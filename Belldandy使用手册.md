@@ -400,23 +400,57 @@ BELLDANDY_OPENAI_MODEL="kimi-k2.5-preview"
 ./start.sh
 ```
 
-### 4.2 手动启动 (高级)
+### 4.2 使用 CLI 启动（推荐）
 
-如果你想更精细地控制启动过程（例如查看详细日志、调试），可以使用手动方式。
-
-在项目根目录运行：
+Belldandy 提供了统一的 `bdd` 命令行工具，所有管理操作都通过它完成。
 
 ```bash
-# 进入项目目录
 cd Belldandy
 
-# 启动 (Windows 推荐使用 PowerShell)
-corepack pnpm dev:gateway
+# 生产模式：带进程守护，崩溃自动重启（等价于 start.bat / start.sh）
+corepack pnpm bdd start
+
+# 开发模式：直接启动 Gateway，适合调试
+corepack pnpm bdd dev
 ```
 
 看到类似 `[Gateway] Listening on http://localhost:28889` 的日志，说明启动成功。
 
-### 4.3 访问界面
+> **💡 首次使用？** 推荐先运行 `corepack pnpm bdd setup` 交互式向导，它会引导你完成 AI 服务配置并写入 `.env.local`，详见下方 4.2.1 节。
+
+#### 4.2.1 Setup 向导（首次配置推荐）
+
+如果你还没有手动编辑过 `.env.local`，可以使用交互式向导快速完成配置：
+
+```bash
+corepack pnpm bdd setup
+```
+
+向导会依次引导你选择：
+- AI 服务商（OpenAI / Gemini / Moonshot / Ollama / 自定义）
+- API Base URL 和 API Key
+- 模型名称
+- 监听地址和端口
+- 鉴权模式（none / token / password）
+
+配置完成后自动写入 `.env.local`，无需手动编辑。
+
+也支持非交互模式（适合脚本化部署）：
+
+```bash
+corepack pnpm bdd setup --provider openai --base-url https://api.openai.com/v1 --api-key sk-xxx --model gpt-4o
+```
+
+### 4.3 手动启动（兼容方式）
+
+你也可以使用传统的 pnpm 脚本启动：
+
+```bash
+cd Belldandy
+corepack pnpm dev:gateway
+```
+
+### 4.4 访问界面
 
 打开浏览器，访问：
 http://localhost:28889/
@@ -428,7 +462,7 @@ http://localhost:28889/
 
 你会看到 WebChat 聊天界面。
 
-### 4.4 首次配对（Pairing）
+### 4.5 首次配对（Pairing）
 
 为了防止你家猫咪或邻居连上你的 AI，首次使用新设备（即使是本机浏览器）连接时，Belldandy 会启动安全配对流程：
 
@@ -438,8 +472,10 @@ http://localhost:28889/
 
     ```bash
     cd Belldandy
-    corepack pnpm pairing:approve ABC123XY
+    corepack pnpm bdd pairing approve ABC123XY
     ```
+
+    > 旧写法 `corepack pnpm pairing:approve ABC123XY` 仍可使用，但推荐使用 `bdd` 统一命令。
 
 4.  回到 WebChat，再次发送消息，现在可以正常对话了。
 
@@ -579,30 +615,137 @@ Belldandy 的运行日志保存在 `~/.belldandy/logs/` 目录，支持：
 
 如需调整日志行为，可在 `.env.local` 中配置 `BELLDANDY_LOG_*` 相关变量（参见 3.2 进阶配置）。
 
-## 6. 管理命令
+## 6. 管理命令（bdd CLI）
 
-Belldandy 提供了一套 CLI 工具来管理授权设备：
+Belldandy 提供了统一的 `bdd` 命令行工具，涵盖启动、配置、诊断、配对管理等所有操作。
 
--   **查看已授权列表**：
-    ```bash
-    cd Belldandy
-    corepack pnpm pairing:list
-    ```
--   **查看待批准请求**：
-    ```bash
-    cd Belldandy
-    corepack pnpm pairing:pending
-    ```
--   **清理过期请求**：
-    ```bash
-    cd Belldandy
-    corepack pnpm pairing:cleanup
-    ```
--   **撤销某设备的授权**：
-    ```bash
-    cd Belldandy
-    corepack pnpm pairing:revoke <CLIENT_ID>
-    ```
+```bash
+# 查看完整命令树
+corepack pnpm bdd --help
+
+# 查看版本号
+corepack pnpm bdd --version
+```
+
+所有命令支持以下全局选项：
+- `--json` — 输出机器可读的 JSON 格式（适合脚本集成）
+- `--state-dir <path>` — 覆盖默认的工作区目录（`~/.belldandy`）
+- `--verbose` — 显示详细输出
+
+### 6.1 启动与运行
+
+```bash
+# 生产模式（带进程守护，崩溃自动重启）
+cd E:\project\belldandy
+corepack pnpm bdd start
+
+# 开发模式（直接启动 Gateway，适合调试）
+corepack pnpm bdd dev
+```
+
+### 6.2 Setup 向导
+
+首次使用或需要重新配置时，运行交互式向导：
+
+```bash
+# 交互式（推荐首次使用）
+corepack pnpm bdd setup
+
+# 非交互式（适合脚本化部署）
+corepack pnpm bdd setup --provider openai --base-url <URL> --api-key <KEY> --model <MODEL>
+```
+
+### 6.3 健康诊断（Doctor）
+
+检查系统环境和配置是否正常：
+
+```bash
+corepack pnpm bdd doctor
+```
+
+Doctor 会检查以下项目：
+- Node.js 版本是否满足要求
+- pnpm 是否可用
+- 工作区目录（`~/.belldandy`）是否存在
+- `.env.local` 是否存在且配置正确
+- Agent Provider 配置（API Key、Base URL、Model）
+- 端口是否可用
+- Memory DB 是否可访问
+- MCP 配置状态
+
+```bash
+# 额外测试模型连通性（会发送一个测试请求）
+corepack pnpm bdd doctor --check-model
+```
+
+通过项显示绿色 ✓，失败项显示红色 ✗ 并附带修复建议，警告项显示黄色 ⚠。
+
+### 6.4 配置管理（Config）
+
+无需手动编辑 `.env.local`，通过 CLI 直接读写配置：
+
+```bash
+# 列出所有配置（敏感字段自动脱敏）
+corepack pnpm bdd config list
+
+# 显示明文（包含 API Key 等）
+corepack pnpm bdd config list --show-secrets
+
+# 读取单个配置项
+corepack pnpm bdd config get BELLDANDY_OPENAI_MODEL
+
+# 修改配置项（自动写入 .env.local）
+corepack pnpm bdd config set BELLDANDY_PORT 28890
+
+# 用编辑器打开 .env.local
+corepack pnpm bdd config edit
+
+# 显示 .env.local 文件路径
+corepack pnpm bdd config path
+```
+
+### 6.5 配对管理（Pairing）
+
+管理设备授权与配对：
+
+```bash
+# 查看已授权设备列表
+corepack pnpm bdd pairing list
+
+# 查看待批准的配对请求
+corepack pnpm bdd pairing pending
+
+# 批准配对请求
+corepack pnpm bdd pairing approve <CODE>
+
+# 撤销某设备的授权
+corepack pnpm bdd pairing revoke <CLIENT_ID>
+
+# 清理过期的配对请求
+corepack pnpm bdd pairing cleanup
+# 预览模式（不实际删除）
+corepack pnpm bdd pairing cleanup --dry-run
+
+# 导出配对数据（备份）
+corepack pnpm bdd pairing export --out backup.json
+
+# 导入配对数据（恢复）
+corepack pnpm bdd pairing import --in backup.json
+```
+
+> **过渡兼容**：旧的 `corepack pnpm pairing:*` 写法仍可使用，内部已重定向到新 CLI。
+
+### 6.6 浏览器 Relay
+
+独立启动 WebSocket-CDP relay（用于浏览器自动化）：
+
+```bash
+# 使用默认端口 (28892)
+corepack pnpm bdd relay start
+
+# 指定端口
+corepack pnpm bdd relay start --port 29000
+```
 
 ## 7. 飞书渠道（手机可用）
 

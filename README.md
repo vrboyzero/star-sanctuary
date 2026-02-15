@@ -600,8 +600,6 @@ corepack pnpm bdd pairing export --out backup.json      # 导出
 corepack pnpm bdd pairing import --in backup.json       # 导入（默认 merge）
 ```
 
-> **过渡期兼容**：旧的 `corepack pnpm pairing:*` 写法仍可使用，内部已重定向到新 CLI。
-
 ### 诊断与配置
 
 ```bash

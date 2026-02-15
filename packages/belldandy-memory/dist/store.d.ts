@@ -4,7 +4,7 @@ export declare class MemoryStore {
     private db;
     private closed;
     private vecDims;
-    /** 当前 SQLite 是否支持 FTS5（Node 内置 node:sqlite 常不包含，会降级为 LIKE 搜索） */
+    /** 当前 SQLite 是否支持 FTS5（better-sqlite3 默认编译 FTS5） */
     private hasFts5;
     constructor(dbPath: string);
     /** 插入或更新 chunk */

@@ -256,6 +256,9 @@ importers:
       '@belldandy/protocol':
         specifier: workspace:*
         version: link:../belldandy-protocol
+      better-sqlite3:
+        specifier: ^11.9.1
+        version: 11.10.0
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
@@ -269,6 +272,9 @@ importers:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/chokidar':
         specifier: ^2.1.7
         version: 2.1.7

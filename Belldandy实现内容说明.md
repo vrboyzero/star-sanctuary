@@ -32,7 +32,7 @@
         - `bdd pairing cleanup [--dry-run]`：清理过期的请求。
         - `bdd pairing export` / `bdd pairing import`：配置数据的备份与恢复。
         - 所有命令支持 `--json` 机器可读输出和 `--state-dir` 覆盖。
-    - **过渡兼容**：旧的 `pnpm pairing:*` 写法仍可使用，内部已重定向到新 CLI。
+    - **旧入口已清理**：Phase D 已删除旧 `pairing-*.ts` 散装脚本及 `pnpm pairing:*` 别名，统一使用 `bdd pairing <sub>`。
 - **价值**：确保个人 AI 助手的私密性，防止被局域网内的其设备意外调用或恶意扫描。
 
 ### 3. Skills 工具系统 (Phase 4)
@@ -54,7 +54,9 @@
 
 - **目标**：赋予 Agent 长期记忆，使其随着使用越来越了解用户，并能回忆起过去的对话与知识。
 - **实现内容**：
-    - **混合检索内核**：基于 SQLite 实现，结合了 **FTS5 关键词检索**（BM25）与 **`sqlite-vec` 向量语义检索**（Native C++ KNN）。
+    - **混合检索内核**：基于 **`better-sqlite3`** 实现，结合了 **FTS5 关键词检索**（BM25）与 **`sqlite-vec` 向量语义检索**（Native C++ KNN）。
+        - **SQLite 引擎迁移**（2026-02-15）：从 Node.js 内置 `node:sqlite`（`DatabaseSync`）迁移至 `better-sqlite3`。原因是 `node:sqlite` 编译时未包含 FTS5 模块，导致关键词检索只能降级为 LIKE 查询（无 BM25 排名）。`better-sqlite3` 默认编译 FTS5，迁移后全文索引开箱即用。
+        - 迁移范围：仅涉及 `store.ts` 和 `sqlite-vec.ts` 两个文件，API 高度兼容，改动量约 10 行。
     - **智能索引**：
         - `Chunker`：基于 Token 估算的智能文本分块。
         - `MemoryIndexer`：增量式文件索引，自动扫描 `~/.belldandy/memory/` 目录。
@@ -234,7 +236,7 @@
 
 - **目标**：引入 `sqlite-vec` 替换纯 JS 的向量计算，实现生产级性能。
 - **实现内容**：
-    - **核心引擎**：引入 `sqlite-vec` (C++ Extension) 提供底层的 SIMD 加速支持。
+    - **核心引擎**：引入 `sqlite-vec` (C++ Extension) 提供底层的 SIMD 加速支持，搭配 `better-sqlite3` 原生扩展加载能力。
     - **存储升级**：使用 `vec0` 虚拟表存储高维向量（替代 BLOB），支持高效的 L2/Cosine 距离计算。
     - **架构优化**：
         - 移除应用层所有计算开销，直接下沉到 SQLite SQL 查询（`WHERE embedding MATCH ?`）。
@@ -790,10 +792,10 @@
     - ToolExecutor auditLogger 接入，工具调用耗时写入日志
     - camera_snap 使用 context.logger
 
-### 5. CLI 框架 (CLI Framework) Phase P1-2 [Phase A+B+C 已完成]
+### 5. CLI 框架 (CLI Framework) Phase P1-2 [Phase A-D 已完成]
 
 - **目标**：统一散装的 10 个 CLI 脚本为单一 `bdd` 命令入口，支持子命令树、`--help`、`--json` 双模输出、懒加载。
-- **状态**：✅ Phase A+B+C 已完成（框架搭建 + pairing 迁移 + start/dev + doctor + config + relay + setup 向导）
+- **状态**：✅ Phase A-D 全部完成（框架搭建 + pairing 迁移 + start/dev + doctor + config + relay + setup 向导 + 旧脚本清理）
 - **技术选型**：
     - **CLI 框架**：`citty`（~7 kB, 0 deps, ESM-first, 声明式 `defineCommand`）
     - **终端着色**：`picocolors`（~7 kB, 0 deps）
@@ -814,7 +816,7 @@
         - `bdd setup` — 交互式 Onboarding Wizard（`@clack/prompts`），收集 provider、API 配置、host/port、auth mode，写入 `.env.local`；支持非交互模式（`--provider openai --base-url ... --api-key ... --model ...`）
     - **双模输出**：所有命令支持 `--json` 输出结构化 JSON，默认人类友好格式
     - **全局选项**：`--json`、`--state-dir`、`--verbose`、`--version`、`--help`
-    - **过渡兼容**：root `package.json` 中旧的 `pnpm pairing:*` 脚本已重定向到新 CLI，旧脚本文件保留待 Phase D 清理
+    - **过渡清理（Phase D）**：已删除 7 个旧 `pairing-*.ts` 散装脚本，移除 root `package.json` 中的 `pairing:*` 别名，旧写法不再可用
     - **bin 注册**：`@belldandy/core` 的 `package.json` 添加了 `bin` 字段（`belldandy` / `bdd`）
 - **文件结构**：
     ```
@@ -841,7 +843,7 @@
         └── bdd.ts                     # bin 入口
     ```
 - **后续阶段**：
-    - Phase D：清理旧散装脚本
+    - 全部完成，无待办阶段。可扩展架构为后续 `skill`/`webhook` 等子命令预留挂载点。
 - **价值**：统一入口降低用户记忆成本，`--json` 支持脚本化集成，懒加载保证轻量启动，可扩展架构为后续 `skill`/`webhook` 等子命令预留挂载点。
 
 ### 6. Local Embedding (优先级：低)
@@ -970,7 +972,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
     - 危险操作（如 `exec` 和 `browser`）可以通过 Policy 策略配置为仅限沙箱运行，或允许受控的本机访问。
 - **持久化 (Persistence)**：
     - **Session**：对话历史存储为 JSON 文件（带文件锁）。
-    - **Memory**：使用 `node:sqlite` + `sqlite-vec` 实现本地向量数据库。
+    - **Memory**：使用 `better-sqlite3` + FTS5 + `sqlite-vec` 实现本地向量数据库与全文检索。
     - **Media**：图片/文件自动存储在本地文件系统中。
 
 > **Belldandy 现状对比**：目前 Belldandy 已实现了 **文件操作** (read/write)、**Web Fetch**、**Memory**、**浏览器自动化（基础版）**，并提供 **Safe Mode 的系统命令执行**（白名单 + 超时 + 风险阻断）。

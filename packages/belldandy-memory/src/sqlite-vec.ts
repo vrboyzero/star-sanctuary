@@ -1,9 +1,7 @@
 
-import type { DatabaseSync } from "node:sqlite";
+import type Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 
-export function loadSqliteVec(db: DatabaseSync): void {
-    db.enableLoadExtension(true);
+export function loadSqliteVec(db: Database.Database): void {
     sqliteVec.load(db);
-    db.enableLoadExtension(false); // Disable after loading for security
 }

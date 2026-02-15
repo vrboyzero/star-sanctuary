@@ -11,13 +11,6 @@
     "bdd": "node --import tsx packages/belldandy-core/src/bin/bdd.ts",
     "start": "node --import tsx packages/belldandy-core/src/bin/bdd.ts start",
     "dev:gateway": "node --import tsx packages/belldandy-core/src/bin/bdd.ts dev",
-    "pairing:approve": "node --import tsx packages/belldandy-core/src/bin/bdd.ts pairing approve",
-    "pairing:revoke": "node --import tsx packages/belldandy-core/src/bin/bdd.ts pairing revoke",
-    "pairing:list": "node --import tsx packages/belldandy-core/src/bin/bdd.ts pairing list",
-    "pairing:pending": "node --import tsx packages/belldandy-core/src/bin/bdd.ts pairing pending",
-    "pairing:cleanup": "node --import tsx packages/belldandy-core/src/bin/bdd.ts pairing cleanup",
-    "pairing:export": "node --import tsx packages/belldandy-core/src/bin/bdd.ts pairing export",
-    "pairing:import": "node --import tsx packages/belldandy-core/src/bin/bdd.ts pairing import",
     "test": "vitest run"
   },
   "devDependencies": {

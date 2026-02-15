@@ -35,7 +35,14 @@
       "Bash(corepack pnpm pairing:list:*)",
       "Bash(cmd.exe /c \"corepack pnpm add @clack/prompts --filter @belldandy/core\")",
       "Bash(BELLDANDY_TEST_SETUP=1 node:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(del:*)",
+      "WebFetch(domain:alexgarcia.xyz)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(corepack pnpm store prune:*)",
+      "Bash(icacls \"E:\\\\project\\\\belldandy\\\\node_modules\\\\.pnpm\\\\sqlite-vec@0.1.7-alpha.2\\\\node_modules\\\\sqlite-vec-linux-x64\" /grant Everyone:F /T)",
+      "Bash(Select-Object:*)",
+      "Bash(cmd /c:*)"
     ]
   }
 }

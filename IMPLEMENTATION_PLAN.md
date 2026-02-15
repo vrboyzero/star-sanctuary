@@ -41,7 +41,7 @@ flowchart TB
 
 - **Phase 0**：文档与边界 ✅
 - **Phase 1-3**：工程骨架、UI、配置工具 ✅
-- **Phase 4**：Skills + Memory + 向量检索 ✅
+- **Phase 4**：Skills + Memory + 向量检索 ✅ (SQLite 引擎已迁移至 better-sqlite3，FTS5 全文索引开箱即用)
 - **Phase 5**：SOUL / Persona 人格系统 ✅
 - **Phase 6-7**：飞书、Heartbeat ✅
 - **Phase 8-15**：高级能力 (Moltbot 对标、浏览器、多媒体、方法论) ✅
@@ -59,7 +59,7 @@ flowchart TB
 | 编号 | 主题 | 对应对比章节 | 主要目标 | 备注 |
 |------|------|--------------|----------|------|
 | P1-1 | 安全加固 ✅ | §10 安全 | 落实安全路线图中的 P0/P1/P2 项。 | **已完成 (Phase 19)** |
-| P1-2 | CLI 命令树与 Onboarding Wizard | §1 核心平台 | 设计统一 CLI 入口及交互式向导。 | 需与 Settings/Doctor 面板配合。 |
+| P1-2 | CLI 命令树与 Onboarding Wizard ✅ | §1 核心平台 | 设计统一 CLI 入口及交互式向导。 | **Phase A-D 全部完成**：`bdd` 统一入口、pairing/doctor/config/relay/setup 子命令、旧脚本已清理。 |
 | P1-3 | 渠道扩展（一线 IM 最小支撑） | §3 Channels | 新增 Telegram + Slack/Discord 渠道。 | 可先实现 MVP，后续补全路由。 |
 | P1-4 | 定时任务 / Cron 工具 ✅ | §8 定时任务 | 通用 Cron 工具与配置。 | **方案 A (轻量 MVP) 已完成** |
 | P1-5 | 会话模型梳理与多 Agent 预备 | §2 会话模型 | 梳理 Store 结构，为多 Agent 预留配置位。 | 避免破坏现有 API。 |
@@ -96,6 +96,9 @@ flowchart TB
     - **Auto-Recall**: NLP 检测关键词自动触发 `memory_search`。
 
 ### Phase 4.8：记忆系统深度优化 [Planned]
+
+> **前置完成**（2026-02-15）：SQLite 引擎从 `node:sqlite` 迁移至 `better-sqlite3`，FTS5 全文索引已完全可用（BM25 排名），不再降级为 LIKE 查询。涉及文件：`store.ts`、`sqlite-vec.ts`、`package.json`。
+
 - [ ] **Auto-Summarization**: 定期生成 High-Level Summary。
 - [ ] **Metadata Filtering**: 支持 `channel`/`topic` 过滤。
 - [ ] **Query Rewrite**: LLM 改写查询消歧。

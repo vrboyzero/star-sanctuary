@@ -1,6 +1,6 @@
 # Belldandy CLI 框架设计方案
 
-> **状态**：Draft — 待项目设计师审核
+> **状态**：Completed — Phase A-D 全部实现，旧脚本已清理
 > **对应 Roadmap**：P1-2（CLI 命令树与 Onboarding Wizard）
 > **前置依赖**：无
 > **后续解锁**：P2-3（Skills 生态 — `bdd skill` 子命令）、P2-5（Webhooks — `bdd webhook` 子命令）

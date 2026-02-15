@@ -1,7 +1,7 @@
-import { DatabaseSync } from "node:sqlite";
+import Database from "better-sqlite3";
 import { vectorToBuffer, vectorFromBuffer } from "./embeddings/index.js";
 import { loadSqliteVec } from "./sqlite-vec.js";
-// 基础表结构（不依赖 FTS5）。Node 内置 node:sqlite 可能未编译 FTS5，需可选创建。
+// 基础表结构。
 const SCHEMA_BASE = `
 CREATE TABLE IF NOT EXISTS chunks (
   id TEXT PRIMARY KEY,
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT
 );
 `;
-// FTS5 全文索引（仅在 SQLite 包含 fts5 时可用，如 better-sqlite3；Node 内置 node:sqlite 常不包含）
+// FTS5 全文索引（better-sqlite3 默认编译 FTS5）
 const SCHEMA_FTS5 = `
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
   content,
@@ -60,10 +60,10 @@ export class MemoryStore {
     db;
     closed = false;
     vecDims = null;
-    /** 当前 SQLite 是否支持 FTS5（Node 内置 node:sqlite 常不包含，会降级为 LIKE 搜索） */
+    /** 当前 SQLite 是否支持 FTS5（better-sqlite3 默认编译 FTS5） */
     hasFts5;
     constructor(dbPath) {
-        this.db = new DatabaseSync(dbPath, { allowExtension: true });
+        this.db = new Database(dbPath);
         loadSqliteVec(this.db);
         this.db.exec(SCHEMA_BASE);
         try {
@@ -106,7 +106,7 @@ export class MemoryStore {
             // 为了性能，可以使用事务或 batch
             const vecDelete = this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`);
             for (const row of rows) {
-                vecDelete.run(BigInt(row.rowid));
+                vecDelete.run(row.rowid);
             }
         }
         const stmt = this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`);
@@ -312,8 +312,8 @@ export class MemoryStore {
         const blob = vectorToBuffer(embedding);
         // vec0 表不支持 upsert (ON CONFLICT)，所以先删除旧的（如果存在），再插入
         // 或者直接 DELETE + INSERT (rowid 不变)
-        this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`).run(BigInt(chunkRow.rowid));
-        this.db.prepare(`INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)`).run(BigInt(chunkRow.rowid), blob);
+        this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`).run(chunkRow.rowid);
+        this.db.prepare(`INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)`).run(chunkRow.rowid, blob);
     }
     /**
      * 获取 chunk 的 embedding 向量
@@ -327,7 +327,7 @@ export class MemoryStore {
             return null;
         try {
             const stmt = this.db.prepare(`SELECT embedding FROM chunks_vec WHERE rowid = ?`);
-            const row = stmt.get(BigInt(chunkRow.rowid));
+            const row = stmt.get(chunkRow.rowid);
             if (!row)
                 return null;
             return vectorFromBuffer(row.embedding);

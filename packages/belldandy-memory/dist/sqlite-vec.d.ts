@@ -1,3 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
-export declare function loadSqliteVec(db: DatabaseSync): void;
+import type Database from "better-sqlite3";
+export declare function loadSqliteVec(db: Database.Database): void;
 //# sourceMappingURL=sqlite-vec.d.ts.map

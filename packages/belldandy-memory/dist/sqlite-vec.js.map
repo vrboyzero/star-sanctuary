@@ -1,1 +1,1 @@
-{"version":3,"file":"sqlite-vec.js","sourceRoot":"","sources":["../src/sqlite-vec.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,SAAS,MAAM,YAAY,CAAC;AAExC,MAAM,UAAU,aAAa,CAAC,EAAgB;IAC1C,EAAE,CAAC,mBAAmB,CAAC,IAAI,CAAC,CAAC;IAC7B,SAAS,CAAC,IAAI,CAAC,EAAE,CAAC,CAAC;IACnB,EAAE,CAAC,mBAAmB,CAAC,KAAK,CAAC,CAAC,CAAC,qCAAqC;AACxE,CAAC"}
+{"version":3,"file":"sqlite-vec.js","sourceRoot":"","sources":["../src/sqlite-vec.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,SAAS,MAAM,YAAY,CAAC;AAExC,MAAM,UAAU,aAAa,CAAC,EAAqB;IAC/C,SAAS,CAAC,IAAI,CAAC,EAAE,CAAC,CAAC;AACvB,CAAC"}
