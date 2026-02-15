@@ -22,15 +22,17 @@
 
 ### 2. 安全准入与 Pairing 机制 (Phase 3 & 3.1)
 
-- **目标**：遵循“默认安全”原则，保护 Agent 不被未授权的设备或用户访问。
+- **目标**：遵循"默认安全"原则，保护 Agent 不被未授权的设备或用户访问。
 - **实现内容**：
     - **强制配对**：所有未知来源的连接请求会被拒绝，并触发 Pairing 流程。
     - **Allowlist**：基于 ClientId 的白名单机制，只有授权设备才能与 Agent 对话。
-    - **CLI 管理工具**：提供了全套命令行工具管理授权：
-        - `pairing:list` / `pairing:pending`：查看授权状态与待处理请求。
-        - `pairing:approve <CODE>`：批准配对请求。
-        - `pairing:cleanup`：一键清理过期的请求。
-        - `pairing:export` / `pairing:import`：配置数据的备份与恢复。
+    - **CLI 管理工具**（已迁移至统一 `bdd` CLI）：
+        - `bdd pairing list` / `bdd pairing pending`：查看授权状态与待处理请求。
+        - `bdd pairing approve <CODE>`：批准配对请求。
+        - `bdd pairing cleanup [--dry-run]`：清理过期的请求。
+        - `bdd pairing export` / `bdd pairing import`：配置数据的备份与恢复。
+        - 所有命令支持 `--json` 机器可读输出和 `--state-dir` 覆盖。
+    - **过渡兼容**：旧的 `pnpm pairing:*` 写法仍可使用，内部已重定向到新 CLI。
 - **价值**：确保个人 AI 助手的私密性，防止被局域网内的其设备意外调用或恶意扫描。
 
 ### 3. Skills 工具系统 (Phase 4)
@@ -788,7 +790,61 @@
     - ToolExecutor auditLogger 接入，工具调用耗时写入日志
     - camera_snap 使用 context.logger
 
-### 5. Local Embedding (优先级：低)
+### 5. CLI 框架 (CLI Framework) Phase P1-2 [Phase A+B+C 已完成]
+
+- **目标**：统一散装的 10 个 CLI 脚本为单一 `bdd` 命令入口，支持子命令树、`--help`、`--json` 双模输出、懒加载。
+- **状态**：✅ Phase A+B+C 已完成（框架搭建 + pairing 迁移 + start/dev + doctor + config + relay + setup 向导）
+- **技术选型**：
+    - **CLI 框架**：`citty`（~7 kB, 0 deps, ESM-first, 声明式 `defineCommand`）
+    - **终端着色**：`picocolors`（~7 kB, 0 deps）
+    - **交互提示**：`@clack/prompts`（美观、TypeScript 友好、支持 group/cancel/password）
+- **实现内容**：
+    - **统一入口**：`bin/bdd.ts` → `cli/main.ts`，通过 `runMain()` 启动
+    - **共享模块**：
+        - `cli/shared/context.ts`：`CLIContext` 提供 stateDir 解析、json/verbose 模式、log/error/success/warn/output helpers
+        - `cli/shared/env-loader.ts`：从 `gateway.ts` 提取的 `loadEnvFileIfExists`，re-export `resolveStateDir`（单一来源）；Phase B 新增 `parseEnvFile`、`updateEnvValue`、`resolveEnvLocalPath` 用于 config 命令读写 `.env.local`
+        - `cli/shared/output.ts`：`printSuccess/Error/Warn/Info/Json` 工具函数
+    - **命令树**（懒加载）：
+        - `bdd start` — 带 supervisor 的 Gateway 启动（fork + exit code 100 自动重启）
+        - `bdd dev` — 开发模式直接启动 Gateway
+        - `bdd pairing approve/revoke/list/pending/cleanup/export/import` — 全部 7 个配对管理子命令
+        - `bdd doctor` — 健康诊断（Node 版本、pnpm、state 目录、.env.local、agent 配置、端口可用性、Memory DB、MCP 配置，可选 `--check-model` 模型连通性测试）
+        - `bdd config list/get/set/edit/path` — 配置管理（读写 `.env.local`，密钥自动脱敏，`--show-secrets` 显示明文）
+        - `bdd relay start [--port]` — 独立启动 WebSocket-CDP relay
+        - `bdd setup` — 交互式 Onboarding Wizard（`@clack/prompts`），收集 provider、API 配置、host/port、auth mode，写入 `.env.local`；支持非交互模式（`--provider openai --base-url ... --api-key ... --model ...`）
+    - **双模输出**：所有命令支持 `--json` 输出结构化 JSON，默认人类友好格式
+    - **全局选项**：`--json`、`--state-dir`、`--verbose`、`--version`、`--help`
+    - **过渡兼容**：root `package.json` 中旧的 `pnpm pairing:*` 脚本已重定向到新 CLI，旧脚本文件保留待 Phase D 清理
+    - **bin 注册**：`@belldandy/core` 的 `package.json` 添加了 `bin` 字段（`belldandy` / `bdd`）
+- **文件结构**：
+    ```
+    packages/belldandy-core/src/
+    ├── cli/
+    │   ├── main.ts                    # root command + subCommands 懒加载
+    │   ├── shared/
+    │   │   ├── context.ts             # CLIContext
+    │   │   ├── output.ts              # 输出工具
+    │   │   └── env-loader.ts          # env 加载/解析/写入 + resolveStateDir
+    │   └── commands/
+    │       ├── start.ts               # bdd start
+    │       ├── dev.ts                 # bdd dev
+    │       ├── doctor.ts              # bdd doctor（11 项健康检查）
+    │       ├── config.ts              # bdd config (parent)
+    │       ├── config/                # config 子命令 (list/get/set/edit/path)
+    │       ├── relay.ts               # bdd relay (parent)
+    │       ├── relay/start.ts         # bdd relay start
+    │       ├── setup.ts               # bdd setup（交互式 + 非交互式）
+    │       └── pairing/               # bdd pairing <sub> (7 个文件)
+    │   └── wizard/
+    │       └── onboard.ts             # Onboarding Wizard 交互逻辑
+    └── bin/
+        └── bdd.ts                     # bin 入口
+    ```
+- **后续阶段**：
+    - Phase D：清理旧散装脚本
+- **价值**：统一入口降低用户记忆成本，`--json` 支持脚本化集成，懒加载保证轻量启动，可扩展架构为后续 `skill`/`webhook` 等子命令预留挂载点。
+
+### 6. Local Embedding (优先级：低)
 
 - **目标**：摆脱对 OpenAI Embedding API 的依赖，实现完全本地化的记忆检索。
 - **实现内容**：

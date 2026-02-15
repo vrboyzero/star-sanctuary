@@ -34,6 +34,21 @@ corepack pnpm pairing:pending
 corepack pnpm pairing:cleanup
 corepack pnpm pairing:export --out backup.json
 corepack pnpm pairing:import --in backup.json
+
+# CLI (unified bdd entry point)
+corepack pnpm bdd --help                # Show full command tree
+corepack pnpm bdd doctor                # Health check (env, port, state dir, deps)
+corepack pnpm bdd doctor --check-model  # Include model connectivity test
+corepack pnpm bdd config list           # List .env.local config (secrets masked)
+corepack pnpm bdd config get <KEY>      # Read a config value
+corepack pnpm bdd config set <KEY> <V>  # Write a config value to .env.local
+corepack pnpm bdd config edit           # Open .env.local in $EDITOR
+corepack pnpm bdd config path           # Print .env.local path
+corepack pnpm bdd relay start [--port]  # Start CDP relay standalone
+
+# Setup wizard
+corepack pnpm bdd setup                # Interactive onboarding wizard
+corepack pnpm bdd setup --provider openai --base-url <URL> --api-key <KEY> --model <MODEL>  # Non-interactive
 ```
 
 ## Architecture

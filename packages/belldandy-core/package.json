@@ -8,6 +8,10 @@
     ".": "./src/index.ts",
     "./cron": "./src/cron/index.ts"
   },
+  "bin": {
+    "belldandy": "./dist/bin/bdd.js",
+    "bdd": "./dist/bin/bdd.js"
+  },
   "scripts": {
     "build": "tsc -b"
   },
@@ -20,7 +24,10 @@
     "@belldandy/plugins": "workspace:*",
     "@belldandy/protocol": "workspace:*",
     "@belldandy/skills": "workspace:*",
+    "citty": "^0.1.6",
+    "@clack/prompts": "^0.10.0",
     "express": "^5.1.0",
+    "picocolors": "^1.1.1",
     "ws": "^8.18.3"
   },
   "devDependencies": {

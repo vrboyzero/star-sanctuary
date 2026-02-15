@@ -27,7 +27,15 @@
       "WebFetch(domain:docs.anthropic.com)",
       "Bash(npx vitest run:*)",
       "Bash(npx next build)",
-      "Bash(corepack pnpm install --no-frozen-lockfile)"
+      "Bash(corepack pnpm install --no-frozen-lockfile)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:bundlephobia.com)",
+      "Bash(corepack pnpm add:*)",
+      "Bash(node:*)",
+      "Bash(corepack pnpm pairing:list:*)",
+      "Bash(cmd.exe /c \"corepack pnpm add @clack/prompts --filter @belldandy/core\")",
+      "Bash(BELLDANDY_TEST_SETUP=1 node:*)",
+      "Bash(echo:*)"
     ]
   }
 }

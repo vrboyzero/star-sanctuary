@@ -163,10 +163,13 @@ cd Belldandy
 # 2. 安装依赖
 corepack pnpm install
 
-# 3. 启动 Gateway
-corepack pnpm dev:gateway
+# 3. 启动 Gateway（开发模式）
+corepack pnpm bdd dev
 
-# 4. 打开浏览器访问
+# 4. 启动 Gateway（带 supervisor 自动重启）
+corepack pnpm bdd start
+
+# 5. 打开浏览器访问
 # http://localhost:28889/
 ```
 
@@ -177,7 +180,7 @@ corepack pnpm dev:gateway
 1. 在 WebChat 发送消息，界面会提示配对码（如 `ABC123XY`）
 2. 在终端执行批准命令：
    ```bash
-   corepack pnpm pairing:approve ABC123XY
+   corepack pnpm bdd pairing approve ABC123XY
    ```
 3. 再次发送消息即可正常对话
 
@@ -208,6 +211,7 @@ corepack pnpm dev:gateway
 | **长程记忆** | Context Compaction | 三层上下文压缩 (Working/Rolling/Archival) 防止 Token 溢出 |
 | **服务管理** | Service Restart | Agent 可通过 `service_restart` 工具自主重启服务 |
 | **可视化** | Config & Tools UI | Web 界面管理配置、工具开关与 System Doctor 自检 |
+| **CLI 框架** | 统一 `bdd` 命令 | citty 声明式子命令树、懒加载、`--json` 双模输出 |
 
 
 ---
@@ -571,27 +575,62 @@ corepack pnpm dev:gateway
 549: 
 550: ---
 551: 
-552: ## 管理命令
+552: ## CLI 命令
+
+Belldandy 提供统一的 `bdd` CLI 入口（基于 [citty](https://github.com/unjs/citty)），所有命令均支持 `--help` 查看用法、`--json` 输出机器可读格式。
 
 ```bash
-# 查看已授权设备
-corepack pnpm pairing:list
+# 查看完整命令树
+corepack pnpm bdd --help
 
-# 查看待批准请求
-corepack pnpm pairing:pending
+# 启动服务
+corepack pnpm bdd start              # 带 supervisor（生产推荐）
+corepack pnpm bdd dev                # 开发模式（无自动重启）
+```
 
-# 批准配对
-corepack pnpm pairing:approve <CODE>
+### 配对管理
 
-# 撤销授权
-corepack pnpm pairing:revoke <CLIENT_ID>
+```bash
+corepack pnpm bdd pairing list                          # 查看已授权设备
+corepack pnpm bdd pairing pending                       # 查看待批准请求
+corepack pnpm bdd pairing approve <CODE>                # 批准配对
+corepack pnpm bdd pairing revoke <CLIENT_ID>            # 撤销授权
+corepack pnpm bdd pairing cleanup [--dry-run]           # 清理过期请求
+corepack pnpm bdd pairing export --out backup.json      # 导出
+corepack pnpm bdd pairing import --in backup.json       # 导入（默认 merge）
+```
 
-# 清理过期请求
-corepack pnpm pairing:cleanup
+> **过渡期兼容**：旧的 `corepack pnpm pairing:*` 写法仍可使用，内部已重定向到新 CLI。
 
-# 备份与恢复
-corepack pnpm pairing:export --out backup.json
-corepack pnpm pairing:import --in backup.json
+### 诊断与配置
+
+```bash
+corepack pnpm bdd doctor                                # 健康检查（Node/pnpm/端口/配置/DB）
+corepack pnpm bdd doctor --check-model                  # 含模型连通性测试
+corepack pnpm bdd doctor --json                         # JSON 格式输出
+
+corepack pnpm bdd config list                           # 列出 .env.local 配置（密钥脱敏）
+corepack pnpm bdd config list --show-secrets             # 显示明文
+corepack pnpm bdd config get <KEY>                      # 读取单个配置项
+corepack pnpm bdd config set <KEY> <VALUE>              # 写入配置项
+corepack pnpm bdd config edit                           # 用编辑器打开 .env.local
+corepack pnpm bdd config path                           # 输出配置文件路径
+```
+
+### 浏览器 Relay
+
+```bash
+corepack pnpm bdd relay start                           # 启动 CDP relay（默认 28892 端口）
+corepack pnpm bdd relay start --port 9222               # 指定端口
+```
+
+### 初始化向导
+
+```bash
+corepack pnpm bdd setup                                 # 交互式引导配置（provider/API/端口/鉴权）
+corepack pnpm bdd setup --provider openai \
+  --base-url https://api.openai.com/v1 \
+  --api-key sk-xxx --model gpt-4o                       # 非交互模式
 ```
 
 ---
