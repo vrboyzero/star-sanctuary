@@ -161,10 +161,13 @@ cd Belldandy
 # 2. Install dependencies
 corepack pnpm install
 
-# 3. Start the gateway
-corepack pnpm dev:gateway
+# 3. Start Gateway (Dev mode)
+corepack pnpm bdd dev
 
-# 4. Open WebChat
+# 4. Start Gateway (With supervisor auto-restart)
+corepack pnpm bdd start
+
+# 5. Open WebChat
 # http://localhost:28889/
 ```
 
@@ -175,7 +178,7 @@ For security reasons, the first client must be paired:
 1. Send any message in WebChat. A pairing code (e.g. `ABC123XY`) will be shown.
 2. Approve the pairing in your terminal:
    ```bash
-   corepack pnpm pairing:approve ABC123XY
+   corepack pnpm bdd pairing approve ABC123XY
    ```
 3. Send another message — you can now chat normally.
 
@@ -206,6 +209,7 @@ For security reasons, the first client must be paired:
 | **Memory**        | Context Compaction             | 3-tier context compression (Working/Rolling/Archival) prevents token overflow |
 | **Management**    | Service Restart                | Agent can autonomously restart the gateway via `service_restart` |
 | **UI**            | Config & Tools UI              | Web UI for settings, tool toggles, and System Doctor self-check  |
+| **CLI Framework** | Unified `bdd` Command          | citty declarative subcommands, lazy loading, `--json` output     |
 
 
 ---
@@ -553,28 +557,88 @@ Place plugins under `~/.belldandy/plugins/`. They are loaded automatically when 
 530: 
 531: ---
 532: 
-533: ## Management Commands
+533: ## CLI Commands
+
+Belldandy provides a unified `bdd` CLI entry point (based on [citty](https://github.com/unjs/citty)). All commands support `--help` for usage and `--json` for machine-readable output.
 
 ```bash
-# List approved devices
-corepack pnpm pairing:list
+# View full command tree
+corepack pnpm bdd --help
 
-# List pending pairing requests
-corepack pnpm pairing:pending
-
-# Approve a pairing code
-corepack pnpm pairing:approve <CODE>
-
-# Revoke an approved client
-corepack pnpm pairing:revoke <CLIENT_ID>
-
-# Clean up expired pairing requests
-corepack pnpm pairing:cleanup
-
-# Backup and restore pairing state
-corepack pnpm pairing:export --out backup.json
-corepack pnpm pairing:import --in backup.json
+# Start service
+corepack pnpm bdd start              # With supervisor (Recommended for production)
+corepack pnpm bdd dev                # Dev mode (No auto-restart)
 ```
+
+### Pairing Management
+
+```bash
+corepack pnpm bdd pairing list                          # List approved devices
+corepack pnpm bdd pairing pending                       # List pending requests
+corepack pnpm bdd pairing approve <CODE>                # Approve pairing code
+corepack pnpm bdd pairing revoke <CLIENT_ID>            # Revoke authorization
+corepack pnpm bdd pairing cleanup [--dry-run]           # Clean up expired requests
+corepack pnpm bdd pairing export --out backup.json      # Export pairing state
+corepack pnpm bdd pairing import --in backup.json       # Import pairing state (Merge by default)
+```
+
+### Diagnostics & Config
+
+```bash
+corepack pnpm bdd doctor                                # Health check (Node/pnpm/Port/Config/DB)
+corepack pnpm bdd doctor --check-model                  # Include model connectivity test
+corepack pnpm bdd doctor --json                         # JSON output
+
+corepack pnpm bdd config list                           # List .env.local config (Secrets masked)
+corepack pnpm bdd config list --show-secrets             # Show secrets
+corepack pnpm bdd config get <KEY>                      # Get single config value
+corepack pnpm bdd config set <KEY> <VALUE>              # Set config value
+corepack pnpm bdd config edit                           # Open .env.local in editor
+corepack pnpm bdd config path                           # Print config file path
+```
+
+### Browser Relay
+
+```bash
+corepack pnpm bdd relay start                           # Start CDP relay (Default port 28892)
+corepack pnpm bdd relay start --port 9222               # Specify port
+```
+
+### Setup Wizard
+
+```bash
+corepack pnpm bdd setup                                 # Interactive setup (Provider/API/Port/Auth)
+corepack pnpm bdd setup --provider openai \
+  --base-url https://api.openai.com/v1 \
+  --api-key sk-xxx --model gpt-4o                       # Non-interactive mode
+```
+
+---
+
+## FAQ
+
+**Q: `EADDRINUSE` error on startup?**
+
+A: Change the port in `.env.local`: `BELLDANDY_PORT=28890`
+
+**Q: How to access from the internet?**
+
+A: Use tools like Cloudflare Tunnel or Frp, and enable authentication with `BELLDANDY_AUTH_MODE=token`.
+
+**Q: Memory retrieval is inaccurate?**
+
+A: Ensure you have configured an Embedding model and set `BELLDANDY_EMBEDDING_ENABLED=true`.
+
+**Q: Can I run CMD commands on Windows?**
+
+A: Yes. Native commands like `copy`, `move`, `del`, `ipconfig` are supported. Note that `del` blocks `/s` and `/q` arguments for safety.
+
+**Q: No reply after sending message in Feishu?**
+
+A: Check:
+1. App is published and approved.
+2. Permissions are correctly granted.
+3. `im.message.receive_v1` event subscription is added.
 
 ---
 
@@ -588,6 +652,7 @@ packages/
 ├── belldandy-skills/    # Skill definitions and execution
 ├── belldandy-memory/    # Memory indexing and retrieval
 ├── belldandy-plugins/   # Plugin system
+├── belldandy-mcp/       # MCP protocol support
 └── belldandy-browser/   # Browser automation relay
 
 apps/
@@ -597,12 +662,18 @@ apps/
 
 ---
 
-## Documentation
+## Developer Info
 
-- `Belldandy实现内容说明.md` – Detailed feature breakdown (Chinese)
-- `Belldandy使用手册.md` – Full user manual (Chinese)
+### References
 
-English docs are still work‑in‑progress; for now, please refer to the README and source code.
+This project is architecturally inspired by [moltbot](https://github.com/moltbot/moltbot), with a complete codebase rewrite.
+
+### Related Docs
+
+- [Belldandy实现内容说明.md](./Belldandy实现内容说明.md) - Detailed feature breakdown (Chinese)
+- [Belldandy使用手册.md](./Belldandy使用手册.md) - Full user manual (Chinese)
+
+English docs are still work-in-progress; for now, please refer to the README and source code.
 
 ---
 

@@ -664,7 +664,7 @@ corepack pnpm bdd doctor
 ```
 
 Doctor 会检查以下项目：
-- Node.js 版本是否满足要求
+- Node.js 版本是否满我足要求
 - pnpm 是否可用
 - 工作区目录（`~/.belldandy`）是否存在
 - `.env.local` 是否存在且配置正确
