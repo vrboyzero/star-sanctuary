@@ -15,7 +15,7 @@ const PROTECTED_FILES = ["soul.md"];
 // 通用命令（所有平台）
 const COMMON_SAFELIST = [
     // 核心系统/文本
-    "pwd", "whoami", "date", "echo", "cat", "grep", "head", "tail", "less",
+    "pwd", "whoami", "echo", "cat", "grep", "head", "tail", "less",
     "which", "uname", "who", "id", "uptime", "time",
     "sed", "awk", "sort", "uniq", "cut", "wc", "tee", "tr", "xargs",
     // JS/TS
@@ -45,6 +45,7 @@ const COMMON_SAFELIST = [
 
 // Unix 特定命令 (Linux + macOS)
 const UNIX_SAFELIST = [
+    "date",
     "ls", "top", "free", "chmod", "chown", "ln", "which", "find", "xargs",
     "uname", "who", "id", "uptime", "time",
     "sed", "awk", "sort", "uniq", "cut", "wc", "tee", "tr",
@@ -64,6 +65,7 @@ const WINDOWS_SAFELIST = [
     "dir", "copy", "move", "del", "ren", "type", "ls",
     "ipconfig", "netstat", "tasklist", "where", "ping", "hostname", "ssh",
     "tracert",
+    "powershell", "powershell.exe", "pwsh",  // Windows shell (可通过 policy extraBlocklist 禁用)
     "start"  // Windows 特有：打开文件/URL
 ];
 
@@ -101,7 +103,7 @@ const ENV_READ_KEYWORDS = ["cat", "type", "more", "less", "head", "tail", "grep"
 const NON_INTERACTIVE_FLAGS = ["--yes", "-y", "--assume-yes", "--non-interactive", "--no-interaction"];
 
 const QUICK_COMMANDS = new Set([
-    "pwd", "whoami", "date", "echo", "git", "ls", "dir", "cat", "head", "tail",
+    "pwd", "whoami", "echo", "git", "ls", "dir", "cat", "head", "tail",
     "rg", "fd", "jq", "yq", "hostname", "df", "du", "netstat", "ping", "ipconfig", "tasklist", "where",
     "which", "uname", "who", "id", "uptime", "time",
     "sed", "awk", "sort", "uniq", "cut", "wc", "tee", "tr", "xargs",
@@ -112,7 +114,8 @@ const LONG_COMMANDS = new Set([
     "npm", "pnpm", "yarn", "npx", "node", "python", "python3", "pip", "pip3", "pipenv", "conda", "pytest", "pipx", "poetry",
     "tsc", "vite", "next", "vue", "vue-cli", "gcc", "g++", "make", "cmake", "cargo", "go", "java", "mvn", "dotnet",
     "gradle", "gradlew", "mvnw",
-    "ffmpeg", "pandoc", "magick"
+    "ffmpeg", "pandoc", "magick",
+    "powershell", "powershell.exe", "pwsh"
 ]);
 
 const DEFAULT_NON_INTERACTIVE_RULES: Array<{ cmd: string; sub?: string[]; flags: string[] }> = [
