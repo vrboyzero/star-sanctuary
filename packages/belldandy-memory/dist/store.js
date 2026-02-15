@@ -106,7 +106,7 @@ export class MemoryStore {
             // 为了性能，可以使用事务或 batch
             const vecDelete = this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`);
             for (const row of rows) {
-                vecDelete.run(row.rowid);
+                vecDelete.run(BigInt(row.rowid));
             }
         }
         const stmt = this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`);
@@ -310,10 +310,10 @@ export class MemoryStore {
             return;
         }
         const blob = vectorToBuffer(embedding);
-        // vec0 表不支持 upsert (ON CONFLICT)，所以先删除旧的（如果存在），再插入
-        // 或者直接 DELETE + INSERT (rowid 不变)
-        this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`).run(chunkRow.rowid);
-        this.db.prepare(`INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)`).run(chunkRow.rowid, blob);
+        // vec0 虚拟表严格要求 rowid 为 SQLITE_INTEGER，用 BigInt 在绑定层保证类型
+        const rowid = BigInt(chunkRow.rowid);
+        this.db.prepare(`DELETE FROM chunks_vec WHERE rowid = ?`).run(rowid);
+        this.db.prepare(`INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)`).run(rowid, blob);
     }
     /**
      * 获取 chunk 的 embedding 向量
@@ -327,7 +327,7 @@ export class MemoryStore {
             return null;
         try {
             const stmt = this.db.prepare(`SELECT embedding FROM chunks_vec WHERE rowid = ?`);
-            const row = stmt.get(chunkRow.rowid);
+            const row = stmt.get(BigInt(chunkRow.rowid));
             if (!row)
                 return null;
             return vectorFromBuffer(row.embedding);
