@@ -83,7 +83,11 @@ promptEl.addEventListener("input", () => {
   // Auto-resize
   promptEl.style.height = "auto";
   promptEl.style.height = promptEl.scrollHeight + "px";
+  promptEl.style.height = promptEl.scrollHeight + "px";
 });
+
+// Initialize Voice Input
+initVoiceInput();
 
 connect();
 
@@ -264,7 +268,7 @@ function connect() {
       setStatus("ready");
       // 重置 token 累计
       sessionTotalTokens = 0;
-      ["tuSys","tuCtx","tuIn","tuOut","tuAll"].forEach(id => {
+      ["tuSys", "tuCtx", "tuIn", "tuOut", "tuAll"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.textContent = "--";
       });
@@ -371,7 +375,7 @@ function sendConnect() {
 
 async function sendMessage() {
   const text = promptEl.value.trim();
-  if (!text) return;
+  if (!text && !pendingAttachments.length) return;
   promptEl.value = "";
 
   if (!ws || !isReady) {
@@ -446,7 +450,8 @@ async function sendMessage() {
     return;
   }
 
-  appendMessage("me", text + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""));
+  const displayText = text || (pendingAttachments.length ? "[语音消息]" : "");
+  appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""));
   botMsgEl = appendMessage("bot", "");
 
   // 准备附件数据
@@ -1572,5 +1577,169 @@ async function saveToolSettings() {
     saveToolSettingsBtn.textContent = "失败";
     saveToolSettingsBtn.disabled = false;
     alert("保存失败: " + (res?.error?.message || "未知错误"));
+  }
+}
+
+// ─── Voice Input Implementation ───
+
+function initVoiceInput() {
+  const voiceBtn = document.getElementById("voiceBtn");
+  const voiceDuration = document.getElementById("voiceDuration");
+  if (!voiceBtn) return;
+
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let startTime = 0;
+  let timerInterval = null;
+  let isRecording = false;
+
+  // Check support
+  const hasMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  const hasWebSpeech = !!(window.webkitSpeechRecognition || window.SpeechRecognition);
+
+  if (!hasMediaRecorder && !hasWebSpeech) {
+    voiceBtn.style.display = "none";
+    return;
+  }
+
+  voiceBtn.addEventListener("click", async () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+
+  async function startRecording() {
+    try {
+      if (hasMediaRecorder) {
+        // Mode A: MediaRecorder (Backend STT)
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        let mimeType = "audio/webm;codecs=opus";
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = "audio/mp4"; // Safari fallback
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = ""; // Let browser choose
+          }
+        }
+
+        const options = mimeType ? { mimeType } : undefined;
+        mediaRecorder = new MediaRecorder(stream, options);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          const mime = mediaRecorder.mimeType || "audio/webm";
+          const blob = new Blob(audioChunks, { type: mime });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            // reader.result is a full data URL: "data:audio/webm;base64,..."
+            const ext = mime.includes("mp4") ? "m4a" : (mime.includes("wav") ? "wav" : "webm");
+            const fileName = `voice_${Date.now()}.${ext}`;
+
+            pendingAttachments.push({
+              name: fileName,
+              type: "audio",
+              mimeType: mime,
+              content: reader.result, // data URL, consistent with image attachments
+            });
+            renderAttachmentsPreview();
+
+            // Auto-send if prompt is empty, or just let user send
+            // For better UX, we could auto-submit, but let's let user confirm for now (or auto-submit if separate setting)
+            sendMessage(); // Auto-send voice message
+          };
+          reader.readAsDataURL(blob);
+
+          // Stop tracks
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        updateUI(true);
+      } else if (hasWebSpeech) {
+        // Mode B: Web Speech API (Frontend STT)
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'zh-CN'; // Default to Chinese, could be configurable
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+          isRecording = true;
+          updateUI(true, "listening");
+        };
+
+        recognition.onresult = (event) => {
+          const text = event.results[0][0].transcript;
+          if (promptEl.value) promptEl.value += " " + text;
+          else promptEl.value = text;
+          // Trigger input event to resize
+          promptEl.dispatchEvent(new Event('input'));
+        };
+
+        recognition.onerror = (event) => {
+          console.error("Speech recognition error", event.error);
+          stopRecording();
+        };
+
+        recognition.onend = () => {
+          stopRecording();
+        };
+
+        recognition.start();
+        // Save reference to stop it later
+        mediaRecorder = recognition;
+      }
+    } catch (err) {
+      console.error("Failed to start recording:", err);
+      alert("无法启动录音: " + err.message);
+      isRecording = false;
+      updateUI(false);
+    }
+  }
+
+  function stopRecording() {
+    if (!isRecording) return;
+
+    if (hasMediaRecorder && mediaRecorder instanceof MediaRecorder) {
+      if (mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+    } else if (hasWebSpeech && mediaRecorder) {
+      // In Web Speech mode, mediaRecorder holds the recognition instance
+      mediaRecorder.stop();
+    }
+
+    isRecording = false;
+    updateUI(false);
+  }
+
+  function updateUI(recording, mode = "recording") {
+    if (recording) {
+      voiceBtn.classList.add(mode);
+      voiceDuration.classList.remove("hidden");
+      startTime = Date.now();
+      voiceDuration.textContent = "00:00";
+      timerInterval = setInterval(() => {
+        const diff = Math.floor((Date.now() - startTime) / 1000);
+        const m = Math.floor(diff / 60).toString().padStart(2, "0");
+        const s = (diff % 60).toString().padStart(2, "0");
+        voiceDuration.textContent = `${m}:${s}`;
+      }, 1000);
+    } else {
+      voiceBtn.classList.remove("recording", "listening");
+      voiceDuration.classList.add("hidden");
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    }
   }
 }

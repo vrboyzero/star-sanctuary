@@ -1250,3 +1250,57 @@ body::before {
 .restart-countdown.pulse {
   transform: scale(1.15);
 }
+
+/* Voice Input */
+.voice-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0 8px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+}
+
+.voice-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+
+.voice-btn.recording {
+  color: #ff4d4f;
+  background: rgba(255, 77, 79, 0.1);
+  animation: pulse-red 1.5s infinite;
+}
+
+.voice-btn.listening {
+  color: #52c41a;
+  background: rgba(82, 196, 26, 0.1);
+  animation: pulse-green 1.5s infinite;
+}
+
+.voice-duration {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: #ff4d4f;
+  margin-right: 8px;
+  min-width: 45px;
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4); transform: scale(1); }
+  70% { box-shadow: 0 0 0 6px rgba(255, 77, 79, 0); transform: scale(1.1); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); transform: scale(1); }
+}
+
+@keyframes pulse-green {
+  0% { box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.4); transform: scale(1); }
+  70% { box-shadow: 0 0 0 6px rgba(82, 196, 26, 0); transform: scale(1.1); }
+  100% { box-shadow: 0 0 0 0 rgba(82, 196, 26, 0); transform: scale(1); }
+}

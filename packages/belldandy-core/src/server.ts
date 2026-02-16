@@ -21,7 +21,7 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import type { ToolsConfigManager } from "./tools-config.js";
-import type { ToolExecutor } from "@belldandy/skills";
+import type { ToolExecutor, TranscribeOptions, TranscribeResult } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 
 export type GatewayServerOptions = {
@@ -48,6 +48,8 @@ export type GatewayServerOptions = {
   toolsConfigManager?: ToolsConfigManager;
   /** 工具执行器（用于获取已注册工具列表） */
   toolExecutor?: ToolExecutor;
+  /** STT implementation: transcribe speech from audio buffer */
+  sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
   /** 插件注册表（用于获取已加载插件列表） */
   pluginRegistry?: PluginRegistry;
 };
@@ -253,6 +255,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         ttsSynthesize: opts.ttsSynthesize,
         toolsConfigManager: opts.toolsConfigManager,
         toolExecutor: opts.toolExecutor,
+        sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
       });
       if (res) sendRes(ws, res);
@@ -335,6 +338,7 @@ async function handleReq(
     ttsSynthesize?: (text: string) => Promise<{ webPath: string; htmlAudio: string } | null>;
     toolsConfigManager?: ToolsConfigManager;
     toolExecutor?: ToolExecutor;
+    sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     pluginRegistry?: PluginRegistry;
   },
 ): Promise<GatewayResFrame | null> {
@@ -435,6 +439,35 @@ async function handleReq(
                 video_url: { url: `file://${absPath}` },
               });
               attachmentPrompts.push(`\n[用户上传了视频: ${att.name}] (System Note: Video content has been injected via multimodal channel. Please analyze it directly.)`);
+            } else if (att.type.startsWith("audio/")) {
+              // Audio logic: Transcribe via STT
+              if (ctx.sttTranscribe) {
+                console.log(`[Gateway] Transcribing audio attachment: ${att.name}`);
+                try {
+                  const sttResult = await ctx.sttTranscribe({
+                    buffer,
+                    fileName: att.name,
+                    mime: att.type,
+                  });
+                  if (sttResult?.text) {
+                    console.log(`[Gateway] STT Result: "${sttResult.text}"`);
+                    if (!promptText?.trim()) {
+                      // If user didn't type anything, treat audio as the main prompt
+                      promptText = sttResult.text;
+                    } else {
+                      // Otherwise append as context
+                      attachmentPrompts.push(`\n[语音转录: "${sttResult.text}"]`);
+                    }
+                  } else {
+                    attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录失败）]`);
+                  }
+                } catch (err) {
+                  console.error(`[Gateway] STT failed for ${att.name}:`, err);
+                  attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录出错）]`);
+                }
+              } else {
+                attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（STT未配置）]`);
+              }
             } else {
               // Text/File logic
               const isText = att.type.startsWith("text/") ||
@@ -497,16 +530,18 @@ async function handleReq(
               }
             }
             if (item.type === "usage") {
-              sendEvent(ws, { type: "event", event: "token.usage", payload: {
-                conversationId,
-                systemPromptTokens: item.systemPromptTokens,
-                contextTokens: item.contextTokens,
-                inputTokens: item.inputTokens,
-                outputTokens: item.outputTokens,
-                cacheCreationTokens: item.cacheCreationTokens,
-                cacheReadTokens: item.cacheReadTokens,
-                modelCalls: item.modelCalls,
-              } });
+              sendEvent(ws, {
+                type: "event", event: "token.usage", payload: {
+                  conversationId,
+                  systemPromptTokens: item.systemPromptTokens,
+                  contextTokens: item.contextTokens,
+                  inputTokens: item.inputTokens,
+                  outputTokens: item.outputTokens,
+                  cacheCreationTokens: item.cacheCreationTokens,
+                  cacheReadTokens: item.cacheReadTokens,
+                  modelCalls: item.modelCalls,
+                }
+              });
             }
           }
 
@@ -962,11 +997,12 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   if (!value || typeof value !== "object") return { ok: false, message: "params must be an object" };
   const obj = value as Record<string, unknown>;
   const text = typeof obj.text === "string" ? obj.text : "";
-  if (!text.trim()) return { ok: false, message: "text is required" };
+  const attachments = obj.attachments as any;
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  if (!text.trim() && !hasAttachments) return { ok: false, message: "text or attachments required" };
   const conversationId =
     typeof obj.conversationId === "string" && obj.conversationId.trim() ? obj.conversationId.trim() : undefined;
   const from = typeof obj.from === "string" && obj.from.trim() ? obj.from.trim() : undefined;
-  const attachments = obj.attachments as any;
   return { ok: true, value: { text, conversationId, from, attachments } };
 }
 

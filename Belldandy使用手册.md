@@ -380,6 +380,47 @@ BELLDANDY_OPENAI_API_KEY="sk-xxxxxxxx"
 BELLDANDY_OPENAI_MODEL="kimi-k2.5-preview"
 ```
 
+### 3.8 语音交互配置 (STT & TTS)
+
+为了让 Belldandy 能听会说，你需要配置语音识别 (STT) 和语音合成 (TTS)。
+
+#### 3.8.1 语音识别 (STT)
+
+Belldandy 支持多种 STT 服务商，你可以根据需要选择：
+
+*   **OpenAI Whisper (默认)**：
+    *   通用性强，准确率高。
+    *   共用主 Agent 的配置 (`BELLDANDY_OPENAI_BASE_URL` / `API_KEY`)。
+    *   配置：`BELLDANDY_STT_PROVIDER=openai`
+
+*   **Groq (极速)**：
+    *   速度极快（接近实时），适合追求低延迟的场景。
+    *   需要单独申请 Groq API Key。
+    *   配置：
+        ```env
+        BELLDANDY_STT_PROVIDER=groq
+        BELLDANDY_STT_GROQ_API_KEY=gsk_your_key
+        ```
+
+*   **DashScope (通义听悟)**：
+    *   中文识别效果极佳，支持 Paraformer 模型。
+    *   共用 `DASHSCOPE_API_KEY`。
+    *   配置：
+        ```env
+        BELLDANDY_STT_PROVIDER=dashscope
+        DASHSCOPE_API_KEY=sk-your_dashscope_key
+        ```
+
+#### 3.8.2 语音合成 (TTS)
+
+TTS 负责让 Belldandy 开口说话。
+
+*   **Edge TTS (推荐/默认)**：无需 API Key，免费且效果自然（晓晓/云希）。
+*   **OpenAI TTS**：音质更逼真，消耗 Token。
+*   **DashScope TTS**：中文韵律好，支持 Sambert 等模型。
+
+启用方式见 **[13. 语音交互 (Voice Interaction)](#13-语音交互-voice-interaction)** 章节。
+
 ## 4. 启动与运行
 
 ### 4.1 极速启动 (推荐)
@@ -834,6 +875,36 @@ node packages/belldandy-browser/dist/bin/relay.js
 1.  在浏览器右上角找到 **Belldandy Relay** 的图标（一个紫色的小幽灵👻或 B 图标）。
 2.  点击它，图标应该会变色或显示 "Connected"，表示已连接到 Relay Server。
 3.  现在的 Agent 就可以通过 `browser_open` 等工具控制你的当前浏览器了！
+
+## 9. 语音交互 (Voice Interaction)
+
+Belldandy 支持双向语音交互：你可以直接对它说话，它也会用语音回复你。
+
+### 9.1 网页端 (WebChat)
+
+在聊天输入框右侧，你会看到一个新的 **🎤 麦克风图标**。
+
+1.  **点击麦克风**：图标变红并伴有脉冲动画，表示正在录音。
+2.  **说话**：直接说出你的指令或问题。
+3.  **再次点击**：结束录音。
+4.  **发送**：
+    *   系统会自动将录音上传到后台进行高精度转写 (STT)。
+    *   转换后的文字会自动填入输入框（或直接发送）。
+    *   Agent 接收到的是你的**语音 + 文字**，它会理解你的语调并回复。
+
+> **🌟 双模引擎**：
+> *   **Mode A (默认)**：录音上传服务器，使用 Whisper/Paraformer 转写。精度高，支持长语音。
+> *   **Mode B (离线/备用)**：如果服务器 STT 未配置或断网，会自动降级使用浏览器原生的 Web Speech API 进行实时识别。
+
+### 9.2 飞书端 (Feishu)
+
+在飞书手机 App 或桌面端，你可以像给朋友发微信语音一样给 Belldandy 发消息：
+
+1.  按住说话，发送语音条。
+2.  Belldandy 会自动识别语音内容（转写文字回显在日志中）。
+3.  它会以文字（或语音，如果开启了 TTS）回复你。
+
+> **注意**：飞书语音识别依赖 `stt-transcribe` 能力，请确保服务端已配置有效的 `BELLDANDY_STT_PROVIDER`。
 
 ## 9. 视觉感知 (Loopback Vision)
 

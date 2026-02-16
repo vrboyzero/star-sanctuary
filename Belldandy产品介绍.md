@@ -55,9 +55,13 @@ Belldandy 是一款面向开发者与创作者的 **本地优先个人 AI 助手
 - **功能**：整合 `chokidar` 对工作区文件进行实时监听，自动触发 Memory 的增量索引与删除清理，让记忆与代码库保持几乎同步。
 - **特色**：通过轻量防抖和增量更新策略，在保证实时性的同时控制系统开销，特别适合“边写代码边当知识库”的开发场景。
 
-### 12. 多媒体与语音（Phase 13）
-- **功能**：重构 `text_to_speech` 为多 Provider 架构，支持 OpenAI 与 Edge TTS，并通过 `/generated` 静态路由向前端暴露音频文件。
-- **特色**：利用 Edge TTS 获得高质量中文语音（如晓晓）且零额外 API 成本，并通过文件信号 `TTS_ENABLED` 支持热切换语音模式，无需重启服务。
+### 12. 双向语音交互 (TTS + STT)（Phase 13+）
+- **语音合成 (TTS)**: 重构 `text_to_speech` 为多 Provider 架构，支持 OpenAI / Edge TTS / DashScope，并通过 `/generated` 静态路由向前端暴露音频文件。
+  - **特色**：利用 Edge TTS 获得高质量中文语音（如晓晓）且零额外 API 成本，并通过文件信号 `TTS_ENABLED` 支持热切换语音模式，无需重启服务。
+- **语音识别 (STT)**:
+  - 支持 OpenAI Whisper / Groq / DashScope Paraformer
+  - WebChat 前端录音 (MediaRecorder) + 离线兜底 (Web Speech API)
+  - 飞书语音消息自动转录
 
 ### 13. 视觉感知（Loopback Vision，Phase 13.5）
 - **功能**：通过浏览器扩展 + `/mirror.html` 回环页面获取摄像头画面，使用 `browser_navigate` + `browser_screenshot` 为模型提供视觉输入。

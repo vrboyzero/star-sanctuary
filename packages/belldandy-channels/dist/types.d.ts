@@ -30,6 +30,14 @@ export type ChannelEvent = {
     messageId?: string;
     chatId: string;
 } | {
+    type: "media_received";
+    channel: string;
+    messageId: string;
+    chatId: string;
+    mediaType: "audio" | "image" | "video";
+    buffer?: Buffer;
+    mime?: string;
+} | {
     type: "error";
     channel: string;
     error: Error;

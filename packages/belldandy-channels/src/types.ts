@@ -21,6 +21,7 @@ export type ChannelEvent =
     | { type: "stopped"; channel: string }
     | { type: "message_received"; channel: string; messageId: string; chatId: string }
     | { type: "message_sent"; channel: string; messageId?: string; chatId: string }
+    | { type: "media_received"; channel: string; messageId: string; chatId: string; mediaType: "audio" | "image" | "video"; buffer?: Buffer; mime?: string }
     | { type: "error"; channel: string; error: Error };
 
 /**

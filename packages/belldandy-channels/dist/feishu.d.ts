@@ -8,6 +8,13 @@ export interface FeishuChannelConfig {
     conversationStore: ConversationStore;
     initialChatId?: string;
     onChatIdUpdate?: (chatId: string) => void;
+    sttTranscribe?: (opts: {
+        buffer: Buffer;
+        fileName: string;
+        mime?: string;
+    }) => Promise<{
+        text: string;
+    } | null>;
 }
 /**
  * 飞书渠道实现
@@ -20,6 +27,7 @@ export declare class FeishuChannel implements Channel {
     private readonly wsClient;
     private readonly agent;
     private readonly conversationStore;
+    private readonly sttTranscribe?;
     private _running;
     private lastChatId?;
     private onChatIdUpdate?;

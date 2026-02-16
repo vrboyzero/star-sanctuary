@@ -39,6 +39,7 @@ import {
   imageGenerateTool,
   textToSpeechTool,
   synthesizeSpeech,
+  transcribeSpeech,
   runCommandTool,
   methodListTool,
   methodReadTool,
@@ -706,6 +707,13 @@ const server = await startGatewayServer({
     }
     return result;
   },
+  sttTranscribe: async (opts) => {
+    const result = await transcribeSpeech(opts);
+    if (result) {
+      logger.info("stt", `Transcribed audio (${result.durationSec?.toFixed(1) ?? "?"}s) via ${result.provider}: "${result.text.slice(0, 50)}${result.text.length > 50 ? "..." : ""}"`);
+    }
+    return result;
+  },
 });
 
 // 绑定 broadcast 给 service_restart 工具使用
@@ -788,6 +796,11 @@ if (feishuAppId && feishuAppSecret && createAgent) {
         } catch (e) {
           logger.error("feishu", "Failed to save state", e);
         }
+      },
+      sttTranscribe: async (opts) => {
+        const result = await transcribeSpeech(opts);
+        if (result) logger.info("feishu", `Transcribed audio (${result.durationSec?.toFixed(1) ?? "?"}s) from ${result.provider}`);
+        return result;
       },
     });
     // Do not await, start in background

@@ -42,7 +42,9 @@
       "Bash(corepack pnpm store prune:*)",
       "Bash(icacls \"E:\\\\project\\\\belldandy\\\\node_modules\\\\.pnpm\\\\sqlite-vec@0.1.7-alpha.2\\\\node_modules\\\\sqlite-vec-linux-x64\" /grant Everyone:F /T)",
       "Bash(Select-Object:*)",
-      "Bash(cmd /c:*)"
+      "Bash(cmd /c:*)",
+      "WebFetch(domain:bailian.console.aliyun.com)",
+      "Bash(curl:*)"
     ]
   }
 }

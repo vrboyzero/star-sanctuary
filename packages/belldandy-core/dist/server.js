@@ -178,6 +178,7 @@ export async function startGatewayServer(opts) {
                 ttsSynthesize: opts.ttsSynthesize,
                 toolsConfigManager: opts.toolsConfigManager,
                 toolExecutor: opts.toolExecutor,
+                sttTranscribe: opts.sttTranscribe,
                 pluginRegistry: opts.pluginRegistry,
             });
             if (res)
@@ -327,6 +328,40 @@ async function handleReq(ws, req, ctx) {
                             });
                             attachmentPrompts.push(`\n[用户上传了视频: ${att.name}] (System Note: Video content has been injected via multimodal channel. Please analyze it directly.)`);
                         }
+                        else if (att.type.startsWith("audio/")) {
+                            // Audio logic: Transcribe via STT
+                            if (ctx.sttTranscribe) {
+                                console.log(`[Gateway] Transcribing audio attachment: ${att.name}`);
+                                try {
+                                    const sttResult = await ctx.sttTranscribe({
+                                        buffer,
+                                        fileName: att.name,
+                                        mime: att.type,
+                                    });
+                                    if (sttResult?.text) {
+                                        console.log(`[Gateway] STT Result: "${sttResult.text}"`);
+                                        if (!promptText?.trim()) {
+                                            // If user didn't type anything, treat audio as the main prompt
+                                            promptText = sttResult.text;
+                                        }
+                                        else {
+                                            // Otherwise append as context
+                                            attachmentPrompts.push(`\n[语音转录: "${sttResult.text}"]`);
+                                        }
+                                    }
+                                    else {
+                                        attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录失败）]`);
+                                    }
+                                }
+                                catch (err) {
+                                    console.error(`[Gateway] STT failed for ${att.name}:`, err);
+                                    attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录出错）]`);
+                                }
+                            }
+                            else {
+                                attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（STT未配置）]`);
+                            }
+                        }
                         else {
                             // Text/File logic
                             const isText = att.type.startsWith("text/") ||
@@ -386,7 +421,8 @@ async function handleReq(ws, req, ctx) {
                             }
                         }
                         if (item.type === "usage") {
-                            sendEvent(ws, { type: "event", event: "token.usage", payload: {
+                            sendEvent(ws, {
+                                type: "event", event: "token.usage", payload: {
                                     conversationId,
                                     systemPromptTokens: item.systemPromptTokens,
                                     contextTokens: item.contextTokens,
@@ -395,7 +431,8 @@ async function handleReq(ws, req, ctx) {
                                     cacheCreationTokens: item.cacheCreationTokens,
                                     cacheReadTokens: item.cacheReadTokens,
                                     modelCalls: item.modelCalls,
-                                } });
+                                }
+                            });
                         }
                     }
                     // Server-side auto TTS: generate audio and send combined response
@@ -814,11 +851,12 @@ function parseMessageSendParams(value) {
         return { ok: false, message: "params must be an object" };
     const obj = value;
     const text = typeof obj.text === "string" ? obj.text : "";
-    if (!text.trim())
-        return { ok: false, message: "text is required" };
+    const attachments = obj.attachments;
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!text.trim() && !hasAttachments)
+        return { ok: false, message: "text or attachments required" };
     const conversationId = typeof obj.conversationId === "string" && obj.conversationId.trim() ? obj.conversationId.trim() : undefined;
     const from = typeof obj.from === "string" && obj.from.trim() ? obj.from.trim() : undefined;
-    const attachments = obj.attachments;
     return { ok: true, value: { text, conversationId, from, attachments } };
 }
 function safeParseFrame(raw) {

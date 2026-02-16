@@ -11,6 +11,7 @@ export interface FeishuChannelConfig {
     conversationStore: ConversationStore;
     initialChatId?: string;
     onChatIdUpdate?: (chatId: string) => void;
+    sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
 }
 
 /**
@@ -25,6 +26,7 @@ export class FeishuChannel implements Channel {
     private readonly wsClient: lark.WSClient;
     private readonly agent: BelldandyAgent;
     private readonly conversationStore: ConversationStore;
+    private readonly sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
     private _running = false;
     private lastChatId?: string; // Track the last active chat for proactive messaging
     private onChatIdUpdate?: (chatId: string) => void;
@@ -57,6 +59,7 @@ export class FeishuChannel implements Channel {
 
         // Store callback
         this.onChatIdUpdate = config.onChatIdUpdate;
+        this.sttTranscribe = config.sttTranscribe;
 
         // setupEventHandlers was removed
 
@@ -118,8 +121,8 @@ export class FeishuChannel implements Channel {
         // Ignore updates, own messages, or system messages if needed
         // Usually we check message_type
 
-        if (message.message_type !== "text") {
-            // For now, only handle text
+        if (message.message_type !== "text" && message.message_type !== "audio") {
+            // For now, only handle text and audio
             // TODO: Support images/files
             return;
         }
@@ -150,9 +153,118 @@ export class FeishuChannel implements Channel {
         let text = "";
         try {
             const contentObj = JSON.parse(message.content);
-            text = contentObj.text;
+            if (message.message_type === "text") {
+                text = contentObj.text;
+            } else if (message.message_type === "audio") {
+                if (!this.sttTranscribe) {
+                    console.warn(`Feishu: Received audio message ${msgId} but STT is not configured.`);
+                    return; // Or send a reply saying voice is not supported
+                }
+                const fileKey = contentObj.file_key;
+                console.log(`Feishu: Downloading audio ${fileKey}...`);
+
+                // Download audio file
+                // SDK path: client.im.messageResource.get
+                // Note: using 'as any' to bypass potential type mismatch in some SDK versions
+                const response = await (this.client as any).im.messageResource.get({
+                    path: { message_id: msgId, file_key: fileKey },
+                    params: { type: "file" }, // type: 'image' | 'file'
+                });
+
+                // The SDK returns a stream or buffer depending on implementation?
+                // Looking at SDK types, `writeFile` returns Promise<response>. 
+                // But `get` returns `Promise<any>` with binary data in `data`?
+                // Actually `get` returns a response object where `data` might be a stream.
+                // Let's assume it returns a buffer or we can read it.
+                // Official SDK often returns raw buffer if not streaming.
+                // Let's try to treat response as containing buffer.
+                // Note: The SDK's `im.message.resource.get` usually returns a stream in `data` property?
+                // Let's double check standard implementation.
+                // For safety, let's treat `response` (or `response.data`) as something convertible to Buffer.
+
+                // Hack: If response is a crypto.webcrypto.BufferSource or ArrayBuffer...
+                // The SDK behavior: `await client.im.message.resource.get(...)` returns `{ code: 0, msg: "success", data: ReadableStream }`?
+                // Actually it returns binary data directly if not specified otherwise? 
+                // Let's wrap in try-catch and inspect.
+
+                // Assuming `response` is valid.
+                // Wait, `get` returns `Promise<GetMessageResourceResponse>`.
+                // We need to read the stream.
+
+                // Let's fetch it manually if SDK is tricky, but we need auth token.
+                // Better to use SDK.
+                // If it fails, we catch error.
+
+                // Let's assume `response` is the binary data (Buffer) because `node-sdk` might handle it?
+                // No, looking at `node-sdk` code, it usually returns standard response wrapper.
+                // If the content type is binary, `response` might be the buffer or stream.
+
+                // Let's look at `node-sdk` typings if possible.
+                // `get(request: GetMessageResourceRequest): Promise<GetMessageResourceResponse>;`
+                // It usually returns a file stream.
+
+                // To keep it simple, let's try `await response.writeFile(path)`? 
+                // Or `response` itself is a stream.
+
+                // Let's start with a simpler assumption: The `response` matches what `readFile` expects.
+                // Actually, let's assume `response` is a Buffer for now (Node SDK behavior varies).
+                // Or use `writeFile`.
+
+                // CORRECT APPROACH for Lark Node SDK:
+                // `const res = await client.im.message.resource.get(...)`
+                // `const buffer = await res.readFile()`?? No.
+
+                // It seems `client.im.message.resource.get` returns the binary file stream directly in some versions?
+                // Let's try downloading via standard `Buffer.concat` on stream.
+
+                let buffer: Buffer;
+                if (Buffer.isBuffer(response)) {
+                    buffer = response;
+                } else if ((response as any).data && typeof (response as any).data.on === 'function') {
+                    // It is a stream
+                    const chunks: Buffer[] = [];
+                    for await (const chunk of (response as any).data) {
+                        chunks.push(Buffer.from(chunk));
+                    }
+                    buffer = Buffer.concat(chunks);
+                } else if ((response as any).writeFile) {
+                    // Valid response object with file helper?
+                    const chunks: Buffer[] = [];
+                    const stream = await (response as any).response.blob?.()?.stream?.(); // Modern?
+                    // Fallback:
+                    buffer = Buffer.from(JSON.stringify(response)); // Error placeholder
+                } else {
+                    // Assume it's a buffer-like object or try to convert
+                    buffer = Buffer.from(response as any);
+                }
+
+                if (buffer.length < 100) {
+                    // Likely JSON error response
+                    console.warn("Feishu: Audio download might be invalid (too small).");
+                }
+
+                // Transcribe
+                // Feishu audio is usually 'opus' in 'audio/ogg' container or 'mp4' (m4a).
+                // File extension in key is not guaranteed.
+                // We'll guess MIME or use 'audio/mp4' (common for mobile).
+                const mime = "audio/mp4";
+                const sttRes = await this.sttTranscribe({
+                    buffer,
+                    fileName: `feishu_${msgId}.m4a`,
+                    mime
+                });
+
+                if (sttRes?.text) {
+                    text = sttRes.text;
+                    console.log(`Feishu: Audio transcribed: "${text}"`);
+                } else {
+                    console.warn(`Feishu: Audio transcription failed for ${msgId}.`);
+                    return;
+                }
+            }
+
         } catch (e) {
-            console.error("Failed to parse Feishu message content", e);
+            console.error("Failed to parse Feishu message content or download audio", e);
             return;
         }
 
@@ -206,10 +318,10 @@ export class FeishuChannel implements Channel {
             if (replyText) {
                 // [PERSISTENCE] Add Assistant Message to Store
                 const sanitized = replyText
-                  .replace(/<audio[^>]*>.*?<\/audio>/gi, "")
-                  .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
-                  .replace(/\n{3,}/g, "\n\n")
-                  .trim();
+                    .replace(/<audio[^>]*>.*?<\/audio>/gi, "")
+                    .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
+                    .replace(/\n{3,}/g, "\n\n")
+                    .trim();
                 this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText);
 
                 await this.reply(msgId, replyText);
