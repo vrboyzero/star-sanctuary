@@ -74,15 +74,14 @@ promptEl.addEventListener("keydown", (e) => {
   }
   // Auto-resize on keydown (for Shift+Enter immediately)
   setTimeout(() => {
-    promptEl.style.height = "auto";
+    promptEl.style.height = "0";
     promptEl.style.height = promptEl.scrollHeight + "px";
   }, 0);
 });
 
 promptEl.addEventListener("input", () => {
   // Auto-resize
-  promptEl.style.height = "auto";
-  promptEl.style.height = promptEl.scrollHeight + "px";
+  promptEl.style.height = "0";
   promptEl.style.height = promptEl.scrollHeight + "px";
 });
 

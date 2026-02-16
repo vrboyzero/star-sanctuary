@@ -688,6 +688,8 @@ body::before {
   padding: 8px 0;
   font-family: inherit;
   line-height: 1.5;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .composer .input:focus {
@@ -698,7 +700,9 @@ body::before {
   background: var(--text-main);
   color: #000;
   border: none;
-  padding: 0 24px;
+  padding: 8px 24px;
+  align-self: flex-end;
+  flex-shrink: 0;
 }
 
 /* Awakening Ritual */
