@@ -27,10 +27,14 @@ export declare class ToolExecutor {
     private readonly extraWorkspaceRoots;
     private readonly policy;
     private readonly auditLogger?;
-    private readonly agentCapabilities?;
+    private agentCapabilities?;
     private readonly logger?;
     private readonly isToolDisabled?;
     constructor(options: ToolExecutorOptions);
+    /**
+     * Late-bind agentCapabilities (for cases where the orchestrator is created after the executor).
+     */
+    setAgentCapabilities(caps: AgentCapabilities): void;
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions(): {
         type: "function";
@@ -51,7 +55,7 @@ export declare class ToolExecutor {
     /** 获取已注册的工具数量 */
     getToolCount(): number;
     /** 执行工具调用 */
-    execute(request: ToolCallRequest, conversationId: string): Promise<ToolCallResult>;
+    execute(request: ToolCallRequest, conversationId: string, agentId?: string): Promise<ToolCallResult>;
     /** 批量执行（并行） */
     executeAll(requests: ToolCallRequest[], conversationId: string): Promise<ToolCallResult[]>;
     private audit;

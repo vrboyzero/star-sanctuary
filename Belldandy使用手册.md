@@ -656,6 +656,159 @@ Belldandy 的运行日志保存在 `~/.belldandy/logs/` 目录，支持：
 
 如需调整日志行为，可在 `.env.local` 中配置 `BELLDANDY_LOG_*` 相关变量（参见 3.2 进阶配置）。
 
+### 5.8 多 Agent 系统 (Multi-Agent)
+
+Belldandy 支持配置和运行多个 Agent，每个 Agent 可以拥有独立的模型、人格、工具权限和工作区。你可以在 WebChat 中切换不同 Agent 对话，也可以让 Agent 之间协作完成复杂任务。
+
+#### 5.8.1 配置 Agent Profile
+
+在 `~/.belldandy/` 目录下创建 `agents.json` 文件：
+
+```json
+{
+  "agents": [
+    {
+      "id": "coder",
+      "displayName": "代码专家",
+      "model": "primary",
+      "systemPromptOverride": "你是一个严谨的代码专家，擅长 TypeScript 和系统设计。",
+      "toolsEnabled": true,
+      "toolWhitelist": ["file_read", "file_write", "run_command", "web_fetch"]
+    },
+    {
+      "id": "researcher",
+      "displayName": "调研助手",
+      "model": "deepseek-chat",
+      "systemPromptOverride": "你是一个高效的调研助手，擅长信息检索和总结。",
+      "toolsEnabled": true,
+      "toolWhitelist": ["web_fetch", "web_search", "memory_search"]
+    }
+  ]
+}
+```
+
+**字段说明**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `id` | 是 | 唯一标识（如 `"coder"`, `"researcher"`） |
+| `displayName` | 否 | 显示名称（用于 UI 和日志，默认等于 `id`） |
+| `model` | 是 | 模型引用：`"primary"` 使用环境变量配置，其他值引用 `models.json` 中对应 `id` 的条目 |
+| `systemPromptOverride` | 否 | 追加到系统提示词末尾的额外内容 |
+| `workspaceDir` | 否 | Agent 专属 workspace 目录名（位于 `~/.belldandy/agents/{workspaceDir}/`），默认等于 `id` |
+| `toolsEnabled` | 否 | 是否启用工具（覆盖环境变量 `BELLDANDY_TOOLS_ENABLED`） |
+| `toolWhitelist` | 否 | 可用工具白名单（仅列出的工具对该 Agent 可用） |
+| `maxInputTokens` | 否 | 最大输入 token 数覆盖 |
+
+> **💡 提示**：不创建 `agents.json` 时，系统只有一个 `"default"` Agent，使用环境变量中的配置，行为与之前完全一致。
+
+#### 5.8.2 Agent 专属工作区
+
+每个非 default 的 Agent 可以拥有独立的人格文件。目录结构：
+
+```
+~/.belldandy/
+├── SOUL.md              # default Agent 的人格
+├── IDENTITY.md
+├── agents/
+│   ├── coder/           # coder Agent 的专属目录
+│   │   ├── SOUL.md      # 覆盖 default 的 SOUL
+│   │   ├── IDENTITY.md  # 覆盖 default 的 IDENTITY
+│   │   └── facets/      # coder 专属的 FACET 模组
+│   │       └── strict.md
+│   └── researcher/
+│       └── SOUL.md
+```
+
+**继承规则**：对每个可继承文件（SOUL.md、IDENTITY.md、USER.md、AGENTS.md、TOOLS.md、MEMORY.md），优先从 `agents/{id}/` 读取；不存在则自动 fallback 到根目录的同名文件。
+
+#### 5.8.3 在 WebChat 中切换 Agent
+
+配置了多个 Agent Profile 后，WebChat 界面顶部会出现 Agent 选择器。点击即可切换到不同的 Agent 进行对话，每个 Agent 的会话是隔离的。
+
+也可以通过 WebSocket API 查询可用 Agent 列表：
+
+```
+方法: agents.list
+返回: { agents: [{ id, displayName, model }, ...] }
+```
+
+#### 5.8.4 飞书渠道绑定 Agent
+
+可以为飞书渠道指定使用特定的 Agent Profile：
+
+```env
+# 飞书渠道使用 "researcher" Agent（默认使用 default）
+BELLDANDY_FEISHU_AGENT_ID=researcher
+```
+
+#### 5.8.5 子 Agent 编排 (Sub-Agent Orchestration)
+
+当启用工具调用（`BELLDANDY_TOOLS_ENABLED=true`）且配置了 Agent Profile 后，Belldandy 支持将复杂任务拆分并委托给子 Agent 执行。
+
+**工作原理**：
+
+1. 主 Agent 在 ReAct 循环中决定需要委托任务
+2. 通过 `delegate_task` 或 `delegate_parallel` 工具发起委托
+3. 子 Agent 在独立的会话中运行，完成后将结果返回给主 Agent
+4. 主 Agent 汇总结果继续推理
+
+**可用工具**：
+
+| 工具 | 说明 |
+|------|------|
+| `delegate_task` | 委托单个任务给指定子 Agent。参数：`instruction`（必填）、`agent_id`（可选，默认 default）、`context`（可选） |
+| `delegate_parallel` | 并行委托多个任务。参数：`tasks` 数组，每项包含 `instruction`、`agent_id`、`context` |
+| `sessions_spawn` | 生成子 Agent 会话（底层工具，功能与 `delegate_task` 类似） |
+| `sessions_history` | 查看当前会话的所有子 Agent 会话状态 |
+
+**使用示例**（在对话中自然语言触发）：
+
+| 你说的话 | Agent 做的事 |
+|----------|-------------|
+| "让 coder 帮我写一个排序算法" | 调用 `delegate_task`，委托给 coder Agent |
+| "同时让 researcher 查资料、coder 写代码" | 调用 `delegate_parallel`，两个子 Agent 并行工作 |
+| "查看子任务进度" | 调用 `sessions_history`，列出所有子 Agent 会话状态 |
+
+**安全机制**：
+
+- **并发限制**：同时运行的子 Agent 数量有上限（默认 3），超出的任务自动排队
+- **队列限制**：排队任务数量有上限（默认 10），队列满时拒绝新任务
+- **超时保护**：子 Agent 运行超时自动终止（默认 120 秒）
+- **嵌套深度限制**：防止子 Agent 无限递归委托（默认最大深度 2）
+- **生命周期钩子**：子 Agent 会话触发 `session_start` / `session_end` 钩子
+
+#### 5.8.6 子 Agent 环境变量
+
+在 `.env.local` 中配置子 Agent 编排参数：
+
+```env
+# ------ 子 Agent 编排 ------
+
+# 最大并发子 Agent 数量（默认 3）
+BELLDANDY_SUB_AGENT_MAX_CONCURRENT=3
+
+# 排队队列最大长度（默认 10，队列满时拒绝新任务）
+BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE=10
+
+# 子 Agent 运行超时（毫秒，默认 120000 即 2 分钟）
+BELLDANDY_SUB_AGENT_TIMEOUT_MS=120000
+
+# 最大嵌套深度（默认 2，防止无限递归）
+BELLDANDY_SUB_AGENT_MAX_DEPTH=2
+
+# 飞书渠道绑定的 Agent Profile ID（可选）
+BELLDANDY_FEISHU_AGENT_ID=researcher
+```
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `BELLDANDY_SUB_AGENT_MAX_CONCURRENT` | `3` | 同时运行的子 Agent 上限 |
+| `BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE` | `10` | 排队等待的任务上限 |
+| `BELLDANDY_SUB_AGENT_TIMEOUT_MS` | `120000` | 单个子 Agent 运行超时（ms） |
+| `BELLDANDY_SUB_AGENT_MAX_DEPTH` | `2` | 子 Agent 嵌套委托最大深度 |
+| `BELLDANDY_FEISHU_AGENT_ID` | — | 飞书渠道使用的 Agent Profile ID |
+
 ## 6. 管理命令（bdd CLI）
 
 Belldandy 提供了统一的 `bdd` 命令行工具，涵盖启动、配置、诊断、配对管理等所有操作。

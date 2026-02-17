@@ -58,6 +58,8 @@ export type MessageSendParams = {
   conversationId?: string;
   text: string;
   from?: string;
+  /** 指定使用的 Agent Profile ID（可选，缺省使用 "default"） */
+  agentId?: string;
   attachments?: Array<{
     name: string;
     type: string;
@@ -103,5 +105,14 @@ export type SystemDoctorResult = {
     name: string;
     status: "pass" | "fail" | "warn";
     message?: string;
+  }>;
+};
+
+// Result payload for agents.list (Response payload)
+export type AgentsListResult = {
+  agents: Array<{
+    id: string;
+    displayName: string;
+    model: string; // 引用名，不暴露 apiKey
   }>;
 };

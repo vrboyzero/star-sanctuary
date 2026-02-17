@@ -579,6 +579,16 @@ body::before {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+.msg.system {
+  justify-self: center;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 12px;
+  border: none;
+  box-shadow: none;
+}
+
 
 /* Composer */
 .composer {
@@ -604,6 +614,23 @@ body::before {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+}
+
+/* Agent Selector */
+.agent-select {
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.agent-select:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* Attach Button */

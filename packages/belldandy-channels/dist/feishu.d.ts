@@ -6,6 +6,7 @@ export interface FeishuChannelConfig {
     appSecret: string;
     agent: BelldandyAgent;
     conversationStore: ConversationStore;
+    agentId?: string;
     initialChatId?: string;
     onChatIdUpdate?: (chatId: string) => void;
     sttTranscribe?: (opts: {
@@ -27,6 +28,7 @@ export declare class FeishuChannel implements Channel {
     private readonly wsClient;
     private readonly agent;
     private readonly conversationStore;
+    private readonly agentId?;
     private readonly sttTranscribe?;
     private _running;
     private lastChatId?;

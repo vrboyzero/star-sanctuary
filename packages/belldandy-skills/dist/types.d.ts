@@ -94,17 +94,27 @@ export type SubAgentResult = {
     success: boolean;
     output: string;
     error?: string;
+    sessionId?: string;
 };
 export type SessionInfo = {
     id: string;
     parentId?: string;
-    status: "running" | "done" | "error";
+    agentId?: string;
+    status: "pending" | "running" | "done" | "error" | "timeout";
     createdAt: number;
+    finishedAt?: number;
     summary?: string;
 };
+export type SpawnSubAgentOptions = {
+    instruction: string;
+    agentId?: string;
+    context?: JsonObject;
+    parentConversationId?: string;
+};
 export type AgentCapabilities = {
-    spawnSubAgent?: (instruction: string, context?: JsonObject) => Promise<SubAgentResult>;
-    listSessions?: () => Promise<SessionInfo[]>;
+    spawnSubAgent?: (opts: SpawnSubAgentOptions) => Promise<SubAgentResult>;
+    spawnParallel?: (tasks: SpawnSubAgentOptions[]) => Promise<SubAgentResult[]>;
+    listSessions?: (parentConversationId?: string) => Promise<SessionInfo[]>;
 };
 /** 工具执行上下文 */
 export type ToolContext = {
@@ -112,6 +122,8 @@ export type ToolContext = {
     workspaceRoot: string;
     /** 额外允许的文件操作根目录（如其他盘符下的目录），路径必须落在 workspaceRoot 或其一内 */
     extraWorkspaceRoots?: string[];
+    /** 当前 Agent ID（用于 per-agent workspace 定位，如 switch_facet） */
+    agentId?: string;
     policy: ToolPolicy;
     agentCapabilities?: AgentCapabilities;
     logger?: {

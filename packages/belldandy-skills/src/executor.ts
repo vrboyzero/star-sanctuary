@@ -45,7 +45,7 @@ export class ToolExecutor {
   private readonly extraWorkspaceRoots: string[];
   private readonly policy: ToolPolicy;
   private readonly auditLogger?: (log: ToolAuditLog) => void;
-  private readonly agentCapabilities?: AgentCapabilities;
+  private agentCapabilities?: AgentCapabilities;
   private readonly logger?: ToolExecutorLogger;
   private readonly isToolDisabled?: (toolName: string) => boolean;
 
@@ -58,6 +58,13 @@ export class ToolExecutor {
     this.agentCapabilities = options.agentCapabilities;
     this.logger = options.logger;
     this.isToolDisabled = options.isToolDisabled;
+  }
+
+  /**
+   * Late-bind agentCapabilities (for cases where the orchestrator is created after the executor).
+   */
+  setAgentCapabilities(caps: AgentCapabilities): void {
+    this.agentCapabilities = caps;
   }
 
   /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
@@ -105,7 +112,7 @@ export class ToolExecutor {
   }
 
   /** 执行工具调用 */
-  async execute(request: ToolCallRequest, conversationId: string): Promise<ToolCallResult> {
+  async execute(request: ToolCallRequest, conversationId: string, agentId?: string): Promise<ToolCallResult> {
     const start = Date.now();
 
     // 防御性检查：拒绝已禁用的工具调用
@@ -141,6 +148,7 @@ export class ToolExecutor {
       conversationId,
       workspaceRoot: this.workspaceRoot,
       extraWorkspaceRoots: this.extraWorkspaceRoots.length > 0 ? this.extraWorkspaceRoots : undefined,
+      agentId,
       policy: this.policy,
       agentCapabilities: this.agentCapabilities,
       logger: this.logger ? {

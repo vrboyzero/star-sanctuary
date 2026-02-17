@@ -682,6 +682,168 @@
     ```
 - **价值**：将 FACET 模组切换从"Agent 自行摸索的多步操作"变为"一键工具调用"，显著降低切换成本和失败率。
 
+### 2.8 多 Agent 配置体系 (AgentProfile & AgentRegistry) ✅ 已完成
+
+- **目标**：为多 Agent 场景打下配置基础，支持按 agentId 创建不同配置的 Agent 实例。
+- **状态**：✅ 已完成（对应 IMPLEMENTATION_PLAN B-P1-5）
+- **实现内容**：
+    - **AgentProfile 类型** (`packages/belldandy-agent/src/agent-profile.ts`)：
+        - 描述一个 Agent 的完整配置：`id`、`displayName`、`model`（引用 models.json 中的条目或 `"primary"` 使用环境变量）、`systemPromptOverride`、`workspaceDir`、`toolsEnabled`、`toolWhitelist`、`maxInputTokens`。
+        - `loadAgentProfiles(filePath)` 从 `~/.belldandy/agents.json` 加载配置，文件不存在时静默返回空数组。
+        - `resolveModelConfig()` 将 `model` 字段解析为实际的 baseUrl/apiKey/model 配置。
+        - `buildDefaultProfile()` 构建隐式的 `"default"` profile（始终存在，映射到环境变量配置）。
+    - **AgentRegistry 注册表** (`packages/belldandy-agent/src/agent-registry.ts`)：
+        - 替代原有的单一 `agentFactory` 闭包，支持按 agentId 创建/缓存 Agent 实例。
+        - `register(profile)` 注册 Profile，`create(agentId)` 按需创建或复用缓存实例。
+        - `list()` 列出所有已注册 Profile，`has(agentId)` 检查是否存在。
+    - **ConversationStore 元数据扩展** (`packages/belldandy-agent/src/conversation.ts`)：
+        - `Conversation` 和 `ConversationMessage` 增加可选 `agentId` 和 `channel` 字段。
+        - 消息持久化时携带 agentId，支持按 Agent 隔离会话。
+    - **协议层预留** (`packages/belldandy-protocol/src/index.ts`)：
+        - `MessageSendParams` 增加可选 `agentId` 字段。
+    - **Gateway 集成** (`packages/belldandy-core/src/bin/gateway.ts`)：
+        - 启动时加载 `agents.json` → 构建 AgentRegistry → 注册所有 Profile。
+        - 无 `agents.json` 时行为与改动前完全一致（向后兼容）。
+- **配置格式** (`~/.belldandy/agents.json`)：
+    ```json
+    {
+      "agents": [
+        {
+          "id": "coder",
+          "displayName": "代码专家",
+          "model": "primary",
+          "systemPromptOverride": "你是一个严谨的代码专家",
+          "toolsEnabled": true,
+          "toolWhitelist": ["file_read", "file_write", "run_command"]
+        }
+      ]
+    }
+    ```
+- **设计决策**：
+    - 独立 `agents.json` 文件，不污染 `models.json`。
+    - 密钥管理：AgentProfile 通过 `model` 字段引用 ModelProfile.id，不重复存储密钥。
+- **价值**：为多 Agent 路由、子 Agent 编排、渠道绑定等后续功能提供了统一的配置基础设施。
+
+### 2.9 多 Agent 路由与前端集成 (P2-1a/b) ✅ 已完成
+
+- **目标**：实现 WebChat Agent 选择、渠道级 Agent 绑定、会话隔离等多 Agent 运行时能力。
+- **状态**：✅ 已完成
+- **实现内容**：
+    - **`agents.list` API**（`packages/belldandy-core/src/server.ts`）：
+        - 新增 WebSocket 方法 `agents.list`，返回已注册的 AgentProfile 列表（`id`、`displayName`、`model`）。
+    - **WebChat Agent 选择器**：
+        - 配置了多个 Agent Profile 后，WebChat 界面顶部出现 Agent 下拉选择器。
+        - 切换 Agent 后，`message.send` 请求携带 `agentId`，Gateway 路由到对应 Agent 实例。
+    - **实例缓存**：
+        - AgentRegistry 为每个 agentId 维护独立的 Agent 实例（含 FailoverClient cooldown 状态），避免重复创建。
+    - **会话隔离**：
+        - 通过 `agentId` 隔离 ConversationStore，不同 Agent 的会话互不干扰。
+    - **飞书渠道绑定**：
+        - 新增 `BELLDANDY_FEISHU_AGENT_ID` 环境变量，飞书渠道可绑定特定 Agent Profile。
+        - 未设置时使用 default Agent，向后兼容。
+- **价值**：用户可以在同一个 Belldandy 实例中运行多个不同人格/能力的 Agent，并在 WebChat 中自由切换。
+
+### 2.10 Per-Agent Workspace 与 Facet 共存 (阶段 4) ✅ 已完成
+
+- **目标**：让每个非 default Agent 拥有独立的人格文件和 FACET 模组目录，同时保持与根目录的继承关系。
+- **状态**：✅ 已完成（通过构建 + 97 个测试用例验证）
+- **实现内容**：
+    - **Per-Agent Workspace 目录**：
+        - `ensureAgentWorkspace()` 创建 `~/.belldandy/agents/{agentId}/` 和 `facets/` 子目录。
+        - `loadAgentWorkspaceFiles()` 按优先级加载：优先从 `agents/{id}/` 读取，缺失则 fallback 到根目录。
+        - 可继承文件：SOUL.md、IDENTITY.md、USER.md、AGENTS.md、TOOLS.md、MEMORY.md。
+    - **switch_facet 多 Agent 适配**：
+        - `resolveAgentPaths()` 根据 `context.agentId` 定位对应 Agent 目录的 SOUL.md 和 facets/。
+        - default Agent 使用根目录，其他 Agent 使用 `agents/{id}/` 子目录。
+    - **AgentProfile 字段扩展**：
+        - 新增 `workspaceDir?: string`（Agent 专属 workspace 目录名，默认等于 id）。
+        - `soulFile` 标记 `@deprecated`，由 `workspaceDir` 替代。
+    - **ToolContext 扩展**：
+        - `ToolContext` 新增 `agentId?: string`，工具执行时可感知当前 Agent 身份。
+    - **Gateway 集成**：
+        - 启动时为每个非 default Agent 创建 workspace 目录、预加载 workspace 文件、构建独立 system prompt（缓存到 `agentWorkspaceCache`）。
+- **目录结构**：
+    ```
+    ~/.belldandy/
+    ├── SOUL.md              # default Agent
+    ├── IDENTITY.md
+    ├── agents/
+    │   ├── coder/
+    │   │   ├── SOUL.md      # 覆盖 default
+    │   │   ├── IDENTITY.md
+    │   │   └── facets/
+    │   │       └── strict.md
+    │   └── researcher/
+    │       └── SOUL.md
+    ```
+- **价值**：Facet 模组（全局人格扩展热替换）与 AgentProfile（多 Agent 人格差异化）互补共存，不互相替代。
+
+### 2.11 子 Agent 编排 (Sub-Agent Orchestration) Phase 16 ✅ MVP 已完成
+
+- **目标**：将复杂任务分发给独立的子 Agent，实现 Agent 团队协作。
+- **状态**：✅ MVP 已完成（24 tests 通过）
+- **实现内容**：
+    - **SubAgentOrchestrator 核心类** (`packages/belldandy-agent/src/orchestrator.ts`)：
+        - 管理子 Agent 会话的完整生命周期：spawn → run → collect result → cleanup。
+        - **Batch 模式**：子 Agent 完成后返回聚合结果给父 Agent，不污染 ReAct 上下文。
+        - **Event Hook**：通过 `onEvent` 回调将子 Agent 状态实时推送（started / queued / thought_delta / completed）。
+        - **独立 conversationId**：子 Agent 运行在隔离的会话中。
+        - **嵌套深度限制**：通过 `context._orchestratorDepth` 防止无限递归（默认最大深度 2）。
+        - **超时保护**：子 Agent 运行超时自动终止（默认 120 秒）。
+    - **工具集**（`packages/belldandy-skills/src/builtin/session/`）：
+        | 工具 | 说明 |
+        |------|------|
+        | `delegate_task` | 委托单个任务给指定子 Agent（语义化接口，指定 `agent_id` + `instruction`） |
+        | `sessions_spawn` | 生成子 Agent 会话（底层工具，功能与 delegate_task 类似） |
+        | `sessions_history` | 查看当前会话的所有子 Agent 会话状态 |
+    - **Gateway 集成**：
+        - 创建 SubAgentOrchestrator 实例，注入 AgentRegistry 和 ConversationStore。
+        - 通过 `agentCapabilities` 将 `spawnSubAgent` / `listSessions` 能力注入 ToolContext。
+        - 注册 `delegate_task` / `sessions_spawn` / `sessions_history` 工具。
+- **环境变量**：
+    | 变量 | 默认值 | 说明 |
+    |------|--------|------|
+    | `BELLDANDY_SUB_AGENT_MAX_CONCURRENT` | `3` | 同时运行的子 Agent 上限 |
+    | `BELLDANDY_SUB_AGENT_TIMEOUT_MS` | `120000` | 单个子 Agent 运行超时（ms） |
+    | `BELLDANDY_SUB_AGENT_MAX_DEPTH` | `2` | 子 Agent 嵌套委托最大深度 |
+- **价值**：赋予 Agent "团队作战"能力，主 Agent 可以将子任务分发给专业化的子 Agent（如让 coder 写代码、researcher 查资料），提升复杂任务的完成质量。
+
+### 2.12 Agents 后续迭代 Phase 25 Step 1-3 ✅ 已完成
+
+- **目标**：基于 Phase 16 MVP 的 SubAgentOrchestrator 进行增强，提升并发能力和系统集成度。
+- **状态**：✅ Step 1-3 已完成（24 tests 通过）
+- **参考框架**：Inngest AgentKit（Network/Router）、OpenAI Agents JS（生命周期钩子）、LangGraph（Orchestrator-Worker + 条件分支）。
+- **实现内容**：
+    - **Step 1: 并发排队机制**：
+        - 超出 `maxConcurrent` 时任务自动排队等待，队列满才拒绝。
+        - `drainQueue()` 在子 Agent 完成后自动消费队列中的下一个任务。
+        - 排队超时检测：等待时间超过 `sessionTimeoutMs` 的任务自动失败。
+        - 新增 `BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE` 环境变量（默认 10）。
+    - **Step 2: `delegate_parallel` 工具**：
+        - 新增 `delegate_parallel` 工具（`packages/belldandy-skills/src/builtin/session/delegate-parallel.ts`）。
+        - 接受 `tasks` 数组，每个 task 包含 `instruction`、`agent_id`（可选）、`context`（可选）。
+        - 所有任务并行执行（通过 `orchestrator.spawnParallel()`），超出并发上限的自动排队。
+        - 全部完成后返回聚合结果（每个 task 的成功/失败状态和输出）。
+    - **Step 3: 生命周期钩子集成**：
+        - 新增 `OrchestratorHookRunner` 接口，由 Gateway 层注入实际的 HookRunner 实例。
+        - 子 Agent session 触发 `session_start` / `session_end` 钩子。
+        - 钩子错误不阻塞子 Agent 执行（catch + warn 日志）。
+- **改动文件**：
+    ```
+    packages/belldandy-agent/src/orchestrator.ts     — 排队机制 + OrchestratorHookRunner 集成
+    packages/belldandy-skills/src/builtin/session/
+    ├── delegate-parallel.ts                          — [NEW] 并行委托工具
+    └── index.ts                                      — 导出 delegateParallelTool
+    packages/belldandy-skills/src/types.ts            — AgentCapabilities.spawnParallel
+    packages/belldandy-core/src/bin/gateway.ts        — 注册 + 绑定
+    ```
+- **后续迭代项**（待实施）：
+    | 项目 | 优先级 | 说明 |
+    |------|--------|------|
+    | WebChat 前端展示 | P2 | `onEvent` → Gateway 转发 → WebSocket → 前端 UI 展示子 Agent 状态卡片 |
+    | 条件分支编排 | P3 | `orchestrate` 工具，接受 DAG 描述，拓扑排序 → 同层并行 → 条件判断 → 聚合结果 |
+- **价值**：并发排队避免资源争抢，`delegate_parallel` 让多个子 Agent 真正并行工作，钩子集成确保子 Agent 生命周期可观测。
+
 ### 3. MCP (Model Context Protocol) 支持 (Phase 17) ✅ 已完成
 
 - **目标**：实现 MCP 协议支持，让 Belldandy 能够连接外部 MCP 服务器，获取第三方工具和数据源。
@@ -975,7 +1137,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
     - **Memory**：使用 `better-sqlite3` + FTS5 + `sqlite-vec` 实现本地向量数据库与全文检索。
     - **Media**：图片/文件自动存储在本地文件系统中。
 
-> **Belldandy 现状对比**：目前 Belldandy 已实现了 **文件操作** (read/write)、**Web Fetch**、**Memory**、**浏览器自动化（基础版）**，并提供 **Safe Mode 的系统命令执行**（白名单 + 超时 + 风险阻断）。
+> **Belldandy 现状对比**：目前 Belldandy 已实现了 **文件操作** (read/write/list/patch)、**Web Fetch/Search**、**Memory**（FTS5 + sqlite-vec 混合检索）、**浏览器自动化**（CDP 中继 + 快照/截图/操作）、**Safe Mode 系统命令执行**（白名单 + 超时 + 风险阻断）、**多 Agent 配置与路由**（AgentProfile + AgentRegistry + agents.list + WebChat 选择器）、**子 Agent 编排**（SubAgentOrchestrator + delegate_task/delegate_parallel + 并发排队 + 钩子集成）、**Cron 定时任务**、**MCP 协议支持**、**FACET 模组切换**。
 
 ---
 
@@ -991,9 +1153,9 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **网络请求** | ✅ search + fetch | ✅ search + fetch | 集成 Brave/SerpAPI |
 | **记忆系统** | ✅ memory + nodes | ✅ memory | 缺少 `nodes` 图谱 |
 | **多媒体** | ✅ tts/image/canvas | ✅ tts/image | 缺少 `canvas` |
-| **会话编排** | ✅ 完整 | ❌ 未实现 | — |
+| **会话编排** | ✅ 完整 | ✅ 完整 | SubAgentOrchestrator + delegate_task/delegate_parallel + 并发排队 + 钩子集成 |
 | **渠道集成** | ✅ 4+ channels | ✅ 飞书 + Channel 接口 | 架构已就绪，可快速扩展 |
-| **定时任务** | ✅ cron tool | ✅ heartbeat + cron | 轻量 MVP 已完成 |
+| **定时任务** | ✅ cron tool | ✅ heartbeat + cron | 完整 cron 工具（list/add/remove/status）+ Heartbeat |
 | **插件系统** | ✅ 丰富 | ✅ 完整对标 | 13 种钩子 + HookRunner + 优先级 |
 | **MCP 支持** | ✅ ACP 协议 | ✅ MCP 协议 | stdio/SSE 传输 + 工具桥接 |
 | **FACET 模组** | — | ✅ switch_facet | 原子化切换 SOUL.md 模组 |
@@ -1051,10 +1213,10 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 | 工具 | 说明 | Belldandy |
 |------|------|-----------|
-| `agents_list` | 列出可用 Agent | ❌ |
-| `sessions_list` | 列出会话 | ❌ |
-| `sessions_spawn` | 创建子 Agent 任务 | ❌ |
-| `cron` | 定时任务管理 | ⚠️ heartbeat |
+| `agents_list` | 列出可用 Agent | ✅ `agents.list` API |
+| `sessions_list` | 列出会话 | ✅ `sessions_history` |
+| `sessions_spawn` | 创建子 Agent 任务 | ✅ `sessions_spawn` / `delegate_task` / `delegate_parallel` |
+| `cron` | 定时任务管理 | ✅ `cron` (list/add/remove/status) |
 | `message` | 跨渠道发送消息 | ❌ |
 
 #### 7. 记忆与知识 (Memory & Nodes)
@@ -1089,18 +1251,23 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **记忆读写** | `memory_read`, `memory_write` |
 | **飞书渠道** | `FeishuChannel`（WebSocket 长连接） |
 | **定时触发** | `Heartbeat Runner`（读取 HEARTBEAT.md） |
+| **定时任务** | `cron`（list/add/remove/status，支持一次性和周期任务） |
 | **会话历史** | `ConversationStore`（内存 + TTL + 文件持久化） |
 | **上下文压缩** | 三层渐进式压缩（Archival Summary → Rolling Summary → Working Memory），模型摘要 + 降级兜底 |
+| **多 Agent** | `AgentProfile` + `AgentRegistry` + `agents.list` API + WebChat Agent 选择器 + 会话隔离 + 飞书渠道绑定 |
+| **子 Agent 编排** | `SubAgentOrchestrator` + `delegate_task` / `delegate_parallel` / `sessions_spawn` / `sessions_history`，并发排队 + 超时 + 深度限制 + 生命周期钩子 |
 
 ---
 
 ### 🎯 推荐下一步优先级
- 
+
  1. ~~**`list_files`** — 低风险，直接列目录，Agent 探索能力基础~~ ✅ 已完成
  2. ~~**`web_search`** — 中等风险，需对接搜索 API（Bing/Google/DuckDuckGo）~~ ✅ 已完成
  3. ~~**`exec` (沙箱版)** — 高风险，已实现 Consumer Safe Mode~~ ✅ 已完成 (含 Windows 支持)
  4. ~~**`browser` (基础版)** — 高复杂度，可先做 `navigate` + `screenshot`~~ ✅ 已完成
- 5. **`logging` (日志系统)** — 文件日志 + 轮转 + Agent 日志工具（Phase 18）
- 6. **`sessions_spawn` (子 Agent 编排)** — 赋予 Agent 团队作战能力（Phase 16）
+ 5. ~~**`logging` (日志系统)** — 文件日志 + 轮转 + Agent 日志工具~~ ✅ 已完成 (Phase 18)
+ 6. ~~**`sessions_spawn` (子 Agent 编排)** — 赋予 Agent 团队作战能力~~ ✅ 已完成 (Phase 16 + Phase 25)
  7. **`canvas` / `code_interpreter` (Stateful)** — 更高级的创造与计算能力
+ 8. **WebChat 子 Agent 状态展示** — 前端实时展示子 Agent 运行状态（Phase 25 Step 4）
+ 9. **条件分支编排** — 根据子 Agent 结果决定后续分支（Phase 25 Step 5）
 

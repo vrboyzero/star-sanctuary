@@ -9,6 +9,7 @@ export interface FeishuChannelConfig {
     appSecret: string;
     agent: BelldandyAgent;
     conversationStore: ConversationStore;
+    agentId?: string;
     initialChatId?: string;
     onChatIdUpdate?: (chatId: string) => void;
     sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
@@ -26,6 +27,7 @@ export class FeishuChannel implements Channel {
     private readonly wsClient: lark.WSClient;
     private readonly agent: BelldandyAgent;
     private readonly conversationStore: ConversationStore;
+    private readonly agentId?: string;
     private readonly sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
     private _running = false;
     private lastChatId?: string; // Track the last active chat for proactive messaging
@@ -43,6 +45,7 @@ export class FeishuChannel implements Channel {
     constructor(config: FeishuChannelConfig) {
         this.agent = config.agent;
         this.conversationStore = config.conversationStore;
+        this.agentId = config.agentId;
 
         // HTTP Client for sending messages
         this.client = new lark.Client({
@@ -279,7 +282,10 @@ export class FeishuChannel implements Channel {
         // We pass conversationId as chatId
 
         // [PERSISTENCE] Add User Message to Store
-        this.conversationStore.addMessage(chatId, "user", text);
+        this.conversationStore.addMessage(chatId, "user", text, {
+            agentId: this.agentId,
+            channel: "feishu",
+        });
 
         // [PERSISTENCE] Get History from Store
         const history = this.conversationStore.getHistory(chatId);
@@ -322,7 +328,10 @@ export class FeishuChannel implements Channel {
                     .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
                     .replace(/\n{3,}/g, "\n\n")
                     .trim();
-                this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText);
+                this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText, {
+                    agentId: this.agentId,
+                    channel: "feishu",
+                });
 
                 await this.reply(msgId, replyText);
                 console.log(`Feishu: Repled to message ${msgId}`);

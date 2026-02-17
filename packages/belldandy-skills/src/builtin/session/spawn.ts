@@ -12,6 +12,10 @@ export const sessionsSpawnTool: Tool = {
                     type: "string",
                     description: "The detailed instruction or goal for the sub-agent.",
                 },
+                agent_id: {
+                    type: "string",
+                    description: "Target agent profile ID (e.g. 'coder', 'researcher'). Omit to use default agent.",
+                },
                 context: {
                     type: "object",
                     description: "Optional structured context to pass to the sub-agent.",
@@ -37,10 +41,12 @@ export const sessionsSpawnTool: Tool = {
         }
 
         try {
-            const result = await context.agentCapabilities.spawnSubAgent(
-                args.instruction as string,
-                args.context as any
-            );
+            const result = await context.agentCapabilities.spawnSubAgent({
+                instruction: args.instruction as string,
+                agentId: args.agent_id as string | undefined,
+                context: args.context as Record<string, unknown> | undefined,
+                parentConversationId: context.conversationId,
+            });
 
             return {
                 id,

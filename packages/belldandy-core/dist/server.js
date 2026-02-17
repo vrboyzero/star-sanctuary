@@ -19,6 +19,7 @@ const DEFAULT_METHODS = [
     "context.compact",
     "tools.list",
     "tools.update",
+    "agents.list",
 ];
 const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "pairing.required"];
 export async function startGatewayServer(opts) {
@@ -173,6 +174,7 @@ export async function startGatewayServer(opts) {
                 clientId: state.clientId ?? state.sessionId,
                 stateDir: opts.stateDir ?? resolveStateDir(),
                 agentFactory: opts.agentFactory ?? (() => new MockAgent()),
+                agentRegistry: opts.agentRegistry,
                 conversationStore,
                 ttsEnabled: opts.ttsEnabled,
                 ttsSynthesize: opts.ttsSynthesize,
@@ -265,8 +267,18 @@ async function handleReq(ws, req, ctx) {
                 return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
             }
             let agent;
+            const requestedAgentId = parsed.value.agentId;
             try {
-                agent = ctx.agentFactory();
+                // Prefer AgentRegistry when available and agentId is specified
+                if (ctx.agentRegistry && requestedAgentId) {
+                    agent = ctx.agentRegistry.create(requestedAgentId);
+                }
+                else if (ctx.agentRegistry) {
+                    agent = ctx.agentRegistry.create(); // default
+                }
+                else {
+                    agent = ctx.agentFactory();
+                }
             }
             catch (err) {
                 if (err.message === "CONFIG_REQUIRED") {
@@ -281,7 +293,18 @@ async function handleReq(ws, req, ctx) {
             }
             const conversationId = parsed.value.conversationId ?? crypto.randomUUID();
             const { history } = await ctx.conversationStore.getHistoryCompacted(conversationId);
-            ctx.conversationStore.addMessage(conversationId, "user", parsed.value.text);
+            // Agent-会话绑定校验：防止不同 Agent 共享同一会话导致上下文污染
+            const existingConv = ctx.conversationStore.get(conversationId);
+            if (existingConv?.agentId && requestedAgentId && existingConv.agentId !== requestedAgentId) {
+                return {
+                    type: "res", id: req.id, ok: false,
+                    error: { code: "agent_mismatch", message: `会话已绑定 Agent "${existingConv.agentId}"，不能使用 "${requestedAgentId}"。请新建会话。` },
+                };
+            }
+            ctx.conversationStore.addMessage(conversationId, "user", parsed.value.text, {
+                agentId: requestedAgentId,
+                channel: "webchat",
+            });
             console.log("[Debug] Processing message.send. conversationId:", conversationId);
             console.log("[Debug] Payload keys:", Object.keys(parsed.value));
             if ('attachments' in parsed.value) {
@@ -392,7 +415,7 @@ async function handleReq(ws, req, ctx) {
             }
             void (async () => {
                 try {
-                    const runInput = { conversationId, text: promptText, history };
+                    const runInput = { conversationId, text: promptText, history, agentId: requestedAgentId };
                     if (contentParts.length > 0) {
                         // Construct multimodal content
                         runInput.content = [
@@ -459,7 +482,9 @@ async function handleReq(ws, req, ctx) {
                             .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
                             .replace(/\n{3,}/g, "\n\n")
                             .trim();
-                        ctx.conversationStore.addMessage(conversationId, "assistant", sanitized || fullResponse);
+                        ctx.conversationStore.addMessage(conversationId, "assistant", sanitized || fullResponse, {
+                            agentId: requestedAgentId,
+                        });
                     }
                 }
                 catch (err) {
@@ -699,6 +724,15 @@ async function handleReq(ws, req, ctx) {
             }
             return { type: "res", id: req.id, ok: true, payload: { checks } };
         }
+        case "agents.list": {
+            const profiles = ctx.agentRegistry?.list() ?? [];
+            const agents = profiles.map(p => ({
+                id: p.id,
+                displayName: p.displayName,
+                model: p.model,
+            }));
+            return { type: "res", id: req.id, ok: true, payload: { agents } };
+        }
         case "workspace.list": {
             const params = req.params;
             const relativePath = params?.path ?? "";
@@ -857,7 +891,8 @@ function parseMessageSendParams(value) {
         return { ok: false, message: "text or attachments required" };
     const conversationId = typeof obj.conversationId === "string" && obj.conversationId.trim() ? obj.conversationId.trim() : undefined;
     const from = typeof obj.from === "string" && obj.from.trim() ? obj.from.trim() : undefined;
-    return { ok: true, value: { text, conversationId, from, attachments } };
+    const agentId = typeof obj.agentId === "string" && obj.agentId.trim() ? obj.agentId.trim() : undefined;
+    return { ok: true, value: { text, conversationId, from, agentId, attachments } };
 }
 function safeParseFrame(raw) {
     let parsed;

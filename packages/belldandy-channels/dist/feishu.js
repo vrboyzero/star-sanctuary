@@ -59,6 +59,7 @@ var FeishuChannel = /** @class */ (function () {
         this.MESSAGE_CACHE_SIZE = 1000;
         this.agent = config.agent;
         this.conversationStore = config.conversationStore;
+        this.agentId = config.agentId;
         // HTTP Client for sending messages
         this.client = new lark.Client({
             appId: config.appId,
@@ -300,7 +301,10 @@ var FeishuChannel = /** @class */ (function () {
                         // The agent is responsible for context via ConversationStore (not linked here yet)
                         // We pass conversationId as chatId
                         // [PERSISTENCE] Add User Message to Store
-                        this.conversationStore.addMessage(chatId, "user", text);
+                        this.conversationStore.addMessage(chatId, "user", text, {
+                            agentId: this.agentId,
+                            channel: "feishu",
+                        });
                         history = this.conversationStore.getHistory(chatId);
                         runInput = {
                             conversationId: chatId, // Map Feishu Chat ID to Conversation ID
@@ -371,7 +375,10 @@ var FeishuChannel = /** @class */ (function () {
                             .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
                             .replace(/\n{3,}/g, "\n\n")
                             .trim();
-                        this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText);
+                        this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText, {
+                            agentId: this.agentId,
+                            channel: "feishu",
+                        });
                         return [4 /*yield*/, this.reply(msgId, replyText)];
                     case 38:
                         _s.sent();

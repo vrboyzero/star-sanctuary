@@ -6,6 +6,7 @@ const connectBtn = document.getElementById("connect");
 const sendBtn = document.getElementById("send");
 const promptEl = document.getElementById("prompt");
 const messagesEl = document.getElementById("messages");
+const agentSelectEl = document.getElementById("agentSelect");
 
 // 文件树和编辑器 DOM 元素
 const sidebarEl = document.getElementById("sidebar");
@@ -24,6 +25,7 @@ const saveEditBtn = document.getElementById("saveEdit");
 const STORE_KEY = "belldandy.webchat.auth";
 const CLIENT_KEY = "belldandy.webchat.clientId";
 const WORKSPACE_ROOTS_KEY = "belldandy.webchat.workspaceRoots";
+const AGENT_ID_KEY = "belldandy.webchat.agentId";
 
 let ws = null;
 let isReady = false;
@@ -176,6 +178,56 @@ async function loadWorkspaceRootsFromServer() {
   }
 }
 
+// ── Agent 选择器 ──
+async function loadAgentList() {
+  if (!ws || !isReady || !agentSelectEl) return;
+
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "agents.list",
+  });
+
+  if (!res || !res.ok || !res.payload || !Array.isArray(res.payload.agents)) return;
+
+  const agents = res.payload.agents;
+
+  // 仅 1 个 agent 时隐藏选择器
+  if (agents.length <= 1) {
+    agentSelectEl.classList.add("hidden");
+    return;
+  }
+
+  agentSelectEl.innerHTML = "";
+  for (const a of agents) {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.textContent = a.displayName;
+    agentSelectEl.appendChild(opt);
+  }
+
+  // 恢复上次选择
+  const saved = localStorage.getItem(AGENT_ID_KEY);
+  if (saved && agents.some(a => a.id === saved)) {
+    agentSelectEl.value = saved;
+  }
+
+  agentSelectEl.classList.remove("hidden");
+}
+
+if (agentSelectEl) {
+  agentSelectEl.addEventListener("change", () => {
+    localStorage.setItem(AGENT_ID_KEY, agentSelectEl.value);
+
+    // 切换 Agent = 新建会话（隔离上下文）
+    activeConversationId = null;
+    botMsgEl = null;
+    messagesEl.innerHTML = "";
+    const displayName = agentSelectEl.options[agentSelectEl.selectedIndex]?.text || agentSelectEl.value;
+    appendMessage("system", `已切换到 ${displayName}`);
+  });
+}
+
 // 保存按钮点击事件
 const saveWorkspaceRootsBtn = document.getElementById("saveWorkspaceRoots");
 if (saveWorkspaceRootsBtn) {
@@ -282,6 +334,9 @@ function connect() {
 
       // 从服务器加载当前配置并填充可操作区输入框
       loadWorkspaceRootsFromServer();
+
+      // 加载 Agent 列表并填充选择器
+      loadAgentList();
 
       // Check if we should play boot sequence
       if (!sessionStorage.getItem("booted")) {
@@ -486,6 +541,7 @@ async function sendMessage() {
       conversationId: activeConversationId || undefined,
       text,
       from: "web",
+      agentId: agentSelectEl?.value || undefined,
       attachments,
     },
   });

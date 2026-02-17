@@ -59,7 +59,8 @@ describe("Code Interpreter Tool", () => {
             code: 'console.error("This is error");'
         }, context);
 
-        expect(result.success).toBe(true); // Success because process ran, but output contains stderr
+        // stderr 非空时 success=false（实现逻辑：stderr.length === 0 才算成功）
+        expect(result.success).toBe(false);
         expect(result.output).toContain("[STDERR]");
         expect(result.output).toContain("This is error");
     });

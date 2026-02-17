@@ -60,7 +60,7 @@ describe("file tools", () => {
       const result = await fileReadTool.execute({ path: "/etc/passwd" }, baseContext);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain("绝对路径");
+      expect(result.error).toContain("越界");
     });
 
     it("should block sensitive files (.env)", async () => {

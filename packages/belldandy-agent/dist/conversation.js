@@ -70,6 +70,7 @@ export class ConversationStore {
                 try {
                     const msg = JSON.parse(line);
                     if (msg.role && msg.content) {
+                        // agentId 为可选字段，旧 JSONL 中不存在时保持 undefined
                         messages.push(msg);
                         if (msg.timestamp > updatedAt)
                             updatedAt = msg.timestamp;
@@ -103,19 +104,30 @@ export class ConversationStore {
      * 添加消息到会话
      * 如果会话不存在会自动创建
      */
-    addMessage(id, role, content) {
+    addMessage(id, role, content, opts) {
         let conv = this.get(id); // get() now handles loadFromFile
         const now = Date.now();
         if (!conv) {
             conv = {
                 id,
+                agentId: opts?.agentId,
+                channel: opts?.channel,
                 messages: [],
                 createdAt: now,
                 updatedAt: now,
             };
             this.conversations.set(id, conv);
         }
+        else {
+            // 更新会话级元数据（如果首次设置）
+            if (opts?.agentId && !conv.agentId)
+                conv.agentId = opts.agentId;
+            if (opts?.channel && !conv.channel)
+                conv.channel = opts.channel;
+        }
         const newMessage = { role, content, timestamp: now };
+        if (opts?.agentId)
+            newMessage.agentId = opts.agentId;
         conv.messages.push(newMessage);
         conv.updatedAt = now;
         // 限制内存中的历史长度

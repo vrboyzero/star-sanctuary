@@ -25,11 +25,32 @@ async function listAvailableFacets(facetsDir: string): Promise<string[]> {
   }
 }
 
+/**
+ * 根据 agentId 解析 SOUL.md 和 facets/ 的实际路径。
+ * - agentId 为空或 "default" → 使用根目录
+ * - 其他 → 使用 agents/{agentId}/ 子目录
+ */
+function resolveAgentPaths(stateDir: string, agentId?: string): { soulPath: string; facetsDir: string; label: string } {
+  if (agentId && agentId !== "default") {
+    const agentDir = path.join(stateDir, "agents", agentId);
+    return {
+      soulPath: path.join(agentDir, "SOUL.md"),
+      facetsDir: path.join(agentDir, "facets"),
+      label: `agents/${agentId}`,
+    };
+  }
+  return {
+    soulPath: path.join(stateDir, "SOUL.md"),
+    facetsDir: path.join(stateDir, "facets"),
+    label: "root",
+  };
+}
+
 export const switchFacetTool: Tool = {
   definition: {
     name: "switch_facet",
     description:
-      "切换 SOUL.md 中的 FACET 职能模组。将锚点行之后的内容替换为指定模组文件的内容。模组文件位于 ~/.belldandy/facets/ 目录。",
+      "切换 SOUL.md 中的 FACET 职能模组。将锚点行之后的内容替换为指定模组文件的内容。模组文件位于 ~/.belldandy/facets/（默认 Agent）或 ~/.belldandy/agents/{id}/facets/（专属 Agent）目录。",
     parameters: {
       type: "object",
       properties: {
@@ -68,10 +89,9 @@ export const switchFacetTool: Tool = {
       return makeError("facet_name 包含非法字符");
     }
 
-    // ── 2. 路径解析 ──
+    // ── 2. 路径解析（感知 agentId） ──
     const stateDir = context.workspaceRoot; // ~/.belldandy
-    const soulPath = path.join(stateDir, "SOUL.md");
-    const facetsDir = path.join(stateDir, "facets");
+    const { soulPath, facetsDir, label } = resolveAgentPaths(stateDir, context.agentId);
     const facetPath = path.join(facetsDir, `${sanitized}.md`);
 
     // ── 3. 校验 facet 文件存在 ──
@@ -90,7 +110,7 @@ export const switchFacetTool: Tool = {
     try {
       soulContent = await fs.readFile(soulPath, "utf-8");
     } catch {
-      return makeError(`无法读取 SOUL.md: ${soulPath}`);
+      return makeError(`无法读取 SOUL.md (${label}): ${soulPath}`);
     }
 
     // ── 5. 查找锚点 ──
@@ -132,13 +152,13 @@ export const switchFacetTool: Tool = {
       return makeError(`写入 SOUL.md 失败: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    context.logger?.info(`FACET switched to "${sanitized}"`);
+    context.logger?.info(`FACET switched to "${sanitized}" (${label})`);
 
     return {
       id,
       name,
       success: true,
-      output: `FACET 模组已切换为「${sanitized}」。SOUL.md 已更新，锚点行之前的内容保持不变。建议接下来调用 service_restart 重启服务以清空旧模组的推理惯性。`,
+      output: `FACET 模组已切换为「${sanitized}」(${label})。SOUL.md 已更新，锚点行之前的内容保持不变。建议接下来调用 service_restart 重启服务以清空旧模组的推理惯性。`,
       durationMs: Date.now() - start,
     };
   },

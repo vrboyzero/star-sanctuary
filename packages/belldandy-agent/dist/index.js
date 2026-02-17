@@ -3,7 +3,7 @@ export { ToolEnabledAgent } from "./tool-agent.js";
 // Failover（模型容灾）
 export { FailoverClient, loadModelFallbacks, classifyFailoverReason, isRetryableReason, } from "./failover-client.js";
 // Workspace & System Prompt (SOUL/Persona)
-export { ensureWorkspace, loadWorkspaceFiles, needsBootstrap, createBootstrapFile, removeBootstrapFile, SOUL_FILENAME, IDENTITY_FILENAME, USER_FILENAME, BOOTSTRAP_FILENAME, AGENTS_FILENAME, TOOLS_FILENAME, HEARTBEAT_FILENAME, } from "./workspace.js";
+export { ensureWorkspace, loadWorkspaceFiles, ensureAgentWorkspace, loadAgentWorkspaceFiles, needsBootstrap, createBootstrapFile, removeBootstrapFile, SOUL_FILENAME, IDENTITY_FILENAME, USER_FILENAME, BOOTSTRAP_FILENAME, AGENTS_FILENAME, TOOLS_FILENAME, HEARTBEAT_FILENAME, } from "./workspace.js";
 export { buildSystemPrompt, buildWorkspaceContext, } from "./system-prompt.js";
 export { ConversationStore, } from "./conversation.js";
 export class MockAgent {
@@ -40,6 +40,12 @@ export { createHookRunner } from "./hook-runner.js";
 export { buildUrl, uploadFileToMoonshot, preprocessMultimodalContent } from "./multimodal.js";
 // Anthropic 原生协议支持（prompt caching、消息/工具转换）
 export { convertMessagesToAnthropic, convertToolsToAnthropic, buildAnthropicRequest, parseAnthropicResponse, } from "./anthropic.js";
+// Agent Profile（多 Agent 预备）
+export { buildDefaultProfile, loadAgentProfiles, resolveModelConfig, } from "./agent-profile.js";
+// Agent Registry（多 Agent 注册表）
+export { AgentRegistry, } from "./agent-registry.js";
+// Sub-Agent Orchestrator（子 Agent 编排）
+export { SubAgentOrchestrator, } from "./orchestrator.js";
 // 对话压缩
 export { compactMessages, compactIncremental, needsCompaction, needsInLoopCompaction, estimateTokens, estimateMessagesTokens, createEmptyCompactionState, } from "./compaction.js";
 //# sourceMappingURL=index.js.map

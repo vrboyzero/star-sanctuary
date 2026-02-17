@@ -18,6 +18,8 @@ export type ConversationMessage = {
     role: "user" | "assistant";
     content: string;
     timestamp: number;
+    /** 产生此消息的 Agent Profile ID（多 Agent 预留） */
+    agentId?: string;
 };
 
 /**
@@ -25,6 +27,10 @@ export type ConversationMessage = {
  */
 export type Conversation = {
     id: string;
+    /** 绑定的 Agent Profile ID（多 Agent 预留） */
+    agentId?: string;
+    /** 来源渠道（"webchat" | "feishu" | "heartbeat" | ...） */
+    channel?: string;
     messages: ConversationMessage[];
     createdAt: number;
     updatedAt: number;
@@ -127,6 +133,7 @@ export class ConversationStore {
                 try {
                     const msg = JSON.parse(line) as ConversationMessage;
                     if (msg.role && msg.content) {
+                        // agentId 为可选字段，旧 JSONL 中不存在时保持 undefined
                         messages.push(msg);
                         if (msg.timestamp > updatedAt) updatedAt = msg.timestamp;
                         if (msg.timestamp < createdAt) createdAt = msg.timestamp;
@@ -159,21 +166,28 @@ export class ConversationStore {
      * 添加消息到会话
      * 如果会话不存在会自动创建
      */
-    addMessage(id: string, role: "user" | "assistant", content: string): void {
+    addMessage(id: string, role: "user" | "assistant", content: string, opts?: { agentId?: string; channel?: string }): void {
         let conv = this.get(id); // get() now handles loadFromFile
         const now = Date.now();
 
         if (!conv) {
             conv = {
                 id,
+                agentId: opts?.agentId,
+                channel: opts?.channel,
                 messages: [],
                 createdAt: now,
                 updatedAt: now,
             };
             this.conversations.set(id, conv);
+        } else {
+            // 更新会话级元数据（如果首次设置）
+            if (opts?.agentId && !conv.agentId) conv.agentId = opts.agentId;
+            if (opts?.channel && !conv.channel) conv.channel = opts.channel;
         }
 
         const newMessage: ConversationMessage = { role, content, timestamp: now };
+        if (opts?.agentId) newMessage.agentId = opts.agentId;
         conv.messages.push(newMessage);
         conv.updatedAt = now;
 

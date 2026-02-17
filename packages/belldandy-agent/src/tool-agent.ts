@@ -331,7 +331,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           });
 
           // 执行工具
-          const result = await this.opts.toolExecutor.execute(request, input.conversationId);
+          const result = await this.opts.toolExecutor.execute(request, input.conversationId, input.agentId);
           const toolDurationMs = Date.now() - toolStartTime;
 
           // Hook: afterToolCall / after_tool_call

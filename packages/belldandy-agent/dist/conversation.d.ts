@@ -6,12 +6,18 @@ export type ConversationMessage = {
     role: "user" | "assistant";
     content: string;
     timestamp: number;
+    /** 产生此消息的 Agent Profile ID（多 Agent 预留） */
+    agentId?: string;
 };
 /**
  * 会话对象
  */
 export type Conversation = {
     id: string;
+    /** 绑定的 Agent Profile ID（多 Agent 预留） */
+    agentId?: string;
+    /** 来源渠道（"webchat" | "feishu" | "heartbeat" | ...） */
+    channel?: string;
     messages: ConversationMessage[];
     createdAt: number;
     updatedAt: number;
@@ -75,7 +81,10 @@ export declare class ConversationStore {
      * 添加消息到会话
      * 如果会话不存在会自动创建
      */
-    addMessage(id: string, role: "user" | "assistant", content: string): void;
+    addMessage(id: string, role: "user" | "assistant", content: string, opts?: {
+        agentId?: string;
+        channel?: string;
+    }): void;
     /**
      * 追加消息到文件
      */

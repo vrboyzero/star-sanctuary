@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles, buildSystemPrompt, ConversationStore, loadModelFallbacks, FailoverClient, } from "@belldandy/agent";
-import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, } from "@belldandy/skills";
+import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles, ensureAgentWorkspace, loadAgentWorkspaceFiles, buildSystemPrompt, ConversationStore, loadModelFallbacks, FailoverClient, AgentRegistry, SubAgentOrchestrator, loadAgentProfiles, buildDefaultProfile, resolveModelConfig, } from "@belldandy/agent";
+import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, } from "@belldandy/skills";
 import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel } from "@belldandy/channels";
@@ -62,6 +62,7 @@ const webRoot = readEnv("BELLDANDY_WEB_ROOT") ?? path.join(process.cwd(), "apps"
 // Channels
 const feishuAppId = readEnv("BELLDANDY_FEISHU_APP_ID");
 const feishuAppSecret = readEnv("BELLDANDY_FEISHU_APP_SECRET");
+const feishuAgentId = readEnv("BELLDANDY_FEISHU_AGENT_ID");
 // Heartbeat
 const heartbeatEnabled = readEnv("BELLDANDY_HEARTBEAT_ENABLED") === "true";
 const heartbeatIntervalRaw = readEnv("BELLDANDY_HEARTBEAT_INTERVAL") ?? "30m";
@@ -219,6 +220,12 @@ try {
 catch (err) {
     logger.warn("failover", `加载备用模型配置失败: ${String(err)}`);
 }
+// Agent Profiles (Multi-Agent 预备)
+const agentsConfigFile = path.join(stateDir, "agents.json");
+const agentProfiles = await loadAgentProfiles(agentsConfigFile);
+if (agentProfiles.length > 0) {
+    logger.info("agent-profile", `加载了 ${agentProfiles.length} 个 Agent Profile (from ${agentsConfigFile})`);
+}
 // MCP
 const mcpEnabled = (readEnv("BELLDANDY_MCP_ENABLED") ?? "false") === "true";
 // --- Activity Tracking ---
@@ -279,6 +286,16 @@ const facetsDir = path.join(stateDir, "facets");
 if (!fs.existsSync(facetsDir)) {
     try {
         fs.mkdirSync(facetsDir, { recursive: true });
+    }
+    catch {
+        // ignore
+    }
+}
+// 1.6 Ensure agents dir exists
+const agentsDir = path.join(stateDir, "agents");
+if (!fs.existsSync(agentsDir)) {
+    try {
+        fs.mkdirSync(agentsDir, { recursive: true });
     }
     catch {
         // ignore
@@ -347,6 +364,11 @@ const toolsToRegister = toolsEnabled
             createServiceRestartTool((msg) => serverBroadcast?.(msg)),
             switchFacetTool,
         ] : []),
+        // ── session 组（子 Agent 编排） ──
+        sessionsSpawnTool,
+        sessionsHistoryTool,
+        delegateTaskTool,
+        delegateParallelTool,
     ]
     : [];
 const toolExecutor = new ToolExecutor({
@@ -458,11 +480,51 @@ const dynamicSystemPrompt = buildSystemPrompt({
     maxChars: maxSystemPromptChars,
 });
 logger.info("system-prompt", `length=${dynamicSystemPrompt.length} chars${maxSystemPromptChars ? `, limit=${maxSystemPromptChars}` : ""}`);
-// 8. Agent Factory (only for openai provider)
-const createAgent = agentProvider === "openai"
-    ? () => {
-        // [MODIFIED] Lazy Check
-        if (!openaiApiKey) {
+// 8. Agent Registry (replaces single agentFactory closure)
+const primaryModelConfig = {
+    baseUrl: openaiBaseUrl ?? "",
+    apiKey: openaiApiKey ?? "",
+    model: openaiModel ?? "",
+};
+// 8.1 Pre-load per-agent workspaces (async, before sync factory)
+const agentWorkspaceCache = new Map();
+// Default agent uses the root workspace (already loaded above)
+agentWorkspaceCache.set("default", { systemPrompt: dynamicSystemPrompt });
+// Non-default agents: ensure workspace dir + load + build system prompt
+for (const profile of agentProfiles) {
+    if (profile.id === "default")
+        continue;
+    const wsDir = profile.workspaceDir ?? profile.id;
+    try {
+        await ensureAgentWorkspace({ rootDir: stateDir, agentId: wsDir });
+        const agentWs = await loadAgentWorkspaceFiles(stateDir, wsDir);
+        const agentPrompt = buildSystemPrompt({
+            workspace: agentWs,
+            extraSystemPrompt: openaiSystemPrompt,
+            userTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            currentTime: new Date().toISOString(),
+            injectAgents,
+            injectSoul,
+            injectMemory,
+            maxChars: maxSystemPromptChars,
+        });
+        agentWorkspaceCache.set(profile.id, { systemPrompt: agentPrompt });
+        logger.info("agent-workspace", `Loaded workspace for agent "${profile.id}" (dir: agents/${wsDir}/), prompt=${agentPrompt.length} chars`);
+    }
+    catch (err) {
+        // Fallback to default workspace if agent workspace fails
+        logger.warn("agent-workspace", `Failed to load workspace for agent "${profile.id}", falling back to default: ${err instanceof Error ? err.message : String(err)}`);
+        agentWorkspaceCache.set(profile.id, { systemPrompt: dynamicSystemPrompt });
+    }
+}
+const agentRegistry = agentProvider === "openai"
+    ? new AgentRegistry((profile) => {
+        // Resolve model config: "primary" → env vars, named → models.json lookup
+        const resolved = resolveModelConfig(profile.model, primaryModelConfig, modelFallbacks);
+        if (profile.model !== "primary" && resolved.source === "primary") {
+            logger.warn("agent-registry", `Model "${profile.model}" not found in models.json, falling back to primary config (agent: ${profile.id})`);
+        }
+        if (!resolved.apiKey) {
             throw new Error("CONFIG_REQUIRED");
         }
         // Dynamic TTS Check: env explicit "false" wins; otherwise env "true" or signal file
@@ -470,7 +532,8 @@ const createAgent = agentProvider === "openai"
         const isTtsEnabled = ttsEnv === "false"
             ? false
             : ttsEnv === "true" || fs.existsSync(path.join(stateDir, "TTS_ENABLED"));
-        let currentSystemPrompt = dynamicSystemPrompt;
+        // Use per-agent system prompt (pre-loaded), fallback to default
+        let currentSystemPrompt = agentWorkspaceCache.get(profile.id)?.systemPrompt ?? dynamicSystemPrompt;
         if (isTtsEnabled) {
             currentSystemPrompt += `
 
@@ -480,11 +543,19 @@ You do NOT need to call any TTS tool — just respond with text as usual.
 Do NOT include any <audio> HTML tags or [Download] links in your response.
 Keep responses concise and natural for spoken delivery.`;
         }
-        if (toolsEnabled) {
+        // Per-profile system prompt override
+        if (profile.systemPromptOverride) {
+            currentSystemPrompt += "\n\n" + profile.systemPromptOverride;
+        }
+        // Determine tools enabled: profile override > env
+        const profileToolsEnabled = profile.toolsEnabled ?? toolsEnabled;
+        // Determine max input tokens: profile override > env
+        const profileMaxInputTokens = profile.maxInputTokens ?? maxInputTokens;
+        if (profileToolsEnabled) {
             return new ToolEnabledAgent({
-                baseUrl: openaiBaseUrl,
-                apiKey: openaiApiKey,
-                model: openaiModel,
+                baseUrl: resolved.baseUrl,
+                apiKey: resolved.apiKey,
+                model: resolved.model,
                 systemPrompt: currentSystemPrompt,
                 toolExecutor: toolExecutor,
                 logger,
@@ -493,15 +564,15 @@ Keep responses concise and natural for spoken delivery.`;
                 failoverLogger: logger,
                 videoUploadConfig,
                 protocol: agentProtocol,
-                ...(maxInputTokens > 0 && { maxInputTokens }),
+                ...(profileMaxInputTokens > 0 && { maxInputTokens: profileMaxInputTokens }),
                 compaction: compactionOpts,
                 summarizer: compactionSummarizer,
             });
         }
         return new OpenAIChatAgent({
-            baseUrl: openaiBaseUrl,
-            apiKey: openaiApiKey,
-            model: openaiModel,
+            baseUrl: resolved.baseUrl,
+            apiKey: resolved.apiKey,
+            model: resolved.model,
             stream: openaiStream,
             systemPrompt: currentSystemPrompt,
             fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
@@ -509,7 +580,27 @@ Keep responses concise and natural for spoken delivery.`;
             videoUploadConfig,
             protocol: agentProtocol,
         });
+    })
+    : undefined;
+// Register agent profiles
+if (agentRegistry) {
+    // Always register the default profile
+    const defaultProfile = buildDefaultProfile();
+    // Check if agents.json has a custom "default" override
+    const customDefault = agentProfiles.find(p => p.id === "default");
+    agentRegistry.register(customDefault ?? defaultProfile);
+    // Register additional profiles from agents.json
+    for (const profile of agentProfiles) {
+        if (profile.id !== "default") {
+            agentRegistry.register(profile);
+        }
     }
+    const profileIds = agentRegistry.list().map(p => p.id);
+    logger.info("agent-registry", `Registered ${profileIds.length} agent profile(s): [${profileIds.join(", ")}]`);
+}
+// Backward-compatible agentFactory wrapper (for existing code paths)
+const createAgent = agentRegistry
+    ? () => agentRegistry.create("default")
     : undefined;
 // 7.5 Init Conversation Store (Shared)
 const sessionsDir = path.join(stateDir, "sessions");
@@ -568,6 +659,43 @@ const conversationStore = new ConversationStore({
     compaction: compactionOpts,
     summarizer: compactionSummarizer,
 });
+// 7.6 Init Sub-Agent Orchestrator (wire agentCapabilities into ToolExecutor)
+if (agentRegistry && toolsEnabled) {
+    const subAgentMaxConcurrent = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_CONCURRENT") || "3", 10);
+    const subAgentTimeoutMs = parseInt(readEnv("BELLDANDY_SUB_AGENT_TIMEOUT_MS") || "120000", 10);
+    const subAgentMaxDepth = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_DEPTH") || "2", 10);
+    const subAgentMaxQueueSize = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE") || "10", 10);
+    const orchestrator = new SubAgentOrchestrator({
+        agentRegistry,
+        conversationStore,
+        maxConcurrent: subAgentMaxConcurrent,
+        maxQueueSize: subAgentMaxQueueSize,
+        sessionTimeoutMs: subAgentTimeoutMs,
+        maxDepth: subAgentMaxDepth,
+        logger: {
+            info: (m, d) => logger.info("orchestrator", m, d),
+            warn: (m, d) => logger.warn("orchestrator", m, d),
+            error: (m, d) => logger.error("orchestrator", m, d),
+            debug: (m, d) => logger.debug("orchestrator", m, d),
+        },
+    });
+    toolExecutor.setAgentCapabilities({
+        spawnSubAgent: (opts) => orchestrator.spawn({
+            parentConversationId: opts.parentConversationId ?? "system",
+            agentId: opts.agentId,
+            instruction: opts.instruction,
+            context: opts.context,
+        }),
+        spawnParallel: (tasks) => orchestrator.spawnParallel(tasks.map((t) => ({
+            parentConversationId: t.parentConversationId ?? "system",
+            agentId: t.agentId,
+            instruction: t.instruction,
+            context: t.context,
+        }))),
+        listSessions: (parentConversationId) => Promise.resolve(orchestrator.listSessions(parentConversationId)),
+    });
+    logger.info("orchestrator", `Sub-agent orchestrator initialized (maxConcurrent=${subAgentMaxConcurrent}, queue=${subAgentMaxQueueSize}, timeout=${subAgentTimeoutMs}ms, maxDepth=${subAgentMaxDepth})`);
+}
 const ttsEnabledPath = path.join(stateDir, "TTS_ENABLED");
 const isTtsEnabledFn = () => {
     const ttsEnv = process.env.BELLDANDY_TTS_ENABLED;
@@ -582,6 +710,7 @@ const server = await startGatewayServer({
     webRoot,
     stateDir,
     agentFactory: createAgent,
+    agentRegistry: agentRegistry,
     conversationStore: conversationStore, // Pass shared instance
     onActivity,
     logger,
@@ -650,11 +779,15 @@ if (autoOpenBrowser) {
 let feishuChannel;
 if (feishuAppId && feishuAppSecret && createAgent) {
     try {
-        const agent = createAgent();
+        // 优先使用 agentRegistry + feishuAgentId，fallback 到 createAgent()
+        const agent = (agentRegistry && feishuAgentId)
+            ? agentRegistry.create(feishuAgentId)
+            : createAgent();
         feishuChannel = new FeishuChannel({
             appId: feishuAppId,
             appSecret: feishuAppSecret,
             agent: agent,
+            agentId: feishuAgentId,
             conversationStore: conversationStore, // [PERSISTENCE] Inject store
             initialChatId: (() => {
                 try {

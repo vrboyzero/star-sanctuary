@@ -276,3 +276,102 @@ export async function loadWorkspaceFiles(dir: string): Promise<WorkspaceLoadResu
         hasMemory,
     };
 }
+
+/**
+ * Per-Agent workspace 中可继承的文件列表（不含 BOOTSTRAP / HEARTBEAT）
+ */
+const INHERITABLE_FILES: WorkspaceFileName[] = [
+    SOUL_FILENAME,
+    IDENTITY_FILENAME,
+    USER_FILENAME,
+    AGENTS_FILENAME,
+    TOOLS_FILENAME,
+    MEMORY_FILENAME,
+];
+
+/**
+ * 确保 Agent 专属 workspace 目录存在。
+ * 创建 ~/.belldandy/agents/{agentId}/ 和 facets/ 子目录。
+ */
+export async function ensureAgentWorkspace(params: {
+    rootDir: string;
+    agentId: string;
+}): Promise<{ agentDir: string; created: boolean }> {
+    const { rootDir, agentId } = params;
+    const agentDir = path.join(rootDir, "agents", agentId);
+    const facetsDir = path.join(agentDir, "facets");
+
+    let created = false;
+    try {
+        await fs.access(agentDir);
+    } catch {
+        created = true;
+    }
+
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(facetsDir, { recursive: true });
+
+    return { agentDir, created };
+}
+
+/**
+ * 加载 Agent 专属 workspace 文件（带 fallback 到根目录）。
+ *
+ * 对每个可继承文件：优先从 agents/{agentId}/ 读取，不存在则 fallback 到 rootDir。
+ * 默认 Agent（id="default"）直接委托 loadWorkspaceFiles(rootDir)。
+ */
+export async function loadAgentWorkspaceFiles(
+    rootDir: string,
+    agentId: string,
+): Promise<WorkspaceLoadResult> {
+    // default agent 不走 agents/ 子目录
+    if (!agentId || agentId === "default") {
+        return loadWorkspaceFiles(rootDir);
+    }
+
+    const agentDir = path.join(rootDir, "agents", agentId);
+    const files: WorkspaceFile[] = [];
+
+    for (const name of INHERITABLE_FILES) {
+        const agentFilePath = path.join(agentDir, name);
+        const rootFilePath = path.join(rootDir, name);
+
+        // 优先 agent 目录
+        let resolved = false;
+        for (const filePath of [agentFilePath, rootFilePath]) {
+            try {
+                const content = await fs.readFile(filePath, "utf-8");
+                files.push({ name, path: filePath, content, missing: false });
+                resolved = true;
+                break;
+            } catch {
+                // try next
+            }
+        }
+        if (!resolved) {
+            files.push({ name, path: agentFilePath, missing: true });
+        }
+    }
+
+    const hasSoul = files.some(f => f.name === SOUL_FILENAME && !f.missing);
+    const hasIdentity = files.some(f => f.name === IDENTITY_FILENAME && !f.missing);
+    const hasUser = files.some(f => f.name === USER_FILENAME && !f.missing);
+    const hasBootstrap = false; // agent workspace 不使用 bootstrap
+    const hasAgents = files.some(f => f.name === AGENTS_FILENAME && !f.missing);
+    const hasTools = files.some(f => f.name === TOOLS_FILENAME && !f.missing);
+    const hasHeartbeat = false; // agent workspace 不使用 heartbeat
+    const hasMemory = files.some(f => f.name === MEMORY_FILENAME && !f.missing);
+
+    return {
+        dir: agentDir,
+        files,
+        hasSoul,
+        hasIdentity,
+        hasUser,
+        hasBootstrap,
+        hasAgents,
+        hasTools,
+        hasHeartbeat,
+        hasMemory,
+    };
+}

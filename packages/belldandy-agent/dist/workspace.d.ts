@@ -70,4 +70,22 @@ export declare function removeBootstrapFile(dir: string): Promise<boolean>;
  * 加载 Workspace 中的所有引导文件
  */
 export declare function loadWorkspaceFiles(dir: string): Promise<WorkspaceLoadResult>;
+/**
+ * 确保 Agent 专属 workspace 目录存在。
+ * 创建 ~/.belldandy/agents/{agentId}/ 和 facets/ 子目录。
+ */
+export declare function ensureAgentWorkspace(params: {
+    rootDir: string;
+    agentId: string;
+}): Promise<{
+    agentDir: string;
+    created: boolean;
+}>;
+/**
+ * 加载 Agent 专属 workspace 文件（带 fallback 到根目录）。
+ *
+ * 对每个可继承文件：优先从 agents/{agentId}/ 读取，不存在则 fallback 到 rootDir。
+ * 默认 Agent（id="default"）直接委托 loadWorkspaceFiles(rootDir)。
+ */
+export declare function loadAgentWorkspaceFiles(rootDir: string, agentId: string): Promise<WorkspaceLoadResult>;
 //# sourceMappingURL=workspace.d.ts.map

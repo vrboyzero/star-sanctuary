@@ -28,10 +28,10 @@ export const sessionsHistoryTool: Tool = {
         }
 
         try {
-            const sessions = await context.agentCapabilities.listSessions();
+            const sessions = await context.agentCapabilities.listSessions(context.conversationId);
 
             const summary = sessions.map(s =>
-                `- [${s.status.toUpperCase()}] ID: ${s.id} (Created: ${new Date(s.createdAt).toISOString()}) ${s.summary ? `\n  Summary: ${s.summary}` : ""}`
+                `- [${s.status.toUpperCase()}] ID: ${s.id}${s.agentId ? ` (agent: ${s.agentId})` : ""} (Created: ${new Date(s.createdAt).toISOString()}) ${s.summary ? `\n  Summary: ${s.summary}` : ""}`
             ).join("\n");
 
             return {

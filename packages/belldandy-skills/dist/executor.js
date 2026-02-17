@@ -31,6 +31,12 @@ export class ToolExecutor {
         this.logger = options.logger;
         this.isToolDisabled = options.isToolDisabled;
     }
+    /**
+     * Late-bind agentCapabilities (for cases where the orchestrator is created after the executor).
+     */
+    setAgentCapabilities(caps) {
+        this.agentCapabilities = caps;
+    }
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions() {
         const all = Array.from(this.tools.values());
@@ -70,7 +76,7 @@ export class ToolExecutor {
         return this.tools.size;
     }
     /** 执行工具调用 */
-    async execute(request, conversationId) {
+    async execute(request, conversationId, agentId) {
         const start = Date.now();
         // 防御性检查：拒绝已禁用的工具调用
         if (this.isToolDisabled?.(request.name)) {
@@ -102,6 +108,7 @@ export class ToolExecutor {
             conversationId,
             workspaceRoot: this.workspaceRoot,
             extraWorkspaceRoots: this.extraWorkspaceRoots.length > 0 ? this.extraWorkspaceRoots : undefined,
+            agentId,
             policy: this.policy,
             agentCapabilities: this.agentCapabilities,
             logger: this.logger ? {

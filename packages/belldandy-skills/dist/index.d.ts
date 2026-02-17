@@ -10,7 +10,7 @@ export { runCommandTool, processManagerTool, terminalTool } from "./builtin/syst
 export { codeInterpreterTool } from "./builtin/code-interpreter/index.js";
 export { imageGenerateTool, textToSpeechTool, cameraSnapTool, synthesizeSpeech, transcribeSpeech } from "./builtin/multimedia/index.js";
 export type { SynthesizeResult, SynthesizeOptions, TranscribeResult, TranscribeOptions } from "./builtin/multimedia/index.js";
-export { sessionsSpawnTool, sessionsHistoryTool } from "./builtin/session/index.js";
+export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";
 export { methodListTool, methodReadTool, methodCreateTool, methodSearchTool } from "./builtin/methodology/index.js";
 export { logReadTool, logSearchTool } from "./builtin/log.js";
 export { createCronTool, type CronToolDeps } from "./builtin/cron-tool.js";

@@ -1,0 +1,504 @@
+/**
+ * SubAgentOrchestrator — 子 Agent 编排核心
+ *
+ * 管理子 Agent 会话的生命周期：spawn → run → collect result → cleanup
+ * 设计决策：
+ * - Batch 模式：子 Agent 完成后返回聚合结果给父 Agent，不污染 ReAct 上下文
+ * - Event Hook：通过 onEvent 回调将子 Agent 状态实时推送到前端
+ * - 独立 conversationId：子 Agent 运行在隔离的会话中
+ * - 嵌套深度限制：通过 context._orchestratorDepth 防止无限递归
+ */
+
+import { randomUUID } from "node:crypto";
+import type { AgentRegistry } from "./agent-registry.js";
+import type { ConversationStore } from "./conversation.js";
+import type { AgentStreamItem, BelldandyAgent } from "./index.js";
+
+// ─── Types ───────────────────────────────────────────────────────────────
+
+export type SubAgentSessionStatus = "pending" | "running" | "done" | "error" | "timeout";
+
+export type SubAgentSession = {
+  id: string;
+  parentConversationId: string;
+  agentId: string;
+  status: SubAgentSessionStatus;
+  instruction: string;
+  createdAt: number;
+  finishedAt?: number;
+  result?: string;
+  error?: string;
+};
+
+export type SubAgentEvent =
+  | { type: "started"; sessionId: string; agentId: string; instruction: string }
+  | { type: "queued"; sessionId: string; position: number }
+  | { type: "thought_delta"; sessionId: string; delta: string }
+  | { type: "completed"; sessionId: string; success: boolean; output: string; error?: string };
+
+export type SpawnOptions = {
+  parentConversationId: string;
+  agentId?: string;
+  instruction: string;
+  context?: Record<string, unknown>;
+};
+
+export type SpawnResult = {
+  success: boolean;
+  output: string;
+  error?: string;
+  sessionId: string;
+};
+
+export type OrchestratorLogger = {
+  info(message: string, data?: unknown): void;
+  warn(message: string, data?: unknown): void;
+  error(message: string, data?: unknown): void;
+  debug(message: string, data?: unknown): void;
+};
+
+export type OrchestratorOptions = {
+  agentRegistry: AgentRegistry;
+  conversationStore: ConversationStore;
+  maxConcurrent?: number;
+  maxQueueSize?: number;
+  sessionTimeoutMs?: number;
+  maxDepth?: number;
+  logger?: OrchestratorLogger;
+  onEvent?: (event: SubAgentEvent) => void;
+  hookRunner?: OrchestratorHookRunner;
+};
+
+/**
+ * 可选的钩子运行器接口，用于触发 session_start / session_end 钩子。
+ * 由 gateway 层注入实际的 HookRunner 实例。
+ */
+export type OrchestratorHookRunner = {
+  runSessionStart: (event: { sessionId: string; resumedFrom?: string }, ctx: { agentId?: string; sessionId: string }) => Promise<void>;
+  runSessionEnd: (event: { sessionId: string; messageCount: number; durationMs?: number }, ctx: { agentId?: string; sessionId: string }) => Promise<void>;
+};
+
+// ─── Constants ───────────────────────────────────────────────────────────
+
+const DEFAULT_MAX_CONCURRENT = 3;
+const DEFAULT_MAX_QUEUE_SIZE = 10;
+const DEFAULT_SESSION_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_DEPTH = 2;
+
+// ─── SubAgentOrchestrator ────────────────────────────────────────────────
+
+export class SubAgentOrchestrator {
+  private sessions = new Map<string, SubAgentSession>();
+  private runningCount = 0;
+  private pendingQueue: Array<{
+    opts: SpawnOptions;
+    resolve: (result: SpawnResult) => void;
+    reject: (err: Error) => void;
+    enqueuedAt: number;
+  }> = [];
+
+  private readonly agentRegistry: AgentRegistry;
+  private readonly conversationStore: ConversationStore;
+  private readonly maxConcurrent: number;
+  private readonly maxQueueSize: number;
+  private readonly sessionTimeoutMs: number;
+  private readonly maxDepth: number;
+  private readonly logger?: OrchestratorLogger;
+  private readonly onEvent?: (event: SubAgentEvent) => void;
+  private readonly hookRunner?: OrchestratorHookRunner;
+
+  constructor(options: OrchestratorOptions) {
+    this.agentRegistry = options.agentRegistry;
+    this.conversationStore = options.conversationStore;
+    this.maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+    this.maxQueueSize = options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
+    this.sessionTimeoutMs = options.sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
+    this.maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+    this.logger = options.logger;
+    this.onEvent = options.onEvent;
+    this.hookRunner = options.hookRunner;
+  }
+
+  /**
+   * Spawn a sub-agent, run it to completion, and return the aggregated result.
+   * If concurrency limit is reached, the request is queued (up to maxQueueSize).
+   */
+  async spawn(opts: SpawnOptions): Promise<SpawnResult> {
+    const agentId = opts.agentId ?? "default";
+
+    // ── Depth check ──
+    const depth = (opts.context?._orchestratorDepth as number) ?? 0;
+    if (depth >= this.maxDepth) {
+      return {
+        success: false,
+        output: "",
+        error: `Max sub-agent nesting depth (${this.maxDepth}) exceeded. Current depth: ${depth}.`,
+        sessionId: `sub_rejected`,
+      };
+    }
+
+    // ── Concurrency check → queue if full ──
+    if (this.runningCount >= this.maxConcurrent) {
+      if (this.pendingQueue.length >= this.maxQueueSize) {
+        return {
+          success: false,
+          output: "",
+          error: `Sub-agent queue full (max ${this.maxQueueSize}). Try again later.`,
+          sessionId: `sub_rejected`,
+        };
+      }
+
+      this.logger?.info(`Sub-agent queued (position=${this.pendingQueue.length + 1}, agent=${agentId})`);
+
+      return new Promise<SpawnResult>((resolve, reject) => {
+        const position = this.pendingQueue.length + 1;
+        this.pendingQueue.push({ opts, resolve, reject, enqueuedAt: Date.now() });
+
+        this.onEvent?.({
+          type: "queued",
+          sessionId: `sub_queued_${agentId}`,
+          position,
+        });
+      });
+    }
+
+    return this.executeSpawn(opts);
+  }
+
+  /**
+   * Internal: actually execute a spawn (assumes concurrency slot is available).
+   */
+  private async executeSpawn(opts: SpawnOptions): Promise<SpawnResult> {
+    const agentId = opts.agentId ?? "default";
+    const sessionId = `sub_${randomUUID().slice(0, 8)}`;
+
+    // ── Resolve agent ──
+    let agent: BelldandyAgent;
+    try {
+      agent = this.agentRegistry.create(agentId);
+    } catch (err) {
+      return {
+        success: false,
+        output: "",
+        error: `Failed to create agent "${agentId}": ${err instanceof Error ? err.message : String(err)}`,
+        sessionId,
+      };
+    }
+
+    // ── Create session ──
+    const session: SubAgentSession = {
+      id: sessionId,
+      parentConversationId: opts.parentConversationId,
+      agentId,
+      status: "running",
+      instruction: opts.instruction,
+      createdAt: Date.now(),
+    };
+    this.sessions.set(sessionId, session);
+    this.runningCount++;
+
+    this.logger?.info(`Sub-agent spawned: ${sessionId} (agent=${agentId})`, {
+      parentConversationId: opts.parentConversationId,
+      instruction: opts.instruction.slice(0, 200),
+    });
+
+    this.onEvent?.({
+      type: "started",
+      sessionId,
+      agentId,
+      instruction: opts.instruction,
+    });
+
+    // ── Hook: session_start ──
+    this.hookRunner?.runSessionStart(
+      { sessionId },
+      { agentId, sessionId },
+    ).catch((err) => this.logger?.warn(`session_start hook error: ${err}`));
+
+    // ── Run with timeout ──
+    try {
+      const result = await this.runWithTimeout(agent, session, opts);
+      return result;
+    } finally {
+      this.runningCount--;
+      this.drainQueue();
+    }
+  }
+
+  /**
+   * Drain the pending queue: execute the next queued spawn if a slot is available.
+   */
+  private drainQueue(): void {
+    while (this.pendingQueue.length > 0 && this.runningCount < this.maxConcurrent) {
+      const next = this.pendingQueue.shift()!;
+
+      // Check if the queued request has been waiting too long
+      const waitMs = Date.now() - next.enqueuedAt;
+      if (waitMs > this.sessionTimeoutMs) {
+        next.resolve({
+          success: false,
+          output: "",
+          error: `Sub-agent timed out while waiting in queue (${waitMs}ms).`,
+          sessionId: `sub_queue_timeout`,
+        });
+        continue;
+      }
+
+      this.executeSpawn(next.opts).then(next.resolve, next.reject);
+    }
+  }
+
+  /**
+   * Current pending queue size.
+   */
+  get queueSize(): number {
+    return this.pendingQueue.length;
+  }
+
+  /**
+   * Spawn multiple sub-agents in parallel (limited by maxConcurrent).
+   */
+  async spawnParallel(tasks: SpawnOptions[]): Promise<SpawnResult[]> {
+    return Promise.all(tasks.map((task) => this.spawn(task)));
+  }
+
+  /**
+   * List sessions, optionally filtered by parent conversation ID.
+   */
+  listSessions(parentConversationId?: string): Array<{
+    id: string;
+    parentId?: string;
+    agentId?: string;
+    status: SubAgentSession["status"];
+    createdAt: number;
+    finishedAt?: number;
+    summary?: string;
+  }> {
+    const all = [...this.sessions.values()];
+    const filtered = parentConversationId
+      ? all.filter((s) => s.parentConversationId === parentConversationId)
+      : all;
+
+    return filtered.map((s) => ({
+      id: s.id,
+      parentId: s.parentConversationId,
+      agentId: s.agentId,
+      status: s.status,
+      createdAt: s.createdAt,
+      finishedAt: s.finishedAt,
+      summary: s.result?.slice(0, 200),
+    }));
+  }
+
+  /**
+   * Get a specific session by ID.
+   */
+  getSession(sessionId: string): SubAgentSession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  /**
+   * Clean up completed sessions older than maxAgeMs.
+   * Returns the number of sessions cleaned.
+   */
+  cleanup(maxAgeMs: number = 600_000): number {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [id, session] of this.sessions) {
+      if (
+        session.status !== "running" &&
+        session.status !== "pending" &&
+        now - session.createdAt >= maxAgeMs
+      ) {
+        this.sessions.delete(id);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      this.logger?.debug(`Cleaned up ${cleaned} sub-agent sessions`);
+    }
+    return cleaned;
+  }
+
+  // ─── Private ─────────────────────────────────────────────────────────
+
+  private async runWithTimeout(
+    agent: BelldandyAgent,
+    session: SubAgentSession,
+    opts: SpawnOptions,
+  ): Promise<SpawnResult> {
+    const conversationId = session.id; // sub-agent uses its own session ID as conversationId
+
+    // Prepare history in conversation store
+    this.conversationStore.addMessage(conversationId, "user", opts.instruction, {
+      agentId: session.agentId,
+    });
+
+    const history = this.conversationStore.getHistory(conversationId);
+
+    return new Promise<SpawnResult>((resolve) => {
+      let settled = false;
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        session.status = "timeout";
+        session.finishedAt = Date.now();
+        session.error = `Sub-agent timed out after ${this.sessionTimeoutMs}ms`;
+
+        this.logger?.warn(`Sub-agent timeout: ${session.id}`);
+        this.onEvent?.({
+          type: "completed",
+          sessionId: session.id,
+          success: false,
+          output: "",
+          error: session.error,
+        });
+
+        // Hook: session_end (timeout)
+        this.hookRunner?.runSessionEnd(
+          { sessionId: session.id, messageCount: 0, durationMs: session.finishedAt - session.createdAt },
+          { agentId: session.agentId, sessionId: session.id },
+        ).catch((err) => this.logger?.warn(`session_end hook error: ${err}`));
+
+        resolve({
+          success: false,
+          output: "",
+          error: session.error,
+          sessionId: session.id,
+        });
+      }, this.sessionTimeoutMs);
+
+      this.consumeStream(agent, session, conversationId, history, opts)
+        .then((result) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(result);
+        })
+        .catch((err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          session.status = "error";
+          session.finishedAt = Date.now();
+          session.error = errorMsg;
+
+          this.logger?.error(`Sub-agent error: ${session.id}`, { error: errorMsg });
+          this.onEvent?.({
+            type: "completed",
+            sessionId: session.id,
+            success: false,
+            output: "",
+            error: errorMsg,
+          });
+
+          // Hook: session_end (error)
+          this.hookRunner?.runSessionEnd(
+            { sessionId: session.id, messageCount: 0, durationMs: session.finishedAt - session.createdAt },
+            { agentId: session.agentId, sessionId: session.id },
+          ).catch((e) => this.logger?.warn(`session_end hook error: ${e}`));
+
+          resolve({
+            success: false,
+            output: "",
+            error: errorMsg,
+            sessionId: session.id,
+          });
+        });
+    });
+  }
+
+  private async consumeStream(
+    agent: BelldandyAgent,
+    session: SubAgentSession,
+    conversationId: string,
+    history: Array<{ role: "user" | "assistant"; content: string }>,
+    opts: SpawnOptions,
+  ): Promise<SpawnResult> {
+    let finalText = "";
+    let lastDelta = "";
+
+    const depth = ((opts.context?._orchestratorDepth as number) ?? 0) + 1;
+
+    const stream = agent.run({
+      conversationId,
+      text: opts.instruction,
+      history,
+      meta: {
+        ...opts.context,
+        _orchestratorDepth: depth,
+        _parentConversationId: opts.parentConversationId,
+      },
+    });
+
+    for await (const item of stream as AsyncIterable<AgentStreamItem>) {
+      switch (item.type) {
+        case "delta":
+          lastDelta += item.delta;
+          // Batch deltas to avoid flooding the event bus
+          if (lastDelta.length >= 50) {
+            this.onEvent?.({
+              type: "thought_delta",
+              sessionId: session.id,
+              delta: lastDelta,
+            });
+            lastDelta = "";
+          }
+          break;
+
+        case "final":
+          finalText = item.text;
+          break;
+
+        // tool_call / tool_result / status / usage — ignored for parent context
+      }
+    }
+
+    // Flush remaining delta
+    if (lastDelta.length > 0) {
+      this.onEvent?.({
+        type: "thought_delta",
+        sessionId: session.id,
+        delta: lastDelta,
+      });
+    }
+
+    // Update session
+    session.status = "done";
+    session.finishedAt = Date.now();
+    session.result = finalText;
+
+    // Persist assistant response
+    this.conversationStore.addMessage(conversationId, "assistant", finalText, {
+      agentId: session.agentId,
+    });
+
+    this.logger?.info(`Sub-agent completed: ${session.id}`, {
+      agentId: session.agentId,
+      outputLength: finalText.length,
+      durationMs: session.finishedAt - session.createdAt,
+    });
+
+    this.onEvent?.({
+      type: "completed",
+      sessionId: session.id,
+      success: true,
+      output: finalText,
+    });
+
+    // Hook: session_end (success)
+    this.hookRunner?.runSessionEnd(
+      { sessionId: session.id, messageCount: 2, durationMs: (session.finishedAt ?? Date.now()) - session.createdAt },
+      { agentId: session.agentId, sessionId: session.id },
+    ).catch((err) => this.logger?.warn(`session_end hook error: ${err}`));
+
+    return {
+      success: true,
+      output: finalText,
+      sessionId: session.id,
+    };
+  }
+}

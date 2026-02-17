@@ -1,4 +1,4 @@
-import { type BelldandyAgent, ConversationStore } from "@belldandy/agent";
+import { type BelldandyAgent, ConversationStore, type AgentRegistry } from "@belldandy/agent";
 import type { GatewayEventFrame } from "@belldandy/protocol";
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
@@ -15,6 +15,8 @@ export type GatewayServerOptions = {
     webRoot: string;
     stateDir?: string;
     agentFactory?: () => BelldandyAgent;
+    /** Multi-Agent registry (takes precedence over agentFactory when agentId is specified) */
+    agentRegistry?: AgentRegistry;
     conversationStoreOptions?: {
         maxHistory?: number;
         ttlSeconds?: number;

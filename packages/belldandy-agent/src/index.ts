@@ -21,6 +21,8 @@ export {
 export {
   ensureWorkspace,
   loadWorkspaceFiles,
+  ensureAgentWorkspace,
+  loadAgentWorkspaceFiles,
   needsBootstrap,
   createBootstrapFile,
   removeBootstrapFile,
@@ -67,6 +69,8 @@ export type AgentRunInput = {
    */
   content?: string | Array<AgentContentPart>;
   meta?: JsonObject;
+  /** 当前 Agent ID（传递给 ToolExecutor 用于 per-agent workspace 定位） */
+  agentId?: string;
   /** 对话历史（role 必须是 user 或 assistant） */
   history?: Array<{ role: "user" | "assistant"; content: string | Array<AgentContentPart> }>;
 };
@@ -179,6 +183,34 @@ export {
   type AnthropicRequestPayload,
   type ParsedAnthropicResponse,
 } from "./anthropic.js";
+
+// Agent Profile（多 Agent 预备）
+export {
+  buildDefaultProfile,
+  loadAgentProfiles,
+  resolveModelConfig,
+  type AgentProfile,
+  type AgentConfigFile,
+} from "./agent-profile.js";
+
+// Agent Registry（多 Agent 注册表）
+export {
+  AgentRegistry,
+  type AgentFactoryFn,
+} from "./agent-registry.js";
+
+// Sub-Agent Orchestrator（子 Agent 编排）
+export {
+  SubAgentOrchestrator,
+  type SubAgentSession,
+  type SubAgentSessionStatus,
+  type SubAgentEvent,
+  type SpawnOptions,
+  type SpawnResult,
+  type OrchestratorOptions,
+  type OrchestratorLogger,
+  type OrchestratorHookRunner,
+} from "./orchestrator.js";
 
 // 对话压缩
 export {
