@@ -44,7 +44,15 @@
       "Bash(Select-Object:*)",
       "Bash(cmd /c:*)",
       "WebFetch(domain:bailian.console.aliyun.com)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(findstr:*)",
+      "Bash(Get-ChildItem:*)",
+      "Bash(Where-Object { $_FullName -notmatch 'node_modules|\\\\.next|\\\\.git|out\\\\\\\\' })",
+      "Bash(npx tsx:*)",
+      "Bash(export TOKEN=\"eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOiJlNDA4YmZjMy1lMzkyLTQ4NjYtODUzZi0wMzYwMzU2MWU4NTciLCJpc3MiOiJnb2RkZXNzLXJlbGllZi1vZmZpY2UiLCJpYXQiOjE3NzEyNDI2ODAsImV4cCI6MTc3MTg0NzQ4MH0.q4wR9PA_3TeDikmrqRkuhCkcqarwmi0CPEBLzJjm7Ic\")",
+      "Bash(python3:*)",
+      "Bash(ITEM_ID=\"c66d1634-fc6a-46f1-bef9-e4be68d8c64d\")",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOiJlNDA4YmZjMy1lMzkyLTQ4NjYtODUzZi0wMzYwMzU2MWU4NTciLCJpc3MiOiJnb2RkZXNzLXJlbGllZi1vZmZpY2UiLCJpYXQiOjE3NzEyNDI2ODAsImV4cCI6MTc3MTg0NzQ4MH0.q4wR9PA_3TeDikmrqRkuhCkcqarwmi0CPEBLzJjm7Ic\")"
     ]
   }
 }

@@ -141,3 +141,79 @@ flowchart TB
 
 - **高级语音**: ElevenLabs 集成，自动摘要优化。
 - **高级图像**: 提示词工程，画廊生成。
+
+---
+
+## 7. 后续开发需求汇总
+
+> 整合自 `IMPLEMENTATION_PLAN.md`、`Belldandy实现内容说明.md`、`office.goddess.ai/WORKSHOP-PLAN.md` 三份文档中尚未完成的工作项。
+> 按所属项目分类，再按优先级排列。
+
+### 7.1 Belldandy（核心 Agent 系统）
+
+#### P1 — 近期
+
+| 编号 | 项目 | 说明 | 来源 |
+|------|------|------|------|
+| B-P1-1 | 渠道扩展：Telegram + Slack/Discord | Channel 接口已就绪，需实现具体渠道适配 | Roadmap P1-3 |
+| B-P1-2 | 会话模型梳理 & 多 Agent 预备 | 梳理 ConversationStore 结构，为 Multi-Agent 预留配置位 | Roadmap P1-5 |
+| B-P1-3 | 记忆检索增强 (Phase 4.7) | Context Injection（对话开始时自动注入最近摘要）、Auto-Recall（NLP 关键词触发 `memory_search`） | Phase 4.7 |
+
+#### P2 — 中期
+
+| 编号 | 项目 | 说明 | 来源 |
+|------|------|------|------|
+| B-P2-1 | Multi-Agent 路由 & Session 编排 (Phase 16) | Session 池、Router、Inter-Agent Protocol，子 Agent 任务分发 | Roadmap P2-1 / Phase 16 |
+| B-P2-2 | 记忆系统深度优化 (Phase 4.8) | Auto-Summarization、Metadata Filtering（channel/topic）、Query Rewrite、Rerank Model | Phase 4.8 |
+| B-P2-3 | Channels 路由引擎升级 | Mention gating、群聊路由规则，结合安全策略 | Roadmap P2-2 |
+| B-P2-4 | Skills 生态 & 技能注册中心 | 类 ClawHub 的技能 registry，优先本地 + MCP 映射 | Roadmap P2-3 |
+| B-P2-5 | Canvas / 可视化工作区（基础版） | 基础画布 + 快照 | Roadmap P2-4 |
+| B-P2-6 | Webhooks & 外部触发 | Webhook 入口、邮件/通知触发，注意鉴权 | Roadmap P2-5 |
+| B-P2-7 | Knowledge Graph (Nodes) | 知识图谱工具，与方法论系统结合 | Roadmap P2-6 |
+| B-P2-8 | Cron 方案 B 升级 | cron 表达式（`croner`）、Session 隔离、agentTurn Payload、渠道定向推送、执行历史 | 说明文档 §2.5 |
+| B-P2-9 | Heartbeat 消息去重 | 防止 Agent 在无法执行操作时反复发送同一条提醒（24h 内重复内容静默） | 说明文档 §2 |
+
+#### P3 — 远期
+
+| 编号 | 项目 | 说明 | 来源 |
+|------|------|------|------|
+| B-P3-1 | OS 计算机操作能力 (Phase 10.5) | nut-js + Jimp 视觉层、Box-to-Pixel 控制层、ScreenMarker 反馈 | Phase 10.5 |
+| B-P3-2 | 原生客户端 (macOS/iOS/Android) | 工程量大，暂缓 | Roadmap P3-1 |
+| B-P3-3 | 远程 Gateway & 部署工具链 | Docker、Tailscale、Remote Gateway | Roadmap P3-2 |
+| B-P3-4 | 高阶 Canvas & 多节点视觉 | 多节点协同视图，多相机流，依赖原生客户端 | Roadmap P3-3 |
+| B-P3-5 | IDE 协议桥接 (ACP) | 评估 ACP/OpenClaw 协议桥接 | Roadmap P3-4 |
+| B-P3-6 | 自动更新机制 (Phase 24) | git pull + pnpm install + restart，需解决文件锁 | Roadmap P3-5 |
+| B-P3-7 | 实时视觉流 (WebRTC) (Phase 15+) | 低延迟高帧率视觉流，WebRTC + PeerJS | Phase 15+ |
+| B-P3-8 | 高级语音 (ElevenLabs) | 更高质量 TTS Provider | §6 |
+| B-P3-9 | 高级图像 | 提示词工程、画廊生成 | §6 |
+
+#### 低优先级 — 锦上添花
+
+| 编号 | 项目 | 说明 |
+|------|------|------|
+| B-L1 | Local Embedding | 本地向量计算（node-llama-cpp / transformers.js），摆脱 API 依赖 |
+| B-L2 | SOUL_EVIL 彩蛋 | 特定条件下加载反转人格，趣味性 |
+| B-L3 | Memory Flush 缓冲机制 | 写入 Buffer + 空闲 Compaction，当前数据量下收益不大 |
+
+---
+
+### 7.2 office.goddess.ai（主页 / Workshop 模组工坊）
+
+#### 待验证
+
+| 编号 | 项目 | 说明 |
+|------|------|------|
+| W-V1 | Workshop 全流程联调 | 发布 → 列表 → 搜索 → 详情 → 下载 → 编辑 → 删除，需启动前后端手动验证 |
+
+#### 后续迭代
+
+| 编号 | 项目 | 说明 | 优先级 |
+|------|------|------|--------|
+| W-1 | 支付流程接入 | 收益分成系统，对接支付网关 | P2 |
+| W-2 | 作品评分与评论 | 用户评价体系 | P2 |
+| W-3 | 作品版本历史 | 支持多版本管理与回滚 | P2 |
+| W-4 | Markdown 描述渲染 | 引入 Markdown 渲染库替代纯文本 | P2 |
+| W-5 | 作品封面图上传 | 提升视觉吸引力 | P2 |
+| W-6 | 下载去重 | 同用户不重复计数 | P3 |
+| W-7 | 全文搜索优化 (FTS5) | 提升搜索质量与性能 | P3 |
+| W-8 | 作品审核流程 | 发布前审核机制，内容安全 | P3 |
