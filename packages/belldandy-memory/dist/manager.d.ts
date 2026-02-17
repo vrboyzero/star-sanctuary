@@ -38,6 +38,10 @@ export declare class MemoryManager {
      */
     search(query: string, limit?: number): Promise<MemorySearchResult[]>;
     /**
+     * Get recent memory chunks (by updated_at, no embedding needed)
+     */
+    getRecent(limit?: number): MemorySearchResult[];
+    /**
      * Process chunks that lack embeddings
      */
     private processPendingEmbeddings;

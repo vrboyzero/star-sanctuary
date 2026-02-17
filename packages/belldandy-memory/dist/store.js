@@ -208,6 +208,29 @@ export class MemoryStore {
             metadata: safeParseJson(row.metadata),
         };
     }
+    /** 获取最近更新的记忆块（按 updated_at 降序） */
+    getRecentChunks(limit = 5) {
+        this.ensureOpen();
+        const stmt = this.db.prepare(`
+      SELECT id, source_path, source_type, memory_type, content, metadata, start_line, end_line
+      FROM chunks
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `);
+        const rows = stmt.all(limit);
+        return rows.map((row) => ({
+            id: row.id,
+            sourcePath: row.source_path,
+            sourceType: row.source_type,
+            memoryType: row.memory_type,
+            snippet: (row.content ?? "").slice(0, 500),
+            content: row.content,
+            score: 1,
+            metadata: safeParseJson(row.metadata),
+            startLine: row.start_line ?? undefined,
+            endLine: row.end_line ?? undefined,
+        }));
+    }
     /** 获取索引状态 */
     getStatus() {
         this.ensureOpen();

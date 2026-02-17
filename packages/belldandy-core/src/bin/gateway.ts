@@ -23,6 +23,9 @@ import {
   buildDefaultProfile,
   resolveModelConfig,
   type AgentProfile,
+  HookRegistry,
+  createHookRunner,
+  type HookRunner,
 } from "@belldandy/agent";
 import {
   ToolExecutor,
@@ -63,7 +66,7 @@ import {
   delegateTaskTool,
   delegateParallelTool,
 } from "@belldandy/skills";
-import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir } from "@belldandy/memory";
+import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel } from "@belldandy/channels";
 
@@ -597,6 +600,50 @@ const dynamicSystemPrompt = buildSystemPrompt({
 });
 logger.info("system-prompt", `length=${dynamicSystemPrompt.length} chars${maxSystemPromptChars ? `, limit=${maxSystemPromptChars}` : ""}`);
 
+// 7.5 Hook System: HookRegistry + Context Injection
+const hookRegistry = new HookRegistry();
+
+// Context Injection: 对话开始时自动注入最近记忆摘要
+const contextInjectionEnabled = readEnv("BELLDANDY_CONTEXT_INJECTION") !== "false"; // 默认启用
+const contextInjectionLimit = Math.max(1, parseInt(readEnv("BELLDANDY_CONTEXT_INJECTION_LIMIT") || "5", 10));
+
+if (contextInjectionEnabled) {
+  hookRegistry.register({
+    source: "context-injection",
+    hookName: "before_agent_start",
+    priority: 100,
+    handler: async (_event, _ctx) => {
+      const mm = getGlobalMemoryManager();
+      if (!mm) return undefined;
+
+      try {
+        const recent = mm.getRecent(contextInjectionLimit);
+        if (recent.length === 0) return undefined;
+
+        const lines = recent.map((r) => {
+          const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
+          return `- [${src}] ${r.snippet}`;
+        });
+        const block = `<recent-memory>\n${lines.join("\n")}\n</recent-memory>`;
+        return { prependContext: block };
+      } catch (err) {
+        logger.warn("context-injection", `Failed to fetch recent memory: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      }
+    },
+  });
+  logger.info("context-injection", `enabled (limit=${contextInjectionLimit})`);
+}
+
+const hookRunner: HookRunner = createHookRunner(hookRegistry, {
+  logger: {
+    debug: (m) => logger.debug("hooks", m),
+    warn: (m) => logger.warn("hooks", m),
+    error: (m) => logger.error("hooks", m),
+  },
+  catchErrors: true,
+});
+
 // 8. Agent Registry (replaces single agentFactory closure)
 const primaryModelConfig = {
   baseUrl: openaiBaseUrl ?? "",
@@ -684,6 +731,7 @@ Keep responses concise and natural for spoken delivery.`;
         systemPrompt: currentSystemPrompt,
         toolExecutor: toolExecutor,
         logger,
+        hookRunner,
         ...(agentTimeoutMs !== undefined && { timeoutMs: agentTimeoutMs }),
         fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
         failoverLogger: logger,

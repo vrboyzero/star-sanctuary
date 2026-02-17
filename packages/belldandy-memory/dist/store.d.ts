@@ -20,6 +20,8 @@ export declare class MemoryStore {
         updatedAt: string;
         metadata?: any;
     } | null;
+    /** 获取最近更新的记忆块（按 updated_at 降序） */
+    getRecentChunks(limit?: number): MemorySearchResult[];
     /** 获取索引状态 */
     getStatus(): MemoryIndexStatus;
     /** 更新最后索引时间 */

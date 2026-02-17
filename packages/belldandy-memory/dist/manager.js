@@ -89,6 +89,12 @@ export class MemoryManager {
         return this.store.searchHybrid(query, queryVec, { limit });
     }
     /**
+     * Get recent memory chunks (by updated_at, no embedding needed)
+     */
+    getRecent(limit = 5) {
+        return this.store.getRecentChunks(limit);
+    }
+    /**
      * Process chunks that lack embeddings
      */
     async processPendingEmbeddings() {

@@ -120,6 +120,13 @@ export class MemoryManager {
     }
 
     /**
+     * Get recent memory chunks (by updated_at, no embedding needed)
+     */
+    getRecent(limit = 5): MemorySearchResult[] {
+        return this.store.getRecentChunks(limit);
+    }
+
+    /**
      * Process chunks that lack embeddings
      */
     private async processPendingEmbeddings(): Promise<void> {

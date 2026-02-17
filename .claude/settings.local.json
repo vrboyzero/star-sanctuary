@@ -54,7 +54,9 @@
       "Bash(ITEM_ID=\"c66d1634-fc6a-46f1-bef9-e4be68d8c64d\")",
       "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOiJlNDA4YmZjMy1lMzkyLTQ4NjYtODUzZi0wMzYwMzU2MWU4NTciLCJpc3MiOiJnb2RkZXNzLXJlbGllZi1vZmZpY2UiLCJpYXQiOjE3NzEyNDI2ODAsImV4cCI6MTc3MTg0NzQ4MH0.q4wR9PA_3TeDikmrqRkuhCkcqarwmi0CPEBLzJjm7Ic\")",
       "Bash(corepack pnpm test:*)",
-      "Bash(corepack pnpm vitest run:*)"
+      "Bash(corepack pnpm vitest run:*)",
+      "Bash(done)",
+      "Bash(find:*)"
     ]
   }
 }
