@@ -25,7 +25,7 @@ function getMemoryManager(workspaceRoot) {
 export const memorySearchTool = {
     definition: {
         name: "memory_search",
-        description: "Search the knowledge base (files in workspace) using hybrid retrieval (semantic vector search + keyword search). Use this to find information, code snippets, or context from the project.",
+        description: "Search the knowledge base (files in workspace) using hybrid retrieval (semantic vector search + keyword search). Use this to find information, code snippets, or context from the project. Supports optional metadata filtering by memory type, channel, topic, and date range.",
         parameters: {
             type: "object",
             properties: {
@@ -37,6 +37,22 @@ export const memorySearchTool = {
                     type: "number",
                     description: "Max number of results to return (default: 5).",
                 },
+                memory_type: {
+                    type: "string",
+                    description: "Filter by memory type: 'core' (long-term facts), 'daily' (daily notes), 'session' (conversation history), 'other'. Can be comma-separated for multiple types.",
+                },
+                channel: {
+                    type: "string",
+                    description: "Filter by source channel: 'webchat', 'feishu', 'heartbeat', etc.",
+                },
+                date_from: {
+                    type: "string",
+                    description: "Filter results from this date (YYYY-MM-DD).",
+                },
+                date_to: {
+                    type: "string",
+                    description: "Filter results up to this date (YYYY-MM-DD).",
+                },
             },
             required: ["query"],
         },
@@ -47,7 +63,20 @@ export const memorySearchTool = {
             const manager = getMemoryManager(context.workspaceRoot);
             const query = args.query;
             const limit = args.limit || 5;
-            const results = await manager.search(query, limit);
+            // Build filter from args
+            const filter = {};
+            if (args.memory_type) {
+                const types = args.memory_type.split(",").map(s => s.trim());
+                filter.memoryType = types.length === 1 ? types[0] : types;
+            }
+            if (args.channel)
+                filter.channel = args.channel;
+            if (args.date_from)
+                filter.dateFrom = args.date_from;
+            if (args.date_to)
+                filter.dateTo = args.date_to;
+            const hasFilter = Object.keys(filter).length > 0;
+            const results = await manager.search(query, hasFilter ? { limit, filter } : limit);
             // Format results
             const output = results.map(r => `[${r.sourcePath}:${r.startLine || 0}] (Score: ${r.score.toFixed(3)})\n${r.snippet}`).join("\n\n---\n\n");
             return {

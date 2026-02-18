@@ -1,5 +1,6 @@
 import { MemoryStore } from "./store.js";
 import { MemoryIndexer } from "./indexer.js";
+import { ResultReranker } from "./reranker.js";
 import { OpenAIEmbeddingProvider } from "./embeddings/openai.js";
 import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import path from "node:path";
@@ -26,6 +27,7 @@ export function getGlobalMemoryManager() {
 export class MemoryManager {
     store;
     indexer;
+    reranker;
     embeddingProvider; // Renamed from embeddingModel
     workspaceRoot;
     embeddingBatchSize;
@@ -60,6 +62,7 @@ export class MemoryManager {
             console.log(`[MemoryManager] Using OpenAI Embedding Provider (${options.openaiModel || "text-embedding-3-small"})`);
         }
         this.indexer = new MemoryIndexer(this.store, options.indexerOptions);
+        this.reranker = new ResultReranker(options.rerankerOptions);
         this.embeddingBatchSize = options.embeddingBatchSize || 10;
     }
     /**
@@ -74,19 +77,30 @@ export class MemoryManager {
     /**
      * Search memory (Hybrid)
      */
-    async search(query, limit = 5) {
+    async search(query, limitOrOptions) {
+        // 兼容旧签名 search(query, limit) 和新签名 search(query, options)
+        let limit = 5;
+        let filter;
+        if (typeof limitOrOptions === "number") {
+            limit = limitOrOptions;
+        }
+        else if (limitOrOptions) {
+            limit = limitOrOptions.limit ?? 5;
+            filter = limitOrOptions.filter;
+        }
         // 1. Embed query
         let queryVec = null;
         try {
-            // Note: embedQuery might be named 'embed' in EmbeddingProvider interface vs 'embedQuery' in old EmbeddingModel
-            // We standardized on 'embed(text)' in types.ts.
             queryVec = await this.embeddingProvider.embed(query);
         }
         catch (err) {
             console.warn("Embedding failed, falling back to keyword search only", err);
         }
-        // 2. Hybrid search
-        return this.store.searchHybrid(query, queryVec, { limit });
+        // 2. Hybrid search with filter
+        const rawResults = this.store.searchHybrid(query, queryVec, { limit: limit * 2, filter });
+        // 3. Rule-based rerank
+        const reranked = this.reranker.rerank(rawResults);
+        return reranked.slice(0, limit);
     }
     /**
      * Get recent memory chunks (by updated_at, no embedding needed)

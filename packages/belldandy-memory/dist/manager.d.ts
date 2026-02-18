@@ -1,5 +1,6 @@
 import { type IndexerOptions } from "./indexer.js";
-import type { MemorySearchResult, MemoryIndexStatus } from "./types.js";
+import { type RerankerOptions } from "./reranker.js";
+import type { MemorySearchResult, MemoryIndexStatus, MemorySearchOptions } from "./types.js";
 /**
  * Register a MemoryManager instance as the global shared instance.
  * Called by Gateway during startup.
@@ -21,10 +22,12 @@ export interface MemoryManagerOptions {
     modelsDir?: string;
     indexerOptions?: IndexerOptions;
     embeddingBatchSize?: number;
+    rerankerOptions?: RerankerOptions;
 }
 export declare class MemoryManager {
     private store;
     private indexer;
+    private reranker;
     private embeddingProvider;
     private workspaceRoot;
     private embeddingBatchSize;
@@ -36,7 +39,7 @@ export declare class MemoryManager {
     /**
      * Search memory (Hybrid)
      */
-    search(query: string, limit?: number): Promise<MemorySearchResult[]>;
+    search(query: string, limitOrOptions?: number | MemorySearchOptions): Promise<MemorySearchResult[]>;
     /**
      * Get recent memory chunks (by updated_at, no embedding needed)
      */

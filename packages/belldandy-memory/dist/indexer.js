@@ -84,6 +84,9 @@ export class MemoryIndexer {
             // 对于 MVP，我们可以接受。
             this.store.deleteBySource(filePath);
             const baseId = crypto.createHash("md5").update(filePath).digest("hex");
+            // Phase M-1: 推断元数据
+            const channel = inferChannelFromPath(filePath, ext);
+            const tsDate = inferTsDateFromPath(filePath, mtime);
             for (let i = 0; i < chunksStr.length; i++) {
                 const chunkContent = chunksStr[i];
                 const chunk = {
@@ -92,6 +95,8 @@ export class MemoryIndexer {
                     sourceType: ext === ".jsonl" ? "session" : "file",
                     memoryType: memoryType,
                     content: chunkContent,
+                    channel,
+                    tsDate,
                     metadata: {
                         file_mtime: mtime, // 存入文件的实际修改时间
                         chunk_index: i,
@@ -153,6 +158,33 @@ export class MemoryIndexer {
             .on("change", handleFile)
             .on("unlink", handleRemove)
             .on("error", error => console.error(`[WatcherError] ${error}`));
+    }
+}
+// ========== Phase M-1: 元数据推断 ==========
+/** 从文件路径推断来源渠道 */
+function inferChannelFromPath(filePath, ext) {
+    const lower = filePath.toLowerCase().replace(/\\/g, "/");
+    if (ext === ".jsonl" || lower.includes("/sessions/")) {
+        if (lower.includes("feishu") || lower.includes("lark"))
+            return "feishu";
+        return "webchat";
+    }
+    if (lower.includes("heartbeat"))
+        return "heartbeat";
+    return undefined;
+}
+/** 从文件路径或 mtime 推断日期 */
+function inferTsDateFromPath(filePath, mtime) {
+    // 优先从文件名提取：memory/YYYY-MM-DD.md 或 sessions/YYYY-MM-DD_xxx.jsonl
+    const dateMatch = filePath.match(/(\d{4}-\d{2}-\d{2})/);
+    if (dateMatch)
+        return dateMatch[1];
+    // 从文件 mtime 推断
+    try {
+        return new Date(mtime).toISOString().slice(0, 10);
+    }
+    catch {
+        return undefined;
     }
 }
 //# sourceMappingURL=indexer.js.map

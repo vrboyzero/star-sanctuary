@@ -1,5 +1,6 @@
 export { MemoryStore } from "./store.js";
 export { MemoryIndexer } from "./indexer.js";
+export { ResultReranker, type RerankerOptions } from "./reranker.js";
 export { MemoryManager, type MemoryManagerOptions, registerGlobalMemoryManager, getGlobalMemoryManager } from "./manager.js";
 export * from "./types.js";
 export * from "./memory-files.js";

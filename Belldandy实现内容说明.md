@@ -1115,15 +1115,28 @@
     - **痛点**：长期对话会导致记忆碎片化，缺乏宏观结论。
     - **方案**：每日或定期触发 LLM 对近期对话生成 **High-Level Summary**，并作为独立记忆块存入，便于检索"结论"而非"过程"。
 
-2.  **元数据过滤 (Metadata Filtering)**
+2.  **元数据过滤 (Metadata Filtering)** ✅ 已完成
     - **痛点**：全量检索可能混杂不同渠道、不同话题的无关信息。
     - **方案**：在记忆块中注入 `channel`、`topic`、`timestamp` 等结构化标签，检索时支持 SQL 级预过滤（Pre-filtering），如"只查飞书上的技术讨论"。
+    - **实现内容**：
+        - `chunks` 表新增 `channel`（来源渠道）、`topic`（话题标签）、`ts_date`（日期）三个结构化列 + 4 个索引。
+        - 数据库启动时自动迁移 Schema 并回填存量数据（从文件路径/metadata 推断 channel 和 ts_date）。
+        - `searchKeyword` / `searchVector` / `searchHybrid` 全部支持 `MemorySearchFilter` 参数（memory_type / channel / topic / dateFrom / dateTo）。
+        - 索引器（`MemoryIndexer`）在索引文件时自动推断 channel（webchat/feishu/heartbeat）和 ts_date。
+        - `memory_search` 工具新增 `memory_type`、`channel`、`date_from`、`date_to` 过滤参数。
+        - `MemoryManager.search()` 兼容旧签名 `(query, limit)` 和新签名 `(query, { limit, filter })`。
 
-3.  **查询重写与重排序 (Rewrite & Rerank)**
+3.  **查询重写与重排序 (Rewrite & Rerank)** — 规则重排 ✅ 已完成 / 查询重写与 LLM 重排 ⏳ 待实现
     - **痛点**：用户指代不清（"它怎么样？"）导致检索失败；向量相似度不等于逻辑相关度。
     - **方案**：
-        - **Rewrite**：先用 LLM 将用户查询改写为完整句子（消歧），再检索。
-        - **Rerank**：引入精细的 Rerank 模型对初步检索的 Top-50 结果进行二次打分，筛选出真正相关的 Top-5。
+        - **Rewrite**：先用 LLM 将用户查询改写为完整句子（消歧），再检索。（⏳ 待实现，`BELLDANDY_MEMORY_REWRITE_ENABLED` 控制）
+        - **Rerank**：引入精细的 Rerank 模型对初步检索的 Top-50 结果进行二次打分，筛选出真正相关的 Top-5。（LLM Rerank ⏳ 待实现）
+    - **已实现 — 规则重排（`ResultReranker`）**：
+        - 零成本纯计算重排，默认开启，三个信号：
+            - **memory_type 权重**：core 1.3x > daily 1.0x > session 0.9x > other 0.8x
+            - **时间衰减**：指数衰减，30 天半衰期，下限 0.3（避免旧核心记忆被完全压制）
+            - **来源多样性惩罚**：同一文件的多个 chunk 每多出现一次降权 15%
+        - 搜索流程：先取 `limit×2` 候选 → RRF 融合 → 规则重排 → 截取 Top-K
 
 ### 5. OS 计算机操作能力 (Computer Use Strategy) (优先级：中)
 
@@ -1254,7 +1267,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **系统命令** | ✅ exec/process | ✅ exec/terminal | **Safe Mode** 保护 |
 | **浏览器自动化** | ✅ 28+ actions | ✅ 核心闭环 | 支持快照/截图/操作/中继 |
 | **网络请求** | ✅ search + fetch | ✅ search + fetch | 集成 Brave/SerpAPI |
-| **记忆系统** | ✅ memory + nodes | ✅ memory | 缺少 `nodes` 图谱 |
+| **记忆系统** | ✅ memory + nodes | ✅ memory + 元数据过滤 + 规则重排 | 缺少 `nodes` 图谱 |
 | **多媒体** | ✅ tts/image/canvas | ✅ tts/image/canvas | Canvas 可视化工作区已实现 |
 | **会话编排** | ✅ 完整 | ✅ 完整 | SubAgentOrchestrator + delegate_task/delegate_parallel + 并发排队 + 钩子集成 |
 | **渠道集成** | ✅ 4+ channels | ✅ 飞书 + Channel 接口 | 架构已就绪，可快速扩展 |
@@ -1352,7 +1365,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **目录列表** | `list_files` |
 | **网页抓取** | `web_fetch`（含域名黑白名单、SSRF 防护） |
 | **网页搜索** | `web_search`（Brave / SerpAPI） |
-| **记忆检索** | `memory_search`（FTS5 + 向量混合检索） |
+| **记忆检索** | `memory_search`（FTS5 + 向量混合检索 + 元数据过滤 + 规则重排） |
 | **记忆读写** | `memory_read`, `memory_write` |
 | **飞书渠道** | `FeishuChannel`（WebSocket 长连接） |
 | **定时触发** | `Heartbeat Runner`（读取 HEARTBEAT.md） |
@@ -1385,6 +1398,6 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
  2. **条件分支编排** — 根据子 Agent 结果决定后续分支（Phase 25 Step 5）
  3. **`code_interpreter` 增强** — 更高级的沙箱计算能力
  4. **Local Embedding** — 完全本地化的向量计算，摆脱 API 依赖
- 5. **记忆系统优化** — 自动摘要、元数据过滤、查询重写与重排序
+ 5. **记忆系统优化** — 自动摘要、~~元数据过滤~~✅、~~规则重排~~✅、查询重写、LLM 重排
  6. **OS 计算机操作** — 操作系统级 GUI 控制（基于 UI-TARS 方案）
 

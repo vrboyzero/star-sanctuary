@@ -346,6 +346,18 @@ Belldandy 会自动读取并索引 `.belldandy/MEMORY.md` 和 `.belldandy/memory
 -   **`MEMORY.md`**：存放你希望它永远记住的关键事实。
 -   **`memory/2026-01-31.md`**：你可以手动记录当天的笔记，Belldandy 会自动索引并在相关对话中回忆起来。
 
+**检索增强**
+
+`memory_search` 工具支持元数据过滤，Agent 可以精确缩小检索范围：
+
+| 过滤参数 | 说明 | 示例 |
+|----------|------|------|
+| `memory_type` | 记忆类型 | `core`（长期事实）、`daily`（日记）、`session`（对话历史） |
+| `channel` | 来源渠道 | `webchat`、`feishu`、`heartbeat` |
+| `date_from` / `date_to` | 日期范围 | `2026-01-01` ~ `2026-02-01` |
+
+检索结果会经过规则重排序（memory_type 权重 + 时间衰减 + 来源多样性），确保最相关的记忆排在前面。
+
 ### 5.3 FACET 模组切换
 
 FACET 是 Belldandy 的"职能模组"系统——通过切换不同的模组文件，可以让同一个 Agent 在不同角色之间快速转换（例如"程序员模式"、"翻译模式"、"创意写作模式"等）。
@@ -1681,7 +1693,7 @@ A: 说明端口 28889 已经被占用了。你可以修改 `.env.local` 中的 `
 A: Belldandy 默认监听 `0.0.0.0`，在局域网内可以直接通过 IP 访问（需要配对）。若要公网访问，建议使用 Cloudflare Tunnel 或 Frp 等内网穿透工具，并务必开启 `BELLDANDY_AUTH_MODE=token` 增加安全性。
 
 **Q: 记忆检索有时候不准？**
-A: 目前使用的是混合检索（关键词+向量）。请确保你的 `.env.local` 中正确配置了 Embedding 模型，且 `BELLDANDY_EMBEDDING_ENABLED=true`。
+A: 记忆系统使用混合检索（关键词 BM25 + 向量语义）+ 规则重排序。请确保 `.env.local` 中正确配置了 Embedding 模型且 `BELLDANDY_EMBEDDING_ENABLED=true`。你也可以在对话中让 Agent 使用过滤参数缩小范围，例如"搜索最近一周飞书上关于 XX 的记忆"，Agent 会自动使用 `channel`、`date_from` 等过滤条件提升精准度。
 
 **Q: Windows 下可以执行 CMD 命令吗？**
 A: 可以。Belldandy 已对 Windows 原生命令 (`copy`, `move`, `del`, `ipconfig` 等) 进行了特别支持。注意：为了安全起见，`del` 命令禁止使用 `/s` (递归) 或 `/q` (静默) 参数。

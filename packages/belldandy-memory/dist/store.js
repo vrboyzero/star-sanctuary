@@ -56,6 +56,18 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
   INSERT INTO chunks_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
 END;
 `;
+// Phase M-1: 元数据列迁移（ALTER TABLE 对已有列安全，会被 SQLite 忽略）
+const SCHEMA_METADATA_COLUMNS = [
+    "ALTER TABLE chunks ADD COLUMN channel TEXT DEFAULT NULL",
+    "ALTER TABLE chunks ADD COLUMN topic TEXT DEFAULT NULL",
+    "ALTER TABLE chunks ADD COLUMN ts_date TEXT DEFAULT NULL",
+];
+const SCHEMA_METADATA_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
+CREATE INDEX IF NOT EXISTS idx_chunks_topic ON chunks(topic);
+CREATE INDEX IF NOT EXISTS idx_chunks_ts_date ON chunks(ts_date);
+CREATE INDEX IF NOT EXISTS idx_chunks_memory_type ON chunks(memory_type);
+`;
 export class MemoryStore {
     db;
     closed = false;
@@ -66,6 +78,15 @@ export class MemoryStore {
         this.db = new Database(dbPath);
         loadSqliteVec(this.db);
         this.db.exec(SCHEMA_BASE);
+        // Phase M-1: 元数据列迁移（对已有列 ALTER TABLE ADD COLUMN 会报 duplicate，安全忽略）
+        for (const sql of SCHEMA_METADATA_COLUMNS) {
+            try {
+                this.db.exec(sql);
+            }
+            catch { /* column already exists */ }
+        }
+        this.db.exec(SCHEMA_METADATA_INDEXES);
+        this.backfillMetadataColumns();
         try {
             this.db.exec(SCHEMA_FTS5);
             this.hasFts5 = true;
@@ -86,15 +107,18 @@ export class MemoryStore {
         this.ensureOpen();
         const now = new Date().toISOString();
         const stmt = this.db.prepare(`
-      INSERT INTO chunks (id, source_path, source_type, memory_type, start_line, end_line, content, metadata, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chunks (id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         content = excluded.content,
         metadata = excluded.metadata,
         updated_at = excluded.updated_at,
-        memory_type = excluded.memory_type
+        memory_type = excluded.memory_type,
+        channel = excluded.channel,
+        topic = excluded.topic,
+        ts_date = excluded.ts_date
     `);
-        stmt.run(chunk.id, chunk.sourcePath, chunk.sourceType, chunk.memoryType, chunk.startLine ?? null, chunk.endLine ?? null, chunk.content, JSON.stringify(chunk.metadata ?? {}), now, now);
+        stmt.run(chunk.id, chunk.sourcePath, chunk.sourceType, chunk.memoryType, chunk.startLine ?? null, chunk.endLine ?? null, chunk.content, JSON.stringify(chunk.metadata ?? {}), chunk.channel ?? null, chunk.topic ?? null, chunk.tsDate ?? null, now, now);
     }
     /** 按来源路径删除 chunks */
     deleteBySource(sourcePath) {
@@ -129,11 +153,12 @@ export class MemoryStore {
         return Number(result.changes);
     }
     /** 关键词搜索（有 FTS5 用全文索引，否则用 LIKE 降级） */
-    searchKeyword(query, limit = 10) {
+    searchKeyword(query, limit = 10, filter) {
         this.ensureOpen();
         const tokens = tokenizeForSearch(query);
         if (tokens.length === 0)
             return [];
+        const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
         if (this.hasFts5) {
             const ftsQuery = buildFtsQuery(query);
             if (!ftsQuery)
@@ -142,26 +167,16 @@ export class MemoryStore {
                 const stmt = this.db.prepare(`
           SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.start_line, c.end_line,
-            c.content, c.metadata,
+            c.content, c.metadata, c.channel, c.topic, c.ts_date,
             bm25(chunks_fts) as rank
           FROM chunks_fts f
           JOIN chunks c ON c.rowid = f.rowid
-          WHERE chunks_fts MATCH ?
+          WHERE chunks_fts MATCH ?${filterClause}
           ORDER BY rank
           LIMIT ?
         `);
-                const rows = stmt.all(ftsQuery, limit);
-                return rows.map((row) => ({
-                    id: row.id,
-                    sourcePath: row.source_path,
-                    sourceType: row.source_type,
-                    memoryType: row.memory_type,
-                    startLine: row.start_line ?? undefined,
-                    endLine: row.end_line ?? undefined,
-                    snippet: truncateContent(row.content, 500),
-                    score: bm25RankToScore(row.rank),
-                    metadata: safeParseJson(row.metadata),
-                }));
+                const rows = stmt.all(ftsQuery, ...filterParams, limit);
+                return rows.map((row) => rowToSearchResult(row, bm25RankToScore(row.rank)));
             }
             catch (err) {
                 console.error("FTS query error:", err);
@@ -169,26 +184,16 @@ export class MemoryStore {
             }
         }
         // 无 FTS5 时用 LIKE 降级（多词 AND，转义 % _ 避免通配符）
-        const likeConditions = tokens.map((t) => `content LIKE ? ESCAPE '\\'`).join(" AND ");
+        const likeConditions = tokens.map(() => `content LIKE ? ESCAPE '\\'`).join(" AND ");
         const likeArgs = tokens.map((t) => `%${escapeLike(t)}%`);
         const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, start_line, end_line, content, metadata
-      FROM chunks
-      WHERE ${likeConditions}
+      SELECT id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date
+      FROM chunks c
+      WHERE ${likeConditions}${filterClause}
       LIMIT ?
     `);
-        const rows = stmt.all(...likeArgs, limit);
-        return rows.map((row) => ({
-            id: row.id,
-            sourcePath: row.source_path,
-            sourceType: row.source_type,
-            memoryType: row.memory_type,
-            startLine: row.start_line ?? undefined,
-            endLine: row.end_line ?? undefined,
-            snippet: truncateContent(row.content, 500),
-            score: 0.5,
-            metadata: safeParseJson(row.metadata),
-        }));
+        const rows = stmt.all(...likeArgs, ...filterParams, limit);
+        return rows.map((row) => rowToSearchResult(row, 0.5));
     }
     /** 获取文件元数据（用于增量检查） */
     getFileMetadata(sourcePath) {
@@ -263,6 +268,71 @@ export class MemoryStore {
             this.closed = true;
         }
     }
+    // ========== Phase M-1: 元数据过滤 ==========
+    /**
+     * 存量数据回填：从 source_path / metadata 推断 channel / ts_date。
+     * 仅对 ts_date IS NULL 的行执行，幂等安全。
+     */
+    backfillMetadataColumns() {
+        // 回填 ts_date：从 source_path 中提取日期（memory/YYYY-MM-DD.md）或从 metadata.file_mtime 推断
+        const rows = this.db.prepare(`SELECT rowid, source_path, metadata FROM chunks WHERE ts_date IS NULL`).all();
+        if (rows.length === 0)
+            return;
+        const update = this.db.prepare(`UPDATE chunks SET channel = ?, ts_date = ? WHERE rowid = ?`);
+        const tx = this.db.transaction(() => {
+            for (const row of rows) {
+                const channel = inferChannel(row.source_path);
+                const tsDate = inferTsDate(row.source_path, row.metadata);
+                update.run(channel, tsDate, row.rowid);
+            }
+        });
+        tx();
+        if (rows.length > 0) {
+            console.log(`[MemoryStore] Backfilled metadata columns for ${rows.length} chunks`);
+        }
+    }
+    /**
+     * 构建 filter 的 WHERE 子句片段和参数。
+     * 返回 { clause: "AND ...", params: [...] }，clause 为空字符串表示无过滤。
+     */
+    buildFilterClause(filter) {
+        if (!filter)
+            return { clause: "", params: [] };
+        const conditions = [];
+        const params = [];
+        // memory_type（支持单值或数组）
+        if (filter.memoryType) {
+            if (Array.isArray(filter.memoryType)) {
+                if (filter.memoryType.length > 0) {
+                    const placeholders = filter.memoryType.map(() => "?").join(", ");
+                    conditions.push(`c.memory_type IN (${placeholders})`);
+                    params.push(...filter.memoryType);
+                }
+            }
+            else {
+                conditions.push(`c.memory_type = ?`);
+                params.push(filter.memoryType);
+            }
+        }
+        if (filter.channel) {
+            conditions.push(`c.channel = ?`);
+            params.push(filter.channel);
+        }
+        if (filter.topic) {
+            conditions.push(`c.topic = ?`);
+            params.push(filter.topic);
+        }
+        if (filter.dateFrom) {
+            conditions.push(`c.ts_date >= ?`);
+            params.push(filter.dateFrom);
+        }
+        if (filter.dateTo) {
+            conditions.push(`c.ts_date <= ?`);
+            params.push(filter.dateTo);
+        }
+        const clause = conditions.length > 0 ? " AND " + conditions.join(" AND ") : "";
+        return { clause, params };
+    }
     /**
      * 初始化/准备向量表
      */
@@ -296,6 +366,9 @@ export class MemoryStore {
             startLine: row.start_line,
             endLine: row.end_line,
             content: row.content,
+            channel: row.channel ?? undefined,
+            topic: row.topic ?? undefined,
+            tsDate: row.ts_date ?? undefined,
             metadata: safeParseJson(row.metadata),
         }));
     }
@@ -385,25 +458,30 @@ export class MemoryStore {
     }
     /**
      * 向量搜索：返回与查询向量最相似的 chunks
+     * filter 通过 post-filter 实现（chunks_vec 无 metadata 列）
      */
-    searchVector(queryVec, limit = 10) {
+    searchVector(queryVec, limit = 10, filter) {
         this.ensureOpen();
         if (!this.vecDims)
             return [];
         const blob = vectorToBuffer(queryVec);
+        const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
+        const hasFilter = filterClause.length > 0;
+        // 有 filter 时多取一些，post-filter 后再截断
+        const fetchLimit = hasFilter ? limit * 5 : limit;
         // sqlite-vec KNN search
         const stmt = this.db.prepare(`
         SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.start_line, c.end_line,
-            c.content, c.metadata,
+            c.content, c.metadata, c.channel, c.topic, c.ts_date,
             v.distance
         FROM chunks_vec v
         JOIN chunks c ON c.rowid = v.rowid
-        WHERE v.embedding MATCH ? AND k = ?
+        WHERE v.embedding MATCH ? AND k = ?${filterClause}
         ORDER BY v.distance
     `);
-        const rows = stmt.all(blob, limit);
-        return rows.map((row) => ({
+        const rows = stmt.all(blob, fetchLimit, ...filterParams);
+        return rows.slice(0, limit).map((row) => ({
             id: row.id,
             sourcePath: row.source_path,
             sourceType: row.source_type,
@@ -411,7 +489,6 @@ export class MemoryStore {
             startLine: row.start_line ?? undefined,
             endLine: row.end_line ?? undefined,
             snippet: truncateContent(row.content, 500),
-            // 简单转换距离为分数，假设距离是 L2 距离
             score: 1 / (1 + row.distance),
             metadata: safeParseJson(row.metadata),
         }));
@@ -420,15 +497,15 @@ export class MemoryStore {
      * 混合搜索：结合关键词（BM25）和向量（语义）搜索
      */
     searchHybrid(query, queryVec, options = {}) {
-        const { limit = 10, vectorWeight = 0.7, textWeight = 0.3 } = options;
+        const { limit = 10, vectorWeight = 0.7, textWeight = 0.3, filter } = options;
         // 获取关键词搜索结果
-        const keywordResults = this.searchKeyword(query, limit * 2);
+        const keywordResults = this.searchKeyword(query, limit * 2, filter);
         // 如果没有向量，只返回关键词结果
         if (!queryVec || queryVec.length === 0) {
             return keywordResults.slice(0, limit);
         }
         // 获取向量搜索结果
-        const vectorResults = this.searchVector(queryVec, limit * 2);
+        const vectorResults = this.searchVector(queryVec, limit * 2, filter);
         // 合并结果（使用 RRF - Reciprocal Rank Fusion）
         const scoreMap = new Map();
         // 添加关键词结果的权重
@@ -528,5 +605,51 @@ function safeParseJson(str) {
     catch {
         return undefined;
     }
+}
+/** 将 DB row 转为 MemorySearchResult（消除重复映射代码） */
+function rowToSearchResult(row, score) {
+    return {
+        id: row.id,
+        sourcePath: row.source_path,
+        sourceType: row.source_type,
+        memoryType: row.memory_type,
+        startLine: row.start_line ?? undefined,
+        endLine: row.end_line ?? undefined,
+        snippet: truncateContent(row.content, 500),
+        score,
+        metadata: safeParseJson(row.metadata),
+    };
+}
+// ========== Phase M-1: 元数据推断辅助函数 ==========
+/** 从 source_path 推断来源渠道 */
+function inferChannel(sourcePath) {
+    const lower = sourcePath.toLowerCase().replace(/\\/g, "/");
+    if (lower.includes("/sessions/")) {
+        // 会话文件：尝试从路径中推断渠道
+        if (lower.includes("feishu") || lower.includes("lark"))
+            return "feishu";
+        return "webchat"; // 默认会话来源
+    }
+    if (lower.includes("heartbeat"))
+        return "heartbeat";
+    if (lower.includes("memory.md") || lower.includes("memory/"))
+        return null; // 文件记忆无渠道
+    return null;
+}
+/** 从 source_path 或 metadata 推断日期 */
+function inferTsDate(sourcePath, metadataStr) {
+    // 优先从文件名提取日期：memory/YYYY-MM-DD.md
+    const dateMatch = sourcePath.match(/(\d{4}-\d{2}-\d{2})/);
+    if (dateMatch)
+        return dateMatch[1];
+    // 从 metadata.file_mtime 推断
+    const meta = safeParseJson(metadataStr);
+    if (meta?.file_mtime) {
+        try {
+            return new Date(meta.file_mtime).toISOString().slice(0, 10);
+        }
+        catch { /* ignore */ }
+    }
+    return null;
 }
 //# sourceMappingURL=store.js.map

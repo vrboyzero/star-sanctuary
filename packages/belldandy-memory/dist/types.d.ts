@@ -8,7 +8,23 @@ export interface MemoryChunk {
     content: string;
     startLine?: number;
     endLine?: number;
+    channel?: string;
+    topic?: string;
+    tsDate?: string;
     metadata?: Record<string, any>;
+}
+/** 检索过滤条件 */
+export interface MemorySearchFilter {
+    memoryType?: MemoryType | MemoryType[];
+    channel?: string;
+    topic?: string;
+    dateFrom?: string;
+    dateTo?: string;
+}
+/** 检索选项（传给 MemoryManager.search） */
+export interface MemorySearchOptions {
+    limit?: number;
+    filter?: MemorySearchFilter;
 }
 /** 检索结果 */
 export interface MemorySearchResult {

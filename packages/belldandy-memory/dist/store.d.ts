@@ -1,4 +1,4 @@
-import type { MemoryChunk, MemorySearchResult, MemoryIndexStatus } from "./types.js";
+import type { MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemorySearchFilter } from "./types.js";
 import { type EmbeddingVector } from "./embeddings/index.js";
 export declare class MemoryStore {
     private db;
@@ -14,7 +14,7 @@ export declare class MemoryStore {
     /** 删除所有 chunks */
     deleteAll(): number;
     /** 关键词搜索（有 FTS5 用全文索引，否则用 LIKE 降级） */
-    searchKeyword(query: string, limit?: number): MemorySearchResult[];
+    searchKeyword(query: string, limit?: number, filter?: MemorySearchFilter): MemorySearchResult[];
     /** 获取文件元数据（用于增量检查） */
     getFileMetadata(sourcePath: string): {
         updatedAt: string;
@@ -28,6 +28,16 @@ export declare class MemoryStore {
     updateLastIndexedAt(): void;
     /** 关闭数据库连接 */
     close(): void;
+    /**
+     * 存量数据回填：从 source_path / metadata 推断 channel / ts_date。
+     * 仅对 ts_date IS NULL 的行执行，幂等安全。
+     */
+    private backfillMetadataColumns;
+    /**
+     * 构建 filter 的 WHERE 子句片段和参数。
+     * 返回 { clause: "AND ...", params: [...] }，clause 为空字符串表示无过滤。
+     */
+    private buildFilterClause;
     /**
      * 初始化/准备向量表
      */
@@ -55,8 +65,9 @@ export declare class MemoryStore {
     getCachedEmbedding(contentHash: string): EmbeddingVector | null;
     /**
      * 向量搜索：返回与查询向量最相似的 chunks
+     * filter 通过 post-filter 实现（chunks_vec 无 metadata 列）
      */
-    searchVector(queryVec: EmbeddingVector, limit?: number): MemorySearchResult[];
+    searchVector(queryVec: EmbeddingVector, limit?: number, filter?: MemorySearchFilter): MemorySearchResult[];
     /**
      * 混合搜索：结合关键词（BM25）和向量（语义）搜索
      */
@@ -64,6 +75,7 @@ export declare class MemoryStore {
         limit?: number;
         vectorWeight?: number;
         textWeight?: number;
+        filter?: MemorySearchFilter;
     }): MemorySearchResult[];
     /**
      * 获取向量索引状态

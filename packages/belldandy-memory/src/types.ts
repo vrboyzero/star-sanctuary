@@ -9,7 +9,25 @@ export interface MemoryChunk {
   content: string;
   startLine?: number;
   endLine?: number;
+  channel?: string;   // 来源渠道: webchat/feishu/heartbeat/cron/...
+  topic?: string;     // 话题标签（可选）
+  tsDate?: string;    // 日期 YYYY-MM-DD
   metadata?: Record<string, any>;
+}
+
+/** 检索过滤条件 */
+export interface MemorySearchFilter {
+  memoryType?: MemoryType | MemoryType[];
+  channel?: string;
+  topic?: string;
+  dateFrom?: string;  // YYYY-MM-DD
+  dateTo?: string;    // YYYY-MM-DD
+}
+
+/** 检索选项（传给 MemoryManager.search） */
+export interface MemorySearchOptions {
+  limit?: number;
+  filter?: MemorySearchFilter;
 }
 
 /** 检索结果 */

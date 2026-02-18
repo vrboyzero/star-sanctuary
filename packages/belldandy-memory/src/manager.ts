@@ -1,9 +1,10 @@
 import { MemoryStore } from "./store.js";
 import { MemoryIndexer, type IndexerOptions } from "./indexer.js";
+import { ResultReranker, type RerankerOptions } from "./reranker.js";
 import { OpenAIEmbeddingProvider } from "./embeddings/openai.js";
 import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import type { EmbeddingProvider } from "./embeddings/index.js"; // [NEW] Correct import
-import type { MemorySearchResult, MemoryIndexStatus } from "./types.js";
+import type { MemorySearchResult, MemoryIndexStatus, MemorySearchOptions, MemorySearchFilter } from "./types.js";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
@@ -44,11 +45,13 @@ export interface MemoryManagerOptions {
     modelsDir?: string; // [NEW] Allow configuring models directory
     indexerOptions?: IndexerOptions;
     embeddingBatchSize?: number;
+    rerankerOptions?: RerankerOptions;
 }
 
 export class MemoryManager {
     private store: MemoryStore;
     private indexer: MemoryIndexer;
+    private reranker: ResultReranker;
     private embeddingProvider: EmbeddingProvider; // Renamed from embeddingModel
     private workspaceRoot: string;
     private embeddingBatchSize: number;
@@ -87,6 +90,7 @@ export class MemoryManager {
         }
 
         this.indexer = new MemoryIndexer(this.store, options.indexerOptions);
+        this.reranker = new ResultReranker(options.rerankerOptions);
         this.embeddingBatchSize = options.embeddingBatchSize || 10;
     }
 
@@ -104,19 +108,33 @@ export class MemoryManager {
     /**
      * Search memory (Hybrid)
      */
-    async search(query: string, limit = 5): Promise<MemorySearchResult[]> {
+    async search(query: string, limitOrOptions?: number | MemorySearchOptions): Promise<MemorySearchResult[]> {
+        // 兼容旧签名 search(query, limit) 和新签名 search(query, options)
+        let limit = 5;
+        let filter: MemorySearchFilter | undefined;
+
+        if (typeof limitOrOptions === "number") {
+            limit = limitOrOptions;
+        } else if (limitOrOptions) {
+            limit = limitOrOptions.limit ?? 5;
+            filter = limitOrOptions.filter;
+        }
+
         // 1. Embed query
         let queryVec: number[] | null = null;
         try {
-            // Note: embedQuery might be named 'embed' in EmbeddingProvider interface vs 'embedQuery' in old EmbeddingModel
-            // We standardized on 'embed(text)' in types.ts.
             queryVec = await this.embeddingProvider.embed(query);
         } catch (err) {
             console.warn("Embedding failed, falling back to keyword search only", err);
         }
 
-        // 2. Hybrid search
-        return this.store.searchHybrid(query, queryVec, { limit });
+        // 2. Hybrid search with filter
+        const rawResults = this.store.searchHybrid(query, queryVec, { limit: limit * 2, filter });
+
+        // 3. Rule-based rerank
+        const reranked = this.reranker.rerank(rawResults);
+
+        return reranked.slice(0, limit);
     }
 
     /**
