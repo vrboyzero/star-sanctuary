@@ -56,7 +56,19 @@
       "Bash(corepack pnpm test:*)",
       "Bash(corepack pnpm vitest run:*)",
       "Bash(done)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__chrome-devtools__list_console_messages",
+      "mcp__chrome-devtools__get_console_message",
+      "mcp__chrome-devtools__list_network_requests",
+      "Bash(corepack pnpm pairing:approve JK6R7U9D)",
+      "Bash(corepack pnpm bdd pairing approve JK6R7U9D)",
+      "mcp__chrome-devtools__click",
+      "mcp__chrome-devtools__evaluate_script",
+      "Bash(npx tsc:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(python:*)"
     ]
   }
 }

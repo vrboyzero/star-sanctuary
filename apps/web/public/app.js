@@ -532,6 +532,16 @@ async function sendMessage() {
   pendingAttachments = [];
   renderAttachmentsPreview();
 
+  // Canvas context injection: when user sends from canvas view, prepend board snapshot
+  let finalText = text;
+  const canvasSection = document.getElementById("canvasSection");
+  if (canvasSection && !canvasSection.classList.contains("hidden") && window._canvasApp?.currentBoardId && window._canvasApp.manager?.board) {
+    const snapshot = window._canvasApp.getCanvasSnapshot();
+    if (snapshot) {
+      finalText = `[当前画布上下文]\n${snapshot}\n\n[用户消息]\n${text}`;
+    }
+  }
+
   const id = makeId();
   const payload = await sendReq({
     type: "req",
@@ -539,7 +549,7 @@ async function sendMessage() {
     method: "message.send",
     params: {
       conversationId: activeConversationId || undefined,
-      text,
+      text: finalText,
       from: "web",
       agentId: agentSelectEl?.value || undefined,
       attachments,
@@ -752,6 +762,35 @@ function handleEvent(event, payload) {
     // 强制滚动到底部（测试模式）
     // 强制滚动到底部（测试模式）
     forceScrollToBottom();
+    // ReAct 可视化：chat.final → 总结节点
+    if (window._canvasApp) {
+      window._canvasApp.handleReactFinal(text);
+    }
+    return;
+  }
+  // Canvas 实时更新事件
+  if (event === "canvas.update") {
+    if (window._canvasApp && payload) {
+      const boardId = payload.boardId;
+      const action = payload.action;
+      const data = payload.payload;
+      if (window._canvasApp.currentBoardId === boardId) {
+        window._canvasApp.handleCanvasEvent(action, data);
+      }
+    }
+    return;
+  }
+  // ReAct 可视化：tool_call / tool_result → canvas 临时节点
+  if (event === "tool_call") {
+    if (window._canvasApp) {
+      window._canvasApp.handleReactEvent("tool_call", payload);
+    }
+    return;
+  }
+  if (event === "tool_result") {
+    if (window._canvasApp) {
+      window._canvasApp.handleReactEvent("tool_result", payload);
+    }
     return;
   }
 }
@@ -1092,6 +1131,17 @@ if (switchFacetBtn) {
   switchFacetBtn.addEventListener("click", () => switchTreeMode("facets"));
 }
 
+// 画布工作区按钮
+const switchCanvasBtn = document.getElementById("switchCanvas");
+if (switchCanvasBtn) {
+  switchCanvasBtn.addEventListener("click", async () => {
+    if (window._canvasApp) {
+      switchMode("canvas");
+      await window._canvasApp.showBoardList();
+    }
+  });
+}
+
 // 切换文件树模式
 function switchTreeMode(mode) {
   if (currentTreeMode === mode) {
@@ -1409,19 +1459,52 @@ function cancelEdit() {
 function switchMode(mode) {
   editorMode = mode === "editor";
 
-  if (editorMode) {
-    // 编辑模式
+  const canvasSection = document.getElementById("canvasSection");
+
+  if (mode === "editor") {
     if (chatSection) chatSection.classList.add("hidden");
     if (editorSection) editorSection.classList.remove("hidden");
+    if (canvasSection) canvasSection.classList.add("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.remove("hidden");
+  } else if (mode === "canvas") {
+    if (chatSection) chatSection.classList.add("hidden");
+    if (editorSection) editorSection.classList.add("hidden");
+    if (canvasSection) canvasSection.classList.remove("hidden");
+    if (composerSection) composerSection.classList.add("hidden");
+    if (editorActions) editorActions.classList.add("hidden");
   } else {
-    // 聊天模式
+    // chat (default)
     if (chatSection) chatSection.classList.remove("hidden");
     if (editorSection) editorSection.classList.add("hidden");
+    if (canvasSection) canvasSection.classList.add("hidden");
     if (composerSection) composerSection.classList.remove("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   }
+}
+
+// Expose switchMode for canvas.js
+window._belldandySwitchMode = switchMode;
+
+// Expose openFile for canvas.js (method node double-click → editor)
+window._belldandyOpenFile = (filePath) => openFile(filePath);
+
+// Expose loadConversation for canvas.js (session node double-click → chat)
+window._belldandyLoadConversation = (conversationId) => {
+  activeConversationId = conversationId;
+  switchMode("chat");
+  if (messagesEl) {
+    messagesEl.innerHTML = "";
+    const hint = document.createElement("div");
+    hint.className = "system-msg";
+    hint.textContent = `已切换到会话: ${conversationId}`;
+    messagesEl.appendChild(hint);
+  }
+};
+
+// Initialize canvas app (canvas.js creates window._canvasApp)
+if (window._canvasApp) {
+  window._canvasApp.init((req) => sendReq(req));
 }
 
 // HTML 转义

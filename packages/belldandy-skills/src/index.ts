@@ -75,3 +75,7 @@ export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
 // Skills 管理工具
 export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
 
+// Canvas 可视化工作区工具
+export { createCanvasTools, type CanvasBroadcastFn } from "./builtin/canvas.js";
+export type { CanvasBoard, CanvasNode, CanvasEdge, NodeType, NodeData, NodeRef } from "./builtin/canvas.js";
+

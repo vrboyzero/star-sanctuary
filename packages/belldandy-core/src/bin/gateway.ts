@@ -68,6 +68,7 @@ import {
   SkillRegistry,
   createSkillsListTool,
   createSkillsSearchTool,
+  createCanvasTools,
 } from "@belldandy/skills";
 import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
@@ -487,6 +488,9 @@ const toolsToRegister = toolsEnabled
     sessionsHistoryTool,
     delegateTaskTool,
     delegateParallelTool,
+
+    // ── canvas 组（可视化工作区） ──
+    ...(hasToolGroup("canvas") ? createCanvasTools((msg) => serverBroadcast?.(msg)) : []),
   ]
   : [];
 

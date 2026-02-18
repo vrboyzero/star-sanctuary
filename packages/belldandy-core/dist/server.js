@@ -430,6 +430,12 @@ async function handleReq(ws, req, ctx) {
                         if (item.type === "status") {
                             sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: item.status } });
                         }
+                        if (item.type === "tool_call") {
+                            sendEvent(ws, { type: "event", event: "tool_call", payload: { conversationId, id: item.id, name: item.name, arguments: item.arguments } });
+                        }
+                        if (item.type === "tool_result") {
+                            sendEvent(ws, { type: "event", event: "tool_result", payload: { conversationId, id: item.id, name: item.name, success: item.success, output: typeof item.output === "string" && item.output.length > 500 ? item.output.slice(0, 500) + "\u2026" : item.output } });
+                        }
                         if (item.type === "delta") {
                             fullResponse += item.delta;
                             // TTS mode: suppress deltas (text + audio sent together after TTS completes)

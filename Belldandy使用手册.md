@@ -6,6 +6,9 @@ Belldandy 是一个运行在你本地电脑上的个人 AI 助手。它注重隐
 
 ---
 
+
+**第一部分：快速上手**
+
 ## 1. 环境准备
 
 在开始之前，请确保你的电脑满足以下要求：
@@ -30,7 +33,7 @@ Belldandy 是一个运行在你本地电脑上的个人 AI 助手。它注重隐
 
     这就完成了所有的安装工作。
 
-## 3. 配置指南
+## 3. 基础配置
 
 Belldandy 使用 **环境变量** 进行配置。为了方便管理，推荐在项目根目录创建一个名为 `.env.local` 的文件（Git 会自动忽略它，保护你的隐私）。
 
@@ -118,7 +121,756 @@ BELLDANDY_LOG_LEVEL=debug
 # BELLDANDY_LOG_FILE=true
 ```
 
-### 3.3 工具权限与策略
+### 3.2 可视化配置 (Settings UI)
+
+如果你觉得编辑文本文件太麻烦，Belldandy 提供了全新的 Web 配置面板：
+
+1.  启动 Belldandy (`start.bat` 或 `./start.sh`)。
+2.  在 WebChat 界面右上角，点击 **⚙️ 设置图标**。
+3.  在弹出的面板中，你可以：
+    *   查看 **System Doctor** 诊断信息（检查 Node 版本、数据库状态、配置有效性）。
+    *   修改 **OpenAI API Key**、**Base URL**、**Model**。
+    *   修改 **心跳间隔**。
+4.  点击 **Save**，系统会自动保存配置到 `.env.local` 并重启服务。
+
+### 3.3 视觉与视频理解 (New!)
+
+Belldandy 现在支持**图片**和**视频**的理解能力（需配置支持视觉的模型，如 Kimi k2.5）。
+
+#### 3.3.1 发送图片
+1. 点击聊天输入框左侧的 `+` 号（或附件按钮）。
+2. 选择本地图片文件（jpg, png, webp 等）。
+3. 在输入框中输入你的问题（例如：“这张图里有什么？”）。
+4. 发送消息，模型将能够“看到”图片并回答。
+
+#### 3.3.2 发送视频 (Kimi K2.5 专属)
+1. 同样点击附件按钮。
+2. 选择本地视频文件（mp4, mov, avi 等，建议 < 100MB）。
+3. 输入问题（例如："这个视频讲了什么故事？"）。
+4. 发送消息。
+   - **注意**：视频上传需要一定时间，界面会显示"上传视频中"的状态提示，请耐心等待。
+   - **原理**：Agent 会自动将视频上传到 Moonshot AI 的云端文件服务，获取文件 ID 后通过 `ms://` 协议引用，模型直接读取云端文件进行分析。
+   - **工具模式也支持**：无论是普通对话模式还是启用了工具调用（`BELLDANDY_TOOLS_ENABLED=true`）的模式，视频理解都能正常工作。
+
+#### 3.3.3 视频上传独立配置（高级）
+
+如果你的 AI 服务使用了代理/网关（如 API 中转站），而该代理不支持 Moonshot 的 `/files` 文件上传端点，你可以在 `models.json` 中为视频上传配置独立的直连地址：
+
+```json
+{
+  "videoUpload": {
+    "apiUrl": "https://api.moonshot.cn/v1",
+    "apiKey": "sk-your-moonshot-key"
+  },
+  "fallbacks": [...]
+}
+```
+
+这样，聊天请求走代理，视频上传直连 Moonshot，互不影响。
+
+#### 3.3.4 配置要求
+使用视觉能力前，请确保 `.env` 中配置了支持视觉的模型：
+```bash
+# 推荐配置 (Kimi K2.5)
+BELLDANDY_OPENAI_BASE_URL="https://api.moonshot.cn/v1"
+BELLDANDY_OPENAI_API_KEY="sk-xxxxxxxx"
+BELLDANDY_OPENAI_MODEL="kimi-k2.5-preview"
+```
+
+### 3.4 语音交互配置 (STT & TTS)
+
+为了让 Belldandy 能听会说，你需要配置语音识别 (STT) 和语音合成 (TTS)。
+
+#### 3.4.1 语音识别 (STT)
+
+Belldandy 支持多种 STT 服务商，你可以根据需要选择：
+
+*   **OpenAI Whisper (默认)**：
+    *   通用性强，准确率高。
+    *   共用主 Agent 的配置 (`BELLDANDY_OPENAI_BASE_URL` / `API_KEY`)。
+    *   配置：`BELLDANDY_STT_PROVIDER=openai`
+
+*   **Groq (极速)**：
+    *   速度极快（接近实时），适合追求低延迟的场景。
+    *   需要单独申请 Groq API Key。
+    *   配置：
+        ```env
+        BELLDANDY_STT_PROVIDER=groq
+        BELLDANDY_STT_GROQ_API_KEY=gsk_your_key
+        ```
+
+*   **DashScope (通义听悟)**：
+    *   中文识别效果极佳，支持 Paraformer 模型。
+    *   共用 `DASHSCOPE_API_KEY`。
+    *   配置：
+        ```env
+        BELLDANDY_STT_PROVIDER=dashscope
+        DASHSCOPE_API_KEY=sk-your_dashscope_key
+        ```
+
+#### 3.4.2 语音合成 (TTS)
+
+TTS 负责让 Belldandy 开口说话。
+
+*   **Edge TTS (推荐/默认)**：无需 API Key，免费且效果自然（晓晓/云希）。
+*   **OpenAI TTS**：音质更逼真，消耗 Token。
+*   **DashScope TTS**：中文韵律好，支持 Sambert 等模型。
+
+启用方式见 **[10. 语音交互 (Voice Interaction)](#10-语音交互-voice-interaction)** 章节。
+
+## 4. 启动与首次使用
+
+### 4.1 极速启动 (推荐)
+
+我们为 Windows 和 Linux/macOS 用户准备了“一键启动脚本”，它会自动完成以下所有工作：
+1. 检查 Node.js 环境
+2. 自动安装/更新依赖
+3. 启动 Gateway 服务
+4. **自动打开浏览器**并登录
+5. 如果服务意外崩溃，会自动尝试重启
+
+**Windows 用户**:
+双击项目根目录下的 `start.bat`。
+
+**macOS / Linux 用户**:
+在终端运行：
+```bash
+./start.sh
+```
+
+### 4.2 使用 CLI 启动（推荐）
+
+Belldandy 提供了统一的 `bdd` 命令行工具，所有管理操作都通过它完成。
+
+```bash
+cd Belldandy
+
+# 生产模式：带进程守护，崩溃自动重启（等价于 start.bat / start.sh）
+corepack pnpm bdd start
+
+# 开发模式：直接启动 Gateway，适合调试
+corepack pnpm bdd dev
+```
+
+看到类似 `[Gateway] Listening on http://localhost:28889` 的日志，说明启动成功。
+
+> **💡 首次使用？** 推荐先运行 `corepack pnpm bdd setup` 交互式向导，它会引导你完成 AI 服务配置并写入 `.env.local`，详见下方 4.2.1 节。
+
+#### 4.2.1 Setup 向导（首次配置推荐）
+
+如果你还没有手动编辑过 `.env.local`，可以使用交互式向导快速完成配置：
+
+```bash
+corepack pnpm bdd setup
+```
+
+向导会依次引导你选择：
+- AI 服务商（OpenAI / Gemini / Moonshot / Ollama / 自定义）
+- API Base URL 和 API Key
+- 模型名称
+- 监听地址和端口
+- 鉴权模式（none / token / password）
+
+配置完成后自动写入 `.env.local`，无需手动编辑。
+
+也支持非交互模式（适合脚本化部署）：
+
+```bash
+corepack pnpm bdd setup --provider openai --base-url https://api.openai.com/v1 --api-key sk-xxx --model gpt-4o
+```
+
+### 4.3 手动启动（兼容方式）
+
+你也可以使用传统的 pnpm 脚本启动：
+
+```bash
+cd Belldandy
+corepack pnpm dev:gateway
+```
+
+### 4.4 访问界面
+
+打开浏览器，访问：
+http://localhost:28889/
+或者
+[http://127.0.0.1:28889/](http://127.0.0.1:28889/)
+
+> **✨ 首次唤醒仪式**：
+> 第一次由本机访问时，你可能会看到一段 **"Initializing..."** 的终端启动动画。这是 Belldandy 的唤醒仪式，稍等其自我检查完毕即可进入聊天界面。
+
+你会看到 WebChat 聊天界面。
+
+### 4.5 首次配对（Pairing）
+
+为了防止你家猫咪或邻居连上你的 AI，首次使用新设备（即使是本机浏览器）连接时，Belldandy 会启动安全配对流程：
+
+1.  在 WebChat 发送第一条消息（例如 "你好"）。
+2.  界面会提示：`Pairing required. Code: ABC123XY`。
+3.  回到**运行 Gateway 的终端**，开启一个新的终端窗口，执行批准命令：
+
+    ```bash
+    cd Belldandy
+    corepack pnpm bdd pairing approve ABC123XY
+    ```
+
+    > 旧写法 `corepack pnpm pairing:approve ABC123XY` 仍可使用，但推荐使用 `bdd` 统一命令。
+
+4.  回到 WebChat，再次发送消息，现在可以正常对话了。
+
+
+---
+
+**第二部分：个性化定制**
+
+## 5. 人格与记忆（让它变成你的专属 AI）
+
+Belldandy 的数据存储在你的用户主目录下的 `.belldandy` 文件夹中（例如 Windows 下是 `C:\Users\YourName\.belldandy`，Linux/Mac 下是 `~/.belldandy`）。
+
+### 5.1 塑造人格 (SOUL)
+
+你可以通过编辑 `.belldandy` 目录下的 Markdown 文件来定义 AI 的性格：
+
+-   **`SOUL.md`**：核心性格文件。
+    -   *例子*：`你是一个严谨的 TypeScript 专家，喜欢用代码解释问题...`
+-   **`IDENTITY.md`**：身份设定。
+    -   *例子*：`你的名字叫 Belldandy，是一级神，喜欢红茶...`
+-   **`USER.md`**：关于你的信息。
+    -   *例子*：`用户叫 vrboyzero，全栈工程师，喜欢简洁的代码...`
+
+修改这些文件后，**重启 Gateway** 即可生效。
+
+### 5.2 长期记忆 (Memory)
+
+Belldandy 会自动读取并索引 `.belldandy/MEMORY.md` 和 `.belldandy/memory/*.md` 文件。
+
+-   **`MEMORY.md`**：存放你希望它永远记住的关键事实。
+-   **`memory/2026-01-31.md`**：你可以手动记录当天的笔记，Belldandy 会自动索引并在相关对话中回忆起来。
+
+### 5.3 FACET 模组切换
+
+FACET 是 Belldandy 的"职能模组"系统——通过切换不同的模组文件，可以让同一个 Agent 在不同角色之间快速转换（例如"程序员模式"、"翻译模式"、"创意写作模式"等）。
+
+**模组文件位置**：`~/.belldandy/facets/` 目录下的 `.md` 文件。
+
+**使用方法**：直接在对话中告诉 Belldandy：
+
+| 你说的话 | Belldandy 做的事 |
+|----------|------------------|
+| "切换模组为 coder" | 调用 `switch_facet` 工具替换 SOUL.md 中的模组内容，然后自动重启服务 |
+| "切换 FACET 为 translator" | 同上，切换到翻译模组 |
+
+**工作原理**：
+
+1. `switch_facet` 工具读取 `~/.belldandy/facets/{模组名}.md` 文件
+2. 在 SOUL.md 中找到锚点行，保留锚点行及之前的所有内容（人格核心不变）
+3. 将锚点行之后的内容替换为新模组内容（原子写入，不会损坏文件）
+4. Agent 随后调用 `service_restart` 重启服务，清空旧模组的推理惯性
+
+**创建自定义模组**：
+
+在 `~/.belldandy/facets/` 目录下创建 `.md` 文件即可。文件内容会被完整追加到 SOUL.md 的锚点行之后。建议以 `## 【FACET | 模组 | 文件名】` 开头，保持格式一致。
+
+> **💡 提示**：模组切换不会影响 SOUL.md 中的 TABOO、ETHOS、SYSTEM 等核心章节——这些内容位于锚点行之前，始终保持不变。
+
+
+## 6. 定时任务
+
+### 6.1 定时提醒 (Heartbeat)
+
+让 Belldandy 主动提醒你！编辑 `~/.belldandy/HEARTBEAT.md`：
+
+```markdown
+# 定时任务
+
+- [ ] 每天早上提醒我查看日程
+- [ ] 喝水提醒
+- [ ] 检查待办事项
+```
+
+当启用心跳功能后（`BELLDANDY_HEARTBEAT_ENABLED=true`），Belldandy 会定期读取这个文件：
+
+- **有任务内容**：执行检查并可能主动联系你
+- **文件为空**：跳过，节省 API 调用
+- **深夜时段**：如果设置了 `BELLDANDY_HEARTBEAT_ACTIVE_HOURS=08:00-23:00`，深夜不会打扰你
+
+> **注意**：心跳推送功能目前输出到日志，飞书推送正在开发中。
+
+### 6.2 定时任务 (Cron)
+
+比 Heartbeat 更灵活的精确定时任务系统。你可以让 Belldandy 在特定时间或按固定间隔执行任务。
+
+**启用方式**：在 `.env.local` 中添加：
+
+```env
+BELLDANDY_CRON_ENABLED=true
+```
+
+**使用方法**：直接在对话中告诉 Belldandy，它会通过 `cron` 工具自动管理：
+
+| 你说的话 | Belldandy 做的事 |
+|----------|------------------|
+| "下午 3 点提醒我开会" | 创建一次性任务 (`at`)，到点推送提醒 |
+| "每 4 小时提醒我喝水" | 创建周期任务 (`every`)，循环执行 |
+| "每天早上 9 点汇报新闻" | 创建周期任务，24h 间隔 |
+| "列出所有定时任务" | 显示任务列表 + 状态 |
+| "删掉喝水提醒" | 移除指定任务 |
+| "定时任务状态" | 查看调度器运行信息 |
+
+**与 Heartbeat 的区别**：
+
+| | Heartbeat | Cron |
+|---|-----------|------|
+| **用途** | 周期性“意识”检查 | 精确定时任务 |
+| **配置** | 编辑 `HEARTBEAT.md` | 对话中自然语言创建 |
+| **灵活性** | 固定间隔 | 一次性 / 任意间隔 |
+| **任务管理** | 修改文件 | `cron list/add/remove` |
+
+> **💡 提示**：即使未启用 `BELLDANDY_CRON_ENABLED`，你仍可以使用 `cron` 工具创建和管理任务列表。启用后调度器才会自动执行到期的任务。
+
+## 7. 多 Agent 系统 (Multi-Agent)
+
+Belldandy 支持配置和运行多个 Agent，每个 Agent 可以拥有独立的模型、人格、工具权限和工作区。你可以在 WebChat 中切换不同 Agent 对话，也可以让 Agent 之间协作完成复杂任务。
+
+### 7.1 配置 Agent Profile
+
+在 `~/.belldandy/` 目录下创建 `agents.json` 文件：
+
+```json
+{
+  "agents": [
+    {
+      "id": "coder",
+      "displayName": "代码专家",
+      "model": "primary",
+      "systemPromptOverride": "你是一个严谨的代码专家，擅长 TypeScript 和系统设计。",
+      "toolsEnabled": true,
+      "toolWhitelist": ["file_read", "file_write", "run_command", "web_fetch"]
+    },
+    {
+      "id": "researcher",
+      "displayName": "调研助手",
+      "model": "deepseek-chat",
+      "systemPromptOverride": "你是一个高效的调研助手，擅长信息检索和总结。",
+      "toolsEnabled": true,
+      "toolWhitelist": ["web_fetch", "web_search", "memory_search"]
+    }
+  ]
+}
+```
+
+**字段说明**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `id` | 是 | 唯一标识（如 `"coder"`, `"researcher"`） |
+| `displayName` | 否 | 显示名称（用于 UI 和日志，默认等于 `id`） |
+| `model` | 是 | 模型引用：`"primary"` 使用环境变量配置，其他值引用 `models.json` 中对应 `id` 的条目 |
+| `systemPromptOverride` | 否 | 追加到系统提示词末尾的额外内容 |
+| `workspaceDir` | 否 | Agent 专属 workspace 目录名（位于 `~/.belldandy/agents/{workspaceDir}/`），默认等于 `id` |
+| `toolsEnabled` | 否 | 是否启用工具（覆盖环境变量 `BELLDANDY_TOOLS_ENABLED`） |
+| `toolWhitelist` | 否 | 可用工具白名单（仅列出的工具对该 Agent 可用） |
+| `maxInputTokens` | 否 | 最大输入 token 数覆盖 |
+
+> **💡 提示**：不创建 `agents.json` 时，系统只有一个 `"default"` Agent，使用环境变量中的配置，行为与之前完全一致。
+
+### 7.2 Agent 专属工作区
+
+每个非 default 的 Agent 可以拥有独立的人格文件。目录结构：
+
+```
+~/.belldandy/
+├── SOUL.md              # default Agent 的人格
+├── IDENTITY.md
+├── agents/
+│   ├── coder/           # coder Agent 的专属目录
+│   │   ├── SOUL.md      # 覆盖 default 的 SOUL
+│   │   ├── IDENTITY.md  # 覆盖 default 的 IDENTITY
+│   │   └── facets/      # coder 专属的 FACET 模组
+│   │       └── strict.md
+│   └── researcher/
+│       └── SOUL.md
+```
+
+**继承规则**：对每个可继承文件（SOUL.md、IDENTITY.md、USER.md、AGENTS.md、TOOLS.md、MEMORY.md），优先从 `agents/{id}/` 读取；不存在则自动 fallback 到根目录的同名文件。
+
+### 7.3 在 WebChat 中切换 Agent
+
+配置了多个 Agent Profile 后，WebChat 界面顶部会出现 Agent 选择器。点击即可切换到不同的 Agent 进行对话，每个 Agent 的会话是隔离的。
+
+也可以通过 WebSocket API 查询可用 Agent 列表：
+
+```
+方法: agents.list
+返回: { agents: [{ id, displayName, model }, ...] }
+```
+
+### 7.4 飞书渠道绑定 Agent
+
+可以为飞书渠道指定使用特定的 Agent Profile：
+
+```env
+# 飞书渠道使用 "researcher" Agent（默认使用 default）
+BELLDANDY_FEISHU_AGENT_ID=researcher
+```
+
+### 7.5 子 Agent 编排 (Sub-Agent Orchestration)
+
+当启用工具调用（`BELLDANDY_TOOLS_ENABLED=true`）且配置了 Agent Profile 后，Belldandy 支持将复杂任务拆分并委托给子 Agent 执行。
+
+**工作原理**：
+
+1. 主 Agent 在 ReAct 循环中决定需要委托任务
+2. 通过 `delegate_task` 或 `delegate_parallel` 工具发起委托
+3. 子 Agent 在独立的会话中运行，完成后将结果返回给主 Agent
+4. 主 Agent 汇总结果继续推理
+
+**可用工具**：
+
+| 工具 | 说明 |
+|------|------|
+| `delegate_task` | 委托单个任务给指定子 Agent。参数：`instruction`（必填）、`agent_id`（可选，默认 default）、`context`（可选） |
+| `delegate_parallel` | 并行委托多个任务。参数：`tasks` 数组，每项包含 `instruction`、`agent_id`、`context` |
+| `sessions_spawn` | 生成子 Agent 会话（底层工具，功能与 `delegate_task` 类似） |
+| `sessions_history` | 查看当前会话的所有子 Agent 会话状态 |
+
+**使用示例**（在对话中自然语言触发）：
+
+| 你说的话 | Agent 做的事 |
+|----------|-------------|
+| "让 coder 帮我写一个排序算法" | 调用 `delegate_task`，委托给 coder Agent |
+| "同时让 researcher 查资料、coder 写代码" | 调用 `delegate_parallel`，两个子 Agent 并行工作 |
+| "查看子任务进度" | 调用 `sessions_history`，列出所有子 Agent 会话状态 |
+
+**安全机制**：
+
+- **并发限制**：同时运行的子 Agent 数量有上限（默认 3），超出的任务自动排队
+- **队列限制**：排队任务数量有上限（默认 10），队列满时拒绝新任务
+- **超时保护**：子 Agent 运行超时自动终止（默认 120 秒）
+- **嵌套深度限制**：防止子 Agent 无限递归委托（默认最大深度 2）
+- **生命周期钩子**：子 Agent 会话触发 `session_start` / `session_end` 钩子
+
+### 7.6 子 Agent 环境变量
+
+在 `.env.local` 中配置子 Agent 编排参数：
+
+```env
+# ------ 子 Agent 编排 ------
+
+# 最大并发子 Agent 数量（默认 3）
+BELLDANDY_SUB_AGENT_MAX_CONCURRENT=3
+
+# 排队队列最大长度（默认 10，队列满时拒绝新任务）
+BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE=10
+
+# 子 Agent 运行超时（毫秒，默认 120000 即 2 分钟）
+BELLDANDY_SUB_AGENT_TIMEOUT_MS=120000
+
+# 最大嵌套深度（默认 2，防止无限递归）
+BELLDANDY_SUB_AGENT_MAX_DEPTH=2
+
+# 飞书渠道绑定的 Agent Profile ID（可选）
+BELLDANDY_FEISHU_AGENT_ID=researcher
+```
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `BELLDANDY_SUB_AGENT_MAX_CONCURRENT` | `3` | 同时运行的子 Agent 上限 |
+| `BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE` | `10` | 排队等待的任务上限 |
+| `BELLDANDY_SUB_AGENT_TIMEOUT_MS` | `120000` | 单个子 Agent 运行超时（ms） |
+| `BELLDANDY_SUB_AGENT_MAX_DEPTH` | `2` | 子 Agent 嵌套委托最大深度 |
+| `BELLDANDY_FEISHU_AGENT_ID` | — | 飞书渠道使用的 Agent Profile ID |
+
+
+---
+
+**第三部分：渠道与交互**
+
+## 8. 管理命令（bdd CLI）
+
+Belldandy 提供了统一的 `bdd` 命令行工具，涵盖启动、配置、诊断、配对管理等所有操作。
+
+```bash
+# 查看完整命令树
+corepack pnpm bdd --help
+
+# 查看版本号
+corepack pnpm bdd --version
+```
+
+所有命令支持以下全局选项：
+- `--json` — 输出机器可读的 JSON 格式（适合脚本集成）
+- `--state-dir <path>` — 覆盖默认的工作区目录（`~/.belldandy`）
+- `--verbose` — 显示详细输出
+
+### 8.1 启动与运行
+
+```bash
+# 生产模式（带进程守护，崩溃自动重启）
+cd E:\project\belldandy
+corepack pnpm bdd start
+
+# 开发模式（直接启动 Gateway，适合调试）
+corepack pnpm bdd dev
+```
+
+### 8.2 Setup 向导
+
+首次使用或需要重新配置时，运行交互式向导：
+
+```bash
+# 交互式（推荐首次使用）
+corepack pnpm bdd setup
+
+# 非交互式（适合脚本化部署）
+corepack pnpm bdd setup --provider openai --base-url <URL> --api-key <KEY> --model <MODEL>
+```
+
+### 8.3 健康诊断（Doctor）
+
+检查系统环境和配置是否正常：
+
+```bash
+corepack pnpm bdd doctor
+```
+
+Doctor 会检查以下项目：
+- Node.js 版本是否满我足要求
+- pnpm 是否可用
+- 工作区目录（`~/.belldandy`）是否存在
+- `.env.local` 是否存在且配置正确
+- Agent Provider 配置（API Key、Base URL、Model）
+- 端口是否可用
+- Memory DB 是否可访问
+- MCP 配置状态
+
+```bash
+# 额外测试模型连通性（会发送一个测试请求）
+corepack pnpm bdd doctor --check-model
+```
+
+通过项显示绿色 ✓，失败项显示红色 ✗ 并附带修复建议，警告项显示黄色 ⚠。
+
+### 8.4 配置管理（Config）
+
+无需手动编辑 `.env.local`，通过 CLI 直接读写配置：
+
+```bash
+# 列出所有配置（敏感字段自动脱敏）
+corepack pnpm bdd config list
+
+# 显示明文（包含 API Key 等）
+corepack pnpm bdd config list --show-secrets
+
+# 读取单个配置项
+corepack pnpm bdd config get BELLDANDY_OPENAI_MODEL
+
+# 修改配置项（自动写入 .env.local）
+corepack pnpm bdd config set BELLDANDY_PORT 28890
+
+# 用编辑器打开 .env.local
+corepack pnpm bdd config edit
+
+# 显示 .env.local 文件路径
+corepack pnpm bdd config path
+```
+
+### 8.5 配对管理（Pairing）
+
+管理设备授权与配对：
+
+```bash
+# 查看已授权设备列表
+corepack pnpm bdd pairing list
+
+# 查看待批准的配对请求
+corepack pnpm bdd pairing pending
+
+# 批准配对请求
+corepack pnpm bdd pairing approve <CODE>
+
+# 撤销某设备的授权
+corepack pnpm bdd pairing revoke <CLIENT_ID>
+
+# 清理过期的配对请求
+corepack pnpm bdd pairing cleanup
+# 预览模式（不实际删除）
+corepack pnpm bdd pairing cleanup --dry-run
+
+# 导出配对数据（备份）
+corepack pnpm bdd pairing export --out backup.json
+
+# 导入配对数据（恢复）
+corepack pnpm bdd pairing import --in backup.json
+```
+
+> **过渡兼容**：旧的 `corepack pnpm pairing:*` 写法仍可使用，内部已重定向到新 CLI。
+
+### 8.6 浏览器 Relay
+
+独立启动 WebSocket-CDP relay（用于浏览器自动化）：
+
+```bash
+# 使用默认端口 (28892)
+corepack pnpm bdd relay start
+
+# 指定端口
+corepack pnpm bdd relay start --port 29000
+```
+
+## 9. 飞书渠道（手机可用）
+
+除了 WebChat，你还可以通过飞书与 Belldandy 对话——无需公网 IP 或内网穿透！
+
+### 9.1 配置飞书
+
+详细配置步骤请参考 [飞书对接说明](./Belldandy飞书对接说明.md)。
+
+简要步骤：
+1. 在 [飞书开放平台](https://open.feishu.cn/) 创建企业自建应用
+2. 获取 App ID 和 App Secret
+3. 开启机器人能力并配置权限
+4. 设置事件订阅为"长连接模式"
+5. 发布应用
+
+### 9.2 配置 Belldandy
+
+在 `.env.local` 中添加：
+
+```env
+BELLDANDY_FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
+BELLDANDY_FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+### 9.3 使用
+
+1. 启动 Gateway：`corepack pnpm dev:gateway`
+2. 终端显示 `Feishu WebSocket Channel started.` 和 `ws client ready` 说明连接成功
+3. 打开飞书，搜索你的应用名称，开始对话！
+
+### 9.4 渠道架构说明
+
+Belldandy 采用了标准化的 **Channel 接口** 设计，使扩展新渠道变得简单：
+
+- **统一接口**：所有渠道（飞书、Telegram、Discord 等）都实现相同的 `Channel` 接口
+- **ChannelManager**：统一管理多个渠道的启动、停止和消息广播
+- **易于扩展**：新增渠道只需实现 `start()`、`stop()`、`sendProactiveMessage()` 方法
+
+**当前已支持的渠道**：
+- ✅ 飞书 (FeishuChannel) - 已完整实现
+
+**计划中的渠道**：
+- ⏳ Telegram
+- ⏳ Discord
+- ⏳ Slack
+
+> **开发者注意**：如果你想贡献新渠道实现，请参考 `packages/belldandy-channels/src/types.ts` 中的 `Channel` 接口定义。
+
+
+
+## 10. 语音交互 (Voice Interaction)
+
+### 10.1 语音输入 (STT)
+
+Belldandy 支持双向语音交互：你可以直接对它说话，它也会用语音回复你。
+
+#### 10.1.1 网页端 (WebChat)
+
+在聊天输入框右侧，你会看到一个新的 **🎤 麦克风图标**。
+
+1.  **点击麦克风**：图标变红并伴有脉冲动画，表示正在录音。
+2.  **说话**：直接说出你的指令或问题。
+3.  **再次点击**：结束录音。
+4.  **发送**：
+    *   系统会自动将录音上传到后台进行高精度转写 (STT)。
+    *   转换后的文字会自动填入输入框（或直接发送）。
+    *   Agent 接收到的是你的**语音 + 文字**，它会理解你的语调并回复。
+
+> **🌟 双模引擎**：
+> *   **Mode A (默认)**：录音上传服务器，使用 Whisper/Paraformer 转写。精度高，支持长语音。
+> *   **Mode B (离线/备用)**：如果服务器 STT 未配置或断网，会自动降级使用浏览器原生的 Web Speech API 进行实时识别。
+
+#### 10.1.2 飞书端 (Feishu)
+
+在飞书手机 App 或桌面端，你可以像给朋友发微信语音一样给 Belldandy 发消息：
+
+1.  按住说话，发送语音条。
+2.  Belldandy 会自动识别语音内容（转写文字回显在日志中）。
+3.  它会以文字（或语音，如果开启了 TTS）回复你。
+
+> **注意**：飞书语音识别依赖 `stt-transcribe` 能力，请确保服务端已配置有效的 `BELLDANDY_STT_PROVIDER`。
+
+
+### 10.2 语音输出 (TTS)
+
+让 Belldandy 开口说话！支持免费且高质量的 Edge TTS（微软晓晓/云希）。
+
+#### 10.2.1 快速开启/关闭
+
+无需配置复杂文件，直接在对话中对 Agent 说：
+
+*   **开启语音**：对它说 "开启语音模式" 或 "我想听你说话"。
+    *   Agent 会自动进入 TTS 模式，每条回复都会附带语音播放器。
+*   **关闭语音**：对它说 "关闭语音" 或 "太吵了"。
+    *   Agent 会立即停止生成音频。
+*   **或是在.env文件中启用语音模式**：服务端自动将 Agent 回复转为语音，true/false，默认 false
+    *   `BELLDANDY_TTS_ENABLED=false`
+
+> **原理**：Agent 会在你的工作区目录创建/删除一个名为 `TTS_ENABLED` 的信号文件。
+
+#### 10.2.2 进阶配置
+
+默认使用 **Edge TTS**（免费）。如果你想使用 **OpenAI TTS**（付费但声线不同），可以通过调用工具时指定参数，或者让 Agent 帮你设置。
+
+**支持的声音（Edge TTS - 推荐）**：
+*   `zh-CN-XiaoxiaoNeural` (晓晓 - 温暖女声)
+*   `zh-CN-YunxiNeural` (云希 - 干练男声)
+*   `en-US-AriaNeural` (Aria - 通用女声)
+
+---
+## 11. 视觉感知 (Loopback Vision)
+
+让 Belldandy 拥有“眼睛”，可以看到你通过宿主机 webcam 看到的画面。
+
+### 11.1 原理简介 (Loopback Vision)
+
+这是一种“回环视觉”技术：
+1.  Agent 指挥浏览器打开一个镜像页面（Mirror Page）。
+2.  该页面调用你的本地摄像头显示画面。
+3.  Agent 对该页面进行截图，从而“看到”了画面。
+
+### 11.2 如何使用
+
+**前提条件**：必须先完成 **8. 浏览器自动化** 的连接步骤（安装插件并连接）。
+
+#### 方法 A：使用内置技能 (推荐)
+
+直接对 Belldandy 说：
+
+> **"拍张照"** 或 **"看看我现在在哪"** 或 **"启动视觉"**
+
+Agent 会自动调用 `camera_snap` 工具：
+1.  自动打开 `/mirror.html` 页面。
+2.  **关键步骤**：此时浏览器会弹窗提示“允许使用摄像头？”，**请务必点击【允许】**。
+3.  等待 2 秒（你可以调整姿势）。
+4.  完成拍摄并进行分析。
+
+#### 方法 B：手动操作 (硬核模式)
+
+
+如果你想体验控制感，可以手动指挥 Agent：
+
+1.  **"打开镜像页"** -> Agent 导航至 `http://.../mirror.html`。
+2.  **"允许摄像头"** -> 你手动在浏览器点击允许。
+3.  **"现在截图"** -> Agent 截图并分析。
+
+
+---
+
+**第四部分：高级功能**
+
+## 12. 高级配置
+
+### 12.1 工具权限与策略
 
 Belldandy 的工具系统默认处于 **Safe Mode**，并可通过策略文件进行精细化控制：
 
@@ -138,7 +890,7 @@ BELLDANDY_TOOLS_POLICY_FILE=E:\project\belldandy\config\tools-policy.json
 BELLDANDY_EXTRA_WORKSPACE_ROOTS=E:\projects,D:\workspace
 ```
 
-### 3.3.1 可视化工具管理 (Tool Settings)
+### 12.1.1 可视化工具管理 (Tool Settings)
 
 除了通过环境变量和策略文件进行全局控制外，Belldandy 还提供了**可视化的工具管理面板**，允许你在运行时动态启用或禁用特定的工具、MCP 服务器或插件。
 
@@ -151,7 +903,7 @@ BELLDANDY_EXTRA_WORKSPACE_ROOTS=E:\projects,D:\workspace
 
 > **应用场景**：当你希望暂时禁止 Agent 联网，或者在调试某个 MCP 服务时通过禁用其他服务来排除干扰。
 
-### 3.4 模型容灾配置 (Model Failover)
+### 12.2 模型容灾配置 (Model Failover)
 
 当主模型因限流 (429)、余额不足 (402)、服务器故障 (5xx) 或超时等问题不可用时，Belldandy 可以 **自动切换到备用模型**，保证不中断服务。
 
@@ -218,7 +970,7 @@ BELLDANDY_MODEL_CONFIG_FILE=E:\\config\\my-models.json
 
 > **💡 提示**：不创建 `models.json` 时，Belldandy 的行为与之前完全一致（仅使用 `.env` 中的单一配置），完全向后兼容。
 
-### 3.5 对话压缩 (Context Compaction)
+### 12.3 对话压缩 (Context Compaction)
 
 当你与 Belldandy 进行长时间对话或让它执行复杂的自动化任务时，对话历史会不断增长，最终可能超出模型的上下文窗口限制。**对话压缩**功能会自动将旧消息摘要化，在保留关键信息的同时大幅减少 token 消耗。
 
@@ -324,279 +1076,7 @@ BELLDANDY_COMPACTION_KEEP_RECENT=10
 - 即将开始一个需要大量上下文的复杂任务，先压缩腾出空间
 - Agent 在执行工具链时上下文接近上限，手动干预
 
-### 3.6 可视化配置 (Settings UI)
-
-如果你觉得编辑文本文件太麻烦，Belldandy 提供了全新的 Web 配置面板：
-
-1.  启动 Belldandy (`start.bat` 或 `./start.sh`)。
-2.  在 WebChat 界面右上角，点击 **⚙️ 设置图标**。
-3.  在弹出的面板中，你可以：
-    *   查看 **System Doctor** 诊断信息（检查 Node 版本、数据库状态、配置有效性）。
-    *   修改 **OpenAI API Key**、**Base URL**、**Model**。
-    *   修改 **心跳间隔**。
-4.  点击 **Save**，系统会自动保存配置到 `.env.local` 并重启服务。
-
-### 3.7 视觉与视频理解 (New!)
-
-Belldandy 现在支持**图片**和**视频**的理解能力（需配置支持视觉的模型，如 Kimi k2.5）。
-
-#### 3.7.1 发送图片
-1. 点击聊天输入框左侧的 `+` 号（或附件按钮）。
-2. 选择本地图片文件（jpg, png, webp 等）。
-3. 在输入框中输入你的问题（例如：“这张图里有什么？”）。
-4. 发送消息，模型将能够“看到”图片并回答。
-
-#### 3.7.2 发送视频 (Kimi K2.5 专属)
-1. 同样点击附件按钮。
-2. 选择本地视频文件（mp4, mov, avi 等，建议 < 100MB）。
-3. 输入问题（例如："这个视频讲了什么故事？"）。
-4. 发送消息。
-   - **注意**：视频上传需要一定时间，界面会显示"上传视频中"的状态提示，请耐心等待。
-   - **原理**：Agent 会自动将视频上传到 Moonshot AI 的云端文件服务，获取文件 ID 后通过 `ms://` 协议引用，模型直接读取云端文件进行分析。
-   - **工具模式也支持**：无论是普通对话模式还是启用了工具调用（`BELLDANDY_TOOLS_ENABLED=true`）的模式，视频理解都能正常工作。
-
-#### 3.7.3 视频上传独立配置（高级）
-
-如果你的 AI 服务使用了代理/网关（如 API 中转站），而该代理不支持 Moonshot 的 `/files` 文件上传端点，你可以在 `models.json` 中为视频上传配置独立的直连地址：
-
-```json
-{
-  "videoUpload": {
-    "apiUrl": "https://api.moonshot.cn/v1",
-    "apiKey": "sk-your-moonshot-key"
-  },
-  "fallbacks": [...]
-}
-```
-
-这样，聊天请求走代理，视频上传直连 Moonshot，互不影响。
-
-#### 3.7.4 配置要求
-使用视觉能力前，请确保 `.env` 中配置了支持视觉的模型：
-```bash
-# 推荐配置 (Kimi K2.5)
-BELLDANDY_OPENAI_BASE_URL="https://api.moonshot.cn/v1"
-BELLDANDY_OPENAI_API_KEY="sk-xxxxxxxx"
-BELLDANDY_OPENAI_MODEL="kimi-k2.5-preview"
-```
-
-### 3.8 语音交互配置 (STT & TTS)
-
-为了让 Belldandy 能听会说，你需要配置语音识别 (STT) 和语音合成 (TTS)。
-
-#### 3.8.1 语音识别 (STT)
-
-Belldandy 支持多种 STT 服务商，你可以根据需要选择：
-
-*   **OpenAI Whisper (默认)**：
-    *   通用性强，准确率高。
-    *   共用主 Agent 的配置 (`BELLDANDY_OPENAI_BASE_URL` / `API_KEY`)。
-    *   配置：`BELLDANDY_STT_PROVIDER=openai`
-
-*   **Groq (极速)**：
-    *   速度极快（接近实时），适合追求低延迟的场景。
-    *   需要单独申请 Groq API Key。
-    *   配置：
-        ```env
-        BELLDANDY_STT_PROVIDER=groq
-        BELLDANDY_STT_GROQ_API_KEY=gsk_your_key
-        ```
-
-*   **DashScope (通义听悟)**：
-    *   中文识别效果极佳，支持 Paraformer 模型。
-    *   共用 `DASHSCOPE_API_KEY`。
-    *   配置：
-        ```env
-        BELLDANDY_STT_PROVIDER=dashscope
-        DASHSCOPE_API_KEY=sk-your_dashscope_key
-        ```
-
-#### 3.8.2 语音合成 (TTS)
-
-TTS 负责让 Belldandy 开口说话。
-
-*   **Edge TTS (推荐/默认)**：无需 API Key，免费且效果自然（晓晓/云希）。
-*   **OpenAI TTS**：音质更逼真，消耗 Token。
-*   **DashScope TTS**：中文韵律好，支持 Sambert 等模型。
-
-启用方式见 **[13. 语音交互 (Voice Interaction)](#13-语音交互-voice-interaction)** 章节。
-
-## 4. 启动与运行
-
-### 4.1 极速启动 (推荐)
-
-我们为 Windows 和 Linux/macOS 用户准备了“一键启动脚本”，它会自动完成以下所有工作：
-1. 检查 Node.js 环境
-2. 自动安装/更新依赖
-3. 启动 Gateway 服务
-4. **自动打开浏览器**并登录
-5. 如果服务意外崩溃，会自动尝试重启
-
-**Windows 用户**:
-双击项目根目录下的 `start.bat`。
-
-**macOS / Linux 用户**:
-在终端运行：
-```bash
-./start.sh
-```
-
-### 4.2 使用 CLI 启动（推荐）
-
-Belldandy 提供了统一的 `bdd` 命令行工具，所有管理操作都通过它完成。
-
-```bash
-cd Belldandy
-
-# 生产模式：带进程守护，崩溃自动重启（等价于 start.bat / start.sh）
-corepack pnpm bdd start
-
-# 开发模式：直接启动 Gateway，适合调试
-corepack pnpm bdd dev
-```
-
-看到类似 `[Gateway] Listening on http://localhost:28889` 的日志，说明启动成功。
-
-> **💡 首次使用？** 推荐先运行 `corepack pnpm bdd setup` 交互式向导，它会引导你完成 AI 服务配置并写入 `.env.local`，详见下方 4.2.1 节。
-
-#### 4.2.1 Setup 向导（首次配置推荐）
-
-如果你还没有手动编辑过 `.env.local`，可以使用交互式向导快速完成配置：
-
-```bash
-corepack pnpm bdd setup
-```
-
-向导会依次引导你选择：
-- AI 服务商（OpenAI / Gemini / Moonshot / Ollama / 自定义）
-- API Base URL 和 API Key
-- 模型名称
-- 监听地址和端口
-- 鉴权模式（none / token / password）
-
-配置完成后自动写入 `.env.local`，无需手动编辑。
-
-也支持非交互模式（适合脚本化部署）：
-
-```bash
-corepack pnpm bdd setup --provider openai --base-url https://api.openai.com/v1 --api-key sk-xxx --model gpt-4o
-```
-
-### 4.3 手动启动（兼容方式）
-
-你也可以使用传统的 pnpm 脚本启动：
-
-```bash
-cd Belldandy
-corepack pnpm dev:gateway
-```
-
-### 4.4 访问界面
-
-打开浏览器，访问：
-http://localhost:28889/
-或者
-[http://127.0.0.1:28889/](http://127.0.0.1:28889/)
-
-> **✨ 首次唤醒仪式**：
-> 第一次由本机访问时，你可能会看到一段 **"Initializing..."** 的终端启动动画。这是 Belldandy 的唤醒仪式，稍等其自我检查完毕即可进入聊天界面。
-
-你会看到 WebChat 聊天界面。
-
-### 4.5 首次配对（Pairing）
-
-为了防止你家猫咪或邻居连上你的 AI，首次使用新设备（即使是本机浏览器）连接时，Belldandy 会启动安全配对流程：
-
-1.  在 WebChat 发送第一条消息（例如 "你好"）。
-2.  界面会提示：`Pairing required. Code: ABC123XY`。
-3.  回到**运行 Gateway 的终端**，开启一个新的终端窗口，执行批准命令：
-
-    ```bash
-    cd Belldandy
-    corepack pnpm bdd pairing approve ABC123XY
-    ```
-
-    > 旧写法 `corepack pnpm pairing:approve ABC123XY` 仍可使用，但推荐使用 `bdd` 统一命令。
-
-4.  回到 WebChat，再次发送消息，现在可以正常对话了。
-
-## 5. 个性化与记忆（让它变成你的专属 AI）
-
-Belldandy 的数据存储在你的用户主目录下的 `.belldandy` 文件夹中（例如 Windows 下是 `C:\Users\YourName\.belldandy`，Linux/Mac 下是 `~/.belldandy`）。
-
-### 5.1 塑造人格 (SOUL)
-
-你可以通过编辑 `.belldandy` 目录下的 Markdown 文件来定义 AI 的性格：
-
--   **`SOUL.md`**：核心性格文件。
-    -   *例子*：`你是一个严谨的 TypeScript 专家，喜欢用代码解释问题...`
--   **`IDENTITY.md`**：身份设定。
-    -   *例子*：`你的名字叫 Belldandy，是一级神，喜欢红茶...`
--   **`USER.md`**：关于你的信息。
-    -   *例子*：`用户叫 vrboyzero，全栈工程师，喜欢简洁的代码...`
-
-修改这些文件后，**重启 Gateway** 即可生效。
-
-### 5.2 长期记忆 (Memory)
-
-Belldandy 会自动读取并索引 `.belldandy/MEMORY.md` 和 `.belldandy/memory/*.md` 文件。
-
--   **`MEMORY.md`**：存放你希望它永远记住的关键事实。
--   **`memory/2026-01-31.md`**：你可以手动记录当天的笔记，Belldandy 会自动索引并在相关对话中回忆起来。
-
-### 5.3 定时提醒 (Heartbeat)
-
-让 Belldandy 主动提醒你！编辑 `~/.belldandy/HEARTBEAT.md`：
-
-```markdown
-# 定时任务
-
-- [ ] 每天早上提醒我查看日程
-- [ ] 喝水提醒
-- [ ] 检查待办事项
-```
-
-当启用心跳功能后（`BELLDANDY_HEARTBEAT_ENABLED=true`），Belldandy 会定期读取这个文件：
-
-- **有任务内容**：执行检查并可能主动联系你
-- **文件为空**：跳过，节省 API 调用
-- **深夜时段**：如果设置了 `BELLDANDY_HEARTBEAT_ACTIVE_HOURS=08:00-23:00`，深夜不会打扰你
-
-> **注意**：心跳推送功能目前输出到日志，飞书推送正在开发中。
-
-### 5.4 定时任务 (Cron)
-
-比 Heartbeat 更灵活的精确定时任务系统。你可以让 Belldandy 在特定时间或按固定间隔执行任务。
-
-**启用方式**：在 `.env.local` 中添加：
-
-```env
-BELLDANDY_CRON_ENABLED=true
-```
-
-**使用方法**：直接在对话中告诉 Belldandy，它会通过 `cron` 工具自动管理：
-
-| 你说的话 | Belldandy 做的事 |
-|----------|------------------|
-| "下午 3 点提醒我开会" | 创建一次性任务 (`at`)，到点推送提醒 |
-| "每 4 小时提醒我喝水" | 创建周期任务 (`every`)，循环执行 |
-| "每天早上 9 点汇报新闻" | 创建周期任务，24h 间隔 |
-| "列出所有定时任务" | 显示任务列表 + 状态 |
-| "删掉喝水提醒" | 移除指定任务 |
-| "定时任务状态" | 查看调度器运行信息 |
-
-**与 Heartbeat 的区别**：
-
-| | Heartbeat | Cron |
-|---|-----------|------|
-| **用途** | 周期性“意识”检查 | 精确定时任务 |
-| **配置** | 编辑 `HEARTBEAT.md` | 对话中自然语言创建 |
-| **灵活性** | 固定间隔 | 一次性 / 任意间隔 |
-| **任务管理** | 修改文件 | `cron list/add/remove` |
-
-> **💡 提示**：即使未启用 `BELLDANDY_CRON_ENABLED`，你仍可以使用 `cron` 工具创建和管理任务列表。启用后调度器才会自动执行到期的任务。
-
-### 5.5 服务重启 (Service Restart)
+### 12.4 服务重启 (Service Restart)
 
 Belldandy 提供了 `service_restart` 工具，让 Agent 能够主动重启 Gateway 服务。这在 Agent 修改了配置文件后特别有用——它可以自主完成"改配置 → 重启生效"的完整流程。
 
@@ -618,33 +1098,7 @@ Belldandy 提供了 `service_restart` 工具，让 Agent 能够主动重启 Gate
 
 > **⚠️ 注意**：`service_restart` 需要通过 `pnpm start`（launcher 模式）启动服务才能自动重启。如果使用 `pnpm dev:gateway` 直接启动，exit code 100 会直接终止进程而不会重启。
 
-### 5.6 FACET 模组切换
-
-FACET 是 Belldandy 的"职能模组"系统——通过切换不同的模组文件，可以让同一个 Agent 在不同角色之间快速转换（例如"程序员模式"、"翻译模式"、"创意写作模式"等）。
-
-**模组文件位置**：`~/.belldandy/facets/` 目录下的 `.md` 文件。
-
-**使用方法**：直接在对话中告诉 Belldandy：
-
-| 你说的话 | Belldandy 做的事 |
-|----------|------------------|
-| "切换模组为 coder" | 调用 `switch_facet` 工具替换 SOUL.md 中的模组内容，然后自动重启服务 |
-| "切换 FACET 为 translator" | 同上，切换到翻译模组 |
-
-**工作原理**：
-
-1. `switch_facet` 工具读取 `~/.belldandy/facets/{模组名}.md` 文件
-2. 在 SOUL.md 中找到锚点行，保留锚点行及之前的所有内容（人格核心不变）
-3. 将锚点行之后的内容替换为新模组内容（原子写入，不会损坏文件）
-4. Agent 随后调用 `service_restart` 重启服务，清空旧模组的推理惯性
-
-**创建自定义模组**：
-
-在 `~/.belldandy/facets/` 目录下创建 `.md` 文件即可。文件内容会被完整追加到 SOUL.md 的锚点行之后。建议以 `## 【FACET | 模组 | 文件名】` 开头，保持格式一致。
-
-> **💡 提示**：模组切换不会影响 SOUL.md 中的 TABOO、ETHOS、SYSTEM 等核心章节——这些内容位于锚点行之前，始终保持不变。
-
-### 5.7 日志系统 (Logs)
+### 12.5 日志系统 (Logs)
 
 Belldandy 的运行日志保存在 `~/.belldandy/logs/` 目录，支持：
 
@@ -656,345 +1110,12 @@ Belldandy 的运行日志保存在 `~/.belldandy/logs/` 目录，支持：
 
 如需调整日志行为，可在 `.env.local` 中配置 `BELLDANDY_LOG_*` 相关变量（参见 3.2 进阶配置）。
 
-### 5.8 多 Agent 系统 (Multi-Agent)
 
-Belldandy 支持配置和运行多个 Agent，每个 Agent 可以拥有独立的模型、人格、工具权限和工作区。你可以在 WebChat 中切换不同 Agent 对话，也可以让 Agent 之间协作完成复杂任务。
-
-#### 5.8.1 配置 Agent Profile
-
-在 `~/.belldandy/` 目录下创建 `agents.json` 文件：
-
-```json
-{
-  "agents": [
-    {
-      "id": "coder",
-      "displayName": "代码专家",
-      "model": "primary",
-      "systemPromptOverride": "你是一个严谨的代码专家，擅长 TypeScript 和系统设计。",
-      "toolsEnabled": true,
-      "toolWhitelist": ["file_read", "file_write", "run_command", "web_fetch"]
-    },
-    {
-      "id": "researcher",
-      "displayName": "调研助手",
-      "model": "deepseek-chat",
-      "systemPromptOverride": "你是一个高效的调研助手，擅长信息检索和总结。",
-      "toolsEnabled": true,
-      "toolWhitelist": ["web_fetch", "web_search", "memory_search"]
-    }
-  ]
-}
-```
-
-**字段说明**：
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `id` | 是 | 唯一标识（如 `"coder"`, `"researcher"`） |
-| `displayName` | 否 | 显示名称（用于 UI 和日志，默认等于 `id`） |
-| `model` | 是 | 模型引用：`"primary"` 使用环境变量配置，其他值引用 `models.json` 中对应 `id` 的条目 |
-| `systemPromptOverride` | 否 | 追加到系统提示词末尾的额外内容 |
-| `workspaceDir` | 否 | Agent 专属 workspace 目录名（位于 `~/.belldandy/agents/{workspaceDir}/`），默认等于 `id` |
-| `toolsEnabled` | 否 | 是否启用工具（覆盖环境变量 `BELLDANDY_TOOLS_ENABLED`） |
-| `toolWhitelist` | 否 | 可用工具白名单（仅列出的工具对该 Agent 可用） |
-| `maxInputTokens` | 否 | 最大输入 token 数覆盖 |
-
-> **💡 提示**：不创建 `agents.json` 时，系统只有一个 `"default"` Agent，使用环境变量中的配置，行为与之前完全一致。
-
-#### 5.8.2 Agent 专属工作区
-
-每个非 default 的 Agent 可以拥有独立的人格文件。目录结构：
-
-```
-~/.belldandy/
-├── SOUL.md              # default Agent 的人格
-├── IDENTITY.md
-├── agents/
-│   ├── coder/           # coder Agent 的专属目录
-│   │   ├── SOUL.md      # 覆盖 default 的 SOUL
-│   │   ├── IDENTITY.md  # 覆盖 default 的 IDENTITY
-│   │   └── facets/      # coder 专属的 FACET 模组
-│   │       └── strict.md
-│   └── researcher/
-│       └── SOUL.md
-```
-
-**继承规则**：对每个可继承文件（SOUL.md、IDENTITY.md、USER.md、AGENTS.md、TOOLS.md、MEMORY.md），优先从 `agents/{id}/` 读取；不存在则自动 fallback 到根目录的同名文件。
-
-#### 5.8.3 在 WebChat 中切换 Agent
-
-配置了多个 Agent Profile 后，WebChat 界面顶部会出现 Agent 选择器。点击即可切换到不同的 Agent 进行对话，每个 Agent 的会话是隔离的。
-
-也可以通过 WebSocket API 查询可用 Agent 列表：
-
-```
-方法: agents.list
-返回: { agents: [{ id, displayName, model }, ...] }
-```
-
-#### 5.8.4 飞书渠道绑定 Agent
-
-可以为飞书渠道指定使用特定的 Agent Profile：
-
-```env
-# 飞书渠道使用 "researcher" Agent（默认使用 default）
-BELLDANDY_FEISHU_AGENT_ID=researcher
-```
-
-#### 5.8.5 子 Agent 编排 (Sub-Agent Orchestration)
-
-当启用工具调用（`BELLDANDY_TOOLS_ENABLED=true`）且配置了 Agent Profile 后，Belldandy 支持将复杂任务拆分并委托给子 Agent 执行。
-
-**工作原理**：
-
-1. 主 Agent 在 ReAct 循环中决定需要委托任务
-2. 通过 `delegate_task` 或 `delegate_parallel` 工具发起委托
-3. 子 Agent 在独立的会话中运行，完成后将结果返回给主 Agent
-4. 主 Agent 汇总结果继续推理
-
-**可用工具**：
-
-| 工具 | 说明 |
-|------|------|
-| `delegate_task` | 委托单个任务给指定子 Agent。参数：`instruction`（必填）、`agent_id`（可选，默认 default）、`context`（可选） |
-| `delegate_parallel` | 并行委托多个任务。参数：`tasks` 数组，每项包含 `instruction`、`agent_id`、`context` |
-| `sessions_spawn` | 生成子 Agent 会话（底层工具，功能与 `delegate_task` 类似） |
-| `sessions_history` | 查看当前会话的所有子 Agent 会话状态 |
-
-**使用示例**（在对话中自然语言触发）：
-
-| 你说的话 | Agent 做的事 |
-|----------|-------------|
-| "让 coder 帮我写一个排序算法" | 调用 `delegate_task`，委托给 coder Agent |
-| "同时让 researcher 查资料、coder 写代码" | 调用 `delegate_parallel`，两个子 Agent 并行工作 |
-| "查看子任务进度" | 调用 `sessions_history`，列出所有子 Agent 会话状态 |
-
-**安全机制**：
-
-- **并发限制**：同时运行的子 Agent 数量有上限（默认 3），超出的任务自动排队
-- **队列限制**：排队任务数量有上限（默认 10），队列满时拒绝新任务
-- **超时保护**：子 Agent 运行超时自动终止（默认 120 秒）
-- **嵌套深度限制**：防止子 Agent 无限递归委托（默认最大深度 2）
-- **生命周期钩子**：子 Agent 会话触发 `session_start` / `session_end` 钩子
-
-#### 5.8.6 子 Agent 环境变量
-
-在 `.env.local` 中配置子 Agent 编排参数：
-
-```env
-# ------ 子 Agent 编排 ------
-
-# 最大并发子 Agent 数量（默认 3）
-BELLDANDY_SUB_AGENT_MAX_CONCURRENT=3
-
-# 排队队列最大长度（默认 10，队列满时拒绝新任务）
-BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE=10
-
-# 子 Agent 运行超时（毫秒，默认 120000 即 2 分钟）
-BELLDANDY_SUB_AGENT_TIMEOUT_MS=120000
-
-# 最大嵌套深度（默认 2，防止无限递归）
-BELLDANDY_SUB_AGENT_MAX_DEPTH=2
-
-# 飞书渠道绑定的 Agent Profile ID（可选）
-BELLDANDY_FEISHU_AGENT_ID=researcher
-```
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `BELLDANDY_SUB_AGENT_MAX_CONCURRENT` | `3` | 同时运行的子 Agent 上限 |
-| `BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE` | `10` | 排队等待的任务上限 |
-| `BELLDANDY_SUB_AGENT_TIMEOUT_MS` | `120000` | 单个子 Agent 运行超时（ms） |
-| `BELLDANDY_SUB_AGENT_MAX_DEPTH` | `2` | 子 Agent 嵌套委托最大深度 |
-| `BELLDANDY_FEISHU_AGENT_ID` | — | 飞书渠道使用的 Agent Profile ID |
-
-## 6. 管理命令（bdd CLI）
-
-Belldandy 提供了统一的 `bdd` 命令行工具，涵盖启动、配置、诊断、配对管理等所有操作。
-
-```bash
-# 查看完整命令树
-corepack pnpm bdd --help
-
-# 查看版本号
-corepack pnpm bdd --version
-```
-
-所有命令支持以下全局选项：
-- `--json` — 输出机器可读的 JSON 格式（适合脚本集成）
-- `--state-dir <path>` — 覆盖默认的工作区目录（`~/.belldandy`）
-- `--verbose` — 显示详细输出
-
-### 6.1 启动与运行
-
-```bash
-# 生产模式（带进程守护，崩溃自动重启）
-cd E:\project\belldandy
-corepack pnpm bdd start
-
-# 开发模式（直接启动 Gateway，适合调试）
-corepack pnpm bdd dev
-```
-
-### 6.2 Setup 向导
-
-首次使用或需要重新配置时，运行交互式向导：
-
-```bash
-# 交互式（推荐首次使用）
-corepack pnpm bdd setup
-
-# 非交互式（适合脚本化部署）
-corepack pnpm bdd setup --provider openai --base-url <URL> --api-key <KEY> --model <MODEL>
-```
-
-### 6.3 健康诊断（Doctor）
-
-检查系统环境和配置是否正常：
-
-```bash
-corepack pnpm bdd doctor
-```
-
-Doctor 会检查以下项目：
-- Node.js 版本是否满我足要求
-- pnpm 是否可用
-- 工作区目录（`~/.belldandy`）是否存在
-- `.env.local` 是否存在且配置正确
-- Agent Provider 配置（API Key、Base URL、Model）
-- 端口是否可用
-- Memory DB 是否可访问
-- MCP 配置状态
-
-```bash
-# 额外测试模型连通性（会发送一个测试请求）
-corepack pnpm bdd doctor --check-model
-```
-
-通过项显示绿色 ✓，失败项显示红色 ✗ 并附带修复建议，警告项显示黄色 ⚠。
-
-### 6.4 配置管理（Config）
-
-无需手动编辑 `.env.local`，通过 CLI 直接读写配置：
-
-```bash
-# 列出所有配置（敏感字段自动脱敏）
-corepack pnpm bdd config list
-
-# 显示明文（包含 API Key 等）
-corepack pnpm bdd config list --show-secrets
-
-# 读取单个配置项
-corepack pnpm bdd config get BELLDANDY_OPENAI_MODEL
-
-# 修改配置项（自动写入 .env.local）
-corepack pnpm bdd config set BELLDANDY_PORT 28890
-
-# 用编辑器打开 .env.local
-corepack pnpm bdd config edit
-
-# 显示 .env.local 文件路径
-corepack pnpm bdd config path
-```
-
-### 6.5 配对管理（Pairing）
-
-管理设备授权与配对：
-
-```bash
-# 查看已授权设备列表
-corepack pnpm bdd pairing list
-
-# 查看待批准的配对请求
-corepack pnpm bdd pairing pending
-
-# 批准配对请求
-corepack pnpm bdd pairing approve <CODE>
-
-# 撤销某设备的授权
-corepack pnpm bdd pairing revoke <CLIENT_ID>
-
-# 清理过期的配对请求
-corepack pnpm bdd pairing cleanup
-# 预览模式（不实际删除）
-corepack pnpm bdd pairing cleanup --dry-run
-
-# 导出配对数据（备份）
-corepack pnpm bdd pairing export --out backup.json
-
-# 导入配对数据（恢复）
-corepack pnpm bdd pairing import --in backup.json
-```
-
-> **过渡兼容**：旧的 `corepack pnpm pairing:*` 写法仍可使用，内部已重定向到新 CLI。
-
-### 6.6 浏览器 Relay
-
-独立启动 WebSocket-CDP relay（用于浏览器自动化）：
-
-```bash
-# 使用默认端口 (28892)
-corepack pnpm bdd relay start
-
-# 指定端口
-corepack pnpm bdd relay start --port 29000
-```
-
-## 7. 飞书渠道（手机可用）
-
-除了 WebChat，你还可以通过飞书与 Belldandy 对话——无需公网 IP 或内网穿透！
-
-### 7.1 配置飞书
-
-详细配置步骤请参考 [飞书对接说明](./Belldandy飞书对接说明.md)。
-
-简要步骤：
-1. 在 [飞书开放平台](https://open.feishu.cn/) 创建企业自建应用
-2. 获取 App ID 和 App Secret
-3. 开启机器人能力并配置权限
-4. 设置事件订阅为"长连接模式"
-5. 发布应用
-
-### 7.2 配置 Belldandy
-
-在 `.env.local` 中添加：
-
-```env
-BELLDANDY_FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
-BELLDANDY_FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-### 7.3 使用
-
-1. 启动 Gateway：`corepack pnpm dev:gateway`
-2. 终端显示 `Feishu WebSocket Channel started.` 和 `ws client ready` 说明连接成功
-3. 打开飞书，搜索你的应用名称，开始对话！
-
-### 7.4 渠道架构说明
-
-Belldandy 采用了标准化的 **Channel 接口** 设计，使扩展新渠道变得简单：
-
-- **统一接口**：所有渠道（飞书、Telegram、Discord 等）都实现相同的 `Channel` 接口
-- **ChannelManager**：统一管理多个渠道的启动、停止和消息广播
-- **易于扩展**：新增渠道只需实现 `start()`、`stop()`、`sendProactiveMessage()` 方法
-
-**当前已支持的渠道**：
-- ✅ 飞书 (FeishuChannel) - 已完整实现
-
-**计划中的渠道**：
-- ⏳ Telegram
-- ⏳ Discord
-- ⏳ Slack
-
-> **开发者注意**：如果你想贡献新渠道实现，请参考 `packages/belldandy-channels/src/types.ts` 中的 `Channel` 接口定义。
-
-
-## 8. 浏览器自动化
+## 13. 浏览器自动化
 
 让 Belldandy 控制你的浏览器打开网页、截图或提取内容的黑科技功能！
 
-### 8.1 启用方式
+### 13.1 启用方式
 
 **推荐：自动启动**
 
@@ -1016,341 +1137,165 @@ cd Belldandy
 node packages/belldandy-browser/dist/bin/relay.js
 ```
 
-### 8.2 安装浏览器扩展
+### 13.2 安装浏览器扩展
 
 1.  打开 Chrome 浏览器，进入 **扩展管理页面** (`chrome://extensions`)。
 2.  开启右上角的 **"开发者模式" (Developer mode)**。
 3.  点击 **"加载已解压的扩展程序" (Load unpacked)**。
 4.  选择项目目录下的 `apps/browser-extension` 文件夹。
 
-### 8.3 连接使用
+### 13.3 连接使用
 
 1.  在浏览器右上角找到 **Belldandy Relay** 的图标（一个紫色的小幽灵👻或 B 图标）。
 2.  点击它，图标应该会变色或显示 "Connected"，表示已连接到 Relay Server。
 3.  现在的 Agent 就可以通过 `browser_open` 等工具控制你的当前浏览器了！
 
-## 9. 语音交互 (Voice Interaction)
-
-Belldandy 支持双向语音交互：你可以直接对它说话，它也会用语音回复你。
-
-### 9.1 网页端 (WebChat)
-
-在聊天输入框右侧，你会看到一个新的 **🎤 麦克风图标**。
-
-1.  **点击麦克风**：图标变红并伴有脉冲动画，表示正在录音。
-2.  **说话**：直接说出你的指令或问题。
-3.  **再次点击**：结束录音。
-4.  **发送**：
-    *   系统会自动将录音上传到后台进行高精度转写 (STT)。
-    *   转换后的文字会自动填入输入框（或直接发送）。
-    *   Agent 接收到的是你的**语音 + 文字**，它会理解你的语调并回复。
-
-> **🌟 双模引擎**：
-> *   **Mode A (默认)**：录音上传服务器，使用 Whisper/Paraformer 转写。精度高，支持长语音。
-> *   **Mode B (离线/备用)**：如果服务器 STT 未配置或断网，会自动降级使用浏览器原生的 Web Speech API 进行实时识别。
-
-### 9.2 飞书端 (Feishu)
-
-在飞书手机 App 或桌面端，你可以像给朋友发微信语音一样给 Belldandy 发消息：
-
-1.  按住说话，发送语音条。
-2.  Belldandy 会自动识别语音内容（转写文字回显在日志中）。
-3.  它会以文字（或语音，如果开启了 TTS）回复你。
-
-> **注意**：飞书语音识别依赖 `stt-transcribe` 能力，请确保服务端已配置有效的 `BELLDANDY_STT_PROVIDER`。
-
-## 9. 视觉感知 (Loopback Vision)
-
-让 Belldandy 拥有“眼睛”，可以看到你通过宿主机 webcam 看到的画面。
-
-### 9.1 原理简介 (Loopback Vision)
-
-这是一种“回环视觉”技术：
-1.  Agent 指挥浏览器打开一个镜像页面（Mirror Page）。
-2.  该页面调用你的本地摄像头显示画面。
-3.  Agent 对该页面进行截图，从而“看到”了画面。
-
-### 9.2 如何使用
-
-**前提条件**：必须先完成 **8. 浏览器自动化** 的连接步骤（安装插件并连接）。
-
-#### 方法 A：使用内置技能 (推荐)
-
-直接对 Belldandy 说：
-
-> **"拍张照"** 或 **"看看我现在在哪"** 或 **"启动视觉"**
-
-Agent 会自动调用 `camera_snap` 工具：
-1.  自动打开 `/mirror.html` 页面。
-2.  **关键步骤**：此时浏览器会弹窗提示“允许使用摄像头？”，**请务必点击【允许】**。
-3.  等待 2 秒（你可以调整姿势）。
-4.  完成拍摄并进行分析。
-
-#### 方法 B：手动操作 (硬核模式)
-
-## 10. 方法论系统 (Methodology System)
+## 14. 方法论系统 (Methodology System)
 
 这是 Belldandy 的"程序性记忆"核心。它允许 Agent 将一次性的经验沉淀为标准操作流程 (SOP)，并在后续任务中自动调用。
 
-### 10.1 核心理念
+### 14.1 核心理念
 - **查阅优先**: 在执行复杂任务前，Agent 会先检查是否有现成的方法 (`method_list/search`).
 - **经验沉淀**: 任务成功或踩坑后，Agent 会将经验记录为 Markdown 文件 (`method_create`).
 - **自我进化**: 随着使用时间的增加，`methods/` 目录下的 SOP 越多，Agent 越聪明。
 
-### 10.2 常用工具
+### 14.2 常用工具
 - `method_list`: 列出所有已沉淀的方法。
 - `method_search`: 搜索特定关键词的方法。
 - `method_read`: 读取方法的具体步骤。
 - `method_create`: 创建或更新方法文档。
 
-### 10.3 给用户的建议
+### 14.3 给用户的建议
 - 您可以在对话中显式要求 Belldandy："把刚才的操作总结为一个方法保存下来。"
 - 您也可以手动在 `~/.belldandy/methods/` 目录下编写 `.md` 文件，教 Belldandy 做事。
 
-## 11. 插件与钩子系统 (Plugin & Hook System)
+## 15. 画布工作区 (Canvas)
 
-Belldandy 提供了完整的插件系统，允许开发者扩展 Agent 的能力。
+画布工作区是一个可视化的无限画布，让你用节点和连线来组织想法、拆解任务、关联知识。Agent 也能直接在画布上操作——创建节点、建立连线、自动布局。
 
-### 11.1 钩子系统
+### 15.1 打开画布
 
-钩子是插件干预 Agent 行为的核心机制。Belldandy 支持 **13 种生命周期钩子**：
+在网页界面左侧边栏，点击 **「画布工作区」** 按钮，进入画布列表页。
 
-| 类别 | 钩子名称 | 用途 |
-|------|---------|------|
-| **Agent** | `before_agent_start` | 在 Agent 开始前注入系统提示词或上下文 |
-| **Agent** | `agent_end` | Agent 完成后分析对话、记录日志 |
-| **消息** | `message_received` | 收到消息时触发（日志/触发器） |
-| **消息** | `message_sending` | 发送前修改或取消消息 |
-| **消息** | `message_sent` | 消息发送后触发（日志） |
-| **工具** | `before_tool_call` | 工具调用前修改参数或阻止执行 |
-| **工具** | `after_tool_call` | 工具调用后结果审计 |
-| **会话** | `session_start` / `session_end` | 会话开始/结束时触发 |
-| **网关** | `gateway_start` / `gateway_stop` | 服务启动/停止时触发 |
+- 点击 **「+ 新建画布」** 创建一个空画布
+- 点击已有画布条目打开它
 
-### 11.2 开发插件
+画布与聊天、编辑器之间可以自由切换（三态切换），点击工具栏右侧的 **✕** 按钮返回聊天。
 
-插件是一个导出 `activate(context)` 方法的 JS/MJS 文件：
+### 15.2 节点类型
 
-```javascript
-// my-plugin.mjs
-export const id = "my-plugin";
-export const name = "My Plugin";
+画布支持 8 种节点类型：
 
-export function activate(context) {
-  // 注册钩子
-  context.hooks.register({
-    source: id,
-    hookName: "before_tool_call",
-    priority: 10, // 优先级越高越先执行
-    handler: (event, ctx) => {
-      console.log(`工具调用: ${event.toolName}`);
-      // 返回 { block: true } 可阻止执行
-      // 返回 { params: {...} } 可修改参数
-    }
-  });
-
-  // 注册新工具
-  context.tools.register({
-    name: "my_tool",
-    description: "我的自定义工具",
-    execute: async (params) => {
-      return { success: true, output: "Hello from my tool!" };
-    }
-  });
-}
-```
-
-### 11.3 加载插件
-
-将插件文件放到 `~/.belldandy/plugins/` 目录下，Gateway 启动时会自动加载。
-
----
-
-## 12. 技能系统 (Skills)
-
-技能（Skills）是 Belldandy 的"经验库"——一套纯文本的操作指南，教 Agent **如何更好地使用已有工具完成特定任务**。
-
-与工具（Tools）的区别：
-- **工具**是"手和脚"——解决"能做什么"的问题（如读文件、搜索网页）
-- **技能**是"经验和套路"——解决"怎么做更好"的问题（如如何写出规范的 commit、如何重构 TypeScript 代码）
-
-技能的本质是 **prompt 注入**：符合条件的技能会被自动注入到 Agent 的系统提示词中，让 Agent "知道"自己有哪些专业能力可用。
-
-### 12.1 技能目录
-
-技能从三个位置加载（优先级递减）：
-
-| 来源 | 路径 | 说明 |
+| 类型 | 图标 | 用途 |
 |------|------|------|
-| 用户技能 | `~/.belldandy/skills/` | 你自己创建的技能，优先级最高 |
-| 插件技能 | 由插件声明 | 插件附带的技能 |
-| 内置技能 | 随项目发布 | Belldandy 自带的通用技能 |
+| 任务 (task) | ☑ | 带状态流转的任务卡片（todo → doing → done） |
+| 笔记 (note) | ✎ | 自由文本 / Markdown 笔记 |
+| 方法 (method) | 📋 | 关联方法论文档（`methods/*.md`） |
+| 知识 (knowledge) | 💡 | 关联记忆笔记（`memory/*.md`） |
+| Agent 输出 (agent-output) | 🤖 | Agent 回复片段 |
+| 截图 (screenshot) | 🖼 | 浏览器快照图片 |
+| 会话 (session) | 💬 | 关联历史对话会话 |
+| 分组 (group) | 📁 | 分组容器 |
 
-当多个来源存在同名技能时，用户技能覆盖插件技能，插件技能覆盖内置技能。
+### 15.3 基本操作
 
-### 12.2 创建自定义技能
+**添加节点**
+- 工具栏点击 **「+ 任务」「+ 笔记」「+ 方法」** 按钮
+- 或在画布空白处 **右键** 打开菜单选择节点类型
+- 方法 / 知识 / 会话类型会弹出 **资源选择器**，列出工作区中可用的文件，选择后自动创建带关联的节点
 
-每个技能是 `~/.belldandy/skills/` 下的一个**目录**，包含一个 `SKILL.md` 文件。
+**连线**
+- 将鼠标移到节点边缘的 **端口**（上下左右四个小圆点），按住拖拽到另一个节点的端口即可建立连线
 
-#### 目录结构示例
+**拖拽与布局**
+- 直接拖拽节点调整位置
+- 点击工具栏 **「布局」** 按钮触发 dagre 自动布局（TB 方向）
+- 点击 **「适应」** 按钮让视图自动缩放以显示所有节点
 
-```
-~/.belldandy/skills/
-├── ts-refactor/
-│   └── SKILL.md
-├── docker-deploy/
-│   └── SKILL.md
-└── code-review/
-    └── SKILL.md
-```
+**缩放与平移**
+- 鼠标滚轮缩放
+- 在空白区域按住左键拖拽平移
+- 工具栏 **+** / **−** 按钮精确缩放
 
-#### SKILL.md 格式
+**删除**
+- 选中节点后按 `Delete` 键删除
+- 或右键节点选择 **「删除节点」**
 
-文件由 **YAML frontmatter**（元数据）和 **Markdown body**（操作指令）两部分组成：
+**撤销 / 重做**
+- `Ctrl+Z` 撤销（最多 50 步）
 
-```yaml
----
-name: ts-refactor
-description: TypeScript 复杂类型重构 SOP
-version: "1.0"
-tags: [typescript, refactor]
-priority: normal
-eligibility:
-  bin: [node, tsc]
-  tools: [file_read, file_write]
-  files: [tsconfig.json]
----
+**保存**
+- 画布会在操作后 2 秒自动保存
+- 也可以点击工具栏 **「保存」** 按钮手动保存
+- 数据存储在 `~/.belldandy/canvas/<boardId>.json`
 
-# Instructions
+### 15.4 节点关联与双击跳转
 
-当你接收到 TypeScript 重构任务时，请遵循以下步骤：
+带有资源关联（ref）的节点会在标题栏显示 🔗 图标。双击节点的行为取决于关联类型：
 
-1. 先用 file_read 读取目标文件，理解现有类型结构
-2. 识别需要重构的类型定义和所有引用点
-3. 制定重构方案，确保类型安全
-4. 逐文件修改，每次修改后验证类型检查通过
-5. 完成后运行 tsc --noEmit 确认无类型错误
-```
+| 关联类型 | 双击行为 |
+|----------|----------|
+| method | 跳转到编辑器，打开对应方法论文档 |
+| memory | 跳转到编辑器，打开对应记忆笔记 |
+| session | 切换到聊天模式，加载对应会话 |
+| url | 在新窗口打开链接 |
+| file | 跳转到编辑器，打开对应文件 |
+| 无关联 | 弹出编辑对话框，可修改标题和内容 |
 
-#### 字段说明
+### 15.5 画布上下文注入
 
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `name` | 是 | 技能唯一名称 |
-| `description` | 是 | 简短描述（会显示在技能列表中） |
-| `version` | 否 | 版本号 |
-| `tags` | 否 | 分类标签（用于搜索和过滤） |
-| `priority` | 否 | 注入优先级，默认 `normal`（见下方说明） |
-| `eligibility` | 否 | 准入条件（见下方说明） |
+当你在画布视图中发送消息时，系统会自动将当前画布的摘要（节点列表 + 连线关系）注入到消息中，让 Agent 了解你正在看的画布内容。
 
-#### 优先级 (priority)
+你也可以点击工具栏的 **「分析画布」** 按钮，系统会切换到聊天模式并在输入框中预填画布摘要，方便你直接让 Agent 分析。
 
-决定技能如何被注入到 Agent 的系统提示词中：
+### 15.6 ReAct 可视化
 
-| 值 | 行为 |
-|----|------|
-| `always` | 始终直接注入系统提示词 |
-| `high` | 直接注入系统提示词 |
-| `normal` | 不直接注入，Agent 可通过 `skills_search` 按需查询 |
-| `low` | 不直接注入，Agent 可通过 `skills_search` 按需查询 |
+点击工具栏的 **「ReAct」** 按钮开启 ReAct 可视化模式。开启后，Agent 的工具调用过程会实时映射为画布上的节点链：
 
-> **Token 控制**：直接注入的技能总字符数超过 4000 时，会自动降级为仅注入名称和描述摘要，完整指令通过 `skills_search` 获取。
+1. Agent 调用工具时 → 画布出现黄色临时节点（带 pulse 动画），显示工具名和参数
+2. 工具返回结果后 → 节点变为绿色（成功）或红色（失败），内容更新为结果摘要
+3. Agent 最终回复时 → 出现紫色总结节点
+4. 多个工具调用之间自动用虚线连接，形成调用链
 
-### 12.3 准入条件 (Eligibility)
+**管理临时节点**：
+- 右键节点选择 **「固定」** 可以将有价值的临时节点保留
+- 关闭 ReAct 模式时，未固定的临时节点会自动清除
+- 已固定的节点会保留在画布上
 
-准入条件用于自动检测当前环境是否满足技能的前置要求。不满足条件的技能不会被注入，避免浪费 token。
+### 15.7 Agent 操作画布
 
-在 `eligibility` 中可以声明以下 5 个维度：
+Agent 可以通过工具直接操作画布。你可以用自然语言指挥它：
 
-| 维度 | 说明 | 示例 |
-|------|------|------|
-| `env` | 环境变量需存在且非空 | `[BELLDANDY_TOOLS_ENABLED]` |
-| `bin` | PATH 上需存在的可执行文件 | `[node, tsc, docker]` |
-| `mcp` | 需在线的 MCP 服务器名称 | `[filesystem, sqlite]` |
-| `tools` | 需已注册的工具名称 | `[file_read, file_write]` |
-| `files` | 工作区中需存在的文件（相对路径） | `[package.json, tsconfig.json]` |
+- "帮我创建一个画布，把这个需求拆解成任务"
+- "在画布上添加一个方法论节点，关联 xxx.md"
+- "把画布上的任务 A 和任务 B 连起来"
+- "给画布做一个自动布局"
+- "读一下当前画布的内容"
 
-不声明 `eligibility` 的技能默认视为可用。
+Agent 可用的画布工具：
 
-### 12.4 Agent 中使用技能
+| 工具 | 功能 |
+|------|------|
+| `canvas_list` | 列出所有画布 |
+| `canvas_create` | 创建新画布 |
+| `canvas_read` | 读取画布完整数据 |
+| `canvas_add_node` | 添加节点（支持所有类型和关联） |
+| `canvas_update_node` | 更新节点属性 |
+| `canvas_remove_node` | 删除节点及关联连线 |
+| `canvas_connect` | 连接两个节点 |
+| `canvas_disconnect` | 删除连线 |
+| `canvas_auto_layout` | 触发自动布局 |
+| `canvas_snapshot` | 获取画布文本摘要 |
 
-Agent 有两个内置工具来发现和使用技能：
-
-#### skills_list — 列出技能
-
-在对话中让 Agent 查看可用技能：
-
-> "列出所有可用的技能"
-> "有哪些和 TypeScript 相关的技能？"
-
-Agent 会调用 `skills_list` 工具，返回所有技能的名称、来源、标签和可用状态。不可用的技能会显示具体原因（如 `missing bin: docker`）。
-
-支持的过滤参数：
-- `filter`: `all`（全部）/ `eligible`（仅可用）/ `ineligible`（仅不可用）
-- `tag`: 按标签过滤
-
-#### skills_search — 搜索技能
-
-当 Agent 遇到不熟悉的领域时，可以搜索技能库获取操作指南：
-
-> "搜索一下有没有关于代码重构的技能"
-> "查找 Docker 部署相关的技能"
-
-Agent 会调用 `skills_search` 工具，按关键词匹配技能的名称、描述、标签和指令内容，返回最相关的技能及其完整操作指南。
-
-### 12.5 完整示例
-
-创建一个"代码审查"技能：
-
-```bash
-mkdir -p ~/.belldandy/skills/code-review
-```
-
-编辑 `~/.belldandy/skills/code-review/SKILL.md`：
-
-```yaml
----
-name: code-review
-description: 代码审查 SOP，关注安全、性能和可维护性
-version: "1.0"
-tags: [review, quality]
-priority: high
-eligibility:
-  tools: [file_read]
----
-
-# Code Review Instructions
-
-当用户要求你审查代码时，请按以下维度逐一检查：
-
-## 安全性
-- 是否存在 SQL 注入、XSS、命令注入等漏洞
-- 敏感信息（密钥、密码）是否硬编码
-- 输入校验是否充分
-
-## 性能
-- 是否有不必要的循环嵌套或重复计算
-- 数据库查询是否有 N+1 问题
-- 是否有内存泄漏风险
-
-## 可维护性
-- 命名是否清晰、一致
-- 函数是否过长（建议 < 50 行）
-- 是否有适当的错误处理
-
-## 输出格式
-按严重程度分类：🔴 严重 / 🟡 建议 / 🟢 良好
-```
-
-重启 Belldandy 后，这个技能会自动加载。因为 `priority: high`，它会直接注入到 Agent 的系统提示词中，Agent 在审查代码时会自动遵循这套 SOP。
+Agent 的写操作会通过 WebSocket 实时推送到前端，你能看到节点逐个出现、连线逐条建立。
 
 ---
 
-## 13. MCP 支持 (Model Context Protocol)
+## 16. MCP 支持 (Model Context Protocol)
 
 MCP 是 Anthropic 提出的标准化协议，让 AI 助手能够连接外部数据源和工具。
 
-### 13.1 启用 MCP
+### 16.1 启用 MCP
 
 在 `.env.local` 中添加：
 
@@ -1360,7 +1305,7 @@ BELLDANDY_TOOLS_ENABLED=true
 BELLDANDY_MCP_ENABLED=true
 ```
 
-### 13.2 配置 MCP 服务器
+### 16.2 配置 MCP 服务器
 
 在 `~/.belldandy/mcp.json` 中定义要连接的 MCP 服务器。Belldandy 支持两种配置格式，可任选其一。
 
@@ -1452,14 +1397,14 @@ BELLDANDY_MCP_ENABLED=true
 
 > **注意**：一个 `mcp.json` 文件只能使用一种格式。系统会自动检测格式并处理，无需手动指定。
 
-### 13.3 传输类型
+### 16.3 传输类型
 
 | 类型 | 说明 | 适用场景 |
 |------|------|----------|
 | `stdio` | 通过子进程的 stdin/stdout 通信 | 本地 MCP 服务器（推荐） |
 | `sse` | 通过 HTTP Server-Sent Events 通信 | 远程 MCP 服务器 |
 
-### 13.4 常用 MCP 服务器
+### 16.4 常用 MCP 服务器
 
 | 服务器 | 命令 | 功能 |
 |--------|------|------|
@@ -1468,7 +1413,7 @@ BELLDANDY_MCP_ENABLED=true
 | `@modelcontextprotocol/server-sqlite` | `npx -y @modelcontextprotocol/server-sqlite` | SQLite 数据库 |
 | `@modelcontextprotocol/server-puppeteer` | `npx -y @modelcontextprotocol/server-puppeteer` | 浏览器自动化 |
 
-### 13.5 工具命名
+### 16.5 工具命名
 
 MCP 工具在 Belldandy 中的命名格式为：`mcp_{serverId}_{toolName}`
 
@@ -1478,43 +1423,256 @@ MCP 工具在 Belldandy 中的命名格式为：`mcp_{serverId}_{toolName}`
 
 > **💡 提示**：启动 Gateway 后，日志会显示已连接的 MCP 服务器和注册的工具数量。
 
-如果你想体验控制感，可以手动指挥 Agent：
-
-1.  **"打开镜像页"** -> Agent 导航至 `http://.../mirror.html`。
-2.  **"允许摄像头"** -> 你手动在浏览器点击允许。
-3.  **"现在截图"** -> Agent 截图并分析。
 
 ---
 
-## 14. 语音交互 (Voice Interaction)
+**第五部分：开发者扩展**
 
-让 Belldandy 开口说话！支持免费且高质量的 Edge TTS（微软晓晓/云希）。
+## 17. 插件与钩子系统 (Plugin & Hook System)
 
-### 14.1 快速开启/关闭
+Belldandy 提供了完整的插件系统，允许开发者扩展 Agent 的能力。
 
-无需配置复杂文件，直接在对话中对 Agent 说：
+### 17.1 钩子系统
 
-*   **开启语音**：对它说 "开启语音模式" 或 "我想听你说话"。
-    *   Agent 会自动进入 TTS 模式，每条回复都会附带语音播放器。
-*   **关闭语音**：对它说 "关闭语音" 或 "太吵了"。
-    *   Agent 会立即停止生成音频。
-*   **或是在.env文件中启用语音模式**：服务端自动将 Agent 回复转为语音，true/false，默认 false
-    *   `BELLDANDY_TTS_ENABLED=false`
+钩子是插件干预 Agent 行为的核心机制。Belldandy 支持 **13 种生命周期钩子**：
 
-> **原理**：Agent 会在你的工作区目录创建/删除一个名为 `TTS_ENABLED` 的信号文件。
+| 类别 | 钩子名称 | 用途 |
+|------|---------|------|
+| **Agent** | `before_agent_start` | 在 Agent 开始前注入系统提示词或上下文 |
+| **Agent** | `agent_end` | Agent 完成后分析对话、记录日志 |
+| **消息** | `message_received` | 收到消息时触发（日志/触发器） |
+| **消息** | `message_sending` | 发送前修改或取消消息 |
+| **消息** | `message_sent` | 消息发送后触发（日志） |
+| **工具** | `before_tool_call` | 工具调用前修改参数或阻止执行 |
+| **工具** | `after_tool_call` | 工具调用后结果审计 |
+| **会话** | `session_start` / `session_end` | 会话开始/结束时触发 |
+| **网关** | `gateway_start` / `gateway_stop` | 服务启动/停止时触发 |
 
-### 14.2 进阶配置
+### 17.2 开发插件
 
-默认使用 **Edge TTS**（免费）。如果你想使用 **OpenAI TTS**（付费但声线不同），可以通过调用工具时指定参数，或者让 Agent 帮你设置。
+插件是一个导出 `activate(context)` 方法的 JS/MJS 文件：
 
-**支持的声音（Edge TTS - 推荐）**：
-*   `zh-CN-XiaoxiaoNeural` (晓晓 - 温暖女声)
-*   `zh-CN-YunxiNeural` (云希 - 干练男声)
-*   `en-US-AriaNeural` (Aria - 通用女声)
+```javascript
+// my-plugin.mjs
+export const id = "my-plugin";
+export const name = "My Plugin";
+
+export function activate(context) {
+  // 注册钩子
+  context.hooks.register({
+    source: id,
+    hookName: "before_tool_call",
+    priority: 10, // 优先级越高越先执行
+    handler: (event, ctx) => {
+      console.log(`工具调用: ${event.toolName}`);
+      // 返回 { block: true } 可阻止执行
+      // 返回 { params: {...} } 可修改参数
+    }
+  });
+
+  // 注册新工具
+  context.tools.register({
+    name: "my_tool",
+    description: "我的自定义工具",
+    execute: async (params) => {
+      return { success: true, output: "Hello from my tool!" };
+    }
+  });
+}
+```
+
+### 17.3 加载插件
+
+将插件文件放到 `~/.belldandy/plugins/` 目录下，Gateway 启动时会自动加载。
 
 ---
 
-## 15. 常见问题 (FAQ)
+## 18. 技能系统 (Skills)
+
+技能（Skills）是 Belldandy 的"经验库"——一套纯文本的操作指南，教 Agent **如何更好地使用已有工具完成特定任务**。
+
+与工具（Tools）的区别：
+- **工具**是"手和脚"——解决"能做什么"的问题（如读文件、搜索网页）
+- **技能**是"经验和套路"——解决"怎么做更好"的问题（如如何写出规范的 commit、如何重构 TypeScript 代码）
+
+技能的本质是 **prompt 注入**：符合条件的技能会被自动注入到 Agent 的系统提示词中，让 Agent "知道"自己有哪些专业能力可用。
+
+### 18.1 技能目录
+
+技能从三个位置加载（优先级递减）：
+
+| 来源 | 路径 | 说明 |
+|------|------|------|
+| 用户技能 | `~/.belldandy/skills/` | 你自己创建的技能，优先级最高 |
+| 插件技能 | 由插件声明 | 插件附带的技能 |
+| 内置技能 | 随项目发布 | Belldandy 自带的通用技能 |
+
+当多个来源存在同名技能时，用户技能覆盖插件技能，插件技能覆盖内置技能。
+
+### 18.2 创建自定义技能
+
+每个技能是 `~/.belldandy/skills/` 下的一个**目录**，包含一个 `SKILL.md` 文件。
+
+#### 目录结构示例
+
+```
+~/.belldandy/skills/
+├── ts-refactor/
+│   └── SKILL.md
+├── docker-deploy/
+│   └── SKILL.md
+└── code-review/
+    └── SKILL.md
+```
+
+#### SKILL.md 格式
+
+文件由 **YAML frontmatter**（元数据）和 **Markdown body**（操作指令）两部分组成：
+
+```yaml
+---
+name: ts-refactor
+description: TypeScript 复杂类型重构 SOP
+version: "1.0"
+tags: [typescript, refactor]
+priority: normal
+eligibility:
+  bin: [node, tsc]
+  tools: [file_read, file_write]
+  files: [tsconfig.json]
+---
+
+# Instructions
+
+当你接收到 TypeScript 重构任务时，请遵循以下步骤：
+
+1. 先用 file_read 读取目标文件，理解现有类型结构
+2. 识别需要重构的类型定义和所有引用点
+3. 制定重构方案，确保类型安全
+4. 逐文件修改，每次修改后验证类型检查通过
+5. 完成后运行 tsc --noEmit 确认无类型错误
+```
+
+#### 字段说明
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | 是 | 技能唯一名称 |
+| `description` | 是 | 简短描述（会显示在技能列表中） |
+| `version` | 否 | 版本号 |
+| `tags` | 否 | 分类标签（用于搜索和过滤） |
+| `priority` | 否 | 注入优先级，默认 `normal`（见下方说明） |
+| `eligibility` | 否 | 准入条件（见下方说明） |
+
+#### 优先级 (priority)
+
+决定技能如何被注入到 Agent 的系统提示词中：
+
+| 值 | 行为 |
+|----|------|
+| `always` | 始终直接注入系统提示词 |
+| `high` | 直接注入系统提示词 |
+| `normal` | 不直接注入，Agent 可通过 `skills_search` 按需查询 |
+| `low` | 不直接注入，Agent 可通过 `skills_search` 按需查询 |
+
+> **Token 控制**：直接注入的技能总字符数超过 4000 时，会自动降级为仅注入名称和描述摘要，完整指令通过 `skills_search` 获取。
+
+### 18.3 准入条件 (Eligibility)
+
+准入条件用于自动检测当前环境是否满足技能的前置要求。不满足条件的技能不会被注入，避免浪费 token。
+
+在 `eligibility` 中可以声明以下 5 个维度：
+
+| 维度 | 说明 | 示例 |
+|------|------|------|
+| `env` | 环境变量需存在且非空 | `[BELLDANDY_TOOLS_ENABLED]` |
+| `bin` | PATH 上需存在的可执行文件 | `[node, tsc, docker]` |
+| `mcp` | 需在线的 MCP 服务器名称 | `[filesystem, sqlite]` |
+| `tools` | 需已注册的工具名称 | `[file_read, file_write]` |
+| `files` | 工作区中需存在的文件（相对路径） | `[package.json, tsconfig.json]` |
+
+不声明 `eligibility` 的技能默认视为可用。
+
+### 18.4 Agent 中使用技能
+
+Agent 有两个内置工具来发现和使用技能：
+
+#### skills_list — 列出技能
+
+在对话中让 Agent 查看可用技能：
+
+> "列出所有可用的技能"
+> "有哪些和 TypeScript 相关的技能？"
+
+Agent 会调用 `skills_list` 工具，返回所有技能的名称、来源、标签和可用状态。不可用的技能会显示具体原因（如 `missing bin: docker`）。
+
+支持的过滤参数：
+- `filter`: `all`（全部）/ `eligible`（仅可用）/ `ineligible`（仅不可用）
+- `tag`: 按标签过滤
+
+#### skills_search — 搜索技能
+
+当 Agent 遇到不熟悉的领域时，可以搜索技能库获取操作指南：
+
+> "搜索一下有没有关于代码重构的技能"
+> "查找 Docker 部署相关的技能"
+
+Agent 会调用 `skills_search` 工具，按关键词匹配技能的名称、描述、标签和指令内容，返回最相关的技能及其完整操作指南。
+
+### 18.5 完整示例
+
+创建一个"代码审查"技能：
+
+```bash
+mkdir -p ~/.belldandy/skills/code-review
+```
+
+编辑 `~/.belldandy/skills/code-review/SKILL.md`：
+
+```yaml
+---
+name: code-review
+description: 代码审查 SOP，关注安全、性能和可维护性
+version: "1.0"
+tags: [review, quality]
+priority: high
+eligibility:
+  tools: [file_read]
+---
+
+# Code Review Instructions
+
+当用户要求你审查代码时，请按以下维度逐一检查：
+
+## 安全性
+- 是否存在 SQL 注入、XSS、命令注入等漏洞
+- 敏感信息（密钥、密码）是否硬编码
+- 输入校验是否充分
+
+## 性能
+- 是否有不必要的循环嵌套或重复计算
+- 数据库查询是否有 N+1 问题
+- 是否有内存泄漏风险
+
+## 可维护性
+- 命名是否清晰、一致
+- 函数是否过长（建议 < 50 行）
+- 是否有适当的错误处理
+
+## 输出格式
+按严重程度分类：🔴 严重 / 🟡 建议 / 🟢 良好
+```
+
+重启 Belldandy 后，这个技能会自动加载。因为 `priority: high`，它会直接注入到 Agent 的系统提示词中，Agent 在审查代码时会自动遵循这套 SOP。
+
+---
+
+
+---
+
+**附录**
+
+## 19. 常见问题 (FAQ)
 
 **Q: 启动时提示 `EADDRINUSE` 端口被占用？**
 A: 说明端口 28889 已经被占用了。你可以修改 `.env.local` 中的 `BELLDANDY_PORT=28890` 换一个端口。

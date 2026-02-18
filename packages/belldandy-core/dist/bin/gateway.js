@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles, ensureAgentWorkspace, loadAgentWorkspaceFiles, buildSystemPrompt, ConversationStore, loadModelFallbacks, FailoverClient, AgentRegistry, SubAgentOrchestrator, loadAgentProfiles, buildDefaultProfile, resolveModelConfig, HookRegistry, createHookRunner, } from "@belldandy/agent";
-import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, } from "@belldandy/skills";
+import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, } from "@belldandy/skills";
 import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel } from "@belldandy/channels";
@@ -369,6 +369,8 @@ const toolsToRegister = toolsEnabled
         sessionsHistoryTool,
         delegateTaskTool,
         delegateParallelTool,
+        // ── canvas 组（可视化工作区） ──
+        ...(hasToolGroup("canvas") ? createCanvasTools((msg) => serverBroadcast?.(msg)) : []),
     ]
     : [];
 const toolExecutor = new ToolExecutor({

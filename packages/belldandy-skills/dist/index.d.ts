@@ -24,4 +24,6 @@ export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool
 export { createMemorySearchTool, createMemoryGetTool, type MemorySearchToolConfig } from "./builtin/memory.js";
 export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
 export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
+export { createCanvasTools, type CanvasBroadcastFn } from "./builtin/canvas.js";
+export type { CanvasBoard, CanvasNode, CanvasEdge, NodeType, NodeData, NodeRef } from "./builtin/canvas.js";
 //# sourceMappingURL=index.d.ts.map

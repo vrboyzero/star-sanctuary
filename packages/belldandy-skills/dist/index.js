@@ -26,4 +26,6 @@ export { createMemorySearchTool, createMemoryGetTool } from "./builtin/memory.js
 export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
 // Skills 管理工具
 export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
+// Canvas 可视化工作区工具
+export { createCanvasTools } from "./builtin/canvas.js";
 //# sourceMappingURL=index.js.map

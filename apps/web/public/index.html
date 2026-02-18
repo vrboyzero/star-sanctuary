@@ -11,6 +11,7 @@
     href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="/styles.css?v=10.0" />
+  <link rel="stylesheet" href="/canvas.css?v=1.0" />
 </head>
 
 <body>
@@ -77,6 +78,8 @@
             智能体设置</button>
           <button id="switchFacet" class="sidebar-action-btn"
             style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧩 模组编辑</button>
+          <button id="switchCanvas" class="sidebar-action-btn"
+            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎨 画布工作区</button>
         </div>
 
         <!-- 树头部 -->
@@ -108,6 +111,53 @@
             <span class="editor-path" id="editorPath">文件路径</span>
           </div>
           <textarea class="editor-textarea" id="editorTextarea" spellcheck="false"></textarea>
+        </section>
+
+        <!-- 画布模式：Canvas 可视化工作区 -->
+        <section class="canvas-section hidden" id="canvasSection">
+          <!-- 画布工具栏 -->
+          <div class="canvas-toolbar" id="canvasToolbar">
+            <div class="canvas-toolbar-left">
+              <span class="canvas-board-name" id="canvasBoardName">未命名画布</span>
+            </div>
+            <div class="canvas-toolbar-center">
+              <button class="canvas-tb-btn" id="canvasAddTask" title="添加任务">+ 任务</button>
+              <button class="canvas-tb-btn" id="canvasAddNote" title="添加笔记">+ 笔记</button>
+              <button class="canvas-tb-btn" id="canvasAddMethod" title="添加方法论">+ 方法</button>
+              <span class="canvas-tb-sep"></span>
+              <button class="canvas-tb-btn" id="canvasAutoLayout" title="自动布局">布局</button>
+              <button class="canvas-tb-btn" id="canvasFitView" title="适应视图">适应</button>
+              <span class="canvas-tb-sep"></span>
+              <button class="canvas-tb-btn canvas-tb-analyze" id="canvasAnalyze" title="让 Agent 分析当前画布">分析画布</button>
+              <button class="canvas-tb-btn canvas-tb-react" id="canvasReactToggle" title="ReAct 可视化开关">ReAct</button>
+            </div>
+            <div class="canvas-toolbar-right">
+              <span class="canvas-zoom-label" id="canvasZoomLabel">100%</span>
+              <button class="canvas-tb-btn" id="canvasZoomIn" title="放大">+</button>
+              <button class="canvas-tb-btn" id="canvasZoomOut" title="缩小">−</button>
+              <span class="canvas-tb-sep"></span>
+              <button class="canvas-tb-btn" id="canvasSave" title="保存">保存</button>
+              <button class="canvas-tb-btn canvas-tb-close" id="canvasClose" title="返回聊天">✕</button>
+            </div>
+          </div>
+          <!-- SVG 画布 -->
+          <svg id="canvasSvg" class="canvas-svg" width="100%" height="100%">
+            <defs>
+              <marker id="cv-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill="var(--primary)" opacity="0.6"/>
+              </marker>
+              <pattern id="cv-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+                <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="0.5"/>
+              </pattern>
+            </defs>
+            <g id="canvasViewport">
+              <rect id="canvasGridBg" width="10000" height="10000" x="-5000" y="-5000" fill="url(#cv-grid)"/>
+              <g id="canvasEdgesLayer"></g>
+              <g id="canvasNodesLayer"></g>
+            </g>
+          </svg>
+          <!-- 连线拖拽临时层 -->
+          <svg id="canvasTempSvg" class="canvas-temp-svg" width="100%" height="100%"></svg>
         </section>
       </div>
     </div>
@@ -218,6 +268,8 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+  <script type="module" src="/canvas.js?v=1.0"></script>
   <script type="module" src="/app.js"></script>
 </body>
 

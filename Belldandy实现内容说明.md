@@ -78,7 +78,7 @@
         1. **System Layer**：系统指令与人格设定（最高优先级，用户不可见）。
         2. **History Layer**：过往对话历史（支持自动压缩，详见第 16 节）。
         3. **User Layer**：当前用户输入（被视为普通内容而非指令）。
-    - **上下文自动压缩**：三层渐进式压缩（Archival Summary → Rolling Summary → Working Memory），支持模型摘要与降级兜底，详见第 16 节。
+    - **上下文自动压缩**：三层渐进式压缩（Archival Summary → Rolling Summary → Working Memory），支持模型摘要与降级兜底，详见第 18 节。
 - **价值**：增强了系统的健壮性与安全性，避免用户通过恶意指令（如"忽略前面所有指令"）篡改 Agent 的核心行为准则。
 
 ### 6. SOUL 人格系统 (Phase 5)
@@ -238,7 +238,7 @@
         - Token 消耗降低 50%-80%。
 - **价值**：赋予 Agent "看"网页（截图/快照）和"动"网页（点击/输入）的能力，是实现复杂 Web 任务自动化的基石。
 
-### 8. 系统级操作 (System Execution) Phase 10
+### 9. 系统级操作 (System Execution) Phase 10
 - **目标**：赋予 Agent 在宿主机执行 Shell 命令的能力，但必须保证宿主机安全。
 - **策略**：**Consumer Safe Mode (消费者安全模式)**
     - **严格白名单**：覆盖主流开发工具（Node/Python/编译链/Java/.NET/媒体/文档转换），并区分 Windows/Unix 命令差异。
@@ -250,7 +250,7 @@
         - 🔒 **敏感保护**：`SOUL.md` 访问优先拦截；禁止通过 `exec` 读取 `.env`。
 - **价值**：填补了 Agent 无法执行 `npm install` 或 `git commit` 的能力空白，使其成为真正的"全栈工程师"。
 
-### 9. 实时文件感知 (Real-time File Perception) Phase 11
+### 10. 实时文件感知 (Real-time File Perception) Phase 11
 
 - **目标**：让 Agent 能够即时感知用户对文件的修改，无需重启或手动刷新。
 - **实现内容**：
@@ -259,7 +259,7 @@
     - **Auto Cleanup**：文件删除时自动清理对应的 chunks 和 vectors。
 - **价值**：消除了 AI 记忆滞后的问题，特别是对于 Coding 场景，Agent 永远知道最新的代码状态。
 
-### 10. Model Failover & High Availability (Phase 8) [已完成]
+### 11. Model Failover & High Availability (Phase 8) [已完成]
 
 - **目标**：实现类似 OpenClaw 的模型调用容灾机制，确保高可用性。
 - **状态**：✅ 已完成 (2026-02-10)
@@ -272,7 +272,7 @@
     - **向后兼容**：未配置 `models.json` 时行为与之前完全一致。
 - **价值**：提升系统的鲁棒性，确保关键时刻 AI 不"掉链子"。多 Key 负载均衡 + 跨 Provider 降级双重保障。
 
-#### 9.5 Kimi K2.5 视觉/视频能力集成 (Vision & Video)
+#### 11.5 Kimi K2.5 视觉/视频能力集成 (Vision & Video)
 - **状态**: ✅ 已完成 (2026-02-10)
 - **功能**:
   - **图片理解**: 支持 WebChat 上传图片，Gateway 自动识别并转为 Base64 DataURI 发送给模型。
@@ -286,7 +286,7 @@
   - **容错**: 上传失败降级为文本占位，不中断请求。
   - **验证脚本**: 提供 `scripts/verify_kimi_video.ts` 用于独立验证视频上传与理解流程。
 
-### 10. 性能与向量加速 (Vector Optimization) Phase 12
+### 12. 性能与向量加速 (Vector Optimization) Phase 12
 
 - **目标**：引入 `sqlite-vec` 替换纯 JS 的向量计算，实现生产级性能。
 - **实现内容**：
@@ -300,7 +300,7 @@
     - 内存占用：大幅降低，不再需要将所有向量加载到 Node.js 堆内存中。
 - **价值**：支撑海量记忆（百万级 Chunk）的基础设施升级，让 Belldandy 有能力管理整个代码库的知识。
 
-### 11. 多媒体与语音 (Multimedia & TTS) Phase 13
+### 13. 多媒体与语音 (Multimedia & TTS) Phase 13
 
 - **目标**：实现高质量、低成本的语音交互能力。
 - **技术方案**：
@@ -310,7 +310,7 @@
     - **动态 System Prompt**：实现文件信号机制 (`TTS_ENABLED`)。Gateway 每次请求前检查该文件，若存在则动态注入 "MUST use text_to_speech tool" 的 System Prompt 指令，实现无需重启的热开关。
 - **价值**：极大提升了交互的拟人感，且利用 Edge TTS 实现了零成本的高质量语音体验。
 
-### 12. 视觉感知 (Vision) Phase 13.5
+### 14. 视觉感知 (Vision) Phase 13.5
 
 - **目标**：赋予 Agent 视觉能力，使其能够"看到"物理世界。
 - **实现内容**：
@@ -319,7 +319,7 @@
     - **Agent Action**：Agent 使用 `browser_navigate` 打开页面，然后使用 `browser_screenshot` 获取视觉帧。
 - **价值**：无需引入复杂的 WebRTC 或流媒体协议，复用现有浏览器能力实现"看世界"。
 
-### 12.5 Kimi 原生视觉与视频 (Native Multimodal Vision & Video) Phase 13.6
+### 14.5 Kimi 原生视觉与视频 (Native Multimodal Vision & Video) Phase 13.6
 
 - **目标**：支持用户直接发送图片和视频给 Agent，利用 Kimi K2.5 的多模态能力进行理解。
 - **状态**：✅ 已完成 (2026-02-10)
@@ -358,7 +358,7 @@
     - **交互升级**：用户可以"发图/发视频提问"，交互体验大幅提升。
     - **DRY 架构**：两个 Agent 共享预处理逻辑，消除代码重复。
 
-### 13. 方法论系统 (Methodology) Phase 14
+### 15. 方法论系统 (Methodology) Phase 14
 
 - **目标**：让 Agent 具备"自我进化"与"经验沉淀"能力。
 - **实现内容**：
@@ -370,7 +370,7 @@
     - **Runtime Support**：自动管理 `~/.belldandy/methods` 目录。
 - **价值**：解决 Agent "用完即忘"的问题，将隐性知识显性化为可复用的 Markdown 文档。
 
-### 14. 会话持久化与向量记忆 (Persistence & Vector Memory) Phase 4.6
+### 16. 会话持久化与向量记忆 (Persistence & Vector Memory) Phase 4.6
 
 - **目标**：实现会话数据的持久化存储，并利用向量索引实现“无限”的记忆 recall。
 - **状态**：✅ 已完成 (2026-02-08)
@@ -393,19 +393,19 @@
     - **全渠道记忆**：无论是网页还是飞书，对话记录都统一归档并在未来可检索。
     - **长程记忆**：Agent 可以通过 `memory_search` 回忆起几天甚至几个月前的对话细节。
 
-### 15. 记忆检索增强 (Memory Retrieval Enhancement) Phase 4.7
+### 17. 记忆检索增强 (Memory Retrieval Enhancement) Phase 4.7
 
 - **目标**：让 Agent 更主动、更智能地使用长期记忆，从"被动回忆"升级为"主动关联"。
 - **状态**：部分完成 (2026-02-08)
 - **已完成**：
     - **Global MemoryManager**：统一 Gateway 与 Skills 的 MemoryManager 实例，让 `memory_search` 工具能访问会话向量索引。
     - **Prompt 引导**：在 `AGENTS.md` 中添加记忆检索策略规则，引导 Agent 在遇到回忆类问题时主动使用 `memory_search`。
+    - **Context Injection**：每次对话开始时，自动从 sessions 中提取最近对话摘要，注入 System Prompt，让 Agent 记住最近发生的事。
 - **规划中**：
-    - **Context Injection**：每次对话开始时，自动从 sessions 中提取最近对话摘要，注入 System Prompt。
     - **Auto-Recall**：使用 NLP 检测用户输入中的"回忆类"关键词，自动触发 `memory_search` 并将结果注入上下文。
 - **价值**：让 Agent 像人类一样自然地回忆，而非机械地等待用户显式请求。
 
-### 16. 上下文自动压缩 (Context Compaction) Phase 2.3
+### 18. 上下文自动压缩 (Context Compaction) Phase 2.3
 
 - **目标**：解决长时间对话和自动化任务中上下文窗口溢出的问题，让 Agent 能够持续运行而不丢失关键信息。
 - **状态**：✅ 已完成 (2026-02-13)
@@ -466,68 +466,83 @@
 
 ---
 
-## 16. 记忆系统未来优化规划 (Planned)
+### 19. Canvas 可视化工作区 (Phase P2-4 / P3-3)
 
-虽然当前系统已具备基础的向量检索能力，但为了进一步提升记忆的“智能感”，我们规划了以下三个优化方向（待适时落地）：
-
-1.  **自动摘要 (Auto-Summarization)**
-    - **痛点**：长期对话会导致记忆碎片化，缺乏宏观结论。
-    - **方案**：每日或定期触发 LLM 对近期对话生成 **High-Level Summary**，并作为独立记忆块存入，便于检索“结论”而非“过程”。
-
-2.  **元数据过滤 (Metadata Filtering)**
-    - **痛点**：全量检索可能混杂不同渠道、不同话题的无关信息。
-    - **方案**：在记忆块中注入 `channel`、`topic`、`timestamp` 等结构化标签，检索时支持 SQL 级预过滤（Pre-filtering），如“只查飞书上的技术讨论”。
-
-3.  **查询重写与重排序 (Rewrite & Rerank)**
-    - **痛点**：用户指代不清（“它怎么样？”）导致检索失败；向量相似度不等于逻辑相关度。
-    - **方案**：
-        - **Rewrite**：先用 LLM 将用户查询改写为完整句子（消歧），再检索。
-        - **Rerank**：引入精细的 Rerank 模型对初步检索的 Top-50 结果进行二次打分，筛选出真正相关的 Top-5。
+- **目标**：提供可视化的无限画布，让用户和 Agent 都能以节点+连线的方式组织信息、拆解任务、关联知识，并实现 Agent 工作过程的实时可视化。
+- **实现内容**：
+    - **自研 SVG 画布引擎**：基于 SVG + `<foreignObject>` 的无限画布，零第三方渲染依赖。支持平移、缩放（viewBox 变换）、节点拖拽、端口连线、框选。
+    - **8 种节点类型**：task（任务，带 todo/doing/done 状态流转）、note（笔记）、method（方法论关联）、knowledge（知识关联）、agent-output（Agent 输出）、screenshot（浏览器快照）、session（会话关联）、group（分组容器）。
+    - **dagre.js 自动布局**：CDN 引入 dagre.js（~30KB），支持 TB/LR 方向的有向图自动布局，pinned 节点在布局时固定不动。
+    - **贝塞尔曲线连线**：SVG `<path>` 渲染，带箭头标记，支持 solid/dashed/dotted 三种线型。
+    - **持久化**：复用 `workspace.read/write` 协议，画布数据存储为 `~/.belldandy/canvas/<boardId>.json`，包含完整的节点、连线、视口状态。
+    - **10 个 Agent 工具**（`packages/belldandy-skills/src/builtin/canvas.ts`）：
+        - `canvas_list` / `canvas_create` / `canvas_read`：画布 CRUD
+        - `canvas_add_node` / `canvas_update_node` / `canvas_remove_node`：节点操作
+        - `canvas_connect` / `canvas_disconnect`：连线操作
+        - `canvas_auto_layout`：触发自动布局
+        - `canvas_snapshot`：生成画布文本摘要（供 Agent 理解画布状态）
+    - **实时 WS 事件桥**：Agent 的写操作通过 `canvas.update` 事件实时推送到前端，增量更新（不重绘整个画布）。
+    - **资源关联与双击跳转**：
+        - method/knowledge/session 类型节点创建时弹出资源选择器，列出工作区中可用的文件
+        - 双击节点按 ref 类型跳转：method→编辑器、memory→编辑器、session→聊天模式、url→新窗口、file→编辑器
+        - 无 ref 节点双击弹出编辑对话框
+        - 有关联的节点显示 🔗 badge
+    - **Agent 自动填充**：Agent 通过 `canvas_add_node` 创建带 ref 的节点时，自动读取关联文件内容填充到 content 字段（截断 500 字符预览）。
+    - **画布上下文注入**：用户在画布视图发送消息时，自动将画布摘要（节点列表+连线关系）注入到消息文本中，让 Agent 了解当前画布状态。工具栏"分析画布"按钮可一键将摘要填入输入框。
+    - **ReAct 循环可视化**：
+        - 工具栏 ReAct 开关，开启后 Agent 的工具调用过程实时映射为画布节点链
+        - `tool_call` → 黄色临时节点（带 pulse 动画），显示工具名和参数预览
+        - `tool_result` → 节点变绿（成功）或变红（失败），内容更新为结果摘要
+        - `chat.final` → 紫色总结节点，连线到最后一个工具节点
+        - 用户可 pin 有价值的临时节点，关闭 ReAct 时未固定节点自动清除
+    - **server.ts 事件转发**：stream 循环新增 `tool_call` / `tool_result` 事件转发到前端（output 截断 500 字符防止 WS 帧过大）。
+    - **三态切换**：chat ↔ editor ↔ canvas 无缝切换，侧边栏"画布工作区"按钮入口。
+    - **Undo/Redo**：50 步撤销栈，`Ctrl+Z` 快捷键。
+    - **右键菜单**：画布空白处右键添加节点，节点右键删除/固定。
+    - **内存互斥锁**：canvas.ts 对同一 boardId 加内存 mutex，防止 Agent 并发写冲突。
+- **文件清单**：
+    | 文件 | 说明 |
+    |------|------|
+    | `apps/web/public/canvas.js` (~1200 行) | 前端画布引擎：BoardManager + CanvasRenderer + CanvasApp |
+    | `apps/web/public/canvas.css` (~500 行) | Ethereal 主题适配：节点/连线/工具栏/选择器/ReAct 样式 |
+    | `apps/web/public/index.html` | canvasSection DOM、dagre CDN、工具栏（含分析画布/ReAct 按钮） |
+    | `apps/web/public/app.js` | switchMode 三态、canvas.update/tool_call/tool_result 事件处理、画布上下文注入、桥接函数 |
+    | `packages/belldandy-skills/src/builtin/canvas.ts` (~690 行) | 10 个 Agent 工具 + 数据模型 + autoPopulateContent |
+    | `packages/belldandy-skills/src/index.ts` | 导出 createCanvasTools + 类型 |
+    | `packages/belldandy-core/src/bin/gateway.ts` | 注册 canvas 工具组、注入 broadcastEvent |
+    | `packages/belldandy-core/src/server.ts` | tool_call/tool_result 事件转发 |
+- **价值**：将 Agent 的能力从纯文本对话扩展到可视化空间，用户可以用画布组织复杂项目、拆解需求、关联知识库；Agent 可以主动建图、实时推送更新；ReAct 可视化让 Agent 的思考过程透明可见，增强用户信任与理解。
 
 ---
 
-## 16. OS 计算机操作能力规划 (Computer Use Strategy) [Planned]
-
-基于 `UI-TARS` 的最佳实践（“看得准”与“点得准”），我们计划赋予 Belldandy 操作系统级别的 GUI 控制能力，使其不局限于浏览器和终端。
-
-1.  **视觉层：精准屏幕感知 (High-Fidelity Vision)**
-    - **DPI 适配**: 引入 `nut-js` + `Jimp` 方案，正确处理 Retina/高分屏缩放 (Scale Factor)，保证模型看到的与真实物理像素一致。
-    - **Visual Feedback**: 实现 `ScreenMarker` (透明置顶窗口)，在执行点击前通过高亮框/光标实时展示模型意图，让用户“看得见”Agent 想点哪。
-
-2.  **控制层：拟人化键鼠操作 (Human-like Input)**
-    - **坐标映射**: 实现统一的 `Box-to-Pixel` 转换器，将 VLM 返回的归一化坐标精准映射到物理屏幕。
-    - **输入优化**:
-        - **Keyboard**: Windows 下优先使用 **剪贴板粘贴 (Ctrl+V)** 替代逐字输入，彻底解决 IME 输入法干扰和字符丢失问题。
-        - **Mouse**: 使用线性插值 (`straightTo`) 移动路径，避免瞬移被反外挂检测，同时增加操作的自然感。
-
-### 6. Phase 2.5: 可视化配置 & System Doctor (用户体验升级)
+### 20. 可视化配置 & System Doctor (Phase 2.5)
 
 **状态**：✅ 已完成
 
-为了解决“手动改配置文件太极客”的痛点，我们在 WebChat 中集成了**可视化配置面板**。
+为了解决"手动改配置文件太极客"的痛点，我们在 WebChat 中集成了**可视化配置面板**。
 
-#### ✨ 功能亮点
+#### 功能亮点
 1.  **Lenient Mode (宽容模式)**：
     *   Gateway 启动时不再强校验 API Key。
     *   即使用户什么都没配，也能打开界面（不会白屏/Crash）。
-    *   只有在真正发消息时，才会提示“配置缺失”并弹出设置窗。
+    *   只有在真正发消息时，才会提示"配置缺失"并弹出设置窗。
 2.  **Settings UI (配置面板)**：
-    *   点击右上角“⚙️”图标即可打开。
+    *   点击右上角"⚙️"图标即可打开。
     *   支持修改 **OpenAI Key**, **Base URL**, **Model**, **Heartbeat Interval**。
     *   **Auto-Save & Restart**: 点击 Save 后，自动更新 `.env.local` 并重启后端进程（配合 `start.sh/bat` 守护进程实现）。
 3.  **System Doctor (系统体检)**：
     *   面板顶部实时显示 Health Badge。
     *   检查项：Node.js 版本、Vector DB 状态、Agent Config 有效性。
 
-#### 🛠️ 技术实现
-*   **Backend**: 
+#### 技术实现
+*   **Backend**:
     *   新增 `config.read` / `config.update` 协议（读写 `.env.local`）。
     *   新增 `system.doctor` 协议（自检）。
     *   新增 `system.restart` 协议（`process.exit(100)` 触发守护进程重启）。
-*   **Frontend**: 
+*   **Frontend**:
     *   原生 JS/CSS 实现 Modal 组件，无缝集成到现有 MVP。
 
-### 6.5 Phase 2.6: 可视化工具管理 (Tool & MCP Management UI)
+### 20.5 可视化工具管理 (Phase 2.6: Tool & MCP Management UI)
 
 **状态**：✅ 已完成
 
@@ -550,7 +565,7 @@
     - **安全性**：用户可以一键禁用高风险工具（如 `run_command`），实现"按需授权"。
     - **调试便利**：开发者可以快速启用/禁用特定 MCP 服务器进行调试。
 
-### 7. Phase 3: 极致美学重构 (Ethereal Digital UI)
+### 21. 极致美学重构 (Phase 3: Ethereal Digital UI)
 
 **状态**：✅ 已完成
 
@@ -570,15 +585,13 @@
 
 ---
 
-## 🚧 待实现功能规划 (后续)
-
-### 8. Phase 3.1: Pairing 管理完善 (Security)
+### 22. 飞书渠道接入 (Phase 3.1)
 
 - **目标**：将 Belldandy 接入飞书自建应用，利用其 WebSocket 模式实现无需内网穿透的实时对话。
 - **状态**：**已完成**（2026-02-01）
 - **实现内容**：`@belldandy/channels` 包 + FeishuChannel（WebSocket 长连接），消息去重，Kimi K2.5 工具调用兼容。
 
-### 14. 渠道架构升级 (Channel Architecture) Phase 15
+### 23. 渠道架构升级 (Channel Architecture) Phase 15
 
 - **目标**：建立标准化的渠道接口，方便后续快速接入 Telegram、Discord、Slack 等社交平台。
 - **状态**：**已完成**（2026-02-05）
@@ -606,7 +619,7 @@
     ```
 - **价值**：降低新渠道接入成本，只需实现 `Channel` 接口即可接入系统，预计每个新渠道开发周期可缩短至 1-2 天。
 
-### 2. Phase 7: Heartbeat 定时任务 ✅ 已完成
+### 24. Heartbeat 定时任务 (Phase 7) ✅ 已完成
 
 - **目标**：让 Agent 能够定期"醒来"检查 HEARTBEAT.md 并主动联系用户。
 - **状态**：**已完成**（2026-02-01）
@@ -630,7 +643,7 @@
 
 > **改进建议**：未来应引入消息去重机制（Deduplication），防止 Agent 在无法执行操作时反复发送同一条提醒。
 
-### 2.5 Phase 7.5: Cron 定时任务系统 ✅ 方案 A 已完成
+### 24.5 Cron 定时任务系统 (Phase 7.5) ✅ 方案 A 已完成
 
 - **目标**：在 Heartbeat 之上，抽象通用定时任务调度，让 Agent 能按计划触发非心跳类任务。
 - **状态**：**方案 A (轻量 MVP) 已完成**（2026-02-10）
@@ -665,7 +678,7 @@
 | **Gateway 协议** | `cron.*` 系列 RPC 方法 | 前端 WebChat 可直接管理定时任务 |
 | **执行历史** | `run` / `runs` action | 手动触发 + 调试审计 |
 
-### 2.6 服务重启工具 (service_restart) ✅ 已完成
+### 25. 服务重启工具 (service_restart) ✅ 已完成
 
 - **目标**：让 Agent 能够通过工具调用主动重启 Gateway 服务，无需用户手动操作。
 - **状态**：**已完成**（2026-02-11）
@@ -698,7 +711,7 @@
     ```
 - **价值**：Agent 可以在修改配置后自主重启服务，实现完整的"修改配置 → 重启生效"自动化闭环。
 
-### 2.7 FACET 模组切换工具 (switch_facet) ✅ 已完成
+### 26. FACET 模组切换工具 (switch_facet) ✅ 已完成
 
 - **目标**：将 SOUL.md 中 FACET 模组的手动读写切换流程自动化为一次工具调用，省时、省 Token、减少错误。
 - **状态**：**已完成**（2026-02-11）
@@ -736,7 +749,7 @@
     ```
 - **价值**：将 FACET 模组切换从"Agent 自行摸索的多步操作"变为"一键工具调用"，显著降低切换成本和失败率。
 
-### 2.8 多 Agent 配置体系 (AgentProfile & AgentRegistry) ✅ 已完成
+### 27. 多 Agent 配置体系 (AgentProfile & AgentRegistry) ✅ 已完成
 
 - **目标**：为多 Agent 场景打下配置基础，支持按 agentId 创建不同配置的 Agent 实例。
 - **状态**：✅ 已完成（对应 IMPLEMENTATION_PLAN B-P1-5）
@@ -778,7 +791,7 @@
     - 密钥管理：AgentProfile 通过 `model` 字段引用 ModelProfile.id，不重复存储密钥。
 - **价值**：为多 Agent 路由、子 Agent 编排、渠道绑定等后续功能提供了统一的配置基础设施。
 
-### 2.9 多 Agent 路由与前端集成 (P2-1a/b) ✅ 已完成
+### 27.5 多 Agent 路由与前端集成 (P2-1a/b) ✅ 已完成
 
 - **目标**：实现 WebChat Agent 选择、渠道级 Agent 绑定、会话隔离等多 Agent 运行时能力。
 - **状态**：✅ 已完成
@@ -797,7 +810,7 @@
         - 未设置时使用 default Agent，向后兼容。
 - **价值**：用户可以在同一个 Belldandy 实例中运行多个不同人格/能力的 Agent，并在 WebChat 中自由切换。
 
-### 2.10 Per-Agent Workspace 与 Facet 共存 (阶段 4) ✅ 已完成
+### 27.6 Per-Agent Workspace 与 Facet 共存 (阶段 4) ✅ 已完成
 
 - **目标**：让每个非 default Agent 拥有独立的人格文件和 FACET 模组目录，同时保持与根目录的继承关系。
 - **状态**：✅ 已完成（通过构建 + 97 个测试用例验证）
@@ -832,7 +845,7 @@
     ```
 - **价值**：Facet 模组（全局人格扩展热替换）与 AgentProfile（多 Agent 人格差异化）互补共存，不互相替代。
 
-### 2.11 子 Agent 编排 (Sub-Agent Orchestration) Phase 16 ✅ MVP 已完成
+### 28. 子 Agent 编排 (Sub-Agent Orchestration) Phase 16 ✅ MVP 已完成
 
 - **目标**：将复杂任务分发给独立的子 Agent，实现 Agent 团队协作。
 - **状态**：✅ MVP 已完成（24 tests 通过）
@@ -862,7 +875,7 @@
     | `BELLDANDY_SUB_AGENT_MAX_DEPTH` | `2` | 子 Agent 嵌套委托最大深度 |
 - **价值**：赋予 Agent "团队作战"能力，主 Agent 可以将子任务分发给专业化的子 Agent（如让 coder 写代码、researcher 查资料），提升复杂任务的完成质量。
 
-### 2.12 Agents 后续迭代 Phase 25 Step 1-3 ✅ 已完成
+### 28.5 Agents 后续迭代 Phase 25 Step 1-3 ✅ 已完成
 
 - **目标**：基于 Phase 16 MVP 的 SubAgentOrchestrator 进行增强，提升并发能力和系统集成度。
 - **状态**：✅ Step 1-3 已完成（24 tests 通过）
@@ -898,7 +911,7 @@
     | 条件分支编排 | P3 | `orchestrate` 工具，接受 DAG 描述，拓扑排序 → 同层并行 → 条件判断 → 聚合结果 |
 - **价值**：并发排队避免资源争抢，`delegate_parallel` 让多个子 Agent 真正并行工作，钩子集成确保子 Agent 生命周期可观测。
 
-### 3. MCP (Model Context Protocol) 支持 (Phase 17) ✅ 已完成
+### 29. MCP (Model Context Protocol) 支持 (Phase 17) ✅ 已完成
 
 - **目标**：实现 MCP 协议支持，让 Belldandy 能够连接外部 MCP 服务器，获取第三方工具和数据源。
 - **背景**：MCP 是 Anthropic 提出的标准化协议，moltbot 通过 ACP 实现了类似功能。
@@ -958,7 +971,7 @@
     | `BELLDANDY_MCP_ENABLED` | 启用 MCP 支持（默认 false） |
 - **价值**：**开放生态**。用户可以接入任何 MCP 兼容的服务（1Password、GitHub、Notion、Slack 等），无需修改 Belldandy 代码即可扩展能力。
 
-### 4. 日志系统 (Logging System) Phase 18 [核心已完成]
+### 30. 日志系统 (Logging System) Phase 18 [核心已完成]
 
 - **目标**：实现完整的文件日志系统，支持 Agent 回溯分析任务执行过程、错误排查和性能分析。
 - **状态**：✅ 已完成
@@ -1008,7 +1021,7 @@
     - ToolExecutor auditLogger 接入，工具调用耗时写入日志
     - camera_snap 使用 context.logger
 
-### 5. CLI 框架 (CLI Framework) Phase P1-2 [Phase A-D 已完成]
+### 31. CLI 框架 (CLI Framework) Phase P1-2 [Phase A-D 已完成]
 
 - **目标**：统一散装的 10 个 CLI 脚本为单一 `bdd` 命令入口，支持子命令树、`--help`、`--json` 双模输出、懒加载。
 - **状态**：✅ Phase A-D 全部完成（框架搭建 + pairing 迁移 + start/dev + doctor + config + relay + setup 向导 + 旧脚本清理）
@@ -1062,7 +1075,11 @@
     - 全部完成，无待办阶段。可扩展架构为后续 `skill`/`webhook` 等子命令预留挂载点。
 - **价值**：统一入口降低用户记忆成本，`--json` 支持脚本化集成，懒加载保证轻量启动，可扩展架构为后续 `skill`/`webhook` 等子命令预留挂载点。
 
-### 6. Local Embedding (优先级：低)
+---
+
+## 🚧 待实现功能规划
+
+### 1. Local Embedding (优先级：低)
 
 - **目标**：摆脱对 OpenAI Embedding API 的依赖，实现完全本地化的记忆检索。
 - **实现内容**：
@@ -1072,7 +1089,7 @@
 - **价值**： **隐私与成本**。不需要把记忆片段发给 OpenAI 计算向量，完全离线可用，且无 API 费用。但会增加内存占用和安装包体积。
 - **工作量**：**中等**。主要挑战在于 Native 依赖的安装和模型文件的管理。
 
-### 4. SOUL_EVIL 彩蛋 (优先级：低)
+### 2. SOUL_EVIL 彩蛋 (优先级：低)
 
 - **目标**：增加趣味性和“灵魂”感。
 - **实现内容**：
@@ -1081,7 +1098,7 @@
 - **价值**：**娱乐性**。让 AI 显得不那么死板。
 - **工作量**：**低**。主要是逻辑判断和 System Prompt 的动态切换。
 
-### 5. Memory Flush 机制 (优先级：低)
+### 3. Memory Flush 机制 (优先级：低)
 
 - **目标**：性能优化。
 - **实现内容**：
@@ -1089,6 +1106,38 @@
     - 在系统空闲或关闭前统一将内存中的变更写入磁盘（Compaction）。
 - **价值**：**性能与硬盘寿命**。防止高频对话时频繁对 SQLite 进行微小写入。在目前单人使用且数据量不大的情况下，收益不明显。
 - **工作量**：**低**。
+
+### 4. 记忆系统优化 (优先级：中)
+
+虽然当前系统已具备基础的向量检索能力，但为了进一步提升记忆的"智能感"，规划了以下三个优化方向：
+
+1.  **自动摘要 (Auto-Summarization)**
+    - **痛点**：长期对话会导致记忆碎片化，缺乏宏观结论。
+    - **方案**：每日或定期触发 LLM 对近期对话生成 **High-Level Summary**，并作为独立记忆块存入，便于检索"结论"而非"过程"。
+
+2.  **元数据过滤 (Metadata Filtering)**
+    - **痛点**：全量检索可能混杂不同渠道、不同话题的无关信息。
+    - **方案**：在记忆块中注入 `channel`、`topic`、`timestamp` 等结构化标签，检索时支持 SQL 级预过滤（Pre-filtering），如"只查飞书上的技术讨论"。
+
+3.  **查询重写与重排序 (Rewrite & Rerank)**
+    - **痛点**：用户指代不清（"它怎么样？"）导致检索失败；向量相似度不等于逻辑相关度。
+    - **方案**：
+        - **Rewrite**：先用 LLM 将用户查询改写为完整句子（消歧），再检索。
+        - **Rerank**：引入精细的 Rerank 模型对初步检索的 Top-50 结果进行二次打分，筛选出真正相关的 Top-5。
+
+### 5. OS 计算机操作能力 (Computer Use Strategy) (优先级：中)
+
+基于 `UI-TARS` 的最佳实践（"看得准"与"点得准"），计划赋予 Belldandy 操作系统级别的 GUI 控制能力，使其不局限于浏览器和终端。
+
+1.  **视觉层：精准屏幕感知 (High-Fidelity Vision)**
+    - **DPI 适配**: 引入 `nut-js` + `Jimp` 方案，正确处理 Retina/高分屏缩放 (Scale Factor)，保证模型看到的与真实物理像素一致。
+    - **Visual Feedback**: 实现 `ScreenMarker` (透明置顶窗口)，在执行点击前通过高亮框/光标实时展示模型意图，让用户"看得见"Agent 想点哪。
+
+2.  **控制层：拟人化键鼠操作 (Human-like Input)**
+    - **坐标映射**: 实现统一的 `Box-to-Pixel` 转换器，将 VLM 返回的归一化坐标精准映射到物理屏幕。
+    - **输入优化**:
+        - **Keyboard**: Windows 下优先使用 **剪贴板粘贴 (Ctrl+V)** 替代逐字输入，彻底解决 IME 输入法干扰和字符丢失问题。
+        - **Mouse**: 使用线性插值 (`straightTo`) 移动路径，避免瞬移被反外挂检测，同时增加操作的自然感。
 
 ---
 
@@ -1206,7 +1255,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **浏览器自动化** | ✅ 28+ actions | ✅ 核心闭环 | 支持快照/截图/操作/中继 |
 | **网络请求** | ✅ search + fetch | ✅ search + fetch | 集成 Brave/SerpAPI |
 | **记忆系统** | ✅ memory + nodes | ✅ memory | 缺少 `nodes` 图谱 |
-| **多媒体** | ✅ tts/image/canvas | ✅ tts/image | 缺少 `canvas` |
+| **多媒体** | ✅ tts/image/canvas | ✅ tts/image/canvas | Canvas 可视化工作区已实现 |
 | **会话编排** | ✅ 完整 | ✅ 完整 | SubAgentOrchestrator + delegate_task/delegate_parallel + 并发排队 + 钩子集成 |
 | **渠道集成** | ✅ 4+ channels | ✅ 飞书 + Channel 接口 | 架构已就绪，可快速扩展 |
 | **定时任务** | ✅ cron tool | ✅ heartbeat + cron | 完整 cron 工具（list/add/remove/status）+ Heartbeat |
@@ -1261,7 +1310,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 |------|------|-----------|
 | `tts` | 文本转语音 | ✅ `text_to_speech` |
 | `image` | 图像生成/视觉识别 | ✅ `image_generate` |
-| `canvas` | 绘图能力 | ❌ |
+| `canvas` | 绘图能力 | ✅ `canvas_*`（10 个工具，可视化工作区） |
 
 #### 6. 会话与编排 (Orchestration)
 
@@ -1299,8 +1348,10 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | 能力 | 工具/功能 |
 |------|----------|
 | **文件读取** | `file_read` |
-| **文件写入** | `file_write` |
+| **文件写入** | `file_write`（overwrite/append/replace/insert 四种模式） |
+| **目录列表** | `list_files` |
 | **网页抓取** | `web_fetch`（含域名黑白名单、SSRF 防护） |
+| **网页搜索** | `web_search`（Brave / SerpAPI） |
 | **记忆检索** | `memory_search`（FTS5 + 向量混合检索） |
 | **记忆读写** | `memory_read`, `memory_write` |
 | **飞书渠道** | `FeishuChannel`（WebSocket 长连接） |
@@ -1308,21 +1359,32 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **定时任务** | `cron`（list/add/remove/status，支持一次性和周期任务） |
 | **会话历史** | `ConversationStore`（内存 + TTL + 文件持久化） |
 | **上下文压缩** | 三层渐进式压缩（Archival Summary → Rolling Summary → Working Memory），模型摘要 + 降级兜底 |
+| **上下文注入** | Context Injection，每次对话自动注入最近会话摘要 |
 | **多 Agent** | `AgentProfile` + `AgentRegistry` + `agents.list` API + WebChat Agent 选择器 + 会话隔离 + 飞书渠道绑定 |
 | **子 Agent 编排** | `SubAgentOrchestrator` + `delegate_task` / `delegate_parallel` / `sessions_spawn` / `sessions_history`，并发排队 + 超时 + 深度限制 + 生命周期钩子 |
 | **技能系统** | `SkillRegistry` + SKILL.md 格式 + 5 维 Eligibility Gating + 两级 Prompt 注入 + `skills_list` / `skills_search` 工具 + Plugin Hooks 桥接 |
+| **画布工作区** | 自研 SVG 无限画布 + 8 种节点类型 + dagre 自动布局 + 10 个 Agent 工具（`canvas_*`）+ 实时 WS 推送 + 资源关联跳转 + 画布上下文注入 + ReAct 可视化 |
+| **浏览器自动化** | Chrome Extension + CDP Relay + `browser_open/navigate/click/type/screenshot/get_content/snapshot` |
+| **系统执行** | `run_command`（Consumer Safe Mode：白名单 + 超时 + 风险阻断） |
+| **进程管理** | `process_manager`（长运行进程管理） |
+| **代码解释器** | `code_interpreter`（Python / JS 沙箱执行） |
+| **多媒体** | `text_to_speech`（Edge TTS / OpenAI）、`image_generate`（DALL-E 3）、`camera_snap`（回环视觉） |
+| **多模态** | 图片理解（Base64 DataURI）、视频理解（Moonshot `ms://` 协议） |
+| **方法论** | `method_list` / `method_search` / `method_read` / `method_create` |
+| **日志系统** | `log_read` / `log_search`（文件日志 + 轮转 + 自动清理） |
+| **MCP 支持** | MCP 客户端（stdio/SSE）+ 工具桥接 + 多服务器管理 |
+| **模型容灾** | `FailoverClient`（错误分类 + Cooldown + 多 Profile 轮询） |
+| **统一 CLI** | `bdd` 命令（pairing/doctor/config/relay/setup） |
+| **可视化配置** | WebChat Settings UI + System Doctor + Tool Management UI |
 
 ---
 
 ### 🎯 推荐下一步优先级
 
- 1. ~~**`list_files`** — 低风险，直接列目录，Agent 探索能力基础~~ ✅ 已完成
- 2. ~~**`web_search`** — 中等风险，需对接搜索 API（Bing/Google/DuckDuckGo）~~ ✅ 已完成
- 3. ~~**`exec` (沙箱版)** — 高风险，已实现 Consumer Safe Mode~~ ✅ 已完成 (含 Windows 支持)
- 4. ~~**`browser` (基础版)** — 高复杂度，可先做 `navigate` + `screenshot`~~ ✅ 已完成
- 5. ~~**`logging` (日志系统)** — 文件日志 + 轮转 + Agent 日志工具~~ ✅ 已完成 (Phase 18)
- 6. ~~**`sessions_spawn` (子 Agent 编排)** — 赋予 Agent 团队作战能力~~ ✅ 已完成 (Phase 16 + Phase 25)
- 7. **`canvas` / `code_interpreter` (Stateful)** — 更高级的创造与计算能力
- 8. **WebChat 子 Agent 状态展示** — 前端实时展示子 Agent 运行状态（Phase 25 Step 4）
- 9. **条件分支编排** — 根据子 Agent 结果决定后续分支（Phase 25 Step 5）
+ 1. **WebChat 子 Agent 状态展示** — 前端实时展示子 Agent 运行状态（Phase 25 Step 4）
+ 2. **条件分支编排** — 根据子 Agent 结果决定后续分支（Phase 25 Step 5）
+ 3. **`code_interpreter` 增强** — 更高级的沙箱计算能力
+ 4. **Local Embedding** — 完全本地化的向量计算，摆脱 API 依赖
+ 5. **记忆系统优化** — 自动摘要、元数据过滤、查询重写与重排序
+ 6. **OS 计算机操作** — 操作系统级 GUI 控制（基于 UI-TARS 方案）
 
