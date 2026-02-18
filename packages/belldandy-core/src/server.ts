@@ -21,7 +21,7 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import type { ToolsConfigManager } from "./tools-config.js";
-import type { ToolExecutor, TranscribeOptions, TranscribeResult } from "@belldandy/skills";
+import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 
 export type GatewayServerOptions = {
@@ -54,6 +54,8 @@ export type GatewayServerOptions = {
   sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
   /** 插件注册表（用于获取已加载插件列表） */
   pluginRegistry?: PluginRegistry;
+  /** 技能注册表（用于获取已加载技能列表） */
+  skillRegistry?: SkillRegistry;
 };
 
 export type GatewayServer = {
@@ -261,6 +263,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         toolExecutor: opts.toolExecutor,
         sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
+        skillRegistry: opts.skillRegistry,
       });
       if (res) sendRes(ws, res);
     });
@@ -345,6 +348,7 @@ async function handleReq(
     toolExecutor?: ToolExecutor;
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     pluginRegistry?: PluginRegistry;
+    skillRegistry?: SkillRegistry;
   },
 ): Promise<GatewayResFrame | null> {
   const secureMethods = ["message.send", "config.read", "config.update", "system.restart", "system.doctor", "workspace.write", "workspace.read", "workspace.list", "context.compact"];
@@ -780,7 +784,7 @@ async function handleReq(
 
     case "tools.list": {
       if (!ctx.toolExecutor || !ctx.toolsConfigManager) {
-        return { type: "res", id: req.id, ok: true, payload: { builtin: [], mcp: {}, plugins: [], disabled: { builtin: [], mcp_servers: [], plugins: [] } } };
+        return { type: "res", id: req.id, ok: true, payload: { builtin: [], mcp: {}, plugins: [], skills: [], disabled: { builtin: [], mcp_servers: [], plugins: [], skills: [] } } };
       }
       const allNames = ctx.toolExecutor.getRegisteredToolNames();
       const config = ctx.toolsConfigManager.getConfig();
@@ -802,7 +806,16 @@ async function handleReq(
         }
       }
 
-      return { type: "res", id: req.id, ok: true, payload: { builtin, mcp, plugins: ctx.pluginRegistry?.getPluginIds() ?? [], disabled: config.disabled } };
+      // Skills 列表
+      const skills = (ctx.skillRegistry?.getEligibleSkills() ?? []).map(s => ({
+        name: s.name,
+        description: s.description,
+        source: s.source.type,
+        priority: s.priority,
+        tags: s.tags ?? [],
+      }));
+
+      return { type: "res", id: req.id, ok: true, payload: { builtin, mcp, plugins: ctx.pluginRegistry?.getPluginIds() ?? [], skills, disabled: config.disabled } };
     }
 
     case "tools.update": {

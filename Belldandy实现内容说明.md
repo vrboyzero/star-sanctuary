@@ -123,6 +123,8 @@
     - **PluginRegistry**：插件加载的核心注册表，支持运行时动态加载。
     - **AgentHooks**：实现了生命周期钩子（`beforeRun`, `beforeToolCall`, `afterToolCall`, `afterRun`），允许插件干预 Agent 决策流程。
     - **Tool Extension**：插件可以注册新的 Tool 到 Agent 的工具箱中。
+    - **Skill Dir Extension**：插件可通过 `context.registerSkillDir(dir)` 声明附带的技能目录，由 SkillRegistry 统一加载。
+    - **Legacy Hooks 桥接**：插件注册的旧 4-hook `AgentHooks` 会自动桥接到新的 13-hook `HookRegistry`（beforeRun→before_agent_start, afterRun→agent_end, beforeToolCall→before_tool_call, afterToolCall→after_tool_call），确保插件 hooks 真正生效。
 - **价值**：为未来的生态扩展打下基础（如接入 1Password, Linear 等第三方服务）。
 
 ### 7.1 钩子系统扩展 (Hook System Extension) Phase 8.3
@@ -161,6 +163,58 @@
     └── index.ts          # 导出新增类型
     ```
 - **价值**：与 moltbot 完全对标，为插件系统提供完整的生命周期干预能力。
+
+### 7.2 技能系统 (Skills System) P2-3
+
+- **目标**：建立"经验库"机制，让 Agent 不仅知道有哪些工具可用，还知道如何组合使用这些工具来完成特定任务。
+- **核心概念**：Skill 是纯 prompt 注入（不执行代码），本质是一份 Markdown 格式的操作指南（SOP）。与 Tool（代码执行）互补：Tool 是"手和脚"，Skill 是"经验和套路"。
+- **实现内容**：
+    - **SKILL.md 格式**：每个技能是一个目录，包含一个 `SKILL.md` 文件（YAML frontmatter 元数据 + Markdown 操作指令）。支持 `name`、`description`、`version`、`tags`、`priority`、`eligibility` 等字段。
+    - **轻量 YAML 解析器**：手写实现，无外部依赖，支持 string / string[] / nested object 子集。
+    - **5 维 Eligibility Gating**：自动检测技能前置条件是否满足：
+        | 维度 | 检查方式 |
+        |------|----------|
+        | `env` | 环境变量存在且非空 |
+        | `bin` | `where`（Windows）/ `which`（Unix）检查 PATH |
+        | `mcp` | MCP 服务器名称在线 |
+        | `tools` | 已注册的 tool 名称 |
+        | `files` | workspace 中存在的文件 |
+        - 批量检查时 bin 结果缓存，避免重复 I/O。
+    - **SkillRegistry（三来源注册表）**：
+        - **Bundled skills**：随项目发布的内置技能（`packages/belldandy-skills/src/bundled-skills/`）
+        - **User skills**：用户自定义技能（`~/.belldandy/skills/*/SKILL.md`）
+        - **Plugin skills**：插件附带的技能（通过 `PluginRegistry.getPluginSkillDirs()` 获取）
+        - 内部用 `source:name` 作为唯一键防冲突，查询按 user > plugin > bundled 优先级覆盖。
+    - **两级 Prompt 注入**：
+        - `priority: always/high` 的 eligible skills → 直接注入 system prompt（P7 段，位于 TOOLS.md 之后）
+        - 其余 eligible skills → 不注入，但提示 Agent 可通过 `skills_search` 按需查询
+        - Token 控制：注入总字符数超过 4000 时自动降级为摘要模式
+    - **Agent 工具**：
+        - `skills_list`：列出所有技能（含 eligibility 状态、来源、标签），支持 filter/tag 过滤
+        - `skills_search`：按关键词搜索技能库，返回匹配技能的完整操作指南
+    - **Plugin Hooks 桥接**：修复了 `PluginRegistry.getAggregatedHooks()` 死代码问题，将旧 4-hook AgentHooks 桥接到新 13-hook HookRegistry。
+- **关键文件**：
+    ```
+    packages/belldandy-skills/src/
+    ├── skill-types.ts              # 类型定义
+    ├── skill-loader.ts             # SKILL.md 解析器
+    ├── skill-eligibility.ts        # 5 维准入检查引擎
+    ├── skill-registry.ts           # 三来源注册表
+    ├── builtin/skills-tool.ts      # skills_list + skills_search 工具
+    └── bundled-skills/
+        └── commit-style/SKILL.md   # 内置示例技能
+
+    packages/belldandy-agent/src/
+    └── system-prompt.ts            # 新增 P7 Skills 注入段
+
+    packages/belldandy-plugins/src/
+    ├── types.ts                    # PluginContext 扩展 registerSkillDir
+    └── registry.ts                 # 新增 getPluginSkillDirs()
+
+    packages/belldandy-core/src/bin/
+    └── gateway.ts                  # SkillRegistry 初始化 + hooks 桥接
+    ```
+- **价值**：Agent 从"只知道有什么工具"进化到"知道如何组合工具完成任务"，用户可以通过编写 SKILL.md 将自己的工作流程沉淀为可复用的技能。
 
 ### 8. 浏览器扩展 (Phase 9)
 
@@ -1256,6 +1310,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **上下文压缩** | 三层渐进式压缩（Archival Summary → Rolling Summary → Working Memory），模型摘要 + 降级兜底 |
 | **多 Agent** | `AgentProfile` + `AgentRegistry` + `agents.list` API + WebChat Agent 选择器 + 会话隔离 + 飞书渠道绑定 |
 | **子 Agent 编排** | `SubAgentOrchestrator` + `delegate_task` / `delegate_parallel` / `sessions_spawn` / `sessions_history`，并发排队 + 超时 + 深度限制 + 生命周期钩子 |
+| **技能系统** | `SkillRegistry` + SKILL.md 格式 + 5 维 Eligibility Gating + 两级 Prompt 注入 + `skills_list` / `skills_search` 工具 + Plugin Hooks 桥接 |
 
 ---
 

@@ -7,6 +7,8 @@ export class PluginRegistry {
     hooksList = [];
     /** pluginId → 该插件注册的工具名列表 */
     pluginToolMap = new Map();
+    /** pluginId → 该插件声明的 skill 目录 */
+    pluginSkillDirs = new Map();
     /**
      * Load a plugin from a file path.
      * The file must default export an object implementing BelldandyPlugin.
@@ -36,6 +38,9 @@ export class PluginRegistry {
                 },
                 registerHooks: (hooks) => {
                     this.hooksList.push(hooks);
+                },
+                registerSkillDir: (dir) => {
+                    this.pluginSkillDirs.set(plugin.id, dir);
                 }
             };
             await plugin.activate(context);
@@ -80,6 +85,12 @@ export class PluginRegistry {
      */
     getPluginToolMap() {
         return this.pluginToolMap;
+    }
+    /**
+     * Get plugin → skill directory mapping (for SkillRegistry integration)
+     */
+    getPluginSkillDirs() {
+        return this.pluginSkillDirs;
     }
     /**
      * Get aggregated hooks to pass to the Agent

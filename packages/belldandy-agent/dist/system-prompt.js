@@ -8,13 +8,15 @@ import { SOUL_FILENAME, IDENTITY_FILENAME, USER_FILENAME, BOOTSTRAP_FILENAME, AG
  * 1. 核心身份声明
  * 2. AGENTS.md（工作空间指南，包含连续性/记忆系统说明）
  * 3. SOUL.md（人格准则）
- * 4. IDENTITY.md（身份信息）
- * 5. USER.md（用户档案）
+ * 4. USER.md（用户档案）
+ * 5. IDENTITY.md（身份信息）
  * 6. TOOLS.md（工具说明）
- * 7. BOOTSTRAP.md（首次引导，如有）
- * 8. 时间信息
- * 9. 额外 system prompt
- * 10. Methodology 系统协议
+ * 7. MEMORY.md（核心记忆）
+ * 8. Skills（技能指令注入）
+ * 9. BOOTSTRAP.md（首次引导，如有）
+ * 10. 时间信息
+ * 11. 额外 system prompt
+ * 12. Methodology 系统协议
  */
 export function buildSystemPrompt(params) {
     const maxChars = params.maxChars && params.maxChars > 0 ? params.maxChars : 0;
@@ -136,7 +138,42 @@ export function buildSystemPrompt(params) {
             ].join("\n"),
         });
     }
-    // P7: BOOTSTRAP.md（首次引导）
+    // P7: Skills（技能指令注入）
+    if (params.skillInstructions && params.skillInstructions.length > 0) {
+        const SKILL_CHAR_LIMIT = 4000;
+        const skillLines = ["# Active Skills", ""];
+        let totalChars = 0;
+        let injectedFull = false;
+        for (const skill of params.skillInstructions) {
+            if (totalChars + skill.instructions.length <= SKILL_CHAR_LIMIT) {
+                skillLines.push(`## [${skill.name}]`, "", skill.instructions.trim(), "");
+                totalChars += skill.instructions.length;
+                injectedFull = true;
+            }
+            else {
+                // 超过阈值，降级为摘要
+                skillLines.push(`- **${skill.name}**: (use skills_search to view full instructions)`);
+            }
+        }
+        if (params.hasSearchableSkills) {
+            skillLines.push("", "你有更多专业技能存储在技能库中。当遇到不熟悉的领域时，请使用 skills_search 工具搜索可用技能。", "");
+        }
+        if (injectedFull || params.hasSearchableSkills) {
+            sections.push({ label: "skills", text: skillLines.join("\n") });
+        }
+    }
+    else if (params.hasSearchableSkills) {
+        sections.push({
+            label: "skills",
+            text: [
+                "# Skills",
+                "",
+                "你有专业技能存储在技能库中。当遇到不熟悉的领域时，请使用 skills_search 工具搜索可用技能。",
+                "",
+            ].join("\n"),
+        });
+    }
+    // P8: BOOTSTRAP.md（首次引导，仅首次存在）
     if (bootstrapFile?.content) {
         sections.push({
             label: "BOOTSTRAP.md",
@@ -152,7 +189,7 @@ export function buildSystemPrompt(params) {
             ].join("\n"),
         });
     }
-    // P8: 时间信息
+    // P9: 时间信息
     if (params.userTimezone || params.currentTime) {
         const timeLines = ["# Current Context", ""];
         if (params.userTimezone)
@@ -162,7 +199,7 @@ export function buildSystemPrompt(params) {
         timeLines.push("");
         sections.push({ label: "time", text: timeLines.join("\n") });
     }
-    // P9: 额外 system prompt
+    // P10: 额外 system prompt
     const extra = params.extraSystemPrompt?.trim();
     if (extra) {
         sections.push({
@@ -170,7 +207,7 @@ export function buildSystemPrompt(params) {
             text: ["# Additional Instructions", "", extra, ""].join("\n"),
         });
     }
-    // P10: Methodology 系统协议
+    // P11: Methodology 系统协议
     sections.push({
         label: "methodology",
         text: [
@@ -194,7 +231,7 @@ export function buildSystemPrompt(params) {
             "",
         ].join("\n"),
     });
-    // P11: Workspace 目录路径
+    // P12: Workspace 目录路径
     if (workspace) {
         sections.push({
             label: "workspace-dir",

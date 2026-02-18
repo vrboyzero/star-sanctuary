@@ -19,6 +19,13 @@ export type SystemPromptParams = {
     injectMemory?: boolean;
     /** 最大字符数限制，超过则按优先级截断低优先级段落（0 或 undefined 表示不限制） */
     maxChars?: number;
+    /** 需要直接注入 system prompt 的 skill 指令列表（high/always priority） */
+    skillInstructions?: Array<{
+        name: string;
+        instructions: string;
+    }>;
+    /** 是否有更多按需 skills 可通过 skills_search 搜索 */
+    hasSearchableSkills?: boolean;
 };
 /**
  * 构建完整的 System Prompt
@@ -29,13 +36,15 @@ export type SystemPromptParams = {
  * 1. 核心身份声明
  * 2. AGENTS.md（工作空间指南，包含连续性/记忆系统说明）
  * 3. SOUL.md（人格准则）
- * 4. IDENTITY.md（身份信息）
- * 5. USER.md（用户档案）
+ * 4. USER.md（用户档案）
+ * 5. IDENTITY.md（身份信息）
  * 6. TOOLS.md（工具说明）
- * 7. BOOTSTRAP.md（首次引导，如有）
- * 8. 时间信息
- * 9. 额外 system prompt
- * 10. Methodology 系统协议
+ * 7. MEMORY.md（核心记忆）
+ * 8. Skills（技能指令注入）
+ * 9. BOOTSTRAP.md（首次引导，如有）
+ * 10. 时间信息
+ * 11. 额外 system prompt
+ * 12. Methodology 系统协议
  */
 export declare function buildSystemPrompt(params: SystemPromptParams): string;
 /**

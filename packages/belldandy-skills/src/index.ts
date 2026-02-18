@@ -10,6 +10,19 @@ export type {
   ToolAuditLog,
 } from "./types.js";
 
+// Skill 系统
+export type {
+  SkillDefinition,
+  SkillEligibility,
+  SkillPriority,
+  SkillSource,
+  EligibilityContext,
+  EligibilityResult,
+} from "./skill-types.js";
+export { loadSkillFromDir, loadSkillsFromDir, parseSkillMd } from "./skill-loader.js";
+export { checkEligibility, checkEligibilityBatch } from "./skill-eligibility.js";
+export { SkillRegistry } from "./skill-registry.js";
+
 export { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
 export type { ToolExecutorOptions } from "./executor.js";
 
@@ -58,4 +71,7 @@ export {
 
 export { createMemorySearchTool, createMemoryGetTool, type MemorySearchToolConfig } from "./builtin/memory.js";
 export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
+
+// Skills 管理工具
+export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
 

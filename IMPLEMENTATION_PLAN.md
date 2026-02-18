@@ -72,7 +72,7 @@ flowchart TB
 |------|------|--------------|----------|------|
 | P2-1 | Multi-Agent 路由与 Session 编排 | §2 会话模型 | 引入多 Agent / 多 workspace 配置。 | **P2-1a/b 已完成**：agents.list API + WebChat Agent 选择器 + 实例缓存 + 会话隔离 + Feishu 渠道绑定。**P2-1c (Phase 16 MVP) 已完成**。**P2-1d (Phase 25 Step 1-3) 已完成**：并发排队 + delegate_parallel + 钩子集成。 |
 | P2-2 | Channels 路由引擎升级 | §3 Channels | Mention gating、群聊路由规则。 | 结合安全策略。 |
-| P2-3 | Skills 生态与「技能注册中心」 | §5 工具 / Skills | 设计 ClawHub 式技能 registry。 | 优先做本地+MCP映射。 |
+| P2-3 | Skills 生态与「技能注册中心」 ✅ | §5 工具 / Skills | 设计 ClawHub 式技能 registry。 | **已完成**：SkillRegistry + SKILL.md 解析 + 5 维 Eligibility Gating + 两级 Prompt 注入 + skills_list/skills_search 工具 + Plugin Hooks 桥接。 |
 | P2-4 | Canvas / 可视化工作区（基础版） | §7 浏览器/Canvas | 基础 Canvas / Board 功能。 | 初期静态画布+快照。 |
 | P2-5 | Webhooks 与外部触发 | §8 定时任务 | Webhook 入口和邮件/通知触发。 | 注意安全/鉴权。 |
 | P2-6 | Nodes 风格的 Memory/Knowledge Graph | §6 记忆 | 增加知识图谱工具。 | 与方法论结合。 |
@@ -383,3 +383,40 @@ agents.list API + WebChat Agent 选择器 + 实例缓存 + 会话隔离 + Feishu
 ## 阶段 4：Facet 模组 × AgentProfile 共存方案 ✅
 
 > 已实施并通过构建 + 97 个测试用例验证。详见上方「阶段 4」完成记录。
+
+---
+
+## P2-3：Skills 生态与「技能注册中心」 ✅
+
+> 已完成。构建通过 + 全部 13 个测试用例通过。
+
+### 实现摘要
+
+Skill 是纯 prompt 注入（不执行代码），告诉 Agent 如何使用已有工具/MCP 完成特定任务。三来源加载：bundled → plugin → user（用户覆盖内置）。
+
+### 新增文件
+
+| 包 | 文件 | 说明 |
+|----|------|------|
+| `belldandy-skills` | `src/skill-types.ts` | 类型定义（SkillDefinition, SkillEligibility, EligibilityContext） |
+| `belldandy-skills` | `src/skill-loader.ts` | SKILL.md 解析器（YAML frontmatter + Markdown，轻量无外部依赖） |
+| `belldandy-skills` | `src/skill-eligibility.ts` | 5 维准入检查（env/bin/mcp/tools/files），含批量优化 |
+| `belldandy-skills` | `src/skill-registry.ts` | 三来源注册表，namespace 防冲突，搜索 API |
+| `belldandy-skills` | `src/builtin/skills-tool.ts` | `skills_list` + `skills_search` Agent 工具 |
+| `belldandy-skills` | `src/bundled-skills/commit-style/SKILL.md` | 内置示例 skill |
+
+### 改动文件
+
+| 包 | 文件 | 改动 |
+|----|------|------|
+| `belldandy-skills` | `src/index.ts` | 导出 skill 模块 |
+| `belldandy-agent` | `src/system-prompt.ts` | 新增 P7 Skills 注入段（两级发现 + 4000 chars 降级） |
+| `belldandy-plugins` | `src/types.ts` + `src/registry.ts` | 新增 `registerSkillDir` / `getPluginSkillDirs` |
+| `belldandy-core` | `src/bin/gateway.ts` | SkillRegistry 初始化 + eligibility 检查 + prompt 注入 + plugin hooks 桥接 |
+
+### 关键设计决策
+
+- **两级发现**：`priority: always/high` 直接注入 system prompt；其余走 `skills_search` 按需查询，控制 token 膨胀
+- **Namespace**：内部 `source:name` 唯一键，查询按 user > plugin > bundled 优先级
+- **Plugin Hooks 桥接**：旧 4-hook AgentHooks → 新 13-hook HookRegistry（beforeRun→before_agent_start, afterRun→agent_end, beforeToolCall→before_tool_call, afterToolCall→after_tool_call）
+- **Eligibility 批量优化**：bin 检查结果缓存，避免重复 `where`/`which` 调用

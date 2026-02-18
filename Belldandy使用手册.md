@@ -1164,11 +1164,193 @@ export function activate(context) {
 
 将插件文件放到 `~/.belldandy/plugins/` 目录下，Gateway 启动时会自动加载。
 
-## 12. MCP 支持 (Model Context Protocol)
+---
+
+## 12. 技能系统 (Skills)
+
+技能（Skills）是 Belldandy 的"经验库"——一套纯文本的操作指南，教 Agent **如何更好地使用已有工具完成特定任务**。
+
+与工具（Tools）的区别：
+- **工具**是"手和脚"——解决"能做什么"的问题（如读文件、搜索网页）
+- **技能**是"经验和套路"——解决"怎么做更好"的问题（如如何写出规范的 commit、如何重构 TypeScript 代码）
+
+技能的本质是 **prompt 注入**：符合条件的技能会被自动注入到 Agent 的系统提示词中，让 Agent "知道"自己有哪些专业能力可用。
+
+### 12.1 技能目录
+
+技能从三个位置加载（优先级递减）：
+
+| 来源 | 路径 | 说明 |
+|------|------|------|
+| 用户技能 | `~/.belldandy/skills/` | 你自己创建的技能，优先级最高 |
+| 插件技能 | 由插件声明 | 插件附带的技能 |
+| 内置技能 | 随项目发布 | Belldandy 自带的通用技能 |
+
+当多个来源存在同名技能时，用户技能覆盖插件技能，插件技能覆盖内置技能。
+
+### 12.2 创建自定义技能
+
+每个技能是 `~/.belldandy/skills/` 下的一个**目录**，包含一个 `SKILL.md` 文件。
+
+#### 目录结构示例
+
+```
+~/.belldandy/skills/
+├── ts-refactor/
+│   └── SKILL.md
+├── docker-deploy/
+│   └── SKILL.md
+└── code-review/
+    └── SKILL.md
+```
+
+#### SKILL.md 格式
+
+文件由 **YAML frontmatter**（元数据）和 **Markdown body**（操作指令）两部分组成：
+
+```yaml
+---
+name: ts-refactor
+description: TypeScript 复杂类型重构 SOP
+version: "1.0"
+tags: [typescript, refactor]
+priority: normal
+eligibility:
+  bin: [node, tsc]
+  tools: [file_read, file_write]
+  files: [tsconfig.json]
+---
+
+# Instructions
+
+当你接收到 TypeScript 重构任务时，请遵循以下步骤：
+
+1. 先用 file_read 读取目标文件，理解现有类型结构
+2. 识别需要重构的类型定义和所有引用点
+3. 制定重构方案，确保类型安全
+4. 逐文件修改，每次修改后验证类型检查通过
+5. 完成后运行 tsc --noEmit 确认无类型错误
+```
+
+#### 字段说明
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `name` | 是 | 技能唯一名称 |
+| `description` | 是 | 简短描述（会显示在技能列表中） |
+| `version` | 否 | 版本号 |
+| `tags` | 否 | 分类标签（用于搜索和过滤） |
+| `priority` | 否 | 注入优先级，默认 `normal`（见下方说明） |
+| `eligibility` | 否 | 准入条件（见下方说明） |
+
+#### 优先级 (priority)
+
+决定技能如何被注入到 Agent 的系统提示词中：
+
+| 值 | 行为 |
+|----|------|
+| `always` | 始终直接注入系统提示词 |
+| `high` | 直接注入系统提示词 |
+| `normal` | 不直接注入，Agent 可通过 `skills_search` 按需查询 |
+| `low` | 不直接注入，Agent 可通过 `skills_search` 按需查询 |
+
+> **Token 控制**：直接注入的技能总字符数超过 4000 时，会自动降级为仅注入名称和描述摘要，完整指令通过 `skills_search` 获取。
+
+### 12.3 准入条件 (Eligibility)
+
+准入条件用于自动检测当前环境是否满足技能的前置要求。不满足条件的技能不会被注入，避免浪费 token。
+
+在 `eligibility` 中可以声明以下 5 个维度：
+
+| 维度 | 说明 | 示例 |
+|------|------|------|
+| `env` | 环境变量需存在且非空 | `[BELLDANDY_TOOLS_ENABLED]` |
+| `bin` | PATH 上需存在的可执行文件 | `[node, tsc, docker]` |
+| `mcp` | 需在线的 MCP 服务器名称 | `[filesystem, sqlite]` |
+| `tools` | 需已注册的工具名称 | `[file_read, file_write]` |
+| `files` | 工作区中需存在的文件（相对路径） | `[package.json, tsconfig.json]` |
+
+不声明 `eligibility` 的技能默认视为可用。
+
+### 12.4 Agent 中使用技能
+
+Agent 有两个内置工具来发现和使用技能：
+
+#### skills_list — 列出技能
+
+在对话中让 Agent 查看可用技能：
+
+> "列出所有可用的技能"
+> "有哪些和 TypeScript 相关的技能？"
+
+Agent 会调用 `skills_list` 工具，返回所有技能的名称、来源、标签和可用状态。不可用的技能会显示具体原因（如 `missing bin: docker`）。
+
+支持的过滤参数：
+- `filter`: `all`（全部）/ `eligible`（仅可用）/ `ineligible`（仅不可用）
+- `tag`: 按标签过滤
+
+#### skills_search — 搜索技能
+
+当 Agent 遇到不熟悉的领域时，可以搜索技能库获取操作指南：
+
+> "搜索一下有没有关于代码重构的技能"
+> "查找 Docker 部署相关的技能"
+
+Agent 会调用 `skills_search` 工具，按关键词匹配技能的名称、描述、标签和指令内容，返回最相关的技能及其完整操作指南。
+
+### 12.5 完整示例
+
+创建一个"代码审查"技能：
+
+```bash
+mkdir -p ~/.belldandy/skills/code-review
+```
+
+编辑 `~/.belldandy/skills/code-review/SKILL.md`：
+
+```yaml
+---
+name: code-review
+description: 代码审查 SOP，关注安全、性能和可维护性
+version: "1.0"
+tags: [review, quality]
+priority: high
+eligibility:
+  tools: [file_read]
+---
+
+# Code Review Instructions
+
+当用户要求你审查代码时，请按以下维度逐一检查：
+
+## 安全性
+- 是否存在 SQL 注入、XSS、命令注入等漏洞
+- 敏感信息（密钥、密码）是否硬编码
+- 输入校验是否充分
+
+## 性能
+- 是否有不必要的循环嵌套或重复计算
+- 数据库查询是否有 N+1 问题
+- 是否有内存泄漏风险
+
+## 可维护性
+- 命名是否清晰、一致
+- 函数是否过长（建议 < 50 行）
+- 是否有适当的错误处理
+
+## 输出格式
+按严重程度分类：🔴 严重 / 🟡 建议 / 🟢 良好
+```
+
+重启 Belldandy 后，这个技能会自动加载。因为 `priority: high`，它会直接注入到 Agent 的系统提示词中，Agent 在审查代码时会自动遵循这套 SOP。
+
+---
+
+## 13. MCP 支持 (Model Context Protocol)
 
 MCP 是 Anthropic 提出的标准化协议，让 AI 助手能够连接外部数据源和工具。
 
-### 12.1 启用 MCP
+### 13.1 启用 MCP
 
 在 `.env.local` 中添加：
 
@@ -1178,7 +1360,7 @@ BELLDANDY_TOOLS_ENABLED=true
 BELLDANDY_MCP_ENABLED=true
 ```
 
-### 12.2 配置 MCP 服务器
+### 13.2 配置 MCP 服务器
 
 在 `~/.belldandy/mcp.json` 中定义要连接的 MCP 服务器。Belldandy 支持两种配置格式，可任选其一。
 
@@ -1270,14 +1452,14 @@ BELLDANDY_MCP_ENABLED=true
 
 > **注意**：一个 `mcp.json` 文件只能使用一种格式。系统会自动检测格式并处理，无需手动指定。
 
-### 12.3 传输类型
+### 13.3 传输类型
 
 | 类型 | 说明 | 适用场景 |
 |------|------|----------|
 | `stdio` | 通过子进程的 stdin/stdout 通信 | 本地 MCP 服务器（推荐） |
 | `sse` | 通过 HTTP Server-Sent Events 通信 | 远程 MCP 服务器 |
 
-### 12.4 常用 MCP 服务器
+### 13.4 常用 MCP 服务器
 
 | 服务器 | 命令 | 功能 |
 |--------|------|------|
@@ -1286,7 +1468,7 @@ BELLDANDY_MCP_ENABLED=true
 | `@modelcontextprotocol/server-sqlite` | `npx -y @modelcontextprotocol/server-sqlite` | SQLite 数据库 |
 | `@modelcontextprotocol/server-puppeteer` | `npx -y @modelcontextprotocol/server-puppeteer` | 浏览器自动化 |
 
-### 12.5 工具命名
+### 13.5 工具命名
 
 MCP 工具在 Belldandy 中的命名格式为：`mcp_{serverId}_{toolName}`
 
@@ -1304,11 +1486,11 @@ MCP 工具在 Belldandy 中的命名格式为：`mcp_{serverId}_{toolName}`
 
 ---
 
-## 13. 语音交互 (Voice Interaction)
+## 14. 语音交互 (Voice Interaction)
 
 让 Belldandy 开口说话！支持免费且高质量的 Edge TTS（微软晓晓/云希）。
 
-### 13.1 快速开启/关闭
+### 14.1 快速开启/关闭
 
 无需配置复杂文件，直接在对话中对 Agent 说：
 
@@ -1321,7 +1503,7 @@ MCP 工具在 Belldandy 中的命名格式为：`mcp_{serverId}_{toolName}`
 
 > **原理**：Agent 会在你的工作区目录创建/删除一个名为 `TTS_ENABLED` 的信号文件。
 
-### 13.2 进阶配置
+### 14.2 进阶配置
 
 默认使用 **Edge TTS**（免费）。如果你想使用 **OpenAI TTS**（付费但声线不同），可以通过调用工具时指定参数，或者让 Agent 帮你设置。
 
@@ -1332,7 +1514,7 @@ MCP 工具在 Belldandy 中的命名格式为：`mcp_{serverId}_{toolName}`
 
 ---
 
-## 14. 常见问题 (FAQ)
+## 15. 常见问题 (FAQ)
 
 **Q: 启动时提示 `EADDRINUSE` 端口被占用？**
 A: 说明端口 28889 已经被占用了。你可以修改 `.env.local` 中的 `BELLDANDY_PORT=28890` 换一个端口。

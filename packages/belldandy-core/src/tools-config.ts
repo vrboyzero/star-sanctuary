@@ -7,12 +7,13 @@ export interface ToolsConfig {
     builtin: string[];
     mcp_servers: string[];
     plugins: string[];
+    skills: string[];
   };
 }
 
 const DEFAULT_CONFIG: ToolsConfig = {
   version: 1,
-  disabled: { builtin: [], mcp_servers: [], plugins: [] },
+  disabled: { builtin: [], mcp_servers: [], plugins: [], skills: [] },
 };
 
 const CONFIG_FILENAME = "tools-config.json";
@@ -31,6 +32,7 @@ export class ToolsConfigManager {
   private disabledBuiltin = new Set<string>();
   private disabledMCPServers = new Set<string>();
   private disabledPlugins = new Set<string>();
+  private disabledSkills = new Set<string>();
 
   constructor(stateDir: string, logger?: { info(m: string): void; warn(m: string): void }) {
     this.filePath = path.join(stateDir, CONFIG_FILENAME);
@@ -49,10 +51,11 @@ export class ToolsConfigManager {
             builtin: Array.isArray(parsed.disabled?.builtin) ? parsed.disabled.builtin : [],
             mcp_servers: Array.isArray(parsed.disabled?.mcp_servers) ? parsed.disabled.mcp_servers : [],
             plugins: Array.isArray(parsed.disabled?.plugins) ? parsed.disabled.plugins : [],
+            skills: Array.isArray(parsed.disabled?.skills) ? parsed.disabled.skills : [],
           },
         };
         this.rebuildSets();
-        this.log?.info(`tools-config loaded: ${this.disabledBuiltin.size} builtin, ${this.disabledMCPServers.size} mcp, ${this.disabledPlugins.size} plugins disabled`);
+        this.log?.info(`tools-config loaded: ${this.disabledBuiltin.size} builtin, ${this.disabledMCPServers.size} mcp, ${this.disabledPlugins.size} plugins, ${this.disabledSkills.size} skills disabled`);
       }
     } catch (err) {
       this.log?.warn(`tools-config load failed, using defaults: ${String(err)}`);
@@ -100,6 +103,7 @@ export class ToolsConfigManager {
     if (disabled.builtin !== undefined) this.config.disabled.builtin = disabled.builtin;
     if (disabled.mcp_servers !== undefined) this.config.disabled.mcp_servers = disabled.mcp_servers;
     if (disabled.plugins !== undefined) this.config.disabled.plugins = disabled.plugins;
+    if (disabled.skills !== undefined) this.config.disabled.skills = disabled.skills;
     this.rebuildSets();
     await this.save();
   }
@@ -115,9 +119,15 @@ export class ToolsConfigManager {
     return null;
   }
 
+  /** 查询 skill 是否被禁用 */
+  isSkillDisabled(skillName: string): boolean {
+    return this.disabledSkills.has(skillName);
+  }
+
   private rebuildSets(): void {
     this.disabledBuiltin = new Set(this.config.disabled.builtin);
     this.disabledMCPServers = new Set(this.config.disabled.mcp_servers);
     this.disabledPlugins = new Set(this.config.disabled.plugins);
+    this.disabledSkills = new Set(this.config.disabled.skills);
   }
 }

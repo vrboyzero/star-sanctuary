@@ -65,6 +65,9 @@ import {
   sessionsHistoryTool,
   delegateTaskTool,
   delegateParallelTool,
+  SkillRegistry,
+  createSkillsListTool,
+  createSkillsSearchTool,
 } from "@belldandy/skills";
 import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
@@ -562,6 +565,41 @@ try {
   logger.warn("plugins", `插件加载失败: ${String(err)}`);
 }
 
+// 4.3 Init SkillRegistry
+const skillRegistry = new SkillRegistry();
+const bundledSkillsDir = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")),
+  "../../belldandy-skills/src/bundled-skills",
+);
+const userSkillsDir = path.join(stateDir, "skills");
+
+try {
+  const bundledCount = await skillRegistry.loadBundledSkills(bundledSkillsDir);
+  if (bundledCount > 0) logger.info("skills", `loaded ${bundledCount} bundled skills`);
+
+  const userCount = await skillRegistry.loadUserSkills(userSkillsDir);
+  if (userCount > 0) logger.info("skills", `loaded ${userCount} user skills`);
+
+  const pluginSkillDirs = pluginRegistry.getPluginSkillDirs();
+  if (pluginSkillDirs.size > 0) {
+    const pluginCount = await skillRegistry.loadPluginSkills(pluginSkillDirs);
+    if (pluginCount > 0) logger.info("skills", `loaded ${pluginCount} plugin skills`);
+  }
+
+  logger.info("skills", `total: ${skillRegistry.size} skills loaded`);
+} catch (err) {
+  logger.warn("skills", `技能加载失败: ${String(err)}`);
+}
+
+// Register skills_list / skills_search tools
+if (toolsEnabled) {
+  toolExecutor.registerTool(createSkillsListTool(skillRegistry));
+  toolExecutor.registerTool(createSkillsSearchTool(skillRegistry));
+  logger.info("skills", "registered skills_list + skills_search tools");
+}
+
+// 4.4 Bridge plugin hooks → HookRegistry (deferred to after hookRegistry init, see section 7.5)
+
 // 4.5 Auto-index memory files (MEMORY.md + memory/*.md)
 await ensureMemoryDir(stateDir);
 const memoryFilesResult = await listMemoryFiles(stateDir);
@@ -587,7 +625,35 @@ if (workspaceResult.created.length > 0) {
 const workspace = await loadWorkspaceFiles(stateDir);
 logger.info("workspace", `SOUL=${workspace.hasSoul}, IDENTITY=${workspace.hasIdentity}, USER=${workspace.hasUser}, BOOTSTRAP=${workspace.hasBootstrap}`);
 
-// 7. Build dynamic system prompt
+// 7. Skill eligibility check + Build dynamic system prompt
+// Collect MCP server names for eligibility check
+const activeMcpServers: string[] = [];
+try {
+  const mcpModule = await import("../mcp/index.js");
+  const diag = mcpModule.getMCPDiagnostics();
+  if (diag) {
+    for (const s of diag.servers) {
+      if (s.status === "connected") activeMcpServers.push(s.name);
+    }
+  }
+} catch { /* MCP not available */ }
+
+const registeredToolNames = toolExecutor.getDefinitions().map(d => d.function.name);
+await skillRegistry.refreshEligibility({
+  registeredTools: registeredToolNames,
+  activeMcpServers,
+  workspaceRoot: stateDir,
+});
+
+const promptSkills = skillRegistry.getPromptSkills().filter(s => !toolsConfigManager.isSkillDisabled(s.name));
+const searchableSkills = skillRegistry.getSearchableSkills().filter(s => !toolsConfigManager.isSkillDisabled(s.name));
+const skillInstructions = promptSkills.map(s => ({ name: s.name, instructions: s.instructions }));
+const hasSearchableSkills = searchableSkills.length > 0;
+
+if (promptSkills.length > 0 || searchableSkills.length > 0) {
+  logger.info("skills", `eligible: ${promptSkills.length} prompt-injected, ${searchableSkills.length} searchable`);
+}
+
 const dynamicSystemPrompt = buildSystemPrompt({
   workspace,
   extraSystemPrompt: openaiSystemPrompt,
@@ -597,6 +663,8 @@ const dynamicSystemPrompt = buildSystemPrompt({
   injectSoul,
   injectMemory,
   maxChars: maxSystemPromptChars,
+  skillInstructions,
+  hasSearchableSkills,
 });
 logger.info("system-prompt", `length=${dynamicSystemPrompt.length} chars${maxSystemPromptChars ? `, limit=${maxSystemPromptChars}` : ""}`);
 
@@ -633,6 +701,54 @@ if (contextInjectionEnabled) {
     },
   });
   logger.info("context-injection", `enabled (limit=${contextInjectionLimit})`);
+}
+
+// 7.6 Bridge legacy plugin hooks → HookRegistry
+const legacyHooks = pluginRegistry.getAggregatedHooks();
+if (legacyHooks.beforeRun) {
+  hookRegistry.register({
+    source: "plugin-bridge",
+    hookName: "before_agent_start",
+    priority: 200,
+    handler: async (event, ctx) => {
+      await legacyHooks.beforeRun!(event as any, ctx as any);
+    },
+  });
+}
+if (legacyHooks.afterRun) {
+  hookRegistry.register({
+    source: "plugin-bridge",
+    hookName: "agent_end",
+    priority: 200,
+    handler: async (event, ctx) => {
+      await legacyHooks.afterRun!(event as any, ctx as any);
+    },
+  });
+}
+if (legacyHooks.beforeToolCall) {
+  hookRegistry.register({
+    source: "plugin-bridge",
+    hookName: "before_tool_call",
+    priority: 200,
+    handler: async (event, ctx) => {
+      const result = await legacyHooks.beforeToolCall!(event as any, ctx as any);
+      if (result === false) return { block: true, blockReason: "blocked by plugin hook" };
+      if (result && typeof result === "object") return { params: result as Record<string, unknown> };
+    },
+  });
+}
+if (legacyHooks.afterToolCall) {
+  hookRegistry.register({
+    source: "plugin-bridge",
+    hookName: "after_tool_call",
+    priority: 200,
+    handler: async (event, ctx) => {
+      await legacyHooks.afterToolCall!(event as any, ctx as any);
+    },
+  });
+}
+if (pluginRegistry.getPluginIds().length > 0) {
+  logger.info("plugins", "legacy hooks bridged to HookRegistry");
 }
 
 const hookRunner: HookRunner = createHookRunner(hookRegistry, {
@@ -673,6 +789,8 @@ for (const profile of agentProfiles) {
       injectSoul,
       injectMemory,
       maxChars: maxSystemPromptChars,
+      skillInstructions,
+      hasSearchableSkills,
     });
     agentWorkspaceCache.set(profile.id, { systemPrompt: agentPrompt });
     logger.info("agent-workspace", `Loaded workspace for agent "${profile.id}" (dir: agents/${wsDir}/), prompt=${agentPrompt.length} chars`);
@@ -906,6 +1024,7 @@ const server = await startGatewayServer({
   toolsConfigManager,
   toolExecutor: toolsEnabled ? toolExecutor : undefined,
   pluginRegistry,
+  skillRegistry,
   ttsEnabled: isTtsEnabledFn,
   ttsSynthesize: async (text: string) => {
     const result = await synthesizeSpeech({ text, stateDir });

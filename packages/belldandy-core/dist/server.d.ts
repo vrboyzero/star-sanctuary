@@ -2,7 +2,7 @@ import { type BelldandyAgent, ConversationStore, type AgentRegistry } from "@bel
 import type { GatewayEventFrame } from "@belldandy/protocol";
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
-import type { ToolExecutor, TranscribeOptions, TranscribeResult } from "@belldandy/skills";
+import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 export type GatewayServerOptions = {
     port: number;
@@ -40,6 +40,8 @@ export type GatewayServerOptions = {
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     /** 插件注册表（用于获取已加载插件列表） */
     pluginRegistry?: PluginRegistry;
+    /** 技能注册表（用于获取已加载技能列表） */
+    skillRegistry?: SkillRegistry;
 };
 export type GatewayServer = {
     port: number;

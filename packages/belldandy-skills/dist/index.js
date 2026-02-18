@@ -1,3 +1,6 @@
+export { loadSkillFromDir, loadSkillsFromDir, parseSkillMd } from "./skill-loader.js";
+export { checkEligibility, checkEligibilityBatch } from "./skill-eligibility.js";
+export { SkillRegistry } from "./skill-registry.js";
 export { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
 // 内置工具
 export { fetchTool } from "./builtin/fetch.js";
@@ -21,4 +24,6 @@ export { createServiceRestartTool } from "./builtin/service-restart.js";
 export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, browserSnapshotTool, } from "./builtin/browser/tools.js";
 export { createMemorySearchTool, createMemoryGetTool } from "./builtin/memory.js";
 export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
+// Skills 管理工具
+export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
 //# sourceMappingURL=index.js.map

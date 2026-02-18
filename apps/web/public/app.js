@@ -1438,7 +1438,7 @@ const closeToolSettingsBtn = document.getElementById("closeToolSettings");
 const saveToolSettingsBtn = document.getElementById("saveToolSettings");
 const toolSettingsBody = document.getElementById("toolSettingsBody");
 
-let toolSettingsData = null; // { builtin, mcp, plugins, disabled }
+let toolSettingsData = null; // { builtin, mcp, plugins, skills, disabled }
 let toolSettingsActiveTab = "builtin";
 
 if (openToolSettingsBtn) {
@@ -1489,12 +1489,14 @@ async function loadToolSettings() {
 
 function renderToolSettingsTab() {
   if (!toolSettingsData) return;
-  const { builtin, mcp, plugins, disabled } = toolSettingsData;
+  const { builtin, mcp, plugins, skills, disabled } = toolSettingsData;
 
   if (toolSettingsActiveTab === "builtin") {
     renderBuiltinTab(builtin, disabled.builtin || []);
   } else if (toolSettingsActiveTab === "mcp") {
     renderMCPTab(mcp, disabled.mcp_servers || []);
+  } else if (toolSettingsActiveTab === "skills") {
+    renderSkillsTab(skills || [], disabled.skills || []);
   } else {
     renderPluginsTab(plugins, disabled.plugins || []);
   }
@@ -1572,6 +1574,40 @@ function renderPluginsTab(pluginList, disabledList) {
       <span class="tool-item-name">${escapeHtml(name)}</span>
       <label class="toggle-switch">
         <input type="checkbox" data-category="plugins" data-name="${escapeHtml(name)}" ${checked ? "checked" : ""}>
+        <span class="toggle-slider"></span>
+      </label>
+    </div>`;
+  }
+  toolSettingsBody.innerHTML = html;
+  bindToggleEvents();
+}
+
+function renderSkillsTab(skillList, disabledList) {
+  if (!skillList || skillList.length === 0) {
+    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载技能（将 SKILL.md 放入 ~/.belldandy/skills/ 目录）</div>';
+    return;
+  }
+  const disabledSet = new Set(disabledList);
+  const enabledCount = skillList.length - disabledSet.size;
+
+  const sourceLabel = { bundled: "内置", user: "用户", plugin: "插件" };
+  const priorityLabel = { always: "始终注入", high: "高优先", normal: "普通", low: "低优先" };
+
+  let html = `<div class="tool-section-header"><span>技能</span><span class="tool-section-count">${enabledCount}/${skillList.length} 已启用</span></div>`;
+  for (const skill of skillList.sort((a, b) => a.name.localeCompare(b.name))) {
+    const checked = !disabledSet.has(skill.name);
+    const src = sourceLabel[skill.source] || skill.source;
+    const pri = priorityLabel[skill.priority] || skill.priority;
+    const tags = (skill.tags || []).map(t => `<span class="skill-tag">${escapeHtml(t)}</span>`).join("");
+    html += `<div class="tool-item${checked ? "" : " disabled"}">
+      <div class="skill-item-info">
+        <span class="tool-item-name">${escapeHtml(skill.name)}</span>
+        <span class="skill-meta">${src} · ${pri}</span>
+        ${skill.description ? `<span class="skill-desc">${escapeHtml(skill.description)}</span>` : ""}
+        ${tags ? `<div class="skill-tags">${tags}</div>` : ""}
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" data-category="skills" data-name="${escapeHtml(skill.name)}" ${checked ? "checked" : ""}>
         <span class="toggle-slider"></span>
       </label>
     </div>`;

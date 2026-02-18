@@ -6,6 +6,8 @@ export interface PluginContext {
     registerTool(tool: Tool): void;
     /** Register hooks provided by this plugin */
     registerHooks(hooks: AgentHooks): void;
+    /** Register a directory containing SKILL.md sub-directories */
+    registerSkillDir(dir: string): void;
 }
 
 export interface BelldandyPlugin {

@@ -11,6 +11,8 @@ export class PluginRegistry {
     private hooksList: AgentHooks[] = [];
     /** pluginId → 该插件注册的工具名列表 */
     private pluginToolMap: Map<string, string[]> = new Map();
+    /** pluginId → 该插件声明的 skill 目录 */
+    private pluginSkillDirs: Map<string, string> = new Map();
 
     /**
      * Load a plugin from a file path.
@@ -45,6 +47,9 @@ export class PluginRegistry {
                 },
                 registerHooks: (hooks: AgentHooks) => {
                     this.hooksList.push(hooks);
+                },
+                registerSkillDir: (dir: string) => {
+                    this.pluginSkillDirs.set(plugin.id, dir);
                 }
             };
 
@@ -93,6 +98,13 @@ export class PluginRegistry {
      */
     getPluginToolMap(): Map<string, string[]> {
         return this.pluginToolMap;
+    }
+
+    /**
+     * Get plugin → skill directory mapping (for SkillRegistry integration)
+     */
+    getPluginSkillDirs(): Map<string, string> {
+        return this.pluginSkillDirs;
     }
 
     /**

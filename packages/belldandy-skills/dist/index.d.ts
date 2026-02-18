@@ -1,4 +1,8 @@
 export type { JsonObject, Tool, ToolDefinition, ToolParameterSchema, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, } from "./types.js";
+export type { SkillDefinition, SkillEligibility, SkillPriority, SkillSource, EligibilityContext, EligibilityResult, } from "./skill-types.js";
+export { loadSkillFromDir, loadSkillsFromDir, parseSkillMd } from "./skill-loader.js";
+export { checkEligibility, checkEligibilityBatch } from "./skill-eligibility.js";
+export { SkillRegistry } from "./skill-registry.js";
 export { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
 export type { ToolExecutorOptions } from "./executor.js";
 export { fetchTool } from "./builtin/fetch.js";
@@ -19,4 +23,5 @@ export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-re
 export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, browserSnapshotTool, } from "./builtin/browser/tools.js";
 export { createMemorySearchTool, createMemoryGetTool, type MemorySearchToolConfig } from "./builtin/memory.js";
 export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
+export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
 //# sourceMappingURL=index.d.ts.map

@@ -182,6 +182,7 @@ export async function startGatewayServer(opts) {
                 toolExecutor: opts.toolExecutor,
                 sttTranscribe: opts.sttTranscribe,
                 pluginRegistry: opts.pluginRegistry,
+                skillRegistry: opts.skillRegistry,
             });
             if (res)
                 sendRes(ws, res);
@@ -656,7 +657,7 @@ async function handleReq(ws, req, ctx) {
         }
         case "tools.list": {
             if (!ctx.toolExecutor || !ctx.toolsConfigManager) {
-                return { type: "res", id: req.id, ok: true, payload: { builtin: [], mcp: {}, plugins: [], disabled: { builtin: [], mcp_servers: [], plugins: [] } } };
+                return { type: "res", id: req.id, ok: true, payload: { builtin: [], mcp: {}, plugins: [], skills: [], disabled: { builtin: [], mcp_servers: [], plugins: [], skills: [] } } };
             }
             const allNames = ctx.toolExecutor.getRegisteredToolNames();
             const config = ctx.toolsConfigManager.getConfig();
@@ -677,7 +678,15 @@ async function handleReq(ws, req, ctx) {
                     builtin.push(name);
                 }
             }
-            return { type: "res", id: req.id, ok: true, payload: { builtin, mcp, plugins: ctx.pluginRegistry?.getPluginIds() ?? [], disabled: config.disabled } };
+            // Skills 列表
+            const skills = (ctx.skillRegistry?.getEligibleSkills() ?? []).map(s => ({
+                name: s.name,
+                description: s.description,
+                source: s.source.type,
+                priority: s.priority,
+                tags: s.tags ?? [],
+            }));
+            return { type: "res", id: req.id, ok: true, payload: { builtin, mcp, plugins: ctx.pluginRegistry?.getPluginIds() ?? [], skills, disabled: config.disabled } };
         }
         case "tools.update": {
             if (!ctx.toolsConfigManager) {
