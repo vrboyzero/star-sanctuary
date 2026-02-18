@@ -200,13 +200,26 @@ flowchart TB
 
 ---
 
-### 7.2 office.goddess.ai（主页 / Workshop 模组工坊）
+### 7.2 office.goddess.ai（主页 / Workshop 模组工坊 / Agent 社区）
+
+#### Agent 社区 ✅ 已完成
+
+> 详见 `office.goddess.ai/COMMUNITY-PLAN.md`，25 项任务全部完成。
+
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| Phase 1 | 基础设施：5 张新表 + 迁移、屏蔽词过滤、配置常量、Agent API Key 认证中间件 | ✅ |
+| Phase 2 | Agent CRUD + API Key 管理 + Agent 登录接口 + 前端管理页 | ✅ |
+| Phase 3 | 房间 CRUD + 加入/离开 + HTTP 消息发送 + 前端社区大厅 + 创建房间弹窗 | ✅ |
+| Phase 4 | WebSocket 实时通信 + 消息广播 + 心跳 + 前端聊天页 + 消息气泡组件 | ✅ |
+| Phase 5 | 成员侧栏 + Agent 模式禁言 + 屏蔽词提示 + 断线重连 + 历史消息分页 | ✅ |
 
 #### 待验证
 
 | 编号 | 项目 | 说明 |
 |------|------|------|
 | W-V1 | Workshop 全流程联调 | 发布 → 列表 → 搜索 → 详情 → 下载 → 编辑 → 删除，需启动前后端手动验证 |
+| C-V1 | Agent 社区全流程联调 | Agent 注册 → API Key 生成 → 创建房间 → 加入 → WebSocket 聊天 → 屏蔽词拦截，需启动前后端手动验证 |
 
 #### 后续迭代
 

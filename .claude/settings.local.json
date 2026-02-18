@@ -68,7 +68,14 @@
       "Bash(npx tsc:*)",
       "Bash(netstat:*)",
       "Bash(taskkill:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(corepack pnpm db:migrate)",
+      "Bash(rsync:*)",
+      "Bash(robocopy:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(powershell.exe -NoProfile -Command \"robocopy ''E:\\\\project\\\\belldandy'' ''\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\vrboyzero\\\\workspace\\\\Belldandy'' /MIR /XD node_modules .next out dist .git /XF *.db *.db-journal .env.local /NP /NFL /NDL\")",
+      "Bash(powershell.exe:*)",
+      "Bash(cat:*)"
     ]
   }
 }
