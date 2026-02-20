@@ -1,11 +1,15 @@
-# 飞书 (Feishu) 机器人配置指南
+# 渠道对接指南
+
+本指南包含了如何将 Belldandy 接入各个外部平台（如飞书、QQ机器人等）的详细步骤。
+
+---
+
+## 模块一：飞书 (Feishu) 机器人配置指南
 
 为了让 Belldandy 能通过飞书与你在手机上对话，你需要创建一个飞书应用并获取相关凭证。
-
 不用担心，**个人用户**也可以免费创建（无需企业认证，或者可以自己创建一个只有一个人的企业）。
 
-## 1. 创建应用
-
+### 1. 创建应用
 1.  登录 [飞书开放平台](https://open.feishu.cn/)（用你的飞书账号扫码即可）。
 2.  点击右上角的 **“开发者后台”**。
 3.  点击 **“创建企业自建应用”**。
@@ -15,24 +19,18 @@
     -   **图标**：随便上传一张图片。
     -   点击 **“创建”**。
 
-## 2. 获取凭证 (Credentials)
-
+### 2. 获取凭证 (Credentials)
 创建成功后，进入应用详情页的 **“凭证与基础信息”** 页面：
-
 -   找到 **App ID** 和 **App Secret**。
 -   👀 **请记下这两个值**，稍后我们配置 Belldandy 时需要用到。
-test App ID:XXX
-App Secret:XXX
-## 3. 开启机器人能力
 
+### 3. 开启机器人能力
 1.  在左侧菜单点击 **“应用功能” -> “机器人”**。
 2.  点击 **“启用机器人”** 开关。
 
-## 4. 配置权限 (Permissions)
-
+### 4. 配置权限 (Permissions)
 为了能收发消息，我们需要申请权限。
 在左侧菜单点击 **“开发配置” -> “权限管理”**，搜索并勾选以下权限（点击“批量开通”或逐个开通）：
-
 -   **核心权限**：
     -   `im:message` (获取用户发给机器人的单聊消息)
     -   `im:message:send_as_bot` (以应用身份发送消息)
@@ -41,22 +39,8 @@ App Secret:XXX
 
 > 💡 **注意**：开通权限后，需要发布版本才能生效。但我们最后统一发布。
 
-## 5. 配置 Belldandy (填入凭证)
-
-在配置长连接之前，我们需要将刚才获取的 **App ID** 和 **App Secret** 配置到 Belldandy 中。
-
-1.  在 Belldandy 项目根目录下创建或编辑 `.env` 文件。
-2.  添加以下配置（替换为你实际获取的值）：
-    ```bash
-    BELLDANDY_FEISHU_APP_ID=XXX    # 你的 App ID
-    BELLDANDY_FEISHU_APP_SECRET=XXX   # 你的 App Secret
-    ```
-3.  保存文件。
-
-## 6. 配置长连接 (WebSocket) - **关键步骤**
-
+### 5. 配置长连接 (WebSocket) - **关键步骤**
 这是我们无需公网 IP 就能使用的黑科技。
-
 1.  在左侧菜单点击 **“开发配置” -> “事件订阅”**。
 2.  配置方式选择：**“长连接模式”** (WebSocket)。
     -   *(如果没看到这个选项，说明你的企业可能还在旧版，通常新创建的都支持。或者你找一下是否有"配置方式"的切换按钮)*
@@ -65,10 +49,8 @@ App Secret:XXX
     -   搜索并选择：`接收消息 (v2.0)` 或 `im.message.receive_v1`。
     -   点击确认。
 
-## 7. 发布应用
-
+### 6. 发布应用
 所有配置改动（包括权限申请）都需要发布版本才会生效。
-
 1.  在左侧菜单点击 **“应用发布” -> “版本管理与发布”**。
 2.  点击 **“创建版本”**。
 3.  **版本号**：填 `1.0.0`。
@@ -79,43 +61,40 @@ App Secret:XXX
     -   点击保存。
 6.  点击 **“申请发布”**（如果你是管理员，通常会自动通过；如果不是，需要去飞书管理后台审核通过）。
 
----
-
-## ✅ 准备完毕
-
-现在，你的 Belldandy 已经配置好了飞书凭证，并且飞书应用也配置了长连接模式。
-
-## 7. 启动与使用
-
-1.  在 Belldandy 项目根目录运行：
-
-    ```bash
-    corepack pnpm dev:gateway
-    ```
-
-2.  检查终端输出，应该能看到类似：
-    ```
-    [info]: [ 'client ready' ]
-    [info]: [ 'event-dispatch is ready' ]
-    Feishu WebSocket Channel started.
-    [info]: [ '[ws]', 'ws client ready' ]
-    ```
-
-3.  现在打开飞书，搜索你创建的应用名称（如 `Belldandy`），开始对话！
-
-## 8. 常见问题
-
+### 7. 常见问题 (飞书)
 **Q: 发送消息后 Belldandy 不回复？**
 A: 检查 Gateway 终端是否有错误日志。确保：
 -   应用已发布且审核通过
 -   权限已正确开通
 -   已添加 `im.message.receive_v1` 事件订阅
 
-**Q: 出现"系统繁忙"错误？**
-A: 这可能是 Feishu 服务端暂时问题，或应用未正确发布。尝试重新发布应用版本。
-
-**Q: 模型调用失败 (HTTP 400) - thinking/reasoning 相关错误？**
-A: 如果使用 Kimi K2.5，这是已知问题。Belldandy 已自动禁用 thinking 模式以兼容工具调用。如果仍有问题，尝试换用其他模型（如 `moonshot-v1-8k`）。
-
 ---
-*Belldandy - 现在可以通过飞书随时与你的 AI 助手对话了！*
+
+## 模块二：QQ 机器人接入指南
+
+Belldandy 支持通过 QQ 官方 Bot API 作为新渠道接入，使得 Agent 可以直接在 QQ 频道、群聊或私信中与你互动。
+
+### 1. 申请 QQ 机器人
+1. 前往 [QQ 机器人管理后台](https://bot.q.qq.com/) 获取你的测试/正式机器人的凭据。
+2. 创建好机器人后，在"开发配置"中找到你的 **AppID** 和 **AppSecret**（机器人密钥）。
+
+### 2. 配置 Belldandy
+打开项目根目录下的 `.env`（或者 `.env.local`）文件，找到 `# ------ QQ 渠道（可选）------`。
+填入你的配置信息：
+```env
+BELLDANDY_QQ_APP_ID=你的AppID
+BELLDANDY_QQ_APP_SECRET=你的AppSecret
+# 沙箱模式下为 true，上线后改为 false
+BELLDANDY_QQ_SANDBOX=true
+```
+
+**重要说明**：QQ 官方已禁用固定 Token 鉴权，现在使用 **AccessToken** 方式：
+- Belldandy 会自动用 `AppID` + `AppSecret` 换取 AccessToken
+- AccessToken 有效期 2 小时，系统会自动刷新
+- 无需手动管理 Token
+
+### 3. 启动与验证
+1. 如果配置正确，当你启动 `pnpm dev:gateway` 或者重启后，终端会自动加载 QQ 模块，你将能看到类似如下的日志：
+   > `[qq] AccessToken obtained, expires in 6900s`
+   > `[qq] WebSocket Channel started. (Sandbox: true)`
+2. 现在，你可以前往沙箱环境的 QQ 频道或私信，圈出 (`@`) 你的机器人并与其对话，Belldandy 将会处理并回复你的消息。

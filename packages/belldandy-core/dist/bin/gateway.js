@@ -5,7 +5,7 @@ import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles,
 import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, } from "@belldandy/skills";
 import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
-import { FeishuChannel } from "@belldandy/channels";
+import { FeishuChannel, QqChannel } from "@belldandy/channels";
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner } from "../heartbeat/index.js";
 import { CronStore, startCronScheduler } from "../cron/index.js";
@@ -63,6 +63,11 @@ const webRoot = readEnv("BELLDANDY_WEB_ROOT") ?? path.join(process.cwd(), "apps"
 const feishuAppId = readEnv("BELLDANDY_FEISHU_APP_ID");
 const feishuAppSecret = readEnv("BELLDANDY_FEISHU_APP_SECRET");
 const feishuAgentId = readEnv("BELLDANDY_FEISHU_AGENT_ID");
+// Channels - QQ
+const qqAppId = readEnv("BELLDANDY_QQ_APP_ID");
+const qqAppSecret = readEnv("BELLDANDY_QQ_APP_SECRET");
+const qqAgentId = readEnv("BELLDANDY_QQ_AGENT_ID");
+const qqSandbox = readEnv("BELLDANDY_QQ_SANDBOX") !== "false";
 // Heartbeat
 const heartbeatEnabled = readEnv("BELLDANDY_HEARTBEAT_ENABLED") === "true";
 const heartbeatIntervalRaw = readEnv("BELLDANDY_HEARTBEAT_INTERVAL") ?? "30m";
@@ -987,6 +992,33 @@ if (feishuAppId && feishuAppSecret && createAgent) {
 }
 else if ((feishuAppId || feishuAppSecret) && !createAgent) {
     logger.warn("feishu", "Credentials present but no Agent configured (provider not openai?), skipping.");
+}
+// 9.5 Start QQ Channel (if configured)
+let qqChannel;
+if (qqAppId && qqAppSecret && createAgent) {
+    try {
+        const agent = (agentRegistry && qqAgentId)
+            ? agentRegistry.create(qqAgentId)
+            : createAgent();
+        qqChannel = new QqChannel({
+            appId: qqAppId,
+            appSecret: qqAppSecret,
+            sandbox: qqSandbox,
+            agent: agent,
+            agentId: qqAgentId,
+            conversationStore: conversationStore,
+        });
+        // Do not await, start in background
+        qqChannel.start().catch((err) => {
+            logger.error("qq", "Channel Error", err);
+        });
+    }
+    catch (e) {
+        logger.warn("qq", "Agent creation failed (likely missing config), skipping QQ startup.");
+    }
+}
+else if ((qqAppId || qqAppSecret) && !createAgent) {
+    logger.warn("qq", "Credentials present but no Agent configured, skipping.");
 }
 // 10. Start Heartbeat Runner (if configured)
 function parseIntervalMs(raw) {

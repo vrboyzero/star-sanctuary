@@ -75,7 +75,12 @@
       "Bash(cmd.exe:*)",
       "Bash(powershell.exe -NoProfile -Command \"robocopy ''E:\\\\project\\\\belldandy'' ''\\\\\\\\wsl.localhost\\\\Ubuntu\\\\home\\\\vrboyzero\\\\workspace\\\\Belldandy'' /MIR /XD node_modules .next out dist .git /XF *.db *.db-journal .env.local /NP /NFL /NDL\")",
       "Bash(powershell.exe:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(xargs kill:*)",
+      "Bash(npm run build)",
+      "Bash(timeout 10 npm start:*)",
+      "WebFetch(domain:bot.q.qq.com)",
+      "Bash(timeout 30 corepack pnpm dev:gateway:*)"
     ]
   }
 }

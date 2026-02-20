@@ -12,13 +12,14 @@
     "dev": "tsc -w"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.42.0",
-    "ws": "^8.18.0",
     "@belldandy/agent": "workspace:*",
-    "@belldandy/protocol": "workspace:*"
+    "@belldandy/protocol": "workspace:*",
+    "@larksuiteoapi/node-sdk": "^1.42.0",
+    "qq-guild-bot": "^2.9.5",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
-    "@types/ws": "^8.5.14"
+    "@types/ws": "^8.5.14",
+    "typescript": "^5.7.3"
   }
 }

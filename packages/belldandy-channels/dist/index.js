@@ -20,6 +20,7 @@ __exportStar(require("./types.js"), exports);
 __exportStar(require("./manager.js"), exports);
 // 渠道实现
 __exportStar(require("./feishu.js"), exports);
+__exportStar(require("./qq.js"), exports);
 // 未来渠道（示例导出位置）
 // export * from "./telegram.js";
 // export * from "./discord.js";
