@@ -119,20 +119,18 @@ export class MemoryIndexer {
             this.watcher = null;
         }
     }
-    /** 启动目录监听 */
-    async startWatching(dirPath) {
+    /** 启动目录监听（支持单目录或多目录） */
+    async startWatching(dirPaths) {
         if (this.watcher)
             return;
-        console.log(`[MemoryIndexer] Starting watch on: ${dirPath}`);
-        this.watcher = chokidar.watch(dirPath, {
+        const paths = Array.isArray(dirPaths) ? dirPaths : [dirPaths];
+        console.log(`[MemoryIndexer] Starting watch on: ${paths.join(", ")}`);
+        this.watcher = chokidar.watch(paths, {
             ignored: (pathStr) => {
-                // Ignore dotfiles (except .belldandy config maybe? no, usually ignore hidden)
-                // Actually we explicitly ignore .git and node_modules in ignoredPatterns.
-                // Chokidar ignored function: return true to ignore.
                 return this.options.ignorePatterns.some(pattern => pathStr.includes(pattern));
             },
             persistent: true,
-            ignoreInitial: true, // Don't re-index everything on start (we rely on indexDirectory for initial scan)
+            ignoreInitial: true,
             awaitWriteFinish: {
                 stabilityThreshold: this.options.watchDebounceMs,
                 pollInterval: 100
@@ -141,15 +139,14 @@ export class MemoryIndexer {
         const handleFile = async (filePath) => {
             const ext = path.extname(filePath).toLowerCase();
             if (this.options.extensions.includes(ext)) {
-                console.log(`[FileChanged] ${path.relative(dirPath, filePath)}`);
+                console.log(`[FileChanged] ${filePath}`);
                 await this.indexFile(filePath);
             }
         };
         const handleRemove = async (filePath) => {
-            // If extension matches, delete from store
             const ext = path.extname(filePath).toLowerCase();
             if (this.options.extensions.includes(ext)) {
-                console.log(`[FileRemoved] ${path.relative(dirPath, filePath)}`);
+                console.log(`[FileRemoved] ${filePath}`);
                 this.store.deleteBySource(filePath);
             }
         };

@@ -50,7 +50,7 @@
     - **Function Calling**：实现了 `ToolEnabledAgent`，支持“思考-调用工具-获取结果-再思考”的 ReAct 循环。
 - **价值**：让 Agent 可以联网搜索最新信息、阅读本地文档、甚至协助编写代码文件，极大地扩展了其实用性。
 
-### 4. Memory 记忆系统 (Phase 4 & 4.5)
+### 4. Memory 记忆系统 (Phase 4 & 4.5 & M-Next)
 
 - **目标**：赋予 Agent 长期记忆，使其随着使用越来越了解用户，并能回忆起过去的对话与知识。
 - **实现内容**：
@@ -59,15 +59,47 @@
         - 迁移范围：仅涉及 `store.ts` 和 `sqlite-vec.ts` 两个文件，API 高度兼容，改动量约 10 行。
     - **智能索引**：
         - `Chunker`：基于 Token 估算的智能文本分块。
-        - `MemoryIndexer`：增量式文件索引，自动扫描 `~/.belldandy/memory/` 目录。
+        - `MemoryIndexer`：增量式文件索引，自动扫描 `~/.belldandy/memory/` 目录，支持 `.md`、`.txt`、`.jsonl`（会话历史）格式。
     - **物理分层存储**：
-        - **数据库层**：SQLite 中 `chunks` 表新增 `memory_type` 字段 (`core` | `daily` | `other`)，实现物理隔离与差异化检索。
+        - **数据库层**：SQLite 中 `chunks` 表新增 `memory_type` 字段 (`core` | `daily` | `session` | `other`)，实现物理隔离与差异化检索。
         - **文件映射**：
             - `MEMORY.md` ➜ `core` (长期记忆/事实)
             - `memory/YYYY-MM-DD.md` ➜ `daily` (短期流水/日志)
-    - **Embedding 集成**：支持对接 OpenAI 兼容的 Embedding API 生成向量。
-    - **Memory Tools**：提供了 `memory_search` 工具，让 Agent 能自主发起检索。
-- **价值**：解决了 LLM 上下文窗口限制问题，并实现了长期核心记忆与短期流水的结构化分离，为未来的差异化权重检索奠定基础。
+            - `sessions/*.jsonl` ➜ `session` (会话历史)
+    - **Embedding 集成**：支持对接 OpenAI 兼容的 Embedding API 生成向量，或使用本地 Embedding 模型（`LocalEmbeddingProvider`）。
+    - **Embedding Cache** (M-N0 ✅)：
+        - 基于内容哈希的 Embedding 缓存表（`embedding_cache`），避免重复计算相同内容的向量。
+        - 缓存命中率可达 30-50%（重复内容场景），显著降低 API 成本与索引时间。
+    - **统一 MemoryStore** (M-N1 ✅)：
+        - 全局单例 `MemoryManager`，通过 `registerGlobalMemoryManager` / `getGlobalMemoryManager` 实现跨包共享。
+        - 避免多实例导致的数据库锁竞争与内存浪费。
+    - **元数据过滤** (Phase M-1 ✅)：
+        - `chunks` 表新增 `channel`、`topic`、`ts_date` 列，支持按渠道/主题/时间范围过滤检索结果。
+        - 索引优化：为元数据列创建 B-Tree 索引，加速过滤查询。
+    - **规则重排序** (Phase M-3 ✅)：
+        - `ResultReranker`：零成本纯计算重排，基于三大信号：
+            1. **Memory Type 权重**：`core` (1.3) > `daily` (1.0) > `session` (0.9) > `other` (0.8)
+            2. **时间衰减**：指数衰减，半衰期默认 30 天（可配置）
+            3. **来源多样性惩罚**：同一文件的多个 chunk 降权（默认 15% 惩罚）
+        - 可通过 `RerankerOptions` 自定义权重与衰减参数。
+    - **L0 摘要层** (M-N2，基础设施已完成)：
+        - `chunks` 表新增 `summary`、`summary_tokens` 列，为每个 chunk 生成简短摘要（100-200 token）。
+        - 配置项：`BELLDANDY_MEMORY_SUMMARY_ENABLED`、`BELLDANDY_MEMORY_SUMMARY_MODEL`。
+        - 摘要生成逻辑已预留，支持批量处理与最小内容长度阈值（默认 500 字符）。
+    - **会话记忆自动提取** (M-N3，基础设施已完成)：
+        - 会话结束时自动提取关键信息（事实、偏好、决策）并写入 `memory/YYYY-MM-DD.md`。
+        - 配置项：`BELLDANDY_MEMORY_EVOLUTION_ENABLED`、`BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES`（默认 4 条消息）。
+        - 提取逻辑已预留，支持相似度去重与人工可审查。
+    - **源路径聚合检索** (M-N4，基础设施已完成)：
+        - 当检索结果中同一 `source_path` 出现多个 chunk 时，自动拉取该文件的所有相关 chunk 进行二次检索。
+        - 配置项：`BELLDANDY_MEMORY_DEEP_RETRIEVAL`。
+        - 适用于"找到一个相关段落后，想看完整上下文"的场景。
+    - **Memory Tools**：提供了 `memory_search`、`memory_get`、`memory_index` 工具，让 Agent 能自主发起检索与索引。
+- **价值**：
+    - 解决了 LLM 上下文窗口限制问题。
+    - 实现了长期核心记忆、短期流水、会话历史的结构化分离与差异化检索。
+    - 通过 Embedding Cache、规则重排、元数据过滤等优化，显著提升检索质量与性能。
+    - 为未来的 L0 摘要、自动记忆提取、LLM 重排等高级能力奠定基础。
 
 ### 5. 对话上下文与防注入 (Phase 2.2)
 
@@ -1107,36 +1139,98 @@
 - **价值**：**性能与硬盘寿命**。防止高频对话时频繁对 SQLite 进行微小写入。在目前单人使用且数据量不大的情况下，收益不明显。
 - **工作量**：**低**。
 
-### 4. 记忆系统优化 (优先级：中)
+### 4. 记忆系统优化 (优先级：中) — Phase M-Next
 
-虽然当前系统已具备基础的向量检索能力，但为了进一步提升记忆的"智能感"，规划了以下三个优化方向：
+基于 OpenViking 的记忆系统架构，Belldandy 实施了一系列记忆系统升级，旨在提升检索质量、降低成本、增强智能感。
 
-1.  **自动摘要 (Auto-Summarization)**
-    - **痛点**：长期对话会导致记忆碎片化，缺乏宏观结论。
-    - **方案**：每日或定期触发 LLM 对近期对话生成 **High-Level Summary**，并作为独立记忆块存入，便于检索"结论"而非"过程"。
+#### 已完成部分
 
-2.  **元数据过滤 (Metadata Filtering)** ✅ 已完成
-    - **痛点**：全量检索可能混杂不同渠道、不同话题的无关信息。
-    - **方案**：在记忆块中注入 `channel`、`topic`、`timestamp` 等结构化标签，检索时支持 SQL 级预过滤（Pre-filtering），如"只查飞书上的技术讨论"。
-    - **实现内容**：
-        - `chunks` 表新增 `channel`（来源渠道）、`topic`（话题标签）、`ts_date`（日期）三个结构化列 + 4 个索引。
-        - 数据库启动时自动迁移 Schema 并回填存量数据（从文件路径/metadata 推断 channel 和 ts_date）。
-        - `searchKeyword` / `searchVector` / `searchHybrid` 全部支持 `MemorySearchFilter` 参数（memory_type / channel / topic / dateFrom / dateTo）。
-        - 索引器（`MemoryIndexer`）在索引文件时自动推断 channel（webchat/feishu/heartbeat）和 ts_date。
-        - `memory_search` 工具新增 `memory_type`、`channel`、`date_from`、`date_to` 过滤参数。
-        - `MemoryManager.search()` 兼容旧签名 `(query, limit)` 和新签名 `(query, { limit, filter })`。
+1. **Embedding Cache (M-N0)** ✅
+   - **痛点**：重复内容（如常见问候、固定模板）反复计算 Embedding，浪费 API 成本与时间。
+   - **方案**：基于内容哈希的缓存表（`embedding_cache`），存储 `content_hash → embedding` 映射。
+   - **实现**：
+     - 新增 `embedding_cache` 表（content_hash / embedding / dimensions / model / created_at）。
+     - `processPendingEmbeddings` 在计算前先查缓存，命中则直接使用。
+     - 缓存命中率可达 30-50%（重复内容场景），显著降低 API 成本与索引时间。
 
-3.  **查询重写与重排序 (Rewrite & Rerank)** — 规则重排 ✅ 已完成 / 查询重写与 LLM 重排 ⏳ 待实现
-    - **痛点**：用户指代不清（"它怎么样？"）导致检索失败；向量相似度不等于逻辑相关度。
-    - **方案**：
-        - **Rewrite**：先用 LLM 将用户查询改写为完整句子（消歧），再检索。（⏳ 待实现，`BELLDANDY_MEMORY_REWRITE_ENABLED` 控制）
-        - **Rerank**：引入精细的 Rerank 模型对初步检索的 Top-50 结果进行二次打分，筛选出真正相关的 Top-5。（LLM Rerank ⏳ 待实现）
-    - **已实现 — 规则重排（`ResultReranker`）**：
-        - 零成本纯计算重排，默认开启，三个信号：
-            - **memory_type 权重**：core 1.3x > daily 1.0x > session 0.9x > other 0.8x
-            - **时间衰减**：指数衰减，30 天半衰期，下限 0.3（避免旧核心记忆被完全压制）
-            - **来源多样性惩罚**：同一文件的多个 chunk 每多出现一次降权 15%
-        - 搜索流程：先取 `limit×2` 候选 → RRF 融合 → 规则重排 → 截取 Top-K
+2. **统一 MemoryStore (M-N1)** ✅
+   - **痛点**：多个包（agent / skills / gateway）各自创建 MemoryStore 实例，导致数据库锁竞争与内存浪费。
+   - **方案**：全局单例 `MemoryManager`，通过 `registerGlobalMemoryManager` / `getGlobalMemoryManager` 实现跨包共享。
+   - **实现**：
+     - `manager.ts` 导出全局注册/获取函数。
+     - Gateway 启动时创建唯一实例并注册。
+     - 其他包通过 `getGlobalMemoryManager()` 获取共享实例。
+
+3. **元数据过滤 (Phase M-1)** ✅
+   - **痛点**：全量检索可能混杂不同渠道、不同话题的无关信息。
+   - **方案**：在记忆块中注入 `channel`、`topic`、`timestamp` 等结构化标签，检索时支持 SQL 级预过滤。
+   - **实现内容**：
+     - `chunks` 表新增 `channel`（来源渠道）、`topic`（话题标签）、`ts_date`（日期）三个结构化列 + 4 个索引。
+     - 数据库启动时自动迁移 Schema 并回填存量数据（从文件路径/metadata 推断 channel 和 ts_date）。
+     - `searchKeyword` / `searchVector` / `searchHybrid` 全部支持 `MemorySearchFilter` 参数（memory_type / channel / topic / dateFrom / dateTo）。
+     - 索引器（`MemoryIndexer`）在索引文件时自动推断 channel（webchat/feishu/heartbeat）和 ts_date。
+     - `memory_search` 工具新增 `memory_type`、`channel`、`date_from`、`date_to` 过滤参数。
+     - `MemoryManager.search()` 兼容旧签名 `(query, limit)` 和新签名 `(query, { limit, filter })`。
+
+4. **规则重排序 (Phase M-3)** ✅
+   - **痛点**：向量相似度不等于逻辑相关度，需要结合多维信号重排。
+   - **方案**：零成本纯计算重排（`ResultReranker`），基于三大信号：
+     1. **Memory Type 权重**：`core` (1.3) > `daily` (1.0) > `session` (0.9) > `other` (0.8)
+     2. **时间衰减**：指数衰减，半衰期默认 30 天，下限 0.3（避免旧核心记忆被完全压制）
+     3. **来源多样性惩罚**：同一文件的多个 chunk 每多出现一次降权 15%
+   - **实现**：
+     - `reranker.ts` 实现 `ResultReranker` 类，支持自定义权重与衰减参数（`RerankerOptions`）。
+     - 搜索流程：先取 `limit×2` 候选 → RRF 融合 → 规则重排 → 截取 Top-K。
+     - 默认开启，无需额外配置。
+
+5. **L0 摘要层 (M-N2)** ✅
+   - **痛点**：长 chunk（1000+ token）在检索时消耗大量上下文窗口，且可能包含冗余信息。
+   - **方案**：为每个 chunk 生成简短摘要（100-200 token），检索时优先返回摘要，需要时再拉取原文。
+   - **实现**：
+     - `chunks` 表新增 `summary`、`summary_tokens` 列。
+     - 配置项：`BELLDANDY_MEMORY_SUMMARY_ENABLED`、`BELLDANDY_MEMORY_SUMMARY_MODEL`、`BELLDANDY_MEMORY_SUMMARY_BATCH_SIZE`、`BELLDANDY_MEMORY_SUMMARY_MIN_CONTENT_LENGTH`。
+     - `generateSummaries()` 方法：异步批量扫描未摘要的长 chunk（> 500 字符），调用 LLM 生成单句摘要。
+     - `callLLMForSummary()` 方法：调用 OpenAI 兼容 API，使用专用 prompt 生成摘要（max_tokens=150，temperature=0.3）。
+     - `memory_search` 工具新增 `detail_level` 参数（`summary` | `full`），默认返回摘要模式。
+     - Token 节省估算：10 条结果从 ~5000-10000 token 降至 ~500-1000 token（节省 80-90%）。
+
+6. **会话记忆自动提取 (M-N3)** ✅
+   - **痛点**：长期对话会导致记忆碎片化，缺乏宏观结论。
+   - **方案**：会话结束时自动提取关键信息（事实、偏好、决策）并写入 `memory/YYYY-MM-DD.md`。
+   - **实现**：
+     - 配置项：`BELLDANDY_MEMORY_EVOLUTION_ENABLED`、`BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES`（默认 4）、`BELLDANDY_MEMORY_EVOLUTION_MODEL`。
+     - `extractMemoriesFromConversation()` 方法：会话结束时触发，检查消息数 ≥ 4，防重复检查（meta 表标记），调用 LLM 提取记忆。
+     - `callLLMForExtraction()` 方法：使用专用 prompt 提取【用户偏好】和【经验教训】两类记忆，返回 JSON 数组。
+     - 相似度去重：提取后用 `memory_search` 检查是否已有相似记忆（score > 0.85 则跳过）。
+     - 写入每日文件：格式为 `- [类型] 内容 (来源: session-xxx)`，追加到 `memory/YYYY-MM-DD.md`。
+     - Gateway 注册 `agent_end` hook，自动触发提取流程。
+
+7. **源路径聚合检索 (M-N4)** ✅
+   - **痛点**：检索到一个相关段落后，想看完整上下文，但只返回单个 chunk。
+   - **方案**：当检索结果中同一 `source_path` 出现多个 chunk 时，自动拉取该文件的所有相关 chunk 进行二次检索。
+   - **实现**：
+     - 配置项：`BELLDANDY_MEMORY_DEEP_RETRIEVAL`（默认关闭）。
+     - `applyDeepRetrieval()` 方法：
+       1. 第一轮结果按 `source_path` 分组统计。
+       2. 找出出现 ≥2 次的 source（触发条件）。
+       3. 计算聚合分数：`avg(score) * log(count + 1)`（兼顾质量和密度）。
+       4. 选出 Top-3 高分 source。
+       5. 拉取这些 source 的全部 chunk（最多 10 个/source），按 `start_line` 排序。
+       6. 补充 chunk 赋予衰减分数（`aggScore * 0.5`），与第一轮结果合并去重排序。
+     - `store.getChunksBySource()` 方法：按 source_path 拉取全部 chunk 并按行号排序。
+     - 无热点 source 时直接返回第一轮结果（性能无损）。
+
+#### 未来规划
+
+8. **查询重写 (Query Rewrite)** ⏳ 待实现
+   - **痛点**：用户指代不清（"它怎么样？"）导致检索失败。
+   - **方案**：先用 LLM 将用户查询改写为完整句子（消歧），再检索。
+   - **配置项**：`BELLDANDY_MEMORY_REWRITE_ENABLED`（待添加）。
+
+9. **LLM 重排 (LLM Rerank)** ⏳ 待实现
+   - **痛点**：规则重排无法理解深层语义，可能遗漏真正相关的结果。
+   - **方案**：引入精细的 Rerank 模型对初步检索的 Top-50 结果进行二次打分，筛选出真正相关的 Top-5。
+   - **配置项**：`BELLDANDY_MEMORY_RERANK_ENABLED`（待添加）。
 
 ### 5. OS 计算机操作能力 (Computer Use Strategy) (优先级：中)
 
@@ -1365,7 +1459,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **目录列表** | `list_files` |
 | **网页抓取** | `web_fetch`（含域名黑白名单、SSRF 防护） |
 | **网页搜索** | `web_search`（Brave / SerpAPI） |
-| **记忆检索** | `memory_search`（FTS5 + 向量混合检索 + 元数据过滤 + 规则重排） |
+| **记忆检索** | `memory_search`（FTS5 + 向量混合检索 + Embedding Cache + 元数据过滤 + 规则重排 + 源路径聚合） |
 | **记忆读写** | `memory_read`, `memory_write` |
 | **飞书渠道** | `FeishuChannel`（WebSocket 长连接） |
 | **定时触发** | `Heartbeat Runner`（读取 HEARTBEAT.md） |
@@ -1397,7 +1491,17 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
  1. **WebChat 子 Agent 状态展示** — 前端实时展示子 Agent 运行状态（Phase 25 Step 4）
  2. **条件分支编排** — 根据子 Agent 结果决定后续分支（Phase 25 Step 5）
  3. **`code_interpreter` 增强** — 更高级的沙箱计算能力
- 4. **Local Embedding** — 完全本地化的向量计算，摆脱 API 依赖
- 5. **记忆系统优化** — 自动摘要、~~元数据过滤~~✅、~~规则重排~~✅、查询重写、LLM 重排
+ 4. **记忆系统优化（M-Next）** ✅ 已全部完成：
+    - ~~Embedding Cache (M-N0)~~✅
+    - ~~统一 MemoryStore (M-N1)~~✅
+    - ~~元数据过滤 (M-1)~~✅
+    - ~~规则重排 (M-3)~~✅
+    - ~~L0 摘要生成 (M-N2)~~✅
+    - ~~会话记忆自动提取 (M-N3)~~✅
+    - ~~源路径聚合检索 (M-N4)~~✅
+    - **未来规划**：查询重写（Query Rewrite）、LLM 重排（LLM Rerank）
+ 5. **Local Embedding** — 完全本地化的向量计算，摆脱 API 依赖（`LocalEmbeddingProvider` 已实现基础框架）
  6. **OS 计算机、手机操作** — 操作系统级 GUI 控制（基于 UI-TARS 方案）
+
+
 

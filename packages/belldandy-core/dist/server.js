@@ -6,7 +6,6 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { MockAgent, ConversationStore } from "@belldandy/agent";
 import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
-import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 const DEFAULT_METHODS = [
     "message.send",
     "config.read",
@@ -80,34 +79,8 @@ export async function startGatewayServer(opts) {
         ...opts.conversationStoreOptions,
         dataDir: sessionsDir,
     });
-    // 初始化记忆向量索引 (Vector Memory)
-    const memoryManager = new MemoryManager({
-        workspaceRoot: sessionsDir, // 仅索引会话目录
-        storePath: path.join(stateDir, "memory.sqlite"),
-        // [FIX] Ensure models are stored in the state root, not nested in sessions
-        modelsDir: path.join(stateDir, "models"),
-        // [FIX] Use BELLDANDY_ prefixed env vars first, fallback to standard env
-        // [UPDATE] Support separate config for Embedding Provider
-        openaiApiKey: process.env.BELLDANDY_EMBEDDING_OPENAI_API_KEY ?? process.env.BELLDANDY_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
-        openaiBaseUrl: process.env.BELLDANDY_EMBEDDING_OPENAI_BASE_URL ?? process.env.BELLDANDY_OPENAI_BASE_URL ?? process.env.OPENAI_BASE_URL,
-        openaiModel: process.env.BELLDANDY_EMBEDDING_MODEL, // [NEW] Pass configured model
-        provider: process.env.BELLDANDY_EMBEDDING_PROVIDER || "openai",
-        localModel: process.env.BELLDANDY_LOCAL_EMBEDDING_MODEL,
-        embeddingBatchSize: Number(process.env.BELLDANDY_EMBEDDING_BATCH_SIZE) || 2,
-        indexerOptions: {
-            // 重要：必须允许扫描 .belldandy 目录下的内容，否则默认 ignorePatterns 会跳过
-            ignorePatterns: ["node_modules", ".git"],
-            extensions: [".jsonl"],
-            watch: true
-        }
-    });
-    // [NEW] Register as global instance so memory_search tool can access this instance
-    // This enables Agent to search session history via vector retrieval
-    registerGlobalMemoryManager(memoryManager);
-    // 启动异步索引 (不阻塞 Gateway 启动)
-    memoryManager.indexWorkspace().catch(err => {
-        console.error("Failed to start memory indexing:", err);
-    });
+    // MemoryManager is now created and registered globally by gateway.ts (unified instance)
+    // No need to create a separate instance here.
     wss.on("connection", (ws, req) => {
         const ip = req.socket.remoteAddress;
         log.info("ws", `New connection from ${ip}`);

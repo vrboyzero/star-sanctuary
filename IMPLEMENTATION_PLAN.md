@@ -743,3 +743,260 @@ memory_search(query, { filter, rewrite, rerank })
 | `BELLDANDY_MEMORY_RERANK_LLM_ENABLED` | `false` | 启用 LLM 重排序 |
 | `BELLDANDY_MEMORY_RERANK_LLM_MODEL` | 继承主模型 | 重排用的模型 |
 
+---
+
+## Phase M-Next：记忆系统架构升级（借鉴 OpenViking）
+
+> **背景**：基于对 [OpenViking](https://github.com/volcengine/OpenViking)（字节跳动火山引擎 Viking 团队的 AI Agent 上下文数据库）的分析，提取其核心设计理念，在 Belldandy 现有 TypeScript 记忆系统上进行增量改进。不引入 Python 依赖，保持本地优先单栈架构。
+
+### M-N0：启用 Embedding Cache（修复已有死代码） ✅
+
+**状态**：已完成。改动：`manager.ts` — `processPendingEmbeddings()` 接入 SHA-256 content hash 缓存查/写，修复 `upsertChunkVector` provider 名称硬编码。
+
+**现状问题**：`store.ts` 已实现完整的 `embedding_cache` 表和 `cacheEmbedding()` / `getCachedEmbedding()` 方法，但 `manager.ts:processPendingEmbeddings()` 从未调用。每次重索引都重新计算 embedding，浪费 API 调用和时间。
+
+**改动范围**：仅 `packages/belldandy-memory/src/manager.ts`
+
+**实现方案**：
+
+1. 在 `processPendingEmbeddings()` 的 embedding 循环中，对每个 chunk：
+   - 计算 `content_hash`（SHA-256 of normalized content）
+   - 调用 `store.getCachedEmbedding(hash)` 检查缓存
+   - 命中 → 直接使用缓存向量，跳过 API 调用
+   - 未命中 → 调用 embedding API → `store.cacheEmbedding(hash, vector, dimensions, model)` 写入缓存
+2. 修复 `upsertChunkVector` 中硬编码的 `"openai"` 字符串，改为从实际 provider 获取
+
+**验证**：
+- 首次索引后检查 `embedding_cache` 表有数据
+- 删除 chunk 后重新索引同内容文件，确认无 API 调用（日志无 embed 请求）
+- `getStatus()` 返回的 `vectorCached` 数值正确
+
+---
+
+### M-N1：统一 MemoryStore 实例（消除双库问题） ✅
+
+**状态**：已完成。改动 4 文件：`indexer.ts`（`startWatching` 支持多目录）、`manager.ts`（新增 `additionalRoots`）、`gateway.ts`（移除独立 `MemoryStore`/`MemoryIndexer`，创建统一 `MemoryManager`）、`server.ts`（移除独立 `MemoryManager` 创建）。
+
+**现状问题**：`gateway.ts:419` 创建 `MemoryStore` 索引 workspace 文件（MEMORY.md、memory/*.md），`server.ts:152` 创建独立的 `MemoryManager` 索引 session 文件（sessions/*.jsonl）。两者使用不同 SQLite 数据库。`memory_search` 工具只能查询 `MemoryManager`（session），workspace 知识库文件不可搜索。
+
+**改动范围**：
+- `packages/belldandy-core/src/bin/gateway.ts` — 重构初始化流程
+- `packages/belldandy-core/src/server.ts` — 移除独立 MemoryManager 创建
+- `packages/belldandy-memory/src/manager.ts` — 支持多目录索引
+- `packages/belldandy-memory/src/indexer.ts` — 支持多 root 目录
+
+**实现方案**：
+
+1. `MemoryManagerOptions` 新增 `additionalRoots?: string[]` 字段
+2. `MemoryIndexer` 支持接收多个 root 目录，分别扫描和 watch
+3. `gateway.ts` 中创建唯一 `MemoryManager`，同时传入 workspace memory 目录和 sessions 目录
+4. `server.ts` 中移除独立 `MemoryManager` 创建，改为接收 gateway 传入的实例
+5. 删除 `gateway.ts` 中独立的 `MemoryStore` 实例（原 `memoryStore` 变量）
+
+**迁移策略**：
+- 统一使用 `memory.sqlite` 作为唯一数据库
+- 首次启动时自动重建索引（因为合并了数据源）
+- 旧的 `memory.db`（如果存在）不自动删除，用户可手动清理
+
+**验证**：
+- `memory_search` 能同时搜到 workspace 文件和 session 内容
+- `getStatus()` 的 `files` 数包含两个目录的文件
+- file watcher 对两个目录都生效
+
+---
+
+### M-N2：L0 摘要层（渐进式上下文加载） ✅
+
+**状态**：已完成。改动 5 文件：`types.ts`（MemorySearchResult 新增 summary 字段，MemoryIndexStatus 新增摘要统计）、`store.ts`（summary/summary_tokens 列迁移 + getChunksNeedingSummary/updateChunkSummary/getSummaryStatus 方法）、`manager.ts`（generateSummaries 异步批量 LLM 摘要生成 + callLLMForSummary）、`memory.ts`（memory_search 新增 detail_level 参数，summary/full 模式）、`gateway.ts`（读取 BELLDANDY_MEMORY_SUMMARY_* 环境变量）。
+
+**借鉴来源**：OpenViking 的 L0/L1/L2 三级上下文加载。Agent 先看摘要决定是否需要全文，大幅节省 token。
+
+**改动范围**：
+- `packages/belldandy-memory/src/types.ts` — 新增 `summary` 字段
+- `packages/belldandy-memory/src/store.ts` — Schema 迁移 + 查询支持
+- `packages/belldandy-memory/src/manager.ts` — 摘要生成流程
+- `packages/belldandy-memory/src/indexer.ts` — 索引时标记待摘要 chunk
+- `packages/belldandy-skills/src/builtin/memory.ts` — `memory_search` 工具支持摘要模式
+
+**实现方案**：
+
+1. **Schema 扩展**：
+   ```sql
+   ALTER TABLE chunks ADD COLUMN summary TEXT DEFAULT NULL;
+   ALTER TABLE chunks ADD COLUMN summary_tokens INTEGER DEFAULT NULL;
+   ```
+
+2. **摘要生成**（异步后台任务，不阻塞索引）：
+   - 索引完成后，扫描 `summary IS NULL AND length(content) > 500` 的 chunk
+   - 批量调用 LLM 生成单句摘要（~50-100 token），写入 `summary` 列
+   - 使用与 Agent 相同的 LLM provider（或配置独立的小模型）
+   - 环境变量 `BELLDANDY_MEMORY_SUMMARY_ENABLED=false`（默认关闭）
+   - 环境变量 `BELLDANDY_MEMORY_SUMMARY_MODEL`（可选，默认继承主模型）
+
+3. **搜索行为变更**：
+   - `memory_search` 工具新增 `detail_level` 参数：`"summary"` | `"full"`（默认 `"summary"`）
+   - `detail_level="summary"` 时：返回 `summary` 字段（如有），无摘要则回退到 content 前 200 字符
+   - `detail_level="full"` 时：返回完整 `content`（现有行为）
+   - Agent 可先用 summary 模式浏览，再对感兴趣的结果用 `memory_get` 获取全文
+
+4. **FTS5 索引扩展**：摘要也纳入全文索引，提升关键词匹配率
+
+**Token 节省估算**：
+- 当前：每条结果返回 ~500-1000 token 的 chunk 内容
+- 摘要模式：每条结果 ~50-100 token
+- 10 条结果场景：从 ~5000-10000 token 降至 ~500-1000 token（节省 80-90%）
+
+**验证**：
+- 启用后，新索引的 chunk 自动生成摘要
+- `memory_search` 默认返回摘要，`detail_level="full"` 返回全文
+- 无摘要的旧 chunk 优雅降级（返回截断内容）
+
+---
+
+### M-N3：会话记忆自动提取（Memory Evolution） ✅
+
+**状态**：已完成。改动 3 文件：`store.ts`（isSessionMemoryExtracted/markSessionMemoryExtracted 基于 meta 表的防重复标记）、`manager.ts`（extractMemoriesFromConversation 完整流程：消息数检查→防重复→LLM 提取→相似度去重→appendToTodayMemory 写入每日文件）、`gateway.ts`（注册 agent_end hook + 读取 BELLDANDY_MEMORY_EVOLUTION_* 环境变量）。
+
+**借鉴来源**：OpenViking 的会话结束记忆自迭代机制。会话结束后自动分析对话，提取用户偏好和 Agent 经验，写回记忆库。
+
+**改动范围**：
+- `packages/belldandy-core/src/bin/gateway.ts` — 注册 `agent_end` hook
+- `packages/belldandy-memory/src/manager.ts` — 新增 `ingestExtractedMemory()` 方法
+- `packages/belldandy-memory/src/memory-files.ts` — 写入每日记忆文件
+
+**实现方案**：
+
+1. **注册 `agent_end` hook**（gateway.ts）：
+   - 触发条件：会话消息数 ≥ 4（过滤掉过短的对话）
+   - 收集本次会话的完整消息历史
+   - 调用 LLM 提取记忆（使用专用 prompt）
+
+2. **记忆提取 Prompt**：
+   ```
+   分析以下对话，提取值得长期记住的信息。分为两类：
+   - 【用户偏好】：用户表达的喜好、习惯、工作方式、技术栈偏好等
+   - 【经验教训】：解决问题的有效方法、踩过的坑、有用的工具/命令等
+
+   仅提取有长期价值的信息，忽略临时性的对话内容。
+   每条记忆用一句话概括，格式为 JSON 数组。
+   如果没有值得记住的内容，返回空数组。
+   ```
+
+3. **记忆写入**：
+   - 提取结果追加到 `~/.belldandy/memory/YYYY-MM-DD.md`（每日记忆文件）
+   - 格式：`- [偏好/经验] 内容 (来源: session-xxx)`
+   - 写入后触发增量索引（已有 file watcher 机制）
+
+4. **防重复**：
+   - 提取前先用 `memory_search` 检查是否已有相似记忆（相似度 > 0.85 则跳过）
+   - 每个 session 只提取一次（在 session metadata 中标记 `memoryExtracted: true`）
+
+5. **环境变量**：
+   - `BELLDANDY_MEMORY_EVOLUTION_ENABLED=false`（默认关闭）
+   - `BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES=4`（最少消息数）
+   - `BELLDANDY_MEMORY_EVOLUTION_MODEL`（可选，默认继承主模型）
+
+**验证**：
+- 启用后，一次 ≥4 条消息的对话结束后，检查当日记忆文件有新增条目
+- 重复对话不产生重复记忆
+- 短对话（< 4 条）不触发提取
+
+---
+
+### M-N4：源路径聚合检索（模仿目录递归） ✅
+
+**状态**：已完成。改动 3 文件：`store.ts`（新增 getChunksBySource 按 source_path 拉取全部 chunk 并按 start_line 排序）、`manager.ts`（search() 新增 applyDeepRetrieval 二次检索：source 分组→聚合分数 avg*log→Top-3 热点 source→拉取补充 chunk→合并去重排序；新增 deepRetrievalEnabled 配置）、`gateway.ts`（读取 BELLDANDY_MEMORY_DEEP_RETRIEVAL 环境变量）。
+
+**借鉴来源**：OpenViking 的目录递归检索策略 — 先定位高分目录，再在目录内精炼搜索。
+
+**现状问题**：当前 hybrid search 是扁平的 KNN + FTS5 → RRF 融合，不考虑 chunk 的来源结构。同一文件的多个 chunk 可能分散在结果中，缺乏上下文连贯性。
+
+**改动范围**：
+- `packages/belldandy-memory/src/store.ts` — 新增聚合检索方法
+- `packages/belldandy-memory/src/manager.ts` — 搜索流程增加二次检索选项
+
+**实现方案**：
+
+1. **第一轮：常规 hybrid search**（现有逻辑不变）
+   - 返回 Top-K 结果（K = limit * 2）
+
+2. **源路径聚合**：
+   - 对第一轮结果按 `source_path` 分组
+   - 计算每个 source 的聚合分数：`avg(score) * log(count + 1)`（兼顾质量和密度）
+   - 选出 Top-3 高分 source
+
+3. **第二轮：定向检索**：
+   - 对 Top-3 source，从 `chunks` 表中拉取该 source 的所有 chunk
+   - 按 `start_line` 排序，保持原文顺序
+   - 与第一轮结果合并去重，重新排序
+
+4. **触发条件**：
+   - 仅当第一轮结果中某个 source 出现 ≥ 2 次时才触发二次检索
+   - 否则直接返回第一轮结果（避免无意义的额外查询）
+
+5. **环境变量**：
+   - `BELLDANDY_MEMORY_DEEP_RETRIEVAL=false`（默认关闭）
+
+**验证**：
+- 搜索一个跨多个 chunk 的长文档主题，结果应包含该文档的连续 chunk（而非散落片段）
+- 单 chunk 命中的简单查询不触发二次检索（性能无损）
+
+---
+
+### 实施优先级与依赖关系
+
+```
+M-N0 (Embedding Cache)  ──→  无依赖，立即可做
+       │
+M-N1 (统一 MemoryStore) ──→  无依赖，但改动较大，建议在 M-N0 之后
+       │
+M-N2 (L0 摘要层)        ──→  依赖 M-N1（统一后才能对所有数据生成摘要）
+       │
+M-N3 (记忆自动提取)     ──→  依赖 M-N1（提取的记忆需要写入统一库）
+       │
+M-N4 (聚合检索)         ──→  依赖 M-N1（需要统一库才能跨源聚合）
+```
+
+| 步骤 | 模块 | 工作量 | 风险 | 默认状态 | 状态 |
+|------|------|--------|------|---------|------|
+| M-N0 | Embedding Cache | 极小（~30 行改动） | 极低 | 始终启用 | ✅ 已完成 |
+| M-N1 | 统一 MemoryStore | 中（~200 行改动，4 文件） | 中（需要重构初始化流程） | 始终启用 | ✅ 已完成 |
+| M-N2 | L0 摘要层 | 中（~300 行新增，5 文件） | 低（新增功能，不影响现有） | 默认关闭 | ✅ 已完成 |
+| M-N3 | 记忆自动提取 | 中（~250 行新增，3 文件） | 低（hook 基础设施已就绪） | 默认关闭 | ✅ 已完成 |
+| M-N4 | 聚合检索 | 小（~150 行改动，2 文件） | 低（可选路径，不影响默认搜索） | 默认关闭 | ✅ 已完成 |
+
+### 新增环境变量汇总
+
+| 变量 | 默认值 | 说明 | 所属步骤 |
+|------|--------|------|---------|
+| `BELLDANDY_MEMORY_SUMMARY_ENABLED` | `false` | 启用 L0 摘要生成 | M-N2 |
+| `BELLDANDY_MEMORY_SUMMARY_MODEL` | 继承主模型 | 摘要生成用的模型（建议小模型） | M-N2 |
+| `BELLDANDY_MEMORY_EVOLUTION_ENABLED` | `false` | 启用会话记忆自动提取 | M-N3 |
+| `BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES` | `4` | 触发提取的最少消息数 | M-N3 |
+| `BELLDANDY_MEMORY_EVOLUTION_MODEL` | 继承主模型 | 记忆提取用的模型 | M-N3 |
+| `BELLDANDY_MEMORY_DEEP_RETRIEVAL` | `false` | 启用源路径聚合二次检索 | M-N4 |
+
+### 风险评估
+
+**M-N0 (Embedding Cache)**：
+- 几乎无风险。代码已存在，只需接线。唯一注意点是 content hash 算法需与 store.ts 中已有实现一致。
+
+**M-N1 (统一 MemoryStore)**：
+- 主要风险在初始化顺序变更。gateway.ts 的启动序列需要仔细调整，确保 MemoryManager 在 server 启动前就绑定好。
+- 迁移风险：合并后首次启动需要重建索引，耗时取决于文件数量（通常 < 30 秒）。
+- 回滚方案：保留旧 `memory.db` 不删除，如需回滚只需恢复旧代码。
+
+**M-N2 (L0 摘要层)**：
+- LLM 调用成本：每个 chunk 摘要约 200-400 token（输入 + 输出），1000 个 chunk 约 200k-400k token。建议使用小模型。
+- 摘要质量依赖模型能力，低质量摘要可能误导 Agent。需要设计好 prompt 并做抽样验证。
+- Schema 迁移安全：`ALTER TABLE ADD COLUMN` 对 SQLite 安全，不影响现有数据。
+
+**M-N3 (记忆自动提取)**：
+- LLM 幻觉风险：提取的记忆可能不准确。通过相似度去重和人工可审查（写入 markdown 文件）缓解。
+- 成本：每次会话结束额外 1000-3000 token。高频对话场景需注意。
+- 隐私：提取的记忆可能包含敏感信息。记忆文件存储在本地 `~/.belldandy/memory/`，符合本地优先原则。
+
+**M-N4 (聚合检索)**：
+- 性能：二次检索增加 1 次 SQL 查询，延迟增加 < 10ms（SQLite 本地查询）。
+- 结果膨胀：拉取整个 source 的所有 chunk 可能导致结果过多。需要设置上限（如每个 source 最多 10 个 chunk，可通过环境变量配置）。
+

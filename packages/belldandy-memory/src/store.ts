@@ -68,6 +68,12 @@ const SCHEMA_METADATA_COLUMNS = [
   "ALTER TABLE chunks ADD COLUMN ts_date TEXT DEFAULT NULL",
 ];
 
+// Phase M-N2: L0 摘要列迁移
+const SCHEMA_SUMMARY_COLUMNS = [
+  "ALTER TABLE chunks ADD COLUMN summary TEXT DEFAULT NULL",
+  "ALTER TABLE chunks ADD COLUMN summary_tokens INTEGER DEFAULT NULL",
+];
+
 const SCHEMA_METADATA_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
 CREATE INDEX IF NOT EXISTS idx_chunks_topic ON chunks(topic);
@@ -89,6 +95,10 @@ export class MemoryStore {
 
     // Phase M-1: 元数据列迁移（对已有列 ALTER TABLE ADD COLUMN 会报 duplicate，安全忽略）
     for (const sql of SCHEMA_METADATA_COLUMNS) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
+    // Phase M-N2: L0 摘要列迁移
+    for (const sql of SCHEMA_SUMMARY_COLUMNS) {
       try { this.db.exec(sql); } catch { /* column already exists */ }
     }
     this.db.exec(SCHEMA_METADATA_INDEXES);
@@ -193,7 +203,7 @@ export class MemoryStore {
         const stmt = this.db.prepare(`
           SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.start_line, c.end_line,
-            c.content, c.metadata, c.channel, c.topic, c.ts_date,
+            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary,
             bm25(chunks_fts) as rank
           FROM chunks_fts f
           JOIN chunks c ON c.rowid = f.rowid
@@ -213,7 +223,7 @@ export class MemoryStore {
     const likeConditions = tokens.map(() => `content LIKE ? ESCAPE '\\'`).join(" AND ");
     const likeArgs = tokens.map((t) => `%${escapeLike(t)}%`);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date
+      SELECT id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, summary
       FROM chunks c
       WHERE ${likeConditions}${filterClause}
       LIMIT ?
@@ -297,7 +307,46 @@ export class MemoryStore {
     stmt.run(now);
   }
 
+  // ========== Phase M-N3: Session 记忆提取标记 ==========
+
+  /** 检查 session 是否已提取过记忆 */
+  isSessionMemoryExtracted(sessionKey: string): boolean {
+    this.ensureOpen();
+    const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(`memory_extracted:${sessionKey}`) as { value: string } | undefined;
+    return row?.value === "true";
+  }
+
+  /** 标记 session 已提取记忆 */
+  markSessionMemoryExtracted(sessionKey: string): void {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      INSERT INTO meta (key, value) VALUES (?, 'true')
+      ON CONFLICT(key) DO UPDATE SET value = 'true'
+    `);
+    stmt.run(`memory_extracted:${sessionKey}`);
+  }
+
   /** 关闭数据库连接 */
+  // ========== Phase M-N4: 源路径聚合检索 ==========
+
+  /**
+   * 按 source_path 拉取该来源的所有 chunk，按 start_line 排序。
+   * @param maxPerSource 每个 source 最多返回的 chunk 数
+   */
+  getChunksBySource(sourcePath: string, maxPerSource = 10): MemorySearchResult[] {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT id, source_path, source_type, memory_type, start_line, end_line,
+             content, metadata, channel, topic, ts_date, summary
+      FROM chunks
+      WHERE source_path = ?
+      ORDER BY start_line ASC, rowid ASC
+      LIMIT ?
+    `);
+    const rows = stmt.all(sourcePath, maxPerSource) as any[];
+    return rows.map(row => rowToSearchResult(row, 0));
+  }
+
   close(): void {
     if (!this.closed) {
       this.db.close();
@@ -536,7 +585,7 @@ export class MemoryStore {
     const stmt = this.db.prepare(`
         SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.start_line, c.end_line,
-            c.content, c.metadata, c.channel, c.topic, c.ts_date,
+            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary,
             v.distance
         FROM chunks_vec v
         JOIN chunks c ON c.rowid = v.rowid
@@ -556,6 +605,7 @@ export class MemoryStore {
       channel: string | null;
       topic: string | null;
       ts_date: string | null;
+      summary: string | null;
       distance: number;
     }>;
 
@@ -567,6 +617,7 @@ export class MemoryStore {
       startLine: row.start_line ?? undefined,
       endLine: row.end_line ?? undefined,
       snippet: truncateContent(row.content, 500),
+      summary: row.summary ?? undefined,
       score: 1 / (1 + row.distance),
       metadata: safeParseJson(row.metadata),
     }));
@@ -660,6 +711,45 @@ export class MemoryStore {
     };
   }
 
+  // ========== Phase M-N2: L0 摘要层 ==========
+
+  /**
+   * 获取需要生成摘要的 chunks（summary IS NULL 且内容足够长）
+   */
+  getChunksNeedingSummary(minContentLength = 500, limit = 20): Array<{ id: string; content: string }> {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT id, content FROM chunks
+      WHERE summary IS NULL AND length(content) > ?
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `);
+    return stmt.all(minContentLength, limit) as Array<{ id: string; content: string }>;
+  }
+
+  /**
+   * 更新 chunk 的摘要
+   */
+  updateChunkSummary(chunkId: string, summary: string, summaryTokens?: number): void {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      UPDATE chunks SET summary = ?, summary_tokens = ? WHERE id = ?
+    `);
+    stmt.run(summary, summaryTokens ?? null, chunkId);
+  }
+
+  /**
+   * 获取摘要统计
+   */
+  getSummaryStatus(): { total: number; summarized: number; pending: number } {
+    this.ensureOpen();
+    const total = (this.db.prepare(`SELECT COUNT(*) as c FROM chunks`).get() as { c: number }).c;
+    const summarized = (this.db.prepare(`SELECT COUNT(*) as c FROM chunks WHERE summary IS NOT NULL`).get() as { c: number }).c;
+    // pending = content long enough but no summary yet
+    const pending = (this.db.prepare(`SELECT COUNT(*) as c FROM chunks WHERE summary IS NULL AND length(content) > 500`).get() as { c: number }).c;
+    return { total, summarized, pending };
+  }
+
   private ensureOpen(): void {
     if (this.closed) {
       throw new Error("MemoryStore already closed");
@@ -717,6 +807,7 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     startLine: row.start_line ?? undefined,
     endLine: row.end_line ?? undefined,
     snippet: truncateContent(row.content, 500),
+    summary: row.summary ?? undefined,
     score,
     metadata: safeParseJson(row.metadata),
   };

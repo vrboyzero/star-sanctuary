@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles, ensureAgentWorkspace, loadAgentWorkspaceFiles, buildSystemPrompt, ConversationStore, loadModelFallbacks, FailoverClient, AgentRegistry, SubAgentOrchestrator, loadAgentProfiles, buildDefaultProfile, resolveModelConfig, HookRegistry, createHookRunner, } from "@belldandy/agent";
 import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, } from "@belldandy/skills";
-import { MemoryStore, MemoryIndexer, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
+import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel } from "@belldandy/channels";
 import { startGatewayServer } from "../server.js";
@@ -77,7 +77,6 @@ const cronEnabled = readEnv("BELLDANDY_CRON_ENABLED") === "true";
 // State & Memory
 const defaultStateDir = path.join(os.homedir(), ".belldandy");
 const stateDir = readEnv("BELLDANDY_STATE_DIR") ?? defaultStateDir;
-const memoryDbPath = readEnv("BELLDANDY_MEMORY_DB") ?? path.join(stateDir, "memory.db");
 const extraWorkspaceRootsRaw = readEnv("BELLDANDY_EXTRA_WORKSPACE_ROOTS");
 const extraWorkspaceRoots = extraWorkspaceRootsRaw
     ? extraWorkspaceRootsRaw
@@ -306,8 +305,7 @@ if (!fs.existsSync(agentsDir)) {
         // ignore
     }
 }
-// 2. Init Memory (Singleton for server)
-const memoryStore = new MemoryStore(memoryDbPath);
+// 2. Memory: unified MemoryManager created after sessionsDir init (see section 7.5b)
 // 2.5 Init Embedding Provider (configured via env for MemoryManager)
 const embeddingEnabled = readEnv("BELLDANDY_EMBEDDING_ENABLED") === "true";
 if (embeddingEnabled && !openaiApiKey) {
@@ -481,17 +479,11 @@ if (toolsEnabled) {
     logger.info("skills", "registered skills_list + skills_search tools");
 }
 // 4.4 Bridge plugin hooks → HookRegistry (deferred to after hookRegistry init, see section 7.5)
-// 4.5 Auto-index memory files (MEMORY.md + memory/*.md)
+// 4.5 Ensure memory directory exists (actual indexing deferred to unified MemoryManager)
 await ensureMemoryDir(stateDir);
 const memoryFilesResult = await listMemoryFiles(stateDir);
 if (memoryFilesResult.files.length > 0) {
     logger.info("memory", `found ${memoryFilesResult.files.length} files (MEMORY.md=${memoryFilesResult.hasMainMemory}, daily=${memoryFilesResult.dailyCount})`);
-    // Index memory files
-    const indexer = new MemoryIndexer(memoryStore);
-    for (const file of memoryFilesResult.files) {
-        await indexer.indexFile(file.absPath);
-    }
-    logger.info("memory", "files indexed");
 }
 else {
     logger.info("memory", "no files found (run 'echo \"# Memory\" > ~/.belldandy/MEMORY.md' to create)");
@@ -860,6 +852,155 @@ const isTtsEnabledFn = () => {
         return false;
     return ttsEnv === "true" || fs.existsSync(ttsEnabledPath);
 };
+// 7.7 Init unified MemoryManager (indexes both sessions and workspace memory files)
+const memoryDir = path.join(stateDir, "memory");
+const memoryAdditionalRoots = [memoryDir];
+// Also index MEMORY.md at stateDir root — add stateDir itself but with .md-only scope
+// We handle this by adding the stateDir as an additional root; the indexer will only pick up
+// files matching the configured extensions (.md, .txt, .jsonl). Subdirs like logs/, models/
+// are excluded by ignorePatterns.
+const embeddingApiKey = readEnv("BELLDANDY_EMBEDDING_OPENAI_API_KEY") ?? openaiApiKey;
+const embeddingBaseUrl = readEnv("BELLDANDY_EMBEDDING_OPENAI_BASE_URL") ?? openaiBaseUrl;
+const embeddingModel = readEnv("BELLDANDY_EMBEDDING_MODEL");
+const embeddingProvider = readEnv("BELLDANDY_EMBEDDING_PROVIDER") || "openai";
+const localEmbeddingModel = readEnv("BELLDANDY_LOCAL_EMBEDDING_MODEL");
+const embeddingBatchSize = Number(readEnv("BELLDANDY_EMBEDDING_BATCH_SIZE")) || 2;
+// L0 摘要层配置
+const summaryEnabled = readEnv("BELLDANDY_MEMORY_SUMMARY_ENABLED") === "true";
+const summaryModel = readEnv("BELLDANDY_MEMORY_SUMMARY_MODEL") || openaiModel;
+const summaryBaseUrl = readEnv("BELLDANDY_MEMORY_SUMMARY_BASE_URL") || openaiBaseUrl;
+const summaryApiKey = readEnv("BELLDANDY_MEMORY_SUMMARY_API_KEY") || openaiApiKey;
+// M-N3: 会话记忆自动提取配置
+const evolutionEnabled = readEnv("BELLDANDY_MEMORY_EVOLUTION_ENABLED") === "true";
+const evolutionModel = readEnv("BELLDANDY_MEMORY_EVOLUTION_MODEL") || openaiModel;
+const evolutionBaseUrl = readEnv("BELLDANDY_MEMORY_EVOLUTION_BASE_URL") || openaiBaseUrl;
+const evolutionApiKey = readEnv("BELLDANDY_MEMORY_EVOLUTION_API_KEY") || openaiApiKey;
+const evolutionMinMessages = Number(readEnv("BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES")) || 4;
+// M-N4: 源路径聚合检索配置
+const deepRetrievalEnabled = readEnv("BELLDANDY_MEMORY_DEEP_RETRIEVAL") === "true";
+const unifiedMemoryManager = new MemoryManager({
+    workspaceRoot: sessionsDir,
+    additionalRoots: memoryAdditionalRoots,
+    storePath: path.join(stateDir, "memory.sqlite"),
+    modelsDir: path.join(stateDir, "models"),
+    stateDir,
+    openaiApiKey: embeddingApiKey,
+    openaiBaseUrl: embeddingBaseUrl,
+    openaiModel: embeddingModel,
+    provider: embeddingProvider,
+    localModel: localEmbeddingModel,
+    embeddingBatchSize,
+    summaryEnabled,
+    summaryModel,
+    summaryBaseUrl,
+    summaryApiKey,
+    evolutionEnabled,
+    evolutionModel,
+    evolutionBaseUrl,
+    evolutionApiKey,
+    evolutionMinMessages,
+    deepRetrievalEnabled,
+    indexerOptions: {
+        ignorePatterns: ["node_modules", ".git", "logs", "models", "plugins", "skills", "methods"],
+        extensions: [".md", ".txt", ".jsonl"],
+        watch: true,
+    },
+});
+registerGlobalMemoryManager(unifiedMemoryManager);
+// Start async indexing (non-blocking)
+unifiedMemoryManager.indexWorkspace().catch(err => {
+    logger.error("memory", `Failed to start unified memory indexing: ${err instanceof Error ? err.message : String(err)}`);
+});
+logger.info("memory", `Unified MemoryManager initialized (sessions + ${memoryAdditionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled})`);
+// ========== 后台任务调度：pause/resume + 空闲摘要 ==========
+// 活跃 Agent 计数器（支持并发会话）
+let activeAgentCount = 0;
+let idleSummaryTimer = null;
+const IDLE_SUMMARY_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
+// before_agent_start: 暂停后台 LLM 任务
+hookRegistry.register({
+    source: "memory-throttle",
+    hookName: "before_agent_start",
+    priority: 50, // 高优先级，尽早暂停
+    handler: async () => {
+        activeAgentCount++;
+        const mm = getGlobalMemoryManager();
+        if (mm && !mm.isPaused) {
+            mm.pause();
+            logger.debug("memory-throttle", "Paused background LLM tasks (agent active)");
+        }
+    },
+});
+// agent_end: 恢复后台 LLM 任务
+hookRegistry.register({
+    source: "memory-throttle",
+    hookName: "agent_end",
+    priority: 50, // 高优先级，在 evolution hook 之前恢复
+    handler: async () => {
+        activeAgentCount = Math.max(0, activeAgentCount - 1);
+        if (activeAgentCount === 0) {
+            const mm = getGlobalMemoryManager();
+            if (mm) {
+                // 延迟 3s 恢复，给 evolution 提取留出窗口
+                setTimeout(() => {
+                    if (activeAgentCount === 0) {
+                        mm.resume();
+                        logger.debug("memory-throttle", "Resumed background LLM tasks (agent idle)");
+                    }
+                }, 3000);
+            }
+        }
+    },
+});
+// 空闲定时器：定期触发摘要生成（仅在无活跃 Agent 时）
+if (summaryEnabled) {
+    idleSummaryTimer = setInterval(() => {
+        if (activeAgentCount > 0)
+            return;
+        const mm = getGlobalMemoryManager();
+        if (!mm)
+            return;
+        mm.runIdleSummaries().then(count => {
+            if (count > 0) {
+                logger.info("memory-summary", `Idle summary run: generated ${count} summaries`);
+            }
+        }).catch(err => {
+            logger.error("memory-summary", `Idle summary failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+    }, IDLE_SUMMARY_INTERVAL_MS);
+    // 不阻止进程退出
+    if (idleSummaryTimer.unref)
+        idleSummaryTimer.unref();
+    logger.info("memory-summary", `Idle summary timer started (interval=${IDLE_SUMMARY_INTERVAL_MS / 1000}s)`);
+}
+// M-N3: 注册 agent_end hook 用于会话记忆自动提取
+if (evolutionEnabled) {
+    hookRegistry.register({
+        source: "memory-evolution",
+        hookName: "agent_end",
+        priority: 100, // 低于 plugin-bridge (200)，让插件先执行
+        handler: async (event, ctx) => {
+            const sessionKey = ctx.sessionKey;
+            if (!sessionKey)
+                return;
+            if (!event.success)
+                return; // 失败的会话不提取
+            const mm = getGlobalMemoryManager();
+            if (!mm)
+                return;
+            // 从 event.messages 获取消息（agent_end 事件携带的消息列表）
+            const messages = event.messages
+                ?.filter(m => m && typeof m.role === "string" && typeof m.content === "string") ?? [];
+            // 延迟 5s 执行提取，避免与 Agent 主请求的尾部流量冲突
+            setTimeout(() => {
+                mm.extractMemoriesFromConversation(sessionKey, messages).catch(err => {
+                    logger.error("memory-evolution", `Memory extraction failed for session ${sessionKey}: ${err instanceof Error ? err.message : String(err)}`);
+                });
+            }, 5000);
+        },
+    });
+    logger.info("memory-evolution", "Registered agent_end hook for memory evolution");
+}
 const server = await startGatewayServer({
     port,
     host,
@@ -914,7 +1055,7 @@ else {
     logger.info("gateway", "To allow remote access, set BELLDANDY_HOST=0.0.0.0 in .env");
 }
 logger.info("gateway", `State Dir: ${stateDir}`);
-logger.info("gateway", `Memory DB: ${memoryDbPath}`);
+logger.info("gateway", `Memory DB: ${path.join(stateDir, "memory.sqlite")}`);
 logger.info("gateway", `Tools Enabled: ${toolsEnabled}`);
 // 8.5 Auto Open Browser (Magic Link)
 const setupToken = readEnv("SETUP_TOKEN");

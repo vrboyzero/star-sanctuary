@@ -26,7 +26,16 @@ export declare class MemoryStore {
     getStatus(): MemoryIndexStatus;
     /** 更新最后索引时间 */
     updateLastIndexedAt(): void;
+    /** 检查 session 是否已提取过记忆 */
+    isSessionMemoryExtracted(sessionKey: string): boolean;
+    /** 标记 session 已提取记忆 */
+    markSessionMemoryExtracted(sessionKey: string): void;
     /** 关闭数据库连接 */
+    /**
+     * 按 source_path 拉取该来源的所有 chunk，按 start_line 排序。
+     * @param maxPerSource 每个 source 最多返回的 chunk 数
+     */
+    getChunksBySource(sourcePath: string, maxPerSource?: number): MemorySearchResult[];
     close(): void;
     /**
      * 存量数据回填：从 source_path / metadata 推断 channel / ts_date。
@@ -84,6 +93,25 @@ export declare class MemoryStore {
         indexed: number;
         cached: number;
         model?: string;
+    };
+    /**
+     * 获取需要生成摘要的 chunks（summary IS NULL 且内容足够长）
+     */
+    getChunksNeedingSummary(minContentLength?: number, limit?: number): Array<{
+        id: string;
+        content: string;
+    }>;
+    /**
+     * 更新 chunk 的摘要
+     */
+    updateChunkSummary(chunkId: string, summary: string, summaryTokens?: number): void;
+    /**
+     * 获取摘要统计
+     */
+    getSummaryStatus(): {
+        total: number;
+        summarized: number;
+        pending: number;
     };
     private ensureOpen;
 }

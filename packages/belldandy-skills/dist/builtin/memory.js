@@ -25,7 +25,7 @@ function getMemoryManager(workspaceRoot) {
 export const memorySearchTool = {
     definition: {
         name: "memory_search",
-        description: "Search the knowledge base (files in workspace) using hybrid retrieval (semantic vector search + keyword search). Use this to find information, code snippets, or context from the project. Supports optional metadata filtering by memory type, channel, topic, and date range.",
+        description: "Search the knowledge base (files in workspace) using hybrid retrieval (semantic vector search + keyword search). Use this to find information, code snippets, or context from the project. Supports optional metadata filtering by memory type, channel, topic, and date range. Use detail_level='summary' (default) for quick overview, or 'full' for complete content.",
         parameters: {
             type: "object",
             properties: {
@@ -36,6 +36,11 @@ export const memorySearchTool = {
                 limit: {
                     type: "number",
                     description: "Max number of results to return (default: 5).",
+                },
+                detail_level: {
+                    type: "string",
+                    enum: ["summary", "full"],
+                    description: "Level of detail: 'summary' returns short summaries (saves tokens), 'full' returns complete content. Default: 'summary'.",
                 },
                 memory_type: {
                     type: "string",
@@ -63,6 +68,7 @@ export const memorySearchTool = {
             const manager = getMemoryManager(context.workspaceRoot);
             const query = args.query;
             const limit = args.limit || 5;
+            const detailLevel = args.detail_level || "summary";
             // Build filter from args
             const filter = {};
             if (args.memory_type) {
@@ -77,8 +83,16 @@ export const memorySearchTool = {
                 filter.dateTo = args.date_to;
             const hasFilter = Object.keys(filter).length > 0;
             const results = await manager.search(query, hasFilter ? { limit, filter } : limit);
-            // Format results
-            const output = results.map(r => `[${r.sourcePath}:${r.startLine || 0}] (Score: ${r.score.toFixed(3)})\n${r.snippet}`).join("\n\n---\n\n");
+            // Format results based on detail_level
+            const output = results.map(r => {
+                const location = `[${r.sourcePath}:${r.startLine || 0}] (Score: ${r.score.toFixed(3)})`;
+                if (detailLevel === "full") {
+                    return `${location}\n${r.snippet}`;
+                }
+                // summary mode: prefer summary, fallback to truncated content
+                const text = r.summary || truncateForSummary(r.snippet, 200);
+                return `${location}\n${text}`;
+            }).join("\n\n---\n\n");
             return {
                 id: "memory_search",
                 name: "memory_search",
@@ -118,7 +132,7 @@ export const memoryIndexTool = {
                 id: "memory_index",
                 name: "memory_index",
                 success: true,
-                output: `Indexing completed. Files: ${status.files}, Chunks: ${status.chunks}, Vectors: ${status.vectorIndexed || 0}, Cached: ${status.vectorCached || 0}`,
+                output: `Indexing completed. Files: ${status.files}, Chunks: ${status.chunks}, Vectors: ${status.vectorIndexed || 0}, Cached: ${status.vectorCached || 0}, Summarized: ${status.summarized || 0}, Summary Pending: ${status.summaryPending || 0}`,
                 durationMs: Date.now() - start,
             };
         }
@@ -167,5 +181,20 @@ export function createMemoryGetTool() {
             };
         }
     };
+}
+// ============================================================================
+// Helpers
+// ============================================================================
+/** 截断文本用于 summary 模式降级（无 LLM 摘要时的 fallback） */
+function truncateForSummary(text, maxLen) {
+    if (!text || text.length <= maxLen)
+        return text;
+    // 尝试在句号/换行处截断，避免截断在词中间
+    const cut = text.slice(0, maxLen);
+    const lastBreak = Math.max(cut.lastIndexOf("。"), cut.lastIndexOf("\n"), cut.lastIndexOf(". "));
+    if (lastBreak > maxLen * 0.5) {
+        return cut.slice(0, lastBreak + 1);
+    }
+    return cut + "...";
 }
 //# sourceMappingURL=memory.js.map

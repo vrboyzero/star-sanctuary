@@ -38,6 +38,7 @@ export interface MemorySearchResult {
   memoryType?: MemoryType;
   content?: string;
   snippet: string;
+  summary?: string;       // L0 摘要（由 LLM 生成的单句概括）
   score: number;
   metadata?: Record<string, any>;
   startLine?: number;
@@ -51,6 +52,8 @@ export type MemoryIndexStatus = {
   lastIndexedAt?: string;
   vectorIndexed?: number;
   vectorCached?: number;
+  summarized?: number;
+  summaryPending?: number;
 };
 
 export class AuthenticationError extends Error { }

@@ -19,7 +19,7 @@ export declare class MemoryIndexer {
     indexFile(filePath: string): Promise<void>;
     /** 停止监听 */
     stopWatching(): Promise<void>;
-    /** 启动目录监听 */
-    startWatching(dirPath: string): Promise<void>;
+    /** 启动目录监听（支持单目录或多目录） */
+    startWatching(dirPaths: string | string[]): Promise<void>;
 }
 //# sourceMappingURL=indexer.d.ts.map
