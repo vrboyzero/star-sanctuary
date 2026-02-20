@@ -182,6 +182,53 @@ corepack pnpm bdd start
    ```bash
    corepack pnpm bdd pairing approve ABC123XY
    ```
+
+### Docker 部署（推荐用于生产环境）
+
+使用 Docker 可以快速部署 Belldandy，无需配置 Node.js 环境。
+
+**前置要求**：
+- Docker 20.10+
+- Docker Compose 2.0+
+
+**快速部署**：
+
+```bash
+# 1. 复制环境变量模板
+cp .env.example .env
+
+# 2. 编辑 .env 文件，填写必需配置
+# - BELLDANDY_AUTH_TOKEN（认证 Token）
+# - BELLDANDY_OPENAI_API_KEY（API 密钥）
+# - BELLDANDY_OPENAI_MODEL（模型名称）
+
+# 3. 一键部署
+./scripts/docker-deploy.sh
+```
+
+**手动部署**：
+
+```bash
+# 1. 构建镜像
+./scripts/docker-build.sh
+
+# 2. 启动服务
+docker-compose up -d belldandy-gateway
+
+# 3. 查看日志
+docker-compose logs -f belldandy-gateway
+```
+
+**访问 WebChat**：打开浏览器访问 `http://localhost:28889`
+
+**高级部署选项**：
+- 📡 [Tailscale 远程访问](docs/TAILSCALE_DEPLOYMENT.md) - 零配置 VPN，无需公网 IP
+- 🐳 [Docker Hub 官方镜像](https://hub.docker.com/r/belldandy/belldandy) - 多架构支持（amd64/arm64）
+- ❄️ [Nix 部署](docs/NIX_DEPLOYMENT.md) - 声明式配置，NixOS 系统集成
+
+详细文档：[Docker 部署指南](docs/DOCKER_DEPLOYMENT.md)
+
+---
 3. 再次发送消息即可正常对话
 
 ---

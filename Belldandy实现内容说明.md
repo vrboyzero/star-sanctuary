@@ -1503,5 +1503,131 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
  5. **Local Embedding** — 完全本地化的向量计算，摆脱 API 依赖（`LocalEmbeddingProvider` 已实现基础框架）
  6. **OS 计算机、手机操作** — 操作系统级 GUI 控制（基于 UI-TARS 方案）
 
+---
+
+## 🐳 Docker 部署支持 (Phase N - MVP)
+
+> **实施时间**：2026-02-20
+> **状态**：✅ MVP 已完成
+
+### 实现内容
+
+**核心文件**：
+- **Dockerfile** - Multi-stage 构建（deps → builder → runtime）
+  - 3 阶段构建：依赖安装 → TypeScript 编译 → 运行时镜像
+  - 非 root 用户运行（uid 1001，用户名 `belldandy`）
+  - 基于 `node:22-bookworm-slim` 最小化镜像体积
+  - 支持 BuildKit cache mount 加速构建
+
+- **.dockerignore** - 优化构建上下文
+  - 排除 `node_modules`、`dist`、日志、测试文件
+  - 排除参考代码目录（`openclaw`、`UI-TARS-desktop-main`）
+  - 减少构建上下文传输时间
+
+- **docker-compose.yml** - 服务编排
+  - `belldandy-gateway` 服务：主 Gateway 服务，支持健康检查、自动重启
+  - `belldandy-cli` 服务：CLI 管理工具（profile: cli，按需启动）
+  - Volume 挂载：`~/.belldandy`（状态目录）、`./workspace`（工作区）
+  - 环境变量注入：支持所有 `BELLDANDY_*` 配置项
+
+- **.env.example** - 环境变量模板
+  - 完整的配置项说明（网络、认证、Agent、功能开关、日志等）
+  - 安全提示（Token 生成方法、0.0.0.0 绑定警告）
+
+**代码修改**：
+- `packages/belldandy-core/src/server.ts:106-109` - 添加 `/health` 健康检查端点
+  - 返回 JSON：`{"status":"ok","timestamp":"..."}`
+  - 用于 Docker 健康检查和负载均衡器探测
+
+**部署脚本**：
+- `scripts/docker-build.sh` - 镜像构建脚本
+  - 支持版本标签（默认 `local`）
+  - 使用 BuildKit 加速构建
+  - 输出构建完成提示和后续步骤
+
+- `scripts/docker-deploy.sh` - 一键部署脚本
+  - 环境检查（Docker、Docker Compose、.env 文件）
+  - 必需环境变量校验（AUTH_TOKEN、API_KEY、MODEL）
+  - 自动构建镜像（如不存在）
+  - 启动服务并等待健康检查通过（60s 超时）
+  - 输出访问地址和常用命令
+
+**文档**：
+- `docs/DOCKER_DEPLOYMENT.md` - 完整部署指南
+  - 快速开始（3 步部署）
+  - 配置说明（网络、认证、Agent、功能开关、数据持久化）
+  - 常用命令（服务管理、CLI 工具、数据备份、镜像管理）
+  - 升级指南（重新构建、官方镜像）
+  - 故障排查（容器启动失败、健康检查失败、WebChat 无法连接、数据丢失）
+  - 高级配置（自定义 Dockerfile、多实例部署、反向代理、资源限制）
+  - 安全建议
+
+- `README.md` - 添加 Docker 部署章节
+  - 快速部署流程
+  - 手动部署步骤
+  - 链接到详细文档
+
+### 技术特性
+
+1. **Multi-stage Build**
+   - 分离构建依赖和运行时依赖
+   - 最小化最终镜像体积（仅包含必要文件）
+   - 利用 Docker layer cache 加速重复构建
+
+2. **安全加固**
+   - 非 root 用户运行（uid 1001）
+   - 最小权限原则
+   - 默认 127.0.0.1 绑定（需显式配置 LAN 访问）
+   - 强制认证（0.0.0.0 + AUTH_MODE=none 会退出）
+
+3. **健康检查**
+   - HTTP 端点：`GET /health`
+   - Docker 原生健康检查（30s 间隔，3 次重试）
+   - 自动重启不健康容器
+
+4. **数据持久化**
+   - Volume 挂载 `~/.belldandy`（配置、会话、记忆数据库）
+   - Volume 挂载 `workspace/`（文件工具访问范围）
+   - 支持自定义挂载路径
+
+5. **生产就绪**
+   - 完整的日志输出（stdout/stderr）
+   - 配置管理（环境变量注入）
+   - 故障排查支持（健康检查、日志查看）
+   - 一键部署脚本
+
+### 使用方式
+
+```bash
+# 1. 配置环境变量
+cp .env.example .env
+# 编辑 .env，填写 BELLDANDY_AUTH_TOKEN、BELLDANDY_OPENAI_API_KEY 等
+
+# 2. 一键部署
+./scripts/docker-deploy.sh
+
+# 3. 访问 WebChat
+# http://localhost:28889
+```
+
+### 后续规划
+
+**Phase N - 完整方案**（待实施）：
+- ❌ **Tailscale 集成**（Sidecar 模式）- 实现远程访问
+- ❌ **Nix 支持**（flake.nix）- 声明式依赖管理
+- ❌ **官方 Docker Hub 镜像** - 公开发布
+- ❌ **CI/CD 自动构建**（GitHub Actions）- 自动化发布流程
+
+---
+
+### 价值
+
+- **降低部署门槛**：无需配置 Node.js 环境，一键启动
+- **环境隔离**：容器化运行，避免依赖冲突
+- **生产就绪**：健康检查、自动重启、数据持久化
+- **安全可控**：非 root 用户、强制认证、最小权限
+- **易于维护**：统一的部署流程、完整的文档支持
+
+
 
 

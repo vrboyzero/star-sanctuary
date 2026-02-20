@@ -1,0 +1,171 @@
+version: '3.8'
+
+services:
+  # Gateway 服务
+  belldandy-gateway:
+    image: ${BELLDANDY_IMAGE:-belldandy:local}
+    container_name: belldandy-gateway
+    init: true  # 正确处理信号
+    restart: unless-stopped
+
+    environment:
+      HOME: /home/belldandy
+      TERM: xterm-256color
+
+      # 网络配置（LAN 访问需显式设置）
+      BELLDANDY_HOST: ${BELLDANDY_HOST:-127.0.0.1}
+      BELLDANDY_PORT: 28889
+
+      # 认证配置（强制要求）
+      BELLDANDY_AUTH_MODE: ${BELLDANDY_AUTH_MODE:-token}
+      BELLDANDY_AUTH_TOKEN: ${BELLDANDY_AUTH_TOKEN}
+
+      # Agent 配置
+      BELLDANDY_AGENT_PROVIDER: ${BELLDANDY_AGENT_PROVIDER:-openai}
+      BELLDANDY_OPENAI_BASE_URL: ${BELLDANDY_OPENAI_BASE_URL}
+      BELLDANDY_OPENAI_API_KEY: ${BELLDANDY_OPENAI_API_KEY}
+      BELLDANDY_OPENAI_MODEL: ${BELLDANDY_OPENAI_MODEL}
+
+      # 功能开关
+      BELLDANDY_TOOLS_ENABLED: ${BELLDANDY_TOOLS_ENABLED:-true}
+      BELLDANDY_MEMORY_ENABLED: ${BELLDANDY_MEMORY_ENABLED:-true}
+      BELLDANDY_EMBEDDING_ENABLED: ${BELLDANDY_EMBEDDING_ENABLED:-false}
+      BELLDANDY_EMBEDDING_MODEL: ${BELLDANDY_EMBEDDING_MODEL:-}
+
+      # 日志配置
+      BELLDANDY_LOG_LEVEL: ${BELLDANDY_LOG_LEVEL:-info}
+      BELLDANDY_LOG_CONSOLE: ${BELLDANDY_LOG_CONSOLE:-true}
+      BELLDANDY_LOG_FILE: ${BELLDANDY_LOG_FILE:-true}
+
+      # 其他配置
+      BELLDANDY_WEB_ROOT: /app/apps/web/public
+      BELLDANDY_STATE_DIR: /home/belldandy/.belldandy
+
+    volumes:
+      # 配置 + 状态持久化
+      - ${BELLDANDY_STATE_DIR:-~/.belldandy}:/home/belldandy/.belldandy
+      # 工作区（可选，用于文件工具）
+      - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
+
+    ports:
+      - "${BELLDANDY_GATEWAY_PORT:-28889}:28889"
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:28889/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # CLI 服务（管理工具）
+  belldandy-cli:
+    image: ${BELLDANDY_IMAGE:-belldandy:local}
+    container_name: belldandy-cli
+    init: true
+    stdin_open: true
+    tty: true
+
+    environment:
+      HOME: /home/belldandy
+      TERM: xterm-256color
+      BELLDANDY_AUTH_TOKEN: ${BELLDANDY_AUTH_TOKEN}
+
+    volumes:
+      - ${BELLDANDY_STATE_DIR:-~/.belldandy}:/home/belldandy/.belldandy
+      - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
+
+    entrypoint: ["pnpm", "bdd"]
+    profiles: ["cli"]  # 默认不启动，需 --profile cli
+
+  # Tailscale Sidecar（远程访问）
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: belldandy-tailscale
+    hostname: belldandy-gateway
+    init: true
+    restart: unless-stopped
+
+    environment:
+      # Tailscale Auth Key（从 https://login.tailscale.com/admin/settings/keys 获取）
+      TS_AUTHKEY: ${TAILSCALE_AUTH_KEY}
+      # 启用 SSH（可选）
+      TS_EXTRA_ARGS: ${TAILSCALE_EXTRA_ARGS:---ssh}
+      # 状态目录
+      TS_STATE_DIR: /var/lib/tailscale
+
+    volumes:
+      # 持久化 Tailscale 状态
+      - tailscale-state:/var/lib/tailscale
+      # 需要 /dev/net/tun 设备
+      - /dev/net/tun:/dev/net/tun
+
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+
+    profiles: ["tailscale"]  # 默认不启动，需 --profile tailscale
+
+  # Gateway with Tailscale（通过 Tailscale 网络访问）
+  belldandy-gateway-tailscale:
+    image: ${BELLDANDY_IMAGE:-belldandy:local}
+    container_name: belldandy-gateway-tailscale
+    init: true
+    restart: unless-stopped
+
+    # 共享 Tailscale 网络栈
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+
+    environment:
+      HOME: /home/belldandy
+      TERM: xterm-256color
+
+      # 监听所有接口（Tailscale 网络）
+      BELLDANDY_HOST: 0.0.0.0
+      BELLDANDY_PORT: 28889
+
+      # 认证配置（强制要求）
+      BELLDANDY_AUTH_MODE: ${BELLDANDY_AUTH_MODE:-token}
+      BELLDANDY_AUTH_TOKEN: ${BELLDANDY_AUTH_TOKEN}
+
+      # Agent 配置
+      BELLDANDY_AGENT_PROVIDER: ${BELLDANDY_AGENT_PROVIDER:-openai}
+      BELLDANDY_OPENAI_BASE_URL: ${BELLDANDY_OPENAI_BASE_URL}
+      BELLDANDY_OPENAI_API_KEY: ${BELLDANDY_OPENAI_API_KEY}
+      BELLDANDY_OPENAI_MODEL: ${BELLDANDY_OPENAI_MODEL}
+
+      # 功能开关
+      BELLDANDY_TOOLS_ENABLED: ${BELLDANDY_TOOLS_ENABLED:-true}
+      BELLDANDY_MEMORY_ENABLED: ${BELLDANDY_MEMORY_ENABLED:-true}
+      BELLDANDY_EMBEDDING_ENABLED: ${BELLDANDY_EMBEDDING_ENABLED:-false}
+      BELLDANDY_EMBEDDING_MODEL: ${BELLDANDY_EMBEDDING_MODEL:-}
+
+      # 日志配置
+      BELLDANDY_LOG_LEVEL: ${BELLDANDY_LOG_LEVEL:-info}
+      BELLDANDY_LOG_CONSOLE: ${BELLDANDY_LOG_CONSOLE:-true}
+      BELLDANDY_LOG_FILE: ${BELLDANDY_LOG_FILE:-true}
+
+      # 其他配置
+      BELLDANDY_WEB_ROOT: /app/apps/web/public
+      BELLDANDY_STATE_DIR: /home/belldandy/.belldandy
+
+    volumes:
+      # 配置 + 状态持久化
+      - ${BELLDANDY_STATE_DIR:-~/.belldandy}:/home/belldandy/.belldandy
+      # 工作区（可选，用于文件工具）
+      - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:28889/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    profiles: ["tailscale"]  # 默认不启动，需 --profile tailscale
+
+volumes:
+  tailscale-state:

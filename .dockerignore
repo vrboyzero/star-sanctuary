@@ -1,0 +1,80 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Node
+node_modules
+**/node_modules
+.pnpm-store
+**/.pnpm-store
+.npm
+**/.npm
+
+# Build artifacts
+dist
+**/dist
+.turbo
+**/.turbo
+.cache
+**/.cache
+
+# Logs
+*.log
+logs
+**/logs
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Temp
+tmp
+**/tmp
+.tmp
+**/.tmp
+
+# Test
+coverage
+**/coverage
+*.test.ts
+*.spec.ts
+**/__tests__
+
+# Docs (keep only README.md)
+docs
+*.md
+!README.md
+!CLAUDE.md
+
+# Config (will be mounted as volumes)
+.env
+.env.local
+.belldandy
+
+# Media (reduce image size)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.mov
+*.wav
+*.mp3
+
+# Reference code (not needed in container)
+openclaw
+UI-TARS-desktop-main
+
+# Development files
+*.map
+.eslintrc*
+.prettierrc*
+tsconfig*.json
+vitest.config.ts

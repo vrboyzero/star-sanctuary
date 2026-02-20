@@ -247,6 +247,159 @@ TTS 负责让 Belldandy 开口说话。
 
 启用方式见 **[10. 语音交互 (Voice Interaction)](#10-语音交互-voice-interaction)** 章节。
 
+---
+
+## 3.5 Docker 部署（推荐用于生产环境）
+
+> **适用场景**：
+> - 不想配置 Node.js 环境
+> - 需要在服务器上长期运行
+> - 希望环境隔离、易于维护
+> - 需要快速部署和升级
+
+### 前置要求
+
+- Docker 20.10+
+- Docker Compose 2.0+
+- 至少 2GB 可用磁盘空间
+
+### 快速部署
+
+**1. 准备配置文件**
+
+```bash
+# 复制环境变量模板
+cp .env.example .env
+```
+
+**2. 编辑 `.env` 文件**
+
+填写必需的配置项：
+
+```env
+# 认证 Token（必填）
+# 生成方法: openssl rand -hex 32
+BELLDANDY_AUTH_TOKEN=your-secure-token-here
+
+# OpenAI API 配置（必填）
+BELLDANDY_OPENAI_BASE_URL=https://api.openai.com/v1
+BELLDANDY_OPENAI_API_KEY=sk-your-api-key-here
+BELLDANDY_OPENAI_MODEL=gpt-4
+
+# 网络配置（可选）
+BELLDANDY_HOST=127.0.0.1  # 仅本机访问
+# BELLDANDY_HOST=0.0.0.0  # 允许局域网访问（需启用认证）
+BELLDANDY_GATEWAY_PORT=28889
+```
+
+**3. 一键部署**
+
+```bash
+# 使用部署脚本（推荐）
+./scripts/docker-deploy.sh
+```
+
+或手动部署：
+
+```bash
+# 构建镜像
+./scripts/docker-build.sh
+
+# 启动服务
+docker-compose up -d belldandy-gateway
+
+# 查看日志
+docker-compose logs -f belldandy-gateway
+```
+
+**4. 访问 WebChat**
+
+打开浏览器访问：`http://localhost:28889`
+
+### 常用命令
+
+```bash
+# 查看服务状态
+docker-compose ps
+
+# 查看日志
+docker-compose logs -f belldandy-gateway
+
+# 停止服务
+docker-compose down
+
+# 重启服务
+docker-compose restart belldandy-gateway
+
+# 运行 CLI 命令
+docker-compose run --rm belldandy-cli --help
+docker-compose run --rm belldandy-cli pairing:list
+docker-compose run --rm belldandy-cli doctor
+```
+
+### 数据备份
+
+```bash
+# 备份状态目录
+tar -czf belldandy-backup-$(date +%Y%m%d).tar.gz ~/.belldandy
+
+# 恢复备份
+tar -xzf belldandy-backup-20260220.tar.gz -C ~/
+```
+
+### 升级
+
+```bash
+# 1. 停止服务
+docker-compose down
+
+# 2. 拉取最新代码
+git pull
+
+# 3. 重新构建镜像
+./scripts/docker-build.sh
+
+# 4. 启动服务
+docker-compose up -d belldandy-gateway
+```
+
+### 故障排查
+
+**容器无法启动**：
+
+```bash
+# 查看日志
+docker-compose logs belldandy-gateway
+
+# 检查端口占用
+netstat -tulpn | grep 28889
+
+# 检查环境变量
+cat .env | grep BELLDANDY_AUTH_TOKEN
+```
+
+**健康检查失败**：
+
+```bash
+# 进入容器测试
+docker exec -it belldandy-gateway bash
+curl http://127.0.0.1:28889/health
+```
+
+**WebChat 无法连接**：
+
+1. 检查浏览器开发者工具（F12）→ Network 标签
+2. 查找 WebSocket 连接错误
+3. 确认认证 Token 是否匹配
+
+### 详细文档
+
+完整的 Docker 部署指南（配置说明、高级配置、安全建议）请参考：
+
+📖 [Docker 部署指南](docs/DOCKER_DEPLOYMENT.md)
+
+---
+
 ## 4. 启动与首次使用
 
 ### 4.1 极速启动 (推荐)
