@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import express from "express";
 import { WebSocketServer } from "ws";
-import { MockAgent, ConversationStore } from "@belldandy/agent";
+import { MockAgent, ConversationStore, extractIdentityInfo } from "@belldandy/agent";
 import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
 const DEFAULT_METHODS = [
     "message.send",
@@ -131,12 +131,18 @@ export async function startGatewayServer(opts) {
                 state.connected = true;
                 state.role = accepted.role;
                 state.clientId = normalizeClientId(frame.clientId) ?? state.sessionId;
+                // 提取身份信息（异步）
+                const identityInfo = await extractIdentityInfo(opts.stateDir ?? resolveStateDir());
                 sendFrame(ws, {
                     type: "hello-ok",
                     sessionId: state.sessionId,
                     role: state.role,
                     methods: DEFAULT_METHODS,
                     events: DEFAULT_EVENTS,
+                    agentName: identityInfo.agentName,
+                    agentAvatar: identityInfo.agentAvatar,
+                    userName: identityInfo.userName,
+                    userAvatar: identityInfo.userAvatar,
                 });
                 return;
             }

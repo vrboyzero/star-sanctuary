@@ -27,6 +27,10 @@ export type HelloOkFrame = {
     role: BelldandyRole;
     methods: string[];
     events: string[];
+    agentName?: string;
+    agentAvatar?: string;
+    userName?: string;
+    userAvatar?: string;
 };
 export type GatewayReqFrame = {
     type: "req";

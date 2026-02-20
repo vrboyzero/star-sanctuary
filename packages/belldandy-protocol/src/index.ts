@@ -27,6 +27,10 @@ export type HelloOkFrame = {
   role: BelldandyRole;
   methods: string[];
   events: string[];
+  agentName?: string;      // Agent 名称（从 IDENTITY.md 提取）
+  agentAvatar?: string;    // Agent 头像（Emoji 或 URL）
+  userName?: string;       // 用户名称（从 USER.md 提取）
+  userAvatar?: string;     // 用户头像（Emoji 或 URL）
 };
 
 export type GatewayReqFrame = {

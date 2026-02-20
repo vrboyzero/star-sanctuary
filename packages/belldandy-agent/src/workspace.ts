@@ -375,3 +375,83 @@ export async function loadAgentWorkspaceFiles(
         hasMemory,
     };
 }
+
+/**
+ * 身份信息结构
+ */
+export type IdentityInfo = {
+    agentName?: string;
+    agentAvatar?: string;
+    userName?: string;
+    userAvatar?: string;
+};
+
+/**
+ * 从 IDENTITY.md 和 USER.md 中提取身份信息
+ *
+ * 解析规则：
+ * - IDENTITY.md: 查找 "**名字：**"、"**Emoji：**"、"**头像：**" 行
+ * - USER.md: 查找 "**名字：**" 行
+ * - 优先级：头像 > Emoji（如果两者都存在，使用头像）
+ */
+export async function extractIdentityInfo(dir: string): Promise<IdentityInfo> {
+    const result: IdentityInfo = {};
+
+    // 解析 IDENTITY.md
+    try {
+        const identityPath = path.join(dir, IDENTITY_FILENAME);
+        const identityContent = await fs.readFile(identityPath, "utf-8");
+
+        // 提取名字：匹配 "**名字：**" 后的内容
+        const nameMatch = identityContent.match(/\*\*名字[：:]\*\*\s*(.+?)(?:\n|$)/);
+        if (nameMatch) {
+            result.agentName = nameMatch[1].trim();
+        }
+
+        // 提取头像：匹配 "**头像：**" 后的内容（优先级高于 Emoji）
+        const avatarMatch = identityContent.match(/\*\*头像[：:]\*\*\s*(.+?)(?:\n|$)/);
+        if (avatarMatch) {
+            result.agentAvatar = avatarMatch[1].trim();
+        }
+
+        // 提取 Emoji：匹配 "**Emoji：**" 后的内容（如果没有头像才使用）
+        if (!result.agentAvatar) {
+            const emojiMatch = identityContent.match(/\*\*Emoji[：:]\*\*\s*(.+?)(?:\n|$)/);
+            if (emojiMatch) {
+                result.agentAvatar = emojiMatch[1].trim();
+            }
+        }
+    } catch {
+        // IDENTITY.md 不存在或读取失败，跳过
+    }
+
+    // 解析 USER.md
+    try {
+        const userPath = path.join(dir, USER_FILENAME);
+        const userContent = await fs.readFile(userPath, "utf-8");
+
+        // 提取名字：匹配 "**名字：**" 后的内容
+        const nameMatch = userContent.match(/\*\*名字[：:]\*\*\s*(.+?)(?:\n|$)/);
+        if (nameMatch) {
+            result.userName = nameMatch[1].trim();
+        }
+
+        // 提取头像：匹配 "**头像：**" 后的内容（优先级高于 Emoji）
+        const avatarMatch = userContent.match(/\*\*头像[：:]\*\*\s*(.+?)(?:\n|$)/);
+        if (avatarMatch) {
+            result.userAvatar = avatarMatch[1].trim();
+        }
+
+        // 提取 Emoji：匹配 "**Emoji：**" 后的内容（如果没有头像才使用）
+        if (!result.userAvatar) {
+            const emojiMatch = userContent.match(/\*\*Emoji[：:]\*\*\s*(.+?)(?:\n|$)/);
+            if (emojiMatch) {
+                result.userAvatar = emojiMatch[1].trim();
+            }
+        }
+    } catch {
+        // USER.md 不存在或读取失败，跳过
+    }
+
+    return result;
+}

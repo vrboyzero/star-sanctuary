@@ -104,10 +104,12 @@ export class QqChannel implements Channel {
             }
 
             this.accessToken = data.access_token;
-            const expiresIn = (data.expires_in || 7200) - 300;
+            // 确保 expiresIn 至少为 60 秒，避免负数或过小值导致无限循环
+            const rawExpiresIn = data.expires_in || 7200;
+            const expiresIn = Math.max(60, rawExpiresIn - 300);
             this.tokenExpiresAt = Date.now() + expiresIn * 1000;
 
-            console.log(`[${this.name}] AccessToken obtained, expires in ${expiresIn}s`);
+            console.log(`[${this.name}] AccessToken obtained, expires in ${expiresIn}s (raw: ${rawExpiresIn}s)`);
             this.scheduleTokenRefresh(expiresIn);
         } catch (error) {
             console.error(`[${this.name}] Failed to fetch AccessToken:`, error);
@@ -123,6 +125,9 @@ export class QqChannel implements Channel {
             clearTimeout(this.tokenRefreshTimer);
         }
 
+        // 确保至少等待 60 秒，避免无限循环
+        const safeExpiresIn = Math.max(60, expiresInSeconds);
+
         this.tokenRefreshTimer = setTimeout(async () => {
             console.log(`[${this.name}] Refreshing AccessToken...`);
             try {
@@ -131,7 +136,7 @@ export class QqChannel implements Channel {
                 console.error(`[${this.name}] Failed to refresh AccessToken:`, error);
                 this.scheduleTokenRefresh(60);
             }
-        }, expiresInSeconds * 1000);
+        }, safeExpiresIn * 1000);
     }
 
     /**

@@ -35,6 +35,12 @@ const pendingReq = new Map();
 const clientId = resolveClientId();
 let queuedText = null;
 
+// 身份信息（从 hello-ok 获取）
+let agentName = "Agent";
+let agentAvatar = "🤖";
+let userName = "User";
+let userAvatar = "👤";
+
 // 编辑器状态
 let editorMode = false;
 let currentEditPath = null;
@@ -317,6 +323,13 @@ function connect() {
       isReady = true;
       sendBtn.disabled = false;
       setStatus("ready");
+
+      // 保存身份信息
+      if (frame.agentName) agentName = frame.agentName;
+      if (frame.agentAvatar) agentAvatar = frame.agentAvatar;
+      if (frame.userName) userName = frame.userName;
+      if (frame.userAvatar) userAvatar = frame.userAvatar;
+
       // 重置 token 累计
       sessionTotalTokens = 0;
       ["tuSys", "tuCtx", "tuIn", "tuOut", "tuAll"].forEach(id => {
@@ -751,6 +764,9 @@ function handleEvent(event, payload) {
     // [FIX] Use innerHTML to support audio tags and basic formatting
     botMsgEl.innerHTML = text;
 
+    // 处理图片和视频缩略图
+    processMediaInMessage(botMsgEl);
+
     // [NEW] Auto-play audio if present
     const audioEl = botMsgEl.querySelector("audio");
     if (audioEl) {
@@ -852,13 +868,68 @@ function flushQueuedText() {
 }
 
 function appendMessage(kind, text) {
-  const el = document.createElement("div");
-  el.className = `msg ${kind}`;
-  el.textContent = text;
-  messagesEl.appendChild(el);
-  // 强制滚动到底部（测试模式）
+  const wrapper = document.createElement("div");
+  wrapper.className = `msg-wrapper ${kind}`;
+
+  // 头像
+  const avatar = document.createElement("div");
+  avatar.className = "msg-avatar";
+
+  const avatarSrc = kind === "bot" ? agentAvatar : userAvatar;
+
+  // 判断是否为图片路径/URL
+  if (isImagePath(avatarSrc)) {
+    avatar.style.backgroundImage = `url(${avatarSrc})`;
+    avatar.classList.add("avatar-image");
+  } else {
+    avatar.textContent = avatarSrc;
+  }
+
+  // 消息内容容器
+  const contentWrapper = document.createElement("div");
+  contentWrapper.className = "msg-content-wrapper";
+
+  // 名称
+  const nameEl = document.createElement("div");
+  nameEl.className = "msg-name";
+  nameEl.textContent = kind === "bot" ? agentName : userName;
+
+  // 消息气泡
+  const bubble = document.createElement("div");
+  bubble.className = `msg ${kind}`;
+  bubble.textContent = text;
+
+  contentWrapper.appendChild(nameEl);
+  contentWrapper.appendChild(bubble);
+
+  wrapper.appendChild(avatar);
+  wrapper.appendChild(contentWrapper);
+
+  messagesEl.appendChild(wrapper);
   forceScrollToBottom();
-  return el;
+  return bubble; // 返回气泡元素，用于后续更新
+}
+
+/**
+ * 判断字符串是否为图片路径或 URL
+ */
+function isImagePath(str) {
+  if (!str || typeof str !== "string") return false;
+
+  // 检查是否为 URL
+  if (str.startsWith("http://") || str.startsWith("https://") || str.startsWith("//")) {
+    return true;
+  }
+
+  // 检查是否为本地路径（以 / 或 ./ 或 ../ 开头）
+  if (str.startsWith("/") || str.startsWith("./") || str.startsWith("../")) {
+    return true;
+  }
+
+  // 检查是否包含图片扩展名
+  const imageExts = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico"];
+  const lowerStr = str.toLowerCase();
+  return imageExts.some(ext => lowerStr.includes(ext));
 }
 
 // ==================== 自动滚动逻辑 ====================
@@ -873,6 +944,95 @@ function scrollToBottomIfNeeded() {
   if (isNearBottom(chatSection)) {
     forceScrollToBottom();
   }
+}
+
+/**
+ * 处理消息中的图片和视频，转换为缩略图
+ * @param {HTMLElement} msgEl - 消息气泡元素
+ */
+function processMediaInMessage(msgEl) {
+  // 处理图片
+  const images = msgEl.querySelectorAll("img");
+  images.forEach(img => {
+    const originalSrc = img.src;
+    const wrapper = document.createElement("div");
+    wrapper.className = "media-thumbnail";
+    wrapper.style.backgroundImage = `url(${originalSrc})`;
+    wrapper.title = "点击查看原图";
+    wrapper.addEventListener("click", () => openMediaModal(originalSrc, "image"));
+    img.replaceWith(wrapper);
+  });
+
+  // 处理视频
+  const videos = msgEl.querySelectorAll("video");
+  videos.forEach(video => {
+    const originalSrc = video.src || (video.querySelector("source")?.src);
+    if (!originalSrc) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "media-thumbnail video-thumbnail";
+    wrapper.title = "点击播放视频";
+
+    // 创建播放图标
+    const playIcon = document.createElement("div");
+    playIcon.className = "play-icon";
+    playIcon.textContent = "▶";
+    wrapper.appendChild(playIcon);
+
+    // 尝试使用视频第一帧作为缩略图（如果可能）
+    const canvas = document.createElement("canvas");
+    canvas.width = 200;
+    canvas.height = 150;
+    const ctx = canvas.getContext("2d");
+    video.addEventListener("loadeddata", () => {
+      ctx.drawImage(video, 0, 0, 200, 150);
+      wrapper.style.backgroundImage = `url(${canvas.toDataURL()})`;
+    }, { once: true });
+
+    wrapper.addEventListener("click", () => openMediaModal(originalSrc, "video"));
+    video.replaceWith(wrapper);
+  });
+}
+
+/**
+ * 打开媒体弹窗
+ * @param {string} src - 媒体源 URL
+ * @param {string} type - 媒体类型 ("image" 或 "video")
+ */
+function openMediaModal(src, type) {
+  // 创建弹窗
+  const modal = document.createElement("div");
+  modal.className = "media-modal";
+  modal.addEventListener("click", () => modal.remove());
+
+  const content = document.createElement("div");
+  content.className = "media-modal-content";
+  content.addEventListener("click", (e) => e.stopPropagation());
+
+  if (type === "image") {
+    const img = document.createElement("img");
+    img.src = src;
+    img.style.maxWidth = "90vw";
+    img.style.maxHeight = "90vh";
+    content.appendChild(img);
+  } else if (type === "video") {
+    const video = document.createElement("video");
+    video.src = src;
+    video.controls = true;
+    video.autoplay = true;
+    video.style.maxWidth = "90vw";
+    video.style.maxHeight = "90vh";
+    content.appendChild(video);
+  }
+
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "media-modal-close";
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", () => modal.remove());
+
+  modal.appendChild(content);
+  modal.appendChild(closeBtn);
+  document.body.appendChild(modal);
 }
 
 /** 强制滚动到底部 - 使用 chatSection 作为滚动容器 */
@@ -1044,20 +1204,41 @@ function renderAttachmentsPreview() {
     item.className = "attachment-item";
 
     if (att.type === "image") {
-      const img = document.createElement("img");
-      img.src = att.content;
-      img.alt = att.name;
-      item.appendChild(img);
+      // 图片缩略图
+      const thumbnail = document.createElement("div");
+      thumbnail.className = "attachment-thumbnail";
+      thumbnail.style.backgroundImage = `url(${att.content})`;
+      thumbnail.title = att.name;
+      item.appendChild(thumbnail);
     } else if (att.type === "video") {
-      const icon = document.createElement("div");
-      icon.className = "file-icon video-icon";
-      icon.textContent = "🎬"; // Simple video icon
-      icon.style.fontSize = "24px";
-      item.appendChild(icon);
+      // 视频缩略图（带播放图标）
+      const thumbnail = document.createElement("div");
+      thumbnail.className = "attachment-thumbnail video-thumbnail";
+      thumbnail.title = att.name;
+
+      // 尝试生成视频第一帧作为缩略图
+      const video = document.createElement("video");
+      video.src = att.content;
+      video.addEventListener("loadeddata", () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 80;
+        canvas.height = 60;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, 80, 60);
+        thumbnail.style.backgroundImage = `url(${canvas.toDataURL()})`;
+      }, { once: true });
+
+      const playIcon = document.createElement("div");
+      playIcon.className = "play-icon-small";
+      playIcon.textContent = "▶";
+      thumbnail.appendChild(playIcon);
+
+      item.appendChild(thumbnail);
     } else {
+      // 文本/音频文件图标
       const icon = document.createElement("div");
-      icon.className = "file-icon text-icon";
-      icon.textContent = "📄";
+      icon.className = "file-icon";
+      icon.textContent = att.type === "audio" ? "🎤" : "📄";
       icon.style.fontSize = "24px";
       item.appendChild(icon);
     }

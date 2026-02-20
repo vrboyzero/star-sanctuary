@@ -88,4 +88,22 @@ export declare function ensureAgentWorkspace(params: {
  * 默认 Agent（id="default"）直接委托 loadWorkspaceFiles(rootDir)。
  */
 export declare function loadAgentWorkspaceFiles(rootDir: string, agentId: string): Promise<WorkspaceLoadResult>;
+/**
+ * 身份信息结构
+ */
+export type IdentityInfo = {
+    agentName?: string;
+    agentAvatar?: string;
+    userName?: string;
+    userAvatar?: string;
+};
+/**
+ * 从 IDENTITY.md 和 USER.md 中提取身份信息
+ *
+ * 解析规则：
+ * - IDENTITY.md: 查找 "**名字：**"、"**Emoji：**"、"**头像：**" 行
+ * - USER.md: 查找 "**名字：**" 行
+ * - 优先级：头像 > Emoji（如果两者都存在，使用头像）
+ */
+export declare function extractIdentityInfo(dir: string): Promise<IdentityInfo>;
 //# sourceMappingURL=workspace.d.ts.map

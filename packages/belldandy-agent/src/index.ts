@@ -26,6 +26,7 @@ export {
   needsBootstrap,
   createBootstrapFile,
   removeBootstrapFile,
+  extractIdentityInfo,
   SOUL_FILENAME,
   IDENTITY_FILENAME,
   USER_FILENAME,
@@ -36,6 +37,7 @@ export {
   type WorkspaceFile,
   type WorkspaceFileName,
   type WorkspaceLoadResult,
+  type IdentityInfo,
 } from "./workspace.js";
 
 export {
