@@ -82,15 +82,6 @@ RUN groupadd -g 1001 belldandy && \
 
 # Copy production dependencies from deps stage
 COPY --from=deps --chown=belldandy:belldandy /app/node_modules ./node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-protocol/node_modules ./packages/belldandy-protocol/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-agent/node_modules ./packages/belldandy-agent/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-core/node_modules ./packages/belldandy-core/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-skills/node_modules ./packages/belldandy-skills/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-memory/node_modules ./packages/belldandy-memory/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-channels/node_modules ./packages/belldandy-channels/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-mcp/node_modules ./packages/belldandy-mcp/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-plugins/node_modules ./packages/belldandy-plugins/node_modules
-COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-browser/node_modules ./packages/belldandy-browser/node_modules
 
 # Copy built artifacts from builder stage
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-protocol/dist ./packages/belldandy-protocol/dist
