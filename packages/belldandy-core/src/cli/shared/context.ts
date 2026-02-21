@@ -2,8 +2,9 @@
  * CLIContext — shared context for all CLI commands.
  * Provides stateDir resolution, output mode, and logging helpers.
  */
+import path from "node:path";
 import pc from "picocolors";
-import { resolveStateDir } from "./env-loader.js";
+import { resolveStateDir, loadEnvFileIfExists } from "./env-loader.js";
 
 export interface CLIContext {
   stateDir: string;
@@ -22,6 +23,11 @@ export function createCLIContext(args: {
   stateDir?: string;
   verbose?: boolean;
 }): CLIContext {
+  // 加载 .env / .env.local，确保 BELLDANDY_STATE_DIR 等环境变量在 CLI 进程中生效。
+  // 与 gateway.ts 的加载逻辑保持一致，避免服务器与 CLI 读取不同的 stateDir。
+  loadEnvFileIfExists(path.join(process.cwd(), ".env.local"));
+  loadEnvFileIfExists(path.join(process.cwd(), ".env"));
+
   const stateDir = args.stateDir ?? resolveStateDir();
   const json = args.json ?? false;
 
