@@ -28,4 +28,9 @@ export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
 export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
 // Canvas 可视化工作区工具
 export { createCanvasTools } from "./builtin/canvas.js";
+// UUID 获取工具
+export { getUserUuidTool } from "./builtin/get-user-uuid.js";
+// 身份上下文工具
+export { getMessageSenderInfoTool } from "./builtin/get-sender-info.js";
+export { getRoomMembersTool } from "./builtin/get-room-members.js";
 //# sourceMappingURL=index.js.map

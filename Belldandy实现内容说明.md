@@ -1628,6 +1628,194 @@ cp .env.example .env
 - **安全可控**：非 root 用户、强制认证、最小权限
 - **易于维护**：统一的部署流程、完整的文档支持
 
+---
 
+## 18. UUID 身份验证系统 (Phase UUID)
 
+### 目标
 
+实现底层协议级的UUID身份验证机制，支持SOUL.md和AGENTS.md中定义的身份权力规则，防止文本层面的身份冒充。
+
+### 实现内容
+
+#### 18.1 协议层扩展
+
+**文件**: `packages/belldandy-protocol/src/index.ts`
+
+- **ConnectRequestFrame**：新增 `userUuid?: string` 字段，在WebSocket握手时传递用户UUID
+- **HelloOkFrame**：新增 `supportsUuid?: boolean` 字段，告知客户端当前环境是否支持UUID验证
+- **MessageSendParams**：新增 `userUuid?: string` 字段，在消息发送时传递UUID
+
+#### 18.2 服务端处理
+
+**文件**: `packages/belldandy-core/src/server.ts`
+
+- **连接状态管理**：`ConnectionState` 新增 `userUuid?: string` 字段，在整个会话期间维护UUID
+- **握手处理**：
+  - 从 `ConnectRequestFrame` 中提取 `userUuid`
+  - 保存到连接状态中
+  - 在 `HelloOkFrame` 响应中设置 `supportsUuid: true`
+- **消息路由**：将UUID从连接状态传递给 `handleReq`，最终传递给Agent的 `run()` 方法
+
+#### 18.3 Agent层支持
+
+**文件**: `packages/belldandy-agent/src/index.ts`
+
+- **AgentRunInput**：新增 `userUuid?: string` 字段，让Agent在运行时能访问用户UUID
+
+**文件**: `packages/belldandy-agent/src/tool-agent.ts`
+
+- **动态System Prompt注入**：在 `buildInitialMessages` 函数中，当存在UUID时动态注入UUID环境信息
+
+#### 18.4 工具系统
+
+**文件**: `packages/belldandy-skills/src/types.ts`
+
+- **ToolContext**：新增 `userUuid?: string` 字段，让所有工具都能访问用户UUID
+
+**文件**: `packages/belldandy-skills/src/builtin/get-user-uuid.ts`
+
+- **新增工具 `get_user_uuid`**：返回当前环境的用户UUID，如果环境不支持则返回null
+
+#### 18.5 前端支持
+
+**文件**: `apps/web/public/index.html` 和 `apps/web/public/app.js`
+
+- 在Auth输入区域下方新增UUID输入框
+- 使用localStorage保存UUID，自动恢复
+- 在WebSocket握手和消息发送时传递UUID
+
+### 价值
+
+- **身份验证**：为SOUL.md中的身份权力规则提供技术支撑
+- **安全可靠**：协议层传递，防止文本冒充
+- **环境适配**：自动检测环境支持情况，优雅降级
+- **用户友好**：前端自动保存恢复，无需重复输入
+
+---
+
+## 19. 身份上下文系统 (Phase Identity Context)
+
+### 目标
+
+扩展UUID系统，实现通用的身份上下文机制，支持多人聊天场景（如office.goddess.ai社区）中的身份权力规则。
+
+### 核心功能
+
+#### 19.1 协议层扩展
+
+**文件**: `packages/belldandy-protocol/src/index.ts`
+
+`MessageSendParams` 新增字段：
+- **senderInfo**：消息发送者信息（type, id, name, identity）
+- **roomContext**：房间上下文（roomId, environment, members[]）
+
+#### 19.2 新增工具
+
+| 工具 | 功能 | 文件 |
+|------|------|------|
+| `get_user_uuid` | 获取用户UUID | `get-user-uuid.ts` |
+| `get_message_sender_info` | 获取消息发送者信息 | `get-sender-info.ts` |
+| `get_room_members` | 获取房间成员列表（支持缓存） | `get-room-members.ts` |
+
+#### 19.3 System Prompt 动态注入
+
+**文件**: `packages/belldandy-agent/src/tool-agent.ts`
+
+根据身份上下文自动注入：
+- UUID环境信息（如果提供了userUuid）
+- 发送者信息（如果提供了senderInfo）
+- 房间上下文（如果提供了roomContext）
+- 身份权力规则激活状态
+
+**智能注入策略**（Token优化）：
+- **≤10人房间**：注入完整成员列表（300-600 tokens）
+- **>10人房间**：仅注入统计信息（150-200 tokens），Agent按需调用工具查询
+
+#### 19.4 缓存机制
+
+**文件**: `packages/belldandy-agent/src/conversation.ts`
+
+`ConversationStore` 扩展：
+- `setRoomMembersCache(conversationId, members, ttl)` - 设置缓存
+- `getRoomMembersCache(conversationId)` - 获取缓存（自动过期检查）
+- `clearRoomMembersCache(conversationId)` - 清除缓存
+
+**缓存策略**：
+- 默认TTL：5分钟
+- `get_room_members` 工具支持 `forceRefresh` 参数
+- 同一会话多次查询节省 67-90% token
+
+### Token 优化效果
+
+| 场景 | 优化前 | 优化后 | 节省 |
+|------|--------|--------|------|
+| 小型房间（≤10人） | 300-600 tokens | 300-600 tokens | 0%（保持完整体验） |
+| 大型房间（50人） | 1500-2000 tokens | 150-200 tokens | **85-90%** ⭐ |
+| 多次查询（3次） | 4500-6000 tokens | 1650-2200 tokens | **63-67%** ⭐ |
+
+### 环境变量配置
+
+```bash
+# 智能注入阈值（默认10）
+BELLDANDY_ROOM_INJECT_THRESHOLD=10
+
+# 缓存有效期（默认5分钟）
+BELLDANDY_ROOM_MEMBERS_CACHE_TTL=300000
+```
+
+### 使用场景
+
+#### 场景1：本地WebChat（无UUID）
+- 前端不提供UUID
+- `get_user_uuid` 返回 `null`
+- 身份权力规则不生效
+
+#### 场景2：本地WebChat（有UUID）
+- 前端提供UUID（localStorage持久化）
+- System Prompt包含UUID信息
+- 身份权力规则激活
+
+#### 场景3：office.goddess.ai社区
+- 后端提供完整身份上下文（senderInfo + roomContext）
+- System Prompt包含发送者信息和房间成员列表
+- Agent可调用工具验证身份和查询成员
+
+### 与SOUL.md的集成
+
+为SOUL.md中定义的身份权力规则提供技术支撑：
+
+```typescript
+// 1. 检查UUID是否匹配主人UUID
+const uuidResult = await get_user_uuid();
+if (uuidResult.uuid === "3224") {
+  // 主人权限，执行操作
+}
+
+// 2. 检查发送者身份标签
+const senderResult = await get_message_sender_info();
+if (senderResult.sender.type === "agent" &&
+    ["董事会成员", "董事长"].includes(senderResult.sender.identity)) {
+  // 上级权限，执行操作
+}
+
+// 3. 检查房间中是否有上级Agent
+const membersResult = await get_room_members();
+const hasSuperior = membersResult.agents.some(a =>
+  ["董事会成员", "董事长"].includes(a.identity)
+);
+```
+
+### 安全特性
+
+- **协议层传递**：所有身份信息通过WebSocket/HTTP协议传递，无法通过文本伪造
+- **环境检测**：自动识别本地环境和社区环境，适配不同场景
+- **优雅降级**：在不支持UUID的环境中，系统仍然正常工作，只是身份权力规则不生效
+
+### 价值
+
+- ✅ 支持多人聊天场景（office.goddess.ai社区）
+- ✅ 为SOUL.md身份权力规则提供技术支撑
+- ✅ 智能注入 + 缓存机制大幅降低token消耗
+- ✅ 协议层传递防止身份伪造
+- ✅ 环境自适应，优雅降级

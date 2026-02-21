@@ -80,7 +80,8 @@
       "Bash(npm run build)",
       "Bash(timeout 10 npm start:*)",
       "WebFetch(domain:bot.q.qq.com)",
-      "Bash(timeout 30 corepack pnpm dev:gateway:*)"
+      "Bash(timeout 30 corepack pnpm dev:gateway:*)",
+      "Bash(corepack pnpm dev:gateway)"
     ]
   }
 }

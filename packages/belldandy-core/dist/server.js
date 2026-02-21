@@ -135,6 +135,8 @@ export async function startGatewayServer(opts) {
                 state.connected = true;
                 state.role = accepted.role;
                 state.clientId = normalizeClientId(frame.clientId) ?? state.sessionId;
+                state.userUuid = frame.userUuid; // 保存用户UUID
+                console.log("[Debug] WebSocket connected. clientId:", state.clientId, "userUuid:", state.userUuid); // 添加调试日志
                 // 提取身份信息（异步）
                 const identityInfo = await extractIdentityInfo(opts.stateDir ?? resolveStateDir());
                 sendFrame(ws, {
@@ -147,6 +149,7 @@ export async function startGatewayServer(opts) {
                     agentAvatar: identityInfo.agentAvatar,
                     userName: identityInfo.userName,
                     userAvatar: identityInfo.userAvatar,
+                    supportsUuid: true, // 告知客户端当前环境支持UUID
                 });
                 return;
             }
@@ -155,6 +158,7 @@ export async function startGatewayServer(opts) {
             }
             const res = await handleReq(ws, frame, {
                 clientId: state.clientId ?? state.sessionId,
+                userUuid: state.userUuid, // 传递UUID
                 stateDir: opts.stateDir ?? resolveStateDir(),
                 agentFactory: opts.agentFactory ?? (() => new MockAgent()),
                 agentRegistry: opts.agentRegistry,
@@ -290,6 +294,7 @@ async function handleReq(ws, req, ctx) {
                 channel: "webchat",
             });
             console.log("[Debug] Processing message.send. conversationId:", conversationId);
+            console.log("[Debug] ctx.userUuid:", ctx.userUuid); // 添加UUID调试日志
             console.log("[Debug] Payload keys:", Object.keys(parsed.value));
             if ('attachments' in parsed.value) {
                 const atts = parsed.value.attachments;
@@ -399,7 +404,15 @@ async function handleReq(ws, req, ctx) {
             }
             void (async () => {
                 try {
-                    const runInput = { conversationId, text: promptText, history, agentId: requestedAgentId };
+                    const runInput = {
+                        conversationId,
+                        text: promptText,
+                        history,
+                        agentId: requestedAgentId,
+                        userUuid: ctx.userUuid, // 传递UUID给Agent
+                        senderInfo: parsed.value.senderInfo, // 传递发送者信息
+                        roomContext: parsed.value.roomContext, // 传递房间上下文
+                    };
                     if (contentParts.length > 0) {
                         // Construct multimodal content
                         runInput.content = [
@@ -890,7 +903,11 @@ function parseMessageSendParams(value) {
     const conversationId = typeof obj.conversationId === "string" && obj.conversationId.trim() ? obj.conversationId.trim() : undefined;
     const from = typeof obj.from === "string" && obj.from.trim() ? obj.from.trim() : undefined;
     const agentId = typeof obj.agentId === "string" && obj.agentId.trim() ? obj.agentId.trim() : undefined;
-    return { ok: true, value: { text, conversationId, from, agentId, attachments } };
+    // 解析 senderInfo 和 roomContext（用于 office.goddess.ai 社区）
+    const senderInfo = obj.senderInfo && typeof obj.senderInfo === "object" ? obj.senderInfo : undefined;
+    const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext : undefined;
+    console.log("[Debug] parseMessageSendParams - senderInfo:", senderInfo, "roomContext:", roomContext); // 添加调试日志
+    return { ok: true, value: { text, conversationId, from, agentId, attachments, senderInfo, roomContext } };
 }
 function safeParseFrame(raw) {
     let parsed;
@@ -908,6 +925,8 @@ function safeParseFrame(raw) {
         const role = typeof obj.role === "string" ? obj.role : "web";
         const auth = parseAuth(obj.auth);
         const clientId = typeof obj.clientId === "string" ? obj.clientId : undefined;
+        const userUuid = typeof obj.userUuid === "string" && obj.userUuid.trim() ? obj.userUuid.trim() : undefined; // 解析 userUuid
+        console.log("[Debug] Parsing connect frame. userUuid from client:", userUuid); // 添加调试日志
         return {
             type: "connect",
             role: isRole(role) ? role : "web",
@@ -915,6 +934,7 @@ function safeParseFrame(raw) {
             auth,
             clientName: typeof obj.clientName === "string" ? obj.clientName : undefined,
             clientVersion: typeof obj.clientVersion === "string" ? obj.clientVersion : undefined,
+            userUuid, // 添加 userUuid 字段
         };
     }
     if (type === "req") {

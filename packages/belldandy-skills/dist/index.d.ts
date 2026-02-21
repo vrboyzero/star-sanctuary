@@ -26,4 +26,7 @@ export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
 export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
 export { createCanvasTools, type CanvasBroadcastFn } from "./builtin/canvas.js";
 export type { CanvasBoard, CanvasNode, CanvasEdge, NodeType, NodeData, NodeRef } from "./builtin/canvas.js";
+export { getUserUuidTool } from "./builtin/get-user-uuid.js";
+export { getMessageSenderInfoTool } from "./builtin/get-sender-info.js";
+export { getRoomMembersTool } from "./builtin/get-room-members.js";
 //# sourceMappingURL=index.d.ts.map

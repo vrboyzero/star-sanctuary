@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { JsonObject } from "@belldandy/protocol";
-import type { Tool, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, AgentCapabilities } from "./types.js";
+import type { Tool, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, AgentCapabilities, ConversationStoreInterface } from "./types.js";
 
 /** 默认策略（最小权限） */
 export const DEFAULT_POLICY: ToolPolicy = {
@@ -37,6 +37,8 @@ export type ToolExecutorOptions = {
   logger?: ToolExecutorLogger;
   /** 可选：运行时判断工具是否被禁用（用于调用设置开关） */
   isToolDisabled?: (toolName: string) => boolean;
+  /** 可选：会话存储（用于缓存等功能） */
+  conversationStore?: ConversationStoreInterface;
 };
 
 export class ToolExecutor {
@@ -48,6 +50,7 @@ export class ToolExecutor {
   private agentCapabilities?: AgentCapabilities;
   private readonly logger?: ToolExecutorLogger;
   private readonly isToolDisabled?: (toolName: string) => boolean;
+  private conversationStore?: ConversationStoreInterface; // 移除 readonly，允许后期绑定
 
   constructor(options: ToolExecutorOptions) {
     this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
@@ -58,6 +61,7 @@ export class ToolExecutor {
     this.agentCapabilities = options.agentCapabilities;
     this.logger = options.logger;
     this.isToolDisabled = options.isToolDisabled;
+    this.conversationStore = options.conversationStore;
   }
 
   /**
@@ -65,6 +69,13 @@ export class ToolExecutor {
    */
   setAgentCapabilities(caps: AgentCapabilities): void {
     this.agentCapabilities = caps;
+  }
+
+  /**
+   * Late-bind conversationStore (for cases where the store is created after the executor).
+   */
+  setConversationStore(store: ConversationStoreInterface): void {
+    this.conversationStore = store;
   }
 
   /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
@@ -112,7 +123,14 @@ export class ToolExecutor {
   }
 
   /** 执行工具调用 */
-  async execute(request: ToolCallRequest, conversationId: string, agentId?: string): Promise<ToolCallResult> {
+  async execute(
+    request: ToolCallRequest,
+    conversationId: string,
+    agentId?: string,
+    userUuid?: string,
+    senderInfo?: any,
+    roomContext?: any,
+  ): Promise<ToolCallResult> {
     const start = Date.now();
 
     // 防御性检查：拒绝已禁用的工具调用
@@ -149,6 +167,10 @@ export class ToolExecutor {
       workspaceRoot: this.workspaceRoot,
       extraWorkspaceRoots: this.extraWorkspaceRoots.length > 0 ? this.extraWorkspaceRoots : undefined,
       agentId,
+      userUuid, // 传递UUID
+      senderInfo, // 传递发送者信息
+      roomContext, // 传递房间上下文
+      conversationStore: this.conversationStore, // 传递会话存储（用于缓存）
       policy: this.policy,
       agentCapabilities: this.agentCapabilities,
       logger: this.logger ? {
@@ -182,8 +204,15 @@ export class ToolExecutor {
   }
 
   /** 批量执行（并行） */
-  async executeAll(requests: ToolCallRequest[], conversationId: string): Promise<ToolCallResult[]> {
-    return Promise.all(requests.map(req => this.execute(req, conversationId)));
+  async executeAll(
+    requests: ToolCallRequest[],
+    conversationId: string,
+    agentId?: string,
+    userUuid?: string,
+    senderInfo?: any,
+    roomContext?: any,
+  ): Promise<ToolCallResult[]> {
+    return Promise.all(requests.map(req => this.execute(req, conversationId, agentId, userUuid, senderInfo, roomContext)));
   }
 
   private audit(result: ToolCallResult, conversationId: string, args: JsonObject): void {

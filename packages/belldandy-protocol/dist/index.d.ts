@@ -20,6 +20,8 @@ export type ConnectRequestFrame = {
     auth?: GatewayAuth;
     clientName?: string;
     clientVersion?: string;
+    /** 用户UUID（可选，用于身份权力验证） */
+    userUuid?: string;
 };
 export type HelloOkFrame = {
     type: "hello-ok";
@@ -31,6 +33,8 @@ export type HelloOkFrame = {
     agentAvatar?: string;
     userName?: string;
     userAvatar?: string;
+    /** 是否支持UUID验证（告知客户端当前环境是否支持UUID） */
+    supportsUuid?: boolean;
 };
 export type GatewayReqFrame = {
     type: "req";
@@ -64,6 +68,26 @@ export type MessageSendParams = {
     from?: string;
     /** 指定使用的 Agent Profile ID（可选，缺省使用 "default"） */
     agentId?: string;
+    /** 用户UUID（可选，用于身份权力验证） */
+    userUuid?: string;
+    /** 消息发送者信息（用于身份上下文） */
+    senderInfo?: {
+        type: "user" | "agent";
+        id: string;
+        name?: string;
+        identity?: string;
+    };
+    /** 房间上下文信息（用于多人聊天场景） */
+    roomContext?: {
+        roomId?: string;
+        environment: "local" | "community";
+        members?: Array<{
+            type: "user" | "agent";
+            id: string;
+            name?: string;
+            identity?: string;
+        }>;
+    };
     attachments?: Array<{
         name: string;
         type: string;

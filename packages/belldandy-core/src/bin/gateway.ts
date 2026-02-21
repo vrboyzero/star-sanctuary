@@ -69,6 +69,9 @@ import {
   createSkillsListTool,
   createSkillsSearchTool,
   createCanvasTools,
+  getUserUuidTool,
+  getMessageSenderInfoTool,
+  getRoomMembersTool,
 } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
@@ -452,6 +455,9 @@ const toolsToRegister = toolsEnabled
     ...(dangerousToolsEnabled ? [runCommandTool] : []),
     createMemorySearchTool(),
     createMemoryGetTool(),
+    getUserUuidTool, // UUID获取工具（始终加载）
+    getMessageSenderInfoTool, // 发送者信息工具（始终加载）
+    getRoomMembersTool, // 房间成员工具（始终加载）
 
     // ── browser 组 ──
     ...(hasToolGroup("browser") ? [
@@ -960,6 +966,9 @@ const conversationStore = new ConversationStore({
   compaction: compactionOpts,
   summarizer: compactionSummarizer,
 });
+
+// Wire conversationStore into ToolExecutor (for caching support)
+toolExecutor.setConversationStore(conversationStore);
 
 // 7.6 Init Sub-Agent Orchestrator (wire agentCapabilities into ToolExecutor)
 if (agentRegistry && toolsEnabled) {

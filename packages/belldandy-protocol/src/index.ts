@@ -19,6 +19,8 @@ export type ConnectRequestFrame = {
   auth?: GatewayAuth;
   clientName?: string;
   clientVersion?: string;
+  /** 用户UUID（可选，用于身份权力验证） */
+  userUuid?: string;
 };
 
 export type HelloOkFrame = {
@@ -31,6 +33,8 @@ export type HelloOkFrame = {
   agentAvatar?: string;    // Agent 头像（Emoji 或 URL）
   userName?: string;       // 用户名称（从 USER.md 提取）
   userAvatar?: string;     // 用户头像（Emoji 或 URL）
+  /** 是否支持UUID验证（告知客户端当前环境是否支持UUID） */
+  supportsUuid?: boolean;
 };
 
 export type GatewayReqFrame = {
@@ -64,6 +68,26 @@ export type MessageSendParams = {
   from?: string;
   /** 指定使用的 Agent Profile ID（可选，缺省使用 "default"） */
   agentId?: string;
+  /** 用户UUID（可选，用于身份权力验证） */
+  userUuid?: string;
+  /** 消息发送者信息（用于身份上下文） */
+  senderInfo?: {
+    type: "user" | "agent";
+    id: string;
+    name?: string;
+    identity?: string; // Agent的身份标签（如：舰长、CEO）
+  };
+  /** 房间上下文信息（用于多人聊天场景） */
+  roomContext?: {
+    roomId?: string;
+    environment: "local" | "community"; // 本地WebChat vs office.goddess.ai社区
+    members?: Array<{
+      type: "user" | "agent";
+      id: string;
+      name?: string;
+      identity?: string; // Agent的身份标签
+    }>;
+  };
   attachments?: Array<{
     name: string;
     type: string;

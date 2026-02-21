@@ -26,6 +26,10 @@ export type SystemPromptParams = {
     }>;
     /** 是否有更多按需 skills 可通过 skills_search 搜索 */
     hasSearchableSkills?: boolean;
+    /** 是否支持UUID验证（告知Agent当前环境是否支持UUID） */
+    supportsUuid?: boolean;
+    /** 用户UUID（如果有） */
+    userUuid?: string;
 };
 /**
  * 构建完整的 System Prompt

@@ -80,7 +80,7 @@ export class ToolEnabledAgent {
                 content = result.content;
             }
         }
-        const messages = buildInitialMessages(this.opts.systemPrompt, content, input.history);
+        const messages = buildInitialMessages(this.opts.systemPrompt, content, input.history, input.userUuid, input.senderInfo, input.roomContext);
         const tools = this.opts.toolExecutor.getDefinitions();
         let toolCallCount = 0;
         const generatedItems = [];
@@ -249,7 +249,7 @@ export class ToolEnabledAgent {
                         arguments: request.arguments,
                     });
                     // 执行工具
-                    const result = await this.opts.toolExecutor.execute(request, input.conversationId, input.agentId);
+                    const result = await this.opts.toolExecutor.execute(request, input.conversationId, input.agentId, input.userUuid, input.senderInfo, input.roomContext);
                     const toolDurationMs = Date.now() - toolStartTime;
                     // Hook: afterToolCall / after_tool_call
                     if (this.opts.hookRunner) {
@@ -504,11 +504,103 @@ function estimateMessagesTotal(messages) {
     }
     return Math.ceil(total * MARGIN);
 }
-function buildInitialMessages(systemPrompt, userContent, history) {
+function buildInitialMessages(systemPrompt, userContent, history, userUuid, // 添加UUID参数
+senderInfo, // 添加发送者信息
+roomContext) {
     const messages = [];
     // Layer 1: System
-    if (systemPrompt?.trim()) {
-        messages.push({ role: "system", content: systemPrompt.trim() });
+    let finalSystemPrompt = systemPrompt?.trim() || "";
+    // 动态注入身份上下文信息
+    const contextLines = [];
+    // 1. UUID环境信息
+    if (userUuid) {
+        contextLines.push("");
+        contextLines.push("## Identity Context (Runtime)");
+        contextLines.push("- **UUID Support**: ENABLED");
+        contextLines.push(`- **Current User UUID**: ${userUuid}`);
+        contextLines.push("- You can use the `get_user_uuid` tool to retrieve this UUID at any time.");
+    }
+    // 2. 发送者信息
+    if (senderInfo) {
+        if (contextLines.length === 0) {
+            contextLines.push("");
+            contextLines.push("## Identity Context (Runtime)");
+        }
+        contextLines.push("");
+        contextLines.push("### Current Message Sender");
+        contextLines.push(`- **Type**: ${senderInfo.type}`);
+        contextLines.push(`- **ID**: ${senderInfo.id}`);
+        if (senderInfo.name) {
+            contextLines.push(`- **Name**: ${senderInfo.name}`);
+        }
+        if (senderInfo.type === "agent" && senderInfo.identity) {
+            contextLines.push(`- **Identity**: ${senderInfo.identity}`);
+        }
+        contextLines.push("- You can use the `get_message_sender_info` tool to retrieve sender information at any time.");
+    }
+    // 3. 房间上下文信息
+    if (roomContext) {
+        if (contextLines.length === 0) {
+            contextLines.push("");
+            contextLines.push("## Identity Context (Runtime)");
+        }
+        contextLines.push("");
+        contextLines.push("### Room Context");
+        contextLines.push(`- **Environment**: ${roomContext.environment === "community" ? "office.goddess.ai Community" : "Local WebChat"}`);
+        if (roomContext.roomId) {
+            contextLines.push(`- **Room ID**: ${roomContext.roomId}`);
+        }
+        if (roomContext.members && roomContext.members.length > 0) {
+            const users = roomContext.members.filter((m) => m.type === "user");
+            const agents = roomContext.members.filter((m) => m.type === "agent");
+            contextLines.push(`- **Members**: ${roomContext.members.length} total (${users.length} users, ${agents.length} agents)`);
+            // 智能注入：≤阈值注入完整列表，>阈值只注入统计
+            // 支持环境变量配置：BELLDANDY_ROOM_INJECT_THRESHOLD（默认10）
+            const SMART_INJECT_THRESHOLD = parseInt(process.env.BELLDANDY_ROOM_INJECT_THRESHOLD || "10", 10);
+            if (roomContext.members.length <= SMART_INJECT_THRESHOLD) {
+                // 小型房间：注入完整成员列表
+                if (users.length > 0) {
+                    contextLines.push(`  - Users:`);
+                    users.forEach((u) => {
+                        contextLines.push(`    - ${u.name || "Unknown"} (UUID: ${u.id})`);
+                    });
+                }
+                if (agents.length > 0) {
+                    contextLines.push(`  - Agents:`);
+                    agents.forEach((a) => {
+                        contextLines.push(`    - ${a.name || "Unknown"} (Identity: ${a.identity || "Unknown"})`);
+                    });
+                }
+            }
+            else {
+                // 大型房间：只注入统计，提示使用工具查询
+                contextLines.push("- Use the `get_room_members` tool to retrieve the full member list with details.");
+            }
+        }
+    }
+    // 4. 身份权力规则激活状态
+    if (userUuid || senderInfo || roomContext) {
+        contextLines.push("");
+        contextLines.push("### Identity-Based Authority Rules");
+        if (roomContext && roomContext.environment === "community") {
+            contextLines.push("- **Status**: ACTIVE (office.goddess.ai Community environment)");
+            contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
+            contextLines.push("- You should verify sender identity before executing sensitive commands.");
+        }
+        else if (userUuid) {
+            contextLines.push("- **Status**: ACTIVE (UUID provided)");
+            contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
+        }
+        else {
+            contextLines.push("- **Status**: PARTIAL (sender info available but not in community environment)");
+        }
+    }
+    if (contextLines.length > 0) {
+        contextLines.push("");
+        finalSystemPrompt += contextLines.join("\n");
+    }
+    if (finalSystemPrompt) {
+        messages.push({ role: "system", content: finalSystemPrompt });
     }
     // Layer 2: History
     if (history && history.length > 0) {

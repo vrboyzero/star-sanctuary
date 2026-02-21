@@ -21,6 +21,17 @@ export type Conversation = {
     messages: ConversationMessage[];
     createdAt: number;
     updatedAt: number;
+    /** 房间成员列表缓存（用于多人聊天场景） */
+    roomMembersCache?: {
+        members: Array<{
+            type: "user" | "agent";
+            id: string;
+            name?: string;
+            identity?: string;
+        }>;
+        cachedAt: number;
+        ttl: number;
+    };
 };
 /**
  * 会话存储选项
@@ -135,5 +146,33 @@ export declare class ConversationStore {
      * 更新并持久化压缩状态
      */
     setCompactionState(id: string, state: CompactionState): void;
+    /**
+     * 设置房间成员列表缓存
+     * @param conversationId 会话ID
+     * @param members 成员列表
+     * @param ttl 缓存有效期（毫秒），默认5分钟
+     */
+    setRoomMembersCache(conversationId: string, members: Array<{
+        type: "user" | "agent";
+        id: string;
+        name?: string;
+        identity?: string;
+    }>, ttl?: number): void;
+    /**
+     * 获取房间成员列表缓存
+     * @param conversationId 会话ID
+     * @returns 成员列表，如果缓存过期或不存在则返回undefined
+     */
+    getRoomMembersCache(conversationId: string): Array<{
+        type: "user" | "agent";
+        id: string;
+        name?: string;
+        identity?: string;
+    }> | undefined;
+    /**
+     * 清除房间成员列表缓存
+     * @param conversationId 会话ID
+     */
+    clearRoomMembersCache(conversationId: string): void;
 }
 //# sourceMappingURL=conversation.d.ts.map

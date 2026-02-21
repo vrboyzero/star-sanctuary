@@ -79,3 +79,10 @@ export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-t
 export { createCanvasTools, type CanvasBroadcastFn } from "./builtin/canvas.js";
 export type { CanvasBoard, CanvasNode, CanvasEdge, NodeType, NodeData, NodeRef } from "./builtin/canvas.js";
 
+// UUID 获取工具
+export { getUserUuidTool } from "./builtin/get-user-uuid.js";
+
+// 身份上下文工具
+export { getMessageSenderInfoTool } from "./builtin/get-sender-info.js";
+export { getRoomMembersTool } from "./builtin/get-room-members.js";
+

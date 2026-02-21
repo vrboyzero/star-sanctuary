@@ -1,6 +1,8 @@
 const statusEl = document.getElementById("status");
 const authModeEl = document.getElementById("authMode");
 const authValueEl = document.getElementById("authValue");
+const userUuidEl = document.getElementById("userUuid"); // UUID输入框
+const saveUuidBtn = document.getElementById("saveUuid"); // UUID保存按钮
 const workspaceRootsEl = document.getElementById("workspaceRoots");
 const connectBtn = document.getElementById("connect");
 const sendBtn = document.getElementById("send");
@@ -26,6 +28,7 @@ const STORE_KEY = "belldandy.webchat.auth";
 const CLIENT_KEY = "belldandy.webchat.clientId";
 const WORKSPACE_ROOTS_KEY = "belldandy.webchat.workspaceRoots";
 const AGENT_ID_KEY = "belldandy.webchat.agentId";
+const UUID_KEY = "belldandy.webchat.userUuid"; // UUID存储键
 
 let ws = null;
 let isReady = false;
@@ -63,6 +66,38 @@ if (sidebarEl) {
 
 restoreAuth();
 restoreWorkspaceRoots();
+restoreUuid(); // 恢复UUID
+
+// 监听 UUID 保存按钮
+if (saveUuidBtn && userUuidEl) {
+  saveUuidBtn.addEventListener("click", () => {
+    const uuid = userUuidEl.value.trim();
+    console.log("[UUID] Saving UUID:", uuid);
+    persistUuid();
+    // 如果 WebSocket 已连接，重新连接以更新 UUID
+    if (ws && isReady) {
+      console.log("[UUID] UUID changed, reconnecting...");
+      teardown();
+      setTimeout(() => connect(), 100);
+    } else {
+      console.log("[UUID] WebSocket not connected, will use UUID on next connect");
+    }
+  });
+}
+
+// 监听 UUID 输入框的变化，自动保存并重新连接（备用方案）
+if (userUuidEl) {
+  userUuidEl.addEventListener("blur", () => {
+    persistUuid();
+    // 如果 WebSocket 已连接，重新连接以更新 UUID
+    if (ws && isReady) {
+      console.log("[UUID] UUID changed (blur), reconnecting...");
+      teardown();
+      setTimeout(() => connect(), 100);
+    }
+  });
+}
+
 // [NEW] Allow ?token=... param to override/set auth
 const urlParams = new URLSearchParams(window.location.search);
 const urlToken = urlParams.get("token");
@@ -134,6 +169,25 @@ function restoreWorkspaceRoots() {
   try {
     const saved = localStorage.getItem(WORKSPACE_ROOTS_KEY);
     if (saved && workspaceRootsEl) workspaceRootsEl.value = saved;
+  } catch {
+    // ignore
+  }
+}
+
+function restoreUuid() {
+  try {
+    const saved = localStorage.getItem(UUID_KEY);
+    if (saved && userUuidEl) userUuidEl.value = saved;
+  } catch {
+    // ignore
+  }
+}
+
+function persistUuid() {
+  try {
+    if (userUuidEl) {
+      localStorage.setItem(UUID_KEY, userUuidEl.value.trim());
+    }
   } catch {
     // ignore
   }
@@ -272,6 +326,7 @@ if (saveWorkspaceRootsBtn) {
 function connect() {
   persistAuth();
   persistWorkspaceRoots();
+  persistUuid(); // 保存UUID
   teardown();
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -421,6 +476,8 @@ function sendConnect() {
   if (!ws) return;
   const mode = authModeEl.value;
   const v = authValueEl.value.trim();
+  const uuid = userUuidEl ? userUuidEl.value.trim() : ""; // 获取UUID
+  console.log("[UUID] sendConnect - UUID from input:", uuid); // 添加调试日志
   const auth =
     mode === "token"
       ? { mode: "token", token: v.startsWith("setup-") ? v : (v.match(/^\d+-\d+$/) ? `setup-${v}` : v) }
@@ -428,16 +485,25 @@ function sendConnect() {
         ? { mode: "password", password: v }
         : { mode: "none" };
 
-  ws.send(
-    JSON.stringify({
-      type: "connect",
-      role: "web",
-      clientId,
-      auth,
-      clientName: "belldandy-webchat",
-      clientVersion: "0.0.0",
-    }),
-  );
+  const connectFrame = {
+    type: "connect",
+    role: "web",
+    clientId,
+    auth,
+    clientName: "belldandy-webchat",
+    clientVersion: "0.0.0",
+  };
+
+  // 如果有UUID，添加到连接帧
+  if (uuid) {
+    connectFrame.userUuid = uuid;
+    console.log("[UUID] Adding UUID to connect frame:", uuid); // 添加调试日志
+  } else {
+    console.log("[UUID] No UUID to send in connect frame"); // 添加调试日志
+  }
+
+  console.log("[UUID] Sending connect frame:", JSON.stringify(connectFrame)); // 添加调试日志
+  ws.send(JSON.stringify(connectFrame));
 }
 
 async function sendMessage() {
@@ -556,17 +622,25 @@ async function sendMessage() {
   }
 
   const id = makeId();
+  const uuid = userUuidEl ? userUuidEl.value.trim() : ""; // 获取UUID
+  const params = {
+    conversationId: activeConversationId || undefined,
+    text: finalText,
+    from: "web",
+    agentId: agentSelectEl?.value || undefined,
+    attachments,
+  };
+
+  // 如果有UUID，添加到params
+  if (uuid) {
+    params.userUuid = uuid;
+  }
+
   const payload = await sendReq({
     type: "req",
     id,
     method: "message.send",
-    params: {
-      conversationId: activeConversationId || undefined,
-      text: finalText,
-      from: "web",
-      agentId: agentSelectEl?.value || undefined,
-      attachments,
-    },
+    params,
   });
 
   if (payload && payload.ok === false) {

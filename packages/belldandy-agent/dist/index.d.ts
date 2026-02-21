@@ -19,6 +19,26 @@ export type AgentContentPart = {
         url: string;
     };
 };
+/** 消息发送者信息 */
+export type SenderInfo = {
+    type: "user" | "agent";
+    id: string;
+    name?: string;
+    identity?: string;
+};
+/** 房间成员信息 */
+export type RoomMember = {
+    type: "user" | "agent";
+    id: string;
+    name?: string;
+    identity?: string;
+};
+/** 房间上下文信息 */
+export type RoomContext = {
+    roomId?: string;
+    environment: "local" | "community";
+    members?: RoomMember[];
+};
 export type AgentRunInput = {
     conversationId: string;
     /**
@@ -39,6 +59,12 @@ export type AgentRunInput = {
         role: "user" | "assistant";
         content: string | Array<AgentContentPart>;
     }>;
+    /** 用户UUID（用于身份权力验证） */
+    userUuid?: string;
+    /** 消息发送者信息（用于身份上下文） */
+    senderInfo?: SenderInfo;
+    /** 房间上下文信息（用于多人聊天场景） */
+    roomContext?: RoomContext;
 };
 export type AgentDelta = {
     type: "delta";

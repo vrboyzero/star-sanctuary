@@ -58,6 +58,29 @@ export type AgentContentPart =
   | { type: "image_url"; image_url: { url: string } }
   | { type: "video_url"; video_url: { url: string } }; // url format: "data:image/jpeg;base64,{base64_image}"
 
+/** 消息发送者信息 */
+export type SenderInfo = {
+  type: "user" | "agent";
+  id: string;
+  name?: string;
+  identity?: string; // Agent的身份标签（如：舰长、CEO）
+};
+
+/** 房间成员信息 */
+export type RoomMember = {
+  type: "user" | "agent";
+  id: string;
+  name?: string;
+  identity?: string; // Agent的身份标签
+};
+
+/** 房间上下文信息 */
+export type RoomContext = {
+  roomId?: string;
+  environment: "local" | "community"; // 本地WebChat vs office.goddess.ai社区
+  members?: RoomMember[];
+};
+
 export type AgentRunInput = {
   conversationId: string;
   /**
@@ -75,6 +98,12 @@ export type AgentRunInput = {
   agentId?: string;
   /** 对话历史（role 必须是 user 或 assistant） */
   history?: Array<{ role: "user" | "assistant"; content: string | Array<AgentContentPart> }>;
+  /** 用户UUID（用于身份权力验证） */
+  userUuid?: string;
+  /** 消息发送者信息（用于身份上下文） */
+  senderInfo?: SenderInfo;
+  /** 房间上下文信息（用于多人聊天场景） */
+  roomContext?: RoomContext;
 };
 
 export type AgentDelta = {

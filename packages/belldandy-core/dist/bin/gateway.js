@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles, ensureAgentWorkspace, loadAgentWorkspaceFiles, buildSystemPrompt, ConversationStore, loadModelFallbacks, FailoverClient, AgentRegistry, SubAgentOrchestrator, loadAgentProfiles, buildDefaultProfile, resolveModelConfig, HookRegistry, createHookRunner, } from "@belldandy/agent";
-import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, } from "@belldandy/skills";
+import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, getUserUuidTool, getMessageSenderInfoTool, getRoomMembersTool, } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel } from "@belldandy/channels";
@@ -337,6 +337,9 @@ const toolsToRegister = toolsEnabled
         ...(dangerousToolsEnabled ? [runCommandTool] : []),
         createMemorySearchTool(),
         createMemoryGetTool(),
+        getUserUuidTool, // UUID获取工具（始终加载）
+        getMessageSenderInfoTool, // 发送者信息工具（始终加载）
+        getRoomMembersTool, // 房间成员工具（始终加载）
         // ── browser 组 ──
         ...(hasToolGroup("browser") ? [
             browserOpenTool,
@@ -808,6 +811,8 @@ const conversationStore = new ConversationStore({
     compaction: compactionOpts,
     summarizer: compactionSummarizer,
 });
+// Wire conversationStore into ToolExecutor (for caching support)
+toolExecutor.setConversationStore(conversationStore);
 // 7.6 Init Sub-Agent Orchestrator (wire agentCapabilities into ToolExecutor)
 if (agentRegistry && toolsEnabled) {
     const subAgentMaxConcurrent = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_CONCURRENT") || "3", 10);

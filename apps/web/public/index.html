@@ -64,6 +64,17 @@
             <input id="authValue" class="input input-sm" placeholder="token / password" />
           </div>
         </div>
+        <!-- UUID 输入 -->
+        <div class="panel-input-group uuid-input-group">
+          <div class="input-label-row">
+            <span class="panel-label">UUID<span class="panel-hint">：用户身份标识（可选）</span></span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <input id="userUuid" class="input input-sm" placeholder="输入你的UUID（可选）"
+              title="用于身份权力验证，如SOUL.md中定义的主人UUID匹配" style="flex: 1;" />
+            <button id="saveUuid" class="button" style="padding: 6px 12px; font-size: 12px;">保存</button>
+          </div>
+        </div>
         <button id="connect" class="button">Connect</button>
       </div>
     </section>

@@ -1,4 +1,4 @@
-import type { Tool, ToolCallRequest, ToolCallResult, ToolPolicy, ToolAuditLog, AgentCapabilities } from "./types.js";
+import type { Tool, ToolCallRequest, ToolCallResult, ToolPolicy, ToolAuditLog, AgentCapabilities, ConversationStoreInterface } from "./types.js";
 /** 默认策略（最小权限） */
 export declare const DEFAULT_POLICY: ToolPolicy;
 /** Logger 接口，供工具在 context 中使用 */
@@ -20,6 +20,8 @@ export type ToolExecutorOptions = {
     logger?: ToolExecutorLogger;
     /** 可选：运行时判断工具是否被禁用（用于调用设置开关） */
     isToolDisabled?: (toolName: string) => boolean;
+    /** 可选：会话存储（用于缓存等功能） */
+    conversationStore?: ConversationStoreInterface;
 };
 export declare class ToolExecutor {
     private readonly tools;
@@ -30,11 +32,16 @@ export declare class ToolExecutor {
     private agentCapabilities?;
     private readonly logger?;
     private readonly isToolDisabled?;
+    private conversationStore?;
     constructor(options: ToolExecutorOptions);
     /**
      * Late-bind agentCapabilities (for cases where the orchestrator is created after the executor).
      */
     setAgentCapabilities(caps: AgentCapabilities): void;
+    /**
+     * Late-bind conversationStore (for cases where the store is created after the executor).
+     */
+    setConversationStore(store: ConversationStoreInterface): void;
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions(): {
         type: "function";
@@ -55,9 +62,9 @@ export declare class ToolExecutor {
     /** 获取已注册的工具数量 */
     getToolCount(): number;
     /** 执行工具调用 */
-    execute(request: ToolCallRequest, conversationId: string, agentId?: string): Promise<ToolCallResult>;
+    execute(request: ToolCallRequest, conversationId: string, agentId?: string, userUuid?: string, senderInfo?: any, roomContext?: any): Promise<ToolCallResult>;
     /** 批量执行（并行） */
-    executeAll(requests: ToolCallRequest[], conversationId: string): Promise<ToolCallResult[]>;
+    executeAll(requests: ToolCallRequest[], conversationId: string, agentId?: string, userUuid?: string, senderInfo?: any, roomContext?: any): Promise<ToolCallResult[]>;
     private audit;
 }
 //# sourceMappingURL=executor.d.ts.map

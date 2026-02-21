@@ -189,15 +189,38 @@ export function buildSystemPrompt(params) {
             ].join("\n"),
         });
     }
-    // P9: 时间信息
-    if (params.userTimezone || params.currentTime) {
+    // P9: 时间信息与UUID环境信息
+    if (params.userTimezone || params.currentTime || params.supportsUuid !== undefined) {
         const timeLines = ["# Current Context", ""];
         if (params.userTimezone)
             timeLines.push(`Time zone: ${params.userTimezone}`);
         if (params.currentTime)
             timeLines.push(`Current time: ${params.currentTime}`);
+        // UUID环境信息
+        if (params.supportsUuid !== undefined) {
+            timeLines.push("");
+            timeLines.push("## UUID Environment");
+            if (params.supportsUuid) {
+                timeLines.push("- **UUID Support**: ENABLED");
+                timeLines.push("- This environment supports UUID-based identity verification.");
+                if (params.userUuid) {
+                    timeLines.push(`- **Current User UUID**: ${params.userUuid}`);
+                    timeLines.push("- You can use the \`get_user_uuid\` tool to retrieve this UUID at any time.");
+                    timeLines.push("- Identity-based authority rules (as defined in SOUL.md) are ACTIVE.");
+                }
+                else {
+                    timeLines.push("- **Current User UUID**: Not provided");
+                    timeLines.push("- Identity-based authority rules (as defined in SOUL.md) are INACTIVE.");
+                }
+            }
+            else {
+                timeLines.push("- **UUID Support**: DISABLED");
+                timeLines.push("- This environment does NOT support UUID verification.");
+                timeLines.push("- Identity-based authority rules (as defined in SOUL.md) are INACTIVE.");
+            }
+        }
         timeLines.push("");
-        sections.push({ label: "time", text: timeLines.join("\n") });
+        sections.push({ label: "context", text: timeLines.join("\n") });
     }
     // P10: 额外 system prompt
     const extra = params.extraSystemPrompt?.trim();

@@ -306,5 +306,52 @@ export class ConversationStore {
             });
         }
     }
+    /**
+     * 设置房间成员列表缓存
+     * @param conversationId 会话ID
+     * @param members 成员列表
+     * @param ttl 缓存有效期（毫秒），默认5分钟
+     */
+    setRoomMembersCache(conversationId, members, ttl = 5 * 60 * 1000) {
+        const conv = this.get(conversationId);
+        if (!conv)
+            return;
+        conv.roomMembersCache = {
+            members,
+            cachedAt: Date.now(),
+            ttl,
+        };
+        conv.updatedAt = Date.now();
+    }
+    /**
+     * 获取房间成员列表缓存
+     * @param conversationId 会话ID
+     * @returns 成员列表，如果缓存过期或不存在则返回undefined
+     */
+    getRoomMembersCache(conversationId) {
+        const conv = this.get(conversationId);
+        if (!conv || !conv.roomMembersCache)
+            return undefined;
+        const now = Date.now();
+        const cache = conv.roomMembersCache;
+        // 检查缓存是否过期
+        if (now - cache.cachedAt > cache.ttl) {
+            // 缓存过期，清除
+            delete conv.roomMembersCache;
+            return undefined;
+        }
+        return cache.members;
+    }
+    /**
+     * 清除房间成员列表缓存
+     * @param conversationId 会话ID
+     */
+    clearRoomMembersCache(conversationId) {
+        const conv = this.get(conversationId);
+        if (!conv)
+            return;
+        delete conv.roomMembersCache;
+        conv.updatedAt = Date.now();
+    }
 }
 //# sourceMappingURL=conversation.js.map

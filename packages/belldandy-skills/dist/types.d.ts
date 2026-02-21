@@ -116,6 +116,26 @@ export type AgentCapabilities = {
     spawnParallel?: (tasks: SpawnSubAgentOptions[]) => Promise<SubAgentResult[]>;
     listSessions?: (parentConversationId?: string) => Promise<SessionInfo[]>;
 };
+/** 消息发送者信息 */
+export type SenderInfo = {
+    type: "user" | "agent";
+    id: string;
+    name?: string;
+    identity?: string;
+};
+/** 房间成员信息 */
+export type RoomMember = {
+    type: "user" | "agent";
+    id: string;
+    name?: string;
+    identity?: string;
+};
+/** 房间上下文信息 */
+export type RoomContext = {
+    roomId?: string;
+    environment: "local" | "community";
+    members?: RoomMember[];
+};
 /** 工具执行上下文 */
 export type ToolContext = {
     conversationId: string;
@@ -124,6 +144,14 @@ export type ToolContext = {
     extraWorkspaceRoots?: string[];
     /** 当前 Agent ID（用于 per-agent workspace 定位，如 switch_facet） */
     agentId?: string;
+    /** 用户UUID（用于身份权力验证） */
+    userUuid?: string;
+    /** 消息发送者信息（用于身份上下文） */
+    senderInfo?: SenderInfo;
+    /** 房间上下文信息（用于多人聊天场景） */
+    roomContext?: RoomContext;
+    /** 会话存储（用于缓存等功能） */
+    conversationStore?: ConversationStoreInterface;
     policy: ToolPolicy;
     agentCapabilities?: AgentCapabilities;
     logger?: {
@@ -134,6 +162,22 @@ export type ToolContext = {
         trace(message: string): void;
     };
 };
+/** ConversationStore 接口（避免循环依赖） */
+export interface ConversationStoreInterface {
+    setRoomMembersCache(conversationId: string, members: Array<{
+        type: "user" | "agent";
+        id: string;
+        name?: string;
+        identity?: string;
+    }>, ttl?: number): void;
+    getRoomMembersCache(conversationId: string): Array<{
+        type: "user" | "agent";
+        id: string;
+        name?: string;
+        identity?: string;
+    }> | undefined;
+    clearRoomMembersCache(conversationId: string): void;
+}
 /** 工具实现接口 */
 export interface Tool {
     definition: ToolDefinition;

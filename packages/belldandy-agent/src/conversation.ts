@@ -34,6 +34,17 @@ export type Conversation = {
     messages: ConversationMessage[];
     createdAt: number;
     updatedAt: number;
+    /** 房间成员列表缓存（用于多人聊天场景） */
+    roomMembersCache?: {
+        members: Array<{
+            type: "user" | "agent";
+            id: string;
+            name?: string;
+            identity?: string;
+        }>;
+        cachedAt: number; // 缓存时间戳
+        ttl: number; // 缓存有效期（毫秒）
+    };
 };
 
 /**
@@ -395,5 +406,63 @@ export class ConversationStore {
                 }
             });
         }
+    }
+
+    /**
+     * 设置房间成员列表缓存
+     * @param conversationId 会话ID
+     * @param members 成员列表
+     * @param ttl 缓存有效期（毫秒），默认5分钟
+     */
+    setRoomMembersCache(
+        conversationId: string,
+        members: Array<{ type: "user" | "agent"; id: string; name?: string; identity?: string }>,
+        ttl: number = 5 * 60 * 1000, // 默认5分钟
+    ): void {
+        const conv = this.get(conversationId);
+        if (!conv) return;
+
+        conv.roomMembersCache = {
+            members,
+            cachedAt: Date.now(),
+            ttl,
+        };
+        conv.updatedAt = Date.now();
+    }
+
+    /**
+     * 获取房间成员列表缓存
+     * @param conversationId 会话ID
+     * @returns 成员列表，如果缓存过期或不存在则返回undefined
+     */
+    getRoomMembersCache(
+        conversationId: string,
+    ): Array<{ type: "user" | "agent"; id: string; name?: string; identity?: string }> | undefined {
+        const conv = this.get(conversationId);
+        if (!conv || !conv.roomMembersCache) return undefined;
+
+        const now = Date.now();
+        const cache = conv.roomMembersCache;
+
+        // 检查缓存是否过期
+        if (now - cache.cachedAt > cache.ttl) {
+            // 缓存过期，清除
+            delete conv.roomMembersCache;
+            return undefined;
+        }
+
+        return cache.members;
+    }
+
+    /**
+     * 清除房间成员列表缓存
+     * @param conversationId 会话ID
+     */
+    clearRoomMembersCache(conversationId: string): void {
+        const conv = this.get(conversationId);
+        if (!conv) return;
+
+        delete conv.roomMembersCache;
+        conv.updatedAt = Date.now();
     }
 }

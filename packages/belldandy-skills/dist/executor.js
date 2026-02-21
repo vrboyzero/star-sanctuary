@@ -21,6 +21,7 @@ export class ToolExecutor {
     agentCapabilities;
     logger;
     isToolDisabled;
+    conversationStore; // 移除 readonly，允许后期绑定
     constructor(options) {
         this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
         this.workspaceRoot = options.workspaceRoot;
@@ -30,12 +31,19 @@ export class ToolExecutor {
         this.agentCapabilities = options.agentCapabilities;
         this.logger = options.logger;
         this.isToolDisabled = options.isToolDisabled;
+        this.conversationStore = options.conversationStore;
     }
     /**
      * Late-bind agentCapabilities (for cases where the orchestrator is created after the executor).
      */
     setAgentCapabilities(caps) {
         this.agentCapabilities = caps;
+    }
+    /**
+     * Late-bind conversationStore (for cases where the store is created after the executor).
+     */
+    setConversationStore(store) {
+        this.conversationStore = store;
     }
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions() {
@@ -76,7 +84,7 @@ export class ToolExecutor {
         return this.tools.size;
     }
     /** 执行工具调用 */
-    async execute(request, conversationId, agentId) {
+    async execute(request, conversationId, agentId, userUuid, senderInfo, roomContext) {
         const start = Date.now();
         // 防御性检查：拒绝已禁用的工具调用
         if (this.isToolDisabled?.(request.name)) {
@@ -109,6 +117,10 @@ export class ToolExecutor {
             workspaceRoot: this.workspaceRoot,
             extraWorkspaceRoots: this.extraWorkspaceRoots.length > 0 ? this.extraWorkspaceRoots : undefined,
             agentId,
+            userUuid, // 传递UUID
+            senderInfo, // 传递发送者信息
+            roomContext, // 传递房间上下文
+            conversationStore: this.conversationStore, // 传递会话存储（用于缓存）
             policy: this.policy,
             agentCapabilities: this.agentCapabilities,
             logger: this.logger ? {
@@ -141,8 +153,8 @@ export class ToolExecutor {
         }
     }
     /** 批量执行（并行） */
-    async executeAll(requests, conversationId) {
-        return Promise.all(requests.map(req => this.execute(req, conversationId)));
+    async executeAll(requests, conversationId, agentId, userUuid, senderInfo, roomContext) {
+        return Promise.all(requests.map(req => this.execute(req, conversationId, agentId, userUuid, senderInfo, roomContext)));
     }
     audit(result, conversationId, args) {
         if (!this.auditLogger)
