@@ -43,19 +43,11 @@ tmp
 # Test
 coverage
 **/coverage
-*.test.ts
-*.spec.ts
-**/__tests__
 
-# Docs (keep only README.md)
+# Docs
 docs
-*.md
-!README.md
-!CLAUDE.md
 
 # Config (will be mounted as volumes)
-.env
-.env.local
 .belldandy
 
 # Media (reduce image size)
@@ -76,4 +68,3 @@ UI-TARS-desktop-main
 *.map
 .eslintrc*
 .prettierrc*
-vitest.config.ts
