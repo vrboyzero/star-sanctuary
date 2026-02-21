@@ -88,8 +88,22 @@ export class RelayServer {
             this.cdpClients.add(ws);
             ws.on("message", async (data) => {
                 if (!this.extensionWs) {
-                    // 如果插件未连接，发送错误
-                    // 通常 CDP 帧包含 ID，但这里如果要报错需要构造响应结构
+                    // 如果插件未连接，立即发送错误响应
+                    try {
+                        const cmd = JSON.parse(data.toString());
+                        if (cmd.id !== undefined) {
+                            ws.send(JSON.stringify({
+                                id: cmd.id,
+                                error: {
+                                    code: -32000,
+                                    message: "浏览器扩展未连接。请告知用户：1) 确保 Chrome 浏览器正在运行；2) 检查 Belldandy 扩展是否已启用并显示已连接状态；3) 如果问题持续，请让用户刷新扩展或重启浏览器。在扩展重新连接前，浏览器相关功能暂时不可用。"
+                                }
+                            }));
+                        }
+                    }
+                    catch {
+                        // Ignore parse errors
+                    }
                     return;
                 }
                 try {
@@ -202,7 +216,6 @@ export class RelayServer {
                 result: {},
                 sessionId: cmd.sessionId
             };
-            client.send(JSON.stringify(response));
             client.send(JSON.stringify(response));
             // CRITICAL FIX: Only trigger "Connect to page-1" if this command comes from the BROWSWER (root)
             // If it comes from an existing Session (cmd.sessionId is present), it's Puppeteer looking for iframes/workers.

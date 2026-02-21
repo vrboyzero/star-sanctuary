@@ -2,8 +2,13 @@
   "files": [],
   "references": [
     { "path": "./packages/belldandy-protocol" },
+    { "path": "./packages/belldandy-memory" },
+    { "path": "./packages/belldandy-skills" },
     { "path": "./packages/belldandy-mcp" },
     { "path": "./packages/belldandy-agent" },
+    { "path": "./packages/belldandy-channels" },
+    { "path": "./packages/belldandy-plugins" },
+    { "path": "./packages/belldandy-browser" },
     { "path": "./packages/belldandy-core" }
   ]
 }
