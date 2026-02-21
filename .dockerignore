@@ -76,5 +76,4 @@ UI-TARS-desktop-main
 *.map
 .eslintrc*
 .prettierrc*
-tsconfig*.json
 vitest.config.ts
