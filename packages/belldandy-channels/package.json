@@ -2,9 +2,9 @@
   "name": "@belldandy/channels",
   "version": "1.0.0",
   "description": "External communication channels for Belldandy (Feishu, etc.)",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.js"
   },
   "type": "module",
   "scripts": {

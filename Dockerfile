@@ -94,6 +94,9 @@ COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-mcp/dist
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-plugins/dist ./packages/belldandy-plugins/dist
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-browser/dist ./packages/belldandy-browser/dist
 
+# Copy runtime assets (templates, etc.)
+COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-agent/src/templates ./packages/belldandy-agent/dist/templates
+
 # Copy WebChat frontend
 COPY --from=builder --chown=belldandy:belldandy /app/apps/web/public ./apps/web/public
 

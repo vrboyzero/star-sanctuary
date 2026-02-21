@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const GATEWAY_SCRIPT = path.resolve(__dirname, "../../bin/gateway.ts");
+// 根据当前文件扩展名判断是开发模式(.ts)还是生产模式(.js)
+const ext = path.extname(__filename);
+const GATEWAY_SCRIPT = path.resolve(__dirname, `../../bin/gateway${ext}`);
 
 const RESTART_EXIT_CODE = 100;
 const RESTART_DELAY_MS = 500;
@@ -22,7 +24,8 @@ export default defineCommand({
 
       const child = fork(GATEWAY_SCRIPT, [], {
         stdio: "inherit",
-        execArgv: ["--import", "tsx"],
+        // 生产模式(.js)不需要 tsx loader
+        execArgv: ext === ".ts" ? ["--import", "tsx"] : [],
       });
 
       child.on("exit", (code, signal) => {

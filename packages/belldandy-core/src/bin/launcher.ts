@@ -12,7 +12,9 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const GATEWAY_SCRIPT = path.join(__dirname, "gateway.ts");
+// 根据当前文件扩展名判断是开发模式(.ts)还是生产模式(.js)
+const ext = path.extname(__filename);
+const GATEWAY_SCRIPT = path.join(__dirname, `gateway${ext}`);
 
 // 重启信号 exit code（与 system.restart 保持一致）
 const RESTART_EXIT_CODE = 100;
@@ -24,8 +26,8 @@ function launchGateway(): void {
 
     const child = fork(GATEWAY_SCRIPT, process.argv.slice(2), {
         stdio: "inherit",
-        // 确保 tsx loader 也传递给子进程
-        execArgv: ["--import", "tsx"],
+        // 生产模式(.js)不需要 tsx loader
+        execArgv: path.extname(__filename) === ".ts" ? ["--import", "tsx"] : [],
     });
 
     child.on("exit", (code, signal) => {

@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "description": "MCP (Model Context Protocol) 客户端支持，用于连接外部工具和资源服务器",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -b",

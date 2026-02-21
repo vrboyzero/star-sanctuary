@@ -50,3 +50,4 @@ export declare class FeishuChannel implements Channel {
      */
     sendProactiveMessage(content: string, chatId?: string): Promise<boolean>;
 }
+//# sourceMappingURL=feishu.d.ts.map

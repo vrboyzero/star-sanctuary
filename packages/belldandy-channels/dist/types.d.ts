@@ -133,3 +133,4 @@ export interface ChannelManager {
      */
     broadcast(content: string): Promise<Map<string, boolean>>;
 }
+//# sourceMappingURL=types.d.ts.map

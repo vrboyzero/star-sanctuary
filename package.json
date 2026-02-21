@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc -b",
     "bdd": "node --import tsx packages/belldandy-core/src/bin/bdd.ts",
-    "start": "node --import tsx packages/belldandy-core/src/bin/bdd.ts start",
+    "start": "node packages/belldandy-core/dist/bin/bdd.js start",
+    "dev": "node --import tsx packages/belldandy-core/src/bin/bdd.ts dev",
     "dev:gateway": "node --import tsx packages/belldandy-core/src/bin/bdd.ts dev",
     "test": "vitest run"
   },

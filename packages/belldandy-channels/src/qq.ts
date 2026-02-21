@@ -378,7 +378,9 @@ export class QqChannel implements Channel {
         this.processedMessages.add(msgId);
         if (this.processedMessages.size > this.MESSAGE_CACHE_SIZE) {
             const first = this.processedMessages.values().next().value;
-            this.processedMessages.delete(first);
+            if (first !== undefined) {
+                this.processedMessages.delete(first);
+            }
         }
 
         // 忽略机器人自己的消息

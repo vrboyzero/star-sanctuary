@@ -63,3 +63,4 @@ export declare class DefaultChannelManager implements ChannelManager {
         running: boolean;
     }[];
 }
+//# sourceMappingURL=manager.d.ts.map
