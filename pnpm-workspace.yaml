@@ -1,8 +1,6 @@
 packages:
   - packages/*
   - apps/*
-  - office.goddess.ai
-  - office.goddess.ai/server
 
 onlyBuiltDependencies:
   - better-sqlite3

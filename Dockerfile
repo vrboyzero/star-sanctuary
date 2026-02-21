@@ -28,8 +28,6 @@ COPY packages/belldandy-mcp/package.json ./packages/belldandy-mcp/
 COPY packages/belldandy-plugins/package.json ./packages/belldandy-plugins/
 COPY packages/belldandy-browser/package.json ./packages/belldandy-browser/
 COPY apps/web/package.json ./apps/web/
-COPY office.goddess.ai/package.json ./office.goddess.ai/
-COPY office.goddess.ai/server/package.json ./office.goddess.ai/server/
 
 # Install production dependencies with cache mount
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
@@ -53,8 +51,6 @@ COPY packages/belldandy-mcp/package.json ./packages/belldandy-mcp/
 COPY packages/belldandy-plugins/package.json ./packages/belldandy-plugins/
 COPY packages/belldandy-browser/package.json ./packages/belldandy-browser/
 COPY apps/web/package.json ./apps/web/
-COPY office.goddess.ai/package.json ./office.goddess.ai/
-COPY office.goddess.ai/server/package.json ./office.goddess.ai/server/
 
 # Copy tsconfig
 COPY tsconfig*.json ./
@@ -66,7 +62,6 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 # Copy source code
 COPY packages ./packages
 COPY apps ./apps
-COPY office.goddess.ai ./office.goddess.ai
 
 # Build TypeScript (tsc -b)
 RUN pnpm build
@@ -123,8 +118,6 @@ COPY --chown=belldandy:belldandy packages/belldandy-mcp/package.json ./packages/
 COPY --chown=belldandy:belldandy packages/belldandy-plugins/package.json ./packages/belldandy-plugins/
 COPY --chown=belldandy:belldandy packages/belldandy-browser/package.json ./packages/belldandy-browser/
 COPY --chown=belldandy:belldandy apps/web/package.json ./apps/web/
-COPY --chown=belldandy:belldandy office.goddess.ai/package.json ./office.goddess.ai/
-COPY --chown=belldandy:belldandy office.goddess.ai/server/package.json ./office.goddess.ai/server/
 
 # Environment variables
 ENV NODE_ENV=production \
