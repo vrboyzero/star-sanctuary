@@ -857,7 +857,7 @@ async function handleReq(
         { id: "memory_db", name: "Vector Database", status: "pass", message: "OK" },
       ];
 
-      const dbPath = path.join(ctx.stateDir, "memory.db");
+      const dbPath = path.join(ctx.stateDir, "memory.sqlite");
       if (fs.existsSync(dbPath)) {
         const stat = fs.statSync(dbPath);
         checks[1].message = `Size: ${(stat.size / 1024).toFixed(1)} KB`;
