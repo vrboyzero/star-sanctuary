@@ -198,6 +198,13 @@ export class QqChannel implements Channel {
 
         this.ws.on("close", (code, reason) => {
             console.log(`[${this.name}] WebSocket closed: ${code} ${reason.toString()}`);
+
+            // 清理心跳定时器
+            if (this.heartbeatInterval) {
+                clearInterval(this.heartbeatInterval);
+                this.heartbeatInterval = undefined;
+            }
+
             if (this._running) {
                 console.log(`[${this.name}] Reconnecting in 5s...`);
                 setTimeout(() => this.connectWebSocket(), 5000);
@@ -222,8 +229,12 @@ export class QqChannel implements Channel {
 
         switch (op) {
             case OpCode.HELLO:
-                // 收到 HELLO，发送 IDENTIFY
-                this.sendIdentify();
+                // 收到 HELLO，判断是恢复会话还是新建会话
+                if (this.sessionId && this.sequence > 0) {
+                    this.sendResume();
+                } else {
+                    this.sendIdentify();
+                }
                 // 启动心跳
                 if (d?.heartbeat_interval) {
                     this.startHeartbeat(d.heartbeat_interval);
@@ -299,6 +310,23 @@ export class QqChannel implements Channel {
 
         this.ws?.send(JSON.stringify(payload));
         console.log(`[${this.name}] Sent IDENTIFY`);
+    }
+
+    /**
+     * 发送 RESUME（恢复会话）
+     */
+    private sendResume(): void {
+        const payload: WsPayload = {
+            op: OpCode.RESUME,
+            d: {
+                token: `QQBot ${this.accessToken}`,
+                session_id: this.sessionId,
+                seq: this.sequence,
+            },
+        };
+
+        this.ws?.send(JSON.stringify(payload));
+        console.log(`[${this.name}] Sent RESUME (session: ${this.sessionId}, seq: ${this.sequence})`);
     }
 
     /**

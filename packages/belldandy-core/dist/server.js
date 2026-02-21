@@ -42,6 +42,10 @@ export async function startGatewayServer(opts) {
     app.get("/", (_req, res) => {
         res.sendFile(path.join(opts.webRoot, "index.html"));
     });
+    // Health check endpoint for Docker/K8s
+    app.get("/health", (_req, res) => {
+        res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+    });
     const server = http.createServer(app);
     // [SECURITY] Origin Header 白名单校验（防 CSWSH）
     const allowedOriginsRaw = process.env.BELLDANDY_ALLOWED_ORIGINS;
