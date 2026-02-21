@@ -65,7 +65,8 @@ jobs:
             --name belldandy-test \
             -e BELLDANDY_HOST=0.0.0.0 \
             -e BELLDANDY_PORT=28889 \
-            -e BELLDANDY_AUTH_MODE=none \
+            -e BELLDANDY_AUTH_MODE=token \
+            -e BELLDANDY_AUTH_TOKEN=ci-test-token-12345 \
             -e BELLDANDY_AGENT_PROVIDER=mock \
             -e BELLDANDY_TOOLS_ENABLED=false \
             -p 28889:28889 \
