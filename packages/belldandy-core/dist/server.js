@@ -149,7 +149,9 @@ export async function startGatewayServer(opts) {
                     agentAvatar: identityInfo.agentAvatar,
                     userName: identityInfo.userName,
                     userAvatar: identityInfo.userAvatar,
-                    supportsUuid: true, // 告知客户端当前环境支持UUID
+                    supportsUuid: true,
+                    // configOk=false 时，前端应自动打开设置面板引导用户配置 API Key
+                    configOk: opts.isConfigured ? opts.isConfigured() : true,
                 });
                 return;
             }
@@ -717,7 +719,7 @@ async function handleReq(ws, req, ctx) {
                 { id: "node", name: "Node.js Environment", status: "pass", message: process.version },
                 { id: "memory_db", name: "Vector Database", status: "pass", message: "OK" },
             ];
-            const dbPath = path.join(ctx.stateDir, "memory.db");
+            const dbPath = path.join(ctx.stateDir, "memory.sqlite");
             if (fs.existsSync(dbPath)) {
                 const stat = fs.statSync(dbPath);
                 checks[1].message = `Size: ${(stat.size / 1024).toFixed(1)} KB`;

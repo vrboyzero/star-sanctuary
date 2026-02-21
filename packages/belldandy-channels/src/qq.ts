@@ -247,6 +247,8 @@ export class QqChannel implements Channel {
                 if (t === "READY") {
                     this.sessionId = d.session_id;
                     console.log(`[${this.name}] Session ready: ${this.sessionId}`);
+                } else if (t === "RESUMED") {
+                    console.log(`[${this.name}] Session resumed successfully (seq: ${this.sequence})`);
                 } else if (
                     t === "AT_MESSAGE_CREATE" ||
                     t === "MESSAGE_CREATE" ||

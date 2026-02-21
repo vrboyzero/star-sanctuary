@@ -77,14 +77,23 @@ export class MemoryManager {
             this.embeddingProvider = new LocalEmbeddingProvider(modelName, modelsDir);
             console.log(`[MemoryManager] Using Local Embedding Provider (${modelName})`);
         }
-        else {
-            // Default to OpenAI
+        else if (options.openaiApiKey) {
+            // 仅在 API Key 存在时才初始化 OpenAI Provider，避免 SDK 构造时因缺少 Key 而抛出异常
             this.embeddingProvider = new OpenAIEmbeddingProvider({
                 apiKey: options.openaiApiKey,
                 baseURL: options.openaiBaseUrl,
                 model: options.openaiModel
             });
             console.log(`[MemoryManager] Using OpenAI Embedding Provider (${options.openaiModel || "text-embedding-3-small"})`);
+        }
+        else {
+            // API Key 缺失时使用空 Provider，仅支持关键词检索，不影响正常启动
+            this.embeddingProvider = {
+                modelName: "none",
+                embed: async () => [],
+                embedBatch: async (texts) => texts.map(() => []),
+            };
+            console.warn("[MemoryManager] No API key for embedding — vector search disabled. Configure via WebChat settings.");
         }
         this.indexer = new MemoryIndexer(this.store, options.indexerOptions);
         this.reranker = new ResultReranker(options.rerankerOptions);

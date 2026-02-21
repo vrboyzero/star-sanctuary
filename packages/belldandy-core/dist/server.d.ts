@@ -40,6 +40,8 @@ export type GatewayServerOptions = {
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     /** 插件注册表（用于获取已加载插件列表） */
     pluginRegistry?: PluginRegistry;
+    /** 可选：检查当前是否已配置好 AI 模型（用于 hello-ok 中告知前端是否需要引导配置）*/
+    isConfigured?: () => boolean;
     /** 技能注册表（用于获取已加载技能列表） */
     skillRegistry?: SkillRegistry;
 };
