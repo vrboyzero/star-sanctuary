@@ -488,17 +488,22 @@ http://localhost:28889/
 
 1.  在 WebChat 发送第一条消息（例如 "你好"）。
 2.  界面会提示：`Pairing required. Code: ABC123XY`。
-3.  回到**运行 Gateway 的终端**，开启一个新的终端窗口，执行批准命令：
+3.  **另开一个终端窗口（不要关掉运行 Gateway 的那个窗口）**，进入项目根目录，然后执行：
 
     ```bash
-    cd Belldandy
+    # 确保你在 Belldandy 项目根目录下执行此命令
+    # Windows 示例：cd D:\gongzuo\xiangmu\Belldandy\Belldandy
+    # macOS/Linux 示例：cd ~/Belldandy
+
     corepack pnpm bdd pairing approve ABC123XY
     ```
 
-    > 旧写法 `corepack pnpm pairing:approve ABC123XY` 仍可使用，但推荐使用 `bdd` 统一命令。
+    > **⚠️ 注意**：
+    > - 必须在 **Belldandy 项目根目录**（即包含 `package.json` 的那层目录）下执行此命令。
+    > - 将 `ABC123XY` 替换为界面上实际显示的配对码。
+    > - 配对码有效期为 **1 小时**，过期需重新在 WebChat 发送消息以获取新码。
 
-4.  回到 WebChat，再次发送消息，现在可以正常对话了。
-
+4.  看到 `✓ Client xxx approved` 即配对成功。回到 WebChat，再次发送消息，现在可以正常对话了。
 
 ---
 

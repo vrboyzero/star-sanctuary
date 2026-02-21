@@ -53,6 +53,8 @@ export type GatewayServerOptions = {
   sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
   /** 插件注册表（用于获取已加载插件列表） */
   pluginRegistry?: PluginRegistry;
+  /** 可选：检查当前是否已配置好 AI 模型（用于 hello-ok 中告知前端是否需要引导配置）*/
+  isConfigured?: () => boolean;
   /** 技能注册表（用于获取已加载技能列表） */
   skillRegistry?: SkillRegistry;
 };
@@ -229,7 +231,9 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
           agentAvatar: identityInfo.agentAvatar,
           userName: identityInfo.userName,
           userAvatar: identityInfo.userAvatar,
-          supportsUuid: true, // 告知客户端当前环境支持UUID
+          supportsUuid: true,
+          // configOk=false 时，前端应自动打开设置面板引导用户配置 API Key
+          configOk: opts.isConfigured ? opts.isConfigured() : true,
         });
         return;
       }

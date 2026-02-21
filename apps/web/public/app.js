@@ -393,6 +393,16 @@ function connect() {
       });
       flushQueuedText();
 
+      // 若服务端告知 AI 模型尚未配置（无 API Key），自动弹出设置面板引导用户
+      if (frame.configOk === false) {
+        setTimeout(() => {
+          toggleSettings(true);
+          // 在聊天区显示一条引导消息
+          const guideMsg = appendMessage("bot", "👋 欢迎使用 Belldandy！\n\n检测到 AI 模型尚未配置。请在右侧设置面板填入你的 API Key，然后点击 Save 保存。");
+          if (guideMsg) guideMsg.style.whiteSpace = "pre-wrap";
+        }, 500);
+      }
+
       // 重连成功后隐藏重启倒计时浮层
       const restartOverlay = document.getElementById("restartOverlay");
       if (restartOverlay) restartOverlay.classList.add("hidden");
@@ -646,7 +656,7 @@ async function sendMessage() {
   if (payload && payload.ok === false) {
     if (payload.error && payload.error.code === "pairing_required") {
       const msg = payload.error.message ? String(payload.error.message) : "Pairing required.";
-      botMsgEl.textContent = `${msg}\n\n在本机执行：corepack pnpm pairing:approve <CODE>\n然后再发送一次消息。`;
+      botMsgEl.textContent = `${msg}\n\n请在项目目录下打开新终端，执行：\n  corepack pnpm bdd pairing approve <CODE>\n（将 <CODE> 替换为上方的配对码，然后再发送一次消息）`;
       return;
     }
     if (payload.error && payload.error.code === "config_required") {
@@ -789,8 +799,9 @@ function handleEvent(event, payload) {
     const code = payload && payload.code ? String(payload.code) : "";
     if (!botMsgEl) botMsgEl = appendMessage("bot", "");
     botMsgEl.textContent =
-      `需要配对（pairing）。配对码：${code}\n\n` +
-      `在本机执行：corepack pnpm pairing:approve ${code}\n` +
+      `需要配对（Pairing）。配对码：${code}\n\n` +
+      `请在项目目录下打开新终端，执行：\n` +
+      `  corepack pnpm bdd pairing approve ${code}\n` +
       `然后再发送一次消息。`;
     return;
   }

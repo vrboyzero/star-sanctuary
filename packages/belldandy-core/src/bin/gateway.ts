@@ -1035,6 +1035,15 @@ const embeddingProvider = (readEnv("BELLDANDY_EMBEDDING_PROVIDER") as "openai" |
 const localEmbeddingModel = readEnv("BELLDANDY_LOCAL_EMBEDDING_MODEL");
 const embeddingBatchSize = Number(readEnv("BELLDANDY_EMBEDDING_BATCH_SIZE")) || 2;
 
+// 若 embedding 需要 API Key 但 key 为空，则自动降级为不启用向量检索。
+// MemoryManager 会使用 NullEmbeddingProvider，Gateway 可以正常启动。
+// 用户通过 WebChat 设置面板配置 Key 后重启即可恢复向量检索。
+const resolvedEmbeddingEnabled = embeddingEnabled && !(embeddingProvider === "openai" && !embeddingApiKey);
+if (embeddingEnabled && !resolvedEmbeddingEnabled) {
+  logger.warn("memory", "BELLDANDY_EMBEDDING_ENABLED=true but no API key found — embedding disabled. Configure API Key via WebChat settings and restart.");
+}
+
+
 // L0 摘要层配置
 const summaryEnabled = readEnv("BELLDANDY_MEMORY_SUMMARY_ENABLED") === "true";
 const summaryModel = readEnv("BELLDANDY_MEMORY_SUMMARY_MODEL") || openaiModel;
@@ -1210,6 +1219,8 @@ const server = await startGatewayServer({
     }
     return result;
   },
+  // 告知前端当前 AI 模型是否已配置好，未配置时前端自动弹出设置引导
+  isConfigured: () => agentProvider === "openai" && !!openaiApiKey,
 });
 
 // 绑定 broadcast 给 service_restart 工具使用
@@ -1509,17 +1520,14 @@ if (browserRelayEnabled) {
 // 12. 监听 .env / .env.local 文件变更，自动触发重启
 // 配合 launcher.ts 使用：exit(100) 会被 launcher 捕获并重新启动 gateway
 {
-  const ENV_FILES = [
-    path.join(process.cwd(), ".env"),
-    path.join(process.cwd(), ".env.local"),
-  ];
+  const WATCH_DIR = process.cwd();
+  const WATCH_FILES = new Set([".env", ".env.local"]);
   const DEBOUNCE_MS = 1500; // 防抖间隔，避免保存时多次触发
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const triggerRestart = (filePath: string) => {
+  const triggerRestart = (fileName: string) => {
     if (restartTimer) clearTimeout(restartTimer);
     restartTimer = setTimeout(() => {
-      const fileName = path.basename(filePath);
       logger.info("config-watcher", `检测到 ${fileName} 变更，正在重启服务...`);
       // 广播通知所有 WebSocket 客户端
       server.broadcast({
@@ -1532,18 +1540,29 @@ if (browserRelayEnabled) {
     }, DEBOUNCE_MS);
   };
 
-  for (const envFile of ENV_FILES) {
-    try {
-      if (fs.existsSync(envFile)) {
-        fs.watch(envFile, (eventType) => {
-          if (eventType === "change") {
-            triggerRestart(envFile);
-          }
-        });
-        logger.info("config-watcher", `监听 ${path.basename(envFile)} 变更`);
+  // 监听目录而非具体文件：解决 .env.local 在启动时不存在（新建时也能被检测到）
+  try {
+    fs.watch(WATCH_DIR, (eventType, fileName) => {
+      if (fileName && WATCH_FILES.has(fileName) && (eventType === "rename" || eventType === "change")) {
+        triggerRestart(fileName);
       }
-    } catch {
-      // 文件不存在或无权监听 → 跳过（不阻塞启动）
+    });
+    logger.info("config-watcher", `监听 .env 变更`);
+    logger.info("config-watcher", `监听 .env.local 变更`);
+  } catch {
+    // 无法监听目录时降级为逐个文件监听
+    for (const name of WATCH_FILES) {
+      const envFile = path.join(WATCH_DIR, name);
+      try {
+        if (fs.existsSync(envFile)) {
+          fs.watch(envFile, (eventType) => {
+            if (eventType === "change") triggerRestart(name);
+          });
+        }
+      } catch {
+        // 跳过
+      }
     }
   }
 }
+

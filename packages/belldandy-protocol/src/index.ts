@@ -35,6 +35,8 @@ export type HelloOkFrame = {
   userAvatar?: string;     // 用户头像（Emoji 或 URL）
   /** 是否支持UUID验证（告知客户端当前环境是否支持UUID） */
   supportsUuid?: boolean;
+  /** false 表示 AI 模型尚未配置（无 API Key），前端应自动弹出设置面板引导用户 */
+  configOk?: boolean;
 };
 
 export type GatewayReqFrame = {

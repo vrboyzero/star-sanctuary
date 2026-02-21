@@ -3,7 +3,6 @@ setlocal
 
 echo [Belldandy Launcher] Initialization...
 
-:: Check Node
 node -v >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js not found. Please install Node.js v22+ from https://nodejs.org/
@@ -11,7 +10,6 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Check PNPM
 call pnpm -v >nul 2>&1
 if %errorlevel% neq 0 (
     echo [INFO] pnpm not found. Enabling via corepack...
@@ -19,30 +17,32 @@ if %errorlevel% neq 0 (
     call corepack prepare pnpm@latest --activate
 )
 
-:: Install Dependencies if needed (simple check if node_modules exists)
 if not exist node_modules (
     echo [INFO] Installing dependencies...
     call corepack pnpm install
 )
 
-:: Generate Token
+REM Generate a one-time session token for WebChat access
 set "SETUP_TOKEN=setup-%RANDOM%-%RANDOM%-%RANDOM%"
 set "AUTO_OPEN_BROWSER=true"
-
-:: Force Server to use this token
 set "BELLDANDY_AUTH_MODE=token"
 set "BELLDANDY_AUTH_TOKEN=%SETUP_TOKEN%"
+
+REM NOTE: We do NOT pre-load .env.local here.
+REM The Gateway reads .env / .env.local directly on startup and applies them
+REM with correct quote-stripping, which always takes precedence over shell env vars.
 
 :main_loop
 echo.
 echo [Belldandy Launcher] Starting Gateway...
+echo [Belldandy Launcher] WebChat: http://localhost:28889
 echo.
 
 call corepack pnpm dev:gateway
 
 if %errorlevel% equ 100 (
     echo.
-    echo [Belldandy Launcher] Restarting requested...
+    echo [Belldandy Launcher] Restarting...
     timeout /t 2 >nul
     goto main_loop
 )

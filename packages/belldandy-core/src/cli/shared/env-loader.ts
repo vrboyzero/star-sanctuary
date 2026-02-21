@@ -40,7 +40,8 @@ export function loadEnvFileIfExists(filePath: string): void {
 
     const key = normalized.slice(0, eq).trim();
     if (!key) continue;
-    if (process.env[key] && process.env[key]!.trim()) continue;
+    // 始终以文件中的值为准（覆盖 shell/启动脚本传入的同名变量）
+    // 这样可以避免启动脚本（如 start.bat）把带引号的值 KEY="val" 直接存入进程环境后无法被纠正。
 
     let value = normalized.slice(eq + 1).trim();
     if (
