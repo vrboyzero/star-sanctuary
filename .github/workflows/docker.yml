@@ -63,7 +63,7 @@ jobs:
           # 启动容器（使用 mock agent，无需 API key）
           docker run -d \
             --name belldandy-test \
-            -e BELLDANDY_HOST=127.0.0.1 \
+            -e BELLDANDY_HOST=0.0.0.0 \
             -e BELLDANDY_PORT=28889 \
             -e BELLDANDY_AUTH_MODE=none \
             -e BELLDANDY_AGENT_PROVIDER=mock \
