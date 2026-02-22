@@ -243,13 +243,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
         // 检查是否有工具调用
         const toolCalls = response.toolCalls;
+        console.log(`[TOOL-CHECK] 工具调用数量: ${toolCalls?.length ?? 0}, 响应内容长度: ${response.content?.length ?? 0}`);
         if (!toolCalls || toolCalls.length === 0) {
           // 无工具调用，输出最终结果（已剥离协议块）
+          console.log(`[TOOL-CHECK] 无工具调用，直接返回文本结果`);
           yield* yieldItem(buildUsageItem());
           yield* yieldItem({ type: "final", text: contentForDisplay });
           yield* yieldItem({ type: "status", status: "done" });
           return;
         }
+        console.log(`[TOOL-CHECK] 检测到工具调用:`, toolCalls.map(tc => tc.function.name).join(', '));
 
         // 防止无限循环
         toolCallCount += toolCalls.length;
