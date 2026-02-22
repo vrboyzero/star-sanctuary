@@ -7,3 +7,5 @@ export {
     browserGetContentTool,
     browserSnapshotTool
 } from "./tools.js";
+
+export { setBrowserLogger } from "./tools.js";

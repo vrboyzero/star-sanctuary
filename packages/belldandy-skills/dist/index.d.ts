@@ -20,7 +20,7 @@ export { logReadTool, logSearchTool } from "./builtin/log.js";
 export { createCronTool, type CronToolDeps } from "./builtin/cron-tool.js";
 export { switchFacetTool } from "./builtin/switch-facet.js";
 export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-restart.js";
-export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, browserSnapshotTool, } from "./builtin/browser/tools.js";
+export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, browserSnapshotTool, setBrowserLogger, } from "./builtin/browser/index.js";
 export { createMemorySearchTool, createMemoryGetTool, type MemorySearchToolConfig } from "./builtin/memory.js";
 export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
 export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";

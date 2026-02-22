@@ -1,3 +1,9 @@
+interface Logger {
+    debug(message: string, data?: unknown): void;
+    info(message: string, data?: unknown): void;
+    warn(message: string, data?: unknown): void;
+    error(message: string, data?: unknown): void;
+}
 export declare class RelayServer {
     private server;
     private wssExtension;
@@ -7,7 +13,8 @@ export declare class RelayServer {
     private pending;
     private nextId;
     readonly port: number;
-    constructor(port?: number);
+    private logger?;
+    constructor(port?: number, logger?: Logger);
     private setupExtensionServer;
     private setupCdpServer;
     private handleExtensionMessage;
@@ -15,4 +22,5 @@ export declare class RelayServer {
     start(): Promise<void>;
     stop(): Promise<void>;
 }
+export {};
 //# sourceMappingURL=relay.d.ts.map

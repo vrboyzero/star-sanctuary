@@ -10,7 +10,9 @@ export class RelayServer {
     pending = new Map();
     nextId = 1;
     port;
-    constructor(port = 28892) {
+    logger;
+    constructor(port = 28892, logger) {
+        this.logger = logger;
         this.port = port;
         this.server = createServer((req, res) => {
             // 基础健康检查与版本信息
@@ -54,24 +56,24 @@ export class RelayServer {
     }
     setupExtensionServer() {
         this.wssExtension.on("connection", (ws) => {
-            console.log("[Relay] Extension 已连接");
+            this.logger?.info("Extension connected");
             this.extensionWs = ws;
             ws.on("message", (data) => {
                 const dataStr = data.toString();
                 // Avoid logging raw ping/pong to keep noise down, but log everything else
                 if (!dataStr.includes('"method":"pong"') && !dataStr.includes('"method":"ping"')) {
-                    console.log(`[Relay] Extension Msg: ${dataStr}`);
+                    this.logger?.debug(`Extension message: ${dataStr}`);
                 }
                 try {
                     const msg = JSON.parse(dataStr);
                     this.handleExtensionMessage(msg);
                 }
                 catch (err) {
-                    console.error("[Relay] 解析 Extension 消息失败", err);
+                    this.logger?.error("Failed to parse extension message", err);
                 }
             });
             ws.on("close", () => {
-                console.log("[Relay] Extension 已断开");
+                this.logger?.info("Extension disconnected");
                 this.extensionWs = null;
                 // 拒绝所有挂起的请求
                 for (const p of this.pending.values()) {
@@ -84,7 +86,7 @@ export class RelayServer {
     }
     setupCdpServer() {
         this.wssCdp.on("connection", (ws) => {
-            console.log("[Relay] CDP Client 已连接");
+            this.logger?.debug("CDP client connected");
             this.cdpClients.add(ws);
             ws.on("message", async (data) => {
                 if (!this.extensionWs) {
@@ -111,7 +113,7 @@ export class RelayServer {
                     this.handleCdpCommand(ws, cmd);
                 }
                 catch (err) {
-                    console.error("[Relay] 解析 CDP 指令失败", err);
+                    this.logger?.error("Failed to parse CDP command", err);
                 }
             });
             ws.on("close", () => {
@@ -168,7 +170,7 @@ export class RelayServer {
         }
     }
     async handleCdpCommand(client, cmd) {
-        console.log(`[Relay] CDP Command: ${cmd.method} (ID: ${cmd.id})`);
+        this.logger?.debug(`CDP command: ${cmd.method} (ID: ${cmd.id})`);
         // Intercept specific commands
         if (cmd.method === "Target.getBrowserContexts") {
             const response = {
@@ -178,7 +180,7 @@ export class RelayServer {
                 },
                 sessionId: cmd.sessionId
             };
-            console.log(`[Relay] Sending Contexts: ${JSON.stringify(response)}`);
+            this.logger?.debug(`Sending contexts: ${JSON.stringify(response)}`);
             client.send(JSON.stringify(response));
             return;
         }
@@ -199,7 +201,7 @@ export class RelayServer {
                     }
                 }
             };
-            console.log(`[Relay] Sending targetCreated: ${JSON.stringify(targetEvent)}`);
+            this.logger?.debug(`Sending targetCreated: ${JSON.stringify(targetEvent)}`);
             client.send(JSON.stringify(targetEvent));
             const response = {
                 id: cmd.id,
@@ -309,7 +311,7 @@ export class RelayServer {
     async start() {
         return new Promise((resolve, reject) => {
             this.server.listen(this.port, "127.0.0.1", () => {
-                console.log(`[Relay] Listening on 127.0.0.1:${this.port}`);
+                this.logger?.info(`Relay server listening on 127.0.0.1:${this.port}`);
                 resolve();
             });
             this.server.on("error", reject);

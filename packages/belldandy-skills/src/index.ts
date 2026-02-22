@@ -64,7 +64,8 @@ export {
   browserScreenshotTool,
   browserGetContentTool,
   browserSnapshotTool,
-} from "./builtin/browser/tools.js";
+  setBrowserLogger,
+} from "./builtin/browser/index.js";
 
 
 

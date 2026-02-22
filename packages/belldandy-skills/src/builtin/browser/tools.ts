@@ -4,10 +4,25 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import WebSocket from "ws";
 
+// Logger interface to avoid circular dependency
+interface Logger {
+    debug(message: string, data?: unknown): void;
+    info(message: string, data?: unknown): void;
+    warn(message: string, data?: unknown): void;
+    error(message: string, data?: unknown): void;
+}
+
 // Relay Server runs on port 28892 by default
 const RELAY_WS_ENDPOINT = "ws://127.0.0.1:28892/cdp";
 
 import { SNAPSHOT_SCRIPT } from "./snapshot.js";
+
+// Global logger instance (set by BrowserManager)
+let browserLogger: Logger | undefined;
+
+export function setBrowserLogger(logger: Logger) {
+    browserLogger = logger;
+}
 
 // =========================================
 // Direct CDP Helper - 绕过 Puppeteer 的 session 管理
@@ -129,10 +144,10 @@ class BrowserManager {
                 browserWSEndpoint: RELAY_WS_ENDPOINT,
                 defaultViewport: null, // Let browser handle viewport
             });
-            console.log("[BrowserManager] Connected to Relay");
+            browserLogger?.debug("Connected to relay");
 
             this.browser.on("disconnected", () => {
-                console.warn("[BrowserManager] Browser disconnected");
+                browserLogger?.warn("Browser disconnected");
                 this.browser = null;
             });
 
@@ -152,7 +167,7 @@ class BrowserManager {
             return pages[0];
         }
 
-        console.log("[BrowserManager] Waiting for targets...");
+        browserLogger?.debug("Waiting for targets...");
         try {
             const target = await browser.waitForTarget(t => t.type() === 'page', { timeout: 5000 });
             const page = await target.page();
@@ -165,7 +180,7 @@ class BrowserManager {
                 url: t.url(),
                 isPage: t.type() === 'page'
             }));
-            console.warn("[BrowserManager] No pages found after wait. Available targets:", JSON.stringify(targetDebug, null, 2));
+            browserLogger?.warn("No pages found after wait", { targets: targetDebug });
 
             throw new Error("No pages found. Ensure the Browser Extension is connected to the Relay.");
         }
@@ -222,13 +237,13 @@ export const browserOpenTool: Tool = {
                 return failure("unknown", "browser_open", validation.error, start);
             }
 
-            console.log(`[browser_open] Creating new tab for URL: ${url}`);
+            browserLogger?.debug(`Creating new tab for URL: ${url}`);
 
             // 使用直接 CDP 命令创建标签页（绕过 Puppeteer 的 session 管理）
             // 扩展的 Target.createTarget 会直接创建带 URL 的标签页
             const result = await sendCdpCommand("Target.createTarget", { url }) as { targetId: string };
 
-            console.log(`[browser_open] Successfully created tab with targetId: ${result.targetId}`);
+            browserLogger?.debug(`Successfully created tab with targetId: ${result.targetId}`);
 
             return success(
                 "unknown",
@@ -237,7 +252,7 @@ export const browserOpenTool: Tool = {
                 start
             );
         } catch (err) {
-            console.error(`[browser_open] Failed:`, err);
+            browserLogger?.error("browser_open failed", err);
             return failure("unknown", "browser_open", err, start);
         }
     },
@@ -441,7 +456,7 @@ export const browserGetContentTool: Tool = {
                         content = htmlToMarkdown(html);
                     }
                 } catch (e) {
-                    console.warn("[browser_get_content] Readability failed, falling back to raw markdown conversion", e);
+                    browserLogger?.warn("Readability failed, falling back to raw markdown conversion", e);
                     content = htmlToMarkdown(html);
                 }
             }

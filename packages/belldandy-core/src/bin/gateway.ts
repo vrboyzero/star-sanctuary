@@ -443,6 +443,12 @@ const toolsConfigManager = new ToolsConfigManager(stateDir, {
 await toolsConfigManager.load();
 
 // 3. Init Executor (conditional)
+// Inject browser logger before registering tools
+if (toolsEnabled) {
+  const { setBrowserLogger } = await import("@belldandy/skills");
+  setBrowserLogger(logger.child("browser"));
+}
+
 const toolsToRegister = toolsEnabled
   ? [
     // ── core 组：文件、网络、记忆（始终加载） ──
@@ -1508,7 +1514,8 @@ const browserRelayEnabled = readEnv("BELLDANDY_BROWSER_RELAY_ENABLED") === "true
 const browserRelayPort = Number(readEnv("BELLDANDY_RELAY_PORT") ?? "28892");
 
 if (browserRelayEnabled) {
-  const relay = new RelayServer(browserRelayPort);
+  const relayLogger = logger.child("browser-relay");
+  const relay = new RelayServer(browserRelayPort, relayLogger);
   // Do not await, start in background
   relay.start().then(() => {
     logger.info("browser-relay", `enabled (port=${browserRelayPort})`);

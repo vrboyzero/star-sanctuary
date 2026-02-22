@@ -21,7 +21,7 @@ export { switchFacetTool } from "./builtin/switch-facet.js";
 // 服务重启工具
 export { createServiceRestartTool } from "./builtin/service-restart.js";
 // 浏览器控制工具
-export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, browserSnapshotTool, } from "./builtin/browser/tools.js";
+export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, browserSnapshotTool, setBrowserLogger, } from "./builtin/browser/index.js";
 export { createMemorySearchTool, createMemoryGetTool } from "./builtin/memory.js";
 export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
 // Skills 管理工具
