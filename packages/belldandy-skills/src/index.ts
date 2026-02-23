@@ -87,3 +87,5 @@ export { getUserUuidTool } from "./builtin/get-user-uuid.js";
 export { getMessageSenderInfoTool } from "./builtin/get-sender-info.js";
 export { getRoomMembersTool } from "./builtin/get-room-members.js";
 
+// 社区工具
+export { createLeaveRoomTool, createJoinRoomTool } from "./builtin/community/index.js";

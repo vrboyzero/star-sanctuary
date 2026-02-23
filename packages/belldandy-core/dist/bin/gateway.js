@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles, ensureAgentWorkspace, loadAgentWorkspaceFiles, buildSystemPrompt, ConversationStore, loadModelFallbacks, FailoverClient, AgentRegistry, SubAgentOrchestrator, loadAgentProfiles, buildDefaultProfile, resolveModelConfig, HookRegistry, createHookRunner, } from "@belldandy/agent";
-import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, getUserUuidTool, getMessageSenderInfoTool, getRoomMembersTool, } from "@belldandy/skills";
+import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, getUserUuidTool, getMessageSenderInfoTool, getRoomMembersTool, createLeaveRoomTool, createJoinRoomTool, } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
-import { FeishuChannel, QqChannel } from "@belldandy/channels";
+import { FeishuChannel, QqChannel, CommunityChannel, loadCommunityConfig, getCommunityConfigPath } from "@belldandy/channels";
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner } from "../heartbeat/index.js";
 import { CronStore, startCronScheduler } from "../cron/index.js";
@@ -345,6 +345,8 @@ const toolsToRegister = toolsEnabled
         getUserUuidTool, // UUID获取工具（始终加载）
         getMessageSenderInfoTool, // 发送者信息工具（始终加载）
         getRoomMembersTool, // 房间成员工具（始终加载）
+        createLeaveRoomTool(undefined), // 离开社区房间工具（CommunityChannel 初始化后才可用）
+        createJoinRoomTool(undefined), // 加入社区房间工具（CommunityChannel 初始化后才可用）
         // ── browser 组 ──
         ...(hasToolGroup("browser") ? [
             browserOpenTool,
@@ -1179,6 +1181,42 @@ if (qqAppId && qqAppSecret && createAgent) {
 }
 else if ((qqAppId || qqAppSecret) && !createAgent) {
     logger.warn("qq", "Credentials present but no Agent configured, skipping.");
+}
+// 9.6 Start Community Channel (if configured)
+// 只要 community.json 存在且有 endpoint，就创建 CommunityChannel，
+// 即使 agents 为空也初始化，这样 join_room 工具可以在运行时动态加入房间。
+let communityChannel;
+try {
+    const communityConfigPath = getCommunityConfigPath();
+    if (fs.existsSync(communityConfigPath) && createAgent) {
+        const communityConfig = loadCommunityConfig();
+        // community config 的 name 是社区显示名，不是 agent profile ID，直接用默认 agent
+        const agent = createAgent();
+        communityChannel = new CommunityChannel({
+            endpoint: communityConfig.endpoint,
+            agents: communityConfig.agents,
+            agent: agent,
+            conversationStore: conversationStore,
+            reconnect: communityConfig.reconnect,
+        });
+        // 注册 leave_room 和 join_room 工具（带 channel 实例）
+        if (toolsEnabled) {
+            const leaveRoomToolWithChannel = createLeaveRoomTool(communityChannel);
+            toolExecutor.registerTool(leaveRoomToolWithChannel);
+            logger.info("community", "Registered leave_room tool with channel instance");
+            const joinRoomToolWithChannel = createJoinRoomTool(communityChannel);
+            toolExecutor.registerTool(joinRoomToolWithChannel);
+            logger.info("community", "Registered join_room tool with channel instance");
+        }
+        // 后台启动（有 agents 配置了 room 时才会实际连接）
+        communityChannel.start().catch((err) => {
+            logger.error("community", "Channel Error", err);
+        });
+        logger.info("community", `Started with ${communityConfig.agents.length} agent(s)`);
+    }
+}
+catch (e) {
+    logger.warn("community", "Failed to load community config, skipping startup:", e);
 }
 // 10. Start Heartbeat Runner (if configured)
 function parseIntervalMs(raw) {

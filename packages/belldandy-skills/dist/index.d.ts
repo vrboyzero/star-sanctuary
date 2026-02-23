@@ -29,4 +29,5 @@ export type { CanvasBoard, CanvasNode, CanvasEdge, NodeType, NodeData, NodeRef }
 export { getUserUuidTool } from "./builtin/get-user-uuid.js";
 export { getMessageSenderInfoTool } from "./builtin/get-sender-info.js";
 export { getRoomMembersTool } from "./builtin/get-room-members.js";
+export { createLeaveRoomTool, createJoinRoomTool } from "./builtin/community/index.js";
 //# sourceMappingURL=index.d.ts.map

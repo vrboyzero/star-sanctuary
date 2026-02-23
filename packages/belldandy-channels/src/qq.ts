@@ -205,10 +205,34 @@ export class QqChannel implements Channel {
                 this.heartbeatInterval = undefined;
             }
 
-            if (this._running) {
-                console.log(`[${this.name}] Reconnecting in 5s...`);
-                setTimeout(() => this.connectWebSocket(), 5000);
+            if (!this._running) return;
+
+            // 按 QQ 官方文档分类处理 close code:
+            // https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/error-trace/websocket.html
+
+            // 不可重连：配置/协议错误，需要开发者修复
+            const FATAL_CODES = [4001, 4002, 4010, 4011, 4012, 4013, 4014, 4914, 4915];
+            if (FATAL_CODES.includes(code)) {
+                console.error(`[${this.name}] Fatal close code ${code}, will NOT reconnect. Fix config and restart.`);
+                this._running = false;
+                return;
             }
+
+            // 4009: 连接过期，可 RESUME（保留 session）
+            // 4008: 发送过快，可 RESUME（保留 session，稍等久一点）
+            // 其他正常断开（1000/1001 等）：保留 session 尝试 RESUME
+
+            // 4006/4007: session 或 seq 无效，不可 RESUME，需重新 IDENTIFY
+            // 4900~4913: 内部错误，不可 RESUME，需重新 IDENTIFY
+            if (code === 4006 || code === 4007 || (code >= 4900 && code <= 4913)) {
+                console.log(`[${this.name}] Session invalidated (code: ${code}), will re-IDENTIFY on next connect`);
+                this.sessionId = undefined;
+                this.sequence = 0;
+            }
+
+            const delay = code === 4008 ? 10000 : 5000;
+            console.log(`[${this.name}] Reconnecting in ${delay / 1000}s...`);
+            setTimeout(() => this.connectWebSocket(), delay);
         });
 
         this.ws.on("error", (error) => {

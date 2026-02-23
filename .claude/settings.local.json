@@ -84,7 +84,11 @@
       "Bash(corepack pnpm dev:gateway)",
       "Bash(docker build:*)",
       "Bash(timeout:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(cd:*)",
+      "Bash(npx kill-port:*)",
+      "Bash(pushd:*)",
+      "Bash(popd)"
     ]
   }
 }

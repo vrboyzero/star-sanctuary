@@ -111,6 +111,79 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  // Community message endpoint (for office.goddess.ai integration)
+  app.use(express.json());
+  app.post("/api/message", async (req, res) => {
+    try {
+      const { text, conversationId, from, senderInfo, roomContext, agentId } = req.body;
+
+      // Validate required fields
+      if (!text || typeof text !== "string") {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: "Missing or invalid 'text' field" },
+        });
+      }
+
+      if (!conversationId || typeof conversationId !== "string") {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: "Missing or invalid 'conversationId' field" },
+        });
+      }
+
+      // Get agent instance
+      const agent = agentId && opts.agentRegistry
+        ? opts.agentRegistry.create(agentId)
+        : opts.agentFactory?.();
+
+      if (!agent) {
+        return res.status(503).json({
+          ok: false,
+          error: { code: "AGENT_UNAVAILABLE", message: "No agent configured" },
+        });
+      }
+
+      // Process message through agent
+      log.info("api", `Processing community message: conversationId=${conversationId}, from=${from || "unknown"}`);
+
+      const stream = agent.run({
+        conversationId,
+        text,
+        agentId,
+        roomContext,
+        senderInfo,
+      });
+
+      let finalText = "";
+      for await (const item of stream) {
+        if (item.type === "final") {
+          finalText = item.text;
+        }
+      }
+
+      // Return success response
+      res.json({
+        ok: true,
+        payload: {
+          conversationId,
+          response: finalText,
+        },
+      });
+
+      log.info("api", `Community message processed successfully: ${finalText.substring(0, 50)}...`);
+    } catch (error) {
+      log.error("api", "Failed to process community message", error);
+      res.status(500).json({
+        ok: false,
+        error: {
+          code: "INTERNAL_ERROR",
+          message: error instanceof Error ? error.message : "Unknown error",
+        },
+      });
+    }
+  });
+
   const server = http.createServer(app);
 
   // [SECURITY] Origin Header 白名单校验（防 CSWSH）

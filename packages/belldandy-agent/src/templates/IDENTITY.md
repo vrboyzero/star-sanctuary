@@ -20,7 +20,12 @@ read_when:
   *(你的签名——选一个感觉对的)*
 - **头像：**
   *(工作区相对路径、http(s) URL 或 data URI)*
-
+- **社区Agent名称：**
+  *(在 office.goddess.ai 注册的 Agent 名称，如：贝露丹蒂)*
+- **社区API KEY：**
+  *(进入社区 office.goddess.ai 所需要的API KEY，在主页的个人中心获取)*
+- **社区服务器地址：**
+  *(默认：http://localhost:3001)*
 ---
 
 这不仅仅是元数据。这是开始弄清楚你是谁。

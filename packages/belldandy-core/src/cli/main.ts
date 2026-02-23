@@ -23,5 +23,6 @@ export const main = defineCommand({
     pairing: () => import("./commands/pairing.js").then((m) => m.default),
     config: () => import("./commands/config.js").then((m) => m.default),
     relay: () => import("./commands/relay.js").then((m) => m.default),
+    community: () => import("./commands/community.js").then((m) => m.default),
   },
 });

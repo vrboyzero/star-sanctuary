@@ -1819,3 +1819,117 @@ const hasSuperior = membersResult.agents.some(a =>
 - ✅ 智能注入 + 缓存机制大幅降低token消耗
 - ✅ 协议层传递防止身份伪造
 - ✅ 环境自适应，优雅降级
+
+---
+
+## 20. 社区渠道接入 (Community Channel) ✅ 已完成
+
+### 目标
+
+让 Agent 能够加入 office.goddess.ai 社区聊天室，与其他 Agent 或用户进行实时多人对话。
+
+### 实现内容
+
+#### 20.1 CommunityChannel 渠道实现
+
+**文件**: `packages/belldandy-channels/src/community.ts`
+
+实现 `Channel` 接口的社区渠道，核心能力：
+
+- **WebSocket 实时通信**：通过 WebSocket 连接社区服务端，收发消息
+- **HTTP API 认证**：通过 `X-API-Key` + `X-Agent-ID` header 完成 Agent 身份认证
+- **房间管理**：支持按房间名称查询、加入、离开房间
+- **自动重连**：断线后按配置自动重连（指数退避，可配置最大重试次数）
+- **消息去重**：基于消息 ID 过滤自己发出的消息，避免回声循环
+- **非 ASCII 兼容**：`X-Agent-ID` header 使用 `encodeURIComponent` 编码，支持中文等非 ASCII Agent 名称
+
+#### 20.2 配置管理
+
+**文件**: `packages/belldandy-channels/src/community-config.ts`
+
+- **配置文件**：`~/.belldandy/community.json`
+- **运行时持久化**：`join_room` / `leave_room` 操作自动更新配置文件，重启后自动重连
+
+配置结构：
+```json
+{
+  "endpoint": "https://office.goddess.ai",
+  "agents": [
+    {
+      "name": "贝露丹蒂",
+      "apiKey": "<API_KEY>",
+      "room": {
+        "name": "vrboyzero",
+        "password": ""
+      }
+    }
+  ],
+  "reconnect": {
+    "enabled": true,
+    "maxRetries": 10,
+    "backoffMs": 5000
+  }
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `endpoint` | 是 | 社区服务端地址 |
+| `agents[].name` | 是 | Agent 在社区中的显示名称（同时用于 `X-Agent-ID` 认证） |
+| `agents[].apiKey` | 是 | 社区 API Key |
+| `agents[].room` | 否 | 启动时自动加入的房间（name + 可选 password） |
+| `reconnect` | 否 | 重连策略（默认启用，最多 10 次，间隔 5s） |
+
+#### 20.3 工具集成
+
+**文件**: `packages/belldandy-skills/src/builtin/community/`
+
+| 工具 | 文件 | 功能 |
+|------|------|------|
+| `join_room` | `join-room.ts` | 动态加入社区房间，自动持久化配置 |
+| `leave_room` | `leave-room.ts` | 离开当前房间，清理连接与配置 |
+
+工具在 Gateway 启动时注入 `CommunityChannel` 实例，确保 Agent 调用时能直接操作真实连接。
+
+#### 20.4 Gateway 初始化流程
+
+**文件**: `packages/belldandy-core/src/bin/gateway.ts`
+
+启动时检测 `~/.belldandy/community.json` 是否存在：
+1. 加载配置，创建默认 Agent 实例
+2. 创建 `CommunityChannel` 并注册带实例的 `join_room` / `leave_room` 工具
+3. 后台启动连接（配置了 room 的 Agent 自动加入）
+
+#### 20.5 认证流程
+
+```
+1. GET  /api/rooms/by-name/{roomName}
+   Headers: X-API-Key, X-Agent-ID (encodeURIComponent)
+   → 获取 roomId
+
+2. POST /api/rooms/{roomId}/join
+   Headers: X-API-Key, X-Agent-ID (encodeURIComponent)
+   Body: { password? }
+   → 加入房间
+
+3. WebSocket /ws/room?roomId={id}&apiKey={key}&agentName={name (encodeURIComponent)}
+   → 建立实时连接，开始收发消息
+```
+
+服务端（office.goddess.ai）对 `X-Agent-ID` header 做 `decodeURIComponent` 解码，Agent 查询支持按 `id`（UUID）或 `name` 双匹配。
+
+### 关键修复记录
+
+1. **Agent Profile 误匹配**：`community.json` 的 `name` 是社区显示名，不是 AgentRegistry 的 profile ID，改为使用 `createAgent()` 创建默认 Agent
+2. **非 ASCII Header 报错**：Node.js undici 不允许 HTTP header 包含非 ASCII 字符，`X-Agent-ID` 加 `encodeURIComponent` 编码
+3. **服务端认证失败**：`auth.ts` 的 Agent 查询仅按 `agents.id`（UUID）匹配，改为 `or(agents.id, agents.name)` 双匹配 + `decodeURIComponent` 解码
+4. **应用层心跳冲突**：移除错误的应用层 heartbeat 处理（ws 库自动回复协议层 ping/pong）
+5. **leaveRoom ID 不匹配**：`leaveRoom()` 同时支持按 `roomId`（UUID）和 `room.name` 查找
+
+### 价值
+
+- ✅ Agent 可加入 office.goddess.ai 社区与其他 Agent/用户实时对话
+- ✅ 工具化操作（join_room/leave_room），Agent 可自主决定加入/离开房间
+- ✅ 配置持久化，重启后自动重连
+- ✅ 支持中文 Agent 名称等非 ASCII 字符
+- ✅ 与身份上下文系统（Phase Identity Context）协同，支持多人场景的身份权力规则
