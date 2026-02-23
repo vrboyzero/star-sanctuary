@@ -5,7 +5,7 @@ import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles,
 import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, getUserUuidTool, getMessageSenderInfoTool, getRoomMembersTool, createLeaveRoomTool, createJoinRoomTool, timerTool, } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
-import { FeishuChannel, QqChannel, CommunityChannel, loadCommunityConfig, getCommunityConfigPath } from "@belldandy/channels";
+import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath } from "@belldandy/channels";
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner } from "../heartbeat/index.js";
 import { CronStore, startCronScheduler } from "../cron/index.js";
@@ -68,6 +68,10 @@ const qqAppId = readEnv("BELLDANDY_QQ_APP_ID");
 const qqAppSecret = readEnv("BELLDANDY_QQ_APP_SECRET");
 const qqAgentId = readEnv("BELLDANDY_QQ_AGENT_ID");
 const qqSandbox = readEnv("BELLDANDY_QQ_SANDBOX") !== "false";
+// Channels - Discord
+const discordEnabled = readEnv("BELLDANDY_DISCORD_ENABLED") === "true";
+const discordBotToken = readEnv("BELLDANDY_DISCORD_BOT_TOKEN");
+const discordDefaultChannelId = readEnv("BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID");
 // Heartbeat
 const heartbeatEnabled = readEnv("BELLDANDY_HEARTBEAT_ENABLED") === "true";
 const heartbeatIntervalRaw = readEnv("BELLDANDY_HEARTBEAT_INTERVAL") ?? "30m";
@@ -1182,6 +1186,33 @@ if (qqAppId && qqAppSecret && createAgent) {
 }
 else if ((qqAppId || qqAppSecret) && !createAgent) {
     logger.warn("qq", "Credentials present but no Agent configured, skipping.");
+}
+// 9.5.5 Start Discord Channel (if configured)
+let discordChannel;
+if (discordEnabled && discordBotToken && createAgent) {
+    try {
+        const agent = createAgent();
+        discordChannel = new DiscordChannel({
+            agent: agent,
+            botToken: discordBotToken,
+            defaultChannelId: discordDefaultChannelId,
+            stateFilePath: path.join(stateDir, "discord-state.json"),
+        });
+        // Do not await, start in background
+        discordChannel.start().catch((err) => {
+            logger.error("discord", "Channel Error", err);
+        });
+        logger.info("discord", "Discord channel initialized");
+    }
+    catch (e) {
+        logger.warn("discord", "Failed to initialize Discord channel", e);
+    }
+}
+else if (discordEnabled && !discordBotToken) {
+    logger.warn("discord", "Discord enabled but BELLDANDY_DISCORD_BOT_TOKEN not set, skipping.");
+}
+else if (discordEnabled && !createAgent) {
+    logger.warn("discord", "Discord enabled but no Agent configured, skipping.");
 }
 // 9.6 Start Community Channel (if configured)
 // 只要 community.json 存在且有 endpoint，就创建 CommunityChannel，

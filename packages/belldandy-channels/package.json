@@ -15,6 +15,7 @@
     "@belldandy/agent": "workspace:*",
     "@belldandy/protocol": "workspace:*",
     "@larksuiteoapi/node-sdk": "^1.42.0",
+    "discord.js": "^14.17.3",
     "qq-guild-bot": "^2.9.5",
     "ws": "^8.18.0"
   },

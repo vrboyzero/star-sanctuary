@@ -444,6 +444,11 @@ body::before {
   min-width: 300px;
 }
 
+.uuid-input-group {
+  flex: 1.2;
+  min-width: 260px;
+}
+
 .auth-controls {
   display: flex;
   gap: 8px;
@@ -495,6 +500,7 @@ body::before {
 .input,
 .select {
   flex: 1;
+  min-width: 0;
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid var(--glass-border);
   color: var(--text-main);

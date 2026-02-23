@@ -12,5 +12,5 @@ export * from "./community-config.js";
 
 // 未来渠道（示例导出位置）
 // export * from "./telegram.js";
-// export * from "./discord.js";
+export * from "./discord.js";
 // export * from "./slack.js";

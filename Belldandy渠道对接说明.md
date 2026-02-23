@@ -259,3 +259,71 @@ Agent 可以通过 `leave_room` 工具主动离开当前房间。在对话中告
 - **工具依赖**：`leave_room` 工具需要启用工具系统（`BELLDANDY_TOOLS_ENABLED=true`）
 
 ---
+
+## 模块四：Discord 机器人接入指南
+
+> **状态**：已完成对接并验证可用。实现文件：`packages/belldandy-channels/src/discord.ts`
+
+### 1. 创建 Discord 应用与 Bot
+
+1. 访问 [Discord Developer Portal](https://discord.com/developers/applications)，登录账号。
+2. 点击 **"New Application"** → 输入名称 → **"Create"**。
+3. 进入 **"Bot"** 页面：
+   - 点击 **"Reset Token"** 获取 **Bot Token**（只显示一次，立即保存）。
+   - 开启 **Privileged Gateway Intents**：
+     - `PRESENCE INTENT`
+     - `SERVER MEMBERS INTENT`
+     - `MESSAGE CONTENT INTENT`（**必须**，否则无法读取消息内容）
+
+### 2. 邀请 Bot 到服务器
+
+进入 **"OAuth2" → "URL Generator"**，Scopes 勾选 `bot`，Bot Permissions 勾选：
+`Send Messages` / `Read Message History` / `Attach Files` / `Embed Links` / `View Channels`
+
+复制生成的 URL，在浏览器打开并授权到目标服务器。
+
+### 3. 配置环境变量
+
+在 `.env.local` 中填写：
+
+```env
+BELLDANDY_DISCORD_ENABLED=true
+BELLDANDY_DISCORD_BOT_TOKEN=你的BotToken
+# 可选：主动消息默认目标频道（右键频道 → 复制频道 ID，需开启开发者模式）
+BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID=
+```
+
+### 4. 启动
+
+```bash
+corepack pnpm start
+```
+
+日志出现 `[Discord] Logged in as BotName#xxxx` 即表示连接成功。
+
+### 5. 功能支持
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 文本消息收发 | ✅ | 完整支持 |
+| 图片/视频附件 | ✅ | 多模态传递给 Agent |
+| 音频附件 | ⚠️ | 暂作为文本提示处理 |
+| 长消息自动分段 | ✅ | 按 2000 字符限制自动切割 |
+| 消息去重 | ✅ | 基于 `message.id` |
+| 主动消息推送 | ✅ | 支持指定频道或使用最后活跃频道 |
+| 状态持久化 | ✅ | `~/.belldandy/discord-state.json` |
+| Slash Commands | 🔄 | 未来可扩展 |
+| 语音频道 | 🔄 | 未来可扩展（需 `@discordjs/voice`） |
+
+### 6. 常见问题
+
+**Q: Bot 在线但不回复？**
+A: 检查 `MESSAGE CONTENT INTENT` 是否已开启，未开启时 `message.content` 为空。
+
+**Q: 报错 `Used disallowed intents`？**
+A: 在 Developer Portal → Bot 页面开启全部 Privileged Intents。
+
+**Q: 主动消息发送失败？**
+A: 确认 `BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID` 是文字频道 ID，且 Bot 有 `Send Messages` 权限。
+
+---
