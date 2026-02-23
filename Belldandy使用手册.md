@@ -140,7 +140,11 @@ BELLDANDY_LOG_LEVEL=debug
     *   查看 **System Doctor** 诊断信息（检查 Node 版本、数据库状态、配置有效性）。
     *   修改 **OpenAI API Key**、**Base URL**、**Model**。
     *   修改 **心跳间隔**。
+    *   点击 **推荐模型API** 链接快速前往官方网页申请 API Key。
 4.  点击 **Save**，系统会自动保存配置到 `.env.local` 并重启服务。
+
+> **💡 配置推荐模型API链接：**  
+> 你（或官方人员）可以通过编辑前端配置文件 `apps/web/public/config.js` 来修改“推荐模型API”对应的 URL。此修改即时生效，无需重启服务。
 
 ### 3.3 视觉与视频理解 (New!)
 

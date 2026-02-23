@@ -680,6 +680,12 @@ const closeSettingsBtn = document.getElementById("closeSettings");
 const saveSettingsBtn = document.getElementById("saveSettings");
 const restartBtn = document.getElementById("restartBtn");
 
+// Initialize Recommend API Link
+const recommendApiLink = document.getElementById("recommendApiLink");
+if (recommendApiLink && window.BELLDANDY_WEB_CONFIG?.recommendApiUrl) {
+  recommendApiLink.href = window.BELLDANDY_WEB_CONFIG.recommendApiUrl;
+}
+
 const cfgApiKey = document.getElementById("cfgApiKey");
 const cfgBaseUrl = document.getElementById("cfgBaseUrl");
 const cfgModel = document.getElementById("cfgModel");

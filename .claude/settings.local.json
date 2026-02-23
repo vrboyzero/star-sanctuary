@@ -88,7 +88,9 @@
       "Bash(cd:*)",
       "Bash(npx kill-port:*)",
       "Bash(pushd:*)",
-      "Bash(popd)"
+      "Bash(popd)",
+      "Bash(wsl --list:*)",
+      "Bash(wsl -d Ubuntu -- bash -c:*)"
     ]
   }
 }

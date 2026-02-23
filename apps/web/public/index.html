@@ -12,6 +12,7 @@
     rel="stylesheet">
   <link rel="stylesheet" href="/styles.css?v=10.0" />
   <link rel="stylesheet" href="/canvas.css?v=1.0" />
+  <script src="/config.js?v=1.0"></script>
 </head>
 
 <body>
@@ -200,8 +201,11 @@
   <!-- Settings Modal -->
   <div id="settingsModal" class="modal-overlay hidden">
     <div class="modal">
-      <div class="modal-header">
-        <span>Settings</span>
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+          <span>Settings</span>
+          <a id="recommendApiLink" href="#" target="_blank" style="font-size: 14px; text-decoration: underline; color: #a3a3a3; transition: color 0.2s;" onmouseover="this.style.color='#ffffff'" onmouseout="this.style.color='#a3a3a3'">推荐模型API</a>
+        </div>
         <button id="closeSettings" class="settings-btn">✕</button>
       </div>
       <div class="modal-body">
