@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { OpenAIChatAgent, ToolEnabledAgent, ensureWorkspace, loadWorkspaceFiles, ensureAgentWorkspace, loadAgentWorkspaceFiles, buildSystemPrompt, ConversationStore, loadModelFallbacks, FailoverClient, AgentRegistry, SubAgentOrchestrator, loadAgentProfiles, buildDefaultProfile, resolveModelConfig, HookRegistry, createHookRunner, } from "@belldandy/agent";
-import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, getUserUuidTool, getMessageSenderInfoTool, getRoomMembersTool, createLeaveRoomTool, createJoinRoomTool, } from "@belldandy/skills";
+import { ToolExecutor, DEFAULT_POLICY, fetchTool, applyPatchTool, fileReadTool, fileWriteTool, fileDeleteTool, listFilesTool, createMemorySearchTool, createMemoryGetTool, browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, cameraSnapTool, imageGenerateTool, textToSpeechTool, synthesizeSpeech, transcribeSpeech, runCommandTool, methodListTool, methodReadTool, methodCreateTool, methodSearchTool, logReadTool, logSearchTool, createCronTool, createServiceRestartTool, switchFacetTool, sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool, SkillRegistry, createSkillsListTool, createSkillsSearchTool, createCanvasTools, getUserUuidTool, getMessageSenderInfoTool, getRoomMembersTool, createLeaveRoomTool, createJoinRoomTool, timerTool, } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, loadCommunityConfig, getCommunityConfigPath } from "@belldandy/channels";
@@ -347,6 +347,7 @@ const toolsToRegister = toolsEnabled
         getRoomMembersTool, // 房间成员工具（始终加载）
         createLeaveRoomTool(undefined), // 离开社区房间工具（CommunityChannel 初始化后才可用）
         createJoinRoomTool(undefined), // 加入社区房间工具（CommunityChannel 初始化后才可用）
+        timerTool, // 计时器工具（始终加载）
         // ── browser 组 ──
         ...(hasToolGroup("browser") ? [
             browserOpenTool,

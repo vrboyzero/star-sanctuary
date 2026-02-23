@@ -17,6 +17,7 @@ export type { SynthesizeResult, SynthesizeOptions, TranscribeResult, TranscribeO
 export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";
 export { methodListTool, methodReadTool, methodCreateTool, methodSearchTool } from "./builtin/methodology/index.js";
 export { logReadTool, logSearchTool } from "./builtin/log.js";
+export { timerTool } from "./builtin/timer.js";
 export { createCronTool, type CronToolDeps } from "./builtin/cron-tool.js";
 export { switchFacetTool } from "./builtin/switch-facet.js";
 export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-restart.js";

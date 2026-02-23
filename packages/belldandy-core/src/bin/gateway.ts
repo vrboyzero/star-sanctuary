@@ -74,6 +74,7 @@ import {
   getRoomMembersTool,
   createLeaveRoomTool,
   createJoinRoomTool,
+  timerTool,
 } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
@@ -468,6 +469,7 @@ const toolsToRegister = toolsEnabled
     getRoomMembersTool, // 房间成员工具（始终加载）
     createLeaveRoomTool(undefined), // 离开社区房间工具（CommunityChannel 初始化后才可用）
     createJoinRoomTool(undefined), // 加入社区房间工具（CommunityChannel 初始化后才可用）
+    timerTool, // 计时器工具（始终加载）
 
     // ── browser 组 ──
     ...(hasToolGroup("browser") ? [

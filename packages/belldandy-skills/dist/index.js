@@ -14,6 +14,8 @@ export { imageGenerateTool, textToSpeechTool, cameraSnapTool, synthesizeSpeech, 
 export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";
 export { methodListTool, methodReadTool, methodCreateTool, methodSearchTool } from "./builtin/methodology/index.js";
 export { logReadTool, logSearchTool } from "./builtin/log.js";
+// 计时器工具
+export { timerTool } from "./builtin/timer.js";
 // 定时任务工具
 export { createCronTool } from "./builtin/cron-tool.js";
 // FACET 模组切换工具
