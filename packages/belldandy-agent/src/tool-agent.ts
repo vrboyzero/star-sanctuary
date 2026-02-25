@@ -449,8 +449,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
       const { response: res } = await this.failoverClient.fetchWithFailover({
         timeoutMs: this.opts.timeoutMs,
         buildRequest: (profile) => {
-          // 按 profile 的 baseUrl 动态检测协议（而非全局固定）
-          const profileProtocol = this.opts.protocol ?? detectProtocol(profile.baseUrl);
+          // 优先使用 profile 自身的 protocol（models.json 配置），再 fallback 到 agent 级别协议
+          const profileProtocol = (profile.protocol as ApiProtocol) ?? this.opts.protocol ?? detectProtocol(profile.baseUrl);
           usedProtocol = profileProtocol;
 
           if (profileProtocol === "anthropic") {

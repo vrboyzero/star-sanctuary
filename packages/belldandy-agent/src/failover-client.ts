@@ -17,6 +17,8 @@ export type ModelProfile = {
     apiKey: string;
     /** 模型名称（如 gpt-4o） */
     model: string;
+    /** API 协议（"openai" | "anthropic"），未指定时使用全局配置 */
+    protocol?: string;
 };
 
 /** 容灾错误原因分类 */
@@ -417,6 +419,7 @@ export type ModelConfigFile = {
         baseUrl: string;
         apiKey: string;
         model: string;
+        protocol?: string;
     }>;
 };
 
@@ -443,6 +446,7 @@ export async function loadModelFallbacks(filePath: string): Promise<ModelProfile
                 baseUrl: f.baseUrl,
                 apiKey: f.apiKey,
                 model: f.model,
+                protocol: typeof f.protocol === "string" ? f.protocol : undefined,
             }));
     } catch {
         // 文件不存在或解析失败，静默返回空

@@ -1,6 +1,6 @@
 ## Belldandy 产品介绍
 
-Belldandy 是一款面向开发者与创作者的 **本地优先个人 AI 助手育成型工作站**。它通过 Gateway 控制平面 + WebChat 界面 + Skills 工具系统 + Memory 记忆引擎 + 渠道与插件生态 + 可视化 Canvas 工作区，为用户提供安全、可控、可进化的智能体体验。
+Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助手育成型工作站**。它通过 Gateway 控制平面 + WebChat 界面 + Skills 工具系统 + Memory 记忆引擎 + 渠道与插件生态 + 可视化 Canvas 工作区，为用户提供安全、可控、可进化的智能体体验。
 
 ---
 

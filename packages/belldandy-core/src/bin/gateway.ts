@@ -866,6 +866,9 @@ Keep responses concise and natural for spoken delivery.`;
     // Determine max input tokens: profile override > env
     const profileMaxInputTokens = profile.maxInputTokens ?? maxInputTokens;
 
+    // Resolve protocol: per-model override > global env
+    const resolvedProtocol = (resolved.protocol ?? agentProtocol) as "openai" | "anthropic" | undefined;
+
     if (profileToolsEnabled) {
       return new ToolEnabledAgent({
         baseUrl: resolved.baseUrl,
@@ -879,7 +882,7 @@ Keep responses concise and natural for spoken delivery.`;
         fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
         failoverLogger: logger,
         videoUploadConfig,
-        protocol: agentProtocol,
+        protocol: resolvedProtocol,
         ...(profileMaxInputTokens > 0 && { maxInputTokens: profileMaxInputTokens }),
         compaction: compactionOpts,
         summarizer: compactionSummarizer,
@@ -894,7 +897,7 @@ Keep responses concise and natural for spoken delivery.`;
       fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
       failoverLogger: logger,
       videoUploadConfig,
-      protocol: agentProtocol,
+      protocol: resolvedProtocol,
     });
   })
   : undefined;

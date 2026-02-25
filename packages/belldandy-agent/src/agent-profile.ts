@@ -115,7 +115,7 @@ export function resolveModelConfig(
   modelRef: string,
   primaryConfig: { baseUrl: string; apiKey: string; model: string },
   fallbacks: ModelProfile[],
-): { baseUrl: string; apiKey: string; model: string; source: "primary" | "named" } {
+): { baseUrl: string; apiKey: string; model: string; protocol?: string; source: "primary" | "named" } {
   if (modelRef === "primary") {
     return { ...primaryConfig, source: "primary" };
   }
@@ -127,6 +127,7 @@ export function resolveModelConfig(
       baseUrl: found.baseUrl,
       apiKey: found.apiKey,
       model: found.model,
+      protocol: found.protocol,
       source: "named",
     };
   }

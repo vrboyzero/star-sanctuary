@@ -834,6 +834,10 @@ body::before {
   cursor: pointer;
   flex-shrink: 0;
 }
+.agent-select option {
+  background: #1a1a2e;
+  color: #00e68a;
+}
 .agent-select:focus {
   outline: none;
   border-color: var(--accent);

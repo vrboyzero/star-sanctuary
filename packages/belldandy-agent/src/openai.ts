@@ -90,10 +90,13 @@ export class OpenAIChatAgent implements BelldandyAgent {
       const messages = buildMessages(this.opts.systemPrompt, content, input.history);
 
       // 使用容灾客户端发送请求
-      const { response: res } = await this.failoverClient.fetchWithFailover({
+      const { response: res, profile: usedProfile } = await this.failoverClient.fetchWithFailover({
         timeoutMs: this.opts.timeoutMs,
         buildRequest: (profile) => this.buildRequest(profile, messages),
       });
+
+      // 实际使用的协议（跟随 failover 选中的 profile）
+      const actualProtocol: ApiProtocol = (usedProfile.protocol as ApiProtocol) ?? this.protocol;
 
       if (!res.ok) {
         const text = await safeReadText(res);
@@ -104,7 +107,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
 
       if (!this.opts.stream) {
         const json = (await res.json()) as JsonObject;
-        const content = this.getNonStreamContent(json);
+        const content = this.getNonStreamContent(json, actualProtocol);
         yield* emitChunkedFinal(content);
         return;
       }
@@ -117,7 +120,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
       }
 
       let out = "";
-      for await (const item of parseSseStream(body as any, this.protocol)) {
+      for await (const item of parseSseStream(body as any, actualProtocol)) {
         if (item.type === "delta") {
           out += item.delta;
           yield item;
@@ -144,10 +147,13 @@ export class OpenAIChatAgent implements BelldandyAgent {
   }
 
   private buildRequest(
-    profile: { baseUrl: string; apiKey: string; model: string },
+    profile: { baseUrl: string; apiKey: string; model: string; protocol?: string },
     messages: Array<{ role: string; content: any }>
   ): { url: string; init: RequestInit } {
-    if (this.protocol === "anthropic") {
+    // 优先使用 profile 自身的 protocol（models.json 配置），再 fallback 到 agent 级别协议
+    const effectiveProtocol = (profile.protocol as ApiProtocol) ?? this.protocol;
+
+    if (effectiveProtocol === "anthropic") {
       // Anthropic 协议：提取 system 消息，使用数组格式支持 prompt caching
       const systemMessage = messages.find(m => m.role === "system")?.content;
       const chatMessages = messages.filter(m => m.role !== "system");
@@ -209,8 +215,8 @@ export class OpenAIChatAgent implements BelldandyAgent {
     };
   }
 
-  private getNonStreamContent(json: JsonObject): string {
-    if (this.protocol === "anthropic") {
+  private getNonStreamContent(json: JsonObject, protocol?: ApiProtocol): string {
+    if ((protocol ?? this.protocol) === "anthropic") {
       // Anthropic 格式：{ content: [{ type: "text", text: "..." }] }
       const content = (json.content as unknown) as Array<any> | undefined;
       return content?.[0]?.text ?? "";
