@@ -1,6 +1,9 @@
 /** 记忆块 */
 export type MemoryType = "core" | "daily" | "session" | "other";
 
+/** 内容语义分类（P1-6） */
+export type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "experience" | "other";
+
 export interface MemoryChunk {
   id: string;
   sourcePath: string;
@@ -12,6 +15,7 @@ export interface MemoryChunk {
   channel?: string;   // 来源渠道: webchat/feishu/heartbeat/cron/...
   topic?: string;     // 话题标签（可选）
   tsDate?: string;    // 日期 YYYY-MM-DD
+  category?: MemoryCategory; // 内容语义分类
   metadata?: Record<string, any>;
 }
 
@@ -22,6 +26,7 @@ export interface MemorySearchFilter {
   topic?: string;
   dateFrom?: string;  // YYYY-MM-DD
   dateTo?: string;    // YYYY-MM-DD
+  category?: MemoryCategory | MemoryCategory[];
 }
 
 /** 检索选项（传给 MemoryManager.search） */

@@ -74,11 +74,17 @@ const SCHEMA_SUMMARY_COLUMNS = [
   "ALTER TABLE chunks ADD COLUMN summary_tokens INTEGER DEFAULT NULL",
 ];
 
+// P1-6: 内容语义分类列迁移
+const SCHEMA_CATEGORY_COLUMNS = [
+  "ALTER TABLE chunks ADD COLUMN category TEXT DEFAULT NULL",
+];
+
 const SCHEMA_METADATA_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
 CREATE INDEX IF NOT EXISTS idx_chunks_topic ON chunks(topic);
 CREATE INDEX IF NOT EXISTS idx_chunks_ts_date ON chunks(ts_date);
 CREATE INDEX IF NOT EXISTS idx_chunks_memory_type ON chunks(memory_type);
+CREATE INDEX IF NOT EXISTS idx_chunks_category ON chunks(category);
 `;
 
 export class MemoryStore {
@@ -99,6 +105,10 @@ export class MemoryStore {
     }
     // Phase M-N2: L0 摘要列迁移
     for (const sql of SCHEMA_SUMMARY_COLUMNS) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
+    // P1-6: 内容语义分类列迁移
+    for (const sql of SCHEMA_CATEGORY_COLUMNS) {
       try { this.db.exec(sql); } catch { /* column already exists */ }
     }
     this.db.exec(SCHEMA_METADATA_INDEXES);
@@ -125,8 +135,8 @@ export class MemoryStore {
     this.ensureOpen();
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO chunks (id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chunks (id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, category, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         content = excluded.content,
         metadata = excluded.metadata,
@@ -134,7 +144,8 @@ export class MemoryStore {
         memory_type = excluded.memory_type,
         channel = excluded.channel,
         topic = excluded.topic,
-        ts_date = excluded.ts_date
+        ts_date = excluded.ts_date,
+        category = excluded.category
     `);
     stmt.run(
       chunk.id,
@@ -148,6 +159,7 @@ export class MemoryStore {
       chunk.channel ?? null,
       chunk.topic ?? null,
       chunk.tsDate ?? null,
+      chunk.category ?? null,
       now,
       now
     );
@@ -428,6 +440,20 @@ export class MemoryStore {
     if (filter.dateTo) {
       conditions.push(`c.ts_date <= ?`);
       params.push(filter.dateTo);
+    }
+
+    // P1-6: category 过滤（支持单值或数组）
+    if (filter.category) {
+      if (Array.isArray(filter.category)) {
+        if (filter.category.length > 0) {
+          const placeholders = filter.category.map(() => "?").join(", ");
+          conditions.push(`c.category IN (${placeholders})`);
+          params.push(...filter.category);
+        }
+      } else {
+        conditions.push(`c.category = ?`);
+        params.push(filter.category);
+      }
     }
 
     const clause = conditions.length > 0 ? " AND " + conditions.join(" AND ") : "";

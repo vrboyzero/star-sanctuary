@@ -1,6 +1,7 @@
 import { MemoryStore } from "./store.js";
 import { MemoryIndexer } from "./indexer.js";
 import { ResultReranker } from "./reranker.js";
+import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 import { OpenAIEmbeddingProvider } from "./embeddings/openai.js";
 import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import { appendToTodayMemory } from "./memory-files.js";
@@ -82,7 +83,9 @@ export class MemoryManager {
             this.embeddingProvider = new OpenAIEmbeddingProvider({
                 apiKey: options.openaiApiKey,
                 baseURL: options.openaiBaseUrl,
-                model: options.openaiModel
+                model: options.openaiModel,
+                queryPrefix: options.embeddingQueryPrefix,
+                passagePrefix: options.embeddingPassagePrefix,
             });
             console.log(`[MemoryManager] Using OpenAI Embedding Provider (${options.openaiModel || "text-embedding-3-small"})`);
         }
@@ -149,10 +152,16 @@ export class MemoryManager {
             limit = limitOrOptions.limit ?? 5;
             filter = limitOrOptions.filter;
         }
-        // 1. Embed query
+        // 0. 自适应检索：对问候/命令/简单确认跳过检索
+        if (shouldSkipRetrieval(query)) {
+            return [];
+        }
+        // 1. Embed query（使用 embedQuery 以支持 task-aware embedding）
         let queryVec = null;
         try {
-            queryVec = await this.embeddingProvider.embed(query);
+            queryVec = await (this.embeddingProvider.embedQuery
+                ? this.embeddingProvider.embedQuery(query)
+                : this.embeddingProvider.embed(query));
         }
         catch (err) {
             console.warn("Embedding failed, falling back to keyword search only", err);
@@ -430,7 +439,7 @@ export class MemoryManager {
                 return 0;
             }
             // 写入每日记忆文件
-            const lines = newMemories.map(m => `- [${m.type}] ${m.content} (来源: ${sessionKey})`);
+            const lines = newMemories.map(m => `- [${m.type}][${m.category}] ${m.content} (来源: ${sessionKey})`);
             const content = lines.join("\n");
             await appendToTodayMemory(this.stateDir, content);
             // 标记已提取
@@ -462,13 +471,17 @@ export class MemoryManager {
                 messages: [
                     {
                         role: "system",
-                        content: `分析以下对话，提取值得长期记住的信息。分为两类：
-- 【偏好】：用户表达的喜好、习惯、工作方式、技术栈偏好等
-- 【经验】：解决问题的有效方法、踩过的坑、有用的工具/命令等
+                        content: `分析以下对话，提取值得长期记住的信息。分为以下类别：
+- 【偏好/preference】：用户表达的喜好、习惯、工作方式、技术栈偏好等
+- 【经验/experience】：解决问题的有效方法、踩过的坑、有用的工具/命令等
+- 【事实/fact】：用户提到的客观事实、背景信息、项目状态等
+- 【决策/decision】：用户做出的技术决策、架构选择、方案确定等
+- 【实体/entity】：用户提到的重要人名、项目名、组织名等
 
 仅提取有长期价值的信息，忽略临时性的对话内容。
 每条记忆用一句话概括。
-返回 JSON 数组，格式：[{"type":"偏好","content":"..."},{"type":"经验","content":"..."}]
+返回 JSON 数组，格式：[{"type":"偏好","category":"preference","content":"..."}]
+category 必须是以下之一：preference / experience / fact / decision / entity
 如果没有值得记住的内容，返回空数组 []。
 只输出 JSON，不要其他内容。`
                     },
@@ -495,7 +508,11 @@ export class MemoryManager {
             const parsed = JSON.parse(jsonStr);
             if (!Array.isArray(parsed))
                 return null;
-            return parsed.filter((item) => item && typeof item.type === "string" && typeof item.content === "string");
+            return parsed.filter((item) => item && typeof item.type === "string" && typeof item.content === "string").map((item) => ({
+                type: item.type,
+                content: item.content,
+                category: (typeof item.category === "string" ? item.category : "other"),
+            }));
         }
         catch {
             console.warn("[MemoryManager] Failed to parse extraction result:", raw.slice(0, 200));

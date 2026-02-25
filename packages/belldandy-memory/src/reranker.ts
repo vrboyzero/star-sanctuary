@@ -16,6 +16,10 @@ export interface RerankerOptions {
   recencyHalfLifeDays?: number;
   /** 同源惩罚系数（0-1），0 表示不惩罚 */
   diversityPenalty?: number;
+  /** 硬截断最低分数，低于此分数的结果直接丢弃（默认 0.15） */
+  minScore?: number;
+  /** 长度归一化锚点（字符数），0 表示不归一化（默认 500） */
+  lengthNormAnchor?: number;
 }
 
 const DEFAULT_TYPE_WEIGHTS: Record<MemoryType, number> = {
@@ -27,16 +31,22 @@ const DEFAULT_TYPE_WEIGHTS: Record<MemoryType, number> = {
 
 const DEFAULT_HALF_LIFE_DAYS = 30;
 const DEFAULT_DIVERSITY_PENALTY = 0.15;
+const DEFAULT_MIN_SCORE = 0.15;
+const DEFAULT_LENGTH_NORM_ANCHOR = 500;
 
 export class ResultReranker {
   private typeWeights: Record<MemoryType, number>;
   private halfLifeDays: number;
   private diversityPenalty: number;
+  private minScore: number;
+  private lengthNormAnchor: number;
 
   constructor(options: RerankerOptions = {}) {
     this.typeWeights = { ...DEFAULT_TYPE_WEIGHTS, ...options.memoryTypeWeights };
     this.halfLifeDays = options.recencyHalfLifeDays ?? DEFAULT_HALF_LIFE_DAYS;
     this.diversityPenalty = options.diversityPenalty ?? DEFAULT_DIVERSITY_PENALTY;
+    this.minScore = options.minScore ?? DEFAULT_MIN_SCORE;
+    this.lengthNormAnchor = options.lengthNormAnchor ?? DEFAULT_LENGTH_NORM_ANCHOR;
   }
 
   /**
@@ -73,10 +83,17 @@ export class ResultReranker {
       }
       sourceCount.set(source, seen + 1);
 
+      // 4. Length normalization（防止长文本靠关键词密度霸榜）
+      if (this.lengthNormAnchor > 0 && result.content) {
+        const charLen = result.content.length;
+        adjustedScore *= 1 / (1 + Math.log2(Math.max(charLen, 1) / this.lengthNormAnchor));
+      }
+
       return { ...result, score: adjustedScore };
     });
 
-    return reranked.sort((a, b) => b.score - a.score);
+    return reranked.sort((a, b) => b.score - a.score)
+      .filter(r => r.score >= this.minScore);
   }
 
   private computeRecencyFactor(result: MemorySearchResult, now: number): number {

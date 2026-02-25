@@ -40,6 +40,9 @@ export interface MemoryManagerOptions {
     evolutionMinMessages?: number;
     /** stateDir 用于定位 memory/ 目录写入每日文件 */
     stateDir?: string;
+    /** Task-aware Embedding 前缀（用于支持 task 参数的模型如 Jina/BGE） */
+    embeddingQueryPrefix?: string;
+    embeddingPassagePrefix?: string;
     /** M-N4: 源路径聚合检索 */
     deepRetrievalEnabled?: boolean;
 }

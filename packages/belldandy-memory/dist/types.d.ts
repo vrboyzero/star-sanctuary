@@ -1,5 +1,7 @@
 /** 记忆块 */
 export type MemoryType = "core" | "daily" | "session" | "other";
+/** 内容语义分类（P1-6） */
+export type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "experience" | "other";
 export interface MemoryChunk {
     id: string;
     sourcePath: string;
@@ -11,6 +13,7 @@ export interface MemoryChunk {
     channel?: string;
     topic?: string;
     tsDate?: string;
+    category?: MemoryCategory;
     metadata?: Record<string, any>;
 }
 /** 检索过滤条件 */
@@ -20,6 +23,7 @@ export interface MemorySearchFilter {
     topic?: string;
     dateFrom?: string;
     dateTo?: string;
+    category?: MemoryCategory | MemoryCategory[];
 }
 /** 检索选项（传给 MemoryManager.search） */
 export interface MemorySearchOptions {

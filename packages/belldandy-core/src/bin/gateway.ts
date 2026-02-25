@@ -1080,6 +1080,14 @@ const evolutionMinMessages = Number(readEnv("BELLDANDY_MEMORY_EVOLUTION_MIN_MESS
 // M-N4: 源路径聚合检索配置
 const deepRetrievalEnabled = readEnv("BELLDANDY_MEMORY_DEEP_RETRIEVAL") === "true";
 
+// P1-4: Task-aware Embedding 前缀（用于 Jina/BGE 等支持 task 参数的模型）
+const embeddingQueryPrefix = readEnv("BELLDANDY_EMBEDDING_QUERY_PREFIX") || undefined;
+const embeddingPassagePrefix = readEnv("BELLDANDY_EMBEDDING_PASSAGE_PREFIX") || undefined;
+
+// P1-5 & P0-2: Reranker 配置
+const rerankerMinScore = Number(readEnv("BELLDANDY_RERANKER_MIN_SCORE")) || undefined;
+const rerankerLengthNormAnchor = Number(readEnv("BELLDANDY_RERANKER_LENGTH_NORM_ANCHOR")) || undefined;
+
 const unifiedMemoryManager = new MemoryManager({
   workspaceRoot: sessionsDir,
   additionalRoots: memoryAdditionalRoots,
@@ -1092,6 +1100,8 @@ const unifiedMemoryManager = new MemoryManager({
   provider: embeddingProvider,
   localModel: localEmbeddingModel,
   embeddingBatchSize,
+  embeddingQueryPrefix,
+  embeddingPassagePrefix,
   summaryEnabled,
   summaryModel,
   summaryBaseUrl,
@@ -1102,6 +1112,10 @@ const unifiedMemoryManager = new MemoryManager({
   evolutionApiKey,
   evolutionMinMessages,
   deepRetrievalEnabled,
+  rerankerOptions: {
+    ...(rerankerMinScore != null ? { minScore: rerankerMinScore } : {}),
+    ...(rerankerLengthNormAnchor != null ? { lengthNormAnchor: rerankerLengthNormAnchor } : {}),
+  },
   indexerOptions: {
     ignorePatterns: ["node_modules", ".git", "logs", "models", "plugins", "skills", "methods"],
     extensions: [".md", ".txt", ".jsonl"],

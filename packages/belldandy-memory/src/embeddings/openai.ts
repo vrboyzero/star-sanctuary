@@ -1,12 +1,29 @@
 import type { EmbeddingProvider, EmbeddingVector } from "./index.js";
 import OpenAI from "openai";
 
+export interface OpenAIEmbeddingOptions {
+    apiKey?: string;
+    baseURL?: string;
+    model?: string;
+    dimension?: number;
+    /**
+     * Task-aware embedding 前缀。
+     * 对于支持 task 参数的模型（如 Jina、BGE-M3），可配置 query/passage 前缀以提升检索相关性。
+     * 例如 BGE 系列: queryPrefix="query: ", passagePrefix="passage: "
+     * OpenAI 原生模型无需配置（留空即可）。
+     */
+    queryPrefix?: string;
+    passagePrefix?: string;
+}
+
 export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     private openai: OpenAI;
     readonly modelName: string;
     readonly dimension: number;
+    private queryPrefix: string;
+    private passagePrefix: string;
 
-    constructor(options: { apiKey?: string; baseURL?: string; model?: string; dimension?: number } = {}) {
+    constructor(options: OpenAIEmbeddingOptions = {}) {
         this.openai = new OpenAI({
             apiKey: options.apiKey || process.env.OPENAI_API_KEY,
             baseURL: options.baseURL || process.env.OPENAI_BASE_URL,
@@ -14,8 +31,10 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
         this.modelName = options.model || "text-embedding-3-small";
         // text-embedding-3-small default is 1536, but can be scaled down. 3-large is 3072.
         this.dimension = options.dimension || 1536;
+        this.queryPrefix = options.queryPrefix ?? "";
+        this.passagePrefix = options.passagePrefix ?? "";
 
-        console.log(`[Embedding] Initialized OpenAI provider with model: ${this.modelName}`);
+        console.log(`[Embedding] Initialized OpenAI provider with model: ${this.modelName}${this.queryPrefix ? ` (task-aware)` : ""}`);
     }
 
     async embed(text: string): Promise<EmbeddingVector> {
@@ -23,19 +42,33 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     }
 
     async embedQuery(text: string): Promise<EmbeddingVector> {
+        const input = this.queryPrefix ? this.queryPrefix + text : text;
         const response = await this.openai.embeddings.create({
             model: this.modelName,
-            input: text,
+            input,
+            dimensions: this.modelName.includes("text-embedding-3") ? this.dimension : undefined,
+        });
+        return response.data[0].embedding;
+    }
+
+    async embedPassage(text: string): Promise<EmbeddingVector> {
+        const input = this.passagePrefix ? this.passagePrefix + text : text;
+        const response = await this.openai.embeddings.create({
+            model: this.modelName,
+            input,
             dimensions: this.modelName.includes("text-embedding-3") ? this.dimension : undefined,
         });
         return response.data[0].embedding;
     }
 
     async embedBatch(texts: string[]): Promise<EmbeddingVector[]> {
-        // OpenAI batch limit logic (simplified for MVP)
+        // embedBatch 用于索引，默认使用 passage 前缀
+        const inputs = this.passagePrefix
+            ? texts.map(t => this.passagePrefix + t)
+            : texts;
         const response = await this.openai.embeddings.create({
             model: this.modelName,
-            input: texts,
+            input: inputs,
             dimensions: this.modelName.includes("text-embedding-3") ? this.dimension : undefined,
         });
         return response.data.map(d => d.embedding);

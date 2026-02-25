@@ -87,7 +87,12 @@
       "Bash(pushd:*)",
       "Bash(popd)",
       "Bash(wsl --list:*)",
-      "Bash(wsl -d Ubuntu -- bash -c:*)"
+      "Bash(wsl -d Ubuntu -- bash -c:*)",
+      "WebFetch(domain:jina.ai)",
+      "WebFetch(domain:pointofai.com)",
+      "WebFetch(domain:www.everydev.ai)",
+      "WebFetch(domain:invertedstone.com)",
+      "WebFetch(domain:pricepertoken.com)"
     ]
   }
 }

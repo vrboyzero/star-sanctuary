@@ -1,6 +1,7 @@
 import { MemoryStore } from "./store.js";
 import { MemoryIndexer, type IndexerOptions } from "./indexer.js";
 import { ResultReranker, type RerankerOptions } from "./reranker.js";
+import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 import { OpenAIEmbeddingProvider } from "./embeddings/openai.js";
 import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import type { EmbeddingProvider } from "./embeddings/index.js";
@@ -65,6 +66,9 @@ export interface MemoryManagerOptions {
     evolutionMinMessages?: number; // 触发提取的最少消息数（默认 4）
     /** stateDir 用于定位 memory/ 目录写入每日文件 */
     stateDir?: string;
+    /** Task-aware Embedding 前缀（用于支持 task 参数的模型如 Jina/BGE） */
+    embeddingQueryPrefix?: string;
+    embeddingPassagePrefix?: string;
     /** M-N4: 源路径聚合检索 */
     deepRetrievalEnabled?: boolean;
 }
@@ -127,7 +131,9 @@ export class MemoryManager {
             this.embeddingProvider = new OpenAIEmbeddingProvider({
                 apiKey: options.openaiApiKey,
                 baseURL: options.openaiBaseUrl,
-                model: options.openaiModel
+                model: options.openaiModel,
+                queryPrefix: options.embeddingQueryPrefix,
+                passagePrefix: options.embeddingPassagePrefix,
             });
             console.log(`[MemoryManager] Using OpenAI Embedding Provider (${options.openaiModel || "text-embedding-3-small"})`);
         } else {
@@ -202,10 +208,17 @@ export class MemoryManager {
             filter = limitOrOptions.filter;
         }
 
-        // 1. Embed query
+        // 0. 自适应检索：对问候/命令/简单确认跳过检索
+        if (shouldSkipRetrieval(query)) {
+            return [];
+        }
+
+        // 1. Embed query（使用 embedQuery 以支持 task-aware embedding）
         let queryVec: number[] | null = null;
         try {
-            queryVec = await this.embeddingProvider.embed(query);
+            queryVec = await (this.embeddingProvider.embedQuery
+                ? this.embeddingProvider.embedQuery(query)
+                : this.embeddingProvider.embed(query));
         } catch (err) {
             console.warn("Embedding failed, falling back to keyword search only", err);
         }
@@ -513,7 +526,7 @@ export class MemoryManager {
             }
 
             // 去重：检查每条记忆是否已存在相似内容
-            const newMemories: Array<{ type: string; content: string }> = [];
+            const newMemories: Array<{ type: string; content: string; category: string }> = [];
             for (const item of extracted) {
                 const similar = await this.search(item.content, { limit: 1 });
                 if (similar.length > 0 && similar[0].score > 0.85) {
@@ -529,7 +542,7 @@ export class MemoryManager {
 
             // 写入每日记忆文件
             const lines = newMemories.map(m =>
-                `- [${m.type}] ${m.content} (来源: ${sessionKey})`
+                `- [${m.type}][${m.category}] ${m.content} (来源: ${sessionKey})`
             );
             const content = lines.join("\n");
             await appendToTodayMemory(this.stateDir, content);
@@ -555,7 +568,7 @@ export class MemoryManager {
      */
     private async callLLMForExtraction(
         conversationText: string,
-    ): Promise<Array<{ type: string; content: string }> | null> {
+    ): Promise<Array<{ type: string; content: string; category: string }> | null> {
         const response = await fetch(`${this.evolutionBaseUrl}/chat/completions`, {
             method: "POST",
             headers: {
@@ -567,13 +580,17 @@ export class MemoryManager {
                 messages: [
                     {
                         role: "system",
-                        content: `分析以下对话，提取值得长期记住的信息。分为两类：
-- 【偏好】：用户表达的喜好、习惯、工作方式、技术栈偏好等
-- 【经验】：解决问题的有效方法、踩过的坑、有用的工具/命令等
+                        content: `分析以下对话，提取值得长期记住的信息。分为以下类别：
+- 【偏好/preference】：用户表达的喜好、习惯、工作方式、技术栈偏好等
+- 【经验/experience】：解决问题的有效方法、踩过的坑、有用的工具/命令等
+- 【事实/fact】：用户提到的客观事实、背景信息、项目状态等
+- 【决策/decision】：用户做出的技术决策、架构选择、方案确定等
+- 【实体/entity】：用户提到的重要人名、项目名、组织名等
 
 仅提取有长期价值的信息，忽略临时性的对话内容。
 每条记忆用一句话概括。
-返回 JSON 数组，格式：[{"type":"偏好","content":"..."},{"type":"经验","content":"..."}]
+返回 JSON 数组，格式：[{"type":"偏好","category":"preference","content":"..."}]
+category 必须是以下之一：preference / experience / fact / decision / entity
 如果没有值得记住的内容，返回空数组 []。
 只输出 JSON，不要其他内容。`
                     },
@@ -605,7 +622,11 @@ export class MemoryManager {
             if (!Array.isArray(parsed)) return null;
             return parsed.filter(
                 (item: any) => item && typeof item.type === "string" && typeof item.content === "string"
-            );
+            ).map((item: any) => ({
+                type: item.type as string,
+                content: item.content as string,
+                category: (typeof item.category === "string" ? item.category : "other") as string,
+            }));
         } catch {
             console.warn("[MemoryManager] Failed to parse extraction result:", raw.slice(0, 200));
             return null;
