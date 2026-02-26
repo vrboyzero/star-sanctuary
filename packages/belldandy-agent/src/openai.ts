@@ -19,6 +19,8 @@ export type OpenAIChatAgentOptions = {
   videoUploadConfig?: VideoUploadConfig;
   /** 强制指定 API 协议（默认自动检测） */
   protocol?: ApiProtocol;
+  /** 单次模型调用最大输出 token 数（默认 4096；调大可避免长输出被截断） */
+  maxOutputTokens?: number;
 };
 
 type ApiProtocol = "openai" | "anthropic";
@@ -161,7 +163,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
       const payload: any = {
         model: profile.model,
         messages: chatMessages,
-        max_tokens: 4096,
+        max_tokens: this.opts.maxOutputTokens ?? 4096,
         stream: this.opts.stream,
       };
 
@@ -198,7 +200,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
     const payload = {
       model: profile.model,
       messages,
-      max_tokens: 4096,
+      max_tokens: this.opts.maxOutputTokens ?? 4096,
       stream: this.opts.stream,
     };
 

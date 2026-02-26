@@ -307,6 +307,9 @@ const agentTimeoutMsRaw = readEnv("BELLDANDY_AGENT_TIMEOUT_MS");
 const agentTimeoutMs = agentTimeoutMsRaw ? Math.max(5000, parseInt(agentTimeoutMsRaw, 10) || 120_000) : undefined;
 const maxInputTokensRaw = readEnv("BELLDANDY_MAX_INPUT_TOKENS");
 const maxInputTokens = maxInputTokensRaw ? parseInt(maxInputTokensRaw, 10) || 0 : 0;
+const maxOutputTokensRaw = readEnv("BELLDANDY_MAX_OUTPUT_TOKENS");
+// 默认 4096，与硬编码默认值保持一致；用户可调大以避免长输出被截断
+const maxOutputTokens = maxOutputTokensRaw ? parseInt(maxOutputTokensRaw, 10) || 4096 : 4096;
 
 // Compaction 配置
 const compactionEnabled = readEnv("BELLDANDY_COMPACTION_ENABLED") !== "false";
@@ -871,6 +874,8 @@ Keep responses concise and natural for spoken delivery.`;
     const profileToolsEnabled = profile.toolsEnabled ?? toolsEnabled;
     // Determine max input tokens: profile override > env
     const profileMaxInputTokens = profile.maxInputTokens ?? maxInputTokens;
+    // Determine max output tokens: profile override > env（默认 4096，调大可避免长输出截断工具调用 JSON）
+    const profileMaxOutputTokens = profile.maxOutputTokens ?? maxOutputTokens;
 
     // Resolve protocol: per-model override > global env
     const resolvedProtocol = (resolved.protocol ?? agentProtocol) as "openai" | "anthropic" | undefined;
@@ -890,6 +895,7 @@ Keep responses concise and natural for spoken delivery.`;
         videoUploadConfig,
         protocol: resolvedProtocol,
         ...(profileMaxInputTokens > 0 && { maxInputTokens: profileMaxInputTokens }),
+        ...(profileMaxOutputTokens > 0 && { maxOutputTokens: profileMaxOutputTokens }),
         compaction: compactionOpts,
         summarizer: compactionSummarizer,
         conversationStore: conversationStore, // 扩展 A：传入 conversationStore 支持跨 run 持久化
@@ -905,6 +911,7 @@ Keep responses concise and natural for spoken delivery.`;
       failoverLogger: logger,
       videoUploadConfig,
       protocol: resolvedProtocol,
+      ...(profileMaxOutputTokens > 0 && { maxOutputTokens: profileMaxOutputTokens }),
     });
   })
   : undefined;

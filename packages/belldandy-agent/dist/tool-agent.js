@@ -375,7 +375,7 @@ export class ToolEnabledAgent {
                             profile,
                             messages: messages,
                             tools: tools,
-                            maxTokens: 4096,
+                            maxTokens: this.opts.maxOutputTokens ?? 4096,
                             stream: false,
                             enableCaching: true,
                         });
@@ -385,7 +385,7 @@ export class ToolEnabledAgent {
                     const payload = {
                         model: profile.model,
                         messages: cleanMessages,
-                        max_tokens: 4096,
+                        max_tokens: this.opts.maxOutputTokens ?? 4096,
                         stream: false,
                     };
                     if (tools && tools.length > 0) {

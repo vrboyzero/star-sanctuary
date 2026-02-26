@@ -37,6 +37,8 @@ export type AgentProfile = {
   toolWhitelist?: string[];
   /** 最大输入 token 数覆盖 */
   maxInputTokens?: number;
+  /** 单次模型调用最大输出 token 数覆盖（调大可避免长输出被截断导致工具调用 JSON 损坏） */
+  maxOutputTokens?: number;
 };
 
 /**
@@ -93,6 +95,7 @@ export async function loadAgentProfiles(filePath: string): Promise<AgentProfile[
         toolsEnabled: typeof obj.toolsEnabled === "boolean" ? obj.toolsEnabled : undefined,
         toolWhitelist: Array.isArray(obj.toolWhitelist) ? obj.toolWhitelist.filter((s): s is string => typeof s === "string") : undefined,
         maxInputTokens: typeof obj.maxInputTokens === "number" && obj.maxInputTokens > 0 ? obj.maxInputTokens : undefined,
+        maxOutputTokens: typeof obj.maxOutputTokens === "number" && obj.maxOutputTokens > 0 ? obj.maxOutputTokens : undefined,
       });
     }
 

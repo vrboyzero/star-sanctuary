@@ -37,6 +37,8 @@ export type ToolEnabledAgentOptions = {
     protocol?: ApiProtocol;
     /** 最大输入 token 数限制（超过时自动裁剪历史消息，0 或不设表示不限制） */
     maxInputTokens?: number;
+    /** 单次模型调用最大输出 token 数（默认 4096；调大可避免长输出被截断导致工具调用 JSON 损坏） */
+    maxOutputTokens?: number;
     /** ReAct 循环内压缩配置（可选） */
     compaction?: CompactionOptions;
     /** 模型摘要函数（用于循环内压缩） */

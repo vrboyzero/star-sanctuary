@@ -116,7 +116,7 @@ export class OpenAIChatAgent {
             const payload = {
                 model: profile.model,
                 messages: chatMessages,
-                max_tokens: 4096,
+                max_tokens: this.opts.maxOutputTokens ?? 4096,
                 stream: this.opts.stream,
             };
             // System prompt 使用数组格式 + cache_control 启用 prompt caching
@@ -149,7 +149,7 @@ export class OpenAIChatAgent {
         const payload = {
             model: profile.model,
             messages,
-            max_tokens: 4096,
+            max_tokens: this.opts.maxOutputTokens ?? 4096,
             stream: this.opts.stream,
         };
         return {

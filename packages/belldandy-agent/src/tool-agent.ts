@@ -46,6 +46,8 @@ export type ToolEnabledAgentOptions = {
   protocol?: ApiProtocol;
   /** 最大输入 token 数限制（超过时自动裁剪历史消息，0 或不设表示不限制） */
   maxInputTokens?: number;
+  /** 单次模型调用最大输出 token 数（默认 4096；调大可避免长输出被截断导致工具调用 JSON 损坏） */
+  maxOutputTokens?: number;
   /** ReAct 循环内压缩配置（可选） */
   compaction?: CompactionOptions;
   /** 模型摘要函数（用于循环内压缩） */
@@ -488,7 +490,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
               profile,
               messages: messages as any,
               tools: tools as any,
-              maxTokens: 4096,
+              maxTokens: this.opts.maxOutputTokens ?? 4096,
               stream: false,
               enableCaching: true,
             });
@@ -499,7 +501,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           const payload: Record<string, unknown> = {
             model: profile.model,
             messages: cleanMessages,
-            max_tokens: 4096,
+            max_tokens: this.opts.maxOutputTokens ?? 4096,
             stream: false,
           };
           if (tools && tools.length > 0) {
@@ -531,10 +533,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
         const parsed = parseAnthropicResponse(json);
         const toolCalls: OpenAIToolCall[] | undefined = parsed.toolCalls && parsed.toolCalls.length > 0
           ? parsed.toolCalls.map(tc => ({
-              id: tc.id,
-              type: "function" as const,
-              function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-            }))
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+          }))
           : undefined;
         return { ok: true, content: parsed.content, toolCalls, usage: parsed.usage };
       }
