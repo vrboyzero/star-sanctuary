@@ -54,6 +54,10 @@ export declare class ToolExecutor {
      * Clear token counter for a specific conversation (cleanup after run).
      */
     clearTokenCounter(conversationId: string): void;
+    /**
+     * Get token counter for a specific conversation (used by hooks for auto boundary detection).
+     */
+    getTokenCounter(conversationId: string): ITokenCounterService | undefined;
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions(): {
         type: "function";

@@ -60,6 +60,12 @@ export class ToolExecutor {
     clearTokenCounter(conversationId) {
         this.tokenCounters.delete(conversationId);
     }
+    /**
+     * Get token counter for a specific conversation (used by hooks for auto boundary detection).
+     */
+    getTokenCounter(conversationId) {
+        return this.tokenCounters.get(conversationId);
+    }
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions() {
         const all = Array.from(this.tools.values());

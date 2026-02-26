@@ -97,6 +97,13 @@ export class ToolExecutor {
     this.tokenCounters.delete(conversationId);
   }
 
+  /**
+   * Get token counter for a specific conversation (used by hooks for auto boundary detection).
+   */
+  getTokenCounter(conversationId: string): ITokenCounterService | undefined {
+    return this.tokenCounters.get(conversationId);
+  }
+
   /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
   getDefinitions(): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
     const all = Array.from(this.tools.values());

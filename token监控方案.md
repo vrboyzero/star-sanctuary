@@ -1,7 +1,7 @@
 # 任务级 Token 计数器 — 实现方案
 
 > 文档日期：2026-02-26
-> 状态：✅ 阶段 1 已完成（2026-02-26）| ✅ 扩展 A+B 已完成（2026-02-26）
+> 状态：✅ 阶段 1 已完成（2026-02-26）| ✅ 扩展 A+B+C 已完成（2026-02-26）
 
 ---
 
@@ -389,7 +389,7 @@ export const tokenCounterStop: Tool = {
 
 **工作量**：+3 小时（协议 + 前端 UI）
 
-### 扩展 C：自动任务边界检测（可选）
+### 扩展 C：自动任务边界检测（✅ 已完成 2026-02-26）
 
 **改动**：通过 hook 系统自动识别任务边界（如检测到 `sessions_spawn` 时自动 start，`agent_end` 时自动 stop）。
 
@@ -541,3 +541,58 @@ baseOutputTokens: s.baseOutputTokens - s.savedGlobalOutputTokens,
 **影响范围**：
 
 代码质量改进，无功能变化。
+
+---
+
+## 十、扩展 C 实施记录：自动任务边界检测
+
+### 完成日期：2026-02-26
+
+### 概述
+
+通过 hook 系统自动识别任务边界：当检测到 `sessions_spawn` / `delegate_task` / `delegate_parallel` 工具调用时自动启动 token 计数器，`agent_end` 时自动停止所有自动计数器并广播结果。无需 Agent 手动调用 `token_counter_start` / `token_counter_stop`。
+
+### 修改文件
+
+| 文件 | 改动内容 |
+|------|----------|
+| `packages/belldandy-skills/src/executor.ts` | 新增 `getTokenCounter(conversationId)` 方法，供 gateway hooks 通过 sessionKey 访问 token 计数器 |
+| `packages/belldandy-agent/src/tool-agent.ts` | 重排 `finally` 块顺序：`runAgentEnd()` → 保存快照 → `cleanup()` → `clearTokenCounter()`，确保 `agent_end` hooks 执行时 token 计数器仍可用 |
+| `packages/belldandy-core/src/bin/gateway.ts` | 新增 `AUTO_BOUNDARY_TOOLS` Set 和 `AUTO_COUNTER_PREFIX` 常量；注册 `after_tool_call` hook（自动 start）和 `agent_end` hook（自动 stop + 广播） |
+
+### 架构说明
+
+```
+ToolEnabledAgent.run()
+  ├─ ReAct 循环
+  │    └─ 工具调用 sessions_spawn / delegate_task / delegate_parallel
+  │         └─ after_tool_call hook 触发
+  │              └─ toolExecutor.getTokenCounter(sessionKey)
+  │              └─ counter.start("auto:delegate_task_1740000000000")
+  │    └─ 后续模型调用 → tokenCounter.notifyUsage() 累加
+  └─ finally
+       ├─ runAgentEnd()  ← agent_end hook 触发
+       │    └─ counter.list() → 过滤 "auto:" 前缀
+       │    └─ counter.stop(name) → 获取统计结果
+       │    └─ serverBroadcast → token.counter.result 事件（auto: true）
+       ├─ getSnapshots() → 保存到 ConversationStore（扩展 A）
+       ├─ cleanup() → 清理泄漏计数器
+       └─ clearTokenCounter()
+```
+
+### 关键设计决策
+
+1. **hook 执行模型**：`agent_end` 和 `after_tool_call` 均为 void hook（`Promise.all` 并行执行），priority 不控制执行顺序
+2. **计数器可用性保证**：由 `tool-agent.ts` finally 块排序保证（`runAgentEnd()` 在 `cleanup()` 之前），而非 hook priority
+3. **命名规则**：自动计数器使用 `auto:{toolName}_{timestamp}` 格式，与手动计数器（扩展 B）命名空间隔离
+4. **广播事件**：复用扩展 B 的 `token.counter.result` 事件，附加 `auto: true` 字段区分来源
+
+### 验收结果
+
+| 验收项 | 结果 |
+|--------|------|
+| `corepack pnpm build` TypeScript 编译 | ✅ 通过 |
+| 向后兼容（不影响现有功能） | ✅ hooks 仅在 `toolsEnabled` 时注册 |
+| 与扩展 A 兼容（跨 run 持久化） | ✅ 自动计数器 stop 后不出现在快照中（语义正确） |
+| 与扩展 B 兼容（手动计数器） | ✅ `auto:` 前缀隔离，互不干扰 |
+| 代码复查 | ✅ 修复死分支 bug + 修正误导性注释 |

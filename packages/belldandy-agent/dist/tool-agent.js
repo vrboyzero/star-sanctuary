@@ -317,18 +317,9 @@ export class ToolEnabledAgent {
         }
         finally {
             const durationMs = Date.now() - startTime;
-            // 清理 token 计数器
-            // 扩展 A：清理前先保存活跃计数器快照（跨 run 持久化）
-            if (this.opts.conversationStore && convId) {
-                const snapshots = tokenCounter.getSnapshots();
-                this.opts.conversationStore.setActiveCounters(convId, snapshots);
-            }
-            const leakedCounters = tokenCounter.cleanup();
-            if (leakedCounters.length > 0) {
-                this.opts.logger?.error("agent", `Token counters leaked: ${leakedCounters.join(", ")}`) ?? console.warn(`[agent] Token counters leaked: ${leakedCounters.join(", ")}`);
-            }
-            this.opts.toolExecutor.clearTokenCounter(input.conversationId ?? "");
-            // Hook: afterRun / agent_end
+            // Hook: afterRun / agent_end（在清理 token 计数器之前执行，
+            // 以便 agent_end hooks 可通过 toolExecutor.getTokenCounter() 访问计数器，
+            // 用于扩展 C 自动任务边界检测等场景）
             if (this.opts.hookRunner) {
                 try {
                     await this.opts.hookRunner.runAgentEnd({
@@ -351,6 +342,17 @@ export class ToolEnabledAgent {
                     this.opts.logger?.error("agent", `Hook afterRun failed: ${err}`) ?? console.error(`Hook afterRun failed: ${err}`);
                 }
             }
+            // 清理 token 计数器（在 agent_end hook 之后执行）
+            // 扩展 A：清理前先保存活跃计数器快照（跨 run 持久化）
+            if (this.opts.conversationStore && convId) {
+                const snapshots = tokenCounter.getSnapshots();
+                this.opts.conversationStore.setActiveCounters(convId, snapshots);
+            }
+            const leakedCounters = tokenCounter.cleanup();
+            if (leakedCounters.length > 0) {
+                this.opts.logger?.error("agent", `Token counters leaked: ${leakedCounters.join(", ")}`) ?? console.warn(`[agent] Token counters leaked: ${leakedCounters.join(", ")}`);
+            }
+            this.opts.toolExecutor.clearTokenCounter(input.conversationId ?? "");
         }
     }
     async callModel(messages, tools) {

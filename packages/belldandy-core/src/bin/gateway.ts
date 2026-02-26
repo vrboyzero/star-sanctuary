@@ -1229,6 +1229,79 @@ if (evolutionEnabled) {
   logger.info("memory-evolution", "Registered agent_end hook for memory evolution");
 }
 
+// ========== 扩展 C：自动任务边界检测 ==========
+// 通过 hook 系统自动识别任务边界：
+// - after_tool_call: 检测到 sessions_spawn / delegate_task / delegate_parallel 时自动 start 计数器
+// - agent_end: 自动 stop 所有自动启动的计数器并广播结果
+const AUTO_BOUNDARY_TOOLS = new Set(["sessions_spawn", "delegate_task", "delegate_parallel"]);
+const AUTO_COUNTER_PREFIX = "auto:";
+
+if (toolsEnabled) {
+  // after_tool_call: 检测任务派发工具，自动启动 token 计数器
+  hookRegistry.register({
+    source: "auto-boundary",
+    hookName: "after_tool_call",
+    priority: 150,
+    handler: async (event, ctx) => {
+      const toolName = ctx.toolName;
+      if (!toolName || !AUTO_BOUNDARY_TOOLS.has(toolName)) return;
+
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      const counter = toolExecutor.getTokenCounter(sessionKey);
+      if (!counter) return;
+
+      const counterName = `${AUTO_COUNTER_PREFIX}${toolName}_${Date.now()}`;
+
+      try {
+        counter.start(counterName);
+        logger.debug("auto-boundary", `Auto-started counter "${counterName}" after ${toolName} (session: ${sessionKey})`);
+      } catch (err) {
+        logger.warn("auto-boundary", `Failed to auto-start counter: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  });
+
+  // agent_end: 自动停止所有 auto: 前缀的计数器并广播结果
+  hookRegistry.register({
+    source: "auto-boundary",
+    hookName: "agent_end",
+    priority: 90, // agent_end 为并行 void hook，执行顺序不由 priority 决定；token counter 可用性由 tool-agent.ts finally 块排序保证
+    handler: async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      const counter = toolExecutor.getTokenCounter(sessionKey);
+      if (!counter) return;
+
+      const activeCounters = counter.list();
+      const autoCounters = activeCounters.filter(name => name.startsWith(AUTO_COUNTER_PREFIX));
+      if (autoCounters.length === 0) return;
+
+      for (const name of autoCounters) {
+        try {
+          const result = counter.stop(name);
+          // 广播结果到前端
+          serverBroadcast?.({
+            type: "event",
+            event: "token.counter.result",
+            payload: {
+              conversationId: sessionKey,
+              auto: true,
+              ...result,
+            },
+          });
+          logger.info("auto-boundary", `Auto-stopped counter "${name}": input=${result.inputTokens}, output=${result.outputTokens}, total=${result.totalTokens}, duration=${result.durationMs}ms`);
+        } catch (err) {
+          logger.warn("auto-boundary", `Failed to auto-stop counter "${name}": ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    },
+  });
+
+  logger.info("auto-boundary", "Registered auto task boundary detection hooks (Extension C)");
+}
 
 const server = await startGatewayServer({
   port,
