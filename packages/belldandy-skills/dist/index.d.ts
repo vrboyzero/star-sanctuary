@@ -18,6 +18,7 @@ export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParal
 export { methodListTool, methodReadTool, methodCreateTool, methodSearchTool } from "./builtin/methodology/index.js";
 export { logReadTool, logSearchTool } from "./builtin/log.js";
 export { timerTool } from "./builtin/timer.js";
+export { tokenCounterStartTool, tokenCounterStopTool } from "./builtin/token-counter.js";
 export { createCronTool, type CronToolDeps } from "./builtin/cron-tool.js";
 export { switchFacetTool } from "./builtin/switch-facet.js";
 export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-restart.js";

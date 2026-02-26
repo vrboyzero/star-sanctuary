@@ -61,7 +61,14 @@
     -   点击保存。
 6.  点击 **“申请发布”**（如果你是管理员，通常会自动通过；如果不是，需要去飞书管理后台审核通过）。
 
-### 7. 常见问题 (飞书)
+### 7. 在 `.env.local` 中添加：
+```env
+# 飞书相关配置
+BELLDANDY_FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
+BELLDANDY_FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+### 8. 常见问题 (飞书)
 **Q: 发送消息后 Belldandy 不回复？**
 A: 检查 Gateway 终端是否有错误日志。确保：
 -   应用已发布且审核通过

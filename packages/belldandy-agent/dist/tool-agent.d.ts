@@ -9,6 +9,7 @@ import type { HookRunner } from "./hook-runner.js";
 import { type ModelProfile, type FailoverLogger } from "./failover-client.js";
 import { type VideoUploadConfig } from "./multimodal.js";
 import { type CompactionOptions, type SummarizerFn } from "./compaction.js";
+import type { ConversationStore } from "./conversation.js";
 type ApiProtocol = "openai" | "anthropic";
 export type ToolEnabledAgentOptions = {
     baseUrl: string;
@@ -40,6 +41,8 @@ export type ToolEnabledAgentOptions = {
     compaction?: CompactionOptions;
     /** 模型摘要函数（用于循环内压缩） */
     summarizer?: SummarizerFn;
+    /** 会话存储（用于跨 run 持久化 token 计数器状态） */
+    conversationStore?: ConversationStore;
 };
 export declare class ToolEnabledAgent implements BelldandyAgent {
     private readonly opts;

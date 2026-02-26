@@ -10,6 +10,18 @@ export type ConversationMessage = {
     agentId?: string;
 };
 /**
+ * 跨 run 持久化的 token 计数器快照
+ */
+export type ActiveCounterSnapshot = {
+    name: string;
+    startTime: number;
+    baseInputTokens: number;
+    baseOutputTokens: number;
+    /** 快照保存时的全局累计值（用于跨 run 恢复） */
+    savedGlobalInputTokens: number;
+    savedGlobalOutputTokens: number;
+};
+/**
  * 会话对象
  */
 export type Conversation = {
@@ -32,6 +44,8 @@ export type Conversation = {
         cachedAt: number;
         ttl: number;
     };
+    /** 跨 run 持久化的活跃 token 计数器快照 */
+    activeCounters?: ActiveCounterSnapshot[];
 };
 /**
  * 会话存储选项
@@ -146,6 +160,14 @@ export declare class ConversationStore {
      * 更新并持久化压缩状态
      */
     setCompactionState(id: string, state: CompactionState): void;
+    /**
+     * 保存活跃 token 计数器快照（跨 run 持久化）
+     */
+    setActiveCounters(conversationId: string, snapshots: ActiveCounterSnapshot[]): void;
+    /**
+     * 获取活跃 token 计数器快照
+     */
+    getActiveCounters(conversationId: string): ActiveCounterSnapshot[];
     /**
      * 设置房间成员列表缓存
      * @param conversationId 会话ID

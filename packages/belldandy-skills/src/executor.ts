@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { JsonObject } from "@belldandy/protocol";
-import type { Tool, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, AgentCapabilities, ConversationStoreInterface } from "./types.js";
+import type { Tool, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, AgentCapabilities, ConversationStoreInterface, ITokenCounterService } from "./types.js";
 
 /** 默认策略（最小权限） */
 export const DEFAULT_POLICY: ToolPolicy = {
@@ -39,6 +39,8 @@ export type ToolExecutorOptions = {
   isToolDisabled?: (toolName: string) => boolean;
   /** 可选：会话存储（用于缓存等功能） */
   conversationStore?: ConversationStoreInterface;
+  /** 可选：事件广播回调（用于工具主动推送事件到前端） */
+  broadcast?: (event: string, payload: Record<string, unknown>) => void;
 };
 
 export class ToolExecutor {
@@ -51,6 +53,8 @@ export class ToolExecutor {
   private readonly logger?: ToolExecutorLogger;
   private readonly isToolDisabled?: (toolName: string) => boolean;
   private conversationStore?: ConversationStoreInterface; // 移除 readonly，允许后期绑定
+  private readonly tokenCounters = new Map<string, ITokenCounterService>(); // 每个 conversation 的 token 计数器
+  private readonly broadcast?: (event: string, payload: Record<string, unknown>) => void;
 
   constructor(options: ToolExecutorOptions) {
     this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
@@ -62,6 +66,7 @@ export class ToolExecutor {
     this.logger = options.logger;
     this.isToolDisabled = options.isToolDisabled;
     this.conversationStore = options.conversationStore;
+    this.broadcast = options.broadcast;
   }
 
   /**
@@ -76,6 +81,20 @@ export class ToolExecutor {
    */
   setConversationStore(store: ConversationStoreInterface): void {
     this.conversationStore = store;
+  }
+
+  /**
+   * Set token counter for a specific conversation (for task-level token tracking).
+   */
+  setTokenCounter(conversationId: string, counter: ITokenCounterService): void {
+    this.tokenCounters.set(conversationId, counter);
+  }
+
+  /**
+   * Clear token counter for a specific conversation (cleanup after run).
+   */
+  clearTokenCounter(conversationId: string): void {
+    this.tokenCounters.delete(conversationId);
   }
 
   /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
@@ -171,6 +190,8 @@ export class ToolExecutor {
       senderInfo, // 传递发送者信息
       roomContext, // 传递房间上下文
       conversationStore: this.conversationStore, // 传递会话存储（用于缓存）
+      tokenCounter: this.tokenCounters.get(conversationId), // 传递 token 计数器（任务级统计）
+      broadcast: this.broadcast, // 传递事件广播回调（扩展 B）
       policy: this.policy,
       agentCapabilities: this.agentCapabilities,
       logger: this.logger ? {

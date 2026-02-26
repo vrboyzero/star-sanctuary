@@ -17,6 +17,8 @@ import {
   type AnthropicUsage,
 } from "./anthropic.js";
 import { estimateTokens, needsInLoopCompaction, compactIncremental, createEmptyCompactionState, type CompactionState, type CompactionOptions, type SummarizerFn } from "./compaction.js";
+import { TokenCounterService } from "./token-counter.js";
+import type { ConversationStore, ActiveCounterSnapshot } from "./conversation.js";
 
 type ApiProtocol = "openai" | "anthropic";
 
@@ -48,6 +50,8 @@ export type ToolEnabledAgentOptions = {
   compaction?: CompactionOptions;
   /** 模型摘要函数（用于循环内压缩） */
   summarizer?: SummarizerFn;
+  /** 会话存储（用于跨 run 持久化 token 计数器状态） */
+  conversationStore?: ConversationStore;
 };
 
 type Message =
@@ -168,6 +172,17 @@ export class ToolEnabledAgent implements BelldandyAgent {
     let totalCacheRead = 0;
     let modelCallCount = 0;
 
+    // 任务级 token 计数器
+    const tokenCounter = new TokenCounterService();
+    this.opts.toolExecutor.setTokenCounter(input.conversationId ?? "", tokenCounter);
+
+    // 扩展 A：从 ConversationStore 恢复跨 run 的活跃计数器
+    const convId = input.conversationId ?? "";
+    if (this.opts.conversationStore && convId) {
+      const snapshots = this.opts.conversationStore.getActiveCounters(convId);
+      tokenCounter.restoreFromSnapshots(snapshots);
+    }
+
     const buildUsageItem = (): AgentUsage => ({
       type: "usage",
       systemPromptTokens: this.opts.systemPrompt ? estimateTokens(this.opts.systemPrompt) : 0,
@@ -216,6 +231,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           totalOutputTokens += u.output_tokens;
           totalCacheCreation += u.cache_creation_input_tokens ?? 0;
           totalCacheRead += u.cache_read_input_tokens ?? 0;
+          tokenCounter.notifyUsage(u.input_tokens, u.output_tokens);
           const parts = [`input=${u.input_tokens}`, `output=${u.output_tokens}`];
           if (u.cache_creation_input_tokens) parts.push(`cache_create=${u.cache_creation_input_tokens}`);
           if (u.cache_read_input_tokens) parts.push(`cache_read=${u.cache_read_input_tokens}`);
@@ -405,6 +421,18 @@ export class ToolEnabledAgent implements BelldandyAgent {
       }
     } finally {
       const durationMs = Date.now() - startTime;
+
+      // 清理 token 计数器
+      // 扩展 A：清理前先保存活跃计数器快照（跨 run 持久化）
+      if (this.opts.conversationStore && convId) {
+        const snapshots = tokenCounter.getSnapshots();
+        this.opts.conversationStore.setActiveCounters(convId, snapshots);
+      }
+      const leakedCounters = tokenCounter.cleanup();
+      if (leakedCounters.length > 0) {
+        this.opts.logger?.error("agent", `Token counters leaked: ${leakedCounters.join(", ")}`) ?? console.warn(`[agent] Token counters leaked: ${leakedCounters.join(", ")}`);
+      }
+      this.opts.toolExecutor.clearTokenCounter(input.conversationId ?? "");
 
       // Hook: afterRun / agent_end
       if (this.opts.hookRunner) {

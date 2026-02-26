@@ -49,6 +49,9 @@ export { logReadTool, logSearchTool } from "./builtin/log.js";
 // 计时器工具
 export { timerTool } from "./builtin/timer.js";
 
+// Token 计数器工具
+export { tokenCounterStartTool, tokenCounterStopTool } from "./builtin/token-counter.js";
+
 // 定时任务工具
 export { createCronTool, type CronToolDeps } from "./builtin/cron-tool.js";
 

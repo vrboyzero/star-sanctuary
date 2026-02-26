@@ -23,6 +23,19 @@ export type ConversationMessage = {
 };
 
 /**
+ * 跨 run 持久化的 token 计数器快照
+ */
+export type ActiveCounterSnapshot = {
+  name: string;
+  startTime: number;
+  baseInputTokens: number;
+  baseOutputTokens: number;
+  /** 快照保存时的全局累计值（用于跨 run 恢复） */
+  savedGlobalInputTokens: number;
+  savedGlobalOutputTokens: number;
+};
+
+/**
  * 会话对象
  */
 export type Conversation = {
@@ -45,6 +58,8 @@ export type Conversation = {
         cachedAt: number; // 缓存时间戳
         ttl: number; // 缓存有效期（毫秒）
     };
+    /** 跨 run 持久化的活跃 token 计数器快照 */
+    activeCounters?: ActiveCounterSnapshot[];
 };
 
 /**
@@ -406,6 +421,24 @@ export class ConversationStore {
                 }
             });
         }
+    }
+
+    /**
+     * 保存活跃 token 计数器快照（跨 run 持久化）
+     */
+    setActiveCounters(conversationId: string, snapshots: ActiveCounterSnapshot[]): void {
+        const conv = this.get(conversationId);
+        if (!conv) return;
+        conv.activeCounters = snapshots.length > 0 ? snapshots : undefined;
+        conv.updatedAt = Date.now();
+    }
+
+    /**
+     * 获取活跃 token 计数器快照
+     */
+    getActiveCounters(conversationId: string): ActiveCounterSnapshot[] {
+        const conv = this.get(conversationId);
+        return conv?.activeCounters ?? [];
     }
 
     /**

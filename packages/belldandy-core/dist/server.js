@@ -20,7 +20,7 @@ const DEFAULT_METHODS = [
     "tools.update",
     "agents.list",
 ];
-const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "pairing.required"];
+const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required"];
 export async function startGatewayServer(opts) {
     ensureWebRoot(opts.webRoot);
     const log = opts.logger

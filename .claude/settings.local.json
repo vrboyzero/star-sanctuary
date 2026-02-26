@@ -92,7 +92,8 @@
       "WebFetch(domain:pointofai.com)",
       "WebFetch(domain:www.everydev.ai)",
       "WebFetch(domain:invertedstone.com)",
-      "WebFetch(domain:pricepertoken.com)"
+      "WebFetch(domain:pricepertoken.com)",
+      "Bash(corepack pnpm bdd doctor:*)"
     ]
   }
 }

@@ -75,6 +75,8 @@ import {
   createLeaveRoomTool,
   createJoinRoomTool,
   timerTool,
+  tokenCounterStartTool,
+  tokenCounterStopTool,
 } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
@@ -475,6 +477,8 @@ const toolsToRegister = toolsEnabled
     createLeaveRoomTool(undefined), // 离开社区房间工具（CommunityChannel 初始化后才可用）
     createJoinRoomTool(undefined), // 加入社区房间工具（CommunityChannel 初始化后才可用）
     timerTool, // 计时器工具（始终加载）
+    tokenCounterStartTool, // 任务级 token 计数器（始终加载）
+    tokenCounterStopTool,
 
     // ── browser 组 ──
     ...(hasToolGroup("browser") ? [
@@ -527,7 +531,9 @@ const toolExecutor = new ToolExecutor({
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
   policy: toolsPolicy,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
-
+  broadcast: (event, payload) => {
+    serverBroadcast?.({ type: "event", event, payload });
+  },
   auditLogger: (log) => {
     const msg = log.success
       ? `${log.toolName} completed in ${log.durationMs}ms`
@@ -886,6 +892,7 @@ Keep responses concise and natural for spoken delivery.`;
         ...(profileMaxInputTokens > 0 && { maxInputTokens: profileMaxInputTokens }),
         compaction: compactionOpts,
         summarizer: compactionSummarizer,
+        conversationStore: conversationStore, // 扩展 A：传入 conversationStore 支持跨 run 持久化
       });
     }
     return new OpenAIChatAgent({

@@ -307,6 +307,23 @@ export class ConversationStore {
         }
     }
     /**
+     * 保存活跃 token 计数器快照（跨 run 持久化）
+     */
+    setActiveCounters(conversationId, snapshots) {
+        const conv = this.get(conversationId);
+        if (!conv)
+            return;
+        conv.activeCounters = snapshots.length > 0 ? snapshots : undefined;
+        conv.updatedAt = Date.now();
+    }
+    /**
+     * 获取活跃 token 计数器快照
+     */
+    getActiveCounters(conversationId) {
+        const conv = this.get(conversationId);
+        return conv?.activeCounters ?? [];
+    }
+    /**
      * 设置房间成员列表缓存
      * @param conversationId 会话ID
      * @param members 成员列表

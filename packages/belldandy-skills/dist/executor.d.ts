@@ -1,4 +1,4 @@
-import type { Tool, ToolCallRequest, ToolCallResult, ToolPolicy, ToolAuditLog, AgentCapabilities, ConversationStoreInterface } from "./types.js";
+import type { Tool, ToolCallRequest, ToolCallResult, ToolPolicy, ToolAuditLog, AgentCapabilities, ConversationStoreInterface, ITokenCounterService } from "./types.js";
 /** 默认策略（最小权限） */
 export declare const DEFAULT_POLICY: ToolPolicy;
 /** Logger 接口，供工具在 context 中使用 */
@@ -22,6 +22,8 @@ export type ToolExecutorOptions = {
     isToolDisabled?: (toolName: string) => boolean;
     /** 可选：会话存储（用于缓存等功能） */
     conversationStore?: ConversationStoreInterface;
+    /** 可选：事件广播回调（用于工具主动推送事件到前端） */
+    broadcast?: (event: string, payload: Record<string, unknown>) => void;
 };
 export declare class ToolExecutor {
     private readonly tools;
@@ -33,6 +35,8 @@ export declare class ToolExecutor {
     private readonly logger?;
     private readonly isToolDisabled?;
     private conversationStore?;
+    private readonly tokenCounters;
+    private readonly broadcast?;
     constructor(options: ToolExecutorOptions);
     /**
      * Late-bind agentCapabilities (for cases where the orchestrator is created after the executor).
@@ -42,6 +46,14 @@ export declare class ToolExecutor {
      * Late-bind conversationStore (for cases where the store is created after the executor).
      */
     setConversationStore(store: ConversationStoreInterface): void;
+    /**
+     * Set token counter for a specific conversation (for task-level token tracking).
+     */
+    setTokenCounter(conversationId: string, counter: ITokenCounterService): void;
+    /**
+     * Clear token counter for a specific conversation (cleanup after run).
+     */
+    clearTokenCounter(conversationId: string): void;
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions(): {
         type: "function";

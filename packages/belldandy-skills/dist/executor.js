@@ -22,6 +22,8 @@ export class ToolExecutor {
     logger;
     isToolDisabled;
     conversationStore; // 移除 readonly，允许后期绑定
+    tokenCounters = new Map(); // 每个 conversation 的 token 计数器
+    broadcast;
     constructor(options) {
         this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
         this.workspaceRoot = options.workspaceRoot;
@@ -32,6 +34,7 @@ export class ToolExecutor {
         this.logger = options.logger;
         this.isToolDisabled = options.isToolDisabled;
         this.conversationStore = options.conversationStore;
+        this.broadcast = options.broadcast;
     }
     /**
      * Late-bind agentCapabilities (for cases where the orchestrator is created after the executor).
@@ -44,6 +47,18 @@ export class ToolExecutor {
      */
     setConversationStore(store) {
         this.conversationStore = store;
+    }
+    /**
+     * Set token counter for a specific conversation (for task-level token tracking).
+     */
+    setTokenCounter(conversationId, counter) {
+        this.tokenCounters.set(conversationId, counter);
+    }
+    /**
+     * Clear token counter for a specific conversation (cleanup after run).
+     */
+    clearTokenCounter(conversationId) {
+        this.tokenCounters.delete(conversationId);
     }
     /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
     getDefinitions() {
@@ -121,6 +136,8 @@ export class ToolExecutor {
             senderInfo, // 传递发送者信息
             roomContext, // 传递房间上下文
             conversationStore: this.conversationStore, // 传递会话存储（用于缓存）
+            tokenCounter: this.tokenCounters.get(conversationId), // 传递 token 计数器（任务级统计）
+            broadcast: this.broadcast, // 传递事件广播回调（扩展 B）
             policy: this.policy,
             agentCapabilities: this.agentCapabilities,
             logger: this.logger ? {

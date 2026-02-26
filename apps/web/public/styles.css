@@ -314,6 +314,28 @@ body::before {
 .token-usage:hover {
   opacity: 1;
 }
+
+/* Task Token Usage Display（任务级统计，token_counter_stop 触发后短暂显示） */
+.task-token-usage {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--glass-surface);
+  border: 1px solid rgba(var(--secondary-rgb, 120, 200, 120), 0.4);
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  opacity: 0.9;
+  animation: task-token-fadein 0.3s ease;
+}
+@keyframes task-token-fadein {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 0.9; transform: translateY(0); }
+}
 .token-label {
   color: rgba(255, 255, 255, 0.35);
   font-size: 9px;

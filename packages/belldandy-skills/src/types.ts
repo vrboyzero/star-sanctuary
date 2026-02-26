@@ -147,6 +147,15 @@ export type RoomContext = {
   members?: RoomMember[];
 };
 
+/** Token 计数器服务接口（由 belldandy-agent 实现，此处定义以避免循环依赖） */
+export interface ITokenCounterService {
+  start(name: string): void;
+  stop(name: string): { name: string; inputTokens: number; outputTokens: number; totalTokens: number; durationMs: number };
+  list(): string[];
+  notifyUsage(inputTokens: number, outputTokens: number): void;
+  cleanup(): string[];
+}
+
 /** 工具执行上下文 */
 export type ToolContext = {
   conversationId: string;
@@ -165,6 +174,10 @@ export type ToolContext = {
   conversationStore?: ConversationStoreInterface;
   policy: ToolPolicy;
   agentCapabilities?: AgentCapabilities;
+  /** Token 计数器（由 ToolEnabledAgent 注入，用于任务级 token 统计） */
+  tokenCounter?: ITokenCounterService;
+  /** 事件广播回调（由 Gateway 注入，用于工具主动推送事件到前端） */
+  broadcast?: (event: string, payload: Record<string, unknown>) => void;
   logger?: {
     info(message: string): void;
     warn(message: string): void;

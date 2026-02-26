@@ -827,6 +827,10 @@ function handleEvent(event, payload) {
     updateTokenUsage(payload);
     return;
   }
+  if (event === "token.counter.result") {
+    showTaskTokenResult(payload);
+    return;
+  }
   if (event === "chat.delta") {
     const delta = payload && payload.delta ? String(payload.delta) : "";
     if (!delta) return;
@@ -948,6 +952,31 @@ function updateTokenUsage(payload) {
   // 移除 updating 动画
   const tuEl = document.getElementById("tokenUsage");
   if (tuEl) tuEl.classList.remove("updating");
+}
+
+let taskTokenHideTimer = null;
+
+function showTaskTokenResult(payload) {
+  if (!payload) return;
+  const panel = document.getElementById("taskTokenUsage");
+  if (!panel) return;
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = typeof val === "number" ? formatTokenCount(val) : String(val ?? "--");
+  };
+  set("taskName", payload.name);
+  set("taskIn", payload.inputTokens);
+  set("taskOut", payload.outputTokens);
+  set("taskTotal", payload.totalTokens);
+
+  panel.style.display = "flex";
+
+  // 8 秒后自动隐藏
+  if (taskTokenHideTimer) clearTimeout(taskTokenHideTimer);
+  taskTokenHideTimer = setTimeout(() => {
+    panel.style.display = "none";
+  }, 8000);
 }
 
 function flushQueuedText() {
