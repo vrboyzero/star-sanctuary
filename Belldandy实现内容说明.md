@@ -95,11 +95,20 @@
         - 配置项：`BELLDANDY_MEMORY_DEEP_RETRIEVAL`。
         - 适用于"找到一个相关段落后，想看完整上下文"的场景。
     - **Memory Tools**：提供了 `memory_search`、`memory_get`、`memory_index` 工具，让 Agent 能自主发起检索与索引。
+    - **检索管线优化** (M-Next P0/P1/P2 ✅)：
+        - **自适应检索**（2026-02-25）：正则分类跳过无意义检索（问候/命令/简单确认），减少无效 Embedding API 调用与噪声注入。实现于 `adaptive-retrieval.ts`，在 `manager.ts` 的 `search()` 入口调用。
+        - **Hard Min Score 截断**（2026-02-25）：rerank 结果末尾过滤低于阈值（默认 0.15）的结果，避免低质量内容污染上下文。`reranker.ts` 新增 `minScore` 选项。
+        - **噪声过滤**（2026-02-25）：索引会话 `.jsonl` 文件时过滤 Agent 否认回复、元问题、会话样板文等噪声消息，提升会话记忆信噪比。实现于 `noise-filter.ts`，在 `session-loader.ts` 接入。
+        - **Task-aware Embedding**（2026-02-25）：`EmbeddingProvider` 接口区分 `embedQuery`/`embedPassage`，索引用 passage 前缀，检索用 query 前缀。`MemoryManagerOptions` 新增 `embeddingQueryPrefix`/`embeddingPassagePrefix` 配置项，对支持 task 参数的模型（Jina、BGE-M3）可提升检索相关性 5-15%。
+        - **长度归一化**（2026-02-25）：reranker 引入 `1 / (1 + log2(charLen / anchor))` 因子（`lengthNormAnchor` 默认 500 字符），防止长文本靠关键词密度霸榜，让短而精准的记忆有机会排上来。
+        - **内容语义分类（Category）**（2026-02-25）：新增 `MemoryCategory` 类型（preference/fact/decision/entity/experience/other）及 `MemoryChunk.category` 字段。M-N3 提取 prompt 扩展为 5 类分类，LLM 输出包含 `category` 字段；`MemorySearchFilter` 支持按语义类型过滤检索。
+        - **MMR 多样性去重**（2026-02-26）：基于向量余弦相似度的 Maximal Marginal Relevance 贪心算法，替代粗粒度同源惩罚，能发现跨文件语义重复。`reranker.ts` 新增 `mmrLambda`（默认 0.7）和 `mmrSimilarityThreshold`（默认 0.85）配置，`manager.ts` 传入 `store.getChunkVector` 回调。
+        - **Scope 隔离**（2026-02-26）：`chunks` 表新增 `agent_id` 列与索引，`MemorySearchFilter` 支持 `agentId` 过滤。`memory.ts` 工具层自动从 `context.agentId` 注入过滤，子 Agent 只检索自己写入的记忆，主 Agent 行为不变，支持多 Agent 记忆隔离。
 - **价值**：
     - 解决了 LLM 上下文窗口限制问题。
     - 实现了长期核心记忆、短期流水、会话历史的结构化分离与差异化检索。
-    - 通过 Embedding Cache、规则重排、元数据过滤等优化，显著提升检索质量与性能。
-    - 为未来的 L0 摘要、自动记忆提取、LLM 重排等高级能力奠定基础。
+    - 通过 Embedding Cache、规则重排、元数据过滤、自适应检索、噪声过滤、MMR 去重、Scope 隔离等优化，显著提升检索质量、信噪比与多 Agent 隔离能力。
+    - 为未来的 LLM 重排、查询重写等高级能力奠定基础。
 
 ### 5. 对话上下文与防注入 (Phase 2.2)
 
@@ -1157,6 +1166,43 @@
     - 支持性能分析场景（如"哪个步骤最耗时？"）。
     - 多计时器并发能力适用于复杂任务的分段计时。
 
+### 33. 任务级 Token 计数器 (Token Counter) ✅ 已完成
+
+- **目标**：让 Agent 能主动控制 token 统计边界，精确追踪特定任务的 token 消耗。
+- **状态**：✅ 阶段 1 + 扩展 A/B/C 已完成（2026-02-26）
+- **背景**：现有机制（`ToolEnabledAgent` 每次 run 结束自动产生 `AgentUsage`）无任务级别概念，前端累加仅存于内存，无后端持久化，`OpenAIChatAgent` 不产生 usage。
+- **实现内容**：
+    - **`TokenCounterService`**（`packages/belldandy-agent/src/token-counter.ts`）：
+        - 维护全局 token 累加器作为基准，管理多个命名计数器（支持并发任务）。
+        - `notifyUsage(input, output)`：每次模型调用后由 `ToolEnabledAgent` 调用累加。
+        - `start(name)` / `stop(name)`：启动/停止命名计数器，`stop` 返回差值统计（inputTokens / outputTokens / totalTokens / durationMs）。
+        - `list()` / `cleanup()`：列出活跃计数器 / run 结束时自动清理防泄漏。
+        - `getSnapshots()` / `clearTokenCounter()`：支持跨 run 持久化快照（扩展 A）。
+    - **`ToolContext` 扩展**：新增可选字段 `tokenCounter?: TokenCounterService`，工具层可直接访问。
+    - **`ToolEnabledAgent` 修改**：初始化 `TokenCounterService` 实例，每次 API usage 后调用 `notifyUsage()`，构造 `ToolContext` 时传入，finally 块自动 `cleanup()` 并 warn 泄漏计数器。
+    - **工具**（`packages/belldandy-skills/src/builtin/token-counter.ts`）：
+        - `token_counter_start`：启动命名计数器。
+        - `token_counter_stop`：停止并返回统计结果，广播 `token.counter.result` 事件到前端。
+    - **扩展 A — 跨 run 持久化**：`ConversationStore` 新增 token 计数字段，run 结束时将快照写入会话存储，刷新不丢失。
+    - **扩展 B — 手动计数器**：Agent 可通过工具手动调用 `token_counter_start`/`stop`，结果通过 `serverBroadcast` 推送 `token.counter.result` 事件。
+    - **扩展 C — 自动任务边界检测**：`after_tool_call` hook 检测 `sessions_spawn`/`delegate_task`/`delegate_parallel` 等编排工具调用，自动以 `auto:{toolName}_{timestamp}` 格式启动计数器；`agent_end` hook 在 run 结束时自动 stop 并广播（附加 `auto: true` 字段区分来源）。`auto:` 前缀与手动计数器命名空间隔离。
+- **关键文件**：
+    ```
+    packages/belldandy-agent/src/token-counter.ts   # TokenCounterService
+    packages/belldandy-skills/src/builtin/token-counter.ts  # 工具实现
+    packages/belldandy-agent/src/tool-agent.ts       # notifyUsage + ToolContext 注入
+    packages/belldandy-skills/src/types.ts           # ToolContext.tokenCounter 字段
+    packages/belldandy-core/src/server.ts            # token.counter.result 事件转发
+    ```
+- **使用示例**：
+    ```
+    token_counter_start({ name: "data_analysis" })
+      ... 执行多次模型调用、工具调用 ...
+    token_counter_stop({ name: "data_analysis" })
+    // → { inputTokens: 1234, outputTokens: 567, totalTokens: 1801, durationMs: 5000 }
+    ```
+- **价值**：Agent 可精确追踪任务级 token 消耗，支持成本分析与预算控制；自动边界检测让子 Agent 编排场景的 token 归因无需手动标注。
+
 ---
 
 ## 🚧 待实现功能规划
@@ -1270,14 +1316,54 @@
      - `store.getChunksBySource()` 方法：按 source_path 拉取全部 chunk 并按行号排序。
      - 无热点 source 时直接返回第一轮结果（性能无损）。
 
+8. **自适应检索 (Adaptive Retrieval)** ✅（2026-02-25）
+   - **痛点**：所有消息一视同仁触发检索，问候/命令/简单确认产生无意义 Embedding API 调用。
+   - **方案**：正则分类，对无需记忆的消息跳过检索；含记忆关键词的消息强制检索。
+   - **实现**：新建 `adaptive-retrieval.ts`，在 `manager.ts` 的 `search()` 入口调用，约 50 行纯正则，零 API 开销。
+
+9. **Hard Min Score 截断** ✅（2026-02-25）
+   - **痛点**：reranker 只排序不截断，低相关结果仍会返回污染上下文。
+   - **方案**：rerank 结果末尾过滤低于阈值的结果。
+   - **实现**：`reranker.ts` 新增 `minScore` 选项（默认 0.15），rerank 末尾一行 filter 截断。
+
+10. **噪声过滤 (Noise Filter)** ✅（2026-02-25）
+    - **痛点**：会话历史索引时，Agent 否认回复（"我不记得"）、用户问候语也被索引为 chunk，降低信噪比。
+    - **方案**：索引 `.jsonl` 会话文件时过滤噪声消息。
+    - **实现**：新建 `noise-filter.ts`，在 `session-loader.ts` 解析 JSONL 时接入，约 60 行正则规则。
+
+11. **Task-aware Embedding** ✅（2026-02-25）
+    - **痛点**：查询和文档用相同方式 embed，对支持 task 参数的模型（Jina、BGE-M3）浪费了区分能力。
+    - **方案**：`EmbeddingProvider` 接口区分 `embedQuery`/`embedPassage`，索引用 passage 前缀，检索用 query 前缀。
+    - **实现**：`embeddings/index.ts` 接口新增可选方法；`embeddings/openai.ts` 新增 `queryPrefix`/`passagePrefix` 配置；`MemoryManagerOptions` 新增 `embeddingQueryPrefix`/`embeddingPassagePrefix`。对支持 task 的模型检索相关性可提升 5-15%。
+
+12. **长度归一化** ✅（2026-02-25）
+    - **痛点**：长 chunk 因包含更多关键词，在 BM25 中天然占优，短而精准的记忆被压制。
+    - **方案**：reranker 引入 `1 / (1 + log2(charLen / anchor))` 因子。
+    - **实现**：`reranker.ts` 新增 `lengthNormAnchor` 选项（默认 500 字符），在 rerank 第 4 步对 `result.content` 应用归一化因子。
+
+13. **内容语义分类 (Category)** ✅（2026-02-25）
+    - **痛点**：`memory_type` 按文件来源分类（core/daily/session），不反映内容语义，无法按"用户偏好"等维度过滤。
+    - **方案**：M-N3 提取时让 LLM 同时输出 category，存入 chunk 元数据，支持语义类型过滤检索。
+    - **实现**：`types.ts` 新增 `MemoryCategory`（preference/fact/decision/entity/experience/other）+ `MemoryChunk.category` + `MemorySearchFilter.category`；`store.ts` 新增 `category` 列迁移、索引、upsert 写入、`buildFilterClause` 过滤支持；M-N3 提取 prompt 扩展为 5 类分类。
+
+14. **MMR 多样性去重** ✅（2026-02-26）
+    - **痛点**：同源惩罚按 `source_path` 粒度较粗，无法发现来自不同文件但内容相似的重复结果。
+    - **方案**：Maximal Marginal Relevance 贪心算法，基于向量余弦相似度去重。
+    - **实现**：`reranker.ts` 新增 `mmrLambda`（默认 0.7）和 `mmrSimilarityThreshold`（默认 0.85）；新增 `applyMMR()` 贪心选择，每次选 `MMR = λ × relevance - (1-λ) × maxSimilarity` 最高的候选；`manager.ts` 传入 `store.getChunkVector` 回调。
+
+15. **Scope 隔离** ✅（2026-02-26）
+    - **痛点**：多 Agent 场景下所有 Agent 共享同一记忆空间，子 Agent 可能检索到其他 Agent 的记忆。
+    - **方案**：`chunks` 表新增 `agent_id` 列，检索时自动按 agentId 过滤。
+    - **实现**：`types.ts` 新增 `MemoryChunk.agentId` 和 `MemorySearchFilter.agentId`；`store.ts` 新增 `agent_id` 列、索引、`buildFilterClause` 支持；`memory.ts` 工具层自动从 `context.agentId` 注入过滤，子 Agent 只检索自己写入的记忆，主 Agent 行为不变。
+
 #### 未来规划
 
-8. **查询重写 (Query Rewrite)** ⏳ 待实现
+16. **查询重写 (Query Rewrite)** ⏳ 待实现
    - **痛点**：用户指代不清（"它怎么样？"）导致检索失败。
    - **方案**：先用 LLM 将用户查询改写为完整句子（消歧），再检索。
    - **配置项**：`BELLDANDY_MEMORY_REWRITE_ENABLED`（待添加）。
 
-9. **LLM 重排 (LLM Rerank)** ⏳ 待实现
+17. **LLM 重排 (LLM Rerank)** ⏳ 待实现
    - **痛点**：规则重排无法理解深层语义，可能遗漏真正相关的结果。
    - **方案**：引入精细的 Rerank 模型对初步检索的 Top-50 结果进行二次打分，筛选出真正相关的 Top-5。
    - **配置项**：`BELLDANDY_MEMORY_RERANK_ENABLED`（待添加）。

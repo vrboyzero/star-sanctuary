@@ -18,7 +18,12 @@
 <body>
   <main class="layout">
     <header class="header">
-      <div class="title">Belldandy WebChat (MVP)</div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div class="title">Belldandy WebChat</div>
+        <a id="officialHomeLink" href="#" target="_blank"
+          style="font-size: 15px; text-decoration: underline; color: #d4a017; transition: color 0.2s;"
+          onmouseover="this.style.color='#f0c040'" onmouseout="this.style.color='#d4a017'">官方主页</a>
+      </div>
       <div style="display: flex; gap: 8px; align-items: center;">
         <div class="token-usage" id="tokenUsage" title="Token Usage">
           <span class="token-label">SYS</span><span class="token-val" id="tuSys">--</span>
@@ -80,8 +85,8 @@
             <span class="panel-label">UUID<span class="panel-hint">：用户身份标识（可选）</span></span>
           </div>
           <div style="display: flex; gap: 8px; align-items: center;">
-            <input id="userUuid" class="input input-sm" placeholder="输入你的UUID（可选）"
-              title="用于身份权力验证，如SOUL.md中定义的主人UUID匹配" style="flex: 1;" />
+            <input id="userUuid" class="input input-sm" placeholder="输入你的UUID（可选）" title="用于身份权力验证，如SOUL.md中定义的主人UUID匹配"
+              style="flex: 1;" />
             <button id="saveUuid" class="button" style="padding: 6px 12px; font-size: 12px;">保存</button>
           </div>
         </div>
@@ -165,14 +170,14 @@
           <svg id="canvasSvg" class="canvas-svg" width="100%" height="100%">
             <defs>
               <marker id="cv-arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-                <polygon points="0 0, 10 3.5, 0 7" fill="var(--primary)" opacity="0.6"/>
+                <polygon points="0 0, 10 3.5, 0 7" fill="var(--primary)" opacity="0.6" />
               </marker>
               <pattern id="cv-grid" width="24" height="24" patternUnits="userSpaceOnUse">
-                <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="0.5"/>
+                <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="0.5" />
               </pattern>
             </defs>
             <g id="canvasViewport">
-              <rect id="canvasGridBg" width="10000" height="10000" x="-5000" y="-5000" fill="url(#cv-grid)"/>
+              <rect id="canvasGridBg" width="10000" height="10000" x="-5000" y="-5000" fill="url(#cv-grid)" />
               <g id="canvasEdgesLayer"></g>
               <g id="canvasNodesLayer"></g>
             </g>
@@ -213,7 +218,9 @@
       <div class="modal-header" style="display: flex; align-items: center;">
         <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
           <span>Settings</span>
-          <a id="recommendApiLink" href="#" target="_blank" style="font-size: 14px; text-decoration: underline; color: #a3a3a3; transition: color 0.2s;" onmouseover="this.style.color='#ffffff'" onmouseout="this.style.color='#a3a3a3'">推荐模型API</a>
+          <a id="recommendApiLink" href="#" target="_blank"
+            style="font-size: 14px; text-decoration: underline; color: #a3a3a3; transition: color 0.2s;"
+            onmouseover="this.style.color='#ffffff'" onmouseout="this.style.color='#a3a3a3'">推荐模型API</a>
         </div>
         <button id="closeSettings" class="settings-btn">✕</button>
       </div>
@@ -255,8 +262,13 @@
   <!-- Tool Settings Modal (调用设置) -->
   <div id="toolSettingsModal" class="modal-overlay hidden">
     <div class="modal tool-settings-modal">
-      <div class="modal-header">
-        <span>调用设置</span>
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+          <span>调用设置</span>
+          <a id="workshopLink" href="#" target="_blank"
+            style="font-size: 15px; text-decoration: underline; color: #d4a017; transition: color 0.2s;"
+            onmouseover="this.style.color='#f0c040'" onmouseout="this.style.color='#d4a017'">工坊入口</a>
+        </div>
         <button id="closeToolSettings" class="settings-btn">✕</button>
       </div>
       <div class="tool-settings-tabs">

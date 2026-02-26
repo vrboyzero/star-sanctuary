@@ -686,6 +686,18 @@ if (recommendApiLink && window.BELLDANDY_WEB_CONFIG?.recommendApiUrl) {
   recommendApiLink.href = window.BELLDANDY_WEB_CONFIG.recommendApiUrl;
 }
 
+// Initialize Official Home Link（官方主页链接）
+const officialHomeLink = document.getElementById("officialHomeLink");
+if (officialHomeLink && window.BELLDANDY_WEB_CONFIG?.officialHomeUrl) {
+  officialHomeLink.href = window.BELLDANDY_WEB_CONFIG.officialHomeUrl;
+}
+
+// Initialize Workshop Link（工坊入口链接）
+const workshopLink = document.getElementById("workshopLink");
+if (workshopLink && window.BELLDANDY_WEB_CONFIG?.workshopUrl) {
+  workshopLink.href = window.BELLDANDY_WEB_CONFIG.workshopUrl;
+}
+
 const cfgApiKey = document.getElementById("cfgApiKey");
 const cfgBaseUrl = document.getElementById("cfgBaseUrl");
 const cfgModel = document.getElementById("cfgModel");
