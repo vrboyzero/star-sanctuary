@@ -79,12 +79,18 @@ const SCHEMA_CATEGORY_COLUMNS = [
   "ALTER TABLE chunks ADD COLUMN category TEXT DEFAULT NULL",
 ];
 
+// Scope 隔离：agent_id 列迁移（多 Agent 记忆隔离）
+const SCHEMA_AGENT_ID_COLUMNS = [
+  "ALTER TABLE chunks ADD COLUMN agent_id TEXT DEFAULT NULL",
+];
+
 const SCHEMA_METADATA_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
 CREATE INDEX IF NOT EXISTS idx_chunks_topic ON chunks(topic);
 CREATE INDEX IF NOT EXISTS idx_chunks_ts_date ON chunks(ts_date);
 CREATE INDEX IF NOT EXISTS idx_chunks_memory_type ON chunks(memory_type);
 CREATE INDEX IF NOT EXISTS idx_chunks_category ON chunks(category);
+CREATE INDEX IF NOT EXISTS idx_chunks_agent_id ON chunks(agent_id);
 `;
 
 export class MemoryStore {
@@ -111,6 +117,10 @@ export class MemoryStore {
     for (const sql of SCHEMA_CATEGORY_COLUMNS) {
       try { this.db.exec(sql); } catch { /* column already exists */ }
     }
+    // Scope 隔离：agent_id 列迁移
+    for (const sql of SCHEMA_AGENT_ID_COLUMNS) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
     this.db.exec(SCHEMA_METADATA_INDEXES);
     this.backfillMetadataColumns();
 
@@ -135,8 +145,8 @@ export class MemoryStore {
     this.ensureOpen();
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO chunks (id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, category, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chunks (id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, category, agent_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         content = excluded.content,
         metadata = excluded.metadata,
@@ -145,7 +155,8 @@ export class MemoryStore {
         channel = excluded.channel,
         topic = excluded.topic,
         ts_date = excluded.ts_date,
-        category = excluded.category
+        category = excluded.category,
+        agent_id = excluded.agent_id
     `);
     stmt.run(
       chunk.id,
@@ -160,6 +171,7 @@ export class MemoryStore {
       chunk.topic ?? null,
       chunk.tsDate ?? null,
       chunk.category ?? null,
+      chunk.agentId ?? null,
       now,
       now
     );
@@ -453,6 +465,19 @@ export class MemoryStore {
       } else {
         conditions.push(`c.category = ?`);
         params.push(filter.category);
+      }
+    }
+
+    // Scope 隔离：agentId 过滤
+    // - agentId 为 string：只查该 Agent 的记忆
+    // - agentId 为 null：只查全局记忆（agent_id IS NULL）
+    // - agentId 为 undefined：不过滤（查询所有）
+    if (filter.agentId !== undefined) {
+      if (filter.agentId === null) {
+        conditions.push(`c.agent_id IS NULL`);
+      } else {
+        conditions.push(`c.agent_id = ?`);
+        params.push(filter.agentId);
       }
     }
 

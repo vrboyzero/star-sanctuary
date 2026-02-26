@@ -1,6 +1,6 @@
 export { MemoryStore } from "./store.js";
 export { MemoryIndexer } from "./indexer.js";
-export { ResultReranker, type RerankerOptions } from "./reranker.js";
+export { ResultReranker, type RerankerOptions, type GetVectorFn } from "./reranker.js";
 export { MemoryManager, type MemoryManagerOptions, registerGlobalMemoryManager, getGlobalMemoryManager } from "./manager.js";
 export { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 export { isNoise, filterNoise, type NoiseFilterOptions } from "./noise-filter.js";

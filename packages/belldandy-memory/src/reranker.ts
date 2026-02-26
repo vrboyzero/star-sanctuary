@@ -5,9 +5,14 @@
  * - memory_type 权重（core > daily > session > other）
  * - 时间衰减（越新越相关）
  * - 来源多样性惩罚（同一文件的多个 chunk 降权）
+ * - MMR 多样性去重（基于向量余弦相似度，跨文件语义去重）
  */
 
 import type { MemorySearchResult, MemoryType } from "./types.js";
+import { cosineSimilarity, type EmbeddingVector } from "./embeddings/index.js";
+
+/** 获取 chunk embedding 向量的回调函数 */
+export type GetVectorFn = (chunkId: string) => EmbeddingVector | null;
 
 export interface RerankerOptions {
   /** core/daily/session/other 的权重乘数 */
@@ -20,6 +25,10 @@ export interface RerankerOptions {
   minScore?: number;
   /** 长度归一化锚点（字符数），0 表示不归一化（默认 500） */
   lengthNormAnchor?: number;
+  /** MMR 多样性去重：lambda 参数（0-1），越小越强调多样性，0 表示禁用（默认 0.7） */
+  mmrLambda?: number;
+  /** MMR 相似度阈值：超过此阈值的结果被视为重复（默认 0.85） */
+  mmrSimilarityThreshold?: number;
 }
 
 const DEFAULT_TYPE_WEIGHTS: Record<MemoryType, number> = {
@@ -33,6 +42,8 @@ const DEFAULT_HALF_LIFE_DAYS = 30;
 const DEFAULT_DIVERSITY_PENALTY = 0.15;
 const DEFAULT_MIN_SCORE = 0.15;
 const DEFAULT_LENGTH_NORM_ANCHOR = 500;
+const DEFAULT_MMR_LAMBDA = 0.7;
+const DEFAULT_MMR_SIMILARITY_THRESHOLD = 0.85;
 
 export class ResultReranker {
   private typeWeights: Record<MemoryType, number>;
@@ -40,6 +51,8 @@ export class ResultReranker {
   private diversityPenalty: number;
   private minScore: number;
   private lengthNormAnchor: number;
+  private mmrLambda: number;
+  private mmrSimilarityThreshold: number;
 
   constructor(options: RerankerOptions = {}) {
     this.typeWeights = { ...DEFAULT_TYPE_WEIGHTS, ...options.memoryTypeWeights };
@@ -47,13 +60,15 @@ export class ResultReranker {
     this.diversityPenalty = options.diversityPenalty ?? DEFAULT_DIVERSITY_PENALTY;
     this.minScore = options.minScore ?? DEFAULT_MIN_SCORE;
     this.lengthNormAnchor = options.lengthNormAnchor ?? DEFAULT_LENGTH_NORM_ANCHOR;
+    this.mmrLambda = options.mmrLambda ?? DEFAULT_MMR_LAMBDA;
+    this.mmrSimilarityThreshold = options.mmrSimilarityThreshold ?? DEFAULT_MMR_SIMILARITY_THRESHOLD;
   }
 
   /**
    * 对搜索结果进行规则重排序。
    * 不修改原数组，返回新的排序后数组。
    */
-  rerank(results: MemorySearchResult[]): MemorySearchResult[] {
+  rerank(results: MemorySearchResult[], getVector?: GetVectorFn): MemorySearchResult[] {
     if (results.length <= 1) return results;
 
     const now = Date.now();
@@ -92,8 +107,84 @@ export class ResultReranker {
       return { ...result, score: adjustedScore };
     });
 
-    return reranked.sort((a, b) => b.score - a.score)
+    // 5. 硬截断
+    const filtered = reranked
+      .sort((a, b) => b.score - a.score)
       .filter(r => r.score >= this.minScore);
+
+    // 6. MMR 多样性去重（如果提供了 getVector 回调且 lambda < 1）
+    if (getVector && this.mmrLambda < 1 && filtered.length > 1) {
+      return this.applyMMR(filtered, getVector);
+    }
+
+    return filtered;
+  }
+
+  /**
+   * MMR (Maximal Marginal Relevance) 多样性去重。
+   * 贪心选择：每次选择与已选结果最不相似、同时相关性最高的候选。
+   */
+  private applyMMR(results: MemorySearchResult[], getVector: GetVectorFn): MemorySearchResult[] {
+    if (results.length <= 1) return results;
+
+    // 预加载所有向量（避免重复查询）
+    const vectors = new Map<string, EmbeddingVector | null>();
+    for (const r of results) {
+      vectors.set(r.id, getVector(r.id));
+    }
+
+    const selected: MemorySearchResult[] = [];
+    const candidates = [...results];
+    const selectedVectors: EmbeddingVector[] = [];
+
+    // 第一个直接选最高分
+    const first = candidates.shift()!;
+    selected.push(first);
+    const firstVec = vectors.get(first.id);
+    if (firstVec) selectedVectors.push(firstVec);
+
+    // 贪心选择剩余
+    while (candidates.length > 0) {
+      let bestIdx = -1;
+      let bestMMRScore = -Infinity;
+
+      for (let i = 0; i < candidates.length; i++) {
+        const candidate = candidates[i];
+        const candVec = vectors.get(candidate.id);
+
+        // 计算与已选结果的最大相似度
+        let maxSim = 0;
+        if (candVec && selectedVectors.length > 0) {
+          for (const selVec of selectedVectors) {
+            const sim = cosineSimilarity(candVec, selVec);
+            if (sim > maxSim) maxSim = sim;
+          }
+        }
+
+        // 如果相似度超过阈值，直接跳过（视为重复）
+        if (maxSim >= this.mmrSimilarityThreshold) {
+          continue;
+        }
+
+        // MMR 分数 = λ * relevance - (1-λ) * maxSimilarity
+        const mmrScore = this.mmrLambda * candidate.score - (1 - this.mmrLambda) * maxSim;
+
+        if (mmrScore > bestMMRScore) {
+          bestMMRScore = mmrScore;
+          bestIdx = i;
+        }
+      }
+
+      // 没有合适的候选了
+      if (bestIdx === -1) break;
+
+      const chosen = candidates.splice(bestIdx, 1)[0];
+      selected.push(chosen);
+      const chosenVec = vectors.get(chosen.id);
+      if (chosenVec) selectedVectors.push(chosenVec);
+    }
+
+    return selected;
   }
 
   private computeRecencyFactor(result: MemorySearchResult, now: number): number {

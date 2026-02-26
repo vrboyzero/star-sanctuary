@@ -168,8 +168,9 @@ export class MemoryManager {
         }
         // 2. Hybrid search with filter
         const rawResults = this.store.searchHybrid(query, queryVec, { limit: limit * 2, filter });
-        // 3. Rule-based rerank
-        const reranked = this.reranker.rerank(rawResults);
+        // 3. Rule-based rerank (with MMR diversity if vectors available)
+        const getVector = (chunkId) => this.store.getChunkVector(chunkId);
+        const reranked = this.reranker.rerank(rawResults, getVector);
         // 4. M-N4: 源路径聚合二次检索（仅当启用且有重复 source 时触发）
         if (this.deepRetrievalEnabled) {
             return this.applyDeepRetrieval(reranked, limit);

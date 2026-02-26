@@ -16,6 +16,7 @@ export interface MemoryChunk {
   topic?: string;     // 话题标签（可选）
   tsDate?: string;    // 日期 YYYY-MM-DD
   category?: MemoryCategory; // 内容语义分类
+  agentId?: string;   // Agent ID（用于多 Agent 记忆隔离）
   metadata?: Record<string, any>;
 }
 
@@ -27,6 +28,7 @@ export interface MemorySearchFilter {
   dateFrom?: string;  // YYYY-MM-DD
   dateTo?: string;    // YYYY-MM-DD
   category?: MemoryCategory | MemoryCategory[];
+  agentId?: string | null;  // Agent ID 过滤（null 表示查询全局记忆）
 }
 
 /** 检索选项（传给 MemoryManager.search） */

@@ -88,6 +88,11 @@ export const memorySearchTool: Tool = {
             if (args.date_from) filter.dateFrom = args.date_from as string;
             if (args.date_to) filter.dateTo = args.date_to as string;
 
+            // Scope 隔离：自动注入 agentId（子 Agent 只检索自己的记忆）
+            if (context.agentId) {
+                filter.agentId = context.agentId;
+            }
+
             const hasFilter = Object.keys(filter).length > 0;
             const results = await manager.search(query, hasFilter ? { limit, filter } : limit);
 

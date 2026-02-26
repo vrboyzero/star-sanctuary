@@ -14,6 +14,7 @@ export interface MemoryChunk {
     topic?: string;
     tsDate?: string;
     category?: MemoryCategory;
+    agentId?: string;
     metadata?: Record<string, any>;
 }
 /** 检索过滤条件 */
@@ -24,6 +25,7 @@ export interface MemorySearchFilter {
     dateFrom?: string;
     dateTo?: string;
     category?: MemoryCategory | MemoryCategory[];
+    agentId?: string | null;
 }
 /** 检索选项（传给 MemoryManager.search） */
 export interface MemorySearchOptions {
