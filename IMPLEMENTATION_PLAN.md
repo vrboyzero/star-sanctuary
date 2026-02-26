@@ -242,6 +242,37 @@ flowchart TB
 - **M-N4 源路径聚合检索**: ✅ 已完成
 - **自适应检索 / 噪声过滤 / Task-aware Embedding / 长度归一化 / 内容语义分类 / MMR 去重 / Scope 隔离**: ✅ 已完成（2026-02-25/26）
 
+### M-Next Bugfix：memory_search 检索失效修复（2026-02-26）
+
+**问题现象**：Agent 调用 `memory_search` 工具检索聊天记录时，始终返回 "No relevant results found"。
+
+**根因分析**：
+
+| 问题 | 原因 | 影响 |
+|------|------|------|
+| FTS5 索引不完整 | `ensureFtsRebuiltIfNeeded()` 只在索引完全为空时触发 rebuild，但实际索引数量（223）远少于 chunks 数量（834） | 关键词搜索漏掉 73% 的数据 |
+| 中文分词失效 | `tokenizeForSearch()` 把整个中文字符串当作一个 token（如 "之前聊过的AI"），FTS5 无法匹配 | 中文查询几乎全部失败 |
+| RRF 分数量级不一致 | 混合搜索的 RRF 分数（~0.01）远低于纯关键词搜索的 BM25 分数（~0.6），被 reranker 的 `minScore=0.15` 过滤 | 有向量时搜索结果被全部丢弃 |
+| vecDims 未初始化 | `MemoryStore` 构造时没有从现有 `chunks_vec` 表读取维度，导致 `getChunkVector()` 返回 null | MMR 去重无法获取向量 |
+
+**修复内容**：
+
+| 文件 | 修改 |
+|------|------|
+| `packages/belldandy-memory/src/store.ts` | FTS rebuild 阈值改为 5% 差异触发；中文分词改为 2-gram + OR 连接；RRF 分数归一化到 0.3-1.0 范围；构造函数自动读取现有 `chunks_vec` 维度 |
+| `packages/belldandy-memory/src/adaptive-retrieval.ts` | 添加 "记忆/回忆/历史/搜索/查找/查询" 到强制检索关键词 |
+
+**验证方式**：
+
+```bash
+# 重建后重启 Gateway
+corepack pnpm build && corepack pnpm start
+
+# Agent 测试查询
+memory_search("之前聊过的AI")  # 应返回相关聊天记录
+memory_search("记忆")          # 应返回记忆相关内容
+```
+
 ## Phase N：远程 Gateway 与部署工具链
 
 - ✅ Docker 容器化（Dockerfile + docker-compose.yml + 部署脚本 + 文档）

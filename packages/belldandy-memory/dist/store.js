@@ -123,9 +123,14 @@ export class MemoryStore {
         }
         this.db.exec(SCHEMA_METADATA_INDEXES);
         this.backfillMetadataColumns();
+        // 从现有 chunks_vec 表读取维度（如果存在）
+        this.initVecDimsFromExistingTable();
         try {
             this.db.exec(SCHEMA_FTS5);
             this.hasFts5 = true;
+            // 兼容老库：如果 chunks 已有存量数据，但 FTS 索引为空，则执行一次 rebuild。
+            // 否则会出现"关键词检索命中为 0"的假性失效。
+            this.ensureFtsRebuiltIfNeeded();
         }
         catch (err) {
             const msg = String(err.message ?? err);
@@ -417,7 +422,7 @@ export class MemoryStore {
             }
         }
         // Scope 隔离：agentId 过滤
-        // - agentId 为 string：只查该 Agent 的记忆
+        // - agentId 为 string：默认查「全局 + 该 Agent」记忆（避免子 Agent 因历史数据无 agent_id 而“失忆”）
         // - agentId 为 null：只查全局记忆（agent_id IS NULL）
         // - agentId 为 undefined：不过滤（查询所有）
         if (filter.agentId !== undefined) {
@@ -425,7 +430,7 @@ export class MemoryStore {
                 conditions.push(`c.agent_id IS NULL`);
             }
             else {
-                conditions.push(`c.agent_id = ?`);
+                conditions.push(`(c.agent_id IS NULL OR c.agent_id = ?)`);
                 params.push(filter.agentId);
             }
         }
@@ -476,19 +481,36 @@ export class MemoryStore {
         if (this.vecDims === dimensions)
             return;
         // 检查表是否存在
-        const tableExists = this.db.prepare(`SELECT count(*) as c FROM sqlite_master WHERE type='table' AND name='chunks_vec'`).get();
-        if (tableExists.c === 0) {
+        const row = this.db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_vec'`).get();
+        if (!row?.sql) {
             this.db.exec(`
         CREATE VIRTUAL TABLE chunks_vec USING vec0(
           embedding float[${dimensions}]
         )
       `);
             this.vecDims = dimensions;
+            return;
         }
-        else {
-            // 假设已存在同名表，我们沿用（忽略维度检查）
+        // vec0 虚拟表的维度是写死在创建 SQL 里的；如果变更 embedding 维度，必须重建。
+        const existingDims = parseVec0DimsFromSql(row.sql);
+        if (existingDims && existingDims !== dimensions) {
+            console.warn(`[MemoryStore] chunks_vec dimensions mismatch (existing=${existingDims}, new=${dimensions}), rebuilding vector table...`);
+            try {
+                this.db.exec(`DROP TABLE IF EXISTS chunks_vec`);
+            }
+            catch {
+                // ignore
+            }
+            this.db.exec(`
+        CREATE VIRTUAL TABLE chunks_vec USING vec0(
+          embedding float[${dimensions}]
+        )
+      `);
             this.vecDims = dimensions;
+            return;
         }
+        // 维度一致（或解析失败）：沿用现有表
+        this.vecDims = dimensions;
     }
     /**
      * 存储 chunk 的 embedding 向量
@@ -633,12 +655,16 @@ export class MemoryStore {
         // 按融合分数排序
         const merged = Array.from(scoreMap.values())
             .sort((a, b) => b.score - a.score)
-            .slice(0, limit)
-            .map(({ result, score }) => ({
+            .slice(0, limit);
+        // 归一化 RRF 分数到 0-1 范围（保持与纯关键词搜索的分数量级一致）
+        const maxScore = merged[0]?.score ?? 1;
+        const minScore = merged[merged.length - 1]?.score ?? 0;
+        const range = maxScore - minScore || 1;
+        return merged.map(({ result, score }) => ({
             ...result,
-            score,
+            // 归一化到 0.3-1.0 范围，避免被 reranker minScore 过滤
+            score: 0.3 + 0.7 * (score - minScore) / range,
         }));
-        return merged;
     }
     /**
      * 获取向量索引状态
@@ -697,6 +723,77 @@ export class MemoryStore {
         const pending = this.db.prepare(`SELECT COUNT(*) as c FROM chunks WHERE summary IS NULL AND length(content) > 500`).get().c;
         return { total, summarized, pending };
     }
+    // ========== Meta（用于版本/签名标记） ==========
+    getMeta(key) {
+        this.ensureOpen();
+        const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key);
+        return row?.value ?? null;
+    }
+    setMeta(key, value) {
+        this.ensureOpen();
+        const stmt = this.db.prepare(`
+      INSERT INTO meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `);
+        stmt.run(key, value);
+    }
+    // ========== 派生索引清理（自愈重建用） ==========
+    clearEmbeddingCache() {
+        this.ensureOpen();
+        try {
+            this.db.exec(`DELETE FROM embedding_cache`);
+        }
+        catch {
+            // ignore
+        }
+    }
+    clearVectorIndex() {
+        this.ensureOpen();
+        try {
+            this.db.exec(`DELETE FROM chunks_vec`);
+        }
+        catch {
+            // table might not exist
+        }
+    }
+    /**
+     * 兼容老库：如果 chunks 与 chunks_fts 数量不一致，则执行一次 rebuild。
+     * 这能修复"FTS 表后加但未 rebuild 导致的关键词检索失效"以及"部分数据未被索引"的问题。
+     */
+    ensureFtsRebuiltIfNeeded() {
+        if (!this.hasFts5)
+            return;
+        try {
+            const chunks = this.db.prepare(`SELECT COUNT(*) as c FROM chunks`).get().c;
+            if (chunks <= 0)
+                return;
+            const fts = this.db.prepare(`SELECT COUNT(*) as c FROM chunks_fts`).get().c;
+            // 如果 FTS 索引为空，或者数量差异超过 5%，则触发 rebuild
+            const mismatchRatio = chunks > 0 ? Math.abs(chunks - fts) / chunks : 0;
+            if (fts > 0 && mismatchRatio < 0.05)
+                return;
+            console.warn(`[MemoryStore] chunks_fts mismatch (chunks=${chunks}, fts=${fts}, ratio=${(mismatchRatio * 100).toFixed(1)}%), rebuilding FTS index...`);
+            this.db.exec(`INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')`);
+        }
+        catch {
+            // ignore — rebuild is best-effort
+        }
+    }
+    /** 从现有 chunks_vec 表读取维度（启动时自动恢复 vecDims） */
+    initVecDimsFromExistingTable() {
+        try {
+            const row = this.db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_vec'`).get();
+            if (row?.sql) {
+                const dims = parseVec0DimsFromSql(row.sql);
+                if (dims) {
+                    this.vecDims = dims;
+                }
+            }
+        }
+        catch {
+            // ignore — table might not exist
+        }
+    }
     ensureOpen() {
         if (this.closed) {
             throw new Error("MemoryStore already closed");
@@ -705,7 +802,27 @@ export class MemoryStore {
 }
 /** 分词（FTS5 与 LIKE 共用） */
 function tokenizeForSearch(raw) {
-    return raw.match(/[A-Za-z0-9_\u4e00-\u9fa5]+/g)?.filter(Boolean) ?? [];
+    const tokens = [];
+    // 提取英文/数字词（保持完整）
+    const englishTokens = raw.match(/[A-Za-z0-9_]+/g) ?? [];
+    tokens.push(...englishTokens);
+    // 提取中文并按 2-gram 分词（FTS5 unicode61 对中文按字符分词，需要拆分）
+    const chineseMatches = raw.match(/[\u4e00-\u9fa5]+/g) ?? [];
+    for (const chinese of chineseMatches) {
+        if (chinese.length <= 2) {
+            tokens.push(chinese);
+        }
+        else {
+            // 2-gram 分词：取首尾和中间关键词，避免 AND 查询过于严格
+            tokens.push(chinese.slice(0, 2)); // 首 2 字
+            tokens.push(chinese.slice(-2)); // 尾 2 字
+            if (chinese.length > 4) {
+                const mid = Math.floor(chinese.length / 2);
+                tokens.push(chinese.slice(mid - 1, mid + 1)); // 中间 2 字
+            }
+        }
+    }
+    return [...new Set(tokens)].filter(Boolean);
 }
 /** LIKE 模式中转义 % 和 _（配合 ESCAPE '\\'） */
 function escapeLike(s) {
@@ -716,7 +833,8 @@ function buildFtsQuery(raw) {
     const tokens = tokenizeForSearch(raw);
     if (tokens.length === 0)
         return null;
-    return tokens.map((t) => `"${t.replace(/"/g, "")}"`).join(" AND ");
+    // 使用 OR 连接，让 BM25 根据匹配数量自动排序（匹配越多分数越高）
+    return tokens.map((t) => `"${t.replace(/"/g, "")}"`).join(" OR ");
 }
 /** BM25 rank 转换为 0-1 分数（rank 越小越好） */
 function bm25RankToScore(rank) {
@@ -728,6 +846,17 @@ function truncateContent(content, maxLen) {
     if (content.length <= maxLen)
         return content;
     return content.slice(0, maxLen) + "...";
+}
+/**
+ * 从 sqlite_master.sql 中解析 vec0 维度。
+ * 示例：CREATE VIRTUAL TABLE chunks_vec USING vec0( embedding float[1536] )
+ */
+function parseVec0DimsFromSql(sql) {
+    const m = sql.match(/float\[(\d+)\]/i);
+    if (!m)
+        return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : null;
 }
 /** 安全解析 JSON */
 function safeParseJson(str) {

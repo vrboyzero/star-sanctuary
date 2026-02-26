@@ -130,7 +130,14 @@ function checkPort(port: number): Promise<CheckResult> {
 }
 
 function checkMemoryDb(stateDir: string): CheckResult {
-  const dbPath = process.env.BELLDANDY_MEMORY_DB ?? path.join(stateDir, "memory.db");
+  // 新默认：memory.sqlite（Gateway 使用）
+  const defaultNew = path.join(stateDir, "memory.sqlite");
+  // 兼容旧默认：memory.db（历史版本）
+  const legacy = path.join(stateDir, "memory.db");
+
+  const override = process.env.BELLDANDY_MEMORY_DB;
+  const dbPath = override ?? defaultNew;
+
   if (fs.existsSync(dbPath)) {
     try {
       fs.accessSync(dbPath, fs.constants.R_OK | fs.constants.W_OK);
@@ -139,6 +146,17 @@ function checkMemoryDb(stateDir: string): CheckResult {
       return { name: "Memory DB", status: "warn", message: `${dbPath} exists but not writable` };
     }
   }
+
+  // 没有新库但发现旧库：给出明确提示，避免“以为失效”的错觉
+  if (!override && fs.existsSync(legacy)) {
+    return {
+      name: "Memory DB",
+      status: "warn",
+      message: `${defaultNew} not found (legacy DB found: ${legacy})`,
+      fix: `Rename "${legacy}" -> "${defaultNew}" (or set BELLDANDY_MEMORY_DB="${legacy}")`,
+    };
+  }
+
   return { name: "Memory DB", status: "warn", message: "not created yet (will be created on first start)" };
 }
 

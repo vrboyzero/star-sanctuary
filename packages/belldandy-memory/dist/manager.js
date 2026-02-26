@@ -54,6 +54,9 @@ export class MemoryManager {
     evolutionApiKey;
     evolutionMinMessages;
     stateDir;
+    /** 用于 embedding 缓存 key / 签名版本化（task-aware embedding） */
+    embeddingQueryPrefix;
+    embeddingPassagePrefix;
     // M-N4: 源路径聚合检索
     deepRetrievalEnabled;
     constructor(options) {
@@ -115,6 +118,8 @@ export class MemoryManager {
         this.evolutionApiKey = options.evolutionApiKey || options.openaiApiKey || "";
         this.evolutionMinMessages = options.evolutionMinMessages ?? 4;
         this.stateDir = options.stateDir || path.join(os.homedir(), ".belldandy");
+        this.embeddingQueryPrefix = options.embeddingQueryPrefix ?? "";
+        this.embeddingPassagePrefix = options.embeddingPassagePrefix ?? "";
         this.deepRetrievalEnabled = options.deepRetrievalEnabled ?? false;
     }
     /**
@@ -183,6 +188,42 @@ export class MemoryManager {
     getRecent(limit = 5) {
         return this.store.getRecentChunks(limit);
     }
+    computeEmbeddingSignature(dims) {
+        const model = this.embeddingProvider.modelName ?? "unknown";
+        // 签名中包含：模型名 + 真实维度 + task-aware 前缀。
+        // 任何一项变更都必须触发向量/缓存重建，否则会出现语义空间不一致或维度不匹配。
+        return [
+            "v2", // 预留版本号，未来可演进
+            `model=${model}`,
+            `dims=${dims}`,
+            `queryPrefix=${this.embeddingQueryPrefix ?? ""}`,
+            `passagePrefix=${this.embeddingPassagePrefix ?? ""}`,
+        ].join("|");
+    }
+    ensureEmbeddingSignature(signature) {
+        const key = "embedding_signature";
+        const prev = this.store.getMeta(key);
+        const vecStatus = this.store.getVectorStatus();
+        // 兼容老库：之前没有写 signature，但可能已经有向量/缓存。
+        // 为了避免“复用旧向量/旧缓存导致检索失效”，这里会做一次自愈清理。
+        if (!prev) {
+            if (vecStatus.indexed > 0 || vecStatus.cached > 0) {
+                console.warn(`[MemoryManager] Legacy embedding signature not found (indexed=${vecStatus.indexed}, cached=${vecStatus.cached}); rebuilding vector index & cache...`);
+                this.store.clearVectorIndex();
+                this.store.clearEmbeddingCache();
+            }
+            this.store.setMeta(key, signature);
+            return;
+        }
+        if (prev !== signature) {
+            console.warn(`[MemoryManager] Embedding signature changed, rebuilding vector index & cache...`);
+            console.warn(`  prev: ${prev}`);
+            console.warn(`  next: ${signature}`);
+            this.store.clearVectorIndex();
+            this.store.clearEmbeddingCache();
+            this.store.setMeta(key, signature);
+        }
+    }
     /**
      * Process chunks that lack embeddings (with cache support)
      */
@@ -201,6 +242,9 @@ export class MemoryManager {
         }
         // Initialize vector table (this ensures vecDims is set in store)
         this.store.prepareVectorStore(dims);
+        // 版本化签名：用于 cache key & 自动重建判断
+        const signature = this.computeEmbeddingSignature(dims);
+        this.ensureEmbeddingSignature(signature);
         const providerName = this.embeddingProvider.modelName ?? "unknown";
         // Loop until no more pending chunks
         while (true) {
@@ -209,7 +253,8 @@ export class MemoryManager {
                 break;
             // Normalize content for embedding and compute content hashes
             const normalized = pending.map(c => c.content.replace(/\n+/g, " ").slice(0, 8000));
-            const hashes = normalized.map(t => createHash("sha256").update(t).digest("hex"));
+            // IMPORTANT: hash 必须包含 embedding signature（模型/维度/prefix），否则升级后会错误复用旧缓存。
+            const hashes = normalized.map(t => createHash("sha256").update(signature).update("\n").update(t).digest("hex"));
             // Separate cached vs uncached
             const needEmbed = [];
             const cachedVectors = new Array(pending.length).fill(null);

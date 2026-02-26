@@ -69,6 +69,9 @@ export declare class MemoryManager {
     private evolutionApiKey;
     private evolutionMinMessages;
     private stateDir;
+    /** 用于 embedding 缓存 key / 签名版本化（task-aware embedding） */
+    private embeddingQueryPrefix;
+    private embeddingPassagePrefix;
     private deepRetrievalEnabled;
     constructor(options: MemoryManagerOptions);
     /**
@@ -83,6 +86,8 @@ export declare class MemoryManager {
      * Get recent memory chunks (by updated_at, no embedding needed)
      */
     getRecent(limit?: number): MemorySearchResult[];
+    private computeEmbeddingSignature;
+    private ensureEmbeddingSignature;
     /**
      * Process chunks that lack embeddings (with cache support)
      */

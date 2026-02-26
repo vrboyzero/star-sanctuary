@@ -113,6 +113,17 @@ export declare class MemoryStore {
         summarized: number;
         pending: number;
     };
+    getMeta(key: string): string | null;
+    setMeta(key: string, value: string): void;
+    clearEmbeddingCache(): void;
+    clearVectorIndex(): void;
+    /**
+     * 兼容老库：如果 chunks 与 chunks_fts 数量不一致，则执行一次 rebuild。
+     * 这能修复"FTS 表后加但未 rebuild 导致的关键词检索失效"以及"部分数据未被索引"的问题。
+     */
+    private ensureFtsRebuiltIfNeeded;
+    /** 从现有 chunks_vec 表读取维度（启动时自动恢复 vecDims） */
+    private initVecDimsFromExistingTable;
     private ensureOpen;
 }
 //# sourceMappingURL=store.d.ts.map
