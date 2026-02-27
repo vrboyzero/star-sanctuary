@@ -75,6 +75,110 @@ test("gateway rejects invalid token", async () => {
     await server.close();
     await fs.promises.rm(stateDir2, { recursive: true, force: true }).catch(() => { });
 });
+test("secure methods require pairing for config raw and tools update", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+        port: 0,
+        auth: { mode: "none" },
+        webRoot: resolveWebRoot(),
+        stateDir,
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames = [];
+    const closeP = new Promise((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+    await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+    ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+    await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+    ws.send(JSON.stringify({ type: "req", id: "raw-read", method: "config.readRaw", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "raw-read"));
+    const rawReadRes = frames.find((f) => f.type === "res" && f.id === "raw-read");
+    expect(rawReadRes.ok).toBe(false);
+    expect(rawReadRes.error?.code).toBe("pairing_required");
+    // 使用非法参数防止历史缺陷导致真实写入 .env
+    ws.send(JSON.stringify({ type: "req", id: "raw-write", method: "config.writeRaw", params: { content: 1 } }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "raw-write"));
+    const rawWriteRes = frames.find((f) => f.type === "res" && f.id === "raw-write");
+    expect(rawWriteRes.ok).toBe(false);
+    expect(rawWriteRes.error?.code).toBe("pairing_required");
+    ws.send(JSON.stringify({ type: "req", id: "tools-update", method: "tools.update", params: { disabled: { builtin: [] } } }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-update"));
+    const toolsUpdateRes = frames.find((f) => f.type === "res" && f.id === "tools-update");
+    expect(toolsUpdateRes.ok).toBe(false);
+    expect(toolsUpdateRes.error?.code).toBe("pairing_required");
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+});
+test("gateway rejects origin prefix spoofing", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+        port: 0,
+        auth: { mode: "none" },
+        webRoot: resolveWebRoot(),
+        stateDir,
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://localhost.attacker.tld" });
+    ws.on("error", () => { });
+    const closeP = new Promise((resolve) => ws.once("close", () => resolve()));
+    await closeP;
+    expect(ws.readyState).toBe(WebSocket.CLOSED);
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+});
+test("workspace methods reject sibling-prefix path traversal", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-state-"));
+    const parentDir = path.dirname(stateDir);
+    const siblingDir = path.join(parentDir, `${path.basename(stateDir)}_evil`);
+    await fs.promises.mkdir(siblingDir, { recursive: true });
+    await fs.promises.writeFile(path.join(siblingDir, "leak.md"), "secret", "utf-8");
+    const server = await startGatewayServer({
+        port: 0,
+        auth: { mode: "none" },
+        webRoot: resolveWebRoot(),
+        stateDir,
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames = [];
+    const closeP = new Promise((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+    await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+    ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+    await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+    // 先触发 pairing challenge 并批准
+    ws.send(JSON.stringify({ type: "req", id: "pairing-init", method: "message.send", params: { text: "ping" } }));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
+    const pairing = frames.find((f) => f.type === "event" && f.event === "pairing.required");
+    const code = pairing?.payload?.code ? String(pairing.payload.code) : "";
+    expect(code.length).toBeGreaterThan(0);
+    const approved = await approvePairingCode({ code, stateDir });
+    expect(approved.ok).toBe(true);
+    const siblingName = path.basename(siblingDir);
+    const listPath = `../${siblingName}`;
+    const readPath = `../${siblingName}/leak.md`;
+    const writePath = `../${siblingName}/write.md`;
+    ws.send(JSON.stringify({ type: "req", id: "ws-list", method: "workspace.list", params: { path: listPath } }));
+    ws.send(JSON.stringify({ type: "req", id: "ws-read", method: "workspace.read", params: { path: readPath } }));
+    ws.send(JSON.stringify({ type: "req", id: "ws-write", method: "workspace.write", params: { path: writePath, content: "x" } }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "ws-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "ws-read"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "ws-write"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "ws-list");
+    const readRes = frames.find((f) => f.type === "res" && f.id === "ws-read");
+    const writeRes = frames.find((f) => f.type === "res" && f.id === "ws-write");
+    expect(listRes.ok).toBe(false);
+    expect(listRes.error?.code).toBe("invalid_path");
+    expect(readRes.ok).toBe(false);
+    expect(readRes.error?.code).toBe("invalid_path");
+    expect(writeRes.ok).toBe(false);
+    expect(writeRes.error?.code).toBe("invalid_path");
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(siblingDir, { recursive: true, force: true }).catch(() => { });
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+});
 async function waitFor(predicate, timeoutMs = 3000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {

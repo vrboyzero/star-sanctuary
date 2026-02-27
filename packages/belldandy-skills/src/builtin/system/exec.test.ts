@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { runCommandTool } from "./exec.js";
 import type { ToolContext } from "../../types.js";
-import path from "node:path";
 
 const mockContext: ToolContext = {
     conversationId: "test-conv",
@@ -113,6 +112,24 @@ describe("run_command (Platform-aware Safelist)", () => {
             const result = await runCommandTool.execute({ command: "rm -rf /tmp" }, mockContext);
             expect(result.success).toBe(false);
             expect(result.error).toContain("Recursive/Force deletion");
+        });
+
+        it("should validate chained commands segment-by-segment", async () => {
+            const result = await runCommandTool.execute({ command: "echo ok && rm -rf ./tmp" }, mockContext);
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Recursive/Force deletion");
+        });
+
+        it("should block shell redirection syntax", async () => {
+            const result = await runCommandTool.execute({ command: "echo test > out.txt" }, mockContext);
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Redirection syntax is blocked");
+        });
+
+        it("should block cwd outside workspace root", async () => {
+            const result = await runCommandTool.execute({ command: "pwd", cwd: "../outside" }, mockContext);
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Working directory escapes workspace root");
         });
     });
 });

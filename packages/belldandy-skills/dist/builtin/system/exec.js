@@ -305,6 +305,74 @@ function validateCommand(cmd, safelist, blocklist) {
     }
     return { valid: true };
 }
+function isUnderRoot(absolute, root) {
+    const resolvedRoot = path.resolve(root);
+    const rel = path.relative(resolvedRoot, path.resolve(absolute));
+    return !(rel.startsWith("..") || path.isAbsolute(rel));
+}
+function splitCommandSegments(command) {
+    const segments = [];
+    let current = "";
+    let quote = null;
+    let escaped = false;
+    const pushSegment = () => {
+        const trimmed = current.trim();
+        if (trimmed)
+            segments.push(trimmed);
+        current = "";
+    };
+    for (let i = 0; i < command.length; i++) {
+        const ch = command[i];
+        const next = command[i + 1];
+        if (escaped) {
+            current += ch;
+            escaped = false;
+            continue;
+        }
+        if (ch === "\\") {
+            current += ch;
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            if (ch === quote)
+                quote = null;
+            current += ch;
+            continue;
+        }
+        if (ch === "'" || ch === "\"") {
+            quote = ch;
+            current += ch;
+            continue;
+        }
+        if (ch === "`" || (ch === "$" && next === "(")) {
+            return { ok: false, reason: "Subshell syntax is blocked by security policy." };
+        }
+        if (ch === ">" || ch === "<") {
+            return { ok: false, reason: "Redirection syntax is blocked by security policy." };
+        }
+        if (ch === ";" || ch === "\n") {
+            pushSegment();
+            continue;
+        }
+        if (ch === "|" || ch === "&") {
+            // 支持单字符与双字符控制符：|、||、&、&&
+            pushSegment();
+            if (next === ch)
+                i += 1;
+            continue;
+        }
+        current += ch;
+    }
+    if (quote) {
+        return { ok: false, reason: "Unterminated quote in command." };
+    }
+    pushSegment();
+    if (segments.length === 0) {
+        return { ok: false, reason: "Empty command" };
+    }
+    return { ok: true, segments };
+}
 export const runCommandTool = {
     definition: {
         name: "run_command",
@@ -360,13 +428,25 @@ export const runCommandTool = {
         const safelist = buildSafelistWithPolicy(execPolicy);
         const blocklist = buildBlocklistWithPolicy(execPolicy);
         const command = applyNonInteractiveFlags(commandRaw, execPolicy);
-        // 安全验证
-        const validation = validateCommand(command, safelist, blocklist);
-        if (!validation.valid) {
-            context.logger?.warn(`[Security Block] ${command} -> ${validation.reason}`);
-            return makeResult(false, "", `Security Error: ${validation.reason}`);
+        // 安全验证：按 shell 控制符分段，逐段校验，避免拼接绕过
+        const segmented = splitCommandSegments(command);
+        if (!segmented.ok) {
+            context.logger?.warn(`[Security Block] ${command} -> ${segmented.reason}`);
+            return makeResult(false, "", `Security Error: ${segmented.reason}`);
+        }
+        for (const segment of segmented.segments) {
+            const validation = validateCommand(segment, safelist, blocklist);
+            if (!validation.valid) {
+                context.logger?.warn(`[Security Block] ${segment} -> ${validation.reason}`);
+                return makeResult(false, "", `Security Error: ${validation.reason}`);
+            }
         }
         const cwd = args.cwd ? path.resolve(context.workspaceRoot, args.cwd) : context.workspaceRoot;
+        if (!isUnderRoot(cwd, context.workspaceRoot)) {
+            const reason = "Working directory escapes workspace root.";
+            context.logger?.warn(`[Security Block] cwd=${cwd} -> ${reason}`);
+            return makeResult(false, "", `Security Error: ${reason}`);
+        }
         const timeoutMs = determineTimeoutMs(command, args.timeoutMs, execPolicy);
         context.logger?.info(`[exec] Run: ${command} in ${cwd}`);
         return new Promise((resolve) => {

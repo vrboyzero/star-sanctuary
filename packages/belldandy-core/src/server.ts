@@ -82,6 +82,20 @@ const DEFAULT_METHODS = [
 ];
 const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required"];
 
+function isUnderRoot(root: string, target: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const rel = path.relative(resolvedRoot, path.resolve(target));
+  return !(rel.startsWith("..") || path.isAbsolute(rel));
+}
+
+function normalizeOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
 export async function startGatewayServer(opts: GatewayServerOptions): Promise<GatewayServer> {
   ensureWebRoot(opts.webRoot);
 
@@ -189,11 +203,14 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   // [SECURITY] Origin Header 白名单校验（防 CSWSH）
   const allowedOriginsRaw = process.env.BELLDANDY_ALLOWED_ORIGINS;
   const hostVal = opts.host ?? "127.0.0.1";
-  const allowedOrigins = allowedOriginsRaw
+  const allowedOriginsSource = allowedOriginsRaw
     ? allowedOriginsRaw.split(",").map((o) => o.trim()).filter(Boolean)
     : (hostVal === "127.0.0.1" || hostVal === "localhost")
       ? ["http://localhost", "http://127.0.0.1", "https://localhost", "https://127.0.0.1"]
       : []; // 公网绑定时默认拒绝所有跨域（需显式配置）
+  const allowedOrigins = allowedOriginsSource
+    .map((origin) => normalizeOrigin(origin))
+    .filter((origin): origin is string => Boolean(origin));
 
   const wss = new WebSocketServer({
     server,
@@ -206,10 +223,15 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         log.error("ws", `Rejected connection: no allowed origins configured for ${hostVal}`);
         return false;
       }
-      const origin = info.origin || "";
-      const allowed = allowedOrigins.some((ao) => origin.startsWith(ao));
+      const rawOrigin = info.origin || "";
+      const origin = normalizeOrigin(rawOrigin);
+      if (!origin) {
+        log.info("ws", `Rejected origin: ${rawOrigin}`);
+        return false;
+      }
+      const allowed = allowedOrigins.includes(origin);
       if (!allowed) {
-        log.info("ws", `Rejected origin: ${origin}`);
+        log.info("ws", `Rejected origin: ${rawOrigin}`);
       }
       return allowed;
     },
@@ -419,7 +441,20 @@ async function handleReq(
     skillRegistry?: SkillRegistry;
   },
 ): Promise<GatewayResFrame | null> {
-  const secureMethods = ["message.send", "config.read", "config.update", "system.restart", "system.doctor", "workspace.write", "workspace.read", "workspace.list", "context.compact"];
+  const secureMethods = [
+    "message.send",
+    "config.read",
+    "config.readRaw",
+    "config.update",
+    "config.writeRaw",
+    "system.restart",
+    "system.doctor",
+    "workspace.write",
+    "workspace.read",
+    "workspace.list",
+    "context.compact",
+    "tools.update",
+  ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
     if (!allowed) {
@@ -965,7 +1000,7 @@ async function handleReq(
 
       // 验证路径安全性
       const targetDir = path.resolve(ctx.stateDir, relativePath);
-      if (!targetDir.startsWith(ctx.stateDir)) {
+      if (!isUnderRoot(ctx.stateDir, targetDir)) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
       }
 
@@ -1023,7 +1058,7 @@ async function handleReq(
 
       // 验证路径安全性
       const targetFile = path.resolve(ctx.stateDir, relativePath);
-      if (!targetFile.startsWith(ctx.stateDir)) {
+      if (!isUnderRoot(ctx.stateDir, targetFile)) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
       }
 
@@ -1067,7 +1102,7 @@ async function handleReq(
 
       // 验证路径安全性
       const targetFile = path.resolve(ctx.stateDir, relativePath);
-      if (!targetFile.startsWith(ctx.stateDir)) {
+      if (!isUnderRoot(ctx.stateDir, targetFile)) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
       }
 
