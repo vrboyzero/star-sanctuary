@@ -5,6 +5,7 @@ import path from "node:path";
 import { expect, test, beforeAll } from "vitest";
 import WebSocket from "ws";
 
+import { MockAgent } from "@belldandy/agent";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 
@@ -223,6 +224,343 @@ test("workspace methods reject sibling-prefix path traversal", async () => {
   await fs.promises.rm(siblingDir, { recursive: true, force: true }).catch(() => {});
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
+
+test("message.send rejects attachment larger than configured per-file limit", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "8",
+    BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "64",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      const reqId = "att-file-limit";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "message.send",
+        params: {
+          text: "",
+          attachments: [
+            { name: "big.txt", type: "text/plain", base64: toBase64("123456789") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId));
+      const res = frames.find((f) => f.type === "res" && f.id === reqId);
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("invalid_params");
+      expect(String(res.error?.message ?? "")).toContain("max file size");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send rejects attachments exceeding configured total limit", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "16",
+    BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "12",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      const reqId = "att-total-limit";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "message.send",
+        params: {
+          text: "limit test",
+          attachments: [
+            { name: "a.txt", type: "text/plain", base64: toBase64("12345678") },
+            { name: "b.txt", type: "text/plain", base64: toBase64("ABCDEFGH") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId));
+      const res = frames.find((f) => f.type === "res" && f.id === reqId);
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("invalid_params");
+      expect(String(res.error?.message ?? "")).toContain("total size");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send accepts multiple attachments within configured limits", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "32",
+    BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "64",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      const reqId = "att-ok";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "message.send",
+        params: {
+          text: "with attachments",
+          attachments: [
+            { name: "a.txt", type: "text/plain", base64: toBase64("hello-a") },
+            { name: "b.txt", type: "text/plain", base64: toBase64("hello-b") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+      const res = frames.find((f) => f.type === "res" && f.id === reqId);
+      const conversationId = String(res?.payload?.conversationId ?? "");
+      expect(conversationId.length).toBeGreaterThan(0);
+
+      const attachmentDir = path.join(stateDir, "storage", "attachments", conversationId);
+      const fileA = await fs.promises.readFile(path.join(attachmentDir, "a.txt"), "utf-8");
+      const fileB = await fs.promises.readFile(path.join(attachmentDir, "b.txt"), "utf-8");
+      expect(fileA).toBe("hello-a");
+      expect(fileB).toBe("hello-b");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("/api/message is disabled by default", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: undefined,
+    BELLDANDY_COMMUNITY_API_TOKEN: undefined,
+    BELLDANDY_AUTH_TOKEN: undefined,
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => new MockAgent(),
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "hello", conversationId: "conv-1" }),
+      });
+      const payload = await res.json();
+      expect(res.status).toBe(404);
+      expect(payload.ok).toBe(false);
+      expect(payload.error?.code).toBe("API_DISABLED");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("/api/message rejects missing bearer token", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-test-token",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => new MockAgent(),
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "hello", conversationId: "conv-2" }),
+      });
+      const payload = await res.json();
+      expect(res.status).toBe(401);
+      expect(payload.ok).toBe(false);
+      expect(payload.error?.code).toBe("UNAUTHORIZED");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("/api/message rejects wrong bearer token", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-test-token",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => new MockAgent(),
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer wrong-token",
+        },
+        body: JSON.stringify({ text: "hello", conversationId: "conv-3" }),
+      });
+      const payload = await res.json();
+      expect(res.status).toBe(401);
+      expect(payload.ok).toBe(false);
+      expect(payload.error?.code).toBe("UNAUTHORIZED");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("/api/message accepts valid bearer token", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-test-token",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => new MockAgent(),
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-test-token",
+        },
+        body: JSON.stringify({
+          text: "hello from community",
+          conversationId: "conv-4",
+          from: "office.goddess.ai",
+          senderInfo: { id: "u-1", name: "tester", type: "user" },
+          roomContext: { environment: "community", roomId: "room-1", members: [] },
+        }),
+      });
+      const payload = await res.json();
+      expect(res.status).toBe(200);
+      expect(payload.ok).toBe(true);
+      expect(payload.payload?.conversationId).toBe("conv-4");
+      expect(String(payload.payload?.response ?? "")).toContain("hello from community");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+async function pairWebSocketClient(ws: WebSocket, frames: any[], stateDir: string): Promise<void> {
+  await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+  ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+  await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+
+  const reqId = `pairing-${Date.now()}`;
+  ws.send(JSON.stringify({ type: "req", id: reqId, method: "message.send", params: { text: "pairing-init" } }));
+  await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
+  const pairingEvents = frames.filter((f) => f.type === "event" && f.event === "pairing.required");
+  const pairing = pairingEvents[pairingEvents.length - 1];
+  const code = pairing?.payload?.code ? String(pairing.payload.code) : "";
+  expect(code.length).toBeGreaterThan(0);
+  const approved = await approvePairingCode({ code, stateDir });
+  expect(approved.ok).toBe(true);
+}
+
+function toBase64(value: string): string {
+  return Buffer.from(value, "utf-8").toString("base64");
+}
+
+async function withEnv(
+  changes: Record<string, string | undefined>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const prev: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(changes)) {
+    prev[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
   const started = Date.now();

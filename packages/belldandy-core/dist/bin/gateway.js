@@ -58,6 +58,7 @@ const host = readEnv("BELLDANDY_HOST") ?? "127.0.0.1"; // Security: Default to l
 const authMode = (readEnv("BELLDANDY_AUTH_MODE") ?? "none");
 const authToken = readEnv("BELLDANDY_AUTH_TOKEN");
 const authPassword = readEnv("BELLDANDY_AUTH_PASSWORD");
+const communityApiEnabled = readEnv("BELLDANDY_COMMUNITY_API_ENABLED") === "true";
 const webRoot = readEnv("BELLDANDY_WEB_ROOT") ?? path.join(process.cwd(), "apps", "web", "public");
 // Channels
 const feishuAppId = readEnv("BELLDANDY_FEISHU_APP_ID");
@@ -271,6 +272,12 @@ if (agentProvider === "openai") {
 if ((host === "0.0.0.0" || host === "::") && authMode === "none") {
     logger.error("gateway", "FATAL: Cannot bind to 0.0.0.0 with AUTH_MODE=none");
     logger.error("gateway", "Set BELLDANDY_AUTH_MODE=token and BELLDANDY_AUTH_TOKEN in .env to enable public access");
+    process.exit(1);
+}
+// Security Check: Community API should never run with AUTH_MODE=none
+if (communityApiEnabled && authMode === "none") {
+    logger.error("gateway", "FATAL: BELLDANDY_COMMUNITY_API_ENABLED=true cannot be used with BELLDANDY_AUTH_MODE=none");
+    logger.error("gateway", "Set BELLDANDY_AUTH_MODE=token (recommended) or password before enabling /api/message");
     process.exit(1);
 }
 // --- Initialization ---

@@ -81,6 +81,13 @@ const DEFAULT_METHODS = [
   "agents.list",
 ];
 const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required"];
+const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
+
+type AttachmentLimits = {
+  maxFileBytes: number;
+  maxTotalBytes: number;
+};
 
 function isUnderRoot(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
@@ -94,6 +101,30 @@ function normalizeOrigin(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function parsePositiveIntEnv(varName: string, fallback: number): number {
+  const raw = process.env[varName];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function getAttachmentLimits(): AttachmentLimits {
+  return {
+    maxFileBytes: parsePositiveIntEnv("BELLDANDY_ATTACHMENT_MAX_FILE_BYTES", DEFAULT_ATTACHMENT_MAX_FILE_BYTES),
+    maxTotalBytes: parsePositiveIntEnv("BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES", DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES),
+  };
+}
+
+function estimateBase64DecodedBytes(base64: string): number | null {
+  const normalized = base64.trim().replace(/\s+/g, "");
+  if (!normalized) return 0;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) return null;
+  if (normalized.length % 4 !== 0) return null;
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.max(0, (normalized.length / 4) * 3 - padding);
 }
 
 export async function startGatewayServer(opts: GatewayServerOptions): Promise<GatewayServer> {
@@ -126,77 +157,121 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   });
 
   // Community message endpoint (for office.goddess.ai integration)
+  const communityApiEnabled = String(process.env.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").toLowerCase() === "true";
+  const communityApiToken =
+    process.env.BELLDANDY_COMMUNITY_API_TOKEN
+    ?? process.env.BELLDANDY_AUTH_TOKEN
+    ?? (opts.auth.mode === "token" ? opts.auth.token : undefined);
+
   app.use(express.json());
-  app.post("/api/message", async (req, res) => {
-    try {
-      const { text, conversationId, from, senderInfo, roomContext, agentId } = req.body;
-
-      // Validate required fields
-      if (!text || typeof text !== "string") {
-        return res.status(400).json({
-          ok: false,
-          error: { code: "INVALID_REQUEST", message: "Missing or invalid 'text' field" },
-        });
-      }
-
-      if (!conversationId || typeof conversationId !== "string") {
-        return res.status(400).json({
-          ok: false,
-          error: { code: "INVALID_REQUEST", message: "Missing or invalid 'conversationId' field" },
-        });
-      }
-
-      // Get agent instance
-      const agent = agentId && opts.agentRegistry
-        ? opts.agentRegistry.create(agentId)
-        : opts.agentFactory?.();
-
-      if (!agent) {
-        return res.status(503).json({
-          ok: false,
-          error: { code: "AGENT_UNAVAILABLE", message: "No agent configured" },
-        });
-      }
-
-      // Process message through agent
-      log.info("api", `Processing community message: conversationId=${conversationId}, from=${from || "unknown"}`);
-
-      const stream = agent.run({
-        conversationId,
-        text,
-        agentId,
-        roomContext,
-        senderInfo,
-      });
-
-      let finalText = "";
-      for await (const item of stream) {
-        if (item.type === "final") {
-          finalText = item.text;
-        }
-      }
-
-      // Return success response
-      res.json({
-        ok: true,
-        payload: {
-          conversationId,
-          response: finalText,
-        },
-      });
-
-      log.info("api", `Community message processed successfully: ${finalText.substring(0, 50)}...`);
-    } catch (error) {
-      log.error("api", "Failed to process community message", error);
-      res.status(500).json({
+  if (!communityApiEnabled) {
+    app.post("/api/message", (_req, res) => {
+      res.status(404).json({
         ok: false,
         error: {
-          code: "INTERNAL_ERROR",
-          message: error instanceof Error ? error.message : "Unknown error",
+          code: "API_DISABLED",
+          message: "Community API is disabled. Set BELLDANDY_COMMUNITY_API_ENABLED=true to enable.",
         },
       });
-    }
-  });
+    });
+  } else {
+    app.post("/api/message", async (req, res) => {
+      try {
+        if (!communityApiToken) {
+          log.error("api", "Community API enabled but no token configured");
+          return res.status(503).json({
+            ok: false,
+            error: { code: "API_MISCONFIGURED", message: "Community API token is not configured." },
+          });
+        }
+
+        const authorization = req.headers.authorization;
+        if (typeof authorization !== "string" || !authorization.startsWith("Bearer ")) {
+          res.setHeader("WWW-Authenticate", 'Bearer realm="belldandy-community"');
+          return res.status(401).json({
+            ok: false,
+            error: { code: "UNAUTHORIZED", message: "Missing or invalid bearer token." },
+          });
+        }
+
+        const token = authorization.slice("Bearer ".length).trim();
+        if (!token || token !== communityApiToken) {
+          res.setHeader("WWW-Authenticate", 'Bearer realm="belldandy-community"');
+          return res.status(401).json({
+            ok: false,
+            error: { code: "UNAUTHORIZED", message: "Missing or invalid bearer token." },
+          });
+        }
+
+        const { text, conversationId, from, senderInfo, roomContext, agentId } = req.body;
+
+        // Validate required fields
+        if (!text || typeof text !== "string") {
+          return res.status(400).json({
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "Missing or invalid 'text' field" },
+          });
+        }
+
+        if (!conversationId || typeof conversationId !== "string") {
+          return res.status(400).json({
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "Missing or invalid 'conversationId' field" },
+          });
+        }
+
+        // Get agent instance
+        const agent = agentId && opts.agentRegistry
+          ? opts.agentRegistry.create(agentId)
+          : opts.agentFactory?.();
+
+        if (!agent) {
+          return res.status(503).json({
+            ok: false,
+            error: { code: "AGENT_UNAVAILABLE", message: "No agent configured" },
+          });
+        }
+
+        // Process message through agent
+        log.info("api", `Processing community message: conversationId=${conversationId}, from=${from || "unknown"}`);
+
+        const stream = agent.run({
+          conversationId,
+          text,
+          agentId,
+          roomContext,
+          senderInfo,
+        });
+
+        let finalText = "";
+        for await (const item of stream) {
+          if (item.type === "final") {
+            finalText = item.text;
+          }
+        }
+
+        // Return success response
+        res.json({
+          ok: true,
+          payload: {
+            conversationId,
+            response: finalText,
+          },
+        });
+
+        log.info("api", `Community message processed successfully: ${finalText.substring(0, 50)}...`);
+      } catch (error) {
+        log.error("api", "Failed to process community message", error);
+        res.status(500).json({
+          ok: false,
+          error: {
+            code: "INTERNAL_ERROR",
+            message: error instanceof Error ? error.message : "Unknown error",
+          },
+        });
+      }
+    });
+  }
 
   const server = http.createServer(app);
 
@@ -536,15 +611,13 @@ async function handleReq(
 
       // Handle Attachments
       let promptText = parsed.value.text;
-      const attachments = parsed.value.attachments as Array<{ name: string; type: string; base64: string }> | undefined;
+      const attachments = parsed.value.attachments;
       const contentParts: Array<any> = []; // Changed from strictly typed imageParts to allow flexible content
 
-      if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+      if (attachments && attachments.length > 0) {
         console.log("[Debug] Processing", attachments.length, "attachments...");
         const attachmentDir = path.join(ctx.stateDir, "storage", "attachments", conversationId);
-        if (!fs.existsSync(attachmentDir)) {
-          fs.mkdirSync(attachmentDir, { recursive: true });
-        }
+        await fs.promises.mkdir(attachmentDir, { recursive: true });
 
         const attachmentPrompts: string[] = [];
         for (const att of attachments) {
@@ -553,7 +626,7 @@ async function handleReq(
 
           try {
             const buffer = Buffer.from(att.base64, "base64");
-            fs.writeFileSync(savePath, buffer);
+            await fs.promises.writeFile(savePath, buffer);
 
             if (att.type.startsWith("image/")) {
               // Image logic: Add to contentParts for vision model
@@ -1166,7 +1239,40 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   if (!value || typeof value !== "object") return { ok: false, message: "params must be an object" };
   const obj = value as Record<string, unknown>;
   const text = typeof obj.text === "string" ? obj.text : "";
-  const attachments = obj.attachments as any;
+  const limits = getAttachmentLimits();
+
+  let attachments: MessageSendParams["attachments"];
+  if (obj.attachments !== undefined) {
+    if (!Array.isArray(obj.attachments)) return { ok: false, message: "attachments must be an array" };
+    attachments = [];
+    let totalBytes = 0;
+    for (let i = 0; i < obj.attachments.length; i += 1) {
+      const raw = obj.attachments[i];
+      if (!raw || typeof raw !== "object") {
+        return { ok: false, message: `attachments[${i}] must be an object` };
+      }
+      const att = raw as Record<string, unknown>;
+      const name = typeof att.name === "string" ? att.name.trim() : "";
+      const type = typeof att.type === "string" ? att.type.trim() : "";
+      const base64 = typeof att.base64 === "string" ? att.base64.trim() : "";
+      if (!name || !type || !base64) {
+        return { ok: false, message: `attachments[${i}] requires name/type/base64` };
+      }
+      const estimatedBytes = estimateBase64DecodedBytes(base64);
+      if (estimatedBytes === null) {
+        return { ok: false, message: `attachments[${i}].base64 is invalid` };
+      }
+      if (estimatedBytes > limits.maxFileBytes) {
+        return { ok: false, message: `attachment "${name}" exceeds max file size (${limits.maxFileBytes} bytes)` };
+      }
+      totalBytes += estimatedBytes;
+      if (totalBytes > limits.maxTotalBytes) {
+        return { ok: false, message: `attachments total size exceeds limit (${limits.maxTotalBytes} bytes)` };
+      }
+      attachments.push({ name, type, base64 });
+    }
+  }
+
   const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
   if (!text.trim() && !hasAttachments) return { ok: false, message: "text or attachments required" };
   const conversationId =

@@ -34,6 +34,8 @@ let ws = null;
 let isReady = false;
 let activeConversationId = null;
 let botMsgEl = null;
+let botRawHtmlBuffer = "";
+let transientUrlToken = null;
 const pendingReq = new Map();
 const clientId = resolveClientId();
 let queuedText = null;
@@ -99,11 +101,11 @@ if (userUuidEl) {
 }
 
 // [NEW] Allow ?token=... param to override/set auth
-const urlParams = new URLSearchParams(window.location.search);
-const urlToken = urlParams.get("token");
+const urlToken = consumeUrlTokenParam();
 if (urlToken) {
   authModeEl.value = "token";
   authValueEl.value = urlToken;
+  transientUrlToken = urlToken;
 }
 
 setStatus("disconnected");
@@ -156,9 +158,14 @@ function restoreAuth() {
 
 function persistAuth() {
   try {
+    const mode = authModeEl.value;
+    const value = authValueEl.value.trim();
+    if (transientUrlToken && mode === "token" && value === transientUrlToken) {
+      return;
+    }
     localStorage.setItem(
       STORE_KEY,
-      JSON.stringify({ mode: authModeEl.value, value: authValueEl.value }),
+      JSON.stringify({ mode, value }),
     );
   } catch {
     // ignore
@@ -512,7 +519,6 @@ function sendConnect() {
     console.log("[UUID] No UUID to send in connect frame"); // 添加调试日志
   }
 
-  console.log("[UUID] Sending connect frame:", JSON.stringify(connectFrame)); // 添加调试日志
   ws.send(JSON.stringify(connectFrame));
 }
 
@@ -596,6 +602,7 @@ async function sendMessage() {
   const displayText = text || (pendingAttachments.length ? "[语音消息]" : "");
   appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""));
   botMsgEl = appendMessage("bot", "");
+  botRawHtmlBuffer = "";
 
   // 准备附件数据
   const attachments = pendingAttachments.map(att => {
@@ -846,19 +853,12 @@ function handleEvent(event, payload) {
   if (event === "chat.delta") {
     const delta = payload && payload.delta ? String(payload.delta) : "";
     if (!delta) return;
-    if (!botMsgEl) botMsgEl = appendMessage("bot", "");
-
-    // [FIX] Use innerHTML to support audio tags and basic formatting
-    // Note: Simple appending might break HTML structure during streaming, but strictly speaking
-    // for <audio> tags at the start/end it usually works. 
-    // Ideally we should re-render the whole markdown, but for now we trust the backend sends valid chunks.
-    // However, += on innerHTML is bad for performance and can break open tags.
-    // For now, let's just use the accumulative buffer logic if possible, or naive append.
-    // Since we don't have the full text here easily without state, we might need to rely on the fact 
-    // that `botMsgEl` is accumulating. 
-    // BUT! `textContent +=` works for text. `innerHTML +=` re-parses everything.
-    // Let's assume the delta is just text or complete tags for now.
-    botMsgEl.innerHTML += delta;
+    if (!botMsgEl) {
+      botMsgEl = appendMessage("bot", "");
+      botRawHtmlBuffer = "";
+    }
+    botRawHtmlBuffer += delta;
+    botMsgEl.innerHTML = sanitizeAssistantHtml(botRawHtmlBuffer);
 
     // 强制滚动到底部（测试模式）
     forceScrollToBottom();
@@ -867,9 +867,8 @@ function handleEvent(event, payload) {
   if (event === "chat.final") {
     const text = payload && payload.text ? String(payload.text) : "";
     if (!botMsgEl) botMsgEl = appendMessage("bot", "");
-
-    // [FIX] Use innerHTML to support audio tags and basic formatting
-    botMsgEl.innerHTML = text;
+    botRawHtmlBuffer = text;
+    botMsgEl.innerHTML = sanitizeAssistantHtml(botRawHtmlBuffer);
 
     // 处理图片和视频缩略图
     processMediaInMessage(botMsgEl);
@@ -1825,6 +1824,138 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+function consumeUrlTokenParam() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (!token) return null;
+    params.delete("token");
+    const query = params.toString();
+    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    window.history.replaceState({}, "", nextUrl);
+    return token;
+  } catch {
+    return null;
+  }
+}
+
+if (authModeEl) {
+  authModeEl.addEventListener("change", () => {
+    if (authModeEl.value !== "token") transientUrlToken = null;
+  });
+}
+if (authValueEl) {
+  authValueEl.addEventListener("input", () => {
+    if (transientUrlToken && authValueEl.value.trim() !== transientUrlToken) {
+      transientUrlToken = null;
+    }
+  });
+}
+
+const SAFE_ASSISTANT_TAGS = new Set([
+  "A", "AUDIO", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM",
+  "I", "IMG", "LI", "OL", "P", "PRE", "SOURCE", "SPAN", "STRONG", "UL", "VIDEO",
+]);
+
+const SAFE_ASSISTANT_ATTRS = {
+  A: new Set(["href", "title", "target", "rel"]),
+  AUDIO: new Set(["src", "controls", "autoplay", "preload", "loop"]),
+  IMG: new Set(["src", "alt", "title"]),
+  SOURCE: new Set(["src", "type"]),
+  VIDEO: new Set(["src", "controls", "autoplay", "muted", "loop", "playsinline", "preload", "poster"]),
+};
+
+function sanitizeAssistantHtml(rawHtml) {
+  if (!rawHtml) return "";
+  const template = document.createElement("template");
+  template.innerHTML = rawHtml;
+  for (const node of Array.from(template.content.childNodes)) {
+    sanitizeAssistantNode(node);
+  }
+  return template.innerHTML;
+}
+
+function sanitizeAssistantNode(node) {
+  if (!node) return;
+  if (node.nodeType === Node.TEXT_NODE) return;
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    node.remove();
+    return;
+  }
+
+  const el = node;
+  const tag = el.tagName;
+  if (!SAFE_ASSISTANT_TAGS.has(tag)) {
+    const parent = el.parentNode;
+    if (!parent) {
+      el.remove();
+      return;
+    }
+    const children = Array.from(el.childNodes);
+    for (const child of children) {
+      parent.insertBefore(child, el);
+      sanitizeAssistantNode(child);
+    }
+    parent.removeChild(el);
+    return;
+  }
+
+  const allowedAttrs = SAFE_ASSISTANT_ATTRS[tag];
+  for (const attr of Array.from(el.attributes)) {
+    const name = attr.name.toLowerCase();
+    if (name.startsWith("on")) {
+      el.removeAttribute(attr.name);
+      continue;
+    }
+    if (!allowedAttrs || !allowedAttrs.has(name)) {
+      el.removeAttribute(attr.name);
+      continue;
+    }
+    if ((name === "src" || name === "href") && !isSafeAssistantUrl(attr.value, tag, name)) {
+      el.removeAttribute(attr.name);
+    }
+  }
+
+  if (tag === "A" && el.getAttribute("target") === "_blank") {
+    el.setAttribute("rel", "noopener noreferrer");
+  }
+
+  for (const child of Array.from(el.childNodes)) {
+    sanitizeAssistantNode(child);
+  }
+}
+
+function isSafeAssistantUrl(value, tag, attrName) {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim();
+  if (!normalized) return false;
+  const lower = normalized.toLowerCase();
+
+  if (normalized.startsWith("/") || normalized.startsWith("./") || normalized.startsWith("../") || normalized.startsWith("#")) {
+    return true;
+  }
+
+  if (lower.startsWith("blob:")) {
+    return true;
+  }
+
+  if (attrName === "src" && (tag === "IMG" || tag === "AUDIO" || tag === "VIDEO" || tag === "SOURCE")) {
+    if (lower.startsWith("data:image/") || lower.startsWith("data:audio/") || lower.startsWith("data:video/")) {
+      return true;
+    }
+  }
+
+  try {
+    const parsed = new URL(normalized, window.location.origin);
+    if (attrName === "href") {
+      return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:" || parsed.protocol === "tel:";
+    }
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 // ── Tool Settings (调用设置) ──

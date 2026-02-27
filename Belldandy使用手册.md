@@ -86,6 +86,13 @@ BELLDANDY_PORT=28889
 BELLDANDY_AUTH_MODE=none
 # BELLDANDY_AUTH_TOKEN=my-secret-token
 
+# Community API（/api/message）开关与鉴权
+# 默认关闭；仅在需要被 office.goddess.ai 等 HTTP 服务调用时开启
+# 安全约束：当 BELLDANDY_COMMUNITY_API_ENABLED=true 时，BELLDANDY_AUTH_MODE 不能为 none（建议 token）
+BELLDANDY_COMMUNITY_API_ENABLED=false
+# 专用 Bearer token（推荐单独设置）；未设置时会回退到 BELLDANDY_AUTH_TOKEN
+# BELLDANDY_COMMUNITY_API_TOKEN=my-community-api-token
+
 # ------ AI 能力开关 ------
 # 启用工具调用（联网、读写文件）
 BELLDANDY_TOOLS_ENABLED=true
@@ -1243,6 +1250,37 @@ Agent 可以通过 `leave_room` 工具主动离开当前房间。在对话中告
 - **房间权限**：确保 API Key 有权限访问指定的房间
 - **网络要求**：需要稳定的网络连接到社区服务端点
 - **工具依赖**：`join_room` 和 `leave_room` 工具需要启用工具系统（`BELLDANDY_TOOLS_ENABLED=true`）
+
+### 9.8 office.goddess.ai 转发 Gateway（`/api/message`）
+
+如果你在本地部署了 `office.goddess.ai/server`，并由它把社区消息转发到 Belldandy Gateway，现在需要使用 Bearer 鉴权。
+
+**Gateway 侧（`Belldandy/.env` 或 `.env.local`）**：
+
+```env
+# 开启 /api/message 时，鉴权模式不能为 none
+BELLDANDY_AUTH_MODE=token
+# 开启 HTTP 社区入口
+BELLDANDY_COMMUNITY_API_ENABLED=true
+# 设置专用 token（推荐）
+BELLDANDY_COMMUNITY_API_TOKEN=your-community-api-token
+```
+
+**office.goddess.ai server 侧（`office.goddess.ai/server/.env`）**：
+
+```env
+BELLDANDY_GATEWAY_URL=http://localhost:28889
+BELLDANDY_COMMUNITY_API_TOKEN=your-community-api-token
+```
+
+要求两边 token 保持一致。`office.goddess.ai/server` 会自动在请求头携带：
+
+```http
+Authorization: Bearer <BELLDANDY_COMMUNITY_API_TOKEN>
+```
+
+如果 Gateway 未开启该接口，会返回 `API_DISABLED`；如果 token 不匹配，会返回 `401 UNAUTHORIZED`。  
+如果你把 `BELLDANDY_COMMUNITY_API_ENABLED=true` 与 `BELLDANDY_AUTH_MODE=none` 同时配置，Gateway 会在启动时直接拒绝启动。
 
 ---
 
