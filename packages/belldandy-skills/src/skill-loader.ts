@@ -148,8 +148,42 @@ function parseYamlBlock(
     const key = trimmed.slice(0, colonIdx).trim();
     const valueRaw = trimmed.slice(colonIdx + 1).trim();
 
-    if (valueRaw === "" || valueRaw === "|" || valueRaw === ">") {
-      // nested block — peek next line indent
+    if (valueRaw === "|" || valueRaw === ">") {
+      // YAML 块标量（literal | 或 folded >）— 将多行内容拼接为字符串
+      const nextNonEmpty = findNextNonEmptyLine(lines, i + 1);
+      if (nextNonEmpty !== -1) {
+        const nextIndent = lines[nextNonEmpty].length - lines[nextNonEmpty].trimStart().length;
+        if (nextIndent > indent) {
+          // 收集所有属于该块标量的行（缩进大于当前 key 的缩进）
+          const blockLines: string[] = [];
+          let j = i + 1;
+          while (j < lines.length) {
+            const bLine = lines[j];
+            // 空行保留（块标量中的空行是内容的一部分）
+            if (bLine.trim() === "") {
+              blockLines.push("");
+              j++;
+              continue;
+            }
+            const bIndent = bLine.length - bLine.trimStart().length;
+            if (bIndent < nextIndent) break; // 回到父级缩进，块结束
+            // 去掉块内容的公共缩进
+            blockLines.push(bLine.slice(nextIndent));
+            j++;
+          }
+          // 移除末尾空行（YAML block scalar 语义）
+          while (blockLines.length > 0 && blockLines[blockLines.length - 1] === "") {
+            blockLines.pop();
+          }
+          result[key] = blockLines.join("\n");
+          i = j;
+          continue;
+        }
+      }
+      result[key] = "";
+      i++;
+    } else if (valueRaw === "") {
+      // 空值 — 尝试解析为嵌套对象（mapping）
       const nextNonEmpty = findNextNonEmptyLine(lines, i + 1);
       if (nextNonEmpty !== -1) {
         const nextIndent = lines[nextNonEmpty].length - lines[nextNonEmpty].trimStart().length;
