@@ -35,7 +35,12 @@ export type ToolEnabledAgentOptions = {
   /** 新版钩子运行器（推荐使用） */
   hookRunner?: HookRunner;
   /** 可选：统一 Logger，用于钩子失败等日志 */
-  logger?: { error(module: string, msg: string, data?: unknown): void };
+  logger?: {
+    debug?: (module: string, msg: string, data?: unknown) => void;
+    info?: (module: string, msg: string, data?: unknown) => void;
+    warn?: (module: string, msg: string, data?: unknown) => void;
+    error: (module: string, msg: string, data?: unknown) => void;
+  };
   /** 备用 Profile 列表（模型容灾） */
   fallbacks?: ModelProfile[];
   /** 容灾日志接口 */
@@ -205,6 +210,17 @@ export class ToolEnabledAgent implements BelldandyAgent {
       yield item;
     };
 
+    const logDebug = (msg: string, data?: unknown) => {
+      this.opts.logger?.debug?.("agent", msg, data);
+    };
+    const logError = (msg: string, data?: unknown) => {
+      if (this.opts.logger) {
+        this.opts.logger.error("agent", msg, data);
+        return;
+      }
+      console.error(`[agent] ${msg}`, data ?? "");
+    };
+
     try {
       while (true) {
         // ReAct 循环内压缩检查：当上下文接近上限时，压缩历史消息
@@ -216,7 +232,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
             try {
               loopCompactionState = await this.compactInLoop(messages, loopCompactionState);
             } catch (err) {
-              console.error(`[agent] [compaction] in-loop compaction failed: ${err}`);
+              logError(`[compaction] in-loop compaction failed: ${err}`);
               // 压缩失败不阻塞，继续执行（trimMessagesToFit 会兜底）
             }
           }
@@ -237,7 +253,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           const parts = [`input=${u.input_tokens}`, `output=${u.output_tokens}`];
           if (u.cache_creation_input_tokens) parts.push(`cache_create=${u.cache_creation_input_tokens}`);
           if (u.cache_read_input_tokens) parts.push(`cache_read=${u.cache_read_input_tokens}`);
-          console.log(`[agent] [usage] ${parts.join(" ")}`);
+          logDebug(`[usage] ${parts.join(" ")}`);
         } else if (response.ok) {
           modelCallCount++;
         }
@@ -261,16 +277,19 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
         // 检查是否有工具调用
         const toolCalls = response.toolCalls;
-        console.log(`[TOOL-CHECK] 工具调用数量: ${toolCalls?.length ?? 0}, 响应内容长度: ${response.content?.length ?? 0}`);
+        logDebug("[tool-check] model response analyzed", {
+          toolCallCount: toolCalls?.length ?? 0,
+          responseContentLength: response.content?.length ?? 0,
+        });
         if (!toolCalls || toolCalls.length === 0) {
           // 无工具调用，输出最终结果（已剥离协议块）
-          console.log(`[TOOL-CHECK] 无工具调用，直接返回文本结果`);
+          logDebug("[tool-check] no tool calls; returning text result");
           yield* yieldItem(buildUsageItem());
           yield* yieldItem({ type: "final", text: contentForDisplay });
           yield* yieldItem({ type: "status", status: "done" });
           return;
         }
-        console.log(`[TOOL-CHECK] 检测到工具调用:`, toolCalls.map(tc => tc.function.name).join(', '));
+        logDebug("[tool-check] tool calls detected", { names: toolCalls.map(tc => tc.function.name) });
 
         // 防止无限循环
         toolCallCount += toolCalls.length;
@@ -383,7 +402,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
                 toolHookCtx,
               );
             } catch (err) {
-              this.opts.logger?.error("agent", `钩子 after_tool_call 执行失败: ${err}`) ?? console.error(`钩子 after_tool_call 执行失败: ${err}`);
+              logError(`钩子 after_tool_call 执行失败: ${err}`);
             }
           } else if (this.opts.hooks?.afterToolCall) {
             // 向后兼容：旧版 hooks
@@ -397,7 +416,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
                 id: result.id
               }, legacyHookCtx);
             } catch (err) {
-              this.opts.logger?.error("agent", `Hook afterToolCall failed: ${err}`) ?? console.error(`Hook afterToolCall failed: ${err}`);
+              logError(`Hook afterToolCall failed: ${err}`);
             }
           }
 
@@ -439,14 +458,14 @@ export class ToolEnabledAgent implements BelldandyAgent {
             agentHookCtx,
           );
         } catch (err) {
-          this.opts.logger?.error("agent", `钩子 agent_end 执行失败: ${err}`) ?? console.error(`钩子 agent_end 执行失败: ${err}`);
+          logError(`钩子 agent_end 执行失败: ${err}`);
         }
       } else if (this.opts.hooks?.afterRun) {
         // 向后兼容：旧版 hooks
         try {
           await this.opts.hooks.afterRun({ input, items: generatedItems }, legacyHookCtx);
         } catch (err) {
-          this.opts.logger?.error("agent", `Hook afterRun failed: ${err}`) ?? console.error(`Hook afterRun failed: ${err}`);
+          logError(`Hook afterRun failed: ${err}`);
         }
       }
 
@@ -458,7 +477,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       }
       const leakedCounters = tokenCounter.cleanup();
       if (leakedCounters.length > 0) {
-        this.opts.logger?.error("agent", `Token counters leaked: ${leakedCounters.join(", ")}`) ?? console.warn(`[agent] Token counters leaked: ${leakedCounters.join(", ")}`);
+        logError(`Token counters leaked: ${leakedCounters.join(", ")}`);
       }
       this.opts.toolExecutor.clearTokenCounter(input.conversationId ?? "");
     }
@@ -642,7 +661,11 @@ export class ToolEnabledAgent implements BelldandyAgent {
     messages.length = 0;
     messages.push(...newMessages);
 
-    console.log(`[agent] [compaction] in-loop compaction: ${result.originalTokens} → ${result.compactedTokens} tokens (tier: ${result.tier})`);
+    this.opts.logger?.debug?.("agent", "[compaction] in-loop compaction completed", {
+      originalTokens: result.originalTokens,
+      compactedTokens: result.compactedTokens,
+      tier: result.tier,
+    });
 
     return result.state;
   }

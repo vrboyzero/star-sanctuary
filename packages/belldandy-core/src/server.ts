@@ -66,6 +66,13 @@ export type GatewayServer = {
   broadcast: (frame: GatewayEventFrame) => void;
 };
 
+type GatewayLog = {
+  debug: (module: string, message: string, data?: unknown) => void;
+  info: (module: string, message: string, data?: unknown) => void;
+  warn: (module: string, message: string, data?: unknown) => void;
+  error: (module: string, message: string, data?: unknown) => void;
+};
+
 const DEFAULT_METHODS = [
   "message.send",
   "config.read",
@@ -130,9 +137,19 @@ function estimateBase64DecodedBytes(base64: string): number | null {
 export async function startGatewayServer(opts: GatewayServerOptions): Promise<GatewayServer> {
   ensureWebRoot(opts.webRoot);
 
-  const log = opts.logger
-    ? { info: (m: string, msg: string, d?: unknown) => opts.logger!.info(m, msg, d), error: (m: string, msg: string, d?: unknown) => opts.logger!.error(m, msg, d) }
-    : { info: (m: string, msg: string) => console.log(`[${m}] ${msg}`), error: (m: string, msg: string, d?: unknown) => console.error(`[${m}] ${msg}`, d ?? "") };
+  const log: GatewayLog = opts.logger
+    ? {
+      debug: (m: string, msg: string, d?: unknown) => opts.logger!.debug(m, msg, d),
+      info: (m: string, msg: string, d?: unknown) => opts.logger!.info(m, msg, d),
+      warn: (m: string, msg: string, d?: unknown) => opts.logger!.warn(m, msg, d),
+      error: (m: string, msg: string, d?: unknown) => opts.logger!.error(m, msg, d),
+    }
+    : {
+      debug: () => { },
+      info: (m: string, msg: string) => console.log(`[${m}] ${msg}`),
+      warn: (m: string, msg: string, d?: unknown) => console.warn(`[${m}] ${msg}`, d ?? ""),
+      error: (m: string, msg: string, d?: unknown) => console.error(`[${m}] ${msg}`, d ?? ""),
+    };
 
   const app = express();
   if (opts.stateDir) {
@@ -386,7 +403,10 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         state.role = accepted.role;
         state.clientId = normalizeClientId(frame.clientId) ?? state.sessionId;
         state.userUuid = frame.userUuid; // 保存用户UUID
-        console.log("[Debug] WebSocket connected. clientId:", state.clientId, "userUuid:", state.userUuid); // 添加调试日志
+        log.debug("ws", "WebSocket connected", {
+          clientId: state.clientId,
+          hasUserUuid: Boolean(state.userUuid),
+        });
 
         // 提取身份信息（异步）
         const identityInfo = await extractIdentityInfo(opts.stateDir ?? resolveStateDir());
@@ -426,6 +446,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
         skillRegistry: opts.skillRegistry,
+        log,
       });
       if (res) sendRes(ws, res);
     });
@@ -504,6 +525,7 @@ async function handleReq(
     clientId: string;
     userUuid?: string; // 添加UUID字段
     stateDir: string;
+    log: GatewayLog;
     agentFactory: () => BelldandyAgent;
     agentRegistry?: AgentRegistry;
     conversationStore: ConversationStore;
@@ -599,14 +621,19 @@ async function handleReq(
         channel: "webchat",
       });
 
-      console.log("[Debug] Processing message.send. conversationId:", conversationId);
-      console.log("[Debug] ctx.userUuid:", ctx.userUuid); // 添加UUID调试日志
-      console.log("[Debug] Payload keys:", Object.keys(parsed.value));
+      ctx.log.debug("message", "Processing message.send", {
+        conversationId,
+        hasUserUuid: Boolean(ctx.userUuid),
+        payloadKeys: Object.keys(parsed.value),
+      });
       if ('attachments' in parsed.value) {
         const atts = (parsed.value as any).attachments;
-        console.log("[Debug] Attachments found:", Array.isArray(atts) ? atts.length : "Not Array", atts);
+        ctx.log.debug("message", "Attachments field detected", {
+          isArray: Array.isArray(atts),
+          count: Array.isArray(atts) ? atts.length : undefined,
+        });
       } else {
-        console.log("[Debug] No attachments field in payload");
+        ctx.log.debug("message", "No attachments field in payload");
       }
 
       // Handle Attachments
@@ -615,7 +642,7 @@ async function handleReq(
       const contentParts: Array<any> = []; // Changed from strictly typed imageParts to allow flexible content
 
       if (attachments && attachments.length > 0) {
-        console.log("[Debug] Processing", attachments.length, "attachments...");
+        ctx.log.debug("message", "Processing attachments", { count: attachments.length, conversationId });
         const attachmentDir = path.join(ctx.stateDir, "storage", "attachments", conversationId);
         await fs.promises.mkdir(attachmentDir, { recursive: true });
 
@@ -649,7 +676,7 @@ async function handleReq(
             } else if (att.type.startsWith("audio/")) {
               // Audio logic: Transcribe via STT
               if (ctx.sttTranscribe) {
-                console.log(`[Gateway] Transcribing audio attachment: ${att.name}`);
+                ctx.log.debug("stt", "Transcribing audio attachment", { name: att.name });
                 try {
                   const sttResult = await ctx.sttTranscribe({
                     buffer,
@@ -657,7 +684,7 @@ async function handleReq(
                     mime: att.type,
                   });
                   if (sttResult?.text) {
-                    console.log(`[Gateway] STT Result: "${sttResult.text}"`);
+                    ctx.log.debug("stt", "Audio transcribed", { name: att.name, textLength: sttResult.text.length });
                     if (!promptText?.trim()) {
                       // If user didn't type anything, treat audio as the main prompt
                       promptText = sttResult.text;
@@ -669,7 +696,7 @@ async function handleReq(
                     attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录失败）]`);
                   }
                 } catch (err) {
-                  console.error(`[Gateway] STT failed for ${att.name}:`, err);
+                  ctx.log.error("stt", `STT failed for ${att.name}`, err);
                   attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录出错）]`);
                 }
               } else {
@@ -694,7 +721,7 @@ async function handleReq(
               }
             }
           } catch (e) {
-            console.error(`Failed to save attachment ${att.name}:`, e);
+            ctx.log.error("message", `Failed to save attachment ${att.name}`, e);
             attachmentPrompts.push(`\n[Failed to upload file: ${att.name}]`);
           }
         }
@@ -794,7 +821,7 @@ async function handleReq(
             });
           }
         } catch (err) {
-          console.error("Agent run failed:", err);
+          ctx.log.error("agent", "Agent run failed", err);
           sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "error" } });
           sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: `Error: ${String(err)}` } });
         }
@@ -1284,8 +1311,6 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   const senderInfo = obj.senderInfo && typeof obj.senderInfo === "object" ? obj.senderInfo as any : undefined;
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
-  console.log("[Debug] parseMessageSendParams - senderInfo:", senderInfo, "roomContext:", roomContext); // 添加调试日志
-
   return { ok: true, value: { text, conversationId, from, agentId, attachments, senderInfo, roomContext } };
 }
 
@@ -1304,7 +1329,6 @@ function safeParseFrame(raw: string): GatewayFrame | null {
     const auth = parseAuth(obj.auth);
     const clientId = typeof obj.clientId === "string" ? obj.clientId : undefined;
     const userUuid = typeof obj.userUuid === "string" && obj.userUuid.trim() ? obj.userUuid.trim() : undefined; // 解析 userUuid
-    console.log("[Debug] Parsing connect frame. userUuid from client:", userUuid); // 添加调试日志
     return {
       type: "connect",
       role: isRole(role) ? role : "web",

@@ -29,6 +29,7 @@ const CLIENT_KEY = "belldandy.webchat.clientId";
 const WORKSPACE_ROOTS_KEY = "belldandy.webchat.workspaceRoots";
 const AGENT_ID_KEY = "belldandy.webchat.agentId";
 const UUID_KEY = "belldandy.webchat.userUuid"; // UUID存储键
+const WEBCHAT_DEBUG_KEY = "belldandy.webchat.debug";
 
 let ws = null;
 let isReady = false;
@@ -39,6 +40,22 @@ let transientUrlToken = null;
 const pendingReq = new Map();
 const clientId = resolveClientId();
 let queuedText = null;
+
+const webchatDebugEnabled = (() => {
+  try {
+    const stored = localStorage.getItem(WEBCHAT_DEBUG_KEY);
+    if (stored === "1" || stored === "true") return true;
+  } catch {
+    // ignore
+  }
+  const flag = new URLSearchParams(window.location.search).get("debug");
+  return flag === "1" || flag === "true";
+})();
+
+function debugLog(...args) {
+  if (!webchatDebugEnabled) return;
+  console.debug(...args);
+}
 
 // 身份信息（从 hello-ok 获取）
 let agentName = "Agent";
@@ -74,15 +91,15 @@ restoreUuid(); // 恢复UUID
 if (saveUuidBtn && userUuidEl) {
   saveUuidBtn.addEventListener("click", () => {
     const uuid = userUuidEl.value.trim();
-    console.log("[UUID] Saving UUID:", uuid);
+    debugLog("[UUID] Saving UUID", { hasUuid: Boolean(uuid) });
     persistUuid();
     // 如果 WebSocket 已连接，重新连接以更新 UUID
     if (ws && isReady) {
-      console.log("[UUID] UUID changed, reconnecting...");
+      debugLog("[UUID] UUID changed, reconnecting");
       teardown();
       setTimeout(() => connect(), 100);
     } else {
-      console.log("[UUID] WebSocket not connected, will use UUID on next connect");
+      debugLog("[UUID] WebSocket not connected, will use UUID on next connect");
     }
   });
 }
@@ -93,7 +110,7 @@ if (userUuidEl) {
     persistUuid();
     // 如果 WebSocket 已连接，重新连接以更新 UUID
     if (ws && isReady) {
-      console.log("[UUID] UUID changed (blur), reconnecting...");
+      debugLog("[UUID] UUID changed (blur), reconnecting");
       teardown();
       setTimeout(() => connect(), 100);
     }
@@ -494,7 +511,7 @@ function sendConnect() {
   const mode = authModeEl.value;
   const v = authValueEl.value.trim();
   const uuid = userUuidEl ? userUuidEl.value.trim() : ""; // 获取UUID
-  console.log("[UUID] sendConnect - UUID from input:", uuid); // 添加调试日志
+  debugLog("[UUID] sendConnect", { hasUuid: Boolean(uuid) });
   const auth =
     mode === "token"
       ? { mode: "token", token: v.startsWith("setup-") ? v : (v.match(/^\d+-\d+$/) ? `setup-${v}` : v) }
@@ -514,9 +531,9 @@ function sendConnect() {
   // 如果有UUID，添加到连接帧
   if (uuid) {
     connectFrame.userUuid = uuid;
-    console.log("[UUID] Adding UUID to connect frame:", uuid); // 添加调试日志
+    debugLog("[UUID] Adding UUID to connect frame");
   } else {
-    console.log("[UUID] No UUID to send in connect frame"); // 添加调试日志
+    debugLog("[UUID] No UUID to send in connect frame");
   }
 
   ws.send(JSON.stringify(connectFrame));

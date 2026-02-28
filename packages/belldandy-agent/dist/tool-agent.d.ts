@@ -25,7 +25,10 @@ export type ToolEnabledAgentOptions = {
     hookRunner?: HookRunner;
     /** 可选：统一 Logger，用于钩子失败等日志 */
     logger?: {
-        error(module: string, msg: string, data?: unknown): void;
+        debug?: (module: string, msg: string, data?: unknown) => void;
+        info?: (module: string, msg: string, data?: unknown) => void;
+        warn?: (module: string, msg: string, data?: unknown) => void;
+        error: (module: string, msg: string, data?: unknown) => void;
     };
     /** 备用 Profile 列表（模型容灾） */
     fallbacks?: ModelProfile[];

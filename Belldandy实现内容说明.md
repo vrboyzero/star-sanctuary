@@ -640,6 +640,10 @@
     - **Channel 通用接口**：定义了所有渠道必须实现的标准方法（`start`、`stop`、`sendProactiveMessage`）。
     - **ChannelManager**：渠道管理器，支持统一注册、启停、广播消息。
     - **FeishuChannel 适配**：飞书渠道已实现新接口，完全向后兼容。
+    - **QQ 渠道**：已接入 QQ 官方 Bot API（AccessToken 自动换取与刷新）。
+    - **Community 渠道**：已支持 office.goddess.ai 房间接入与多 Agent 协作。
+    - **Discord 渠道**：已完成对接并验证可用（消息收发、主动推送、状态持久化）。
+    - **完成情况同步**：本节渠道状态已按 `Belldandy渠道对接说明.md` 同步更新（2026-02-27）。
 - **接口设计**：
     ```typescript
     interface Channel {
@@ -656,6 +660,9 @@
     ├── types.ts      # Channel 通用接口定义
     ├── manager.ts    # ChannelManager 管理器
     ├── feishu.ts     # 飞书渠道实现 (implements Channel)
+    ├── qq.ts         # QQ 渠道实现 (implements Channel)
+    ├── community.ts  # 社区渠道实现 (implements Channel)
+    ├── discord.ts    # Discord 渠道实现 (implements Channel)
     └── index.ts      # 统一导出
     ```
 - **价值**：降低新渠道接入成本，只需实现 `Channel` 接口即可接入系统，预计每个新渠道开发周期可缩短至 1-2 天。
@@ -1500,7 +1507,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **记忆系统** | ✅ memory + nodes | ✅ memory + 元数据过滤 + 规则重排 | 缺少 `nodes` 图谱 |
 | **多媒体** | ✅ tts/image/canvas | ✅ tts/image/canvas | Canvas 可视化工作区已实现 |
 | **会话编排** | ✅ 完整 | ✅ 完整 | SubAgentOrchestrator + delegate_task/delegate_parallel + 并发排队 + 钩子集成 |
-| **渠道集成** | ✅ 4+ channels | ✅ 飞书 + Channel 接口 | 架构已就绪，可快速扩展 |
+| **渠道集成** | ✅ 4+ channels | ✅ 飞书 + QQ + 社区 + Discord | 多渠道已落地，继续扩展 Telegram/Slack/WhatsApp |
 | **定时任务** | ✅ cron tool | ✅ heartbeat + cron | 完整 cron 工具（list/add/remove/status）+ Heartbeat |
 | **插件系统** | ✅ 丰富 | ✅ 完整对标 | 13 种钩子 + HookRunner + 优先级 |
 | **MCP 支持** | ✅ ACP 协议 | ✅ MCP 协议 | stdio/SSE 传输 + 工具桥接 |
@@ -1579,7 +1586,9 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | 渠道 | Belldandy | 说明 |
 |------|-----------|------|
 | Slack | ⏳ 待实现 | Channel 接口已就绪 |
-| Discord | ⏳ 待实现 | Channel 接口已就绪 |
+| Discord | ✅ 已实现 | 已完成对接并验证可用（详见 `Belldandy渠道对接说明.md`） |
+| QQ | ✅ 已实现 | 官方 Bot API 接入，AccessToken 自动刷新 |
+| 社区（office.goddess.ai） | ✅ 已实现 | 多 Agent 房间协作 + `join_room` / `leave_room` |
 | Telegram | ⏳ 待实现 | Channel 接口已就绪 |
 | WhatsApp | ⏳ 待实现 | Channel 接口已就绪 |
 | 飞书 | ✅ 已实现 | 完整实现 Channel 接口 |
@@ -1598,6 +1607,9 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | **记忆检索** | `memory_search`（FTS5 + 向量混合检索 + Embedding Cache + 元数据过滤 + 规则重排 + 源路径聚合） |
 | **记忆读写** | `memory_read`, `memory_write` |
 | **飞书渠道** | `FeishuChannel`（WebSocket 长连接） |
+| **QQ 渠道** | `QqChannel`（QQ 官方 Bot API + AccessToken 自动刷新） |
+| **Discord 渠道** | `DiscordChannel`（消息收发 + 主动推送 + 状态持久化） |
+| **社区渠道** | `CommunityChannel`（多 Agent 房间协作 + 动态入退房） |
 | **定时触发** | `Heartbeat Runner`（读取 HEARTBEAT.md） |
 | **定时任务** | `cron`（list/add/remove/status，支持一次性和周期任务） |
 | **会话历史** | `ConversationStore`（内存 + TTL + 文件持久化） |
@@ -2069,3 +2081,72 @@ const hasSuperior = membersResult.agents.some(a =>
 - ✅ 配置持久化，重启后自动重连
 - ✅ 支持中文 Agent 名称等非 ASCII 字符
 - ✅ 与身份上下文系统（Phase Identity Context）协同，支持多人场景的身份权力规则
+
+---
+
+## 21. 全局代码分析修复收敛 (2026-02-27) ✅ 已完成
+
+> 本节根据 `docs/全局代码分析报告.md` 的最新修复进度同步更新。
+
+### 目标
+
+将全局静态审计识别出的 P0/P1 风险与 O 类优化项落地到生产链路，并给出可复验的测试与构建结果。
+
+### 实现内容
+
+#### 21.1 P0 安全问题收敛
+
+- **P0-1 `run_command` shell 控制符绕过**：命令按控制符分段逐段校验，并拦截重定向/子 shell 语法。  
+  **文件**：`packages/belldandy-skills/src/builtin/system/exec.ts`
+- **P0-2 `run_command` 的 `cwd` 越界**：新增 `path.relative` 工作区边界校验。  
+  **文件**：`packages/belldandy-skills/src/builtin/system/exec.ts`
+- **P0-3 Pairing 绕过读取/覆盖 `.env`**：`config.readRaw`、`config.writeRaw`、`tools.update` 纳入 `secureMethods`。  
+  **文件**：`packages/belldandy-core/src/server.ts`
+- **P0-4 WebSocket Origin 前缀匹配绕过**：`startsWith` 改为 URL `origin` 严格等值匹配。  
+  **文件**：`packages/belldandy-core/src/server.ts`
+- **P0-5 `workspace.*` 同前缀目录绕过**：`workspace.list/read/write` 统一改为 `path.relative` 边界判定。  
+  **文件**：`packages/belldandy-core/src/server.ts`
+
+#### 21.2 P1 风险问题收敛
+
+- **P1-1 WebChat XSS + 凭据日志泄露**：
+  - `chat.delta/chat.final` 改为“缓冲 + 白名单净化渲染”，不再直接将模型输出写入 `innerHTML`。
+  - 移除敏感连接帧日志，避免 token/password 出现在浏览器控制台。
+  - `?token=` 改为“即用即清”，限制 URL token 默认持久化。
+  **文件**：`apps/web/public/app.js`
+- **P1-2 `/api/message` 鉴权缺失**：
+  - `/api/message` 默认关闭（需显式 `BELLDANDY_COMMUNITY_API_ENABLED=true`）。
+  - 启用后强制 `Authorization: Bearer <token>`。
+  - token 优先级：`BELLDANDY_COMMUNITY_API_TOKEN` -> `BELLDANDY_AUTH_TOKEN` -> `opts.auth.token`。
+  **文件**：`packages/belldandy-core/src/server.ts`、`packages/belldandy-core/src/server.test.ts`、`office.goddess.ai/server/src/lib/belldandy-client.ts`、`.env`、`.env.example`、`office.goddess.ai/server/.env`
+- **P1-3 附件大小限制与同步 IO**：
+  - 新增 `BELLDANDY_ATTACHMENT_MAX_FILE_BYTES`（默认 10MB）与 `BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES`（默认 30MB）。
+  - 参数解析阶段增加附件结构/base64/大小校验。
+  - 写盘由同步 IO 改为异步 IO（`fs.promises.mkdir/writeFile`）。
+  **文件**：`packages/belldandy-core/src/server.ts`、`packages/belldandy-core/src/server.test.ts`、`.env.example`
+
+#### 21.3 O 类优化收敛
+
+- **O1 测试默认范围收敛**：`vitest.config.ts` 增加 `openclaw` 与 `UI-TARS-desktop-main` 排除规则，并保留 `configDefaults.exclude`。
+- **O2 生产路径日志治理**：
+  - `server.ts` 接入统一 `debug/info/warn/error` 分级日志，热路径调试日志默认关闭。
+  - `tool-agent.ts` 的 `[usage]/[tool-check]/[compaction]` 改为 `logger.debug`，错误路径统一 `logger.error`。
+  - `app.js` 增加前端调试开关（`localStorage: belldandy.webchat.debug` 或 `?debug=1`），UUID 调试日志默认关闭且不打印原值。
+  **文件**：`packages/belldandy-core/src/server.ts`、`packages/belldandy-agent/src/tool-agent.ts`、`apps/web/public/app.js`
+- **O3 社区配置 CLI 去重**：抽取 `runCommunityWizard()` 公共向导，CLI 与旧入口改为薄封装复用。  
+  **文件**：`packages/belldandy-core/src/community/wizard.ts`、`packages/belldandy-core/src/community/wizard.test.ts`、`packages/belldandy-core/src/cli/commands/community.ts`、`packages/belldandy-core/src/bin/community-config.ts`
+
+### 测试与构建结果
+
+- `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-skills/src/builtin/system/exec.test.ts packages/belldandy-core/src/server.test.ts`：通过（17/17）
+- `node .\\node_modules\\vitest\\vitest.mjs run --exclude "**/openclaw/**" --exclude "**/UI-TARS-desktop-main/**"`：通过（12 files passed, 3 files skipped；113 passed, 20 skipped）
+- `corepack pnpm build`：通过
+- `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/server.test.ts`：通过（12/12）
+- `node --check apps/web/public/app.js`：通过
+- O2 日志治理验证：`node --check apps/web/public/app.js`、`node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/server.test.ts`、`corepack pnpm build`、`corepack pnpm test` 均通过
+
+### 价值
+
+- ✅ 高风险越权路径（命令执行、配置读写、路径边界、来源校验）完成收敛
+- ✅ WebChat 与 HTTP 入口的生产安全基线显著提升
+- ✅ 日志从“高噪声 console”收敛到“可分级、可控、可审计”的统一体系
