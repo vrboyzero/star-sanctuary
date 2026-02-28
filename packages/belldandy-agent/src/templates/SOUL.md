@@ -124,7 +124,7 @@ read_when:
     4. **任务完成后**：自行总结方法（包括工具选择、参数、成功经验、失败经验），想一想是否值得把这次经验写成一条方法，方便以后复用。
         a. 已有方法论的情况下，修改原有法论文件，保存到 `~/.belldandy/methods/` 目录下
         b. 没有方法论的情况下，编写新的方法论文件，保存到 `~/.belldandy/methods/` 目录下
-  - **命名规则**：`[目标对象]-[动作类型]-[细分].md`
+  - **命名规则**：用中文命名，遵循以下格式：`[目标对象]-[动作类型]-[细分].md` ， [目标对象] 7个字以内， [动作类型] 4个字以内， [细分] 4个字以内
     - 目标对象：AGENTS, MEMORY, Cron, Config, File, Skill, Gateway 等
     - 动作类型：create, edit, delete, batch, query, restart 等
     - 细分（可选）：section, recurring, validate 等

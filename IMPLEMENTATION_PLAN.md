@@ -163,7 +163,7 @@ flowchart TB
 | B-P2-3 | Channels 路由引擎升级 | Mention gating、群聊路由规则，结合安全策略 | Roadmap P2-2 |
 | B-P2-5 | Webhooks & 外部触发 | Webhook 入口、邮件/通知触发，注意鉴权 | Roadmap P2-5 |
 | B-P2-6 | Knowledge Graph (Nodes) | 知识图谱工具，与方法论系统结合 | Roadmap P2-6 |
-| B-P2-7 | Cron 方案 B 升级 | cron 表达式（`croner`）、Session 隔离、渠道定向推送、执行历史 | 说明文档 §2.5 |
+| B-P2-7 | Cron 方案 B 升级 | cron 表达式（`croner`）、Session 隔离、渠道定向推送、执行历史 | Belldandy实现内容说明.md §24.5 Cron 定时任务系统 |
 | B-P2-8 | Heartbeat 消息去重 | 防止 Agent 在无法执行操作时反复发送同一条提醒（24h 内重复内容静默） | 说明文档 §2 |
 | B-P2-9 | Phase 25 Step 4 | WebChat 前端展示子 Agent 状态 | Phase 25 |
 
