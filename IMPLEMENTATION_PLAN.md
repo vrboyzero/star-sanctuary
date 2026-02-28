@@ -279,3 +279,205 @@ memory_search("记忆")          # 应返回记忆相关内容
 - ✅ Tailscale 集成（Sidecar 模式）
 - ✅ Nix 支持（flake.nix）
 - ✅ 官方 Docker Hub 镜像 + CI/CD 自动构建
+
+---
+
+## Phase D：Daemon 模式与进程管理 [规划中]
+
+> **目标**：实现类似 `openclaw gateway start` 的持久化运行功能，支持后台运行、进程管理、云端部署。
+
+### D-1 当前状态
+
+| 功能 | 状态 |
+|------|------|
+| 前台运行 + 自动重启 (exit code 100) | ✅ 已实现 (`bdd start`) |
+| 后台运行 (detached) | ❌ 缺失 |
+| PID 文件管理 | ❌ 缺失 |
+| 日志重定向到文件 | ❌ 缺失 |
+| `bdd stop` 命令 | ❌ 缺失 |
+| `bdd status` 命令 | ❌ 缺失 |
+
+**问题**：`start.ts` 和 `launcher.ts` 存在重复实现，需合并。
+
+### D-2 实现方案
+
+#### D-2.1 新增 daemon 管理模块
+
+文件：`packages/belldandy-core/src/cli/daemon.ts`
+
+```typescript
+// 核心函数
+startDaemon(): Promise<number>    // detached 模式启动，返回 PID
+stopDaemon(): Promise<boolean>    // 读 PID，发 SIGTERM，清理 PID 文件
+getDaemonStatus(): DaemonStatus   // 检查进程存活状态
+```
+
+**关键实现**：
+
+```typescript
+// daemon 模式启动
+const logFile = path.join(BELLDANDY_HOME, 'logs', 'gateway.log');
+const logFd = fs.openSync(logFile, 'a');
+
+const child = fork(GATEWAY_SCRIPT, [], {
+  detached: true,
+  stdio: ['ignore', logFd, logFd, 'ipc'],
+  execArgv: ext === ".ts" ? ["--import", "tsx"] : [],
+});
+
+// 写入 PID 文件
+fs.writeFileSync(PID_FILE, String(child.pid));
+
+// 允许父进程退出
+child.unref();
+```
+
+#### D-2.2 命令改动
+
+| 命令 | 改动 |
+|------|------|
+| `bdd start` | 添加 `--daemon` / `-d` 参数，默认仍前台运行 |
+| `bdd stop` | **新增** - 停止后台进程 |
+| `bdd status` | **新增** - 查看运行状态 |
+
+#### D-2.3 文件管理
+
+```
+~/.belldandy/
+├── gateway.pid          # PID 文件
+└── logs/
+    └── gateway.log      # daemon 模式日志输出
+```
+
+#### D-2.4 清理
+
+删除 `packages/belldandy-core/src/bin/launcher.ts`，逻辑合并到 `start.ts`。
+
+### D-3 用法示例
+
+```bash
+bdd start              # 前台运行（当前行为，不变）
+bdd start -d           # 后台运行（daemon 模式）
+bdd start --daemon     # 同上
+bdd stop               # 停止后台进程
+bdd status             # 查看状态：Running (PID 12345) / Stopped
+```
+
+### D-4 跨平台说明
+
+| 平台 | 行为 |
+|------|------|
+| Linux/macOS | 标准 detached + unref，真正的后台进程 |
+| Windows | detached 模式可工作，但关闭终端窗口后进程可能被终止；生产部署建议用 Windows Service 或 NSSM |
+
+### D-5 实现清单
+
+- [x] **D-5.1** 新增 `packages/belldandy-core/src/cli/daemon.ts` - daemon 管理核心模块
+- [x] **D-5.2** 修改 `packages/belldandy-core/src/cli/commands/start.ts` - 添加 `--daemon` 参数
+- [x] **D-5.3** 新增 `packages/belldandy-core/src/cli/commands/stop.ts` - 停止命令
+- [x] **D-5.4** 新增 `packages/belldandy-core/src/cli/commands/status.ts` - 状态查询命令
+- [x] **D-5.5** 修改 `packages/belldandy-core/src/cli/main.ts` - 注册新命令
+- [x] **D-5.6** 删除 `packages/belldandy-core/src/bin/launcher.ts` - 消除重复实现
+- [x] **D-5.7** 更新 `CLAUDE.md` 命令文档
+
+### D-6 未来增强：平台路由模式（可选）[未实现]
+
+> **背景**：当前 `bdd start -d` 使用 Node.js fork + detach 方式实现后台运行，简单易用但不支持开机自启。
+> 参考 openclaw 的实现，可以添加平台路由模式，将服务注册为操作系统原生服务，获得更强的系统集成能力。
+
+#### D-6.1 命令结构
+
+```bash
+bdd daemon install    # 安装为系统服务（支持开机自启）
+bdd daemon uninstall  # 卸载系统服务
+bdd daemon start      # 启动系统服务
+bdd daemon stop       # 停止系统服务
+bdd daemon restart    # 重启系统服务
+bdd daemon status     # 查看系统服务状态
+```
+
+#### D-6.2 各平台实现方式
+
+| 平台 | 服务管理器 | 配置文件位置 | 特性 |
+|------|-----------|-------------|------|
+| macOS | launchd | `~/Library/LaunchAgents/ai.belldandy.gateway.plist` | RunAtLoad, KeepAlive |
+| Linux | systemd | `~/.config/systemd/user/belldandy-gateway.service` | enable, Restart=always |
+| Windows | schtasks | `~/.belldandy/gateway.cmd` | ONLOGON 触发器 |
+
+#### D-6.3 统一接口设计
+
+```typescript
+// packages/belldandy-core/src/cli/platform-service.ts
+
+interface GatewayService {
+  label: string;  // "LaunchAgent" | "systemd" | "Scheduled Task"
+
+  install(opts: InstallOptions): Promise<void>;
+  uninstall(): Promise<void>;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  restart(): Promise<void>;
+
+  isInstalled(): Promise<boolean>;
+  getStatus(): Promise<ServiceStatus>;
+}
+
+// 平台路由
+function resolveGatewayService(): GatewayService {
+  switch (process.platform) {
+    case 'darwin': return new LaunchdService();
+    case 'linux':  return new SystemdService();
+    case 'win32':  return new SchtasksService();
+    default: throw new Error(`Unsupported platform: ${process.platform}`);
+  }
+}
+```
+
+#### D-6.4 文件结构
+
+```
+packages/belldandy-core/src/cli/
+├── daemon.ts                    # 当前实现（fork + detach）
+├── platform-service/            # 平台路由模式（新增）
+│   ├── index.ts                 # resolveGatewayService()
+│   ├── types.ts                 # GatewayService 接口定义
+│   ├── launchd.ts               # macOS: launchctl bootstrap/bootout
+│   ├── launchd-plist.ts         # macOS: plist 文件生成/解析
+│   ├── systemd.ts               # Linux: systemctl --user
+│   ├── systemd-unit.ts          # Linux: .service unit 文件生成
+│   └── schtasks.ts              # Windows: schtasks /Create /Run
+└── commands/
+    └── daemon-cmd.ts            # bdd daemon 子命令（新增）
+```
+
+#### D-6.5 与当前实现的对比
+
+| 维度 | `bdd start -d`（当前） | `bdd daemon install`（未来） |
+|------|----------------------|----------------------------|
+| 实现方式 | Node.js fork + detach | OS 原生服务管理器 |
+| 开机自启 | ❌ | ✅ |
+| 进程保活 | ❌ | ✅ (KeepAlive/Restart) |
+| 使用复杂度 | 低（一条命令） | 中（需先 install） |
+| 实现复杂度 | 低 | 高（三套平台代码） |
+| 适用场景 | 开发/临时使用 | 生产部署/长期运行 |
+
+#### D-6.6 实现清单（待实现）
+
+- [ ] **D-6.6.1** 新增 `platform-service/types.ts` - 统一接口定义
+- [ ] **D-6.6.2** 新增 `platform-service/index.ts` - 平台路由
+- [ ] **D-6.6.3** 新增 `platform-service/launchd.ts` - macOS launchd 实现
+- [ ] **D-6.6.4** 新增 `platform-service/launchd-plist.ts` - plist 文件处理
+- [ ] **D-6.6.5** 新增 `platform-service/systemd.ts` - Linux systemd 实现
+- [ ] **D-6.6.6** 新增 `platform-service/systemd-unit.ts` - unit 文件处理
+- [ ] **D-6.6.7** 新增 `platform-service/schtasks.ts` - Windows schtasks 实现
+- [ ] **D-6.6.8** 新增 `commands/daemon-cmd.ts` - daemon 子命令
+- [ ] **D-6.6.9** 修改 `main.ts` - 注册 daemon 子命令
+- [ ] **D-6.6.10** 更新文档
+
+#### D-6.7 优先级说明
+
+此功能为 **可选增强**，当前 `bdd start -d` 已满足大部分使用场景。建议在以下情况下实现：
+
+1. 用户反馈需要开机自启功能
+2. 需要在生产服务器上长期稳定运行
+3. 需要与系统服务管理工具集成

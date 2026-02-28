@@ -17,6 +17,8 @@ export const main = defineCommand({
   },
   subCommands: {
     start: () => import("./commands/start.js").then((m) => m.default),
+    stop: () => import("./commands/stop.js").then((m) => m.default),
+    status: () => import("./commands/status.js").then((m) => m.default),
     dev: () => import("./commands/dev.js").then((m) => m.default),
     doctor: () => import("./commands/doctor.js").then((m) => m.default),
     setup: () => import("./commands/setup.js").then((m) => m.default),

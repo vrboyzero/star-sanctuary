@@ -1,51 +1,59 @@
 /**
- * bdd start — Launch Gateway with process supervisor (auto-restart on exit code 100).
- * Delegates to the existing launcher.ts via fork.
+ * bdd start — Launch Gateway with process supervisor.
+ * Supports foreground mode (default) and daemon mode (-d/--daemon).
  */
 import { defineCommand } from "citty";
-import { fork } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-// 根据当前文件扩展名判断是开发模式(.ts)还是生产模式(.js)
-const ext = path.extname(__filename);
-const GATEWAY_SCRIPT = path.resolve(__dirname, `../../bin/gateway${ext}`);
-
-const RESTART_EXIT_CODE = 100;
-const RESTART_DELAY_MS = 500;
+import pc from "picocolors";
+import { startDaemon, startForeground, getDaemonStatus } from "../daemon.js";
+import { createCLIContext } from "../shared/context.js";
 
 export default defineCommand({
-  meta: { name: "start", description: "Start Gateway with supervisor (auto-restart)" },
-  async run() {
-    function launchGateway(): void {
-      console.log(`[Launcher] Starting Gateway...`);
+  meta: { name: "start", description: "Start Gateway (foreground or daemon mode)" },
+  args: {
+    daemon: {
+      type: "boolean",
+      alias: "d",
+      description: "Run in background (daemon mode)",
+      default: false,
+    },
+    json: { type: "boolean", description: "JSON output" },
+    "state-dir": { type: "string", description: "Override state directory" },
+  },
+  async run({ args }) {
+    const ctx = createCLIContext({ json: args.json, stateDir: args["state-dir"] });
 
-      const child = fork(GATEWAY_SCRIPT, [], {
-        stdio: "inherit",
-        // 生产模式(.js)不需要 tsx loader
-        execArgv: ext === ".ts" ? ["--import", "tsx"] : [],
-      });
-
-      child.on("exit", (code, signal) => {
-        if (code === RESTART_EXIT_CODE) {
-          console.log(`[Launcher] Gateway requested restart, restarting in ${RESTART_DELAY_MS}ms...`);
-          setTimeout(() => launchGateway(), RESTART_DELAY_MS);
+    if (args.daemon) {
+      // Daemon mode - start in background
+      const status = getDaemonStatus(ctx.stateDir);
+      if (status.running) {
+        if (ctx.json) {
+          ctx.output({ success: false, error: `Gateway is already running (PID ${status.pid})`, pid: status.pid });
         } else {
-          const reason = signal ? `signal ${signal}` : `exit code ${code ?? 1}`;
-          console.log(`[Launcher] Gateway exited (${reason}).`);
-          process.exit(code ?? 1);
+          ctx.error(`Gateway is already running (PID ${status.pid})`);
         }
-      });
+        process.exit(1);
+      }
 
-      const forwardSignal = (sig: NodeJS.Signals) => {
-        child.kill(sig);
-      };
-      process.on("SIGINT", forwardSignal);
-      process.on("SIGTERM", forwardSignal);
+      const result = await startDaemon(ctx.stateDir);
+      if (result.success) {
+        if (ctx.json) {
+          ctx.output({ success: true, pid: result.pid, logFile: status.logFile });
+        } else {
+          ctx.success(`Gateway started in background (PID ${result.pid})`);
+          ctx.log(`  Log file: ${status.logFile}`);
+          ctx.log(`  Stop with: ${pc.cyan("bdd stop")}`);
+        }
+      } else {
+        if (ctx.json) {
+          ctx.output({ success: false, error: result.error });
+        } else {
+          ctx.error(result.error ?? "Failed to start gateway");
+        }
+        process.exit(1);
+      }
+    } else {
+      // Foreground mode - existing behavior with auto-restart
+      startForeground();
     }
-
-    launchGateway();
   },
 });

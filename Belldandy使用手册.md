@@ -985,9 +985,92 @@ corepack pnpm bdd --version
 cd E:\project\belldandy
 corepack pnpm bdd start
 
+# 后台运行（Daemon 模式，适合服务器部署）
+corepack pnpm bdd start -d
+# 或
+corepack pnpm bdd start --daemon
+
 # 开发模式（直接启动 Gateway，适合调试）
 corepack pnpm bdd dev
+
+# 查看 Gateway 运行状态
+corepack pnpm bdd status
+
+# 停止后台运行的 Gateway
+corepack pnpm bdd stop
 ```
+
+#### 8.1.1 后台运行（Daemon 模式）
+
+当你需要在服务器上长期运行 Belldandy，或者希望关闭终端后服务继续运行时，可以使用 Daemon 模式。
+
+**启动后台服务**：
+
+```bash
+corepack pnpm bdd start -d
+```
+
+启动成功后会显示：
+```
+✓ Gateway started in background (PID 12345)
+  Log file: ~/.belldandy/logs/gateway.log
+  Stop with: bdd stop
+```
+
+**查看运行状态**：
+
+```bash
+corepack pnpm bdd status
+```
+
+输出示例：
+```
+Belldandy Gateway Status
+
+  ● Running
+    PID:     12345
+    Uptime:  2h 30m
+    Log:     ~/.belldandy/logs/gateway.log
+    PID file: ~/.belldandy/gateway.pid
+
+  Stop with:  bdd stop
+```
+
+**停止后台服务**：
+
+```bash
+corepack pnpm bdd stop
+```
+
+**日志查看**：
+
+Daemon 模式下，所有输出会重定向到日志文件：
+
+```bash
+# 实时查看日志
+tail -f ~/.belldandy/logs/gateway.log
+
+# Windows PowerShell
+Get-Content ~/.belldandy/logs/gateway.log -Wait
+```
+
+**与前台模式的区别**：
+
+| | 前台模式 (`bdd start`) | Daemon 模式 (`bdd start -d`) |
+|---|----------------------|------------------------------|
+| 终端关闭后 | 服务停止 | 服务继续运行 |
+| 日志输出 | 直接显示在终端 | 写入 `~/.belldandy/logs/gateway.log` |
+| 适用场景 | 本地开发、调试 | 服务器部署、长期运行 |
+| 停止方式 | `Ctrl+C` | `bdd stop` |
+
+**跨平台说明**：
+
+| 平台 | 行为 |
+|------|------|
+| Linux / macOS | 标准 daemon 进程，关闭终端后继续运行 |
+| Windows | detached 模式可工作，但关闭终端窗口后进程可能被终止；生产部署建议使用 Windows Service 或 NSSM |
+
+> **💡 提示**：如果你使用 Docker 部署，容器本身就是后台运行的，无需使用 Daemon 模式。详见 [3.5 Docker 部署](#35-docker-部署推荐用于生产环境)。
 
 ### 8.2 Setup 向导
 

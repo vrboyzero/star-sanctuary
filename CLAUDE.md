@@ -13,11 +13,15 @@ Belldandy is a **local-first personal AI assistant** — a pnpm monorepo using T
 ```bash
 corepack pnpm install          # Install dependencies
 corepack pnpm build            # Build all packages
-corepack pnpm start            # Start Gateway (with auto-restart)
+corepack pnpm start            # Start Gateway (foreground, with auto-restart)
 corepack pnpm dev:gateway      # Start Gateway (dev mode)
 corepack pnpm test             # Run tests
 corepack pnpm bdd --help       # CLI help
 corepack pnpm bdd doctor       # Health check
+corepack pnpm bdd start        # Start Gateway (foreground)
+corepack pnpm bdd start -d     # Start Gateway (daemon/background mode)
+corepack pnpm bdd stop         # Stop Gateway daemon
+corepack pnpm bdd status       # Show Gateway daemon status
 ```
 
 ## Package Structure
@@ -92,7 +96,8 @@ Use `.env.local` for persistent local config (Git-ignored).
 ├── allowlist.json / pairing.json     # Security state
 ├── models.json                       # Failover model profiles
 ├── memory.db                         # SQLite (FTS5 + vector)
-├── logs/ / sessions/ / memory/       # Runtime data
+├── gateway.pid                       # Daemon PID file (when running in background)
+├── logs/ / sessions/ / memory/       # Runtime data (logs/gateway.log for daemon output)
 └── plugins/ / skills/                # User extensions
 ```
 
