@@ -10,7 +10,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import type { Tool, ToolContext, ToolCallResult, JsonObject } from "../types.js";
 
-const ANCHOR =
+const DEFAULT_ANCHOR =
   "## **警告** FACET 模组 内容切换时，必须在这一行之后执行，不可覆盖替换这一行之前的内容。";
 
 /** 列出 facets 目录下可用的模组名（不含后缀） */
@@ -114,10 +114,11 @@ export const switchFacetTool: Tool = {
     }
 
     // ── 5. 查找锚点 ──
+    const anchor = process.env.BELLDANDY_FACET_ANCHOR?.trim() || DEFAULT_ANCHOR;
     const lines = soulContent.split("\n");
     let anchorIndex = -1;
     for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes("警告") && lines[i].includes("FACET 模组") && lines[i].includes("不可覆盖替换这一行之前的内容")) {
+      if (lines[i].includes(anchor)) {
         anchorIndex = i;
         break;
       }
@@ -125,7 +126,7 @@ export const switchFacetTool: Tool = {
 
     if (anchorIndex === -1) {
       return makeError(
-        `未在 SOUL.md 中找到 FACET 切换锚点行。请确认文件中包含锚点: "${ANCHOR}"`,
+        `未在 SOUL.md 中找到 FACET 切换锚点行。请确认文件中包含锚点: "${anchor}"`,
       );
     }
 
