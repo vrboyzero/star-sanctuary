@@ -1,5 +1,6 @@
 export * from "./types.js";
 export * from "./manager.js";
+export * from "./router/index.js";
 export * from "./feishu.js";
 export * from "./qq.js";
 export * from "./community.js";

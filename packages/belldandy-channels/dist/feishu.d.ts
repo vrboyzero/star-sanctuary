@@ -1,10 +1,8 @@
-import type { BelldandyAgent } from "@belldandy/agent";
-import type { Channel } from "./types.js";
+import type { Channel, ChannelConfig } from "./types.js";
 import { ConversationStore } from "@belldandy/agent";
-export interface FeishuChannelConfig {
+export interface FeishuChannelConfig extends ChannelConfig {
     appId: string;
     appSecret: string;
-    agent: BelldandyAgent;
     conversationStore: ConversationStore;
     agentId?: string;
     initialChatId?: string;
@@ -29,6 +27,9 @@ export declare class FeishuChannel implements Channel {
     private readonly agent;
     private readonly conversationStore;
     private readonly agentId?;
+    private readonly defaultAgentId?;
+    private readonly router?;
+    private readonly agentResolver?;
     private readonly sttTranscribe?;
     private _running;
     private lastChatId?;
@@ -38,6 +39,9 @@ export declare class FeishuChannel implements Channel {
     /** 渠道是否正在运行 */
     get isRunning(): boolean;
     constructor(config: FeishuChannelConfig);
+    private inferChatKind;
+    private extractMentions;
+    private resolveAgent;
     start(): Promise<void>;
     stop(): Promise<void>;
     private handleMessage;

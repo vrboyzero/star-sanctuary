@@ -4,6 +4,7 @@ import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
+import type { WebhookConfig, IdempotencyManager } from "./webhook/index.js";
 export type GatewayServerOptions = {
     port: number;
     host?: string;
@@ -44,6 +45,10 @@ export type GatewayServerOptions = {
     isConfigured?: () => boolean;
     /** 技能注册表（用于获取已加载技能列表） */
     skillRegistry?: SkillRegistry;
+    /** Webhook 配置 */
+    webhookConfig?: WebhookConfig;
+    /** Webhook 幂等性管理器 */
+    webhookIdempotency?: IdempotencyManager;
 };
 export type GatewayServer = {
     port: number;

@@ -6,6 +6,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { MockAgent, ConversationStore, extractIdentityInfo } from "@belldandy/agent";
 import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
+import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
 const DEFAULT_METHODS = [
     "message.send",
     "config.read",
@@ -191,6 +192,129 @@ export async function startGatewayServer(opts) {
             }
             catch (error) {
                 log.error("api", "Failed to process community message", error);
+                res.status(500).json({
+                    ok: false,
+                    error: {
+                        code: "INTERNAL_ERROR",
+                        message: error instanceof Error ? error.message : "Unknown error",
+                    },
+                });
+            }
+        });
+    }
+    // Webhook endpoint (for external system integration)
+    const webhookEnabled = opts.webhookConfig && opts.webhookConfig.webhooks.length > 0;
+    if (!webhookEnabled) {
+        app.post("/api/webhook/:id", (_req, res) => {
+            res.status(404).json({
+                ok: false,
+                error: {
+                    code: "WEBHOOK_DISABLED",
+                    message: "Webhook API is disabled. Configure webhooks in ~/.belldandy/webhooks.json to enable.",
+                },
+            });
+        });
+    }
+    else {
+        app.post("/api/webhook/:id", async (req, res) => {
+            try {
+                const webhookId = req.params.id;
+                if (!webhookId || typeof webhookId !== "string") {
+                    return res.status(400).json({
+                        ok: false,
+                        error: { code: "INVALID_REQUEST", message: "Missing webhook ID" },
+                    });
+                }
+                // Find webhook rule
+                const rule = findWebhookRule(opts.webhookConfig, webhookId);
+                if (!rule) {
+                    return res.status(404).json({
+                        ok: false,
+                        error: { code: "WEBHOOK_NOT_FOUND", message: `Webhook "${webhookId}" not found` },
+                    });
+                }
+                // Check if webhook is enabled
+                if (!rule.enabled) {
+                    return res.status(403).json({
+                        ok: false,
+                        error: { code: "WEBHOOK_DISABLED", message: `Webhook "${webhookId}" is disabled` },
+                    });
+                }
+                // Verify Bearer token
+                const authHeader = req.headers.authorization;
+                if (!verifyWebhookToken(rule, authHeader)) {
+                    res.setHeader("WWW-Authenticate", 'Bearer realm="belldandy-webhook"');
+                    return res.status(401).json({
+                        ok: false,
+                        error: { code: "UNAUTHORIZED", message: "Missing or invalid bearer token" },
+                    });
+                }
+                // Check idempotency
+                const idempotencyKey = req.headers["x-idempotency-key"];
+                if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
+                    const cached = opts.webhookIdempotency.getCachedResponse(webhookId, idempotencyKey);
+                    if (cached) {
+                        log.info("webhook", `Duplicate request detected: ${webhookId} / ${idempotencyKey}`);
+                        return res.json({ ...cached, duplicate: true });
+                    }
+                }
+                // Parse request body
+                const params = req.body;
+                const requestedAgentId = params.agentId ?? rule.defaultAgentId;
+                const conversationId = params.conversationId ?? generateConversationId(rule);
+                // Generate prompt text
+                let promptText = params.text ?? "";
+                if (!promptText && params.payload) {
+                    promptText = generatePromptFromPayload(rule, params.payload);
+                }
+                if (!promptText.trim()) {
+                    return res.status(400).json({
+                        ok: false,
+                        error: { code: "INVALID_REQUEST", message: "Missing text or payload" },
+                    });
+                }
+                // Get agent instance
+                const agent = requestedAgentId && opts.agentRegistry
+                    ? opts.agentRegistry.create(requestedAgentId)
+                    : opts.agentFactory?.();
+                if (!agent) {
+                    return res.status(503).json({
+                        ok: false,
+                        error: { code: "AGENT_UNAVAILABLE", message: "No agent configured" },
+                    });
+                }
+                // Process message through agent
+                log.info("webhook", `Processing webhook: id=${webhookId}, conversationId=${conversationId}, agentId=${requestedAgentId ?? "default"}`);
+                const stream = agent.run({
+                    conversationId,
+                    text: promptText,
+                    agentId: requestedAgentId,
+                });
+                let finalText = "";
+                for await (const item of stream) {
+                    if (item.type === "final") {
+                        finalText = item.text;
+                    }
+                }
+                // Build response
+                const response = {
+                    ok: true,
+                    payload: {
+                        webhookId,
+                        conversationId,
+                        response: finalText,
+                    },
+                };
+                // Cache response for idempotency
+                if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
+                    opts.webhookIdempotency.cacheResponse(webhookId, idempotencyKey, response);
+                }
+                // Return success response
+                res.json(response);
+                log.info("webhook", `Webhook processed successfully: ${finalText.substring(0, 50)}...`);
+            }
+            catch (error) {
+                log.error("webhook", "Failed to process webhook", error);
                 res.status(500).json({
                     ok: false,
                     error: {

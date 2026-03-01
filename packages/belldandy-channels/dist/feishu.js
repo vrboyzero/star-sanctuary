@@ -11,6 +11,9 @@ export class FeishuChannel {
     agent;
     conversationStore;
     agentId;
+    defaultAgentId;
+    router;
+    agentResolver;
     sttTranscribe;
     _running = false;
     lastChatId; // Track the last active chat for proactive messaging
@@ -26,6 +29,9 @@ export class FeishuChannel {
         this.agent = config.agent;
         this.conversationStore = config.conversationStore;
         this.agentId = config.agentId;
+        this.defaultAgentId = config.defaultAgentId;
+        this.router = config.router;
+        this.agentResolver = config.agentResolver;
         // HTTP Client for sending messages
         this.client = new lark.Client({
             appId: config.appId,
@@ -45,6 +51,64 @@ export class FeishuChannel {
             this.lastChatId = config.initialChatId;
             console.log(`Feishu: Restored last chat ID: ${this.lastChatId}`);
         }
+    }
+    inferChatKind(message) {
+        return message?.chat_type === "p2p" ? "dm" : "group";
+    }
+    extractMentions(message) {
+        const mentions = new Set();
+        const addMention = (value) => {
+            if (typeof value !== "string")
+                return;
+            const trimmed = value.trim();
+            if (trimmed)
+                mentions.add(trimmed);
+        };
+        if (Array.isArray(message?.mentions)) {
+            for (const mention of message.mentions) {
+                if (!mention || typeof mention !== "object")
+                    continue;
+                const obj = mention;
+                addMention(obj.id);
+                addMention(obj.user_id);
+                addMention(obj.open_id);
+            }
+        }
+        if (typeof message?.content === "string") {
+            try {
+                const contentObj = JSON.parse(message.content);
+                if (typeof contentObj.text === "string") {
+                    if (/<at\s+user_id=/.test(contentObj.text) || /@\S+/.test(contentObj.text)) {
+                        mentions.add("__mention__");
+                    }
+                }
+                if (Array.isArray(contentObj.mentions)) {
+                    for (const mention of contentObj.mentions) {
+                        if (!mention || typeof mention !== "object")
+                            continue;
+                        const obj = mention;
+                        addMention(obj.id);
+                        addMention(obj.user_id);
+                        addMention(obj.open_id);
+                    }
+                }
+            }
+            catch {
+                // ignore non-json content
+            }
+        }
+        return Array.from(mentions);
+    }
+    resolveAgent(agentId) {
+        if (this.agentResolver) {
+            try {
+                return this.agentResolver(agentId);
+            }
+            catch (error) {
+                console.warn(`[${this.name}] Failed to resolve agent "${agentId}", fallback to default agent:`, error);
+            }
+        }
+        return this.agent;
     }
     async start() {
         if (this._running)
@@ -226,6 +290,34 @@ export class FeishuChannel {
         // Ignore empty messages
         if (!text)
             return;
+        const chatKind = this.inferChatKind(message);
+        const mentions = this.extractMentions(message);
+        const mentioned = chatKind === "dm" ? true : mentions.length > 0;
+        const senderId = sender?.sender_id?.open_id || sender?.sender_id?.user_id || sender?.sender_id?.union_id;
+        const decision = this.router
+            ? this.router.decide({
+                channel: "feishu",
+                chatKind,
+                chatId,
+                text,
+                senderId: typeof senderId === "string" ? senderId : undefined,
+                senderName: typeof sender?.sender_id?.user_id === "string" ? sender.sender_id.user_id : undefined,
+                mentions,
+                mentioned,
+                eventType: "im.message.receive_v1",
+            })
+            : {
+                allow: true,
+                reason: "router_unavailable",
+                agentId: this.agentId ?? this.defaultAgentId,
+            };
+        if (!decision.allow) {
+            console.log(`[${this.name}] Route blocked message ${msgId} (${decision.reason})`);
+            return;
+        }
+        const selectedAgentId = decision.agentId ?? this.agentId ?? this.defaultAgentId;
+        const runAgent = this.resolveAgent(selectedAgentId);
+        console.log(`[${this.name}] Route decision for ${msgId}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
         console.log(`Feishu: Processing message ${msgId} from chat ${chatId}: "${text.slice(0, 50)}..."`);
         // Run the agent
         // We create a history context if possible, but for MVP we just send the text
@@ -233,7 +325,7 @@ export class FeishuChannel {
         // We pass conversationId as chatId
         // [PERSISTENCE] Add User Message to Store
         this.conversationStore.addMessage(chatId, "user", text, {
-            agentId: this.agentId,
+            agentId: selectedAgentId,
             channel: "feishu",
         });
         // [PERSISTENCE] Get History from Store
@@ -250,7 +342,7 @@ export class FeishuChannel {
             }
         };
         try {
-            const stream = this.agent.run(runInput);
+            const stream = runAgent.run(runInput);
             let replyText = "";
             for await (const item of stream) {
                 if (item.type === "delta") {
@@ -276,7 +368,7 @@ export class FeishuChannel {
                     .replace(/\n{3,}/g, "\n\n")
                     .trim();
                 this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText, {
-                    agentId: this.agentId,
+                    agentId: selectedAgentId,
                     channel: "feishu",
                 });
                 await this.reply(msgId, replyText);

@@ -2,6 +2,8 @@
 export * from "./types.js";
 // 渠道管理器
 export * from "./manager.js";
+// 路由引擎
+export * from "./router/index.js";
 // 渠道实现
 export * from "./feishu.js";
 export * from "./qq.js";
