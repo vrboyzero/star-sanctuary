@@ -4,6 +4,9 @@
  */
 
 import type { BelldandyAgent } from "@belldandy/agent";
+import type { ChannelRouter } from "./router/types.js";
+
+export type ChannelAgentResolver = (agentId?: string) => BelldandyAgent;
 
 /**
  * 渠道基础配置
@@ -11,6 +14,12 @@ import type { BelldandyAgent } from "@belldandy/agent";
 export interface ChannelConfig {
     /** Agent 实例，用于处理消息 */
     agent: BelldandyAgent;
+    /** 可选：渠道消息路由器 */
+    router?: ChannelRouter;
+    /** 可选：根据 agentId 解析 Agent 实例（用于多 Agent 路由） */
+    agentResolver?: ChannelAgentResolver;
+    /** 可选：路由默认 Agent ID */
+    defaultAgentId?: string;
 }
 
 /**

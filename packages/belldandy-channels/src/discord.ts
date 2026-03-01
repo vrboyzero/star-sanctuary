@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Message, TextChannel } from "discord.js";
 import type { BelldandyAgent } from "@belldandy/agent";
 import type { Channel, ChannelConfig, ChannelEventListener } from "./types.js";
+import type { ChannelRouter } from "./router/types.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -25,11 +26,24 @@ export class DiscordChannel implements Channel {
     private processedMessages = new Set<string>();
     private state: DiscordState = {};
     private _running = false;
+    private readonly router?: ChannelRouter;
 
     constructor(config: DiscordChannelConfig) {
         this.agent = config.agent;
         this.config = config;
+        this.router = config.router;
         this.loadState();
+    }
+
+    private resolveAgent(agentId?: string): BelldandyAgent {
+        if (this.config.agentResolver) {
+            try {
+                return this.config.agentResolver(agentId);
+            } catch (error) {
+                console.warn(`[Discord] Failed to resolve agent "${agentId}", fallback to default agent:`, error);
+            }
+        }
+        return this.agent;
     }
 
     get isRunning(): boolean {
@@ -157,6 +171,36 @@ export class DiscordChannel implements Channel {
             return;
         }
 
+        const chatKind = message.guildId ? "channel" : "dm";
+        const mentions = message.mentions.users.map((u) => u.id);
+        const mentioned = message.guildId ? message.mentions.has(this.client!.user!.id) : true;
+        const decision = this.router
+            ? this.router.decide({
+                channel: "discord",
+                chatKind,
+                chatId,
+                text: message.content || "",
+                senderId: userId,
+                senderName: username,
+                mentions,
+                mentioned,
+                eventType: "messageCreate",
+            })
+            : {
+                allow: true,
+                reason: "router_unavailable",
+                agentId: this.config.defaultAgentId,
+            };
+
+        if (!decision.allow) {
+            console.log(`[Discord] Route blocked message ${message.id} (${decision.reason})`);
+            return;
+        }
+
+        const selectedAgentId = decision.agentId ?? this.config.defaultAgentId;
+        const runAgent = this.resolveAgent(selectedAgentId);
+        console.log(`[Discord] Route decision for ${message.id}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
+
         // 显示 "正在输入..." 状态
         if (message.channel.isTextBased() && 'sendTyping' in message.channel) {
             await message.channel.sendTyping();
@@ -164,7 +208,7 @@ export class DiscordChannel implements Channel {
 
         try {
             // 调用 Agent 处理
-            const stream = this.agent.run({
+            const stream = runAgent.run({
                 text: message.content || "",
                 content: contentParts,
                 conversationId: chatId,
@@ -173,7 +217,8 @@ export class DiscordChannel implements Channel {
                     userId,
                     username,
                     guildId: message.guildId ?? undefined,
-                    channelId: chatId
+                    channelId: chatId,
+                    agentId: selectedAgentId,
                 }
             });
 

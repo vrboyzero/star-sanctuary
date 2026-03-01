@@ -1,12 +1,12 @@
 import { WebSocket } from "ws";
 import type { BelldandyAgent, ConversationStore } from "@belldandy/agent";
-import type { Channel } from "./types.js";
+import type { ChatKind, ChannelRouter } from "./router/types.js";
+import type { Channel, ChannelConfig } from "./types.js";
 
-export interface QqChannelConfig {
+export interface QqChannelConfig extends ChannelConfig {
     appId: string;
     appSecret: string;
     sandbox?: boolean;
-    agent: BelldandyAgent;
     conversationStore: ConversationStore;
     agentId?: string;
 }
@@ -47,6 +47,8 @@ export class QqChannel implements Channel {
     private readonly agent: BelldandyAgent;
     private readonly conversationStore: ConversationStore;
     private readonly agentId?: string;
+    private readonly defaultAgentId?: string;
+    private readonly router?: ChannelRouter;
 
     private _running = false;
     private lastChatId?: string;
@@ -75,6 +77,25 @@ export class QqChannel implements Channel {
         this.agent = config.agent;
         this.conversationStore = config.conversationStore;
         this.agentId = config.agentId;
+        this.defaultAgentId = config.defaultAgentId;
+        this.router = config.router;
+    }
+
+    private resolveAgent(agentId?: string): BelldandyAgent {
+        if (this.config.agentResolver) {
+            try {
+                return this.config.agentResolver(agentId);
+            } catch (error) {
+                console.warn(`[${this.name}] Failed to resolve agent "${agentId}", fallback to default agent:`, error);
+            }
+        }
+        return this.agent;
+    }
+
+    private inferChatKind(eventType: string): ChatKind {
+        if (eventType === "DIRECT_MESSAGE_CREATE" || eventType === "C2C_MESSAGE_CREATE") return "dm";
+        if (eventType === "GROUP_AT_MESSAGE_CREATE") return "group";
+        return "channel";
     }
 
     /**
@@ -428,12 +449,42 @@ export class QqChannel implements Channel {
             eventType,
         };
 
+        const chatKind = this.inferChatKind(eventType);
+        const mentions = eventType.includes("_AT_") ? ["__mention__"] : [];
+        const mentioned = chatKind === "dm" ? true : mentions.length > 0;
+        const decision = this.router
+            ? this.router.decide({
+                channel: "qq",
+                chatKind,
+                chatId: String(this.lastChatId ?? ""),
+                text: content,
+                senderId: typeof message.author?.id === "string" ? message.author.id : undefined,
+                senderName: typeof message.author?.username === "string" ? message.author.username : undefined,
+                mentions,
+                mentioned,
+                eventType,
+            })
+            : {
+                allow: true,
+                reason: "router_unavailable",
+                agentId: this.agentId ?? this.defaultAgentId,
+            };
+
+        if (!decision.allow) {
+            console.log(`[${this.name}] Route blocked message ${msgId} (${decision.reason})`);
+            return;
+        }
+
+        const selectedAgentId = decision.agentId ?? this.agentId ?? this.defaultAgentId;
+        const runAgent = this.resolveAgent(selectedAgentId);
+        console.log(`[${this.name}] Route decision for ${msgId}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
+
         // 获取或创建会话
         const conversationId = `qq_${this.lastChatId}`;
 
         // 添加用户消息到会话历史
         this.conversationStore.addMessage(conversationId, "user", content, {
-            agentId: this.agentId,
+            agentId: selectedAgentId,
             channel: this.name,
         });
 
@@ -442,20 +493,21 @@ export class QqChannel implements Channel {
 
         // 调用 Agent 处理
         try {
-            for await (const item of this.agent.run({
+            for await (const item of runAgent.run({
                 conversationId,
                 text: content,
                 history,
                 meta: {
                     eventType,
                     channel: this.name,
+                    agentId: selectedAgentId,
                 },
             })) {
                 if (item.type === "final") {
                     await this.sendReply(item.text);
                     // 添加助手回复到会话历史
                     this.conversationStore.addMessage(conversationId, "assistant", item.text, {
-                        agentId: this.agentId,
+                        agentId: selectedAgentId,
                         channel: this.name,
                     });
                 }

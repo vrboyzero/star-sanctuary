@@ -1,13 +1,13 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { BelldandyAgent } from "@belldandy/agent";
-import type { Channel } from "./types.js";
+import type { ChatKind, ChannelRouter } from "./router/types.js";
+import type { Channel, ChannelAgentResolver, ChannelConfig } from "./types.js";
 
 import { ConversationStore } from "@belldandy/agent";
 
-export interface FeishuChannelConfig {
+export interface FeishuChannelConfig extends ChannelConfig {
     appId: string;
     appSecret: string;
-    agent: BelldandyAgent;
     conversationStore: ConversationStore;
     agentId?: string;
     initialChatId?: string;
@@ -28,6 +28,9 @@ export class FeishuChannel implements Channel {
     private readonly agent: BelldandyAgent;
     private readonly conversationStore: ConversationStore;
     private readonly agentId?: string;
+    private readonly defaultAgentId?: string;
+    private readonly router?: ChannelRouter;
+    private readonly agentResolver?: ChannelAgentResolver;
     private readonly sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
     private _running = false;
     private lastChatId?: string; // Track the last active chat for proactive messaging
@@ -46,6 +49,9 @@ export class FeishuChannel implements Channel {
         this.agent = config.agent;
         this.conversationStore = config.conversationStore;
         this.agentId = config.agentId;
+        this.defaultAgentId = config.defaultAgentId;
+        this.router = config.router;
+        this.agentResolver = config.agentResolver;
 
         // HTTP Client for sending messages
         this.client = new lark.Client({
@@ -70,6 +76,64 @@ export class FeishuChannel implements Channel {
             this.lastChatId = config.initialChatId;
             console.log(`Feishu: Restored last chat ID: ${this.lastChatId}`);
         }
+    }
+
+    private inferChatKind(message: any): ChatKind {
+        return message?.chat_type === "p2p" ? "dm" : "group";
+    }
+
+    private extractMentions(message: any): string[] {
+        const mentions = new Set<string>();
+        const addMention = (value: unknown) => {
+            if (typeof value !== "string") return;
+            const trimmed = value.trim();
+            if (trimmed) mentions.add(trimmed);
+        };
+
+        if (Array.isArray(message?.mentions)) {
+            for (const mention of message.mentions) {
+                if (!mention || typeof mention !== "object") continue;
+                const obj = mention as Record<string, unknown>;
+                addMention(obj.id);
+                addMention(obj.user_id);
+                addMention(obj.open_id);
+            }
+        }
+
+        if (typeof message?.content === "string") {
+            try {
+                const contentObj = JSON.parse(message.content) as Record<string, unknown>;
+                if (typeof contentObj.text === "string") {
+                    if (/<at\s+user_id=/.test(contentObj.text) || /@\S+/.test(contentObj.text)) {
+                        mentions.add("__mention__");
+                    }
+                }
+                if (Array.isArray(contentObj.mentions)) {
+                    for (const mention of contentObj.mentions) {
+                        if (!mention || typeof mention !== "object") continue;
+                        const obj = mention as Record<string, unknown>;
+                        addMention(obj.id);
+                        addMention(obj.user_id);
+                        addMention(obj.open_id);
+                    }
+                }
+            } catch {
+                // ignore non-json content
+            }
+        }
+
+        return Array.from(mentions);
+    }
+
+    private resolveAgent(agentId?: string): BelldandyAgent {
+        if (this.agentResolver) {
+            try {
+                return this.agentResolver(agentId);
+            } catch (error) {
+                console.warn(`[${this.name}] Failed to resolve agent "${agentId}", fallback to default agent:`, error);
+            }
+        }
+        return this.agent;
     }
 
 
@@ -274,6 +338,38 @@ export class FeishuChannel implements Channel {
         // Ignore empty messages
         if (!text) return;
 
+        const chatKind = this.inferChatKind(message);
+        const mentions = this.extractMentions(message);
+        const mentioned = chatKind === "dm" ? true : mentions.length > 0;
+        const senderId = sender?.sender_id?.open_id || sender?.sender_id?.user_id || sender?.sender_id?.union_id;
+
+        const decision = this.router
+            ? this.router.decide({
+                channel: "feishu",
+                chatKind,
+                chatId,
+                text,
+                senderId: typeof senderId === "string" ? senderId : undefined,
+                senderName: typeof sender?.sender_id?.user_id === "string" ? sender.sender_id.user_id : undefined,
+                mentions,
+                mentioned,
+                eventType: "im.message.receive_v1",
+            })
+            : {
+                allow: true,
+                reason: "router_unavailable",
+                agentId: this.agentId ?? this.defaultAgentId,
+            };
+
+        if (!decision.allow) {
+            console.log(`[${this.name}] Route blocked message ${msgId} (${decision.reason})`);
+            return;
+        }
+
+        const selectedAgentId = decision.agentId ?? this.agentId ?? this.defaultAgentId;
+        const runAgent = this.resolveAgent(selectedAgentId);
+        console.log(`[${this.name}] Route decision for ${msgId}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
+
         console.log(`Feishu: Processing message ${msgId} from chat ${chatId}: "${text.slice(0, 50)}..."`);
 
         // Run the agent
@@ -283,7 +379,7 @@ export class FeishuChannel implements Channel {
 
         // [PERSISTENCE] Add User Message to Store
         this.conversationStore.addMessage(chatId, "user", text, {
-            agentId: this.agentId,
+            agentId: selectedAgentId,
             channel: "feishu",
         });
 
@@ -303,7 +399,7 @@ export class FeishuChannel implements Channel {
         };
 
         try {
-            const stream = this.agent.run(runInput);
+            const stream = runAgent.run(runInput);
             let replyText = "";
 
             for await (const item of stream) {
@@ -329,7 +425,7 @@ export class FeishuChannel implements Channel {
                     .replace(/\n{3,}/g, "\n\n")
                     .trim();
                 this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText, {
-                    agentId: this.agentId,
+                    agentId: selectedAgentId,
                     channel: "feishu",
                 });
 

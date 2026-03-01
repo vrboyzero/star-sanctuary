@@ -80,7 +80,7 @@ import {
 } from "@belldandy/skills";
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
-import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath } from "@belldandy/channels";
+import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
 
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
@@ -94,6 +94,7 @@ import {
 import { createLoggerFromEnv } from "../logger/index.js";
 import { ToolsConfigManager } from "../tools-config.js";
 import { PluginRegistry } from "@belldandy/plugins";
+import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 
 // --- Env Loading ---
 loadEnvFileIfExists(path.join(process.cwd(), ".env.local"));
@@ -162,6 +163,8 @@ const qqSandbox = readEnv("BELLDANDY_QQ_SANDBOX") !== "false";
 const discordEnabled = readEnv("BELLDANDY_DISCORD_ENABLED") === "true";
 const discordBotToken = readEnv("BELLDANDY_DISCORD_BOT_TOKEN");
 const discordDefaultChannelId = readEnv("BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID");
+const channelRouterEnabled = readEnv("BELLDANDY_CHANNEL_ROUTER_ENABLED") === "true";
+const channelRouterDefaultAgentId = readEnv("BELLDANDY_CHANNEL_ROUTER_DEFAULT_AGENT_ID") ?? "default";
 
 // Heartbeat
 const heartbeatEnabled = readEnv("BELLDANDY_HEARTBEAT_ENABLED") === "true";
@@ -174,6 +177,9 @@ const cronEnabled = readEnv("BELLDANDY_CRON_ENABLED") === "true";
 // State & Memory
 const defaultStateDir = path.join(os.homedir(), ".belldandy");
 const stateDir = readEnv("BELLDANDY_STATE_DIR") ?? defaultStateDir;
+const channelRouterConfigPath = readEnv("BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH") ?? path.join(stateDir, "channels-routing.json");
+const webhookConfigPath = readEnv("BELLDANDY_WEBHOOK_CONFIG_PATH") ?? path.join(stateDir, "webhooks.json");
+const webhookIdempotencyWindowMs = Number(readEnv("BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS")) || 10 * 60 * 1000; // 默认 10 分钟
 const extraWorkspaceRootsRaw = readEnv("BELLDANDY_EXTRA_WORKSPACE_ROOTS");
 const extraWorkspaceRoots = extraWorkspaceRootsRaw
   ? extraWorkspaceRootsRaw
@@ -1318,6 +1324,21 @@ if (toolsEnabled) {
   logger.info("auto-boundary", "Registered auto task boundary detection hooks (Extension C)");
 }
 
+// Load Webhook configuration
+const webhookConfig = loadWebhookConfig(webhookConfigPath, {
+  info: (m, d) => logger.info("webhook", m, d),
+  warn: (m, d) => logger.warn("webhook", m, d),
+  error: (m, d) => logger.error("webhook", m, d),
+});
+
+const webhookIdempotency = new IdempotencyManager(webhookIdempotencyWindowMs);
+
+if (webhookConfig.webhooks.length > 0) {
+  logger.info("webhook", `Loaded ${webhookConfig.webhooks.length} webhook(s) from ${webhookConfigPath}`);
+} else {
+  logger.info("webhook", "No webhooks configured (create ~/.belldandy/webhooks.json to enable)");
+}
+
 const server = await startGatewayServer({
   port,
   host,
@@ -1350,6 +1371,8 @@ const server = await startGatewayServer({
   },
   // 告知前端当前 AI 模型是否已配置好，未配置时前端自动弹出设置引导
   isConfigured: () => agentProvider === "openai" && !!openaiApiKey,
+  webhookConfig,
+  webhookIdempotency,
 });
 
 // 绑定 broadcast 给 service_restart 工具使用
@@ -1398,6 +1421,38 @@ if (autoOpenBrowser) {
   }
 }
 
+const channelRouter = createChannelRouter({
+  enabled: channelRouterEnabled,
+  configPath: channelRouterConfigPath,
+  defaultAgentId: channelRouterDefaultAgentId,
+  logger: {
+    debug: (message, data) => logger.debug("channel-router", message, data),
+    info: (message, data) => logger.info("channel-router", message, data),
+    warn: (message, data) => logger.warn("channel-router", message, data),
+  },
+});
+
+if (channelRouterEnabled) {
+  logger.info("channel-router", `enabled (config: ${channelRouterConfigPath}, defaultAgent: ${channelRouterDefaultAgentId})`);
+} else {
+  logger.info("channel-router", "disabled");
+}
+
+const resolveChannelAgent = (requestedAgentId?: string): BelldandyAgent => {
+  if (agentRegistry) {
+    try {
+      return agentRegistry.create(requestedAgentId);
+    } catch (error) {
+      logger.warn("channel-router", `Failed to resolve agent "${requestedAgentId ?? "default"}", fallback to default`, error);
+      return agentRegistry.create("default");
+    }
+  }
+  if (createAgent) {
+    return createAgent();
+  }
+  throw new Error("No agent available for channel routing");
+};
+
 // 9. Start Feishu Channel (if configured)
 let feishuChannel: FeishuChannel | undefined;
 if (feishuAppId && feishuAppSecret && createAgent) {
@@ -1411,6 +1466,9 @@ if (feishuAppId && feishuAppSecret && createAgent) {
       appSecret: feishuAppSecret,
       agent: agent,
       agentId: feishuAgentId,
+      defaultAgentId: channelRouterDefaultAgentId,
+      router: channelRouter,
+      agentResolver: resolveChannelAgent,
       conversationStore: conversationStore, // [PERSISTENCE] Inject store
       initialChatId: (() => {
         try {
@@ -1467,6 +1525,9 @@ if (qqAppId && qqAppSecret && createAgent) {
       sandbox: qqSandbox,
       agent: agent,
       agentId: qqAgentId,
+      defaultAgentId: channelRouterDefaultAgentId,
+      router: channelRouter,
+      agentResolver: resolveChannelAgent,
       conversationStore: conversationStore,
     });
     // Do not await, start in background
@@ -1489,6 +1550,9 @@ if (discordEnabled && discordBotToken && createAgent) {
       agent: agent,
       botToken: discordBotToken,
       defaultChannelId: discordDefaultChannelId,
+      defaultAgentId: channelRouterDefaultAgentId,
+      router: channelRouter,
+      agentResolver: resolveChannelAgent,
       stateFilePath: path.join(stateDir, "discord-state.json"),
     });
     // Do not await, start in background
