@@ -6,6 +6,7 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { MockAgent, ConversationStore, extractIdentityInfo } from "@belldandy/agent";
 import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
+import { checkAndConsumeRestartCooldown, formatRestartCooldownMessage } from "@belldandy/skills";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
 const DEFAULT_METHODS = [
     "message.send",
@@ -1050,6 +1051,15 @@ async function handleReq(ws, req, ctx) {
             }
         }
         case "system.restart": {
+            const cooldownCheck = checkAndConsumeRestartCooldown({ stateDir: ctx.stateDir });
+            if (!cooldownCheck.allowed) {
+                const message = formatRestartCooldownMessage(cooldownCheck.remainingSeconds);
+                ctx.log.warn("system", "system.restart blocked by cooldown", {
+                    clientId: ctx.clientId,
+                    remainingSeconds: cooldownCheck.remainingSeconds,
+                });
+                return { type: "res", id: req.id, ok: false, error: { code: "restart_cooldown", message } };
+            }
             setTimeout(() => {
                 process.exit(100);
             }, 500);

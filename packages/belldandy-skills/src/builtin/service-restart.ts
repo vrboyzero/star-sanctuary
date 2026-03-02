@@ -9,6 +9,11 @@
  */
 
 import type { Tool, ToolContext, ToolCallResult, JsonObject } from "../types.js";
+import {
+  checkAndConsumeRestartCooldown,
+  formatRestartCooldownMessage,
+  getRestartCommandCooldownSeconds,
+} from "./restart-cooldown.js";
 
 /** 广播函数接口，由 gateway 注入 */
 export type BroadcastFn = (msg: unknown) => void;
@@ -24,7 +29,7 @@ export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
     definition: {
       name: "service_restart",
       description:
-        "Restart the Belldandy gateway service. Use this when configuration changes require a restart, or when the user explicitly requests a service restart. The service will gracefully shut down and automatically restart via the launcher supervisor. A 3-second countdown will be broadcast to all connected clients before the restart.",
+        "Restart the Belldandy gateway service. Use this when configuration changes require a restart, or when the user explicitly requests a service restart. The service will gracefully shut down and automatically restart via the launcher supervisor. A 3-second countdown will be broadcast to all connected clients before the restart. A 180-second cooldown applies between restart commands.",
       parameters: {
         type: "object",
         properties: {
@@ -40,8 +45,26 @@ export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
       args: JsonObject,
       context: ToolContext,
     ): Promise<ToolCallResult> {
-      const reason = (args.reason as string) || "agent requested restart";
       const startMs = Date.now();
+      const reason = (args.reason as string) || "agent requested restart";
+      const cooldownCheck = checkAndConsumeRestartCooldown({
+        nowMs: startMs,
+        stateDir: context.workspaceRoot,
+      });
+      if (!cooldownCheck.allowed) {
+        const output = formatRestartCooldownMessage(cooldownCheck.remainingSeconds);
+        context.logger?.warn(
+          `Service restart blocked by cooldown: ${cooldownCheck.remainingSeconds}s remaining`,
+        );
+        return {
+          id: "",
+          name: "service_restart",
+          success: false,
+          output,
+          error: output,
+          durationMs: Date.now() - startMs,
+        };
+      }
 
       context.logger?.info(`Service restart requested: ${reason}`);
 
@@ -69,7 +92,7 @@ export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
         id: "",
         name: "service_restart",
         success: true,
-        output: `Service restart initiated (after ${COUNTDOWN_SECONDS}s countdown). Reason: ${reason}`,
+        output: `Service restart initiated (after ${COUNTDOWN_SECONDS}s countdown, cooldown ${getRestartCommandCooldownSeconds()}s). Reason: ${reason}`,
         durationMs: Date.now() - startMs,
       };
     },

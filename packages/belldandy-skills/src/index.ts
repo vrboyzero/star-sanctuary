@@ -60,6 +60,11 @@ export { switchFacetTool } from "./builtin/switch-facet.js";
 
 // 服务重启工具
 export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-restart.js";
+export {
+  checkAndConsumeRestartCooldown,
+  formatRestartCooldownMessage,
+  getRestartCommandCooldownSeconds,
+} from "./builtin/restart-cooldown.js";
 
 // 浏览器控制工具
 export {

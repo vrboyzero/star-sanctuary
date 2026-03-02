@@ -21,6 +21,7 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
+import { checkAndConsumeRestartCooldown, formatRestartCooldownMessage } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
@@ -1241,6 +1242,15 @@ async function handleReq(
     }
 
     case "system.restart": {
+      const cooldownCheck = checkAndConsumeRestartCooldown({ stateDir: ctx.stateDir });
+      if (!cooldownCheck.allowed) {
+        const message = formatRestartCooldownMessage(cooldownCheck.remainingSeconds);
+        ctx.log.warn("system", "system.restart blocked by cooldown", {
+          clientId: ctx.clientId,
+          remainingSeconds: cooldownCheck.remainingSeconds,
+        });
+        return { type: "res", id: req.id, ok: false, error: { code: "restart_cooldown", message } };
+      }
       setTimeout(() => {
         process.exit(100);
       }, 500);

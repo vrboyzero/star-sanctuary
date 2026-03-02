@@ -24,6 +24,7 @@ export { createCronTool } from "./builtin/cron-tool.js";
 export { switchFacetTool } from "./builtin/switch-facet.js";
 // 服务重启工具
 export { createServiceRestartTool } from "./builtin/service-restart.js";
+export { checkAndConsumeRestartCooldown, formatRestartCooldownMessage, getRestartCommandCooldownSeconds, } from "./builtin/restart-cooldown.js";
 // 浏览器控制工具
 export { browserOpenTool, browserNavigateTool, browserClickTool, browserTypeTool, browserScreenshotTool, browserGetContentTool, browserSnapshotTool, setBrowserLogger, } from "./builtin/browser/index.js";
 export { createMemorySearchTool, createMemoryGetTool } from "./builtin/memory.js";
