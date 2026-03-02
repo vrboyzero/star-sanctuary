@@ -46,6 +46,13 @@ function parsePositiveIntEnv(varName, fallback) {
         return fallback;
     return parsed;
 }
+function readEnvTrimmed(varName) {
+    const raw = process.env[varName];
+    if (!raw)
+        return undefined;
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+}
 function getAttachmentLimits() {
     return {
         maxFileBytes: parsePositiveIntEnv("BELLDANDY_ATTACHMENT_MAX_FILE_BYTES", DEFAULT_ATTACHMENT_MAX_FILE_BYTES),
@@ -103,6 +110,13 @@ export async function startGatewayServer(opts) {
     const communityApiToken = process.env.BELLDANDY_COMMUNITY_API_TOKEN
         ?? process.env.BELLDANDY_AUTH_TOKEN
         ?? (opts.auth.mode === "token" ? opts.auth.token : undefined);
+    const tokenUsageUploadConfig = {
+        enabled: String(process.env.BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED ?? "false").toLowerCase() === "true",
+        url: readEnvTrimmed("BELLDANDY_TOKEN_USAGE_UPLOAD_URL"),
+        token: readEnvTrimmed("BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY")
+            ?? readEnvTrimmed("BELLDANDY_TOKEN_USAGE_UPLOAD_TOKEN"), // backward compatible
+        timeoutMs: parsePositiveIntEnv("BELLDANDY_TOKEN_USAGE_UPLOAD_TIMEOUT_MS", 3000),
+    };
     app.use(express.json());
     if (!communityApiEnabled) {
         app.post("/api/message", (_req, res) => {
@@ -462,6 +476,7 @@ export async function startGatewayServer(opts) {
                 sttTranscribe: opts.sttTranscribe,
                 pluginRegistry: opts.pluginRegistry,
                 skillRegistry: opts.skillRegistry,
+                tokenUsageUploadConfig,
                 log,
             });
             if (res)
@@ -713,6 +728,7 @@ async function handleReq(ws, req, ctx) {
             }
             void (async () => {
                 try {
+                    let lastUploadedUsageTotal = 0;
                     const runInput = {
                         conversationId,
                         text: promptText,
@@ -768,6 +784,23 @@ async function handleReq(ws, req, ctx) {
                                     modelCalls: item.modelCalls,
                                 }
                             });
+                            if (ctx.tokenUsageUploadConfig.enabled && ctx.userUuid) {
+                                const usageTotal = Math.max(0, Number(item.inputTokens ?? 0) + Number(item.outputTokens ?? 0));
+                                const deltaTokens = Math.max(0, usageTotal - lastUploadedUsageTotal);
+                                if (usageTotal > lastUploadedUsageTotal) {
+                                    lastUploadedUsageTotal = usageTotal;
+                                }
+                                if (deltaTokens > 0) {
+                                    void uploadTokenUsage({
+                                        config: ctx.tokenUsageUploadConfig,
+                                        userUuid: ctx.userUuid,
+                                        conversationId,
+                                        source: parsed.value.from ?? "webchat",
+                                        deltaTokens,
+                                        log: ctx.log,
+                                    });
+                                }
+                            }
                         }
                     }
                     // Server-side auto TTS: generate audio and send combined response
@@ -859,6 +892,7 @@ async function handleReq(ws, req, ctx) {
                 "BELLDANDY_HEARTBEAT_ACTIVE_HOURS", "BELLDANDY_AGENT_TIMEOUT_MS",
                 "BELLDANDY_OPENAI_STREAM", "BELLDANDY_MEMORY_ENABLED",
                 "BELLDANDY_EXTRA_WORKSPACE_ROOTS",
+                "BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED",
                 // Extended whitelist for settings panel
                 "BELLDANDY_OPENAI_API_KEY", "BELLDANDY_AGENT_PROVIDER",
                 "BELLDANDY_EMBEDDING_OPENAI_API_KEY", "BELLDANDY_EMBEDDING_OPENAI_BASE_URL",
@@ -1199,6 +1233,57 @@ async function handleReq(ws, req, ctx) {
         }
     }
     return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Unknown method." } };
+}
+async function uploadTokenUsage(input) {
+    const { config, userUuid, conversationId, deltaTokens, source, log } = input;
+    if (!config.url) {
+        log.warn("token-upload", "Token usage upload enabled but BELLDANDY_TOKEN_USAGE_UPLOAD_URL is not configured");
+        return;
+    }
+    const headers = {
+        "Content-Type": "application/json",
+    };
+    if (config.token) {
+        headers.Authorization = `Bearer ${config.token}`;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+    try {
+        const res = await fetch(config.url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+                userUuid,
+                deltaTokens,
+                conversationId,
+                source,
+            }),
+            signal: controller.signal,
+        });
+        if (!res.ok) {
+            const bodyText = await res.text().catch(() => "");
+            log.warn("token-upload", "Token usage upload failed", {
+                status: res.status,
+                statusText: res.statusText,
+                body: bodyText.slice(0, 300),
+            });
+        }
+    }
+    catch (err) {
+        if (err?.name === "AbortError") {
+            log.warn("token-upload", "Token usage upload timeout", {
+                timeoutMs: config.timeoutMs,
+            });
+        }
+        else {
+            log.warn("token-upload", "Token usage upload error", {
+                error: String(err),
+            });
+        }
+    }
+    finally {
+        clearTimeout(timer);
+    }
 }
 function parseMessageSendParams(value) {
     if (!value || typeof value !== "object")

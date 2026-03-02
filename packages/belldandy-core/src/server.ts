@@ -102,6 +102,13 @@ type AttachmentLimits = {
   maxTotalBytes: number;
 };
 
+type TokenUsageUploadConfig = {
+  enabled: boolean;
+  url?: string;
+  token?: string;
+  timeoutMs: number;
+};
+
 function isUnderRoot(root: string, target: string): boolean {
   const resolvedRoot = path.resolve(root);
   const rel = path.relative(resolvedRoot, path.resolve(target));
@@ -122,6 +129,13 @@ function parsePositiveIntEnv(varName: string, fallback: number): number {
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
   return parsed;
+}
+
+function readEnvTrimmed(varName: string): string | undefined {
+  const raw = process.env[varName];
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  return trimmed || undefined;
 }
 
 function getAttachmentLimits(): AttachmentLimits {
@@ -185,6 +199,14 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     process.env.BELLDANDY_COMMUNITY_API_TOKEN
     ?? process.env.BELLDANDY_AUTH_TOKEN
     ?? (opts.auth.mode === "token" ? opts.auth.token : undefined);
+  const tokenUsageUploadConfig: TokenUsageUploadConfig = {
+    enabled: String(process.env.BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED ?? "false").toLowerCase() === "true",
+    url: readEnvTrimmed("BELLDANDY_TOKEN_USAGE_UPLOAD_URL"),
+    token:
+      readEnvTrimmed("BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY")
+      ?? readEnvTrimmed("BELLDANDY_TOKEN_USAGE_UPLOAD_TOKEN"), // backward compatible
+    timeoutMs: parsePositiveIntEnv("BELLDANDY_TOKEN_USAGE_UPLOAD_TIMEOUT_MS", 3000),
+  };
 
   app.use(express.json());
   if (!communityApiEnabled) {
@@ -590,6 +612,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
         skillRegistry: opts.skillRegistry,
+        tokenUsageUploadConfig,
         log,
       });
       if (res) sendRes(ws, res);
@@ -680,6 +703,7 @@ async function handleReq(
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     pluginRegistry?: PluginRegistry;
     skillRegistry?: SkillRegistry;
+    tokenUsageUploadConfig: TokenUsageUploadConfig;
   },
 ): Promise<GatewayResFrame | null> {
   const secureMethods = [
@@ -877,6 +901,7 @@ async function handleReq(
 
       void (async () => {
         try {
+          let lastUploadedUsageTotal = 0;
           const runInput: any = {
             conversationId,
             text: promptText,
@@ -934,6 +959,24 @@ async function handleReq(
                   modelCalls: item.modelCalls,
                 }
               });
+
+              if (ctx.tokenUsageUploadConfig.enabled && ctx.userUuid) {
+                const usageTotal = Math.max(0, Number(item.inputTokens ?? 0) + Number(item.outputTokens ?? 0));
+                const deltaTokens = Math.max(0, usageTotal - lastUploadedUsageTotal);
+                if (usageTotal > lastUploadedUsageTotal) {
+                  lastUploadedUsageTotal = usageTotal;
+                }
+                if (deltaTokens > 0) {
+                  void uploadTokenUsage({
+                    config: ctx.tokenUsageUploadConfig,
+                    userUuid: ctx.userUuid,
+                    conversationId,
+                    source: parsed.value.from ?? "webchat",
+                    deltaTokens,
+                    log: ctx.log,
+                  });
+                }
+              }
             }
           }
 
@@ -1031,6 +1074,7 @@ async function handleReq(
         "BELLDANDY_HEARTBEAT_ACTIVE_HOURS", "BELLDANDY_AGENT_TIMEOUT_MS",
         "BELLDANDY_OPENAI_STREAM", "BELLDANDY_MEMORY_ENABLED",
         "BELLDANDY_EXTRA_WORKSPACE_ROOTS",
+        "BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED",
         // Extended whitelist for settings panel
         "BELLDANDY_OPENAI_API_KEY", "BELLDANDY_AGENT_PROVIDER",
         "BELLDANDY_EMBEDDING_OPENAI_API_KEY", "BELLDANDY_EMBEDDING_OPENAI_BASE_URL",
@@ -1403,6 +1447,65 @@ async function handleReq(
   }
 
   return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Unknown method." } };
+}
+
+async function uploadTokenUsage(input: {
+  config: TokenUsageUploadConfig;
+  userUuid: string;
+  conversationId: string;
+  deltaTokens: number;
+  source: string;
+  log: GatewayLog;
+}): Promise<void> {
+  const { config, userUuid, conversationId, deltaTokens, source, log } = input;
+  if (!config.url) {
+    log.warn("token-upload", "Token usage upload enabled but BELLDANDY_TOKEN_USAGE_UPLOAD_URL is not configured");
+    return;
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.token) {
+    headers.Authorization = `Bearer ${config.token}`;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const res = await fetch(config.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        userUuid,
+        deltaTokens,
+        conversationId,
+        source,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      log.warn("token-upload", "Token usage upload failed", {
+        status: res.status,
+        statusText: res.statusText,
+        body: bodyText.slice(0, 300),
+      });
+    }
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      log.warn("token-upload", "Token usage upload timeout", {
+        timeoutMs: config.timeoutMs,
+      });
+    } else {
+      log.warn("token-upload", "Token usage upload error", {
+        error: String(err),
+      });
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 
