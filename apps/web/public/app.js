@@ -78,6 +78,13 @@ const attachmentsPreviewEl = document.getElementById("attachmentsPreview");
 const attachBtn = document.getElementById("attachBtn");
 const fileInput = document.getElementById("fileInput");
 let pendingAttachments = []; // { name, type, mimeType, content }
+const UPSTREAM_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
+const UPSTREAM_BODY_GUARD_BYTES = Math.floor(UPSTREAM_BODY_LIMIT_BYTES * 0.9);
+const IMAGE_COMPRESS_TRIGGER_BYTES = 800 * 1024;
+const IMAGE_COMPRESS_TARGET_BYTES = 1200 * 1024;
+const IMAGE_COMPRESS_MAX_EDGE = 2048;
+const IMAGE_COMPRESS_RESIZE_FACTOR = 0.85;
+const IMAGE_COMPRESS_QUALITIES = [0.86, 0.78, 0.7, 0.62, 0.54];
 
 // 侧边栏状态（默认收起）
 let sidebarExpanded = false;
@@ -604,6 +611,70 @@ function sendConnect() {
   ws.send(JSON.stringify(connectFrame));
 }
 
+function estimateBase64DecodedBytes(base64) {
+  if (typeof base64 !== "string") return 0;
+  const normalized = base64.trim().replace(/\s+/g, "");
+  if (!normalized) return 0;
+  const padding = normalized.endsWith("==") ? 2 : (normalized.endsWith("=") ? 1 : 0);
+  return Math.max(0, (normalized.length / 4) * 3 - padding);
+}
+
+function estimateJsonBytes(value) {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof TextEncoder !== "undefined") {
+      return new TextEncoder().encode(json).length;
+    }
+    return json.length;
+  } catch {
+    return 0;
+  }
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${Math.round(bytes)} B`;
+}
+
+function restorePromptText(text) {
+  if (!text) return;
+  promptEl.value = text;
+  promptEl.dispatchEvent(new Event("input"));
+}
+
+function buildAttachmentsPayload(attachments) {
+  return attachments.map(att => {
+    let base64 = "";
+    if (typeof att.content === "string" && att.content.startsWith("data:")) {
+      const parts = att.content.split(",");
+      base64 = parts.length > 1 ? parts[1] : "";
+    } else {
+      try {
+        base64 = window.btoa(unescape(encodeURIComponent(att.content || "")));
+      } catch (e) {
+        console.error("Base64 conversion failed for", att.name, e);
+      }
+    }
+    return {
+      name: att.name,
+      type: att.mimeType || "application/octet-stream",
+      base64
+    };
+  });
+}
+
+function estimateMessageSendFrameBytes(params) {
+  const preflightFrame = {
+    type: "req",
+    id: "preflight",
+    method: "message.send",
+    params
+  };
+  return estimateJsonBytes(preflightFrame);
+}
+
 async function sendMessage() {
   const text = promptEl.value.trim();
   if (!text && !pendingAttachments.length) return;
@@ -681,35 +752,6 @@ async function sendMessage() {
     return;
   }
 
-  const displayText = text || (pendingAttachments.length ? "[语音消息]" : "");
-  appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""));
-  botMsgEl = appendMessage("bot", "");
-  botRawHtmlBuffer = "";
-
-  // 准备附件数据
-  const attachments = pendingAttachments.map(att => {
-    let base64 = "";
-    if (typeof att.content === "string" && att.content.startsWith("data:")) {
-      // Data URL (Image): strip prefix
-      base64 = att.content.split(",")[1];
-    } else {
-      // Text content: convert to base64 (UTF-8 safe)
-      try {
-        base64 = window.btoa(unescape(encodeURIComponent(att.content)));
-      } catch (e) {
-        console.error("Base64 conversion failed for", att.name, e);
-      }
-    }
-    return {
-      name: att.name,
-      type: att.mimeType || "application/octet-stream",
-      base64
-    };
-  });
-
-  pendingAttachments = [];
-  renderAttachmentsPreview();
-
   // Canvas context injection: when user sends from canvas view, prepend board snapshot
   let finalText = text;
   const canvasSection = document.getElementById("canvasSection");
@@ -720,7 +762,10 @@ async function sendMessage() {
     }
   }
 
-  const id = makeId();
+  // 准备附件数据（用于预估体积 + 实际发送）
+  const attachments = buildAttachmentsPayload(pendingAttachments);
+  const attachmentDecodedBytes = attachments.reduce((sum, att) => sum + estimateBase64DecodedBytes(att.base64), 0);
+
   const uuid = userUuidEl ? userUuidEl.value.trim() : ""; // 获取UUID
   const params = {
     conversationId: activeConversationId || undefined,
@@ -736,6 +781,38 @@ async function sendMessage() {
     params.userUuid = uuid;
   }
 
+  const estimatedFrameBytes = estimateMessageSendFrameBytes(params);
+  const guardExceeded = estimatedFrameBytes > UPSTREAM_BODY_GUARD_BYTES;
+  const hardExceeded = estimatedFrameBytes > UPSTREAM_BODY_LIMIT_BYTES;
+  if (hardExceeded || guardExceeded) {
+    const estimated = formatBytes(estimatedFrameBytes);
+    const guard = formatBytes(UPSTREAM_BODY_GUARD_BYTES);
+    const hard = formatBytes(UPSTREAM_BODY_LIMIT_BYTES);
+    appendMessage("bot",
+      `⚠️ 本次消息已在发送前拦截。\n` +
+      `预估请求体大小：${estimated}（保护阈值 ${guard}，上游限制约 ${hard}）。\n` +
+      `建议：缩小/压缩图片、减少附件，或先发送 /compact 后再重试。`
+    );
+    console.warn("message.send preflight blocked", {
+      estimatedFrameBytes,
+      guardBytes: UPSTREAM_BODY_GUARD_BYTES,
+      hardLimitBytes: UPSTREAM_BODY_LIMIT_BYTES,
+      attachmentDecodedBytes,
+      attachmentCount: attachments.length,
+    });
+    restorePromptText(text);
+    return;
+  }
+
+  const displayText = text || (pendingAttachments.length ? "[语音消息]" : "");
+  appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""));
+  botMsgEl = appendMessage("bot", "");
+  botRawHtmlBuffer = "";
+
+  pendingAttachments = [];
+  renderAttachmentsPreview();
+
+  const id = makeId();
   const payload = await sendReq({
     type: "req",
     id,
@@ -1371,12 +1448,20 @@ async function handleFiles(files) {
     }
 
     try {
-      // Images and Videos are read as Base64 Data URL
-      const content = await readFileContent(file, isImage || isVideo);
+      let content = "";
+      let mimeType = file.type || (isImage ? "image/png" : (isVideo ? "video/mp4" : "text/plain"));
+      if (isImage) {
+        const processed = await readImageForAttachment(file);
+        content = processed.content;
+        mimeType = processed.mimeType;
+      } else {
+        // Videos use Data URL directly; text files are read as UTF-8 text
+        content = await readFileContent(file, isVideo);
+      }
       pendingAttachments.push({
         name: file.name,
         type: isImage ? "image" : (isVideo ? "video" : "text"),
-        mimeType: file.type || (isImage ? "image/png" : (isVideo ? "video/mp4" : "text/plain")),
+        mimeType,
         content
       });
     } catch (err) {
@@ -1406,6 +1491,116 @@ function readFileContent(file, asBase64) {
       reader.readAsText(file);
     }
   });
+}
+
+function estimateDataUrlBytes(dataUrl) {
+  if (typeof dataUrl !== "string") return 0;
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) return 0;
+  return estimateBase64DecodedBytes(dataUrl.slice(comma + 1));
+}
+
+function loadImageElementFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = (err) => {
+      URL.revokeObjectURL(objectUrl);
+      reject(err);
+    };
+    image.src = objectUrl;
+  });
+}
+
+function canvasToDataUrl(canvas, mimeType, quality) {
+  try {
+    return canvas.toDataURL(mimeType, quality);
+  } catch {
+    return "";
+  }
+}
+
+async function compressImageToDataUrl(file, sourceType) {
+  const image = await loadImageElementFromFile(file);
+  const sourceWidth = image.naturalWidth || image.width || 1;
+  const sourceHeight = image.naturalHeight || image.height || 1;
+  let scale = Math.min(1, IMAGE_COMPRESS_MAX_EDGE / Math.max(sourceWidth, sourceHeight));
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Canvas context unavailable");
+  }
+
+  let best = null;
+  const preferredType = sourceType === "image/webp" ? "image/webp" : "image/jpeg";
+  const fallbackType = preferredType === "image/webp" ? "image/jpeg" : "image/webp";
+
+  for (let resizeAttempt = 0; resizeAttempt < 4; resizeAttempt += 1) {
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    canvas.width = width;
+    canvas.height = height;
+    ctx.clearRect(0, 0, width, height);
+    ctx.drawImage(image, 0, 0, width, height);
+
+    const tryTypes = [preferredType, fallbackType];
+    for (const type of tryTypes) {
+      for (const quality of IMAGE_COMPRESS_QUALITIES) {
+        const dataUrl = canvasToDataUrl(canvas, type, quality);
+        if (!dataUrl) continue;
+        const bytes = estimateDataUrlBytes(dataUrl);
+        if (!best || bytes < best.bytes) {
+          best = { dataUrl, bytes, mimeType: type };
+        }
+        if (bytes <= IMAGE_COMPRESS_TARGET_BYTES) {
+          return { dataUrl, bytes, mimeType: type };
+        }
+      }
+    }
+
+    scale *= IMAGE_COMPRESS_RESIZE_FACTOR;
+  }
+
+  return best;
+}
+
+async function readImageForAttachment(file) {
+  const sourceType = (file.type || "image/png").toLowerCase();
+  const originalDataUrl = await readFileContent(file, true);
+  const originalBytes = estimateDataUrlBytes(originalDataUrl);
+
+  // GIF/SVG 保持原样，避免破坏动画或矢量内容
+  if (sourceType.includes("gif") || sourceType.includes("svg")) {
+    return { content: originalDataUrl, mimeType: sourceType };
+  }
+  if (originalBytes <= IMAGE_COMPRESS_TRIGGER_BYTES) {
+    return { content: originalDataUrl, mimeType: sourceType };
+  }
+
+  try {
+    const compressed = await compressImageToDataUrl(file, sourceType);
+    if (compressed && compressed.dataUrl && compressed.bytes > 0 && compressed.bytes < originalBytes) {
+      console.info("Image compressed before upload", {
+        name: file.name,
+        originalBytes,
+        compressedBytes: compressed.bytes,
+        mimeType: compressed.mimeType,
+      });
+      return {
+        content: compressed.dataUrl,
+        mimeType: compressed.mimeType
+      };
+    }
+  } catch (err) {
+    console.warn("Image compression failed, use original file", { name: file.name, error: String(err) });
+  }
+
+  return { content: originalDataUrl, mimeType: sourceType };
 }
 
 // 渲染附件预览
