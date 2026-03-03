@@ -121,7 +121,7 @@ export { createHookRunner, type HookRunner, type HookRunnerLogger, type HookRunn
 export { buildUrl, uploadFileToMoonshot, preprocessMultimodalContent, type PreprocessResult, type VideoUploadConfig } from "./multimodal.js";
 export { convertMessagesToAnthropic, convertToolsToAnthropic, buildAnthropicRequest, parseAnthropicResponse, type AnthropicUsage, type AnthropicRequestPayload, type ParsedAnthropicResponse, } from "./anthropic.js";
 export { buildDefaultProfile, loadAgentProfiles, resolveModelConfig, type AgentProfile, type AgentConfigFile, } from "./agent-profile.js";
-export { AgentRegistry, type AgentFactoryFn, } from "./agent-registry.js";
+export { AgentRegistry, type AgentFactoryFn, type AgentCreateOptions, } from "./agent-registry.js";
 export { SubAgentOrchestrator, type SubAgentSession, type SubAgentSessionStatus, type SubAgentEvent, type SpawnOptions, type SpawnResult, type OrchestratorOptions, type OrchestratorLogger, type OrchestratorHookRunner, } from "./orchestrator.js";
 export { compactMessages, compactIncremental, needsCompaction, needsInLoopCompaction, estimateTokens, estimateMessagesTokens, createEmptyCompactionState, type CompactionOptions, type CompactionResult, type CompactionState, type SummarizerFn, } from "./compaction.js";
 //# sourceMappingURL=index.d.ts.map

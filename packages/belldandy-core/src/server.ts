@@ -6,7 +6,7 @@ import path from "node:path";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo } from "@belldandy/agent";
+import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type ModelProfile } from "@belldandy/agent";
 import type {
   GatewayFrame,
   GatewayReqFrame,
@@ -39,6 +39,10 @@ export type GatewayServerOptions = {
   agentFactory?: () => BelldandyAgent;
   /** Multi-Agent registry (takes precedence over agentFactory when agentId is specified) */
   agentRegistry?: AgentRegistry;
+  /** 主模型配置（用于 models.list 返回默认模型） */
+  primaryModelConfig?: { baseUrl: string; apiKey: string; model: string };
+  /** 备用模型配置（来自 models.json） */
+  modelFallbacks?: ModelProfile[];
   conversationStoreOptions?: { maxHistory?: number; ttlSeconds?: number };
   conversationStore?: ConversationStore; // [NEW] Allow passing shared instance
   onActivity?: () => void;
@@ -82,6 +86,7 @@ type GatewayLog = {
 
 const DEFAULT_METHODS = [
   "message.send",
+  "models.list",
   "config.read",
   "config.update",
   "system.doctor",
@@ -605,6 +610,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         stateDir: opts.stateDir ?? resolveStateDir(),
         agentFactory: opts.agentFactory ?? (() => new MockAgent()),
         agentRegistry: opts.agentRegistry,
+        primaryModelConfig: opts.primaryModelConfig,
+        modelFallbacks: opts.modelFallbacks,
         conversationStore,
         ttsEnabled: opts.ttsEnabled,
         ttsSynthesize: opts.ttsSynthesize,
@@ -696,6 +703,8 @@ async function handleReq(
     log: GatewayLog;
     agentFactory: () => BelldandyAgent;
     agentRegistry?: AgentRegistry;
+    primaryModelConfig?: { baseUrl: string; apiKey: string; model: string };
+    modelFallbacks?: ModelProfile[];
     conversationStore: ConversationStore;
     ttsEnabled?: () => boolean;
     ttsSynthesize?: (text: string) => Promise<{ webPath: string; htmlAudio: string } | null>;
@@ -744,6 +753,40 @@ async function handleReq(
   }
 
   switch (req.method) {
+    case "models.list": {
+      const models: Array<{ id: string; displayName: string; model: string }> = [];
+      const defaultModelRef = ctx.agentRegistry?.getProfile("default")?.model ?? "primary";
+
+      if (ctx.primaryModelConfig?.model) {
+        const defaultTag = defaultModelRef === "primary" ? "（默认）" : "";
+        models.push({
+          id: "primary",
+          displayName: `${ctx.primaryModelConfig.model}${defaultTag}`,
+          model: ctx.primaryModelConfig.model,
+        });
+      }
+
+      for (const fb of ctx.modelFallbacks ?? []) {
+        const fallbackId = fb.id ?? fb.model;
+        const defaultTag = fallbackId === defaultModelRef ? "（默认）" : "";
+        models.push({
+          id: fallbackId,
+          displayName: `${fb.displayName ?? fb.model}${defaultTag}`,
+          model: fb.model,
+        });
+      }
+
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          models,
+          currentDefault: defaultModelRef,
+        },
+      };
+    }
+
     case "message.send": {
       const parsed = parseMessageSendParams(req.params);
       if (!parsed.ok) {
@@ -752,12 +795,14 @@ async function handleReq(
 
       let agent: BelldandyAgent;
       const requestedAgentId = parsed.value.agentId;
+      const requestedModelId = parsed.value.modelId;
+      const createOpts = requestedModelId ? { modelOverride: requestedModelId } : undefined;
       try {
         // Prefer AgentRegistry when available and agentId is specified
         if (ctx.agentRegistry && requestedAgentId) {
-          agent = ctx.agentRegistry.create(requestedAgentId);
+          agent = ctx.agentRegistry.create(requestedAgentId, createOpts);
         } else if (ctx.agentRegistry) {
-          agent = ctx.agentRegistry.create(); // default
+          agent = ctx.agentRegistry.create("default", createOpts);
         } else {
           agent = ctx.agentFactory();
         }
@@ -1563,12 +1608,13 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
     typeof obj.conversationId === "string" && obj.conversationId.trim() ? obj.conversationId.trim() : undefined;
   const from = typeof obj.from === "string" && obj.from.trim() ? obj.from.trim() : undefined;
   const agentId = typeof obj.agentId === "string" && obj.agentId.trim() ? obj.agentId.trim() : undefined;
+  const modelId = typeof obj.modelId === "string" && obj.modelId.trim() ? obj.modelId.trim() : undefined;
 
   // 解析 senderInfo 和 roomContext（用于 office.goddess.ai 社区）
   const senderInfo = obj.senderInfo && typeof obj.senderInfo === "object" ? obj.senderInfo as any : undefined;
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
-  return { ok: true, value: { text, conversationId, from, agentId, attachments, senderInfo, roomContext } };
+  return { ok: true, value: { text, conversationId, from, agentId, modelId, attachments, senderInfo, roomContext } };
 }
 
 function safeParseFrame(raw: string): GatewayFrame | null {

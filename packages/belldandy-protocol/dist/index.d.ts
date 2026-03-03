@@ -70,6 +70,8 @@ export type MessageSendParams = {
     from?: string;
     /** 指定使用的 Agent Profile ID（可选，缺省使用 "default"） */
     agentId?: string;
+    /** 指定使用的模型 ID（可选，缺省使用默认模型） */
+    modelId?: string;
     /** 用户UUID（可选，用于身份权力验证） */
     userUuid?: string;
     /** 消息发送者信息（用于身份上下文） */
@@ -133,5 +135,13 @@ export type AgentsListResult = {
         displayName: string;
         model: string;
     }>;
+};
+export type ModelsListResult = {
+    models: Array<{
+        id: string;
+        displayName: string;
+        model: string;
+    }>;
+    currentDefault: string;
 };
 //# sourceMappingURL=index.d.ts.map

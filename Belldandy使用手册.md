@@ -44,6 +44,7 @@ Belldandy 是一个运行在你本地电脑上的个人 AI 助手。它注重隐
    - [7.4 飞书渠道绑定 Agent](#74-飞书渠道绑定-agent)
    - [7.5 子 Agent 编排 (Sub-Agent Orchestration)](#75-子-agent-编排-sub-agent-orchestration)
    - [7.6 子 Agent 环境变量](#76-子-agent-环境变量)
+   - [7.7 在对话中切换模型（运行时）](#77-在对话中切换模型运行时)
 9. [8. 管理命令（bdd CLI）](#8-管理命令bdd-cli)
    - [8.1 启动与运行](#81-启动与运行)
    - [8.2 Setup 向导](#82-setup-向导)
@@ -1132,6 +1133,98 @@ BELLDANDY_FEISHU_AGENT_ID=researcher
 | `BELLDANDY_SUB_AGENT_MAX_DEPTH` | `2` | 子 Agent 嵌套委托最大深度 |
 | `BELLDANDY_FEISHU_AGENT_ID` | — | 飞书渠道使用的 Agent Profile ID |
 
+### 7.7 在对话中切换模型（运行时）
+
+Belldandy 支持在**不重启服务**的情况下，在 WebChat 对话中动态切换模型。该能力与 `models.json` 共用同一套模型配置。
+
+#### 7.7.1 前置配置
+
+1. 在 `.env.local` 配置主模型（Primary）：
+```env
+BELLDANDY_AGENT_PROVIDER=openai
+BELLDANDY_OPENAI_BASE_URL=https://api.openai.com/v1
+BELLDANDY_OPENAI_API_KEY=sk-xxxx
+BELLDANDY_OPENAI_MODEL=gpt-5
+```
+
+2. 在 `~/.belldandy/models.json` 配置可选模型（`id` 必须唯一）：
+```json
+{
+  "fallbacks": [
+    {
+      "id": "kimi-k2.5",
+      "displayName": "Kimi K2.5 (Moonshot)",
+      "baseUrl": "https://api.moonshot.cn/v1",
+      "apiKey": "sk-xxx",
+      "model": "kimi-k2.5"
+    },
+    {
+      "id": "claude-opus",
+      "displayName": "Claude Opus 4.5",
+      "baseUrl": "https://api.anthropic.com",
+      "apiKey": "sk-ant-xxx",
+      "model": "claude-opus-4-5",
+      "protocol": "anthropic"
+    }
+  ]
+}
+```
+
+3. 修改 `models.json` 后重启 Gateway（模型列表在启动时加载）：
+```bash
+corepack pnpm bdd restart
+```
+
+#### 7.7.2 WebChat 使用方式
+
+1. 连接成功后，输入框区域会出现**模型下拉框**（仅有默认模型时会自动隐藏）。
+2. 默认项显示为 `默认模型 (xxx)`，其中 `xxx` 来自当前 default Agent 的模型引用。
+3. 选择目标模型后直接发送消息，本次请求将使用该模型。
+4. 切回“默认模型”后，恢复使用 default Agent 自身配置的模型。
+
+> 说明：模型切换是**按消息请求生效**的，不会要求重启，也不会影响其他已连接客户端。
+
+#### 7.7.3 自定义客户端（WebSocket API）
+
+查询模型列表：
+```json
+{ "type": "req", "id": "m1", "method": "models.list" }
+```
+
+返回示例：
+```json
+{
+  "type": "res",
+  "id": "m1",
+  "ok": true,
+  "payload": {
+    "models": [
+      { "id": "primary", "displayName": "gpt-5", "model": "gpt-5" },
+      { "id": "kimi-k2.5", "displayName": "Kimi K2.5（默认）", "model": "kimi-k2.5" }
+    ],
+    "currentDefault": "kimi-k2.5"
+  }
+}
+```
+
+发送消息并指定模型：
+```json
+{
+  "type": "req",
+  "id": "msg-1",
+  "method": "message.send",
+  "params": {
+    "text": "你好",
+    "modelId": "kimi-k2.5"
+  }
+}
+```
+
+#### 7.7.4 回退与安全说明
+
+- 当 `modelId` 不存在或为空时，会自动回退到默认模型。
+- `models.list` 只返回 `id/displayName/model`，不会返回 `apiKey/baseUrl` 等敏感字段。
+
 
 ---
 
@@ -1924,6 +2017,8 @@ BELLDANDY_EXTRA_WORKSPACE_ROOTS=E:\projects,D:\workspace
 
 当主模型因限流 (429)、余额不足 (402)、服务器故障 (5xx) 或超时等问题不可用时，Belldandy 可以 **自动切换到备用模型**，保证不中断服务。
 
+> `models.json` 不仅用于容灾，也用于 WebChat/WS 的**运行时模型切换**（见 [7.7 在对话中切换模型（运行时）](#77-在对话中切换模型运行时)）。
+
 **快速开始**：在 `~/.belldandy/` 目录下创建 `models.json` 文件：
 
 ```json
@@ -1946,9 +2041,11 @@ BELLDANDY_EXTRA_WORKSPACE_ROOTS=E:\projects,D:\workspace
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `id` | 否 | 标识名称，用于日志显示（如 `deepseek-backup`） |
+| `displayName` | 否 | 模型显示名（用于 WebChat 模型下拉展示） |
 | `baseUrl` | 是 | API 服务地址（OpenAI 协议兼容） |
 | `apiKey` | 是 | 该服务的 API Key |
 | `model` | 是 | 模型名称（如 `deepseek-chat`、`gpt-4o`） |
+| `protocol` | 否 | 协议类型（如 `openai`、`anthropic`），不填则继承全局配置 |
 
 **环境变量**：
 

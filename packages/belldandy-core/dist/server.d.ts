@@ -1,4 +1,4 @@
-import { type BelldandyAgent, ConversationStore, type AgentRegistry } from "@belldandy/agent";
+import { type BelldandyAgent, ConversationStore, type AgentRegistry, type ModelProfile } from "@belldandy/agent";
 import type { GatewayEventFrame } from "@belldandy/protocol";
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
@@ -18,6 +18,14 @@ export type GatewayServerOptions = {
     agentFactory?: () => BelldandyAgent;
     /** Multi-Agent registry (takes precedence over agentFactory when agentId is specified) */
     agentRegistry?: AgentRegistry;
+    /** 主模型配置（用于 models.list 返回默认模型） */
+    primaryModelConfig?: {
+        baseUrl: string;
+        apiKey: string;
+        model: string;
+    };
+    /** 备用模型配置（来自 models.json） */
+    modelFallbacks?: ModelProfile[];
     conversationStoreOptions?: {
         maxHistory?: number;
         ttlSeconds?: number;

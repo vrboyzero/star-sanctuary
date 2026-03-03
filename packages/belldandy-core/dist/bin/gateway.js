@@ -702,11 +702,12 @@ for (const profile of agentProfiles) {
     }
 }
 const agentRegistry = agentProvider === "openai"
-    ? new AgentRegistry((profile) => {
+    ? new AgentRegistry((profile, opts) => {
+        const modelRef = opts?.modelOverride ?? profile.model;
         // Resolve model config: "primary" → env vars, named → models.json lookup
-        const resolved = resolveModelConfig(profile.model, primaryModelConfig, modelFallbacks);
-        if (profile.model !== "primary" && resolved.source === "primary") {
-            logger.warn("agent-registry", `Model "${profile.model}" not found in models.json, falling back to primary config (agent: ${profile.id})`);
+        const resolved = resolveModelConfig(modelRef, primaryModelConfig, modelFallbacks);
+        if (modelRef !== "primary" && resolved.source === "primary") {
+            logger.warn("agent-registry", `Model "${modelRef}" not found in models.json, falling back to primary config (agent: ${profile.id})`);
         }
         if (!resolved.apiKey) {
             throw new Error("CONFIG_REQUIRED");
@@ -1157,6 +1158,8 @@ const server = await startGatewayServer({
     stateDir,
     agentFactory: createAgent,
     agentRegistry: agentRegistry,
+    primaryModelConfig,
+    modelFallbacks,
     conversationStore: conversationStore, // Pass shared instance
     onActivity,
     logger,

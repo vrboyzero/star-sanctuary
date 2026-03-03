@@ -228,6 +228,7 @@ export {
 export {
   AgentRegistry,
   type AgentFactoryFn,
+  type AgentCreateOptions,
 } from "./agent-registry.js";
 
 // Sub-Agent Orchestrator（子 Agent 编排）

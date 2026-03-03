@@ -8,6 +8,7 @@ const connectBtn = document.getElementById("connect");
 const sendBtn = document.getElementById("send");
 const promptEl = document.getElementById("prompt");
 const messagesEl = document.getElementById("messages");
+const modelSelectEl = document.getElementById("modelSelect");
 const agentSelectEl = document.getElementById("agentSelect");
 
 // 文件树和编辑器 DOM 元素
@@ -27,6 +28,7 @@ const saveEditBtn = document.getElementById("saveEdit");
 const STORE_KEY = "belldandy.webchat.auth";
 const CLIENT_KEY = "belldandy.webchat.clientId";
 const WORKSPACE_ROOTS_KEY = "belldandy.webchat.workspaceRoots";
+const MODEL_ID_KEY = "belldandy.webchat.modelId";
 const AGENT_ID_KEY = "belldandy.webchat.agentId";
 const UUID_KEY = "belldandy.webchat.userUuid"; // UUID存储键
 const WEBCHAT_DEBUG_KEY = "belldandy.webchat.debug";
@@ -299,6 +301,56 @@ async function loadAgentList() {
   agentSelectEl.classList.remove("hidden");
 }
 
+// ── 模型选择器 ──
+async function loadModelList() {
+  if (!ws || !isReady || !modelSelectEl) return;
+
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "models.list",
+  });
+
+  if (!res || !res.ok || !res.payload || !Array.isArray(res.payload.models)) return;
+
+  const models = res.payload.models;
+  const currentDefault = typeof res.payload.currentDefault === "string" && res.payload.currentDefault.trim()
+    ? res.payload.currentDefault.trim()
+    : "primary";
+
+  const defaultModel = models.find((m) => m.id === currentDefault);
+  const defaultLabel = defaultModel?.displayName || defaultModel?.model || "默认模型";
+
+  modelSelectEl.innerHTML = "";
+  const defaultOpt = document.createElement("option");
+  defaultOpt.value = "";
+  defaultOpt.textContent = `默认模型 (${defaultLabel})`;
+  modelSelectEl.appendChild(defaultOpt);
+
+  for (const m of models) {
+    if (!m || typeof m !== "object") continue;
+    if (m.id === currentDefault) continue;
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.displayName || m.model || m.id;
+    modelSelectEl.appendChild(opt);
+  }
+
+  const saved = localStorage.getItem(MODEL_ID_KEY);
+  if (saved && [...modelSelectEl.options].some((opt) => opt.value === saved)) {
+    modelSelectEl.value = saved;
+  } else {
+    modelSelectEl.value = "";
+  }
+
+  // 有备选模型时显示；只有默认模型时隐藏
+  if (modelSelectEl.options.length > 1) {
+    modelSelectEl.classList.remove("hidden");
+  } else {
+    modelSelectEl.classList.add("hidden");
+  }
+}
+
 if (agentSelectEl) {
   agentSelectEl.addEventListener("change", () => {
     localStorage.setItem(AGENT_ID_KEY, agentSelectEl.value);
@@ -309,6 +361,17 @@ if (agentSelectEl) {
     messagesEl.innerHTML = "";
     const displayName = agentSelectEl.options[agentSelectEl.selectedIndex]?.text || agentSelectEl.value;
     appendMessage("system", `已切换到 ${displayName}`);
+  });
+}
+
+if (modelSelectEl) {
+  modelSelectEl.addEventListener("change", () => {
+    const selected = modelSelectEl.value || "";
+    if (selected) {
+      localStorage.setItem(MODEL_ID_KEY, selected);
+    } else {
+      localStorage.removeItem(MODEL_ID_KEY);
+    }
   });
 }
 
@@ -439,6 +502,8 @@ function connect() {
 
       // 加载 Agent 列表并填充选择器
       loadAgentList();
+      // 加载模型列表并填充选择器
+      loadModelList();
 
       // Check if we should play boot sequence
       if (!sessionStorage.getItem("booted")) {
@@ -661,6 +726,7 @@ async function sendMessage() {
     conversationId: activeConversationId || undefined,
     text: finalText,
     from: "web",
+    modelId: modelSelectEl?.value || undefined,
     agentId: agentSelectEl?.value || undefined,
     attachments,
   };

@@ -11,6 +11,8 @@
 export type ModelProfile = {
     /** 唯一标识（用于日志） */
     id?: string;
+    /** 显示名称（用于前端展示） */
+    displayName?: string;
     /** API 基础 URL（如 https://api.openai.com） */
     baseUrl: string;
     /** API Key */
@@ -416,6 +418,7 @@ export type ModelConfigFile = {
     /** 备用 Profile 列表 */
     fallbacks: Array<{
         id?: string;
+        displayName?: string;
         baseUrl: string;
         apiKey: string;
         model: string;
@@ -443,6 +446,7 @@ export async function loadModelFallbacks(filePath: string): Promise<ModelProfile
             .filter((f) => f.baseUrl && f.apiKey && f.model)
             .map((f, i) => ({
                 id: f.id ?? `fallback-${i}`,
+                displayName: typeof f.displayName === "string" ? f.displayName : undefined,
                 baseUrl: f.baseUrl,
                 apiKey: f.apiKey,
                 model: f.model,
