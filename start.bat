@@ -22,9 +22,17 @@ if not exist node_modules (
     call corepack pnpm install
 )
 
-REM 首次使用时自动构建（编译 TypeScript → dist/）
-if not exist "packages\belldandy-core\dist" (
-    echo [INFO] Building project for first time...
+REM 检查所有 workspace 包是否已编译（任何一个 dist 缺失都需要构建）
+set "NEED_BUILD=0"
+if not exist "packages\belldandy-core\dist" set "NEED_BUILD=1"
+if not exist "packages\belldandy-agent\dist" set "NEED_BUILD=1"
+if not exist "packages\belldandy-channels\dist" set "NEED_BUILD=1"
+if not exist "packages\belldandy-skills\dist" set "NEED_BUILD=1"
+if not exist "packages\belldandy-memory\dist" set "NEED_BUILD=1"
+if not exist "packages\belldandy-protocol\dist" set "NEED_BUILD=1"
+
+if "%NEED_BUILD%"=="1" (
+    echo [INFO] Building project ^(compiling TypeScript...^)
     call corepack pnpm build
     if %errorlevel% neq 0 (
         echo [ERROR] Build failed. Please check the error above.

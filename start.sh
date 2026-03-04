@@ -21,9 +21,17 @@ if [ ! -d "node_modules" ]; then
     corepack pnpm install
 fi
 
-# 首次使用时自动构建（编译 TypeScript → dist/）
-if [ ! -d "packages/belldandy-core/dist" ]; then
-    echo "[INFO] Building project for first time..."
+# 检查所有 workspace 包是否已编译（任何一个 dist 缺失都需要构建）
+NEED_BUILD=0
+[ ! -d "packages/belldandy-core/dist" ] && NEED_BUILD=1
+[ ! -d "packages/belldandy-agent/dist" ] && NEED_BUILD=1
+[ ! -d "packages/belldandy-channels/dist" ] && NEED_BUILD=1
+[ ! -d "packages/belldandy-skills/dist" ] && NEED_BUILD=1
+[ ! -d "packages/belldandy-memory/dist" ] && NEED_BUILD=1
+[ ! -d "packages/belldandy-protocol/dist" ] && NEED_BUILD=1
+
+if [ "$NEED_BUILD" -eq 1 ]; then
+    echo "[INFO] Building project (compiling TypeScript...)"
     corepack pnpm build
     if [ $? -ne 0 ]; then
         echo "[ERROR] Build failed. Please check the error above."
