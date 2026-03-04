@@ -8,7 +8,7 @@
 <p align="center">
   <strong>🌟 本地优先的个人 AI 助手</strong><br>
   在你自己的设备上运行，通过多种聊天渠道为你服务<br>
-  <span style="color:#ff4d4f;font-weight:bold;">【重要声明】本项目仍处于开发与测试阶段，测试与使用存在一定风险，请勿用于生产环境或存储敏感数据。</span>
+  <span style="color:#ff4d4f;font-weight:bold;">【重要声明】Belldandy使用有风险，但风险不大。最多就是被盗信用卡硬盘格式化苹果大爆炸。</span>
 </p>
 
 <p align="center">
