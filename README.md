@@ -163,15 +163,20 @@ cd Belldandy
 # 2. 安装依赖
 corepack pnpm install
 
-# 3. 启动 Gateway（开发模式）
+# 3. 构建项目（编译 TypeScript → dist/）
+corepack pnpm build
+
+# 4. 启动 Gateway（开发模式，使用 tsx 直接运行源码）
 corepack pnpm bdd dev
 
-# 4. 启动 Gateway（带 supervisor 自动重启）
+# 5. 启动 Gateway（生产模式，需要先执行 build）
 corepack pnpm bdd start
 
-# 5. 打开浏览器访问
+# 6. 打开浏览器访问
 # http://localhost:28889/
 ```
+
+> **⚠️ 注意**：`pnpm bdd dev` 通过 tsx 直接运行 TypeScript 源码，可以跳过 build 步骤。但 `pnpm start` 运行的是编译后的 `dist/` 目录，**必须先执行 `pnpm build`**，否则会报 `Cannot find module` 错误。
 
 ### 首次配对
 
@@ -680,6 +685,14 @@ corepack pnpm bdd setup --provider openai \
 ---
 
 ## 常见问题
+
+**Q: 启动时提示 `Cannot find module '...dist/xxx.js'`？**
+
+A: 这是因为还没有编译 TypeScript 源码。执行以下命令即可：
+```bash
+corepack pnpm build
+```
+然后再启动。如果使用 `pnpm bdd dev`（开发模式）则不需要 build，它会通过 tsx 直接运行源码。
 
 **Q: 启动时提示 `EADDRINUSE` 端口被占用？**
 

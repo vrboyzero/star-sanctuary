@@ -22,6 +22,17 @@ if not exist node_modules (
     call corepack pnpm install
 )
 
+REM 首次使用时自动构建（编译 TypeScript → dist/）
+if not exist "packages\belldandy-core\dist" (
+    echo [INFO] Building project for first time...
+    call corepack pnpm build
+    if %errorlevel% neq 0 (
+        echo [ERROR] Build failed. Please check the error above.
+        pause
+        exit /b 1
+    )
+)
+
 REM Generate a one-time session token for WebChat access
 set "SETUP_TOKEN=setup-%RANDOM%-%RANDOM%-%RANDOM%"
 set "AUTO_OPEN_BROWSER=true"

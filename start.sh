@@ -21,6 +21,16 @@ if [ ! -d "node_modules" ]; then
     corepack pnpm install
 fi
 
+# 首次使用时自动构建（编译 TypeScript → dist/）
+if [ ! -d "packages/belldandy-core/dist" ]; then
+    echo "[INFO] Building project for first time..."
+    corepack pnpm build
+    if [ $? -ne 0 ]; then
+        echo "[ERROR] Build failed. Please check the error above."
+        exit 1
+    fi
+fi
+
 # Generate Session Token
 export SETUP_TOKEN="setup-$(date +%s)-${RANDOM}"
 export AUTO_OPEN_BROWSER="true"
