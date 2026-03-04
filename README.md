@@ -694,6 +694,21 @@ corepack pnpm build
 ```
 然后再启动。如果使用 `pnpm bdd dev`（开发模式）则不需要 build，它会通过 tsx 直接运行源码。
 
+**Q: 安装依赖时 `better-sqlite3` 编译失败？**
+
+A: 通常是因为 Node.js 版本过新（如 v24），导致找不到预编译的二进制文件。推荐使用 **Node.js v22 LTS** 版本：
+```bash
+# 如果使用 nvm
+nvm install 22
+nvm use 22
+
+# 然后清理并重装依赖
+rmdir /s /q node_modules           # Windows
+rm -rf node_modules                # macOS/Linux
+corepack pnpm install
+```
+下载地址：[https://nodejs.org/](https://nodejs.org/)（选择 LTS 版本）
+
 **Q: 启动时提示 `EADDRINUSE` 端口被占用？**
 
 A: 修改 `.env.local` 中的端口：`BELLDANDY_PORT=28890`
