@@ -63,6 +63,7 @@ docs
 # Reference code (not needed in container)
 openclaw
 UI-TARS-desktop-main
+office.goddess.ai
 
 # Development files
 *.map
