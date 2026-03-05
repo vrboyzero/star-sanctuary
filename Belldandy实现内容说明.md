@@ -597,13 +597,44 @@
 ### 17. 记忆检索增强 (Memory Retrieval Enhancement) Phase 4.7
 
 - **目标**：让 Agent 更主动、更智能地使用长期记忆，从"被动回忆"升级为"主动关联"。
-- **状态**：部分完成 (2026-02-08)
+- **状态**：✅ 已完成（2026-03-05）
 - **已完成**：
     - **Global MemoryManager**：统一 Gateway 与 Skills 的 MemoryManager 实例，让 `memory_search` 工具能访问会话向量索引。
     - **Prompt 引导**：在 `AGENTS.md` 中添加记忆检索策略规则，引导 Agent 在遇到回忆类问题时主动使用 `memory_search`。
     - **Context Injection**：每次对话开始时，自动从 sessions 中提取最近对话摘要，注入 System Prompt，让 Agent 记住最近发生的事。
-- **规划中**：
-    - **Auto-Recall**：使用 NLP 检测用户输入中的"回忆类"关键词，自动触发 `memory_search` 并将结果注入上下文。
+    - **Auto-Recall（底层隐式语义召回）**：
+        - 在 `before_agent_start` 同一 hook 中合并执行"近期记忆注入 + 语义召回注入"。
+        - Auto-Recall 检索 query 优先使用 `event.userInput`（用户原始输入），缺失时回退 `event.prompt`。
+        - 直接调用 `MemoryManager.search()`，复用内置 `shouldSkipRetrieval()` 过滤，自动跳过问候/低价值 query。
+        - 增加 2 秒超时降级：检索超时时返回空结果，不阻塞主对话流程。
+        - 增加阈值和体积控制：`minScore` 过滤、结果条数上限、snippet 200 字截断，减少上下文污染和 token 消耗。
+        - 通过 `<auto-recall ...>` 块静默注入 `prependContext`，提示 Agent 无需重复调用 `memory_search`。
+    - **调用链改造（为避免附件拼接文本污染检索）**：
+        - `AgentRunInput` 新增 `userInput?: string`。
+        - `BeforeAgentStartEvent` 新增 `userInput?: string`。
+        - `tool-agent.ts` 在调用 `runBeforeAgentStart` 时透传 `userInput`。
+        - `server.ts` 在 `message.send` / 社区 API / webhook 三条入口调用 `agent.run(...)` 时传入原始用户输入。
+    - **配置项新增**（`.env` / `.env.example`）：
+        - `BELLDANDY_AUTO_RECALL_ENABLED`（默认 `false`）
+        - `BELLDANDY_AUTO_RECALL_LIMIT`（默认 `3`）
+        - `BELLDANDY_AUTO_RECALL_MIN_SCORE`（默认 `0.3`）
+- **实现进度**：
+    - 已提交代码：`cdee79f`（`feat: add auto-recall semantic context injection`）。
+    - 编译验证：`corepack pnpm build` ✅ 通过。
+    - 运行期验证：待按环境开关执行联调（语义命中、问候跳过、关闭回退）。
+- **实测结果与参数建议（`limit` / `minScore`）**：
+    - **当前联调反馈**：开启 Auto-Recall 后，相关历史记忆可被稳定带入上下文，问候类输入可正常被跳过，主对话无阻塞现象。
+    - **推荐调优区间**：
+        - `BELLDANDY_AUTO_RECALL_LIMIT`：建议 `2~5`（默认 `3`）。
+        - `BELLDANDY_AUTO_RECALL_MIN_SCORE`：建议 `0.25~0.45`（默认 `0.3`）。
+    - **建议起步组合**：
+        - 通用场景：`limit=3`，`minScore=0.30`（平衡召回率与噪声）。
+        - 追求精准：`limit=2~3`，`minScore=0.35~0.45`（减少误召回）。
+        - 追求覆盖：`limit=4~5`，`minScore=0.25~0.30`（提高召回但可能增 token）。
+    - **调优顺序**（建议每次只改一个参数）：
+        1. 先固定 `limit=3`，按 `0.30 -> 0.35 -> 0.40` 逐步提升 `minScore`，观察是否出现“回忆缺失”。
+        2. 若相关记忆仍不足，再将 `limit` 从 `3` 提到 `4`（必要时到 `5`）。
+        3. 出现上下文噪声或 token 压力时，优先提高 `minScore`，其次下调 `limit`。
 - **价值**：让 Agent 像人类一样自然地回忆，而非机械地等待用户显式请求。
 
 ### 18. 上下文自动压缩 (Context Compaction) Phase 2.3

@@ -36,7 +36,9 @@ export class ToolEnabledAgent {
         // 优先使用新版 hookRunner，向后兼容旧版 hooks
         if (this.opts.hookRunner) {
             try {
-                const hookRes = await this.opts.hookRunner.runBeforeAgentStart({ prompt: typeof input.content === 'string' ? input.content : input.text, messages: input.history }, // TODO: Update hook types for multimodal
+                const normalizedPrompt = typeof input.content === "string" ? input.content : input.text;
+                const normalizedUserInput = input.userInput?.trim() || normalizedPrompt;
+                const hookRes = await this.opts.hookRunner.runBeforeAgentStart({ prompt: normalizedPrompt, messages: input.history, userInput: normalizedUserInput }, // TODO: Update hook types for multimodal
                 agentHookCtx);
                 if (hookRes) {
                     // 注入系统提示词前置上下文

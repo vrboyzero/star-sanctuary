@@ -46,6 +46,8 @@ export type AgentRunInput = {
      * If only `text` is provided, it will be treated as `{ type: "text", text }`.
      */
     text: string;
+    /** 用户原始输入文本（可选；用于钩子语义召回等场景） */
+    userInput?: string;
     /**
      * Multimodal content parts (text, image, etc).
      * Compatible with OpenAI's content array format.

@@ -577,33 +577,70 @@ const hookRegistry = new HookRegistry();
 // Context Injection: 对话开始时自动注入最近记忆摘要
 const contextInjectionEnabled = readEnv("BELLDANDY_CONTEXT_INJECTION") !== "false"; // 默认启用
 const contextInjectionLimit = Math.max(1, parseInt(readEnv("BELLDANDY_CONTEXT_INJECTION_LIMIT") || "5", 10));
-if (contextInjectionEnabled) {
+// Auto-Recall: 对话开始时按当前用户输入自动进行语义召回（默认关闭）
+const autoRecallEnabled = readEnv("BELLDANDY_AUTO_RECALL_ENABLED") === "true";
+const autoRecallLimit = Math.max(1, parseInt(readEnv("BELLDANDY_AUTO_RECALL_LIMIT") || "3", 10) || 3);
+const autoRecallMinScoreRaw = Number(readEnv("BELLDANDY_AUTO_RECALL_MIN_SCORE") || "0.3");
+const autoRecallMinScore = Number.isFinite(autoRecallMinScoreRaw) ? autoRecallMinScoreRaw : 0.3;
+if (contextInjectionEnabled || autoRecallEnabled) {
     hookRegistry.register({
         source: "context-injection",
         hookName: "before_agent_start",
         priority: 100,
-        handler: async (_event, _ctx) => {
+        handler: async (event, _ctx) => {
             const mm = getGlobalMemoryManager();
             if (!mm)
                 return undefined;
-            try {
-                const recent = mm.getRecent(contextInjectionLimit);
-                if (recent.length === 0)
-                    return undefined;
-                const lines = recent.map((r) => {
-                    const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
-                    return `- [${src}] ${r.snippet}`;
-                });
-                const block = `<recent-memory>\n${lines.join("\n")}\n</recent-memory>`;
-                return { prependContext: block };
+            const blocks = [];
+            if (contextInjectionEnabled) {
+                try {
+                    const recent = mm.getRecent(contextInjectionLimit);
+                    if (recent.length > 0) {
+                        const lines = recent.map((r) => {
+                            const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
+                            return `- [${src}] ${r.snippet}`;
+                        });
+                        blocks.push(`<recent-memory>\n${lines.join("\n")}\n</recent-memory>`);
+                    }
+                }
+                catch (err) {
+                    logger.warn("context-injection", `Failed to fetch recent memory: ${err instanceof Error ? err.message : String(err)}`);
+                }
             }
-            catch (err) {
-                logger.warn("context-injection", `Failed to fetch recent memory: ${err instanceof Error ? err.message : String(err)}`);
-                return undefined;
+            if (autoRecallEnabled) {
+                try {
+                    const queryText = event.userInput?.trim() || event.prompt?.trim();
+                    if (queryText) {
+                        const results = await Promise.race([
+                            mm.search(queryText, { limit: autoRecallLimit }),
+                            new Promise((resolve) => setTimeout(() => resolve([]), 2000)),
+                        ]);
+                        const filtered = results.filter((r) => r.score >= autoRecallMinScore);
+                        if (filtered.length > 0) {
+                            const lines = filtered.map((r) => {
+                                const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
+                                const snippet = r.snippet.length > 200
+                                    ? `${r.snippet.slice(0, 200)}...`
+                                    : r.snippet;
+                                return `- [${src}, score=${r.score.toFixed(2)}] ${snippet}`;
+                            });
+                            blocks.push(`<auto-recall hint="以下是与用户当前输入语义相关的历史记忆，仅供参考。无需再次调用 memory_search 除非需要更深入搜索。">\n${lines.join("\n")}\n</auto-recall>`);
+                        }
+                    }
+                }
+                catch (err) {
+                    logger.warn("auto-recall", `Failed to fetch semantic memory: ${err instanceof Error ? err.message : String(err)}`);
+                }
             }
+            return blocks.length > 0
+                ? { prependContext: blocks.join("\n\n") }
+                : undefined;
         },
     });
-    logger.info("context-injection", `enabled (limit=${contextInjectionLimit})`);
+    if (contextInjectionEnabled)
+        logger.info("context-injection", `enabled (limit=${contextInjectionLimit})`);
+    if (autoRecallEnabled)
+        logger.info("auto-recall", `enabled (limit=${autoRecallLimit}, minScore=${autoRecallMinScore})`);
 }
 // 7.6 Bridge legacy plugin hooks → HookRegistry
 const legacyHooks = pluginRegistry.getAggregatedHooks();
