@@ -25,6 +25,7 @@ import { checkAndConsumeRestartCooldown, formatRestartCooldownMessage } from "@b
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
+import { BELLDANDY_VERSION } from "./version.generated.js";
 
 export type GatewayServerOptions = {
   port: number;
@@ -196,7 +197,11 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
 
   // Health check endpoint for Docker/K8s
   app.get("/health", (_req, res) => {
-    res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+    res.status(200).json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      version: BELLDANDY_VERSION,
+    });
   });
 
   // Community message endpoint (for office.goddess.ai integration)
@@ -591,6 +596,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
           role: state.role,
           methods: DEFAULT_METHODS,
           events: DEFAULT_EVENTS,
+          version: BELLDANDY_VERSION,
           agentName: identityInfo.agentName,
           agentAvatar: identityInfo.agentAvatar,
           userName: identityInfo.userName,

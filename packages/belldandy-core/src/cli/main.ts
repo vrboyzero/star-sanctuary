@@ -3,11 +3,12 @@
  * Sub-commands are lazily loaded via dynamic import.
  */
 import { defineCommand } from "citty";
+import { BELLDANDY_VERSION } from "../version.generated.js";
 
 export const main = defineCommand({
   meta: {
     name: "belldandy",
-    version: "0.1.0",
+    version: BELLDANDY_VERSION,
     description: "Belldandy AI Assistant CLI",
   },
   args: {

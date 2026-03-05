@@ -14,6 +14,8 @@ import { createLoggerFromEnv } from "../logger/index.js";
 import { ToolsConfigManager } from "../tools-config.js";
 import { PluginRegistry } from "@belldandy/plugins";
 import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
+import { BELLDANDY_VERSION } from "../version.generated.js";
+import { checkForUpdates } from "../update-checker.js";
 // --- Env Loading ---
 loadEnvFileIfExists(path.join(process.cwd(), ".env.local"));
 loadEnvFileIfExists(path.join(process.cwd(), ".env"));
@@ -61,6 +63,9 @@ const authToken = readEnv("BELLDANDY_AUTH_TOKEN");
 const authPassword = readEnv("BELLDANDY_AUTH_PASSWORD");
 const communityApiEnabled = readEnv("BELLDANDY_COMMUNITY_API_ENABLED") === "true";
 const webRoot = readEnv("BELLDANDY_WEB_ROOT") ?? path.join(process.cwd(), "apps", "web", "public");
+const updateCheckEnabled = readEnv("BELLDANDY_UPDATE_CHECK") !== "false";
+const updateCheckApiUrl = readEnv("BELLDANDY_UPDATE_CHECK_API_URL");
+const updateCheckTimeoutMs = Number(readEnv("BELLDANDY_UPDATE_CHECK_TIMEOUT_MS") ?? "3000") || 3000;
 // Channels
 const feishuAppId = readEnv("BELLDANDY_FEISHU_APP_ID");
 const feishuAppSecret = readEnv("BELLDANDY_FEISHU_APP_SECRET");
@@ -1227,8 +1232,16 @@ const server = await startGatewayServer({
 // 绑定 broadcast 给 service_restart 工具使用
 serverBroadcast = (msg) => server.broadcast(msg);
 logger.info("gateway", `Belldandy Gateway running: http://${server.host}:${server.port}`);
+logger.info("gateway", `Belldandy Version: v${BELLDANDY_VERSION}`);
 logger.info("gateway", `WebChat: http://${server.host}:${server.port}/`);
 logger.info("gateway", `WS: ws://${server.host}:${server.port}`);
+void checkForUpdates({
+    currentVersion: BELLDANDY_VERSION,
+    logger,
+    enabled: updateCheckEnabled,
+    timeoutMs: updateCheckTimeoutMs,
+    releasesApiUrl: updateCheckApiUrl,
+});
 if (server.host === "0.0.0.0" || server.host === "::") {
     // Print LAN IPs for easier access from other machines
     const nets = os.networkInterfaces();

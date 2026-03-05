@@ -6,6 +6,7 @@ import WebSocket from "ws";
 import { AgentRegistry, MockAgent } from "@belldandy/agent";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
+import { BELLDANDY_VERSION } from "./version.generated.js";
 // MemoryManager 内部会初始化 OpenAIEmbeddingProvider，需要 OPENAI_API_KEY
 // 测试环境中设置一个占位值，避免构造函数抛错（不会实际调用 API）
 beforeAll(() => {
@@ -33,6 +34,8 @@ test("gateway handshake and message.send streams chat", async () => {
     await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
     ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
     await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+    const hello = frames.find((f) => f.type === "hello-ok");
+    expect(hello?.version).toBe(BELLDANDY_VERSION);
     const reqId = "req-1";
     ws.send(JSON.stringify({ type: "req", id: reqId, method: "message.send", params: { text: "你好" } }));
     await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
@@ -52,6 +55,26 @@ test("gateway handshake and message.send streams chat", async () => {
     await server.close();
     // Windows: SQLite 文件可能仍被锁定，忽略清理错误（由 OS 最终回收）
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+});
+test("/health includes version", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+        port: 0,
+        auth: { mode: "none" },
+        webRoot: resolveWebRoot(),
+        stateDir,
+    });
+    try {
+        const res = await fetch(`http://127.0.0.1:${server.port}/health`);
+        const payload = await res.json();
+        expect(res.status).toBe(200);
+        expect(payload.status).toBe("ok");
+        expect(payload.version).toBe(BELLDANDY_VERSION);
+    }
+    finally {
+        await server.close();
+        await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+    }
 });
 test("models.list returns sanitized model list with current default model ref", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));

@@ -1,5 +1,6 @@
 {
   "name": "belldandy",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.23.0",
@@ -7,6 +8,10 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "version:generate": "node --import tsx scripts/generate-version.ts",
+    "prebuild": "pnpm run version:generate",
+    "predev": "pnpm run version:generate",
+    "pretest": "pnpm run version:generate",
     "build": "tsc -b",
     "postbuild": "node -e \"fs.cpSync('packages/belldandy-agent/src/templates', 'packages/belldandy-agent/dist/templates', {recursive:true, force:true})\"",
     "bdd": "node --import tsx packages/belldandy-core/src/bin/bdd.ts",

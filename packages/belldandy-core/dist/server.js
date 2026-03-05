@@ -8,6 +8,7 @@ import { MockAgent, ConversationStore, extractIdentityInfo } from "@belldandy/ag
 import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
 import { checkAndConsumeRestartCooldown, formatRestartCooldownMessage } from "@belldandy/skills";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
+import { BELLDANDY_VERSION } from "./version.generated.js";
 const DEFAULT_METHODS = [
     "message.send",
     "models.list",
@@ -105,7 +106,11 @@ export async function startGatewayServer(opts) {
     });
     // Health check endpoint for Docker/K8s
     app.get("/health", (_req, res) => {
-        res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+        res.status(200).json({
+            status: "ok",
+            timestamp: new Date().toISOString(),
+            version: BELLDANDY_VERSION,
+        });
     });
     // Community message endpoint (for office.goddess.ai integration)
     const communityApiEnabled = String(process.env.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").toLowerCase() === "true";
@@ -453,6 +458,7 @@ export async function startGatewayServer(opts) {
                     role: state.role,
                     methods: DEFAULT_METHODS,
                     events: DEFAULT_EVENTS,
+                    version: BELLDANDY_VERSION,
                     agentName: identityInfo.agentName,
                     agentAvatar: identityInfo.agentAvatar,
                     userName: identityInfo.userName,

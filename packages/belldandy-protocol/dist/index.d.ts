@@ -29,6 +29,7 @@ export type HelloOkFrame = {
     role: BelldandyRole;
     methods: string[];
     events: string[];
+    version?: string;
     agentName?: string;
     agentAvatar?: string;
     userName?: string;

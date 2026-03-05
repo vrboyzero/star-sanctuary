@@ -30,6 +30,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Resolve build version
+        id: build_version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="$(node -p "require('./package.json').version || '0.0.0-dev'")"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -55,6 +66,8 @@ jobs:
           push: false
           load: true
           tags: belldandy:test
+          build-args: |
+            BELLDANDY_VERSION=${{ steps.build_version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -105,6 +118,8 @@ jobs:
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BELLDANDY_VERSION=${{ steps.build_version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -123,6 +138,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Resolve build version
+        id: build_version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="$(node -p "require('./package.json').version || '0.0.0-dev'")"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -159,6 +185,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BELLDANDY_VERSION=${{ steps.build_version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -190,11 +218,46 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
+      - name: Extract changelog section
+        id: changelog
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          if [[ ! -f CHANGELOG.md ]]; then
+            {
+              echo "body<<EOF"
+              echo "No changelog entry found for v${VERSION}."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SECTION="$(awk -v ver="$VERSION" '
+            BEGIN { capture=0 }
+            $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+            capture && $0 ~ "^## \\[" { exit }
+            capture { print }
+          ' CHANGELOG.md)"
+
+          if [[ -z "${SECTION//[[:space:]]/}" ]]; then
+            SECTION="No changelog entry found for v${VERSION}."
+          fi
+
+          {
+            echo "body<<EOF"
+            echo "$SECTION"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           name: Release v${{ steps.version.outputs.VERSION }}
           body: |
+            ## What's Changed
+
+            ${{ steps.changelog.outputs.body }}
+
             ## Docker Images
 
             ```bash
@@ -205,10 +268,6 @@ jobs:
             # Run with docker-compose
             docker-compose up -d
             ```
-
-            ## What's Changed
-
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
 
             ## Documentation
 

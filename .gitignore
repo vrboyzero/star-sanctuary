@@ -47,6 +47,7 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
+packages/belldandy-core/src/version.generated.ts
 
 # Test / coverage
 coverage/

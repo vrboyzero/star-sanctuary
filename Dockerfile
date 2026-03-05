@@ -70,6 +70,7 @@ RUN pnpm build
 # Runtime Stage (Production)
 # ========================================
 FROM node:22-bookworm-slim AS runtime
+ARG BELLDANDY_VERSION=0.0.0-dev
 
 # Enable corepack
 RUN corepack enable
@@ -126,7 +127,8 @@ ENV NODE_ENV=production \
     BELLDANDY_HOST=127.0.0.1 \
     BELLDANDY_PORT=28889 \
     BELLDANDY_STATE_DIR=/home/belldandy/.belldandy \
-    BELLDANDY_WEB_ROOT=/app/apps/web/public
+    BELLDANDY_WEB_ROOT=/app/apps/web/public \
+    BELLDANDY_VERSION=${BELLDANDY_VERSION}
 
 # Switch to non-root user
 USER belldandy
