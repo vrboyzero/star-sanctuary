@@ -107,8 +107,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
     // 优先使用新版 hookRunner，向后兼容旧版 hooks
     if (this.opts.hookRunner) {
       try {
+        const normalizedPrompt = typeof input.content === "string" ? input.content : input.text;
+        const normalizedUserInput = input.userInput?.trim() || normalizedPrompt;
         const hookRes = await this.opts.hookRunner.runBeforeAgentStart(
-          { prompt: typeof input.content === 'string' ? input.content : input.text, messages: input.history as any }, // TODO: Update hook types for multimodal
+          { prompt: normalizedPrompt, messages: input.history as any, userInput: normalizedUserInput }, // TODO: Update hook types for multimodal
           agentHookCtx,
         );
         if (hookRes) {

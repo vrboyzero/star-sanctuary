@@ -126,6 +126,8 @@ export interface BeforeAgentStartEvent {
   prompt: string;
   /** 历史消息（可选） */
   messages?: unknown[];
+  /** 用户原始输入（用于语义召回；可选，缺失时可回退到 prompt） */
+  userInput?: string;
 }
 
 /**

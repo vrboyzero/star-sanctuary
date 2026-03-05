@@ -289,6 +289,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         const stream = agent.run({
           conversationId,
           text,
+          userInput: text,
           agentId,
           roomContext,
           senderInfo,
@@ -420,6 +421,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         const stream = agent.run({
           conversationId,
           text: promptText,
+          userInput: promptText,
           agentId: requestedAgentId,
         });
 
@@ -951,6 +953,7 @@ async function handleReq(
           const runInput: any = {
             conversationId,
             text: promptText,
+            userInput: parsed.value.text,
             history,
             agentId: requestedAgentId,
             userUuid: ctx.userUuid, // 传递UUID给Agent
