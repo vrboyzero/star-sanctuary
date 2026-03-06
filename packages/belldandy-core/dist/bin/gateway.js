@@ -201,6 +201,19 @@ const agentProvider = (readEnv("BELLDANDY_AGENT_PROVIDER") ?? "mock");
 const openaiBaseUrl = readEnv("BELLDANDY_OPENAI_BASE_URL");
 const openaiApiKey = readEnv("BELLDANDY_OPENAI_API_KEY");
 const openaiModel = readEnv("BELLDANDY_OPENAI_MODEL");
+const openaiWireApi = (readEnv("BELLDANDY_OPENAI_WIRE_API") ?? "chat_completions").toLowerCase() === "responses"
+    ? "responses"
+    : "chat_completions";
+const openaiMaxRetriesRaw = readEnv("BELLDANDY_OPENAI_MAX_RETRIES");
+const openaiMaxRetries = openaiMaxRetriesRaw ? Math.max(0, parseInt(openaiMaxRetriesRaw, 10) || 0) : 0;
+const openaiRetryBackoffMsRaw = readEnv("BELLDANDY_OPENAI_RETRY_BACKOFF_MS");
+const openaiRetryBackoffMs = openaiRetryBackoffMsRaw ? Math.max(100, parseInt(openaiRetryBackoffMsRaw, 10) || 300) : 300;
+const openaiProxyUrl = readEnv("BELLDANDY_OPENAI_PROXY_URL");
+const primaryWarmupEnabled = (readEnv("BELLDANDY_PRIMARY_WARMUP_ENABLED") ?? "true") !== "false";
+const primaryWarmupTimeoutMsRaw = readEnv("BELLDANDY_PRIMARY_WARMUP_TIMEOUT_MS");
+const primaryWarmupTimeoutMs = primaryWarmupTimeoutMsRaw ? Math.max(1000, parseInt(primaryWarmupTimeoutMsRaw, 10) || 8000) : 8000;
+const primaryWarmupCooldownMsRaw = readEnv("BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS");
+const primaryWarmupCooldownMs = primaryWarmupCooldownMsRaw ? Math.max(5000, parseInt(primaryWarmupCooldownMsRaw, 10) || 60000) : 60000;
 const openaiStream = (readEnv("BELLDANDY_OPENAI_STREAM") ?? "true") !== "false";
 const openaiSystemPrompt = readEnv("BELLDANDY_OPENAI_SYSTEM_PROMPT");
 const agentProtocol = readEnv("BELLDANDY_AGENT_PROTOCOL");
@@ -710,6 +723,55 @@ const primaryModelConfig = {
     apiKey: openaiApiKey ?? "",
     model: openaiModel ?? "",
 };
+let primaryBootstrapCooldownUntil = 0;
+function getBootstrapProfileCooldowns() {
+    const remainingMs = primaryBootstrapCooldownUntil - Date.now();
+    if (remainingMs <= 0)
+        return undefined;
+    return { primary: remainingMs };
+}
+async function runPrimaryWarmupProbe() {
+    if (!primaryWarmupEnabled || agentProvider !== "openai")
+        return;
+    if (!openaiBaseUrl || !openaiApiKey || !openaiModel)
+        return;
+    const trimmedBase = openaiBaseUrl.replace(/\/+$/, "");
+    const base = /\/v\d+$/.test(trimmedBase) ? trimmedBase : `${trimmedBase}/v1`;
+    const isResponsesWireApi = openaiWireApi === "responses";
+    const url = isResponsesWireApi ? `${base}/responses` : `${base}/chat/completions`;
+    const body = isResponsesWireApi
+        ? { model: openaiModel, input: "ping", max_output_tokens: 8 }
+        : { model: openaiModel, messages: [{ role: "user", content: "ping" }], max_tokens: 8 };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), primaryWarmupTimeoutMs);
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${openaiApiKey}`,
+            },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        });
+        if (res.ok) {
+            logger.info("warmup", `primary probe success (wire_api=${openaiWireApi}, model=${openaiModel})`);
+            return;
+        }
+        const text = await res.text().catch(() => "");
+        primaryBootstrapCooldownUntil = Date.now() + primaryWarmupCooldownMs;
+        logger.warn("warmup", `primary probe failed: HTTP ${res.status} (wire_api=${openaiWireApi}, model=${openaiModel}), apply ${primaryWarmupCooldownMs}ms cooldown. body=${text.slice(0, 200)}`);
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        primaryBootstrapCooldownUntil = Date.now() + primaryWarmupCooldownMs;
+        logger.warn("warmup", `primary probe error: ${msg} (wire_api=${openaiWireApi}, model=${openaiModel}), apply ${primaryWarmupCooldownMs}ms cooldown.`);
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+void runPrimaryWarmupProbe();
 // 8.1 Pre-load per-agent workspaces (async, before sync factory)
 const agentWorkspaceCache = new Map();
 // Default agent uses the root workspace (already loaded above)
@@ -782,6 +844,28 @@ Keep responses concise and natural for spoken delivery.`;
         const profileMaxOutputTokens = profile.maxOutputTokens ?? maxOutputTokens;
         // Resolve protocol: per-model override > global env
         const resolvedProtocol = (resolved.protocol ?? agentProtocol);
+        // Resolve wire_api: per-model override > global env
+        const resolvedWireApi = (resolved.wireApi ?? "").toLowerCase() === "responses"
+            ? "responses"
+            : (resolved.wireApi ?? "").toLowerCase() === "chat_completions"
+                ? "chat_completions"
+                : openaiWireApi;
+        const resolvedRequestTimeoutMs = (() => {
+            const candidates = [];
+            if (typeof resolved.requestTimeoutMs === "number" && resolved.requestTimeoutMs > 0) {
+                candidates.push(resolved.requestTimeoutMs);
+            }
+            if (typeof agentTimeoutMs === "number" && agentTimeoutMs > 0) {
+                candidates.push(agentTimeoutMs);
+            }
+            if (candidates.length === 0)
+                return undefined;
+            return Math.max(...candidates);
+        })();
+        const resolvedMaxRetries = resolved.maxRetries ?? openaiMaxRetries;
+        const resolvedRetryBackoffMs = resolved.retryBackoffMs ?? openaiRetryBackoffMs;
+        const resolvedProxyUrl = resolved.proxyUrl ?? openaiProxyUrl;
+        const bootstrapProfileCooldowns = getBootstrapProfileCooldowns();
         if (profileToolsEnabled) {
             return new ToolEnabledAgent({
                 baseUrl: resolved.baseUrl,
@@ -791,11 +875,16 @@ Keep responses concise and natural for spoken delivery.`;
                 toolExecutor: toolExecutor,
                 logger,
                 hookRunner,
-                ...(agentTimeoutMs !== undefined && { timeoutMs: agentTimeoutMs }),
+                ...(resolvedRequestTimeoutMs !== undefined && { timeoutMs: resolvedRequestTimeoutMs }),
+                maxRetries: resolvedMaxRetries,
+                retryBackoffMs: resolvedRetryBackoffMs,
+                ...(resolvedProxyUrl && { proxyUrl: resolvedProxyUrl }),
+                ...(bootstrapProfileCooldowns && { bootstrapProfileCooldowns }),
                 fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
                 failoverLogger: logger,
                 videoUploadConfig,
                 protocol: resolvedProtocol,
+                wireApi: resolvedWireApi,
                 ...(profileMaxInputTokens > 0 && { maxInputTokens: profileMaxInputTokens }),
                 ...(profileMaxOutputTokens > 0 && { maxOutputTokens: profileMaxOutputTokens }),
                 compaction: compactionOpts,
@@ -813,6 +902,12 @@ Keep responses concise and natural for spoken delivery.`;
             failoverLogger: logger,
             videoUploadConfig,
             protocol: resolvedProtocol,
+            wireApi: resolvedWireApi,
+            ...(resolvedRequestTimeoutMs !== undefined && { timeoutMs: resolvedRequestTimeoutMs }),
+            maxRetries: resolvedMaxRetries,
+            retryBackoffMs: resolvedRetryBackoffMs,
+            ...(resolvedProxyUrl && { proxyUrl: resolvedProxyUrl }),
+            ...(bootstrapProfileCooldowns && { bootstrapProfileCooldowns }),
             ...(profileMaxOutputTokens > 0 && { maxOutputTokens: profileMaxOutputTokens }),
         });
     })
@@ -856,7 +951,22 @@ if (compactionEnabled) {
             const { response } = await summarizerClient.fetchWithFailover({
                 timeoutMs: 30_000,
                 buildRequest: (profile) => {
-                    const url = `${profile.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+                    const trimmedBase = profile.baseUrl.replace(/\/+$/, "");
+                    const base = /\/v\d+$/.test(trimmedBase) ? trimmedBase : `${trimmedBase}/v1`;
+                    const isResponsesWireApi = openaiWireApi === "responses";
+                    const url = isResponsesWireApi ? `${base}/responses` : `${base}/chat/completions`;
+                    const body = isResponsesWireApi
+                        ? {
+                            model: profile.model,
+                            input: prompt,
+                            max_output_tokens: 1024,
+                        }
+                        : {
+                            model: profile.model,
+                            messages: [{ role: "user", content: prompt }],
+                            max_tokens: 1024,
+                            temperature: 0.3,
+                        };
                     return {
                         url,
                         init: {
@@ -865,17 +975,27 @@ if (compactionEnabled) {
                                 "Content-Type": "application/json",
                                 Authorization: `Bearer ${profile.apiKey}`,
                             },
-                            body: JSON.stringify({
-                                model: profile.model,
-                                messages: [{ role: "user", content: prompt }],
-                                max_tokens: 1024,
-                                temperature: 0.3,
-                            }),
+                            body: JSON.stringify(body),
                         },
                     };
                 },
             });
             const json = await response.json();
+            if (openaiWireApi === "responses") {
+                if (typeof json.output_text === "string")
+                    return json.output_text;
+                const output = Array.isArray(json.output) ? json.output : [];
+                const parts = [];
+                for (const item of output) {
+                    if (item?.type !== "message" || !Array.isArray(item.content))
+                        continue;
+                    for (const part of item.content) {
+                        if (typeof part?.text === "string")
+                            parts.push(part.text);
+                    }
+                }
+                return parts.join("");
+            }
             return json.choices?.[0]?.message?.content ?? "";
         };
         logger.info("compaction", `Summarizer initialized (model: ${summarizerModel}, baseUrl: ${summarizerBaseUrl})`);

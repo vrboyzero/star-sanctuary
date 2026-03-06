@@ -4,6 +4,8 @@ import type { AgentRunInput, AgentStreamItem, BelldandyAgent } from "./index.js"
 import { FailoverClient, type ModelProfile, type FailoverLogger } from "./failover-client.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
 
+export type OpenAIWireApi = "chat_completions" | "responses";
+
 export type OpenAIChatAgentOptions = {
   baseUrl: string;
   apiKey: string;
@@ -21,9 +23,24 @@ export type OpenAIChatAgentOptions = {
   protocol?: ApiProtocol;
   /** 单次模型调用最大输出 token 数（默认 4096；调大可避免长输出被截断） */
   maxOutputTokens?: number;
+  /** OpenAI 协议底层线路：chat.completions（默认）或 responses */
+  wireApi?: OpenAIWireApi;
+  /** 同一 profile 最大重试次数（不含首次请求） */
+  maxRetries?: number;
+  /** 同一 profile 重试退避基线（毫秒） */
+  retryBackoffMs?: number;
+  /** primary profile 专用代理 URL（可选） */
+  proxyUrl?: string;
+  /** 启动阶段预置冷却（毫秒） */
+  bootstrapProfileCooldowns?: Record<string, number>;
 };
 
 type ApiProtocol = "openai" | "anthropic";
+const MIN_MULTIMODAL_REQUEST_TIMEOUT_MS = 300_000;
+const LARGE_TEXT_ATTACHMENT_TRIGGER_CHARS = 12_000;
+const HUGE_TEXT_ATTACHMENT_TRIGGER_CHARS = 30_000;
+const MIN_LARGE_TEXT_ATTACHMENT_TIMEOUT_MS = 120_000;
+const MIN_HUGE_TEXT_ATTACHMENT_TIMEOUT_MS = 300_000;
 
 /**
  * 检测 API 协议类型
@@ -46,9 +63,62 @@ function detectProtocol(baseUrl: string, forceProtocol?: ApiProtocol): ApiProtoc
   return "openai";
 }
 
+function normalizeWireApi(raw?: string): OpenAIWireApi | undefined {
+  if (!raw) return undefined;
+  const value = raw.trim().toLowerCase();
+  if (value === "responses") return "responses";
+  if (value === "chat_completions") return "chat_completions";
+  return undefined;
+}
+
+function resolveWireApiForProfile(
+  profile: { id?: string; wireApi?: string },
+  defaultWireApi: OpenAIWireApi,
+): OpenAIWireApi {
+  const fromProfile = normalizeWireApi(profile.wireApi);
+  if (fromProfile) return fromProfile;
+  // fallback profile 默认走 chat_completions，避免全局 responses 导致兼容模型 404
+  if (profile.id && profile.id !== "primary") return "chat_completions";
+  return defaultWireApi;
+}
+
+function hasMultimodalContentInMessages(messages: Array<{ role: string; content: any }>): boolean {
+  return messages.some((m) =>
+    Array.isArray(m.content) && m.content.some((part: any) => typeof part?.type === "string" && part.type !== "text")
+  );
+}
+
+function readTextAttachmentChars(meta?: JsonObject): number {
+  if (!meta || typeof meta !== "object") return 0;
+  const stats = (meta as any).attachmentStats;
+  const value = stats?.textAttachmentChars;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
+function resolveMinimumAdaptiveTimeoutMs(
+  messages: Array<{ role: string; content: any }>,
+  textAttachmentChars: number,
+): number | undefined {
+  let minimumTimeoutMs = 0;
+
+  if (hasMultimodalContentInMessages(messages)) {
+    minimumTimeoutMs = Math.max(minimumTimeoutMs, MIN_MULTIMODAL_REQUEST_TIMEOUT_MS);
+  }
+
+  if (textAttachmentChars >= HUGE_TEXT_ATTACHMENT_TRIGGER_CHARS) {
+    minimumTimeoutMs = Math.max(minimumTimeoutMs, MIN_HUGE_TEXT_ATTACHMENT_TIMEOUT_MS);
+  } else if (textAttachmentChars >= LARGE_TEXT_ATTACHMENT_TRIGGER_CHARS) {
+    minimumTimeoutMs = Math.max(minimumTimeoutMs, MIN_LARGE_TEXT_ATTACHMENT_TIMEOUT_MS);
+  }
+
+  return minimumTimeoutMs > 0 ? minimumTimeoutMs : undefined;
+}
+
 export class OpenAIChatAgent implements BelldandyAgent {
-  private readonly opts: Required<Pick<OpenAIChatAgentOptions, "timeoutMs" | "stream">> &
-    Omit<OpenAIChatAgentOptions, "timeoutMs" | "stream">;
+  private readonly opts: Required<Pick<OpenAIChatAgentOptions, "timeoutMs" | "stream" | "wireApi" | "maxRetries" | "retryBackoffMs">> &
+    Omit<OpenAIChatAgentOptions, "timeoutMs" | "stream" | "wireApi" | "maxRetries" | "retryBackoffMs">;
   private readonly failoverClient: FailoverClient;
   private readonly protocol: ApiProtocol;
 
@@ -57,6 +127,9 @@ export class OpenAIChatAgent implements BelldandyAgent {
       ...opts,
       timeoutMs: opts.timeoutMs ?? 60_000,
       stream: opts.stream ?? true,
+      wireApi: opts.wireApi ?? "chat_completions",
+      maxRetries: opts.maxRetries ?? 0,
+      retryBackoffMs: opts.retryBackoffMs ?? 300,
     };
 
     // 检测 API 协议类型（优先使用用户指定的协议）
@@ -64,9 +137,16 @@ export class OpenAIChatAgent implements BelldandyAgent {
 
     // 初始化容灾客户端
     this.failoverClient = new FailoverClient({
-      primary: { id: "primary", baseUrl: opts.baseUrl, apiKey: opts.apiKey, model: opts.model },
+      primary: {
+        id: "primary",
+        baseUrl: opts.baseUrl,
+        apiKey: opts.apiKey,
+        model: opts.model,
+        proxyUrl: opts.proxyUrl,
+      },
       fallbacks: opts.fallbacks,
       logger: opts.failoverLogger,
+      bootstrapCooldowns: opts.bootstrapProfileCooldowns,
     });
   }
 
@@ -90,15 +170,24 @@ export class OpenAIChatAgent implements BelldandyAgent {
       }
 
       const messages = buildMessages(this.opts.systemPrompt, content, input.history);
+      const textAttachmentChars = readTextAttachmentChars(input.meta);
+      const minimumAdaptiveTimeoutMs = resolveMinimumAdaptiveTimeoutMs(messages, textAttachmentChars);
+      const requestTimeoutMs = minimumAdaptiveTimeoutMs
+        ? Math.max(this.opts.timeoutMs, minimumAdaptiveTimeoutMs)
+        : this.opts.timeoutMs;
 
       // 使用容灾客户端发送请求
       const { response: res, profile: usedProfile } = await this.failoverClient.fetchWithFailover({
-        timeoutMs: this.opts.timeoutMs,
+        timeoutMs: requestTimeoutMs,
+        minimumTimeoutMs: minimumAdaptiveTimeoutMs,
+        maxRetries: this.opts.maxRetries,
+        retryBackoffMs: this.opts.retryBackoffMs,
         buildRequest: (profile) => this.buildRequest(profile, messages),
       });
 
       // 实际使用的协议（跟随 failover 选中的 profile）
       const actualProtocol: ApiProtocol = (usedProfile.protocol as ApiProtocol) ?? this.protocol;
+      const actualWireApi = resolveWireApiForProfile(usedProfile, this.opts.wireApi);
 
       if (!res.ok) {
         const text = await safeReadText(res);
@@ -109,7 +198,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
 
       if (!this.opts.stream) {
         const json = (await res.json()) as JsonObject;
-        const content = this.getNonStreamContent(json, actualProtocol);
+        const content = this.getNonStreamContent(json, actualProtocol, actualWireApi);
         yield* emitChunkedFinal(content);
         return;
       }
@@ -122,7 +211,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
       }
 
       let out = "";
-      for await (const item of parseSseStream(body as any, actualProtocol)) {
+      for await (const item of parseSseStream(body as any, actualProtocol, actualWireApi)) {
         if (item.type === "delta") {
           out += item.delta;
           yield item;
@@ -149,11 +238,12 @@ export class OpenAIChatAgent implements BelldandyAgent {
   }
 
   private buildRequest(
-    profile: { baseUrl: string; apiKey: string; model: string; protocol?: string },
+    profile: { id?: string; baseUrl: string; apiKey: string; model: string; protocol?: string; wireApi?: string },
     messages: Array<{ role: string; content: any }>
   ): { url: string; init: RequestInit } {
     // 优先使用 profile 自身的 protocol（models.json 配置），再 fallback 到 agent 级别协议
     const effectiveProtocol = (profile.protocol as ApiProtocol) ?? this.protocol;
+    const effectiveWireApi = resolveWireApiForProfile(profile, this.opts.wireApi);
 
     if (effectiveProtocol === "anthropic") {
       // Anthropic 协议：提取 system 消息，使用数组格式支持 prompt caching
@@ -197,6 +287,27 @@ export class OpenAIChatAgent implements BelldandyAgent {
     }
 
     // OpenAI 协议
+    if (effectiveWireApi === "responses") {
+      const payload = {
+        model: profile.model,
+        input: buildResponsesInput(messages),
+        max_output_tokens: this.opts.maxOutputTokens ?? 4096,
+        stream: this.opts.stream,
+      };
+
+      return {
+        url: buildUrl(profile.baseUrl, "/responses"),
+        init: {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${profile.apiKey}`,
+          },
+          body: JSON.stringify(payload),
+        },
+      };
+    }
+
     const payload = {
       model: profile.model,
       messages,
@@ -217,14 +328,18 @@ export class OpenAIChatAgent implements BelldandyAgent {
     };
   }
 
-  private getNonStreamContent(json: JsonObject, protocol?: ApiProtocol): string {
+  private getNonStreamContent(json: JsonObject, protocol?: ApiProtocol, wireApi?: OpenAIWireApi): string {
     if ((protocol ?? this.protocol) === "anthropic") {
       // Anthropic 格式：{ content: [{ type: "text", text: "..." }] }
       const content = (json.content as unknown) as Array<any> | undefined;
       return content?.[0]?.text ?? "";
     }
 
-    // OpenAI 格式：{ choices: [{ message: { content: "..." } }] }
+    if ((wireApi ?? this.opts.wireApi) === "responses") {
+      return extractResponsesText(json);
+    }
+
+    // OpenAI Chat Completions 格式：{ choices: [{ message: { content: "..." } }] }
     const choices = (json.choices as unknown) as Array<any> | undefined;
     return choices?.[0]?.message?.content ?? "";
   }
@@ -291,7 +406,8 @@ type ParsedSseItem =
 
 async function* parseSseStream(
   body: ReadableStream<Uint8Array>,
-  protocol: ApiProtocol
+  protocol: ApiProtocol,
+  wireApi: OpenAIWireApi
 ): AsyncIterable<ParsedSseItem> {
   const reader = body.getReader();
   const decoder = new TextDecoder("utf-8");
@@ -334,10 +450,27 @@ async function* parseSseStream(
               return;
             }
           } else {
-            // OpenAI SSE 格式
-            const delta = json?.choices?.[0]?.delta?.content;
-            if (typeof delta === "string" && delta.length) {
-              yield { type: "delta", delta };
+            if (wireApi === "responses") {
+              // Responses SSE: response.output_text.delta / response.completed
+              if (json?.type === "response.output_text.delta" && typeof json.delta === "string" && json.delta.length) {
+                yield { type: "delta", delta: json.delta };
+                continue;
+              }
+              if (json?.type === "response.completed") {
+                yield { type: "final" };
+                return;
+              }
+              if (json?.type === "response.error" || json?.type === "error") {
+                const message = json?.error?.message ?? "模型流返回错误";
+                yield { type: "error", message };
+                return;
+              }
+            } else {
+              // OpenAI Chat Completions SSE 格式
+              const delta = json?.choices?.[0]?.delta?.content;
+              if (typeof delta === "string" && delta.length) {
+                yield { type: "delta", delta };
+              }
             }
           }
         } catch {
@@ -347,4 +480,74 @@ async function* parseSseStream(
       }
     }
   }
+}
+
+function buildResponsesInput(messages: Array<{ role: string; content: any }>): Array<Record<string, unknown>> {
+  const input: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    const role = toResponsesRole(message.role);
+    const content = toResponsesContent(message.content);
+    if (typeof content === "undefined") continue;
+    input.push({ role, content });
+  }
+  return input;
+}
+
+function toResponsesRole(role: string): "developer" | "user" | "assistant" {
+  if (role === "system" || role === "developer") return "developer";
+  if (role === "assistant") return "assistant";
+  return "user";
+}
+
+function toResponsesContent(content: any): string | Array<Record<string, unknown>> | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    const mapped = content
+      .map((part) => {
+        if (!part || typeof part !== "object") return undefined;
+        if (part.type === "text" && typeof part.text === "string") {
+          return { type: "input_text", text: part.text };
+        }
+        if (part.type === "image_url" && typeof part.image_url?.url === "string") {
+          return { type: "input_image", image_url: part.image_url.url };
+        }
+        if (part.type === "video_url" && typeof part.video_url?.url === "string") {
+          return { type: "input_text", text: `[Video] ${part.video_url.url}` };
+        }
+        return undefined;
+      })
+      .filter(Boolean) as Array<Record<string, unknown>>;
+
+    return mapped.length > 0 ? mapped : undefined;
+  }
+  if (content === null || typeof content === "undefined") {
+    return undefined;
+  }
+  return String(content);
+}
+
+function extractResponsesText(json: JsonObject): string {
+  const direct = (json as any).output_text;
+  if (typeof direct === "string") {
+    return direct;
+  }
+
+  const output = Array.isArray((json as any).output) ? (json as any).output : [];
+  const chunks: string[] = [];
+
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (!part || typeof part !== "object") continue;
+        if (typeof part.text === "string" && part.text.length > 0) {
+          chunks.push(part.text);
+        }
+      }
+    }
+  }
+
+  return chunks.join("");
 }

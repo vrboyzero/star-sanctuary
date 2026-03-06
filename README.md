@@ -333,9 +333,83 @@ BELLDANDY_COMPACTION_KEEP_RECENT=10     # 保留最近 N 条完整消息
 BELLDANDY_CRON_ENABLED=true             # 启用 Cron 调度引擎 (默认工具可用，此开关控制自动执行)
 
 # ------ 模型容灾与多模态 ------
-BELLDANDY_MODEL_CONFIG_FILE=~/.belldandy/models.json # 备用模型与视频上传配置
+BELLDANDY_MODEL_CONFIG_FILE=~/.belldandy/models.json # 备用模型配置文件
+BELLDANDY_OPENAI_WIRE_API=chat_completions          # primary 线路：chat_completions | responses
+BELLDANDY_OPENAI_MAX_RETRIES=1                      # 默认重试次数（不含首轮）
+BELLDANDY_OPENAI_RETRY_BACKOFF_MS=300               # 默认退避基线（毫秒）
+# BELLDANDY_OPENAI_PROXY_URL=http://127.0.0.1:7890  # primary 专用代理（可选）
+
+# primary 启动预热与冷却（降低首轮失败抖动）
+BELLDANDY_PRIMARY_WARMUP_ENABLED=true
+BELLDANDY_PRIMARY_WARMUP_TIMEOUT_MS=8000
+BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS=60000
 
 ```
+
+### 模型容灾配置（`models.json`）
+
+`models.json` 默认路径为 `~/.belldandy/models.json`，用于定义 fallback 模型队列。  
+字段优先级（高 → 低）：
+
+1. `models.json` 每个 fallback 的字段（`wireApi/requestTimeoutMs/maxRetries/retryBackoffMs/proxyUrl`）
+2. 全局环境变量（`BELLDANDY_OPENAI_*`）
+
+说明：`primary` 来自 `.env.local`，不在 `fallbacks` 中配置。
+
+```json
+{
+  "fallbacks": [
+    {
+      "id": "backup",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "sk-xxx",
+      "model": "deepseek-chat",
+      "protocol": "openai",
+      "wireApi": "chat_completions",
+      "requestTimeoutMs": 60000,
+      "maxRetries": 1,
+      "retryBackoffMs": 300,
+      "proxyUrl": "http://127.0.0.1:7890"
+    }
+  ]
+}
+```
+
+“主稳 + gpt fallback” 推荐示例：
+
+```json
+{
+  "fallbacks": [
+    {
+      "id": "gpt-5.3-codex",
+      "baseUrl": "https://api.aicodewith.com/chatgpt/v1",
+      "apiKey": "sk-xxx",
+      "model": "gpt-5.3-codex",
+      "protocol": "openai",
+      "wireApi": "responses",
+      "requestTimeoutMs": 60000,
+      "maxRetries": 1,
+      "retryBackoffMs": 400
+    },
+    {
+      "id": "kimi-k2.5-relay",
+      "baseUrl": "https://aiping.cn/api/v1",
+      "apiKey": "sk-xxx",
+      "model": "kimi-k2.5",
+      "protocol": "openai",
+      "wireApi": "chat_completions",
+      "requestTimeoutMs": 90000,
+      "maxRetries": 1,
+      "retryBackoffMs": 300
+    }
+  ]
+}
+```
+
+文本附件稳定性策略（已内置）：
+- 文本附件按单文件 `200000` 字符截断后注入上下文，避免单文件异常膨胀。
+- 当文本附件累计字符达到 `12000` / `30000` 时，请求超时下限会自动提升到 `120s` / `300s`。
+- 普通纯文本请求仍使用原始超时配置；建议继续设置 `BELLDANDY_MAX_INPUT_TOKENS` 控制总体上下文大小。
 
 ### 工具权限与策略（简要）
 

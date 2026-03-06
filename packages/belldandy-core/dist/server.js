@@ -677,6 +677,9 @@ async function handleReq(ws, req, ctx) {
             let promptText = parsed.value.text;
             const attachments = parsed.value.attachments;
             const contentParts = []; // Changed from strictly typed imageParts to allow flexible content
+            const TEXT_ATTACHMENT_CHAR_LIMIT = 200_000;
+            let textAttachmentCount = 0;
+            let textAttachmentChars = 0;
             if (attachments && attachments.length > 0) {
                 ctx.log.debug("message", "Processing attachments", { count: attachments.length, conversationId });
                 const attachmentDir = path.join(ctx.stateDir, "storage", "attachments", conversationId);
@@ -753,7 +756,20 @@ async function handleReq(ws, req, ctx) {
                                 att.name.endsWith(".log");
                             if (isText) {
                                 const content = buffer.toString("utf-8");
-                                const truncated = content.length > 50000 ? content.slice(0, 50000) + "\n...[Truncated]" : content;
+                                const wasTruncated = content.length > TEXT_ATTACHMENT_CHAR_LIMIT;
+                                const truncated = wasTruncated
+                                    ? content.slice(0, TEXT_ATTACHMENT_CHAR_LIMIT) + "\n...[Truncated]"
+                                    : content;
+                                textAttachmentCount += 1;
+                                textAttachmentChars += truncated.length;
+                                if (wasTruncated) {
+                                    ctx.log.debug("message", "Text attachment truncated by char limit", {
+                                        name: att.name,
+                                        originalChars: content.length,
+                                        keptChars: truncated.length,
+                                        charLimit: TEXT_ATTACHMENT_CHAR_LIMIT,
+                                    });
+                                }
                                 attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated}\n--- End of Attachment ---\n`);
                             }
                             else {
@@ -783,6 +799,15 @@ async function handleReq(ws, req, ctx) {
                         senderInfo: parsed.value.senderInfo, // 传递发送者信息
                         roomContext: parsed.value.roomContext, // 传递房间上下文
                     };
+                    if (textAttachmentCount > 0) {
+                        runInput.meta = {
+                            attachmentStats: {
+                                textAttachmentCount,
+                                textAttachmentChars,
+                                textAttachmentTruncatedCharLimit: TEXT_ATTACHMENT_CHAR_LIMIT,
+                            },
+                        };
+                    }
                     if (contentParts.length > 0) {
                         // Construct multimodal content
                         runInput.content = [

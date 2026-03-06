@@ -21,6 +21,16 @@ export type ModelProfile = {
     model: string;
     /** API 协议（"openai" | "anthropic"），未指定时使用全局配置 */
     protocol?: string;
+    /** OpenAI 线路协议（"chat_completions" | "responses"），可按模型覆盖 */
+    wireApi?: string;
+    /** 单次请求超时（毫秒） */
+    requestTimeoutMs?: number;
+    /** 同一 profile 的最大重试次数（不含首次请求） */
+    maxRetries?: number;
+    /** 同一 profile 重试退避基线（毫秒） */
+    retryBackoffMs?: number;
+    /** 供应商专用代理 URL（可选） */
+    proxyUrl?: string;
 };
 
 /** 容灾错误原因分类 */
@@ -41,6 +51,10 @@ export type FailoverAttempt = {
     error: string;
     reason: FailoverReason;
     status?: number;
+    attempt?: number;
+    maxAttempts?: number;
+    timeoutMs?: number;
+    wireApi?: string;
 };
 
 /** fetchWithFailover 的返回结果 */
@@ -178,6 +192,8 @@ export class FailoverClient {
         fallbacks?: ModelProfile[];
         /** 冷却时间（毫秒），默认 60s */
         cooldownMs?: number;
+        /** 启动阶段的预置冷却（毫秒） */
+        bootstrapCooldowns?: Record<string, number>;
         /** 日志接口 */
         logger?: FailoverLogger;
     }) {
@@ -195,6 +211,14 @@ export class FailoverClient {
         this.profiles = [primary, ...fallbacks];
         this.cooldown = new CooldownManager(params.cooldownMs ?? 60_000);
         this.logger = params.logger;
+
+        if (params.bootstrapCooldowns) {
+            for (const [profileId, durationMs] of Object.entries(params.bootstrapCooldowns)) {
+                if (durationMs > 0) {
+                    this.cooldown.mark(profileId, durationMs);
+                }
+            }
+        }
     }
 
     /** 获取所有 Profile（用于调试） */
@@ -217,13 +241,31 @@ export class FailoverClient {
         buildRequest: (profile: ModelProfile) => { url: string; init: RequestInit };
         /** 单次请求超时（毫秒） */
         timeoutMs?: number;
+        /** 请求超时下限（毫秒），会覆盖过小的 profile.requestTimeoutMs */
+        minimumTimeoutMs?: number;
+        /** 默认同 profile 最大重试次数（不含首次请求） */
+        maxRetries?: number;
+        /** 默认重试退避基线（毫秒） */
+        retryBackoffMs?: number;
     }): Promise<FailoverResult> {
-        const { buildRequest, timeoutMs = 120_000 } = params;
+        const {
+            buildRequest,
+            timeoutMs = 120_000,
+            minimumTimeoutMs,
+            maxRetries = 0,
+            retryBackoffMs = 300,
+        } = params;
         const attempts: FailoverAttempt[] = [];
         let lastError: Error | undefined;
 
         for (const profile of this.profiles) {
             const profileId = profile.id ?? "unknown";
+            const baseTimeoutMs = normalizePositiveInt(profile.requestTimeoutMs) ?? timeoutMs;
+            const timeoutFloorMs = normalizePositiveInt(minimumTimeoutMs) ?? 0;
+            const resolvedTimeoutMs = Math.max(baseTimeoutMs, timeoutFloorMs);
+            const resolvedMaxRetries = normalizeNonNegativeInt(profile.maxRetries) ?? maxRetries;
+            const resolvedBackoffMs = normalizePositiveInt(profile.retryBackoffMs) ?? retryBackoffMs;
+            const maxAttempts = resolvedMaxRetries + 1;
 
             // 跳过冷却中的 Profile
             if (this.cooldown.isInCooldown(profileId)) {
@@ -234,112 +276,151 @@ export class FailoverClient {
                     model: profile.model,
                     error: `Profile ${profileId} 处于冷却中，跳过`,
                     reason: "rate_limit",
+                    maxAttempts,
+                    timeoutMs: resolvedTimeoutMs,
+                    wireApi: profile.wireApi,
                 });
                 continue;
             }
 
-            // 构建请求
-            const { url, init } = buildRequest(profile);
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                // 构建请求
+                const { url, init } = buildRequest(profile);
 
-            // 设置超时
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs);
+                // 设置超时
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
-            // 合并 signal
-            const originalSignal = init.signal;
-            if (originalSignal) {
-                // 如果调用方也传了 signal，任一触发都 abort
-                originalSignal.addEventListener("abort", () => controller.abort());
-            }
-
-            try {
-                const response = await fetch(url, {
-                    ...init,
-                    signal: controller.signal,
-                });
-
-                // 成功（2xx）
-                if (response.ok) {
-                    this.cooldown.markSuccess(profileId);
-                    if (attempts.length > 0) {
-                        this.logger?.info(
-                            "failover",
-                            `✅ Profile "${profileId}" (${profile.model}) 成功（经过 ${attempts.length} 次失败尝试）`,
-                        );
-                    }
-                    return { response, profile, attempts };
+                // 合并 signal
+                const originalSignal = init.signal;
+                if (originalSignal) {
+                    // 如果调用方也传了 signal，任一触发都 abort
+                    originalSignal.addEventListener("abort", () => controller.abort());
                 }
 
-                // 非 2xx：分类错误
-                const reason = classifyFailoverReason(response.status);
+                try {
+                    const requestInit: RequestInit = {
+                        ...init,
+                        signal: controller.signal,
+                    };
+                    const dispatcher = await getProxyDispatcher(profile.proxyUrl);
+                    if (dispatcher) {
+                        (requestInit as any).dispatcher = dispatcher;
+                    }
 
-                // 400 (format) 不可重试——直接返回给调用方处理
-                if (!isRetryableReason(reason)) {
+                    const response = await fetch(url, requestInit);
+
+                    // 成功（2xx）
+                    if (response.ok) {
+                        this.cooldown.markSuccess(profileId);
+                        if (attempts.length > 0) {
+                            this.logger?.info(
+                                "failover",
+                                `✅ Profile "${profileId}" (${profile.model}) 成功（经过 ${attempts.length} 次失败尝试）`,
+                            );
+                        }
+                        return { response, profile, attempts };
+                    }
+
+                    // 非 2xx：分类错误
+                    const reason = classifyFailoverReason(response.status);
+                    const errorText = await safeReadText(response);
+                    const errorMsg = `HTTP ${response.status}: ${errorText}`;
+                    const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
+
+                    // 400 (format) 不可重试——直接返回给调用方处理
+                    if (!isRetryableReason(reason)) {
+                        this.logger?.warn(
+                            "failover",
+                            `Profile "${profileId}" 返回 HTTP ${response.status}（${reason}），不可重试`,
+                        );
+                        return { response, profile, attempts };
+                    }
+
+                    attempts.push({
+                        profileId,
+                        provider: extractProvider(profile.baseUrl),
+                        model: profile.model,
+                        error: errorMsg,
+                        reason,
+                        status: response.status,
+                        attempt,
+                        maxAttempts,
+                        timeoutMs: resolvedTimeoutMs,
+                        wireApi: profile.wireApi,
+                    });
+                    lastError = new Error(errorMsg);
+
+                    if (canRetrySameProfile) {
+                        const retryAfterMs = reason === "rate_limit" ? parseRetryAfter(response) : undefined;
+                        const waitMs = retryAfterMs ?? calcBackoffDelay(resolvedBackoffMs, attempt);
+                        this.logger?.warn(
+                            "failover",
+                            `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
+                        );
+                        await sleep(waitMs);
+                        continue;
+                    }
+
                     this.logger?.warn(
                         "failover",
-                        `Profile "${profileId}" 返回 HTTP ${response.status}（${reason}），不可重试`,
+                        `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），尝试下一个...`,
                     );
-                    return { response, profile, attempts };
-                }
 
-                // 可重试错误：记录并继续
-                const errorText = await safeReadText(response);
-                const errorMsg = `HTTP ${response.status}: ${errorText}`;
+                    // 对 rate_limit 和 billing 设置冷却
+                    // 优先使用 Retry-After 响应头（Anthropic 会返回）
+                    if (reason === "rate_limit") {
+                        const retryAfterMs = parseRetryAfter(response);
+                        this.cooldown.mark(profileId, retryAfterMs); // 有 Retry-After 用它，否则指数退避
+                    } else if (reason === "billing") {
+                        this.cooldown.mark(profileId, 600_000); // 10 分钟
+                    } else {
+                        this.cooldown.mark(profileId);
+                    }
+                    break;
+                } catch (err) {
+                    // 网络错误或超时
+                    const isAbort = err instanceof Error && err.name === "AbortError";
+                    const reason: FailoverReason = isAbort ? "timeout" : "unknown";
+                    const errorMsg = isAbort
+                        ? `请求超时（${resolvedTimeoutMs}ms）`
+                        : err instanceof Error
+                            ? err.message
+                            : String(err);
+                    const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
 
-                this.logger?.warn(
-                    "failover",
-                    `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}，尝试下一个...`,
-                );
+                    attempts.push({
+                        profileId,
+                        provider: extractProvider(profile.baseUrl),
+                        model: profile.model,
+                        error: errorMsg,
+                        reason,
+                        attempt,
+                        maxAttempts,
+                        timeoutMs: resolvedTimeoutMs,
+                        wireApi: profile.wireApi,
+                    });
+                    lastError = err instanceof Error ? err : new Error(String(err));
 
-                // 对 rate_limit 和 billing 设置冷却
-                // 优先使用 Retry-After 响应头（Anthropic 会返回）
-                if (reason === "rate_limit") {
-                    const retryAfterMs = parseRetryAfter(response);
-                    this.cooldown.mark(profileId, retryAfterMs); // 有 Retry-After 用它，否则指数退避
-                } else if (reason === "billing") {
-                    this.cooldown.mark(profileId, 600_000); // 10 分钟
-                } else {
+                    if (canRetrySameProfile) {
+                        const waitMs = calcBackoffDelay(resolvedBackoffMs, attempt);
+                        this.logger?.warn(
+                            "failover",
+                            `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
+                        );
+                        await sleep(waitMs);
+                        continue;
+                    }
+
+                    this.logger?.warn(
+                        "failover",
+                        `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），尝试下一个...`,
+                    );
                     this.cooldown.mark(profileId);
+                    break;
+                } finally {
+                    clearTimeout(timer);
                 }
-
-                attempts.push({
-                    profileId,
-                    provider: extractProvider(profile.baseUrl),
-                    model: profile.model,
-                    error: errorMsg,
-                    reason,
-                    status: response.status,
-                });
-
-                lastError = new Error(errorMsg);
-            } catch (err) {
-                // 网络错误或超时
-                const isAbort = err instanceof Error && err.name === "AbortError";
-                const reason: FailoverReason = isAbort ? "timeout" : "unknown";
-                const errorMsg = isAbort
-                    ? `请求超时（${timeoutMs}ms）`
-                    : err instanceof Error
-                        ? err.message
-                        : String(err);
-
-                this.logger?.warn(
-                    "failover",
-                    `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}，尝试下一个...`,
-                );
-
-                this.cooldown.mark(profileId);
-
-                attempts.push({
-                    profileId,
-                    provider: extractProvider(profile.baseUrl),
-                    model: profile.model,
-                    error: errorMsg,
-                    reason,
-                });
-
-                lastError = err instanceof Error ? err : new Error(String(err));
-            } finally {
-                clearTimeout(timer);
             }
         }
 
@@ -359,6 +440,56 @@ export class FailoverClient {
 }
 
 // ─── 辅助函数 ─────────────────────────────────────────────────────────────
+
+const proxyDispatcherCache = new Map<string, unknown>();
+
+function normalizePositiveInt(value: unknown): number | undefined {
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    const rounded = Math.floor(value);
+    return rounded > 0 ? rounded : undefined;
+}
+
+function normalizeNonNegativeInt(value: unknown): number | undefined {
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    const rounded = Math.floor(value);
+    return rounded >= 0 ? rounded : undefined;
+}
+
+function isSameProfileRetryable(reason: FailoverReason): boolean {
+    return reason === "timeout"
+        || reason === "rate_limit"
+        || reason === "server_error"
+        || reason === "unknown";
+}
+
+function calcBackoffDelay(baseMs: number, attempt: number): number {
+    const safeBase = Math.max(100, baseMs);
+    const exponent = Math.max(0, attempt - 1);
+    return Math.min(safeBase * Math.pow(2, exponent), 5_000);
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getProxyDispatcher(proxyUrl?: string): Promise<unknown | undefined> {
+    if (!proxyUrl || !proxyUrl.trim()) return undefined;
+    const normalized = proxyUrl.trim();
+    const cached = proxyDispatcherCache.get(normalized);
+    if (cached) return cached;
+
+    try {
+        const moduleName = ["undici"].join("");
+        const undici = await import(moduleName);
+        const ProxyAgentCtor = (undici as any).ProxyAgent;
+        if (typeof ProxyAgentCtor !== "function") return undefined;
+        const dispatcher = new ProxyAgentCtor(normalized);
+        proxyDispatcherCache.set(normalized, dispatcher);
+        return dispatcher;
+    } catch {
+        return undefined;
+    }
+}
 
 /**
  * 解析 Retry-After 响应头。
@@ -423,6 +554,11 @@ export type ModelConfigFile = {
         apiKey: string;
         model: string;
         protocol?: string;
+        wireApi?: string;
+        requestTimeoutMs?: number;
+        maxRetries?: number;
+        retryBackoffMs?: number;
+        proxyUrl?: string;
     }>;
 };
 
@@ -451,6 +587,11 @@ export async function loadModelFallbacks(filePath: string): Promise<ModelProfile
                 apiKey: f.apiKey,
                 model: f.model,
                 protocol: typeof f.protocol === "string" ? f.protocol : undefined,
+                wireApi: typeof f.wireApi === "string" ? f.wireApi : undefined,
+                requestTimeoutMs: normalizePositiveInt(f.requestTimeoutMs),
+                maxRetries: normalizeNonNegativeInt(f.maxRetries),
+                retryBackoffMs: normalizePositiveInt(f.retryBackoffMs),
+                proxyUrl: typeof f.proxyUrl === "string" ? f.proxyUrl : undefined,
             }));
     } catch {
         // 文件不存在或解析失败，静默返回空

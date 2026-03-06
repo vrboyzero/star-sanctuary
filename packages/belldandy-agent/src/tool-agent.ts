@@ -16,11 +16,19 @@ import {
   parseAnthropicResponse,
   type AnthropicUsage,
 } from "./anthropic.js";
+import type { OpenAIWireApi } from "./openai.js";
 import { estimateTokens, needsInLoopCompaction, compactIncremental, createEmptyCompactionState, type CompactionState, type CompactionOptions, type SummarizerFn } from "./compaction.js";
 import { TokenCounterService } from "./token-counter.js";
 import type { ConversationStore, ActiveCounterSnapshot } from "./conversation.js";
 
 type ApiProtocol = "openai" | "anthropic";
+const MIN_MULTIMODAL_REQUEST_TIMEOUT_MS = 300_000;
+const LARGE_TEXT_ATTACHMENT_TRIGGER_CHARS = 12_000;
+const HUGE_TEXT_ATTACHMENT_TRIGGER_CHARS = 30_000;
+const MIN_LARGE_TEXT_ATTACHMENT_TIMEOUT_MS = 120_000;
+const MIN_HUGE_TEXT_ATTACHMENT_TIMEOUT_MS = 300_000;
+const DATA_URI_BASE64_PREFIX_RE = /^data:([^;]+);base64,/i;
+const BASE64_FIELD_KEY_RE = /^(base64|data)$/i;
 
 export type ToolEnabledAgentOptions = {
   baseUrl: string;
@@ -53,6 +61,16 @@ export type ToolEnabledAgentOptions = {
   maxInputTokens?: number;
   /** 单次模型调用最大输出 token 数（默认 4096；调大可避免长输出被截断导致工具调用 JSON 损坏） */
   maxOutputTokens?: number;
+  /** OpenAI 协议底层线路：chat.completions（默认）或 responses */
+  wireApi?: OpenAIWireApi;
+  /** 同一 profile 最大重试次数（不含首次请求） */
+  maxRetries?: number;
+  /** 同一 profile 重试退避基线（毫秒） */
+  retryBackoffMs?: number;
+  /** primary profile 专用代理 URL（可选） */
+  proxyUrl?: string;
+  /** 启动阶段预置冷却（毫秒） */
+  bootstrapProfileCooldowns?: Record<string, number>;
   /** ReAct 循环内压缩配置（可选） */
   compaction?: CompactionOptions;
   /** 模型摘要函数（用于循环内压缩） */
@@ -73,9 +91,42 @@ type OpenAIToolCall = {
   function: { name: string; arguments: string };
 };
 
+function hasMultimodalContentInMessages(messages: Message[]): boolean {
+  return messages.some((m) =>
+    m.role === "user" &&
+    Array.isArray(m.content) &&
+    m.content.some((part: any) => typeof part?.type === "string" && part.type !== "text")
+  );
+}
+
+function readTextAttachmentChars(meta?: JsonObject): number {
+  if (!meta || typeof meta !== "object") return 0;
+  const stats = (meta as any).attachmentStats;
+  const value = stats?.textAttachmentChars;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
+function resolveMinimumAdaptiveTimeoutMs(messages: Message[], textAttachmentChars: number): number | undefined {
+  let minimumTimeoutMs = 0;
+
+  if (hasMultimodalContentInMessages(messages)) {
+    minimumTimeoutMs = Math.max(minimumTimeoutMs, MIN_MULTIMODAL_REQUEST_TIMEOUT_MS);
+  }
+
+  if (textAttachmentChars >= HUGE_TEXT_ATTACHMENT_TRIGGER_CHARS) {
+    minimumTimeoutMs = Math.max(minimumTimeoutMs, MIN_HUGE_TEXT_ATTACHMENT_TIMEOUT_MS);
+  } else if (textAttachmentChars >= LARGE_TEXT_ATTACHMENT_TRIGGER_CHARS) {
+    minimumTimeoutMs = Math.max(minimumTimeoutMs, MIN_LARGE_TEXT_ATTACHMENT_TIMEOUT_MS);
+  }
+
+  return minimumTimeoutMs > 0 ? minimumTimeoutMs : undefined;
+}
+
 export class ToolEnabledAgent implements BelldandyAgent {
-  private readonly opts: Required<Pick<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls">> &
-    Omit<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls">;
+  private readonly opts: Required<Pick<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs">> &
+    Omit<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs">;
   private readonly failoverClient: FailoverClient;
 
   constructor(opts: ToolEnabledAgentOptions) {
@@ -83,13 +134,23 @@ export class ToolEnabledAgent implements BelldandyAgent {
       ...opts,
       timeoutMs: opts.timeoutMs ?? 120_000,
       maxToolCalls: opts.maxToolCalls ?? 999999,
+      wireApi: opts.wireApi ?? "chat_completions",
+      maxRetries: opts.maxRetries ?? 0,
+      retryBackoffMs: opts.retryBackoffMs ?? 300,
     };
 
     // 初始化容灾客户端
     this.failoverClient = new FailoverClient({
-      primary: { id: "primary", baseUrl: opts.baseUrl, apiKey: opts.apiKey, model: opts.model },
+      primary: {
+        id: "primary",
+        baseUrl: opts.baseUrl,
+        apiKey: opts.apiKey,
+        model: opts.model,
+        proxyUrl: opts.proxyUrl,
+      },
       fallbacks: opts.fallbacks,
       logger: opts.failoverLogger,
+      bootstrapCooldowns: opts.bootstrapProfileCooldowns,
     });
   }
 
@@ -165,6 +226,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       input.senderInfo,
       input.roomContext,
     );
+    const textAttachmentChars = readTextAttachmentChars(input.meta);
     const tools = this.opts.toolExecutor.getDefinitions();
     let toolCallCount = 0;
     const generatedItems: AgentStreamItem[] = [];
@@ -196,7 +258,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       type: "usage",
       systemPromptTokens: this.opts.systemPrompt ? estimateTokens(this.opts.systemPrompt) : 0,
       contextTokens: (input.history ?? []).reduce(
-        (sum, m) => sum + estimateTokens(typeof m.content === "string" ? m.content : JSON.stringify(m.content)) + 4,
+        (sum, m) => sum + estimateTokens(contentToTokenEstimateString(m.content)) + 4,
         0,
       ),
       inputTokens: totalInputTokens,
@@ -241,7 +303,11 @@ export class ToolEnabledAgent implements BelldandyAgent {
         }
 
         // 调用模型
-        const response = await this.callModel(messages, tools.length > 0 ? tools : undefined);
+        const response = await this.callModel(
+          messages,
+          tools.length > 0 ? tools : undefined,
+          textAttachmentChars,
+        );
 
         // 记录并累加 usage 信息
         if (response.ok && response.usage) {
@@ -487,8 +553,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
   private async callModel(
     messages: Message[],
-    tools?: { type: "function"; function: { name: string; description: string; parameters: object } }[]
+    tools?: { type: "function"; function: { name: string; description: string; parameters: object } }[],
+    textAttachmentChars?: number,
   ): Promise<{ ok: true; content: string; toolCalls?: OpenAIToolCall[]; reasoning_content?: string; usage?: AnthropicUsage } | { ok: false; error: string }> {
+    let effectiveTimeoutMs = this.opts.timeoutMs;
     try {
       // 输入 token 预检：超限时裁剪历史消息
       const maxInput = this.opts.maxInputTokens;
@@ -498,13 +566,24 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
       // 用于记录实际使用的协议（由 buildRequest 内部决定）
       let usedProtocol: ApiProtocol = "openai" as ApiProtocol;
+      let usedWireApi: OpenAIWireApi = this.opts.wireApi;
+      const minimumAdaptiveTimeoutMs = resolveMinimumAdaptiveTimeoutMs(messages, textAttachmentChars ?? 0);
+      const requestTimeoutMs = minimumAdaptiveTimeoutMs
+        ? Math.max(this.opts.timeoutMs, minimumAdaptiveTimeoutMs)
+        : this.opts.timeoutMs;
+      effectiveTimeoutMs = requestTimeoutMs;
 
       const { response: res } = await this.failoverClient.fetchWithFailover({
-        timeoutMs: this.opts.timeoutMs,
+        timeoutMs: requestTimeoutMs,
+        minimumTimeoutMs: minimumAdaptiveTimeoutMs,
+        maxRetries: this.opts.maxRetries,
+        retryBackoffMs: this.opts.retryBackoffMs,
         buildRequest: (profile) => {
           // 优先使用 profile 自身的 protocol（models.json 配置），再 fallback 到 agent 级别协议
           const profileProtocol = (profile.protocol as ApiProtocol) ?? this.opts.protocol ?? detectProtocol(profile.baseUrl);
+          const profileWireApi = resolveWireApiForProfile(profile, this.opts.wireApi);
           usedProtocol = profileProtocol;
+          usedWireApi = profileWireApi;
 
           if (profileProtocol === "anthropic") {
             return buildAnthropicRequest({
@@ -518,6 +597,34 @@ export class ToolEnabledAgent implements BelldandyAgent {
           }
 
           // OpenAI 协议
+          if (profileWireApi === "responses") {
+            const payload: Record<string, unknown> = {
+              model: profile.model,
+              input: buildResponsesInputFromMessages(messages),
+              max_output_tokens: this.opts.maxOutputTokens ?? 4096,
+              stream: false,
+            };
+            if (tools && tools.length > 0) {
+              payload.tools = tools.map(t => ({
+                type: "function",
+                name: t.function.name,
+                description: t.function.description,
+                parameters: t.function.parameters,
+              }));
+            }
+            return {
+              url: buildUrl(profile.baseUrl, "/responses"),
+              init: {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  authorization: `Bearer ${profile.apiKey}`,
+                },
+                body: JSON.stringify(payload),
+              },
+            };
+          }
+
           const cleanMessages = messages.map(m => cleanupMessage(m, profile.model));
           const payload: Record<string, unknown> = {
             model: profile.model,
@@ -564,6 +671,22 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
       // OpenAI 响应解析
       const json = (await res.json()) as JsonObject;
+      if (usedWireApi === "responses") {
+        const content = extractResponsesText(json);
+        const toolCalls = extractResponsesToolCalls(json);
+        const rawUsage = (json as any).usage;
+        const usage: AnthropicUsage | undefined = rawUsage ? {
+          input_tokens: rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0,
+          output_tokens: rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0,
+        } : undefined;
+        return {
+          ok: true,
+          content,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          usage,
+        };
+      }
+
       const choice = (json.choices as any)?.[0];
       if (!choice) {
         return { ok: false, error: "模型返回空响应" };
@@ -583,7 +706,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       return { ok: true, content, toolCalls, reasoning_content, usage };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
-        return { ok: false, error: `模型调用超时（${this.opts.timeoutMs}ms）` };
+        return { ok: false, error: `模型调用超时（${effectiveTimeoutMs}ms）` };
       }
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -612,7 +735,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
     for (let i = systemIdx; i < messages.length; i++) {
       const m = messages[i];
       if (m.role === "user" || m.role === "assistant") {
-        historyMessages.push({ role: m.role, content: typeof m.content === "string" ? m.content || "" : JSON.stringify(m.content) });
+        historyMessages.push({ role: m.role, content: contentToTokenEstimateString(m.content) });
         historyIndices.push(i);
       }
     }
@@ -678,7 +801,7 @@ function estimateMessagesTotal(messages: Message[]): number {
   const MARGIN = 1.2;
   let total = 0;
   for (const m of messages) {
-    const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+    const content = contentToTokenEstimateString(m.content);
     total += estimateTokens(content ?? "") + 4;
     if (m.role === "assistant" && (m as any).tool_calls) {
       total += estimateTokens(JSON.stringify((m as any).tool_calls));
@@ -827,6 +950,25 @@ function detectProtocol(baseUrl: string): ApiProtocol {
   return "openai";
 }
 
+function normalizeWireApi(raw?: string): OpenAIWireApi | undefined {
+  if (!raw) return undefined;
+  const value = raw.trim().toLowerCase();
+  if (value === "responses") return "responses";
+  if (value === "chat_completions") return "chat_completions";
+  return undefined;
+}
+
+function resolveWireApiForProfile(
+  profile: { id?: string; wireApi?: string },
+  defaultWireApi: OpenAIWireApi,
+): OpenAIWireApi {
+  const fromProfile = normalizeWireApi(profile.wireApi);
+  if (fromProfile) return fromProfile;
+  // fallback profile 默认走 chat_completions，避免全局 responses 导致兼容模型 404
+  if (profile.id && profile.id !== "primary") return "chat_completions";
+  return defaultWireApi;
+}
+
 // 辅助函数：转换 Message 对象为 OpenAI 格式（去除 undefined 字段）
 function cleanupMessage(msg: Message, modelId?: string): any {
   if (msg.role === "assistant") {
@@ -850,6 +992,135 @@ function cleanupMessage(msg: Message, modelId?: string): any {
     return cleaned;
   }
   return msg;
+}
+
+function buildResponsesInputFromMessages(messages: Message[]): Array<Record<string, unknown>> {
+  const input: Array<Record<string, unknown>> = [];
+
+  for (const msg of messages) {
+    if (msg.role === "tool") {
+      input.push({
+        type: "function_call_output",
+        call_id: msg.tool_call_id,
+        output: msg.content,
+      });
+      continue;
+    }
+
+    const role = toResponsesRole(msg.role);
+    const content = toResponsesContent(msg.content);
+
+    if (typeof content !== "undefined") {
+      input.push({
+        type: "message",
+        role,
+        content,
+      });
+    }
+
+    if (msg.role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      for (const tc of msg.tool_calls) {
+        input.push({
+          type: "function_call",
+          call_id: tc.id,
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        });
+      }
+    }
+  }
+
+  return input;
+}
+
+function toResponsesRole(role: Message["role"]): "developer" | "user" | "assistant" {
+  if (role === "system") return "developer";
+  if (role === "assistant") return "assistant";
+  return "user";
+}
+
+function toResponsesContent(content: unknown): string | Array<Record<string, unknown>> | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    const mapped = content.map((part: any) => {
+      if (!part || typeof part !== "object") return undefined;
+      if (part.type === "text" && typeof part.text === "string") {
+        return { type: "input_text", text: part.text };
+      }
+      if (part.type === "image_url" && typeof part.image_url?.url === "string") {
+        return { type: "input_image", image_url: part.image_url.url };
+      }
+      if (part.type === "video_url" && typeof part.video_url?.url === "string") {
+        return { type: "input_text", text: `[Video] ${part.video_url.url}` };
+      }
+      return undefined;
+    }).filter(Boolean) as Array<Record<string, unknown>>;
+
+    return mapped.length > 0 ? mapped : undefined;
+  }
+
+  if (typeof content === "undefined" || content === null) {
+    return undefined;
+  }
+
+  return String(content);
+}
+
+function extractResponsesText(json: JsonObject): string {
+  const direct = (json as any).output_text;
+  if (typeof direct === "string") {
+    return direct;
+  }
+
+  const output = Array.isArray((json as any).output) ? (json as any).output : [];
+  const chunks: string[] = [];
+
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (!part || typeof part !== "object") continue;
+        if (typeof part.text === "string" && part.text.length > 0) {
+          chunks.push(part.text);
+        }
+      }
+    }
+  }
+
+  return chunks.join("");
+}
+
+function extractResponsesToolCalls(json: JsonObject): OpenAIToolCall[] {
+  const output = Array.isArray((json as any).output) ? (json as any).output : [];
+  const toolCalls: OpenAIToolCall[] = [];
+
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type !== "function_call") continue;
+
+    const name = typeof item.name === "string" ? item.name : "";
+    const callId = typeof item.call_id === "string"
+      ? item.call_id
+      : (typeof item.id === "string" ? item.id : `call_${Date.now()}`);
+    const args = typeof item.arguments === "string"
+      ? item.arguments
+      : JSON.stringify(item.arguments ?? {});
+
+    if (!name) continue;
+    toolCalls.push({
+      id: callId,
+      type: "function",
+      function: {
+        name,
+        arguments: args,
+      },
+    });
+  }
+
+  return toolCalls;
 }
 
 function safeParseJson(str: string): JsonObject {
@@ -914,7 +1185,7 @@ function trimMessagesToFit(
   const estimateTotal = () => {
     let total = toolsTokens;
     for (const m of messages) {
-      const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      const content = contentToTokenEstimateString(m.content);
       total += estimateTokens(content ?? "") + 4; // +4 for role/formatting
       if (m.role === "assistant" && (m as any).tool_calls) {
         total += estimateTokens(JSON.stringify((m as any).tool_calls));
@@ -936,4 +1207,44 @@ function trimMessagesToFit(
     messages.splice(idx, 1);
     total = estimateTotal();
   }
+}
+
+function contentToTokenEstimateString(content: unknown): string {
+  if (typeof content === "string") {
+    return sanitizeStringForTokenEstimate(content);
+  }
+  if (typeof content === "undefined" || content === null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(content, tokenEstimateJsonReplacer);
+  } catch {
+    return String(content);
+  }
+}
+
+function tokenEstimateJsonReplacer(key: string, value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const sanitized = sanitizeStringForTokenEstimate(value);
+  if (sanitized !== value) {
+    return sanitized;
+  }
+  if (BASE64_FIELD_KEY_RE.test(key) && value.length > 128) {
+    return `[base64:${value.length} chars omitted for token estimate]`;
+  }
+  return value;
+}
+
+function sanitizeStringForTokenEstimate(value: string): string {
+  if (!value) return value;
+  const prefixMatch = value.match(DATA_URI_BASE64_PREFIX_RE);
+  if (!prefixMatch) {
+    return value;
+  }
+  const commaIndex = value.indexOf(",");
+  const encoded = commaIndex >= 0 ? value.slice(commaIndex + 1).replace(/\s+/g, "") : "";
+  const mime = prefixMatch[1] || "unknown";
+  return `[data-uri:${mime};base64:${encoded.length} chars omitted for token estimate]`;
 }

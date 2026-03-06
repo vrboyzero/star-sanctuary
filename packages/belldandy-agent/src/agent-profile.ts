@@ -118,7 +118,18 @@ export function resolveModelConfig(
   modelRef: string,
   primaryConfig: { baseUrl: string; apiKey: string; model: string },
   fallbacks: ModelProfile[],
-): { baseUrl: string; apiKey: string; model: string; protocol?: string; source: "primary" | "named" } {
+): {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  protocol?: string;
+  wireApi?: string;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
+  retryBackoffMs?: number;
+  proxyUrl?: string;
+  source: "primary" | "named";
+} {
   if (modelRef === "primary") {
     return { ...primaryConfig, source: "primary" };
   }
@@ -131,6 +142,11 @@ export function resolveModelConfig(
       apiKey: found.apiKey,
       model: found.model,
       protocol: found.protocol,
+      wireApi: found.wireApi,
+      requestTimeoutMs: found.requestTimeoutMs,
+      maxRetries: found.maxRetries,
+      retryBackoffMs: found.retryBackoffMs,
+      proxyUrl: found.proxyUrl,
       source: "named",
     };
   }

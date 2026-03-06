@@ -78,13 +78,18 @@ const attachmentsPreviewEl = document.getElementById("attachmentsPreview");
 const attachBtn = document.getElementById("attachBtn");
 const fileInput = document.getElementById("fileInput");
 let pendingAttachments = []; // { name, type, mimeType, content }
-const UPSTREAM_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
-const UPSTREAM_BODY_GUARD_BYTES = Math.floor(UPSTREAM_BODY_LIMIT_BYTES * 0.9);
+const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
+let attachmentLimits = {
+  maxFileBytes: DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
+  maxTotalBytes: DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
+};
 const IMAGE_COMPRESS_TRIGGER_BYTES = 800 * 1024;
 const IMAGE_COMPRESS_TARGET_BYTES = 1200 * 1024;
 const IMAGE_COMPRESS_MAX_EDGE = 2048;
 const IMAGE_COMPRESS_RESIZE_FACTOR = 0.85;
 const IMAGE_COMPRESS_QUALITIES = [0.86, 0.78, 0.7, 0.62, 0.54];
+const attachmentHintEl = ensureAttachmentHintElement();
 
 // 侧边栏状态（默认收起）
 let sidebarExpanded = false;
@@ -135,6 +140,7 @@ if (urlToken) {
 }
 
 setStatus("disconnected");
+updateAttachmentHint();
 
 connectBtn.addEventListener("click", () => connect());
 sendBtn.addEventListener("click", () => sendMessage());
@@ -251,9 +257,80 @@ async function syncWorkspaceRoots() {
   });
 }
 
+function parsePositiveIntOrDefault(raw, fallback) {
+  if (raw === undefined || raw === null) return fallback;
+  const parsed = Number.parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function ensureAttachmentHintElement() {
+  if (!attachmentsPreviewEl || !attachmentsPreviewEl.parentElement) return null;
+  const existing = document.getElementById("attachmentHint");
+  if (existing) return existing;
+
+  const hint = document.createElement("div");
+  hint.id = "attachmentHint";
+  hint.style.fontSize = "12px";
+  hint.style.lineHeight = "1.4";
+  hint.style.color = "#9ca3af";
+  hint.style.margin = "6px 2px 0";
+  hint.style.whiteSpace = "pre-wrap";
+  hint.style.wordBreak = "break-word";
+  attachmentsPreviewEl.parentElement.insertBefore(hint, attachmentsPreviewEl.nextSibling);
+  return hint;
+}
+
+function estimateTextBytes(text) {
+  if (typeof text !== "string") return 0;
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(text).length;
+  }
+  return unescape(encodeURIComponent(text)).length;
+}
+
+function estimateAttachmentBytes(att) {
+  if (!att || typeof att !== "object") return 0;
+  if (typeof att.content !== "string") return 0;
+  if (att.content.startsWith("data:")) return estimateDataUrlBytes(att.content);
+  return estimateTextBytes(att.content);
+}
+
+function estimatePendingAttachmentTotalBytes() {
+  return pendingAttachments.reduce((sum, att) => sum + estimateAttachmentBytes(att), 0);
+}
+
+function updateAttachmentHint(extraMessage) {
+  if (!attachmentHintEl) return;
+
+  const totalBytes = estimatePendingAttachmentTotalBytes();
+  const summary = pendingAttachments.length > 0
+    ? `已选 ${pendingAttachments.length} 个附件，约 ${formatBytes(totalBytes)} / ${formatBytes(attachmentLimits.maxTotalBytes)}。单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}。`
+    : `附件上限：单文件 ${formatBytes(attachmentLimits.maxFileBytes)}，总计 ${formatBytes(attachmentLimits.maxTotalBytes)}。`;
+
+  attachmentHintEl.textContent = extraMessage ? `${extraMessage}\n${summary}` : summary;
+  attachmentHintEl.style.color = extraMessage ? "#f59e0b" : "#9ca3af";
+}
+
+function syncAttachmentLimitsFromConfig(config) {
+  if (!config || typeof config !== "object") return;
+
+  const maxFileBytes = parsePositiveIntOrDefault(
+    config["BELLDANDY_ATTACHMENT_MAX_FILE_BYTES"],
+    DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
+  );
+  const maxTotalBytes = parsePositiveIntOrDefault(
+    config["BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES"],
+    DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
+  );
+
+  attachmentLimits = { maxFileBytes, maxTotalBytes };
+  updateAttachmentHint();
+}
+
 // 从服务器加载可操作区配置值
 async function loadWorkspaceRootsFromServer() {
-  if (!ws || !isReady || !workspaceRootsEl) return;
+  if (!ws || !isReady) return;
 
   const id = makeId();
   const res = await sendReq({
@@ -263,8 +340,10 @@ async function loadWorkspaceRootsFromServer() {
   });
 
   if (res && res.ok && res.payload && res.payload.config) {
+    const config = res.payload.config;
+    syncAttachmentLimitsFromConfig(config);
     const serverValue = res.payload.config["BELLDANDY_EXTRA_WORKSPACE_ROOTS"];
-    if (serverValue && serverValue !== "[REDACTED]") {
+    if (workspaceRootsEl && serverValue && serverValue !== "[REDACTED]") {
       workspaceRootsEl.value = serverValue;
       persistWorkspaceRoots(); // 同步到 localStorage
     }
@@ -619,18 +698,6 @@ function estimateBase64DecodedBytes(base64) {
   return Math.max(0, (normalized.length / 4) * 3 - padding);
 }
 
-function estimateJsonBytes(value) {
-  try {
-    const json = JSON.stringify(value);
-    if (typeof TextEncoder !== "undefined") {
-      return new TextEncoder().encode(json).length;
-    }
-    return json.length;
-  } catch {
-    return 0;
-  }
-}
-
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
@@ -663,16 +730,6 @@ function buildAttachmentsPayload(attachments) {
       base64
     };
   });
-}
-
-function estimateMessageSendFrameBytes(params) {
-  const preflightFrame = {
-    type: "req",
-    id: "preflight",
-    method: "message.send",
-    params
-  };
-  return estimateJsonBytes(preflightFrame);
 }
 
 async function sendMessage() {
@@ -781,23 +838,32 @@ async function sendMessage() {
     params.userUuid = uuid;
   }
 
-  const estimatedFrameBytes = estimateMessageSendFrameBytes(params);
-  const guardExceeded = estimatedFrameBytes > UPSTREAM_BODY_GUARD_BYTES;
-  const hardExceeded = estimatedFrameBytes > UPSTREAM_BODY_LIMIT_BYTES;
-  if (hardExceeded || guardExceeded) {
-    const estimated = formatBytes(estimatedFrameBytes);
-    const guard = formatBytes(UPSTREAM_BODY_GUARD_BYTES);
-    const hard = formatBytes(UPSTREAM_BODY_LIMIT_BYTES);
+  const oversizedAttachment = attachments.find((att) => estimateBase64DecodedBytes(att.base64) > attachmentLimits.maxFileBytes);
+  if (oversizedAttachment) {
     appendMessage("bot",
       `⚠️ 本次消息已在发送前拦截。\n` +
-      `预估请求体大小：${estimated}（保护阈值 ${guard}，上游限制约 ${hard}）。\n` +
-      `建议：缩小/压缩图片、减少附件，或先发送 /compact 后再重试。`
+      `附件 "${oversizedAttachment.name}" 超过单文件大小限制。\n` +
+      `当前限制：${formatBytes(attachmentLimits.maxFileBytes)}（可通过 BELLDANDY_ATTACHMENT_MAX_FILE_BYTES 调整）。\n` +
+      `建议：压缩文件或拆分后重试。`
     );
-    console.warn("message.send preflight blocked", {
-      estimatedFrameBytes,
-      guardBytes: UPSTREAM_BODY_GUARD_BYTES,
-      hardLimitBytes: UPSTREAM_BODY_LIMIT_BYTES,
+    console.warn("message.send blocked by single attachment limit", {
+      fileName: oversizedAttachment.name,
+      fileLimitBytes: attachmentLimits.maxFileBytes,
+      attachmentCount: attachments.length,
+    });
+    restorePromptText(text);
+    return;
+  }
+
+  if (attachmentDecodedBytes > attachmentLimits.maxTotalBytes) {
+    appendMessage("bot",
+      `⚠️ 本次消息已在发送前拦截。\n` +
+      `附件总大小约 ${formatBytes(attachmentDecodedBytes)}，超过总限制 ${formatBytes(attachmentLimits.maxTotalBytes)}。\n` +
+      `可通过 BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES 调整上限，或减少附件后重试。`
+    );
+    console.warn("message.send blocked by attachment total limit", {
       attachmentDecodedBytes,
+      totalLimitBytes: attachmentLimits.maxTotalBytes,
       attachmentCount: attachments.length,
     });
     restorePromptText(text);
@@ -900,6 +966,7 @@ async function loadConfig() {
   const res = await sendReq({ type: "req", id, method: "config.read" });
   if (res && res.ok && res.payload && res.payload.config) {
     const c = res.payload.config;
+    syncAttachmentLimitsFromConfig(c);
     cfgApiKey.value = c["BELLDANDY_OPENAI_API_KEY"] || "";
     cfgBaseUrl.value = c["BELLDANDY_OPENAI_BASE_URL"] || "";
     cfgModel.value = c["BELLDANDY_OPENAI_MODEL"] || "";
@@ -1435,6 +1502,8 @@ async function handleFiles(files) {
     video: [".mp4", ".mov", ".avi", ".webm", ".mkv"],
     text: [".txt", ".md", ".json", ".log", ".js", ".ts", ".xml", ".html", ".css", ".csv"] // Added more text types
   };
+  const rejected = [];
+  let projectedTotalBytes = estimatePendingAttachmentTotalBytes();
 
   for (const file of files) {
     const ext = "." + file.name.split(".").pop().toLowerCase();
@@ -1444,29 +1513,66 @@ async function handleFiles(files) {
 
     if (!isImage && !isVideo && !isText) {
       console.warn(`不支持的文件类型: ${file.name}`);
+      rejected.push(`${file.name}：不支持的文件类型`);
       continue;
     }
 
     try {
       let content = "";
       let mimeType = file.type || (isImage ? "image/png" : (isVideo ? "video/mp4" : "text/plain"));
+      let attachmentBytes = 0;
+
+      if (!isImage && file.size > attachmentLimits.maxFileBytes) {
+        rejected.push(`${file.name}：文件大小 ${formatBytes(file.size)} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}`);
+        continue;
+      }
+      if (!isImage && projectedTotalBytes + file.size > attachmentLimits.maxTotalBytes) {
+        rejected.push(`${file.name}：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}`);
+        continue;
+      }
+
       if (isImage) {
         const processed = await readImageForAttachment(file);
         content = processed.content;
         mimeType = processed.mimeType;
+        attachmentBytes = estimateDataUrlBytes(content);
       } else {
         // Videos use Data URL directly; text files are read as UTF-8 text
         content = await readFileContent(file, isVideo);
+        attachmentBytes = isVideo
+          ? estimateDataUrlBytes(content)
+          : estimateTextBytes(typeof content === "string" ? content : "");
       }
+
+      if (attachmentBytes > attachmentLimits.maxFileBytes) {
+        rejected.push(`${file.name}：处理后大小 ${formatBytes(attachmentBytes)} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}`);
+        continue;
+      }
+      if (projectedTotalBytes + attachmentBytes > attachmentLimits.maxTotalBytes) {
+        rejected.push(`${file.name}：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}`);
+        continue;
+      }
+
       pendingAttachments.push({
         name: file.name,
         type: isImage ? "image" : (isVideo ? "video" : "text"),
         mimeType,
         content
       });
+      projectedTotalBytes += attachmentBytes;
     } catch (err) {
       console.error(`读取文件失败: ${file.name}`, err);
+      rejected.push(`${file.name}：读取失败`);
     }
+  }
+
+  if (rejected.length > 0) {
+    const lines = rejected.slice(0, 3).map((item) => `- ${item}`);
+    if (rejected.length > 3) {
+      lines.push(`- 另有 ${rejected.length - 3} 个文件被跳过`);
+    }
+    renderAttachmentsPreview(`⚠️ 以下文件未加入：\n${lines.join("\n")}`);
+    return;
   }
 
   renderAttachmentsPreview();
@@ -1604,7 +1710,7 @@ async function readImageForAttachment(file) {
 }
 
 // 渲染附件预览
-function renderAttachmentsPreview() {
+function renderAttachmentsPreview(hintMessage = "") {
   if (!attachmentsPreviewEl) return;
   attachmentsPreviewEl.innerHTML = "";
 
@@ -1667,6 +1773,8 @@ function renderAttachmentsPreview() {
 
     attachmentsPreviewEl.appendChild(item);
   });
+
+  updateAttachmentHint(hintMessage);
 }
 
 // ==================== 文件树和编辑器逻辑 ====================
@@ -2537,12 +2645,27 @@ function initVoiceInput() {
             // reader.result is a full data URL: "data:audio/webm;base64,..."
             const ext = mime.includes("mp4") ? "m4a" : (mime.includes("wav") ? "wav" : "webm");
             const fileName = `voice_${Date.now()}.${ext}`;
+            const content = typeof reader.result === "string" ? reader.result : "";
+            const audioBytes = estimateDataUrlBytes(content);
+
+            if (audioBytes > attachmentLimits.maxFileBytes) {
+              renderAttachmentsPreview(
+                `⚠️ 语音附件未加入：${fileName} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}。`
+              );
+              return;
+            }
+            if (estimatePendingAttachmentTotalBytes() + audioBytes > attachmentLimits.maxTotalBytes) {
+              renderAttachmentsPreview(
+                `⚠️ 语音附件未加入：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}。`
+              );
+              return;
+            }
 
             pendingAttachments.push({
               name: fileName,
               type: "audio",
               mimeType: mime,
-              content: reader.result, // data URL, consistent with image attachments
+              content, // data URL, consistent with image attachments
             });
             renderAttachmentsPreview();
 

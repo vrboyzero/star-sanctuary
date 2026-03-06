@@ -8,6 +8,7 @@ import type { AgentRunInput, AgentStreamItem, BelldandyAgent, AgentHooks } from 
 import type { HookRunner } from "./hook-runner.js";
 import { type ModelProfile, type FailoverLogger } from "./failover-client.js";
 import { type VideoUploadConfig } from "./multimodal.js";
+import type { OpenAIWireApi } from "./openai.js";
 import { type CompactionOptions, type SummarizerFn } from "./compaction.js";
 import type { ConversationStore } from "./conversation.js";
 type ApiProtocol = "openai" | "anthropic";
@@ -42,6 +43,16 @@ export type ToolEnabledAgentOptions = {
     maxInputTokens?: number;
     /** 单次模型调用最大输出 token 数（默认 4096；调大可避免长输出被截断导致工具调用 JSON 损坏） */
     maxOutputTokens?: number;
+    /** OpenAI 协议底层线路：chat.completions（默认）或 responses */
+    wireApi?: OpenAIWireApi;
+    /** 同一 profile 最大重试次数（不含首次请求） */
+    maxRetries?: number;
+    /** 同一 profile 重试退避基线（毫秒） */
+    retryBackoffMs?: number;
+    /** primary profile 专用代理 URL（可选） */
+    proxyUrl?: string;
+    /** 启动阶段预置冷却（毫秒） */
+    bootstrapProfileCooldowns?: Record<string, number>;
     /** ReAct 循环内压缩配置（可选） */
     compaction?: CompactionOptions;
     /** 模型摘要函数（用于循环内压缩） */

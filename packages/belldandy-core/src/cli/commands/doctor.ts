@@ -21,9 +21,16 @@ interface CheckResult {
   fix?: string;
 }
 
+type OpenAIWireApi = "chat_completions" | "responses";
+
 const REQUIRED_NODE_MAJOR = 22;
 const REQUIRED_NODE_MINOR = 12;
 const DEFAULT_PORT = 28889;
+
+function resolveOpenAIWireApi(): OpenAIWireApi {
+  const raw = (process.env.BELLDANDY_OPENAI_WIRE_API ?? "chat_completions").trim().toLowerCase();
+  return raw === "responses" ? "responses" : "chat_completions";
+}
 
 function checkNodeVersion(): CheckResult {
   const [major, minor] = process.versions.node.split(".").map(Number);
@@ -86,6 +93,7 @@ function checkRequiredEnv(): CheckResult[] {
     const baseUrl = process.env.BELLDANDY_OPENAI_BASE_URL;
     const apiKey = process.env.BELLDANDY_OPENAI_API_KEY;
     const model = process.env.BELLDANDY_OPENAI_MODEL;
+    const wireApi = resolveOpenAIWireApi();
 
     results.push({
       name: "OpenAI Base URL",
@@ -104,6 +112,11 @@ function checkRequiredEnv(): CheckResult[] {
       status: model ? "pass" : "fail",
       message: model ?? "not set",
       ...(!model ? { fix: "bdd config set BELLDANDY_OPENAI_MODEL <model>" } : {}),
+    });
+    results.push({
+      name: "OpenAI Wire API",
+      status: "pass",
+      message: wireApi,
     });
   }
 
@@ -179,15 +192,29 @@ async function checkModelConnectivity(): Promise<CheckResult> {
   const baseUrl = process.env.BELLDANDY_OPENAI_BASE_URL;
   const apiKey = process.env.BELLDANDY_OPENAI_API_KEY;
   const model = process.env.BELLDANDY_OPENAI_MODEL;
+  const wireApi = resolveOpenAIWireApi();
 
   if (!baseUrl || !apiKey || !model) {
     return { name: "Model connectivity", status: "warn", message: "skipped (missing config)" };
   }
 
   try {
-    const url = `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const trimmedBase = baseUrl.replace(/\/+$/, "");
+    const base = /\/v\d+$/.test(trimmedBase) ? trimmedBase : `${trimmedBase}/v1`;
+    const url = wireApi === "responses" ? `${base}/responses` : `${base}/chat/completions`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
+    const requestBody = wireApi === "responses"
+      ? {
+        model,
+        input: "hi",
+        max_output_tokens: 1,
+      }
+      : {
+        model,
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 1,
+      };
 
     const res = await fetch(url, {
       method: "POST",
@@ -195,11 +222,7 @@ async function checkModelConnectivity(): Promise<CheckResult> {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -207,8 +230,8 @@ async function checkModelConnectivity(): Promise<CheckResult> {
     if (res.ok) {
       return { name: "Model connectivity", status: "pass", message: `${model} reachable` };
     }
-    const body = await res.text().catch(() => "");
-    return { name: "Model connectivity", status: "fail", message: `HTTP ${res.status}: ${body.slice(0, 100)}` };
+    const responseText = await res.text().catch(() => "");
+    return { name: "Model connectivity", status: "fail", message: `HTTP ${res.status}: ${responseText.slice(0, 100)}` };
   } catch (err) {
     return {
       name: "Model connectivity",
