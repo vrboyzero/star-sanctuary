@@ -1,1 +1,0 @@
-{"version":3,"file":"python.d.ts","sourceRoot":"","sources":["../../../src/builtin/code-interpreter/python.ts"],"names":[],"mappings":"AAKA,qBAAa,YAAY;IACrB,OAAO,CAAC,UAAU,CAAS;gBAEf,aAAa,EAAE,MAAM;IAI3B,GAAG,CAAC,IAAI,EAAE,MAAM,GAAG,OAAO,CAAC;QAAE,MAAM,EAAE,MAAM,CAAC;QAAC,MAAM,EAAE,MAAM,CAAA;KAAE,CAAC;CAmCvE"}

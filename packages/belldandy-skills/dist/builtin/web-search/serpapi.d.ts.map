@@ -1,1 +1,0 @@
-{"version":3,"file":"serpapi.d.ts","sourceRoot":"","sources":["../../../src/builtin/web-search/serpapi.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,cAAc,EAAE,YAAY,EAAE,gBAAgB,EAAE,MAAM,YAAY,CAAC;AAejF,qBAAa,eAAgB,YAAW,cAAc;IAClD,IAAI,SAAa;IAEX,MAAM,CAAC,OAAO,EAAE,gBAAgB,GAAG,OAAO,CAAC,YAAY,EAAE,CAAC;CAgDnE"}

@@ -1,1 +1,0 @@
-{"version":3,"file":"brave.d.ts","sourceRoot":"","sources":["../../../src/builtin/web-search/brave.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,cAAc,EAAE,YAAY,EAAE,gBAAgB,EAAE,MAAM,YAAY,CAAC;AAgBjF,qBAAa,mBAAoB,YAAW,cAAc;IACtD,IAAI,SAAW;IAET,MAAM,CAAC,OAAO,EAAE,gBAAgB,GAAG,OAAO,CAAC,YAAY,EAAE,CAAC;CA8CnE"}
