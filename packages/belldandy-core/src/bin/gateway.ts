@@ -560,12 +560,27 @@ const toolsToRegister = toolsEnabled
   ]
   : [];
 
+let agentRegistry: AgentRegistry | undefined;
+
 const toolExecutor = new ToolExecutor({
   tools: toolsToRegister,
   workspaceRoot: stateDir, // Use ~/.belldandy as the workspace root for file operations
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
   policy: toolsPolicy,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
+  isToolAllowedForAgent: (toolName, agentId) => {
+    const resolvedAgentId = typeof agentId === "string" && agentId.trim()
+      ? agentId.trim()
+      : "default";
+    const profile = agentRegistry?.getProfile(resolvedAgentId);
+    const whitelist = profile?.toolWhitelist?.filter((name) => typeof name === "string" && name.trim());
+
+    if (!whitelist || whitelist.length === 0) {
+      return true;
+    }
+
+    return whitelist.includes(toolName);
+  },
   broadcast: (event, payload) => {
     serverBroadcast?.({ type: "event", event, payload });
   },
@@ -966,7 +981,7 @@ for (const profile of agentProfiles) {
   }
 }
 
-const agentRegistry = agentProvider === "openai"
+agentRegistry = agentProvider === "openai"
   ? new AgentRegistry((profile: AgentProfile, opts?: { modelOverride?: string }): BelldandyAgent => {
     const modelRef = opts?.modelOverride ?? profile.model;
     // Resolve model config: "primary" → env vars, named → models.json lookup

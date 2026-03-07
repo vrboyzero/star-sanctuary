@@ -1081,6 +1081,140 @@ Belldandy 支持配置和运行多个 Agent，每个 Agent 可以拥有独立的
 
 > **💡 提示**：不创建 `agents.json` 时，系统只有一个 `"default"` Agent，使用环境变量中的配置，行为与之前完全一致。
 
+#### 7.1.1 `toolWhitelist` 使用说明
+
+`toolWhitelist` 用于限制某个 Agent **可见且可执行** 的工具集合。
+
+当前版本中，它已经同时作用于两层：
+
+- **工具下发阶段**：模型只能看到白名单中的工具定义
+- **工具执行阶段**：即使模型尝试调用白名单外工具，也会被执行层拒绝
+
+这意味着 `toolWhitelist` 现在是一个真正的 Agent 权限边界，而不只是提示用途。
+
+#### 7.1.2 `toolWhitelist` 生效前提
+
+要让 `toolWhitelist` 生效，需要满足以下条件：
+
+1. 该 Agent 的 `toolsEnabled` 为 `true`
+2. 目标工具已经在全局工具集中注册
+3. 该工具没有被全局调用设置禁用
+4. 该工具名存在于当前 Agent 的 `toolWhitelist` 中
+
+判断顺序可以理解为：
+
+1. 先看工具是否存在
+2. 再看是否被全局禁用
+3. 最后看当前 Agent 是否允许使用
+
+只有三者都通过，工具才会真正可见、可执行。
+
+#### 7.1.3 默认兼容策略
+
+如果某个 Agent：
+
+- 没有配置 `toolWhitelist`
+- 或者配置了空数组
+
+则当前实现按**不限制**处理，保持和旧版本兼容。
+
+对 `default` Agent 也是同样规则：
+
+- `default` 未配置 `toolWhitelist`：默认不限制
+- `default` 配置了 `toolWhitelist`：严格按该列表限制
+
+#### 7.1.4 推荐配置方式
+
+建议按 Agent 职责拆分工具，而不是把所有工具都给每个 Agent。
+
+例如：
+
+- `coder`
+  - 推荐保留：`file_read`、`file_write`、`apply_patch`、`run_command`、`log_read`
+- `researcher`
+  - 推荐保留：`web_fetch`、`web_search`、`memory_search`
+- `default`
+  - 可先不配 `toolWhitelist`，待职责稳定后再逐步收紧
+
+这样可以降低模型误用工具的概率，也更利于后续安全控制。
+
+#### 7.1.5 修改后如何生效
+
+修改 `~/.belldandy/agents.json` 后，需要**重启 Belldandy Gateway / 主服务**，让 Agent Profile 重新加载。
+
+如果你修改后没有看到效果，优先检查是不是还在使用旧进程。
+
+#### 7.1.6 常见报错与排查
+
+如果某个 Agent 调用了白名单外工具，通常会看到类似错误：
+
+- `工具 file_write 不允许给 Agent "researcher" 使用`
+
+如果工具被全局禁用，则通常会看到：
+
+- `工具 file_write 已被禁用`
+
+建议按以下顺序排查：
+
+1. 该工具是否真的已经注册并启用
+2. `toolsEnabled` 是否为 `true`
+3. 工具是否被全局工具设置禁用
+4. 工具名是否正确写入 `toolWhitelist`
+5. 修改 `agents.json` 后是否已重启服务
+
+#### 7.1.7 更完整示例
+
+下面是一个更贴近实际使用的配置示例：
+
+```json
+{
+  "agents": [
+    {
+      "id": "default",
+      "displayName": "Belldandy",
+      "model": "primary",
+      "toolsEnabled": true
+    },
+    {
+      "id": "coder",
+      "displayName": "代码专家",
+      "model": "MiniMax-M2.5",
+      "systemPromptOverride": "你是一个严谨的代码专家，专注于实现、调试和重构。",
+      "toolsEnabled": true,
+      "toolWhitelist": [
+        "file_read",
+        "file_write",
+        "file_delete",
+        "list_files",
+        "apply_patch",
+        "run_command",
+        "log_read",
+        "log_search",
+        "memory_search"
+      ]
+    },
+    {
+      "id": "researcher",
+      "displayName": "调研助手",
+      "model": "kimi-k2.5-relay",
+      "systemPromptOverride": "你是一个专业的调研助手，擅长搜索、整理和归纳信息。",
+      "toolsEnabled": true,
+      "toolWhitelist": [
+        "web_fetch",
+        "web_search",
+        "memory_search"
+      ]
+    }
+  ]
+}
+```
+
+这个配置的效果是：
+
+- `default` 继续保持通用模式
+- `coder` 聚焦代码和文件操作
+- `researcher` 聚焦检索和信息整理
+
 ### 7.2 Agent 专属工作区
 
 每个非 default 的 Agent 可以拥有独立的人格文件。目录结构：

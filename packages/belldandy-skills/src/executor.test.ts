@@ -108,6 +108,24 @@ describe("ToolExecutor", () => {
     expect(definitions[0].function.name).toBe("echo");
   });
 
+  it("should filter tool definitions by agent whitelist", () => {
+    const executor = new ToolExecutor({
+      tools: [echoTool, failTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedForAgent: (toolName, agentId) => {
+        if (agentId === "researcher") {
+          return toolName === "echo";
+        }
+        return true;
+      },
+    });
+
+    const definitions = executor.getDefinitions("researcher");
+
+    expect(definitions).toHaveLength(1);
+    expect(definitions[0].function.name).toBe("echo");
+  });
+
   it("should call audit logger", async () => {
     const auditLogs: any[] = [];
     const executor = new ToolExecutor({
@@ -160,6 +178,40 @@ describe("ToolExecutor", () => {
     expect(results).toHaveLength(2);
     expect(results[0].output).toBe("Echo: A");
     expect(results[1].output).toBe("Echo: B");
+  });
+
+  it("should reject tool execution outside agent whitelist", async () => {
+    const executor = new ToolExecutor({
+      tools: [echoTool, failTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedForAgent: (toolName, agentId) => {
+        if (agentId === "researcher") {
+          return toolName === "echo";
+        }
+        return true;
+      },
+    });
+
+    const result = await executor.execute(
+      { id: "req-6", name: "fail", arguments: {} },
+      "conv-1",
+      "researcher",
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("不允许给 Agent \"researcher\" 使用");
+  });
+
+  it("should keep default behavior when no whitelist is configured", () => {
+    const executor = new ToolExecutor({
+      tools: [echoTool, failTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedForAgent: () => true,
+    });
+
+    const definitions = executor.getDefinitions("default");
+
+    expect(definitions).toHaveLength(2);
   });
 });
 

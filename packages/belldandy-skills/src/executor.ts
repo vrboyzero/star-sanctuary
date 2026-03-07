@@ -37,6 +37,8 @@ export type ToolExecutorOptions = {
   logger?: ToolExecutorLogger;
   /** 可选：运行时判断工具是否被禁用（用于调用设置开关） */
   isToolDisabled?: (toolName: string) => boolean;
+  /** 可选：运行时判断工具是否允许给指定 Agent 使用（用于 per-agent toolWhitelist） */
+  isToolAllowedForAgent?: (toolName: string, agentId?: string) => boolean;
   /** 可选：会话存储（用于缓存等功能） */
   conversationStore?: ConversationStoreInterface;
   /** 可选：事件广播回调（用于工具主动推送事件到前端） */
@@ -52,6 +54,7 @@ export class ToolExecutor {
   private agentCapabilities?: AgentCapabilities;
   private readonly logger?: ToolExecutorLogger;
   private readonly isToolDisabled?: (toolName: string) => boolean;
+  private readonly isToolAllowedForAgent?: (toolName: string, agentId?: string) => boolean;
   private conversationStore?: ConversationStoreInterface; // 移除 readonly，允许后期绑定
   private readonly tokenCounters = new Map<string, ITokenCounterService>(); // 每个 conversation 的 token 计数器
   private readonly broadcast?: (event: string, payload: Record<string, unknown>) => void;
@@ -65,6 +68,7 @@ export class ToolExecutor {
     this.agentCapabilities = options.agentCapabilities;
     this.logger = options.logger;
     this.isToolDisabled = options.isToolDisabled;
+    this.isToolAllowedForAgent = options.isToolAllowedForAgent;
     this.conversationStore = options.conversationStore;
     this.broadcast = options.broadcast;
   }
@@ -104,12 +108,10 @@ export class ToolExecutor {
     return this.tokenCounters.get(conversationId);
   }
 
-  /** 获取所有工具定义（用于发送给模型），已过滤禁用工具 */
-  getDefinitions(): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
+  /** 获取所有工具定义（用于发送给模型），已过滤禁用工具和 Agent 白名单 */
+  getDefinitions(agentId?: string): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
     const all = Array.from(this.tools.values());
-    const active = this.isToolDisabled
-      ? all.filter(t => !this.isToolDisabled!(t.definition.name))
-      : all;
+    const active = all.filter((tool) => this.isToolAvailable(tool.definition.name, agentId));
     return active.map(t => ({
       type: "function" as const,
       function: {
@@ -159,20 +161,6 @@ export class ToolExecutor {
   ): Promise<ToolCallResult> {
     const start = Date.now();
 
-    // 防御性检查：拒绝已禁用的工具调用
-    if (this.isToolDisabled?.(request.name)) {
-      const result: ToolCallResult = {
-        id: request.id,
-        name: request.name,
-        success: false,
-        output: "",
-        error: `工具 ${request.name} 已被禁用`,
-        durationMs: Date.now() - start,
-      };
-      this.audit(result, conversationId, request.arguments);
-      return result;
-    }
-
     const tool = this.tools.get(request.name);
 
     if (!tool) {
@@ -182,6 +170,20 @@ export class ToolExecutor {
         success: false,
         output: "",
         error: `未知工具：${request.name}`,
+        durationMs: Date.now() - start,
+      };
+      this.audit(result, conversationId, request.arguments);
+      return result;
+    }
+
+    // 防御性检查：拒绝已禁用或不在 Agent 白名单中的工具调用
+    if (!this.isToolAvailable(request.name, agentId)) {
+      const result: ToolCallResult = {
+        id: request.id,
+        name: request.name,
+        success: false,
+        output: "",
+        error: this.buildToolUnavailableMessage(request.name, agentId),
         durationMs: Date.now() - start,
       };
       this.audit(result, conversationId, request.arguments);
@@ -261,6 +263,29 @@ export class ToolExecutor {
       error: result.error,
       durationMs: result.durationMs,
     });
+  }
+
+  private isToolAvailable(toolName: string, agentId?: string): boolean {
+    if (this.isToolDisabled?.(toolName)) {
+      return false;
+    }
+
+    if (this.isToolAllowedForAgent && !this.isToolAllowedForAgent(toolName, agentId)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private buildToolUnavailableMessage(toolName: string, agentId?: string): string {
+    if (this.isToolDisabled?.(toolName)) {
+      return `工具 ${toolName} 已被禁用`;
+    }
+
+    const targetAgentId = typeof agentId === "string" && agentId.trim()
+      ? agentId.trim()
+      : "default";
+    return `工具 ${toolName} 不允许给 Agent "${targetAgentId}" 使用`;
   }
 }
 
