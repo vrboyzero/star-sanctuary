@@ -2,6 +2,160 @@ import type { Tool, JsonObject, ToolContext } from "../../types.js";
 import { promises as fs } from "fs";
 import * as path from "path";
 import { getMethodsDir } from "./list.js";
+import { parseMethodContent, type ParsedMethod } from "./meta.js";
+
+type SearchMatch = {
+    file: string;
+    title?: string;
+    score: number;
+    matchedIn: string[];
+    snippet: string;
+    status?: string;
+    tags: string[];
+    readWhen: string[];
+};
+
+function countOccurrences(text: string, term: string): number {
+    if (!text || !term) return 0;
+    let count = 0;
+    let fromIndex = 0;
+    while (fromIndex < text.length) {
+        const foundIndex = text.indexOf(term, fromIndex);
+        if (foundIndex === -1) break;
+        count += 1;
+        fromIndex = foundIndex + term.length;
+    }
+    return count;
+}
+
+function buildSearchTerms(keyword: string): string[] {
+    const normalized = keyword.trim().toLowerCase();
+    const terms = new Set<string>();
+    if (normalized) {
+        terms.add(normalized);
+    }
+
+    for (const part of normalized.split(/\s+/)) {
+        if (part) {
+            terms.add(part);
+        }
+    }
+
+    return Array.from(terms);
+}
+
+function extractSnippet(source: string, terms: string[]): string {
+    const compact = source.replace(/\s+/g, " ").trim();
+    if (!compact) {
+        return "无摘要";
+    }
+
+    let matchIndex = -1;
+    let matchedTerm = "";
+    const normalized = compact.toLowerCase();
+
+    for (const term of terms) {
+        const termIndex = normalized.indexOf(term);
+        if (termIndex !== -1 && (matchIndex === -1 || termIndex < matchIndex)) {
+            matchIndex = termIndex;
+            matchedTerm = term;
+        }
+    }
+
+    if (matchIndex === -1) {
+        return compact.slice(0, 80);
+    }
+
+    const start = Math.max(0, matchIndex - 24);
+    const end = Math.min(compact.length, matchIndex + matchedTerm.length + 40);
+    const prefix = start > 0 ? "..." : "";
+    const suffix = end < compact.length ? "..." : "";
+    return `${prefix}${compact.slice(start, end)}${suffix}`;
+}
+
+function scoreMethod(file: string, parsed: ParsedMethod, terms: string[]): SearchMatch | null {
+    const lowerFile = file.toLowerCase();
+    const title = parsed.title ?? "";
+    const lowerTitle = title.toLowerCase();
+    const summary = parsed.metadata.summary ?? "";
+    const lowerSummary = summary.toLowerCase();
+    const sectionsText = parsed.sections.join(" ");
+    const lowerSections = sectionsText.toLowerCase();
+    const lowerBody = parsed.body.toLowerCase();
+    const lowerTags = parsed.metadata.tags.join(" ").toLowerCase();
+    const lowerReadWhen = parsed.metadata.readWhen.join(" ").toLowerCase();
+
+    let score = 0;
+    const matchedIn = new Set<string>();
+
+    for (const term of terms) {
+        const fileHits = countOccurrences(lowerFile, term);
+        const titleHits = countOccurrences(lowerTitle, term);
+        const summaryHits = countOccurrences(lowerSummary, term);
+        const sectionHits = countOccurrences(lowerSections, term);
+        const tagHits = countOccurrences(lowerTags, term);
+        const readWhenHits = countOccurrences(lowerReadWhen, term);
+        const bodyHits = countOccurrences(lowerBody, term);
+
+        if (fileHits > 0) {
+            score += 100 + fileHits * 10;
+            matchedIn.add("filename");
+        }
+        if (titleHits > 0) {
+            score += 80 + titleHits * 8;
+            matchedIn.add("title");
+        }
+        if (summaryHits > 0) {
+            score += 60 + summaryHits * 6;
+            matchedIn.add("summary");
+        }
+        if (sectionHits > 0) {
+            score += 45 + sectionHits * 5;
+            matchedIn.add("section");
+        }
+        if (tagHits > 0) {
+            score += 55 + tagHits * 6;
+            matchedIn.add("tags");
+        }
+        if (readWhenHits > 0) {
+            score += 35 + readWhenHits * 4;
+            matchedIn.add("read_when");
+        }
+        if (bodyHits > 0) {
+            score += Math.min(30, bodyHits * 4);
+            matchedIn.add("content");
+        }
+    }
+
+    if (score === 0) {
+        return null;
+    }
+
+    const snippetSource = parsed.metadata.summary || title || parsed.body;
+
+    return {
+        file,
+        title: parsed.title,
+        score,
+        matchedIn: Array.from(matchedIn),
+        snippet: extractSnippet(snippetSource, terms),
+        status: parsed.metadata.status,
+        tags: parsed.metadata.tags,
+        readWhen: parsed.metadata.readWhen,
+    };
+}
+
+function formatSearchResult(match: SearchMatch, index: number): string {
+    const titlePart = match.title ? ` | 标题：${match.title}` : "";
+    const statusPart = match.status ? ` | 状态：${match.status}` : "";
+    const tagsPart = match.tags.length > 0 ? ` | 标签：${match.tags.join(", ")}` : "";
+    return [
+        `${index + 1}. [${match.file}]${titlePart}${statusPart}${tagsPart}`,
+        `   命中：${match.matchedIn.join(", ")} | 评分：${match.score}`,
+        `   使用时机：${match.readWhen.length > 0 ? match.readWhen.join(" / ") : "未标注"}`,
+        `   摘要：${match.snippet}`,
+    ].join("\n");
+}
 
 export const methodSearchTool: Tool = {
     definition: {
@@ -18,26 +172,34 @@ export const methodSearchTool: Tool = {
             required: ["keyword"]
         }
     },
-    execute: async (args: JsonObject, _context: ToolContext) => {
+    execute: async (args: JsonObject, context: ToolContext) => {
         const keyword = (args.keyword as string)?.toLowerCase();
         if (!keyword) return { id: "error", name: "method_search", success: false, output: "Empty keyword", durationMs: 0 };
 
-        const methodsDir = getMethodsDir();
+        const methodsDir = getMethodsDir(context);
         try {
             await fs.mkdir(methodsDir, { recursive: true });
             const files = await fs.readdir(methodsDir);
             const mdFiles = files.filter(f => f.endsWith('.md'));
 
-            const results: string[] = [];
+            const terms = buildSearchTerms(keyword);
+            const results: SearchMatch[] = [];
 
-            // 简单的遍历搜索 (MVP)
             for (const file of mdFiles) {
                 const content = await fs.readFile(path.join(methodsDir, file), "utf-8");
-                if (file.toLowerCase().includes(keyword) || content.toLowerCase().includes(keyword)) {
-                    // 截取一点上下文
-                    results.push(`- [${file}]: (Matched)`);
+                const parsed = parseMethodContent(content);
+                const scored = scoreMethod(file, parsed, terms);
+                if (scored) {
+                    results.push(scored);
                 }
             }
+
+            results.sort((left, right) => {
+                if (right.score !== left.score) {
+                    return right.score - left.score;
+                }
+                return left.file.localeCompare(right.file, "zh-CN");
+            });
 
             if (results.length === 0) {
                 return {
@@ -53,7 +215,7 @@ export const methodSearchTool: Tool = {
                 id: "method_search",
                 name: "method_search",
                 success: true,
-                output: `找到 ${results.length} 个相关方法:\n${results.join('\n')}`,
+                output: `找到 ${results.length} 个相关方法:\n${results.map((result, index) => formatSearchResult(result, index)).join('\n')}`,
                 durationMs: 0
             };
 
@@ -68,3 +230,4 @@ export const methodSearchTool: Tool = {
         }
     }
 };
+

@@ -2,6 +2,7 @@ import type { Tool, JsonObject, ToolContext } from "../../types.js";
 import { promises as fs } from "fs";
 import * as path from "path";
 import { getMethodsDir } from "./list.js";
+import { isValidMethodFilename } from "./dir.js";
 
 export const methodCreateTool: Tool = {
     definition: {
@@ -12,7 +13,7 @@ export const methodCreateTool: Tool = {
             properties: {
                 filename: {
                     type: "string",
-                    description: "文件名 (必须遵循命名规范: [目标对象]-[动作类型]-[细分].md, 例如: 'Cron-create.md')"
+                    description: "文件名（兼容原有英文 slug，例如 'cron-create.md'；也支持任意中文 .md 文件名，例如 '网页自动化基础.md'）"
                 },
                 content: {
                     type: "string",
@@ -22,7 +23,7 @@ export const methodCreateTool: Tool = {
             required: ["filename", "content"]
         }
     },
-    execute: async (args: JsonObject, _context: ToolContext) => {
+    execute: async (args: JsonObject, context: ToolContext) => {
         const filename = args.filename as string;
         const content = args.content as string;
 
@@ -37,9 +38,7 @@ export const methodCreateTool: Tool = {
             };
         }
 
-        // 校验命名规范 (简单的 regex)
-        const validNameRegex = /^[A-Za-z0-9_]+-[A-Za-z0-9_]+(-[A-Za-z0-9_]+)?\.md$/;
-        if (!validNameRegex.test(filename)) {
+        if (!isValidMethodFilename(filename)) {
             // 虽然校验失败，但作为 Helper，我们不仅报错，还可以建议。
             // 为了不中断 Agent 的热情，我们暂时只给 Warning 但仍然允许写入，或者强制报错。
             // 根据“严格的方法论”设计，我们应该强制报错提示修正。
@@ -47,17 +46,17 @@ export const methodCreateTool: Tool = {
                 id: "error",
                 name: "method_create",
                 success: false,
-                output: `文件名 '${filename}' 不符合规范。请使用格式: [Object]-[Action]-[Suffix].md (例如: File-read-large.md)`,
+                output: `文件名 '${filename}' 不符合规范。请使用原有英文 slug（例如: file-read-basic.md），或使用安全的中文 .md 文件名（例如: 网页自动化基础.md）。`,
                 error: "Invalid filename format",
                 durationMs: 0
             };
         }
 
-        const methodsDir = getMethodsDir();
-        const filePath = path.join(methodsDir, filename);
+        const methodsDir = path.resolve(getMethodsDir(context));
+        const filePath = path.resolve(methodsDir, filename);
 
         // 安全检查
-        if (!filePath.startsWith(methodsDir)) {
+        if (!filePath.startsWith(methodsDir + path.sep) && filePath !== methodsDir) {
             return { id: "error", name: "method_create", success: false, output: "Access Denied", error: "Path traversal", durationMs: 0 };
         }
 

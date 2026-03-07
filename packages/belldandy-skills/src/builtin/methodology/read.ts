@@ -18,7 +18,7 @@ export const methodReadTool: Tool = {
             required: ["filename"]
         }
     },
-    execute: async (args: JsonObject, _context: ToolContext) => {
+    execute: async (args: JsonObject, context: ToolContext) => {
         const filename = args.filename as string;
         if (!filename) {
             return {
@@ -31,11 +31,11 @@ export const methodReadTool: Tool = {
             };
         }
 
-        const methodsDir = getMethodsDir();
-        const filePath = path.join(methodsDir, filename);
+        const methodsDir = path.resolve(getMethodsDir(context));
+        const filePath = path.resolve(methodsDir, filename);
 
         // 安全检查：防止路径遍历
-        if (!filePath.startsWith(methodsDir)) {
+        if (!filePath.startsWith(methodsDir + path.sep) && filePath !== methodsDir) {
             return {
                 id: "error",
                 name: "method_read",

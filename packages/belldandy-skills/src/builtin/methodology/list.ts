@@ -1,10 +1,10 @@
 import type { Tool, JsonObject, ToolContext } from "../../types.js";
 import { promises as fs } from "fs";
 import * as path from "path";
-import * as os from "os";
+import { resolveMethodsDir } from "./dir.js";
+import { parseMethodContent } from "./meta.js";
 
-// Helper function to get methods directory
-export const getMethodsDir = () => path.join(os.homedir(), ".belldandy", "methods");
+export const getMethodsDir = (context?: Pick<ToolContext, "workspaceRoot">, env?: NodeJS.ProcessEnv) => resolveMethodsDir(context, env);
 
 export const methodListTool: Tool = {
     definition: {
@@ -16,8 +16,8 @@ export const methodListTool: Tool = {
             required: []
         }
     },
-    execute: async (args: JsonObject, _context: ToolContext) => {
-        const methodsDir = getMethodsDir();
+    execute: async (_args: JsonObject, context: ToolContext) => {
+        const methodsDir = getMethodsDir(context);
         try {
             await fs.mkdir(methodsDir, { recursive: true });
             const files = await fs.readdir(methodsDir);
@@ -34,11 +34,21 @@ export const methodListTool: Tool = {
                 };
             }
 
+            const entries: string[] = [];
+            for (const file of mdFiles.sort((left, right) => left.localeCompare(right, "zh-CN"))) {
+                const content = await fs.readFile(path.join(methodsDir, file), "utf-8");
+                const parsed = parseMethodContent(content);
+                const titlePart = parsed.title ? ` | 标题：${parsed.title}` : "";
+                const statusPart = parsed.metadata.status ? ` | 状态：${parsed.metadata.status}` : "";
+                const summaryPart = parsed.metadata.summary ? ` | 摘要：${parsed.metadata.summary}` : "";
+                entries.push(`- ${file}${titlePart}${statusPart}${summaryPart}`);
+            }
+
             return {
                 id: "method_list",
                 name: "method_list",
                 success: true,
-                output: `找到 ${mdFiles.length} 个方法文档:\n` + mdFiles.map(f => `- ${f}`).join('\n'),
+                output: `找到 ${mdFiles.length} 个方法文档:\n${entries.join("\n")}`,
                 durationMs: 0
             };
         } catch (error) {
@@ -54,3 +64,4 @@ export const methodListTool: Tool = {
         }
     }
 };
+
