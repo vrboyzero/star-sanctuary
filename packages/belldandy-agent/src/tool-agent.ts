@@ -63,6 +63,8 @@ export type ToolEnabledAgentOptions = {
   maxOutputTokens?: number;
   /** OpenAI 协议底层线路：chat.completions（默认）或 responses */
   wireApi?: OpenAIWireApi;
+  /** 仅在 responses 模式下清洗工具 schema（移除不兼容关键字） */
+  sanitizeResponsesToolSchema?: boolean;
   /** 同一 profile 最大重试次数（不含首次请求） */
   maxRetries?: number;
   /** 同一 profile 重试退避基线（毫秒） */
@@ -125,8 +127,8 @@ function resolveMinimumAdaptiveTimeoutMs(messages: Message[], textAttachmentChar
 }
 
 export class ToolEnabledAgent implements BelldandyAgent {
-  private readonly opts: Required<Pick<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs">> &
-    Omit<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs">;
+  private readonly opts: Required<Pick<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs" | "sanitizeResponsesToolSchema">> &
+    Omit<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs" | "sanitizeResponsesToolSchema">;
   private readonly failoverClient: FailoverClient;
 
   constructor(opts: ToolEnabledAgentOptions) {
@@ -135,6 +137,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       timeoutMs: opts.timeoutMs ?? 120_000,
       maxToolCalls: opts.maxToolCalls ?? 999999,
       wireApi: opts.wireApi ?? "chat_completions",
+      sanitizeResponsesToolSchema: opts.sanitizeResponsesToolSchema ?? false,
       maxRetries: opts.maxRetries ?? 0,
       retryBackoffMs: opts.retryBackoffMs ?? 300,
     };
@@ -605,7 +608,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
               stream: false,
             };
             if (tools && tools.length > 0) {
-              payload.tools = tools.map(t => ({
+              const responseTools = this.opts.sanitizeResponsesToolSchema
+                ? sanitizeResponsesToolDefinitions(tools)
+                : tools;
+              payload.tools = responseTools.map(t => ({
                 type: "function",
                 name: t.function.name,
                 description: t.function.description,
@@ -1091,6 +1097,67 @@ function extractResponsesText(json: JsonObject): string {
   }
 
   return chunks.join("");
+}
+
+const RESPONSES_UNSUPPORTED_SCHEMA_KEYS = new Set([
+  "$ref",
+  "$schema",
+  "$defs",
+  "definitions",
+  "oneOf",
+  "anyOf",
+  "allOf",
+  "not",
+  "if",
+  "then",
+  "else",
+  "dependentSchemas",
+  "dependentRequired",
+  "patternProperties",
+  "unevaluatedProperties",
+]);
+
+type ResponseToolDefinition = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: object;
+  };
+};
+
+export function sanitizeResponsesToolDefinitions(tools: ResponseToolDefinition[]): ResponseToolDefinition[] {
+  return tools.map((tool) => ({
+    ...tool,
+    function: {
+      ...tool.function,
+      parameters: sanitizeResponsesSchemaNode(tool.function.parameters) as object,
+    },
+  }));
+}
+
+function sanitizeResponsesSchemaNode(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeResponsesSchemaNode(item))
+      .filter((item) => typeof item !== "undefined");
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const output: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (RESPONSES_UNSUPPORTED_SCHEMA_KEYS.has(key)) {
+      continue;
+    }
+    const sanitizedChild = sanitizeResponsesSchemaNode(child);
+    if (typeof sanitizedChild !== "undefined") {
+      output[key] = sanitizedChild;
+    }
+  }
+  return output;
 }
 
 function extractResponsesToolCalls(json: JsonObject): OpenAIToolCall[] {

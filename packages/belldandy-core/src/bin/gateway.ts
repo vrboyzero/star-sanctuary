@@ -303,6 +303,7 @@ const openaiModel = readEnv("BELLDANDY_OPENAI_MODEL");
 const openaiWireApi = (readEnv("BELLDANDY_OPENAI_WIRE_API") ?? "chat_completions").toLowerCase() === "responses"
   ? "responses"
   : "chat_completions";
+const sanitizeResponsesToolSchema = (readEnv("BELLDANDY_RESPONSES_SANITIZE_TOOL_SCHEMA") ?? "false") === "true";
 const openaiMaxRetriesRaw = readEnv("BELLDANDY_OPENAI_MAX_RETRIES");
 const openaiMaxRetries = openaiMaxRetriesRaw ? Math.max(0, parseInt(openaiMaxRetriesRaw, 10) || 0) : 0;
 const openaiRetryBackoffMsRaw = readEnv("BELLDANDY_OPENAI_RETRY_BACKOFF_MS");
@@ -1067,6 +1068,7 @@ Keep responses concise and natural for spoken delivery.`;
         videoUploadConfig,
         protocol: resolvedProtocol,
         wireApi: resolvedWireApi,
+        sanitizeResponsesToolSchema,
         ...(profileMaxInputTokens > 0 && { maxInputTokens: profileMaxInputTokens }),
         ...(profileMaxOutputTokens > 0 && { maxOutputTokens: profileMaxOutputTokens }),
         compaction: compactionOpts,
