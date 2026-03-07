@@ -611,6 +611,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
               const responseTools = this.opts.sanitizeResponsesToolSchema
                 ? sanitizeResponsesToolDefinitions(tools)
                 : tools;
+              // Responses API 使用扁平化工具格式（与 Chat Completions 不同）
               payload.tools = responseTools.map(t => ({
                 type: "function",
                 name: t.function.name,
