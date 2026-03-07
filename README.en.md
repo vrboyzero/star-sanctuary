@@ -150,7 +150,9 @@ start.bat
 ./start.sh
 ```
 
-The script will: check your environment → install dependencies → start the gateway → open the browser.
+The script will: check your environment → install dependencies → verify and build `dist/` when needed → start the gateway → open the browser.
+
+> **Note**: This repository is maintained primarily as source code, so the GitHub repo usually does not include committed `dist/` build artifacts. If `dist/` is missing on first launch, `start.bat` / `start.sh` will automatically run `corepack pnpm build`.
 
 ### Manual Launch
 
@@ -161,15 +163,20 @@ cd Belldandy
 # 2. Install dependencies
 corepack pnpm install
 
-# 3. Start Gateway (Dev mode)
+# 3. Build project (compile TypeScript into `dist/`)
+corepack pnpm build
+
+# 4. Start Gateway (Dev mode)
 corepack pnpm bdd dev
 
-# 4. Start Gateway (With supervisor auto-restart)
+# 5. Start Gateway (With supervisor auto-restart)
 corepack pnpm bdd start
 
-# 5. Open WebChat
+# 6. Open WebChat
 # http://localhost:28889/
 ```
+
+> **Note**: `pnpm bdd dev` runs TypeScript source directly via `tsx`, so it can skip the build step. `pnpm bdd start` runs compiled files from `dist/`, so you must run `corepack pnpm build` first or you may hit `Cannot find module` errors.
 
 ### First‑time Pairing
 
