@@ -73,3 +73,6 @@ docs/
 
 # tmp
 tmp/
+
+# Local-only scripts
+scripts/*.local.ps1
