@@ -311,6 +311,7 @@ body::before {
   opacity: 0.8;
   transition: opacity 0.3s;
 }
+
 .token-usage:hover {
   opacity: 1;
 }
@@ -332,33 +333,54 @@ body::before {
   opacity: 0.9;
   animation: task-token-fadein 0.3s ease;
 }
+
 @keyframes task-token-fadein {
-  from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 0.9; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 0.9;
+    transform: translateY(0);
+  }
 }
+
 .token-label {
   color: rgba(255, 255, 255, 0.35);
   font-size: 9px;
   text-transform: uppercase;
 }
+
 .token-val {
   color: var(--primary);
   min-width: 20px;
   text-align: right;
 }
+
 .token-val-all {
   color: var(--secondary);
 }
+
 .token-sep {
   color: rgba(255, 255, 255, 0.12);
   margin: 0 1px;
 }
+
 .token-usage.updating .token-val {
   animation: token-pulse 1s ease-in-out infinite;
 }
+
 @keyframes token-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
 }
 
 /* Settings Button */
@@ -578,14 +600,18 @@ body::before {
 }
 
 .msg {
-  max-width: 80%;
+  /* Let msg-content-wrapper constrain the width */
+  max-width: 100%;
+  min-width: 0;
   padding: 12px 18px;
   font-size: 15px;
   line-height: 1.6;
   margin-bottom: 32px;
   /* Fallback for gap */
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: break-word;
+  /* Ensure basic text wraps safely */
   animation: fade-up 0.4s ease forwards;
 }
 
@@ -607,6 +633,68 @@ body::before {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* Markdown 元素内部样式限制 */
+.msg p {
+  margin: 0.5em 0;
+}
+
+.msg p:first-child {
+  margin-top: 0;
+}
+
+.msg p:last-child {
+  margin-bottom: 0;
+}
+
+/* 防止代码块或长无断点文本撑破气泡 */
+.msg pre {
+  max-width: 100%;
+  overflow-x: auto;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 10px;
+  border-radius: 6px;
+  margin: 0.5em 0;
+}
+
+.msg code {
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.msg pre code {
+  white-space: pre;
+  background: transparent;
+  padding: 0;
+}
+
+/* 更好的 Markdown 表格样式 */
+.msg table {
+  width: 100%;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 1em 0;
+  white-space: nowrap;
+  /* 不换行，靠横向滚动查看长表格 */
+}
+
+.msg th,
+.msg td {
+  border: 1px solid var(--glass-border);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.msg th {
+  background: rgba(0, 0, 0, 0.2);
+  font-weight: 600;
+}
+
 .msg.system {
   justify-self: center;
   background: transparent;
@@ -623,6 +711,9 @@ body::before {
   gap: 12px;
   align-items: flex-start;
   margin-bottom: 16px;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
   animation: fade-up 0.4s ease forwards;
 }
 
@@ -662,7 +753,10 @@ body::before {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-width: calc(80% - 48px);
+  /* 计算最大宽度：100% 减去头像及其 gap。并且保证能在极窄屏幕下也能缩回 */
+  max-width: calc(100% - 48px);
+  min-width: 0;
+  /* 这是 Flex 子元素不被内部撑爆的关键 */
 }
 
 /* 名称 */
@@ -856,10 +950,12 @@ body::before {
   cursor: pointer;
   flex-shrink: 0;
 }
+
 .agent-select option {
   background: #1a1a2e;
   color: #00e68a;
 }
+
 .agent-select:focus {
   outline: none;
   border-color: var(--accent);
@@ -1363,11 +1459,11 @@ body::before {
   transition: transform 0.2s, background 0.2s;
 }
 
-.toggle-switch input:checked + .toggle-slider {
+.toggle-switch input:checked+.toggle-slider {
   background: rgba(0, 243, 255, 0.3);
 }
 
-.toggle-switch input:checked + .toggle-slider::before {
+.toggle-switch input:checked+.toggle-slider::before {
   transform: translateX(18px);
   background: var(--primary);
 }
@@ -1523,8 +1619,13 @@ body::before {
 }
 
 @keyframes restart-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .restart-title {
@@ -1594,13 +1695,35 @@ body::before {
 }
 
 @keyframes pulse-red {
-  0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4); transform: scale(1); }
-  70% { box-shadow: 0 0 0 6px rgba(255, 77, 79, 0); transform: scale(1.1); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); transform: scale(1); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4);
+    transform: scale(1);
+  }
+
+  70% {
+    box-shadow: 0 0 0 6px rgba(255, 77, 79, 0);
+    transform: scale(1.1);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 79, 0);
+    transform: scale(1);
+  }
 }
 
 @keyframes pulse-green {
-  0% { box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.4); transform: scale(1); }
-  70% { box-shadow: 0 0 0 6px rgba(82, 196, 26, 0); transform: scale(1.1); }
-  100% { box-shadow: 0 0 0 0 rgba(82, 196, 26, 0); transform: scale(1); }
+  0% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.4);
+    transform: scale(1);
+  }
+
+  70% {
+    box-shadow: 0 0 0 6px rgba(82, 196, 26, 0);
+    transform: scale(1.1);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(82, 196, 26, 0);
+    transform: scale(1);
+  }
 }

@@ -1085,7 +1085,11 @@ function handleEvent(event, payload) {
       botRawHtmlBuffer = "";
     }
     botRawHtmlBuffer += delta;
-    botMsgEl.innerHTML = sanitizeAssistantHtml(botRawHtmlBuffer);
+
+    // 剥离 <think> 标签并解析 Markdown，然后再安全过滤
+    const strippedText = stripThinkBlocks(botRawHtmlBuffer);
+    const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
+    botMsgEl.innerHTML = sanitizeAssistantHtml(parsedHtml);
 
     // 强制滚动到底部（测试模式）
     forceScrollToBottom();
@@ -1095,7 +1099,11 @@ function handleEvent(event, payload) {
     const text = payload && payload.text ? String(payload.text) : "";
     if (!botMsgEl) botMsgEl = appendMessage("bot", "");
     botRawHtmlBuffer = text;
-    botMsgEl.innerHTML = sanitizeAssistantHtml(botRawHtmlBuffer);
+
+    // 剥离 <think> 标签并解析 Markdown，然后再安全过滤
+    const strippedText = stripThinkBlocks(botRawHtmlBuffer);
+    const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
+    botMsgEl.innerHTML = sanitizeAssistantHtml(parsedHtml);
 
     // 处理图片和视频缩略图
     processMediaInMessage(botMsgEl);
@@ -2241,8 +2249,8 @@ if (authValueEl) {
 }
 
 const SAFE_ASSISTANT_TAGS = new Set([
-  "A", "AUDIO", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM",
-  "I", "IMG", "LI", "OL", "P", "PRE", "SOURCE", "SPAN", "STRONG", "UL", "VIDEO",
+  "A", "AUDIO", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "H5", "H6", "HR",
+  "I", "IMG", "LI", "OL", "P", "PRE", "SOURCE", "SPAN", "STRONG", "UL", "VIDEO", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD"
 ]);
 
 const SAFE_ASSISTANT_ATTRS = {
@@ -2251,7 +2259,18 @@ const SAFE_ASSISTANT_ATTRS = {
   IMG: new Set(["src", "alt", "title"]),
   SOURCE: new Set(["src", "type"]),
   VIDEO: new Set(["src", "controls", "autoplay", "muted", "loop", "playsinline", "preload", "poster"]),
+  CODE: new Set(["class", "language"]), // For syntax highlighting classes from marked
+  PRE: new Set(["class"]),
 };
+
+function stripThinkBlocks(text) {
+  if (!text) return "";
+  // 移除完整的 think 块
+  let stripped = text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+  // 移除末尾处于未完成状态的 think 块 (适配流式输出)
+  stripped = stripped.replace(/<think>[\s\S]*$/, "");
+  return stripped;
+}
 
 function sanitizeAssistantHtml(rawHtml) {
   if (!rawHtml) return "";
