@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code when working with code in this repository.
 
@@ -65,7 +65,7 @@ apps/
 
 ## Security Model
 
-- **Pairing**: Default-deny. Unknown clients get pairing code. Allowlist in `~/.belldandy/allowlist.json`
+- **Pairing**: Default-deny. Unknown clients get pairing code. Allowlist in `~/.star_sanctuary/allowlist.json`
 - **Bind safety**: `0.0.0.0` + `AUTH_MODE=none` → forced exit
 - **Dangerous tools**: `run_command` requires `BELLDANDY_DANGEROUS_TOOLS_ENABLED=true`
 - **SSRF protection**: `web_fetch` has DNS rebinding check
@@ -87,10 +87,10 @@ Core variables (see `.env.example` for full list):
 
 Use `.env.local` for persistent local config (Git-ignored).
 
-## User Workspace (`~/.belldandy/`)
+## User Workspace (`~/.star_sanctuary/`)
 
 ```
-~/.belldandy/
+~/.star_sanctuary/
 ├── SOUL.md / IDENTITY.md / USER.md   # Personality & user profile
 ├── TOOLS.md / AGENTS.md              # Local environment description
 ├── allowlist.json / pairing.json     # Security state
@@ -129,3 +129,4 @@ Use `.env.local` for persistent local config (Git-ignored).
 - Express 5 + ws for HTTP/WebSocket
 - SQLite + FTS5 + sqlite-vec for RAG
 - Vitest for testing
+

@@ -1,5 +1,17 @@
 export type JsonObject = Record<string, unknown>;
 
+export {
+  STATE_DIR_ENV_KEY,
+  LEGACY_STATE_DIR_BASENAME,
+  DEFAULT_STATE_DIR_BASENAME,
+  LEGACY_STATE_DIR_DISPLAY,
+  DEFAULT_STATE_DIR_DISPLAY,
+  resolveNamedCompatDir,
+  resolveDefaultStateDir,
+  resolveStateDir,
+  resolveWorkspaceStateDir,
+} from "./state-dir.js";
+
 export type BelldandyRole = "web" | "cli" | "node";
 
 export type GatewayAuth =

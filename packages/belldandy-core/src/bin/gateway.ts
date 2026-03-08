@@ -81,6 +81,7 @@ import {
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
+import { DEFAULT_STATE_DIR_DISPLAY, resolveStateDir } from "@belldandy/protocol";
 
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
@@ -180,8 +181,7 @@ const heartbeatActiveHoursRaw = readEnv("BELLDANDY_HEARTBEAT_ACTIVE_HOURS"); // 
 const cronEnabled = readEnv("BELLDANDY_CRON_ENABLED") === "true";
 
 // State & Memory
-const defaultStateDir = path.join(os.homedir(), ".belldandy");
-const stateDir = readEnv("BELLDANDY_STATE_DIR") ?? defaultStateDir;
+const stateDir = resolveStateDir(process.env);
 const channelRouterConfigPath = readEnv("BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH") ?? path.join(stateDir, "channels-routing.json");
 const webhookConfigPath = readEnv("BELLDANDY_WEBHOOK_CONFIG_PATH") ?? path.join(stateDir, "webhooks.json");
 const webhookIdempotencyWindowMs = Number(readEnv("BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS")) || 10 * 60 * 1000; // 默认 10 分钟
@@ -565,7 +565,7 @@ let agentRegistry: AgentRegistry | undefined;
 
 const toolExecutor = new ToolExecutor({
   tools: toolsToRegister,
-  workspaceRoot: stateDir, // Use ~/.belldandy as the workspace root for file operations
+  workspaceRoot: stateDir, // Use the resolved state directory as the workspace root for file operations
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
   policy: toolsPolicy,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
@@ -627,7 +627,7 @@ if (mcpEnabled && toolsEnabled) {
   logger.warn("mcp", "BELLDANDY_MCP_ENABLED=true 但 BELLDANDY_TOOLS_ENABLED=false，MCP 需要启用工具系统");
 }
 
-// 4.2 Load Plugins (~/.belldandy/plugins/)
+// 4.2 Load Plugins (~/.star_sanctuary/plugins/ by default)
 const pluginRegistry = new PluginRegistry();
 const pluginsDir = path.join(stateDir, "plugins");
 try {
@@ -694,7 +694,7 @@ const memoryFilesResult = await listMemoryFiles(stateDir);
 if (memoryFilesResult.files.length > 0) {
   logger.info("memory", `found ${memoryFilesResult.files.length} files (MEMORY.md=${memoryFilesResult.hasMainMemory}, daily=${memoryFilesResult.dailyCount})`);
 } else {
-  logger.info("memory", "no files found (run 'echo \"# Memory\" > ~/.belldandy/MEMORY.md' to create)");
+  logger.info("memory", `no files found (run 'echo "# Memory" > ${DEFAULT_STATE_DIR_DISPLAY}/MEMORY.md' to create)`);
 }
 
 // 5. Init Workspace (SOUL/Persona)
@@ -1525,7 +1525,7 @@ const webhookIdempotency = new IdempotencyManager(webhookIdempotencyWindowMs);
 if (webhookConfig.webhooks.length > 0) {
   logger.info("webhook", `Loaded ${webhookConfig.webhooks.length} webhook(s) from ${webhookConfigPath}`);
 } else {
-  logger.info("webhook", "No webhooks configured (create ~/.belldandy/webhooks.json to enable)");
+  logger.info("webhook", `No webhooks configured (create ${DEFAULT_STATE_DIR_DISPLAY}/webhooks.json to enable)`);
 }
 
 const server = await startGatewayServer({

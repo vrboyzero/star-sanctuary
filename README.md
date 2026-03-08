@@ -115,7 +115,7 @@ Belldandy/
 │   └── browser-extension/           # Chrome 扩展 (MV3)
 │       └── background.js            # chrome.debugger 桥接
 │
-└── ~/.belldandy/                    # 用户工作空间
+└── ~/.star_sanctuary/                    # 用户工作空间
     ├── SOUL.md                      # 核心人格
     ├── IDENTITY.md                  # 身份设定
     ├── USER.md                      # 用户档案
@@ -155,6 +155,16 @@ Belldandy/
 脚本会自动：检查环境 → 安装依赖 → 检查并构建 `dist/` → 启动服务 → 打开浏览器
 
 > **说明**：本仓库默认作为源码仓库维护，GitHub 仓库通常不提交 `dist/` 编译产物。首次启动时如果缺少 `dist/`，`start.bat` / `start.sh` 会自动执行 `corepack pnpm build`。
+>
+> **当前推荐的构建口径**：
+> - 日常构建：`corepack pnpm build`
+> - 构建异常恢复：`corepack pnpm rebuild`
+>
+> 其中：
+> - `pnpm build` 会执行**强制全量 TypeScript 构建**，并在构建后校验各工作区包的 `dist` 入口产物是否完整
+> - `pnpm rebuild` 会先清理各包 `dist/` 与 `tsconfig.tsbuildinfo`，再执行完整重建
+>
+> 如果你遇到 `Cannot find module '@belldandy/*'`、`Could not find a declaration file`、或 `dist/index.js` / `dist/index.d.ts` 缺失，**优先运行 `corepack pnpm rebuild`**。
 
 ### 手动启动
 
@@ -168,6 +178,9 @@ corepack pnpm install
 # 3. 构建项目（编译 TypeScript → dist/）
 corepack pnpm build
 
+# 如果构建产物异常、类型入口缺失或曾经改动过包配置，建议直接全量重建
+corepack pnpm rebuild
+
 # 4. 启动 Gateway（开发模式，使用 tsx 直接运行源码）
 corepack pnpm bdd dev
 
@@ -178,7 +191,7 @@ corepack pnpm bdd start
 # http://localhost:28889/
 ```
 
-> **⚠️ 注意**：`pnpm bdd dev` 通过 tsx 直接运行 TypeScript 源码，可以跳过 build 步骤。但 `pnpm start` 运行的是编译后的 `dist/` 目录，**必须先执行 `pnpm build`**，否则会报 `Cannot find module` 错误。
+> **⚠️ 注意**：`pnpm bdd dev` 通过 tsx 直接运行 TypeScript 源码，可以跳过 build 步骤。但 `pnpm start` / `pnpm bdd start` 运行的是编译后的 `dist/` 目录，**必须先执行 `pnpm build`**。如果曾出现构建缓存异常或入口产物缺失，请改用 `pnpm rebuild`。
 
 ### 首次配对
 
@@ -320,7 +333,7 @@ BELLDANDY_MCP_ENABLED=true              # 启用 MCP 协议支持
 
 # ------ 日志系统 ------
 BELLDANDY_LOG_LEVEL=debug               # 最低日志级别 (debug/info/warn/error)
-BELLDANDY_LOG_DIR=~/.belldandy/logs     # 日志目录，默认 ~/.belldandy/logs
+BELLDANDY_LOG_DIR=~/.star_sanctuary/logs     # 日志目录，默认 ~/.star_sanctuary/logs
 BELLDANDY_LOG_MAX_SIZE=10MB             # 单文件最大大小，超过则轮转
 BELLDANDY_LOG_RETENTION_DAYS=7          # 日志保留天数，超过自动清理
 BELLDANDY_LOG_CONSOLE=true              # 是否输出到控制台
@@ -335,7 +348,7 @@ BELLDANDY_COMPACTION_KEEP_RECENT=10     # 保留最近 N 条完整消息
 BELLDANDY_CRON_ENABLED=true             # 启用 Cron 调度引擎 (默认工具可用，此开关控制自动执行)
 
 # ------ 模型容灾与多模态 ------
-BELLDANDY_MODEL_CONFIG_FILE=~/.belldandy/models.json # 备用模型配置文件
+BELLDANDY_MODEL_CONFIG_FILE=~/.star_sanctuary/models.json # 备用模型配置文件
 BELLDANDY_OPENAI_WIRE_API=chat_completions          # primary 线路：chat_completions | responses
 BELLDANDY_OPENAI_MAX_RETRIES=1                      # 默认重试次数（不含首轮）
 BELLDANDY_OPENAI_RETRY_BACKOFF_MS=300               # 默认退避基线（毫秒）
@@ -350,7 +363,7 @@ BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS=60000
 
 ### 模型容灾配置（`models.json`）
 
-`models.json` 默认路径为 `~/.belldandy/models.json`，用于定义 fallback 模型队列。  
+`models.json` 默认路径为 `~/.star_sanctuary/models.json`，用于定义 fallback 模型队列。  
 字段优先级（高 → 低）：
 
 1. `models.json` 每个 fallback 的字段（`wireApi/requestTimeoutMs/maxRetries/retryBackoffMs/proxyUrl`）
@@ -426,7 +439,7 @@ BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS=60000
 
 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) 是一个标准化协议，用于 AI 助手连接外部数据源和工具。
 
-在 `~/.belldandy/mcp.json` 中配置 MCP 服务器：
+在 `~/.star_sanctuary/mcp.json` 中配置 MCP 服务器：
 
 ```json
 {
@@ -484,7 +497,7 @@ BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS=60000
 
 ## 个性化定制
 
-Star Sanctuary 的数据存储在 `~/.belldandy/` 目录下。
+Star Sanctuary 的数据存储在 `~/.star_sanctuary/` 目录下。
 
 ### 人格塑造
 
@@ -511,7 +524,7 @@ Star Sanctuary 的数据存储在 `~/.belldandy/` 目录下。
 
 ### 日志系统
 
-运行日志保存在 `~/.belldandy/logs/` 目录，支持：
+运行日志保存在 `~/.star_sanctuary/logs/` 目录，支持：
 
 | 特性 | 说明 |
 |------|------|
@@ -531,8 +544,8 @@ Star Sanctuary 在普通 Skills 体系之上，专门为 **长记忆、长期陪
 
 - **Agent**：由 `SOUL.md` / `AGENTS.md` / `USER.md` / `TOOLS.md` 等 Workspace 文件塑造的人格与决策层。
 - **Skills**：执行具体动作的工具集合（读写文件、网络请求、浏览器控制、命令执行、Memory 检索等）。
-- **Methods**：存放在 `~/.belldandy/methods/` 下的 Markdown SOP 文档，是 Agent 的「做事方式记忆」，通过 `method_list` / `method_read` / `method_create` 工具读写。
-- **Logs**：结构化文件日志（`~/.belldandy/logs/*.log`），配合 `log_read` / `log_search` 让 Agent 自己能翻执行记录、查错误、看性能。
+- **Methods**：存放在 `~/.star_sanctuary/methods/` 下的 Markdown SOP 文档，是 Agent 的「做事方式记忆」，通过 `method_list` / `method_read` / `method_create` 工具读写。
+- **Logs**：结构化文件日志（`~/.star_sanctuary/logs/*.log`），配合 `log_read` / `log_search` 让 Agent 自己能翻执行记录、查错误、看性能。
 
 这四者形成一条闭环，让 Agent 不再只是“下一次再想一遍”，而是逐步长出自己的方法论：
 
@@ -542,7 +555,7 @@ Star Sanctuary 在普通 Skills 体系之上，专门为 **长记忆、长期陪
     - 再用 `method_read` 读出 SOP，按步骤执行；
     - 没有方法时，则视为「第一次探索」，允许自由组合 Skills 解决问题。
 - **事中：所有尝试都有“事实记录”**
-  - 每次工具调用、错误、慢查询、心跳执行，都会写入 `~/.belldandy/logs/YYYY-MM-DD.log`，包含时间、模块、级别、参数摘要和耗时；
+  - 每次工具调用、错误、慢查询、心跳执行，都会写入 `~/.star_sanctuary/logs/YYYY-MM-DD.log`，包含时间、模块、级别、参数摘要和耗时；
   - Agent 可以随时使用 `log_read` / `log_search` 回看：最近哪些步骤失败、哪些调用过慢、某个错误是否反复出现。
 - **事后：从日志到方法，沉淀经验**
   - 当某个任务最终搞定（哪怕中间踩了很多坑）时，Agent 可以：
@@ -663,7 +676,7 @@ corepack pnpm dev:gateway
 | 会话 | `session_start`, `session_end` |
 | 网关 | `gateway_start`, `gateway_stop` |
 
-插件放到 `~/.belldandy/plugins/` 目录，Gateway 启动时自动加载。
+插件放到 `~/.star_sanctuary/plugins/` 目录，Gateway 启动时自动加载。
 
 
 ---
@@ -767,6 +780,10 @@ corepack pnpm bdd setup --provider openai \
 A: 这是因为还没有编译 TypeScript 源码。执行以下命令即可：
 ```bash
 corepack pnpm build
+```
+如果仍然报错，说明很可能是工作区包构建缓存或 `dist` 产物不完整，继续执行：
+```bash
+corepack pnpm rebuild
 ```
 然后再启动。如果使用 `pnpm bdd dev`（开发模式）则不需要 build，它会通过 tsx 直接运行源码。
 
@@ -885,6 +902,7 @@ MIT
 <p align="center">
   <em>Star Sanctuary - Your Personal AI Assistant</em>
 </p>
+
 
 
 

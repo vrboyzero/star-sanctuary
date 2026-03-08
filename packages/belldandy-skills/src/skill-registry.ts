@@ -34,7 +34,7 @@ export class SkillRegistry {
     return loaded.length;
   }
 
-  /** 加载用户 skills（~/.belldandy/skills/） */
+  /** 加载用户 skills（~/.star_sanctuary/skills/ 默认目录） */
   async loadUserSkills(dir: string): Promise<number> {
     const loaded = await loadSkillsFromDir(dir, { type: "user", path: dir });
     for (const skill of loaded) {

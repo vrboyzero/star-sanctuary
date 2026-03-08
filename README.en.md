@@ -107,7 +107,7 @@ Belldandy/
 │   └── browser-extension/           # Chrome extension (MV3)
 │       └── background.js            # chrome.debugger bridge
 │
-└── ~/.belldandy/                    # User workspace (created at runtime)
+└── ~/.star_sanctuary/                    # User workspace (created at runtime)
     ├── SOUL.md                      # Core persona
     ├── IDENTITY.md                  # Identity
     ├── USER.md                      # User profile
@@ -270,7 +270,7 @@ BELLDANDY_MCP_ENABLED=true              # Enable MCP support
 
 # ------ Logging ------
 BELLDANDY_LOG_LEVEL=debug               # debug / info / warn / error
-BELLDANDY_LOG_DIR=~/.belldandy/logs     # Log directory
+BELLDANDY_LOG_DIR=~/.star_sanctuary/logs     # Log directory
 BELLDANDY_LOG_MAX_SIZE=10MB             # Rotate when exceeded
 BELLDANDY_LOG_RETENTION_DAYS=7          # Auto‑delete old logs
 BELLDANDY_LOG_CONSOLE=true              # Log to console
@@ -285,7 +285,7 @@ BELLDANDY_COMPACTION_KEEP_RECENT=10     # Number of recent messages to keep raw
 BELLDANDY_CRON_ENABLED=true             # Enable the Cron scheduling engine
 
 # ------ Failover & Multimodal ------
-BELLDANDY_MODEL_CONFIG_FILE=~/.belldandy/models.json # Fallback models & video upload config
+BELLDANDY_MODEL_CONFIG_FILE=~/.star_sanctuary/models.json # Fallback models & video upload config
 
 ```
 
@@ -304,7 +304,7 @@ BELLDANDY_MODEL_CONFIG_FILE=~/.belldandy/models.json # Fallback models & video u
 
 [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) is a standard protocol for connecting AI assistants to external data sources and tools.
 
-Example `~/.belldandy/mcp.json`:
+Example `~/.star_sanctuary/mcp.json`:
 
 ```json
 {
@@ -357,7 +357,7 @@ Supported transport types:
 
 ## Personalization
 
-Star Sanctuary stores all user data under `~/.belldandy/`.
+Star Sanctuary stores all user data under `~/.star_sanctuary/`.
 
 ### Persona Files
 
@@ -385,7 +385,7 @@ Edit `HEARTBEAT.md`:
 
 ### Logging
 
-Runtime logs are stored in `~/.belldandy/logs/`.
+Runtime logs are stored in `~/.star_sanctuary/logs/`.
 
 | Feature              | Description                                   |
 |----------------------|-----------------------------------------------|
@@ -405,8 +405,8 @@ On top of a standard skills/tooling system, Star Sanctuary adds a **Methodology 
 
 - **Agent**: The decision‑making layer shaped by workspace files like `SOUL.md`, `AGENTS.md`, `USER.md`, and `TOOLS.md`.
 - **Skills**: The concrete tools that perform actions (file I/O, web fetch, browser control, shell commands, memory search, etc.).
-- **Methods**: Markdown SOP documents under `~/.belldandy/methods/`, acting as the Agent’s "how‑to" memory, managed via `method_list`, `method_read`, and `method_create`.
-- **Logs**: Structured runtime logs under `~/.belldandy/logs/*.log`, which the Agent can read with `log_read` / `log_search` to review executions, errors, and performance.
+- **Methods**: Markdown SOP documents under `~/.star_sanctuary/methods/`, acting as the Agent’s "how‑to" memory, managed via `method_list`, `method_read`, and `method_create`.
+- **Logs**: Structured runtime logs under `~/.star_sanctuary/logs/*.log`, which the Agent can read with `log_read` / `log_search` to review executions, errors, and performance.
 
 These four pieces form a closed loop so the Agent doesn’t just "rethink from scratch next time" but gradually grows its own methodology:
 
@@ -416,7 +416,7 @@ These four pieces form a closed loop so the Agent doesn’t just "rethink from s
     - Use `method_read` to load the SOP and follow the steps.
     - If there is no method yet, treat this as a "first‑time exploration" and freely combine skills to solve it.
 - **During: every attempt leaves a factual trace**
-  - Each tool call, error, slow query, and heartbeat run is logged to `~/.belldandy/logs/YYYY-MM-DD.log` with timestamp, module, level, argument summary, and duration.
+  - Each tool call, error, slow query, and heartbeat run is logged to `~/.star_sanctuary/logs/YYYY-MM-DD.log` with timestamp, module, level, argument summary, and duration.
   - The Agent can use `log_read` / `log_search` at any time to inspect which steps failed, which calls were slow, and whether certain errors repeat.
 - **After: turn logs into methods and capture experience**
   - Once a task is solved (even after many failures), the Agent can:
@@ -526,7 +526,7 @@ Use the camera via browser to let the Agent "see" the physical world.
 | Session  | `session_start`, `session_end` |
 | Gateway  | `gateway_start`, `gateway_stop` |
 
-Place plugins under `~/.belldandy/plugins/`. They are loaded automatically when the gateway starts.
+Place plugins under `~/.star_sanctuary/plugins/`. They are loaded automatically when the gateway starts.
 
 497: ---
 498: 
@@ -706,6 +706,7 @@ Feedback and suggestions are very welcome.
 ## License
 
 Star Sanctuary is released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+
 
 
 

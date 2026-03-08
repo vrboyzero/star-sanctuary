@@ -7,15 +7,15 @@
  * canvas_connect / canvas_disconnect
  * canvas_auto_layout / canvas_snapshot
  *
- * 存储路径: ~/.belldandy/canvas/<boardId>.json
+ * 存储路径: ~/.star_sanctuary/canvas/<boardId>.json
  * 广播机制: 写操作完成后通过 BroadcastFn 推送 canvas.update 事件
  */
 
 import type { Tool, JsonObject, ToolContext, ToolCallResult } from "../types.js";
 import { promises as fs } from "fs";
 import * as path from "path";
-import * as os from "os";
 import * as crypto from "crypto";
+import { resolveStateDir } from "@belldandy/protocol";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ interface CanvasBoard {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
-const getCanvasDir = () => path.join(os.homedir(), ".belldandy", "canvas");
+const getCanvasDir = () => path.join(resolveStateDir(process.env), "canvas");
 
 function genId(): string {
   return crypto.randomBytes(6).toString("hex");
@@ -117,7 +117,7 @@ async function writeBoard(dir: string, board: CanvasBoard): Promise<void> {
 /** Auto-populate content from ref when creating a node with a reference */
 async function autoPopulateContent(ref: NodeRef | undefined): Promise<string | undefined> {
   if (!ref) return undefined;
-  const stateDir = path.join(os.homedir(), ".belldandy");
+  const stateDir = resolveStateDir(process.env);
   let filePath: string | undefined;
   if (ref.type === "method") {
     filePath = path.join(stateDir, "methods", ref.id);

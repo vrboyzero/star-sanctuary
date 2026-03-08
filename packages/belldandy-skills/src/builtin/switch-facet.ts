@@ -50,7 +50,7 @@ export const switchFacetTool: Tool = {
   definition: {
     name: "switch_facet",
     description:
-      "切换 SOUL.md 中的 FACET 职能模组。将锚点行之后的内容替换为指定模组文件的内容。模组文件位于 ~/.belldandy/facets/（默认 Agent）或 ~/.belldandy/agents/{id}/facets/（专属 Agent）目录。",
+      "切换 SOUL.md 中的 FACET 职能模组。将锚点行之后的内容替换为指定模组文件的内容。模组文件位于 ~/.star_sanctuary/facets/（默认 Agent）或 ~/.star_sanctuary/agents/{id}/facets/（专属 Agent）目录。",
     parameters: {
       type: "object",
       properties: {
@@ -90,7 +90,7 @@ export const switchFacetTool: Tool = {
     }
 
     // ── 2. 路径解析（感知 agentId） ──
-    const stateDir = context.workspaceRoot; // ~/.belldandy
+    const stateDir = context.workspaceRoot; // ~/.star_sanctuary（默认）
     const { soulPath, facetsDir, label } = resolveAgentPaths(stateDir, context.agentId);
     const facetPath = path.join(facetsDir, `${sanitized}.md`);
 

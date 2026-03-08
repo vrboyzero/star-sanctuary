@@ -19,7 +19,7 @@ read_when:
 - **列目录**：`list_files` — 列出主工作区或 `BELLDANDY_EXTRA_WORKSPACE_ROOTS` 配置根目录下指定目录的文件和子目录；path 可为相对主工作区的路径或允许范围内的绝对路径（如 C:/、E:/ 下），可选 recursive、depth。
 
 **范围与限制：**
-- 主工作区：`~/.belldandy`（或 `BELLDANDY_STATE_DIR` 指定目录）。
+- 主工作区：`~/.star_sanctuary`（或 `BELLDANDY_STATE_DIR` 指定目录）。
 - 额外根目录：由 .env 中 `BELLDANDY_EXTRA_WORKSPACE_ROOTS` 指定（逗号分隔，如 `C:/,E:/,D:/`）；`file_read` / `file_write` / `file_delete` / `list_files` 均可在主工作区与这些根下操作。
 - 路径：可使用相对路径或上述范围内的绝对路径；禁止越界访问。
 - 策略：`policy.deniedPaths` 会禁止访问含 .git、node_modules、.env 等路径。
@@ -41,7 +41,7 @@ read_when:
 
 ```markdown
 ### 工作目录
-- 主项目 → ~/workspace/Belldandy
+- 主项目 → ~/workspace/star_sanctuary
 - 笔记 → ~/Documents/notes
 
 ### 常用命令

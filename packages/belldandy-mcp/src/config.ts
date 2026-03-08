@@ -1,14 +1,14 @@
 /**
  * MCP 配置加载与管理
  * 
- * 负责从 ~/.belldandy/mcp.json 加载和验证 MCP 服务器配置。
+ * 负责从状态目录中的 mcp.json 加载和验证 MCP 服务器配置。
  */
 
 import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { mcpLog } from "./logger-adapter.js";
 import { z } from "zod";
+import { resolveStateDir } from "@belldandy/protocol";
 import {
   type MCPConfig,
   type MCPServerConfig,
@@ -21,10 +21,18 @@ import {
 // ============================================================================
 
 /** Belldandy 用户目录 */
-const BELLDANDY_DIR = join(homedir(), ".belldandy");
+function getBelldandyDir(): string {
+  return resolveStateDir(process.env);
+}
+
+const BELLDANDY_DIR = getBelldandyDir();
 
 /** MCP 配置文件路径 */
-const MCP_CONFIG_PATH = join(BELLDANDY_DIR, "mcp.json");
+function getMcpConfigPath(): string {
+  return join(getBelldandyDir(), "mcp.json");
+}
+
+const MCP_CONFIG_PATH = getMcpConfigPath();
 
 // ============================================================================
 // Zod 验证 Schema
@@ -215,7 +223,7 @@ function convertExternalConfig(external: ExternalMCPConfig): Record<string, unkn
  */
 export async function configExists(): Promise<boolean> {
   try {
-    await access(MCP_CONFIG_PATH);
+    await access(getMcpConfigPath());
     return true;
   } catch {
     return false;
@@ -231,14 +239,14 @@ export async function configExists(): Promise<boolean> {
 export async function loadConfig(): Promise<MCPConfig> {
   // 检查配置文件是否存在
   if (!(await configExists())) {
-    mcpLog("MCP", `配置文件不存在: ${MCP_CONFIG_PATH}`);
+    mcpLog("MCP", `配置文件不存在: ${getMcpConfigPath()}`);
     mcpLog("MCP", "使用默认配置（无服务器）");
     return { ...DEFAULT_MCP_CONFIG };
   }
 
   try {
     // 读取配置文件
-    const content = await readFile(MCP_CONFIG_PATH, "utf-8");
+    const content = await readFile(getMcpConfigPath(), "utf-8");
     let rawConfig = JSON.parse(content);
 
     // 兼容外部格式（Claude Desktop / Cursor 等 mcpServers 格式）
@@ -282,9 +290,9 @@ export async function loadConfig(): Promise<MCPConfig> {
 export async function saveConfig(config: MCPConfig): Promise<void> {
   // 确保目录存在
   try {
-    await access(BELLDANDY_DIR);
+    await access(getBelldandyDir());
   } catch {
-    await mkdir(BELLDANDY_DIR, { recursive: true });
+    await mkdir(getBelldandyDir(), { recursive: true });
   }
 
   // 验证配置
@@ -298,8 +306,9 @@ export async function saveConfig(config: MCPConfig): Promise<void> {
 
   // 写入配置文件
   const content = JSON.stringify(config, null, 2);
-  await writeFile(MCP_CONFIG_PATH, content, "utf-8");
-  mcpLog("MCP", `配置已保存到: ${MCP_CONFIG_PATH}`);
+  const configPath = getMcpConfigPath();
+  await writeFile(configPath, content, "utf-8");
+  mcpLog("MCP", `配置已保存到: ${configPath}`);
 }
 
 /**
@@ -309,7 +318,7 @@ export async function saveConfig(config: MCPConfig): Promise<void> {
  */
 export async function createDefaultConfig(): Promise<void> {
   if (await configExists()) {
-    mcpLog("MCP", `配置文件已存在: ${MCP_CONFIG_PATH}`);
+    mcpLog("MCP", `配置文件已存在: ${getMcpConfigPath()}`);
     return;
   }
 
@@ -337,7 +346,7 @@ export async function createDefaultConfig(): Promise<void> {
   };
 
   await saveConfig(defaultConfig);
-  mcpLog("MCP", `已创建默认配置文件: ${MCP_CONFIG_PATH}`);
+  mcpLog("MCP", `已创建默认配置文件: ${getMcpConfigPath()}`);
 }
 
 // ============================================================================

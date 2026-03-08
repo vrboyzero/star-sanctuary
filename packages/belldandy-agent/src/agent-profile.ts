@@ -29,7 +29,7 @@ export type AgentProfile = {
   systemPromptOverride?: string;
   /** @deprecated 使用 workspaceDir 替代。指向不同的 SOUL 文件（如 "SOUL-coder.md"） */
   soulFile?: string;
-  /** Agent 专属 workspace 目录名（位于 ~/.belldandy/agents/{workspaceDir}/），默认等于 id */
+  /** Agent 专属 workspace 目录名（位于 ~/.star_sanctuary/agents/{workspaceDir}/），默认等于 id */
   workspaceDir?: string;
   /** 是否启用工具（覆盖环境变量 BELLDANDY_TOOLS_ENABLED） */
   toolsEnabled?: boolean;

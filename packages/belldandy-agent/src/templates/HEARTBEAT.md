@@ -25,7 +25,7 @@ read_when:
 ### 定期检查
 - 每天整理一次 memory 目录
 - 每周回顾 MEMORY.md 并更新
-- 每周看一眼 `~/.belldandy/methods/`，为最近高频任务补上一两条方法
+- 每周看一眼 `~/.star_sanctuary/methods/`，为最近高频任务补上一两条方法
 ```
 
 ---

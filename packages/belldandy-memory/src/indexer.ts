@@ -27,7 +27,7 @@ export class MemoryIndexer {
         this.options = {
             extensions: options.extensions ?? [".md", ".txt", ".jsonl"],
             chunkOptions: options.chunkOptions ?? {},
-            ignorePatterns: options.ignorePatterns ?? ["node_modules", ".git", "dist", "build", ".belldandy"],
+            ignorePatterns: options.ignorePatterns ?? ["node_modules", ".git", "dist", "build", ".star_sanctuary", ".belldandy"],
             watch: options.watch ?? false,
             watchDebounceMs: options.watchDebounceMs ?? 1000,
         };

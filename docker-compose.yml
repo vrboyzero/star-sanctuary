@@ -39,11 +39,11 @@ services:
 
       # 其他配置
       BELLDANDY_WEB_ROOT: /app/apps/web/public
-      BELLDANDY_STATE_DIR: /home/belldandy/.belldandy
+      BELLDANDY_STATE_DIR: /home/belldandy/.star_sanctuary
 
     volumes:
       # 配置 + 状态持久化
-      - ${BELLDANDY_STATE_DIR:-~/.belldandy}:/home/belldandy/.belldandy
+      - ${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary
       # 工作区（可选，用于文件工具）
       - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
 
@@ -72,7 +72,7 @@ services:
       BELLDANDY_AUTH_TOKEN: ${BELLDANDY_AUTH_TOKEN}
 
     volumes:
-      - ${BELLDANDY_STATE_DIR:-~/.belldandy}:/home/belldandy/.belldandy
+      - ${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary
       - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
 
     entrypoint: ["pnpm", "bdd"]
@@ -149,11 +149,11 @@ services:
 
       # 其他配置
       BELLDANDY_WEB_ROOT: /app/apps/web/public
-      BELLDANDY_STATE_DIR: /home/belldandy/.belldandy
+      BELLDANDY_STATE_DIR: /home/belldandy/.star_sanctuary
 
     volumes:
       # 配置 + 状态持久化
-      - ${BELLDANDY_STATE_DIR:-~/.belldandy}:/home/belldandy/.belldandy
+      - ${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary
       # 工作区（可选，用于文件工具）
       - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
 

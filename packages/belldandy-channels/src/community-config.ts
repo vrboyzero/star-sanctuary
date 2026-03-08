@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
+import { resolveStateDir } from "@belldandy/protocol";
 import type { CommunityAgentConfig } from "./community.js";
 
 /**
@@ -36,9 +36,7 @@ const DEFAULT_CONFIG: CommunityConfig = {
  * 获取配置文件路径
  */
 export function getCommunityConfigPath(): string {
-  const homeDir = os.homedir();
-  const belldandyDir = path.join(homeDir, ".belldandy");
-  return path.join(belldandyDir, "community.json");
+  return path.join(resolveStateDir(process.env), "community.json");
 }
 
 /**

@@ -1,7 +1,22 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import {
+  resolveDefaultStateDir,
+  resolveNamedCompatDir,
+  resolveStateDir,
+  resolveWorkspaceStateDir,
+} from "@belldandy/protocol";
+export {
+  DEFAULT_STATE_DIR_BASENAME,
+  DEFAULT_STATE_DIR_DISPLAY,
+  LEGACY_STATE_DIR_BASENAME,
+  LEGACY_STATE_DIR_DISPLAY,
+  resolveDefaultStateDir,
+  resolveNamedCompatDir,
+  resolveStateDir,
+  resolveWorkspaceStateDir,
+} from "@belldandy/protocol";
 
 export type AllowlistStore = {
   version: 1;
@@ -23,12 +38,6 @@ const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_MAX_PENDING = 20;
-
-export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  const v = env.BELLDANDY_STATE_DIR;
-  if (v && v.trim()) return v.trim();
-  return path.join(os.homedir(), ".belldandy");
-}
 
 export function resolveAllowlistPath(stateDir: string): string {
   return path.join(stateDir, "allowlist.json");
@@ -238,4 +247,3 @@ function generateUniqueCode(existing: Set<string>): string {
   }
   throw new Error("failed to generate unique pairing code");
 }
-

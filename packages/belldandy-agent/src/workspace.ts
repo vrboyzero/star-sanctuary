@@ -95,7 +95,7 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
 /**
  * 确保 Workspace 目录存在，并创建缺失的模板文件
  *
- * @param dir Workspace 目录路径（如 ~/.belldandy）
+ * @param dir Workspace 目录路径（如 ~/.star_sanctuary）
  * @param createMissing 是否创建缺失的模板文件
  * @returns 创建结果
  */
@@ -291,7 +291,7 @@ const INHERITABLE_FILES: WorkspaceFileName[] = [
 
 /**
  * 确保 Agent 专属 workspace 目录存在。
- * 创建 ~/.belldandy/agents/{agentId}/ 和 facets/ 子目录。
+ * 创建 ~/.star_sanctuary/agents/{agentId}/ 和 facets/ 子目录。
  */
 export async function ensureAgentWorkspace(params: {
     rootDir: string;

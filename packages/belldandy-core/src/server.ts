@@ -6,6 +6,7 @@ import path from "node:path";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 
+import { DEFAULT_STATE_DIR_DISPLAY } from "@belldandy/protocol";
 import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type ModelProfile } from "@belldandy/agent";
 import type {
   GatewayFrame,
@@ -338,7 +339,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         ok: false,
         error: {
           code: "WEBHOOK_DISABLED",
-          message: "Webhook API is disabled. Configure webhooks in ~/.belldandy/webhooks.json to enable.",
+          message: `Webhook API is disabled. Configure webhooks in ${DEFAULT_STATE_DIR_DISPLAY}/webhooks.json to enable.`,
         },
       });
     });
@@ -1396,7 +1397,7 @@ async function handleReq(
         const items: Array<{ name: string; type: "file" | "directory"; path: string }> = [];
 
         for (const entry of entries) {
-          // 忽略隐藏文件（以.开头，但排除 .belldandy 自身）
+          // 忽略隐藏文件（以.开头，但排除状态目录自身）
           if (entry.name.startsWith(".") && relativePath !== "") continue;
           // 忽略特定名称
           if (IGNORED_NAMES.includes(entry.name)) continue;

@@ -1,4 +1,4 @@
-# Belldandy 实施计划
+﻿# Belldandy 实施计划
 
 > **注意**：已完成的 Phase 详细实施记录已归档至 [`docs/archive/IMPLEMENTATION_LOG.md`](file:///e:/project/belldandy/docs/archive/IMPLEMENTATION_LOG.md)。
 > 本文档仅保留 **架构总览**、**Roadmap**、**未完成规划** 与 **风险评估**。
@@ -343,7 +343,7 @@ child.unref();
 #### D-2.3 文件管理
 
 ```
-~/.belldandy/
+~/.star_sanctuary/
 ├── gateway.pid          # PID 文件
 └── logs/
     └── gateway.log      # daemon 模式日志输出
@@ -402,7 +402,7 @@ bdd daemon status     # 查看系统服务状态
 |------|-----------|-------------|------|
 | macOS | launchd | `~/Library/LaunchAgents/ai.belldandy.gateway.plist` | RunAtLoad, KeepAlive |
 | Linux | systemd | `~/.config/systemd/user/belldandy-gateway.service` | enable, Restart=always |
-| Windows | schtasks | `~/.belldandy/gateway.cmd` | ONLOGON 触发器 |
+| Windows | schtasks | `~/.star_sanctuary/gateway.cmd` | ONLOGON 触发器 |
 
 #### D-6.3 统一接口设计
 

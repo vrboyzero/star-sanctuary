@@ -10,8 +10,9 @@ import { createConsoleTransport } from "./console-transport.js";
 import { createFileTransport, parseSizeToBytes } from "./file-transport.js";
 import path from "node:path";
 import os from "node:os";
+import { resolveDefaultStateDir } from "@belldandy/protocol";
 
-const DEFAULT_LOG_DIR = path.join(os.homedir(), ".belldandy", "logs");
+const DEFAULT_LOG_DIR = path.join(resolveDefaultStateDir(), "logs");
 const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const DEFAULT_MAX_RETENTION_DAYS = 7;
 

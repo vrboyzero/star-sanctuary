@@ -2,6 +2,7 @@ import type { Tool, ToolCallResult } from "../types.js";
 import { MemoryManager, getGlobalMemoryManager } from "@belldandy/memory";
 import type { MemorySearchResult, MemoryIndexStatus, MemorySearchFilter } from "@belldandy/memory";
 import path from "node:path";
+import { resolveStateDir } from "@belldandy/protocol";
 
 // Singleton instance (lazy init, fallback only)
 let memoryManager: MemoryManager | null = null;
@@ -16,8 +17,8 @@ function getMemoryManager(workspaceRoot: string): MemoryManager {
     // Fallback: 创建本地实例（用于测试或独立运行场景）
     if (!memoryManager) {
         // [IMPROVED] Use shared models directory if available
-        const stateDir = process.env.BELLDANDY_STATE_DIR;
-        const modelsDir = stateDir ? path.join(stateDir, "models") : undefined;
+        const stateDir = resolveStateDir(process.env);
+        const modelsDir = path.join(stateDir, "models");
 
         memoryManager = new MemoryManager({
             workspaceRoot,

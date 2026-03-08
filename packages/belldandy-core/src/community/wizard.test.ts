@@ -73,7 +73,7 @@ describe("community wizard", () => {
       reconnect: { enabled: true, maxRetries: 10, backoffMs: 5000 },
     };
 
-    channelsState.getCommunityConfigPath.mockReturnValue("/mock/.belldandy/community.json");
+    channelsState.getCommunityConfigPath.mockReturnValue("/mock/.star_sanctuary/community.json");
     channelsState.loadCommunityConfig.mockImplementation(() => cloneConfig(channelsState.config));
     channelsState.listAgentConfigs.mockImplementation(() => channelsState.config.agents.map((a) => ({ ...a })));
     channelsState.saveCommunityConfig.mockImplementation((config: CommunityConfig) => {

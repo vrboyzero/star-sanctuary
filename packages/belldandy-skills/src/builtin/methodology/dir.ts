@@ -1,6 +1,6 @@
 import type { ToolContext } from "../../types.js";
-import * as os from "node:os";
 import * as path from "node:path";
+import { resolveStateDir as resolveDefaultStateDir } from "@belldandy/protocol";
 
 const asciiMethodFilenameRegex = /^[A-Za-z0-9_]+-[A-Za-z0-9_]+(-[A-Za-z0-9_]+)?\.md$/;
 const hasHanCharacterRegex = /\p{Script=Han}/u;
@@ -11,13 +11,7 @@ export function resolveStateDir(context?: Pick<ToolContext, "workspaceRoot">, en
     if (workspaceRoot) {
         return workspaceRoot;
     }
-
-    const stateDir = env.BELLDANDY_STATE_DIR?.trim();
-    if (stateDir) {
-        return stateDir;
-    }
-
-    return path.join(os.homedir(), ".belldandy");
+    return resolveDefaultStateDir(env);
 }
 
 export function resolveMethodsDir(context?: Pick<ToolContext, "workspaceRoot">, env: NodeJS.ProcessEnv = process.env): string {

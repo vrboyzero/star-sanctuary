@@ -38,7 +38,7 @@ Star Sanctuary 是一款面向开发者与创作者的 **本地优先的个人 A
 
 ### 4. 方法论系统（Methodology，Phase 14）
 
-- **功能**：将 SOP/经验写入 `~/.belldandy/methods`，并通过 `method_list/method_search/method_read/method_create` 工具管理，System Prompt 中注入 Methodology Protocol，要求 Agent 在复杂任务前后查阅/沉淀方法。
+- **功能**：将 SOP/经验写入 `~/.star_sanctuary/methods`，并通过 `method_list/method_search/method_read/method_create` 工具管理，System Prompt 中注入 Methodology Protocol，要求 Agent 在复杂任务前后查阅/沉淀方法。
 - **特色**：在架构上与 Skills 并行——**Skills 决定“能做什么”，Methods 决定“遇到重复任务按什么套路去做”**；Agent 会先选择/更新方法，再在方法步骤里调用各类 Skills 与 Memory/Logs，让复杂工作流从即兴推理升级为有版本的 SOP。
 
 ### 5. Memory 记忆系统与向量检索（Phase 4 & 4.5 & 4.6 & 12 & M-Next）
@@ -69,7 +69,7 @@ Star Sanctuary 是一款面向开发者与创作者的 **本地优先的个人 A
 ### 7. SOUL 人格系统与 Facet 模组 + 多 Agent Workspace（Phase 5 & 2.10 & 27 系列）
 
 - **功能**：
-  - 通过 `~/.belldandy` 下的 `AGENTS.md / SOUL.md / IDENTITY.md / USER.md / TOOLS.md` 等文件定义人格与环境；
+  - 通过 `~/.star_sanctuary` 下的 `AGENTS.md / SOUL.md / IDENTITY.md / USER.md / TOOLS.md` 等文件定义人格与环境；
   - 支持 `switch_facet` 工具一键切换 FACET 模组，原子更新 SOUL.md；
   - AgentProfile + AgentRegistry 支持多 Agent 配置（模型、工具白名单、workspaceDir 等），配合 WebChat Agent 下拉选择器；
   - Per-Agent Workspace：非 default Agent 拥有独立的 SOUL/IDENTITY/facets 目录，缺失时回退到根目录。
@@ -146,7 +146,7 @@ Star Sanctuary 是一款面向开发者与创作者的 **本地优先的个人 A
 - **功能**：
   - `@belldandy/mcp` 包提供 MCP 客户端（stdio/SSE）、配置解析与工具桥接；
   - 兼容 Claude/Cursor 等通用 mcpServers 格式与 Star Sanctuary 自有 mcp.json 格式；
-  - Gateway 启动时自动加载 `~/.belldandy/mcp.json` 并注册工具。
+  - Gateway 启动时自动加载 `~/.star_sanctuary/mcp.json` 并注册工具。
 - **特色**：遵循 MCP 标准协议，为接入 Filesystem / GitHub / Notion / Slack 等生态工具提供统一入口。
 
 ### 16. 日志系统与自诊断（Phase 18）
@@ -229,4 +229,5 @@ Star Sanctuary 是一款面向开发者与创作者的 **本地优先的个人 A
 从当前实现情况来看，Star Sanctuary 已经完整打通了 **Gateway 控制平面、WebChat UI、Skills & 方法论系统、记忆与向量检索（含 M-Next 架构）、多 Agent 编排、浏览器与系统执行、多模态、Canvas 可视化工作区、MCP/日志/安全体系、Docker & 远程部署链路** 等一整条“个人 AI 工作站”的主干，并在 `office.goddess.ai` 工程中完成了社区级落地验证。  
 结合 `IMPLEMENTATION_PLAN.md` 的 Phase 总览，**Phase 0–23 及 Phase N / M-Next 等核心阶段基本全部完成，仅剩本地 Embedding、OS 级 GUI 操作、Nodes 知识图谱、记忆 Query Rewrite / LLM Rerank、多渠道扩展等中长期能力处于规划或迭代中**。  
 如果以对标 openclaw/moltbot 的能力清单为参照，可以认为 Star Sanctuary 在“核心平台 + 工具链 + 记忆系统 + 多 Agent 编排 + 部署与安全”这些主干方向上已经完成了约 **80–85% 的整体 Roadmap**，后续工作将主要集中在多终端生态扩展、OS 级操作、多渠道覆盖与检索智能化等增量能力上。
+
 

@@ -18,7 +18,7 @@ import {
 export interface HeartbeatRunnerOptions {
     /** 心跳间隔毫秒（默认 30 分钟） */
     intervalMs?: number;
-    /** Workspace 目录（如 ~/.belldandy） */
+    /** Workspace 目录（如 ~/.star_sanctuary） */
     workspaceDir: string;
     /** 发送消息到 Agent 并获取回复 */
     sendMessage: (prompt: string) => Promise<string>;

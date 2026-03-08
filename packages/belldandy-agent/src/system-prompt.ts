@@ -287,7 +287,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
         text: [
             "# Methodology System (Auto-Injected)",
             "",
-            `You have access to a dynamic "Methodology" system located in \`~/.belldandy/methods/\`.`,
+            `You have access to a dynamic "Methodology" system located in \`~/.star_sanctuary/methods/\`.`,
             `This is your "Procedural Memory" - a library of Standard Operating Procedures (SOPs).`,
             "",
             "## Execution Protocol",

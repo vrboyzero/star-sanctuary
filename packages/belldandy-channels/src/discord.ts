@@ -4,6 +4,7 @@ import type { Channel, ChannelConfig, ChannelEventListener } from "./types.js";
 import type { ChannelRouter } from "./router/types.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { resolveStateDir } from "@belldandy/protocol";
 
 export interface DiscordChannelConfig extends ChannelConfig {
     botToken: string;
@@ -347,7 +348,7 @@ export class DiscordChannel implements Channel {
      * 状态持久化
      */
     private loadState(): void {
-        const path = this.config.stateFilePath ?? join(process.env.BELLDANDY_STATE_DIR ?? "~/.belldandy", "discord-state.json");
+        const path = this.config.stateFilePath ?? join(resolveStateDir(process.env), "discord-state.json");
 
         if (existsSync(path)) {
             try {
@@ -359,7 +360,7 @@ export class DiscordChannel implements Channel {
     }
 
     private saveState(): void {
-        const path = this.config.stateFilePath ?? join(process.env.BELLDANDY_STATE_DIR ?? "~/.belldandy", "discord-state.json");
+        const path = this.config.stateFilePath ?? join(resolveStateDir(process.env), "discord-state.json");
 
         try {
             writeFileSync(path, JSON.stringify(this.state, null, 2));

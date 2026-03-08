@@ -2,12 +2,13 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { resolveWorkspaceStateDir } from "@belldandy/protocol";
 
 export class PythonRunner {
     private scratchDir: string;
 
     constructor(workspaceRoot: string) {
-        this.scratchDir = path.join(workspaceRoot, ".belldandy", "scratchpad");
+        this.scratchDir = path.join(resolveWorkspaceStateDir(workspaceRoot), "scratchpad");
     }
 
     async run(code: string): Promise<{ stdout: string; stderr: string }> {

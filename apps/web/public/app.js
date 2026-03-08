@@ -2580,7 +2580,7 @@ function renderMCPTab(mcpServers, disabledList) {
 
 function renderPluginsTab(pluginList, disabledList) {
   if (!pluginList || pluginList.length === 0) {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载插件（将 .js/.mjs 文件放入 ~/.belldandy/plugins/ 目录）</div>';
+    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载插件（将 .js/.mjs 文件放入 ~/.star_sanctuary/plugins/ 目录）</div>';
     return;
   }
   const disabledSet = new Set(disabledList);
@@ -2603,7 +2603,7 @@ function renderPluginsTab(pluginList, disabledList) {
 
 function renderSkillsTab(skillList, disabledList) {
   if (!skillList || skillList.length === 0) {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载技能（将 SKILL.md 放入 ~/.belldandy/skills/ 目录）</div>';
+    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载技能（将 SKILL.md 放入 ~/.star_sanctuary/skills/ 目录）</div>';
     return;
   }
   const disabledSet = new Set(disabledList);

@@ -73,7 +73,7 @@ export interface MCPServerConfig {
 
 /**
  * MCP 全局配置
- * ~/.belldandy/mcp.json 的结构
+ * ~/.star_sanctuary/mcp.json 的结构
  */
 export interface MCPConfig {
   /** 配置版本 */

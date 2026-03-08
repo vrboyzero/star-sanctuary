@@ -7,8 +7,8 @@ import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import type { EmbeddingProvider } from "./embeddings/index.js";
 import type { MemorySearchResult, MemoryIndexStatus, MemorySearchOptions, MemorySearchFilter } from "./types.js";
 import { appendToTodayMemory } from "./memory-files.js";
+import { resolveStateDir, resolveWorkspaceStateDir } from "@belldandy/protocol";
 import path from "node:path";
-import os from "node:os";
 import fs from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -109,8 +109,9 @@ export class MemoryManager {
         this.workspaceRoot = options.workspaceRoot;
         this.additionalRoots = options.additionalRoots ?? [];
 
-        // Default store path: .belldandy/memory.sqlite
-        const defaultStorePath = path.join(options.workspaceRoot, ".belldandy", "memory.sqlite");
+        // Default store path: .star_sanctuary/memory.sqlite（带旧目录回退）
+        const workspaceStateDir = resolveWorkspaceStateDir(options.workspaceRoot);
+        const defaultStorePath = path.join(workspaceStateDir, "memory.sqlite");
         const storePath = options.storePath || defaultStorePath;
 
         // Ensure dir exists synchronously
@@ -126,7 +127,7 @@ export class MemoryManager {
         // Initialize Embedding Provider
         if (options.provider === "local") {
             const modelName = options.localModel || "BAAI/bge-m3";
-            const modelsDir = options.modelsDir || path.join(this.workspaceRoot, ".belldandy", "models");
+            const modelsDir = options.modelsDir || path.join(workspaceStateDir, "models");
             this.embeddingProvider = new LocalEmbeddingProvider(modelName, modelsDir);
             console.log(`[MemoryManager] Using Local Embedding Provider (${modelName})`);
         } else if (options.openaiApiKey) {
@@ -167,7 +168,7 @@ export class MemoryManager {
         this.evolutionBaseUrl = options.evolutionBaseUrl || options.openaiBaseUrl || "";
         this.evolutionApiKey = options.evolutionApiKey || options.openaiApiKey || "";
         this.evolutionMinMessages = options.evolutionMinMessages ?? 4;
-        this.stateDir = options.stateDir || path.join(os.homedir(), ".belldandy");
+        this.stateDir = options.stateDir || resolveStateDir(process.env);
         this.embeddingQueryPrefix = options.embeddingQueryPrefix ?? "";
         this.embeddingPassagePrefix = options.embeddingPassagePrefix ?? "";
         this.deepRetrievalEnabled = options.deepRetrievalEnabled ?? false;

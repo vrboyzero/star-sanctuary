@@ -1,7 +1,7 @@
 /**
  * Cron Store - JSON 文件持久化
  *
- * 将定时任务列表存储在 ~/.belldandy/cron-jobs.json 中
+ * 将定时任务列表存储在 ~/.star_sanctuary/cron-jobs.json 中
  * 支持 CRUD 操作，写入时使用临时文件 + rename 保证原子性
  */
 
