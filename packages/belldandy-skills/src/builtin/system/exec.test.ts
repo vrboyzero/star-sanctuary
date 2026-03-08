@@ -1,10 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
 import { runCommandTool } from "./exec.js";
 import type { ToolContext } from "../../types.js";
+import path from "node:path";
+
+const workspaceRoot = process.platform === "win32"
+    ? "C:\\tmp\\test-workspace"
+    : "/tmp/test-workspace";
+
+const extraWorkspaceRoot = process.platform === "win32"
+    ? "E:\\extra-workspace"
+    : "/tmp/extra-workspace";
 
 const mockContext: ToolContext = {
     conversationId: "test-conv",
-    workspaceRoot: "/tmp/test-workspace",
+    workspaceRoot,
     policy: {
         allowedPaths: [],
         deniedPaths: [],
@@ -129,7 +138,160 @@ describe("run_command (Platform-aware Safelist)", () => {
         it("should block cwd outside workspace root", async () => {
             const result = await runCommandTool.execute({ command: "pwd", cwd: "../outside" }, mockContext);
             expect(result.success).toBe(false);
-            expect(result.error).toContain("Working directory escapes workspace root");
+            expect(result.error).toContain("Working directory escapes allowed roots");
+        });
+
+        it("should allow cwd inside extraWorkspaceRoots", async () => {
+            const result = await runCommandTool.execute(
+                { command: "pwd", cwd: extraWorkspaceRoot },
+                { ...mockContext, extraWorkspaceRoots: [extraWorkspaceRoot] }
+            );
+
+            if (!result.success) {
+                expect(result.error).not.toContain("Working directory escapes allowed roots");
+            }
+        });
+
+        it("should block Windows file commands when path operand escapes allowed roots", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'move ".\\inside.txt" "C:\\outside\\target.txt"' },
+                mockContext
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Path operand escapes allowed roots");
+        });
+
+        it("should allow Windows file commands within extraWorkspaceRoots", async () => {
+            if (!isWindows) return;
+
+            const extraFile = path.join(extraWorkspaceRoot, "inside.txt");
+            const result = await runCommandTool.execute(
+                { command: `move "${extraFile}" "${path.join(extraWorkspaceRoot, "renamed.txt")}"` },
+                { ...mockContext, extraWorkspaceRoots: [extraWorkspaceRoot] }
+            );
+
+            if (!result.success) {
+                expect(result.error).not.toContain("Path operand escapes allowed roots");
+                expect(result.error).not.toContain("not in the safe list");
+            }
+        });
+
+        it("should allow controlled 'if exist' builtin with safe nested command", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'if not exist ".\\flag.txt" move ".\\inside.txt" ".\\inside.bak"' },
+                mockContext
+            );
+
+            if (!result.success) {
+                expect(result.error).not.toContain("not in the safe list");
+                expect(result.error).not.toContain("Path operand escapes allowed roots");
+            }
+        });
+
+        it("should validate grouped 'if exist' builtin commands segment-by-segment", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'if not exist ".\\flag.txt" (echo ok && del /q *.log)' },
+                mockContext
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Recursive/Quiet deletion");
+        });
+
+        it("should allow grouped 'if exist' builtin with safe else branch", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'if exist ".\\flag.txt" (move ".\\inside.txt" ".\\inside.bak") else (echo missing && move ".\\inside.bak" ".\\inside.txt")' },
+                mockContext
+            );
+
+            if (!result.success) {
+                expect(result.error).not.toContain("Only 'if [not] exist");
+                expect(result.error).not.toContain("Path operand escapes allowed roots");
+                expect(result.error).not.toContain("not in the safe list");
+            }
+        });
+
+        it("should block grouped 'if exist' builtin when else branch has unsafe command", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'if exist ".\\flag.txt" (echo found) else (echo missing && del /q *.log)' },
+                mockContext
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Recursive/Quiet deletion");
+        });
+
+        it("should block grouped 'if exist' builtin when else branch path escapes allowed roots", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'if exist ".\\flag.txt" (move ".\\inside.txt" ".\\inside.bak") else (echo missing && move ".\\inside.txt" "C:\\outside\\inside.bak")' },
+                mockContext
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Path operand escapes allowed roots");
+        });
+
+        it("should block controlled 'if exist' builtin when condition path escapes allowed roots", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'if exist "C:\\outside\\flag.txt" move ".\\inside.txt" ".\\inside.bak"' },
+                mockContext
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Path operand escapes allowed roots");
+        });
+
+        it("should allow controlled 'for' builtin with safe nested command", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'for %f in (".\\*.txt") do move "%f" ".\\archive"' },
+                mockContext
+            );
+
+            if (!result.success) {
+                expect(result.error).not.toContain("not in the safe list");
+                expect(result.error).not.toContain("Path operand escapes allowed roots");
+            }
+        });
+
+        it("should validate grouped 'for' builtin commands segment-by-segment", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'for %f in (".\\*.txt") do (echo %f && del /q *.log)' },
+                mockContext
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Recursive/Quiet deletion");
+        });
+
+        it("should block controlled 'for' builtin when iterable escapes allowed roots", async () => {
+            if (!isWindows) return;
+
+            const result = await runCommandTool.execute(
+                { command: 'for %f in ("C:\\outside\\*.txt") do move "%f" ".\\archive"' },
+                mockContext
+            );
+
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Path operand escapes allowed roots");
         });
     });
 });

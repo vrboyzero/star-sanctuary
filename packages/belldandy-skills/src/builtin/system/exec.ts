@@ -101,6 +101,8 @@ const DEFAULT_EXEC_POLICY: Required<ToolExecPolicy> = {
 const ENV_FILE_PATTERN = /\.env(\.|$)/i;
 const ENV_READ_KEYWORDS = ["cat", "type", "more", "less", "head", "tail", "grep", "rg", "sed", "awk", "get-content"];
 const NON_INTERACTIVE_FLAGS = ["--yes", "-y", "--assume-yes", "--non-interactive", "--no-interaction"];
+const WINDOWS_FILE_COMMANDS = new Set(["copy", "move", "ren", "del"]);
+const WINDOWS_CONTROLLED_BUILTINS = new Set(["if", "for"]);
 
 const QUICK_COMMANDS = new Set([
     "pwd", "whoami", "echo", "git", "ls", "dir", "cat", "head", "tail",
@@ -273,9 +275,405 @@ function killChildProcess(child: ChildProcess): void {
     }
 }
 
-function validateCommand(cmd: string, safelist: Set<string>, blocklist: Set<string>): { valid: boolean; reason?: string } {
+function isAbsoluteLike(input: string): boolean {
+    return path.isAbsolute(input) || /^[A-Za-z]:/.test(input) || input.startsWith("\\\\");
+}
+
+function stripOuterQuotes(token: string): string {
+    if (token.length >= 2) {
+        if ((token.startsWith("\"") && token.endsWith("\"")) || (token.startsWith("'") && token.endsWith("'"))) {
+            return token.slice(1, -1);
+        }
+    }
+    return token;
+}
+
+function tokenizeCommand(segment: string): string[] {
+    const matches = segment.match(/"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+/g) ?? [];
+    return matches.map(stripOuterQuotes).filter(Boolean);
+}
+
+function serializeTokens(tokens: string[]): string {
+    return tokens
+        .map((token) => (/\s/.test(token) ? `"${token.replace(/"/g, '\\"')}"` : token))
+        .join(" ")
+        .trim();
+}
+
+function trimParensToken(token: string, side: "start" | "end"): string {
+    if (side === "start") return token.replace(/^\(+/, "");
+    return token.replace(/\)+$/, "");
+}
+
+function unwrapGroupedTokens(tokens: string[]): string[] {
+    if (tokens.length === 0) return tokens;
+    const copy = [...tokens];
+    copy[0] = trimParensToken(copy[0], "start");
+    copy[copy.length - 1] = trimParensToken(copy[copy.length - 1], "end");
+    return copy.map(stripOuterQuotes).filter(Boolean);
+}
+
+function isUnderAnyAllowedRoot(absolute: string, workspaceRoot: string, extraWorkspaceRoots?: string[]): boolean {
+    if (isUnderRoot(absolute, workspaceRoot)) return true;
+    return (extraWorkspaceRoots ?? []).some((root) => isUnderRoot(absolute, root));
+}
+
+function resolveExecPath(targetPath: string, cwd: string): string {
+    return isAbsoluteLike(targetPath)
+        ? path.resolve(targetPath)
+        : path.resolve(cwd, targetPath);
+}
+
+function resolveWorkingDirectory(
+    cwdArg: string | undefined,
+    workspaceRoot: string,
+    extraWorkspaceRoots?: string[]
+): { ok: true; cwd: string } | { ok: false; reason: string } {
+    const cwd = cwdArg
+        ? (isAbsoluteLike(cwdArg) ? path.resolve(cwdArg) : path.resolve(workspaceRoot, cwdArg))
+        : path.resolve(workspaceRoot);
+
+    if (!isUnderAnyAllowedRoot(cwd, workspaceRoot, extraWorkspaceRoots)) {
+        return { ok: false, reason: "Working directory escapes allowed roots." };
+    }
+
+    return { ok: true, cwd };
+}
+
+function isWindowsSwitchToken(token: string): boolean {
+    return /^\/(?![\\/])[A-Za-z?][^\\/:]*$/i.test(token);
+}
+
+function getValidatedPathOperands(executable: string, tokens: string[]): string[] {
+    const args = tokens.slice(1);
+    const nonSwitchArgs = args.filter((token) => !isWindowsSwitchToken(token));
+
+    switch (executable) {
+        case "copy":
+        case "move":
+            return nonSwitchArgs.slice(0, Math.max(0, nonSwitchArgs.length));
+        case "ren":
+            return nonSwitchArgs.slice(0, 2);
+        case "del":
+            return nonSwitchArgs;
+        default:
+            return [];
+    }
+}
+
+type ParsedControlledBuiltin =
+    | { kind: "if"; conditionPath: string; thenCommand: string; elseCommand?: string }
+    | { kind: "for"; iterableTokens: string[]; nestedCommand: string };
+
+function countParenDelta(token: string): number {
+    let delta = 0;
+    for (const ch of token) {
+        if (ch === "(") delta += 1;
+        if (ch === ")") delta -= 1;
+    }
+    return delta;
+}
+
+function splitTokensAtTopLevelKeyword(tokens: string[], keyword: string): { before: string[]; after?: string[] } {
+    let depth = 0;
+
+    for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token.toLowerCase() === keyword && depth === 0) {
+            return {
+                before: tokens.slice(0, index),
+                after: tokens.slice(index + 1),
+            };
+        }
+        depth += countParenDelta(token);
+    }
+
+    return { before: tokens };
+}
+
+function parseControlledWindowsBuiltin(cmd: string): ParsedControlledBuiltin | { error: string } | null {
+    const tokens = tokenizeCommand(cmd);
+    if (tokens.length === 0) return { error: "Empty command" };
+
+    const executable = tokens[0].toLowerCase();
+    if (!WINDOWS_CONTROLLED_BUILTINS.has(executable)) return null;
+
+    if (executable === "if") {
+        let index = 1;
+        if (tokens[index]?.toLowerCase() === "not") index += 1;
+        if (tokens[index]?.toLowerCase() !== "exist") {
+            return { error: "Only 'if [not] exist <path> <command> [else <command>]' is allowed." };
+        }
+
+        const conditionPath = tokens[index + 1];
+        const commandTokens = tokens.slice(index + 2);
+        const { before, after } = splitTokensAtTopLevelKeyword(commandTokens, "else");
+        const thenTokens = unwrapGroupedTokens(before);
+        const elseTokens = after ? unwrapGroupedTokens(after) : [];
+        if (!conditionPath || thenTokens.length === 0 || (after && elseTokens.length === 0)) {
+            return { error: "Only 'if [not] exist <path> <command> [else <command>]' is allowed." };
+        }
+
+        return {
+            kind: "if",
+            conditionPath,
+            thenCommand: serializeTokens(thenTokens),
+            elseCommand: elseTokens.length > 0 ? serializeTokens(elseTokens) : undefined,
+        };
+    }
+
+    let index = 1;
+    while (index < tokens.length && isWindowsSwitchToken(tokens[index])) {
+        index += 1;
+    }
+
+    if (!tokens[index]) {
+        return { error: "Only 'for ... in (...) do <command>' is allowed." };
+    }
+    index += 1;
+
+    if (tokens[index]?.toLowerCase() !== "in") {
+        return { error: "Only 'for ... in (...) do <command>' is allowed." };
+    }
+
+    const doIndex = tokens.findIndex((token, idx) => idx > index && token.toLowerCase() === "do");
+    if (doIndex < 0) {
+        return { error: "Only 'for ... in (...) do <command>' is allowed." };
+    }
+
+    const iterableTokens = unwrapGroupedTokens(tokens.slice(index + 1, doIndex));
+    const nestedTokens = unwrapGroupedTokens(tokens.slice(doIndex + 1));
+    if (iterableTokens.length === 0 || nestedTokens.length === 0) {
+        return { error: "Only 'for ... in (...) do <command>' is allowed." };
+    }
+
+    return {
+        kind: "for",
+        iterableTokens,
+        nestedCommand: serializeTokens(nestedTokens),
+    };
+}
+
+function shouldSkipPathOperandValidation(token: string): boolean {
+    return /^%[^%]+%?$/.test(token);
+}
+
+function validateCommandSegments(
+    command: string,
+    validator: (segment: string, depth: number) => { valid: boolean; reason?: string },
+    depth = 0,
+): { valid: boolean; reason?: string } {
+    const segmented = splitCommandSegments(command);
+    if (!segmented.ok) {
+        return { valid: false, reason: segmented.reason };
+    }
+
+    for (const segment of segmented.segments) {
+        const validation = validator(segment, depth + 1);
+        if (!validation.valid) {
+            return validation;
+        }
+    }
+
+    return { valid: true };
+}
+
+function validateControlledBuiltinCommand(
+    cmd: string,
+    safelist: Set<string>,
+    blocklist: Set<string>,
+    depth = 0,
+): { handled: boolean; valid: boolean; reason?: string } {
+    if (process.platform !== "win32") return { handled: false, valid: true };
+    if (depth > 3) {
+        return { handled: true, valid: false, reason: "Windows shell builtin nesting is too deep." };
+    }
+
+    const parsed = parseControlledWindowsBuiltin(cmd);
+    if (parsed == null) return { handled: false, valid: true };
+    if ("error" in parsed) {
+        return { handled: true, valid: false, reason: parsed.error };
+    }
+
+    if (parsed.kind === "if") {
+        const thenValidation = validateCommandSegments(
+            parsed.thenCommand,
+            (segment, nextDepth) => validateCommandInternal(segment, safelist, blocklist, nextDepth),
+            depth,
+        );
+        if (!thenValidation.valid) {
+            return { handled: true, valid: false, reason: thenValidation.reason };
+        }
+
+        if (parsed.elseCommand) {
+            const elseValidation = validateCommandSegments(
+                parsed.elseCommand,
+                (segment, nextDepth) => validateCommandInternal(segment, safelist, blocklist, nextDepth),
+                depth,
+            );
+            if (!elseValidation.valid) {
+                return { handled: true, valid: false, reason: elseValidation.reason };
+            }
+        }
+
+        return { handled: true, valid: true };
+    }
+
+    const nestedValidation = validateCommandSegments(
+        parsed.nestedCommand,
+        (segment, nextDepth) => validateCommandInternal(segment, safelist, blocklist, nextDepth),
+        depth,
+    );
+    if (!nestedValidation.valid) {
+        return { handled: true, valid: false, reason: nestedValidation.reason };
+    }
+
+    return { handled: true, valid: true };
+}
+
+function validateControlledBuiltinPathBoundaries(
+    cmd: string,
+    cwd: string,
+    workspaceRoot: string,
+    extraWorkspaceRoots: string[] | undefined,
+    depth = 0,
+): { handled: boolean; valid: boolean; reason?: string } {
+    if (process.platform !== "win32") return { handled: false, valid: true };
+    if (depth > 3) {
+        return { handled: true, valid: false, reason: "Windows shell builtin nesting is too deep." };
+    }
+
+    const parsed = parseControlledWindowsBuiltin(cmd);
+    if (parsed == null) return { handled: false, valid: true };
+    if ("error" in parsed) {
+        return { handled: true, valid: false, reason: parsed.error };
+    }
+
+    const operands = parsed.kind === "if"
+        ? [parsed.conditionPath]
+        : parsed.iterableTokens.filter((token) => !shouldSkipPathOperandValidation(token));
+
+    for (const operand of operands) {
+        const absolute = resolveExecPath(operand, cwd);
+        if (!isUnderAnyAllowedRoot(absolute, workspaceRoot, extraWorkspaceRoots)) {
+            return { handled: true, valid: false, reason: `Path operand escapes allowed roots: ${operand}` };
+        }
+    }
+
+    if (parsed.kind === "if") {
+        const thenValidation = validateCommandSegments(
+            parsed.thenCommand,
+            (segment, nextDepth) => validateCommandPathBoundariesInternal(
+                segment,
+                cwd,
+                workspaceRoot,
+                extraWorkspaceRoots,
+                nextDepth,
+            ),
+            depth,
+        );
+        if (!thenValidation.valid) {
+            return { handled: true, valid: false, reason: thenValidation.reason };
+        }
+
+        if (parsed.elseCommand) {
+            const elseValidation = validateCommandSegments(
+                parsed.elseCommand,
+                (segment, nextDepth) => validateCommandPathBoundariesInternal(
+                    segment,
+                    cwd,
+                    workspaceRoot,
+                    extraWorkspaceRoots,
+                    nextDepth,
+                ),
+                depth,
+            );
+            if (!elseValidation.valid) {
+                return { handled: true, valid: false, reason: elseValidation.reason };
+            }
+        }
+
+        return { handled: true, valid: true };
+    }
+
+    const nestedValidation = validateCommandSegments(
+        parsed.nestedCommand,
+        (segment, nextDepth) => validateCommandPathBoundariesInternal(
+            segment,
+            cwd,
+            workspaceRoot,
+            extraWorkspaceRoots,
+            nextDepth,
+        ),
+        depth,
+    );
+    if (!nestedValidation.valid) {
+        return { handled: true, valid: false, reason: nestedValidation.reason };
+    }
+
+    return { handled: true, valid: true };
+}
+
+function validateCommandPathBoundariesInternal(
+    cmd: string,
+    cwd: string,
+    workspaceRoot: string,
+    extraWorkspaceRoots?: string[],
+    depth = 0,
+): { valid: true } | { valid: false; reason: string } {
+    const builtinValidation = validateControlledBuiltinPathBoundaries(
+        cmd,
+        cwd,
+        workspaceRoot,
+        extraWorkspaceRoots,
+        depth,
+    );
+    if (builtinValidation.handled) {
+        return builtinValidation.valid
+            ? { valid: true }
+            : { valid: false, reason: builtinValidation.reason ?? "Windows shell builtin path validation failed." };
+    }
+
+    const tokens = tokenizeCommand(cmd);
+    if (tokens.length === 0) {
+        return { valid: false, reason: "Empty command" };
+    }
+
+    const executable = tokens[0].toLowerCase();
+    if (!WINDOWS_FILE_COMMANDS.has(executable)) {
+        return { valid: true };
+    }
+
+    const operands = getValidatedPathOperands(executable, tokens);
+    for (const operand of operands) {
+        const absolute = resolveExecPath(operand, cwd);
+        if (!isUnderAnyAllowedRoot(absolute, workspaceRoot, extraWorkspaceRoots)) {
+            return { valid: false, reason: `Path operand escapes allowed roots: ${operand}` };
+        }
+    }
+
+    return { valid: true };
+}
+
+function validateCommandPathBoundaries(
+    cmd: string,
+    cwd: string,
+    workspaceRoot: string,
+    extraWorkspaceRoots?: string[]
+): { valid: true } | { valid: false; reason: string } {
+    return validateCommandPathBoundariesInternal(cmd, cwd, workspaceRoot, extraWorkspaceRoots);
+}
+
+function validateCommandInternal(cmd: string, safelist: Set<string>, blocklist: Set<string>, depth = 0): { valid: boolean; reason?: string } {
     const trimmed = cmd.trim();
     if (!trimmed) return { valid: false, reason: "Empty command" };
+
+    const builtinValidation = validateControlledBuiltinCommand(trimmed, safelist, blocklist, depth);
+    if (builtinValidation.handled) {
+        return builtinValidation.valid
+            ? { valid: true }
+            : { valid: false, reason: builtinValidation.reason };
+    }
 
     // 1. 拆分命令 (简单拆分，不处理复杂引号引用，优先保证安全)
     const parts = trimmed.split(/\s+/);
@@ -328,6 +726,10 @@ function validateCommand(cmd: string, safelist: Set<string>, blocklist: Set<stri
     return { valid: true };
 }
 
+function validateCommand(cmd: string, safelist: Set<string>, blocklist: Set<string>): { valid: boolean; reason?: string } {
+    return validateCommandInternal(cmd, safelist, blocklist);
+}
+
 function isUnderRoot(absolute: string, root: string): boolean {
     const resolvedRoot = path.resolve(root);
     const rel = path.relative(resolvedRoot, path.resolve(absolute));
@@ -339,6 +741,7 @@ function splitCommandSegments(command: string): { ok: true; segments: string[] }
     let current = "";
     let quote: "'" | "\"" | null = null;
     let escaped = false;
+    let parenDepth = 0;
 
     const pushSegment = () => {
         const trimmed = current.trim();
@@ -374,6 +777,18 @@ function splitCommandSegments(command: string): { ok: true; segments: string[] }
             continue;
         }
 
+        if (ch === "(") {
+            parenDepth += 1;
+            current += ch;
+            continue;
+        }
+
+        if (ch === ")") {
+            parenDepth = Math.max(0, parenDepth - 1);
+            current += ch;
+            continue;
+        }
+
         if (ch === "`" || (ch === "$" && next === "(")) {
             return { ok: false, reason: "Subshell syntax is blocked by security policy." };
         }
@@ -383,15 +798,21 @@ function splitCommandSegments(command: string): { ok: true; segments: string[] }
         }
 
         if (ch === ";" || ch === "\n") {
-            pushSegment();
+            if (parenDepth === 0) {
+                pushSegment();
+                continue;
+            }
+            current += ch;
             continue;
         }
 
         if (ch === "|" || ch === "&") {
             // 支持单字符与双字符控制符：|、||、&、&&
-            pushSegment();
-            if (next === ch) i += 1;
-            continue;
+            if (parenDepth === 0) {
+                pushSegment();
+                if (next === ch) i += 1;
+                continue;
+            }
         }
 
         current += ch;
@@ -487,12 +908,32 @@ export const runCommandTool: Tool = {
             }
         }
 
-        const cwd = args.cwd ? path.resolve(context.workspaceRoot, args.cwd as string) : context.workspaceRoot;
-        if (!isUnderRoot(cwd, context.workspaceRoot)) {
-            const reason = "Working directory escapes workspace root.";
-            context.logger?.warn(`[Security Block] cwd=${cwd} -> ${reason}`);
+        const cwdArg = typeof args.cwd === "string" ? args.cwd : undefined;
+        const cwdResult = resolveWorkingDirectory(
+            cwdArg,
+            context.workspaceRoot,
+            context.extraWorkspaceRoots,
+        );
+        if (!cwdResult.ok) {
+            const reason = cwdResult.reason;
+            context.logger?.warn(`[Security Block] cwd=${cwdArg ?? context.workspaceRoot} -> ${reason}`);
             return makeResult(false, "", `Security Error: ${reason}`);
         }
+        const cwd = cwdResult.cwd;
+
+        for (const segment of segmented.segments) {
+            const pathValidation = validateCommandPathBoundaries(
+                segment,
+                cwd,
+                context.workspaceRoot,
+                context.extraWorkspaceRoots,
+            );
+            if (!pathValidation.valid) {
+                context.logger?.warn(`[Security Block] ${segment} -> ${pathValidation.reason}`);
+                return makeResult(false, "", `Security Error: ${pathValidation.reason}`);
+            }
+        }
+
         const timeoutMs = determineTimeoutMs(command, args.timeoutMs as number | undefined, execPolicy);
 
         context.logger?.info(`[exec] Run: ${command} in ${cwd}`);
