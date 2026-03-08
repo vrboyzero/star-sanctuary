@@ -913,6 +913,48 @@ const closeSettingsBtn = document.getElementById("closeSettings");
 const saveSettingsBtn = document.getElementById("saveSettings");
 const restartBtn = document.getElementById("restartBtn");
 
+// 暴露给 WebView 等环境的接口
+window.__BELLDANDY_WEBCHAT_READY__ = true;
+
+// 全局委托复制按钮事件
+document.addEventListener("click", async (e) => {
+  const codeBtn = e.target.closest(".copy-code-btn");
+  if (codeBtn) {
+    const wrapper = codeBtn.closest(".code-block-wrapper");
+    if (wrapper) {
+      const codeEl = wrapper.querySelector("code");
+      if (codeEl) {
+        try {
+          await navigator.clipboard.writeText(codeEl.textContent);
+          const originalHTML = codeBtn.innerHTML;
+          codeBtn.innerHTML = "已复制";
+          setTimeout(() => { codeBtn.innerHTML = originalHTML; }, 2000);
+        } catch (err) {
+          console.error("复制失败", err);
+        }
+      }
+    }
+    return;
+  }
+
+  const msgBtn = e.target.closest(".copy-msg-btn");
+  if (msgBtn) {
+    const wrapper = msgBtn.closest(".msg-content-wrapper");
+    if (wrapper) {
+      const bubble = wrapper.querySelector(".msg");
+      if (bubble) {
+        try {
+          await navigator.clipboard.writeText(bubble.textContent);
+          const originalHTML = msgBtn.innerHTML;
+          msgBtn.innerHTML = "已复制";
+          setTimeout(() => { msgBtn.innerHTML = originalHTML; }, 2000);
+        } catch (err) {
+          console.error("复制失败", err);
+        }
+      }
+    }
+  }
+});
 // Initialize Recommend API Link
 const recommendApiLink = document.getElementById("recommendApiLink");
 if (recommendApiLink && window.BELLDANDY_WEB_CONFIG?.recommendApiUrl) {
@@ -1088,6 +1130,7 @@ function handleEvent(event, payload) {
 
     // 剥离 <think> 标签并解析 Markdown，然后再安全过滤
     const strippedText = stripThinkBlocks(botRawHtmlBuffer);
+    configureMarkedOnce();
     const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
     botMsgEl.innerHTML = sanitizeAssistantHtml(parsedHtml);
 
@@ -1102,6 +1145,7 @@ function handleEvent(event, payload) {
 
     // 剥离 <think> 标签并解析 Markdown，然后再安全过滤
     const strippedText = stripThinkBlocks(botRawHtmlBuffer);
+    configureMarkedOnce();
     const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
     botMsgEl.innerHTML = sanitizeAssistantHtml(parsedHtml);
 
@@ -1267,6 +1311,24 @@ function appendMessage(kind, text) {
 
   contentWrapper.appendChild(nameEl);
   contentWrapper.appendChild(bubble);
+
+  // 对于机器人的回复，在气泡外加一个复制全文按钮
+  if (kind === "bot") {
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "msg-actions";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "copy-msg-btn";
+    copyBtn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg> 复制
+    `;
+    copyBtn.title = "复制全文";
+
+    actionsEl.appendChild(copyBtn);
+    contentWrapper.appendChild(actionsEl);
+  }
 
   wrapper.appendChild(avatar);
   wrapper.appendChild(contentWrapper);
@@ -2250,7 +2312,7 @@ if (authValueEl) {
 
 const SAFE_ASSISTANT_TAGS = new Set([
   "A", "AUDIO", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "H5", "H6", "HR",
-  "I", "IMG", "LI", "OL", "P", "PRE", "SOURCE", "SPAN", "STRONG", "UL", "VIDEO", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD"
+  "I", "IMG", "LI", "OL", "P", "PRE", "SOURCE", "SPAN", "STRONG", "UL", "VIDEO", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "BUTTON", "SVG", "PATH", "RECT"
 ]);
 
 const SAFE_ASSISTANT_ATTRS = {
@@ -2261,7 +2323,32 @@ const SAFE_ASSISTANT_ATTRS = {
   VIDEO: new Set(["src", "controls", "autoplay", "muted", "loop", "playsinline", "preload", "poster"]),
   CODE: new Set(["class", "language"]), // For syntax highlighting classes from marked
   PRE: new Set(["class"]),
+  DIV: new Set(["class"]),
+  SPAN: new Set(["class"]),
+  BUTTON: new Set(["class", "title", "onclick"]),
+  SVG: new Set(["width", "height", "viewBox", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "xmlns", "class"]),
+  PATH: new Set(["d", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"]),
+  RECT: new Set(["x", "y", "width", "height", "rx", "ry", "fill", "stroke", "stroke-width"]),
 };
+
+let markedConfigured = false;
+function configureMarkedOnce() {
+  if (markedConfigured || !window.marked) return;
+  const renderer = new window.marked.Renderer();
+  renderer.code = function (code, language) {
+    return `<div class="code-block-wrapper">
+  <div class="code-block-header">
+    <span class="code-block-lang">${language || ''}</span>
+    <button class="copy-code-btn" title="复制代码">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> 复制
+    </button>
+  </div>
+  <pre><code class="language-${language}">${escapeHtml(code)}</code></pre>
+</div>`;
+  };
+  window.marked.use({ renderer });
+  markedConfigured = true;
+}
 
 function stripThinkBlocks(text) {
   if (!text) return "";
