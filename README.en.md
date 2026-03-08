@@ -1,4 +1,4 @@
-# Belldandy
+﻿# Star Sanctuary
 
 <p align="center">
   <strong>🌟 Local‑first personal AI assistant</strong><br>
@@ -16,7 +16,7 @@
 
 ## Introduction
 
-Belldandy is a **local‑first personal AI assistant**. It runs on your own computer, keeps your data private, and comes with powerful capabilities such as long‑term memory, tool usage, browser automation, and voice interaction.
+Star Sanctuary is a **local‑first personal AI assistant**. It runs on your own computer, keeps your data private, and comes with powerful capabilities such as long‑term memory, tool usage, browser automation, and voice interaction.
 
 ### Design Principles
 
@@ -89,7 +89,7 @@ Belldandy/
 │   │   ├── types.ts                 # MCP types
 │   │   ├── config.ts                # MCP config loading & validation
 │   │   ├── client.ts                # MCP client (stdio/SSE)
-│   │   ├── tool-bridge.ts           # MCP tools → Belldandy skills
+│   │   ├── tool-bridge.ts           # MCP tools → Star Sanctuary skills
 │   │   └── manager.ts               # Multi‑server manager
 │   │
 │   ├── belldandy-plugins/           # Plugin system
@@ -158,7 +158,7 @@ The script will: check your environment → install dependencies → verify and 
 
 ```bash
 # 1. Enter project directory
-cd Belldandy
+cd Star Sanctuary
 
 # 2. Install dependencies
 corepack pnpm install
@@ -357,14 +357,14 @@ Supported transport types:
 
 ## Personalization
 
-Belldandy stores all user data under `~/.belldandy/`.
+Star Sanctuary stores all user data under `~/.belldandy/`.
 
 ### Persona Files
 
 | File          | Purpose           | Example                                   |
 |---------------|-------------------|-------------------------------------------|
 | `SOUL.md`     | Core personality  | "You are a meticulous TypeScript expert…" |
-| `IDENTITY.md` | Identity profile  | "Your name is Belldandy, a first‑class god…" |
+| `IDENTITY.md` | Identity profile  | "Your name is Star Sanctuary, a first‑class god…" |
 | `USER.md`     | User profile      | "User is vrboyzero, a full‑stack engineer…" |
 
 ### Memory System
@@ -401,7 +401,7 @@ See `BELLDANDY_LOG_*` variables for configuration.
 
 > Tools define what the Agent is able to do; methods define how it should do those things in the future.
 
-On top of a standard skills/tooling system, Belldandy adds a **Methodology System** designed specifically for **long‑memory, long‑term companion Agents**. It consists of four parts:
+On top of a standard skills/tooling system, Star Sanctuary adds a **Methodology System** designed specifically for **long‑memory, long‑term companion Agents**. It consists of four parts:
 
 - **Agent**: The decision‑making layer shaped by workspace files like `SOUL.md`, `AGENTS.md`, `USER.md`, and `TOOLS.md`.
 - **Skills**: The concrete tools that perform actions (file I/O, web fetch, browser control, shell commands, memory search, etc.).
@@ -457,7 +457,7 @@ These four pieces form a closed loop so the Agent doesn’t just "rethink from s
 ## Feishu (Lark) Integration
 
 
-Talk to Belldandy via Feishu without exposing your machine to the internet.
+Talk to Star Sanctuary via Feishu without exposing your machine to the internet.
 
 High‑level steps (see Chinese docs for screenshots):
 
@@ -467,7 +467,7 @@ High‑level steps (see Chinese docs for screenshots):
    - `im:message:send_as_bot` (send messages)
    - `im:resource` (access resources)
 3. **Configure long‑lived connection**: enable `im.message.receive_v1` in event subscriptions.
-4. **Configure Belldandy** via `.env.local`:
+4. **Configure Star Sanctuary** via `.env.local`:
 
    ```env
    BELLDANDY_FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
@@ -566,7 +566,7 @@ Place plugins under `~/.belldandy/plugins/`. They are loaded automatically when 
 532: 
 533: ## CLI Commands
 
-Belldandy provides a unified `bdd` CLI entry point (based on [citty](https://github.com/unjs/citty)). All commands support `--help` for usage and `--json` for machine-readable output.
+Star Sanctuary provides a unified `bdd` CLI entry point (based on [citty](https://github.com/unjs/citty)). All commands support `--help` for usage and `--json` for machine-readable output.
 
 ```bash
 # View full command tree
@@ -677,8 +677,8 @@ This project is architecturally inspired by [moltbot](https://github.com/moltbot
 
 ### Related Docs
 
-- [Belldandy实现内容说明.md](./Belldandy实现内容说明.md) - Detailed feature breakdown (Chinese)
-- [Belldandy使用手册.md](./Belldandy使用手册.md) - Full user manual (Chinese)
+- [Star Sanctuary实现内容说明.md](./Star%20Sanctuary实现内容说明.md) - Detailed feature breakdown (Chinese)
+- [Star Sanctuary使用手册.md](./Star%20Sanctuary使用手册.md) - Full user manual (Chinese)
 
 English docs are still work-in-progress; for now, please refer to the README and source code.
 
@@ -686,7 +686,7 @@ English docs are still work-in-progress; for now, please refer to the README and
 
 ## Sponsorship
 
-If Belldandy is helpful, you can support the author:
+If Star Sanctuary is helpful, you can support the author:
 
 - Afdian: <https://afdian.com/a/vrboyzero777>
 - See `README.md` for QR code images (WeChat / Alipay, Chinese only).
@@ -697,7 +697,7 @@ If Belldandy is helpful, you can support the author:
 
 - **Email**: <fyyx4918822@gmail.com>
 - **QQ Group** (Chinese): 1080383003
-- **Issue Tracker**: <https://github.com/vrboyzero/Belldandy/issues>
+- **Issue Tracker**: <https://github.com/vrboyzero/star-sanctuary/issues>
 
 Feedback and suggestions are very welcome.
 
@@ -705,4 +705,8 @@ Feedback and suggestions are very welcome.
 
 ## License
 
-Belldandy is released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+Star Sanctuary is released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+
+
+
+

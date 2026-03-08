@@ -1,6 +1,6 @@
-## Belldandy 产品介绍
+﻿## Star Sanctuary 产品介绍
 
-Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助手育成型工作站**。它通过 Gateway 控制平面 + WebChat 界面 + Skills 工具系统 + Memory 记忆引擎 + 渠道与插件生态 + 可视化 Canvas 工作区，为用户提供安全、可控、可进化的智能体体验。
+Star Sanctuary 是一款面向开发者与创作者的 **本地优先的个人 AI 助手育成型工作站**。它通过 Gateway 控制平面 + WebChat 界面 + Skills 工具系统 + Memory 记忆引擎 + 渠道与插件生态 + 可视化 Canvas 工作区，为用户提供安全、可控、可进化的智能体体验。
 
 ---
 
@@ -92,7 +92,7 @@ Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助
   - PluginRegistry 支持运行时动态加载 JS/MJS 插件；
   - HookRegistry 支持 13 种生命周期 Hook（Agent / Message / Tool / Session / Gateway），支持优先级与三种执行模式（并行 / 顺序 / 同步）；
   - 旧版 `AgentHooks` 自动桥接到新 Hook 系统。
-- **特色**：完整对标 moltbot 的 Hook 体系，是构建 Belldandy 生态的关键基础设施；SkillRegistry 与 MCP 管理器也已接入日志与 Hook 系统。
+- **特色**：完整对标 moltbot 的 Hook 体系，是构建 Star Sanctuary 生态的关键基础设施；SkillRegistry 与 MCP 管理器也已接入日志与 Hook 系统。
 
 ### 10. 浏览器扩展与 Web 自动化（Phase 9 & 9.5）
 
@@ -139,13 +139,13 @@ Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助
   - 10 个 Canvas 工具（`canvas_list/create/read/add_node/update_node/remove_node/connect/disconnect/auto_layout/snapshot`）；
   - 画布与方法论/记忆/会话/浏览器截图联动，支持双击跳转与 🔗 标记；
   - ReAct 流程可视化：工具调用链路映射为节点链路，支持一键 pin/清理。
-- **特色**：从“纯文本对话”升级为“可视化工作区”，适合项目拆解、知识整理、任务编排与 Agent 思考过程可视化，是 Belldandy 的重要差异化能力之一。
+- **特色**：从“纯文本对话”升级为“可视化工作区”，适合项目拆解、知识整理、任务编排与 Agent 思考过程可视化，是 Star Sanctuary 的重要差异化能力之一。
 
 ### 15. MCP 支持（Phase 17）
 
 - **功能**：
   - `@belldandy/mcp` 包提供 MCP 客户端（stdio/SSE）、配置解析与工具桥接；
-  - 兼容 Claude/Cursor 等通用 mcpServers 格式与 Belldandy 自有 mcp.json 格式；
+  - 兼容 Claude/Cursor 等通用 mcpServers 格式与 Star Sanctuary 自有 mcp.json 格式；
   - Gateway 启动时自动加载 `~/.belldandy/mcp.json` 并注册工具。
 - **特色**：遵循 MCP 标准协议，为接入 Filesystem / GitHub / Notion / Slack 等生态工具提供统一入口。
 
@@ -165,21 +165,21 @@ Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助
   - `.env.example` + `scripts/docker-build.sh` + `scripts/docker-deploy.sh` 实现一键构建与部署；
   - Gateway 提供 `/health` 健康检查端点；
   - flake.nix、Tailscale Sidecar、官方镜像 & CI/CD 等已在 IMPLEMENTATION_PLAN 中标记完成，支持远程部署与零信任访问场景。
-- **特色**：显著降低部署门槛，支持从本地开发到家庭服务器/云主机的平滑过渡，为“多设备共享一个 Belldandy 实例”提供基础设施。
+- **特色**：显著降低部署门槛，支持从本地开发到家庭服务器/云主机的平滑过渡，为“多设备共享一个 Star Sanctuary 实例”提供基础设施。
 
 ### 18. 渠道架构与飞书渠道（Phase 6 & 15 & office.goddess.ai 集成）
 
 - **功能**：
   - 通用 `Channel` 接口与 `ChannelManager` 管理器，实现渠道标准化；
   - 已完成 Feishu 渠道（WebSocket 长连接），支持环境变量绑定特定 Agent；
-  - 在 `office.goddess.ai` 项目中，已落地完整 Agent 社区后端与前端，对 Belldandy 的渠道能力进行了实战验证。
+  - 在 `office.goddess.ai` 项目中，已落地完整 Agent 社区后端与前端，对 Star Sanctuary 的渠道能力进行了实战验证。
 - **特色**：为 Telegram/Slack/Discord 等后续渠道接入打下统一抽象，预留跨项目协同的空间。
 
 ---
 
 ## 二、规划中 / 迭代中的能力（Roadmap 摘要）
 
-> 本节为 **仍在规划或部分完成** 的能力，具体细项以 `IMPLEMENTATION_PLAN.md` 与 `Belldandy实现内容说明.md` 为准。
+> 本节为 **仍在规划或部分完成** 的能力，具体细项以 `IMPLEMENTATION_PLAN.md` 与 `Star Sanctuary实现内容说明.md` 为准。
 
 ### 1. 多渠道扩展（Telegram / Slack / Discord 等）
 
@@ -189,7 +189,7 @@ Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助
 ### 2. Channels 路由引擎升级 & Webhooks
 
 - 完善 mention gating、群聊路由规则，支持按房间/身份/关键词路由到不同 Agent 或不同工作流。
-- 增补 Webhook 触发入口，将 CI / 监控告警 / 业务系统通知接入 Belldandy，配合 Cron/Methods 构建自动化运维与业务助手。
+- 增补 Webhook 触发入口，将 CI / 监控告警 / 业务系统通知接入 Star Sanctuary，配合 Cron/Methods 构建自动化运维与业务助手。
 
 ### 3. 记忆系统高级能力（Query Rewrite / LLM Rerank）
 
@@ -206,7 +206,7 @@ Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助
 ### 5. Apps & Nodes（macOS/iOS/Android 原生应用）
 
 - 规划实现菜单栏 App、移动端节点与 Gateway 之间的 Node 协议桥接，暴露系统通知、摄像头、屏幕录制等本地能力。
-- 目标是让 Belldandy 从“单机工作站”升级为“多终端统一助手”。
+- 目标是让 Star Sanctuary 从“单机工作站”升级为“多终端统一助手”。
 
 ### 6. 本地 Embedding 与 Memory Flush
 
@@ -220,12 +220,13 @@ Belldandy 是一款面向开发者与创作者的 **本地优先的个人 AI 助
   - Box-to-Pixel 坐标映射；
   - 拟人化键鼠操作；
   - ScreenMarker 透明高亮反馈。
-- 目标是让 Belldandy 不仅能“看网页”，还可以“像人一样操作电脑”。
+- 目标是让 Star Sanctuary 不仅能“看网页”，还可以“像人一样操作电脑”。
 
 ---
 
 ## 三、总结与项目完成度
 
-从当前实现情况来看，Belldandy 已经完整打通了 **Gateway 控制平面、WebChat UI、Skills & 方法论系统、记忆与向量检索（含 M-Next 架构）、多 Agent 编排、浏览器与系统执行、多模态、Canvas 可视化工作区、MCP/日志/安全体系、Docker & 远程部署链路** 等一整条“个人 AI 工作站”的主干，并在 `office.goddess.ai` 工程中完成了社区级落地验证。  
+从当前实现情况来看，Star Sanctuary 已经完整打通了 **Gateway 控制平面、WebChat UI、Skills & 方法论系统、记忆与向量检索（含 M-Next 架构）、多 Agent 编排、浏览器与系统执行、多模态、Canvas 可视化工作区、MCP/日志/安全体系、Docker & 远程部署链路** 等一整条“个人 AI 工作站”的主干，并在 `office.goddess.ai` 工程中完成了社区级落地验证。  
 结合 `IMPLEMENTATION_PLAN.md` 的 Phase 总览，**Phase 0–23 及 Phase N / M-Next 等核心阶段基本全部完成，仅剩本地 Embedding、OS 级 GUI 操作、Nodes 知识图谱、记忆 Query Rewrite / LLM Rerank、多渠道扩展等中长期能力处于规划或迭代中**。  
-如果以对标 openclaw/moltbot 的能力清单为参照，可以认为 Belldandy 在“核心平台 + 工具链 + 记忆系统 + 多 Agent 编排 + 部署与安全”这些主干方向上已经完成了约 **80–85% 的整体 Roadmap**，后续工作将主要集中在多终端生态扩展、OS 级操作、多渠道覆盖与检索智能化等增量能力上。
+如果以对标 openclaw/moltbot 的能力清单为参照，可以认为 Star Sanctuary 在“核心平台 + 工具链 + 记忆系统 + 多 Agent 编排 + 部署与安全”这些主干方向上已经完成了约 **80–85% 的整体 Roadmap**，后续工作将主要集中在多终端生态扩展、OS 级操作、多渠道覆盖与检索智能化等增量能力上。
+

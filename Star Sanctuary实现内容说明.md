@@ -1,6 +1,6 @@
-# Belldandy 实现内容说明
+﻿# Star Sanctuary 实现内容说明
 
-本文档详细介绍了 Belldandy 项目已完成的功能模块及后续规划，旨在帮助开发者和使用者深入理解系统设计与能力。同时，为了方便对比与参考，附录部分详细列出了参考目标 **openclaw** 的完整能力清单。
+本文档详细介绍了 Star Sanctuary 项目已完成的功能模块及后续规划，旨在帮助开发者和使用者深入理解系统设计与能力。同时，为了方便对比与参考，附录部分详细列出了参考目标 **openclaw** 的完整能力清单。
 
 ## 1. 范围与约束
 
@@ -12,7 +12,7 @@
 
 > 以下目录对应「已完成功能模块」章节，便于快速跳转与查阅。
 
-- [Belldandy 实现内容说明](#belldandy-实现内容说明)
+- [Star Sanctuary 实现内容说明](#star-sanctuary-实现内容说明)
   - [1. 范围与约束](#1-范围与约束)
   - [📚 模块章节目录](#-模块章节目录)
   - [📚 后续章节目录](#-后续章节目录)
@@ -90,7 +90,7 @@
     - [6. 会话与编排 (Orchestration)](#6-会话与编排-orchestration)
     - [7. 外部扩展 (Plugins)](#7-外部扩展-plugins)
     - [8. 安全与存储 (Security \& Persistence)](#8-安全与存储-security--persistence)
-  - [📊 Moltbot vs Belldandy Agent 能力详细对比](#-moltbot-vs-belldandy-agent-能力详细对比)
+  - [📊 Moltbot vs Star Sanctuary Agent 能力详细对比](#-moltbot-vs-star-sanctuary-agent-能力详细对比)
     - [对比总结](#对比总结)
     - [Moltbot Agent 工具完整清单](#moltbot-agent-工具完整清单)
       - [1. 文件操作 (Coding Tools)](#1-文件操作-coding-tools)
@@ -101,7 +101,7 @@
       - [6. 会话与编排 (Orchestration)](#6-会话与编排-orchestration-1)
       - [7. 记忆与知识 (Memory \& Nodes)](#7-记忆与知识-memory--nodes)
       - [8. 渠道特定工具](#8-渠道特定工具)
-    - [Belldandy 当前已实现](#belldandy-当前已实现)
+    - [Star Sanctuary 当前已实现](#star-sanctuary-当前已实现)
     - [🎯 推荐下一步优先级](#-推荐下一步优先级)
   - [🐳 Docker 部署支持 (Phase N - MVP)](#-docker-部署支持-phase-n---mvp)
     - [实现内容](#实现内容)
@@ -160,7 +160,7 @@
 1. [🚧 待实现功能规划](#-待实现功能规划)
 2. [🔐 安全与网络加固路线图 ✅ 已完成 (2026-02-08)](#-安全与网络加固路线图--已完成-2026-02-08)
 3. [📚 附录：Moltbot 能力清单 (参考基准)](#-附录moltbot-能力清单-参考基准)
-4. [📊 Moltbot vs Belldandy Agent 能力详细对比](#-moltbot-vs-belldandy-agent-能力详细对比)
+4. [📊 Moltbot vs Star Sanctuary Agent 能力详细对比](#-moltbot-vs-star-sanctuary-agent-能力详细对比)
 5. [🐳 Docker 部署支持 (Phase N - MVP)](#-docker-部署支持-phase-n---mvp)
 6. [18. UUID 身份验证系统 (Phase UUID)](#18-uuid-身份验证系统-phase-uuid)
 7. [19. 身份上下文系统 (Phase Identity Context)](#19-身份上下文系统-phase-identity-context)
@@ -499,7 +499,7 @@
 - **性能飞跃**：
     - 检索延迟：**~12ms** (10k 向量)，相比 JS 实现提升显著。
     - 内存占用：大幅降低，不再需要将所有向量加载到 Node.js 堆内存中。
-- **价值**：支撑海量记忆（百万级 Chunk）的基础设施升级，让 Belldandy 有能力管理整个代码库的知识。
+- **价值**：支撑海量记忆（百万级 Chunk）的基础设施升级，让 Star Sanctuary 有能力管理整个代码库的知识。
 
 ### 13. 多媒体与语音 (Multimedia & TTS) Phase 13
 
@@ -819,7 +819,7 @@
 
 ### 22. 飞书渠道接入 (Phase 3.1)
 
-- **目标**：将 Belldandy 接入飞书自建应用，利用其 WebSocket 模式实现无需内网穿透的实时对话。
+- **目标**：将 Star Sanctuary 接入飞书自建应用，利用其 WebSocket 模式实现无需内网穿透的实时对话。
 - **状态**：**已完成**（2026-02-01）
 - **实现内容**：`@belldandy/channels` 包 + FeishuChannel（WebSocket 长连接），消息去重，Kimi K2.5 工具调用兼容。
 
@@ -834,7 +834,7 @@
     - **QQ 渠道**：已接入 QQ 官方 Bot API（AccessToken 自动换取与刷新）。
     - **Community 渠道**：已支持 office.goddess.ai 房间接入与多 Agent 协作。
     - **Discord 渠道**：已完成对接并验证可用（消息收发、主动推送、状态持久化）。
-    - **完成情况同步**：本节渠道状态已按 `Belldandy渠道对接说明.md` 同步更新（2026-02-27）。
+    - **完成情况同步**：本节渠道状态已按 `Star Sanctuary渠道对接说明.md` 同步更新（2026-02-27）。
 - **接口设计**：
     ```typescript
     interface Channel {
@@ -871,11 +871,11 @@
 
 #### 💡 Moltbot 对标分析：Heartbeat 模块
 
-| 功能特性 | Moltbot 实现 | Belldandy 实现 | 差异/优化点 |
+| 功能特性 | Moltbot 实现 | Star Sanctuary 实现 | 差异/优化点 |
 |---------|-------------|----------------|------------|
-| **基础触发** | 定时器 + Command Queue 检查 | 简单定时器 (setInterval) | Belldandy 尚未实现队列忙碌检测，可能在 Agent 繁忙时插队 |
+| **基础触发** | 定时器 + Command Queue 检查 | 简单定时器 (setInterval) | Star Sanctuary 尚未实现队列忙碌检测，可能在 Agent 繁忙时插队 |
 | **活跃时段** | 支持 User/Local 时区，精确分钟控制 | 支持时区与 HH:MM 范围 | 基本一致，Moltbot 的时区处理更健壮 |
-| **消息去重** | ✅ **支持** (24内重复内容静默) | ❌ **未实现** | **差异点**：Moltbot 防止了一件事重复唠叨，Belldandy 可能会重复提醒 |
+| **消息去重** | ✅ **支持** (24内重复内容静默) | ❌ **未实现** | **差异点**：Moltbot 防止了一件事重复唠叨，Star Sanctuary 可能会重复提醒 |
 | **空值优化** | ✅ 检查文件内容是否为空 (skip empty) | ✅ 检查文件内容是否为空 | 一致，节省 Token |
 | **静默响应** | `HEARTBEAT_OK` token 检测 | `HEARTBEAT_OK` token 检测 | 一致 |
 | **多 Agent** | 支持每个 Agent 独立频率与配置 | 全局单一配置 | 架构差异，当前够用 |
@@ -1047,7 +1047,7 @@
     - **飞书渠道绑定**：
         - 新增 `BELLDANDY_FEISHU_AGENT_ID` 环境变量，飞书渠道可绑定特定 Agent Profile。
         - 未设置时使用 default Agent，向后兼容。
-- **价值**：用户可以在同一个 Belldandy 实例中运行多个不同人格/能力的 Agent，并在 WebChat 中自由切换。
+- **价值**：用户可以在同一个 Star Sanctuary 实例中运行多个不同人格/能力的 Agent，并在 WebChat 中自由切换。
 
 ### 27.6 Per-Agent Workspace 与 Facet 共存 (阶段 4) ✅ 已完成
 
@@ -1152,7 +1152,7 @@
 
 ### 29. MCP (Model Context Protocol) 支持 (Phase 17) ✅ 已完成
 
-- **目标**：实现 MCP 协议支持，让 Belldandy 能够连接外部 MCP 服务器，获取第三方工具和数据源。
+- **目标**：实现 MCP 协议支持，让 Star Sanctuary 能够连接外部 MCP 服务器，获取第三方工具和数据源。
 - **背景**：MCP 是 Anthropic 提出的标准化协议，moltbot 通过 ACP 实现了类似功能。
 - **状态**：**已完成**（2026-02-05）
 - **实现内容**：
@@ -1160,7 +1160,7 @@
     - **类型定义 (types.ts)**：配置类型、运行时状态、事件类型等
     - **配置加载 (config.ts)**：使用 Zod 验证 `~/.belldandy/mcp.json` 配置，支持双格式兼容
     - **MCP 客户端 (client.ts)**：支持 stdio/SSE 两种传输方式
-    - **工具桥接 (tool-bridge.ts)**：MCP 工具 → Belldandy Skills 转换
+    - **工具桥接 (tool-bridge.ts)**：MCP 工具 → Star Sanctuary Skills 转换
     - **管理器 (manager.ts)**：多服务器连接管理、工具发现、事件处理
     - **Gateway 集成**：启动时自动初始化 MCP 并注册工具
     - **双格式配置兼容**：`loadConfig()` 自动检测并兼容两种 `mcp.json` 格式，用户无需手动转换
@@ -1181,7 +1181,7 @@
         }
         ```
         转换规则：对象 key → `id`/`name`，`command`/`args`/`env`/`cwd` → `transport: { type: "stdio" }`，`url`/`baseUrl` → `transport: { type: "sse" }`，`disabled: true` → `enabled: false`。
-    - **格式二：Belldandy 原生格式**（提供更多控制选项）：
+    - **格式二：Star Sanctuary 原生格式**（提供更多控制选项）：
         ```json
         {
           "version": "1.0.0",
@@ -1208,7 +1208,7 @@
     | 变量 | 说明 |
     |------|------|
     | `BELLDANDY_MCP_ENABLED` | 启用 MCP 支持（默认 false） |
-- **价值**：**开放生态**。用户可以接入任何 MCP 兼容的服务（1Password、GitHub、Notion、Slack 等），无需修改 Belldandy 代码即可扩展能力。
+- **价值**：**开放生态**。用户可以接入任何 MCP 兼容的服务（1Password、GitHub、Notion、Slack 等），无需修改 Star Sanctuary 代码即可扩展能力。
 
 ### 30. 日志系统 (Logging System) Phase 18 [核心已完成]
 
@@ -1437,7 +1437,7 @@
 
 ### 4. 记忆系统优化 (优先级：中) — Phase M-Next
 
-基于 OpenViking 的记忆系统架构，Belldandy 实施了一系列记忆系统升级，旨在提升检索质量、降低成本、增强智能感。
+基于 OpenViking 的记忆系统架构，Star Sanctuary 实施了一系列记忆系统升级，旨在提升检索质量、降低成本、增强智能感。
 
 #### 已完成部分
 
@@ -1570,7 +1570,7 @@
 
 ### 5. OS 计算机操作能力 (Computer Use Strategy) (优先级：中)
 
-基于 `UI-TARS` 的最佳实践（"看得准"与"点得准"），计划赋予 Belldandy 操作系统级别的 GUI 控制能力，使其不局限于浏览器和终端。
+基于 `UI-TARS` 的最佳实践（"看得准"与"点得准"），计划赋予 Star Sanctuary 操作系统级别的 GUI 控制能力，使其不局限于浏览器和终端。
 
 1.  **视觉层：精准屏幕感知 (High-Fidelity Vision)**
     - **DPI 适配**: 引入 `nut-js` + `Jimp` 方案，正确处理 Retina/高分屏缩放 (Scale Factor)，保证模型看到的与真实物理像素一致。
@@ -1629,7 +1629,7 @@
 
 ## 📚 附录：Moltbot 能力清单 (参考基准)
 
-以下是参考项目 **moltbot** 目前已实现的完整能力清单，Belldandy 的开发正是为了逐步对齐这些能力。
+以下是参考项目 **moltbot** 目前已实现的完整能力清单，Star Sanctuary 的开发正是为了逐步对齐这些能力。
 
 ### 1. 核心文件操作 (Core Coding)
 Agent 可以像工程师一样直接操作项目代码。
@@ -1683,15 +1683,15 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
     - **Memory**：使用 `better-sqlite3` + FTS5 + `sqlite-vec` 实现本地向量数据库与全文检索。
     - **Media**：图片/文件自动存储在本地文件系统中。
 
-> **Belldandy 现状对比**：目前 Belldandy 已实现了 **文件操作** (read/write/list/patch)、**Web Fetch/Search**、**Memory**（FTS5 + sqlite-vec 混合检索）、**浏览器自动化**（CDP 中继 + 快照/截图/操作）、**Safe Mode 系统命令执行**（白名单 + 超时 + 风险阻断）、**多 Agent 配置与路由**（AgentProfile + AgentRegistry + agents.list + WebChat 选择器）、**子 Agent 编排**（SubAgentOrchestrator + delegate_task/delegate_parallel + 并发排队 + 钩子集成）、**Cron 定时任务**、**MCP 协议支持**、**FACET 模组切换**。
+> **Star Sanctuary 现状对比**：目前 Star Sanctuary 已实现了 **文件操作** (read/write/list/patch)、**Web Fetch/Search**、**Memory**（FTS5 + sqlite-vec 混合检索）、**浏览器自动化**（CDP 中继 + 快照/截图/操作）、**Safe Mode 系统命令执行**（白名单 + 超时 + 风险阻断）、**多 Agent 配置与路由**（AgentProfile + AgentRegistry + agents.list + WebChat 选择器）、**子 Agent 编排**（SubAgentOrchestrator + delegate_task/delegate_parallel + 并发排队 + 钩子集成）、**Cron 定时任务**、**MCP 协议支持**、**FACET 模组切换**。
 
 ---
 
-## 📊 Moltbot vs Belldandy Agent 能力详细对比
+## 📊 Moltbot vs Star Sanctuary Agent 能力详细对比
 
 ### 对比总结
 
-| 能力类别 | Moltbot | Belldandy | 差距 |
+| 能力类别 | Moltbot | Star Sanctuary | 差距 |
 |---------|---------|-----------|------|
 | **文件操作** | ✅ 完整 | ✅ 完整 | `list_files`, `apply_patch` (DSL) 已就绪 |
 | **系统命令** | ✅ exec/process | ✅ exec/terminal | **Safe Mode** 保护 |
@@ -1712,7 +1712,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 #### 1. 文件操作 (Coding Tools)
 
-| 工具 | 说明 | Belldandy |
+| 工具 | 说明 | Star Sanctuary |
 |------|------|-----------|
 | `read` / `read_file_content` | 读取文件内容 | ✅ `file_read` |
 | `write` / `write_file` | 写入文件 | ✅ `file_write` |
@@ -1722,7 +1722,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 #### 2. 系统命令 (Execution)
 
-| 工具 | 说明 | Belldandy |
+| 工具 | 说明 | Star Sanctuary |
 |------|------|-----------|
 | `exec` | 执行 Shell 命令（受控环境） | ✅ `run_command` (Safe) |
 | `process` | 管理长运行进程（后台任务） | ✅ `process_manager` |
@@ -1731,7 +1731,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 #### 3. 浏览器自动化 (Browser Control)
 
-| Action | 说明 | Belldandy |
+| Action | 说明 | Star Sanctuary |
 |--------|------|-----------|
 | `status` | 检查浏览器状态 | ✅ `browser_status` |
 | `start` / `stop` | 启动/关闭浏览器 | ✅ (自动/中继) |
@@ -1742,14 +1742,14 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 #### 4. 网络与数据 (Web)
 
-| 工具 | 说明 | Belldandy |
+| 工具 | 说明 | Star Sanctuary |
 |------|------|-----------|
 | `web_search` | Google/Bing 搜索 | ✅ `web_search` |
 | `web_fetch` | 轻量级网页抓取 | ✅ |
 
 #### 5. 多媒体 (Media)
 
-| 工具 | 说明 | Belldandy |
+| 工具 | 说明 | Star Sanctuary |
 |------|------|-----------|
 | `tts` | 文本转语音 | ✅ `text_to_speech` |
 | `image` | 图像生成/视觉识别 | ✅ `image_generate` |
@@ -1757,7 +1757,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 #### 6. 会话与编排 (Orchestration)
 
-| 工具 | 说明 | Belldandy |
+| 工具 | 说明 | Star Sanctuary |
 |------|------|-----------|
 | `agents_list` | 列出可用 Agent | ✅ `agents.list` API |
 | `sessions_list` | 列出会话 | ✅ `sessions_history` |
@@ -1767,7 +1767,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 #### 7. 记忆与知识 (Memory & Nodes)
 
-| 工具 | 说明 | Belldandy |
+| 工具 | 说明 | Star Sanctuary |
 |------|------|-----------|
 | `memory_search` | 向量+关键词检索 | ✅ |
 | `memory_read` | 读取记忆文件 | ✅ |
@@ -1776,10 +1776,10 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 #### 8. 渠道特定工具
 
-| 渠道 | Belldandy | 说明 |
+| 渠道 | Star Sanctuary | 说明 |
 |------|-----------|------|
 | Slack | ⏳ 待实现 | Channel 接口已就绪 |
-| Discord | ✅ 已实现 | 已完成对接并验证可用（详见 `Belldandy渠道对接说明.md`） |
+| Discord | ✅ 已实现 | 已完成对接并验证可用（详见 `Star Sanctuary渠道对接说明.md`） |
 | QQ | ✅ 已实现 | 官方 Bot API 接入，AccessToken 自动刷新 |
 | 社区（office.goddess.ai） | ✅ 已实现 | 多 Agent 房间协作 + `join_room` / `leave_room` |
 | Telegram | ⏳ 待实现 | Channel 接口已就绪 |
@@ -1788,7 +1788,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 
 ---
 
-### Belldandy 当前已实现
+### Star Sanctuary 当前已实现
 
 | 能力 | 工具/功能 |
 |------|----------|
@@ -2197,7 +2197,7 @@ const hasSuperior = membersResult.agents.some(a =>
   "endpoint": "https://office.goddess.ai",
   "agents": [
     {
-      "name": "贝露丹蒂",
+      "name": "星辰圣所",
       "apiKey": "<API_KEY>",
       "room": {
         "name": "vrboyzero",
@@ -2343,3 +2343,5 @@ const hasSuperior = membersResult.agents.some(a =>
 - ✅ 高风险越权路径（命令执行、配置读写、路径边界、来源校验）完成收敛
 - ✅ WebChat 与 HTTP 入口的生产安全基线显著提升
 - ✅ 日志从“高噪声 console”收敛到“可分级、可控、可审计”的统一体系
+
+

@@ -1,6 +1,6 @@
-# Belldandy Browser Relay Extension
+﻿# Star Sanctuary Browser Relay Extension
 
-此 Chrome 扩展用于将真实的浏览器连接到 Belldandy Agent。
+此 Chrome 扩展用于将真实的浏览器连接到 Star Sanctuary Agent。
 
 ## 安装步骤
 
@@ -11,11 +11,11 @@
 
 ## 使用方法
 
-1. 确保 Belldandy Relay Server 已启动：
+1. 确保 Star Sanctuary Relay Server 已启动：
    ```bash
    node packages/belldandy-browser/dist/bin/relay.js
    ```
-2. 在 Chrome 中点击扩展图标 **Belldandy Relay**。
+2. 在 Chrome 中点击扩展图标 **Star Sanctuary Relay**。
    - 扩展会自动尝试连接到 `ws://127.0.0.1:28892/extension`。
    - 连接成功后，Relay Server 终端会显示 `[Relay] Extension 已连接`。
 
@@ -23,3 +23,4 @@
 
 - 充当 Agent (Puppeteer) 与 Chrome Tab 之间的桥梁。
 - 复用浏览器的登录态（Cookie/Session）。
+

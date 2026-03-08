@@ -1,5 +1,5 @@
-{
-  description = "Belldandy - Local-first Personal AI Assistant";
+﻿{
+  description = "Star Sanctuary - Local-first Personal AI Assistant";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -20,7 +20,7 @@
         # pnpm 版本
         pnpm = pkgs.pnpm;
 
-        # 构建 Belldandy 包
+        # 构建 Star Sanctuary 包
         belldandy = pkgs.stdenv.mkDerivation rec {
           pname = "belldandy";
           version = "0.1.0";
@@ -82,7 +82,7 @@
 
           meta = with pkgs.lib; {
             description = "Local-first Personal AI Assistant";
-            homepage = "https://github.com/your-org/belldandy";
+            homepage = "https://github.com/vrboyzero/star-sanctuary";
             license = licenses.mit;
             maintainers = [ ];
             platforms = platforms.unix;
@@ -106,7 +106,7 @@
           ];
 
           shellHook = ''
-            echo "🌸 Belldandy Development Environment"
+            echo "🌸 Star Sanctuary Development Environment"
             echo "Node.js: $(node --version)"
             echo "pnpm: $(pnpm --version)"
             echo ""
@@ -126,12 +126,12 @@
           in
           {
             options.services.belldandy = {
-              enable = mkEnableOption "Belldandy AI Assistant";
+              enable = mkEnableOption "Star Sanctuary AI Assistant";
 
               package = mkOption {
                 type = types.package;
                 default = belldandy;
-                description = "Belldandy package to use";
+                description = "Star Sanctuary package to use";
               };
 
               host = mkOption {
@@ -211,13 +211,13 @@
               user = mkOption {
                 type = types.str;
                 default = "belldandy";
-                description = "User to run Belldandy as";
+                description = "User to run Star Sanctuary as";
               };
 
               group = mkOption {
                 type = types.str;
                 default = "belldandy";
-                description = "Group to run Belldandy as";
+                description = "Group to run Star Sanctuary as";
               };
             };
 
@@ -234,7 +234,7 @@
 
               # systemd 服务
               systemd.services.belldandy = {
-                description = "Belldandy AI Assistant";
+                description = "Star Sanctuary AI Assistant";
                 wantedBy = [ "multi-user.target" ];
                 after = [ "network.target" ];
 
@@ -301,3 +301,5 @@
       }
     );
 }
+
+

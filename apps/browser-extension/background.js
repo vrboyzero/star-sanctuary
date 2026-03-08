@@ -1,4 +1,4 @@
-const DEFAULT_PORT = 28892;
+﻿const DEFAULT_PORT = 28892;
 
 /** @type {WebSocket|null} */
 let relayWs = null;
@@ -25,7 +25,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
         // 发送心跳 ping 保持 WebSocket 连接
         if (relayWs && relayWs.readyState === WebSocket.OPEN) {
             relayWs.send(JSON.stringify({ method: "ping" }));
-            console.log("[Belldandy] Keep-alive ping sent");
+            console.log("[Star Sanctuary] Keep-alive ping sent");
         }
     }
 });
@@ -44,7 +44,7 @@ async function ensureRelayConnection() {
             return; // 已连接，无需操作
         }
         if (relayWs.readyState === WebSocket.CLOSING || relayWs.readyState === WebSocket.CLOSED) {
-            console.log("[Belldandy] Cleaning up closed WebSocket");
+            console.log("[Star Sanctuary] Cleaning up closed WebSocket");
             relayWs = null;
         }
     }
@@ -55,7 +55,7 @@ async function ensureRelayConnection() {
         const port = await getRelayPort();
         const wsUrl = `ws://127.0.0.1:${port}/extension`;
 
-        console.log(`[Belldandy] Connecting to Relay at ${wsUrl}...`);
+        console.log(`[Star Sanctuary] Connecting to Relay at ${wsUrl}...`);
         setBadge("...", "#2196F3"); // Blue
 
         try {
@@ -66,13 +66,13 @@ async function ensureRelayConnection() {
                 const t = setTimeout(() => reject(new Error("Timeout")), 5000);
                 ws.onopen = () => {
                     clearTimeout(t);
-                    console.log("[Belldandy] Relay Connected");
+                    console.log("[Star Sanctuary] Relay Connected");
                     setBadge("ON", "#4CAF50"); // Green
                     resolve();
                 };
                 ws.onerror = () => {
                     clearTimeout(t);
-                    console.error("[Belldandy] Connection Failed");
+                    console.error("[Star Sanctuary] Connection Failed");
                     setBadge("ERR", "#F44336"); // Red
                     reject(new Error("Connection Failed"));
                 };
@@ -80,7 +80,7 @@ async function ensureRelayConnection() {
 
             ws.onmessage = (event) => onRelayMessage(event.data);
             ws.onclose = () => {
-                console.log("[Belldandy] Relay Disconnected");
+                console.log("[Star Sanctuary] Relay Disconnected");
                 setBadge("OFF", "#F44336"); // Red
                 relayWs = null;
             };
@@ -89,7 +89,7 @@ async function ensureRelayConnection() {
             chrome.debugger.onEvent.addListener(onDebuggerEvent);
             chrome.debugger.onDetach.addListener(onDebuggerDetach);
         } catch (err) {
-            console.error("[Belldandy] Connection Error:", err);
+            console.error("[Star Sanctuary] Connection Error:", err);
             relayWs = null;
             throw err;
         } finally {
@@ -154,7 +154,7 @@ async function handleCdpCommand(method, params, sessionId) {
         // 【关键修复】如果有 sessionId 但找不到对应 tab，对于导航命令直接报错
         // 不要回退到 active tab，避免替换 WebChat
         if (!tabId && isNavigationCommand) {
-            console.error(`[Belldandy] Session ${sessionId} not found for navigation command`);
+            console.error(`[Star Sanctuary] Session ${sessionId} not found for navigation command`);
             throw new Error(`Session ${sessionId} not found. Cannot fallback to active tab for navigation.`);
         }
     }
@@ -165,7 +165,7 @@ async function handleCdpCommand(method, params, sessionId) {
         if (active) {
             // 【保护检查】对于导航命令，绝不使用受保护的标签页
             if (isNavigationCommand && await isProtectedTab(active.id)) {
-                console.warn(`[Belldandy] BLOCKED: Active tab ${active.id} is protected, refusing to navigate`);
+                console.warn(`[Star Sanctuary] BLOCKED: Active tab ${active.id} is protected, refusing to navigate`);
                 throw new Error("Cannot navigate: active tab is protected (WebChat). Use browser_open to create a new tab.");
             }
             tabId = active.id;
@@ -175,7 +175,7 @@ async function handleCdpCommand(method, params, sessionId) {
     // 【双重保护】即使通过 session 找到了 tabId，也再检查一次
     if (tabId && isNavigationCommand) {
         if (await isProtectedTab(tabId)) {
-            console.warn(`[Belldandy] BLOCKED: Refusing to navigate protected tab ${tabId}`);
+            console.warn(`[Star Sanctuary] BLOCKED: Refusing to navigate protected tab ${tabId}`);
             throw new Error("Cannot navigate protected tab (WebChat). Use browser_open to create a new tab instead.");
         }
     }
@@ -211,9 +211,9 @@ async function handleCdpCommand(method, params, sessionId) {
                 waitingForDebugger: false
             });
 
-            console.log(`[Belldandy] Created and attached to new tab ${newTabId} with session ${newSessionId}`);
+            console.log(`[Star Sanctuary] Created and attached to new tab ${newTabId} with session ${newSessionId}`);
         } catch (attachErr) {
-            console.warn(`[Belldandy] Failed to auto-attach to new tab ${newTabId}:`, attachErr.message);
+            console.warn(`[Star Sanctuary] Failed to auto-attach to new tab ${newTabId}:`, attachErr.message);
         }
 
         // NOTE: Puppeteer expects { targetId }
@@ -363,7 +363,7 @@ setBadge("OFF", "#F44336");
 
 // 点击图标时连接
 chrome.action.onClicked.addListener(async () => {
-    console.log("[Belldandy] User clicked action icon. Forcing reconnection...");
+    console.log("[Star Sanctuary] User clicked action icon. Forcing reconnection...");
 
     // 强制清理现有连接
     if (relayWs) {
@@ -397,16 +397,16 @@ async function autoConnectToRelay() {
     while (autoConnectRetries < MAX_AUTO_RETRIES) {
         try {
             await ensureRelayConnection();
-            console.log("[Belldandy] Auto-connect succeeded!");
+            console.log("[Star Sanctuary] Auto-connect succeeded!");
             autoConnectRetries = 0; // 重置计数器
             return;
         } catch (err) {
             autoConnectRetries++;
-            console.log(`[Belldandy] Auto-connect attempt ${autoConnectRetries}/${MAX_AUTO_RETRIES} failed, retrying in ${AUTO_RETRY_DELAY}ms...`);
+            console.log(`[Star Sanctuary] Auto-connect attempt ${autoConnectRetries}/${MAX_AUTO_RETRIES} failed, retrying in ${AUTO_RETRY_DELAY}ms...`);
             await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_DELAY));
         }
     }
-    console.warn("[Belldandy] Auto-connect exhausted all retries. Click the extension icon to connect manually.");
+    console.warn("[Star Sanctuary] Auto-connect exhausted all retries. Click the extension icon to connect manually.");
 }
 
 // 启动时尝试自动连接
@@ -415,7 +415,7 @@ autoConnectToRelay();
 // 断开时自动重连
 function setupAutoReconnect() {
     const originalOnClose = () => {
-        console.log("[Belldandy] Relay Disconnected, will auto-reconnect...");
+        console.log("[Star Sanctuary] Relay Disconnected, will auto-reconnect...");
         relayWs = null;
         // 延迟重连
         setTimeout(() => {
@@ -436,3 +436,4 @@ function setupAutoReconnect() {
 }
 
 setupAutoReconnect();
+

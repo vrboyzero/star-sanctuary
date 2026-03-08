@@ -1,9 +1,9 @@
-version: '3.8'
+﻿version: '3.8'
 
 services:
   # Gateway 服务
   belldandy-gateway:
-    image: ${BELLDANDY_IMAGE:-belldandy:local}
+    image: ${BELLDANDY_IMAGE:-vrboyzero/star-sanctuary:local}
     container_name: belldandy-gateway
     init: true  # 正确处理信号
     restart: unless-stopped
@@ -60,7 +60,7 @@ services:
 
   # CLI 服务（管理工具）
   belldandy-cli:
-    image: ${BELLDANDY_IMAGE:-belldandy:local}
+    image: ${BELLDANDY_IMAGE:-vrboyzero/star-sanctuary:local}
     container_name: belldandy-cli
     init: true
     stdin_open: true
@@ -108,7 +108,7 @@ services:
 
   # Gateway with Tailscale（通过 Tailscale 网络访问）
   belldandy-gateway-tailscale:
-    image: ${BELLDANDY_IMAGE:-belldandy:local}
+    image: ${BELLDANDY_IMAGE:-vrboyzero/star-sanctuary:local}
     container_name: belldandy-gateway-tailscale
     init: true
     restart: unless-stopped
@@ -169,3 +169,5 @@ services:
 
 volumes:
   tailscale-state:
+
+

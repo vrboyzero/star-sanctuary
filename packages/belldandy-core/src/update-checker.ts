@@ -1,6 +1,6 @@
-import type { BelldandyLogger } from "./logger/index.js";
+﻿import type { BelldandyLogger } from "./logger/index.js";
 
-const DEFAULT_RELEASES_API_URL = "https://api.github.com/repos/vrboyzero/Belldandy/releases/latest";
+const DEFAULT_RELEASES_API_URL = "https://api.github.com/repos/vrboyzero/star-sanctuary/releases/latest";
 const DEFAULT_TIMEOUT_MS = 3000;
 
 type UpdateCheckOptions = {
@@ -77,7 +77,7 @@ export async function checkForUpdates(options: UpdateCheckOptions): Promise<void
     if (compareSemVer(latest, current) > 0) {
       const releaseUrl = typeof payload.html_url === "string" && payload.html_url.trim()
         ? payload.html_url.trim()
-        : `https://github.com/vrboyzero/Belldandy/releases/tag/v${latestVersion}`;
+        : `https://github.com/vrboyzero/star-sanctuary/releases/tag/v${latestVersion}`;
       options.logger.info("update", `New version available: v${latestVersion} (current: v${options.currentVersion})`);
       options.logger.info("update", `Upgrade: ${releaseUrl}`);
     }
@@ -91,3 +91,5 @@ export async function checkForUpdates(options: UpdateCheckOptions): Promise<void
     clearTimeout(timer);
   }
 }
+
+

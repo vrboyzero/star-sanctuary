@@ -1,8 +1,8 @@
-{
+﻿{
     "manifest_version": 3,
-    "name": "Belldandy Browser Relay",
+    "name": "Star Sanctuary Browser Relay",
     "version": "0.1.0",
-    "description": "Connects Chrome to Belldandy Agent via local Relay Server.",
+    "description": "Connects Chrome to Star Sanctuary Agent via local Relay Server.",
     "permissions": [
         "debugger",
         "tabs",
@@ -19,6 +19,6 @@
         "type": "module"
     },
     "action": {
-        "default_title": "Belldandy Relay (Click to Connect)"
+        "default_title": "Star Sanctuary Relay (Click to Connect)"
     }
 }

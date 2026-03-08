@@ -1,4 +1,4 @@
-/**
+﻿/**
  * service_restart - 供 Agent 调用的服务重启工具
  *
  * 通过 process.exit(100) 触发 launcher 的自动重启机制。
@@ -29,7 +29,7 @@ export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
     definition: {
       name: "service_restart",
       description:
-        "Restart the Belldandy gateway service. Use this when configuration changes require a restart, or when the user explicitly requests a service restart. The service will gracefully shut down and automatically restart via the launcher supervisor. A 3-second countdown will be broadcast to all connected clients before the restart. A 180-second cooldown applies between restart commands.",
+        "Restart the Star Sanctuary gateway service. Use this when configuration changes require a restart, or when the user explicitly requests a service restart. The service will gracefully shut down and automatically restart via the launcher supervisor. A 3-second countdown will be broadcast to all connected clients before the restart. A 180-second cooldown applies between restart commands.",
       parameters: {
         type: "object",
         properties: {
@@ -98,3 +98,4 @@ export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
     },
   };
 }
+

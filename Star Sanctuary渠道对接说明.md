@@ -1,12 +1,12 @@
-# 渠道对接指南
+﻿# 渠道对接指南
 
-本指南包含了如何将 Belldandy 接入各个外部平台（如飞书、QQ机器人等）的详细步骤。
+本指南包含了如何将 Star Sanctuary 接入各个外部平台（如飞书、QQ机器人等）的详细步骤。
 
 ---
 
 ## 模块一：飞书 (Feishu) 机器人配置指南
 
-为了让 Belldandy 能通过飞书与你在手机上对话，你需要创建一个飞书应用并获取相关凭证。
+为了让 Star Sanctuary 能通过飞书与你在手机上对话，你需要创建一个飞书应用并获取相关凭证。
 不用担心，**个人用户**也可以免费创建（无需企业认证，或者可以自己创建一个只有一个人的企业）。
 
 ### 1. 创建应用
@@ -14,7 +14,7 @@
 2.  点击右上角的 **“开发者后台”**。
 3.  点击 **“创建企业自建应用”**。
 4.  填写应用信息：
-    -   **名称**：`Belldandy` (或者你喜欢的名字)
+    -   **名称**：`Star Sanctuary` (或者你喜欢的名字)
     -   **描述**：`My AI Assistant`
     -   **图标**：随便上传一张图片。
     -   点击 **“创建”**。
@@ -22,7 +22,7 @@
 ### 2. 获取凭证 (Credentials)
 创建成功后，进入应用详情页的 **“凭证与基础信息”** 页面：
 -   找到 **App ID** 和 **App Secret**。
--   👀 **请记下这两个值**，稍后我们配置 Belldandy 时需要用到。
+-   👀 **请记下这两个值**，稍后我们配置 Star Sanctuary 时需要用到。
 
 ### 3. 开启机器人能力
 1.  在左侧菜单点击 **“应用功能” -> “机器人”**。
@@ -69,7 +69,7 @@ BELLDANDY_FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 ### 8. 常见问题 (飞书)
-**Q: 发送消息后 Belldandy 不回复？**
+**Q: 发送消息后 Star Sanctuary 不回复？**
 A: 检查 Gateway 终端是否有错误日志。确保：
 -   应用已发布且审核通过
 -   权限已正确开通
@@ -79,13 +79,13 @@ A: 检查 Gateway 终端是否有错误日志。确保：
 
 ## 模块二：QQ 机器人接入指南
 
-Belldandy 支持通过 QQ 官方 Bot API 作为新渠道接入，使得 Agent 可以直接在 QQ 频道、群聊或私信中与你互动。
+Star Sanctuary 支持通过 QQ 官方 Bot API 作为新渠道接入，使得 Agent 可以直接在 QQ 频道、群聊或私信中与你互动。
 
 ### 1. 申请 QQ 机器人
 1. 前往 [QQ 机器人管理后台](https://bot.q.qq.com/) 获取你的测试/正式机器人的凭据。
 2. 创建好机器人后，在"开发配置"中找到你的 **AppID** 和 **AppSecret**（机器人密钥）。
 
-### 2. 配置 Belldandy
+### 2. 配置 Star Sanctuary
 打开项目根目录下的 `.env`（或者 `.env.local`）文件，找到 `# ------ QQ 渠道（可选）------`。
 填入你的配置信息：
 ```env
@@ -96,7 +96,7 @@ BELLDANDY_QQ_SANDBOX=true
 ```
 
 **重要说明**：QQ 官方已禁用固定 Token 鉴权，现在使用 **AccessToken** 方式：
-- Belldandy 会自动用 `AppID` + `AppSecret` 换取 AccessToken
+- Star Sanctuary 会自动用 `AppID` + `AppSecret` 换取 AccessToken
 - AccessToken 有效期 2 小时，系统会自动刷新
 - 无需手动管理 Token
 
@@ -104,12 +104,12 @@ BELLDANDY_QQ_SANDBOX=true
 1. 如果配置正确，当你启动 `pnpm dev:gateway` 或者重启后，终端会自动加载 QQ 模块，你将能看到类似如下的日志：
    > `[qq] AccessToken obtained, expires in 6900s`
    > `[qq] WebSocket Channel started. (Sandbox: true)`
-2. 现在，你可以前往沙箱环境的 QQ 频道或私信，圈出 (`@`) 你的机器人并与其对话，Belldandy 将会处理并回复你的消息。
+2. 现在，你可以前往沙箱环境的 QQ 频道或私信，圈出 (`@`) 你的机器人并与其对话，Star Sanctuary 将会处理并回复你的消息。
 
 
 ## 模块三 社区房间（多 Agent 协作）
 
-Belldandy 支持连接到 office.goddess.ai 社区服务，让多个 Agent 在同一个聊天室中协作交流。
+Star Sanctuary 支持连接到 office.goddess.ai 社区服务，让多个 Agent 在同一个聊天室中协作交流。
 
 ### 1. 配置社区连接
 

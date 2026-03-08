@@ -1,7 +1,7 @@
-@echo off
+﻿@echo off
 setlocal enabledelayedexpansion
 
-echo [Belldandy] Kill Gateway Script
+echo [Star Sanctuary] Kill Gateway Script
 echo ================================
 echo.
 
@@ -44,3 +44,4 @@ if %errorlevel% equ 0 (
 
 echo.
 pause
+

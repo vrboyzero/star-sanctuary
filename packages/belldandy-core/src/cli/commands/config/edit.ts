@@ -1,4 +1,4 @@
-import { defineCommand } from "citty";
+﻿import { defineCommand } from "citty";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import { createCLIContext } from "../../shared/context.js";
@@ -16,7 +16,7 @@ export default defineCommand({
 
     // Ensure file exists
     if (!fs.existsSync(envPath)) {
-      fs.writeFileSync(envPath, "# Belldandy local configuration\n", "utf-8");
+      fs.writeFileSync(envPath, "# Star Sanctuary local configuration\n", "utf-8");
     }
 
     const editor =
@@ -38,3 +38,4 @@ export default defineCommand({
     }
   },
 });
+

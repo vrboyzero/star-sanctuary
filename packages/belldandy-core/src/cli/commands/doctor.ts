@@ -1,4 +1,4 @@
-/**
+﻿/**
  * bdd doctor — Health check / diagnostic command.
  * Checks Node version, state dir, env config, port availability, memory DB, MCP config.
  */
@@ -281,7 +281,7 @@ export default defineCommand({
       return;
     }
 
-    ctx.log("Belldandy Doctor\n");
+    ctx.log("Star Sanctuary Doctor\n");
     for (const r of results) {
       const icon = r.status === "pass" ? "\u2713" : r.status === "warn" ? "\u26A0" : "\u2717";
       const colorFn =
@@ -306,3 +306,4 @@ export default defineCommand({
     }
   },
 });
+

@@ -1,4 +1,4 @@
-const statusEl = document.getElementById("status");
+﻿const statusEl = document.getElementById("status");
 const authModeEl = document.getElementById("authMode");
 const authValueEl = document.getElementById("authValue");
 const userUuidEl = document.getElementById("userUuid"); // UUID输入框
@@ -571,7 +571,7 @@ function connect() {
         setTimeout(() => {
           toggleSettings(true);
           // 在聊天区显示一条引导消息
-          const guideMsg = appendMessage("bot", "👋 欢迎使用 Belldandy！\n\n检测到 AI 模型尚未配置。请在右侧设置面板填入你的 API Key，然后点击 Save 保存。");
+          const guideMsg = appendMessage("bot", "👋 欢迎使用 Star Sanctuary！\n\n检测到 AI 模型尚未配置。请在右侧设置面板填入你的 API Key，然后点击 Save 保存。");
           if (guideMsg) guideMsg.style.whiteSpace = "pre-wrap";
         }, 500);
       }
@@ -638,7 +638,7 @@ async function playBootSequence() {
     "Initializing Neural Interface...",
     "Loading Core Memories... OK",
     "Establishing Secure Link... OK",
-    "Syncing with Belldandy Gateway...",
+    "Syncing with Star Sanctuary Gateway...",
     "User Identity Verified.",
     "System Online."
   ];
@@ -2868,3 +2868,4 @@ function initVoiceInput() {
     }
   }
 }
+

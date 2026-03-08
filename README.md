@@ -1,4 +1,4 @@
-# Belldandy
+﻿# Star Sanctuary
 
 <p align="center">
   <a href="./README.md"><b>简体中文</b></a> |
@@ -8,7 +8,7 @@
 <p align="center">
   <strong>🌟 本地优先的个人 AI 助手</strong><br>
   在你自己的设备上运行，通过多种聊天渠道为你服务<br>
-  <span style="color:#ff4d4f;font-weight:bold;">【重要声明】Belldandy使用有风险，但风险不大。最多就是被盗信用卡硬盘格式化苹果大爆炸。</span>
+  <span style="color:#ff4d4f;font-weight:bold;">【重要声明】Star Sanctuary使用有风险，但风险不大。最多就是被盗信用卡硬盘格式化苹果大爆炸。</span>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 ## 简介
 
-Belldandy 是一个 **本地优先（local-first）** 的个人 AI 助手项目。它运行在你自己的电脑上，注重隐私、安全，并具备记忆、工具使用、语音交互等强大能力。
+Star Sanctuary 是一个 **本地优先（local-first）** 的个人 AI 助手项目。它运行在你自己的电脑上，注重隐私、安全，并具备记忆、工具使用、语音交互等强大能力。
 
 ### 设计原则
 
@@ -160,7 +160,7 @@ Belldandy/
 
 ```bash
 # 1. 进入项目目录
-cd Belldandy
+cd Star Sanctuary
 
 # 2. 安装依赖
 corepack pnpm install
@@ -192,7 +192,7 @@ corepack pnpm bdd start
 
 ### Docker 部署（推荐用于生产环境）
 
-使用 Docker 可以快速部署 Belldandy，无需配置 Node.js 环境。
+使用 Docker 可以快速部署 Star Sanctuary，无需配置 Node.js 环境。
 
 **前置要求**：
 - Docker 20.10+
@@ -230,7 +230,7 @@ docker-compose logs -f belldandy-gateway
 
 **高级部署选项**：
 - 📡 [Tailscale 远程访问](docs/TAILSCALE_DEPLOYMENT.md) - 零配置 VPN，无需公网 IP
-- 🐳 [Docker Hub 官方镜像](https://hub.docker.com/r/belldandy/belldandy) - 多架构支持（amd64/arm64）
+- 🐳 [Docker Hub 官方镜像](https://hub.docker.com/r/vrboyzero/star-sanctuary) - 多架构支持（amd64/arm64）
 - ❄️ [Nix 部署](docs/NIX_DEPLOYMENT.md) - 声明式配置，NixOS 系统集成
 
 详细文档：[Docker 部署指南](docs/DOCKER_DEPLOYMENT.md)
@@ -484,14 +484,14 @@ BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS=60000
 
 ## 个性化定制
 
-Belldandy 的数据存储在 `~/.belldandy/` 目录下。
+Star Sanctuary 的数据存储在 `~/.belldandy/` 目录下。
 
 ### 人格塑造
 
 | 文件 | 用途 | 示例 |
 |------|------|------|
 | `SOUL.md` | 核心性格 | "你是一个严谨的 TypeScript 专家..." |
-| `IDENTITY.md` | 身份设定 | "你的名字叫 Belldandy，是一级神..." |
+| `IDENTITY.md` | 身份设定 | "你的名字叫 Star Sanctuary，是一级神..." |
 | `USER.md` | 用户档案 | "用户叫 vrboyzero，全栈工程师..." |
 
 ### 记忆系统
@@ -527,7 +527,7 @@ Belldandy 的数据存储在 `~/.belldandy/` 目录下。
 
 > 使用的工具需要稳定性，工作的方式需要可变性。Skills 管的是“能做什么”，Methods 管的是“以后应该怎么做”。
 
-Belldandy 在普通 Skills 体系之上，专门为 **长记忆、长期陪伴** 的个人 Agent 设计了一套 **方法论系统 (Methodology)**，核心由四部分组成：
+Star Sanctuary 在普通 Skills 体系之上，专门为 **长记忆、长期陪伴** 的个人 Agent 设计了一套 **方法论系统 (Methodology)**，核心由四部分组成：
 
 - **Agent**：由 `SOUL.md` / `AGENTS.md` / `USER.md` / `TOOLS.md` 等 Workspace 文件塑造的人格与决策层。
 - **Skills**：执行具体动作的工具集合（读写文件、网络请求、浏览器控制、命令执行、Memory 检索等）。
@@ -582,7 +582,7 @@ Belldandy 在普通 Skills 体系之上，专门为 **长记忆、长期陪伴**
 
 ## 飞书对接
 
-让 Belldandy 通过飞书与你对话——无需公网 IP！
+让 Star Sanctuary 通过飞书与你对话——无需公网 IP！
 
 ### 1. 创建飞书应用
 
@@ -606,7 +606,7 @@ Belldandy 在普通 Skills 体系之上，专门为 **长记忆、长期陪伴**
 3. **配置长连接**：开发配置 → 事件订阅 → 选择"长连接模式" → 添加 `im.message.receive_v1` 事件
 4. **发布应用**：应用发布 → 版本管理 → 创建版本 → 申请发布
 
-### 4. 配置 Belldandy
+### 4. 配置 Star Sanctuary
 
 在 `.env.local` 中添加：
 ```env
@@ -704,7 +704,7 @@ corepack pnpm dev:gateway
 
 ## CLI 命令
 
-Belldandy 提供统一的 `bdd` CLI 入口（基于 [citty](https://github.com/unjs/citty)），所有命令均支持 `--help` 查看用法、`--json` 输出机器可读格式。
+Star Sanctuary 提供统一的 `bdd` CLI 入口（基于 [citty](https://github.com/unjs/citty)），所有命令均支持 `--help` 查看用法、`--json` 输出机器可读格式。
 
 ```bash
 # 查看完整命令树
@@ -837,14 +837,14 @@ apps/
 
 ### 相关文档
 
-- [Belldandy实现内容说明.md](./Belldandy实现内容说明.md) - 详细功能说明
-- [Belldandy使用手册.md](./Belldandy使用手册.md) - 完整使用指南
+- [Star Sanctuary实现内容说明.md](./Star%20Sanctuary实现内容说明.md) - 详细功能说明
+- [Star Sanctuary使用手册.md](./Star%20Sanctuary使用手册.md) - 完整使用指南
 
 ---
 
 ## 赞助支持
 
-如果 Belldandy 对你有帮助，欢迎请作者喝杯咖啡 ☕
+如果 Star Sanctuary 对你有帮助，欢迎请作者喝杯咖啡 ☕
 
 开发和维护开源项目需要投入大量时间和精力，你的支持是我持续更新的动力！
 
@@ -870,7 +870,7 @@ apps/
 
 - **Email**：[fyyx4918822@gmail.com](mailto:fyyx4918822@gmail.com)
 - **QQ 群**：1080383003
-- **问题反馈**：[GitHub Issues](https://github.com/vrboyzero/Belldandy/issues)
+- **问题反馈**：[GitHub Issues](https://github.com/vrboyzero/star-sanctuary/issues)
 
 欢迎交流、反馈 Bug 或提出建议！
 
@@ -883,5 +883,10 @@ MIT
 ---
 
 <p align="center">
-  <em>Belldandy - Your Personal AI Assistant</em>
+  <em>Star Sanctuary - Your Personal AI Assistant</em>
 </p>
+
+
+
+
+
