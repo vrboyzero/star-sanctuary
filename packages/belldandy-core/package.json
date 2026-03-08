@@ -4,16 +4,25 @@
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js",
-    "./cron": "./dist/cron/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./cron": {
+      "types": "./dist/cron/index.d.ts",
+      "import": "./dist/cron/index.js",
+      "default": "./dist/cron/index.js"
+    }
   },
   "bin": {
     "belldandy": "./dist/bin/bdd.js",
     "bdd": "./dist/bin/bdd.js"
   },
   "scripts": {
-    "prebuild": "node --import tsx ../../scripts/generate-version.ts",
+    "prebuild": "node ../../scripts/generate-version.mjs",
     "build": "tsc -b"
   },
   "dependencies": {
