@@ -903,6 +903,36 @@ MIT
   <em>Star Sanctuary - Your Personal AI Assistant</em>
 </p>
 
+---
+
+## 工具命令风险清单
+
+项目里已经对 `file_read` / `file_write` / `file_delete` / `apply_patch` 等核心文件工具做了较多路径安全收口，但仍有少量“会写磁盘”的工具没有完全纳入同一套规则。
+
+给非技术同学的简化理解：
+
+- **高风险**：可能把文件写到不该写的地方，或者能力边界比普通文件工具更大；
+- **中风险**：通常不会立刻出事，但规则不统一，后续容易反复踩坑；
+- **低风险**：写入位置固定、用途单一，短期相对安全。
+
+当前重点关注项：
+
+1. `office_workshop_download`
+   - 下载目录规则尚未完全统一，且服务端返回文件名会参与本地落盘。
+2. `code_interpreter`
+   - 本质上是执行脚本，不只是普通写文件工具，能力边界更大。
+3. `browser_screenshot`
+   - 截图文件名使用传入名称，需继续收口文件名安全。
+
+建议的后续修复顺序：
+
+1. 先修 `office_workshop_download`
+2. 再修 `browser_screenshot`
+3. 再明确 `code_interpreter` 的能力边界
+4. 最后统一 `canvas` / `method_create` / `switch_facet` 等专用写盘工具
+
+详细说明请见：`工具命令风险清单.md`
+
 
 
 

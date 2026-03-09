@@ -96,7 +96,7 @@ import {
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
-import { DEFAULT_STATE_DIR_DISPLAY, resolveStateDir } from "@belldandy/protocol";
+import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, resolveStateDir, type TokenUsageUploadConfig } from "@belldandy/protocol";
 
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
@@ -1806,6 +1806,20 @@ try {
   const communityConfigPath = getCommunityConfigPath();
   if (fs.existsSync(communityConfigPath) && createAgent) {
     const communityConfig = loadCommunityConfig();
+    const communityOwnerUserUuid = await extractOwnerUuid(stateDir);
+    const communityTokenUsageStrictUuid = String(process.env.BELLDANDY_TOKEN_USAGE_STRICT_UUID ?? "false").toLowerCase() === "true";
+    const communityTokenUsageUploadConfig: TokenUsageUploadConfig = {
+      enabled: String(process.env.BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED ?? "false").toLowerCase() === "true",
+      url: readEnv("BELLDANDY_TOKEN_USAGE_UPLOAD_URL")?.trim() || undefined,
+      token:
+        readEnv("BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY")?.trim()
+        || readEnv("BELLDANDY_TOKEN_USAGE_UPLOAD_TOKEN")?.trim()
+        || undefined,
+      timeoutMs: Number(readEnv("BELLDANDY_TOKEN_USAGE_UPLOAD_TIMEOUT_MS") ?? "3000") || 3000,
+    };
+    if (communityTokenUsageUploadConfig.enabled && communityTokenUsageStrictUuid && !communityOwnerUserUuid) {
+      logger.warn("community", "Token usage upload is enabled but owner UUID was not found in root IDENTITY.md; community uploads may fail when strict UUID validation is enabled.");
+    }
     // community config 的 name 是社区显示名，不是 agent profile ID，直接用默认 agent
     const agent = createAgent();
 
@@ -1815,6 +1829,8 @@ try {
       agent: agent,
       conversationStore: conversationStore,
       reconnect: communityConfig.reconnect,
+      tokenUsageUpload: communityTokenUsageUploadConfig,
+      ownerUserUuid: communityOwnerUserUuid,
     });
 
     // 注册 leave_room 和 join_room 工具（带 channel 实例）

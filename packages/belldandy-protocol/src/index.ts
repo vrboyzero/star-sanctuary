@@ -12,6 +12,10 @@ export {
   resolveWorkspaceStateDir,
 } from "./state-dir.js";
 
+export type { TokenUsageUploadConfig, TokenUsageUploadLogger } from "./token-usage-upload.js";
+export { uploadTokenUsage } from "./token-usage-upload.js";
+export { extractOwnerUuid } from "./identity.js";
+
 export type BelldandyRole = "web" | "cli" | "node";
 
 export type GatewayAuth =

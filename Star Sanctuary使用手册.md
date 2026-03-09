@@ -206,6 +206,20 @@ BELLDANDY_COMMUNITY_API_ENABLED=false
 # 专用 Bearer token（推荐单独设置）；未设置时会回退到 BELLDANDY_AUTH_TOKEN
 # BELLDANDY_COMMUNITY_API_TOKEN=my-community-api-token
 
+# Token 消耗上传（对接 office.goddess.ai，可选）
+# 开启后，Gateway 会把本地 WebChat 与社区房间中的 token 增量
+# 主动上报到 office.goddess.ai 的 /api/internal/token-usage
+BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=false
+# 目标地址：你的 office.goddess.ai 服务地址
+# BELLDANDY_TOKEN_USAGE_UPLOAD_URL=https://office.goddess.ai/api/internal/token-usage
+# 鉴权：填写“该主人自己的 office API Key 明文”
+# BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY=gro_xxxxx
+# 超时（毫秒）
+BELLDANDY_TOKEN_USAGE_UPLOAD_TIMEOUT_MS=3000
+# 严格 UUID 校验（可选）
+# 开启后，office 会要求上传 body 里的 userUuid 与 API Key 主人一致
+BELLDANDY_TOKEN_USAGE_STRICT_UUID=false
+
 # ------ AI 能力开关 ------
 # 启用工具调用（联网、读写文件）
 BELLDANDY_TOOLS_ENABLED=true
@@ -250,7 +264,60 @@ BELLDANDY_LOG_LEVEL=debug
 # BELLDANDY_LOG_FILE=true
 ```
 
-#### 3.1.1 Channels 路由引擎（Router MVP）配置总览（短版）
+#### 3.1.1 office Token 上传配置（可选）
+
+如果你希望把 Star Sanctuary 的 token 消耗累计到 `office.goddess.ai` 的用户账户中，可以开启上传功能。
+
+**适用范围**：
+
+- 本地 WebChat 对话
+- `office.goddess.ai` 社区房间中的 Agent 对话
+
+**记账语义**：
+
+- token 始终记到 **Agent 主人** 名下
+- 不区分是哪个 Agent 消耗了 token
+- 社区房间里也**不按实际发言用户**记账
+
+**最小配置**：
+
+```env
+BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=true
+BELLDANDY_TOKEN_USAGE_UPLOAD_URL=https://office.goddess.ai/api/internal/token-usage
+BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY=gro_xxxxx
+```
+
+说明：
+
+- `BELLDANDY_TOKEN_USAGE_UPLOAD_URL` 填你的 `office.goddess.ai` 服务地址，不是本机 Gateway 地址
+- `BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY` 填 **该主人自己** 在 office 后台生成的 API Key 明文
+- 上传失败不会中断聊天主流程，只会输出 warning 日志
+
+**严格 UUID 校验（可选）**：
+
+```env
+BELLDANDY_TOKEN_USAGE_STRICT_UUID=true
+```
+
+开启后：
+
+- WebChat 会上传当前用户 UUID
+- community 链路会尝试从**根工作区** `IDENTITY.md` 中读取 `主人UUID`
+- 如果你开启了严格模式，但 `IDENTITY.md` 里没有配置 `主人UUID`，community token 上传会失败，启动时也会看到 warning
+
+`IDENTITY.md` 示例：
+
+```md
+- **主人UUID**：a10001
+```
+
+**常见用法**：
+
+- 只想本地使用，不对接 office：保持 `BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=false`
+- 想把 token 统一累计到 office 主人账户：开启上传并配置 URL + API Key
+- 想进一步防止 UUID 归属错误：再开启 `BELLDANDY_TOKEN_USAGE_STRICT_UUID=true`
+
+#### 3.1.2 Channels 路由引擎（Router MVP）配置总览（短版）
 
 如果你希望在多渠道（Discord / QQ / Feishu）中实现“群聊只在被 @ 时触发”或“按关键词路由到不同 Agent”，可加以下最小配置：
 
@@ -1827,6 +1894,12 @@ Agent 可以通过 `leave_room` 工具主动离开当前房间。在对话中告
 ### 9.8 office.goddess.ai 转发 Gateway（`/api/message`）
 
 如果你在本地部署了 `office.goddess.ai/server`，并由它把社区消息转发到 Star Sanctuary Gateway，现在需要使用 Bearer 鉴权。
+
+> 说明：这是 **HTTP 转发 `/api/message`** 的兼容接入方式，适用于你自部署一套 `office.goddess.ai/server` 并反向调用本地 Gateway 的场景。
+>
+> 对于当前推荐的官网社区用法，Star Sanctuary 采用的是 **Gateway 主动连接 `office.goddess.ai`** 的模式（见 9.1 ～ 9.7），不需要配置 `BELLDANDY_GATEWAY_URL`。
+>
+> token 消耗上传也与这里的 `/api/message` 转发解耦；token 上传请使用上面的 `BELLDANDY_TOKEN_USAGE_UPLOAD_*` 配置。
 
 **Gateway 侧（`Belldandy/.env` 或 `.env.local`）**：
 

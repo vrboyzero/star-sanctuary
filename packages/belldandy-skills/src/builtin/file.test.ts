@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { fileReadTool, fileWriteTool } from "./file.js";
+import { fileDeleteTool, fileReadTool, fileWriteTool } from "./file.js";
 import type { ToolContext } from "../types.js";
 
 describe("file tools", () => {
@@ -222,6 +222,37 @@ describe("file tools", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("禁止写入");
+    });
+  });
+
+  describe("file_delete", () => {
+    it("should enforce allowedPaths whitelist", async () => {
+      await fs.mkdir(path.join(tempDir, "allowed"), { recursive: true });
+      await fs.mkdir(path.join(tempDir, "blocked"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "allowed", "ok.txt"), "ok", "utf-8");
+      await fs.writeFile(path.join(tempDir, "blocked", "no.txt"), "no", "utf-8");
+
+      const restrictedContext: ToolContext = {
+        ...baseContext,
+        policy: {
+          ...baseContext.policy,
+          allowedPaths: ["allowed"],
+        },
+      };
+
+      const blockedResult = await fileDeleteTool.execute(
+        { path: "blocked/no.txt" },
+        restrictedContext,
+      );
+      expect(blockedResult.success).toBe(false);
+      expect(blockedResult.error).toContain("白名单");
+
+      const allowedResult = await fileDeleteTool.execute(
+        { path: "allowed/ok.txt" },
+        restrictedContext,
+      );
+      expect(allowedResult.success).toBe(true);
+      await expect(fs.access(path.join(tempDir, "allowed", "ok.txt"))).rejects.toThrow();
     });
   });
 

@@ -73,6 +73,17 @@ function isDeniedPath(relativePath: string, deniedPaths: string[]): string | nul
   return null;
 }
 
+function isAllowedPath(relativePath: string, allowedPaths: string[]): boolean {
+  if (allowedPaths.length === 0) return true;
+  const normalizedRelative = relativePath.replace(/\\/g, "/").toLowerCase();
+  return allowedPaths.some((entry) => {
+    const normalizedAllowed = entry.replace(/\\/g, "/").toLowerCase();
+    if (normalizedAllowed === ".") return true;
+    return normalizedRelative.startsWith(normalizedAllowed + "/") ||
+      normalizedRelative === normalizedAllowed;
+  });
+}
+
 /** 检查路径是否在指定根目录下（不越界） */
 function isUnderRoot(absolute: string, root: string): { ok: true; relative: string } | { ok: false } {
   const resolvedRoot = path.resolve(root);
@@ -354,19 +365,8 @@ export const fileWriteTool: Tool = {
 
     // 白名单检查（如果配置了白名单，则只能写入白名单内的目录）
     const { allowedPaths } = context.policy;
-    if (allowedPaths.length > 0) {
-      const normalizedRelative = relative.replace(/\\/g, "/").toLowerCase();
-      const allowed = allowedPaths.some(p => {
-        const normalizedAllowed = p.replace(/\\/g, "/").toLowerCase();
-        // [FIX] Special case: "." means everything under root is allowed
-        if (normalizedAllowed === ".") return true;
-
-        return normalizedRelative.startsWith(normalizedAllowed + "/") ||
-          normalizedRelative === normalizedAllowed;
-      });
-      if (!allowed) {
+    if (!isAllowedPath(relative, allowedPaths)) {
         return makeError(`路径不在写入白名单中。允许的路径：${allowedPaths.join(", ")}`);
-      }
     }
 
     const fileWritePolicy = context.policy.fileWrite ?? {};
@@ -590,6 +590,11 @@ export const fileDeleteTool: Tool = {
     // 敏感文件检查
     if (isSensitivePath(relative)) {
       return makeError("禁止删除敏感文件");
+    }
+
+    const { allowedPaths } = context.policy;
+    if (!isAllowedPath(relative, allowedPaths)) {
+      return makeError(`路径不在写入白名单中。允许的路径：${allowedPaths.join(", ")}`);
     }
 
     try {

@@ -6,7 +6,7 @@ import path from "node:path";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { DEFAULT_STATE_DIR_DISPLAY } from "@belldandy/protocol";
+import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig, uploadTokenUsage } from "@belldandy/protocol";
 import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type ModelProfile } from "@belldandy/agent";
 import type {
   GatewayFrame,
@@ -108,13 +108,6 @@ const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
 type AttachmentLimits = {
   maxFileBytes: number;
   maxTotalBytes: number;
-};
-
-type TokenUsageUploadConfig = {
-  enabled: boolean;
-  url?: string;
-  token?: string;
-  timeoutMs: number;
 };
 
 function isUnderRoot(root: string, target: string): boolean {
@@ -1538,66 +1531,6 @@ async function handleReq(
 
   return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Unknown method." } };
 }
-
-async function uploadTokenUsage(input: {
-  config: TokenUsageUploadConfig;
-  userUuid: string;
-  conversationId: string;
-  deltaTokens: number;
-  source: string;
-  log: GatewayLog;
-}): Promise<void> {
-  const { config, userUuid, conversationId, deltaTokens, source, log } = input;
-  if (!config.url) {
-    log.warn("token-upload", "Token usage upload enabled but BELLDANDY_TOKEN_USAGE_UPLOAD_URL is not configured");
-    return;
-  }
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (config.token) {
-    headers.Authorization = `Bearer ${config.token}`;
-  }
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-  try {
-    const res = await fetch(config.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        userUuid,
-        deltaTokens,
-        conversationId,
-        source,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      const bodyText = await res.text().catch(() => "");
-      log.warn("token-upload", "Token usage upload failed", {
-        status: res.status,
-        statusText: res.statusText,
-        body: bodyText.slice(0, 300),
-      });
-    }
-  } catch (err: any) {
-    if (err?.name === "AbortError") {
-      log.warn("token-upload", "Token usage upload timeout", {
-        timeoutMs: config.timeoutMs,
-      });
-    } else {
-      log.warn("token-upload", "Token usage upload error", {
-        error: String(err),
-      });
-    }
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 
 function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendParams } | { ok: false; message: string } {
   if (!value || typeof value !== "object") return { ok: false, message: "params must be an object" };

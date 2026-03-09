@@ -43,25 +43,77 @@ function isDeniedPath(relativePath: string, deniedPaths: string[]): string | nul
     return null;
 }
 
-/** 规范化并验证路径在工作区内 */
+function isAllowedPath(relativePath: string, allowedPaths: string[]): boolean {
+    if (allowedPaths.length === 0) return true;
+    const normalizedRelative = relativePath.replace(/\\/g, "/").toLowerCase();
+    return allowedPaths.some((entry) => {
+        const normalizedAllowed = entry.replace(/\\/g, "/").toLowerCase();
+        if (normalizedAllowed === ".") return true;
+        return normalizedRelative.startsWith(normalizedAllowed + "/") || normalizedRelative === normalizedAllowed;
+    });
+}
+
+function isUnderRoot(absolute: string, root: string): { ok: true; relative: string } | { ok: false } {
+    const resolvedRoot = path.resolve(root);
+    const rel = path.relative(resolvedRoot, absolute);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) return { ok: false };
+    return { ok: true, relative: rel.replace(/\\/g, "/") };
+}
+
+/** 规范化并验证路径在工作区内（主工作区或 extraWorkspaceRoots 中的任一根目录下） */
 function resolveAndValidatePath(
-    relativePath: string,
-    workspaceRoot: string
+    pathArg: string,
+    workspaceRoot: string,
+    extraWorkspaceRoots?: string[],
 ): { ok: true; absolute: string; relative: string } | { ok: false; error: string } {
-    const normalized = relativePath.replace(/\\/g, "/");
-
-    if (path.isAbsolute(normalized)) {
-        return { ok: false, error: "禁止使用绝对路径，请使用相对于工作区的路径" };
+    const trimmed = (pathArg || "").trim();
+    if (!trimmed) {
+        return { ok: false, error: "路径不能为空" };
     }
 
-    const absolute = path.resolve(workspaceRoot, normalized);
-    const resolvedRoot = path.resolve(workspaceRoot);
+    const normalized = trimmed.replace(/\\/g, "/");
+    const mainRoot = path.resolve(workspaceRoot);
 
-    if (!absolute.startsWith(resolvedRoot + path.sep) && absolute !== resolvedRoot) {
-        return { ok: false, error: "路径越界：不允许访问工作区外的文件" };
+    const absolute = path.isAbsolute(normalized) || (trimmed.length >= 2 && /^[A-Za-z]:/.test(trimmed))
+        ? path.resolve(normalized)
+        : path.resolve(mainRoot, normalized);
+
+    const underMain = isUnderRoot(absolute, mainRoot);
+    if (underMain.ok) {
+        return { ok: true, absolute, relative: underMain.relative };
     }
 
-    return { ok: true, absolute, relative: normalized };
+    for (const extraRoot of extraWorkspaceRoots ?? []) {
+        const underExtra = isUnderRoot(absolute, path.resolve(extraRoot));
+        if (underExtra.ok) {
+            return { ok: true, absolute, relative: underExtra.relative };
+        }
+    }
+
+    return { ok: false, error: "路径越界：不允许访问工作区外的文件" };
+}
+
+function validateWritablePath(
+    pathArg: string,
+    context: ToolContext,
+): { ok: true; absolute: string; relative: string } | { ok: false; error: string } {
+    const resolved = resolveAndValidatePath(pathArg, context.workspaceRoot, context.extraWorkspaceRoots);
+    if (!resolved.ok) return resolved;
+
+    if (isSensitivePath(resolved.relative)) {
+        return { ok: false, error: `[${resolved.relative}] 禁止修改敏感文件` };
+    }
+
+    const denied = isDeniedPath(resolved.relative, context.policy.deniedPaths);
+    if (denied) {
+        return { ok: false, error: `[${resolved.relative}] 禁止修改路径：${denied}` };
+    }
+
+    if (!isAllowedPath(resolved.relative, context.policy.allowedPaths)) {
+        return { ok: false, error: `[${resolved.relative}] 路径不在写入白名单中` };
+    }
+
+    return resolved;
 }
 
 async function ensureDir(filePath: string) {
@@ -136,26 +188,9 @@ export const applyPatchTool: Tool = {
             // 2. 依次应用 Hunks
             // 注意：这里没有像 Moltbot 一样支持 AbortSignal，因为 execute 本身是原子的
             for (const hunk of parsed.hunks) {
-                // 安全检查：路径校验
-                const pathCheck = resolveAndValidatePath(hunk.path, context.workspaceRoot);
-                if (!pathCheck.ok) throw new Error(`[${hunk.path}] ${pathCheck.error}`);
+                const pathCheck = validateWritablePath(hunk.path, context);
+                if (!pathCheck.ok) throw new Error(pathCheck.error);
                 const { absolute, relative } = pathCheck;
-
-                // 安全检查：策略校验
-                if (isSensitivePath(relative)) throw new Error(`[${relative}] 禁止修改敏感文件`);
-
-                const denied = isDeniedPath(relative, context.policy.deniedPaths);
-                if (denied) throw new Error(`[${relative}] 禁止修改路径：${denied}`);
-
-                // 白名单检查
-                if (context.policy.allowedPaths.length > 0) {
-                    const allowed = context.policy.allowedPaths.some(p => {
-                        const normalizedAllowed = p.replace(/\\/g, "/").toLowerCase();
-                        const normalizedRelative = relative.replace(/\\/g, "/").toLowerCase();
-                        return normalizedRelative.startsWith(normalizedAllowed + "/") || normalizedRelative === normalizedAllowed;
-                    });
-                    if (!allowed) throw new Error(`[${relative}] 路径不在写入白名单中`);
-                }
 
                 if (hunk.kind === "add") {
                     await ensureDir(absolute);
@@ -176,8 +211,8 @@ export const applyPatchTool: Tool = {
 
                     if (hunk.movePath) {
                         // 移动文件逻辑
-                        const moveCheck = resolveAndValidatePath(hunk.movePath, context.workspaceRoot);
-                        if (!moveCheck.ok) throw new Error(`[MoveTo: ${hunk.movePath}] ${moveCheck.error}`);
+                        const moveCheck = validateWritablePath(hunk.movePath, context);
+                        if (!moveCheck.ok) throw new Error(moveCheck.error);
 
                         await ensureDir(moveCheck.absolute);
                         await fs.writeFile(moveCheck.absolute, newContent, "utf8");

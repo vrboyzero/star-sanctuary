@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import type { BelldandyAgent } from "@belldandy/agent";
+import { uploadTokenUsage, type TokenUsageUploadConfig } from "@belldandy/protocol";
 import type { Channel } from "./types.js";
 import { ConversationStore } from "@belldandy/agent";
 import { updateAgentRoom } from "./community-config.js";
@@ -46,6 +47,10 @@ export interface CommunityChannelConfig {
     maxRetries: number;
     backoffMs: number;
   };
+  /** token 用量上传配置（可选） */
+  tokenUsageUpload?: TokenUsageUploadConfig;
+  /** 主人 UUID（用于 strict uuid 模式） */
+  ownerUserUuid?: string;
 }
 
 /**
@@ -88,6 +93,8 @@ export class CommunityChannel implements Channel {
     maxRetries: number;
     backoffMs: number;
   };
+  private readonly tokenUsageUpload?: TokenUsageUploadConfig;
+  private readonly ownerUserUuid?: string;
 
   private _running = false;
   private connections = new Map<string, ConnectionState>(); // agentName -> ConnectionState
@@ -106,6 +113,8 @@ export class CommunityChannel implements Channel {
     this.agent = config.agent;
     this.conversationStore = config.conversationStore;
     this.agentId = config.agentId;
+    this.tokenUsageUpload = config.tokenUsageUpload;
+    this.ownerUserUuid = config.ownerUserUuid;
     this.reconnectConfig = config.reconnect ?? {
       enabled: true,
       maxRetries: 10,
@@ -441,11 +450,39 @@ export class CommunityChannel implements Channel {
       });
 
       let finalText = "";
+      let lastUploadedUsageTotal = 0;
+
+      const tokenUploadLog = {
+        warn: (module: string, message: string, data?: unknown) => {
+          if (data !== undefined) {
+            console.warn(`[${this.name}] [${module}] ${message}`, data);
+          } else {
+            console.warn(`[${this.name}] [${module}] ${message}`);
+          }
+        },
+      };
 
       // 处理流式响应
       for await (const item of stream) {
         if (item.type === "final") {
           finalText = item.text;
+        }
+        if (item.type === "usage" && this.tokenUsageUpload?.enabled) {
+          const usageTotal = Math.max(0, Number(item.inputTokens ?? 0) + Number(item.outputTokens ?? 0));
+          const deltaTokens = Math.max(0, usageTotal - lastUploadedUsageTotal);
+          if (usageTotal > lastUploadedUsageTotal) {
+            lastUploadedUsageTotal = usageTotal;
+          }
+          if (deltaTokens > 0) {
+            void uploadTokenUsage({
+              config: this.tokenUsageUpload,
+              userUuid: this.ownerUserUuid,
+              conversationId,
+              source: "community",
+              deltaTokens,
+              log: tokenUploadLog,
+            });
+          }
         }
       }
 
