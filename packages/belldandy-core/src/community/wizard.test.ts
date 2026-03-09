@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommunityWizard } from "./wizard.js";
 
 type RoomInfo = { name: string; password?: string };
-type AgentConfig = { name: string; apiKey: string; room?: RoomInfo };
+type AgentConfig = {
+  name: string;
+  apiKey: string;
+  office?: { downloadDir?: string; uploadRoots?: string[] };
+  room?: RoomInfo;
+};
 type CommunityConfig = {
   endpoint: string;
   agents: AgentConfig[];
@@ -26,13 +31,21 @@ const channelsState = vi.hoisted(() => ({
   addAgentConfig: vi.fn(),
   removeAgentConfig: vi.fn(),
   listAgentConfigs: vi.fn(),
+  getAgentConfig: vi.fn(),
   getCommunityConfigPath: vi.fn(),
 }));
 
 function cloneConfig(config: CommunityConfig): CommunityConfig {
   return {
     ...config,
-    agents: config.agents.map((agent) => ({ ...agent, room: agent.room ? { ...agent.room } : undefined })),
+    agents: config.agents.map((agent) => ({
+      ...agent,
+      office: agent.office ? {
+        downloadDir: agent.office.downloadDir,
+        uploadRoots: agent.office.uploadRoots ? [...agent.office.uploadRoots] : undefined,
+      } : undefined,
+      room: agent.room ? { ...agent.room } : undefined,
+    })),
     reconnect: config.reconnect ? { ...config.reconnect } : undefined,
   };
 }
@@ -59,6 +72,7 @@ vi.mock("@belldandy/channels", () => ({
   addAgentConfig: channelsState.addAgentConfig,
   removeAgentConfig: channelsState.removeAgentConfig,
   listAgentConfigs: channelsState.listAgentConfigs,
+  getAgentConfig: channelsState.getAgentConfig,
   getCommunityConfigPath: channelsState.getCommunityConfigPath,
 }));
 
@@ -76,6 +90,7 @@ describe("community wizard", () => {
     channelsState.getCommunityConfigPath.mockReturnValue("/mock/.star_sanctuary/community.json");
     channelsState.loadCommunityConfig.mockImplementation(() => cloneConfig(channelsState.config));
     channelsState.listAgentConfigs.mockImplementation(() => channelsState.config.agents.map((a) => ({ ...a })));
+    channelsState.getAgentConfig.mockImplementation((name: string) => channelsState.config.agents.find((a) => a.name === name));
     channelsState.saveCommunityConfig.mockImplementation((config: CommunityConfig) => {
       channelsState.config = cloneConfig(config);
     });
@@ -130,5 +145,32 @@ describe("community wizard", () => {
 
     expect(channelsState.saveCommunityConfig).toHaveBeenCalledTimes(1);
     expect(channelsState.config.endpoint).toBe("https://community.example.com");
+  });
+
+  it("should preserve office config when updating existing agent", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    channelsState.config.agents = [{
+      name: "agent-alpha",
+      apiKey: "old-key",
+      office: {
+        downloadDir: "downloads/office",
+        uploadRoots: ["E:/assets/workshop"],
+      },
+      room: { name: "Aira" },
+    }];
+    readlineState.answers.push("1", "agent-alpha", "new-key", "n", "5");
+
+    await runCommunityWizard();
+
+    expect(channelsState.addAgentConfig).toHaveBeenCalledWith({
+      name: "agent-alpha",
+      apiKey: "new-key",
+      office: {
+        downloadDir: "downloads/office",
+        uploadRoots: ["E:/assets/workshop"],
+      },
+      room: undefined,
+    });
   });
 });

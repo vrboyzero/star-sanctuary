@@ -1,0 +1,339 @@
+import crypto from "node:crypto";
+import * as fsSync from "node:fs";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { resolveStateDir } from "@belldandy/protocol";
+import type { ToolContext } from "../../types.js";
+
+export type OfficeCommunityAgentConfig = {
+  name: string;
+  apiKey: string;
+  office?: {
+    downloadDir?: string;
+    uploadRoots?: string[];
+  };
+};
+
+type OfficeCommunityConfig = {
+  endpoint: string;
+  agents: OfficeCommunityAgentConfig[];
+};
+
+type OfficeApiErrorBody = {
+  error?: string;
+  message?: string;
+};
+
+const SENSITIVE_PATTERNS = [
+  ".env",
+  ".env.local",
+  ".env.production",
+  "credentials",
+  "secret",
+  ".key",
+  ".pem",
+  ".p12",
+  ".pfx",
+  "id_rsa",
+  "id_ed25519",
+  ".ssh",
+  "password",
+  "token",
+];
+
+function getCommunityConfigPath(): string {
+  return path.join(resolveStateDir(process.env), "community.json");
+}
+
+function isUnderRoot(absolute: string, root: string): { ok: true; relative: string } | { ok: false } {
+  const resolvedRoot = path.resolve(root);
+  const rel = path.relative(resolvedRoot, absolute);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return { ok: false };
+  return { ok: true, relative: rel.replace(/\\/g, "/") };
+}
+
+function isDeniedPath(relativePath: string, deniedPaths: string[]): string | null {
+  const normalized = relativePath.replace(/\\/g, "/").toLowerCase();
+  for (const denied of deniedPaths) {
+    const deniedNorm = denied.replace(/\\/g, "/").toLowerCase();
+    if (normalized.includes(deniedNorm)) {
+      return denied;
+    }
+  }
+  return null;
+}
+
+function isSensitivePath(relativePath: string): boolean {
+  const lower = relativePath.toLowerCase();
+  return SENSITIVE_PATTERNS.some((entry) => lower.includes(entry));
+}
+
+function resolveAndValidatePath(
+  pathArg: string,
+  workspaceRoot: string,
+  extraWorkspaceRoots?: string[],
+): { absolute: string; relative: string } {
+  const trimmed = (pathArg || "").trim();
+  if (!trimmed) {
+    throw new Error("路径不能为空");
+  }
+
+  const normalized = trimmed.replace(/\\/g, "/");
+  const mainRoot = path.resolve(workspaceRoot);
+  const absolute = path.isAbsolute(normalized) || /^[A-Za-z]:/.test(trimmed)
+    ? path.resolve(normalized)
+    : path.resolve(mainRoot, normalized);
+
+  const underMain = isUnderRoot(absolute, mainRoot);
+  if (underMain.ok) {
+    return { absolute, relative: underMain.relative };
+  }
+
+  for (const extraRoot of extraWorkspaceRoots ?? []) {
+    const underExtra = isUnderRoot(absolute, path.resolve(extraRoot));
+    if (underExtra.ok) {
+      return { absolute, relative: underExtra.relative };
+    }
+  }
+
+  throw new Error("路径越界：不允许访问工作区外的文件");
+}
+
+function resolveConfiguredRoots(roots: string[] | undefined, workspaceRoot: string): string[] {
+  return (roots ?? [])
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const normalized = entry.replace(/\\/g, "/");
+      return path.isAbsolute(normalized) || /^[A-Za-z]:/.test(entry)
+        ? path.resolve(normalized)
+        : path.resolve(workspaceRoot, normalized);
+    });
+}
+
+function mergeRoots(...groups: Array<string[] | undefined>): string[] {
+  return [...new Set(groups.flatMap((group) => group ?? []).map((entry) => path.resolve(entry)))];
+}
+
+export function resolveReadablePath(
+  pathArg: string,
+  context: ToolContext,
+  extraWorkspaceRoots?: string[],
+): { absolute: string; relative: string } {
+  const resolved = resolveAndValidatePath(
+    pathArg,
+    context.workspaceRoot,
+    mergeRoots(context.extraWorkspaceRoots, extraWorkspaceRoots),
+  );
+  const denied = isDeniedPath(resolved.relative, context.policy.deniedPaths);
+  if (denied) {
+    throw new Error(`禁止访问路径：${denied}`);
+  }
+  if (isSensitivePath(resolved.relative)) {
+    throw new Error("禁止读取敏感文件（如 .env、密钥、凭证等）");
+  }
+  return resolved;
+}
+
+export function resolveWritableDir(
+  pathArg: string,
+  context: ToolContext,
+  extraWorkspaceRoots?: string[],
+): { absolute: string; relative: string } {
+  const resolved = resolveAndValidatePath(
+    pathArg,
+    context.workspaceRoot,
+    mergeRoots(context.extraWorkspaceRoots, extraWorkspaceRoots),
+  );
+  const denied = isDeniedPath(resolved.relative, context.policy.deniedPaths);
+  if (denied) {
+    throw new Error(`禁止写入路径：${denied}`);
+  }
+  if (isSensitivePath(resolved.relative)) {
+    throw new Error("禁止写入敏感路径");
+  }
+  return resolved;
+}
+
+export function normalizeWorkshopCategory(input: string): string {
+  const value = (input || "").trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    skills: "skills",
+    skill: "skills",
+    "技能": "skills",
+    methods: "methods",
+    method: "methods",
+    "方法": "methods",
+    "方法论": "methods",
+    apps: "apps",
+    app: "apps",
+    "应用": "apps",
+    plugins: "plugins",
+    plugin: "plugins",
+    "插件": "plugins",
+    "模组": "plugins",
+    facets: "facets",
+    facet: "facets",
+    mcp: "mcp",
+  };
+  return aliases[value] ?? value;
+}
+
+export async function sha256File(filePath: string): Promise<string> {
+  const buffer = await fs.readFile(filePath);
+  return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+export class OfficeSiteClient {
+  private readonly endpoint: string;
+  private readonly agentConfig: OfficeCommunityAgentConfig;
+
+  constructor(agentName: string) {
+    const config = this.loadConfig();
+    this.endpoint = config.endpoint.replace(/\/+$/, "");
+    this.agentConfig = config.agents.find((agent) => agent.name === agentName)
+      ?? (() => {
+        throw new Error(`community.json 未找到 Agent 配置: ${agentName}`);
+      })();
+
+    if (!this.agentConfig.apiKey) {
+      throw new Error(`Agent ${agentName} 缺少 apiKey 配置`);
+    }
+  }
+
+  getUploadRoots(context: ToolContext): string[] {
+    return resolveConfiguredRoots(this.agentConfig.office?.uploadRoots, context.workspaceRoot);
+  }
+
+  resolveUploadPath(pathArg: string, context: ToolContext): { absolute: string; relative: string } {
+    return resolveReadablePath(pathArg, context, this.getUploadRoots(context));
+  }
+
+  getDownloadDir(context: ToolContext): string {
+    const configured = this.agentConfig.office?.downloadDir?.trim();
+    if (!configured) {
+      return path.join(context.workspaceRoot, "downloads", "office");
+    }
+    return resolveWritableDir(
+      configured,
+      context,
+      mergeRoots(this.getUploadRoots(context), resolveConfiguredRoots([configured], context.workspaceRoot)),
+    ).absolute;
+  }
+
+  async getJson<T>(apiPath: string): Promise<T> {
+    return this.requestJson<T>(apiPath, { method: "GET" });
+  }
+
+  async postJson<T>(apiPath: string, body: unknown): Promise<T> {
+    return this.requestJson<T>(apiPath, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async putJson<T>(apiPath: string, body: unknown): Promise<T> {
+    return this.requestJson<T>(apiPath, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async deleteJson<T>(apiPath: string): Promise<T> {
+    return this.requestJson<T>(apiPath, {
+      method: "DELETE",
+    });
+  }
+
+  async postForm<T>(apiPath: string, form: FormData): Promise<T> {
+    return this.requestJson<T>(apiPath, {
+      method: "POST",
+      body: form,
+    });
+  }
+
+  async download(apiPath: string): Promise<{ buffer: Buffer; contentType: string | null }> {
+    const res = await fetch(this.buildUrl(apiPath), {
+      method: "GET",
+      headers: this.buildHeaders(),
+    });
+
+    if (!res.ok) {
+      throw await this.buildResponseError(res);
+    }
+
+    const arrayBuffer = await res.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      contentType: res.headers.get("content-type"),
+    };
+  }
+
+  private loadConfig(): OfficeCommunityConfig {
+    const configPath = getCommunityConfigPath();
+    let raw: string;
+    try {
+      raw = fsSync.readFileSync(configPath, "utf-8");
+    } catch {
+      throw new Error(`community.json 不存在：${configPath}`);
+    }
+
+    let parsed: OfficeCommunityConfig;
+    try {
+      parsed = JSON.parse(raw) as OfficeCommunityConfig;
+    } catch (error) {
+      throw new Error(`community.json 解析失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    if (!parsed.endpoint || !Array.isArray(parsed.agents)) {
+      throw new Error("community.json 缺少 endpoint 或 agents 配置");
+    }
+    return parsed;
+  }
+
+  private async requestJson<T>(apiPath: string, init: RequestInit): Promise<T> {
+    const headers = {
+      ...this.buildHeaders(),
+      ...(init.headers ?? {}),
+    };
+
+    const res = await fetch(this.buildUrl(apiPath), {
+      ...init,
+      headers,
+    });
+
+    if (!res.ok) {
+      throw await this.buildResponseError(res);
+    }
+
+    return res.json() as Promise<T>;
+  }
+
+  private buildHeaders(): Record<string, string> {
+    return {
+      "X-API-Key": this.agentConfig.apiKey,
+      "X-Agent-ID": encodeURIComponent(this.agentConfig.name),
+    };
+  }
+
+  private buildUrl(apiPath: string): string {
+    if (/^https?:\/\//i.test(apiPath)) return apiPath;
+    return `${this.endpoint}${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`;
+  }
+
+  private async buildResponseError(res: Response): Promise<Error> {
+    let message = `请求失败 (${res.status})`;
+    try {
+      const body = await res.json() as OfficeApiErrorBody;
+      message = body.error || body.message || message;
+    } catch {
+      const bodyText = await res.text().catch(() => "");
+      if (bodyText.trim()) {
+        message = bodyText.trim().slice(0, 300);
+      }
+    }
+    return new Error(message);
+  }
+}

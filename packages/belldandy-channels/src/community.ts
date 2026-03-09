@@ -12,6 +12,13 @@ export interface CommunityAgentConfig {
   name: string;
   /** API Key */
   apiKey: string;
+  /** 官网工具相关本地路径配置 */
+  office?: {
+    /** 工坊默认下载目录；相对路径按工作区解析 */
+    downloadDir?: string;
+    /** 工坊上传/读取白名单根目录；相对路径按工作区解析 */
+    uploadRoots?: string[];
+  };
   /** 要加入的房间 */
   room?: {
     name: string;

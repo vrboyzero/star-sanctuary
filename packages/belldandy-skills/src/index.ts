@@ -100,3 +100,22 @@ export { getRoomMembersTool } from "./builtin/get-room-members.js";
 
 // 社区工具
 export { createLeaveRoomTool, createJoinRoomTool } from "./builtin/community/index.js";
+
+// 官网工具
+export {
+  officeWorkshopSearchTool,
+  officeWorkshopGetItemTool,
+  officeWorkshopDownloadTool,
+  officeWorkshopPublishTool,
+  officeWorkshopMineTool,
+  officeWorkshopUpdateTool,
+  officeWorkshopDeleteTool,
+  officeHomesteadGetTool,
+  officeHomesteadInventoryTool,
+  officeHomesteadClaimTool,
+  officeHomesteadPlaceTool,
+  officeHomesteadRecallTool,
+  officeHomesteadMountTool,
+  officeHomesteadUnmountTool,
+  officeHomesteadOpenBlindBoxTool,
+} from "./builtin/office/index.js";

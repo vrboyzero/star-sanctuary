@@ -5,6 +5,7 @@ import {
   addAgentConfig,
   removeAgentConfig,
   listAgentConfigs,
+  getAgentConfig,
   getCommunityConfigPath,
   type CommunityAgentConfig,
 } from "@belldandy/channels";
@@ -59,9 +60,11 @@ export async function runCommunityWizard(options: CommunityWizardOptions = {}): 
       };
     }
 
+    const existingAgent = getAgentConfig(name);
     const agentConfig: CommunityAgentConfig = {
       name,
       apiKey,
+      office: existingAgent?.office,
       room,
     };
 
@@ -135,6 +138,12 @@ export async function runCommunityWizard(options: CommunityWizardOptions = {}): 
           console.log(`     房间密码: ${agent.room.password ? "已设置" : "无"}`);
         } else {
           console.log(`     房间: 未配置`);
+        }
+        if (agent.office?.downloadDir) {
+          console.log(`     默认下载目录: ${agent.office.downloadDir}`);
+        }
+        if (agent.office?.uploadRoots?.length) {
+          console.log(`     上传白名单: ${agent.office.uploadRoots.join(", ")}`);
         }
       });
     }
