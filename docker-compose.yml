@@ -1,11 +1,13 @@
-﻿version: '3.8'
+name: star-sanctuary
 
+# 对外发布名已切换为 Star Sanctuary。
+# 为兼容现有脚本、CLI 说明和运维命令，service key / container_name 继续保留 belldandy-*。
 services:
-  # Gateway 服务
+  # Star Sanctuary Gateway
   belldandy-gateway:
     image: ${BELLDANDY_IMAGE:-vrboyzero/star-sanctuary:local}
     container_name: belldandy-gateway
-    init: true  # 正确处理信号
+    init: true
     restart: unless-stopped
 
     environment:
@@ -43,14 +45,13 @@ services:
 
     volumes:
       # 配置 + 状态持久化
-      - ${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary
+      - "${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary"
       # 工作区（可选，用于文件工具）
-      - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
+      - "${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace"
 
     ports:
       - "${BELLDANDY_GATEWAY_PORT:-28889}:28889"
 
-    # 健康检查
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:28889/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
@@ -58,7 +59,7 @@ services:
       retries: 3
       start_period: 10s
 
-  # CLI 服务（管理工具）
+  # Star Sanctuary CLI（管理工具）
   belldandy-cli:
     image: ${BELLDANDY_IMAGE:-vrboyzero/star-sanctuary:local}
     container_name: belldandy-cli
@@ -72,11 +73,11 @@ services:
       BELLDANDY_AUTH_TOKEN: ${BELLDANDY_AUTH_TOKEN}
 
     volumes:
-      - ${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary
-      - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
+      - "${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary"
+      - "${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace"
 
     entrypoint: ["pnpm", "bdd"]
-    profiles: ["cli"]  # 默认不启动，需 --profile cli
+    profiles: ["cli"]
 
   # Tailscale Sidecar（远程访问）
   tailscale:
@@ -87,33 +88,26 @@ services:
     restart: unless-stopped
 
     environment:
-      # Tailscale Auth Key（从 https://login.tailscale.com/admin/settings/keys 获取）
       TS_AUTHKEY: ${TAILSCALE_AUTH_KEY}
-      # 启用 SSH（可选）
       TS_EXTRA_ARGS: ${TAILSCALE_EXTRA_ARGS:---ssh}
-      # 状态目录
       TS_STATE_DIR: /var/lib/tailscale
 
     volumes:
-      # 持久化 Tailscale 状态
       - tailscale-state:/var/lib/tailscale
-      # 需要 /dev/net/tun 设备
       - /dev/net/tun:/dev/net/tun
 
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
 
-    profiles: ["tailscale"]  # 默认不启动，需 --profile tailscale
+    profiles: ["tailscale"]
 
-  # Gateway with Tailscale（通过 Tailscale 网络访问）
+  # Star Sanctuary Gateway with Tailscale（通过 Tailscale 网络访问）
   belldandy-gateway-tailscale:
     image: ${BELLDANDY_IMAGE:-vrboyzero/star-sanctuary:local}
     container_name: belldandy-gateway-tailscale
     init: true
     restart: unless-stopped
-
-    # 共享 Tailscale 网络栈
     network_mode: service:tailscale
     depends_on:
       - tailscale
@@ -152,12 +146,9 @@ services:
       BELLDANDY_STATE_DIR: /home/belldandy/.star_sanctuary
 
     volumes:
-      # 配置 + 状态持久化
-      - ${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary
-      # 工作区（可选，用于文件工具）
-      - ${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace
+      - "${BELLDANDY_STATE_DIR:-~/.star_sanctuary}:/home/belldandy/.star_sanctuary"
+      - "${BELLDANDY_WORKSPACE_DIR:-./workspace}:/home/belldandy/workspace"
 
-    # 健康检查
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:28889/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
@@ -165,9 +156,7 @@ services:
       retries: 3
       start_period: 10s
 
-    profiles: ["tailscale"]  # 默认不启动，需 --profile tailscale
+    profiles: ["tailscale"]
 
 volumes:
   tailscale-state:
-
-

@@ -65,7 +65,7 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
-          tags: belldandy:test
+          tags: vrboyzero/star-sanctuary:test
           build-args: |
             BELLDANDY_VERSION=${{ steps.build_version.outputs.version }}
           cache-from: type=gha
@@ -75,7 +75,7 @@ jobs:
         run: |
           # 启动容器（使用 mock agent，无需 API key）
           docker run -d \
-            --name belldandy-test \
+            --name star-sanctuary-test \
             -e BELLDANDY_HOST=0.0.0.0 \
             -e BELLDANDY_PORT=28889 \
             -e BELLDANDY_AUTH_MODE=token \
@@ -83,18 +83,18 @@ jobs:
             -e BELLDANDY_AGENT_PROVIDER=mock \
             -e BELLDANDY_TOOLS_ENABLED=false \
             -p 28889:28889 \
-            belldandy:test
+            vrboyzero/star-sanctuary:test
 
           # 等待健康检查通过（最多 60 秒）
           echo "Waiting for health check..."
           for i in {1..30}; do
-            if docker exec belldandy-test node -e "require('http').get('http://127.0.0.1:28889/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))" 2>/dev/null; then
+            if docker exec star-sanctuary-test node -e "require('http').get('http://127.0.0.1:28889/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))" 2>/dev/null; then
               echo "✅ Health check passed"
               break
             fi
             if [ $i -eq 30 ]; then
               echo "❌ Health check failed after 60s"
-              docker logs belldandy-test
+              docker logs star-sanctuary-test
               exit 1
             fi
             sleep 2
@@ -106,8 +106,8 @@ jobs:
           echo "✅ WebChat accessible"
 
           # 清理
-          docker stop belldandy-test
-          docker rm belldandy-test
+          docker stop star-sanctuary-test
+          docker rm star-sanctuary-test
 
       - name: Build multi-platform images
         uses: docker/build-push-action@v5
@@ -196,8 +196,8 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE_NAME }}
-          short-description: "Belldandy - Local-first Personal AI Assistant"
-          readme-filepath: ./docs/DOCKER_HUB_README.md
+          short-description: "Star Sanctuary - Local-first Personal AI Assistant"
+          readme-filepath: ./DOCKER_HUB_README.md
 
   # ========================================
   # Job 3: 创建 GitHub Release（仅 tags）
@@ -252,7 +252,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Release v${{ steps.version.outputs.VERSION }}
+          name: Star Sanctuary v${{ steps.version.outputs.VERSION }}
           body: |
             ## What's Changed
 
@@ -262,16 +262,16 @@ jobs:
 
             ```bash
             # Pull latest image
-            docker pull belldandy/belldandy:${{ steps.version.outputs.VERSION }}
-            docker pull belldandy/belldandy:latest
+            docker pull vrboyzero/star-sanctuary:${{ steps.version.outputs.VERSION }}
+            docker pull vrboyzero/star-sanctuary:latest
 
-            # Run with docker-compose
-            docker-compose up -d
+            # Run with Docker Compose
+            docker compose up -d
             ```
 
             ## Documentation
 
-            - [Docker Deployment Guide](https://github.com/${{ github.repository }}/blob/main/docs/DOCKER_DEPLOYMENT.md)
+            - [Docker Deployment Guide](https://github.com/${{ github.repository }}/blob/main/DOCKER_DEPLOYMENT.md)
             - [Tailscale Remote Access](https://github.com/${{ github.repository }}/blob/main/docs/TAILSCALE_DEPLOYMENT.md)
           draft: false
           prerelease: false

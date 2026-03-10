@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # ========================================
-# Belldandy Docker 镜像构建脚本
+# Star Sanctuary Docker 镜像构建脚本
 # ========================================
 
 VERSION=${1:-local}
-IMAGE_NAME="belldandy:${VERSION}"
+IMAGE_NAME="vrboyzero/star-sanctuary:${VERSION}"
 
 echo "========================================="
-echo "Building Belldandy Docker image"
+echo "Building Star Sanctuary Docker image"
 echo "========================================="
 echo "Image: ${IMAGE_NAME}"
 echo "Build context: $(pwd)"
@@ -43,6 +43,6 @@ echo "Image: ${IMAGE_NAME}"
 echo ""
 echo "Next steps:"
 echo "  1. Copy .env.example to .env and configure it"
-echo "  2. Run: docker-compose up -d"
-echo "  3. Check logs: docker-compose logs -f belldandy-gateway"
+echo "  2. Run: docker compose up -d belldandy-gateway"
+echo "  3. Check logs: docker compose logs -f belldandy-gateway"
 echo ""

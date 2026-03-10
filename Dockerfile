@@ -78,6 +78,13 @@ RUN corepack enable
 
 WORKDIR /app
 
+LABEL org.opencontainers.image.title="Star Sanctuary" \
+      org.opencontainers.image.description="Local-first personal AI assistant" \
+      org.opencontainers.image.source="https://github.com/vrboyzero/star-sanctuary" \
+      org.opencontainers.image.url="https://github.com/vrboyzero/star-sanctuary" \
+      org.opencontainers.image.version="${BELLDANDY_VERSION}" \
+      org.opencontainers.image.licenses="MIT"
+
 # Create non-root user for security
 RUN groupadd -g 1001 belldandy && \
     useradd -u 1001 -g belldandy -m -s /bin/bash belldandy
@@ -127,7 +134,7 @@ COPY --chown=belldandy:belldandy apps/web/package.json ./apps/web/
 ENV NODE_ENV=production \
     BELLDANDY_HOST=127.0.0.1 \
     BELLDANDY_PORT=28889 \
-    BELLDANDY_STATE_DIR=/home/belldandy/.belldandy \
+    BELLDANDY_STATE_DIR=/home/belldandy/.star_sanctuary \
     BELLDANDY_WEB_ROOT=/app/apps/web/public \
     BELLDANDY_VERSION=${BELLDANDY_VERSION}
 

@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # ========================================
-# Belldandy Docker 一键部署脚本
+# Star Sanctuary Docker 一键部署脚本
 # ========================================
 
 echo "========================================="
-echo "Belldandy Docker Deployment"
+echo "Star Sanctuary Docker Deployment"
 echo "========================================="
 echo ""
 
@@ -19,6 +19,12 @@ fi
 if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null 2>&1; then
   echo "Error: Docker Compose is not installed"
   exit 1
+fi
+
+if docker compose version &> /dev/null 2>&1; then
+  COMPOSE_CMD=(docker compose)
+else
+  COMPOSE_CMD=(docker-compose)
 fi
 
 # 检查 .env 文件
@@ -66,7 +72,7 @@ if [ ${#MISSING_VARS[@]} -gt 0 ]; then
 fi
 
 # 检查镜像是否存在
-IMAGE_NAME="${BELLDANDY_IMAGE:-belldandy:local}"
+IMAGE_NAME="${BELLDANDY_IMAGE:-vrboyzero/star-sanctuary:local}"
 if ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
   echo "Image $IMAGE_NAME not found. Building..."
   ./scripts/docker-build.sh
@@ -74,8 +80,8 @@ if ! docker image inspect "$IMAGE_NAME" &> /dev/null; then
 fi
 
 # 启动服务
-echo "Starting Belldandy Gateway..."
-docker-compose up -d belldandy-gateway
+echo "Starting Star Sanctuary Gateway..."
+"${COMPOSE_CMD[@]}" up -d belldandy-gateway
 
 # 等待健康检查
 echo ""
@@ -83,20 +89,20 @@ echo "Waiting for Gateway to be healthy..."
 TIMEOUT=60
 ELAPSED=0
 while [ $ELAPSED -lt $TIMEOUT ]; do
-  if docker-compose ps | grep -q "healthy"; then
+  if "${COMPOSE_CMD[@]}" ps | grep -q "healthy"; then
     echo ""
     echo "========================================="
-    echo "Belldandy Gateway is running!"
+    echo "Star Sanctuary Gateway is running!"
     echo "========================================="
     echo ""
     echo "Access WebChat at:"
     echo "  http://localhost:${BELLDANDY_GATEWAY_PORT:-28889}"
     echo ""
     echo "Useful commands:"
-    echo "  - View logs: docker-compose logs -f belldandy-gateway"
-    echo "  - Stop: docker-compose down"
-    echo "  - Restart: docker-compose restart belldandy-gateway"
-    echo "  - CLI: docker-compose run --rm belldandy-cli --help"
+    echo "  - View logs: ${COMPOSE_CMD[*]} logs -f belldandy-gateway"
+    echo "  - Stop: ${COMPOSE_CMD[*]} down"
+    echo "  - Restart: ${COMPOSE_CMD[*]} restart belldandy-gateway"
+    echo "  - CLI: ${COMPOSE_CMD[*]} run --rm belldandy-cli --help"
     echo ""
     exit 0
   fi
@@ -107,5 +113,5 @@ done
 
 echo ""
 echo "Warning: Gateway did not become healthy within ${TIMEOUT}s"
-echo "Check logs: docker-compose logs belldandy-gateway"
+echo "Check logs: ${COMPOSE_CMD[*]} logs belldandy-gateway"
 exit 1
