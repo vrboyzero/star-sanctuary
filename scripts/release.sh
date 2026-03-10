@@ -39,7 +39,7 @@ git add package.json CHANGELOG.md
 git commit -m "release: v$VERSION"
 git tag "v$VERSION"
 
-echo "Pushing to origin/main with tags..."
-git push origin main --tags
+echo "Pushing to star/main with tags..."
+git push star main --tags
 
 echo "Release v$VERSION completed."

@@ -99,7 +99,7 @@ try {
     Write-Step "[DRY-RUN] git add package.json CHANGELOG.md"
     Write-Step "[DRY-RUN] git commit -m ""release: v$Version"""
     Write-Step "[DRY-RUN] git tag v$Version"
-    Write-Step "[DRY-RUN] git push origin $Branch --tags"
+    Write-Step "[DRY-RUN] git push star $Branch --tags"
     Write-Step "Dry-run completed."
     exit 0
   }
@@ -126,7 +126,7 @@ try {
   }
 
   Invoke-Checked "Push $Branch branch with tags" {
-    Invoke-Git -Args @("push", "origin", $Branch, "--tags")
+    Invoke-Git -Args @("push", "star", $Branch, "--tags")
   }
 
   Write-Step "Release v$Version completed."
