@@ -6,8 +6,8 @@ window.BELLDANDY_WEB_CONFIG = {
     // 推荐模型API申请页或文档页地址
     recommendApiUrl: "https://platform.minimaxi.com/subscribe/coding-plan",
     // Star Sanctuary 官方主页地址
-    officialHomeUrl: "https://belldandy.ai",
+    officialHomeUrl: "https://mwvyxhanusek.sealosgzg.site/",
     // Star Sanctuary 工坊入口地址
-    workshopUrl: "https://belldandy.ai/workshop"
+    workshopUrl: "https://mwvyxhanusek.sealosgzg.site/workshop"
 };
 

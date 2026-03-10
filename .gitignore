@@ -31,7 +31,7 @@ pnpm-debug.log*
 .env.*
 !.env.example
 *.local
-
+!.env.local.example
 # User data directory (Belldandy workspace)
 .belldandy/
 

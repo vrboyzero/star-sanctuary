@@ -8,7 +8,7 @@
 <p align="center">
   <strong>🌟 本地优先的个人 AI 助手</strong><br>
   在你自己的设备上运行，通过多种聊天渠道为你服务<br>
-  <span style="color:#ff4d4f;font-weight:bold;">【重要声明】Star Sanctuary使用有风险，但风险不大。最多就是被盗信用卡硬盘格式化苹果大爆炸。</span>
+  <span style="color:#ff4d4f;font-weight:bold;">重要声明：Star Sanctuary 具备较强的本地执行与自动化能力，但任何具备行动能力的系统都不应被视为零风险。开放高权限能力同时，请先了解它的边界，做好备份，并优先在可控环境中使用。</span>
 </p>
 
 <p align="center">
