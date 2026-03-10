@@ -55,7 +55,7 @@ export class RelayServer {
                 res.writeHead(200, { "Content-Type": "application/json" });
                 const wsUrl = `ws://127.0.0.1:${this.port}/cdp`;
                 res.end(JSON.stringify({
-                    Browser: "Belldandy/Relay",
+                    Browser: "Star Sanctuary/Relay",
                     "Protocol-Version": "1.3",
                     webSocketDebuggerUrl: this.extensionWs ? wsUrl : undefined
                 }));
@@ -139,7 +139,7 @@ export class RelayServer {
                                 id: cmd.id,
                                 error: {
                                     code: -32000,
-                                    message: "浏览器扩展未连接。请告知用户：1) 确保 Chrome 浏览器正在运行；2) 检查 Belldandy 扩展是否已启用并显示已连接状态；3) 如果问题持续，请让用户刷新扩展或重启浏览器。在扩展重新连接前，浏览器相关功能暂时不可用。"
+                                    message: "浏览器扩展未连接。请告知用户：1) 确保 Chrome 浏览器正在运行；2) 检查 Star Sanctuary Browser Relay 扩展是否已启用并显示已连接状态；3) 如果问题持续，请让用户刷新扩展或重启浏览器。在扩展重新连接前，浏览器相关功能暂时不可用。"
                                 }
                             }));
                         }

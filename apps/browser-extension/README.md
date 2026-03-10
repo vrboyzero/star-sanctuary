@@ -15,7 +15,7 @@
    ```bash
    node packages/belldandy-browser/dist/bin/relay.js
    ```
-2. 在 Chrome 中点击扩展图标 **Star Sanctuary Relay**。
+2. 在 Chrome 中点击扩展图标 **Star Sanctuary Browser Relay**。
    - 扩展会自动尝试连接到 `ws://127.0.0.1:28892/extension`。
    - 连接成功后，Relay Server 终端会显示 `[Relay] Extension 已连接`。
 

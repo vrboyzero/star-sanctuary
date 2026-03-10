@@ -24,6 +24,73 @@ export function setBrowserLogger(logger: Logger) {
     browserLogger = logger;
 }
 
+type PageLike = {
+    url(): string;
+    isClosed(): boolean;
+    target(): unknown;
+};
+
+type PageSelectionOptions = {
+    preferredTargetId?: string;
+    preferredUrl?: string;
+};
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getComparablePageUrl(url: string | undefined): string {
+    if (!url) return "";
+    try {
+        const parsed = new URL(url);
+        parsed.hash = "";
+        return parsed.toString();
+    } catch {
+        return url;
+    }
+}
+
+export function getTargetId(value: unknown): string | undefined {
+    const candidate = value as {
+        _targetId?: unknown;
+        targetId?: unknown;
+        _targetInfo?: { targetId?: unknown };
+        _target?: { _targetId?: unknown; _targetInfo?: { targetId?: unknown } };
+    } | undefined;
+
+    const raw = candidate?._targetId
+        ?? candidate?.targetId
+        ?? candidate?._targetInfo?.targetId
+        ?? candidate?._target?._targetId
+        ?? candidate?._target?._targetInfo?.targetId;
+
+    return typeof raw === "string" && raw.trim() ? raw : undefined;
+}
+
+export function selectPreferredPage<T extends PageLike>(pages: T[], options: PageSelectionOptions): T | undefined {
+    const openPages = pages.filter(page => !page.isClosed());
+    if (openPages.length === 0) {
+        return undefined;
+    }
+
+    if (options.preferredTargetId) {
+        const preferredByTarget = openPages.find(page => getTargetId(page.target()) === options.preferredTargetId);
+        if (preferredByTarget) {
+            return preferredByTarget;
+        }
+    }
+
+    if (options.preferredUrl) {
+        const preferredUrl = getComparablePageUrl(options.preferredUrl);
+        const preferredByUrl = openPages.find(page => getComparablePageUrl(page.url()) === preferredUrl);
+        if (preferredByUrl) {
+            return preferredByUrl;
+        }
+    }
+
+    return openPages[openPages.length - 1];
+}
+
 // =========================================
 // Direct CDP Helper - 绕过 Puppeteer 的 session 管理
 // =========================================
@@ -111,7 +178,10 @@ function validateBrowserUrl(urlStr: string): { ok: true } | { ok: false; error: 
 class BrowserManager {
     private static instance: BrowserManager;
     private browser: Browser | null = null;
+    private activePage: Page | null = null;
     private connecting = false;
+    private preferredTargetId?: string;
+    private preferredUrl?: string;
 
     private constructor() { }
 
@@ -149,6 +219,7 @@ class BrowserManager {
             this.browser.on("disconnected", () => {
                 browserLogger?.warn("Browser disconnected");
                 this.browser = null;
+                this.activePage = null;
             });
 
             return this.browser;
@@ -157,14 +228,60 @@ class BrowserManager {
         }
     }
 
+    private rememberPage(page: Page): Page {
+        this.activePage = page;
+        this.preferredTargetId = getTargetId(page.target()) ?? this.preferredTargetId;
+        const currentUrl = page.url();
+        if (currentUrl && currentUrl !== "about:blank") {
+            this.preferredUrl = currentUrl;
+        }
+        return page;
+    }
+
+    public async bindToPage(preferred: PageSelectionOptions & { timeoutMs?: number }): Promise<Page | null> {
+        if (preferred.preferredTargetId) {
+            this.preferredTargetId = preferred.preferredTargetId;
+        }
+        if (preferred.preferredUrl) {
+            this.preferredUrl = preferred.preferredUrl;
+        }
+
+        const browser = await this.connect();
+        const timeoutMs = preferred.timeoutMs ?? 5000;
+        const deadline = Date.now() + timeoutMs;
+
+        while (Date.now() <= deadline) {
+            const selected = selectPreferredPage(await browser.pages(), {
+                preferredTargetId: this.preferredTargetId,
+                preferredUrl: this.preferredUrl,
+            });
+            if (selected) {
+                return this.rememberPage(selected);
+            }
+            await sleep(100);
+        }
+
+        browserLogger?.warn("Unable to bind preferred page", {
+            preferredTargetId: this.preferredTargetId,
+            preferredUrl: this.preferredUrl,
+        });
+        return null;
+    }
+
     public async getPage(): Promise<Page> {
         const browser = await this.connect();
+        if (this.activePage && !this.activePage.isClosed()) {
+            return this.activePage;
+        }
+
         let pages = await browser.pages();
 
-        // Puppeteer via Relay should find the targets exposed by Relay.
-        // If we have open pages, pick the first visible one (usually the active tab user is on).
-        if (pages.length > 0) {
-            return pages[0];
+        const preferredPage = selectPreferredPage(pages, {
+            preferredTargetId: this.preferredTargetId,
+            preferredUrl: this.preferredUrl,
+        });
+        if (preferredPage) {
+            return this.rememberPage(preferredPage);
         }
 
         browserLogger?.debug("Waiting for targets...");
@@ -172,7 +289,7 @@ class BrowserManager {
             const target = await browser.waitForTarget(t => t.type() === 'page', { timeout: 5000 });
             const page = await target.page();
             if (!page) throw new Error("Target found but no page attached");
-            return page;
+            return this.rememberPage(page);
         } catch (err) {
             const targets = browser.targets();
             const targetDebug = targets.map(t => ({
@@ -242,6 +359,12 @@ export const browserOpenTool: Tool = {
             // 使用直接 CDP 命令创建标签页（绕过 Puppeteer 的 session 管理）
             // 扩展的 Target.createTarget 会直接创建带 URL 的标签页
             const result = await sendCdpCommand("Target.createTarget", { url }) as { targetId: string };
+            const manager = BrowserManager.getInstance();
+            await manager.bindToPage({
+                preferredTargetId: result.targetId,
+                preferredUrl: url,
+                timeoutMs: 5000,
+            });
 
             browserLogger?.debug(`Successfully created tab with targetId: ${result.targetId}`);
 
@@ -285,6 +408,11 @@ export const browserNavigateTool: Tool = {
             const page = await manager.getPage();
 
             await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+            await manager.bindToPage({
+                preferredTargetId: getTargetId(page.target()),
+                preferredUrl: page.url(),
+                timeoutMs: 1000,
+            });
 
             return success("unknown", "browser_navigate", `Navigated to ${url}`, start);
         } catch (err) {
@@ -430,7 +558,11 @@ export const browserGetContentTool: Tool = {
             const page = await manager.getPage();
 
             let content = "";
-            let metadata = "";
+
+            await page.waitForFunction(
+                () => (document.body?.innerText ?? "").trim().length > 120,
+                { timeout: 1500 }
+            ).catch(() => undefined);
 
             if (format === "html") {
                 content = await page.content();
@@ -440,11 +572,20 @@ export const browserGetContentTool: Tool = {
                 // Markdown (Readability)
                 const html = await page.content();
                 const url = page.url();
+                const pageInfo = await page.evaluate(() => ({
+                    title: document.title,
+                    bodyText: document.body?.innerText ?? "",
+                }));
                 // Ensure import works in ESM context
-                const { extractReadabilityContent, htmlToMarkdown } = await import("./utils.js");
+                const { extractBestContent, htmlToMarkdown } = await import("./utils.js");
 
                 try {
-                    const result = extractReadabilityContent(html, url);
+                    const result = extractBestContent({
+                        html,
+                        url,
+                        title: pageInfo.title,
+                        bodyText: pageInfo.bodyText,
+                    });
 
                     if (result) {
                         const title = result.title ? `# ${result.title}\n\n` : "";
@@ -453,11 +594,11 @@ export const browserGetContentTool: Tool = {
                         content = `${title}${byline}${originalUrl}${result.content}`;
                     } else {
                         // Fallback if readability fails
-                        content = htmlToMarkdown(html);
+                        content = pageInfo.bodyText || htmlToMarkdown(html);
                     }
                 } catch (e) {
-                    browserLogger?.warn("Readability failed, falling back to raw markdown conversion", e);
-                    content = htmlToMarkdown(html);
+                    browserLogger?.warn("Structured extraction failed, falling back to raw markdown conversion", e);
+                    content = pageInfo.bodyText || htmlToMarkdown(html);
                 }
             }
 

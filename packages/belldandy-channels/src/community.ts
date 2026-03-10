@@ -614,6 +614,17 @@ export class CommunityChannel implements Channel {
   }
 
   /**
+   * 返回当前已加入的社区房间，用于工具在非社区上下文中解析离开目标。
+   */
+  getJoinedRooms(): Array<{ agentName: string; roomId: string; roomName?: string }> {
+    return Array.from(this.connections.values()).map(state => ({
+      agentName: state.agentConfig.name,
+      roomId: state.roomId,
+      roomName: state.agentConfig.room?.name,
+    }));
+  }
+
+  /**
    * 动态加入房间（供工具调用）
    */
   async joinRoom(agentName: string, roomName: string, password?: string): Promise<void> {
