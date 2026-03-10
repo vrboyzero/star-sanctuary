@@ -1092,11 +1092,19 @@ function handleEvent(event, payload) {
   if (event === "pairing.required") {
     const code = payload && payload.code ? String(payload.code) : "";
     if (!botMsgEl) botMsgEl = appendMessage("bot", "");
-    botMsgEl.textContent =
-      `需要配对（Pairing）。配对码：${code}\n\n` +
-      `请在项目目录下打开新终端，执行：\n` +
-      `  corepack pnpm bdd pairing approve ${code}\n` +
-      `然后再发送一次消息。`;
+    botMsgEl.innerHTML = `
+      <div style="line-height: 1.6;">
+        需要配对（Pairing）。配对码：<b>${code}</b><br><br>
+        <b>新手操作指南：</b><br>
+        1. 不要关闭当前网页。<br>
+        2. <b>保持那个运行着服务的黑色窗口不要关</b>，然后在项目目录下重新打开一个<b>新的黑色终端窗口</b>。<br>
+        3. 在这个新窗口里，复制并粘贴下面的完整命令，然后按回车键：<br>
+        <div style="background: var(--bg-secondary); padding: 8px; border-radius: 4px; margin: 8px 0; font-family: monospace;">
+          corepack pnpm bdd pairing approve ${code}
+        </div>
+        4. 终端提示成功后，在这个网页再发一次消息即可。
+      </div>
+    `;
     return;
   }
   if (event === "agent.status") {
