@@ -221,6 +221,21 @@ If you use Belldandy inside the community ecosystem long-term, this is part of t
 - Node.js: **22.12.0 or later**. Node 24.x is currently not recommended.
 - Package manager: `pnpm` via `corepack`
 
+### Getting the Code
+
+You can get the project in one of two ways:
+
+**Method 1: Download from Release (Recommended)**
+1. Visit the project's [Releases page](https://github.com/vrboyzero/star-sanctuary/releases).
+2. Download the `Source code (zip)` archive for the latest version.
+3. Extract it to a path without special characters or spaces.
+
+**Method 2: Git Clone**
+```bash
+git clone https://github.com/vrboyzero/star-sanctuary.git
+cd star-sanctuary
+```
+
 ### One-click Launch
 
 **Windows**
