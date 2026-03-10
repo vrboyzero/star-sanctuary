@@ -1,129 +1,215 @@
-﻿# Star Sanctuary
+# Star Sanctuary
 
 <p align="center">
-  <strong>🌟 Local‑first personal AI assistant</strong><br>
-  Runs entirely on your own machine and talks to you through multiple channels.<br>
-  <span style="color:#ff4d4f;font-weight:bold;">[Important Notice] This project is under active development and testing. Use at your own risk and do not rely on it for production workloads or storing sensitive data.</span>
+  <a href="./README.md">简体中文</a> |
+  <a href="./README.en.md"><b>English</b></a>
 </p>
 
+<p align="center">
+  <strong>Local-first personal AI assistant and Agent workspace</strong><br>
+  Runs on your own machine with WebChat, CLI, multi-channel access, memory, tools, automation, and long-term workspace capabilities.<br>
+  <span style="color:#ff4d4f;font-weight:bold;">Important notice: Star Sanctuary has local execution, file editing, browser control, and external integration capabilities. Enable high-privilege features only after you understand the boundaries, preferably in a controlled environment with proper backups.</span>
+</p>
 
 <p align="center">
-  <a href="./README.md"><b>简体中文</b></a> |
-  <a href="./README.en.md">English</a>
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#core-capabilities">Core Capabilities</a> •
+  <a href="#project-structure">Project Structure</a> •
+  <a href="#personalization-and-long-term-capabilities">Personalization</a> •
+  <a href="#configuration">Configuration</a> •
+  <a href="#channels-and-integrations">Channels</a> •
+  <a href="#deployment">Deployment</a> •
+  <a href="#faq">FAQ</a> •
+  <a href="#sponsorship">Sponsorship</a>
 </p>
 
 ---
 
 ## Introduction
 
-Star Sanctuary is a **local‑first personal AI assistant**. It runs on your own computer, keeps your data private, and comes with powerful capabilities such as long‑term memory, tool usage, browser automation, and voice interaction.
+Star Sanctuary is a **local-first** personal AI assistant project. It is built around a local Gateway that unifies model calls, long-term workspace files, memory retrieval, tool execution, chat channels, browser automation, and scheduled tasks into one runtime.
+
+This repository is no longer just a WebChat demo. It is now a full Agent infrastructure stack:
+
+- **Local-first**: the default state directory is `~/.star_sanctuary`, with compatibility for the legacy `~/.belldandy`
+- **Unified entrypoints**: WebChat, `bdd` CLI, chat channels, webhooks, and community APIs share the same Agent and tool system
+- **Long-term workspace**: built-in workspace files such as `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, and `AGENTS.md`
+- **Extensible by design**: supports Skills, Methods, Plugins, MCP, Browser Relay, Channels Router, and multi-Agent Profiles
 
 ### Design Principles
 
-- **🔒 Single‑user, privacy‑first**: No public sharing features by default; everything is stored locally.
-- **🛡️ Secure by default**: All inbound messages are treated as untrusted input. Tools run under strict allowlists and least‑privilege policies.
-- **🔌 Extensible**: Channels, tools, and capabilities can be extended via the `plugins` / `skills` system.
+- **Privacy-first**: runs locally by default and keeps your data and workspace under your control
+- **Secure defaults**: public binding requires authentication; client messages require pairing; tools are guarded by policies and allowlists
+- **Long-term companionship**: this is not just one-shot Q&A, but an Agent with memory, methodology, logs, and automation
 
 ### Tech Stack
 
-| Category        | Tech                                       |
-|-----------------|--------------------------------------------|
-| **Language**    | TypeScript                                 |
-| **Runtime**     | Node.js 22+                                |
-| **Package**     | pnpm (monorepo)                            |
-| **Database**    | SQLite + FTS5 + sqlite‑vec                 |
-| **Transport**   | WebSocket                                  |
-| **Frontend**    | Vanilla JS/CSS (no framework dependency)   |
-| **Browser**     | Chrome Extension (MV3) + CDP relay         |
-| **TTS**         | Edge TTS / OpenAI TTS                      |
-| **Vector Search** | sqlite‑vec (C++ SIMD‑accelerated)       |
+| Category | Tech |
+|------|------|
+| Language | TypeScript |
+| Runtime | Node.js 22.12+ |
+| Package manager | pnpm Workspace |
+| Transport | WebSocket + HTTP API |
+| Data | SQLite / FTS5 / sqlite-vec |
+| Frontend | Vanilla HTML / JS / CSS |
+| Browser automation | Chrome Extension (MV3) + Relay |
+| Voice | TTS / STT |
+| Extension protocol | MCP |
 
-### Project Layout
+---
+
+## Core Capabilities
+
+### 1. Gateway + WebChat + CLI
+
+- Local Gateway, default address: `http://127.0.0.1:28889`
+- WebChat with streaming replies, configuration management, tool toggles, and workspace editing
+- `bdd` CLI with `start / stop / status / doctor / setup / pairing / config / relay / community`
+- Foreground mode, background daemon mode, and `GET /health` health check
+
+### 2. Agent Runtime
+
+- OpenAI-compatible provider support
+- Both `chat_completions` and `responses` API paths
+- Primary model plus `models.json` fallback queue
+- Automatic context compaction
+- Multi-Agent Profiles, Agent Registry, and per-channel / per-rule routing
+
+### 3. Memory and Long-term Workspace
+
+- Hybrid retrieval with SQLite + FTS5 + sqlite-vec
+- Embedding retrieval, local workspace file loading, and session persistence
+- Methods documents, logs playback, and memory file directories
+- Supports `agents/{agentId}` sub-workspaces and `facets/` module switching
+
+### 4. Tool System
+
+Built-in tools currently cover:
+
+- File read/write, directory listing, patch apply, web fetch, and web search
+- System commands, process management, terminal, and code interpreter
+- Memory search, log reading, methodology read/write, task delegation, and parallel subtasks
+- Browser open / navigate / click / type / screenshot / snapshot
+- TTS, STT, image generation, and camera capture
+- Timers, token counters, cron scheduling, and service restart
+- Skills lookup, canvas workspace, identity context, community room actions, and office / homestead tools
+
+### 5. Channels and External Integrations
+
+- WebChat
+- Feishu
+- QQ
+- Discord
+- `community` persistent community connection
+- `/api/message` community HTTP API
+- `/api/webhook/:id` webhook API
+- Channels Router
+
+### 6. Deployment and Operations
+
+- One-click launch via `start.bat` / `start.sh`
+- Docker / Docker Compose
+- Tailscale remote access
+- Nix deployment
+- `bdd doctor` health checks
+
+---
+
+## Project Structure
 
 ```text
 Belldandy/
-├── packages/
-│   ├── belldandy-core/              # Core gateway service
-│   │   ├── server.ts                # Gateway entrypoint
-│   │   ├── logger/                  # Logging (console + file rotation)
-│   │   ├── heartbeat/               # Scheduled heartbeat jobs
-│   │   └── pairing/                 # Client pairing and allowlist
-│   │
-│   ├── belldandy-agent/             # Agent runtime
-│   │   ├── tool-agent.ts            # Tool‑enabled agent loop (ReAct)
-│   │   ├── hooks.ts                 # 13 lifecycle hooks
-│   │   ├── hook-runner.ts           # Hook executor
-│   │   ├── system-prompt.ts         # System prompt construction
-│   │   └── templates/               # Persona templates (SOUL/IDENTITY/...)
-│   │
-│   ├── belldandy-channels/          # Channels layer
-│   │   ├── types.ts                 # Channel interfaces
-│   │   ├── manager.ts               # Multi‑channel manager
-│   │   └── feishu.ts                # Feishu (Lark) WebSocket channel
-│   │
-│   ├── belldandy-skills/            # Tools system
-│   │   ├── builtin/
-│   │   │   ├── fetch.ts             # Web fetch (with SSRF protection)
-│   │   │   ├── file.ts              # File read/write (path traversal guard)
-│   │   │   ├── list-files.ts        # Directory listing
-│   │   │   ├── apply-patch/         # Apply unified diffs
-│   │   │   ├── web-search/          # Web search (Brave/SerpAPI)
-│   │   │   ├── system/              # System commands (Safe Mode)
-│   │   │   ├── browser/             # Browser automation toolset
-│   │   │   ├── memory.ts            # Memory search tools
-│   │   │   ├── log.ts               # Log read/search (log_read/log_search)
-│   │   │   ├── multimedia/          # TTS / image / camera
-│   │   │   ├── methodology/         # SOP methodology tools
-│   │   │   ├── session/             # Session orchestration (spawn/history)
-│   │   │   └── code-interpreter/    # Code interpreter (Python/JS)
-│   │   ├── executor.ts              # Tool executor
-│   │   └── types.ts                 # Tool type definitions
-│   │
-│   ├── belldandy-memory/            # Memory subsystem
-│   │   ├── store.ts                 # SQLite + FTS5 storage
-│   │   ├── vector.ts                # sqlite‑vec vector search
-│   │   ├── chunker.ts               # Text chunking
-│   │   └── indexer.ts               # Incremental indexer & watcher
-│   │
-│   ├── belldandy-mcp/               # MCP (Model Context Protocol) support
-│   │   ├── types.ts                 # MCP types
-│   │   ├── config.ts                # MCP config loading & validation
-│   │   ├── client.ts                # MCP client (stdio/SSE)
-│   │   ├── tool-bridge.ts           # MCP tools → Star Sanctuary skills
-│   │   └── manager.ts               # Multi‑server manager
-│   │
-│   ├── belldandy-plugins/           # Plugin system
-│   │   └── registry.ts              # Dynamic loading + hook aggregation
-│   │
-│   └── belldandy-browser/           # Browser relay
-│       └── relay.ts                 # WebSocket‑to‑CDP relay
-│
 ├── apps/
 │   ├── web/                         # WebChat frontend
-│   │   └── public/
-│   │       ├── index.html           # Main page
-│   │       └── app.js               # Frontend logic
-│   │
-│   └── browser-extension/           # Chrome extension (MV3)
-│       └── background.js            # chrome.debugger bridge
-│
-└── ~/.star_sanctuary/                    # User workspace (created at runtime)
-    ├── SOUL.md                      # Core persona
-    ├── IDENTITY.md                  # Identity
-    ├── USER.md                      # User profile
-    ├── MEMORY.md                    # Long‑term memory
-    ├── HEARTBEAT.md                 # Heartbeat tasks
-    ├── mcp.json                     # MCP server config
-    ├── logs/                        # Runtime logs (rotated)
-    ├── memory/                      # Daily notes
-    ├── methods/                     # SOP methods
-    ├── skills/                      # User‑defined tools
-    ├── plugins/                     # User plugins
-    ├── cron-jobs.json               # Cron jobs persistence
-    └── sessions/                    # Session logs & compaction state
-        ├── {id}.jsonl               # Session persistence
-        └── {id}.compaction.json     # Compaction state
+│   └── browser-extension/          # Chrome extension for Browser Relay
+├── packages/
+│   ├── belldandy-protocol/         # Protocol, state-dir resolution, shared types
+│   ├── belldandy-core/             # Gateway, CLI, logs, Heartbeat, Cron, Webhook
+│   ├── belldandy-agent/            # Agent runtime, prompts, compaction, multi-Agent
+│   ├── belldandy-memory/           # SQLite / FTS / vector retrieval / memory management
+│   ├── belldandy-skills/           # Built-in tools, Skills, Browser, Methods, Office
+│   ├── belldandy-channels/         # Feishu / QQ / Discord / Community / Router
+│   ├── belldandy-mcp/              # MCP integration
+│   ├── belldandy-plugins/          # Plugin system
+│   └── belldandy-browser/          # Browser Relay
+├── docs/                           # Deployment, webhook, routing, design docs
+├── examples/                       # Methods, skills, facets, and Agent examples
+├── start.bat
+├── start.sh
+├── DOCKER_DEPLOYMENT.md
+└── README.md
 ```
+
+### Default State Directory
+
+The default state directory is `~/.star_sanctuary`. If that does not exist but the legacy `~/.belldandy` does, the system will automatically use the legacy directory for compatibility.
+
+Typical contents:
+
+```text
+~/.star_sanctuary/
+├── AGENTS.md
+├── SOUL.md
+├── TOOLS.md
+├── IDENTITY.md
+├── USER.md
+├── HEARTBEAT.md
+├── BOOTSTRAP.md
+├── MEMORY.md                       # optional
+├── agents/                         # multi-Agent sub-workspaces
+├── facets/                         # FACET modules
+├── methods/                        # SOP / methodology
+├── sessions/                       # persisted sessions
+├── generated/                      # runtime-generated assets
+├── logs/                           # logs
+├── models.json                     # fallback model config
+├── mcp.json                        # MCP config
+├── webhooks.json                   # Webhook config
+├── channels-routing.json           # channel routing rules
+├── allowlist.json                  # paired client allowlist
+└── pairing.json                    # pending pairing requests
+```
+
+---
+
+## Personalization and Long-term Capabilities
+
+### FACET Module System
+
+FACET is the persona / role module system in Belldandy. Instead of putting every behavior rule into a single `SOUL.md`, you can split different styles and responsibilities into dedicated modules and switch when needed.
+
+- Module files live under `~/.star_sanctuary/facets/`
+- Useful for roles such as coder, researcher, translator, or writer
+- Switch with the `switch_facet` tool; the change then applies under the current workspace rules
+- In multi-Agent setups, FACET can also work together with `agents/{agentId}` sub-workspaces
+
+For examples, see [`examples/facets`](./examples/facets).
+
+### Methodology System
+
+Methods are not just a tool list. They are the SOPs that the Agent gradually accumulates for how similar work should be done next time.
+
+- Method documents live under `~/.star_sanctuary/methods/`
+- The Agent can read and write them via `method_list`, `method_read`, `method_create`, and `method_search`
+- Methods can work together with logs, memory, Heartbeat, and Cron to form a loop of execution -> review -> distillation -> reuse
+- Good for deployment flows, channel integrations, operational SOPs, troubleshooting procedures, and content production workflows
+
+In short:
+
+- Skills answer "what the Agent can do"
+- Methods answer "how it should do it next time"
+- Logs answer "what actually happened before"
+
+### office.goddess.ai Ecosystem Capabilities
+
+Star Sanctuary is already integrated with the `office.goddess.ai` ecosystem. It is not only a chat frontend, but can also work with community, workshop, and homestead modules.
+
+- `bdd community` configures community access and room connections
+- Built-in Workshop tools support search, inspect, download, publish, update, and delete flows
+- Built-in Homestead tools support status lookup, inventory, claim, place, recall, mount, unmount, and blind-box actions
+- Can work together with community identity, room context, and token usage upload for a unified experience
+
+If you use Belldandy inside the community ecosystem long-term, this is part of the core workflow rather than an extra add-on.
 
 ---
 
@@ -131,583 +217,565 @@ Belldandy/
 
 ### Requirements
 
-- **OS**: Windows / macOS / Linux
-- **Node.js**: **22.12.0** or later (LTS recommended)
-- **Package manager**: `pnpm` (managed via corepack)
+- OS: Windows / macOS / Linux
+- Node.js: **22.12.0 or later**. Node 24.x is currently not recommended.
+- Package manager: `pnpm` via `corepack`
 
-### One‑click Launch (Recommended)
+### One-click Launch
 
-**Windows**:
+**Windows**
+Double-click `start.bat` in the install directory,
+or run:
 
-```bash
-# In Explorer, double‑click
-start.bat
+```powershell
+.\start.bat
 ```
 
-**macOS / Linux**:
+**macOS / Linux**
 
 ```bash
 ./start.sh
 ```
 
-The script will: check your environment → install dependencies → verify and build `dist/` when needed → start the gateway → open the browser.
+The launcher script will automatically:
 
-> **Note**: This repository is maintained primarily as source code, so the GitHub repo usually does not include committed `dist/` build artifacts. If `dist/` is missing on first launch, `start.bat` / `start.sh` will automatically run `corepack pnpm build`.
+- check Node.js and pnpm
+- run `corepack pnpm install` if dependencies are missing
+- run `corepack pnpm build` if `dist/` is missing
+- generate a one-time WebChat token
+- start the Gateway and open the browser
 
-### Manual Launch
+### Manual Start
 
 ```bash
-# 1. Enter project directory
-cd Star Sanctuary
-
-# 2. Install dependencies
+# 1. Install dependencies
 corepack pnpm install
 
-# 3. Build project (compile TypeScript into `dist/`)
+# 2. Build
 corepack pnpm build
 
-# 4. Start Gateway (Dev mode)
+# If build artifacts are inconsistent, do a clean rebuild
+corepack pnpm rebuild
+
+# 3. Health check (recommended)
+corepack pnpm bdd doctor
+
+# 4. Start in development mode
 corepack pnpm bdd dev
 
-# 5. Start Gateway (With supervisor auto-restart)
+# Or start in foreground production mode
 corepack pnpm bdd start
 
-# 6. Open WebChat
-# http://localhost:28889/
+# Or start as a background daemon
+corepack pnpm bdd start -d
+
+# Check status / stop
+corepack pnpm bdd status
+corepack pnpm bdd stop
 ```
 
-> **Note**: `pnpm bdd dev` runs TypeScript source directly via `tsx`, so it can skip the build step. `pnpm bdd start` runs compiled files from `dist/`, so you must run `corepack pnpm build` first or you may hit `Cannot find module` errors.
+### First-time Setup
 
-### First‑time Pairing
+If `.env.local` does not exist yet, start with:
 
-For security reasons, the first client must be paired:
+```bash
+corepack pnpm bdd setup
+```
 
-1. Send any message in WebChat. A pairing code (e.g. `ABC123XY`) will be shown.
-2. Approve the pairing in your terminal:
-   ```bash
-   corepack pnpm bdd pairing approve ABC123XY
-   ```
-3. Send another message — you can now chat normally.
+Non-interactive example:
 
----
+```bash
+corepack pnpm bdd setup \
+  --provider openai \
+  --base-url https://api.openai.com/v1 \
+  --api-key sk-xxx \
+  --model gpt-4o \
+  --auth-mode token \
+  --auth-secret your-token
+```
 
-## Features
+### First-time Pairing
 
-### ✅ Implemented Modules
+The Web client requires pairing on first connection. The page will show a pairing code such as `ABC123XY`.
 
-| Module            | Feature                        | Description                                                      |
-|-------------------|--------------------------------|------------------------------------------------------------------|
-| **Core**          | Gateway + WebChat              | WebSocket, streaming replies, Markdown rendering                 |
-| **Security**      | Pairing                        | ClientId allowlist; unauthorized clients cannot trigger Agent    |
-| **Skills**        | Tool system                    | `web_fetch`, `file_read/write`, `list_files`, `apply_patch`, `log_read`, `log_search` |
-| **Memory**        | Hybrid RAG                     | SQLite FTS5 + sqlite‑vec hybrid retrieval                        |
-| **Persona**       | SOUL system                    | Configurable persona, identity, and user profile                 |
-| **Plugins**       | 13 lifecycle hooks             | HookRegistry + HookRunner + priorities                           |
-| **Browser**       | Browser extension              | Snapshot, screenshot, click, type, automation via CDP relay      |
-| **System exec**   | Safe Mode                      | Secure shell command execution with strict allowlist             |
-| **Multimedia**    | TTS + image generation         | Free Edge TTS, DALL‑E 3 image generation                         |
-| **Vision**        | Loopback Vision                | Use camera via browser to let Agent "see" the world             |
-| **Methodology**   | SOP system                     | Agent self‑improvement and SOP reuse                             |
-| **MCP**           | Model Context Protocol support | Connect external MCP servers as tools                            |
-| **Channels**      | Feishu channel + channel API   | Extensible multi‑channel architecture                            |
-| **Cron**          | Cron Tasks + Heartbeat         | `cron` tools for `at`/`every` scheduling; Heartbeat periodic checks |
-| **Persona**       | FACET System                   | `switch_facet` tool to switch persona modules instantly          |
-| **Vision**        | Native Vision & Video          | Support Kimi K2.5 for understanding uploaded images/videos (`ms://`) |
-| **Memory**        | Context Compaction             | 3-tier context compression (Working/Rolling/Archival) prevents token overflow |
-| **Management**    | Service Restart                | Agent can autonomously restart the gateway via `service_restart` |
-| **UI**            | Config & Tools UI              | Web UI for settings, tool toggles, and System Doctor self-check  |
-| **CLI Framework** | Unified `bdd` Command          | citty declarative subcommands, lazy loading, `--json` output     |
+Approve it in a terminal:
 
+```bash
+corepack pnpm bdd pairing approve ABC123XY
+```
+
+Useful pairing commands:
+
+```bash
+corepack pnpm bdd pairing pending
+corepack pnpm bdd pairing list
+corepack pnpm bdd pairing revoke <CLIENT_ID>
+corepack pnpm bdd pairing cleanup --dry-run
+corepack pnpm bdd pairing export --out pairing-backup.json --include-pending
+corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
+```
 
 ---
 
 ## Configuration
 
-Create `.env.local` in the project root (Git ignored). You can use `.env.example` as a template.
+Create `.env.local` in the project root. See `.env.example` and `.env.local.example` for more complete examples.
 
-### Basic Configuration (Required)
+### Minimal Configuration
 
 ```env
-# Choose an OpenAI‑compatible provider
 BELLDANDY_AGENT_PROVIDER=openai
-
-# API endpoint
 BELLDANDY_OPENAI_BASE_URL=https://api.openai.com/v1
-# Or Gemini: https://generativelanguage.googleapis.com/v1beta/openai
-# Or local Ollama: http://127.0.0.1:11434/v1
-
-# API Key
-BELLDANDY_OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
-
-# Model name
+BELLDANDY_OPENAI_API_KEY=sk-xxxxxxxx
 BELLDANDY_OPENAI_MODEL=gpt-4o
 ```
 
-> 💡 You can also edit configuration in the Web UI: click the gear icon (⚙️) in the top‑right corner. Changes are written to `.env.local` and the backend restarts automatically.
-
-### Advanced Configuration (Optional)
+### Common Base Configuration
 
 ```env
-# ------ Network & Security ------
-BELLDANDY_PORT=28889                    # Server port
-BELLDANDY_AUTH_MODE=none                # none | token | password
+# Host and port
+BELLDANDY_HOST=127.0.0.1
+BELLDANDY_PORT=28889
 
-# ------ AI Capabilities ------
-BELLDANDY_TOOLS_ENABLED=true            # Enable tool calling
-BELLDANDY_EMBEDDING_ENABLED=true        # Enable memory retrieval
-BELLDANDY_EMBEDDING_MODEL=text-embedding-004
+# Auth mode: none | token | password
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
 
-# ------ Heartbeat ------
-BELLDANDY_HEARTBEAT_ENABLED=true        # Periodically check HEARTBEAT.md
-BELLDANDY_HEARTBEAT_INTERVAL=30m        # 30m, 1h, 300s
-BELLDANDY_HEARTBEAT_ACTIVE_HOURS=08:00-23:00  # Quiet at night
-
-# ------ Browser relay ------
-BELLDANDY_BROWSER_RELAY_ENABLED=true    # Start browser relay automatically
-
-# ------ MCP ------
-BELLDANDY_MCP_ENABLED=true              # Enable MCP support
-
-# ------ Logging ------
-BELLDANDY_LOG_LEVEL=debug               # debug / info / warn / error
-BELLDANDY_LOG_DIR=~/.star_sanctuary/logs     # Log directory
-BELLDANDY_LOG_MAX_SIZE=10MB             # Rotate when exceeded
-BELLDANDY_LOG_RETENTION_DAYS=7          # Auto‑delete old logs
-BELLDANDY_LOG_CONSOLE=true              # Log to console
-BELLDANDY_LOG_FILE=true                 # Log to files
-
-# ------ Long-term Memory & Compaction ------
-BELLDANDY_COMPACTION_ENABLED=true       # Enable automatic context compression
-BELLDANDY_COMPACTION_THRESHOLD=20000    # Token usage threshold to trigger compaction
-BELLDANDY_COMPACTION_KEEP_RECENT=10     # Number of recent messages to keep raw
-
-# ------ Cron Tasks ------
-BELLDANDY_CRON_ENABLED=true             # Enable the Cron scheduling engine
-
-# ------ Failover & Multimodal ------
-BELLDANDY_MODEL_CONFIG_FILE=~/.star_sanctuary/models.json # Fallback models & video upload config
-
+# State dir (default: ~/.star_sanctuary)
+# BELLDANDY_STATE_DIR=E:/star_sanctuary
 ```
 
-### Tool Permissions (Brief)
+### Model and Request Path
 
-- **File access**: confined to workspace roots by default; sensitive files like `.env` / `SOUL.md` are protected.
-- **`file_write` capabilities**: supports `overwrite/append/replace/insert`; replace by line or regex; auto‑create parent dirs; dotfiles and base64 writes are policy‑controlled; `.sh` writes auto‑`chmod +x` on non‑Windows.
-- **Multi‑workspace**: extend writable roots via `BELLDANDY_EXTRA_WORKSPACE_ROOTS` for cross‑project work.
-- **System commands**: Safe Mode allowlist with non‑interactive injection, quick/build timeouts, and forced kill; dangerous args like `rm -r/-rf` and `del /s /q` are blocked.
-- **Firewall rules**: path guard blocks access to `SOUL.md`; `exec` is forbidden from reading `.env`.
-- **Policy overrides**: use `BELLDANDY_TOOLS_POLICY_FILE` to point at a JSON policy file (see `.env.example`).
+```env
+# OpenAI-compatible API shape: chat_completions | responses
+BELLDANDY_OPENAI_WIRE_API=chat_completions
 
+# Stream output
+BELLDANDY_OPENAI_STREAM=true
 
-### MCP Configuration
-
-
-[MCP (Model Context Protocol)](https://modelcontextprotocol.io/) is a standard protocol for connecting AI assistants to external data sources and tools.
-
-Example `~/.star_sanctuary/mcp.json`:
-
-```json
-{
-  "version": "1.0.0",
-  "servers": [
-    {
-      "id": "filesystem",
-      "name": "Filesystem",
-      "description": "Access to local filesystem",
-      "transport": {
-        "type": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
-      },
-      "autoConnect": true,
-      "enabled": true
-    },
-    {
-      "id": "github",
-      "name": "GitHub",
-      "description": "GitHub API access",
-      "transport": {
-        "type": "stdio",
-        "command": "npx",
-        "args": ["-y", "@modelcontextprotocol/server-github"],
-        "env": {
-          "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxxxxxxxxxxx"
-        }
-      },
-      "autoConnect": true,
-      "enabled": true
-    }
-  ],
-  "settings": {
-    "defaultTimeout": 30000,
-    "debug": false,
-    "toolPrefix": true
-  }
-}
+# Retry and warmup
+BELLDANDY_OPENAI_MAX_RETRIES=1
+BELLDANDY_OPENAI_RETRY_BACKOFF_MS=300
+BELLDANDY_PRIMARY_WARMUP_ENABLED=true
+BELLDANDY_PRIMARY_WARMUP_TIMEOUT_MS=8000
+BELLDANDY_PRIMARY_WARMUP_COOLDOWN_MS=60000
 ```
 
-Supported transport types:
+`responses` is typically used for models that require that API shape, such as some Codex-style providers.
 
-- `stdio`: local subprocess communication (recommended for most MCP servers)
-- `sse`: HTTP Server‑Sent Events (for remote servers)
+### Memory, Tools, and Workspace
 
-> 💡 MCP requires the tools system to be enabled (`BELLDANDY_TOOLS_ENABLED=true`).
+```env
+BELLDANDY_TOOLS_ENABLED=true
+BELLDANDY_EMBEDDING_ENABLED=true
+BELLDANDY_EMBEDDING_PROVIDER=openai
+BELLDANDY_EMBEDDING_MODEL=text-embedding-3-large
 
----
+# Extra workspace roots (comma-separated)
+# BELLDANDY_EXTRA_WORKSPACE_ROOTS=E:/project-a,E:/project-b
 
-## Personalization
-
-Star Sanctuary stores all user data under `~/.star_sanctuary/`.
-
-### Persona Files
-
-| File          | Purpose           | Example                                   |
-|---------------|-------------------|-------------------------------------------|
-| `SOUL.md`     | Core personality  | "You are a meticulous TypeScript expert…" |
-| `IDENTITY.md` | Identity profile  | "Your name is Star Sanctuary, a first‑class god…" |
-| `USER.md`     | User profile      | "User is vrboyzero, a full‑stack engineer…" |
-
-### Memory System
-
-| Path                    | Purpose                      |
-|-------------------------|------------------------------|
-| `MEMORY.md`             | Long‑term curated facts      |
-| `memory/YYYY-MM-DD.md`  | Daily notes / raw transcripts |
-
-### Heartbeat Tasks
-
-Edit `HEARTBEAT.md`:
-
-```markdown
-- [ ] Remind me to review my schedule every morning
-- [ ] Drink water reminder
+# Custom tools policy file
+# BELLDANDY_TOOLS_POLICY_FILE=./config/tools-policy.json
 ```
 
-### Logging
+### Scheduled Tasks and Context Compaction
 
-Runtime logs are stored in `~/.star_sanctuary/logs/`.
+```env
+BELLDANDY_HEARTBEAT_ENABLED=true
+BELLDANDY_HEARTBEAT_INTERVAL=30m
+BELLDANDY_HEARTBEAT_ACTIVE_HOURS=08:00-23:00
 
-| Feature              | Description                                   |
-|----------------------|-----------------------------------------------|
-| **Dual outputs**     | Log to both console and files                 |
-| **Daily files**      | `gateway-2025-02-05.log`, etc.                |
-| **Size‑based rotate**| Split automatically when size > 10MB          |
-| **Auto cleanup**     | Logs older than retention days are deleted    |
-| **Agent readable**   | Agent can read logs via `log_read/log_search` |
+BELLDANDY_CRON_ENABLED=true
 
-See `BELLDANDY_LOG_*` variables for configuration.
-
-### Methodology System (Methods)
-
-> Tools define what the Agent is able to do; methods define how it should do those things in the future.
-
-On top of a standard skills/tooling system, Star Sanctuary adds a **Methodology System** designed specifically for **long‑memory, long‑term companion Agents**. It consists of four parts:
-
-- **Agent**: The decision‑making layer shaped by workspace files like `SOUL.md`, `AGENTS.md`, `USER.md`, and `TOOLS.md`.
-- **Skills**: The concrete tools that perform actions (file I/O, web fetch, browser control, shell commands, memory search, etc.).
-- **Methods**: Markdown SOP documents under `~/.star_sanctuary/methods/`, acting as the Agent’s "how‑to" memory, managed via `method_list`, `method_read`, and `method_create`.
-- **Logs**: Structured runtime logs under `~/.star_sanctuary/logs/*.log`, which the Agent can read with `log_read` / `log_search` to review executions, errors, and performance.
-
-These four pieces form a closed loop so the Agent doesn’t just "rethink from scratch next time" but gradually grows its own methodology:
-
-- **Before: look up methods instead of improvising**
-  - For complex tasks (deployments, system configuration, multi‑file refactors, external integrations, etc.):
-    - Use `method_list` to see if there is already a relevant method.
-    - Use `method_read` to load the SOP and follow the steps.
-    - If there is no method yet, treat this as a "first‑time exploration" and freely combine skills to solve it.
-- **During: every attempt leaves a factual trace**
-  - Each tool call, error, slow query, and heartbeat run is logged to `~/.star_sanctuary/logs/YYYY-MM-DD.log` with timestamp, module, level, argument summary, and duration.
-  - The Agent can use `log_read` / `log_search` at any time to inspect which steps failed, which calls were slow, and whether certain errors repeat.
-- **After: turn logs into methods and capture experience**
-  - Once a task is solved (even after many failures), the Agent can:
-    - Use `log_search` to replay the errors and fixes from that time window.
-    - Distill a stable, reusable procedure.
-    - Use `method_create` to write a method document (for example, `Feishu-connection-debug.md` or `Project-deploy-basic.md`) with context, steps, skills used, and common pitfalls.
-- **Next time: start from methods, then fine‑tune**
-  - When a similar task appears again:
-    - Start with `method_list` / `method_read` to load the relevant method.
-    - Adjust on top of the SOP instead of repeating the full "trial → debug → success" cycle.
-    - If the environment changed and new issues appear, update the method based on logs so the SOP evolves with reality.
-
-**In short:**
-
-- **Skills** define what the Agent *can* do.
-- **Logs** record what it *actually* did.
-- **Methods** capture how it *should* do things next time.
-- **Agent** loops through these three, evolving from "tool‑user" into a long‑term partner with its own way of doing things.
-
-**Key benefits: Automation, continuous improvement, and composability for long‑memory Agents**
-
-- **Automation**:
-  - Repetitive business workflows no longer rely on ad‑hoc prompts; they are written as versioned SOPs (methods) and executed repeatedly via heartbeat (`HEARTBEAT.md`) or explicit tasks.
-  - Updating a method document is effectively shipping a new version of the automation pipeline — the next run follows the new process.
-
-- **Continuous improvement**:
-  - Every failure/debugging session is logged; the Agent can aggregate errors with `log_search` and then use `method_create` to encode the lessons into methods.
-  - Updating methods changes the Agent’s default behavior for that scenario, making it more stable and efficient on the same machine and project over time.
-
-- **Composability**:
-  - Each method document is a reusable "business brick" (for example, "1688 sourcing", "Amazon listing", "daily monitoring").
-  - More complex revenue‑generating or operations workflows can then be defined as pipeline‑style methods that compose these bricks, instead of rebuilding everything from raw skills each time.
-
-> For a concrete Chinese example of an end‑to‑end workflow (sourcing from 1688 and continuously listing on Amazon), and how methods integrate with heartbeat and the logging system to run the pipeline, see [`Methods方法论示例与说明.md`](./Methods方法论示例与说明.md).
-
----
-
-## Feishu (Lark) Integration
-
-
-Talk to Star Sanctuary via Feishu without exposing your machine to the internet.
-
-High‑level steps (see Chinese docs for screenshots):
-
-1. **Create a Feishu app** on [Feishu Open Platform](https://open.feishu.cn/).
-2. **Enable the bot** and request permissions:
-   - `im:message` (receive messages)
-   - `im:message:send_as_bot` (send messages)
-   - `im:resource` (access resources)
-3. **Configure long‑lived connection**: enable `im.message.receive_v1` in event subscriptions.
-4. **Configure Star Sanctuary** via `.env.local`:
-
-   ```env
-   BELLDANDY_FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
-   BELLDANDY_FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-   ```
-
-5. Start the gateway:
-
-   ```bash
-   corepack pnpm dev:gateway
-   ```
-
-When you see `Feishu WebSocket Channel started.` and `ws client ready` in logs, you can start chatting with the bot from Feishu.
-
----
-
-## Advanced Features
+BELLDANDY_COMPACTION_ENABLED=true
+BELLDANDY_COMPACTION_TRIGGER_FRACTION=0.75
+BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD=2000
+```
 
 ### Browser Automation
 
-Let the Agent control your browser: open pages, click buttons, type into inputs, capture screenshots, and extract content.
+```env
+BELLDANDY_BROWSER_RELAY_ENABLED=true
+BELLDANDY_RELAY_PORT=28892
+```
 
-1. Enable the relay:
-   ```env
-   BELLDANDY_BROWSER_RELAY_ENABLED=true
-   ```
-2. Install the browser extension:
-   - Open `chrome://extensions`
-   - Enable "Developer mode"
-   - Click "Load unpacked" and select `apps/browser-extension`
-3. Click the extension icon and confirm it shows **Connected**.
+### Multi-channel Configuration
 
-### Voice Interaction
+```env
+# Feishu
+BELLDANDY_FEISHU_APP_ID=
+BELLDANDY_FEISHU_APP_SECRET=
+BELLDANDY_FEISHU_AGENT_ID=default
 
-High‑quality voice via Edge TTS (free) or OpenAI TTS.
+# QQ
+BELLDANDY_QQ_APP_ID=
+BELLDANDY_QQ_APP_SECRET=
+BELLDANDY_QQ_AGENT_ID=default
+BELLDANDY_QQ_SANDBOX=true
 
-- **Enable**: tell the Agent "enable voice mode".
-- **Disable**: tell the Agent "disable voice".
+# Discord
+BELLDANDY_DISCORD_ENABLED=true
+BELLDANDY_DISCORD_BOT_TOKEN=
+BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID=
+```
 
-### Vision
+### Channel Routing, Community, and Webhook
 
-Use the camera via browser to let the Agent "see" the physical world.
+```env
+BELLDANDY_CHANNEL_ROUTER_ENABLED=true
+BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH=~/.star_sanctuary/channels-routing.json
+BELLDANDY_CHANNEL_ROUTER_DEFAULT_AGENT_ID=default
 
-- Requires browser automation to be connected.
-- Ask the Agent to "take a photo" or "look where I am now".
+BELLDANDY_COMMUNITY_API_ENABLED=false
+BELLDANDY_COMMUNITY_API_TOKEN=your-community-token
 
-### Plugin System
+BELLDANDY_WEBHOOK_CONFIG_PATH=~/.star_sanctuary/webhooks.json
+BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS=600000
+```
 
-13 lifecycle hooks enable deep customization:
+### Fallback Model Config: `models.json`
 
-| Category | Hooks |
-|----------|-------|
-| Agent    | `before_agent_start`, `agent_end`, `before_compaction`, `after_compaction` |
-| Message  | `message_received`, `message_sending`, `message_sent` |
-| Tool     | `before_tool_call`, `after_tool_call`, `tool_result_persist` |
-| Session  | `session_start`, `session_end` |
-| Gateway  | `gateway_start`, `gateway_stop` |
+`models.json` lives at `~/.star_sanctuary/models.json` by default and defines fallback models:
 
-Place plugins under `~/.star_sanctuary/plugins/`. They are loaded automatically when the gateway starts.
+```json
+{
+  "fallbacks": [
+    {
+      "id": "backup",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "sk-xxx",
+      "model": "deepseek-chat",
+      "protocol": "openai",
+      "wireApi": "chat_completions",
+      "requestTimeoutMs": 60000,
+      "maxRetries": 1,
+      "retryBackoffMs": 300
+    }
+  ]
+}
+```
 
-497: ---
-498: 
-499: ## Key New Features
-500: 
-501: ### 1. Native Vision & Video Understanding
-502: 
-503: Directly send images and videos (requires a vision-capable model like Kimi k2.5).
-504: 
-505: - **Images**: Upload directly; the model "sees" it immediately.
-506: - **Videos**: Upload video files (mp4/mov, etc.). The Agent automatically uploads them to the cloud and references them via `ms://` protocol for long-video understanding.
-507: 
-508: ### 2. Cron Tasks
-509: 
-510: More flexible than Heartbeat. Just tell the Agent:
-511: 
-512: > "Remind me to meet at 3 PM" (One-time)
-513: > "Remind me to drink water every 4 hours" (Recurring)
-514: 
-515: Managed automatically via `cron` tools with persistence.
-516: 
-517: ### 3. Context Compaction
-518: 
-519: Solves token overflow in long conversations using a **3-tier progressive compression** architecture:
-520: 
-521: 1. **Working Memory**: Keeps the last N raw messages.
-522: 2. **Rolling Summary**: Incrementally summarizes overflowed messages.
-523: 3. **Archival Summary**: Further condenses summaries into core conclusions when they get too long.
-524: 
-525: Keeps "core memory" intact even after thousands of turns while saving tokens.
-526: 
-527: ### 4. FACET Persona Switching
-528: 
-529: Tell the Agent "Switch module to coder" or "Switch FACET to translator" to instantly swap the persona module in `SOUL.md` and auto-restart to apply changes.
-530: 
-531: ---
-532: 
-533: ## CLI Commands
+---
 
-Star Sanctuary provides a unified `bdd` CLI entry point (based on [citty](https://github.com/unjs/citty)). All commands support `--help` for usage and `--json` for machine-readable output.
+## Channels and Integrations
+
+### WebChat
+
+After the Gateway starts, open:
+
+- `http://127.0.0.1:28889`
+- or your configured `BELLDANDY_HOST:PORT`
+
+### Feishu / QQ / Discord
+
+Once credentials are configured, the Gateway will initialize these channels automatically at startup.
+
+Reference:
+
+- [Star Sanctuary渠道对接说明.md](./Star%20Sanctuary渠道对接说明.md)
+
+### Community Access
+
+Community integration has its own setup wizard:
 
 ```bash
-# View full command tree
+corepack pnpm bdd community
+```
+
+It manages the community connection config and supports API keys, room names, and room passwords for different Agents.
+
+### Channels Router
+
+`channels-routing.json` lets you route messages to different Agents based on channel, room, keywords, mention requirements, and more.
+
+See:
+
+- [docs/channels-routing.md](./docs/channels-routing.md)
+
+### Community HTTP API
+
+When `BELLDANDY_COMMUNITY_API_ENABLED=true` is enabled, you can use:
+
+```text
+POST /api/message
+```
+
+This is mainly for community or external-service integration with the Gateway, using Bearer Token auth.
+
+### Webhook API
+
+Webhooks use a dedicated config file at `~/.star_sanctuary/webhooks.json` and support:
+
+- per-webhook tokens
+- explicit `agentId`
+- auto-generated `conversationId`
+- `X-Idempotency-Key` for idempotency
+
+Endpoint:
+
+```text
+POST /api/webhook/:id
+```
+
+See:
+
+- [docs/webhook.md](./docs/webhook.md)
+
+---
+
+## Browser Automation
+
+Star Sanctuary browser automation has two parts:
+
+- the local Relay Server
+- the Chrome extension in `apps/browser-extension`
+
+Both need to be ready before the Agent can control your real browser session and logged-in pages.
+
+### 1. Start Relay
+
+The simplest way:
+
+```bash
+corepack pnpm bdd relay start --port 28892
+```
+
+Or let Gateway start Relay automatically:
+
+```env
+BELLDANDY_BROWSER_RELAY_ENABLED=true
+BELLDANDY_RELAY_PORT=28892
+```
+
+> By default, the extension connects to `ws://127.0.0.1:28892/extension`. If you change the Relay port, the extension side must use the same port.
+
+### 2. Install the Chrome Extension
+
+1. Open `chrome://extensions`
+2. Enable Developer mode
+3. Click Load unpacked
+4. Select [`apps/browser-extension`](./apps/browser-extension)
+
+After installation, you should see the `Star Sanctuary Browser Relay` icon in the Chrome toolbar.
+
+### 3. First Connection
+
+1. Make sure Relay is already running
+2. Click the extension icon in the browser toolbar once
+3. The extension will try to connect to the local Relay and keep the connection alive in the background
+
+The current extension badge states are roughly:
+
+- `ON`: connected
+- `OFF`: disconnected
+- `ERR`: connection failed
+- `...`: connecting
+
+### 4. How to Verify It Works
+
+- the extension badge shows `ON`
+- Gateway / Relay logs show that the extension connected
+- the Agent can use browser tools such as open page, screenshot, click, type, and snapshot extraction
+
+### 5. Typical Usage Tips
+
+- Open a site you are already logged into, then let the Agent take over
+- If you do not want the WebChat tab to be navigated accidentally, prefer using `browser_open` to create a new tab
+- If connection fails, first check that local port 28892 is not occupied, then click the extension icon again
+
+### 6. Installation Summary
+
+1. Start Relay
+2. Load [`apps/browser-extension`](./apps/browser-extension) from `chrome://extensions`
+3. Click the extension icon to connect
+4. Use browser tools from chat
+
+Extension documentation:
+
+- [apps/browser-extension/README.md](./apps/browser-extension/README.md)
+
+---
+
+## Deployment
+
+### Docker / Compose
+
+Shortest path:
+
+```bash
+cp .env.example .env
+docker compose up -d belldandy-gateway
+```
+
+Full deployment, images, persistence paths, and Tailscale sidecar docs:
+
+- [DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)
+- [DOCKER_HUB_README.md](./DOCKER_HUB_README.md)
+
+### Tailscale
+
+- [docs/TAILSCALE_DEPLOYMENT.md](./docs/TAILSCALE_DEPLOYMENT.md)
+
+### Nix
+
+- [docs/NIX_DEPLOYMENT.md](./docs/NIX_DEPLOYMENT.md)
+
+---
+
+## CLI Commands
+
+```bash
+# Root help
 corepack pnpm bdd --help
 
-# Start service
-corepack pnpm bdd start              # With supervisor (Recommended for production)
-corepack pnpm bdd dev                # Dev mode (No auto-restart)
-```
+# Service management
+corepack pnpm bdd start
+corepack pnpm bdd start -d
+corepack pnpm bdd status
+corepack pnpm bdd stop
 
-### Pairing Management
+# Setup and diagnostics
+corepack pnpm bdd setup
+corepack pnpm bdd doctor
+corepack pnpm bdd doctor --check-model
 
-```bash
-corepack pnpm bdd pairing list                          # List approved devices
-corepack pnpm bdd pairing pending                       # List pending requests
-corepack pnpm bdd pairing approve <CODE>                # Approve pairing code
-corepack pnpm bdd pairing revoke <CLIENT_ID>            # Revoke authorization
-corepack pnpm bdd pairing cleanup [--dry-run]           # Clean up expired requests
-corepack pnpm bdd pairing export --out backup.json      # Export pairing state
-corepack pnpm bdd pairing import --in backup.json       # Import pairing state (Merge by default)
-```
+# Pairing management
+corepack pnpm bdd pairing pending
+corepack pnpm bdd pairing approve <CODE>
+corepack pnpm bdd pairing revoke <CLIENT_ID>
 
-### Diagnostics & Config
+# Config file management
+corepack pnpm bdd config path
+corepack pnpm bdd config list
+corepack pnpm bdd config list --show-secrets
+corepack pnpm bdd config get <KEY>
+corepack pnpm bdd config set <KEY> <VALUE>
+corepack pnpm bdd config edit
 
-```bash
-corepack pnpm bdd doctor                                # Health check (Node/pnpm/Port/Config/DB)
-corepack pnpm bdd doctor --check-model                  # Include model connectivity test
-corepack pnpm bdd doctor --json                         # JSON output
+# Browser Relay
+corepack pnpm bdd relay start --port 28892
 
-corepack pnpm bdd config list                           # List .env.local config (Secrets masked)
-corepack pnpm bdd config list --show-secrets             # Show secrets
-corepack pnpm bdd config get <KEY>                      # Get single config value
-corepack pnpm bdd config set <KEY> <VALUE>              # Set config value
-corepack pnpm bdd config edit                           # Open .env.local in editor
-corepack pnpm bdd config path                           # Print config file path
-```
-
-### Browser Relay
-
-```bash
-corepack pnpm bdd relay start                           # Start CDP relay (Default port 28892)
-corepack pnpm bdd relay start --port 9222               # Specify port
-```
-
-### Setup Wizard
-
-```bash
-corepack pnpm bdd setup                                 # Interactive setup (Provider/API/Port/Auth)
-corepack pnpm bdd setup --provider openai \
-  --base-url https://api.openai.com/v1 \
-  --api-key sk-xxx --model gpt-4o                       # Non-interactive mode
+# Community setup wizard
+corepack pnpm bdd community
 ```
 
 ---
 
 ## FAQ
 
-**Q: `EADDRINUSE` error on startup?**
+### Startup says `Cannot find module ... dist/...`
 
-A: Change the port in `.env.local`: `BELLDANDY_PORT=28890`
+This usually means build artifacts are missing or incomplete. Run:
 
-**Q: How to access from the internet?**
-
-A: Use tools like Cloudflare Tunnel or Frp, and enable authentication with `BELLDANDY_AUTH_MODE=token`.
-
-**Q: Memory retrieval is inaccurate?**
-
-A: Ensure you have configured an Embedding model and set `BELLDANDY_EMBEDDING_ENABLED=true`.
-
-**Q: Can I run CMD commands on Windows?**
-
-A: Yes. Native commands like `copy`, `move`, `del`, `ipconfig` are supported. Note that `del` blocks `/s` and `/q` arguments for safety.
-
-**Q: No reply after sending message in Feishu?**
-
-A: Check:
-1. App is published and approved.
-2. Permissions are correctly granted.
-3. `im.message.receive_v1` event subscription is added.
-
----
-
-## Project Structure (Monorepo)
-
-```text
-packages/
-├── belldandy-core/      # Gateway, protocol, config, security
-├── belldandy-agent/     # Agent runtime, tool orchestration, streaming
-├── belldandy-channels/  # Channel interfaces (Feishu, Telegram, ...)
-├── belldandy-skills/    # Skill definitions and execution
-├── belldandy-memory/    # Memory indexing and retrieval
-├── belldandy-plugins/   # Plugin system
-├── belldandy-mcp/       # MCP protocol support
-└── belldandy-browser/   # Browser automation relay
-
-apps/
-├── web/                 # WebChat frontend
-└── browser-extension/   # Chrome extension
+```bash
+corepack pnpm build
 ```
 
+If it still fails, do a clean rebuild:
+
+```bash
+corepack pnpm rebuild
+```
+
+### `better-sqlite3` fails to build during install
+
+Check the Node.js version first. **Node.js 22 LTS** is currently recommended. Native modules are more likely to fail on Node 24+.
+
+### Port already in use
+
+Change:
+
+```env
+BELLDANDY_PORT=28890
+```
+
+Then restart.
+
+### The browser says pairing is required
+
+That is expected. Copy the pairing code from the page and run:
+
+```bash
+corepack pnpm bdd pairing approve <CODE>
+```
+
+### I want LAN or public access
+
+Set:
+
+```env
+BELLDANDY_HOST=0.0.0.0
+```
+
+and make sure auth is enabled:
+
+```env
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
+```
+
+The project intentionally rejects the unsafe combination `0.0.0.0 + AUTH_MODE=none`.
+
+### Webhook / Community API is not working
+
+Check:
+
+- whether the feature is enabled
+- whether the Bearer Token is correct
+- whether the config file exists in the state directory
+- whether the Gateway has been restarted
+
 ---
 
-## Developer Info
+## Related Docs
 
-### References
-
-This project is architecturally inspired by [moltbot](https://github.com/moltbot/moltbot), with a complete codebase rewrite.
-
-### Related Docs
-
-- [Star Sanctuary实现内容说明.md](./Star%20Sanctuary实现内容说明.md) - Detailed feature breakdown (Chinese)
-- [Star Sanctuary使用手册.md](./Star%20Sanctuary使用手册.md) - Full user manual (Chinese)
-
-English docs are still work-in-progress; for now, please refer to the README and source code.
+- [Star Sanctuary使用手册.md](./Star%20Sanctuary使用手册.md)
+- [Star Sanctuary实现内容说明.md](./Star%20Sanctuary实现内容说明.md)
+- [项目使用指南.md](./项目使用指南.md)
+- [Agent官网对接使用手册.md](./Agent官网对接使用手册.md)
+- [DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)
+- [docs/webhook.md](./docs/webhook.md)
+- [docs/channels-routing.md](./docs/channels-routing.md)
 
 ---
 
 ## Sponsorship
 
-If Star Sanctuary is helpful, you can support the author:
+If Star Sanctuary is useful to you, you can support its continued development.
 
-- Afdian: <https://afdian.com/a/vrboyzero777>
-- See `README.md` for QR code images (WeChat / Alipay, Chinese only).
+### Afdian
+
+[![Afdian](https://img.shields.io/badge/Afdian-Support%20the%20Author-946ce6?style=for-the-badge)](https://afdian.com/a/vrboyzero777)
+
+<https://afdian.com/a/vrboyzero777>
+
+### WeChat / Alipay
+
+<p align="center">
+  <img src="./assets/wechat.png" alt="WeChat QR" width="200">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="./assets/alipay.jpg" alt="Alipay QR" width="200">
+</p>
 
 ---
 
 ## Contact
 
-- **Email**: <fyyx4918822@gmail.com>
-- **QQ Group** (Chinese): 1080383003
-- **Issue Tracker**: <https://github.com/vrboyzero/star-sanctuary/issues>
+- **Email**: [fyyx4918822@gmail.com](mailto:fyyx4918822@gmail.com)
+- **QQ Group**: 1080383003
+- **Issue Tracker**: [GitHub Issues](https://github.com/vrboyzero/star-sanctuary/issues)
 
-Feedback and suggestions are very welcome.
+Feedback, bug reports, and suggestions are welcome.
 
 ---
 
 ## License
 
-Star Sanctuary is released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+[MIT License](./LICENSE)
 
+---
 
-
-
-
+<p align="center">
+  <em>Star Sanctuary - Your Personal AI Assistant</em>
+</p>

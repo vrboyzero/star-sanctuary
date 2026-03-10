@@ -889,7 +889,7 @@ async function sendMessage() {
   if (payload && payload.ok === false) {
     if (payload.error && payload.error.code === "pairing_required") {
       const msg = payload.error.message ? String(payload.error.message) : "Pairing required.";
-      botMsgEl.textContent = `${msg}\n\n请在项目目录下打开新终端，执行：\n  corepack pnpm bdd pairing approve <CODE>\n（将 <CODE> 替换为上方的配对码，然后再发送一次消息）`;
+      botMsgEl.innerHTML = `\n        <div style="line-height: 1.6;">\n          ${msg}<br><br>\n          <b>新手操作指南：</b><br>\n          1. 不要关闭当前网页。<br>\n          2. <b>保持那个运行着服务的黑色窗口不要关</b>，然后在项目目录下重新打开一个<b>新的黑色终端窗口</b>。<br>\n          3. 在这个新窗口里，复制并粘贴下面的完整命令，然后按回车键：<br>\n          <div style="background: var(--bg-secondary); padding: 8px; border-radius: 4px; margin: 8px 0; font-family: monospace;">\n            corepack pnpm bdd pairing approve &lt;CODE&gt;\n          </div>\n          <i style="color: var(--text-tertiary); font-size: 0.9em;">（注意：请把 <code>&lt;CODE&gt;</code> 换成上方实际给你的配对码）</i><br><br>\n          4. 终端提示成功后，在这个网页再发一次消息即可。\n        </div>\n      `;
       return;
     }
     if (payload.error && payload.error.code === "config_required") {
