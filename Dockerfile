@@ -54,6 +54,7 @@ COPY apps/web/package.json ./apps/web/
 
 # Copy tsconfig
 COPY tsconfig*.json ./
+COPY scripts ./scripts
 
 # Install all dependencies (including dev dependencies for build)
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
