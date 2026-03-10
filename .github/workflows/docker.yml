@@ -13,7 +13,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: belldandy/belldandy
+  IMAGE_NAME: vrboyzero/star-sanctuary
 
 jobs:
   # ========================================
