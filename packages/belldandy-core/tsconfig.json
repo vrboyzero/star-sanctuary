@@ -11,6 +11,9 @@
   ],
   "references": [
     {
+      "path": "../star-sanctuary-distribution"
+    },
+    {
       "path": "../belldandy-protocol"
     },
     {

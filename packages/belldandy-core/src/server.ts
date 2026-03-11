@@ -5,6 +5,7 @@ import path from "node:path";
 
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
+import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
 
 import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig, uploadTokenUsage } from "@belldandy/protocol";
 import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type ModelProfile } from "@belldandy/agent";
@@ -37,6 +38,7 @@ export type GatewayServerOptions = {
     password?: string;
   };
   webRoot: string;
+  envDir?: string;
   stateDir?: string;
   agentFactory?: () => BelldandyAgent;
   /** Multi-Agent registry (takes precedence over agentFactory when agentId is specified) */
@@ -610,6 +612,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         clientId: state.clientId ?? state.sessionId,
         userUuid: state.userUuid, // 传递UUID
         stateDir: opts.stateDir ?? resolveStateDir(),
+        envDir: opts.envDir,
         agentFactory: opts.agentFactory ?? (() => new MockAgent()),
         agentRegistry: opts.agentRegistry,
         primaryModelConfig: opts.primaryModelConfig,
@@ -702,6 +705,7 @@ async function handleReq(
     clientId: string;
     userUuid?: string; // 添加UUID字段
     stateDir: string;
+    envDir?: string;
     log: GatewayLog;
     agentFactory: () => BelldandyAgent;
     agentRegistry?: AgentRegistry;
@@ -1092,8 +1096,7 @@ async function handleReq(
     }
 
     case "config.read": {
-      const envPath = path.join(process.cwd(), ".env");
-      const localEnvPath = path.join(process.cwd(), ".env.local");
+      const { envPath, envLocalPath: localEnvPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       const config: Record<string, string> = {};
 
       const readEnvFile = (p: string) => {
@@ -1223,8 +1226,9 @@ async function handleReq(
         }
       };
 
-      const envOk = updateEnvFile(path.join(process.cwd(), ".env"), envUpdates);
-      const localOk = updateEnvFile(path.join(process.cwd(), ".env.local"), localUpdates);
+      const { envPath, envLocalPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
+      const envOk = updateEnvFile(envPath, envUpdates);
+      const localOk = updateEnvFile(envLocalPath, localUpdates);
 
       if (!envOk || !localOk) {
         return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: "Failed to write config files" } };
@@ -1235,7 +1239,7 @@ async function handleReq(
 
     // [NEW] 读取 .env 文件原始内容（用于编辑器）
     case "config.readRaw": {
-      const envPath = path.join(process.cwd(), ".env");
+      const { envPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       try {
         if (!fs.existsSync(envPath)) {
           return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: ".env 文件不存在" } };
@@ -1253,7 +1257,7 @@ async function handleReq(
       if (typeof content !== "string") {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "Missing content" } };
       }
-      const envPath = path.join(process.cwd(), ".env");
+      const { envPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       try {
         fs.writeFileSync(envPath, content, "utf-8");
         return { type: "res", id: req.id, ok: true };

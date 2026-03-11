@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveWorkspaceTemplateDir } from "@star-sanctuary/distribution";
 
 /**
  * Workspace 引导文件名常量
@@ -53,17 +53,15 @@ export type WorkspaceLoadResult = {
     hasMemory: boolean;
 };
 
-// 模板目录（相对于此文件）
-const TEMPLATE_DIR = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "templates"
-);
-
 /**
  * 加载模板文件内容
  */
 async function loadTemplate(name: string): Promise<string> {
-    const templatePath = path.join(TEMPLATE_DIR, name);
+    const { templatesDir } = resolveWorkspaceTemplateDir({
+        env: process.env,
+        agentModuleUrl: import.meta.url,
+    });
+    const templatePath = path.join(templatesDir, name);
     try {
         return await fs.readFile(templatePath, "utf-8");
     } catch {

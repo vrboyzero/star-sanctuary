@@ -157,8 +157,12 @@ export async function checkEligibilityBatch(
 function checkBinExists(bin: string): Promise<boolean> {
   const cmd = isWindows ? "where" : "which";
   return new Promise((resolve) => {
-    execFile(cmd, [bin], { timeout: 3000 }, (err) => {
-      resolve(!err);
-    });
+    try {
+      execFile(cmd, [bin], { timeout: 3000 }, (err) => {
+        resolve(!err);
+      });
+    } catch {
+      resolve(false);
+    }
   });
 }

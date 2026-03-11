@@ -6,6 +6,7 @@
   "files": [],
   "references": [
     { "path": "./packages/belldandy-protocol" },
+    { "path": "./packages/star-sanctuary-distribution" },
     { "path": "./packages/belldandy-memory" },
     { "path": "./packages/belldandy-skills" },
     { "path": "./packages/belldandy-mcp" },

@@ -15,6 +15,12 @@ const __dirname = path.dirname(__filename);
 const EXT = path.extname(__filename);
 const GATEWAY_SCRIPT = path.resolve(__dirname, `../bin/gateway${EXT}`);
 
+function resolveGatewayScript(): string {
+  const override = process.env.STAR_SANCTUARY_GATEWAY_ENTRY?.trim()
+    || process.env.BELLDANDY_GATEWAY_ENTRY?.trim();
+  return override ? path.resolve(override) : GATEWAY_SCRIPT;
+}
+
 // 重启信号 exit code（与 system.restart 保持一致）
 const RESTART_EXIT_CODE = 100;
 const RESTART_DELAY_MS = 500;
@@ -129,7 +135,7 @@ export async function startDaemon(stateDir?: string): Promise<{ success: boolean
   const logFd = fs.openSync(logFile, "a");
 
   try {
-    const child = fork(GATEWAY_SCRIPT, [], {
+    const child = fork(resolveGatewayScript(), [], {
       detached: true,
       stdio: ["ignore", logFd, logFd, "ipc"],
       execArgv: EXT === ".ts" ? ["--import", "tsx"] : [],
@@ -217,7 +223,7 @@ export function startForeground(): void {
   function launchGateway(): void {
     console.log(`[Launcher] Starting Gateway...`);
 
-    const child = fork(GATEWAY_SCRIPT, [], {
+    const child = fork(resolveGatewayScript(), [], {
       stdio: "inherit",
       execArgv: EXT === ".ts" ? ["--import", "tsx"] : [],
     });

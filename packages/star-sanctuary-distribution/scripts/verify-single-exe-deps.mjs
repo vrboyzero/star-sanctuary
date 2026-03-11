@@ -1,0 +1,193 @@
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { getModeLogSuffix, resolveDistributionMode, resolveSingleExeArtifactRoot } from "./distribution-mode.mjs";
+
+const workspaceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")), "..", "..", "..");
+const platform = process.platform;
+const arch = process.arch;
+const distribution = resolveDistributionMode();
+const { mode } = distribution;
+const suffix = getModeLogSuffix(mode);
+const singleExeRoot = resolveSingleExeArtifactRoot({
+  workspaceRoot,
+  platform,
+  arch,
+  mode,
+});
+const metadataPath = path.join(singleExeRoot, "single-exe.json");
+const executablePath = path.join(singleExeRoot, "star-sanctuary-single.exe");
+const singleExeHome = path.join(workspaceRoot, "artifacts", `single-exe-home-verify${suffix}`);
+const stateDir = path.join(workspaceRoot, "artifacts", `single-exe-state-verify${suffix}`);
+const stdoutPath = path.join(workspaceRoot, "artifacts", `single-exe-verify${suffix}.stdout.log`);
+const stderrPath = path.join(workspaceRoot, "artifacts", `single-exe-verify${suffix}.stderr.log`);
+const reportPath = path.join(singleExeRoot, "single-exe-deps-report.json");
+const extractedVerifyStdoutPath = path.join(workspaceRoot, "artifacts", `single-exe-runtime-check${suffix}.stdout.log`);
+const extractedVerifyStderrPath = path.join(workspaceRoot, "artifacts", `single-exe-runtime-check${suffix}.stderr.log`);
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function checkHealth() {
+  try {
+    const res = await fetch("http://127.0.0.1:28889/health");
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForChildExit(child) {
+  return new Promise((resolve) => {
+    child.on("exit", (code) => resolve(code ?? 1));
+  });
+}
+
+function buildVersionKey(metadata) {
+  return `${metadata.version}-${metadata.platform}-${metadata.arch}`;
+}
+
+function ensureArtifactExists(targetPath, label) {
+  if (!fs.existsSync(targetPath)) {
+    throw new Error(`Missing ${label}: ${targetPath}`);
+  }
+}
+
+async function runSingleExeForExtraction() {
+  fs.rmSync(stdoutPath, { force: true });
+  fs.rmSync(stderrPath, { force: true });
+  fs.rmSync(singleExeHome, { recursive: true, force: true });
+  fs.rmSync(stateDir, { recursive: true, force: true });
+
+  const stdout = fs.openSync(stdoutPath, "w");
+  const stderr = fs.openSync(stderrPath, "w");
+
+  const child = spawn(executablePath, [], {
+    cwd: singleExeRoot,
+    env: {
+      ...process.env,
+      STAR_SANCTUARY_SINGLE_EXE_HOME: singleExeHome,
+      BELLDANDY_STATE_DIR: stateDir,
+      AUTO_OPEN_BROWSER: "false",
+    },
+    stdio: ["ignore", stdout, stderr],
+    windowsHide: true,
+  });
+
+  let healthy = false;
+  try {
+    for (let i = 0; i < 45; i += 1) {
+      await wait(1000);
+      if (child.exitCode != null) break;
+      if (await checkHealth()) {
+        healthy = true;
+        break;
+      }
+    }
+  } finally {
+    if (child.exitCode == null) {
+      child.kill("SIGTERM");
+      await wait(1000);
+      if (child.exitCode == null) {
+        child.kill("SIGKILL");
+      }
+    }
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+  }
+
+  if (!healthy) {
+    const stdoutText = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, "utf-8") : "";
+    const stderrText = fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, "utf-8") : "";
+    throw new Error(`Single-exe dependency extraction failed.\n--- stdout ---\n${stdoutText}\n--- stderr ---\n${stderrText}`);
+  }
+}
+
+async function runExtractedRuntimeCheck() {
+  const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
+  const versionKey = buildVersionKey(metadata);
+  const versionRootDir = path.join(singleExeHome, "runtime", versionKey);
+  const runtimeExecutable = path.join(versionRootDir, platform === "win32" ? "node-runtime.exe" : "node-runtime");
+  const entryScript = path.join(
+    versionRootDir,
+    "runtime",
+    "packages",
+    "star-sanctuary-distribution",
+    "dist",
+    "portable-runtime-check.js",
+  );
+
+  ensureArtifactExists(runtimeExecutable, "extracted runtime executable");
+  ensureArtifactExists(entryScript, "single-exe runtime check entry");
+
+  fs.rmSync(reportPath, { force: true });
+  fs.rmSync(extractedVerifyStdoutPath, { force: true });
+  fs.rmSync(extractedVerifyStderrPath, { force: true });
+
+  const stdout = fs.openSync(extractedVerifyStdoutPath, "w");
+  const stderr = fs.openSync(extractedVerifyStderrPath, "w");
+  const child = spawn(runtimeExecutable, [entryScript], {
+    cwd: versionRootDir,
+    env: {
+      ...process.env,
+      STAR_SANCTUARY_PORTABLE_REPORT_PATH: reportPath,
+      AUTO_OPEN_BROWSER: "false",
+    },
+    stdio: ["ignore", stdout, stderr],
+    windowsHide: true,
+  });
+
+  const exitCode = await waitForChildExit(child);
+  fs.closeSync(stdout);
+  fs.closeSync(stderr);
+
+  if (exitCode !== 0) {
+    const stdoutText = fs.existsSync(extractedVerifyStdoutPath)
+      ? fs.readFileSync(extractedVerifyStdoutPath, "utf-8")
+      : "";
+    const stderrText = fs.existsSync(extractedVerifyStderrPath)
+      ? fs.readFileSync(extractedVerifyStderrPath, "utf-8")
+      : "";
+    throw new Error(`Single-exe runtime dependency check failed.\n--- stdout ---\n${stdoutText}\n--- stderr ---\n${stderrText}`);
+  }
+
+  if (!fs.existsSync(reportPath)) {
+    throw new Error("Single-exe dependency report was not generated.");
+  }
+
+  return JSON.parse(fs.readFileSync(reportPath, "utf-8"));
+}
+
+function assertReport(report) {
+  const nodePtyOk = mode !== "full"
+    || (report.nodePty?.installed && report.nodePty?.backend === "node-pty");
+
+  if (
+    !report.betterSqlite3?.ok
+    || !report.sqliteVec?.ok
+    || !nodePtyOk
+    || !report.protobufjs?.ok
+    || !report.browserToolchain?.puppeteerCore?.ok
+    || !report.browserToolchain?.browserToolsModule?.ok
+    || !report.browserToolchain?.readability?.ok
+    || !report.browserToolchain?.turndown?.ok
+  ) {
+    throw new Error(`Single-exe dependency verification reported failures.\n${JSON.stringify(report, null, 2)}`);
+  }
+}
+
+async function main() {
+  if (!fs.existsSync(executablePath) || !fs.existsSync(metadataPath)) {
+    throw new Error(`Single-exe artifact is missing for mode=${mode}. Run 'corepack pnpm build:single-exe${mode === "full" ? ":full" : ""}' first.`);
+  }
+
+  await runSingleExeForExtraction();
+  const report = await runExtractedRuntimeCheck();
+  assertReport(report);
+
+  console.log(`[single-exe-verify] Dependency report (${mode}) written to ${reportPath}`);
+  console.log(JSON.stringify(report, null, 2));
+}
+
+main();

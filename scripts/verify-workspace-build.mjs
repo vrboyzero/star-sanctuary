@@ -37,7 +37,10 @@ for (const entry of fs.readdirSync(packagesDir, { withFileTypes: true })) {
   if (!fs.existsSync(packageJsonPath)) continue;
 
   const packageJson = readJson(packageJsonPath);
-  if (typeof packageJson.name !== "string" || !packageJson.name.startsWith("@belldandy/")) {
+  if (
+    typeof packageJson.name !== "string"
+    || (!packageJson.name.startsWith("@belldandy/") && !packageJson.name.startsWith("@star-sanctuary/"))
+  ) {
     continue;
   }
 

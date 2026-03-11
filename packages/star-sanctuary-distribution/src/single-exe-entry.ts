@@ -1,0 +1,137 @@
+import crypto from "node:crypto";
+import path from "node:path";
+import * as sea from "node:sea";
+
+import { resolveStateDir } from "@belldandy/protocol";
+
+import { startGatewaySupervisor } from "./gateway-supervisor.js";
+import {
+  cleanupSingleExeRuntimeDirs,
+  removeSingleExeRuntimeActivityMarker,
+  writeSingleExeRuntimeActivityMarker,
+} from "./runtime-cleanup.js";
+import { resolveSingleExePayloadRoot } from "./runtime-manifest.js";
+import {
+  ensureSingleExeRuntime,
+  ensureSingleExeRuntimeFromSea,
+  SINGLE_EXE_NODE_RUNTIME_FILE_NAME,
+} from "./runtime-extract.js";
+
+function ensureSingleExeEnv(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  runtimeDir: string;
+  envDir: string;
+}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...params.baseEnv };
+  env.STAR_SANCTUARY_RUNTIME_MODE = "single-exe";
+  env.BELLDANDY_RUNTIME_MODE = "single-exe";
+  env.STAR_SANCTUARY_RUNTIME_DIR = params.runtimeDir;
+  env.BELLDANDY_RUNTIME_DIR = params.runtimeDir;
+  env.STAR_SANCTUARY_ENV_DIR = params.envDir;
+  env.BELLDANDY_ENV_DIR = params.envDir;
+
+  if (!env.BELLDANDY_AUTH_MODE) {
+    const setupToken = `setup-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    env.SETUP_TOKEN = setupToken;
+    env.AUTO_OPEN_BROWSER = env.AUTO_OPEN_BROWSER || "true";
+    env.BELLDANDY_AUTH_MODE = "token";
+    env.BELLDANDY_AUTH_TOKEN = setupToken;
+  }
+
+  return env;
+}
+
+function main(): void {
+  const baseEnv = { ...process.env };
+  const stateDir = resolveStateDir(baseEnv);
+  const envDir = path.resolve(
+    baseEnv.STAR_SANCTUARY_ENV_DIR
+    ?? baseEnv.BELLDANDY_ENV_DIR
+    ?? stateDir,
+  );
+  console.log(`[Star Sanctuary Single-Exe] Environment dir: ${envDir}`);
+  const runningFromSea = sea.isSea();
+  const ensuredRuntime = runningFromSea
+    ? ensureSingleExeRuntimeFromSea({ env: baseEnv })
+    : ensureSingleExeRuntime({
+      payloadRoot: resolveSingleExePayloadRoot(process.env),
+      env: baseEnv,
+    });
+
+  if (!runningFromSea) {
+    console.log(`[Star Sanctuary Single-Exe] Payload root: ${resolveSingleExePayloadRoot(process.env)}`);
+  } else {
+    console.log("[Star Sanctuary Single-Exe] Using embedded SEA payload");
+  }
+
+  const gatewayEntry = path.join(
+    ensuredRuntime.versionDirInfo.runtimeDir,
+    "packages",
+    "belldandy-core",
+    "dist",
+    "bin",
+    "gateway.js",
+  );
+  const embeddedNodeRuntime = path.join(
+    ensuredRuntime.versionDirInfo.versionRootDir,
+    SINGLE_EXE_NODE_RUNTIME_FILE_NAME,
+  );
+  const env = ensureSingleExeEnv({
+    baseEnv,
+    runtimeDir: ensuredRuntime.versionDirInfo.runtimeDir,
+    envDir,
+  });
+
+  console.log(`[Star Sanctuary Single-Exe] Gateway entry: ${gatewayEntry}`);
+
+  if (ensuredRuntime.extracted) {
+    console.log(
+      `[Star Sanctuary Single-Exe] Prepared runtime ${ensuredRuntime.versionDirInfo.versionKey} at ${ensuredRuntime.versionDirInfo.versionRootDir}`,
+    );
+  } else {
+    console.log(
+      `[Star Sanctuary Single-Exe] Reusing runtime ${ensuredRuntime.versionDirInfo.versionKey} at ${ensuredRuntime.versionDirInfo.versionRootDir}`,
+    );
+  }
+
+  const runtimeActivityMarkerPath = writeSingleExeRuntimeActivityMarker({
+    versionRootDir: ensuredRuntime.versionDirInfo.versionRootDir,
+    productName: ensuredRuntime.versionFile.productName,
+    versionKey: ensuredRuntime.versionDirInfo.versionKey,
+  });
+  const cleanupRuntimeActivityMarker = () => {
+    try {
+      removeSingleExeRuntimeActivityMarker(ensuredRuntime.versionDirInfo.versionRootDir);
+    } catch (error) {
+      console.warn(
+        `[Star Sanctuary Single-Exe] Failed to remove runtime activity marker ${runtimeActivityMarkerPath}: ${String(error)}`,
+      );
+    }
+  };
+  process.on("exit", cleanupRuntimeActivityMarker);
+  process.on("SIGINT", () => cleanupRuntimeActivityMarker());
+  process.on("SIGTERM", () => cleanupRuntimeActivityMarker());
+
+  const cleanupResult = cleanupSingleExeRuntimeDirs({
+    runtimeBaseDir: ensuredRuntime.versionDirInfo.runtimeBaseDir,
+    currentVersionRootDir: ensuredRuntime.versionDirInfo.versionRootDir,
+  });
+  if (cleanupResult.removedVersionDirs.length > 0 || cleanupResult.removedTempDirs.length > 0) {
+    console.log(
+      `[Star Sanctuary Single-Exe] Cleaned runtime cache: removedVersions=${cleanupResult.removedVersionDirs.length}, removedTempDirs=${cleanupResult.removedTempDirs.length}`,
+    );
+  }
+  for (const skippedPath of cleanupResult.skippedPaths) {
+    console.warn(`[Star Sanctuary Single-Exe] Skipped runtime cleanup for ${skippedPath.path}: ${skippedPath.reason}`);
+  }
+
+  startGatewaySupervisor({
+    label: "Star Sanctuary Single-Exe",
+    gatewayEntry,
+    runtimeExecutable: runningFromSea ? embeddedNodeRuntime : undefined,
+    cwd: envDir,
+    env,
+  });
+}
+
+main();

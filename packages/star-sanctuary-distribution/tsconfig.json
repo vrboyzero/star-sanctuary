@@ -3,10 +3,7 @@
   "compilerOptions": {
     "composite": true,
     "rootDir": "./src",
-    "outDir": "./dist",
-    "types": [
-      "node"
-    ]
+    "outDir": "./dist"
   },
   "include": [
     "src/**/*.ts"
@@ -14,12 +11,6 @@
   "references": [
     {
       "path": "../belldandy-protocol"
-    },
-    {
-      "path": "../star-sanctuary-distribution"
-    },
-    {
-      "path": "../belldandy-skills"
     }
   ]
 }

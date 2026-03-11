@@ -19,6 +19,7 @@ FROM base AS deps
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY .npmrc* ./
 COPY packages/belldandy-protocol/package.json ./packages/belldandy-protocol/
+COPY packages/star-sanctuary-distribution/package.json ./packages/star-sanctuary-distribution/
 COPY packages/belldandy-agent/package.json ./packages/belldandy-agent/
 COPY packages/belldandy-core/package.json ./packages/belldandy-core/
 COPY packages/belldandy-skills/package.json ./packages/belldandy-skills/
@@ -42,6 +43,7 @@ FROM base AS builder
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY .npmrc* ./
 COPY packages/belldandy-protocol/package.json ./packages/belldandy-protocol/
+COPY packages/star-sanctuary-distribution/package.json ./packages/star-sanctuary-distribution/
 COPY packages/belldandy-agent/package.json ./packages/belldandy-agent/
 COPY packages/belldandy-core/package.json ./packages/belldandy-core/
 COPY packages/belldandy-skills/package.json ./packages/belldandy-skills/
@@ -102,6 +104,7 @@ COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-browser/nod
 
 # Copy built artifacts from builder stage
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-protocol/dist ./packages/belldandy-protocol/dist
+COPY --from=builder --chown=belldandy:belldandy /app/packages/star-sanctuary-distribution/dist ./packages/star-sanctuary-distribution/dist
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-agent/dist ./packages/belldandy-agent/dist
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-core/dist ./packages/belldandy-core/dist
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-skills/dist ./packages/belldandy-skills/dist
@@ -113,6 +116,7 @@ COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-browser/
 
 # Copy runtime assets (templates, etc.)
 COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-agent/src/templates ./packages/belldandy-agent/dist/templates
+COPY --from=builder --chown=belldandy:belldandy /app/packages/belldandy-skills/src/bundled-skills ./packages/belldandy-skills/dist/bundled-skills
 
 # Copy WebChat frontend
 COPY --from=builder --chown=belldandy:belldandy /app/apps/web/public ./apps/web/public
@@ -120,6 +124,7 @@ COPY --from=builder --chown=belldandy:belldandy /app/apps/web/public ./apps/web/
 # Copy package.json files (needed for module resolution)
 COPY --chown=belldandy:belldandy package.json pnpm-workspace.yaml ./
 COPY --chown=belldandy:belldandy packages/belldandy-protocol/package.json ./packages/belldandy-protocol/
+COPY --chown=belldandy:belldandy packages/star-sanctuary-distribution/package.json ./packages/star-sanctuary-distribution/
 COPY --chown=belldandy:belldandy packages/belldandy-agent/package.json ./packages/belldandy-agent/
 COPY --chown=belldandy:belldandy packages/belldandy-core/package.json ./packages/belldandy-core/
 COPY --chown=belldandy:belldandy packages/belldandy-skills/package.json ./packages/belldandy-skills/

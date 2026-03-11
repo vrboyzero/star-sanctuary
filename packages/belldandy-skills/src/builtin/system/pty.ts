@@ -1,4 +1,5 @@
 import os from "node:os";
+import { createRequire } from "node:module";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 // Generic interface compatible with node-pty
@@ -19,6 +20,14 @@ interface Session {
     createdAt: number;
     lastActivity: number;
 }
+
+type PtyBackend = "node-pty" | "child_process";
+type PtyBackendStatus = {
+    installed: boolean;
+    backend: PtyBackend;
+    resolvedFrom?: string;
+    error?: string;
+};
 
 class MockPty implements IPty {
     public pid: number;
@@ -66,6 +75,8 @@ export class PtyManager {
     private static instance: PtyManager;
     private nodePtyModule: any = null;
     private loadAttempted = false;
+    private nodePtyResolvedFrom?: string;
+    private nodePtyLoadError?: string;
 
     private constructor() { }
 
@@ -80,13 +91,26 @@ export class PtyManager {
         if (this.loadAttempted) return;
         this.loadAttempted = true;
         try {
+            const require = createRequire(import.meta.url);
+            this.nodePtyResolvedFrom = require.resolve("node-pty");
             // Try to dynamically import node-pty
             const m = await import("node-pty");
             this.nodePtyModule = m.default || m;
             console.log("[PtyManager] node-pty loaded successfully.");
         } catch (e) {
+            this.nodePtyLoadError = e instanceof Error ? e.message : String(e);
             console.warn("[PtyManager] Failed to load node-pty, falling back to MockPty (child_process).", e);
         }
+    }
+
+    public async inspectBackend(): Promise<PtyBackendStatus> {
+        await this.loadNodePty();
+        return {
+            installed: Boolean(this.nodePtyResolvedFrom),
+            backend: this.nodePtyModule ? "node-pty" : "child_process",
+            resolvedFrom: this.nodePtyResolvedFrom,
+            error: this.nodePtyLoadError,
+        };
     }
 
     async createSession(

@@ -1,4 +1,4 @@
-import { FlagEmbedding } from "fastembed";
+import type { FlagEmbedding } from "fastembed";
 import { EmbeddingProvider } from "./index.js";
 import { AuthenticationError, RateLimitError } from "../types.js";
 
@@ -28,12 +28,18 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
                     await fs.mkdir(modelSubdir, { recursive: true });
                 }
 
+                const { FlagEmbedding } = await import("fastembed");
                 this.model = await FlagEmbedding.init({
                     model: this.modelName as any,
                     cacheDir: this.cacheDir
                 });
                 console.log(`[LocalEmbedding] Initialized model: ${this.modelName} in ${this.cacheDir || "default cache"}`);
             } catch (err) {
+                if (err instanceof Error && /Cannot find package 'fastembed'|Cannot find module 'fastembed'/.test(err.message)) {
+                    throw new Error(
+                        "Local embedding provider requires optional dependency 'fastembed'. Rebuild with optional native dependencies enabled.",
+                    );
+                }
                 console.error(`[LocalEmbedding] Failed to initialize model ${this.modelName}:`, err);
                 throw err;
             } finally {

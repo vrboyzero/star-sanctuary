@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
 
 import {
   OpenAIChatAgent,
@@ -96,7 +97,7 @@ import {
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
-import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, resolveStateDir, type TokenUsageUploadConfig } from "@belldandy/protocol";
+import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type TokenUsageUploadConfig } from "@belldandy/protocol";
 
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
@@ -115,8 +116,22 @@ import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
 
 // --- Env Loading ---
-loadEnvFileIfExists(path.join(process.cwd(), ".env.local"));
-loadEnvFileIfExists(path.join(process.cwd(), ".env"));
+let runtimePaths = resolveGatewayRuntimePaths({
+  env: process.env,
+  cwd: process.cwd(),
+  gatewayModuleUrl: import.meta.url,
+});
+let envFiles = resolveEnvFilePaths({ envDir: runtimePaths.envDir });
+
+loadEnvFileIfExists(envFiles.envLocalPath);
+loadEnvFileIfExists(envFiles.envPath);
+
+runtimePaths = resolveGatewayRuntimePaths({
+  env: process.env,
+  cwd: process.cwd(),
+  gatewayModuleUrl: import.meta.url,
+});
+envFiles = resolveEnvFilePaths({ envDir: runtimePaths.envDir });
 
 function readEnv(name: string): string | undefined {
   const v = process.env[name];
@@ -164,7 +179,7 @@ const authMode = (readEnv("BELLDANDY_AUTH_MODE") ?? "none") as "none" | "token" 
 const authToken = readEnv("BELLDANDY_AUTH_TOKEN");
 const authPassword = readEnv("BELLDANDY_AUTH_PASSWORD");
 const communityApiEnabled = readEnv("BELLDANDY_COMMUNITY_API_ENABLED") === "true";
-const webRoot = readEnv("BELLDANDY_WEB_ROOT") ?? path.join(process.cwd(), "apps", "web", "public");
+const webRoot = runtimePaths.webRoot;
 const updateCheckEnabled = readEnv("BELLDANDY_UPDATE_CHECK") !== "false";
 const updateCheckApiUrl = readEnv("BELLDANDY_UPDATE_CHECK_API_URL");
 const updateCheckTimeoutMs = Number(readEnv("BELLDANDY_UPDATE_CHECK_TIMEOUT_MS") ?? "3000") || 3000;
@@ -196,7 +211,7 @@ const heartbeatActiveHoursRaw = readEnv("BELLDANDY_HEARTBEAT_ACTIVE_HOURS"); // 
 const cronEnabled = readEnv("BELLDANDY_CRON_ENABLED") === "true";
 
 // State & Memory
-const stateDir = resolveStateDir(process.env);
+const stateDir = runtimePaths.stateDir;
 const channelRouterConfigPath = readEnv("BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH") ?? path.join(stateDir, "channels-routing.json");
 const webhookConfigPath = readEnv("BELLDANDY_WEBHOOK_CONFIG_PATH") ?? path.join(stateDir, "webhooks.json");
 const webhookIdempotencyWindowMs = Number(readEnv("BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS")) || 10 * 60 * 1000; // 默认 10 分钟
@@ -685,10 +700,7 @@ try {
 
 // 4.3 Init SkillRegistry
 const skillRegistry = new SkillRegistry();
-const bundledSkillsDir = path.resolve(
-  path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")),
-  "../../belldandy-skills/src/bundled-skills",
-);
+const bundledSkillsDir = runtimePaths.bundledSkillsDir;
 const userSkillsDir = path.join(stateDir, "skills");
 
 try {
@@ -1563,6 +1575,7 @@ const server = await startGatewayServer({
   host,
   auth: { mode: authMode, token: authToken, password: authPassword },
   webRoot,
+  envDir: runtimePaths.envDir,
   stateDir,
   agentFactory: createAgent,
   agentRegistry: agentRegistry,
@@ -2025,8 +2038,11 @@ if (browserRelayEnabled) {
 // 12. 监听 .env / .env.local 文件变更，自动触发重启
 // 配合 launcher.ts 使用：exit(100) 会被 launcher 捕获并重新启动 gateway
 {
-  const WATCH_DIR = process.cwd();
-  const WATCH_FILES = new Set([".env", ".env.local"]);
+  const WATCH_DIR = envFiles.envDir;
+  const WATCH_FILES = new Set([
+    path.basename(envFiles.envPath),
+    path.basename(envFiles.envLocalPath),
+  ]);
   const DEBOUNCE_MS = 1500; // 防抖间隔，避免保存时多次触发
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -2047,9 +2063,10 @@ if (browserRelayEnabled) {
 
   // 监听目录而非具体文件：解决 .env.local 在启动时不存在（新建时也能被检测到）
   try {
-    fs.watch(WATCH_DIR, (eventType, fileName) => {
-      if (fileName && WATCH_FILES.has(fileName) && (eventType === "rename" || eventType === "change")) {
-        triggerRestart(fileName);
+    fs.watch(WATCH_DIR, (eventType: string, fileName: string | Buffer | null) => {
+      const normalizedFileName = typeof fileName === "string" ? fileName : fileName?.toString();
+      if (normalizedFileName && WATCH_FILES.has(normalizedFileName) && (eventType === "rename" || eventType === "change")) {
+        triggerRestart(normalizedFileName);
       }
     });
     logger.info("config-watcher", `监听 .env 变更`);
