@@ -977,6 +977,12 @@ const cfgApiKey = document.getElementById("cfgApiKey");
 const cfgBaseUrl = document.getElementById("cfgBaseUrl");
 const cfgModel = document.getElementById("cfgModel");
 const cfgHeartbeat = document.getElementById("cfgHeartbeat");
+const cfgHeartbeatEnabled = document.getElementById("cfgHeartbeatEnabled");
+const cfgHeartbeatActiveHours = document.getElementById("cfgHeartbeatActiveHours");
+const cfgBrowserRelayEnabled = document.getElementById("cfgBrowserRelayEnabled");
+const cfgRelayPort = document.getElementById("cfgRelayPort");
+const cfgMcpEnabled = document.getElementById("cfgMcpEnabled");
+const cfgCronEnabled = document.getElementById("cfgCronEnabled");
 const cfgEmbeddingEnabled = document.getElementById("cfgEmbeddingEnabled");
 const cfgEmbeddingApiKey = document.getElementById("cfgEmbeddingApiKey");
 const cfgEmbeddingBaseUrl = document.getElementById("cfgEmbeddingBaseUrl");
@@ -986,6 +992,12 @@ const cfgTtsEnabled = document.getElementById("cfgTtsEnabled");
 const cfgTtsProvider = document.getElementById("cfgTtsProvider");
 const cfgTtsVoice = document.getElementById("cfgTtsVoice");
 const cfgDashScopeApiKey = document.getElementById("cfgDashScopeApiKey");
+const cfgFacetAnchor = document.getElementById("cfgFacetAnchor");
+const cfgInjectAgents = document.getElementById("cfgInjectAgents");
+const cfgInjectSoul = document.getElementById("cfgInjectSoul");
+const cfgInjectMemory = document.getElementById("cfgInjectMemory");
+const cfgMaxSystemPromptChars = document.getElementById("cfgMaxSystemPromptChars");
+const cfgMaxHistory = document.getElementById("cfgMaxHistory");
 const doctorStatusEl = document.getElementById("doctorStatus");
 const REDACTED_PLACEHOLDER = "[REDACTED]";
 
@@ -1023,6 +1035,12 @@ async function loadConfig() {
     cfgBaseUrl.value = c["BELLDANDY_OPENAI_BASE_URL"] || "";
     cfgModel.value = c["BELLDANDY_OPENAI_MODEL"] || "";
     cfgHeartbeat.value = c["BELLDANDY_HEARTBEAT_INTERVAL"] || "";
+    cfgHeartbeatEnabled.checked = c["BELLDANDY_HEARTBEAT_ENABLED"] === "true";
+    cfgHeartbeatActiveHours.value = c["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] || "";
+    cfgBrowserRelayEnabled.checked = c["BELLDANDY_BROWSER_RELAY_ENABLED"] === "true";
+    cfgRelayPort.value = c["BELLDANDY_RELAY_PORT"] || "";
+    cfgMcpEnabled.checked = c["BELLDANDY_MCP_ENABLED"] === "true";
+    cfgCronEnabled.checked = c["BELLDANDY_CRON_ENABLED"] === "true";
     cfgEmbeddingEnabled.checked = c["BELLDANDY_EMBEDDING_ENABLED"] === "true";
     cfgEmbeddingApiKey.value = c["BELLDANDY_EMBEDDING_OPENAI_API_KEY"] || "";
     cfgEmbeddingBaseUrl.value = c["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] || "";
@@ -1032,6 +1050,12 @@ async function loadConfig() {
     cfgTtsProvider.value = c["BELLDANDY_TTS_PROVIDER"] || "edge";
     cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
     cfgDashScopeApiKey.value = c["DASHSCOPE_API_KEY"] || "";
+    cfgFacetAnchor.value = c["BELLDANDY_FACET_ANCHOR"] || "";
+    cfgInjectAgents.checked = c["BELLDANDY_INJECT_AGENTS"] === "true";
+    cfgInjectSoul.checked = c["BELLDANDY_INJECT_SOUL"] === "true";
+    cfgInjectMemory.checked = c["BELLDANDY_INJECT_MEMORY"] === "true";
+    cfgMaxSystemPromptChars.value = c["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] || "";
+    cfgMaxHistory.value = c["BELLDANDY_MAX_HISTORY"] || "";
   }
 }
 
@@ -1077,7 +1101,13 @@ async function saveConfig() {
   assignSecretUpdate(updates, "BELLDANDY_OPENAI_API_KEY", cfgApiKey);
   updates["BELLDANDY_OPENAI_BASE_URL"] = cfgBaseUrl.value.trim() || "https://api.openai.com/v1";
   updates["BELLDANDY_OPENAI_MODEL"] = cfgModel.value.trim();
+  updates["BELLDANDY_HEARTBEAT_ENABLED"] = cfgHeartbeatEnabled.checked ? "true" : "false";
   updates["BELLDANDY_HEARTBEAT_INTERVAL"] = cfgHeartbeat.value.trim();
+  updates["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] = cfgHeartbeatActiveHours.value.trim();
+  updates["BELLDANDY_BROWSER_RELAY_ENABLED"] = cfgBrowserRelayEnabled.checked ? "true" : "false";
+  updates["BELLDANDY_RELAY_PORT"] = cfgRelayPort.value.trim();
+  updates["BELLDANDY_MCP_ENABLED"] = cfgMcpEnabled.checked ? "true" : "false";
+  updates["BELLDANDY_CRON_ENABLED"] = cfgCronEnabled.checked ? "true" : "false";
   updates["BELLDANDY_EMBEDDING_ENABLED"] = cfgEmbeddingEnabled.checked ? "true" : "false";
   assignSecretUpdate(updates, "BELLDANDY_EMBEDDING_OPENAI_API_KEY", cfgEmbeddingApiKey);
   updates["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] = cfgEmbeddingBaseUrl.value.trim();
@@ -1087,6 +1117,12 @@ async function saveConfig() {
   updates["BELLDANDY_TTS_PROVIDER"] = cfgTtsProvider.value.trim() || "edge";
   updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
   assignSecretUpdate(updates, "DASHSCOPE_API_KEY", cfgDashScopeApiKey);
+  updates["BELLDANDY_FACET_ANCHOR"] = cfgFacetAnchor.value.trim();
+  updates["BELLDANDY_INJECT_AGENTS"] = cfgInjectAgents.checked ? "true" : "false";
+  updates["BELLDANDY_INJECT_SOUL"] = cfgInjectSoul.checked ? "true" : "false";
+  updates["BELLDANDY_INJECT_MEMORY"] = cfgInjectMemory.checked ? "true" : "false";
+  updates["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] = cfgMaxSystemPromptChars.value.trim();
+  updates["BELLDANDY_MAX_HISTORY"] = cfgMaxHistory.value.trim();
 
   // Set Provider to openai if key present (Lenient mode auto-enable)
   if (mainApiKey && mainApiKey !== REDACTED_PLACEHOLDER) {

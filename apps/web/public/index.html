@@ -236,6 +236,7 @@
           <div id="doctorStatus" style="display: flex; flex-wrap: wrap; gap: 8px;">
             <span class="badge">Checking...</span>
           </div>
+          <div class="form-help">检查当前配置、依赖与运行状态，便于快速定位缺失项。</div>
         </div>
         <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
 
@@ -243,19 +244,65 @@
         <div class="form-group">
           <label class="form-label">OpenAI API Key</label>
           <input id="cfgApiKey" class="input" type="password" placeholder="sk-..." />
+          <div class="form-help">主对话模型使用的 API Key。未配置时 WebChat 只能进入引导状态。</div>
         </div>
         <div class="form-group">
           <label class="form-label">OpenAI Base URL</label>
           <input id="cfgBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
+          <div class="form-help">兼容 OpenAI 协议的接口地址。官方接口通常保持默认即可。</div>
         </div>
         <div class="form-group">
           <label class="form-label">OpenAI Model</label>
           <input id="cfgModel" class="input" placeholder="gpt-4o" />
+          <div class="form-help">主聊天模型名称，例如 `gpt-4o`、`deepseek-chat`、`kimi-k2`。</div>
         </div>
         <div class="form-group">
           <label class="form-label">Heartbeat Interval</label>
           <input id="cfgHeartbeat" class="input" placeholder="30m" />
+          <div class="form-help">心跳任务执行间隔，支持 `30m`、`1h`、`300s` 这类格式。</div>
         </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgHeartbeatEnabled">
+            <input id="cfgHeartbeatEnabled" type="checkbox" style="margin-right: 8px;" />
+            Enable Heartbeat
+          </label>
+          <div class="form-help">启用后，Agent 会按心跳配置检查 `HEARTBEAT.md` 并主动联系你。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Heartbeat Active Hours</label>
+          <input id="cfgHeartbeatActiveHours" class="input" placeholder="08:00-23:00" />
+          <div class="form-help">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
+        </div>
+        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+
+        <div class="form-group">
+          <label class="form-label" for="cfgBrowserRelayEnabled">
+            <input id="cfgBrowserRelayEnabled" type="checkbox" style="margin-right: 8px;" />
+            Enable Browser Relay
+          </label>
+          <div class="form-help">启用浏览器中继自动启动，需要配合 Chrome 扩展完成自动化操作。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Relay Port</label>
+          <input id="cfgRelayPort" class="input" placeholder="28892" />
+          <div class="form-help">浏览器中继监听端口。只有在启用 Browser Relay 时才会用到。</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="cfgMcpEnabled">
+            <input id="cfgMcpEnabled" type="checkbox" style="margin-right: 8px;" />
+            Enable MCP
+          </label>
+          <div class="form-help">启用 MCP 协议支持。通常需要同时打开工具系统。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgCronEnabled">
+            <input id="cfgCronEnabled" type="checkbox" style="margin-right: 8px;" />
+            Enable Cron Scheduler
+          </label>
+          <div class="form-help">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
+        </div>
+
         <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
 
         <div class="form-group">
@@ -263,19 +310,22 @@
             <input id="cfgEmbeddingEnabled" type="checkbox" style="margin-right: 8px;" />
             Enable Embedding Retrieval
           </label>
-          <div style="font-size: 12px; color: #888; margin-top: 6px;">向量检索开关，关闭后不会初始化 Embedding。</div>
+          <div class="form-help">向量检索总开关。关闭后不会初始化 Embedding，也不会进行相关召回。</div>
         </div>
         <div class="form-group">
           <label class="form-label">Embedding API Key</label>
           <input id="cfgEmbeddingApiKey" class="input" type="password" placeholder="留空则复用主模型 API Key" />
+          <div class="form-help">向量模型专用 API Key。留空时默认复用主模型的 API Key。</div>
         </div>
         <div class="form-group">
           <label class="form-label">Embedding Base URL</label>
           <input id="cfgEmbeddingBaseUrl" class="input" placeholder="留空则复用主模型 Base URL" />
+          <div class="form-help">向量模型接口地址。留空时默认复用主模型 Base URL。</div>
         </div>
         <div class="form-group">
           <label class="form-label">Embedding Model</label>
           <input id="cfgEmbeddingModel" class="input" placeholder="text-embedding-3-small" />
+          <div class="form-help">向量模型名称，例如 `text-embedding-3-small` 或兼容模型名。</div>
         </div>
 
         <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
@@ -285,7 +335,7 @@
             <input id="cfgToolsEnabled" type="checkbox" style="margin-right: 8px;" />
             Enable Tool Calls
           </label>
-          <div style="font-size: 12px; color: #888; margin-top: 6px;">对应 `BELLDANDY_TOOLS_ENABLED`，关闭后模型将不会调用工具。</div>
+          <div class="form-help">工具系统总开关。关闭后模型将无法调用文件、浏览器、命令等工具。</div>
         </div>
 
         <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
@@ -295,7 +345,7 @@
             <input id="cfgTtsEnabled" type="checkbox" style="margin-right: 8px;" />
             Enable TTS
           </label>
-          <div style="font-size: 12px; color: #888; margin-top: 6px;">对应 `BELLDANDY_TTS_ENABLED`，开启后服务端会自动生成语音。</div>
+          <div class="form-help">服务端自动语音开关。开启后回复可附带语音音频。</div>
         </div>
         <div class="form-group">
           <label class="form-label">TTS Provider</label>
@@ -304,14 +354,57 @@
             <option value="openai">openai</option>
             <option value="dashscope">dashscope</option>
           </select>
+          <div class="form-help">语音合成提供方。`edge` 免费可用，`openai` 和 `dashscope` 需要对应密钥。</div>
         </div>
         <div class="form-group">
           <label class="form-label">TTS Voice</label>
           <input id="cfgTtsVoice" class="input" placeholder="留空则使用 provider 默认音色" />
+          <div class="form-help">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
         </div>
         <div class="form-group">
           <label class="form-label">DashScope API Key</label>
           <input id="cfgDashScopeApiKey" class="input" type="password" placeholder="仅 dashscope provider 需要" />
+          <div class="form-help">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
+        </div>
+
+        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+
+        <div class="form-group">
+          <label class="form-label">FACET Anchor</label>
+          <input id="cfgFacetAnchor" class="input" placeholder="&lt;!-- FACET_ANCHOR --&gt;" />
+          <div class="form-help">`switch_facet` 工具在 `SOUL.md` 中查找的锚点文本，用来确定替换起点。</div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="cfgInjectAgents">
+            <input id="cfgInjectAgents" type="checkbox" style="margin-right: 8px;" />
+            Inject AGENTS.md
+          </label>
+          <div class="form-help">决定是否把 `AGENTS.md` 注入到 System Prompt。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgInjectSoul">
+            <input id="cfgInjectSoul" type="checkbox" style="margin-right: 8px;" />
+            Inject SOUL.md
+          </label>
+          <div class="form-help">决定是否把 `SOUL.md` 注入到 System Prompt。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgInjectMemory">
+            <input id="cfgInjectMemory" type="checkbox" style="margin-right: 8px;" />
+            Inject MEMORY.md
+          </label>
+          <div class="form-help">决定是否把 `MEMORY.md` 注入到 System Prompt。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max System Prompt Chars</label>
+          <input id="cfgMaxSystemPromptChars" class="input" placeholder="0 / 6000 / 20000" />
+          <div class="form-help">限制 System Prompt 最大字符数。设为 `0` 或留空表示不限制。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Max History Rounds</label>
+          <input id="cfgMaxHistory" class="input" placeholder="10" />
+          <div class="form-help">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
         </div>
       </div>
       <div class="modal-footer">
