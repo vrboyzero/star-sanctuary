@@ -93,6 +93,8 @@ RUN groupadd -g 1001 belldandy && \
 
 # Copy production dependencies from deps stage
 COPY --from=deps --chown=belldandy:belldandy /app/node_modules ./node_modules
+COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-protocol/node_modules ./packages/belldandy-protocol/node_modules
+COPY --from=deps --chown=belldandy:belldandy /app/packages/star-sanctuary-distribution/node_modules ./packages/star-sanctuary-distribution/node_modules
 COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-agent/node_modules ./packages/belldandy-agent/node_modules
 COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-core/node_modules ./packages/belldandy-core/node_modules
 COPY --from=deps --chown=belldandy:belldandy /app/packages/belldandy-skills/node_modules ./packages/belldandy-skills/node_modules
