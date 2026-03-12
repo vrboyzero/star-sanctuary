@@ -77,6 +77,7 @@ async function main() {
     || !report.sqliteVec?.ok
     || !nodePtyOk
     || !report.protobufjs?.ok
+    || !report.launcher?.openModule?.ok
     || !report.browserToolchain?.puppeteerCore?.ok
     || !report.browserToolchain?.browserToolsModule?.ok
     || !report.browserToolchain?.readability?.ok

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as sea from "node:sea";
 import { gunzipSync } from "node:zlib";
 
 import {
@@ -13,6 +12,7 @@ import {
   type RuntimeManifestFileEntry,
 } from "./runtime-manifest.js";
 import { resolveRuntimeVersionDirInfo, type RuntimeVersionDirInfo } from "./runtime-version-dir.js";
+import { getSeaModule, isSeaRuntime } from "./sea.js";
 
 export type EnsureSingleExeRuntimeParams = {
   payloadRoot: string;
@@ -239,12 +239,27 @@ function copyPayloadToStage(params: {
 }
 
 function getSeaAssetText(assetKey: string): string {
+  const sea = getSeaModule();
+  if (!sea) {
+    throw new Error("node:sea is unavailable in the current process.");
+  }
   const value = sea.getAsset(assetKey, "utf8");
-  return typeof value === "string" ? value : Buffer.from(value).toString("utf8");
+  return typeof value === "string" ? value : bufferFromSeaAsset(value).toString("utf8");
 }
 
 function getSeaAssetBuffer(assetKey: string): Buffer {
-  return Buffer.from(sea.getRawAsset(assetKey));
+  const sea = getSeaModule();
+  if (!sea) {
+    throw new Error("node:sea is unavailable in the current process.");
+  }
+  return bufferFromSeaAsset(sea.getRawAsset(assetKey));
+}
+
+function bufferFromSeaAsset(value: ArrayBuffer | ArrayBufferView): Buffer {
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return Buffer.from(value);
 }
 
 function resolveManifestSymlinkTargetPath(params: {
@@ -451,7 +466,7 @@ export function ensureSingleExeRuntime(params: EnsureSingleExeRuntimeParams): En
 export function ensureSingleExeRuntimeFromSea(
   params: EnsureSingleExeRuntimeFromSeaParams = {},
 ): EnsuredSingleExeRuntime {
-  if (!sea.isSea()) {
+  if (!isSeaRuntime()) {
     throw new Error("Single-exe SEA runtime is not available in the current process.");
   }
 

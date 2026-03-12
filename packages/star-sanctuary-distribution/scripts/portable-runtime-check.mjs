@@ -1,44 +1,31 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { MemoryStore } from "../../belldandy-memory/dist/index.js";
 import { PtyManager } from "../../belldandy-skills/dist/builtin/system/pty.js";
 
-type CheckResult = {
-  productName: string;
-  mode: "slim" | "full";
-  betterSqlite3: { ok: boolean; error?: string };
-  sqliteVec: { ok: boolean; error?: string };
-  nodePty: { installed: boolean; backend: "node-pty" | "child_process"; resolvedFrom?: string; error?: string };
-  protobufjs: { ok: boolean; resolvedFrom?: string; error?: string };
-  browserToolchain: {
-    puppeteerCore: { ok: boolean; error?: string };
-    browserToolsModule: { ok: boolean; exportedTools?: string[]; error?: string };
-    readability: { ok: boolean; title?: string; excerpt?: string; error?: string };
-    turndown: { ok: boolean; snippet?: string; error?: string };
-  };
-};
-
 function getPortableContext() {
-  const distDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"));
-  const runtimeDir = path.resolve(distDir, "..", "..", "..");
+  const scriptDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1"));
+  const runtimeDir = path.resolve(scriptDir, "..", "..", "..");
   const portableRoot = path.resolve(runtimeDir, "..");
   const versionPath = path.join(portableRoot, "version.json");
   const version = JSON.parse(fs.readFileSync(versionPath, "utf-8"));
   return { runtimeDir, portableRoot, version };
 }
 
-function normalizeError(error: unknown): string {
+function normalizeError(error) {
   if (error instanceof Error) return error.message;
   return String(error);
 }
 
 async function main() {
-  const { portableRoot, version } = getPortableContext();
+  const { version } = getPortableContext();
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "star-sanctuary-portable-check-"));
   const dbPath = path.join(tempDir, "memory.sqlite");
 
-  const result: CheckResult = {
+  const result = {
     productName: "Star Sanctuary",
     mode: version.includeOptionalNative ? "full" : "slim",
     betterSqlite3: { ok: false },
@@ -50,6 +37,9 @@ async function main() {
       browserToolsModule: { ok: false },
       readability: { ok: false },
       turndown: { ok: false },
+    },
+    launcher: {
+      openModule: { ok: false },
     },
   };
 
@@ -92,7 +82,7 @@ async function main() {
 
   try {
     const puppeteerModule = await import("puppeteer-core");
-    const defaultExport = puppeteerModule.default as { connect?: unknown } | undefined;
+    const defaultExport = puppeteerModule.default;
     if (typeof defaultExport?.connect !== "function") {
       throw new Error("puppeteer-core default export is missing connect()");
     }
@@ -153,6 +143,19 @@ async function main() {
     if (!result.browserToolchain.turndown.error) {
       result.browserToolchain.turndown.error = message;
     }
+  }
+
+  try {
+    const gatewayRequire = createRequire(new URL("../../belldandy-core/dist/bin/gateway.js", import.meta.url));
+    const openModulePath = gatewayRequire.resolve("open");
+    const openModule = await import(pathToFileURL(openModulePath).href);
+    if (typeof openModule.default !== "function") {
+      throw new Error("open default export is not a function");
+    }
+    result.launcher.openModule.ok = true;
+    result.launcher.openModule.resolvedFrom = openModulePath;
+  } catch (error) {
+    result.launcher.openModule.error = normalizeError(error);
   }
 
   fs.rmSync(tempDir, { recursive: true, force: true });

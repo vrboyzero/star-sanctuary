@@ -77,7 +77,7 @@ async function runSingleExeForExtraction() {
 
   let healthy = false;
   try {
-    for (let i = 0; i < 45; i += 1) {
+    for (let i = 0; i < 90; i += 1) {
       await wait(1000);
       if (child.exitCode != null) break;
       if (await checkHealth()) {
@@ -168,6 +168,7 @@ function assertReport(report) {
     || !report.sqliteVec?.ok
     || !nodePtyOk
     || !report.protobufjs?.ok
+    || !report.launcher?.openModule?.ok
     || !report.browserToolchain?.puppeteerCore?.ok
     || !report.browserToolchain?.browserToolsModule?.ok
     || !report.browserToolchain?.readability?.ok

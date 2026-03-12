@@ -190,6 +190,7 @@ async function main() {
     label: "initial",
     expectPrepared: true,
     expectReused: false,
+    maxWaitSeconds: 90,
   });
 
   ensureExists(versionRootDir, "version runtime root after initial boot");

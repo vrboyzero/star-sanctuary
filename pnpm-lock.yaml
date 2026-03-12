@@ -135,16 +135,15 @@ importers:
       express:
         specifier: ^5.1.0
         version: 5.2.1
+      open:
+        specifier: ^11.0.0
+        version: 11.0.0
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
       ws:
         specifier: ^8.18.3
         version: 8.19.0
-    devDependencies:
-      open:
-        specifier: ^11.0.0
-        version: 11.0.0
 
   packages/belldandy-mcp:
     dependencies:

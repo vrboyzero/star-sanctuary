@@ -977,7 +977,17 @@ const cfgApiKey = document.getElementById("cfgApiKey");
 const cfgBaseUrl = document.getElementById("cfgBaseUrl");
 const cfgModel = document.getElementById("cfgModel");
 const cfgHeartbeat = document.getElementById("cfgHeartbeat");
+const cfgEmbeddingEnabled = document.getElementById("cfgEmbeddingEnabled");
+const cfgEmbeddingApiKey = document.getElementById("cfgEmbeddingApiKey");
+const cfgEmbeddingBaseUrl = document.getElementById("cfgEmbeddingBaseUrl");
+const cfgEmbeddingModel = document.getElementById("cfgEmbeddingModel");
+const cfgToolsEnabled = document.getElementById("cfgToolsEnabled");
+const cfgTtsEnabled = document.getElementById("cfgTtsEnabled");
+const cfgTtsProvider = document.getElementById("cfgTtsProvider");
+const cfgTtsVoice = document.getElementById("cfgTtsVoice");
+const cfgDashScopeApiKey = document.getElementById("cfgDashScopeApiKey");
 const doctorStatusEl = document.getElementById("doctorStatus");
+const REDACTED_PLACEHOLDER = "[REDACTED]";
 
 if (openSettingsBtn) {
   openSettingsBtn.addEventListener("click", () => toggleSettings(true));
@@ -1013,7 +1023,23 @@ async function loadConfig() {
     cfgBaseUrl.value = c["BELLDANDY_OPENAI_BASE_URL"] || "";
     cfgModel.value = c["BELLDANDY_OPENAI_MODEL"] || "";
     cfgHeartbeat.value = c["BELLDANDY_HEARTBEAT_INTERVAL"] || "";
+    cfgEmbeddingEnabled.checked = c["BELLDANDY_EMBEDDING_ENABLED"] === "true";
+    cfgEmbeddingApiKey.value = c["BELLDANDY_EMBEDDING_OPENAI_API_KEY"] || "";
+    cfgEmbeddingBaseUrl.value = c["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] || "";
+    cfgEmbeddingModel.value = c["BELLDANDY_EMBEDDING_MODEL"] || "";
+    cfgToolsEnabled.checked = c["BELLDANDY_TOOLS_ENABLED"] === "true";
+    cfgTtsEnabled.checked = c["BELLDANDY_TTS_ENABLED"] === "true";
+    cfgTtsProvider.value = c["BELLDANDY_TTS_PROVIDER"] || "edge";
+    cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
+    cfgDashScopeApiKey.value = c["DASHSCOPE_API_KEY"] || "";
   }
+}
+
+function assignSecretUpdate(updates, key, inputEl) {
+  if (!inputEl) return;
+  const value = inputEl.value.trim();
+  if (value === REDACTED_PLACEHOLDER) return;
+  updates[key] = value;
 }
 
 async function runDoctor() {
@@ -1047,15 +1073,23 @@ async function saveConfig() {
   saveSettingsBtn.disabled = true;
 
   const updates = {};
-  if (cfgApiKey.value.trim()) updates["BELLDANDY_OPENAI_API_KEY"] = cfgApiKey.value.trim();
-  if (cfgBaseUrl.value.trim()) updates["BELLDANDY_OPENAI_BASE_URL"] = cfgBaseUrl.value.trim();
-  else if (!cfgBaseUrl.value) updates["BELLDANDY_OPENAI_BASE_URL"] = "https://api.openai.com/v1"; // Default?
-
-  if (cfgModel.value.trim()) updates["BELLDANDY_OPENAI_MODEL"] = cfgModel.value.trim();
-  if (cfgHeartbeat.value.trim()) updates["BELLDANDY_HEARTBEAT_INTERVAL"] = cfgHeartbeat.value.trim();
+  const mainApiKey = cfgApiKey.value.trim();
+  assignSecretUpdate(updates, "BELLDANDY_OPENAI_API_KEY", cfgApiKey);
+  updates["BELLDANDY_OPENAI_BASE_URL"] = cfgBaseUrl.value.trim() || "https://api.openai.com/v1";
+  updates["BELLDANDY_OPENAI_MODEL"] = cfgModel.value.trim();
+  updates["BELLDANDY_HEARTBEAT_INTERVAL"] = cfgHeartbeat.value.trim();
+  updates["BELLDANDY_EMBEDDING_ENABLED"] = cfgEmbeddingEnabled.checked ? "true" : "false";
+  assignSecretUpdate(updates, "BELLDANDY_EMBEDDING_OPENAI_API_KEY", cfgEmbeddingApiKey);
+  updates["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] = cfgEmbeddingBaseUrl.value.trim();
+  updates["BELLDANDY_EMBEDDING_MODEL"] = cfgEmbeddingModel.value.trim();
+  updates["BELLDANDY_TOOLS_ENABLED"] = cfgToolsEnabled.checked ? "true" : "false";
+  updates["BELLDANDY_TTS_ENABLED"] = cfgTtsEnabled.checked ? "true" : "false";
+  updates["BELLDANDY_TTS_PROVIDER"] = cfgTtsProvider.value.trim() || "edge";
+  updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
+  assignSecretUpdate(updates, "DASHSCOPE_API_KEY", cfgDashScopeApiKey);
 
   // Set Provider to openai if key present (Lenient mode auto-enable)
-  if (cfgApiKey.value.trim()) {
+  if (mainApiKey && mainApiKey !== REDACTED_PLACEHOLDER) {
     updates["BELLDANDY_AGENT_PROVIDER"] = "openai";
   }
 

@@ -244,6 +244,30 @@ test("gateway rejects invalid token", async () => {
   await fs.promises.rm(stateDir2, { recursive: true, force: true }).catch(() => {});
 });
 
+test("gateway accepts browser same-origin websocket with explicit port", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: `http://127.0.0.1:${server.port}` });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+  ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+  await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+
+  ws.close();
+  await closeP;
+  await server.close();
+  await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
 test("secure methods require pairing for config raw and tools update", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
 

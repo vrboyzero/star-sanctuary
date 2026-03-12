@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillDefinition, EligibilityContext } from "./skill-types.js";
 import { checkEligibility, checkEligibilityBatch } from "./skill-eligibility.js";
 
-const execFileMock = vi.fn();
+const { execFileMock } = vi.hoisted(() => ({
+  execFileMock: vi.fn(),
+}));
 
 vi.mock("node:child_process", () => ({
   execFile: execFileMock,

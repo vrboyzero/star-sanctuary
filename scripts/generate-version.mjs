@@ -23,6 +23,17 @@ async function main() {
   ].join("\n");
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  try {
+    const existing = await fs.readFile(outputPath, "utf-8");
+    if (existing === content) {
+      console.log(`[version] Unchanged ${path.relative(rootDir, outputPath)} (${version})`);
+      return;
+    }
+  } catch (err) {
+    if (err?.code !== "ENOENT") {
+      throw err;
+    }
+  }
   await fs.writeFile(outputPath, content, "utf-8");
   console.log(`[version] Generated ${path.relative(rootDir, outputPath)} (${version})`);
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startGatewaySupervisor } from "./gateway-supervisor.js";
+import { loadRuntimeEnvFiles, readTrimmedEnv, resolveRuntimeEnvDir } from "./env.js";
 import { ensurePortableRuntime } from "./portable-runtime.js";
 
 function resolvePaths() {
@@ -27,22 +28,22 @@ function resolvePaths() {
 }
 
 function ensurePortableEnv(baseEnv: NodeJS.ProcessEnv, portableRoot: string, runtimeDir: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  const envDir = path.resolve(resolveRuntimeEnvDir({
+    baseEnv,
+    fallbackEnvDir: portableRoot,
+  }));
+  const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(baseEnv, envDir);
   env.STAR_SANCTUARY_RUNTIME_MODE = "portable";
   env.BELLDANDY_RUNTIME_MODE = "portable";
-  const envDir = env.STAR_SANCTUARY_ENV_DIR
-    ?? env.BELLDANDY_ENV_DIR
-    ?? portableRoot;
   env.STAR_SANCTUARY_RUNTIME_DIR = runtimeDir;
   env.BELLDANDY_RUNTIME_DIR = runtimeDir;
   env.STAR_SANCTUARY_ENV_DIR = envDir;
   env.BELLDANDY_ENV_DIR = envDir;
+  env.AUTO_OPEN_BROWSER = readTrimmedEnv(env, "AUTO_OPEN_BROWSER") ?? "true";
 
-  if (!env.BELLDANDY_AUTH_MODE) {
+  if (readTrimmedEnv(env, "BELLDANDY_AUTH_MODE") === "token" && !readTrimmedEnv(env, "BELLDANDY_AUTH_TOKEN")) {
     const setupToken = `setup-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     env.SETUP_TOKEN = setupToken;
-    env.AUTO_OPEN_BROWSER = env.AUTO_OPEN_BROWSER || "true";
-    env.BELLDANDY_AUTH_MODE = "token";
     env.BELLDANDY_AUTH_TOKEN = setupToken;
   }
 

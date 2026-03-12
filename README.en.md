@@ -56,6 +56,14 @@ This repository is no longer just a WebChat demo. It is now a full Agent infrast
 | Voice | TTS / STT |
 | Extension protocol | MCP |
 
+### Tutorials and Videos
+
+To keep this README concise, full usage guides, installation walkthroughs, configuration tutorials, troubleshooting instructions, and update overviews are not all embedded here.
+
+Related tutorial videos will be published on the author's Bilibili homepage:
+
+- https://space.bilibili.com/26585867?spm_id_from=333.1007.0.0
+
 ---
 
 ## Core Capabilities

@@ -126,6 +126,16 @@ function normalizeOrigin(value: string): string | null {
   }
 }
 
+function isLocalLoopbackOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return url.hostname === "127.0.0.1" || url.hostname === "localhost";
+  } catch {
+    return false;
+  }
+}
+
 function parsePositiveIntEnv(varName: string, fallback: number): number {
   const raw = process.env[varName];
   if (!raw) return fallback;
@@ -470,11 +480,10 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   // [SECURITY] Origin Header 白名单校验（防 CSWSH）
   const allowedOriginsRaw = process.env.BELLDANDY_ALLOWED_ORIGINS;
   const hostVal = opts.host ?? "127.0.0.1";
+  const isLocalBinding = hostVal === "127.0.0.1" || hostVal === "localhost";
   const allowedOriginsSource = allowedOriginsRaw
     ? allowedOriginsRaw.split(",").map((o) => o.trim()).filter(Boolean)
-    : (hostVal === "127.0.0.1" || hostVal === "localhost")
-      ? ["http://localhost", "http://127.0.0.1", "https://localhost", "https://127.0.0.1"]
-      : []; // 公网绑定时默认拒绝所有跨域（需显式配置）
+    : []; // 公网绑定时默认拒绝所有跨域（需显式配置）
   const allowedOrigins = allowedOriginsSource
     .map((origin) => normalizeOrigin(origin))
     .filter((origin): origin is string => Boolean(origin));
@@ -482,15 +491,23 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   const wss = new WebSocketServer({
     server,
     verifyClient: (info: { origin?: string; req: http.IncomingMessage; secure: boolean }) => {
+      const rawOrigin = info.origin || "";
+
       // 若未配置白名单（空数组），则仅对公网绑定生效（拒绝所有）
-      if (allowedOrigins.length === 0 && (hostVal === "127.0.0.1" || hostVal === "localhost")) {
-        return true; // 本地开发默认放行
+      if (allowedOrigins.length === 0 && isLocalBinding) {
+        if (!rawOrigin) {
+          return true; // 本地开发下允许无 Origin 的客户端
+        }
+        const allowed = isLocalLoopbackOrigin(rawOrigin);
+        if (!allowed) {
+          log.info("ws", `Rejected origin: ${rawOrigin}`);
+        }
+        return allowed;
       }
       if (allowedOrigins.length === 0) {
         log.error("ws", `Rejected connection: no allowed origins configured for ${hostVal}`);
         return false;
       }
-      const rawOrigin = info.origin || "";
       const origin = normalizeOrigin(rawOrigin);
       if (!origin) {
         log.info("ws", `Rejected origin: ${rawOrigin}`);
@@ -1154,10 +1171,12 @@ async function handleReq(
         "BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED",
         // Extended whitelist for settings panel
         "BELLDANDY_OPENAI_API_KEY", "BELLDANDY_AGENT_PROVIDER",
+        "BELLDANDY_TOOLS_ENABLED",
+        "BELLDANDY_EMBEDDING_ENABLED",
         "BELLDANDY_EMBEDDING_OPENAI_API_KEY", "BELLDANDY_EMBEDDING_OPENAI_BASE_URL",
         "BELLDANDY_EMBEDDING_MODEL",
         // TTS & DashScope
-        "BELLDANDY_TTS_PROVIDER", "BELLDANDY_TTS_VOICE", "DASHSCOPE_API_KEY"
+        "BELLDANDY_TTS_ENABLED", "BELLDANDY_TTS_PROVIDER", "BELLDANDY_TTS_VOICE", "DASHSCOPE_API_KEY"
       ]);
       for (const key of Object.keys(updates)) {
         if (!SAFE_UPDATE_KEYS.has(key)) {

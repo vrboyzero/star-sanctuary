@@ -286,6 +286,13 @@ function copyFile(src, dest) {
   fs.copyFileSync(src, dest);
 }
 
+function writePortableRuntimeCheckScript() {
+  copyFile(
+    path.join(workspaceRoot, "packages", "star-sanctuary-distribution", "scripts", "portable-runtime-check.mjs"),
+    path.join(runtimePackagesRoot, "star-sanctuary-distribution", "dist", "portable-runtime-check.js"),
+  );
+}
+
 function normalizeRelativePath(filePath) {
   return filePath.split(path.sep).join("/");
 }
@@ -735,6 +742,7 @@ function main() {
     for (const packageName of packageNames) {
       copyPackage(packageName);
     }
+    writePortableRuntimeCheckScript();
 
     copyDir(
       path.join(workspaceRoot, "packages", "belldandy-agent", "dist", "templates"),

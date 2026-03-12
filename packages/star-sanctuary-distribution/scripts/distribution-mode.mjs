@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 const VALID_MODES = new Set(["slim", "full"]);
@@ -69,6 +70,14 @@ export function getArtifactVariantName(params) {
   return mode === "full" ? `${platform}-${arch}-full` : `${platform}-${arch}`;
 }
 
+function readWorkspaceVersion(workspaceRoot) {
+  const packageJsonPath = path.join(workspaceRoot, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+  return typeof packageJson.version === "string" && packageJson.version.trim()
+    ? packageJson.version.trim()
+    : "0.0.0";
+}
+
 export function resolvePortableArtifactRoot(params) {
   const { workspaceRoot, platform, arch, mode } = params;
   return path.join(workspaceRoot, "artifacts", "portable", getArtifactVariantName({ platform, arch, mode }));
@@ -76,7 +85,13 @@ export function resolvePortableArtifactRoot(params) {
 
 export function resolveSingleExeArtifactRoot(params) {
   const { workspaceRoot, platform, arch, mode } = params;
-  return path.join(workspaceRoot, "artifacts", "single-exe", getArtifactVariantName({ platform, arch, mode }));
+  const version = params.version ?? readWorkspaceVersion(workspaceRoot);
+  return path.join(
+    workspaceRoot,
+    "artifacts",
+    "single-exe",
+    `star-sanctuary-single-exe-${getArtifactVariantName({ platform, arch, mode })}-v${version}`,
+  );
 }
 
 export function getModeLogSuffix(mode) {

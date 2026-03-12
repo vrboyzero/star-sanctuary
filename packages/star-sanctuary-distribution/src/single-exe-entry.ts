@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import * as sea from "node:sea";
 
 import { resolveStateDir } from "@belldandy/protocol";
 
+import { loadRuntimeEnvFiles, readTrimmedEnv, resolveRuntimeEnvDir } from "./env.js";
 import { startGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   cleanupSingleExeRuntimeDirs,
@@ -16,25 +16,25 @@ import {
   ensureSingleExeRuntimeFromSea,
   SINGLE_EXE_NODE_RUNTIME_FILE_NAME,
 } from "./runtime-extract.js";
+import { isSeaRuntime } from "./sea.js";
 
 function ensureSingleExeEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
   runtimeDir: string;
   envDir: string;
 }): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...params.baseEnv };
+  const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(params.baseEnv, params.envDir);
   env.STAR_SANCTUARY_RUNTIME_MODE = "single-exe";
   env.BELLDANDY_RUNTIME_MODE = "single-exe";
   env.STAR_SANCTUARY_RUNTIME_DIR = params.runtimeDir;
   env.BELLDANDY_RUNTIME_DIR = params.runtimeDir;
   env.STAR_SANCTUARY_ENV_DIR = params.envDir;
   env.BELLDANDY_ENV_DIR = params.envDir;
+  env.AUTO_OPEN_BROWSER = readTrimmedEnv(env, "AUTO_OPEN_BROWSER") ?? "true";
 
-  if (!env.BELLDANDY_AUTH_MODE) {
+  if (readTrimmedEnv(env, "BELLDANDY_AUTH_MODE") === "token" && !readTrimmedEnv(env, "BELLDANDY_AUTH_TOKEN")) {
     const setupToken = `setup-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     env.SETUP_TOKEN = setupToken;
-    env.AUTO_OPEN_BROWSER = env.AUTO_OPEN_BROWSER || "true";
-    env.BELLDANDY_AUTH_MODE = "token";
     env.BELLDANDY_AUTH_TOKEN = setupToken;
   }
 
@@ -44,13 +44,12 @@ function ensureSingleExeEnv(params: {
 function main(): void {
   const baseEnv = { ...process.env };
   const stateDir = resolveStateDir(baseEnv);
-  const envDir = path.resolve(
-    baseEnv.STAR_SANCTUARY_ENV_DIR
-    ?? baseEnv.BELLDANDY_ENV_DIR
-    ?? stateDir,
-  );
+  const envDir = path.resolve(resolveRuntimeEnvDir({
+    baseEnv,
+    fallbackEnvDir: stateDir,
+  }));
   console.log(`[Star Sanctuary Single-Exe] Environment dir: ${envDir}`);
-  const runningFromSea = sea.isSea();
+  const runningFromSea = isSeaRuntime();
   const ensuredRuntime = runningFromSea
     ? ensureSingleExeRuntimeFromSea({ env: baseEnv })
     : ensureSingleExeRuntime({
