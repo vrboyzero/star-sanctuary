@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REMOTE="${RELEASE_REMOTE:-origin}"
+BRANCH="${RELEASE_BRANCH:-main}"
+
 if [[ $# -ne 1 ]]; then
   echo "Usage: scripts/release.sh <version>"
-  echo "Example: scripts/release.sh 0.1.1"
+  echo "Example: scripts/release.sh 0.1.2"
+  echo "Optional env: RELEASE_REMOTE=origin RELEASE_BRANCH=main"
   exit 1
 fi
 
@@ -28,6 +32,11 @@ if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
   exit 1
 fi
 
+if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
+  echo "Release blocked: git remote '$REMOTE' does not exist."
+  exit 1
+fi
+
 echo "Bumping root version to $VERSION..."
 node -e "const fs=require('fs');const p='package.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version='$VERSION';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
 
@@ -39,7 +48,7 @@ git add package.json CHANGELOG.md
 git commit -m "release: v$VERSION"
 git tag "v$VERSION"
 
-echo "Pushing to star/main with tags..."
-git push star main --tags
+echo "Pushing to $REMOTE/$BRANCH with tags..."
+git push "$REMOTE" "$BRANCH" --tags
 
 echo "Release v$VERSION completed."

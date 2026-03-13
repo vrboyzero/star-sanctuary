@@ -2,6 +2,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$Version,
   [string]$Branch = "main",
+  [string]$Remote = "origin",
   [switch]$DryRun,
   [switch]$SkipCleanCheck
 )
@@ -53,6 +54,9 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 if ([string]::IsNullOrWhiteSpace($Branch)) {
   throw "Invalid branch name."
 }
+if ([string]::IsNullOrWhiteSpace($Remote)) {
+  throw "Invalid remote name."
+}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptDir "..")
@@ -78,6 +82,11 @@ try {
     throw "Release blocked: current branch is '$currentBranch', expected '$Branch'. Use -Branch to override explicitly."
   }
 
+  $remoteExists = (& git remote get-url $Remote) 2>$null
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($remoteExists | Out-String).Trim())) {
+    throw "Release blocked: git remote '$Remote' does not exist."
+  }
+
   $changelog = Get-Content -LiteralPath "CHANGELOG.md" -Raw
   $changelogPattern = "(?m)^## \[$([regex]::Escape($Version))\]"
   if ($changelog -notmatch $changelogPattern) {
@@ -99,7 +108,7 @@ try {
     Write-Step "[DRY-RUN] git add package.json CHANGELOG.md"
     Write-Step "[DRY-RUN] git commit -m ""release: v$Version"""
     Write-Step "[DRY-RUN] git tag v$Version"
-    Write-Step "[DRY-RUN] git push star $Branch --tags"
+    Write-Step "[DRY-RUN] git push $Remote $Branch --tags"
     Write-Step "Dry-run completed."
     exit 0
   }
@@ -125,8 +134,8 @@ try {
     Invoke-Git -Args @("tag", "v$Version")
   }
 
-  Invoke-Checked "Push $Branch branch with tags" {
-    Invoke-Git -Args @("push", "star", $Branch, "--tags")
+  Invoke-Checked "Push $Remote/$Branch with tags" {
+    Invoke-Git -Args @("push", $Remote, $Branch, "--tags")
   }
 
   Write-Step "Release v$Version completed."

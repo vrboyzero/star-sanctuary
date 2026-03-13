@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-03-13
+
+聚焦发布分发能力增强与安装体验补强，作为 `v0.1.1` 后的首个补丁版本发布。
+
+### Distribution / Packaging
+
+- 新增 `star-sanctuary-distribution` 包，提供 portable 包与 single-exe 两条分发链路
+- 增加 portable / single-exe 的 build、prefetch、smoke、verify 生命周期脚本
+- 补充发布产物清理脚本与工作区构建校验，降低发版过程中的脏产物干扰
+- Docker 构建链路补齐 `protocol` 与 `distribution` 依赖拷贝，修复镜像内运行缺包问题
+
+### WebChat / Gateway
+
+- WebChat 设置页增加更多关键配置项与中文说明，降低首次配置门槛
+- Gateway 服务补充与标准包分发相关的运行时适配
+- 新增 `skill-eligibility` 测试与相关运行时调整，提升技能装载判定稳定性
+
+### Documentation
+
+- `README.md` 与 `README.en.md` 增加安装说明
+- 补充标准包、单文件可执行版与安装流程相关文档
+
 ## [0.1.1] - 2026-03-10
 
 首次正式发布。Star Sanctuary 是一个 local-first 的个人育成型 AI 助手与 Agent 工作台。
