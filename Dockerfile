@@ -34,6 +34,21 @@ COPY apps/web/package.json ./apps/web/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --prod
 
+# Some workspace packages have no direct production dependencies, so pnpm
+# does not materialize a local node_modules directory for them. The runtime
+# stage copies these paths explicitly, so create them proactively.
+RUN mkdir -p \
+    packages/belldandy-protocol/node_modules \
+    packages/star-sanctuary-distribution/node_modules \
+    packages/belldandy-agent/node_modules \
+    packages/belldandy-core/node_modules \
+    packages/belldandy-skills/node_modules \
+    packages/belldandy-memory/node_modules \
+    packages/belldandy-channels/node_modules \
+    packages/belldandy-mcp/node_modules \
+    packages/belldandy-plugins/node_modules \
+    packages/belldandy-browser/node_modules
+
 # ========================================
 # Builder Stage
 # ========================================
