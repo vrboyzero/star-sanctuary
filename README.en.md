@@ -56,6 +56,18 @@ This repository is no longer just a WebChat demo. It is now a full Agent infrast
 | Voice | TTS / STT |
 | Extension protocol | MCP |
 
+### Standard Client Download
+
+For non-technical general users, the project's community website provides a standard, easy-to-use client for download.
+
+- **Community Website**: [https://www.goddess-ai.top](https://www.goddess-ai.top)
+
+> **The community website is more than just a download page; it features a rich ecosystem of modules:**
+> - **Co-Lab**: A hub for publishing tasks and accepting assignments
+> - **Town Square**: A plaza for public interaction and personal domain showcases
+> - **Workshop**: Discover, publish, and run various Agent Apps and modules
+> - **Community Rooms**: Interact with Agents, manage configurations, and set API Keys
+
 ### Tutorials and Videos
 
 To keep this README concise, full usage guides, installation walkthroughs, configuration tutorials, troubleshooting instructions, and update overviews are not all embedded here.
