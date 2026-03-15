@@ -42,6 +42,7 @@ import {
   createMemoryGetTool,
   memoryReadTool,
   memoryWriteTool,
+  memorySharePromoteTool,
   taskSearchTool,
   taskGetTool,
   taskRecentTool,
@@ -543,6 +544,7 @@ const toolsToRegister = toolsEnabled
     createMemoryGetTool(),
     memoryReadTool,
     memoryWriteTool,
+    memorySharePromoteTool,
     taskSearchTool,
     taskGetTool,
     taskRecentTool,
@@ -655,7 +657,7 @@ const toolExecutor = new ToolExecutor({
 
 // 4. Log enabled tools
 if (toolsEnabled) {
-  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, task_search, task_get, task_recent, browser_*, log_read, log_search";
+  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, memory_share_promote, task_search, task_get, task_recent, browser_*, log_read, log_search";
   if (dangerousToolsEnabled) {
     logger.warn("tools", "⚠️ DANGEROUS_TOOLS_ENABLED=true: run_command is active");
     logger.info("tools", `Tools enabled: ${safeTools}, run_command`);

@@ -316,6 +316,31 @@ export class MemoryManager {
         return this.store.getChunk(chunkId);
     }
 
+    promoteMemoryChunk(chunkId: string): MemorySearchResult | null {
+        const updated = this.store.promoteChunkVisibility(chunkId, "shared");
+        if (!updated) return null;
+        return this.store.getChunk(chunkId);
+    }
+
+    promoteMemorySource(sourcePath: string): { count: number; chunks: MemorySearchResult[] } {
+        for (const candidatePath of this.resolveSourcePathCandidates(sourcePath)) {
+            const count = this.store.promoteSourceVisibility(candidatePath, "shared");
+            if (count > 0) {
+                return {
+                    count,
+                    chunks: this.store.getChunksBySource(candidatePath, 100),
+                };
+            }
+        }
+
+        return { count: 0, chunks: [] };
+    }
+
+    assignMemorySourceAgent(sourcePath: string, agentId: string): void {
+        if (!agentId) return;
+        this.store.setSourceAgentId(this.resolveSourcePath(sourcePath), agentId);
+    }
+
     getTaskByConversation(conversationId: string): TaskRecord | null {
         return this.store.getTaskByConversation(conversationId);
     }
@@ -344,21 +369,29 @@ export class MemoryManager {
         relation: TaskMemoryRelation = "generated",
         options: { attempts?: number; delayMs?: number } = {},
     ): Promise<number> {
-        const task = this.store.getTaskByConversation(conversationId);
-        if (!task) return 0;
-
         const attempts = Math.max(1, options.attempts ?? 4);
         const delayMs = Math.max(50, options.delayMs ?? 300);
+        const candidatePaths = this.resolveSourcePathCandidates(sourcePath);
 
         for (let attempt = 0; attempt < attempts; attempt++) {
-            const chunks = this.store.getChunksBySource(sourcePath, 100);
-            if (chunks.length > 0) {
-                for (const chunk of chunks) {
-                    this.store.linkTaskMemory(task.id, chunk.id, relation);
+            for (const candidatePath of candidatePaths) {
+                const chunks = this.store.getChunksBySource(candidatePath, 100);
+                if (chunks.length === 0) {
+                    continue;
                 }
 
-                const artifactPaths = [...new Set([...(task.artifactPaths ?? []), sourcePath])];
-                this.store.updateTask(task.id, { artifactPaths });
+                this.taskProcessor.linkMemory(conversationId, chunks.map((chunk) => chunk.id), relation);
+                this.taskProcessor.addArtifactPath(conversationId, candidatePath);
+
+                const task = this.store.getTaskByConversation(conversationId);
+                if (task) {
+                    for (const chunk of chunks) {
+                        this.store.linkTaskMemory(task.id, chunk.id, relation);
+                    }
+
+                    const artifactPaths = [...new Set([...(task.artifactPaths ?? []), candidatePath])];
+                    this.store.updateTask(task.id, { artifactPaths });
+                }
                 return chunks.length;
             }
 
@@ -367,8 +400,14 @@ export class MemoryManager {
             }
         }
 
-        const artifactPaths = [...new Set([...(task.artifactPaths ?? []), sourcePath])];
-        this.store.updateTask(task.id, { artifactPaths });
+        const resolvedSourcePath = candidatePaths[0] ?? sourcePath;
+        this.taskProcessor.addArtifactPath(conversationId, resolvedSourcePath);
+
+        const task = this.store.getTaskByConversation(conversationId);
+        if (task) {
+            const artifactPaths = [...new Set([...(task.artifactPaths ?? []), resolvedSourcePath])];
+            this.store.updateTask(task.id, { artifactPaths });
+        }
         return 0;
     }
 
@@ -422,9 +461,11 @@ export class MemoryManager {
         let dims = 1536;
         try {
             const probe = await this.embeddingProvider.embed("ping");
-            if (probe && probe.length > 0) {
-                dims = probe.length;
+            if (!probe || probe.length === 0) {
+                console.log("[MemoryManager] Embedding provider returned empty vectors; skipping vector generation.");
+                return;
             }
+            dims = probe.length;
         } catch (e) {
             console.warn("Failed to probe embedding model, skipping vector generation", e);
             return;
@@ -469,7 +510,7 @@ export class MemoryManager {
 
             // Store cached vectors immediately
             for (let i = 0; i < pending.length; i++) {
-                if (cachedVectors[i]) {
+                if (cachedVectors[i] && cachedVectors[i]!.length > 0) {
                     this.store.upsertChunkVector(pending[i].id, cachedVectors[i]!, providerName);
                 }
             }
@@ -484,7 +525,7 @@ export class MemoryManager {
                     for (let j = 0; j < needEmbed.length; j++) {
                         const { idx } = needEmbed[j];
                         const vec = vectors[j];
-                        if (vec) {
+                        if (vec && vec.length > 0) {
                             this.store.upsertChunkVector(pending[idx].id, vec, providerName);
                             this.store.cacheEmbedding(hashes[idx], vec, providerName);
                         }
@@ -554,6 +595,17 @@ export class MemoryManager {
             .slice(0, limit);
 
         return merged;
+    }
+
+    private resolveSourcePath(sourcePath: string): string {
+        if (!sourcePath) return sourcePath;
+        return path.isAbsolute(sourcePath) ? sourcePath : path.resolve(this.workspaceRoot, sourcePath);
+    }
+
+    private resolveSourcePathCandidates(sourcePath: string): string[] {
+        if (!sourcePath) return [];
+        const resolved = this.resolveSourcePath(sourcePath);
+        return sourcePath === resolved ? [resolved] : [sourcePath, resolved];
     }
 
     getStatus(): MemoryIndexStatus {

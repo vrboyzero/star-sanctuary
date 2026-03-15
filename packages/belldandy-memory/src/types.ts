@@ -4,6 +4,12 @@ export type MemoryType = "core" | "daily" | "session" | "other";
 /** 内容语义分类（P1-6） */
 export type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "experience" | "other";
 
+/** 共享可见性（P3-1） */
+export type MemoryVisibility = "private" | "shared";
+
+/** 检索范围（P3-2） */
+export type MemorySearchScope = "private" | "shared" | "all";
+
 export interface MemoryChunk {
   id: string;
   sourcePath: string;
@@ -17,6 +23,7 @@ export interface MemoryChunk {
   tsDate?: string;    // 日期 YYYY-MM-DD
   category?: MemoryCategory; // 内容语义分类
   agentId?: string;   // Agent ID（用于多 Agent 记忆隔离）
+  visibility?: MemoryVisibility; // 可见性：默认私有
   metadata?: Record<string, any>;
 }
 
@@ -28,6 +35,7 @@ export interface MemorySearchFilter {
   dateFrom?: string;  // YYYY-MM-DD
   dateTo?: string;    // YYYY-MM-DD
   category?: MemoryCategory | MemoryCategory[];
+  scope?: MemorySearchScope; // 显式检索范围；不传时保持历史行为
   agentId?: string | null;  // Agent ID 过滤（null 表示查询全局记忆）
 }
 
@@ -43,6 +51,7 @@ export interface MemorySearchResult {
   sourcePath: string;
   sourceType: string;
   memoryType?: MemoryType;
+  visibility?: MemoryVisibility;
   content?: string;
   snippet: string;
   summary?: string;       // L0 摘要（由 LLM 生成的单句概括）

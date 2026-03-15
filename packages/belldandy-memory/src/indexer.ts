@@ -113,6 +113,7 @@ export class MemoryIndexer {
             // Phase M-1: 推断元数据
             const channel = inferChannelFromPath(filePath, ext);
             const tsDate = inferTsDateFromPath(filePath, mtime);
+            const agentId = this.store.getSourceAgentId(filePath) ?? undefined;
 
             for (let i = 0; i < chunksStr.length; i++) {
                 const chunkContent = chunksStr[i];
@@ -124,6 +125,7 @@ export class MemoryIndexer {
                     content: chunkContent,
                     channel,
                     tsDate,
+                    agentId,
                     metadata: {
                         file_mtime: mtime, // 存入文件的实际修改时间
                         chunk_index: i,

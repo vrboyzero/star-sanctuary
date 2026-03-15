@@ -1,6 +1,6 @@
 
 import Database from "better-sqlite3";
-import type { MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter } from "./types.js";
+import type { MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter, MemoryVisibility } from "./types.js";
 import type { TaskRecord, TaskSearchFilter, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
 import { cosineSimilarity, vectorToBuffer, vectorFromBuffer, type EmbeddingVector } from "./embeddings/index.js";
 import { loadSqliteVec } from "./sqlite-vec.js";
@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   source_path TEXT NOT NULL,
   source_type TEXT NOT NULL,
   memory_type TEXT NOT NULL DEFAULT 'other',
+  visibility TEXT NOT NULL DEFAULT 'private',
   start_line INTEGER,
   end_line INTEGER,
   content TEXT NOT NULL,
@@ -162,6 +163,11 @@ const SCHEMA_AGENT_ID_COLUMNS = [
   "ALTER TABLE chunks ADD COLUMN agent_id TEXT DEFAULT NULL",
 ];
 
+// P3-1: 共享可见性列迁移
+const SCHEMA_VISIBILITY_COLUMNS = [
+  "ALTER TABLE chunks ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'",
+];
+
 const SCHEMA_METADATA_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
 CREATE INDEX IF NOT EXISTS idx_chunks_topic ON chunks(topic);
@@ -169,6 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_chunks_ts_date ON chunks(ts_date);
 CREATE INDEX IF NOT EXISTS idx_chunks_memory_type ON chunks(memory_type);
 CREATE INDEX IF NOT EXISTS idx_chunks_category ON chunks(category);
 CREATE INDEX IF NOT EXISTS idx_chunks_agent_id ON chunks(agent_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_visibility ON chunks(visibility);
 `;
 
 export class MemoryStore {
@@ -198,6 +205,10 @@ export class MemoryStore {
     }
     // Scope 隔离：agent_id 列迁移
     for (const sql of SCHEMA_AGENT_ID_COLUMNS) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
+    // P3-1: 共享可见性列迁移
+    for (const sql of SCHEMA_VISIBILITY_COLUMNS) {
       try { this.db.exec(sql); } catch { /* column already exists */ }
     }
     this.db.exec(SCHEMA_METADATA_INDEXES);
@@ -230,14 +241,16 @@ export class MemoryStore {
   upsertChunk(chunk: MemoryChunk): void {
     this.ensureOpen();
     const now = new Date().toISOString();
+    const visibility = chunk.visibility ?? "private";
     const stmt = this.db.prepare(`
-      INSERT INTO chunks (id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, category, agent_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO chunks (id, source_path, source_type, memory_type, visibility, start_line, end_line, content, metadata, channel, topic, ts_date, category, agent_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         content = excluded.content,
         metadata = excluded.metadata,
         updated_at = excluded.updated_at,
         memory_type = excluded.memory_type,
+        visibility = excluded.visibility,
         channel = excluded.channel,
         topic = excluded.topic,
         ts_date = excluded.ts_date,
@@ -249,6 +262,7 @@ export class MemoryStore {
       chunk.sourcePath,
       chunk.sourceType,
       chunk.memoryType,
+      visibility,
       chunk.startLine ?? null,
       chunk.endLine ?? null,
       chunk.content,
@@ -379,7 +393,7 @@ export class MemoryStore {
       try {
         const stmt = this.db.prepare(`
           SELECT
-            c.id, c.source_path, c.source_type, c.memory_type, c.start_line, c.end_line,
+            c.id, c.source_path, c.source_type, c.memory_type, c.visibility, c.start_line, c.end_line,
             c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary,
             bm25(chunks_fts) as rank
           FROM chunks_fts f
@@ -400,7 +414,7 @@ export class MemoryStore {
     const likeConditions = tokens.map(() => `content LIKE ? ESCAPE '\\'`).join(" AND ");
     const likeArgs = tokens.map((t) => `%${escapeLike(t)}%`);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, start_line, end_line, content, metadata, channel, topic, ts_date, summary
+      SELECT id, source_path, source_type, memory_type, visibility, start_line, end_line, content, metadata, channel, topic, ts_date, summary
       FROM chunks c
       WHERE ${likeConditions}${filterClause}
       LIMIT ?
@@ -434,7 +448,7 @@ export class MemoryStore {
     this.ensureOpen();
     const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, content, metadata, start_line, end_line
+      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line
       FROM chunks c
       WHERE 1 = 1${filterClause}
       ORDER BY c.updated_at DESC
@@ -446,6 +460,7 @@ export class MemoryStore {
       sourcePath: row.source_path,
       sourceType: row.source_type,
       memoryType: row.memory_type,
+      visibility: row.visibility ?? "private",
       snippet: (row.content ?? "").slice(0, 500),
       content: row.content,
       score: 1,
@@ -458,7 +473,7 @@ export class MemoryStore {
   getChunk(chunkId: string): MemorySearchResult | null {
     this.ensureOpen();
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, content, metadata, start_line, end_line, summary
+      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line, summary
       FROM chunks
       WHERE id = ?
       LIMIT 1
@@ -470,6 +485,7 @@ export class MemoryStore {
       sourcePath: row.source_path,
       sourceType: row.source_type,
       memoryType: row.memory_type,
+      visibility: row.visibility ?? "private",
       snippet: (row.content ?? "").slice(0, 500),
       content: row.content,
       summary: row.summary ?? undefined,
@@ -478,6 +494,28 @@ export class MemoryStore {
       startLine: row.start_line ?? undefined,
       endLine: row.end_line ?? undefined,
     };
+  }
+
+  promoteChunkVisibility(chunkId: string, visibility: MemoryVisibility = "shared"): boolean {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      UPDATE chunks
+      SET visibility = ?, updated_at = ?
+      WHERE id = ?
+    `);
+    const result = stmt.run(visibility, new Date().toISOString(), chunkId);
+    return Number(result.changes) > 0;
+  }
+
+  promoteSourceVisibility(sourcePath: string, visibility: MemoryVisibility = "shared"): number {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      UPDATE chunks
+      SET visibility = ?, updated_at = ?
+      WHERE source_path = ?
+    `);
+    const result = stmt.run(visibility, new Date().toISOString(), sourcePath);
+    return Number(result.changes);
   }
 
   createTask(task: TaskRecord): void {
@@ -657,7 +695,7 @@ export class MemoryStore {
     this.ensureOpen();
     const stmt = this.db.prepare(`
       SELECT id, source_path, source_type, memory_type, start_line, end_line,
-             content, metadata, channel, topic, ts_date, summary
+             visibility, content, metadata, channel, topic, ts_date, summary
       FROM chunks
       WHERE source_path = ?
       ORDER BY start_line ASC, rowid ASC
@@ -764,16 +802,44 @@ export class MemoryStore {
       }
     }
 
-    // Scope 隔离：agentId 过滤
-    // - agentId 为 string：默认查「全局 + 该 Agent」记忆（避免子 Agent 因历史数据无 agent_id 而“失忆”）
-    // - agentId 为 null：只查全局记忆（agent_id IS NULL）
-    // - agentId 为 undefined：不过滤（查询所有）
-    if (filter.agentId !== undefined) {
-      if (filter.agentId === null) {
-        conditions.push(`c.agent_id IS NULL`);
+    // P3-2: scope 检索
+    // - 不传 scope：保持历史 agentId 过滤行为不变
+    // - scope=private：只查私有层（当前 Agent 私有 + 系统级私有）
+    // - scope=shared：查共享层 + 系统级记忆
+    // - scope=all：查当前 Agent 私有 + 共享层 + 系统级记忆
+    if (filter.scope === "private") {
+      conditions.push(`c.visibility = 'private'`);
+      if (filter.agentId !== undefined) {
+        if (filter.agentId === null) {
+          conditions.push(`c.agent_id IS NULL`);
+        } else {
+          conditions.push(`(c.agent_id IS NULL OR c.agent_id = ?)`);
+          params.push(filter.agentId);
+        }
+      }
+    } else if (filter.scope === "shared") {
+      conditions.push(`(c.agent_id IS NULL OR c.visibility = 'shared')`);
+    } else if (filter.scope === "all") {
+      if (filter.agentId === undefined) {
+        // 无 agent 上下文时，all 等价于历史“查全部”
+      } else if (filter.agentId === null) {
+        conditions.push(`(c.agent_id IS NULL OR c.visibility = 'shared')`);
       } else {
-        conditions.push(`(c.agent_id IS NULL OR c.agent_id = ?)`);
+        conditions.push(`(c.agent_id IS NULL OR c.agent_id = ? OR c.visibility = 'shared')`);
         params.push(filter.agentId);
+      }
+    } else {
+      // Scope 隔离：agentId 过滤
+      // - agentId 为 string：默认查「全局 + 该 Agent」记忆（避免子 Agent 因历史数据无 agent_id 而“失忆”）
+      // - agentId 为 null：只查全局记忆（agent_id IS NULL）
+      // - agentId 为 undefined：不过滤（查询所有）
+      if (filter.agentId !== undefined) {
+        if (filter.agentId === null) {
+          conditions.push(`c.agent_id IS NULL`);
+        } else {
+          conditions.push(`(c.agent_id IS NULL OR c.agent_id = ?)`);
+          params.push(filter.agentId);
+        }
       }
     }
 
@@ -867,6 +933,7 @@ export class MemoryStore {
       sourcePath: row.source_path,
       sourceType: row.source_type,
       memoryType: row.memory_type as MemoryType,
+      visibility: (row.visibility ?? "private") as MemoryVisibility,
       startLine: row.start_line,
       endLine: row.end_line,
       content: row.content,
@@ -1008,7 +1075,7 @@ export class MemoryStore {
     // sqlite-vec KNN search
     const stmt = this.db.prepare(`
         SELECT
-            c.id, c.source_path, c.source_type, c.memory_type, c.start_line, c.end_line,
+            c.id, c.source_path, c.source_type, c.memory_type, c.visibility, c.start_line, c.end_line,
             c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary,
             v.distance
         FROM chunks_vec v
@@ -1022,6 +1089,7 @@ export class MemoryStore {
       source_path: string;
       source_type: string;
       memory_type: string;
+      visibility: string;
       start_line: number | null;
       end_line: number | null;
       content: string;
@@ -1038,6 +1106,7 @@ export class MemoryStore {
       sourcePath: row.source_path,
       sourceType: row.source_type as "file" | "session" | "manual",
       memoryType: row.memory_type as MemoryType,
+      visibility: (row.visibility ?? "private") as MemoryVisibility,
       startLine: row.start_line ?? undefined,
       endLine: row.end_line ?? undefined,
       snippet: truncateContent(row.content, 500),
@@ -1194,6 +1263,14 @@ export class MemoryStore {
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `);
     stmt.run(key, value);
+  }
+
+  getSourceAgentId(sourcePath: string): string | null {
+    return this.getMeta(sourceAgentMetaKey(sourcePath));
+  }
+
+  setSourceAgentId(sourcePath: string, agentId: string): void {
+    this.setMeta(sourceAgentMetaKey(sourcePath), agentId);
   }
 
   // ========== 派生索引清理（自愈重建用） ==========
@@ -1355,6 +1432,7 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     sourcePath: row.source_path,
     sourceType: row.source_type,
     memoryType: row.memory_type as MemoryType,
+    visibility: (row.visibility ?? "private") as MemoryVisibility,
     startLine: row.start_line ?? undefined,
     endLine: row.end_line ?? undefined,
     snippet: truncateContent(row.content, 500),
@@ -1362,6 +1440,10 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     score,
     metadata: safeParseJson(row.metadata),
   };
+}
+
+function sourceAgentMetaKey(sourcePath: string): string {
+  return `source_agent:${sourcePath}`;
 }
 
 function rowToTaskRecord(row: Record<string, unknown>): TaskRecord {

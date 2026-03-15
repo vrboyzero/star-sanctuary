@@ -7,6 +7,9 @@ const manager = {
   getStatus: vi.fn(),
   linkTaskMemories: vi.fn(),
   linkTaskMemoriesFromSource: vi.fn(),
+  assignMemorySourceAgent: vi.fn(),
+  promoteMemoryChunk: vi.fn(),
+  promoteMemorySource: vi.fn(),
   searchTasks: vi.fn(),
   getRecentTasks: vi.fn(),
   getTaskDetail: vi.fn(),
@@ -37,6 +40,11 @@ const baseContext: ToolContext = {
     maxTimeoutMs: 30_000,
     maxResponseBytes: 512_000,
   },
+};
+
+const agentContext: ToolContext = {
+  ...baseContext,
+  agentId: "agent-belldandy",
 };
 
 describe("memory tools", () => {
@@ -75,6 +83,37 @@ describe("memory tools", () => {
     expect(manager.linkTaskMemories).toHaveBeenCalledWith("conv-1", ["chunk-1"], "used");
   });
 
+  it("memory_search should pass explicit shared scope with agent context", async () => {
+    manager.search.mockResolvedValue([
+      {
+        id: "chunk-shared",
+        sourcePath: "memory/shared.md",
+        sourceType: "file",
+        snippet: "共享记忆片段",
+        summary: "共享摘要",
+        score: 0.88,
+        startLine: 8,
+        visibility: "shared",
+      },
+    ]);
+
+    const result = await mod.memorySearchTool.execute({
+      query: "共享经验",
+      limit: 2,
+      scope: "shared",
+    }, agentContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.search).toHaveBeenCalledWith("共享经验", {
+      limit: 2,
+      filter: {
+        scope: "shared",
+        agentId: "agent-belldandy",
+      },
+    });
+    expect(result.output).toContain("[shared]");
+  });
+
   it("memory_read should render file content", async () => {
     readMemoryFile.mockResolvedValue({
       path: "memory/2026-03-15.md",
@@ -110,6 +149,62 @@ describe("memory tools", () => {
       "E:/project/star-sanctuary/.star_sanctuary/memory/2026-03-15.md",
       "generated",
     );
+  });
+
+  it("memory_write should register source owner when agent context exists", async () => {
+    appendToTodayMemory.mockResolvedValue("E:/project/star-sanctuary/.star_sanctuary/memory/2026-03-15.md");
+
+    const result = await mod.memoryWriteTool.execute({
+      content: "- Agent 记忆",
+    }, agentContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.assignMemorySourceAgent).toHaveBeenCalledWith(
+      "E:/project/star-sanctuary/.star_sanctuary/memory/2026-03-15.md",
+      "agent-belldandy",
+    );
+  });
+
+  it("memory_share_promote should promote a single chunk", async () => {
+    manager.promoteMemoryChunk.mockReturnValue({
+      id: "chunk-1",
+      sourcePath: "memory/2026-03-15.md",
+      visibility: "shared",
+    });
+
+    const result = await mod.memorySharePromoteTool.execute({
+      chunk_id: "chunk-1",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.promoteMemoryChunk).toHaveBeenCalledWith("chunk-1");
+    expect(manager.linkTaskMemories).toHaveBeenCalledWith("conv-1", ["chunk-1"], "referenced");
+    expect(result.output).toContain("Promoted 1 chunk to shared.");
+    expect(result.output).toContain("Visibility: shared");
+  });
+
+  it("memory_share_promote should promote all chunks by source path", async () => {
+    manager.promoteMemorySource.mockReturnValue({
+      count: 2,
+      chunks: [
+        { id: "chunk-a" },
+        { id: "chunk-b" },
+      ],
+    });
+
+    const result = await mod.memorySharePromoteTool.execute({
+      source_path: "memory/shared.md",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.promoteMemorySource).toHaveBeenCalledWith("memory/shared.md");
+    expect(manager.linkTaskMemoriesFromSource).toHaveBeenCalledWith(
+      "conv-1",
+      "memory/shared.md",
+      "referenced",
+    );
+    expect(result.output).toContain("Promoted 2 chunks to shared.");
+    expect(result.output).toContain("chunk-a, chunk-b");
   });
 
   it("task_recent should render task list", async () => {

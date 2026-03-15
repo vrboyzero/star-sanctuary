@@ -89,6 +89,7 @@ export const memorySearchTool: Tool = {
             if (args.channel) filter.channel = args.channel as string;
             if (args.date_from) filter.dateFrom = args.date_from as string;
             if (args.date_to) filter.dateTo = args.date_to as string;
+            if (args.scope) filter.scope = args.scope as MemorySearchFilter["scope"];
 
             // Scope 隔离：自动注入 agentId（子 Agent 只检索自己的记忆）
             if (context.agentId) {
@@ -101,7 +102,8 @@ export const memorySearchTool: Tool = {
 
             // Format results based on detail_level
             const output = results.map(r => {
-                const location = `[${r.sourcePath}:${r.startLine || 0}] (Score: ${r.score.toFixed(3)})`;
+                const visibilityTag = r.visibility === "shared" ? " [shared]" : "";
+                const location = `[${r.sourcePath}:${r.startLine || 0}]${visibilityTag} (Score: ${r.score.toFixed(3)})`;
                 if (detailLevel === "full") {
                     return `${location}\n${r.snippet}`;
                 }
@@ -272,6 +274,9 @@ export const memoryWriteTool: Tool = {
                 })
                 : await appendToTodayMemory(context.workspaceRoot, content);
 
+            if (context.agentId) {
+                manager.assignMemorySourceAgent(filePath, context.agentId);
+            }
             await manager.linkTaskMemoriesFromSource(context.conversationId, filePath, "generated");
 
             return {
@@ -285,6 +290,104 @@ export const memoryWriteTool: Tool = {
             return {
                 id: "memory_write",
                 name: "memory_write",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const memorySharePromoteTool: Tool = {
+    definition: {
+        name: "memory_share_promote",
+        description: "Explicitly promote a memory chunk or all chunks from a source path to shared visibility. Use this when a memory should be retrievable by other agents via scope=shared or scope=all.",
+        parameters: {
+            type: "object",
+            properties: {
+                chunk_id: {
+                    type: "string",
+                    description: "Exact chunk ID to promote to shared visibility.",
+                },
+                source_path: {
+                    type: "string",
+                    description: "Exact source path whose chunks should all be promoted to shared visibility.",
+                },
+            },
+            oneOf: [
+                { required: ["chunk_id"] },
+                { required: ["source_path"] },
+            ],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const chunkId = typeof args.chunk_id === "string" ? args.chunk_id.trim() : "";
+            const sourcePath = typeof args.source_path === "string" ? args.source_path.trim() : "";
+
+            if (!chunkId && !sourcePath) {
+                return {
+                    id: "memory_share_promote",
+                    name: "memory_share_promote",
+                    success: false,
+                    output: "",
+                    error: "chunk_id or source_path is required.",
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            if (chunkId) {
+                const chunk = manager.promoteMemoryChunk(chunkId);
+                if (!chunk) {
+                    return {
+                        id: "memory_share_promote",
+                        name: "memory_share_promote",
+                        success: false,
+                        output: "",
+                        error: `Memory chunk not found: ${chunkId}`,
+                        durationMs: Date.now() - start,
+                    };
+                }
+
+                manager.linkTaskMemories(context.conversationId, [chunk.id], "referenced");
+                return {
+                    id: "memory_share_promote",
+                    name: "memory_share_promote",
+                    success: true,
+                    output: `Promoted 1 chunk to shared.\nChunk: ${chunk.id}\nSource: ${chunk.sourcePath}\nVisibility: ${chunk.visibility ?? "shared"}`,
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            const promoted = manager.promoteMemorySource(sourcePath);
+            if (promoted.count <= 0) {
+                return {
+                    id: "memory_share_promote",
+                    name: "memory_share_promote",
+                    success: false,
+                    output: "",
+                    error: `No memory chunks found for source_path: ${sourcePath}`,
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            await manager.linkTaskMemoriesFromSource(context.conversationId, sourcePath, "referenced");
+            const chunkIds = promoted.chunks.map((item) => item.id).join(", ");
+            return {
+                id: "memory_share_promote",
+                name: "memory_share_promote",
+                success: true,
+                output: `Promoted ${promoted.count} chunks to shared.\nSource: ${sourcePath}\nChunks: ${chunkIds}`,
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "memory_share_promote",
+                name: "memory_share_promote",
                 success: false,
                 output: "",
                 error: err instanceof Error ? err.message : String(err),
@@ -324,6 +427,11 @@ export const taskSearchTool: Tool = {
                 date_to: {
                     type: "string",
                     description: "Filter results up to this date (YYYY-MM-DD).",
+                },
+                scope: {
+                    type: "string",
+                    enum: ["private", "shared", "all"],
+                    description: "Explicit retrieval scope. 'private' = current agent private + system memory, 'shared' = shared memory + system memory, 'all' = current agent private + shared memory + system memory. Default keeps legacy behavior unchanged.",
                 },
             },
             required: ["query"],

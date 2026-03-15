@@ -144,4 +144,26 @@ describe("TaskProcessor", () => {
       { taskId: taskId!, chunkId: "chunk-2", relation: "used" },
     ]);
   });
+
+  it("should keep artifact paths added outside tool summaries", () => {
+    const store = new FakeStore();
+    const processor = new TaskProcessor(store as any, { enabled: true });
+
+    processor.startTask({
+      conversationId: "conv-4",
+      sessionKey: "conv-4",
+      source: "chat",
+      objective: "校验 source_path 挂链产物记录",
+    });
+    processor.addArtifactPath("conv-4", "memory/shared.md");
+    processor.addArtifactPath("conv-4", "memory/shared.md");
+
+    const taskId = processor.completeTask({
+      conversationId: "conv-4",
+      success: true,
+    });
+
+    expect(taskId).toBeTruthy();
+    expect(store.getTask(taskId!)?.artifactPaths).toEqual(["memory/shared.md"]);
+  });
 });

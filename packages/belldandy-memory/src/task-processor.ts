@@ -110,6 +110,15 @@ export class TaskProcessor {
     }
   }
 
+  addArtifactPath(conversationId: string, artifactPath: string): void {
+    if (!this.enabled || !artifactPath) return;
+    const draft = this.drafts.get(conversationId);
+    if (!draft) return;
+    if (!draft.artifactPaths.includes(artifactPath)) {
+      draft.artifactPaths.push(artifactPath);
+    }
+  }
+
   completeTask(input: {
     conversationId: string;
     success: boolean;
