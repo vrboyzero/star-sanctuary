@@ -35,6 +35,7 @@ export interface MemorySearchFilter {
   dateFrom?: string;  // YYYY-MM-DD
   dateTo?: string;    // YYYY-MM-DD
   category?: MemoryCategory | MemoryCategory[];
+  uncategorized?: boolean; // 仅查询未分类/非法分类数据
   scope?: MemorySearchScope; // 显式检索范围；不传时保持历史行为
   agentId?: string | null;  // Agent ID 过滤（null 表示查询全局记忆）
 }
@@ -51,6 +52,7 @@ export interface MemorySearchResult {
   sourcePath: string;
   sourceType: string;
   memoryType?: MemoryType;
+  category?: MemoryCategory;
   visibility?: MemoryVisibility;
   content?: string;
   snippet: string;
@@ -65,6 +67,9 @@ export interface MemorySearchResult {
 export type MemoryIndexStatus = {
   files: number;
   chunks: number;
+  categorized?: number;
+  uncategorized?: number;
+  categoryBuckets?: Partial<Record<MemoryCategory, number>>;
   lastIndexedAt?: string;
   vectorIndexed?: number;
   vectorCached?: number;

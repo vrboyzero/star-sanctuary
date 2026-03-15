@@ -1,9 +1,11 @@
 
 import Database from "better-sqlite3";
-import type { MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter, MemoryVisibility } from "./types.js";
+import type { MemoryCategory, MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter, MemoryVisibility } from "./types.js";
 import type { TaskRecord, TaskSearchFilter, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
 import { cosineSimilarity, vectorToBuffer, vectorFromBuffer, type EmbeddingVector } from "./embeddings/index.js";
 import { loadSqliteVec } from "./sqlite-vec.js";
+
+const KNOWN_MEMORY_CATEGORIES = ["preference", "experience", "fact", "decision", "entity", "other"] as const;
 
 // 基础表结构。
 const SCHEMA_BASE = `
@@ -394,7 +396,7 @@ export class MemoryStore {
         const stmt = this.db.prepare(`
           SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.visibility, c.start_line, c.end_line,
-            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary,
+            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary, c.category,
             bm25(chunks_fts) as rank
           FROM chunks_fts f
           JOIN chunks c ON c.rowid = f.rowid
@@ -414,7 +416,7 @@ export class MemoryStore {
     const likeConditions = tokens.map(() => `content LIKE ? ESCAPE '\\'`).join(" AND ");
     const likeArgs = tokens.map((t) => `%${escapeLike(t)}%`);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, visibility, start_line, end_line, content, metadata, channel, topic, ts_date, summary
+      SELECT id, source_path, source_type, memory_type, visibility, start_line, end_line, content, metadata, channel, topic, ts_date, summary, category
       FROM chunks c
       WHERE ${likeConditions}${filterClause}
       LIMIT ?
@@ -448,7 +450,7 @@ export class MemoryStore {
     this.ensureOpen();
     const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line
+      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line, category
       FROM chunks c
       WHERE 1 = 1${filterClause}
       ORDER BY c.updated_at DESC
@@ -460,6 +462,7 @@ export class MemoryStore {
       sourcePath: row.source_path,
       sourceType: row.source_type,
       memoryType: row.memory_type,
+      category: normalizeCategory(row.category),
       visibility: row.visibility ?? "private",
       snippet: (row.content ?? "").slice(0, 500),
       content: row.content,
@@ -473,7 +476,7 @@ export class MemoryStore {
   getChunk(chunkId: string): MemorySearchResult | null {
     this.ensureOpen();
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line, summary
+      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line, summary, category
       FROM chunks
       WHERE id = ?
       LIMIT 1
@@ -485,6 +488,7 @@ export class MemoryStore {
       sourcePath: row.source_path,
       sourceType: row.source_type,
       memoryType: row.memory_type,
+      category: normalizeCategory(row.category),
       visibility: row.visibility ?? "private",
       snippet: (row.content ?? "").slice(0, 500),
       content: row.content,
@@ -644,12 +648,34 @@ export class MemoryStore {
     const chunksStmt = this.db.prepare(`SELECT COUNT(*) as count FROM chunks`);
     const chunksRow = chunksStmt.get() as { count: number };
 
+    const categoryRows = this.db.prepare(`
+      SELECT category, COUNT(*) as count
+      FROM chunks
+      GROUP BY category
+    `).all() as Array<{ category: string | null; count: number }>;
+
+    const categoryBuckets: Partial<Record<MemoryCategory, number>> = {};
+    let categorized = 0;
+    let uncategorized = 0;
+    for (const row of categoryRows) {
+      const category = normalizeCategory(row.category);
+      if (category) {
+        categoryBuckets[category] = row.count;
+        categorized += row.count;
+      } else {
+        uncategorized += row.count;
+      }
+    }
+
     const metaStmt = this.db.prepare(`SELECT value FROM meta WHERE key = 'last_indexed_at'`);
     const metaRow = metaStmt.get() as { value: string } | undefined;
 
     return {
       files: filesRow.count,
       chunks: chunksRow.count,
+      categorized,
+      uncategorized,
+      categoryBuckets,
       lastIndexedAt: metaRow?.value,
     };
   }
@@ -695,7 +721,7 @@ export class MemoryStore {
     this.ensureOpen();
     const stmt = this.db.prepare(`
       SELECT id, source_path, source_type, memory_type, start_line, end_line,
-             visibility, content, metadata, channel, topic, ts_date, summary
+             visibility, content, metadata, channel, topic, ts_date, summary, category
       FROM chunks
       WHERE source_path = ?
       ORDER BY start_line ASC, rowid ASC
@@ -788,8 +814,12 @@ export class MemoryStore {
       params.push(filter.dateTo);
     }
 
-    // P1-6: category 过滤（支持单值或数组）
-    if (filter.category) {
+    // P4-2: uncategorized 显式过滤（优先级高于 category）
+    if (filter.uncategorized) {
+      const known = KNOWN_MEMORY_CATEGORIES.map((item) => `'${item}'`).join(", ");
+      conditions.push(`(c.category IS NULL OR TRIM(c.category) = '' OR c.category NOT IN (${known}))`);
+    } else if (filter.category) {
+      // P1-6: category 过滤（支持单值或数组）
       if (Array.isArray(filter.category)) {
         if (filter.category.length > 0) {
           const placeholders = filter.category.map(() => "?").join(", ");
@@ -1076,7 +1106,7 @@ export class MemoryStore {
     const stmt = this.db.prepare(`
         SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.visibility, c.start_line, c.end_line,
-            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary,
+            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary, c.category,
             v.distance
         FROM chunks_vec v
         JOIN chunks c ON c.rowid = v.rowid
@@ -1098,6 +1128,7 @@ export class MemoryStore {
       topic: string | null;
       ts_date: string | null;
       summary: string | null;
+      category: string | null;
       distance: number;
     }>;
 
@@ -1106,6 +1137,7 @@ export class MemoryStore {
       sourcePath: row.source_path,
       sourceType: row.source_type as "file" | "session" | "manual",
       memoryType: row.memory_type as MemoryType,
+      category: normalizeCategory(row.category),
       visibility: (row.visibility ?? "private") as MemoryVisibility,
       startLine: row.start_line ?? undefined,
       endLine: row.end_line ?? undefined,
@@ -1432,6 +1464,7 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     sourcePath: row.source_path,
     sourceType: row.source_type,
     memoryType: row.memory_type as MemoryType,
+    category: normalizeCategory(row.category),
     visibility: (row.visibility ?? "private") as MemoryVisibility,
     startLine: row.start_line ?? undefined,
     endLine: row.end_line ?? undefined,
@@ -1440,6 +1473,20 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     score,
     metadata: safeParseJson(row.metadata),
   };
+}
+
+function normalizeCategory(value: unknown): MemoryCategory | undefined {
+  switch (value) {
+    case "preference":
+    case "experience":
+    case "fact":
+    case "decision":
+    case "entity":
+    case "other":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function sourceAgentMetaKey(sourcePath: string): string {

@@ -2252,3 +2252,101 @@ Viewer 已完成最小收口：
 1. Viewer 增加任务详情联动与来源跳转
 2. 共享样本治理与回收机制
 3. 更清晰的 Agent / 系统层记忆边界展示
+
+---
+
+## 28. 第四阶段收口版：`category` 语义分类补完
+
+第四阶段的目标已经收敛为一句话：
+
+- **把已有的 `category` 底层字段补成可检索、可展示、可统计、可兼容旧数据的产品能力。**
+
+### 28.1 范围与冻结项
+
+本阶段已完成的范围：
+
+- `memory_search` 支持 `category`
+- `memory.recent / memory.search / memory.get` 返回分类信息
+- Viewer 支持分类筛选与 `未分类` 显式筛选
+- Viewer 列表、详情、统计区、分类分布图展示分类能力
+- 旧数据、空值、非法分类值统一兼容为“未分类”
+
+本阶段明确不做：
+
+- 非 M-N3 来源数据的补标
+- `tags` 设计与落地
+- 更复杂的分类分析（趋势图、时间维度图、多维交叉分析等）
+
+### 28.2 当前能力
+
+当前第四阶段已经具备：
+
+1. 工具层可按 `category` 检索
+2. Viewer 可按分类与“未分类”过滤
+3. Viewer 列表与详情可展示分类
+4. Viewer 统计区可展示：
+   - 当前结果
+   - 当前已分类
+   - 当前未分类
+   - 全库已分类
+   - 全库未分类
+5. Viewer 可展示 `categoryBuckets` 分类分布卡片，并高亮当前筛选分类
+
+### 28.3 关键实现说明
+
+本阶段关键收口点只有 4 个：
+
+1. **过滤语义补齐**
+   - 支持 `category=value`
+   - 支持 `uncategorized=true`
+   - 未分类定义统一为：`NULL`、空字符串、非法分类值
+
+2. **结果类型补齐**
+   - `MemorySearchResult` 已补 `category`
+   - `search / recent / getChunk` 已统一返回分类
+
+3. **Viewer 文案收口**
+   - 页面统一展示中文分类文案：
+     - 偏好 / 经验 / 事实 / 决策 / 实体 / 其他 / 未分类
+   - 工具层仍保留英文分类值，保持接口契约稳定
+
+4. **统计与分布展示**
+   - `memory.stats` 已补充：
+     - `categorized`
+     - `uncategorized`
+     - `categoryBuckets`
+   - Viewer 统计卡片与当前筛选联动
+   - Viewer 已展示最小分类分布图
+
+### 28.4 验收结果
+
+验收结果：
+
+- [x] `memory_search` 已支持 `category`
+- [x] `memory.recent / memory.search / memory.get` 已稳定返回分类
+- [x] Viewer 可按分类与“未分类”过滤
+- [x] Viewer 列表、详情、统计区、分布图均已展示分类能力
+- [x] `category = NULL`、空字符串、非法分类值不会报错
+- [x] 未分类旧数据仍会出现在默认检索结果中
+
+已执行验证：
+
+- [x] `node .\node_modules\vitest\vitest.mjs run packages/belldandy-skills/src/builtin/memory.test.ts packages/belldandy-core/src/server.test.ts`
+- [x] `corepack pnpm --filter @belldandy/memory --filter @belldandy/core --filter @belldandy/skills build`
+- [x] `node --check apps\web\public\app.js`
+
+### 28.5 阶段结论
+
+第四阶段现在可以正式判定为：**已收口**。
+
+当前 `category` 已从“底层已有字段”升级为：
+
+- 工具可用
+- RPC 可用
+- Viewer 可筛
+- Viewer 可看
+- Viewer 可统计
+- Viewer 可展示分布
+- 旧数据可兼容
+
+后续若继续推进分类能力，应视为新阶段增强，不再算第四阶段未完项。

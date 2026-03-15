@@ -330,9 +330,17 @@ test("memory viewer rpc returns task and memory data", async () => {
 
   await fs.promises.writeFile(path.join(workspaceRoot, "MEMORY.md"), "# Belldandy\nMemory viewer test content.\n", "utf-8");
   await memoryManager.indexWorkspace();
+  (memoryManager as any).store.upsertChunk({
+    id: "chunk-category-decision",
+    sourcePath: "memory/category-decision.md",
+    sourceType: "manual",
+    memoryType: "other",
+    content: "phase4decision marker: complete category minimum loop first.",
+    category: "decision",
+  });
   registerGlobalMemoryManager(memoryManager);
 
-  const recentChunk = memoryManager.getRecent(1)[0];
+  const recentChunk = memoryManager.getRecent(5).find((item) => item.sourcePath.endsWith("MEMORY.md")) ?? memoryManager.getRecent(1)[0];
   expect(recentChunk?.id).toBeTruthy();
 
   const startedTaskId = memoryManager.startTaskCapture({
@@ -377,28 +385,43 @@ test("memory viewer rpc returns task and memory data", async () => {
     ws.send(JSON.stringify({ type: "req", id: "memory-stats", method: "memory.stats" }));
     ws.send(JSON.stringify({ type: "req", id: "task-list", method: "memory.task.list", params: { limit: 5 } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-recent", method: "memory.recent", params: { limit: 5 } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-recent-uncategorized", method: "memory.recent", params: { limit: 5, filter: { uncategorized: true } } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-search", method: "memory.search", params: { query: "viewer", limit: 5 } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-recent-category", method: "memory.recent", params: { limit: 5, filter: { category: "decision" } } }));
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-stats"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-uncategorized"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-search"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-category"));
 
     const taskListRes = frames.find((f) => f.type === "res" && f.id === "task-list");
     const memoryRecentRes = frames.find((f) => f.type === "res" && f.id === "memory-recent");
+    const memoryRecentUncategorizedRes = frames.find((f) => f.type === "res" && f.id === "memory-recent-uncategorized");
     const memorySearchRes = frames.find((f) => f.type === "res" && f.id === "memory-search");
+    const memoryRecentCategoryRes = frames.find((f) => f.type === "res" && f.id === "memory-recent-category");
     const statsRes = frames.find((f) => f.type === "res" && f.id === "memory-stats");
 
     expect(statsRes.ok).toBe(true);
     expect(statsRes.payload.status.chunks).toBeGreaterThan(0);
+    expect(statsRes.payload.status.categorized).toBeGreaterThan(0);
+    expect(statsRes.payload.status.uncategorized).toBeGreaterThan(0);
+    expect(statsRes.payload.status.categoryBuckets.decision).toBeGreaterThan(0);
     expect(taskListRes.ok).toBe(true);
     expect(taskListRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentRes.ok).toBe(true);
     expect(memoryRecentRes.payload.items.length).toBeGreaterThan(0);
+    expect(memoryRecentUncategorizedRes.ok).toBe(true);
+    expect(memoryRecentUncategorizedRes.payload.items.length).toBeGreaterThan(0);
+    expect(memoryRecentUncategorizedRes.payload.items[0].category).toBeUndefined();
     expect(memorySearchRes.ok).toBe(true);
+    expect(memoryRecentCategoryRes.ok).toBe(true);
+    expect(memoryRecentCategoryRes.payload.items.length).toBeGreaterThan(0);
+    expect(memoryRecentCategoryRes.payload.items[0].category).toBe("decision");
 
     const taskId = taskListRes.payload.items[0].id;
-    const chunkId = memoryRecentRes.payload.items[0].id;
+    const chunkId = memoryRecentCategoryRes.payload.items[0].id;
 
     ws.send(JSON.stringify({ type: "req", id: "task-get", method: "memory.task.get", params: { taskId } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-get", method: "memory.get", params: { chunkId } }));
@@ -415,7 +438,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(taskGetRes.ok).toBe(true);
     expect(taskGetRes.payload.task.memoryLinks.length).toBeGreaterThan(0);
     expect(memoryGetRes.ok).toBe(true);
-    expect(memoryGetRes.payload.item.content).toContain("Belldandy");
+    expect(memoryGetRes.payload.item.category).toBe("decision");
+    expect(memoryGetRes.payload.item.content).toContain("phase4decision");
     expect(sourceReadRes.ok).toBe(true);
     expect(sourceReadRes.payload.readOnly).toBe(true);
     expect(sourceReadRes.payload.content).toContain("Memory viewer test content");

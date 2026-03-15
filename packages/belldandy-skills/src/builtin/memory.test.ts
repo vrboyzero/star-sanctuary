@@ -114,6 +114,36 @@ describe("memory tools", () => {
     expect(result.output).toContain("[shared]");
   });
 
+  it("memory_search should pass category filter and render category tag", async () => {
+    manager.search.mockResolvedValue([
+      {
+        id: "chunk-decision",
+        sourcePath: "memory/decision.md",
+        sourceType: "file",
+        snippet: "确定采用第四阶段最小闭环。",
+        summary: "第四阶段决策摘要",
+        score: 0.91,
+        startLine: 3,
+        category: "decision",
+      },
+    ]);
+
+    const result = await mod.memorySearchTool.execute({
+      query: "第四阶段",
+      category: "decision",
+      limit: 2,
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.search).toHaveBeenCalledWith("第四阶段", {
+      limit: 2,
+      filter: {
+        category: "decision",
+      },
+    });
+    expect(result.output).toContain("[decision]");
+  });
+
   it("memory_read should render file content", async () => {
     readMemoryFile.mockResolvedValue({
       path: "memory/2026-03-15.md",

@@ -40,6 +40,7 @@ const memoryTaskStatusFilterEl = document.getElementById("memoryTaskStatusFilter
 const memoryTaskSourceFilterEl = document.getElementById("memoryTaskSourceFilter");
 const memoryChunkTypeFilterEl = document.getElementById("memoryChunkTypeFilter");
 const memoryChunkVisibilityFilterEl = document.getElementById("memoryChunkVisibilityFilter");
+const memoryChunkCategoryFilterEl = document.getElementById("memoryChunkCategoryFilter");
 
 const STORE_KEY = "belldandy.webchat.auth";
 const CLIENT_KEY = "belldandy.webchat.clientId";
@@ -204,6 +205,11 @@ if (memoryChunkTypeFilterEl) {
 }
 if (memoryChunkVisibilityFilterEl) {
   memoryChunkVisibilityFilterEl.addEventListener("change", () => {
+    if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
+  });
+}
+if (memoryChunkCategoryFilterEl) {
+  memoryChunkCategoryFilterEl.addEventListener("change", () => {
     if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
   });
 }
@@ -2605,6 +2611,7 @@ async function loadTaskViewer(forceSelectFirst = false) {
 
   const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
   memoryViewerState.items = items;
+  renderMemoryViewerStats(memoryViewerState.stats);
 
   if (!items.length) {
     memoryViewerState.selectedId = null;
@@ -2648,6 +2655,13 @@ async function loadMemoryChunkViewer(forceSelectFirst = false) {
   const filter = {};
   if (memoryChunkTypeFilterEl?.value) filter.memoryType = memoryChunkTypeFilterEl.value;
   if (memoryChunkVisibilityFilterEl?.value) filter.scope = memoryChunkVisibilityFilterEl.value;
+  if (memoryChunkCategoryFilterEl?.value) {
+    if (memoryChunkCategoryFilterEl.value === "uncategorized") {
+      filter.uncategorized = true;
+    } else {
+      filter.category = memoryChunkCategoryFilterEl.value;
+    }
+  }
 
   const params = { limit: 20 };
   if (Object.keys(filter).length > 0) params.filter = filter;
@@ -2664,6 +2678,7 @@ async function loadMemoryChunkViewer(forceSelectFirst = false) {
 
   const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
   memoryViewerState.items = items;
+  renderMemoryViewerStats(memoryViewerState.stats);
 
   if (!items.length) {
     memoryViewerState.selectedId = null;
@@ -2707,6 +2722,25 @@ function renderMemoryViewerStats(stats) {
       <div class="memory-stat-card"><span class="memory-stat-label">记忆块</span><strong class="memory-stat-value">--</strong></div>
       <div class="memory-stat-card"><span class="memory-stat-label">向量索引</span><strong class="memory-stat-value">--</strong></div>
       <div class="memory-stat-card"><span class="memory-stat-label">摘要完成</span><strong class="memory-stat-value">--</strong></div>
+    `;
+    return;
+  }
+
+  if (memoryViewerState.tab === "memories") {
+    const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
+    const currentCategorized = items.filter((item) => Boolean(item?.category)).length;
+    const currentUncategorized = items.length - currentCategorized;
+    const activeCategoryLabel = getActiveMemoryCategoryLabel();
+    const distributionCard = renderMemoryCategoryDistribution(stats);
+
+    memoryViewerStatsEl.innerHTML = `
+      <div class="memory-stat-card"><span class="memory-stat-label">当前结果</span><strong class="memory-stat-value">${formatCount(items.length)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">筛选分类</span><strong class="memory-stat-value">${escapeHtml(activeCategoryLabel)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">当前已分类</span><strong class="memory-stat-value">${formatCount(currentCategorized)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">当前未分类</span><strong class="memory-stat-value">${formatCount(currentUncategorized)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">全库已分类</span><strong class="memory-stat-value">${formatCount(stats.categorized)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">全库未分类</span><strong class="memory-stat-value">${formatCount(stats.uncategorized)}</strong></div>
+      ${distributionCard}
     `;
     return;
   }
@@ -2766,6 +2800,7 @@ function renderMemoryList(items) {
     const summary = item.summary || item.snippet || "暂无摘要";
     const isActive = item.id === memoryViewerState.selectedId;
     const visibility = normalizeMemoryVisibility(item.visibility);
+    const category = formatMemoryCategory(item.category);
     return `
       <div class="memory-list-item ${isActive ? "active" : ""}" data-memory-id="${escapeHtml(item.id)}">
         <div class="memory-list-item-title">${escapeHtml(title)}</div>
@@ -2773,6 +2808,7 @@ function renderMemoryList(items) {
           <span>${escapeHtml(item.memoryType || "other")}</span>
           <span>${escapeHtml(item.sourceType || "unknown")}</span>
           <span class="memory-badge ${getVisibilityBadgeClass(visibility)}">${escapeHtml(visibility)}</span>
+          <span class="memory-badge">${escapeHtml(category)}</span>
           <span>score ${formatScore(item.score)}</span>
         </div>
         <div class="memory-list-item-snippet">${escapeHtml(summary)}</div>
@@ -2893,6 +2929,7 @@ function renderMemoryDetail(item) {
   }
 
   const visibility = normalizeMemoryVisibility(item.visibility);
+  const category = formatMemoryCategory(item.category);
   memoryViewerDetailEl.innerHTML = `
     <div class="memory-detail-shell">
       <div class="memory-detail-header">
@@ -2906,6 +2943,7 @@ function renderMemoryDetail(item) {
           <span class="memory-badge">${escapeHtml(item.memoryType || "other")}</span>
           <span class="memory-badge">${escapeHtml(item.sourceType || "unknown")}</span>
           <span class="memory-badge ${getVisibilityBadgeClass(visibility)}">${escapeHtml(visibility)}</span>
+          <span class="memory-badge">${escapeHtml(category)}</span>
           <span class="memory-badge">score ${formatScore(item.score)}</span>
         </div>
       </div>
@@ -2914,6 +2952,7 @@ function renderMemoryDetail(item) {
         <div class="memory-detail-card"><span class="memory-detail-label">Source Path</span><div class="memory-detail-text">${item.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(item.sourcePath)}" data-open-line="${typeof item.startLine === "number" ? item.startLine : ""}">${escapeHtml(item.sourcePath)}</button>` : "-"}</div></div>
         <div class="memory-detail-card"><span class="memory-detail-label">Lines</span><div class="memory-detail-text">${escapeHtml(formatLineRange(item.startLine, item.endLine))}</div></div>
         <div class="memory-detail-card"><span class="memory-detail-label">Visibility</span><div class="memory-detail-text">${escapeHtml(visibility)}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">分类</span><div class="memory-detail-text">${escapeHtml(category)}</div></div>
         <div class="memory-detail-card"><span class="memory-detail-label">Summary</span><div class="memory-detail-text">${escapeHtml(item.summary || "暂无摘要")}</div></div>
       </div>
 
@@ -3005,6 +3044,108 @@ function formatScore(score) {
 
 function normalizeMemoryVisibility(value) {
   return value === "shared" ? "shared" : "private";
+}
+
+function formatMemoryCategory(value) {
+  switch (value) {
+    case "preference":
+      return "偏好";
+    case "experience":
+      return "经验";
+    case "fact":
+      return "事实";
+    case "decision":
+      return "决策";
+    case "entity":
+      return "实体";
+    case "other":
+      return "其他";
+    default:
+      return "未分类";
+  }
+}
+
+function getActiveMemoryCategoryLabel() {
+  const value = memoryChunkCategoryFilterEl?.value || "";
+  if (!value) return "全部分类";
+  if (value === "uncategorized") return "未分类";
+  return formatMemoryCategory(value);
+}
+
+function renderMemoryCategoryDistribution(stats) {
+  const entries = getMemoryCategoryDistributionEntries(stats);
+  if (!entries.length) {
+    return `
+      <div class="memory-stat-card memory-stat-card-wide">
+        <div class="memory-stat-card-head">
+          <span class="memory-stat-label">分类分布</span>
+          <span class="memory-stat-caption">暂无分类样本</span>
+        </div>
+      </div>
+    `;
+  }
+
+  const total = entries.reduce((sum, entry) => sum + entry.count, 0);
+  const activeKey = memoryChunkCategoryFilterEl?.value || "";
+  return `
+    <div class="memory-stat-card memory-stat-card-wide">
+      <div class="memory-stat-card-head">
+        <span class="memory-stat-label">分类分布</span>
+        <span class="memory-stat-caption">全库 ${formatCount(total)} 条</span>
+      </div>
+      <div class="memory-category-chart">
+        ${entries.map((entry) => {
+          const percent = total > 0 ? (entry.count / total) * 100 : 0;
+          const isActive = activeKey === entry.key;
+          return `
+            <div class="memory-category-row ${isActive ? "active" : ""}">
+              <div class="memory-category-name">${escapeHtml(entry.label)}</div>
+              <div class="memory-category-bar-track">
+                <div class="memory-category-bar-fill ${getMemoryCategoryToneClass(entry.key)}" style="width:${Math.max(percent, entry.count > 0 ? 3 : 0).toFixed(2)}%"></div>
+              </div>
+              <div class="memory-category-metrics">
+                <span class="memory-category-count">${formatCount(entry.count)}</span>
+                <span class="memory-category-percent">${percent.toFixed(percent >= 10 ? 0 : 1)}%</span>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function getMemoryCategoryDistributionEntries(stats) {
+  const buckets = stats?.categoryBuckets || {};
+  const ordered = [
+    { key: "preference", label: "偏好", count: buckets.preference || 0 },
+    { key: "experience", label: "经验", count: buckets.experience || 0 },
+    { key: "fact", label: "事实", count: buckets.fact || 0 },
+    { key: "decision", label: "决策", count: buckets.decision || 0 },
+    { key: "entity", label: "实体", count: buckets.entity || 0 },
+    { key: "other", label: "其他", count: buckets.other || 0 },
+    { key: "uncategorized", label: "未分类", count: stats?.uncategorized || 0 },
+  ];
+  return ordered.filter((entry) => entry.count > 0);
+}
+
+function getMemoryCategoryToneClass(key) {
+  switch (key) {
+    case "preference":
+      return "memory-category-bar-preference";
+    case "experience":
+      return "memory-category-bar-experience";
+    case "fact":
+      return "memory-category-bar-fact";
+    case "decision":
+      return "memory-category-bar-decision";
+    case "entity":
+      return "memory-category-bar-entity";
+    case "other":
+      return "memory-category-bar-other";
+    default:
+      return "memory-category-bar-uncategorized";
+  }
 }
 
 function getVisibilityBadgeClass(visibility) {

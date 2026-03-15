@@ -59,6 +59,10 @@ export const memorySearchTool: Tool = {
                     type: "string",
                     description: "Filter by source channel: 'webchat', 'feishu', 'heartbeat', etc.",
                 },
+                category: {
+                    type: "string",
+                    description: "Filter by semantic category: 'preference', 'experience', 'fact', 'decision', 'entity', or 'other'.",
+                },
                 date_from: {
                     type: "string",
                     description: "Filter results from this date (YYYY-MM-DD).",
@@ -87,6 +91,7 @@ export const memorySearchTool: Tool = {
                 filter.memoryType = types.length === 1 ? types[0] as any : types as any;
             }
             if (args.channel) filter.channel = args.channel as string;
+            if (args.category) filter.category = args.category as MemorySearchFilter["category"];
             if (args.date_from) filter.dateFrom = args.date_from as string;
             if (args.date_to) filter.dateTo = args.date_to as string;
             if (args.scope) filter.scope = args.scope as MemorySearchFilter["scope"];
@@ -103,7 +108,8 @@ export const memorySearchTool: Tool = {
             // Format results based on detail_level
             const output = results.map(r => {
                 const visibilityTag = r.visibility === "shared" ? " [shared]" : "";
-                const location = `[${r.sourcePath}:${r.startLine || 0}]${visibilityTag} (Score: ${r.score.toFixed(3)})`;
+                const categoryTag = r.category ? ` [${r.category}]` : "";
+                const location = `[${r.sourcePath}:${r.startLine || 0}]${visibilityTag}${categoryTag} (Score: ${r.score.toFixed(3)})`;
                 if (detailLevel === "full") {
                     return `${location}\n${r.snippet}`;
                 }
