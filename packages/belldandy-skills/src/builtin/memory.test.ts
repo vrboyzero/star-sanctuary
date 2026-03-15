@@ -1,33 +1,177 @@
-import { describe, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ToolContext } from "../types.js";
 
-// NOTE: 这些测试跳过因为 vitest 不支持 node:sqlite
-// @belldandy/memory 依赖 node:sqlite，导致 vitest 无法加载
-// 代码通过独立脚本和端到端测试验证可用
+const manager = {
+  search: vi.fn(),
+  indexWorkspace: vi.fn(),
+  getStatus: vi.fn(),
+  linkTaskMemories: vi.fn(),
+  linkTaskMemoriesFromSource: vi.fn(),
+  searchTasks: vi.fn(),
+  getRecentTasks: vi.fn(),
+  getTaskDetail: vi.fn(),
+};
 
-describe("memory_search tool", () => {
-    it.skip("should return search results", () => {
-        // See note above
+const readMemoryFile = vi.fn();
+const writeMemoryFile = vi.fn();
+const appendToTodayMemory = vi.fn();
+
+vi.mock("@belldandy/memory", () => ({
+  MemoryManager: vi.fn(),
+  getGlobalMemoryManager: () => manager,
+  appendToTodayMemory,
+  readMemoryFile,
+  writeMemoryFile,
+}));
+
+const mod = await import("./memory.js");
+
+const baseContext: ToolContext = {
+  conversationId: "conv-1",
+  workspaceRoot: "E:/project/star-sanctuary/.star_sanctuary",
+  policy: {
+    allowedPaths: [],
+    deniedPaths: [],
+    allowedDomains: [],
+    deniedDomains: [],
+    maxTimeoutMs: 30_000,
+    maxResponseBytes: 512_000,
+  },
+};
+
+describe("memory tools", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager.getStatus.mockReturnValue({
+      files: 2,
+      chunks: 10,
+      vectorIndexed: 5,
+      vectorCached: 3,
+      summarized: 4,
+      summaryPending: 1,
+    });
+  });
+
+  it("memory_search should link used memories", async () => {
+    manager.search.mockResolvedValue([
+      {
+        id: "chunk-1",
+        sourcePath: "memory/2026-03-15.md",
+        sourceType: "file",
+        snippet: "记忆片段一",
+        summary: "摘要一",
+        score: 0.9,
+        startLine: 12,
+      },
+    ]);
+
+    const result = await mod.memorySearchTool.execute({
+      query: "测试检索",
+      limit: 3,
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("摘要一");
+    expect(manager.linkTaskMemories).toHaveBeenCalledWith("conv-1", ["chunk-1"], "used");
+  });
+
+  it("memory_read should render file content", async () => {
+    readMemoryFile.mockResolvedValue({
+      path: "memory/2026-03-15.md",
+      totalLines: 3,
+      text: "# 2026-03-15\n\n- 一条记忆",
     });
 
-    it.skip("should handle empty results", () => {
-        // See note above
+    const result = await mod.memoryReadTool.execute({
+      path: "memory/2026-03-15.md",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Total Lines: 3");
+    expect(result.output).toContain("- 一条记忆");
+    expect(manager.linkTaskMemoriesFromSource).toHaveBeenCalledWith(
+      "conv-1",
+      "memory/2026-03-15.md",
+      "used",
+    );
+  });
+
+  it("memory_write should append to today file and link generated memory", async () => {
+    appendToTodayMemory.mockResolvedValue("E:/project/star-sanctuary/.star_sanctuary/memory/2026-03-15.md");
+
+    const result = await mod.memoryWriteTool.execute({
+      content: "- 新记忆",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(appendToTodayMemory).toHaveBeenCalled();
+    expect(manager.linkTaskMemoriesFromSource).toHaveBeenCalledWith(
+      "conv-1",
+      "E:/project/star-sanctuary/.star_sanctuary/memory/2026-03-15.md",
+      "generated",
+    );
+  });
+
+  it("task_recent should render task list", async () => {
+    manager.getRecentTasks.mockReturnValue([
+      {
+        id: "task_1",
+        status: "success",
+        source: "chat",
+        startedAt: "2026-03-15T00:00:00.000Z",
+        finishedAt: "2026-03-15T00:01:00.000Z",
+        title: "修复任务",
+        summary: "完成修复。",
+      },
+    ]);
+
+    const result = await mod.taskRecentTool.execute({}, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("修复任务");
+    expect(result.output).toContain("task_1");
+  });
+
+  it("task_get should render readable detail with memory links", async () => {
+    manager.getTaskDetail.mockReturnValue({
+      id: "task_1",
+      conversationId: "conv-1",
+      status: "success",
+      source: "chat",
+      startedAt: "2026-03-15T00:00:00.000Z",
+      finishedAt: "2026-03-15T00:01:00.000Z",
+      title: "修复任务",
+      objective: "修复记忆问题",
+      summary: "已经修复。",
+      reflection: "以后先查 task_recent。",
+      toolCalls: [{ toolName: "memory_search", success: true, durationMs: 120 }],
+      memoryLinks: [
+        {
+          chunkId: "chunk-1",
+          relation: "used",
+          sourcePath: "memory/2026-03-15.md",
+          memoryType: "daily",
+          snippet: "记忆片段一",
+        },
+      ],
     });
 
-    it.skip("should handle error", () => {
-        // See note above
-    });
-});
+    const result = await mod.taskGetTool.execute({ task_id: "task_1" }, baseContext);
 
-describe("memory_get tool", () => {
-    it.skip("should read memory file content", () => {
-        // See note above
-    });
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Task: 修复任务");
+    expect(result.output).toContain("Memory Links:");
+    expect(result.output).toContain("memory/2026-03-15.md");
+    expect(result.output).toContain("记忆片段一");
+  });
 
-    it.skip("should handle line range", () => {
-        // See note above
-    });
+  it("memory_index should report index status", async () => {
+    manager.indexWorkspace.mockResolvedValue(undefined);
 
-    it.skip("should reject non-memory paths", () => {
-        // See note above
-    });
+    const result = await mod.memoryIndexTool.execute({}, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Files: 2");
+    expect(result.output).toContain("Chunks: 10");
+  });
 });

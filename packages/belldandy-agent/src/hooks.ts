@@ -128,6 +128,8 @@ export interface BeforeAgentStartEvent {
   messages?: unknown[];
   /** 用户原始输入（用于语义召回；可选，缺失时可回退到 prompt） */
   userInput?: string;
+  /** 透传的运行元信息（如父会话 ID） */
+  meta?: JsonObject;
 }
 
 /**

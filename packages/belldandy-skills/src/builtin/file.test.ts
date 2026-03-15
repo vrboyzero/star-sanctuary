@@ -1,9 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { fileDeleteTool, fileReadTool, fileWriteTool } from "./file.js";
 import type { ToolContext } from "../types.js";
+
+const memoryManager = {
+  linkTaskMemoriesFromSource: vi.fn(),
+};
+
+vi.mock("@belldandy/memory", () => ({
+  getGlobalMemoryManager: () => memoryManager,
+}));
+
+const { fileDeleteTool, fileReadTool, fileWriteTool } = await import("./file.js");
 
 describe("file tools", () => {
   let tempDir: string;
@@ -11,6 +20,7 @@ describe("file tools", () => {
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    vi.clearAllMocks();
     baseContext = {
       conversationId: "test-conv",
       workspaceRoot: tempDir,
@@ -117,6 +127,38 @@ describe("file tools", () => {
       expect(result.success).toBe(true);
       const output = JSON.parse(result.output);
       expect(output.content).toBe("deep content");
+    });
+
+    it("should link used memory for MEMORY.md and memory/* reads", async () => {
+      await fs.writeFile(path.join(tempDir, "MEMORY.md"), "# Memory", "utf-8");
+
+      const rootMemoryResult = await fileReadTool.execute({ path: "MEMORY.md" }, baseContext);
+      expect(rootMemoryResult.success).toBe(true);
+      expect(memoryManager.linkTaskMemoriesFromSource).toHaveBeenCalledWith(
+        "test-conv",
+        "MEMORY.md",
+        "used",
+      );
+
+      await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "memory", "2026-03-15.md"), "# 2026-03-15", "utf-8");
+
+      const dailyMemoryResult = await fileReadTool.execute({ path: "memory/2026-03-15.md" }, baseContext);
+      expect(dailyMemoryResult.success).toBe(true);
+      expect(memoryManager.linkTaskMemoriesFromSource).toHaveBeenCalledWith(
+        "test-conv",
+        "memory/2026-03-15.md",
+        "used",
+      );
+    });
+
+    it("should not link non-memory file reads", async () => {
+      await fs.writeFile(path.join(tempDir, "notes.txt"), "plain notes", "utf-8");
+
+      const result = await fileReadTool.execute({ path: "notes.txt" }, baseContext);
+
+      expect(result.success).toBe(true);
+      expect(memoryManager.linkTaskMemoriesFromSource).not.toHaveBeenCalled();
     });
   });
 

@@ -7,6 +7,7 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
 
+import { getGlobalMemoryManager } from "@belldandy/memory";
 import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig, uploadTokenUsage } from "@belldandy/protocol";
 import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type ModelProfile } from "@belldandy/agent";
 import type {
@@ -40,6 +41,7 @@ export type GatewayServerOptions = {
   webRoot: string;
   envDir?: string;
   stateDir?: string;
+  additionalWorkspaceRoots?: string[];
   agentFactory?: () => BelldandyAgent;
   /** Multi-Agent registry (takes precedence over agentFactory when agentId is specified) */
   agentRegistry?: AgentRegistry;
@@ -97,11 +99,18 @@ const DEFAULT_METHODS = [
   "system.restart",
   "workspace.list",
   "workspace.read",
+  "workspace.readSource",
   "workspace.write",
   "context.compact",
   "tools.list",
   "tools.update",
   "agents.list",
+  "memory.search",
+  "memory.get",
+  "memory.recent",
+  "memory.stats",
+  "memory.task.list",
+  "memory.task.get",
 ];
 const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required"];
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -629,6 +638,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         clientId: state.clientId ?? state.sessionId,
         userUuid: state.userUuid, // 传递UUID
         stateDir: opts.stateDir ?? resolveStateDir(),
+        additionalWorkspaceRoots: opts.additionalWorkspaceRoots ?? [],
         envDir: opts.envDir,
         agentFactory: opts.agentFactory ?? (() => new MockAgent()),
         agentRegistry: opts.agentRegistry,
@@ -722,6 +732,7 @@ async function handleReq(
     clientId: string;
     userUuid?: string; // 添加UUID字段
     stateDir: string;
+    additionalWorkspaceRoots: string[];
     envDir?: string;
     log: GatewayLog;
     agentFactory: () => BelldandyAgent;
@@ -749,9 +760,16 @@ async function handleReq(
     "system.doctor",
     "workspace.write",
     "workspace.read",
+    "workspace.readSource",
     "workspace.list",
     "context.compact",
     "tools.update",
+    "memory.search",
+    "memory.get",
+    "memory.recent",
+    "memory.stats",
+    "memory.task.list",
+    "memory.task.get",
   ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
@@ -1393,6 +1411,120 @@ async function handleReq(
       return { type: "res", id: req.id, ok: true, payload: { agents } };
     }
 
+    case "memory.search": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const query = typeof params.query === "string" ? params.query.trim() : "";
+      if (!query) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "query is required" } };
+      }
+
+      const limit = clampListLimit(params.limit, 20);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = await manager.search(query, { limit, filter: filter as any });
+      return { type: "res", id: req.id, ok: true, payload: { items, query, limit } };
+    }
+
+    case "memory.get": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const chunkId = typeof params.chunkId === "string" ? params.chunkId.trim() : "";
+      if (!chunkId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "chunkId is required" } };
+      }
+
+      const item = manager.getMemory(chunkId);
+      if (!item) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Memory not found." } };
+      }
+
+      return { type: "res", id: req.id, ok: true, payload: { item } };
+    }
+
+    case "memory.recent": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = clampListLimit(params.limit, 20);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = manager.getRecent(limit, filter as any);
+      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+    }
+
+    case "memory.stats": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          status: manager.getStatus(),
+          recentTasks: manager.getRecentTasks(5),
+        },
+      };
+    }
+
+    case "memory.task.list": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const query = typeof params.query === "string" ? params.query.trim() : "";
+      const limit = clampListLimit(params.limit, 20);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = query
+        ? manager.searchTasks(query, { limit, filter: filter as any })
+        : manager.getRecentTasks(limit, filter as any);
+
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items,
+          query,
+          limit,
+        },
+      };
+    }
+
+    case "memory.task.get": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      if (!taskId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
+      }
+
+      const task = manager.getTaskDetail(taskId);
+      if (!task) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Task not found." } };
+      }
+
+      return { type: "res", id: req.id, ok: true, payload: { task } };
+    }
+
     case "workspace.list": {
       const params = req.params as { path?: string } | undefined;
       const relativePath = params?.path ?? "";
@@ -1482,6 +1614,57 @@ async function handleReq(
       try {
         const content = fs.readFileSync(targetFile, "utf-8");
         return { type: "res", id: req.id, ok: true, payload: { content, path: relativePath } };
+      } catch (err) {
+        return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(err) } };
+      }
+    }
+
+    case "workspace.readSource": {
+      const params = req.params as { path?: string } | undefined;
+      const requestedPath = params?.path;
+
+      if (!requestedPath || typeof requestedPath !== "string") {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "path is required" } };
+      }
+
+      const targetFile = path.isAbsolute(requestedPath)
+        ? path.resolve(requestedPath)
+        : path.resolve(ctx.stateDir, requestedPath);
+      const allowedRoots = [ctx.stateDir, ...ctx.additionalWorkspaceRoots];
+
+      if (!allowedRoots.some((root) => isUnderRoot(root, targetFile))) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
+      }
+
+      const READABLE_TEXT_EXTENSIONS = [
+        ".md", ".txt", ".json", ".jsonl", ".log", ".csv",
+        ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts",
+        ".css", ".scss", ".less", ".html", ".xml",
+        ".yml", ".yaml", ".toml", ".ini",
+        ".py", ".rb", ".go", ".rs", ".java", ".kt", ".cs",
+        ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
+      ];
+      const ext = path.extname(targetFile).toLowerCase();
+      if (!READABLE_TEXT_EXTENSIONS.includes(ext)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_type", message: "不支持的源文件类型" } };
+      }
+
+      if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
+      }
+
+      try {
+        const content = fs.readFileSync(targetFile, "utf-8");
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            content,
+            path: targetFile,
+            readOnly: true,
+          },
+        };
       } catch (err) {
         return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(err) } };
       }
@@ -1672,6 +1855,16 @@ function normalizeClientId(value: unknown): string | null {
   if (!trimmed) return null;
   if (trimmed.length > 200) return null;
   return trimmed;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function clampListLimit(value: unknown, fallback: number, max = 100): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
 }
 
 function sendRes(ws: WebSocket, frame: GatewayResFrame) {

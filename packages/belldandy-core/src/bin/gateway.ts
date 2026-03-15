@@ -39,8 +39,12 @@ import {
   fileDeleteTool,
   listFilesTool,
   createMemorySearchTool,
-
   createMemoryGetTool,
+  memoryReadTool,
+  memoryWriteTool,
+  taskSearchTool,
+  taskGetTool,
+  taskRecentTool,
   browserOpenTool,
   browserNavigateTool,
   browserClickTool,
@@ -537,6 +541,11 @@ const toolsToRegister = toolsEnabled
     ...(dangerousToolsEnabled ? [runCommandTool] : []),
     createMemorySearchTool(),
     createMemoryGetTool(),
+    memoryReadTool,
+    memoryWriteTool,
+    taskSearchTool,
+    taskGetTool,
+    taskRecentTool,
     getUserUuidTool, // UUID获取工具（始终加载）
     getMessageSenderInfoTool, // 发送者信息工具（始终加载）
     getRoomMembersTool, // 房间成员工具（始终加载）
@@ -646,7 +655,7 @@ const toolExecutor = new ToolExecutor({
 
 // 4. Log enabled tools
 if (toolsEnabled) {
-  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, browser_*, log_read, log_search";
+  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, task_search, task_get, task_recent, browser_*, log_read, log_search";
   if (dangerousToolsEnabled) {
     logger.warn("tools", "⚠️ DANGEROUS_TOOLS_ENABLED=true: run_command is active");
     logger.info("tools", `Tools enabled: ${safeTools}, run_command`);
@@ -1339,6 +1348,16 @@ const evolutionMinMessages = Number(readEnv("BELLDANDY_MEMORY_EVOLUTION_MIN_MESS
 // M-N4: 源路径聚合检索配置
 const deepRetrievalEnabled = readEnv("BELLDANDY_MEMORY_DEEP_RETRIEVAL") === "true";
 
+// Task 层总结配置
+const taskMemoryEnabled = readEnv("BELLDANDY_TASK_MEMORY_ENABLED") === "true";
+const taskSummaryEnabled = readEnv("BELLDANDY_TASK_SUMMARY_ENABLED") === "true";
+const taskSummaryModel = readEnv("BELLDANDY_TASK_SUMMARY_MODEL") || openaiModel;
+const taskSummaryBaseUrl = readEnv("BELLDANDY_TASK_SUMMARY_BASE_URL") || openaiBaseUrl;
+const taskSummaryApiKey = readEnv("BELLDANDY_TASK_SUMMARY_API_KEY") || openaiApiKey;
+const taskSummaryMinDurationMs = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_DURATION_MS")) || 15_000;
+const taskSummaryMinToolCalls = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_TOOL_CALLS")) || 2;
+const taskSummaryMinTokenTotal = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_TOKEN_TOTAL")) || 2_000;
+
 // P1-4: Task-aware Embedding 前缀（用于 Jina/BGE 等支持 task 参数的模型）
 const embeddingQueryPrefix = readEnv("BELLDANDY_EMBEDDING_QUERY_PREFIX") || undefined;
 const embeddingPassagePrefix = readEnv("BELLDANDY_EMBEDDING_PASSAGE_PREFIX") || undefined;
@@ -1370,6 +1389,15 @@ const unifiedMemoryManager = new MemoryManager({
   evolutionBaseUrl,
   evolutionApiKey,
   evolutionMinMessages,
+  taskMemoryEnabled,
+  taskSummaryEnabled,
+  taskSummaryModel,
+  taskSummaryBaseUrl,
+  taskSummaryApiKey,
+  taskSummaryMinDurationMs,
+  taskSummaryMinToolCalls,
+  taskSummaryMinTokenTotal,
+  conversationStore,
   deepRetrievalEnabled,
   rerankerOptions: {
     ...(rerankerMinScore != null ? { minScore: rerankerMinScore } : {}),
@@ -1387,7 +1415,7 @@ registerGlobalMemoryManager(unifiedMemoryManager);
 unifiedMemoryManager.indexWorkspace().catch(err => {
   logger.error("memory", `Failed to start unified memory indexing: ${err instanceof Error ? err.message : String(err)}`);
 });
-logger.info("memory", `Unified MemoryManager initialized (sessions + ${memoryAdditionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled})`);
+logger.info("memory", `Unified MemoryManager initialized (sessions + ${memoryAdditionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled})`);
 
 // ========== 后台任务调度：pause/resume + 空闲摘要 ==========
 
@@ -1450,6 +1478,134 @@ if (summaryEnabled) {
   // 不阻止进程退出
   if (idleSummaryTimer.unref) idleSummaryTimer.unref();
   logger.info("memory-summary", `Idle summary timer started (interval=${IDLE_SUMMARY_INTERVAL_MS / 1000}s)`);
+}
+
+function detectTaskSource(sessionKey: string, meta?: Record<string, unknown>): "chat" | "sub_agent" | "cron" | "heartbeat" | "manual" {
+  if (typeof meta?._parentConversationId === "string" && meta._parentConversationId.trim()) {
+    return "sub_agent";
+  }
+  if (sessionKey.startsWith("sub_")) return "sub_agent";
+  if (sessionKey.startsWith("cron-")) return "cron";
+  if (sessionKey.startsWith("heartbeat-")) return "heartbeat";
+  return "chat";
+}
+
+function extractTaskArtifactPaths(toolName: string, result: unknown, params: Record<string, unknown>): string[] {
+  if (toolName === "file_write" && typeof params.path === "string" && params.path.trim()) {
+    return [params.path.trim()];
+  }
+
+  if (toolName === "method_create" && typeof params.filename === "string" && params.filename.trim()) {
+    return [`methods/${params.filename.trim()}`];
+  }
+
+  if (typeof result !== "string" || !result.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(result) as Record<string, unknown>;
+
+    if (toolName === "apply_patch" && parsed.summary && typeof parsed.summary === "object") {
+      const summary = parsed.summary as Record<string, unknown>;
+      const values = [
+        ...(Array.isArray(summary.added) ? summary.added : []),
+        ...(Array.isArray(summary.modified) ? summary.modified : []),
+      ].map((value) => String(value)).filter(Boolean);
+      return [...new Set(values)];
+    }
+
+    if ((toolName === "file_write" || toolName === "file_delete") && typeof parsed.path === "string" && parsed.path.trim()) {
+      return [parsed.path.trim()];
+    }
+  } catch {
+    // ignore parse failure
+  }
+
+  return [];
+}
+
+if (taskMemoryEnabled) {
+  hookRegistry.register({
+    source: "task-memory",
+    hookName: "before_agent_start",
+    priority: 40,
+    handler: async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      const mm = getGlobalMemoryManager();
+      if (!mm) return;
+
+      const meta = event.meta && typeof event.meta === "object"
+        ? event.meta as Record<string, unknown>
+        : undefined;
+      const objective = typeof event.userInput === "string" && event.userInput.trim()
+        ? event.userInput
+        : event.prompt;
+
+      mm.startTaskCapture({
+        conversationId: sessionKey,
+        sessionKey,
+        agentId: ctx.agentId,
+        source: detectTaskSource(sessionKey, meta),
+        objective,
+        parentConversationId: typeof meta?._parentConversationId === "string"
+          ? meta._parentConversationId
+          : undefined,
+      });
+    },
+  });
+
+  hookRegistry.register({
+    source: "task-memory",
+    hookName: "after_tool_call",
+    priority: 40,
+    handler: async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      const mm = getGlobalMemoryManager();
+      if (!mm) return;
+
+      const artifactPaths = extractTaskArtifactPaths(
+        event.toolName,
+        event.result,
+        event.params ?? {},
+      );
+
+      mm.recordTaskToolCall(sessionKey, {
+        toolName: event.toolName,
+        success: !event.error,
+        durationMs: event.durationMs,
+        note: event.error,
+        artifactPaths,
+      });
+    },
+  });
+
+  hookRegistry.register({
+    source: "task-memory",
+    hookName: "agent_end",
+    priority: 40,
+    handler: async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      const mm = getGlobalMemoryManager();
+      if (!mm) return;
+
+      mm.completeTaskCapture({
+        conversationId: sessionKey,
+        success: event.success,
+        durationMs: event.durationMs,
+        error: event.error,
+        messages: Array.isArray(event.messages) ? event.messages : undefined,
+      });
+    },
+  });
+
+  logger.info("task-memory", "Registered task memory hooks");
 }
 
 // M-N3: 注册 agent_end hook 用于会话记忆自动提取
@@ -1577,6 +1733,7 @@ const server = await startGatewayServer({
   webRoot,
   envDir: runtimePaths.envDir,
   stateDir,
+  additionalWorkspaceRoots: extraWorkspaceRoots,
   agentFactory: createAgent,
   agentRegistry: agentRegistry,
   primaryModelConfig,

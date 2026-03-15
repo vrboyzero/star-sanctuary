@@ -82,7 +82,7 @@ export {
 
 
 export { createMemorySearchTool, createMemoryGetTool, type MemorySearchToolConfig } from "./builtin/memory.js";
-export { memorySearchTool, memoryIndexTool } from "./builtin/memory.js";
+export { memorySearchTool, memoryIndexTool, memoryReadTool, memoryWriteTool, taskSearchTool, taskGetTool, taskRecentTool } from "./builtin/memory.js";
 
 // Skills 管理工具
 export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";

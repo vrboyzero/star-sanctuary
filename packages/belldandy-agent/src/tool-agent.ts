@@ -159,11 +159,12 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
   async *run(input: AgentRunInput): AsyncIterable<AgentStreamItem> {
     const startTime = Date.now();
-    const legacyHookCtx = { agentId: "tool-agent", conversationId: input.conversationId };
+    const resolvedAgentId = input.agentId ?? "tool-agent";
+    const legacyHookCtx = { agentId: resolvedAgentId, conversationId: input.conversationId };
 
     // 新版钩子上下文
     const agentHookCtx: HookAgentContext = {
-      agentId: "tool-agent",
+      agentId: resolvedAgentId,
       sessionKey: input.conversationId,
     };
 
@@ -174,7 +175,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
         const normalizedPrompt = typeof input.content === "string" ? input.content : input.text;
         const normalizedUserInput = input.userInput?.trim() || normalizedPrompt;
         const hookRes = await this.opts.hookRunner.runBeforeAgentStart(
-          { prompt: normalizedPrompt, messages: input.history as any, userInput: normalizedUserInput }, // TODO: Update hook types for multimodal
+          { prompt: normalizedPrompt, messages: input.history as any, userInput: normalizedUserInput, meta: input.meta }, // TODO: Update hook types for multimodal
           agentHookCtx,
         );
         if (hookRes) {
@@ -393,7 +394,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
           // 工具钩子上下文
           const toolHookCtx: HookToolContext = {
-            agentId: "tool-agent",
+            agentId: resolvedAgentId,
             sessionKey: input.conversationId,
             toolName: request.name,
           };

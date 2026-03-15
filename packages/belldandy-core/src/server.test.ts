@@ -6,6 +6,7 @@ import { expect, test, beforeAll } from "vitest";
 import WebSocket from "ws";
 
 import { AgentRegistry, type BelldandyAgent, MockAgent } from "@belldandy/agent";
+import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
@@ -310,6 +311,122 @@ test("secure methods require pairing for config raw and tools update", async () 
   await closeP;
   await server.close();
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("memory viewer rpc returns task and memory data", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+  (memoryManager as any).embeddingProvider = {
+    modelName: "test-memory-viewer",
+    embed: async () => [0.1],
+    embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+    embedQuery: async () => [0.1],
+  };
+
+  await fs.promises.writeFile(path.join(workspaceRoot, "MEMORY.md"), "# Belldandy\nMemory viewer test content.\n", "utf-8");
+  await memoryManager.indexWorkspace();
+  registerGlobalMemoryManager(memoryManager);
+
+  const recentChunk = memoryManager.getRecent(1)[0];
+  expect(recentChunk?.id).toBeTruthy();
+
+  const startedTaskId = memoryManager.startTaskCapture({
+    conversationId: "conv-memory-viewer",
+    sessionKey: "session-memory-viewer",
+    source: "chat",
+    objective: "Implement memory viewer",
+  });
+  expect(startedTaskId).toBeTruthy();
+  if (recentChunk?.id) {
+    memoryManager.linkTaskMemories("conv-memory-viewer", [recentChunk.id], "used");
+  }
+  memoryManager.recordTaskToolCall("conv-memory-viewer", {
+    toolName: "memory_search",
+    success: true,
+    durationMs: 120,
+  });
+  const completedTaskId = memoryManager.completeTaskCapture({
+    conversationId: "conv-memory-viewer",
+    success: true,
+    durationMs: 1200,
+    messages: [{ type: "usage", inputTokens: 12, outputTokens: 8 }],
+  });
+  expect(completedTaskId).toBeTruthy();
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    additionalWorkspaceRoots: [workspaceRoot],
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "memory-stats", method: "memory.stats" }));
+    ws.send(JSON.stringify({ type: "req", id: "task-list", method: "memory.task.list", params: { limit: 5 } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-recent", method: "memory.recent", params: { limit: 5 } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-search", method: "memory.search", params: { query: "viewer", limit: 5 } }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-stats"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-search"));
+
+    const taskListRes = frames.find((f) => f.type === "res" && f.id === "task-list");
+    const memoryRecentRes = frames.find((f) => f.type === "res" && f.id === "memory-recent");
+    const memorySearchRes = frames.find((f) => f.type === "res" && f.id === "memory-search");
+    const statsRes = frames.find((f) => f.type === "res" && f.id === "memory-stats");
+
+    expect(statsRes.ok).toBe(true);
+    expect(statsRes.payload.status.chunks).toBeGreaterThan(0);
+    expect(taskListRes.ok).toBe(true);
+    expect(taskListRes.payload.items.length).toBeGreaterThan(0);
+    expect(memoryRecentRes.ok).toBe(true);
+    expect(memoryRecentRes.payload.items.length).toBeGreaterThan(0);
+    expect(memorySearchRes.ok).toBe(true);
+
+    const taskId = taskListRes.payload.items[0].id;
+    const chunkId = memoryRecentRes.payload.items[0].id;
+
+    ws.send(JSON.stringify({ type: "req", id: "task-get", method: "memory.task.get", params: { taskId } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-get", method: "memory.get", params: { chunkId } }));
+    ws.send(JSON.stringify({ type: "req", id: "source-read", method: "workspace.readSource", params: { path: recentChunk.sourcePath } }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-get"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-get"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "source-read"));
+
+    const taskGetRes = frames.find((f) => f.type === "res" && f.id === "task-get");
+    const memoryGetRes = frames.find((f) => f.type === "res" && f.id === "memory-get");
+    const sourceReadRes = frames.find((f) => f.type === "res" && f.id === "source-read");
+
+    expect(taskGetRes.ok).toBe(true);
+    expect(taskGetRes.payload.task.memoryLinks.length).toBeGreaterThan(0);
+    expect(memoryGetRes.ok).toBe(true);
+    expect(memoryGetRes.payload.item.content).toContain("Belldandy");
+    expect(sourceReadRes.ok).toBe(true);
+    expect(sourceReadRes.payload.readOnly).toBe(true);
+    expect(sourceReadRes.payload.content).toContain("Memory viewer test content");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("gateway rejects origin prefix spoofing", async () => {

@@ -256,3 +256,68 @@ export async function appendToTodayMemory(
 
     return filePath;
 }
+
+/**
+ * 写入指定的 memory 文件。
+ *
+ * @param workspaceDir Workspace 根目录
+ * @param relPath memory 相对路径（如 MEMORY.md 或 memory/2026-03-15.md）
+ * @param content 要写入的内容
+ * @param mode append / overwrite
+ */
+export async function writeMemoryFile(params: {
+    workspaceDir: string;
+    relPath: string;
+    content: string;
+    mode?: "append" | "overwrite";
+}): Promise<string> {
+    const { workspaceDir, relPath, content } = params;
+    const mode = params.mode ?? "append";
+    const normalized = normalizeRelPath(relPath);
+
+    if (!isMemoryPath(normalized)) {
+        throw new Error(`Path is not a memory file: ${relPath}`);
+    }
+
+    const absPath = path.join(workspaceDir, normalized);
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+
+    const existsAlready = await exists(absPath);
+    const trimmedContent = content.trim();
+    if (!trimmedContent) {
+        throw new Error("Memory content cannot be empty");
+    }
+
+    if (mode === "overwrite") {
+        if (normalized.startsWith("memory/")) {
+            const fileName = path.basename(normalized);
+            const dateMatch = fileName.match(DATE_FILE_PATTERN);
+            if (dateMatch) {
+                const header = `# ${dateMatch[1]}\n\n`;
+                await fs.writeFile(absPath, header + trimmedContent + "\n", "utf-8");
+                return absPath;
+            }
+        }
+
+        await fs.writeFile(absPath, trimmedContent + "\n", "utf-8");
+        return absPath;
+    }
+
+    if (!existsAlready) {
+        if (normalized.startsWith("memory/")) {
+            const fileName = path.basename(normalized);
+            const dateMatch = fileName.match(DATE_FILE_PATTERN);
+            if (dateMatch) {
+                const header = `# ${dateMatch[1]}\n\n`;
+                await fs.writeFile(absPath, header + trimmedContent + "\n", "utf-8");
+                return absPath;
+            }
+        }
+
+        await fs.writeFile(absPath, trimmedContent + "\n", "utf-8");
+        return absPath;
+    }
+
+    await fs.appendFile(absPath, "\n" + trimmedContent + "\n", "utf-8");
+    return absPath;
+}

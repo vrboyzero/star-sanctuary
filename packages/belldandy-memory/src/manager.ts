@@ -6,6 +6,9 @@ import { OpenAIEmbeddingProvider } from "./embeddings/openai.js";
 import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import type { EmbeddingProvider } from "./embeddings/index.js";
 import type { MemorySearchResult, MemoryIndexStatus, MemorySearchOptions, MemorySearchFilter } from "./types.js";
+import { TaskProcessor } from "./task-processor.js";
+import { TaskSummarizer } from "./task-summarizer.js";
+import type { TaskConversationStore, TaskMemoryRelation, TaskRecord, TaskSearchFilter, TaskSearchOptions, TaskSource, TaskToolCallSummary } from "./task-types.js";
 import { appendToTodayMemory } from "./memory-files.js";
 import { resolveStateDir, resolveWorkspaceStateDir } from "@belldandy/protocol";
 import path from "node:path";
@@ -71,6 +74,16 @@ export interface MemoryManagerOptions {
     embeddingPassagePrefix?: string;
     /** M-N4: 源路径聚合检索 */
     deepRetrievalEnabled?: boolean;
+    /** Task 层总结 */
+    taskMemoryEnabled?: boolean;
+    taskSummaryEnabled?: boolean;
+    taskSummaryModel?: string;
+    taskSummaryBaseUrl?: string;
+    taskSummaryApiKey?: string;
+    taskSummaryMinDurationMs?: number;
+    taskSummaryMinToolCalls?: number;
+    taskSummaryMinTokenTotal?: number;
+    conversationStore?: TaskConversationStore;
 }
 
 export class MemoryManager {
@@ -104,6 +117,7 @@ export class MemoryManager {
     private embeddingPassagePrefix: string;
     // M-N4: 源路径聚合检索
     private deepRetrievalEnabled: boolean;
+    private taskProcessor: TaskProcessor;
 
     constructor(options: MemoryManagerOptions) {
         this.workspaceRoot = options.workspaceRoot;
@@ -172,6 +186,20 @@ export class MemoryManager {
         this.embeddingQueryPrefix = options.embeddingQueryPrefix ?? "";
         this.embeddingPassagePrefix = options.embeddingPassagePrefix ?? "";
         this.deepRetrievalEnabled = options.deepRetrievalEnabled ?? false;
+        const taskSummarizer = new TaskSummarizer({
+            enabled: options.taskSummaryEnabled ?? false,
+            model: options.taskSummaryModel,
+            baseUrl: options.taskSummaryBaseUrl,
+            apiKey: options.taskSummaryApiKey,
+        });
+        this.taskProcessor = new TaskProcessor(this.store, {
+            enabled: options.taskMemoryEnabled ?? false,
+            conversationStore: options.conversationStore,
+            summarizer: taskSummarizer,
+            summaryMinDurationMs: options.taskSummaryMinDurationMs,
+            summaryMinToolCalls: options.taskSummaryMinToolCalls,
+            summaryMinTokenTotal: options.taskSummaryMinTokenTotal,
+        });
     }
 
     /**
@@ -247,8 +275,101 @@ export class MemoryManager {
     /**
      * Get recent memory chunks (by updated_at, no embedding needed)
      */
-    getRecent(limit = 5): MemorySearchResult[] {
-        return this.store.getRecentChunks(limit);
+    getRecent(limit = 5, filter?: MemorySearchFilter): MemorySearchResult[] {
+        return this.store.getRecentChunks(limit, filter);
+    }
+
+    startTaskCapture(input: {
+        conversationId: string;
+        sessionKey: string;
+        agentId?: string;
+        source: TaskSource;
+        objective?: string;
+        parentConversationId?: string;
+    }): string | null {
+        return this.taskProcessor.startTask(input);
+    }
+
+    recordTaskToolCall(conversationId: string, item: TaskToolCallSummary): void {
+        this.taskProcessor.recordToolCall(conversationId, item);
+    }
+
+    linkTaskMemories(conversationId: string, chunkIds: string[], relation: TaskMemoryRelation = "used"): void {
+        this.taskProcessor.linkMemory(conversationId, chunkIds, relation);
+    }
+
+    completeTaskCapture(input: {
+        conversationId: string;
+        success: boolean;
+        durationMs?: number;
+        error?: string;
+        messages?: unknown[];
+    }): string | null {
+        return this.taskProcessor.completeTask(input);
+    }
+
+    getTask(taskId: string): TaskRecord | null {
+        return this.store.getTask(taskId);
+    }
+
+    getMemory(chunkId: string): MemorySearchResult | null {
+        return this.store.getChunk(chunkId);
+    }
+
+    getTaskByConversation(conversationId: string): TaskRecord | null {
+        return this.store.getTaskByConversation(conversationId);
+    }
+
+    getTaskDetail(taskId: string): (TaskRecord & { memoryLinks: Array<{ chunkId: string; relation: string; sourcePath?: string; memoryType?: string; snippet?: string }> }) | null {
+        const task = this.store.getTask(taskId);
+        if (!task) return null;
+        return {
+            ...task,
+            memoryLinks: this.store.listTaskMemoryLinks(taskId),
+        };
+    }
+
+    getRecentTasks(limit = 10, filter?: TaskSearchFilter): TaskRecord[] {
+        return this.store.listTasks(limit, filter);
+    }
+
+    searchTasks(query: string, options: TaskSearchOptions = {}): TaskRecord[] {
+        const limit = options.limit ?? 10;
+        return this.store.searchTasksKeyword(query, limit, options.filter);
+    }
+
+    async linkTaskMemoriesFromSource(
+        conversationId: string,
+        sourcePath: string,
+        relation: TaskMemoryRelation = "generated",
+        options: { attempts?: number; delayMs?: number } = {},
+    ): Promise<number> {
+        const task = this.store.getTaskByConversation(conversationId);
+        if (!task) return 0;
+
+        const attempts = Math.max(1, options.attempts ?? 4);
+        const delayMs = Math.max(50, options.delayMs ?? 300);
+
+        for (let attempt = 0; attempt < attempts; attempt++) {
+            const chunks = this.store.getChunksBySource(sourcePath, 100);
+            if (chunks.length > 0) {
+                for (const chunk of chunks) {
+                    this.store.linkTaskMemory(task.id, chunk.id, relation);
+                }
+
+                const artifactPaths = [...new Set([...(task.artifactPaths ?? []), sourcePath])];
+                this.store.updateTask(task.id, { artifactPaths });
+                return chunks.length;
+            }
+
+            if (attempt < attempts - 1) {
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+        }
+
+        const artifactPaths = [...new Set([...(task.artifactPaths ?? []), sourcePath])];
+        this.store.updateTask(task.id, { artifactPaths });
+        return 0;
     }
 
     private computeEmbeddingSignature(dims: number): string {
@@ -599,7 +720,8 @@ export class MemoryManager {
                 `- [${m.type}][${m.category}] ${m.content} (来源: ${sessionKey})`
             );
             const content = lines.join("\n");
-            await appendToTodayMemory(this.stateDir, content);
+            const filePath = await appendToTodayMemory(this.stateDir, content);
+            await this.linkTaskMemoriesFromSource(sessionKey, filePath, "generated");
 
             // 标记已提取
             this.store.markSessionMemoryExtracted(sessionKey);

@@ -19,11 +19,26 @@ const refreshTreeBtn = document.getElementById("refreshTree");
 const chatSection = document.getElementById("chatSection");
 const editorSection = document.getElementById("editorSection");
 const editorPath = document.getElementById("editorPath");
+const editorModeBadge = document.getElementById("editorModeBadge");
 const editorTextarea = document.getElementById("editorTextarea");
 const composerSection = document.getElementById("composerSection");
 const editorActions = document.getElementById("editorActions");
 const cancelEditBtn = document.getElementById("cancelEdit");
 const saveEditBtn = document.getElementById("saveEdit");
+const memoryViewerSection = document.getElementById("memoryViewerSection");
+const memoryViewerStatsEl = document.getElementById("memoryViewerStats");
+const memoryViewerListEl = document.getElementById("memoryViewerList");
+const memoryViewerDetailEl = document.getElementById("memoryViewerDetail");
+const memoryViewerRefreshBtn = document.getElementById("memoryViewerRefresh");
+const memoryTabTasksBtn = document.getElementById("memoryTabTasks");
+const memoryTabMemoriesBtn = document.getElementById("memoryTabMemories");
+const memorySearchInputEl = document.getElementById("memorySearchInput");
+const memorySearchBtn = document.getElementById("memorySearchBtn");
+const memoryTaskFiltersEl = document.getElementById("memoryTaskFilters");
+const memoryChunkFiltersEl = document.getElementById("memoryChunkFilters");
+const memoryTaskStatusFilterEl = document.getElementById("memoryTaskStatusFilter");
+const memoryTaskSourceFilterEl = document.getElementById("memoryTaskSourceFilter");
+const memoryChunkTypeFilterEl = document.getElementById("memoryChunkTypeFilter");
 
 const STORE_KEY = "belldandy.webchat.auth";
 const CLIENT_KEY = "belldandy.webchat.clientId";
@@ -69,9 +84,16 @@ let userAvatar = "👤";
 let editorMode = false;
 let currentEditPath = null;
 let originalContent = null;
+let currentEditReadOnly = false;
 // Tree Mode: "root" | "facets"
 let currentTreeMode = "root";
 const expandedFolders = new Set();
+const memoryViewerState = {
+  tab: "tasks",
+  stats: null,
+  items: [],
+  selectedId: null,
+};
 
 // 附件状态
 const attachmentsPreviewEl = document.getElementById("attachmentsPreview");
@@ -144,6 +166,41 @@ updateAttachmentHint();
 
 connectBtn.addEventListener("click", () => connect());
 sendBtn.addEventListener("click", () => sendMessage());
+if (memoryViewerRefreshBtn) {
+  memoryViewerRefreshBtn.addEventListener("click", () => loadMemoryViewer(true));
+}
+if (memoryTabTasksBtn) {
+  memoryTabTasksBtn.addEventListener("click", () => switchMemoryViewerTab("tasks"));
+}
+if (memoryTabMemoriesBtn) {
+  memoryTabMemoriesBtn.addEventListener("click", () => switchMemoryViewerTab("memories"));
+}
+if (memorySearchBtn) {
+  memorySearchBtn.addEventListener("click", () => loadMemoryViewer(true));
+}
+if (memorySearchInputEl) {
+  memorySearchInputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      loadMemoryViewer(true);
+    }
+  });
+}
+if (memoryTaskStatusFilterEl) {
+  memoryTaskStatusFilterEl.addEventListener("change", () => {
+    if (memoryViewerState.tab === "tasks") loadMemoryViewer(true);
+  });
+}
+if (memoryTaskSourceFilterEl) {
+  memoryTaskSourceFilterEl.addEventListener("change", () => {
+    if (memoryViewerState.tab === "tasks") loadMemoryViewer(true);
+  });
+}
+if (memoryChunkTypeFilterEl) {
+  memoryChunkTypeFilterEl.addEventListener("change", () => {
+    if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
+  });
+}
 promptEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
@@ -590,6 +647,9 @@ function connect() {
       loadAgentList();
       // 加载模型列表并填充选择器
       loadModelList();
+      if (memoryViewerSection && !memoryViewerSection.classList.contains("hidden")) {
+        loadMemoryViewer(true);
+      }
 
       // Check if we should play boot sequence
       if (!sessionStorage.getItem("booted")) {
@@ -1969,12 +2029,19 @@ if (openEnvEditorBtn) {
 // 导航按钮
 const switchRootBtn = document.getElementById("switchRoot");
 const switchFacetBtn = document.getElementById("switchFacet");
+const switchMemoryBtn = document.getElementById("switchMemory");
 
 if (switchRootBtn) {
   switchRootBtn.addEventListener("click", () => switchTreeMode("root"));
 }
 if (switchFacetBtn) {
   switchFacetBtn.addEventListener("click", () => switchTreeMode("facets"));
+}
+if (switchMemoryBtn) {
+  switchMemoryBtn.addEventListener("click", async () => {
+    switchMode("memory");
+    await loadMemoryViewer(false);
+  });
 }
 
 // 画布工作区按钮
@@ -1993,31 +2060,15 @@ function switchTreeMode(mode) {
   if (currentTreeMode === mode) {
     if (!sidebarExpanded) toggleSidebar();
     else loadFileTree();
+    switchMode("chat");
     return;
   }
 
   currentTreeMode = mode;
   expandedFolders.clear();
 
-  // 更新 UI 样式
-  if (switchRootBtn) {
-    if (mode === "root") {
-      switchRootBtn.style.background = "rgba(255,255,255,0.1)";
-      switchRootBtn.style.opacity = "1";
-    } else {
-      switchRootBtn.style.background = "transparent";
-      switchRootBtn.style.opacity = "0.7";
-    }
-  }
-  if (switchFacetBtn) {
-    if (mode === "facets") {
-      switchFacetBtn.style.background = "rgba(255,255,255,0.1)";
-      switchFacetBtn.style.opacity = "1";
-    } else {
-      switchFacetBtn.style.background = "transparent";
-      switchFacetBtn.style.opacity = "0.7";
-    }
-  }
+  switchMode("chat");
+  updateSidebarModeButtons(mode);
 
   // 确保侧边栏展开
   if (!sidebarExpanded) {
@@ -2027,10 +2078,108 @@ function switchTreeMode(mode) {
   }
 }
 
+function setSidebarActionButtonState(button, active) {
+  if (!button) return;
+  button.style.background = active ? "rgba(255,255,255,0.1)" : "transparent";
+  button.style.opacity = active ? "1" : "0.7";
+}
+
+function updateSidebarModeButtons(treeModeOverride) {
+  const treeMode = treeModeOverride ?? currentTreeMode;
+  setSidebarActionButtonState(switchRootBtn, treeMode === "root");
+  setSidebarActionButtonState(switchFacetBtn, treeMode === "facets");
+  setSidebarActionButtonState(switchMemoryBtn, memoryViewerSection && !memoryViewerSection.classList.contains("hidden"));
+  const canvasSection = document.getElementById("canvasSection");
+  setSidebarActionButtonState(switchCanvasBtn, canvasSection && !canvasSection.classList.contains("hidden"));
+}
+
+function ensureNoticeStack() {
+  let stack = document.getElementById("noticeStack");
+  if (stack) return stack;
+  stack = document.createElement("div");
+  stack.id = "noticeStack";
+  stack.className = "notice-stack";
+  document.body.appendChild(stack);
+  return stack;
+}
+
+function showNotice(title, message, tone = "info", durationMs = 3200) {
+  const stack = ensureNoticeStack();
+  const item = document.createElement("div");
+  item.className = `notice-item notice-${tone}`;
+  item.innerHTML = `
+    <div class="notice-title">${escapeHtml(title)}</div>
+    <div class="notice-message">${escapeHtml(message)}</div>
+  `;
+  stack.appendChild(item);
+
+  const remove = () => {
+    if (item.parentElement) item.parentElement.removeChild(item);
+  };
+  setTimeout(remove, durationMs);
+}
+
+function applyEditorSession({ path, content, readOnly = false, label, startLine }) {
+  currentEditPath = path;
+  originalContent = content;
+  currentEditReadOnly = readOnly;
+
+  if (editorPath) {
+    editorPath.textContent = label || path || "文件路径";
+  }
+  if (editorTextarea) {
+    editorTextarea.value = content || "";
+    editorTextarea.readOnly = readOnly;
+  }
+  if (editorModeBadge) {
+    editorModeBadge.classList.toggle("hidden", !readOnly);
+    editorModeBadge.textContent = readOnly ? "只读来源" : "可编辑";
+  }
+  if (saveEditBtn) {
+    saveEditBtn.disabled = readOnly;
+    saveEditBtn.textContent = readOnly ? "只读" : "保存";
+    saveEditBtn.title = readOnly ? "当前为只读源文件视图" : "";
+  }
+
+  switchMode("editor");
+  if (typeof startLine === "number" && startLine > 0) {
+    focusEditorLine(startLine);
+  }
+}
+
+function focusEditorLine(lineNumber) {
+  if (!editorTextarea || typeof lineNumber !== "number" || lineNumber <= 0) return;
+  const lines = editorTextarea.value.split("\n");
+  const safeLine = Math.max(1, Math.min(lineNumber, lines.length));
+  let offset = 0;
+  for (let i = 0; i < safeLine - 1; i += 1) {
+    offset += lines[i].length + 1;
+  }
+  const lineText = lines[safeLine - 1] || "";
+  editorTextarea.focus();
+  editorTextarea.setSelectionRange(offset, offset + lineText.length);
+  const lineHeight = parseFloat(getComputedStyle(editorTextarea).lineHeight || "22");
+  editorTextarea.scrollTop = Math.max(0, (safeLine - 3) * lineHeight);
+}
+
+function resetEditorAccessState() {
+  currentEditReadOnly = false;
+  if (editorTextarea) editorTextarea.readOnly = false;
+  if (editorModeBadge) {
+    editorModeBadge.classList.add("hidden");
+    editorModeBadge.textContent = "只读来源";
+  }
+  if (saveEditBtn) {
+    saveEditBtn.disabled = false;
+    saveEditBtn.textContent = "保存";
+    saveEditBtn.title = "";
+  }
+}
+
 // 打开 .env 文件进行编辑
 async function openEnvFile() {
   if (!ws || !isReady) {
-    alert("未连接到服务器");
+    showNotice("无法打开配置", "未连接到服务器。", "error");
     return;
   }
 
@@ -2043,17 +2192,16 @@ async function openEnvFile() {
 
   if (!res || !res.ok) {
     const msg = res && res.error ? res.error.message : "读取失败";
-    alert(`无法读取配置文件: ${msg}`);
+    showNotice("无法读取配置文件", msg, "error");
     return;
   }
 
-  currentEditPath = ".env";
-  originalContent = res.payload.content;
-
-  if (editorPath) editorPath.textContent = ".env (环境配置)";
-  if (editorTextarea) editorTextarea.value = res.payload.content;
-
-  switchMode("editor");
+  applyEditorSession({
+    path: ".env",
+    content: res.payload.content,
+    readOnly: false,
+    label: ".env (环境配置)",
+  });
 }
 
 // 加载文件树
@@ -2193,7 +2341,7 @@ async function loadFolderChildren(folderPath, containerEl) {
 // 打开文件进行编辑
 async function openFile(filePath) {
   if (!ws || !isReady) {
-    alert("未连接到服务器");
+    showNotice("无法打开文件", "未连接到服务器。", "error");
     return;
   }
 
@@ -2207,31 +2355,68 @@ async function openFile(filePath) {
 
   if (!res || !res.ok) {
     const msg = res && res.error ? res.error.message : "读取失败";
-    alert(`无法读取文件: ${msg}`);
+    showNotice("无法读取文件", msg, "error");
     return;
   }
 
-  currentEditPath = filePath;
-  originalContent = res.payload.content;
-
-  if (editorPath) editorPath.textContent = filePath;
-  if (editorTextarea) editorTextarea.value = res.payload.content;
-
-  switchMode("editor");
+  applyEditorSession({
+    path: filePath,
+    content: res.payload.content,
+    readOnly: false,
+    label: filePath,
+  });
 
   // 刷新文件树以更新 active 状态
   loadFileTree();
 }
 
+async function openSourcePath(sourcePath, options = {}) {
+  if (!ws || !isReady) {
+    showNotice("无法打开来源文件", "未连接到服务器。", "error");
+    return;
+  }
+  if (!sourcePath || typeof sourcePath !== "string") {
+    showNotice("无法打开来源文件", "无效的来源路径。", "error");
+    return;
+  }
+
+  const id = makeId();
+  const res = await sendReq({
+    type: "req",
+    id,
+    method: "workspace.readSource",
+    params: { path: sourcePath },
+  });
+
+  if (!res || !res.ok) {
+    const msg = res && res.error ? res.error.message : "读取失败";
+    showNotice("无法打开来源文件", msg, "error", 4200);
+    return;
+  }
+
+  applyEditorSession({
+    path: res.payload.path || sourcePath,
+    content: res.payload.content,
+    readOnly: true,
+    label: `${res.payload.path || sourcePath} (只读来源)`,
+    startLine: options.startLine,
+  });
+  showNotice("来源文件已打开", "当前为只读视图，不会写回原文件。", "info", 2600);
+}
+
 // 保存文件
 async function saveFile() {
   if (!ws || !isReady) {
-    alert("未连接到服务器");
+    showNotice("无法保存", "未连接到服务器。", "error");
+    return;
+  }
+  if (currentEditReadOnly) {
+    showNotice("当前不可保存", "这是只读来源视图，不能直接写回。", "error");
     return;
   }
 
   if (!currentEditPath) {
-    alert("没有正在编辑的文件");
+    showNotice("无法保存", "没有正在编辑的文件。", "error");
     return;
   }
 
@@ -2269,17 +2454,19 @@ async function saveFile() {
   if (!res || !res.ok) {
     if (saveEditBtn) saveEditBtn.textContent = "保存";
     const msg = res && res.error ? res.error.message : "保存失败";
-    alert(`保存失败: ${msg}`);
+    showNotice("保存失败", msg, "error");
     return;
   }
 
   if (saveEditBtn) saveEditBtn.textContent = "已保存";
+  showNotice("保存成功", `${currentEditPath} 已写入。`, "success", 1800);
 
   setTimeout(() => {
     if (saveEditBtn) saveEditBtn.textContent = "保存";
     switchMode("chat");
     currentEditPath = null;
     originalContent = null;
+    resetEditorAccessState();
     loadFileTree();
   }, 500);
 }
@@ -2298,6 +2485,7 @@ function cancelEdit() {
   switchMode("chat");
   currentEditPath = null;
   originalContent = null;
+  resetEditorAccessState();
   loadFileTree();
 }
 
@@ -2311,12 +2499,21 @@ function switchMode(mode) {
     if (chatSection) chatSection.classList.add("hidden");
     if (editorSection) editorSection.classList.remove("hidden");
     if (canvasSection) canvasSection.classList.add("hidden");
+    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.remove("hidden");
   } else if (mode === "canvas") {
     if (chatSection) chatSection.classList.add("hidden");
     if (editorSection) editorSection.classList.add("hidden");
     if (canvasSection) canvasSection.classList.remove("hidden");
+    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+    if (composerSection) composerSection.classList.add("hidden");
+    if (editorActions) editorActions.classList.add("hidden");
+  } else if (mode === "memory") {
+    if (chatSection) chatSection.classList.add("hidden");
+    if (editorSection) editorSection.classList.add("hidden");
+    if (canvasSection) canvasSection.classList.add("hidden");
+    if (memoryViewerSection) memoryViewerSection.classList.remove("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   } else {
@@ -2324,10 +2521,483 @@ function switchMode(mode) {
     if (chatSection) chatSection.classList.remove("hidden");
     if (editorSection) editorSection.classList.add("hidden");
     if (canvasSection) canvasSection.classList.add("hidden");
+    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
     if (composerSection) composerSection.classList.remove("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   }
+
+  updateSidebarModeButtons();
 }
+
+function switchMemoryViewerTab(tab) {
+  if (memoryViewerState.tab === tab) return;
+  memoryViewerState.tab = tab;
+  memoryViewerState.items = [];
+  memoryViewerState.selectedId = null;
+  syncMemoryViewerUi();
+  loadMemoryViewer(true);
+}
+
+function syncMemoryViewerUi() {
+  const isTasks = memoryViewerState.tab === "tasks";
+  if (memoryTabTasksBtn) memoryTabTasksBtn.classList.toggle("active", isTasks);
+  if (memoryTabMemoriesBtn) memoryTabMemoriesBtn.classList.toggle("active", !isTasks);
+  if (memoryTaskFiltersEl) memoryTaskFiltersEl.classList.toggle("hidden", !isTasks);
+  if (memoryChunkFiltersEl) memoryChunkFiltersEl.classList.toggle("hidden", isTasks);
+}
+
+async function loadMemoryViewer(forceSelectFirst = false) {
+  if (!memoryViewerSection) return;
+  syncMemoryViewerUi();
+
+  if (!ws || !isReady) {
+    renderMemoryViewerStats(null);
+    renderMemoryViewerListEmpty("未连接到服务器。");
+    renderMemoryViewerDetailEmpty("连接完成后可查看任务与记忆。");
+    return;
+  }
+
+  await loadMemoryViewerStats();
+  if (memoryViewerState.tab === "tasks") {
+    await loadTaskViewer(forceSelectFirst);
+  } else {
+    await loadMemoryChunkViewer(forceSelectFirst);
+  }
+}
+
+async function loadMemoryViewerStats() {
+  const id = makeId();
+  const res = await sendReq({ type: "req", id, method: "memory.stats" });
+  if (!res || !res.ok) {
+    renderMemoryViewerStats(null);
+    return;
+  }
+  memoryViewerState.stats = res.payload?.status ?? null;
+  renderMemoryViewerStats(memoryViewerState.stats);
+}
+
+async function loadTaskViewer(forceSelectFirst = false) {
+  renderMemoryViewerListEmpty("Tasks 加载中…");
+  renderMemoryViewerDetailEmpty("正在加载 task 详情…");
+
+  const params = { limit: 20 };
+  const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
+  if (query) params.query = query;
+
+  const filter = {};
+  if (memoryTaskStatusFilterEl?.value) filter.status = memoryTaskStatusFilterEl.value;
+  if (memoryTaskSourceFilterEl?.value) filter.source = memoryTaskSourceFilterEl.value;
+  if (Object.keys(filter).length > 0) params.filter = filter;
+
+  const id = makeId();
+  const res = await sendReq({ type: "req", id, method: "memory.task.list", params });
+  if (!res || !res.ok) {
+    renderMemoryViewerListEmpty("Task 列表加载失败。");
+    renderMemoryViewerDetailEmpty(res?.error?.message || "无法读取 task 数据。");
+    return;
+  }
+
+  const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
+  memoryViewerState.items = items;
+
+  if (!items.length) {
+    memoryViewerState.selectedId = null;
+    renderTaskList(items);
+    renderMemoryViewerDetailEmpty("没有匹配的 task。");
+    return;
+  }
+
+  const selectedExists = items.some((item) => item.id === memoryViewerState.selectedId);
+  if (forceSelectFirst || !selectedExists) {
+    memoryViewerState.selectedId = items[0].id;
+  }
+
+  renderTaskList(items);
+  await loadTaskDetail(memoryViewerState.selectedId);
+}
+
+async function loadTaskDetail(taskId) {
+  if (!taskId) {
+    renderMemoryViewerDetailEmpty("请选择一个 task。");
+    return;
+  }
+
+  renderMemoryViewerDetailEmpty("Task 详情加载中…");
+  const id = makeId();
+  const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId } });
+  if (!res || !res.ok) {
+    renderMemoryViewerDetailEmpty(res?.error?.message || "Task 详情加载失败。");
+    return;
+  }
+
+  renderTaskList(memoryViewerState.items);
+  renderTaskDetail(res.payload?.task);
+}
+
+async function loadMemoryChunkViewer(forceSelectFirst = false) {
+  renderMemoryViewerListEmpty("Memories 加载中…");
+  renderMemoryViewerDetailEmpty("正在加载 memory 详情…");
+
+  const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
+  const filter = {};
+  if (memoryChunkTypeFilterEl?.value) filter.memoryType = memoryChunkTypeFilterEl.value;
+
+  const params = { limit: 20 };
+  if (Object.keys(filter).length > 0) params.filter = filter;
+  if (query) params.query = query;
+
+  const method = query ? "memory.search" : "memory.recent";
+  const id = makeId();
+  const res = await sendReq({ type: "req", id, method, params });
+  if (!res || !res.ok) {
+    renderMemoryViewerListEmpty("Memory 列表加载失败。");
+    renderMemoryViewerDetailEmpty(res?.error?.message || "无法读取 memory 数据。");
+    return;
+  }
+
+  const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
+  memoryViewerState.items = items;
+
+  if (!items.length) {
+    memoryViewerState.selectedId = null;
+    renderMemoryList(items);
+    renderMemoryViewerDetailEmpty("没有匹配的 memory。");
+    return;
+  }
+
+  const selectedExists = items.some((item) => item.id === memoryViewerState.selectedId);
+  if (forceSelectFirst || !selectedExists) {
+    memoryViewerState.selectedId = items[0].id;
+  }
+
+  renderMemoryList(items);
+  await loadMemoryDetail(memoryViewerState.selectedId);
+}
+
+async function loadMemoryDetail(chunkId) {
+  if (!chunkId) {
+    renderMemoryViewerDetailEmpty("请选择一条 memory。");
+    return;
+  }
+
+  renderMemoryViewerDetailEmpty("Memory 详情加载中…");
+  const id = makeId();
+  const res = await sendReq({ type: "req", id, method: "memory.get", params: { chunkId } });
+  if (!res || !res.ok) {
+    renderMemoryViewerDetailEmpty(res?.error?.message || "Memory 详情加载失败。");
+    return;
+  }
+
+  renderMemoryList(memoryViewerState.items);
+  renderMemoryDetail(res.payload?.item);
+}
+
+function renderMemoryViewerStats(stats) {
+  if (!memoryViewerStatsEl) return;
+  if (!stats) {
+    memoryViewerStatsEl.innerHTML = `
+      <div class="memory-stat-card"><span class="memory-stat-label">记忆文件</span><strong class="memory-stat-value">--</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">记忆块</span><strong class="memory-stat-value">--</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">向量索引</span><strong class="memory-stat-value">--</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">摘要完成</span><strong class="memory-stat-value">--</strong></div>
+    `;
+    return;
+  }
+
+  memoryViewerStatsEl.innerHTML = `
+    <div class="memory-stat-card"><span class="memory-stat-label">记忆文件</span><strong class="memory-stat-value">${formatCount(stats.files)}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">记忆块</span><strong class="memory-stat-value">${formatCount(stats.chunks)}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">向量索引</span><strong class="memory-stat-value">${formatCount(stats.vectorIndexed)}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">摘要完成</span><strong class="memory-stat-value">${formatCount(stats.summarized)}</strong></div>
+  `;
+}
+
+function renderTaskList(items) {
+  if (!memoryViewerListEl) return;
+  if (!items.length) {
+    renderMemoryViewerListEmpty("没有可展示的 task。");
+    return;
+  }
+
+  memoryViewerListEl.innerHTML = items.map((item) => {
+    const title = item.title || item.objective || item.summary || item.conversationId || item.id;
+    const snippet = item.summary || item.outcome || item.objective || "暂无摘要";
+    const isActive = item.id === memoryViewerState.selectedId;
+    return `
+      <div class="memory-list-item ${isActive ? "active" : ""}" data-task-id="${escapeHtml(item.id)}">
+        <div class="memory-list-item-title">${escapeHtml(title)}</div>
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(item.status || "unknown")}</span>
+          <span>${escapeHtml(item.source || "unknown")}</span>
+          <span>${escapeHtml(formatDateTime(item.finishedAt || item.startedAt || item.createdAt))}</span>
+        </div>
+        <div class="memory-list-item-snippet">${escapeHtml(snippet)}</div>
+      </div>
+    `;
+  }).join("");
+
+  memoryViewerListEl.querySelectorAll("[data-task-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = node.getAttribute("data-task-id");
+      if (!taskId) return;
+      memoryViewerState.selectedId = taskId;
+      renderTaskList(memoryViewerState.items);
+      await loadTaskDetail(taskId);
+    });
+  });
+}
+
+function renderMemoryList(items) {
+  if (!memoryViewerListEl) return;
+  if (!items.length) {
+    renderMemoryViewerListEmpty("没有可展示的 memory。");
+    return;
+  }
+
+  memoryViewerListEl.innerHTML = items.map((item) => {
+    const title = summarizeSourcePath(item.sourcePath);
+    const summary = item.summary || item.snippet || "暂无摘要";
+    const isActive = item.id === memoryViewerState.selectedId;
+    return `
+      <div class="memory-list-item ${isActive ? "active" : ""}" data-memory-id="${escapeHtml(item.id)}">
+        <div class="memory-list-item-title">${escapeHtml(title)}</div>
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(item.memoryType || "other")}</span>
+          <span>${escapeHtml(item.sourceType || "unknown")}</span>
+          <span>score ${formatScore(item.score)}</span>
+        </div>
+        <div class="memory-list-item-snippet">${escapeHtml(summary)}</div>
+      </div>
+    `;
+  }).join("");
+
+  memoryViewerListEl.querySelectorAll("[data-memory-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const chunkId = node.getAttribute("data-memory-id");
+      if (!chunkId) return;
+      memoryViewerState.selectedId = chunkId;
+      renderMemoryList(memoryViewerState.items);
+      await loadMemoryDetail(chunkId);
+    });
+  });
+}
+
+function renderTaskDetail(task) {
+  if (!memoryViewerDetailEl) return;
+  if (!task) {
+    renderMemoryViewerDetailEmpty("Task 不存在。");
+    return;
+  }
+
+  const title = task.title || task.objective || task.summary || task.id;
+  const toolCalls = Array.isArray(task.toolCalls) ? task.toolCalls : [];
+  const memoryLinks = Array.isArray(task.memoryLinks) ? task.memoryLinks : [];
+  const artifactPaths = Array.isArray(task.artifactPaths) ? task.artifactPaths : [];
+
+  memoryViewerDetailEl.innerHTML = `
+    <div class="memory-detail-shell">
+      <div class="memory-detail-header">
+        <div>
+          <div class="memory-detail-title">${escapeHtml(title)}</div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(task.id)}</span>
+            <span>${escapeHtml(task.conversationId || "-")}</span>
+          </div>
+        </div>
+        <div class="memory-detail-badges">
+          <span class="memory-badge">${escapeHtml(task.status || "unknown")}</span>
+          <span class="memory-badge">${escapeHtml(task.source || "unknown")}</span>
+          ${task.agentId ? `<span class="memory-badge">${escapeHtml(task.agentId)}</span>` : ""}
+        </div>
+      </div>
+
+      <div class="memory-detail-grid">
+        <div class="memory-detail-card"><span class="memory-detail-label">开始时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.startedAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">结束时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.finishedAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">耗时</span><div class="memory-detail-text">${escapeHtml(formatDuration(task.durationMs))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Token</span><div class="memory-detail-text">${escapeHtml(formatCount(task.tokenTotal))}</div></div>
+      </div>
+
+      ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">Objective</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
+      ${task.summary ? `<div class="memory-detail-card"><span class="memory-detail-label">Summary</span><div class="memory-detail-text">${escapeHtml(task.summary)}</div></div>` : ""}
+      ${task.outcome ? `<div class="memory-detail-card"><span class="memory-detail-label">Outcome</span><div class="memory-detail-text">${escapeHtml(task.outcome)}</div></div>` : ""}
+      ${task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">Reflection</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Tool Calls (${toolCalls.length})</span>
+        ${toolCalls.length ? `
+          <div class="memory-inline-list">
+            ${toolCalls.map((call) => `
+              <div class="memory-inline-item">
+                <div class="memory-inline-item-head">
+                  <span class="memory-badge">${escapeHtml(call.toolName || "unknown")}</span>
+                  <span class="memory-badge">${call.success ? "success" : "failed"}</span>
+                  <span class="memory-badge">${escapeHtml(formatDuration(call.durationMs))}</span>
+                </div>
+                ${call.note ? `<div class="memory-detail-text">${escapeHtml(call.note)}</div>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-detail-text">无工具调用记录。</div>`}
+      </div>
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Linked Memories (${memoryLinks.length})</span>
+        ${memoryLinks.length ? `
+          <div class="memory-inline-list">
+            ${memoryLinks.map((link) => `
+              <div class="memory-inline-item">
+                <div class="memory-inline-item-head">
+                  <span class="memory-badge">${escapeHtml(link.relation || "used")}</span>
+                  ${link.memoryType ? `<span class="memory-badge">${escapeHtml(link.memoryType)}</span>` : ""}
+                </div>
+                ${link.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(link.sourcePath)}">${escapeHtml(link.sourcePath)}</button>` : ""}
+                ${link.snippet ? `<div class="memory-detail-text">${escapeHtml(link.snippet)}</div>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-detail-text">暂无关联记忆。</div>`}
+      </div>
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Artifacts (${artifactPaths.length})</span>
+        ${artifactPaths.length ? `
+          <div class="memory-inline-list">
+            ${artifactPaths.map((artifactPath) => `
+              <div class="memory-inline-item">
+                <button class="memory-path-link" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(artifactPath)}</button>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-detail-text">暂无产物路径。</div>`}
+      </div>
+    </div>
+  `;
+  bindMemoryPathLinks();
+}
+
+function renderMemoryDetail(item) {
+  if (!memoryViewerDetailEl) return;
+  if (!item) {
+    renderMemoryViewerDetailEmpty("Memory 不存在。");
+    return;
+  }
+
+  memoryViewerDetailEl.innerHTML = `
+    <div class="memory-detail-shell">
+      <div class="memory-detail-header">
+        <div>
+          <div class="memory-detail-title">${escapeHtml(summarizeSourcePath(item.sourcePath))}</div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(item.id)}</span>
+          </div>
+        </div>
+        <div class="memory-detail-badges">
+          <span class="memory-badge">${escapeHtml(item.memoryType || "other")}</span>
+          <span class="memory-badge">${escapeHtml(item.sourceType || "unknown")}</span>
+          <span class="memory-badge">score ${formatScore(item.score)}</span>
+        </div>
+      </div>
+
+      <div class="memory-detail-grid">
+        <div class="memory-detail-card"><span class="memory-detail-label">Source Path</span><div class="memory-detail-text">${item.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(item.sourcePath)}" data-open-line="${typeof item.startLine === "number" ? item.startLine : ""}">${escapeHtml(item.sourcePath)}</button>` : "-"}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Lines</span><div class="memory-detail-text">${escapeHtml(formatLineRange(item.startLine, item.endLine))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Summary</span><div class="memory-detail-text">${escapeHtml(item.summary || "暂无摘要")}</div></div>
+      </div>
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Snippet</span>
+        <div class="memory-detail-text">${escapeHtml(item.snippet || "暂无内容")}</div>
+      </div>
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Content</span>
+        <pre class="memory-detail-pre">${escapeHtml(item.content || item.snippet || "暂无内容")}</pre>
+      </div>
+
+      ${item.metadata ? `
+        <div class="memory-detail-card">
+          <span class="memory-detail-label">Metadata</span>
+          <pre class="memory-detail-pre">${escapeHtml(JSON.stringify(item.metadata, null, 2))}</pre>
+        </div>
+      ` : ""}
+    </div>
+  `;
+  bindMemoryPathLinks();
+}
+
+function renderMemoryViewerListEmpty(message) {
+  if (!memoryViewerListEl) return;
+  memoryViewerListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+}
+
+function renderMemoryViewerDetailEmpty(message) {
+  if (!memoryViewerDetailEl) return;
+  memoryViewerDetailEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+}
+
+function bindMemoryPathLinks() {
+  if (!memoryViewerDetailEl) return;
+  memoryViewerDetailEl.querySelectorAll("[data-open-source]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const sourcePath = node.getAttribute("data-open-source");
+      const lineRaw = node.getAttribute("data-open-line");
+      const startLine = lineRaw ? Number.parseInt(lineRaw, 10) : undefined;
+      await openSourcePath(sourcePath, { startLine });
+    });
+  });
+}
+
+function summarizeSourcePath(sourcePath) {
+  if (!sourcePath) return "(unknown source)";
+  const normalized = String(sourcePath).replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length <= 3) return normalized;
+  return parts.slice(-3).join("/");
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatDuration(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0) return "-";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainSeconds}s`;
+}
+
+function formatLineRange(startLine, endLine) {
+  if (typeof startLine === "number" && typeof endLine === "number") return `${startLine}-${endLine}`;
+  if (typeof startLine === "number") return String(startLine);
+  return "-";
+}
+
+function formatScore(score) {
+  if (typeof score !== "number" || !Number.isFinite(score)) return "--";
+  return score.toFixed(3);
+}
+
+function formatCount(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+syncMemoryViewerUi();
+updateSidebarModeButtons();
 
 // Expose switchMode for canvas.js
 window._belldandySwitchMode = switchMode;

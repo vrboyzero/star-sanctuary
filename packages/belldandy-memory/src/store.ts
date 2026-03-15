@@ -1,6 +1,7 @@
 
 import Database from "better-sqlite3";
 import type { MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter } from "./types.js";
+import type { TaskRecord, TaskSearchFilter, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
 import { cosineSimilarity, vectorToBuffer, vectorFromBuffer, type EmbeddingVector } from "./embeddings/index.js";
 import { loadSqliteVec } from "./sqlite-vec.js";
 
@@ -38,6 +39,55 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `;
 
+const SCHEMA_TASKS = `
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  parent_conversation_id TEXT DEFAULT NULL,
+  parent_task_id TEXT DEFAULT NULL,
+  agent_id TEXT DEFAULT NULL,
+  source TEXT NOT NULL,
+  title TEXT DEFAULT NULL,
+  objective TEXT DEFAULT NULL,
+  status TEXT NOT NULL,
+  outcome TEXT DEFAULT NULL,
+  summary TEXT DEFAULT NULL,
+  reflection TEXT DEFAULT NULL,
+  tool_calls_json TEXT DEFAULT NULL,
+  artifact_paths_json TEXT DEFAULT NULL,
+  token_input INTEGER DEFAULT NULL,
+  token_output INTEGER DEFAULT NULL,
+  token_total INTEGER DEFAULT NULL,
+  duration_ms INTEGER DEFAULT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT DEFAULT NULL,
+  summary_model TEXT DEFAULT NULL,
+  summary_version TEXT DEFAULT NULL,
+  metadata TEXT DEFAULT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_conversation_id ON tasks(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
+CREATE INDEX IF NOT EXISTS idx_tasks_finished_at ON tasks(finished_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_parent_conversation_id ON tasks(parent_conversation_id);
+
+CREATE TABLE IF NOT EXISTS task_memory_links (
+  task_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  relation TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (task_id, chunk_id, relation)
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_memory_links_task_id ON task_memory_links(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_memory_links_chunk_id ON task_memory_links(chunk_id);
+`;
+
 // FTS5 全文索引（better-sqlite3 默认编译 FTS5）
 const SCHEMA_FTS5 = `
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
@@ -58,6 +108,34 @@ END;
 CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
   INSERT INTO chunks_fts(chunks_fts, rowid, content) VALUES('delete', OLD.rowid, OLD.content);
   INSERT INTO chunks_fts(rowid, content) VALUES (NEW.rowid, NEW.content);
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+  title,
+  objective,
+  summary,
+  reflection,
+  outcome,
+  content='tasks',
+  content_rowid='rowid',
+  tokenize='unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+  INSERT INTO tasks_fts(rowid, title, objective, summary, reflection, outcome)
+  VALUES (NEW.rowid, NEW.title, NEW.objective, NEW.summary, NEW.reflection, NEW.outcome);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+  INSERT INTO tasks_fts(tasks_fts, rowid, title, objective, summary, reflection, outcome)
+  VALUES('delete', OLD.rowid, OLD.title, OLD.objective, OLD.summary, OLD.reflection, OLD.outcome);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+  INSERT INTO tasks_fts(tasks_fts, rowid, title, objective, summary, reflection, outcome)
+  VALUES('delete', OLD.rowid, OLD.title, OLD.objective, OLD.summary, OLD.reflection, OLD.outcome);
+  INSERT INTO tasks_fts(rowid, title, objective, summary, reflection, outcome)
+  VALUES (NEW.rowid, NEW.title, NEW.objective, NEW.summary, NEW.reflection, NEW.outcome);
 END;
 `;
 
@@ -104,6 +182,7 @@ export class MemoryStore {
     this.db = new Database(dbPath);
     loadSqliteVec(this.db);
     this.db.exec(SCHEMA_BASE);
+    this.db.exec(SCHEMA_TASKS);
 
     // Phase M-1: 元数据列迁移（对已有列 ALTER TABLE ADD COLUMN 会报 duplicate，安全忽略）
     for (const sql of SCHEMA_METADATA_COLUMNS) {
@@ -133,6 +212,7 @@ export class MemoryStore {
       // 兼容老库：如果 chunks 已有存量数据，但 FTS 索引为空，则执行一次 rebuild。
       // 否则会出现"关键词检索命中为 0"的假性失效。
       this.ensureFtsRebuiltIfNeeded();
+      this.ensureTaskFtsRebuiltIfNeeded();
     } catch (err) {
       const msg = String((err as Error).message ?? err);
       if (msg.includes("fts5") || msg.includes("no such module")) {
@@ -217,6 +297,73 @@ export class MemoryStore {
     return Number(result.changes);
   }
 
+  private upsertTask(task: TaskRecord): void {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      INSERT INTO tasks (
+        id, conversation_id, session_key, parent_conversation_id, parent_task_id, agent_id,
+        source, title, objective, status, outcome, summary, reflection, tool_calls_json,
+        artifact_paths_json, token_input, token_output, token_total, duration_ms,
+        started_at, finished_at, summary_model, summary_version, metadata, created_at, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        conversation_id = excluded.conversation_id,
+        session_key = excluded.session_key,
+        parent_conversation_id = excluded.parent_conversation_id,
+        parent_task_id = excluded.parent_task_id,
+        agent_id = excluded.agent_id,
+        source = excluded.source,
+        title = excluded.title,
+        objective = excluded.objective,
+        status = excluded.status,
+        outcome = excluded.outcome,
+        summary = excluded.summary,
+        reflection = excluded.reflection,
+        tool_calls_json = excluded.tool_calls_json,
+        artifact_paths_json = excluded.artifact_paths_json,
+        token_input = excluded.token_input,
+        token_output = excluded.token_output,
+        token_total = excluded.token_total,
+        duration_ms = excluded.duration_ms,
+        started_at = excluded.started_at,
+        finished_at = excluded.finished_at,
+        summary_model = excluded.summary_model,
+        summary_version = excluded.summary_version,
+        metadata = excluded.metadata,
+        updated_at = excluded.updated_at
+    `);
+
+    stmt.run(
+      task.id,
+      task.conversationId,
+      task.sessionKey,
+      task.parentConversationId ?? null,
+      task.parentTaskId ?? null,
+      task.agentId ?? null,
+      task.source,
+      task.title ?? null,
+      task.objective ?? null,
+      task.status,
+      task.outcome ?? null,
+      task.summary ?? null,
+      task.reflection ?? null,
+      JSON.stringify(task.toolCalls ?? []),
+      JSON.stringify(task.artifactPaths ?? []),
+      task.tokenInput ?? null,
+      task.tokenOutput ?? null,
+      task.tokenTotal ?? null,
+      task.durationMs ?? null,
+      task.startedAt,
+      task.finishedAt ?? null,
+      task.summaryModel ?? null,
+      task.summaryVersion ?? null,
+      JSON.stringify(task.metadata ?? {}),
+      task.createdAt,
+      task.updatedAt
+    );
+  }
+
   /** 关键词搜索（有 FTS5 用全文索引，否则用 LIKE 降级） */
   searchKeyword(query: string, limit = 10, filter?: MemorySearchFilter): MemorySearchResult[] {
     this.ensureOpen();
@@ -283,15 +430,17 @@ export class MemoryStore {
   }
 
   /** 获取最近更新的记忆块（按 updated_at 降序） */
-  getRecentChunks(limit = 5): MemorySearchResult[] {
+  getRecentChunks(limit = 5, filter?: MemorySearchFilter): MemorySearchResult[] {
     this.ensureOpen();
+    const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
     const stmt = this.db.prepare(`
       SELECT id, source_path, source_type, memory_type, content, metadata, start_line, end_line
-      FROM chunks
-      ORDER BY updated_at DESC
+      FROM chunks c
+      WHERE 1 = 1${filterClause}
+      ORDER BY c.updated_at DESC
       LIMIT ?
     `);
-    const rows = stmt.all(limit) as any[];
+    const rows = stmt.all(...filterParams, limit) as any[];
     return rows.map((row) => ({
       id: row.id,
       sourcePath: row.source_path,
@@ -303,6 +452,147 @@ export class MemoryStore {
       metadata: safeParseJson(row.metadata),
       startLine: row.start_line ?? undefined,
       endLine: row.end_line ?? undefined,
+    }));
+  }
+
+  getChunk(chunkId: string): MemorySearchResult | null {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT id, source_path, source_type, memory_type, content, metadata, start_line, end_line, summary
+      FROM chunks
+      WHERE id = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(chunkId) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      sourcePath: row.source_path,
+      sourceType: row.source_type,
+      memoryType: row.memory_type,
+      snippet: (row.content ?? "").slice(0, 500),
+      content: row.content,
+      summary: row.summary ?? undefined,
+      score: 1,
+      metadata: safeParseJson(row.metadata),
+      startLine: row.start_line ?? undefined,
+      endLine: row.end_line ?? undefined,
+    };
+  }
+
+  createTask(task: TaskRecord): void {
+    this.upsertTask(task);
+  }
+
+  updateTask(taskId: string, patch: Partial<TaskRecord>): void {
+    const existing = this.getTask(taskId);
+    if (!existing) return;
+
+    const updated: TaskRecord = {
+      ...existing,
+      ...patch,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    this.upsertTask(updated);
+  }
+
+  getTask(taskId: string): TaskRecord | null {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT * FROM tasks WHERE id = ? LIMIT 1
+    `);
+    const row = stmt.get(taskId) as Record<string, unknown> | undefined;
+    return row ? rowToTaskRecord(row) : null;
+  }
+
+  getTaskByConversation(conversationId: string): TaskRecord | null {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT * FROM tasks
+      WHERE conversation_id = ?
+      ORDER BY COALESCE(finished_at, started_at) DESC, created_at DESC
+      LIMIT 1
+    `);
+    const row = stmt.get(conversationId) as Record<string, unknown> | undefined;
+    return row ? rowToTaskRecord(row) : null;
+  }
+
+  listTasks(limit = 10, filter?: TaskSearchFilter): TaskRecord[] {
+    this.ensureOpen();
+    const { clause, params } = this.buildTaskFilterClause(filter);
+    const stmt = this.db.prepare(`
+      SELECT * FROM tasks t
+      WHERE 1 = 1${clause}
+      ORDER BY COALESCE(t.finished_at, t.started_at) DESC, t.created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(...params, limit) as Record<string, unknown>[];
+    return rows.map(rowToTaskRecord);
+  }
+
+  searchTasksKeyword(query: string, limit = 10, filter?: TaskSearchFilter): TaskRecord[] {
+    this.ensureOpen();
+    const normalized = query.trim();
+    if (!normalized) return [];
+
+    const { clause, params } = this.buildTaskFilterClause(filter);
+    if (this.hasFts5) {
+      const ftsQuery = buildFtsQuery(normalized);
+      if (!ftsQuery) return [];
+      const stmt = this.db.prepare(`
+        SELECT t.*
+        FROM tasks_fts f
+        JOIN tasks t ON t.rowid = f.rowid
+        WHERE tasks_fts MATCH ?${clause}
+        ORDER BY bm25(tasks_fts)
+        LIMIT ?
+      `);
+      const rows = stmt.all(ftsQuery, ...params, limit) as Record<string, unknown>[];
+      return rows.map(rowToTaskRecord);
+    }
+
+    const like = `%${escapeLike(normalized)}%`;
+    const stmt = this.db.prepare(`
+      SELECT * FROM tasks t
+      WHERE (
+        t.title LIKE ? ESCAPE '\\'
+        OR t.objective LIKE ? ESCAPE '\\'
+        OR t.summary LIKE ? ESCAPE '\\'
+        OR t.reflection LIKE ? ESCAPE '\\'
+        OR t.outcome LIKE ? ESCAPE '\\'
+      )${clause}
+      ORDER BY COALESCE(t.finished_at, t.started_at) DESC, t.created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(like, like, like, like, like, ...params, limit) as Record<string, unknown>[];
+    return rows.map(rowToTaskRecord);
+  }
+
+  linkTaskMemory(taskId: string, chunkId: string, relation: "used" | "generated" | "referenced"): void {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO task_memory_links (task_id, chunk_id, relation, created_at)
+      VALUES (?, ?, ?, ?)
+    `);
+    stmt.run(taskId, chunkId, relation, new Date().toISOString());
+  }
+
+  listTaskMemoryLinks(taskId: string): Array<{ chunkId: string; relation: string; sourcePath?: string; memoryType?: string; snippet?: string }> {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT l.chunk_id, l.relation, c.source_path, c.memory_type, c.content
+      FROM task_memory_links l
+      LEFT JOIN chunks c ON c.id = l.chunk_id
+      WHERE l.task_id = ?
+    `);
+    return (stmt.all(taskId) as Array<{ chunk_id: string; relation: string; source_path?: string | null; memory_type?: string | null; content?: string | null }>).map((row) => ({
+      chunkId: row.chunk_id,
+      relation: row.relation,
+      sourcePath: row.source_path ?? undefined,
+      memoryType: row.memory_type ?? undefined,
+      snippet: row.content ? truncateContent(row.content, 120) : undefined,
     }));
   }
 
@@ -489,6 +779,60 @@ export class MemoryStore {
 
     const clause = conditions.length > 0 ? " AND " + conditions.join(" AND ") : "";
     return { clause, params };
+  }
+
+  private buildTaskFilterClause(filter?: TaskSearchFilter): { clause: string; params: unknown[] } {
+    if (!filter) return { clause: "", params: [] };
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter.agentId) {
+      conditions.push(`t.agent_id = ?`);
+      params.push(filter.agentId);
+    }
+
+    if (filter.status) {
+      if (Array.isArray(filter.status) && filter.status.length > 0) {
+        const placeholders = filter.status.map(() => "?").join(", ");
+        conditions.push(`t.status IN (${placeholders})`);
+        params.push(...filter.status);
+      } else if (typeof filter.status === "string") {
+        conditions.push(`t.status = ?`);
+        params.push(filter.status);
+      }
+    }
+
+    if (filter.source) {
+      if (Array.isArray(filter.source) && filter.source.length > 0) {
+        const placeholders = filter.source.map(() => "?").join(", ");
+        conditions.push(`t.source IN (${placeholders})`);
+        params.push(...filter.source);
+      } else if (typeof filter.source === "string") {
+        conditions.push(`t.source = ?`);
+        params.push(filter.source);
+      }
+    }
+
+    if (filter.dateFrom) {
+      conditions.push(`COALESCE(t.finished_at, t.started_at) >= ?`);
+      params.push(filter.dateFrom);
+    }
+
+    if (filter.dateTo) {
+      conditions.push(`COALESCE(t.finished_at, t.started_at) <= ?`);
+      params.push(filter.dateTo);
+    }
+
+    if (filter.parentConversationId) {
+      conditions.push(`t.parent_conversation_id = ?`);
+      params.push(filter.parentConversationId);
+    }
+
+    return {
+      clause: conditions.length > 0 ? ` AND ${conditions.join(" AND ")}` : "",
+      params,
+    };
   }
 
   /**
@@ -892,6 +1236,20 @@ export class MemoryStore {
     }
   }
 
+  private ensureTaskFtsRebuiltIfNeeded(): void {
+    if (!this.hasFts5) return;
+    try {
+      const tasks = (this.db.prepare(`SELECT COUNT(*) as c FROM tasks`).get() as { c: number }).c;
+      if (tasks <= 0) return;
+      const fts = (this.db.prepare(`SELECT COUNT(*) as c FROM tasks_fts`).get() as { c: number }).c;
+      const mismatchRatio = tasks > 0 ? Math.abs(tasks - fts) / tasks : 0;
+      if (fts > 0 && mismatchRatio < 0.05) return;
+      this.db.exec(`INSERT INTO tasks_fts(tasks_fts) VALUES('rebuild')`);
+    } catch {
+      // ignore — rebuild is best-effort
+    }
+  }
+
   /** 从现有 chunks_vec 表读取维度（启动时自动恢复 vecDims） */
   private initVecDimsFromExistingTable(): void {
     try {
@@ -1006,6 +1364,37 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
   };
 }
 
+function rowToTaskRecord(row: Record<string, unknown>): TaskRecord {
+  return {
+    id: String(row.id),
+    conversationId: String(row.conversation_id),
+    sessionKey: String(row.session_key),
+    parentConversationId: optionalString(row.parent_conversation_id),
+    parentTaskId: optionalString(row.parent_task_id),
+    agentId: optionalString(row.agent_id),
+    source: String(row.source) as TaskSource,
+    title: optionalString(row.title),
+    objective: optionalString(row.objective),
+    status: String(row.status) as TaskStatus,
+    outcome: optionalString(row.outcome),
+    summary: optionalString(row.summary),
+    reflection: optionalString(row.reflection),
+    toolCalls: safeParseToolCalls(row.tool_calls_json),
+    artifactPaths: safeParseStringArray(row.artifact_paths_json),
+    tokenInput: optionalNumber(row.token_input),
+    tokenOutput: optionalNumber(row.token_output),
+    tokenTotal: optionalNumber(row.token_total),
+    durationMs: optionalNumber(row.duration_ms),
+    startedAt: String(row.started_at),
+    finishedAt: optionalString(row.finished_at),
+    summaryModel: optionalString(row.summary_model),
+    summaryVersion: optionalString(row.summary_version),
+    metadata: safeParseJson(asNullableString(row.metadata)),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
 // ========== Phase M-1: 元数据推断辅助函数 ==========
 
 /** 从 source_path 推断来源渠道 */
@@ -1036,4 +1425,51 @@ function inferTsDate(sourcePath: string, metadataStr: string | null): string | n
   }
 
   return null;
+}
+
+function safeParseToolCalls(value: unknown): TaskToolCallSummary[] | undefined {
+  const raw = asNullableString(value);
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed
+      .filter((item) => item && typeof item === "object" && typeof item.toolName === "string")
+      .map((item) => ({
+        toolName: String(item.toolName),
+        success: Boolean(item.success),
+        durationMs: typeof item.durationMs === "number" ? item.durationMs : undefined,
+        note: typeof item.note === "string" ? item.note : undefined,
+        artifactPaths: Array.isArray(item.artifactPaths)
+          ? item.artifactPaths.map((artifactPath: unknown) => String(artifactPath)).filter(Boolean)
+          : undefined,
+      }));
+  } catch {
+    return undefined;
+  }
+}
+
+function safeParseStringArray(value: unknown): string[] | undefined {
+  const raw = asNullableString(value);
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const values = parsed.map((item) => String(item)).filter(Boolean);
+    return values.length > 0 ? values : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function asNullableString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

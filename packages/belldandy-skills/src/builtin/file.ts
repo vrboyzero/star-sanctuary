@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Tool, ToolCallResult } from "../types.js";
+import { getGlobalMemoryManager } from "@belldandy/memory";
 
 /** 敏感文件模式（禁止读取） */
 const SENSITIVE_PATTERNS = [
@@ -82,6 +83,11 @@ function isAllowedPath(relativePath: string, allowedPaths: string[]): boolean {
     return normalizedRelative.startsWith(normalizedAllowed + "/") ||
       normalizedRelative === normalizedAllowed;
   });
+}
+
+function isMemoryLinkWhitelistPath(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, "/").toLowerCase();
+  return normalized === "memory.md" || normalized.startsWith("memory/");
 }
 
 /** 检查路径是否在指定根目录下（不越界） */
@@ -222,6 +228,12 @@ export const fileReadTool: Tool = {
         }
 
         const truncated = stat.size > maxBytes;
+
+        const manager = getGlobalMemoryManager();
+        const underMainRoot = isUnderRoot(absolute, context.workspaceRoot);
+        if (manager && underMainRoot.ok && isMemoryLinkWhitelistPath(relative)) {
+          await manager.linkTaskMemoriesFromSource(context.conversationId, relative, "used");
+        }
 
         return {
           id,

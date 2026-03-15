@@ -5,6 +5,9 @@ export { MemoryManager, type MemoryManagerOptions, registerGlobalMemoryManager, 
 export { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 export { isNoise, filterNoise, type NoiseFilterOptions } from "./noise-filter.js";
 export * from "./types.js";
+export * from "./task-types.js";
 export * from "./memory-files.js";
+export { TaskProcessor, type TaskProcessorOptions } from "./task-processor.js";
+export { TaskSummarizer, type TaskSummarizerOptions, type TaskSummaryPayload } from "./task-summarizer.js";
 export { OpenAIEmbeddingProvider, type OpenAIEmbeddingOptions } from "./embeddings/openai.js";
 export type { EmbeddingProvider } from "./embeddings/types.js";

@@ -106,6 +106,8 @@
             智能体设置</button>
           <button id="switchFacet" class="sidebar-action-btn"
             style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧩 模组编辑</button>
+          <button id="switchMemory" class="sidebar-action-btn"
+            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧠 记忆查看</button>
           <button id="switchCanvas" class="sidebar-action-btn"
             style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎨 画布工作区</button>
         </div>
@@ -137,6 +139,7 @@
         <section class="editor-section hidden" id="editorSection">
           <div class="editor-header">
             <span class="editor-path" id="editorPath">文件路径</span>
+            <span class="editor-mode-badge hidden" id="editorModeBadge">只读来源</span>
           </div>
           <textarea class="editor-textarea" id="editorTextarea" spellcheck="false"></textarea>
         </section>
@@ -186,6 +189,71 @@
           </svg>
           <!-- 连线拖拽临时层 -->
           <svg id="canvasTempSvg" class="canvas-temp-svg" width="100%" height="100%"></svg>
+        </section>
+
+        <section class="memory-viewer hidden" id="memoryViewerSection">
+          <div class="memory-viewer-shell">
+            <div class="memory-viewer-header">
+              <div>
+                <div class="memory-viewer-kicker">Memory Viewer</div>
+                <div class="memory-viewer-title">Belldandy Memory Viewer</div>
+              </div>
+              <button id="memoryViewerRefresh" class="button">刷新</button>
+            </div>
+
+            <div class="memory-viewer-stats" id="memoryViewerStats">
+              <div class="memory-stat-card">
+                <span class="memory-stat-label">记忆块</span>
+                <strong class="memory-stat-value">--</strong>
+              </div>
+            </div>
+
+            <div class="memory-viewer-toolbar">
+              <div class="memory-viewer-tabs">
+                <button id="memoryTabTasks" class="memory-tab-btn active">Tasks</button>
+                <button id="memoryTabMemories" class="memory-tab-btn">Memories</button>
+              </div>
+              <div class="memory-viewer-filters">
+                <input id="memorySearchInput" class="input input-sm memory-search-input" placeholder="搜索 task 标题、总结或 memory 内容" />
+                <div id="memoryTaskFilters" class="memory-filter-group">
+                  <select id="memoryTaskStatusFilter" class="select select-sm">
+                    <option value="">全部状态</option>
+                    <option value="running">running</option>
+                    <option value="success">success</option>
+                    <option value="failed">failed</option>
+                    <option value="partial">partial</option>
+                  </select>
+                  <select id="memoryTaskSourceFilter" class="select select-sm">
+                    <option value="">全部来源</option>
+                    <option value="chat">chat</option>
+                    <option value="sub_agent">sub_agent</option>
+                    <option value="cron">cron</option>
+                    <option value="heartbeat">heartbeat</option>
+                    <option value="manual">manual</option>
+                  </select>
+                </div>
+                <div id="memoryChunkFilters" class="memory-filter-group hidden">
+                  <select id="memoryChunkTypeFilter" class="select select-sm">
+                    <option value="">全部记忆类型</option>
+                    <option value="core">core</option>
+                    <option value="daily">daily</option>
+                    <option value="session">session</option>
+                    <option value="other">other</option>
+                  </select>
+                </div>
+                <button id="memorySearchBtn" class="button">查询</button>
+              </div>
+            </div>
+
+            <div class="memory-viewer-body">
+              <aside class="memory-viewer-list" id="memoryViewerList">
+                <div class="memory-viewer-empty">等待加载…</div>
+              </aside>
+              <section class="memory-viewer-detail" id="memoryViewerDetail">
+                <div class="memory-viewer-empty">选择左侧条目查看详情。</div>
+              </section>
+            </div>
+          </div>
         </section>
       </div>
     </div>
