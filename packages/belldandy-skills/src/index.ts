@@ -21,7 +21,8 @@ export type {
 } from "./skill-types.js";
 export { loadSkillFromDir, loadSkillsFromDir, parseSkillMd } from "./skill-loader.js";
 export { checkEligibility, checkEligibilityBatch } from "./skill-eligibility.js";
-export { SkillRegistry } from "./skill-registry.js";
+export { SkillRegistry, registerGlobalSkillRegistry, getGlobalSkillRegistry } from "./skill-registry.js";
+export { publishSkillCandidate, getUserSkillsDir } from "./skill-publisher.js";
 
 export { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
 export type { ToolExecutorOptions } from "./executor.js";
@@ -82,10 +83,26 @@ export {
 
 
 export { createMemorySearchTool, createMemoryGetTool, type MemorySearchToolConfig } from "./builtin/memory.js";
-export { memorySearchTool, memoryIndexTool, memoryReadTool, memoryWriteTool, memorySharePromoteTool, taskSearchTool, taskGetTool, taskRecentTool } from "./builtin/memory.js";
+export {
+  memorySearchTool,
+  memoryIndexTool,
+  memoryReadTool,
+  memoryWriteTool,
+  memorySharePromoteTool,
+  taskSearchTool,
+  taskGetTool,
+  taskRecentTool,
+  taskPromoteMethodTool,
+  taskPromoteSkillDraftTool,
+  experienceCandidateListTool,
+  experienceCandidateAcceptTool,
+  experienceCandidateRejectTool,
+  experienceUsageRecordTool,
+  experienceUsageRevokeTool,
+} from "./builtin/memory.js";
 
 // Skills 管理工具
-export { createSkillsListTool, createSkillsSearchTool } from "./builtin/skills-tool.js";
+export { createSkillsListTool, createSkillsSearchTool, createSkillGetTool } from "./builtin/skills-tool.js";
 
 // Canvas 可视化工作区工具
 export { createCanvasTools, type CanvasBroadcastFn } from "./builtin/canvas.js";

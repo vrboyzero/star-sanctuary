@@ -203,7 +203,8 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
         if (params.hasSearchableSkills) {
             skillLines.push(
                 "",
-                "你有更多专业技能存储在技能库中。当遇到不熟悉的领域时，请使用 skills_search 工具搜索可用技能。",
+                "你有更多专业技能存储在技能库中。当遇到不熟悉的领域时，请使用 skills_search 工具搜索可用技能；当你决定采用某个 skill 时，优先调用 skill_get 精确打开。",
+                "注意：仅搜索不算已使用；skill_get 会在当前 task 存在时自动记录 skill usage。若通过其他入口实际采用了 method 或 skill，再调用 experience_usage_record 补记。若误记了 usage，可用 experience_usage_revoke 撤销当前 task 的记录。",
                 "",
             );
         }
@@ -217,7 +218,8 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
             text: [
                 "# Skills",
                 "",
-                "你有专业技能存储在技能库中。当遇到不熟悉的领域时，请使用 skills_search 工具搜索可用技能。",
+                "你有专业技能存储在技能库中。当遇到不熟悉的领域时，请使用 skills_search 工具搜索可用技能；当你决定采用某个 skill 时，优先调用 skill_get 精确打开。",
+                "注意：仅搜索不算已使用；skill_get 会在当前 task 存在时自动记录 skill usage。若通过其他入口实际采用了 method 或 skill，再调用 experience_usage_record 补记。若误记了 usage，可用 experience_usage_revoke 撤销当前 task 的记录。",
                 "",
             ].join("\n"),
         });
@@ -294,7 +296,11 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
             "1. **Check First**: Before doing anything other than ordinary conversation, ALWAYS check for existing methods.",
             "   - Use `method_list` or `method_search` to find relevant docs.",
             "   - Use `method_read` to load the SOP.",
+            "   - Use `skills_search` to discover skills, and `skill_get` to load the exact skill you decide to adopt.",
             "   - **Follow the method strictly** if found.",
+            "   - `method_read` and `skill_get` will auto-record usage when the current conversation already has a task.",
+            "   - If you adopted a method or skill through some other non-standard path, call `experience_usage_record` to record the usage manually.",
+            "   - If a usage was recorded by mistake, use `experience_usage_revoke` to revoke it on the current task.",
             "",
             "2. **Knowledge Distillation**: After completing a task, REFLECT: 'Did I learn a reusable pattern?'",
             "   - If yes -> Use `method_create` to save/update the Method.",

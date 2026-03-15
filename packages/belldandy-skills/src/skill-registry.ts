@@ -14,6 +14,16 @@ function makeKey(skill: SkillDefinition): string {
   return `${skill.source.type}:${skill.name}`;
 }
 
+let globalSkillRegistry: SkillRegistry | null = null;
+
+export function registerGlobalSkillRegistry(registry: SkillRegistry): void {
+  globalSkillRegistry = registry;
+}
+
+export function getGlobalSkillRegistry(): SkillRegistry | null {
+  return globalSkillRegistry;
+}
+
 export class SkillRegistry {
   /** 所有已加载的 skills（key = source:name） */
   private skills = new Map<string, SkillDefinition>();

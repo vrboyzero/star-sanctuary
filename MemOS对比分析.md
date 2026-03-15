@@ -2350,3 +2350,718 @@ Viewer 已完成最小收口：
 - 旧数据可兼容
 
 后续若继续推进分类能力，应视为新阶段增强，不再算第四阶段未完项。
+
+---
+
+## 29. 第五阶段详细实施单：经验到 `Method / Skill` 的半自动沉淀
+
+第五阶段的目标已经收敛为一句话：
+
+- **把高质量 task 经验沉淀为“候选方法 / 候选技能”，但第一版只进入候选层，不直接污染正式资产。**
+
+### 29.1 当前代码基线
+
+对照当前实现，已经具备的基础有：
+
+- `Task` 层已有：
+  - `title`
+  - `summary`
+  - `reflection`
+  - `outcome`
+  - `toolCalls`
+  - `artifactPaths`
+  - `task_memory_links`
+- `TaskProcessor` 已能在后台生成较稳定的任务总结，适合作为经验提炼输入
+- 方法体系已有：
+  - `method_list`
+  - `method_search`
+  - `method_create`
+- 技能体系已有：
+  - `SkillRegistry`
+  - `skills_list`
+  - `skills_search`
+  - `SKILL.md` 解析与 eligibility gating
+
+当前明确缺口也很清楚：
+
+- `MemoryStore` 已有 `experience_candidates` 表与基础 CRUD
+- `MemoryManager` 已有候选生成、审核，以及 method 发布能力
+- `server.ts` 已有经验候选相关 RPC
+- 方法侧已能在 `accepted` 后写入正式 `methods/`
+- 技能侧仍没有独立的 `skill_create` 正式资产创建接口，但已补上“候选接受 -> 用户 `skills/` 发布”的闭环
+
+这意味着第五阶段第一版已经完成候选层、method 发布闭环，以及 skill 发布闭环。
+
+### 29.2 第一版边界
+
+第五阶段第一版明确只做：
+
+1. 允许从单个 `task_id` 手动生成候选
+2. 允许在 task 完成后按开关自动生成候选，且默认开启
+3. 候选只进入独立候选层
+4. 审核通过后，才允许进入正式 `methods/` 或 `skills/`
+5. 同一 task + 同一 type 不允许无限重复生成
+
+第一版当前实现口径：
+
+- 自动候选生成默认开启，但只会生成 `experience_candidates`
+- 自动候选生成可通过环境变量关闭或按类型细分关闭
+- 自动生成不会直接发布到正式 `methods/` / 用户 `skills/`
+- 自动候选生成当前为规则化提炼，不强依赖额外模型
+- `BELLDANDY_TASK_SUMMARY_MODEL` 不会直接驱动候选生成
+- `Task Summary` 只是在开启后补强 `summary / reflection / outcome`，从而间接提升候选质量
+
+相关环境变量：
+
+- `BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED`，默认 `true`
+- `BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED`，默认 `true`
+- `BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED`，默认 `true`
+- `BELLDANDY_TASK_SUMMARY_ENABLED` / `BELLDANDY_TASK_SUMMARY_MODEL` 为可选增强项，不是自动沉淀前提
+
+第一版明确不做：
+
+- 不做自动发布到正式资产
+- 不做批量历史任务回溯生成
+- 不做复杂质量评估模型
+- 不做候选内容的自动合并/去重图谱
+
+### 29.3 推荐实施策略
+
+第五阶段建议拆成两个批次，而不是一次性闭环到底：
+
+#### P5-A 候选层最小闭环
+
+先把“生成候选、可审核、可拒绝、可防重复”做成立：
+
+- **P5-A1 数据层**
+  - 在 `packages/belldandy-memory/src/store.ts` 增加 `experience_candidates` 表
+  - 建议字段：
+    - `id`
+    - `task_id`
+    - `type` (`method` | `skill`)
+    - `status` (`draft` | `reviewed` | `accepted` | `rejected`)
+    - `title`
+    - `slug`
+    - `content`
+    - `summary`
+    - `quality_score`
+    - `source_task_snapshot_json`
+    - `published_path`
+    - `created_at`
+    - `reviewed_at`
+    - `accepted_at`
+    - `rejected_at`
+  - 索引至少包括：
+    - `task_id`
+    - `type`
+    - `status`
+    - `(task_id, type)` 唯一约束或等价防重约束
+
+- **P5-A2 类型与管理层**
+  - 在 `packages/belldandy-memory/src/types.ts` / 新增类型文件中补 `ExperienceCandidate`
+  - 在 `packages/belldandy-memory/src/manager.ts` 增加：
+    - `promoteTaskToMethodCandidate(taskId)`
+    - `promoteTaskToSkillCandidate(taskId)`
+    - `listExperienceCandidates(...)`
+    - `acceptExperienceCandidate(id)`
+    - `rejectExperienceCandidate(id)`
+
+- **P5-A3 提炼服务**
+  - 新增 `packages/belldandy-memory/src/experience-promoter.ts`
+  - 负责：
+    - 读取 task 详情
+    - 抽取可复用经验输入
+    - 生成 method / skill 候选草稿
+    - 计算最小质量分
+    - 做重复生成检查
+  - 第一版已支持两种入口：
+    - 显式工具 / RPC 调用
+    - task 完成后的自动候选生成
+  - 自动候选生成通过开关控制，默认开启，但仍然只写候选层
+
+- **P5-A4 候选生成输入**
+  - 第一版输入只依赖当前已有字段：
+    - `title`
+    - `objective`
+    - `summary`
+    - `reflection`
+    - `outcome`
+    - `toolCalls`
+    - `artifactPaths`
+    - `memoryLinks`
+  - 不额外回读整段长对话作为硬依赖，避免 token 爆炸
+
+- **P5-A5 对外接口**
+  - 在 `packages/belldandy-core/src/server.ts` 增加最小 RPC：
+    - `experience.candidate.list`
+    - `experience.candidate.accept`
+    - `experience.candidate.reject`
+  - 工具层新增：
+    - `task_promote_method`
+    - `task_promote_skill_draft`
+    - `experience_candidate_list`
+    - `experience_candidate_accept`
+    - `experience_candidate_reject`
+
+#### P5-B 发布闭环
+
+在候选层稳定后，再补“审核通过 -> 正式资产”：
+
+- **P5-B1 method 发布：已完成**
+  - 复用现有 methodology 文档结构
+  - `accepted` 后写入正式 `methods/`
+  - 发布成功后回写 `published_path`
+
+- **P5-B2 skill 发布：已完成**
+  - 已生成用户技能目录：
+    - `<stateDir>/skills/<slug>/SKILL.md`
+  - 发布内容直接复用候选层已生成的 `SKILL.md` 草稿内容，保持现有 frontmatter 契约
+  - 已在工具入口与 RPC 入口接入“先发布、再 accept”
+  - 发布后已触发 `SkillRegistry.loadUserSkills(...)` 最小刷新
+
+- **P5-B3 状态机收口**
+  - `draft -> reviewed -> accepted/rejected`
+  - 第一版也可以简化为：
+    - `draft -> accepted/rejected`
+  - 但即便简化，也不要跳过候选层直接落正式目录
+  - 当前已按最小版本收口：
+    - 仅允许 `draft -> accepted/rejected`
+    - 已 `accepted/rejected` 的候选不能再被二次改写
+    - 暂未开放独立 `reviewed` 动作
+
+### 29.4 具体文件落点建议
+
+按当前代码结构，建议修改路径如下：
+
+- `packages/belldandy-memory/src/store.ts`
+  - 增表、CRUD、索引、防重复检查
+- `packages/belldandy-memory/src/manager.ts`
+  - 暴露候选生成与审核 API
+  - 在 task 完成后按开关自动触发候选生成
+- `packages/belldandy-memory/src/experience-promoter.ts`
+  - 新增候选提炼服务
+- `packages/belldandy-skills/src/builtin/methodology/create.ts`
+  - 复用发布 method 的文件生成逻辑，避免重复模板
+- `packages/belldandy-skills/src/builtin/skills-tool.ts`
+  - 视需要补候选相关工具，或新增独立 experience 工具文件
+- `packages/belldandy-skills/src/skill-registry.ts`
+  - 接受 skill 候选后支持最小刷新
+- `packages/belldandy-core/src/server.ts`
+  - 增加候选相关 RPC
+- `packages/belldandy-core/src/bin/gateway.ts`
+  - 解析自动候选生成相关环境变量并注入 `MemoryManager`
+
+### 29.5 关键设计决策
+
+第五阶段最重要的不是“怎么生成”，而是“怎么不污染正式资产”。
+
+因此建议固定 5 条设计原则：
+
+1. **候选层先落库，不先落正式文件**
+2. **第一版允许自动生成候选，但必须可开关，且默认只到候选层**
+3. **同一 task + 同一 type 默认只保留一个有效候选**
+4. **所有候选都必须带 `source task_id`**
+5. **方法与技能分开生成、分开审核、分开发布**
+
+其中第 5 条尤其重要：
+
+- `method` 可直接复用现有 methodology markdown 结构
+- `skill` 必须满足 `SKILL.md` frontmatter 格式，复杂度更高
+
+所以实现顺序建议是：
+
+1. 先打通 `method` 候选
+2. 再补 `skill` 候选
+3. 最后再补发布与 registry 刷新
+
+### 29.6 第一版验收口径
+
+第五阶段第一版完成后，至少满足以下结果：
+
+- 用户可以基于单个 `task_id` 生成 method 候选
+- 用户可以基于单个 `task_id` 生成 skill 候选草稿
+- task 完成后可按开关自动生成 method / skill 候选，且默认开启
+- 候选只进入 `experience_candidates`，不直接进入正式目录
+- 相同 task 不会无限重复生成同类候选
+- 候选可被列出、接受、拒绝
+- `accepted` 后，method 可进入正式 `methods/`
+- `accepted` 后，skill 可进入用户 skills 目录，并被 `skills_search` 发现
+
+### 29.7 风险与控制
+
+第五阶段仍然是当前五阶段里风险最高的一项，控制重点如下：
+
+1. **不要把生成链路放进同步主流程**
+   - 否则会明显拖慢任务完成时间
+
+2. **不要直接写正式资产**
+   - 当前 `method_create` 是直接写正式目录
+   - skill 侧也没有现成草稿层
+   - 所以必须先补候选层
+
+3. **不要把 skill 发布难度低估**
+   - skill 不是单文件 markdown
+   - 而是目录 + `SKILL.md` + frontmatter 契约
+
+4. **自动生成必须可控**
+   - 即便默认开启，也必须能整体关闭或按类型关闭
+   - 自动生成只允许进入候选层，不能绕过审核直接发布
+
+### 29.8 当前结论
+
+第五阶段现在最合理的推进方式不是“直接开写发布链路”，而是：
+
+1. 先做 `experience_candidates` 候选层
+2. 保留手动触发，同时支持 task 完成后的自动候选生成
+3. 自动生成默认开启，但通过环境变量可关闭
+4. 先打通候选层，再做接受发布与 registry 刷新
+
+这会比“一次性自动沉淀到 methods/skills”稳很多，也更符合当前代码现状。
+
+### 29.9 当前实现进度
+
+截至当前，第四阶段已经收口，第五阶段进入如下状态：
+
+- **P5-A 候选层最小闭环：已完成**
+  - `experience_candidates` 数据层已落地
+  - `ExperienceCandidate` / `ExperiencePromoter` 已落地
+  - 已支持手动生成 method / skill 候选
+  - 已支持 task 完成后的自动候选生成，且默认开启
+  - 已支持候选列表、接受、拒绝
+  - 已补工具入口与 RPC
+- **P5-B1 method 发布闭环：已完成**
+  - method 候选在 `accepted` 后已真正写入 `methods/`
+  - `published_path` 已回写到候选记录
+  - 已补最小测试，验证发布文件真实落地
+- **P5-B2 skill 发布闭环：已完成**
+  - skill 候选在 `accepted` 后已真正写入用户 `skills/`
+  - `published_path` 已回写到候选记录
+  - `SkillRegistry` 最小刷新链路已接入
+  - 已补测试，验证发布文件真实落地且 registry 可发现新 skill
+- **P5-B3 状态机收口：已完成（最小版）**
+  - 已将状态迁移收口为 `draft -> accepted/rejected`
+  - 已禁止 `accepted/rejected` 候选被再次 accept / reject
+  - 工具入口与 RPC 已返回明确的 `invalid_state` 提示
+  - 暂不引入独立 `reviewed` 审核动作，留待后续多步审核场景再扩展
+- **P5-B3 第二版：多步审核状态机增强（暂不实现）**
+  - 若未来进入第二版，可在当前最小状态机之上继续补：
+    - 独立 `reviewed` 状态与 `draft -> reviewed -> accepted/rejected` 迁移
+    - 独立审核动作，例如 `reviewExperienceCandidate()`
+    - 审核元数据，例如 reviewer / review note / decision reason
+    - 更完整的扩展状态，例如 `reopen` / `withdrawn` / `superseded`
+    - Viewer / RPC 的多步审核流展示
+  - 该项不属于第五阶段第一版验收口径，当前明确 **暂不实现**
+
+因此，第五阶段第一版当前已经达到既定验收口径：
+
+1. method / skill 候选都可手动生成
+2. task 完成后可按开关自动生成 method / skill 候选，且默认开启
+3. 候选接受后可分别发布到正式 `methods/` 与用户 `skills/`
+4. `skills_search` / registry 侧已具备发现新发布 skill 的最小闭环
+
+下一步若继续推进，第一个优先项应转向：
+
+1. **P5-B3 状态机收口**
+2. 或进入第六阶段，而不是继续补第五阶段第一版主链路
+
+## 30. 第六阶段详细实施单：已沉淀经验的消费闭环
+
+第六阶段的目标可以收敛为一句话：
+
+> 不仅要把 task 经验沉淀成 `method / skill`，还要让这些已发布经验在后续任务里被看见、被调用、被回链、被评估。
+
+第五阶段解决的是“怎么安全地产生经验资产”，第六阶段解决的是“这些经验资产如何真正参与后续工作流”。
+
+### 30.1 阶段目标
+
+第六阶段第一版建议只做“消费闭环最小版”，不做复杂推荐系统，不做复杂质量评分模型。
+
+目标拆成 4 件事：
+
+1. 在任务开始或执行前，支持基于 task 目标检索相关 `method / skill`
+2. 在任务执行过程中，记录本次 task 实际引用了哪些经验资产
+3. 在任务完成后，把“经验被使用”的事实回写到经验资产侧
+4. 在 Viewer / RPC 中展示最小可读的“沉淀 -> 发布 -> 使用”闭环
+
+### 30.2 第一版边界
+
+第六阶段第一版明确只做：
+
+1. **经验检索，不做自动强插**
+   - 先支持“推荐 / 检索 / 展示”
+   - 不强制 agent 必须调用某个 method 或 skill
+
+2. **记录实际使用，不做复杂归因**
+   - 先记录“本次 task 用过哪个 method / skill”
+   - 不追求精确到每一步 token 级引用
+
+3. **轻量统计，不做复杂评分**
+   - 先补：
+     - `usage_count`
+     - `last_used_at`
+     - `last_used_task_id`
+   - 暂不引入复杂质量分、衰减模型、排序学习
+
+4. **Viewer 先做闭环展示，不做复杂运营面板**
+   - 先看得到：
+     - 哪个 task 产出了哪个候选
+     - 哪个候选发布成了哪个正式资产
+     - 哪个正式资产后来又被哪些 task 使用
+
+### 30.3 实施批次建议
+
+#### P6-A 经验消费记录层
+
+先补“经验被使用”的数据结构与回写能力：
+
+- 新增经验使用记录表，例如：
+  - `experience_usages`
+- 最小字段建议：
+  - `id`
+  - `task_id`
+  - `asset_type` (`method` / `skill`)
+  - `asset_key`（method 文件名或 skill 名称 / 目录标识）
+  - `source_candidate_id`（若能回链）
+  - `used_via`（manual / search / tool / auto_suggest）
+  - `created_at`
+- 同时给正式资产补最小统计字段或可计算视图：
+  - `usage_count`
+  - `last_used_at`
+  - `last_used_task_id`
+
+#### P6-B 检索与命中闭环
+
+在现有工具与任务链路里补“经验消费入口”：
+
+- method 侧：
+  - 基于 task 目标搜索 `methods/`
+  - 命中后可记录 usage
+- skill 侧：
+  - 基于 task 目标或上下文搜索 `skills_search`
+  - 决定采用后通过 `skill_get` 精确打开
+  - 命中后可记录 usage
+- 第一版只要求：
+  - “能查到”
+  - “能记录被采用”
+  - “能回看使用记录”
+
+#### P6-C Viewer / RPC 闭环展示
+
+在现有 memory viewer 基础上补最小可视化：
+
+- task 详情中新增：
+  - `usedMethods`
+  - `usedSkills`
+- method / skill 详情或聚合视图中新增：
+  - 来源 task
+  - 来源 candidate
+  - 使用次数
+  - 最近使用时间
+  - 最近使用 task
+- 若 UI 成本过高，第一版也至少要先补 RPC 数据结构
+
+当前第一版已按最小闭环落地到 Viewer：
+
+- task tab 顶部已新增 usage 总览卡
+  - 分开展示热门 `method / skill`
+  - 展示累计使用次数与最近使用时间
+- task detail 已新增 Method Usage / Skill Usage 区块
+  - 展示当前 task 采用的资产
+  - 展示 `used_via / usage_count / last_used_at / source_candidate_id / last_used_task_id`
+
+### 30.4 具体文件落点建议
+
+- `packages/belldandy-memory/src/store.ts`
+  - 增加 `experience_usages` 表与查询
+- `packages/belldandy-memory/src/manager.ts`
+  - 暴露记录经验使用与查询 usage 聚合的 API
+- `packages/belldandy-memory/src/experience-types.ts`
+  - 新增 usage 类型定义
+- `packages/belldandy-skills/src/builtin/memory.ts`
+  - 补经验使用记录工具，或在现有工具调用后回写 usage
+- `packages/belldandy-skills/src/builtin/skills-tool.ts`
+  - skill 命中后补 usage 记录挂点
+- `packages/belldandy-skills/src/builtin/methodology/*.ts`
+  - method 搜索 / 调用后补 usage 记录挂点
+- `packages/belldandy-core/src/server.ts`
+  - 增加 usage 相关 RPC
+- `packages/belldandy-web/src/*`
+  - 若继续扩 Viewer，则补“经验消费闭环”展示
+
+### 30.5 关键设计决策
+
+第六阶段最重要的不是“推荐得多智能”，而是“经验资产是否真的被消费，并且可审计”。
+
+因此建议固定 4 条原则：
+
+1. **先记录真实使用，再谈自动推荐效果**
+2. **使用记录必须可回链到 task**
+3. **method 与 skill 的消费记录统一建模，但保留类型差异**
+4. **第一版先做人可理解的闭环，不做黑盒评分**
+
+第六阶段第一版还应额外坚持 3 条铁规则：
+
+1. **只提供候选参考，不强制采纳**
+   - 推荐结果只能作为辅助上下文
+   - 不能把命中的 `method / skill` 强制注入成必须执行的硬约束
+
+2. **先记录 usage，不拿 usage 做强排序**
+   - 第一版可以统计“谁被用过”
+   - 但不能直接把 `usage_count` 当成质量高低的强信号，避免形成错误路径依赖
+
+3. **所有推荐结果都带来源和最近使用时间**
+   - 至少要能看到：
+     - 来源 task / 来源 candidate（若可回链）
+     - 最近使用时间
+     - 最近使用 task
+   - 这样 Agent 与人都能判断这条经验是“新鲜且相关”，还是“旧经验但仅供参考”
+
+### 30.6 第一版验收口径
+
+第六阶段第一版完成后，至少满足以下结果：
+
+- task 执行过程中可记录 method / skill 的实际使用
+- usage 可回链到 `task_id`
+- 已发布 method / skill 可查看最小使用统计
+- Viewer / RPC 能展示“来源 task -> 候选 -> 正式资产 -> 后续使用”的最小链路
+- 后续可基于 usage 数据继续做排序、推荐、归档，而无需重做数据底座
+
+### 30.7 风险与控制
+
+第六阶段最大的风险不在“实现难”，而在“容易把使用记录做成不可信日志”。
+
+控制重点如下：
+
+1. **不要把“搜索过”当成“使用过”**
+   - 只有真正采用或执行后，才记 usage
+
+2. **不要把自动推荐做成强耦合主流程**
+   - 第一版推荐应该是辅助，不应成为任务执行阻塞点
+
+3. **不要让 usage 模型绑死具体资产存储形态**
+   - method 是文件，skill 是目录
+   - usage 层应该统一抽象为 asset 引用
+
+4. **不要在第一版就做复杂评分**
+   - 先把事实记录对，再考虑排序策略
+
+5. **不要把推荐结果变成强控制信号**
+   - 第六阶段第一版的推荐只能辅助判断
+   - 不能反过来压制 Agent 对当前上下文的自主判断
+
+### 30.8 当前结论
+
+第六阶段现在最合理的推进方式是：
+
+1. 先补 `experience_usages` 数据层
+2. 再把 method / skill 的实际使用挂到 task 上
+3. 然后补 Viewer / RPC 展示
+4. 最后才考虑自动推荐、排序、归档等增强能力
+
+这样做可以把“经验沉淀”真正推进成“经验循环”，而不是停留在资产生成阶段。
+
+### 30.9 当前实现进度
+
+截至当前，第六阶段进入如下状态：
+
+- **P6-A 经验消费记录层：已完成（第一版）**
+  - `experience_usages` 数据层已落地
+  - 已支持记录 `method / skill` 两类 usage
+  - 已支持按 `task_id + asset` 去重，避免同一 task 重复刷 usage
+  - 已支持最小 usage 聚合统计：
+    - `usage_count`
+    - `last_used_at`
+    - `last_used_task_id`
+  - `MemoryManager` 已暴露最小 API：
+    - `recordExperienceUsage`
+    - `recordMethodUsage`
+    - `recordSkillUsage`
+    - `listExperienceUsages`
+    - `getExperienceUsageStats`
+    - `listExperienceUsageStats`
+  - 已补最小测试，验证 usage 记录、去重、聚合
+
+- **P6-B 检索与命中闭环：进行中（第一、二批已完成）**
+  - **第一批已完成**
+    - `method_read` 已在当前对话存在 task 时自动回写 method usage
+    - 已新增显式 usage 工具，用于在实际采用 skill 后记录 usage
+    - `skills_search` 仅补“采用后请记录 usage”的引导，不把搜索误记成已使用
+  - **第二批已完成**
+    - `recordExperienceUsage / recordMethodUsage / recordSkillUsage` 现在会自动尝试推断 `sourceCandidateId`
+    - method usage 可按已发布方法文件名自动回链到来源 candidate
+    - skill usage 可按 skill 名称自动回链到来源 candidate
+    - system prompt / SOUL 已明确要求：
+      - 只有在真实采用了 method / skill 后，才调用 `experience_usage_record`
+      - 仅搜索不算 usage
+  - **后续补充已开始**
+    - 已新增 `skill_get` 精确读取入口
+    - `skill_get` 在当前对话存在 task 时会自动回写 skill usage
+    - `skills_search -> skill_get` 现在形成了更稳的 skill 消费闭环
+    - 已补 `file_read` 对经验资产文件的 usage 挂点：
+      - 读取 `methods/*.md` 时会自动回写 method usage
+      - 读取 `skills/**/SKILL.md` 时会自动回写 skill usage
+  - **仍未完成**
+    - 还未把更多 skill / method 消费入口自动挂接到 usage 回写
+
+- **P6-C Viewer / RPC 闭环展示：进行中（第一、二批已完成）**
+  - **第一批已完成**
+    - `task_get / memory.task.get` 已带出：
+      - `usedMethods`
+      - `usedSkills`
+    - 已新增最小 usage RPC：
+      - `experience.usage.list`
+      - `experience.usage.stats`
+    - CLI / tool 侧的 `task_get` 也已能展示已使用的 method / skill
+  - **第二批已完成**
+    - Viewer task tab 顶部已新增 usage 总览卡
+      - 分开展示热门 `method / skill`
+      - 展示累计使用次数与最近使用时间
+    - Viewer task detail 已新增：
+      - Method Usage 卡片区
+      - Skill Usage 卡片区
+      - 当前 task 的 usage 数量与最近采用时间
+    - 前端已把 `usedMethods / usedSkills` 从“仅数据存在”推进到“可直接审计与回看”
+  - **仍未完成**
+    - 暂未做更复杂的 method / skill 独立详情页
+    - 暂未基于 usage 做推荐、排序或归档策略
+
+- **P6-D usage 纠错 / 撤销最小版：已完成**
+  - 已新增最小纠错入口：
+    - tool：`experience_usage_revoke`
+    - RPC：`experience.usage.revoke`
+  - 已支持两种撤销方式：
+    - 按 `usage_id` 精确撤销
+    - 按 `task_id + asset_type + asset_key` 撤销
+  - Agent 工具默认只处理当前对话 task，避免误删其他 task 的 usage
+  - 当前撤销边界明确为：
+    - 只撤 `usage`
+    - 不改 `task`
+    - 不改 `candidate`
+    - 不改正式 `method / skill` 资产
+  - Viewer 侧已新增最小撤销入口：
+    - 在 task detail 的 Method Usage / Skill Usage 卡片中可直接撤销单条 usage
+    - 撤销后会自动刷新当前 task 明细与顶部 usage 总览
+
+因此，第六阶段下一步最合理的开发顺序是：
+
+1. 继续补 **P6-B 后续批次**：把更多真实消费入口接到 usage 回写
+2. 视需要补 **method / skill 独立详情页或聚合页**
+3. 最后再决定是否扩更复杂的推荐、排序、归档逻辑
+
+### 30.10 第六阶段剩余缺位需求
+
+结合当前实现进度与第一版验收口径，第六阶段还存在 3 条值得明确写出的剩余缺位需求：
+
+1. **更多真实消费入口的 usage 挂点**
+   - 当前 `method_read` 与显式 `experience_usage_record` 已接入
+   - 当前又新增了 `skill_get` 自动 usage 挂点
+   - 当前也已补 `file_read -> methods / skills` 的自动 usage 识别
+   - 但更多 skill / method 的真实采用入口还未统一挂接
+   - 这会导致 usage 数据仍有“记录不全”的问题
+   - 该项属于当前最优先的真实缺口
+
+2. **usage 误记后的纠错 / 撤销机制**
+   - 当前最小版已落地：
+     - 支持按 `usage_id` 精确撤销
+     - 支持按 `task + asset` 撤销
+     - Agent 可通过 `experience_usage_revoke` 修正当前 task 的误记
+   - 当前仍未做：
+     - 批量撤销
+     - 撤销审计日志
+   - 因此该项已不再是“无机制”的缺口，而是“后续是否扩体验”的问题
+
+3. **Viewer 审计跳转闭环**
+   - 当前 Viewer 已能展示 `usedMethods / usedSkills`
+   - 但“来源 task -> candidate -> 正式资产 -> 后续 usage” 仍主要停留在可展示层
+   - 若要把“可审计”真正做实，后续至少应支持：
+     - 从 usage 回看来源 task
+     - 从 usage 回看来源 candidate
+     - 从 usage 跳到 method 文件或 skill 资产
+
+其中建议优先级如下：
+
+- **发布前建议优先补齐**：更多真实消费入口的 usage 挂点
+- **收口阶段可继续增强**：usage 撤销审计能力
+- **后续增强但建议保留在文档中**：Viewer 审计跳转闭环
+
+补一份更聚焦的“剩余 usage 挂点”优先级清单：
+
+1. **P1：prompt 注入 skill 的真实采用盲区**
+   - 当前 `priority = high / always` 的 skill 会直接注入 system prompt
+   - 这类 skill 若被模型直接采用，现阶段没有显式工具调用可自动观测
+   - 该类不是大量代码散点，而是一个重要入口类型；建议先在文档与审计口径中明确为“需手动补记 / 暂不可全自动覆盖”
+
+2. **P2：少量非标准真实消费入口**
+   - 重点继续排查是否还有工具或链路会直接打开、读取、采用 method / skill 内容，但未经过 `method_read` / `skill_get` / `file_read`
+   - 这部分预计是少量零散挂点，不是主链路大缺口
+
+3. **P3：显式补记继续兜底**
+   - 对无法稳定自动识别的采用路径，继续使用 `experience_usage_record`
+   - 这条更像制度性兜底，而不是新的自动挂点建设
+
+当前判断：
+
+- 主入口已覆盖
+- 剩余 usage 挂点量级为 **小量**
+- 更像 `2~4` 类剩余入口类型，而不是还差一整批主链路
+
+### 30.11 当前发布判断与后续优先级评估
+
+基于当前实现进度，第六阶段已经不再存在“必须实现否则无法发布”的硬阻塞项。
+
+当前剩余需求可以整理为两类：
+
+#### A. 发布前建议优先补齐
+
+1. **更多真实消费入口的 usage 挂点**
+   - 这是当前唯一仍直接影响 usage 数据完整度与可信度的缺口
+   - 若不继续补，系统已经可用，但 usage 统计可能存在少量漏记
+
+#### B. 后续增强项
+
+2. **Viewer 审计跳转闭环**
+   - 让 `usage -> task / candidate / method 文件 / skill 资产` 真正可跳转、可核对
+   - 该项会显著增强审计体验，但不是当前发布阻塞
+
+3. **usage 撤销增强**
+   - 当前最小撤销机制已完成
+   - 后续若继续增强，优先考虑：
+     - 撤销审计日志
+     - 批量撤销
+
+4. **method / skill 独立详情页或聚合页**
+   - 属于 Viewer 体验增强
+   - 对首发可用性帮助有限，可后置
+
+5. **基于 usage 的推荐 / 排序 / 归档**
+   - 属于后续增长型能力
+   - 当前不建议提前介入，以免过早把 usage 变成强控制信号
+
+### 30.12 当前是否可发布
+
+当前判断：**可以发布版本。**
+
+原因如下：
+
+1. 第五阶段第一版已经达到既定验收口径
+2. 第六阶段当前已具备最小消费闭环：
+   - `P6-A` 数据底座已完成
+   - `P6-B` 已覆盖多条真实消费入口
+   - `P6-C` 已可在 Viewer 中回看 usage
+   - `P6-D` 已支持误记后的最小撤销修正
+3. 当前剩余问题主要是“usage 覆盖率与审计体验还可继续增强”，而不是“主链路不可用”
+
+因此，如果当前发布目标是：
+
+- 能从 task 沉淀 method / skill
+- 能在后续 task 中消费这些经验资产
+- 能看到 usage
+- 能在误记时撤销 usage
+
+那么现在已经具备发布条件。
+
+更稳妥的发布口径建议是：
+
+- 以“第六阶段第一版 / Beta 稳定版”对外
+- 并明确 1 条已知限制：
+  - 并非所有真实消费入口都已自动挂接 usage，当前 usage 统计仍可能存在少量漏记

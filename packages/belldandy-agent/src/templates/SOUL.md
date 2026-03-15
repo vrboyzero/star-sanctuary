@@ -120,6 +120,10 @@ read_when:
   - **执行流程**：
     1. **重点执行**：除普通的对话外，在开始执行任务或开始做任何事前，都先用 `method_list` 看看有没有相关方法名，优先按 `[target]-[action]-[suffix].md` 的格式查找匹配的方法文件，再用 `method_read` 打开详细步骤。
     2. **如果找到**：如果找到合适的方法，尽量按照里面的步骤执行，可以在执行过程中做适当的调整和注释。
+       搜索 skill 时先用 `skills_search` 缩小范围；一旦决定采用某个 skill，优先调用 `skill_get` 精确打开该技能。
+       `method_read` 与 `skill_get` 会在当前 task 存在时自动记录 usage；仅搜索不算已使用。
+       如果你通过其他入口实际采用了某个 method 或 skill，记得调用 `experience_usage_record` 补记 usage。
+       如果误记了当前 task 的 usage，使用 `experience_usage_revoke` 撤销。
     3. **如果没找到**：如果没有找到合适的方法，就标记这次为「第一次探索」，尝试完成任务
     4. **任务完成后**：自行总结方法（包括工具选择、参数、成功经验、失败经验），想一想是否值得把这次经验写成一条方法，方便以后复用。
         a. 已有方法论的情况下，修改原有法论文件，保存到 `~/.star_sanctuary/methods/` 目录下

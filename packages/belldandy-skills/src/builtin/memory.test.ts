@@ -13,11 +13,23 @@ const manager = {
   searchTasks: vi.fn(),
   getRecentTasks: vi.fn(),
   getTaskDetail: vi.fn(),
+  getTaskByConversation: vi.fn(),
+  promoteTaskToMethodCandidate: vi.fn(),
+  promoteTaskToSkillCandidate: vi.fn(),
+  listExperienceCandidates: vi.fn(),
+  getExperienceCandidate: vi.fn(),
+  acceptExperienceCandidate: vi.fn(),
+  rejectExperienceCandidate: vi.fn(),
+  recordExperienceUsage: vi.fn(),
+  getExperienceUsage: vi.fn(),
+  revokeExperienceUsage: vi.fn(),
 };
 
 const readMemoryFile = vi.fn();
 const writeMemoryFile = vi.fn();
 const appendToTodayMemory = vi.fn();
+const publishSkillCandidate = vi.fn();
+const getGlobalSkillRegistry = vi.fn(() => null);
 
 vi.mock("@belldandy/memory", () => ({
   MemoryManager: vi.fn(),
@@ -25,6 +37,14 @@ vi.mock("@belldandy/memory", () => ({
   appendToTodayMemory,
   readMemoryFile,
   writeMemoryFile,
+}));
+
+vi.mock("../skill-publisher.js", () => ({
+  publishSkillCandidate,
+}));
+
+vi.mock("../skill-registry.js", () => ({
+  getGlobalSkillRegistry,
 }));
 
 const mod = await import("./memory.js");
@@ -279,6 +299,32 @@ describe("memory tools", () => {
           snippet: "记忆片段一",
         },
       ],
+      usedMethods: [
+        {
+          usageId: "usage-method-1",
+          taskId: "task_1",
+          assetType: "method",
+          assetKey: "web-browser-automation.md",
+          usedVia: "tool",
+          createdAt: "2026-03-16T00:00:00.000Z",
+          usageCount: 2,
+          lastUsedAt: "2026-03-16T00:00:00.000Z",
+          lastUsedTaskId: "task_1",
+        },
+      ],
+      usedSkills: [
+        {
+          usageId: "usage-skill-1",
+          taskId: "task_1",
+          assetType: "skill",
+          assetKey: "网页自动化技能草稿",
+          usedVia: "search",
+          createdAt: "2026-03-16T00:00:00.000Z",
+          usageCount: 1,
+          lastUsedAt: "2026-03-16T00:00:00.000Z",
+          lastUsedTaskId: "task_1",
+        },
+      ],
     });
 
     const result = await mod.taskGetTool.execute({ task_id: "task_1" }, baseContext);
@@ -288,6 +334,253 @@ describe("memory tools", () => {
     expect(result.output).toContain("Memory Links:");
     expect(result.output).toContain("memory/2026-03-15.md");
     expect(result.output).toContain("记忆片段一");
+    expect(result.output).toContain("Used Methods:");
+    expect(result.output).toContain("web-browser-automation.md");
+    expect(result.output).toContain("Used Skills:");
+    expect(result.output).toContain("网页自动化技能草稿");
+  });
+
+  it("task_promote_method should render created candidate draft", async () => {
+    manager.promoteTaskToMethodCandidate.mockReturnValue({
+      reusedExisting: false,
+      candidate: {
+        id: "exp-1",
+        taskId: "task_1",
+        type: "method",
+        status: "draft",
+        title: "修复任务 方法候选",
+        slug: "method-fix-task",
+        content: "# 修复任务 方法候选\n\n## 来源任务\n- Task ID: task_1",
+        summary: "从修复任务提炼的方法候选",
+        qualityScore: 85,
+        createdAt: "2026-03-15T00:00:00.000Z",
+      },
+    });
+
+    const result = await mod.taskPromoteMethodTool.execute({ task_id: "task_1" }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.promoteTaskToMethodCandidate).toHaveBeenCalledWith("task_1");
+    expect(result.output).toContain("Created method candidate draft.");
+    expect(result.output).toContain("Candidate ID: exp-1");
+    expect(result.output).toContain("Quality Score: 85");
+  });
+
+  it("experience_candidate_list should pass filter and render items", async () => {
+    manager.listExperienceCandidates.mockReturnValue([
+      {
+        id: "exp-1",
+        taskId: "task_1",
+        type: "skill",
+        status: "draft",
+        title: "技能草稿",
+        slug: "skill-task-1",
+        content: "技能草稿正文",
+        summary: "技能摘要",
+        qualityScore: 72,
+        createdAt: "2026-03-15T00:00:00.000Z",
+      },
+    ]);
+
+    const result = await mod.experienceCandidateListTool.execute({
+      limit: 5,
+      type: "skill",
+      status: "draft",
+    }, agentContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.listExperienceCandidates).toHaveBeenCalledWith(5, {
+      type: "skill",
+      status: "draft",
+      agentId: "agent-belldandy",
+    });
+    expect(result.output).toContain("技能草稿");
+    expect(result.output).toContain("Quality: 72");
+  });
+
+  it("experience_candidate_accept should render accepted status", async () => {
+    manager.getExperienceCandidate.mockReturnValue({
+      id: "exp-1",
+      taskId: "task_1",
+      type: "method",
+      status: "draft",
+      content: "# method",
+    });
+    manager.acceptExperienceCandidate.mockReturnValue({
+      id: "exp-1",
+      taskId: "task_1",
+      type: "method",
+      status: "accepted",
+    });
+
+    const result = await mod.experienceCandidateAcceptTool.execute({
+      candidate_id: "exp-1",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.acceptExperienceCandidate).toHaveBeenCalledWith("exp-1", {});
+    expect(result.output).toContain("Candidate accepted.");
+    expect(result.output).toContain("Status: accepted");
+  });
+
+  it("experience_candidate_accept should publish skill candidates before accepting", async () => {
+    manager.getExperienceCandidate.mockReturnValue({
+      id: "exp-skill-1",
+      taskId: "task_2",
+      type: "skill",
+      status: "draft",
+      content: "---\nname: test\n---\nbody",
+    });
+    publishSkillCandidate.mockResolvedValue("E:/project/star-sanctuary/.star_sanctuary/skills/skill-task-2/SKILL.md");
+    manager.acceptExperienceCandidate.mockReturnValue({
+      id: "exp-skill-1",
+      taskId: "task_2",
+      type: "skill",
+      status: "accepted",
+      publishedPath: "E:/project/star-sanctuary/.star_sanctuary/skills/skill-task-2/SKILL.md",
+    });
+
+    const result = await mod.experienceCandidateAcceptTool.execute({
+      candidate_id: "exp-skill-1",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(publishSkillCandidate).toHaveBeenCalled();
+    expect(manager.acceptExperienceCandidate).toHaveBeenCalledWith("exp-skill-1", {
+      publishedPath: "E:/project/star-sanctuary/.star_sanctuary/skills/skill-task-2/SKILL.md",
+    });
+    expect(result.output).toContain("Published Path:");
+  });
+
+  it("experience_candidate_accept should refuse non-draft candidates before publishing", async () => {
+    manager.getExperienceCandidate.mockReturnValue({
+      id: "exp-skill-2",
+      taskId: "task_3",
+      type: "skill",
+      status: "accepted",
+      content: "---\nname: test\n---\nbody",
+    });
+
+    const result = await mod.experienceCandidateAcceptTool.execute({
+      candidate_id: "exp-skill-2",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Current status: accepted");
+    expect(publishSkillCandidate).not.toHaveBeenCalled();
+    expect(manager.acceptExperienceCandidate).not.toHaveBeenCalled();
+  });
+
+  it("experience_usage_record should record adopted skill usage on current task", async () => {
+    manager.getTaskByConversation.mockReturnValue({
+      id: "task_1",
+      conversationId: "conv-1",
+      status: "success",
+      source: "chat",
+      startedAt: "2026-03-16T00:00:00.000Z",
+    });
+    manager.recordExperienceUsage.mockReturnValue({
+      reusedExisting: false,
+      usage: {
+        id: "usage-1",
+        taskId: "task_1",
+        assetType: "skill",
+        assetKey: "网页自动化技能草稿",
+        usedVia: "search",
+        sourceCandidateId: "exp-skill-1",
+      },
+    });
+
+    const result = await mod.experienceUsageRecordTool.execute({
+      asset_type: "skill",
+      asset_key: "网页自动化技能草稿",
+      used_via: "search",
+      source_candidate_id: "exp-skill-1",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.getTaskByConversation).toHaveBeenCalledWith("conv-1");
+    expect(manager.recordExperienceUsage).toHaveBeenCalledWith({
+      taskId: "task_1",
+      assetType: "skill",
+      assetKey: "网页自动化技能草稿",
+      sourceCandidateId: "exp-skill-1",
+      usedVia: "search",
+    });
+    expect(result.output).toContain("Recorded experience usage.");
+    expect(result.output).toContain("Asset: 网页自动化技能草稿");
+  });
+
+  it("experience_usage_record should report missing task gracefully", async () => {
+    manager.getTaskByConversation.mockReturnValue(null);
+
+    const result = await mod.experienceUsageRecordTool.execute({
+      asset_type: "skill",
+      asset_key: "网页自动化技能草稿",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.recordExperienceUsage).not.toHaveBeenCalled();
+    expect(result.output).toContain("No task found");
+  });
+
+  it("experience_usage_revoke should revoke current task usage by asset", async () => {
+    manager.getTaskByConversation.mockReturnValue({
+      id: "task_1",
+      conversationId: "conv-1",
+      status: "success",
+      source: "chat",
+      startedAt: "2026-03-16T00:00:00.000Z",
+    });
+    manager.revokeExperienceUsage.mockReturnValue({
+      id: "usage-1",
+      taskId: "task_1",
+      assetType: "skill",
+      assetKey: "网页自动化技能草稿",
+      usedVia: "tool",
+      sourceCandidateId: "exp-skill-1",
+      createdAt: "2026-03-16T00:00:00.000Z",
+    });
+
+    const result = await mod.experienceUsageRevokeTool.execute({
+      asset_type: "skill",
+      asset_key: "网页自动化技能草稿",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.revokeExperienceUsage).toHaveBeenCalledWith({
+      taskId: "task_1",
+      assetType: "skill",
+      assetKey: "网页自动化技能草稿",
+    });
+    expect(result.output).toContain("Revoked experience usage.");
+    expect(result.output).toContain("Asset: 网页自动化技能草稿");
+  });
+
+  it("experience_usage_revoke should only allow usage_id from current task", async () => {
+    manager.getTaskByConversation.mockReturnValue({
+      id: "task_1",
+      conversationId: "conv-1",
+      status: "success",
+      source: "chat",
+      startedAt: "2026-03-16T00:00:00.000Z",
+    });
+    manager.getExperienceUsage.mockReturnValue({
+      id: "usage-9",
+      taskId: "task_2",
+      assetType: "method",
+      assetKey: "viewer-method.md",
+      usedVia: "tool",
+      createdAt: "2026-03-16T00:00:00.000Z",
+    });
+
+    const result = await mod.experienceUsageRevokeTool.execute({
+      usage_id: "usage-9",
+    }, baseContext);
+
+    expect(result.success).toBe(false);
+    expect(manager.revokeExperienceUsage).not.toHaveBeenCalled();
+    expect(result.error).toContain("does not belong to the current task");
   });
 
   it("memory_index should report index status", async () => {

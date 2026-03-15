@@ -3,11 +3,34 @@
  *
  * skills_list: 列出所有 skills（含 eligibility 状态）
  * skills_search: 按关键词搜索，返回匹配 skill 的完整 instructions
+ * skill_get: 按精确名称读取单个 skill，并在当前 task 存在时自动记录 usage
  */
 
 import crypto from "node:crypto";
-import type { Tool, ToolCallResult, JsonObject } from "../types.js";
+import { getGlobalMemoryManager } from "@belldandy/memory";
+import type { Tool, ToolCallResult, JsonObject, ToolContext } from "../types.js";
 import type { SkillRegistry } from "../skill-registry.js";
+
+function findSkillByName(registry: SkillRegistry, name: string) {
+  const direct = registry.getSkill(name);
+  if (direct) return direct;
+
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return registry.listSkills().find((skill) => skill.name.trim().toLowerCase() === normalized);
+}
+
+function tryRecordSkillUsage(skillName: string, context: ToolContext) {
+  try {
+    const manager = getGlobalMemoryManager();
+    const task = manager?.getTaskByConversation(context.conversationId);
+    if (manager && task) {
+      manager.recordSkillUsage(task.id, skillName, { usedVia: "tool" });
+    }
+  } catch {
+    // usage 记录失败不影响 skill 正常读取
+  }
+}
 
 /**
  * 创建 skills_list 工具（需要 SkillRegistry 实例）
@@ -152,6 +175,71 @@ export function createSkillsSearchTool(registry: SkillRegistry): Tool {
       if (results.length > MAX_RESULTS) {
         lines.push(`（还有 ${results.length - MAX_RESULTS} 个匹配结果未显示，请缩小搜索范围）`);
       }
+
+      lines.push("");
+      lines.push("如果你决定采用其中某个 skill，优先调用 `skill_get` 精确打开该技能；该入口会在当前 task 存在时自动记录 usage。");
+      lines.push("若是通过其他非标准入口实际采用了 skill，再调用 `experience_usage_record` 补记 usage；仅搜索不应记录为已使用。");
+
+      return {
+        id, name, success: true,
+        output: lines.join("\n"),
+        durationMs: Date.now() - start,
+      };
+    },
+  };
+}
+
+export function createSkillGetTool(registry: SkillRegistry): Tool {
+  return {
+    definition: {
+      name: "skill_get",
+      description: "按精确名称读取单个 skill 的完整操作指南。适合在已经决定采用某个 skill 后调用；当前对话存在 task 时会自动记录 usage。",
+      parameters: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "技能名称（建议直接使用 skills_search / skills_list 返回的原始名称）",
+          },
+        },
+        required: ["name"],
+      },
+    },
+    async execute(args: JsonObject, context: ToolContext): Promise<ToolCallResult> {
+      const start = Date.now();
+      const id = crypto.randomUUID();
+      const name = "skill_get";
+
+      const requestedName = String(args.name ?? "").trim();
+      if (!requestedName) {
+        return {
+          id, name, success: false,
+          output: "", error: "缺少 name 参数",
+          durationMs: Date.now() - start,
+        };
+      }
+
+      const skill = findSkillByName(registry, requestedName);
+      if (!skill) {
+        return {
+          id, name, success: true,
+          output: `未找到技能 "${requestedName}"。请先用 skills_search 或 skills_list 确认名称。`,
+          durationMs: Date.now() - start,
+        };
+      }
+
+      tryRecordSkillUsage(skill.name, context);
+
+      const tags = skill.tags?.length ? ` [${skill.tags.join(", ")}]` : "";
+      const lines = [
+        `## ${skill.name}${tags}`,
+        `> ${skill.description}`,
+        "",
+        `- source: ${skill.source.type}`,
+        `- priority: ${skill.priority}`,
+        "",
+        skill.instructions,
+      ];
 
       return {
         id, name, success: true,

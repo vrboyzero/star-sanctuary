@@ -1566,6 +1566,11 @@ body::before {
   font-size: 18px;
 }
 
+.memory-stat-value-compact {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .memory-stat-card-wide {
   grid-column: 1 / -1;
 }
@@ -1838,6 +1843,10 @@ body::before {
   gap: 10px;
 }
 
+.memory-detail-grid-usage {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 .memory-detail-card {
   padding: 11px 13px;
   border-radius: 14px;
@@ -1893,6 +1902,173 @@ body::before {
   color: var(--primary);
   font-size: 12px;
   word-break: break-all;
+}
+
+.memory-usage-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.memory-usage-overview-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.memory-usage-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.memory-usage-overview-title {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.memory-usage-overview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-usage-overview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 28%) 52px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.memory-usage-overview-row-main {
+  min-width: 0;
+}
+
+.memory-usage-overview-key {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.memory-usage-overview-meta,
+.memory-usage-item-meta {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.memory-usage-overview-bar-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.memory-usage-overview-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.memory-usage-overview-bar-method {
+  background: linear-gradient(90deg, rgba(0, 243, 255, 0.52), rgba(0, 243, 255, 0.96));
+}
+
+.memory-usage-overview-bar-skill {
+  background: linear-gradient(90deg, rgba(255, 186, 73, 0.52), rgba(255, 186, 73, 0.96));
+}
+
+.memory-usage-overview-metrics {
+  color: rgba(255, 255, 255, 0.9);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.memory-usage-overview-empty {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.memory-usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-usage-item {
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.memory-usage-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.memory-usage-item-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.memory-usage-item-key {
+  flex: 1;
+  min-width: 0;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.memory-usage-action-btn {
+  border: 1px solid rgba(248, 113, 113, 0.24);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fecaca;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.memory-usage-action-btn:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+.memory-usage-action-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.memory-usage-action-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 
 .memory-path-link {
@@ -1999,6 +2175,19 @@ body::before {
   .memory-category-row {
     grid-template-columns: 1fr;
     gap: 8px;
+  }
+
+  .memory-usage-overview-row {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-usage-item-head {
+    flex-direction: column;
+  }
+
+  .memory-usage-item-actions {
+    width: 100%;
+    align-items: flex-start;
   }
 
   .memory-category-metrics {

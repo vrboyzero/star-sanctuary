@@ -95,6 +95,14 @@ const memoryViewerState = {
   stats: null,
   items: [],
   selectedId: null,
+  selectedTask: null,
+  pendingUsageRevokeId: null,
+  usageOverview: {
+    loading: false,
+    methods: [],
+    skills: [],
+  },
+  usageOverviewSeq: 0,
 };
 
 // 附件状态
@@ -2546,6 +2554,7 @@ function switchMemoryViewerTab(tab) {
   memoryViewerState.tab = tab;
   memoryViewerState.items = [];
   memoryViewerState.selectedId = null;
+  memoryViewerState.selectedTask = null;
   syncMemoryViewerUi();
   loadMemoryViewer(true);
 }
@@ -2569,10 +2578,15 @@ async function loadMemoryViewer(forceSelectFirst = false) {
     return;
   }
 
-  await loadMemoryViewerStats();
   if (memoryViewerState.tab === "tasks") {
+    await Promise.all([
+      loadMemoryViewerStats(),
+      loadTaskUsageOverview(),
+    ]);
     await loadTaskViewer(forceSelectFirst);
   } else {
+    memoryViewerState.selectedTask = null;
+    await loadMemoryViewerStats();
     await loadMemoryChunkViewer(forceSelectFirst);
   }
 }
@@ -2588,9 +2602,45 @@ async function loadMemoryViewerStats() {
   renderMemoryViewerStats(memoryViewerState.stats);
 }
 
+async function loadTaskUsageOverview() {
+  const seq = memoryViewerState.usageOverviewSeq + 1;
+  memoryViewerState.usageOverviewSeq = seq;
+  memoryViewerState.usageOverview = {
+    ...memoryViewerState.usageOverview,
+    loading: true,
+  };
+  renderMemoryViewerStats(memoryViewerState.stats);
+
+  const [methodsRes, skillsRes] = await Promise.all([
+    sendReq({
+      type: "req",
+      id: makeId(),
+      method: "experience.usage.stats",
+      params: { limit: 6, filter: { assetType: "method" } },
+    }),
+    sendReq({
+      type: "req",
+      id: makeId(),
+      method: "experience.usage.stats",
+      params: { limit: 6, filter: { assetType: "skill" } },
+    }),
+  ]);
+
+  if (memoryViewerState.tab !== "tasks" || memoryViewerState.usageOverviewSeq !== seq) return;
+
+  memoryViewerState.usageOverview = {
+    loading: false,
+    methods: methodsRes?.ok && Array.isArray(methodsRes.payload?.items) ? methodsRes.payload.items : [],
+    skills: skillsRes?.ok && Array.isArray(skillsRes.payload?.items) ? skillsRes.payload.items : [],
+  };
+  renderMemoryViewerStats(memoryViewerState.stats);
+}
+
 async function loadTaskViewer(forceSelectFirst = false) {
   renderMemoryViewerListEmpty("Tasks 加载中…");
   renderMemoryViewerDetailEmpty("正在加载 task 详情…");
+  memoryViewerState.selectedTask = null;
+  renderMemoryViewerStats(memoryViewerState.stats);
 
   const params = { limit: 20 };
   const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
@@ -2604,8 +2654,10 @@ async function loadTaskViewer(forceSelectFirst = false) {
   const id = makeId();
   const res = await sendReq({ type: "req", id, method: "memory.task.list", params });
   if (!res || !res.ok) {
+    memoryViewerState.selectedTask = null;
     renderMemoryViewerListEmpty("Task 列表加载失败。");
     renderMemoryViewerDetailEmpty(res?.error?.message || "无法读取 task 数据。");
+    renderMemoryViewerStats(memoryViewerState.stats);
     return;
   }
 
@@ -2615,8 +2667,10 @@ async function loadTaskViewer(forceSelectFirst = false) {
 
   if (!items.length) {
     memoryViewerState.selectedId = null;
+    memoryViewerState.selectedTask = null;
     renderTaskList(items);
     renderMemoryViewerDetailEmpty("没有匹配的 task。");
+    renderMemoryViewerStats(memoryViewerState.stats);
     return;
   }
 
@@ -2631,7 +2685,10 @@ async function loadTaskViewer(forceSelectFirst = false) {
 
 async function loadTaskDetail(taskId) {
   if (!taskId) {
+    memoryViewerState.selectedTask = null;
+    memoryViewerState.pendingUsageRevokeId = null;
     renderMemoryViewerDetailEmpty("请选择一个 task。");
+    renderMemoryViewerStats(memoryViewerState.stats);
     return;
   }
 
@@ -2639,12 +2696,18 @@ async function loadTaskDetail(taskId) {
   const id = makeId();
   const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId } });
   if (!res || !res.ok) {
+    memoryViewerState.selectedTask = null;
+    memoryViewerState.pendingUsageRevokeId = null;
     renderMemoryViewerDetailEmpty(res?.error?.message || "Task 详情加载失败。");
+    renderMemoryViewerStats(memoryViewerState.stats);
     return;
   }
 
+  memoryViewerState.selectedTask = res.payload?.task ?? null;
+  memoryViewerState.pendingUsageRevokeId = null;
   renderTaskList(memoryViewerState.items);
-  renderTaskDetail(res.payload?.task);
+  renderTaskDetail(memoryViewerState.selectedTask);
+  renderMemoryViewerStats(memoryViewerState.stats);
 }
 
 async function loadMemoryChunkViewer(forceSelectFirst = false) {
@@ -2745,11 +2808,17 @@ function renderMemoryViewerStats(stats) {
     return;
   }
 
+  const selectedTask = memoryViewerState.selectedTask;
+  const usedMethods = Array.isArray(selectedTask?.usedMethods) ? selectedTask.usedMethods : [];
+  const usedSkills = Array.isArray(selectedTask?.usedSkills) ? selectedTask.usedSkills : [];
+  const lastUsedAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
+
   memoryViewerStatsEl.innerHTML = `
-    <div class="memory-stat-card"><span class="memory-stat-label">记忆文件</span><strong class="memory-stat-value">${formatCount(stats.files)}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">记忆块</span><strong class="memory-stat-value">${formatCount(stats.chunks)}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">向量索引</span><strong class="memory-stat-value">${formatCount(stats.vectorIndexed)}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">摘要完成</span><strong class="memory-stat-value">${formatCount(stats.summarized)}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">当前 Task 结果</span><strong class="memory-stat-value">${formatCount(Array.isArray(memoryViewerState.items) ? memoryViewerState.items.length : 0)}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Method</span><strong class="memory-stat-value">${formatCount(usedMethods.length)}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Skill</span><strong class="memory-stat-value">${formatCount(usedSkills.length)}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">最近采用时间</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(formatDateTime(lastUsedAt))}</strong></div>
+    ${renderTaskUsageOverviewCard()}
   `;
 }
 
@@ -2838,6 +2907,9 @@ function renderTaskDetail(task) {
   const toolCalls = Array.isArray(task.toolCalls) ? task.toolCalls : [];
   const memoryLinks = Array.isArray(task.memoryLinks) ? task.memoryLinks : [];
   const artifactPaths = Array.isArray(task.artifactPaths) ? task.artifactPaths : [];
+  const usedMethods = Array.isArray(task.usedMethods) ? task.usedMethods : [];
+  const usedSkills = Array.isArray(task.usedSkills) ? task.usedSkills : [];
+  const lastUsageAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
 
   memoryViewerDetailEl.innerHTML = `
     <div class="memory-detail-shell">
@@ -2863,10 +2935,26 @@ function renderTaskDetail(task) {
         <div class="memory-detail-card"><span class="memory-detail-label">Token</span><div class="memory-detail-text">${escapeHtml(formatCount(task.tokenTotal))}</div></div>
       </div>
 
+      <div class="memory-detail-grid memory-detail-grid-usage">
+        <div class="memory-detail-card"><span class="memory-detail-label">Method 使用数</span><div class="memory-detail-text">${escapeHtml(formatCount(usedMethods.length))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Skill 使用数</span><div class="memory-detail-text">${escapeHtml(formatCount(usedSkills.length))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">最近采用时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(lastUsageAt))}</div></div>
+      </div>
+
       ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">Objective</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
       ${task.summary ? `<div class="memory-detail-card"><span class="memory-detail-label">Summary</span><div class="memory-detail-text">${escapeHtml(task.summary)}</div></div>` : ""}
       ${task.outcome ? `<div class="memory-detail-card"><span class="memory-detail-label">Outcome</span><div class="memory-detail-text">${escapeHtml(task.outcome)}</div></div>` : ""}
       ${task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">Reflection</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Method Usage (${usedMethods.length})</span>
+        ${renderTaskUsageItems(usedMethods, "method")}
+      </div>
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Skill Usage (${usedSkills.length})</span>
+        ${renderTaskUsageItems(usedSkills, "skill")}
+      </div>
 
       <div class="memory-detail-card">
         <span class="memory-detail-label">Tool Calls (${toolCalls.length})</span>
@@ -2919,6 +3007,7 @@ function renderTaskDetail(task) {
     </div>
   `;
   bindMemoryPathLinks();
+  bindTaskUsageRevokeButtons(task);
 }
 
 function renderMemoryDetail(item) {
@@ -2999,6 +3088,65 @@ function bindMemoryPathLinks() {
   });
 }
 
+function bindTaskUsageRevokeButtons(task) {
+  if (!memoryViewerDetailEl || !task) return;
+  memoryViewerDetailEl.querySelectorAll("[data-revoke-usage-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const usageId = node.getAttribute("data-revoke-usage-id");
+      const taskId = node.getAttribute("data-revoke-task-id") || task.id;
+      const assetKey = node.getAttribute("data-revoke-asset-key") || "";
+      if (!usageId || !taskId) return;
+      if (memoryViewerState.pendingUsageRevokeId) return;
+
+      const confirmed = window.confirm(`确认撤销这条 usage 记录？\n\n${assetKey || usageId}`);
+      if (!confirmed) return;
+
+      await revokeTaskUsage(usageId, taskId, assetKey);
+    });
+  });
+}
+
+async function revokeTaskUsage(usageId, taskId, assetKey = "") {
+  if (!ws || !isReady) {
+    showNotice("无法撤销 usage", "未连接到服务器。", "error");
+    return;
+  }
+
+  memoryViewerState.pendingUsageRevokeId = usageId;
+  if (memoryViewerState.selectedTask?.id === taskId) {
+    renderTaskDetail(memoryViewerState.selectedTask);
+  }
+
+  try {
+    const id = makeId();
+    const res = await sendReq({
+      type: "req",
+      id,
+      method: "experience.usage.revoke",
+      params: { usageId },
+    });
+
+    if (!res || !res.ok || !res.payload?.revoked) {
+      showNotice("撤销失败", res?.error?.message || "Usage 未撤销。", "error");
+      return;
+    }
+
+    showNotice("已撤销 usage", assetKey ? `${assetKey} 已从当前 task 的使用记录中移除。` : "该条经验使用记录已撤销。", "success", 2200);
+    await Promise.all([
+      loadTaskUsageOverview(),
+      loadTaskDetail(taskId),
+    ]);
+  } catch (error) {
+    showNotice("撤销失败", error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    memoryViewerState.pendingUsageRevokeId = null;
+    if (memoryViewerState.selectedTask?.id === taskId) {
+      renderTaskDetail(memoryViewerState.selectedTask);
+    }
+    renderMemoryViewerStats(memoryViewerState.stats);
+  }
+}
+
 function summarizeSourcePath(sourcePath) {
   if (!sourcePath) return "(unknown source)";
   const normalized = String(sourcePath).replace(/\\/g, "/");
@@ -3070,6 +3218,144 @@ function getActiveMemoryCategoryLabel() {
   if (!value) return "全部分类";
   if (value === "uncategorized") return "未分类";
   return formatMemoryCategory(value);
+}
+
+function renderTaskUsageOverviewCard() {
+  const overview = memoryViewerState.usageOverview || {};
+  const methods = Array.isArray(overview.methods) ? overview.methods : [];
+  const skills = Array.isArray(overview.skills) ? overview.skills : [];
+  const loading = Boolean(overview.loading);
+
+  if (!loading && !methods.length && !skills.length) {
+    return `
+      <div class="memory-stat-card memory-stat-card-wide">
+        <div class="memory-stat-card-head">
+          <span class="memory-stat-label">经验消费总览</span>
+          <span class="memory-stat-caption">暂无 usage 数据</span>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="memory-stat-card memory-stat-card-wide">
+      <div class="memory-stat-card-head">
+        <span class="memory-stat-label">经验消费总览</span>
+        <span class="memory-stat-caption">${loading ? "统计更新中…" : "按全局累计使用次数展示"}</span>
+      </div>
+      <div class="memory-usage-overview-grid">
+        ${renderTaskUsageOverviewLane("热门 Methods", methods, "method")}
+        ${renderTaskUsageOverviewLane("热门 Skills", skills, "skill")}
+      </div>
+    </div>
+  `;
+}
+
+function renderTaskUsageOverviewLane(title, items, tone) {
+  const safeItems = Array.isArray(items) ? items : [];
+  if (!safeItems.length) {
+    return `
+      <div class="memory-usage-overview-lane">
+        <div class="memory-usage-overview-head">
+          <span class="memory-usage-overview-title">${escapeHtml(title)}</span>
+        </div>
+        <div class="memory-usage-overview-empty">暂无记录</div>
+      </div>
+    `;
+  }
+
+  const maxCount = safeItems.reduce((max, item) => Math.max(max, Number(item?.usageCount) || 0), 0);
+  return `
+    <div class="memory-usage-overview-lane">
+      <div class="memory-usage-overview-head">
+        <span class="memory-usage-overview-title">${escapeHtml(title)}</span>
+        <span class="memory-stat-caption">Top ${formatCount(safeItems.length)}</span>
+      </div>
+      <div class="memory-usage-overview-list">
+        ${safeItems.map((item) => {
+          const usageCount = Number(item?.usageCount) || 0;
+          const percent = maxCount > 0 ? (usageCount / maxCount) * 100 : 0;
+          return `
+            <div class="memory-usage-overview-row">
+              <div class="memory-usage-overview-row-main">
+                <div class="memory-usage-overview-key">${escapeHtml(item?.assetKey || "-")}</div>
+                <div class="memory-usage-overview-meta">
+                  ${item?.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
+                  <span>最近 ${escapeHtml(formatDateTime(item?.lastUsedAt))}</span>
+                </div>
+              </div>
+              <div class="memory-usage-overview-bar-track">
+                <div class="memory-usage-overview-bar-fill memory-usage-overview-bar-${tone}" style="width:${Math.max(percent, usageCount > 0 ? 10 : 0).toFixed(2)}%"></div>
+              </div>
+              <div class="memory-usage-overview-metrics">${formatCount(usageCount)}</div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderTaskUsageItems(items, assetType) {
+  const safeItems = Array.isArray(items) ? items : [];
+  if (!safeItems.length) {
+    return `<div class="memory-detail-text">暂无 ${escapeHtml(assetType)} usage 记录。</div>`;
+  }
+
+  return `
+    <div class="memory-usage-list">
+      ${safeItems.map((item) => `
+        <div class="memory-usage-item">
+          <div class="memory-usage-item-head">
+            <div class="memory-usage-item-key">${escapeHtml(item.assetKey || "-")}</div>
+            <div class="memory-usage-item-actions">
+              <div class="memory-detail-badges">
+                <span class="memory-badge">${escapeHtml(formatUsageVia(item.usedVia))}</span>
+                <span class="memory-badge">累计 ${formatCount(item.usageCount)}</span>
+              </div>
+              <button
+                class="memory-usage-action-btn"
+                data-revoke-usage-id="${escapeHtml(item.usageId || "")}"
+                data-revoke-task-id="${escapeHtml(item.taskId || "")}"
+                data-revoke-asset-key="${escapeHtml(item.assetKey || "")}"
+                ${memoryViewerState.pendingUsageRevokeId === item.usageId ? "disabled" : ""}
+              >${memoryViewerState.pendingUsageRevokeId === item.usageId ? "撤销中…" : "撤销"}</button>
+            </div>
+          </div>
+          <div class="memory-usage-item-meta">
+            <span>本 task 采用 ${escapeHtml(formatDateTime(item.createdAt))}</span>
+            <span>全局最近 ${escapeHtml(formatDateTime(item.lastUsedAt || item.createdAt))}</span>
+            ${item.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
+            ${item.lastUsedTaskId ? `<span>最近 task ${escapeHtml(item.lastUsedTaskId)}</span>` : ""}
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function getLatestExperienceUsageTimestamp(...groups) {
+  const timestamps = groups
+    .flat()
+    .map((item) => item?.createdAt || item?.lastUsedAt)
+    .filter(Boolean)
+    .map((value) => new Date(value).getTime())
+    .filter((value) => Number.isFinite(value));
+  if (!timestamps.length) return undefined;
+  return new Date(Math.max(...timestamps)).toISOString();
+}
+
+function formatUsageVia(value) {
+  switch (value) {
+    case "tool":
+      return "tool";
+    case "search":
+      return "search";
+    case "auto_suggest":
+      return "auto";
+    default:
+      return "manual";
+  }
 }
 
 function renderMemoryCategoryDistribution(stats) {

@@ -7,6 +7,7 @@ import WebSocket from "ws";
 
 import { AgentRegistry, type BelldandyAgent, MockAgent } from "@belldandy/agent";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
+import { SkillRegistry } from "@belldandy/skills";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
@@ -365,6 +366,22 @@ test("memory viewer rpc returns task and memory data", async () => {
     messages: [{ type: "usage", inputTokens: 12, outputTokens: 8 }],
   });
   expect(completedTaskId).toBeTruthy();
+  (memoryManager as any).store.createExperienceUsage({
+    id: "usage-viewer-method",
+    taskId: completedTaskId!,
+    assetType: "method",
+    assetKey: "viewer-method.md",
+    usedVia: "tool",
+    createdAt: "2026-03-16T00:00:01.000Z",
+  });
+  (memoryManager as any).store.createExperienceUsage({
+    id: "usage-viewer-skill",
+    taskId: completedTaskId!,
+    assetType: "skill",
+    assetKey: "Viewer Skill",
+    usedVia: "search",
+    createdAt: "2026-03-16T00:00:02.000Z",
+  });
 
   const server = await startGatewayServer({
     port: 0,
@@ -388,6 +405,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     ws.send(JSON.stringify({ type: "req", id: "memory-recent-uncategorized", method: "memory.recent", params: { limit: 5, filter: { uncategorized: true } } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-search", method: "memory.search", params: { query: "viewer", limit: 5 } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-recent-category", method: "memory.recent", params: { limit: 5, filter: { category: "decision" } } }));
+    ws.send(JSON.stringify({ type: "req", id: "usage-list", method: "experience.usage.list", params: { limit: 10, filter: { taskId: completedTaskId } } }));
+    ws.send(JSON.stringify({ type: "req", id: "usage-stats", method: "experience.usage.stats", params: { limit: 10, filter: { assetType: "method" } } }));
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-stats"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list"));
@@ -395,6 +414,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-uncategorized"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-search"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-category"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-stats"));
 
     const taskListRes = frames.find((f) => f.type === "res" && f.id === "task-list");
     const memoryRecentRes = frames.find((f) => f.type === "res" && f.id === "memory-recent");
@@ -402,6 +423,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     const memorySearchRes = frames.find((f) => f.type === "res" && f.id === "memory-search");
     const memoryRecentCategoryRes = frames.find((f) => f.type === "res" && f.id === "memory-recent-category");
     const statsRes = frames.find((f) => f.type === "res" && f.id === "memory-stats");
+    const usageListRes = frames.find((f) => f.type === "res" && f.id === "usage-list");
+    const usageStatsRes = frames.find((f) => f.type === "res" && f.id === "usage-stats");
 
     expect(statsRes.ok).toBe(true);
     expect(statsRes.payload.status.chunks).toBeGreaterThan(0);
@@ -419,6 +442,26 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(memoryRecentCategoryRes.ok).toBe(true);
     expect(memoryRecentCategoryRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentCategoryRes.payload.items[0].category).toBe("decision");
+    expect(usageListRes.ok).toBe(true);
+    expect(usageListRes.payload.items.length).toBe(2);
+    expect(usageStatsRes.ok).toBe(true);
+    expect(usageStatsRes.payload.items[0].assetKey).toBe("viewer-method.md");
+    expect(usageStatsRes.payload.items[0].usageCount).toBeGreaterThan(0);
+
+    const usageIdToRevoke = usageListRes.payload.items[0].id;
+    ws.send(JSON.stringify({ type: "req", id: "usage-revoke", method: "experience.usage.revoke", params: { usageId: usageIdToRevoke } }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-revoke"));
+    const usageRevokeRes = frames.find((f) => f.type === "res" && f.id === "usage-revoke");
+    ws.send(JSON.stringify({ type: "req", id: "usage-list-after-revoke", method: "experience.usage.list", params: { limit: 10, filter: { taskId: completedTaskId } } }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-list-after-revoke"));
+    const usageListAfterRevokeRes = frames.find((f) => f.type === "res" && f.id === "usage-list-after-revoke");
+    expect(usageRevokeRes.ok).toBe(true);
+    expect(usageRevokeRes.payload.revoked).toBe(true);
+    expect(usageRevokeRes.payload.usage.id).toBe(usageIdToRevoke);
+    expect(usageListAfterRevokeRes.ok).toBe(true);
+    expect(usageListAfterRevokeRes.payload.items.length).toBe(1);
+    const revokedAssetType = usageRevokeRes.payload.usage.assetType;
 
     const taskId = taskListRes.payload.items[0].id;
     const chunkId = memoryRecentCategoryRes.payload.items[0].id;
@@ -437,6 +480,16 @@ test("memory viewer rpc returns task and memory data", async () => {
 
     expect(taskGetRes.ok).toBe(true);
     expect(taskGetRes.payload.task.memoryLinks.length).toBeGreaterThan(0);
+    expect(taskGetRes.payload.task.usedMethods.length + taskGetRes.payload.task.usedSkills.length).toBe(1);
+    if (revokedAssetType === "method") {
+      expect(taskGetRes.payload.task.usedMethods.length).toBe(0);
+      expect(taskGetRes.payload.task.usedSkills.length).toBe(1);
+      expect(taskGetRes.payload.task.usedSkills[0].assetKey).toBe("Viewer Skill");
+    } else {
+      expect(taskGetRes.payload.task.usedMethods.length).toBe(1);
+      expect(taskGetRes.payload.task.usedMethods[0].assetKey).toBe("viewer-method.md");
+      expect(taskGetRes.payload.task.usedSkills.length).toBe(0);
+    }
     expect(memoryGetRes.ok).toBe(true);
     expect(memoryGetRes.payload.item.category).toBe("decision");
     expect(memoryGetRes.payload.item.content).toContain("phase4decision");
@@ -450,6 +503,126 @@ test("memory viewer rpc returns task and memory data", async () => {
     memoryManager.close();
     await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience candidate rpc lists and updates candidate status", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-workspace-"));
+  const skillRegistry = new SkillRegistry();
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-03-15T00:00:00.000Z";
+  (memoryManager as any).store.createTask({
+    id: "task-experience-1",
+    conversationId: "conv-experience-1",
+    sessionKey: "session-experience-1",
+    source: "chat",
+    status: "success",
+    title: "收敛第五阶段方案",
+    objective: "为第五阶段生成候选层闭环",
+    summary: "已经梳理出候选层数据结构与接口边界。",
+    reflection: "先做候选层，再做发布链路，能避免污染正式资产。",
+    toolCalls: [{ toolName: "memory_search", success: true, durationMs: 90 }],
+    artifactPaths: ["MemOS对比分析.md"],
+    startedAt: now,
+    finishedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const methodCandidate = memoryManager.promoteTaskToMethodCandidate("task-experience-1");
+  const skillCandidate = memoryManager.promoteTaskToSkillCandidate("task-experience-1");
+  expect(methodCandidate?.candidate.id).toBeTruthy();
+  expect(skillCandidate?.candidate.id).toBeTruthy();
+
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    additionalWorkspaceRoots: [workspaceRoot],
+    skillRegistry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-list",
+      method: "experience.candidate.list",
+      params: { limit: 10, filter: { status: "draft" } },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-list"));
+
+    const listRes = frames.find((f) => f.type === "res" && f.id === "candidate-list");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload.items.length).toBe(2);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-accept",
+      method: "experience.candidate.accept",
+      params: { candidateId: methodCandidate!.candidate.id },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-skill-accept",
+      method: "experience.candidate.accept",
+      params: { candidateId: skillCandidate!.candidate.id },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-accept"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-skill-accept"));
+
+    const acceptRes = frames.find((f) => f.type === "res" && f.id === "candidate-accept");
+    const skillAcceptRes = frames.find((f) => f.type === "res" && f.id === "candidate-skill-accept");
+    expect(acceptRes.ok).toBe(true);
+    expect(acceptRes.payload.candidate.status).toBe("accepted");
+    const acceptedCandidate = memoryManager.getExperienceCandidate(methodCandidate!.candidate.id);
+    expect(acceptedCandidate?.publishedPath).toContain(path.join(stateDir, "methods"));
+    const publishedContent = await fs.promises.readFile(acceptedCandidate!.publishedPath!, "utf-8");
+    expect(publishedContent).toContain("# 收敛第五阶段方案 方法候选");
+
+    expect(skillAcceptRes.ok).toBe(true);
+    expect(skillAcceptRes.payload.candidate.status).toBe("accepted");
+    const acceptedSkillCandidate = memoryManager.getExperienceCandidate(skillCandidate!.candidate.id);
+    expect(acceptedSkillCandidate?.publishedPath).toContain(path.join(stateDir, "skills"));
+    const publishedSkillContent = await fs.promises.readFile(acceptedSkillCandidate!.publishedPath!, "utf-8");
+    expect(publishedSkillContent).toContain("name:");
+    expect(skillRegistry.getSkill("收敛第五阶段方案 技能草稿")).toBeTruthy();
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-accept-again",
+      method: "experience.candidate.accept",
+      params: { candidateId: methodCandidate!.candidate.id },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-accept-again"));
+
+    const invalidAcceptRes = frames.find((f) => f.type === "res" && f.id === "candidate-accept-again");
+    expect(invalidAcceptRes.ok).toBe(false);
+    expect(invalidAcceptRes.error.code).toBe("invalid_state");
+    expect(invalidAcceptRes.error.message).toContain("Current status: accepted");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => { });
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
   }
 });
 

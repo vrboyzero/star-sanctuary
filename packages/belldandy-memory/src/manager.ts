@@ -6,15 +6,29 @@ import { OpenAIEmbeddingProvider } from "./embeddings/openai.js";
 import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import type { EmbeddingProvider } from "./embeddings/index.js";
 import type { MemorySearchResult, MemoryIndexStatus, MemorySearchOptions, MemorySearchFilter } from "./types.js";
+import { ExperiencePromoter } from "./experience-promoter.js";
 import { TaskProcessor } from "./task-processor.js";
 import { TaskSummarizer } from "./task-summarizer.js";
 import type { TaskConversationStore, TaskMemoryRelation, TaskRecord, TaskSearchFilter, TaskSearchOptions, TaskSource, TaskToolCallSummary } from "./task-types.js";
+import type {
+    ExperienceAssetType,
+    ExperienceCandidate,
+    ExperienceCandidateListFilter,
+    ExperiencePromoteResult,
+    ExperienceUsage,
+    ExperienceUsageListFilter,
+    ExperienceUsageRecordResult,
+    ExperienceUsageSummary,
+    ExperienceUsageStats,
+    ExperienceUsageVia,
+    TaskExperienceDetail,
+} from "./experience-types.js";
 import { appendToTodayMemory } from "./memory-files.js";
 import { resolveStateDir, resolveWorkspaceStateDir } from "@belldandy/protocol";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { mkdirSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 
 // ============================================================================
 // Global Registry - Allows sharing MemoryManager across packages
@@ -84,6 +98,10 @@ export interface MemoryManagerOptions {
     taskSummaryMinToolCalls?: number;
     taskSummaryMinTokenTotal?: number;
     conversationStore?: TaskConversationStore;
+    /** P5: Task 完成后自动生成经验候选（只落到 experience_candidates） */
+    experienceAutoPromotionEnabled?: boolean;
+    experienceAutoMethodEnabled?: boolean;
+    experienceAutoSkillEnabled?: boolean;
 }
 
 export class MemoryManager {
@@ -118,6 +136,11 @@ export class MemoryManager {
     // M-N4: 源路径聚合检索
     private deepRetrievalEnabled: boolean;
     private taskProcessor: TaskProcessor;
+    private experiencePromoter: ExperiencePromoter;
+    private experienceAutoPromotionEnabled: boolean;
+    private experienceAutoMethodEnabled: boolean;
+    private experienceAutoSkillEnabled: boolean;
+    private publishStateDir: string;
 
     constructor(options: MemoryManagerOptions) {
         this.workspaceRoot = options.workspaceRoot;
@@ -183,6 +206,7 @@ export class MemoryManager {
         this.evolutionApiKey = options.evolutionApiKey || options.openaiApiKey || "";
         this.evolutionMinMessages = options.evolutionMinMessages ?? 4;
         this.stateDir = options.stateDir || resolveStateDir(process.env);
+        this.publishStateDir = options.stateDir || workspaceStateDir;
         this.embeddingQueryPrefix = options.embeddingQueryPrefix ?? "";
         this.embeddingPassagePrefix = options.embeddingPassagePrefix ?? "";
         this.deepRetrievalEnabled = options.deepRetrievalEnabled ?? false;
@@ -200,6 +224,10 @@ export class MemoryManager {
             summaryMinToolCalls: options.taskSummaryMinToolCalls,
             summaryMinTokenTotal: options.taskSummaryMinTokenTotal,
         });
+        this.experiencePromoter = new ExperiencePromoter(this.store);
+        this.experienceAutoPromotionEnabled = options.experienceAutoPromotionEnabled ?? true;
+        this.experienceAutoMethodEnabled = options.experienceAutoMethodEnabled ?? true;
+        this.experienceAutoSkillEnabled = options.experienceAutoSkillEnabled ?? true;
     }
 
     /**
@@ -305,7 +333,28 @@ export class MemoryManager {
         error?: string;
         messages?: unknown[];
     }): string | null {
-        return this.taskProcessor.completeTask(input);
+        const taskId = this.taskProcessor.completeTask(input);
+        if (!taskId || !this.experienceAutoPromotionEnabled) {
+            return taskId;
+        }
+
+        const task = this.store.getTask(taskId);
+        if (!task || !this.shouldAutoPromoteTask(task)) {
+            return taskId;
+        }
+
+        try {
+            if (this.experienceAutoMethodEnabled) {
+                this.experiencePromoter.promoteTask(taskId, "method");
+            }
+            if (this.experienceAutoSkillEnabled) {
+                this.experiencePromoter.promoteTask(taskId, "skill");
+            }
+        } catch (err) {
+            console.warn("[MemoryManager] Failed to auto-promote experience candidates:", err);
+        }
+
+        return taskId;
     }
 
     getTask(taskId: string): TaskRecord | null {
@@ -345,12 +394,21 @@ export class MemoryManager {
         return this.store.getTaskByConversation(conversationId);
     }
 
-    getTaskDetail(taskId: string): (TaskRecord & { memoryLinks: Array<{ chunkId: string; relation: string; sourcePath?: string; memoryType?: string; snippet?: string }> }) | null {
+    getTaskDetail(taskId: string): TaskExperienceDetail | null {
         const task = this.store.getTask(taskId);
         if (!task) return null;
+        const usages = this.store.listExperienceUsages(100, { taskId });
+        const usedMethods = usages
+            .filter((item) => item.assetType === "method")
+            .map((item) => this.toExperienceUsageSummary(item));
+        const usedSkills = usages
+            .filter((item) => item.assetType === "skill")
+            .map((item) => this.toExperienceUsageSummary(item));
         return {
             ...task,
             memoryLinks: this.store.listTaskMemoryLinks(taskId),
+            usedMethods,
+            usedSkills,
         };
     }
 
@@ -361,6 +419,209 @@ export class MemoryManager {
     searchTasks(query: string, options: TaskSearchOptions = {}): TaskRecord[] {
         const limit = options.limit ?? 10;
         return this.store.searchTasksKeyword(query, limit, options.filter);
+    }
+
+    promoteTaskToMethodCandidate(taskId: string): ExperiencePromoteResult | null {
+        return this.experiencePromoter.promoteTask(taskId, "method");
+    }
+
+    promoteTaskToSkillCandidate(taskId: string): ExperiencePromoteResult | null {
+        return this.experiencePromoter.promoteTask(taskId, "skill");
+    }
+
+    getExperienceCandidate(candidateId: string): ExperienceCandidate | null {
+        return this.store.getExperienceCandidate(candidateId);
+    }
+
+    listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter): ExperienceCandidate[] {
+        return this.store.listExperienceCandidates(limit, filter);
+    }
+
+    recordExperienceUsage(input: {
+        taskId: string;
+        assetType: ExperienceAssetType;
+        assetKey: string;
+        sourceCandidateId?: string;
+        usedVia?: ExperienceUsageVia;
+    }): ExperienceUsageRecordResult | null {
+        const taskId = String(input.taskId ?? "").trim();
+        const assetKey = String(input.assetKey ?? "").trim();
+        if (!taskId || !assetKey) return null;
+
+        const task = this.store.getTask(taskId);
+        if (!task) return null;
+
+        const existing = this.store.findExperienceUsage(taskId, input.assetType, assetKey);
+        if (existing) {
+            return { usage: existing, reusedExisting: true };
+        }
+
+        const usage: ExperienceUsage = {
+            id: randomUUID(),
+            taskId,
+            assetType: input.assetType,
+            assetKey,
+            sourceCandidateId: input.sourceCandidateId ?? this.inferExperienceSourceCandidateId(input.assetType, assetKey),
+            usedVia: input.usedVia ?? "tool",
+            createdAt: new Date().toISOString(),
+        };
+        this.store.createExperienceUsage(usage);
+        return {
+            usage: this.store.getExperienceUsage(usage.id) ?? usage,
+            reusedExisting: false,
+        };
+    }
+
+    recordMethodUsage(taskId: string, methodFile: string, options: { sourceCandidateId?: string; usedVia?: ExperienceUsageVia } = {}): ExperienceUsageRecordResult | null {
+        return this.recordExperienceUsage({
+            taskId,
+            assetType: "method",
+            assetKey: methodFile,
+            sourceCandidateId: options.sourceCandidateId,
+            usedVia: options.usedVia ?? "tool",
+        });
+    }
+
+    recordSkillUsage(taskId: string, skillName: string, options: { sourceCandidateId?: string; usedVia?: ExperienceUsageVia } = {}): ExperienceUsageRecordResult | null {
+        return this.recordExperienceUsage({
+            taskId,
+            assetType: "skill",
+            assetKey: skillName,
+            sourceCandidateId: options.sourceCandidateId,
+            usedVia: options.usedVia ?? "tool",
+        });
+    }
+
+    getExperienceUsage(usageId: string): ExperienceUsage | null {
+        return this.store.getExperienceUsage(usageId);
+    }
+
+    revokeExperienceUsage(input: {
+        usageId?: string;
+        taskId?: string;
+        assetType?: ExperienceAssetType;
+        assetKey?: string;
+    }): ExperienceUsage | null {
+        const usageId = String(input.usageId ?? "").trim();
+        if (usageId) {
+            return this.store.deleteExperienceUsage(usageId);
+        }
+
+        const taskId = String(input.taskId ?? "").trim();
+        const assetKey = String(input.assetKey ?? "").trim();
+        if (!taskId || !assetKey || (input.assetType !== "method" && input.assetType !== "skill")) {
+            return null;
+        }
+
+        return this.store.deleteExperienceUsageByTaskAsset(taskId, input.assetType, assetKey);
+    }
+
+    listExperienceUsages(limit = 20, filter?: ExperienceUsageListFilter): ExperienceUsage[] {
+        return this.store.listExperienceUsages(limit, filter);
+    }
+
+    getExperienceUsageStats(assetType: ExperienceAssetType, assetKey: string): ExperienceUsageStats {
+        return this.store.getExperienceUsageStats(assetType, assetKey);
+    }
+
+    listExperienceUsageStats(limit = 50, filter?: Pick<ExperienceUsageListFilter, "assetType" | "assetKey" | "sourceCandidateId">): ExperienceUsageStats[] {
+        return this.store.listExperienceUsageStats(limit, filter);
+    }
+
+    private toExperienceUsageSummary(usage: ExperienceUsage): ExperienceUsageSummary {
+        const stats = this.store.getExperienceUsageStats(usage.assetType, usage.assetKey);
+        return {
+            usageId: usage.id,
+            taskId: usage.taskId,
+            assetType: usage.assetType,
+            assetKey: usage.assetKey,
+            sourceCandidateId: usage.sourceCandidateId ?? stats.sourceCandidateId,
+            usedVia: usage.usedVia,
+            createdAt: usage.createdAt,
+            usageCount: stats.usageCount,
+            lastUsedAt: stats.lastUsedAt,
+            lastUsedTaskId: stats.lastUsedTaskId,
+        };
+    }
+
+    private inferExperienceSourceCandidateId(assetType: ExperienceAssetType, assetKey: string): string | undefined {
+        const normalizedAssetKey = this.normalizeExperienceAssetKey(assetKey);
+        if (!normalizedAssetKey) return undefined;
+
+        const candidates = this.store.listExperienceCandidates(500, {
+            type: assetType,
+            status: "accepted",
+        });
+
+        for (const candidate of candidates) {
+            if (assetType === "method") {
+                const publishedName = candidate.publishedPath ? path.basename(candidate.publishedPath) : "";
+                const slugName = candidate.slug ? `${candidate.slug}.md` : "";
+                const titleName = candidate.title ?? "";
+                const matched = [
+                    publishedName,
+                    slugName,
+                    titleName,
+                ].some((value) => this.normalizeExperienceAssetKey(value) === normalizedAssetKey);
+                if (matched) {
+                    return candidate.id;
+                }
+                continue;
+            }
+
+            const skillName = this.extractSkillNameFromCandidate(candidate);
+            const publishedDir = candidate.publishedPath ? path.basename(path.dirname(candidate.publishedPath)) : "";
+            const matched = [
+                skillName,
+                candidate.slug,
+                candidate.title,
+                publishedDir,
+            ].some((value) => this.normalizeExperienceAssetKey(value) === normalizedAssetKey);
+            if (matched) {
+                return candidate.id;
+            }
+        }
+
+        return undefined;
+    }
+
+    private extractSkillNameFromCandidate(candidate: ExperienceCandidate): string {
+        const match = candidate.content.match(/(?:^|\n)name:\s*["']?([^"\n']+)["']?/i);
+        return match?.[1]?.trim() || candidate.title;
+    }
+
+    private normalizeExperienceAssetKey(value: string | undefined): string {
+        return String(value ?? "").trim().toLowerCase();
+    }
+
+    acceptExperienceCandidate(candidateId: string, options: { publishedPath?: string } = {}): ExperienceCandidate | null {
+        const existing = this.store.getExperienceCandidate(candidateId);
+        if (!existing) return null;
+        if (existing.status !== "draft") return null;
+        const now = new Date().toISOString();
+        const publishedPath = existing.type === "method"
+            ? this.publishMethodCandidate(existing)
+            : options.publishedPath ?? existing.publishedPath;
+        return this.store.updateExperienceCandidate(candidateId, {
+            status: "accepted",
+            reviewedAt: existing.reviewedAt ?? now,
+            acceptedAt: now,
+            rejectedAt: undefined,
+            publishedPath,
+        });
+    }
+
+    rejectExperienceCandidate(candidateId: string): ExperienceCandidate | null {
+        const existing = this.store.getExperienceCandidate(candidateId);
+        if (!existing) return null;
+        if (existing.status !== "draft") return null;
+        const now = new Date().toISOString();
+        return this.store.updateExperienceCandidate(candidateId, {
+            status: "rejected",
+            reviewedAt: existing.reviewedAt ?? now,
+            acceptedAt: undefined,
+            rejectedAt: now,
+        });
     }
 
     async linkTaskMemoriesFromSource(
@@ -917,4 +1178,75 @@ category 必须是以下之一：preference / experience / fact / decision / ent
         this.indexer.stopWatching().catch(console.error);
         this.store.close();
     }
+
+    private shouldAutoPromoteTask(task: TaskRecord): boolean {
+        if (task.status !== "success" && task.status !== "partial") {
+            return false;
+        }
+
+        const hasSummary = Boolean(task.summary?.trim());
+        const hasReflection = Boolean(task.reflection?.trim());
+        const hasTools = (task.toolCalls?.length ?? 0) > 0;
+        const hasArtifacts = (task.artifactPaths?.length ?? 0) > 0;
+        const hasObjective = Boolean(task.objective?.trim());
+        return hasSummary || hasReflection || hasTools || hasArtifacts || hasObjective;
+    }
+
+    private publishMethodCandidate(candidate: ExperienceCandidate): string {
+        const methodsDir = path.join(this.publishStateDir, "methods");
+        mkdirSync(methodsDir, { recursive: true });
+
+        const filePath = this.resolveMethodPublishPath(methodsDir, candidate);
+        writeFileSync(filePath, candidate.content, "utf-8");
+        return filePath;
+    }
+
+    private resolveMethodPublishPath(methodsDir: string, candidate: ExperienceCandidate): string {
+        if (candidate.publishedPath) {
+            return candidate.publishedPath;
+        }
+
+        const baseName = toSafeMethodFilenameBase(candidate.slug, candidate.taskId);
+        const suffixTaskId = normalizeAsciiToken(candidate.taskId, "task");
+        const suffixCandidateId = normalizeAsciiToken(candidate.id, "candidate");
+        const candidates = [
+            `${baseName}.md`,
+            `${baseName}-${suffixTaskId}.md`,
+            `${baseName}-${suffixCandidateId}.md`,
+        ];
+
+        for (const filename of candidates) {
+            const filePath = path.join(methodsDir, filename);
+            if (!existsSync(filePath)) {
+                return filePath;
+            }
+        }
+
+        return path.join(methodsDir, `${baseName}-${suffixCandidateId}-${Date.now()}.md`);
+    }
+}
+
+function toSafeMethodFilenameBase(slug: string, taskId: string): string {
+    const raw = (slug || "").trim();
+    const normalized = raw
+        .replace(/\.md$/i, "")
+        .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-")
+        .replace(/\s+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-+|-+$/g, "");
+
+    if (normalized) {
+        return normalized;
+    }
+
+    return `method-${normalizeAsciiToken(taskId, "task")}`;
+}
+
+function normalizeAsciiToken(value: string, fallback: string): string {
+    const normalized = String(value ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-+|-+$/g, "");
+    return normalized || fallback;
 }

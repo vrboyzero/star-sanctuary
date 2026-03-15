@@ -24,7 +24,7 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
-import { checkAndConsumeRestartCooldown, formatRestartCooldownMessage } from "@belldandy/skills";
+import { checkAndConsumeRestartCooldown, formatRestartCooldownMessage, publishSkillCandidate } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
@@ -111,6 +111,12 @@ const DEFAULT_METHODS = [
   "memory.stats",
   "memory.task.list",
   "memory.task.get",
+  "experience.candidate.list",
+  "experience.candidate.accept",
+  "experience.candidate.reject",
+  "experience.usage.list",
+  "experience.usage.stats",
+  "experience.usage.revoke",
 ];
 const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required"];
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -770,6 +776,12 @@ async function handleReq(
     "memory.stats",
     "memory.task.list",
     "memory.task.get",
+    "experience.candidate.list",
+    "experience.candidate.accept",
+    "experience.candidate.reject",
+    "experience.usage.list",
+    "experience.usage.stats",
+    "experience.usage.revoke",
   ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
@@ -1523,6 +1535,146 @@ async function handleReq(
       }
 
       return { type: "res", id: req.id, ok: true, payload: { task } };
+    }
+
+    case "experience.candidate.list": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = clampListLimit(params.limit, 50);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = manager.listExperienceCandidates(limit, filter as any);
+      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+    }
+
+    case "experience.candidate.accept": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const candidateId = typeof params.candidateId === "string" ? params.candidateId.trim() : "";
+      if (!candidateId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "candidateId is required" } };
+      }
+
+      const existing = manager.getExperienceCandidate(candidateId);
+      if (!existing) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience candidate not found." } };
+      }
+      if (existing.status !== "draft") {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "invalid_state", message: `Experience candidate can only be accepted from draft status. Current status: ${existing.status}.` },
+        };
+      }
+
+      let publishedPath: string | undefined;
+      if (existing.type === "skill") {
+        publishedPath = await publishSkillCandidate(existing, ctx.stateDir, ctx.skillRegistry);
+      }
+
+      const candidate = manager.acceptExperienceCandidate(candidateId, publishedPath ? { publishedPath } : {});
+      if (!candidate) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience candidate not found." } };
+      }
+
+      return { type: "res", id: req.id, ok: true, payload: { candidate } };
+    }
+
+    case "experience.candidate.reject": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const candidateId = typeof params.candidateId === "string" ? params.candidateId.trim() : "";
+      if (!candidateId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "candidateId is required" } };
+      }
+      const existing = manager.getExperienceCandidate(candidateId);
+      if (!existing) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience candidate not found." } };
+      }
+      if (existing.status !== "draft") {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "invalid_state", message: `Experience candidate can only be rejected from draft status. Current status: ${existing.status}.` },
+        };
+      }
+
+      const candidate = manager.rejectExperienceCandidate(candidateId);
+      if (!candidate) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience candidate not found." } };
+      }
+
+      return { type: "res", id: req.id, ok: true, payload: { candidate } };
+    }
+
+    case "experience.usage.list": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = clampListLimit(params.limit, 50);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = manager.listExperienceUsages(limit, filter as any);
+      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+    }
+
+    case "experience.usage.stats": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = clampListLimit(params.limit, 50);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = manager.listExperienceUsageStats(limit, filter as any);
+      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+    }
+
+    case "experience.usage.revoke": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const usageId = typeof params.usageId === "string" ? params.usageId.trim() : "";
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      const assetType = typeof params.assetType === "string" ? params.assetType.trim() : "";
+      const assetKey = typeof params.assetKey === "string" ? params.assetKey.trim() : "";
+
+      if (!usageId && (!taskId || (assetType !== "method" && assetType !== "skill") || !assetKey)) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "invalid_params", message: "usageId or taskId + assetType + assetKey is required." },
+        };
+      }
+
+      const usage = manager.revokeExperienceUsage({
+        usageId: usageId || undefined,
+        taskId: taskId || undefined,
+        assetType: assetType === "method" || assetType === "skill" ? assetType : undefined,
+        assetKey: assetKey || undefined,
+      });
+
+      return { type: "res", id: req.id, ok: true, payload: { usage, revoked: Boolean(usage) } };
     }
 
     case "workspace.list": {

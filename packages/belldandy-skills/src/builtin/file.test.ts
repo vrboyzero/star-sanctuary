@@ -6,6 +6,9 @@ import type { ToolContext } from "../types.js";
 
 const memoryManager = {
   linkTaskMemoriesFromSource: vi.fn(),
+  getTaskByConversation: vi.fn(),
+  recordMethodUsage: vi.fn(),
+  recordSkillUsage: vi.fn(),
 };
 
 vi.mock("@belldandy/memory", () => ({
@@ -159,6 +162,48 @@ describe("file tools", () => {
 
       expect(result.success).toBe(true);
       expect(memoryManager.linkTaskMemoriesFromSource).not.toHaveBeenCalled();
+    });
+
+    it("should record method usage when reading methods/*.md through file_read", async () => {
+      await fs.mkdir(path.join(tempDir, "methods"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "methods", "网页自动化基础.md"), "# 方法\n\n内容", "utf-8");
+      memoryManager.getTaskByConversation.mockReturnValue({
+        id: "task-file-method-1",
+        conversationId: "test-conv",
+      });
+
+      const result = await fileReadTool.execute({ path: "methods/网页自动化基础.md" }, baseContext);
+
+      expect(result.success).toBe(true);
+      expect(memoryManager.recordMethodUsage).toHaveBeenCalledWith("task-file-method-1", "网页自动化基础.md", {
+        usedVia: "tool",
+      });
+    });
+
+    it("should record skill usage when reading skills/**/SKILL.md through file_read", async () => {
+      await fs.mkdir(path.join(tempDir, "skills", "web-auto"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "skills", "web-auto", "SKILL.md"),
+        `---
+name: 网页自动化 Skill
+description: 用于网页自动化任务
+---
+
+1. 打开浏览器
+2. 执行网页自动化`,
+        "utf-8",
+      );
+      memoryManager.getTaskByConversation.mockReturnValue({
+        id: "task-file-skill-1",
+        conversationId: "test-conv",
+      });
+
+      const result = await fileReadTool.execute({ path: "skills/web-auto/SKILL.md" }, baseContext);
+
+      expect(result.success).toBe(true);
+      expect(memoryManager.recordSkillUsage).toHaveBeenCalledWith("task-file-skill-1", "网页自动化 Skill", {
+        usedVia: "tool",
+      });
     });
   });
 

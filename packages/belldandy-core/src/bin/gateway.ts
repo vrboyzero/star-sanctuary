@@ -46,6 +46,13 @@ import {
   taskSearchTool,
   taskGetTool,
   taskRecentTool,
+  taskPromoteMethodTool,
+  taskPromoteSkillDraftTool,
+  experienceCandidateListTool,
+  experienceCandidateAcceptTool,
+  experienceCandidateRejectTool,
+  experienceUsageRecordTool,
+  experienceUsageRevokeTool,
   browserOpenTool,
   browserNavigateTool,
   browserClickTool,
@@ -72,8 +79,10 @@ import {
   delegateTaskTool,
   delegateParallelTool,
   SkillRegistry,
+  registerGlobalSkillRegistry,
   createSkillsListTool,
   createSkillsSearchTool,
+  createSkillGetTool,
   createCanvasTools,
   getUserUuidTool,
   getMessageSenderInfoTool,
@@ -548,6 +557,13 @@ const toolsToRegister = toolsEnabled
     taskSearchTool,
     taskGetTool,
     taskRecentTool,
+    taskPromoteMethodTool,
+    taskPromoteSkillDraftTool,
+    experienceCandidateListTool,
+    experienceCandidateAcceptTool,
+    experienceCandidateRejectTool,
+    experienceUsageRecordTool,
+    experienceUsageRevokeTool,
     getUserUuidTool, // UUID获取工具（始终加载）
     getMessageSenderInfoTool, // 发送者信息工具（始终加载）
     getRoomMembersTool, // 房间成员工具（始终加载）
@@ -728,15 +744,17 @@ try {
   }
 
   logger.info("skills", `total: ${skillRegistry.size} skills loaded`);
+  registerGlobalSkillRegistry(skillRegistry);
 } catch (err) {
   logger.warn("skills", `技能加载失败: ${String(err)}`);
 }
 
-// Register skills_list / skills_search tools
+// Register skills_list / skills_search / skill_get tools
 if (toolsEnabled) {
   toolExecutor.registerTool(createSkillsListTool(skillRegistry));
   toolExecutor.registerTool(createSkillsSearchTool(skillRegistry));
-  logger.info("skills", "registered skills_list + skills_search tools");
+  toolExecutor.registerTool(createSkillGetTool(skillRegistry));
+  logger.info("skills", "registered skills_list + skills_search + skill_get tools");
 }
 
 // 4.4 Bridge plugin hooks → HookRegistry (deferred to after hookRegistry init, see section 7.5)
@@ -1359,6 +1377,9 @@ const taskSummaryApiKey = readEnv("BELLDANDY_TASK_SUMMARY_API_KEY") || openaiApi
 const taskSummaryMinDurationMs = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_DURATION_MS")) || 15_000;
 const taskSummaryMinToolCalls = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_TOOL_CALLS")) || 2;
 const taskSummaryMinTokenTotal = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_TOKEN_TOTAL")) || 2_000;
+const experienceAutoPromotionEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED") ?? "true") !== "false";
+const experienceAutoMethodEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED") ?? "true") !== "false";
+const experienceAutoSkillEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED") ?? "true") !== "false";
 
 // P1-4: Task-aware Embedding 前缀（用于 Jina/BGE 等支持 task 参数的模型）
 const embeddingQueryPrefix = readEnv("BELLDANDY_EMBEDDING_QUERY_PREFIX") || undefined;
@@ -1399,6 +1420,9 @@ const unifiedMemoryManager = new MemoryManager({
   taskSummaryMinDurationMs,
   taskSummaryMinToolCalls,
   taskSummaryMinTokenTotal,
+  experienceAutoPromotionEnabled,
+  experienceAutoMethodEnabled,
+  experienceAutoSkillEnabled,
   conversationStore,
   deepRetrievalEnabled,
   rerankerOptions: {
@@ -1417,7 +1441,10 @@ registerGlobalMemoryManager(unifiedMemoryManager);
 unifiedMemoryManager.indexWorkspace().catch(err => {
   logger.error("memory", `Failed to start unified memory indexing: ${err instanceof Error ? err.message : String(err)}`);
 });
-logger.info("memory", `Unified MemoryManager initialized (sessions + ${memoryAdditionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled})`);
+logger.info(
+  "memory",
+  `Unified MemoryManager initialized (sessions + ${memoryAdditionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
+);
 
 // ========== 后台任务调度：pause/resume + 空闲摘要 ==========
 

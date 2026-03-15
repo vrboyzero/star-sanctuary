@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Tool, ToolCallResult } from "../types.js";
 import { getGlobalMemoryManager } from "@belldandy/memory";
+import { parseSkillMd } from "../skill-loader.js";
 
 /** 敏感文件模式（禁止读取） */
 const SENSITIVE_PATTERNS = [
@@ -88,6 +89,49 @@ function isAllowedPath(relativePath: string, allowedPaths: string[]): boolean {
 function isMemoryLinkWhitelistPath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/").toLowerCase();
   return normalized === "memory.md" || normalized.startsWith("memory/");
+}
+
+function detectMethodUsagePath(relativePath: string): string | null {
+  const normalized = relativePath.replace(/\\/g, "/");
+  if (!normalized.startsWith("methods/")) return null;
+  const fileName = path.posix.basename(normalized);
+  if (!fileName || !fileName.toLowerCase().endsWith(".md")) return null;
+  return fileName;
+}
+
+function detectSkillUsageName(relativePath: string, content: string): string | null {
+  const normalized = relativePath.replace(/\\/g, "/");
+  if (!normalized.startsWith("skills/") || !normalized.toLowerCase().endsWith("/skill.md")) {
+    return null;
+  }
+
+  try {
+    const parsed = parseSkillMd(content, { type: "user", path: normalized });
+    return parsed.name?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function tryRecordExperienceUsageFromFileRead(relativePath: string, content: string, conversationId: string) {
+  try {
+    const manager = getGlobalMemoryManager();
+    const task = manager?.getTaskByConversation(conversationId);
+    if (!manager || !task) return;
+
+    const methodFile = detectMethodUsagePath(relativePath);
+    if (methodFile) {
+      manager.recordMethodUsage(task.id, methodFile, { usedVia: "tool" });
+      return;
+    }
+
+    const skillName = detectSkillUsageName(relativePath, content);
+    if (skillName) {
+      manager.recordSkillUsage(task.id, skillName, { usedVia: "tool" });
+    }
+  } catch {
+    // usage 回写失败不影响 file_read 正常返回
+  }
 }
 
 /** 检查路径是否在指定根目录下（不越界） */
@@ -231,8 +275,11 @@ export const fileReadTool: Tool = {
 
         const manager = getGlobalMemoryManager();
         const underMainRoot = isUnderRoot(absolute, context.workspaceRoot);
-        if (manager && underMainRoot.ok && isMemoryLinkWhitelistPath(relative)) {
-          await manager.linkTaskMemoriesFromSource(context.conversationId, relative, "used");
+        if (manager && underMainRoot.ok) {
+          if (isMemoryLinkWhitelistPath(relative)) {
+            await manager.linkTaskMemoriesFromSource(context.conversationId, relative, "used");
+          }
+          tryRecordExperienceUsageFromFileRead(relative, content, context.conversationId);
         }
 
         return {

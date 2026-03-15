@@ -1,7 +1,9 @@
 import type { Tool, ToolCallResult } from "../types.js";
 import { MemoryManager, getGlobalMemoryManager } from "@belldandy/memory";
-import type { MemorySearchFilter, TaskRecord, TaskSearchFilter } from "@belldandy/memory";
+import type { ExperienceCandidate, ExperienceCandidateListFilter, ExperienceUsageVia, MemorySearchFilter, TaskRecord, TaskSearchFilter } from "@belldandy/memory";
 import { appendToTodayMemory, readMemoryFile, writeMemoryFile } from "@belldandy/memory";
+import { getGlobalSkillRegistry } from "../skill-registry.js";
+import { publishSkillCandidate } from "../skill-publisher.js";
 import path from "node:path";
 import { resolveStateDir } from "@belldandy/protocol";
 
@@ -567,6 +569,497 @@ export const taskGetTool: Tool = {
     },
 };
 
+export const taskPromoteMethodTool: Tool = {
+    definition: {
+        name: "task_promote_method",
+        description: "Generate a method candidate draft from a historical task. This only writes to the experience candidate layer and does not publish to methods/ yet.",
+        parameters: {
+            type: "object",
+            properties: {
+                task_id: {
+                    type: "string",
+                    description: "The task ID returned by task_search, task_recent, or task_get.",
+                },
+            },
+            required: ["task_id"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const taskId = String(args.task_id ?? "").trim();
+            const result = manager.promoteTaskToMethodCandidate(taskId);
+
+            return {
+                id: "task_promote_method",
+                name: "task_promote_method",
+                success: true,
+                output: result
+                    ? formatExperiencePromotionResult(result, "method")
+                    : "Task not found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "task_promote_method",
+                name: "task_promote_method",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const taskPromoteSkillDraftTool: Tool = {
+    definition: {
+        name: "task_promote_skill_draft",
+        description: "Generate a skill draft candidate from a historical task. This only writes to the experience candidate layer and does not publish to user skills yet.",
+        parameters: {
+            type: "object",
+            properties: {
+                task_id: {
+                    type: "string",
+                    description: "The task ID returned by task_search, task_recent, or task_get.",
+                },
+            },
+            required: ["task_id"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const taskId = String(args.task_id ?? "").trim();
+            const result = manager.promoteTaskToSkillCandidate(taskId);
+
+            return {
+                id: "task_promote_skill_draft",
+                name: "task_promote_skill_draft",
+                success: true,
+                output: result
+                    ? formatExperiencePromotionResult(result, "skill")
+                    : "Task not found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "task_promote_skill_draft",
+                name: "task_promote_skill_draft",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const experienceCandidateListTool: Tool = {
+    definition: {
+        name: "experience_candidate_list",
+        description: "List method/skill experience candidates waiting for review.",
+        parameters: {
+            type: "object",
+            properties: {
+                limit: {
+                    type: "number",
+                    description: "Max number of candidates to return (default: 10).",
+                },
+                type: {
+                    type: "string",
+                    description: "Filter by candidate type: method or skill. Can be comma-separated.",
+                },
+                status: {
+                    type: "string",
+                    description: "Filter by candidate status: draft, reviewed, accepted, rejected. Can be comma-separated.",
+                },
+                task_id: {
+                    type: "string",
+                    description: "Only list candidates from a specific task ID.",
+                },
+            },
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const limit = (args.limit as number) || 10;
+            const filter = buildExperienceCandidateFilter(args, context.agentId);
+            const items = manager.listExperienceCandidates(limit, filter);
+
+            return {
+                id: "experience_candidate_list",
+                name: "experience_candidate_list",
+                success: true,
+                output: formatExperienceCandidateList(items) || "No experience candidates found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_candidate_list",
+                name: "experience_candidate_list",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const experienceCandidateAcceptTool: Tool = {
+    definition: {
+        name: "experience_candidate_accept",
+        description: "Mark an experience candidate as accepted. Method candidates will be published to methods/; skill candidates will be published to user skills/ and become discoverable via skills_search.",
+        parameters: {
+            type: "object",
+            properties: {
+                candidate_id: {
+                    type: "string",
+                    description: "Experience candidate ID returned by experience_candidate_list.",
+                },
+            },
+            required: ["candidate_id"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const candidateId = String(args.candidate_id ?? "").trim();
+            const existing = manager.getExperienceCandidate(candidateId);
+            if (!existing) {
+                return {
+                    id: "experience_candidate_accept",
+                    name: "experience_candidate_accept",
+                    success: true,
+                    output: "Experience candidate not found.",
+                    durationMs: Date.now() - start,
+                };
+            }
+            if (existing.status !== "draft") {
+                return {
+                    id: "experience_candidate_accept",
+                    name: "experience_candidate_accept",
+                    success: true,
+                    output: formatExperienceCandidateInvalidState(existing, "accept"),
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            let publishedPath: string | undefined;
+            if (existing.type === "skill") {
+                publishedPath = await publishSkillCandidate(
+                    existing,
+                    context.workspaceRoot,
+                    getGlobalSkillRegistry(),
+                );
+            }
+
+            const candidate = manager.acceptExperienceCandidate(candidateId, publishedPath ? { publishedPath } : {});
+            return {
+                id: "experience_candidate_accept",
+                name: "experience_candidate_accept",
+                success: true,
+                output: candidate ? formatExperienceCandidateDecision(candidate, "accepted") : "Experience candidate not found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_candidate_accept",
+                name: "experience_candidate_accept",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const experienceCandidateRejectTool: Tool = {
+    definition: {
+        name: "experience_candidate_reject",
+        description: "Mark an experience candidate as rejected.",
+        parameters: {
+            type: "object",
+            properties: {
+                candidate_id: {
+                    type: "string",
+                    description: "Experience candidate ID returned by experience_candidate_list.",
+                },
+            },
+            required: ["candidate_id"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const candidateId = String(args.candidate_id ?? "").trim();
+            const existing = manager.getExperienceCandidate(candidateId);
+            if (!existing) {
+                return {
+                    id: "experience_candidate_reject",
+                    name: "experience_candidate_reject",
+                    success: true,
+                    output: "Experience candidate not found.",
+                    durationMs: Date.now() - start,
+                };
+            }
+            if (existing.status !== "draft") {
+                return {
+                    id: "experience_candidate_reject",
+                    name: "experience_candidate_reject",
+                    success: true,
+                    output: formatExperienceCandidateInvalidState(existing, "reject"),
+                    durationMs: Date.now() - start,
+                };
+            }
+            const candidate = manager.rejectExperienceCandidate(candidateId);
+            return {
+                id: "experience_candidate_reject",
+                name: "experience_candidate_reject",
+                success: true,
+                output: candidate ? formatExperienceCandidateDecision(candidate, "rejected") : "Experience candidate not found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_candidate_reject",
+                name: "experience_candidate_reject",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const experienceUsageRecordTool: Tool = {
+    definition: {
+        name: "experience_usage_record",
+        description: "Record that the current task actually adopted a method or skill. Use this only after you truly decided to apply the method/skill, not merely after searching.",
+        parameters: {
+            type: "object",
+            properties: {
+                asset_type: {
+                    type: "string",
+                    description: "Experience asset type.",
+                    enum: ["method", "skill"],
+                },
+                asset_key: {
+                    type: "string",
+                    description: "Method filename or skill name that was actually adopted.",
+                },
+                source_candidate_id: {
+                    type: "string",
+                    description: "Optional source experience candidate ID if you know which candidate the asset came from.",
+                },
+                used_via: {
+                    type: "string",
+                    description: "How the asset was adopted.",
+                    enum: ["manual", "search", "tool", "auto_suggest"],
+                },
+            },
+            required: ["asset_type", "asset_key"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const task = manager.getTaskByConversation(context.conversationId);
+            if (!task) {
+                return {
+                    id: "experience_usage_record",
+                    name: "experience_usage_record",
+                    success: true,
+                    output: "No task found for the current conversation. Usage was not recorded.",
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            const assetType = String(args.asset_type ?? "").trim() as "method" | "skill";
+            const assetKey = String(args.asset_key ?? "").trim();
+            const sourceCandidateId = typeof args.source_candidate_id === "string" ? args.source_candidate_id.trim() : undefined;
+            const usedVia = (typeof args.used_via === "string" ? args.used_via.trim() : "") as ExperienceUsageVia;
+
+            if ((assetType !== "method" && assetType !== "skill") || !assetKey) {
+                return {
+                    id: "experience_usage_record",
+                    name: "experience_usage_record",
+                    success: false,
+                    output: "",
+                    error: "asset_type must be 'method' or 'skill', and asset_key is required.",
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            const recorded = manager.recordExperienceUsage({
+                taskId: task.id,
+                assetType,
+                assetKey,
+                sourceCandidateId,
+                usedVia: usedVia || "tool",
+            });
+
+            if (!recorded) {
+                return {
+                    id: "experience_usage_record",
+                    name: "experience_usage_record",
+                    success: true,
+                    output: "Usage was not recorded.",
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            return {
+                id: "experience_usage_record",
+                name: "experience_usage_record",
+                success: true,
+                output: formatExperienceUsageRecordResult(recorded, task.id),
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_usage_record",
+                name: "experience_usage_record",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const experienceUsageRevokeTool: Tool = {
+    definition: {
+        name: "experience_usage_revoke",
+        description: "Revoke a mistakenly recorded method/skill usage. By default this only operates on the current task in the current conversation.",
+        parameters: {
+            type: "object",
+            properties: {
+                usage_id: {
+                    type: "string",
+                    description: "Specific usage record ID to revoke. If provided, it must belong to the current task.",
+                },
+                asset_type: {
+                    type: "string",
+                    description: "Experience asset type for current-task revoke.",
+                    enum: ["method", "skill"],
+                },
+                asset_key: {
+                    type: "string",
+                    description: "Method filename or skill name to revoke on the current task.",
+                },
+            },
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const task = manager.getTaskByConversation(context.conversationId);
+            if (!task) {
+                return {
+                    id: "experience_usage_revoke",
+                    name: "experience_usage_revoke",
+                    success: true,
+                    output: "No task found for the current conversation. Usage was not revoked.",
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            const usageId = typeof args.usage_id === "string" ? args.usage_id.trim() : "";
+            if (usageId) {
+                const existing = manager.getExperienceUsage(usageId);
+                if (!existing) {
+                    return {
+                        id: "experience_usage_revoke",
+                        name: "experience_usage_revoke",
+                        success: true,
+                        output: "Experience usage not found. Nothing was revoked.",
+                        durationMs: Date.now() - start,
+                    };
+                }
+                if (existing.taskId !== task.id) {
+                    return {
+                        id: "experience_usage_revoke",
+                        name: "experience_usage_revoke",
+                        success: false,
+                        output: "",
+                        error: "usage_id does not belong to the current task.",
+                        durationMs: Date.now() - start,
+                    };
+                }
+
+                const revoked = manager.revokeExperienceUsage({ usageId });
+                return {
+                    id: "experience_usage_revoke",
+                    name: "experience_usage_revoke",
+                    success: true,
+                    output: revoked
+                        ? formatExperienceUsageRevokeResult(revoked)
+                        : "Experience usage not found. Nothing was revoked.",
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            const assetType = String(args.asset_type ?? "").trim() as "method" | "skill";
+            const assetKey = String(args.asset_key ?? "").trim();
+            if ((assetType !== "method" && assetType !== "skill") || !assetKey) {
+                return {
+                    id: "experience_usage_revoke",
+                    name: "experience_usage_revoke",
+                    success: false,
+                    output: "",
+                    error: "usage_id is required, or asset_type must be 'method' or 'skill' with asset_key.",
+                    durationMs: Date.now() - start,
+                };
+            }
+
+            const revoked = manager.revokeExperienceUsage({
+                taskId: task.id,
+                assetType,
+                assetKey,
+            });
+
+            return {
+                id: "experience_usage_revoke",
+                name: "experience_usage_revoke",
+                success: true,
+                output: revoked
+                    ? formatExperienceUsageRevokeResult(revoked)
+                    : "Experience usage not found on the current task. Nothing was revoked.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_usage_revoke",
+                name: "experience_usage_revoke",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
 // ============================================================================
 // Legacy / Compatibility Exports
 // ============================================================================
@@ -653,6 +1146,32 @@ function buildTaskFilter(args: Record<string, unknown>, agentId?: string): TaskS
     if (args.date_to) filter.dateTo = String(args.date_to);
     if (agentId) filter.agentId = agentId;
 
+    return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
+function buildExperienceCandidateFilter(args: Record<string, unknown>, agentId?: string): ExperienceCandidateListFilter | undefined {
+    const filter: ExperienceCandidateListFilter = {};
+
+    if (args.type) {
+        const values = String(args.type).split(",").map((value) => value.trim()).filter(Boolean);
+        if (values.length === 1) {
+            filter.type = values[0] as ExperienceCandidateListFilter["type"];
+        } else if (values.length > 1) {
+            filter.type = values as Exclude<ExperienceCandidateListFilter["type"], string>;
+        }
+    }
+
+    if (args.status) {
+        const values = String(args.status).split(",").map((value) => value.trim()).filter(Boolean);
+        if (values.length === 1) {
+            filter.status = values[0] as ExperienceCandidateListFilter["status"];
+        } else if (values.length > 1) {
+            filter.status = values as Exclude<ExperienceCandidateListFilter["status"], string>;
+        }
+    }
+
+    if (args.task_id) filter.taskId = String(args.task_id);
+    if (agentId) filter.agentId = agentId;
     return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
@@ -744,5 +1263,123 @@ function formatTaskDetail(task: TaskRecord & { memoryLinks?: Array<{ chunkId: st
         }
     }
 
+    if (Array.isArray((task as any).usedMethods) && (task as any).usedMethods.length > 0) {
+        lines.push("");
+        lines.push("Used Methods:");
+        for (const item of (task as any).usedMethods) {
+            const meta = [
+                item.usedVia ? `via=${item.usedVia}` : "",
+                typeof item.usageCount === "number" ? `count=${item.usageCount}` : "",
+                item.lastUsedAt ? `last=${item.lastUsedAt}` : "",
+            ].filter(Boolean).join(" | ");
+            lines.push(`- ${item.assetKey}${meta ? ` (${meta})` : ""}`);
+        }
+    }
+
+    if (Array.isArray((task as any).usedSkills) && (task as any).usedSkills.length > 0) {
+        lines.push("");
+        lines.push("Used Skills:");
+        for (const item of (task as any).usedSkills) {
+            const meta = [
+                item.usedVia ? `via=${item.usedVia}` : "",
+                typeof item.usageCount === "number" ? `count=${item.usageCount}` : "",
+                item.lastUsedAt ? `last=${item.lastUsedAt}` : "",
+            ].filter(Boolean).join(" | ");
+            lines.push(`- ${item.assetKey}${meta ? ` (${meta})` : ""}`);
+        }
+    }
+
+    return lines.join("\n");
+}
+
+function formatExperiencePromotionResult(
+    result: { candidate: ExperienceCandidate; reusedExisting: boolean },
+    type: "method" | "skill",
+): string {
+    const lines = [
+        result.reusedExisting
+            ? `Reused existing ${type} candidate.`
+            : `Created ${type} candidate draft.`,
+        `Candidate ID: ${result.candidate.id}`,
+        `Task ID: ${result.candidate.taskId}`,
+        `Status: ${result.candidate.status}`,
+        `Slug: ${result.candidate.slug}`,
+    ];
+    if (typeof result.candidate.qualityScore === "number") {
+        lines.push(`Quality Score: ${result.candidate.qualityScore}`);
+    }
+    if (result.candidate.summary) {
+        lines.push(`Summary: ${result.candidate.summary}`);
+    }
+    lines.push("", truncateForSummary(result.candidate.content, 400));
+    return lines.join("\n");
+}
+
+function formatExperienceCandidateList(items: ExperienceCandidate[]): string {
+    return items.map((item) => {
+        const meta = [
+            item.id,
+            item.type,
+            item.status,
+            item.taskId,
+            item.createdAt,
+        ].filter(Boolean).join(" | ");
+        const quality = typeof item.qualityScore === "number" ? `Quality: ${item.qualityScore}` : "Quality: n/a";
+        const summary = item.summary || truncateForSummary(item.content, 180);
+        return `[${meta}]\n${item.title}\n${quality}\n${summary}`;
+    }).join("\n\n---\n\n");
+}
+
+function formatExperienceCandidateDecision(candidate: ExperienceCandidate, action: "accepted" | "rejected"): string {
+    const lines = [
+        `Candidate ${action}.`,
+        `Candidate ID: ${candidate.id}`,
+        `Task ID: ${candidate.taskId}`,
+        `Type: ${candidate.type}`,
+        `Status: ${candidate.status}`,
+    ];
+    if (candidate.publishedPath) {
+        lines.push(`Published Path: ${candidate.publishedPath}`);
+    }
+    return lines.join("\n");
+}
+
+function formatExperienceCandidateInvalidState(candidate: ExperienceCandidate, action: "accept" | "reject"): string {
+    const verb = action === "accept" ? "accepted" : "rejected";
+    return `Experience candidate can only be ${verb} from draft status. Current status: ${candidate.status}`;
+}
+
+function formatExperienceUsageRecordResult(
+    result: { reusedExisting: boolean; usage: { id: string; assetType: string; assetKey: string; usedVia: string; sourceCandidateId?: string } },
+    taskId: string,
+): string {
+    const lines = [
+        result.reusedExisting ? "Reused existing experience usage record." : "Recorded experience usage.",
+        `Usage ID: ${result.usage.id}`,
+        `Task ID: ${taskId}`,
+        `Type: ${result.usage.assetType}`,
+        `Asset: ${result.usage.assetKey}`,
+        `Used Via: ${result.usage.usedVia}`,
+    ];
+    if (result.usage.sourceCandidateId) {
+        lines.push(`Source Candidate: ${result.usage.sourceCandidateId}`);
+    }
+    return lines.join("\n");
+}
+
+function formatExperienceUsageRevokeResult(
+    usage: { id: string; taskId: string; assetType: string; assetKey: string; usedVia: string; sourceCandidateId?: string },
+): string {
+    const lines = [
+        "Revoked experience usage.",
+        `Usage ID: ${usage.id}`,
+        `Task ID: ${usage.taskId}`,
+        `Type: ${usage.assetType}`,
+        `Asset: ${usage.assetKey}`,
+        `Used Via: ${usage.usedVia}`,
+    ];
+    if (usage.sourceCandidateId) {
+        lines.push(`Source Candidate: ${usage.sourceCandidateId}`);
+    }
     return lines.join("\n");
 }

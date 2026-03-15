@@ -1,7 +1,18 @@
 
 import Database from "better-sqlite3";
 import type { MemoryCategory, MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter, MemoryVisibility } from "./types.js";
-import type { TaskRecord, TaskSearchFilter, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
+import type { TaskMemoryRelation, TaskRecord, TaskSearchFilter, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
+import type {
+  ExperienceAssetType,
+  ExperienceCandidate,
+  ExperienceCandidateListFilter,
+  ExperienceCandidateType,
+  ExperienceSourceTaskSnapshot,
+  ExperienceUsage,
+  ExperienceUsageListFilter,
+  ExperienceUsageStats,
+  ExperienceUsageVia,
+} from "./experience-types.js";
 import { cosineSimilarity, vectorToBuffer, vectorFromBuffer, type EmbeddingVector } from "./embeddings/index.js";
 import { loadSqliteVec } from "./sqlite-vec.js";
 
@@ -89,6 +100,49 @@ CREATE TABLE IF NOT EXISTS task_memory_links (
 
 CREATE INDEX IF NOT EXISTS idx_task_memory_links_task_id ON task_memory_links(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_memory_links_chunk_id ON task_memory_links(chunk_id);
+`;
+
+const SCHEMA_EXPERIENCE = `
+CREATE TABLE IF NOT EXISTS experience_candidates (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  title TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  content TEXT NOT NULL,
+  summary TEXT DEFAULT NULL,
+  quality_score REAL DEFAULT NULL,
+  source_task_snapshot_json TEXT NOT NULL,
+  published_path TEXT DEFAULT NULL,
+  created_at TEXT NOT NULL,
+  reviewed_at TEXT DEFAULT NULL,
+  accepted_at TEXT DEFAULT NULL,
+  rejected_at TEXT DEFAULT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_experience_candidates_task_id ON experience_candidates(task_id);
+CREATE INDEX IF NOT EXISTS idx_experience_candidates_type ON experience_candidates(type);
+CREATE INDEX IF NOT EXISTS idx_experience_candidates_status ON experience_candidates(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_experience_candidates_task_type_unique
+  ON experience_candidates(task_id, type);
+
+CREATE TABLE IF NOT EXISTS experience_usages (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  asset_type TEXT NOT NULL,
+  asset_key TEXT NOT NULL,
+  source_candidate_id TEXT DEFAULT NULL,
+  used_via TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_experience_usages_task_id ON experience_usages(task_id);
+CREATE INDEX IF NOT EXISTS idx_experience_usages_asset_type ON experience_usages(asset_type);
+CREATE INDEX IF NOT EXISTS idx_experience_usages_asset_key ON experience_usages(asset_key);
+CREATE INDEX IF NOT EXISTS idx_experience_usages_source_candidate_id ON experience_usages(source_candidate_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_experience_usages_task_asset_unique
+  ON experience_usages(task_id, asset_type, asset_key);
 `;
 
 // FTS5 全文索引（better-sqlite3 默认编译 FTS5）
@@ -192,6 +246,7 @@ export class MemoryStore {
     loadSqliteVec(this.db);
     this.db.exec(SCHEMA_BASE);
     this.db.exec(SCHEMA_TASKS);
+    this.db.exec(SCHEMA_EXPERIENCE);
 
     // Phase M-1: 元数据列迁移（对已有列 ALTER TABLE ADD COLUMN 会报 duplicate，安全忽略）
     for (const sql of SCHEMA_METADATA_COLUMNS) {
@@ -621,7 +676,7 @@ export class MemoryStore {
     stmt.run(taskId, chunkId, relation, new Date().toISOString());
   }
 
-  listTaskMemoryLinks(taskId: string): Array<{ chunkId: string; relation: string; sourcePath?: string; memoryType?: string; snippet?: string }> {
+  listTaskMemoryLinks(taskId: string): Array<{ chunkId: string; relation: TaskMemoryRelation; sourcePath?: string; memoryType?: string; snippet?: string }> {
     this.ensureOpen();
     const stmt = this.db.prepare(`
       SELECT l.chunk_id, l.relation, c.source_path, c.memory_type, c.content
@@ -631,11 +686,248 @@ export class MemoryStore {
     `);
     return (stmt.all(taskId) as Array<{ chunk_id: string; relation: string; source_path?: string | null; memory_type?: string | null; content?: string | null }>).map((row) => ({
       chunkId: row.chunk_id,
-      relation: row.relation,
+      relation: row.relation as TaskMemoryRelation,
       sourcePath: row.source_path ?? undefined,
       memoryType: row.memory_type ?? undefined,
       snippet: row.content ? truncateContent(row.content, 120) : undefined,
     }));
+  }
+
+  createExperienceCandidate(candidate: ExperienceCandidate): void {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      INSERT INTO experience_candidates (
+        id, task_id, type, status, title, slug, content, summary, quality_score,
+        source_task_snapshot_json, published_path, created_at, reviewed_at, accepted_at, rejected_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      candidate.id,
+      candidate.taskId,
+      candidate.type,
+      candidate.status,
+      candidate.title,
+      candidate.slug,
+      candidate.content,
+      candidate.summary ?? null,
+      candidate.qualityScore ?? null,
+      JSON.stringify(candidate.sourceTaskSnapshot),
+      candidate.publishedPath ?? null,
+      candidate.createdAt,
+      candidate.reviewedAt ?? null,
+      candidate.acceptedAt ?? null,
+      candidate.rejectedAt ?? null,
+    );
+  }
+
+  getExperienceCandidate(candidateId: string): ExperienceCandidate | null {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT * FROM experience_candidates
+      WHERE id = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(candidateId) as Record<string, unknown> | undefined;
+    return row ? rowToExperienceCandidate(row) : null;
+  }
+
+  findExperienceCandidateByTaskAndType(taskId: string, type: ExperienceCandidateType): ExperienceCandidate | null {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT * FROM experience_candidates
+      WHERE task_id = ? AND type = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(taskId, type) as Record<string, unknown> | undefined;
+    return row ? rowToExperienceCandidate(row) : null;
+  }
+
+  listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter): ExperienceCandidate[] {
+    this.ensureOpen();
+    const { clause, params } = this.buildExperienceCandidateFilterClause(filter);
+    const stmt = this.db.prepare(`
+      SELECT c.*
+      FROM experience_candidates c
+      LEFT JOIN tasks t ON t.id = c.task_id
+      WHERE 1 = 1${clause}
+      ORDER BY c.created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(...params, limit) as Record<string, unknown>[];
+    return rows.map(rowToExperienceCandidate);
+  }
+
+  updateExperienceCandidate(candidateId: string, patch: Partial<ExperienceCandidate>): ExperienceCandidate | null {
+    const existing = this.getExperienceCandidate(candidateId);
+    if (!existing) return null;
+
+    const updated: ExperienceCandidate = {
+      ...existing,
+      ...patch,
+      id: existing.id,
+      taskId: existing.taskId,
+      type: existing.type,
+      createdAt: existing.createdAt,
+      sourceTaskSnapshot: patch.sourceTaskSnapshot ?? existing.sourceTaskSnapshot,
+    };
+
+    const stmt = this.db.prepare(`
+      UPDATE experience_candidates
+      SET
+        status = ?,
+        title = ?,
+        slug = ?,
+        content = ?,
+        summary = ?,
+        quality_score = ?,
+        source_task_snapshot_json = ?,
+        published_path = ?,
+        reviewed_at = ?,
+        accepted_at = ?,
+        rejected_at = ?
+      WHERE id = ?
+    `);
+
+    stmt.run(
+      updated.status,
+      updated.title,
+      updated.slug,
+      updated.content,
+      updated.summary ?? null,
+      updated.qualityScore ?? null,
+      JSON.stringify(updated.sourceTaskSnapshot),
+      updated.publishedPath ?? null,
+      updated.reviewedAt ?? null,
+      updated.acceptedAt ?? null,
+      updated.rejectedAt ?? null,
+      candidateId,
+    );
+
+    return this.getExperienceCandidate(candidateId);
+  }
+
+  createExperienceUsage(usage: ExperienceUsage): void {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      INSERT INTO experience_usages (
+        id, task_id, asset_type, asset_key, source_candidate_id, used_via, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    stmt.run(
+      usage.id,
+      usage.taskId,
+      usage.assetType,
+      usage.assetKey,
+      usage.sourceCandidateId ?? null,
+      usage.usedVia,
+      usage.createdAt,
+    );
+  }
+
+  getExperienceUsage(usageId: string): ExperienceUsage | null {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM experience_usages
+      WHERE id = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(usageId) as Record<string, unknown> | undefined;
+    return row ? rowToExperienceUsage(row) : null;
+  }
+
+  deleteExperienceUsage(usageId: string): ExperienceUsage | null {
+    this.ensureOpen();
+    const existing = this.getExperienceUsage(usageId);
+    if (!existing) return null;
+
+    this.db.prepare(`
+      DELETE FROM experience_usages
+      WHERE id = ?
+    `).run(usageId);
+
+    return existing;
+  }
+
+  findExperienceUsage(taskId: string, assetType: ExperienceAssetType, assetKey: string): ExperienceUsage | null {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM experience_usages
+      WHERE task_id = ? AND asset_type = ? AND asset_key = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(taskId, assetType, assetKey) as Record<string, unknown> | undefined;
+    return row ? rowToExperienceUsage(row) : null;
+  }
+
+  deleteExperienceUsageByTaskAsset(taskId: string, assetType: ExperienceAssetType, assetKey: string): ExperienceUsage | null {
+    this.ensureOpen();
+    const existing = this.findExperienceUsage(taskId, assetType, assetKey);
+    if (!existing) return null;
+    return this.deleteExperienceUsage(existing.id);
+  }
+
+  listExperienceUsages(limit = 20, filter?: ExperienceUsageListFilter): ExperienceUsage[] {
+    this.ensureOpen();
+    const { clause, params } = this.buildExperienceUsageFilterClause(filter);
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM experience_usages
+      WHERE 1 = 1${clause}
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(...params, limit) as Record<string, unknown>[];
+    return rows.map(rowToExperienceUsage);
+  }
+
+  getExperienceUsageStats(assetType: ExperienceAssetType, assetKey: string): ExperienceUsageStats {
+    this.ensureOpen();
+    const countRow = this.db.prepare(`
+      SELECT COUNT(*) as usage_count, MAX(created_at) as last_used_at
+      FROM experience_usages
+      WHERE asset_type = ? AND asset_key = ?
+    `).get(assetType, assetKey) as { usage_count?: number; last_used_at?: string | null } | undefined;
+
+    const lastUsageRow = this.db.prepare(`
+      SELECT task_id, source_candidate_id
+      FROM experience_usages
+      WHERE asset_type = ? AND asset_key = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(assetType, assetKey) as Record<string, unknown> | undefined;
+
+    return {
+      assetType,
+      assetKey,
+      sourceCandidateId: lastUsageRow ? optionalString(lastUsageRow.source_candidate_id) : undefined,
+      usageCount: Number(countRow?.usage_count ?? 0),
+      lastUsedAt: countRow?.last_used_at ?? undefined,
+      lastUsedTaskId: lastUsageRow ? optionalString(lastUsageRow.task_id) : undefined,
+    };
+  }
+
+  listExperienceUsageStats(limit = 50, filter?: Pick<ExperienceUsageListFilter, "assetType" | "assetKey" | "sourceCandidateId">): ExperienceUsageStats[] {
+    this.ensureOpen();
+    const { clause, params } = this.buildExperienceUsageStatsFilterClause(filter);
+    const stmt = this.db.prepare(`
+      SELECT asset_type, asset_key
+      FROM experience_usages
+      WHERE 1 = 1${clause}
+      GROUP BY asset_type, asset_key
+      ORDER BY MAX(created_at) DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(...params, limit) as Record<string, unknown>[];
+    return rows.map((row) => this.getExperienceUsageStats(
+      String(row.asset_type) as ExperienceAssetType,
+      String(row.asset_key),
+    ));
   }
 
   /** 获取索引状态 */
@@ -929,6 +1221,97 @@ export class MemoryStore {
       clause: conditions.length > 0 ? ` AND ${conditions.join(" AND ")}` : "",
       params,
     };
+  }
+
+  private buildExperienceCandidateFilterClause(filter?: ExperienceCandidateListFilter): { clause: string; params: unknown[] } {
+    if (!filter) return { clause: "", params: [] };
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter.taskId) {
+      conditions.push(`c.task_id = ?`);
+      params.push(filter.taskId);
+    }
+
+    if (filter.type) {
+      if (Array.isArray(filter.type) && filter.type.length > 0) {
+        const placeholders = filter.type.map(() => "?").join(", ");
+        conditions.push(`c.type IN (${placeholders})`);
+        params.push(...filter.type);
+      } else if (typeof filter.type === "string") {
+        conditions.push(`c.type = ?`);
+        params.push(filter.type);
+      }
+    }
+
+    if (filter.status) {
+      if (Array.isArray(filter.status) && filter.status.length > 0) {
+        const placeholders = filter.status.map(() => "?").join(", ");
+        conditions.push(`c.status IN (${placeholders})`);
+        params.push(...filter.status);
+      } else if (typeof filter.status === "string") {
+        conditions.push(`c.status = ?`);
+        params.push(filter.status);
+      }
+    }
+
+    if (filter.agentId) {
+      conditions.push(`t.agent_id = ?`);
+      params.push(filter.agentId);
+    }
+
+    return {
+      clause: conditions.length > 0 ? ` AND ${conditions.join(" AND ")}` : "",
+      params,
+    };
+  }
+
+  private buildExperienceUsageFilterClause(filter?: ExperienceUsageListFilter): { clause: string; params: unknown[] } {
+    if (!filter) return { clause: "", params: [] };
+
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter.taskId) {
+      conditions.push(`task_id = ?`);
+      params.push(filter.taskId);
+    }
+
+    if (filter.assetType) {
+      if (Array.isArray(filter.assetType) && filter.assetType.length > 0) {
+        const placeholders = filter.assetType.map(() => "?").join(", ");
+        conditions.push(`asset_type IN (${placeholders})`);
+        params.push(...filter.assetType);
+      } else if (typeof filter.assetType === "string") {
+        conditions.push(`asset_type = ?`);
+        params.push(filter.assetType);
+      }
+    }
+
+    if (filter.assetKey) {
+      conditions.push(`asset_key = ?`);
+      params.push(filter.assetKey);
+    }
+
+    if (filter.sourceCandidateId) {
+      conditions.push(`source_candidate_id = ?`);
+      params.push(filter.sourceCandidateId);
+    }
+
+    return {
+      clause: conditions.length > 0 ? ` AND ${conditions.join(" AND ")}` : "",
+      params,
+    };
+  }
+
+  private buildExperienceUsageStatsFilterClause(filter?: Pick<ExperienceUsageListFilter, "assetType" | "assetKey" | "sourceCandidateId">): { clause: string; params: unknown[] } {
+    if (!filter) return { clause: "", params: [] };
+    return this.buildExperienceUsageFilterClause({
+      assetType: filter.assetType,
+      assetKey: filter.assetKey,
+      sourceCandidateId: filter.sourceCandidateId,
+    });
   }
 
   /**
@@ -1524,6 +1907,39 @@ function rowToTaskRecord(row: Record<string, unknown>): TaskRecord {
   };
 }
 
+function rowToExperienceCandidate(row: Record<string, unknown>): ExperienceCandidate {
+  const sourceTaskSnapshot = safeParseExperienceSnapshot(asNullableString(row.source_task_snapshot_json));
+  return {
+    id: String(row.id),
+    taskId: String(row.task_id),
+    type: String(row.type) as ExperienceCandidateType,
+    status: String(row.status) as ExperienceCandidate["status"],
+    title: String(row.title),
+    slug: String(row.slug),
+    content: String(row.content),
+    summary: optionalString(row.summary),
+    qualityScore: optionalNumber(row.quality_score),
+    sourceTaskSnapshot,
+    publishedPath: optionalString(row.published_path),
+    createdAt: String(row.created_at),
+    reviewedAt: optionalString(row.reviewed_at),
+    acceptedAt: optionalString(row.accepted_at),
+    rejectedAt: optionalString(row.rejected_at),
+  };
+}
+
+function rowToExperienceUsage(row: Record<string, unknown>): ExperienceUsage {
+  return {
+    id: String(row.id),
+    taskId: String(row.task_id),
+    assetType: String(row.asset_type) as ExperienceAssetType,
+    assetKey: String(row.asset_key),
+    sourceCandidateId: optionalString(row.source_candidate_id),
+    usedVia: String(row.used_via) as ExperienceUsageVia,
+    createdAt: String(row.created_at),
+  };
+}
+
 // ========== Phase M-1: 元数据推断辅助函数 ==========
 
 /** 从 source_path 推断来源渠道 */
@@ -1589,6 +2005,20 @@ function safeParseStringArray(value: unknown): string[] | undefined {
   } catch {
     return undefined;
   }
+}
+
+function safeParseExperienceSnapshot(value: string | null): ExperienceSourceTaskSnapshot {
+  const parsed = safeParseJson(value) as ExperienceSourceTaskSnapshot | undefined;
+  if (parsed && typeof parsed.taskId === "string" && typeof parsed.conversationId === "string" && typeof parsed.source === "string" && typeof parsed.status === "string" && typeof parsed.startedAt === "string") {
+    return parsed;
+  }
+  return {
+    taskId: "",
+    conversationId: "",
+    source: "manual",
+    status: "failed",
+    startedAt: new Date(0).toISOString(),
+  };
 }
 
 function optionalString(value: unknown): string | undefined {
