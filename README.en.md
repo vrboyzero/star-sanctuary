@@ -805,6 +805,19 @@ Feedback, bug reports, and suggestions are welcome.
 
 ---
 
+## 💖 Sponsors
+
+Thank you to all the friends who support and sponsor the Star Sanctuary project. Your help makes the project better!
+
+### 🥇 First Special Sponsor
+
+**Special Thanks: 王道 (Wang Dao)**
+You are the **first sponsor** in the history of this project! This trust and support from 0 to 1 is a huge milestone for us. Thank you so much!
+
+*(More sponsor information will be displayed here in the future)*
+
+---
+
 ## License
 
 [MIT License](./LICENSE)
