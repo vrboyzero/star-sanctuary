@@ -521,16 +521,17 @@ export class MemoryManager {
     }
 
     getExperienceUsageStats(assetType: ExperienceAssetType, assetKey: string): ExperienceUsageStats {
-        return this.store.getExperienceUsageStats(assetType, assetKey);
+        return this.enrichExperienceUsageStats(this.store.getExperienceUsageStats(assetType, assetKey));
     }
 
     listExperienceUsageStats(limit = 50, filter?: Pick<ExperienceUsageListFilter, "assetType" | "assetKey" | "sourceCandidateId">): ExperienceUsageStats[] {
-        return this.store.listExperienceUsageStats(limit, filter);
+        return this.store.listExperienceUsageStats(limit, filter).map((item) => this.enrichExperienceUsageStats(item));
     }
 
     private toExperienceUsageSummary(usage: ExperienceUsage): ExperienceUsageSummary {
         const stats = this.store.getExperienceUsageStats(usage.assetType, usage.assetKey);
         return {
+            ...this.enrichExperienceUsageStats(stats),
             usageId: usage.id,
             taskId: usage.taskId,
             assetType: usage.assetType,
@@ -538,9 +539,35 @@ export class MemoryManager {
             sourceCandidateId: usage.sourceCandidateId ?? stats.sourceCandidateId,
             usedVia: usage.usedVia,
             createdAt: usage.createdAt,
-            usageCount: stats.usageCount,
-            lastUsedAt: stats.lastUsedAt,
-            lastUsedTaskId: stats.lastUsedTaskId,
+        };
+    }
+
+    private enrichExperienceUsageStats(stats: ExperienceUsageStats): ExperienceUsageStats {
+        return {
+            ...stats,
+            ...this.resolveExperienceCandidateAudit(stats.sourceCandidateId),
+        };
+    }
+
+    private resolveExperienceCandidateAudit(sourceCandidateId?: string): Pick<
+        ExperienceUsageStats,
+        "sourceCandidateType" | "sourceCandidateTitle" | "sourceCandidateStatus" | "sourceCandidateTaskId" | "sourceCandidatePublishedPath"
+    > {
+        if (!sourceCandidateId) {
+            return {};
+        }
+
+        const candidate = this.store.getExperienceCandidate(sourceCandidateId);
+        if (!candidate) {
+            return {};
+        }
+
+        return {
+            sourceCandidateType: candidate.type,
+            sourceCandidateTitle: candidate.title,
+            sourceCandidateStatus: candidate.status,
+            sourceCandidateTaskId: candidate.taskId,
+            sourceCandidatePublishedPath: candidate.publishedPath,
         };
     }
 

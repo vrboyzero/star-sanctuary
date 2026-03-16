@@ -366,11 +366,16 @@ test("memory viewer rpc returns task and memory data", async () => {
     messages: [{ type: "usage", inputTokens: 12, outputTokens: 8 }],
   });
   expect(completedTaskId).toBeTruthy();
+  const methodCandidate = memoryManager.promoteTaskToMethodCandidate(completedTaskId!);
+  expect(methodCandidate?.candidate.id).toBeTruthy();
+  const acceptedMethodCandidate = memoryManager.acceptExperienceCandidate(methodCandidate!.candidate.id);
+  expect(acceptedMethodCandidate?.publishedPath).toBeTruthy();
   (memoryManager as any).store.createExperienceUsage({
     id: "usage-viewer-method",
     taskId: completedTaskId!,
     assetType: "method",
-    assetKey: "viewer-method.md",
+    assetKey: path.basename(acceptedMethodCandidate!.publishedPath!),
+    sourceCandidateId: methodCandidate!.candidate.id,
     usedVia: "tool",
     createdAt: "2026-03-16T00:00:01.000Z",
   });
@@ -407,6 +412,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     ws.send(JSON.stringify({ type: "req", id: "memory-recent-category", method: "memory.recent", params: { limit: 5, filter: { category: "decision" } } }));
     ws.send(JSON.stringify({ type: "req", id: "usage-list", method: "experience.usage.list", params: { limit: 10, filter: { taskId: completedTaskId } } }));
     ws.send(JSON.stringify({ type: "req", id: "usage-stats", method: "experience.usage.stats", params: { limit: 10, filter: { assetType: "method" } } }));
+    ws.send(JSON.stringify({ type: "req", id: "usage-get", method: "experience.usage.get", params: { usageId: "usage-viewer-method" } }));
+    ws.send(JSON.stringify({ type: "req", id: "candidate-get", method: "experience.candidate.get", params: { candidateId: methodCandidate!.candidate.id } }));
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-stats"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list"));
@@ -416,6 +423,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-category"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-list"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-stats"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-get"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-get"));
 
     const taskListRes = frames.find((f) => f.type === "res" && f.id === "task-list");
     const memoryRecentRes = frames.find((f) => f.type === "res" && f.id === "memory-recent");
@@ -425,6 +434,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     const statsRes = frames.find((f) => f.type === "res" && f.id === "memory-stats");
     const usageListRes = frames.find((f) => f.type === "res" && f.id === "usage-list");
     const usageStatsRes = frames.find((f) => f.type === "res" && f.id === "usage-stats");
+    const usageGetRes = frames.find((f) => f.type === "res" && f.id === "usage-get");
+    const candidateGetRes = frames.find((f) => f.type === "res" && f.id === "candidate-get");
 
     expect(statsRes.ok).toBe(true);
     expect(statsRes.payload.status.chunks).toBeGreaterThan(0);
@@ -445,8 +456,16 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(usageListRes.ok).toBe(true);
     expect(usageListRes.payload.items.length).toBe(2);
     expect(usageStatsRes.ok).toBe(true);
-    expect(usageStatsRes.payload.items[0].assetKey).toBe("viewer-method.md");
+    expect(usageStatsRes.payload.items[0].assetKey).toBe(path.basename(acceptedMethodCandidate!.publishedPath!));
     expect(usageStatsRes.payload.items[0].usageCount).toBeGreaterThan(0);
+    expect(usageStatsRes.payload.items[0].sourceCandidateId).toBe(methodCandidate!.candidate.id);
+    expect(usageStatsRes.payload.items[0].sourceCandidatePublishedPath).toBe(acceptedMethodCandidate!.publishedPath);
+    expect(usageGetRes.ok).toBe(true);
+    expect(usageGetRes.payload.usage.id).toBe("usage-viewer-method");
+    expect(usageGetRes.payload.usage.sourceCandidateId).toBe(methodCandidate!.candidate.id);
+    expect(candidateGetRes.ok).toBe(true);
+    expect(candidateGetRes.payload.candidate.id).toBe(methodCandidate!.candidate.id);
+    expect(candidateGetRes.payload.candidate.publishedPath).toBe(acceptedMethodCandidate!.publishedPath);
 
     const usageIdToRevoke = usageListRes.payload.items[0].id;
     ws.send(JSON.stringify({ type: "req", id: "usage-revoke", method: "experience.usage.revoke", params: { usageId: usageIdToRevoke } }));
@@ -487,7 +506,9 @@ test("memory viewer rpc returns task and memory data", async () => {
       expect(taskGetRes.payload.task.usedSkills[0].assetKey).toBe("Viewer Skill");
     } else {
       expect(taskGetRes.payload.task.usedMethods.length).toBe(1);
-      expect(taskGetRes.payload.task.usedMethods[0].assetKey).toBe("viewer-method.md");
+      expect(taskGetRes.payload.task.usedMethods[0].assetKey).toBe(path.basename(acceptedMethodCandidate!.publishedPath!));
+      expect(taskGetRes.payload.task.usedMethods[0].sourceCandidateId).toBe(methodCandidate!.candidate.id);
+      expect(taskGetRes.payload.task.usedMethods[0].sourceCandidatePublishedPath).toBe(acceptedMethodCandidate!.publishedPath);
       expect(taskGetRes.payload.task.usedSkills.length).toBe(0);
     }
     expect(memoryGetRes.ok).toBe(true);

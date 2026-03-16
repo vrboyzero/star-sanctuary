@@ -240,9 +240,20 @@ export class ConversationStore {
         // 异步写入，不阻塞主线程
         fs.appendFile(filePath, line, "utf-8", (err) => {
             if (err) {
+                if (this.shouldIgnoreAppendError(filePath, err)) {
+                    return;
+                }
                 console.error(`Failed to append to conversation ${id}:`, err);
             }
         });
+    }
+
+    private shouldIgnoreAppendError(filePath: string, err: NodeJS.ErrnoException): boolean {
+        void filePath;
+        // appendFile 对不存在的目标文件本来会自动创建；
+        // 因此这里出现 ENOENT，本质上就是父目录在异步回调落地前已被清理。
+        // 这类情况不会影响当前请求响应和内存态上下文，直接静默，避免测试期 stderr 噪音。
+        return err.code === "ENOENT";
     }
 
     /**

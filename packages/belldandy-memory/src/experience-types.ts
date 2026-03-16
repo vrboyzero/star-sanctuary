@@ -77,6 +77,11 @@ export interface ExperienceUsageStats {
   assetType: ExperienceAssetType;
   assetKey: string;
   sourceCandidateId?: string;
+  sourceCandidateType?: ExperienceCandidateType;
+  sourceCandidateTitle?: string;
+  sourceCandidateStatus?: ExperienceCandidateStatus;
+  sourceCandidateTaskId?: string;
+  sourceCandidatePublishedPath?: string;
   usageCount: number;
   lastUsedAt?: string;
   lastUsedTaskId?: string;

@@ -1,6 +1,17 @@
 import type { Tool, ToolCallResult } from "../types.js";
 import { MemoryManager, getGlobalMemoryManager } from "@belldandy/memory";
-import type { ExperienceCandidate, ExperienceCandidateListFilter, ExperienceUsageVia, MemorySearchFilter, TaskRecord, TaskSearchFilter } from "@belldandy/memory";
+import type {
+    ExperienceCandidate,
+    ExperienceCandidateListFilter,
+    ExperienceUsage,
+    ExperienceUsageListFilter,
+    ExperienceUsageSummary,
+    ExperienceUsageVia,
+    MemorySearchFilter,
+    TaskExperienceDetail,
+    TaskRecord,
+    TaskSearchFilter,
+} from "@belldandy/memory";
 import { appendToTodayMemory, readMemoryFile, writeMemoryFile } from "@belldandy/memory";
 import { getGlobalSkillRegistry } from "../skill-registry.js";
 import { publishSkillCandidate } from "../skill-publisher.js";
@@ -659,6 +670,49 @@ export const taskPromoteSkillDraftTool: Tool = {
     },
 };
 
+export const experienceCandidateGetTool: Tool = {
+    definition: {
+        name: "experience_candidate_get",
+        description: "Get the full audit detail of one experience candidate by candidate ID.",
+        parameters: {
+            type: "object",
+            properties: {
+                candidate_id: {
+                    type: "string",
+                    description: "Experience candidate ID returned by experience_candidate_list or task_get.",
+                },
+            },
+            required: ["candidate_id"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const candidateId = String(args.candidate_id ?? "").trim();
+            const item = manager.getExperienceCandidate(candidateId);
+
+            return {
+                id: "experience_candidate_get",
+                name: "experience_candidate_get",
+                success: true,
+                output: item ? formatExperienceCandidateDetail(item) : "Experience candidate not found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_candidate_get",
+                name: "experience_candidate_get",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
 export const experienceCandidateListTool: Tool = {
     definition: {
         name: "experience_candidate_list",
@@ -837,6 +891,109 @@ export const experienceCandidateRejectTool: Tool = {
             return {
                 id: "experience_candidate_reject",
                 name: "experience_candidate_reject",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const experienceUsageGetTool: Tool = {
+    definition: {
+        name: "experience_usage_get",
+        description: "Get one experience usage record by usage ID for audit tracing.",
+        parameters: {
+            type: "object",
+            properties: {
+                usage_id: {
+                    type: "string",
+                    description: "Usage ID returned by task_get, experience_usage_list, or experience_usage_record.",
+                },
+            },
+            required: ["usage_id"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const usageId = String(args.usage_id ?? "").trim();
+            const usage = manager.getExperienceUsage(usageId);
+
+            return {
+                id: "experience_usage_get",
+                name: "experience_usage_get",
+                success: true,
+                output: usage ? formatExperienceUsageDetail(usage, manager) : "Experience usage not found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_usage_get",
+                name: "experience_usage_get",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+};
+
+export const experienceUsageListTool: Tool = {
+    definition: {
+        name: "experience_usage_list",
+        description: "List experience usage records for audit tracing. You can filter by task, asset, or source candidate.",
+        parameters: {
+            type: "object",
+            properties: {
+                limit: {
+                    type: "number",
+                    description: "Max number of usage records to return (default: 10).",
+                },
+                task_id: {
+                    type: "string",
+                    description: "Only list usage records for a specific task ID.",
+                },
+                asset_type: {
+                    type: "string",
+                    description: "Filter by asset type.",
+                    enum: ["method", "skill"],
+                },
+                asset_key: {
+                    type: "string",
+                    description: "Filter by exact asset key.",
+                },
+                source_candidate_id: {
+                    type: "string",
+                    description: "Filter by source experience candidate ID.",
+                },
+            },
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const manager = getMemoryManager(context.workspaceRoot);
+            const limit = (args.limit as number) || 10;
+            const filter = buildExperienceUsageFilter(args);
+            const items = manager.listExperienceUsages(limit, filter);
+
+            return {
+                id: "experience_usage_list",
+                name: "experience_usage_list",
+                success: true,
+                output: formatExperienceUsageList(items, manager) || "No experience usages found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "experience_usage_list",
+                name: "experience_usage_list",
                 success: false,
                 output: "",
                 error: err instanceof Error ? err.message : String(err),
@@ -1175,6 +1332,20 @@ function buildExperienceCandidateFilter(args: Record<string, unknown>, agentId?:
     return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
+function buildExperienceUsageFilter(args: Record<string, unknown>): ExperienceUsageListFilter | undefined {
+    const filter: ExperienceUsageListFilter = {};
+    if (args.task_id) filter.taskId = String(args.task_id);
+    if (args.asset_key) filter.assetKey = String(args.asset_key);
+    if (args.source_candidate_id) filter.sourceCandidateId = String(args.source_candidate_id);
+    if (args.asset_type) {
+        const value = String(args.asset_type).trim();
+        if (value === "method" || value === "skill") {
+            filter.assetType = value;
+        }
+    }
+    return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
 function formatTaskList(tasks: TaskRecord[]): string {
     return tasks.map((task) => {
         const title = task.title || task.objective || task.id;
@@ -1189,7 +1360,7 @@ function formatTaskList(tasks: TaskRecord[]): string {
     }).join("\n\n---\n\n");
 }
 
-function formatTaskDetail(task: TaskRecord & { memoryLinks?: Array<{ chunkId: string; relation: string; sourcePath?: string; memoryType?: string; snippet?: string }> }): string {
+function formatTaskDetail(task: TaskExperienceDetail): string {
     const lines: string[] = [];
     lines.push(`Task: ${task.title || task.objective || task.id}`);
     lines.push(`ID: ${task.id}`);
@@ -1260,32 +1431,25 @@ function formatTaskDetail(task: TaskRecord & { memoryLinks?: Array<{ chunkId: st
             if (item.snippet) {
                 lines.push(`  snippet: ${item.snippet}`);
             }
+            if (item.sourcePath) {
+                lines.push(`  source_path: ${item.sourcePath}`);
+            }
         }
     }
 
-    if (Array.isArray((task as any).usedMethods) && (task as any).usedMethods.length > 0) {
+    if (Array.isArray(task.usedMethods) && task.usedMethods.length > 0) {
         lines.push("");
         lines.push("Used Methods:");
-        for (const item of (task as any).usedMethods) {
-            const meta = [
-                item.usedVia ? `via=${item.usedVia}` : "",
-                typeof item.usageCount === "number" ? `count=${item.usageCount}` : "",
-                item.lastUsedAt ? `last=${item.lastUsedAt}` : "",
-            ].filter(Boolean).join(" | ");
-            lines.push(`- ${item.assetKey}${meta ? ` (${meta})` : ""}`);
+        for (const item of task.usedMethods) {
+            appendUsageSummaryLines(lines, item);
         }
     }
 
-    if (Array.isArray((task as any).usedSkills) && (task as any).usedSkills.length > 0) {
+    if (Array.isArray(task.usedSkills) && task.usedSkills.length > 0) {
         lines.push("");
         lines.push("Used Skills:");
-        for (const item of (task as any).usedSkills) {
-            const meta = [
-                item.usedVia ? `via=${item.usedVia}` : "",
-                typeof item.usageCount === "number" ? `count=${item.usageCount}` : "",
-                item.lastUsedAt ? `last=${item.lastUsedAt}` : "",
-            ].filter(Boolean).join(" | ");
-            lines.push(`- ${item.assetKey}${meta ? ` (${meta})` : ""}`);
+        for (const item of task.usedSkills) {
+            appendUsageSummaryLines(lines, item);
         }
     }
 
@@ -1330,6 +1494,50 @@ function formatExperienceCandidateList(items: ExperienceCandidate[]): string {
     }).join("\n\n---\n\n");
 }
 
+function formatExperienceCandidateDetail(candidate: ExperienceCandidate): string {
+    const lines = [
+        `Candidate: ${candidate.title}`,
+        `Candidate ID: ${candidate.id}`,
+        `Task ID: ${candidate.taskId}`,
+        `Type: ${candidate.type}`,
+        `Status: ${candidate.status}`,
+        `Slug: ${candidate.slug}`,
+        `Created: ${candidate.createdAt}`,
+    ];
+    if (typeof candidate.qualityScore === "number") {
+        lines.push(`Quality Score: ${candidate.qualityScore}`);
+    }
+    if (candidate.reviewedAt) lines.push(`Reviewed: ${candidate.reviewedAt}`);
+    if (candidate.acceptedAt) lines.push(`Accepted: ${candidate.acceptedAt}`);
+    if (candidate.rejectedAt) lines.push(`Rejected: ${candidate.rejectedAt}`);
+    if (candidate.publishedPath) lines.push(`Published Path: ${candidate.publishedPath}`);
+    if (candidate.summary) {
+        lines.push("", "Summary:", candidate.summary);
+    }
+    lines.push(
+        "",
+        "Source Task Snapshot:",
+        `- Task ID: ${candidate.sourceTaskSnapshot.taskId}`,
+        `- Conversation: ${candidate.sourceTaskSnapshot.conversationId}`,
+        `- Status: ${candidate.sourceTaskSnapshot.status}`,
+        `- Source: ${candidate.sourceTaskSnapshot.source}`,
+    );
+    if (candidate.sourceTaskSnapshot.title) {
+        lines.push(`- Title: ${candidate.sourceTaskSnapshot.title}`);
+    }
+    if (candidate.sourceTaskSnapshot.objective) {
+        lines.push(`- Objective: ${candidate.sourceTaskSnapshot.objective}`);
+    }
+    if (candidate.sourceTaskSnapshot.memoryLinks?.length) {
+        lines.push(`- Memory Links: ${candidate.sourceTaskSnapshot.memoryLinks.length}`);
+    }
+    if (candidate.sourceTaskSnapshot.artifactPaths?.length) {
+        lines.push(`- Artifacts: ${candidate.sourceTaskSnapshot.artifactPaths.join(", ")}`);
+    }
+    lines.push("", truncateForSummary(candidate.content, 600));
+    return lines.join("\n");
+}
+
 function formatExperienceCandidateDecision(candidate: ExperienceCandidate, action: "accepted" | "rejected"): string {
     const lines = [
         `Candidate ${action}.`,
@@ -1347,6 +1555,36 @@ function formatExperienceCandidateDecision(candidate: ExperienceCandidate, actio
 function formatExperienceCandidateInvalidState(candidate: ExperienceCandidate, action: "accept" | "reject"): string {
     const verb = action === "accept" ? "accepted" : "rejected";
     return `Experience candidate can only be ${verb} from draft status. Current status: ${candidate.status}`;
+}
+
+function formatExperienceUsageList(items: ExperienceUsage[], manager: MemoryManager): string {
+    return items.map((item) => formatExperienceUsageDetail(item, manager)).join("\n\n---\n\n");
+}
+
+function formatExperienceUsageDetail(usage: ExperienceUsage, manager: MemoryManager): string {
+    const lines = [
+        `Usage ID: ${usage.id}`,
+        `Task ID: ${usage.taskId}`,
+        `Type: ${usage.assetType}`,
+        `Asset: ${usage.assetKey}`,
+        `Used Via: ${usage.usedVia}`,
+        `Created: ${usage.createdAt}`,
+    ];
+
+    if (usage.sourceCandidateId) {
+        lines.push(`Source Candidate: ${usage.sourceCandidateId}`);
+        const candidate = manager.getExperienceCandidate(usage.sourceCandidateId);
+        if (candidate) {
+            lines.push(`Candidate Title: ${candidate.title}`);
+            lines.push(`Candidate Status: ${candidate.status}`);
+            lines.push(`Candidate Task: ${candidate.taskId}`);
+            if (candidate.publishedPath) {
+                lines.push(`Published Path: ${candidate.publishedPath}`);
+            }
+        }
+    }
+
+    return lines.join("\n");
 }
 
 function formatExperienceUsageRecordResult(
@@ -1382,4 +1620,34 @@ function formatExperienceUsageRevokeResult(
         lines.push(`Source Candidate: ${usage.sourceCandidateId}`);
     }
     return lines.join("\n");
+}
+
+function appendUsageSummaryLines(lines: string[], item: ExperienceUsageSummary): void {
+    const meta = [
+        item.usageId ? `usage=${item.usageId}` : "",
+        item.usedVia ? `via=${item.usedVia}` : "",
+        typeof item.usageCount === "number" ? `count=${item.usageCount}` : "",
+        item.lastUsedAt ? `last=${item.lastUsedAt}` : "",
+    ].filter(Boolean).join(" | ");
+    lines.push(`- ${item.assetKey}${meta ? ` (${meta})` : ""}`);
+    lines.push(`  task_id: ${item.taskId}`);
+    lines.push(`  created_at: ${item.createdAt}`);
+    if (item.sourceCandidateId) {
+        lines.push(`  source_candidate: ${item.sourceCandidateId}`);
+    }
+    if (item.sourceCandidateTitle) {
+        lines.push(`  candidate_title: ${item.sourceCandidateTitle}`);
+    }
+    if (item.sourceCandidateStatus) {
+        lines.push(`  candidate_status: ${item.sourceCandidateStatus}`);
+    }
+    if (item.sourceCandidateTaskId) {
+        lines.push(`  candidate_task: ${item.sourceCandidateTaskId}`);
+    }
+    if (item.sourceCandidatePublishedPath) {
+        lines.push(`  published_path: ${item.sourceCandidatePublishedPath}`);
+    }
+    if (item.lastUsedTaskId) {
+        lines.push(`  last_used_task: ${item.lastUsedTaskId}`);
+    }
 }

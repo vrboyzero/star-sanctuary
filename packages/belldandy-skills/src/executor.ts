@@ -45,6 +45,10 @@ export type ToolExecutorOptions = {
   broadcast?: (event: string, payload: Record<string, unknown>) => void;
 };
 
+type RegisterToolOptions = {
+  silentReplace?: boolean;
+};
+
 export class ToolExecutor {
   private readonly tools: Map<string, Tool>;
   private readonly workspaceRoot: string;
@@ -133,8 +137,8 @@ export class ToolExecutor {
   }
 
   /** 动态注册工具 */
-  registerTool(tool: Tool): void {
-    if (this.tools.has(tool.definition.name)) {
+  registerTool(tool: Tool, options?: RegisterToolOptions): void {
+    if (this.tools.has(tool.definition.name) && !options?.silentReplace) {
       (this.logger?.warn ?? console.warn)(`[ToolExecutor] 工具 "${tool.definition.name}" 已存在，将被覆盖`);
     }
     this.tools.set(tool.definition.name, tool);

@@ -22,6 +22,7 @@ const manager = {
   rejectExperienceCandidate: vi.fn(),
   recordExperienceUsage: vi.fn(),
   getExperienceUsage: vi.fn(),
+  listExperienceUsages: vi.fn(),
   revokeExperienceUsage: vi.fn(),
 };
 
@@ -310,6 +311,11 @@ describe("memory tools", () => {
           usageCount: 2,
           lastUsedAt: "2026-03-16T00:00:00.000Z",
           lastUsedTaskId: "task_1",
+          sourceCandidateId: "exp-method-1",
+          sourceCandidateTitle: "网页自动化方法候选",
+          sourceCandidateStatus: "accepted",
+          sourceCandidateTaskId: "task_source_method_1",
+          sourceCandidatePublishedPath: "E:/project/star-sanctuary/.star_sanctuary/methods/web-browser-automation.md",
         },
       ],
       usedSkills: [
@@ -323,6 +329,11 @@ describe("memory tools", () => {
           usageCount: 1,
           lastUsedAt: "2026-03-16T00:00:00.000Z",
           lastUsedTaskId: "task_1",
+          sourceCandidateId: "exp-skill-1",
+          sourceCandidateTitle: "网页自动化技能候选",
+          sourceCandidateStatus: "accepted",
+          sourceCandidateTaskId: "task_source_skill_1",
+          sourceCandidatePublishedPath: "E:/project/star-sanctuary/.star_sanctuary/skills/web-auto/SKILL.md",
         },
       ],
     });
@@ -336,6 +347,9 @@ describe("memory tools", () => {
     expect(result.output).toContain("记忆片段一");
     expect(result.output).toContain("Used Methods:");
     expect(result.output).toContain("web-browser-automation.md");
+    expect(result.output).toContain("usage-method-1");
+    expect(result.output).toContain("candidate_task: task_source_method_1");
+    expect(result.output).toContain("published_path: E:/project/star-sanctuary/.star_sanctuary/methods/web-browser-automation.md");
     expect(result.output).toContain("Used Skills:");
     expect(result.output).toContain("网页自动化技能草稿");
   });
@@ -396,6 +410,38 @@ describe("memory tools", () => {
     });
     expect(result.output).toContain("技能草稿");
     expect(result.output).toContain("Quality: 72");
+  });
+
+  it("experience_candidate_get should render candidate audit detail", async () => {
+    manager.getExperienceCandidate.mockReturnValue({
+      id: "exp-1",
+      taskId: "task_1",
+      type: "method",
+      status: "accepted",
+      title: "技能草稿",
+      slug: "skill-task-1",
+      content: "技能草稿正文",
+      summary: "技能摘要",
+      qualityScore: 72,
+      publishedPath: "E:/project/star-sanctuary/.star_sanctuary/methods/skill-task-1.md",
+      createdAt: "2026-03-15T00:00:00.000Z",
+      sourceTaskSnapshot: {
+        taskId: "task_1",
+        conversationId: "conv-1",
+        status: "success",
+        source: "chat",
+        objective: "沉淀经验",
+      },
+    });
+
+    const result = await mod.experienceCandidateGetTool.execute({
+      candidate_id: "exp-1",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Candidate ID: exp-1");
+    expect(result.output).toContain("Published Path: E:/project/star-sanctuary/.star_sanctuary/methods/skill-task-1.md");
+    expect(result.output).toContain("Source Task Snapshot:");
   });
 
   it("experience_candidate_accept should render accepted status", async () => {
@@ -522,6 +568,90 @@ describe("memory tools", () => {
     expect(result.success).toBe(true);
     expect(manager.recordExperienceUsage).not.toHaveBeenCalled();
     expect(result.output).toContain("No task found");
+  });
+
+  it("experience_usage_get should render candidate-backed audit detail", async () => {
+    manager.getExperienceUsage.mockReturnValue({
+      id: "usage-1",
+      taskId: "task_1",
+      assetType: "skill",
+      assetKey: "网页自动化技能草稿",
+      usedVia: "search",
+      sourceCandidateId: "exp-skill-1",
+      createdAt: "2026-03-16T00:00:00.000Z",
+    });
+    manager.getExperienceCandidate.mockReturnValue({
+      id: "exp-skill-1",
+      taskId: "task_source_skill_1",
+      type: "skill",
+      status: "accepted",
+      title: "网页自动化技能候选",
+      slug: "web-auto-skill",
+      content: "正文",
+      createdAt: "2026-03-15T00:00:00.000Z",
+      publishedPath: "E:/project/star-sanctuary/.star_sanctuary/skills/web-auto/SKILL.md",
+      sourceTaskSnapshot: {
+        taskId: "task_source_skill_1",
+        conversationId: "conv-source-1",
+        status: "success",
+        source: "chat",
+      },
+    });
+
+    const result = await mod.experienceUsageGetTool.execute({
+      usage_id: "usage-1",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Usage ID: usage-1");
+    expect(result.output).toContain("Source Candidate: exp-skill-1");
+    expect(result.output).toContain("Candidate Task: task_source_skill_1");
+    expect(result.output).toContain("Published Path: E:/project/star-sanctuary/.star_sanctuary/skills/web-auto/SKILL.md");
+  });
+
+  it("experience_usage_list should pass filters and render usage ids", async () => {
+    manager.listExperienceUsages.mockReturnValue([
+      {
+        id: "usage-1",
+        taskId: "task_1",
+        assetType: "method",
+        assetKey: "web-browser-automation.md",
+        usedVia: "tool",
+        sourceCandidateId: "exp-method-1",
+        createdAt: "2026-03-16T00:00:00.000Z",
+      },
+    ]);
+    manager.getExperienceCandidate.mockReturnValue({
+      id: "exp-method-1",
+      taskId: "task_source_method_1",
+      type: "method",
+      status: "accepted",
+      title: "网页自动化方法候选",
+      slug: "web-browser-automation",
+      content: "正文",
+      createdAt: "2026-03-15T00:00:00.000Z",
+      publishedPath: "E:/project/star-sanctuary/.star_sanctuary/methods/web-browser-automation.md",
+      sourceTaskSnapshot: {
+        taskId: "task_source_method_1",
+        conversationId: "conv-source-method-1",
+        status: "success",
+        source: "chat",
+      },
+    });
+
+    const result = await mod.experienceUsageListTool.execute({
+      limit: 5,
+      task_id: "task_1",
+      asset_type: "method",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.listExperienceUsages).toHaveBeenCalledWith(5, {
+      taskId: "task_1",
+      assetType: "method",
+    });
+    expect(result.output).toContain("Usage ID: usage-1");
+    expect(result.output).toContain("Candidate Title: 网页自动化方法候选");
   });
 
   it("experience_usage_revoke should revoke current task usage by asset", async () => {

@@ -111,9 +111,11 @@ const DEFAULT_METHODS = [
   "memory.stats",
   "memory.task.list",
   "memory.task.get",
+  "experience.candidate.get",
   "experience.candidate.list",
   "experience.candidate.accept",
   "experience.candidate.reject",
+  "experience.usage.get",
   "experience.usage.list",
   "experience.usage.stats",
   "experience.usage.revoke",
@@ -773,15 +775,17 @@ async function handleReq(
     "memory.search",
     "memory.get",
     "memory.recent",
-    "memory.stats",
-    "memory.task.list",
-    "memory.task.get",
-    "experience.candidate.list",
-    "experience.candidate.accept",
-    "experience.candidate.reject",
-    "experience.usage.list",
-    "experience.usage.stats",
-    "experience.usage.revoke",
+      "memory.stats",
+      "memory.task.list",
+      "memory.task.get",
+      "experience.candidate.get",
+      "experience.candidate.list",
+      "experience.candidate.accept",
+      "experience.candidate.reject",
+      "experience.usage.get",
+      "experience.usage.list",
+      "experience.usage.stats",
+      "experience.usage.revoke",
   ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
@@ -1537,6 +1541,26 @@ async function handleReq(
       return { type: "res", id: req.id, ok: true, payload: { task } };
     }
 
+    case "experience.candidate.get": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const candidateId = typeof params.candidateId === "string" ? params.candidateId.trim() : "";
+      if (!candidateId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "candidateId is required" } };
+      }
+
+      const candidate = manager.getExperienceCandidate(candidateId);
+      if (!candidate) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience candidate not found." } };
+      }
+
+      return { type: "res", id: req.id, ok: true, payload: { candidate } };
+    }
+
     case "experience.candidate.list": {
       const manager = getGlobalMemoryManager();
       if (!manager) {
@@ -1618,6 +1642,26 @@ async function handleReq(
       }
 
       return { type: "res", id: req.id, ok: true, payload: { candidate } };
+    }
+
+    case "experience.usage.get": {
+      const manager = getGlobalMemoryManager();
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const usageId = typeof params.usageId === "string" ? params.usageId.trim() : "";
+      if (!usageId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "usageId is required" } };
+      }
+
+      const usage = manager.getExperienceUsage(usageId);
+      if (!usage) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience usage not found." } };
+      }
+
+      return { type: "res", id: req.id, ok: true, payload: { usage } };
     }
 
     case "experience.usage.list": {

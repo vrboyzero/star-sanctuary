@@ -94,9 +94,12 @@ export {
   taskRecentTool,
   taskPromoteMethodTool,
   taskPromoteSkillDraftTool,
+  experienceCandidateGetTool,
   experienceCandidateListTool,
   experienceCandidateAcceptTool,
   experienceCandidateRejectTool,
+  experienceUsageGetTool,
+  experienceUsageListTool,
   experienceUsageRecordTool,
   experienceUsageRevokeTool,
 } from "./builtin/memory.js";

@@ -10,6 +10,8 @@ const promptEl = document.getElementById("prompt");
 const messagesEl = document.getElementById("messages");
 const modelSelectEl = document.getElementById("modelSelect");
 const agentSelectEl = document.getElementById("agentSelect");
+const PROMPT_MAX_HEIGHT_PX = 120;
+let promptBaseHeightPx = 0;
 
 // 文件树和编辑器 DOM 元素
 const sidebarEl = document.getElementById("sidebar");
@@ -96,6 +98,7 @@ const memoryViewerState = {
   items: [],
   selectedId: null,
   selectedTask: null,
+  selectedCandidate: null,
   pendingUsageRevokeId: null,
   usageOverview: {
     loading: false,
@@ -221,23 +224,59 @@ if (memoryChunkCategoryFilterEl) {
     if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
   });
 }
+function measurePromptBaseHeight() {
+  if (!promptEl) return;
+  const computed = window.getComputedStyle(promptEl);
+  const lineHeight = parseFloat(computed.lineHeight) || 24;
+  const paddingTop = parseFloat(computed.paddingTop) || 0;
+  const paddingBottom = parseFloat(computed.paddingBottom) || 0;
+  const borderTop = parseFloat(computed.borderTopWidth) || 0;
+  const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+  promptBaseHeightPx = Math.max(
+    promptBaseHeightPx,
+    Math.ceil(lineHeight + paddingTop + paddingBottom + borderTop + borderBottom)
+  );
+}
+
+function syncPromptHeight() {
+  if (!promptEl) return;
+  const baseHeight = promptBaseHeightPx || promptEl.scrollHeight;
+  const hasText = Boolean(promptEl.value);
+  if (!hasText) {
+    promptEl.style.height = baseHeight + "px";
+    promptEl.style.overflowY = "hidden";
+    return;
+  }
+  promptEl.style.height = "auto";
+  const nextHeight = Math.min(promptEl.scrollHeight, PROMPT_MAX_HEIGHT_PX);
+  promptEl.style.height = Math.max(baseHeight, nextHeight) + "px";
+  promptEl.style.overflowY = promptEl.scrollHeight > PROMPT_MAX_HEIGHT_PX ? "auto" : "hidden";
+}
+
+function initializePromptHeight() {
+  measurePromptBaseHeight();
+  syncPromptHeight();
+}
+
 promptEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendMessage();
   }
   // Auto-resize on keydown (for Shift+Enter immediately)
-  setTimeout(() => {
-    promptEl.style.height = "0";
-    promptEl.style.height = promptEl.scrollHeight + "px";
-  }, 0);
+  requestAnimationFrame(syncPromptHeight);
 });
 
 promptEl.addEventListener("input", () => {
-  // Auto-resize
-  promptEl.style.height = "0";
-  promptEl.style.height = promptEl.scrollHeight + "px";
+  syncPromptHeight();
 });
+
+initializePromptHeight();
+if (document.fonts?.ready) {
+  document.fonts.ready.then(() => {
+    initializePromptHeight();
+  }).catch(() => {});
+}
 
 // Initialize Voice Input
 initVoiceInput();
@@ -788,7 +827,7 @@ function formatBytes(bytes) {
 function restorePromptText(text) {
   if (!text) return;
   promptEl.value = text;
-  promptEl.dispatchEvent(new Event("input"));
+  syncPromptHeight();
 }
 
 function buildAttachmentsPayload(attachments) {
@@ -816,6 +855,7 @@ async function sendMessage() {
   const text = promptEl.value.trim();
   if (!text && !pendingAttachments.length) return;
   promptEl.value = "";
+  syncPromptHeight();
 
   if (!ws || !isReady) {
     queuedText = text;
@@ -2555,6 +2595,7 @@ function switchMemoryViewerTab(tab) {
   memoryViewerState.items = [];
   memoryViewerState.selectedId = null;
   memoryViewerState.selectedTask = null;
+  memoryViewerState.selectedCandidate = null;
   syncMemoryViewerUi();
   loadMemoryViewer(true);
 }
@@ -2586,6 +2627,7 @@ async function loadMemoryViewer(forceSelectFirst = false) {
     await loadTaskViewer(forceSelectFirst);
   } else {
     memoryViewerState.selectedTask = null;
+    memoryViewerState.selectedCandidate = null;
     await loadMemoryViewerStats();
     await loadMemoryChunkViewer(forceSelectFirst);
   }
@@ -2686,6 +2728,7 @@ async function loadTaskViewer(forceSelectFirst = false) {
 async function loadTaskDetail(taskId) {
   if (!taskId) {
     memoryViewerState.selectedTask = null;
+    memoryViewerState.selectedCandidate = null;
     memoryViewerState.pendingUsageRevokeId = null;
     renderMemoryViewerDetailEmpty("请选择一个 task。");
     renderMemoryViewerStats(memoryViewerState.stats);
@@ -2697,6 +2740,7 @@ async function loadTaskDetail(taskId) {
   const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId } });
   if (!res || !res.ok) {
     memoryViewerState.selectedTask = null;
+    memoryViewerState.selectedCandidate = null;
     memoryViewerState.pendingUsageRevokeId = null;
     renderMemoryViewerDetailEmpty(res?.error?.message || "Task 详情加载失败。");
     renderMemoryViewerStats(memoryViewerState.stats);
@@ -2704,6 +2748,13 @@ async function loadTaskDetail(taskId) {
   }
 
   memoryViewerState.selectedTask = res.payload?.task ?? null;
+  if (
+    memoryViewerState.selectedCandidate?.taskId &&
+    memoryViewerState.selectedTask?.id &&
+    memoryViewerState.selectedCandidate.taskId !== memoryViewerState.selectedTask.id
+  ) {
+    memoryViewerState.selectedCandidate = null;
+  }
   memoryViewerState.pendingUsageRevokeId = null;
   renderTaskList(memoryViewerState.items);
   renderTaskDetail(memoryViewerState.selectedTask);
@@ -2777,6 +2828,61 @@ async function loadMemoryDetail(chunkId) {
   renderMemoryDetail(res.payload?.item);
 }
 
+async function openTaskFromAudit(taskId) {
+  if (!taskId) return;
+  if (memoryViewerState.tab !== "tasks") {
+    memoryViewerState.tab = "tasks";
+    memoryViewerState.items = [];
+    memoryViewerState.selectedTask = null;
+    syncMemoryViewerUi();
+  }
+
+  memoryViewerState.selectedId = taskId;
+  await loadTaskViewer(false);
+
+  if (!Array.isArray(memoryViewerState.items) || !memoryViewerState.items.some((item) => item.id === taskId)) {
+    memoryViewerState.selectedId = taskId;
+    renderTaskList(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
+    await loadTaskDetail(taskId);
+  }
+}
+
+async function openMemoryFromAudit(chunkId) {
+  if (!chunkId) return;
+  if (memoryViewerState.tab !== "memories") {
+    memoryViewerState.tab = "memories";
+    memoryViewerState.items = [];
+    memoryViewerState.selectedTask = null;
+    memoryViewerState.selectedCandidate = null;
+    syncMemoryViewerUi();
+  }
+
+  memoryViewerState.selectedId = chunkId;
+  await loadMemoryChunkViewer(false);
+
+  if (!Array.isArray(memoryViewerState.items) || !memoryViewerState.items.some((item) => item.id === chunkId)) {
+    memoryViewerState.selectedId = chunkId;
+    renderMemoryList(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
+    await loadMemoryDetail(chunkId);
+  }
+}
+
+async function loadCandidateDetail(candidateId) {
+  if (!candidateId || !ws || !isReady) return;
+  const id = makeId();
+  const res = await sendReq({ type: "req", id, method: "experience.candidate.get", params: { candidateId } });
+  if (!res || !res.ok) {
+    showNotice("候选详情加载失败", res?.error?.message || "无法读取 candidate。", "error");
+    return;
+  }
+  memoryViewerState.selectedCandidate = res.payload?.candidate ?? null;
+  if (memoryViewerState.tab === "tasks" && memoryViewerState.selectedTask) {
+    renderTaskDetail(memoryViewerState.selectedTask);
+  } else {
+    renderCandidateOnlyDetail(memoryViewerState.selectedCandidate);
+  }
+}
+
 function renderMemoryViewerStats(stats) {
   if (!memoryViewerStatsEl) return;
   if (!stats) {
@@ -2820,6 +2926,7 @@ function renderMemoryViewerStats(stats) {
     <div class="memory-stat-card"><span class="memory-stat-label">最近采用时间</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(formatDateTime(lastUsedAt))}</strong></div>
     ${renderTaskUsageOverviewCard()}
   `;
+  bindStatsAuditJumpLinks();
 }
 
 function renderTaskList(items) {
@@ -2910,9 +3017,11 @@ function renderTaskDetail(task) {
   const usedMethods = Array.isArray(task.usedMethods) ? task.usedMethods : [];
   const usedSkills = Array.isArray(task.usedSkills) ? task.usedSkills : [];
   const lastUsageAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
+  const candidatePanel = renderCandidateDetailPanel(memoryViewerState.selectedCandidate);
 
   memoryViewerDetailEl.innerHTML = `
     <div class="memory-detail-shell">
+      ${candidatePanel}
       <div class="memory-detail-header">
         <div>
           <div class="memory-detail-title">${escapeHtml(title)}</div>
@@ -2983,6 +3092,7 @@ function renderTaskDetail(task) {
                 <div class="memory-inline-item-head">
                   <span class="memory-badge">${escapeHtml(link.relation || "used")}</span>
                   ${link.memoryType ? `<span class="memory-badge">${escapeHtml(link.memoryType)}</span>` : ""}
+                  <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "open memory")}</button>
                 </div>
                 ${link.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(link.sourcePath)}">${escapeHtml(link.sourcePath)}</button>` : ""}
                 ${link.snippet ? `<div class="memory-detail-text">${escapeHtml(link.snippet)}</div>` : ""}
@@ -3007,7 +3117,23 @@ function renderTaskDetail(task) {
     </div>
   `;
   bindMemoryPathLinks();
+  bindTaskAuditJumpLinks();
   bindTaskUsageRevokeButtons(task);
+}
+
+function renderCandidateOnlyDetail(candidate) {
+  if (!memoryViewerDetailEl) return;
+  if (!candidate) {
+    renderMemoryViewerDetailEmpty("Candidate 不存在。");
+    return;
+  }
+  memoryViewerDetailEl.innerHTML = `
+    <div class="memory-detail-shell">
+      ${renderCandidateDetailPanel(candidate)}
+    </div>
+  `;
+  bindMemoryPathLinks();
+  bindTaskAuditJumpLinks();
 }
 
 function renderMemoryDetail(item) {
@@ -3084,6 +3210,60 @@ function bindMemoryPathLinks() {
       const lineRaw = node.getAttribute("data-open-line");
       const startLine = lineRaw ? Number.parseInt(lineRaw, 10) : undefined;
       await openSourcePath(sourcePath, { startLine });
+    });
+  });
+}
+
+function bindStatsAuditJumpLinks() {
+  if (!memoryViewerStatsEl) return;
+  memoryViewerStatsEl.querySelectorAll("[data-open-task-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = node.getAttribute("data-open-task-id");
+      await openTaskFromAudit(taskId);
+    });
+  });
+  memoryViewerStatsEl.querySelectorAll("[data-open-source]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const sourcePath = node.getAttribute("data-open-source");
+      await openSourcePath(sourcePath);
+    });
+  });
+  memoryViewerStatsEl.querySelectorAll("[data-open-candidate-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const candidateId = node.getAttribute("data-open-candidate-id");
+      await loadCandidateDetail(candidateId);
+    });
+  });
+}
+
+function bindTaskAuditJumpLinks() {
+  if (!memoryViewerDetailEl) return;
+  memoryViewerDetailEl.querySelectorAll("[data-open-task-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const taskId = node.getAttribute("data-open-task-id");
+      await openTaskFromAudit(taskId);
+    });
+  });
+  memoryViewerDetailEl.querySelectorAll("[data-open-candidate-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const candidateId = node.getAttribute("data-open-candidate-id");
+      await loadCandidateDetail(candidateId);
+    });
+  });
+  memoryViewerDetailEl.querySelectorAll("[data-close-candidate-panel]").forEach((node) => {
+    node.addEventListener("click", () => {
+      memoryViewerState.selectedCandidate = null;
+      if (memoryViewerState.selectedTask) {
+        renderTaskDetail(memoryViewerState.selectedTask);
+      } else {
+        renderMemoryViewerDetailEmpty("请选择一个 task。");
+      }
+    });
+  });
+  memoryViewerDetailEl.querySelectorAll("[data-open-memory-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const chunkId = node.getAttribute("data-open-memory-id");
+      await openMemoryFromAudit(chunkId);
     });
   });
 }
@@ -3281,7 +3461,13 @@ function renderTaskUsageOverviewLane(title, items, tone) {
                 <div class="memory-usage-overview-key">${escapeHtml(item?.assetKey || "-")}</div>
                 <div class="memory-usage-overview-meta">
                   ${item?.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
+                  ${item?.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
                   <span>最近 ${escapeHtml(formatDateTime(item?.lastUsedAt))}</span>
+                </div>
+                <div class="memory-detail-badges">
+                  ${item?.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">候选详情</button>` : ""}
+                  ${item?.lastUsedTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">最近 Task</button>` : ""}
+                  ${item?.sourceCandidatePublishedPath ? `<button class="memory-usage-action-btn" data-open-source="${escapeHtml(item.sourceCandidatePublishedPath)}">打开产物</button>` : ""}
                 </div>
               </div>
               <div class="memory-usage-overview-bar-track">
@@ -3309,12 +3495,20 @@ function renderTaskUsageItems(items, assetType) {
           <div class="memory-usage-item-head">
             <div class="memory-usage-item-key">${escapeHtml(item.assetKey || "-")}</div>
             <div class="memory-usage-item-actions">
-              <div class="memory-detail-badges">
-                <span class="memory-badge">${escapeHtml(formatUsageVia(item.usedVia))}</span>
-                <span class="memory-badge">累计 ${formatCount(item.usageCount)}</span>
-              </div>
-              <button
-                class="memory-usage-action-btn"
+            <div class="memory-detail-badges">
+              ${item.sourceCandidateStatus ? `<span class="memory-badge">${escapeHtml(item.sourceCandidateStatus)}</span>` : ""}
+              ${item.sourceCandidateId ? `<span class="memory-badge">candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
+            </div>
+            <div class="memory-detail-badges">
+              <span class="memory-badge">${escapeHtml(formatUsageVia(item.usedVia))}</span>
+              <span class="memory-badge">累计 ${formatCount(item.usageCount)}</span>
+            </div>
+            ${item.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">候选详情</button>` : ""}
+            ${item.sourceCandidateTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.sourceCandidateTaskId)}">源 Task</button>` : ""}
+            ${item.sourceCandidatePublishedPath ? `<button class="memory-usage-action-btn" data-open-source="${escapeHtml(item.sourceCandidatePublishedPath)}">打开产物</button>` : ""}
+            ${item.lastUsedTaskId && item.lastUsedTaskId !== item.taskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">最近 Task</button>` : ""}
+            <button
+              class="memory-usage-action-btn"
                 data-revoke-usage-id="${escapeHtml(item.usageId || "")}"
                 data-revoke-task-id="${escapeHtml(item.taskId || "")}"
                 data-revoke-asset-key="${escapeHtml(item.assetKey || "")}"
@@ -3323,9 +3517,12 @@ function renderTaskUsageItems(items, assetType) {
             </div>
           </div>
           <div class="memory-usage-item-meta">
+            <span>usage ${escapeHtml(item.usageId || "-")}</span>
             <span>本 task 采用 ${escapeHtml(formatDateTime(item.createdAt))}</span>
             <span>全局最近 ${escapeHtml(formatDateTime(item.lastUsedAt || item.createdAt))}</span>
             ${item.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
+            ${item.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
+            ${item.sourceCandidateTaskId ? `<span>源 task ${escapeHtml(item.sourceCandidateTaskId)}</span>` : ""}
             ${item.lastUsedTaskId ? `<span>最近 task ${escapeHtml(item.lastUsedTaskId)}</span>` : ""}
           </div>
         </div>
@@ -3356,6 +3553,97 @@ function formatUsageVia(value) {
     default:
       return "manual";
   }
+}
+
+function renderCandidateDetailPanel(candidate) {
+  if (!candidate) return "";
+  const snapshot = candidate.sourceTaskSnapshot || {};
+  const memoryLinks = Array.isArray(snapshot.memoryLinks) ? snapshot.memoryLinks : [];
+  const artifactPaths = Array.isArray(snapshot.artifactPaths) ? snapshot.artifactPaths : [];
+  const toolCalls = Array.isArray(snapshot.toolCalls) ? snapshot.toolCalls : [];
+
+  return `
+    <div class="memory-detail-card">
+      <div class="memory-inline-item-head">
+        <span class="memory-detail-label">Candidate 详情面板</span>
+        <div class="memory-detail-badges">
+          <span class="memory-badge">${escapeHtml(candidate.type || "unknown")}</span>
+          <span class="memory-badge">${escapeHtml(candidate.status || "unknown")}</span>
+          <button class="memory-usage-action-btn" data-close-candidate-panel="1">关闭</button>
+        </div>
+      </div>
+      <div class="memory-detail-text"><strong>${escapeHtml(candidate.title || candidate.id || "未命名候选")}</strong></div>
+      <div class="memory-detail-grid">
+        <div class="memory-detail-card"><span class="memory-detail-label">Candidate ID</span><div class="memory-detail-text">${escapeHtml(candidate.id || "-")}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Source Task</span><div class="memory-detail-text">${candidate.taskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(candidate.taskId)}">${escapeHtml(candidate.taskId)}</button>` : "-"}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Slug</span><div class="memory-detail-text">${escapeHtml(candidate.slug || "-")}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Published Path</span><div class="memory-detail-text">${candidate.publishedPath ? `<button class="memory-path-link" data-open-source="${escapeHtml(candidate.publishedPath)}">${escapeHtml(candidate.publishedPath)}</button>` : "-"}</div></div>
+      </div>
+      ${candidate.summary ? `<div class="memory-detail-text">${escapeHtml(candidate.summary)}</div>` : ""}
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">来源快照</span>
+        <div class="memory-detail-grid">
+          <div class="memory-detail-card"><span class="memory-detail-label">Conversation</span><div class="memory-detail-text">${escapeHtml(snapshot.conversationId || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">状态</span><div class="memory-detail-text">${escapeHtml(snapshot.status || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">Source</span><div class="memory-detail-text">${escapeHtml(snapshot.source || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">开始</span><div class="memory-detail-text">${escapeHtml(formatDateTime(snapshot.startedAt))}</div></div>
+        </div>
+        ${snapshot.objective ? `<div class="memory-detail-text"><strong>Objective:</strong> ${escapeHtml(snapshot.objective)}</div>` : ""}
+        ${snapshot.summary ? `<div class="memory-detail-text"><strong>Summary:</strong> ${escapeHtml(snapshot.summary)}</div>` : ""}
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">来源记忆 (${memoryLinks.length})</span>
+        ${memoryLinks.length ? `
+          <div class="memory-inline-list">
+            ${memoryLinks.map((link) => `
+              <div class="memory-inline-item">
+                <div class="memory-inline-item-head">
+                  <span class="memory-badge">${escapeHtml(link.relation || "used")}</span>
+                  ${link.memoryType ? `<span class="memory-badge">${escapeHtml(link.memoryType)}</span>` : ""}
+                  <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "open memory")}</button>
+                </div>
+                ${link.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(link.sourcePath)}">${escapeHtml(link.sourcePath)}</button>` : ""}
+                ${link.snippet ? `<div class="memory-detail-text">${escapeHtml(link.snippet)}</div>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-detail-text">无来源记忆链接。</div>`}
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">来源产物 (${artifactPaths.length})</span>
+        ${artifactPaths.length ? `
+          <div class="memory-inline-list">
+            ${artifactPaths.map((artifactPath) => `
+              <div class="memory-inline-item">
+                <button class="memory-path-link" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(artifactPath)}</button>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-detail-text">无来源产物。</div>`}
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Tool Calls (${toolCalls.length})</span>
+        ${toolCalls.length ? `
+          <div class="memory-inline-list">
+            ${toolCalls.map((call) => `
+              <div class="memory-inline-item">
+                <div class="memory-inline-item-head">
+                  <span class="memory-badge">${escapeHtml(call.toolName || "unknown")}</span>
+                  <span class="memory-badge">${call.success ? "success" : "failed"}</span>
+                  <span class="memory-badge">${escapeHtml(formatDuration(call.durationMs))}</span>
+                </div>
+                ${call.note ? `<div class="memory-detail-text">${escapeHtml(call.note)}</div>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-detail-text">无工具调用记录。</div>`}
+      </div>
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Candidate Content</span>
+        <pre class="memory-detail-pre">${escapeHtml(candidate.content || "暂无内容")}</pre>
+      </div>
+    </div>
+  `;
 }
 
 function renderMemoryCategoryDistribution(stats) {

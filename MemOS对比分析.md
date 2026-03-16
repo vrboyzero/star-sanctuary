@@ -372,7 +372,7 @@ Belldandy 目前更像内建系统能力：
 - **经验沉淀仍偏 HITL**：已经有 `experience_candidate` 与发布闭环，但还没有 MemOS Local 那种自动升级、版本演化、公共技能发现体系。
 - **共享层仍以 memory 为主**：有 shared memory，但 shared experience / shared skill / discovery 市场还不完整。
 - **语义分类已有基础但仍偏浅**：已有 `preference/fact/decision/entity/experience/other`，但还没有更强的生命周期、图谱、多模态和反馈纠错体系。
-- **产品化可视界面偏弱**：缺少独立的 memory viewer / task viewer / skill viewer。
+- **产品化可视界面仍偏轻量**：已经有最小 memory/task/usage/candidate 审计闭环，但还没有更完整的 task / method / skill 独立聚合页。
 - **反馈纠错链路不明显**：没有 MemOS 那种“自然语言反馈修正记忆”的成体系能力。
 
 ---
@@ -548,10 +548,10 @@ Belldandy 现在已经不只是“想做这件事”，而是已经有了 task -
 Belldandy 最优路线不是“整体替换成 MemOS”，而是：
 
 1. 保留当前 **workspace-native memory** 基座
-2. 强化现有 **task retrieval / task recall**
+2. 继续补齐 **usage 覆盖率与审计口径**
 3. 从 **shared memory** 演进到 **shared experience / shared skill**
-4. 视产品需要补 **memory/task/experience viewer**
-5. 最后再考虑更轻量的 **candidate upgrade / version 演化**
+4. 在现有最小 Viewer 基础上继续补 **method / skill / candidate 聚合视图**
+5. 最后再考虑 **task retrieval / recall 强化** 与更轻量的 **candidate upgrade / version 演化**
 
 这条路线更稳，也更适合当前项目。
 
@@ -592,12 +592,12 @@ Belldandy 最优路线不是“整体替换成 MemOS”，而是：
 
 ## 12. 我的建议
 
-如果这份对比是为了指导后续设计，我建议 Belldandy 的记忆演进优先级按下面排：
+如果这份对比是为了指导当前这版之后的后续设计，我建议 Belldandy 的记忆演进优先级按下面排：
 
-1. **Task Retrieval / Task Recall**
+1. **Usage Coverage / Audit Completion**
 2. **Shared Experience / Shared Skill**
-3. **Memory / Task / Experience Viewer**
-4. **更细的语义分类标签**
+3. **Method / Skill / Candidate Viewer Aggregation**
+4. **Task Retrieval / Task Recall**
 5. **Candidate Upgrade / Version 演化**
 
 这样可以吸收 MemOS 最有价值的部分，又不会把当前系统一下子推向过高复杂度。
@@ -828,7 +828,7 @@ MemOS Local 不是纯 memory engine，它还会带来：
 
 - 缺更强的 task retrieval / recall
 - 缺共享经验层
-- 缺 viewer
+- 缺更完整的 viewer 聚合体验
 - 缺内容语义分类
 - 缺经验到 method/skill 的升级通道
 
@@ -869,13 +869,13 @@ MemOS Local 不是纯 memory engine，它还会带来：
 | 能力 | 当前状态 | 说明 |
 | --- | --- | --- |
 | Task 层 | 已落地基础闭环 | 已有 `tasks / task_memory_links / task_search / task_recent / task_get` |
-| Viewer | 已有最小可用版 | 已能做只读观察，后续重点是跳转与审计体验 |
+| Viewer | 已完成最小审计闭环 | 已能做 task / usage / candidate / memory / source path 的最小回看与跳转 |
 | Shared Memory | 已落地最小闭环 | 已有 `shared/private`、`scope=private/shared/all`、`memory_share_promote` |
 | Category | 已落地基础版 | 已有 `category` 字段、过滤与统计基础 |
 | Experience Candidate | 已落地第一版 | 已有候选生成、accept/reject、发布边界 |
-| Experience Usage | 已落地第一版 | 已有 usage 回写、展示与最小撤销 |
+| Experience Usage | 已完成本轮发布前补强 | 已补 usage 回写、展示、最小撤销、候选回链与审计跳转 |
 
-这意味着：当前真正需要继续做的，不是“重建记忆底座”，而是补 recall 质量、共享经验层、Viewer 审计体验和 usage 覆盖率。
+这意味着：当前真正需要继续做的，不是“重建记忆底座”，而是后续再补 recall 质量、共享经验层，以及剩余少量 usage 覆盖盲区。
 
 ---
 
@@ -883,10 +883,10 @@ MemOS Local 不是纯 memory engine，它还会带来：
 
 如果只保留最值得继续推进的事项，我建议按下面顺序看：
 
-1. **补 usage 挂点与审计跳转**
-2. **继续强化 task retrieval / recall**
-3. **从 shared memory 深化到 shared experience / shared skill**
-4. **补 Viewer 的 task / candidate / usage 联动体验**
+1. **继续补剩余 usage 挂点**
+2. **从 shared memory 深化到 shared experience / shared skill**
+3. **再做更完整的 method / skill / candidate 聚合视图**
+4. **继续强化 task retrieval / recall**
 5. **最后再做 candidate version / upgrade / 更复杂推荐**
 
 排序原则：
@@ -911,8 +911,11 @@ MemOS Local 不是纯 memory engine，它还会带来：
 - 能在后续 task 中消费这些经验资产
 - 能看到 usage
 - 能在误记时撤销 usage
+- 能从 Viewer 跳回 task / candidate / memory / source file / published asset
 
 那么当前已经满足。
+
+本轮另外已补一份发布前核对文档：`docs/memory-audit-smoke-checklist.md`，用于对 usage 覆盖率、审计跳转、Viewer 联动与 RPC 数据链做发布前 smoke。
 
 ---
 
@@ -949,8 +952,8 @@ MemOS Local 不是纯 memory engine，它还会带来：
 
 - **MemOS 更像平台，Belldandy 更像工程化记忆层。**
 - **Belldandy 当前已经具备 task、shared、category、experience candidate、usage 等基础闭环，不再是单纯的 memory search。**
-- **最值得继续做的是 recall 质量、共享经验层、Viewer 审计体验，而不是再造第二套记忆主链路。**
-- **当前版本可以发布，但仍应把 usage 覆盖率与审计跳转作为下一轮优化重点。**
+- **最值得继续做的是 recall 质量、共享经验层、Viewer 聚合体验，而不是再造第二套记忆主链路。**
+- **当前版本可以发布，但下一轮优化重点应转为 usage 剩余挂点与更完整的 Viewer 聚合体验。**
 
 ---
 ## 24. 第一阶段详细实施单：`Task` 层总结
@@ -1539,7 +1542,7 @@ Viewer 已完成最小收口：
 
 若继续产品化，优先考虑：
 
-1. Viewer 增加任务详情联动与来源跳转
+1. 继续补 usage 剩余挂点与审计口径
 2. 共享样本治理与回收机制
 3. 更清晰的 Agent / 系统层记忆边界展示
 
@@ -2042,13 +2045,14 @@ Viewer 已完成最小收口：
 - task 详情中新增：
   - `usedMethods`
   - `usedSkills`
-- method / skill 详情或聚合视图中新增：
+- usage / candidate 审计点中新增：
   - 来源 task
   - 来源 candidate
+  - published path
   - 使用次数
   - 最近使用时间
   - 最近使用 task
-- 若 UI 成本过高，第一版也至少要先补 RPC 数据结构
+- method / skill 的独立详情页与完整聚合页先后置
 
 当前第一版已按最小闭环落地到 Viewer：
 
@@ -2058,25 +2062,33 @@ Viewer 已完成最小收口：
 - task detail 已新增 Method Usage / Skill Usage 区块
   - 展示当前 task 采用的资产
   - 展示 `used_via / usage_count / last_used_at / source_candidate_id / last_used_task_id`
+- task / usage / candidate 已能互相跳转回看
+  - `task -> linked memory`
+  - `usage -> candidate`
+  - `usage -> source task`
+  - `usage -> published asset`
+- candidate 已有专属详情面板
+  - 可展示 source task snapshot / source memories / artifacts / published path
 
-### 30.4 具体文件落点建议
+### 30.4 具体文件落点（已落地 + 剩余扩展位）
 
-- `packages/belldandy-memory/src/store.ts`
-  - 增加 `experience_usages` 表与查询
 - `packages/belldandy-memory/src/manager.ts`
-  - 暴露记录经验使用与查询 usage 聚合的 API
+  - 已补 usage 聚合与 candidate 审计字段回填
 - `packages/belldandy-memory/src/experience-types.ts`
-  - 新增 usage 类型定义
+  - 已补 usage / candidate 审计字段定义
 - `packages/belldandy-skills/src/builtin/memory.ts`
-  - 补经验使用记录工具，或在现有工具调用后回写 usage
-- `packages/belldandy-skills/src/builtin/skills-tool.ts`
-  - skill 命中后补 usage 记录挂点
-- `packages/belldandy-skills/src/builtin/methodology/*.ts`
-  - method 搜索 / 调用后补 usage 记录挂点
+  - 已补 `experience_candidate_get` / `experience_usage_get` / `experience_usage_list`
+  - 已补 `task_get` 审计锚点输出
+- `packages/belldandy-skills/src/builtin/file.ts`
+  - 已补 `file_read -> methods / skills` 的 usage 自动识别
 - `packages/belldandy-core/src/server.ts`
-  - 增加 usage 相关 RPC
-- `packages/belldandy-web/src/*`
-  - 若继续扩 Viewer，则补“经验消费闭环”展示
+  - 已补 `experience.usage.get` / `experience.candidate.get`
+- `apps/web/public/app.js`
+  - 已补 usage overview 跳转、task detail 审计跳转、candidate 详情面板
+- 剩余扩展位
+  - `packages/belldandy-skills/src/builtin/skills-tool.ts`
+  - `packages/belldandy-skills/src/builtin/methodology/*.ts`
+  - 若继续扩 method / skill 聚合页，再补对应 Viewer/RPC
 
 ### 30.5 关键设计决策
 
@@ -2193,7 +2205,7 @@ Viewer 已完成最小收口：
   - **仍未完成**
     - 还未把更多 skill / method 消费入口自动挂接到 usage 回写
 
-- **P6-C Viewer / RPC 闭环展示：进行中（第一、二批已完成）**
+- **P6-C Viewer / RPC 闭环展示：已完成（前三批已完成）**
   - **第一批已完成**
     - `task_get / memory.task.get` 已带出：
       - `usedMethods`
@@ -2211,8 +2223,26 @@ Viewer 已完成最小收口：
       - Skill Usage 卡片区
       - 当前 task 的 usage 数量与最近采用时间
     - 前端已把 `usedMethods / usedSkills` 从“仅数据存在”推进到“可直接审计与回看”
+  - **第三批已完成**
+    - 已新增 candidate / usage 的最小审计 RPC：
+      - `experience.candidate.get`
+      - `experience.usage.get`
+    - `task_get` / Viewer 已补 usage 的审计锚点：
+      - `usage_id`
+      - `source_candidate_id`
+      - `source_candidate_task_id`
+      - `source_candidate_published_path`
+    - Viewer 已补最小审计跳转：
+      - `usage -> candidate`
+      - `usage -> source task`
+      - `usage -> published asset`
+      - `task -> linked memory`
+    - Viewer 已补 candidate 专属详情面板，可继续回看：
+      - source task snapshot
+      - source memories
+      - artifact / published path
   - **仍未完成**
-    - 暂未做更复杂的 method / skill 独立详情页
+    - 暂未做更复杂的 method / skill 独立详情页或完整聚合页
     - 暂未基于 usage 做推荐、排序或归档策略
 
 - **P6-D usage 纠错 / 撤销最小版：已完成**
@@ -2260,19 +2290,18 @@ Viewer 已完成最小收口：
      - 撤销审计日志
    - 因此该项已不再是“无机制”的缺口，而是“后续是否扩体验”的问题
 
-3. **Viewer 审计跳转闭环**
-   - 当前 Viewer 已能展示 `usedMethods / usedSkills`
-   - 但“来源 task -> candidate -> 正式资产 -> 后续 usage” 仍主要停留在可展示层
-   - 若要把“可审计”真正做实，后续至少应支持：
-     - 从 usage 回看来源 task
-     - 从 usage 回看来源 candidate
-     - 从 usage 跳到 method 文件或 skill 资产
+3. **更完整的 Viewer 聚合页**
+   - 当前最小审计跳转闭环已经补齐
+   - 但仍未做更完整的：
+     - method / skill 独立详情页
+     - candidate 聚合列表页
+     - 跨 task 的 usage 汇总操作页
 
 其中建议优先级如下：
 
-- **发布前建议优先补齐**：更多真实消费入口的 usage 挂点
+- **若发版前还有余量，优先继续补**：更多真实消费入口的 usage 挂点
 - **收口阶段可继续增强**：usage 撤销审计能力
-- **后续增强但建议保留在文档中**：Viewer 审计跳转闭环
+- **后续增强但建议保留在文档中**：更完整的 Viewer 聚合体验
 
 补一份更聚焦的“剩余 usage 挂点”优先级清单：
 
@@ -2301,7 +2330,7 @@ Viewer 已完成最小收口：
 
 当前剩余需求可以整理为两类：
 
-#### A. 发布前建议优先补齐
+#### A. 若发版前仍有余量，优先继续补齐
 
 1. **更多真实消费入口的 usage 挂点**
    - 这是当前唯一仍直接影响 usage 数据完整度与可信度的缺口
@@ -2309,9 +2338,9 @@ Viewer 已完成最小收口：
 
 #### B. 后续增强项
 
-2. **Viewer 审计跳转闭环**
-   - 让 `usage -> task / candidate / method 文件 / skill 资产` 真正可跳转、可核对
-   - 该项会显著增强审计体验，但不是当前发布阻塞
+2. **更完整的 Viewer 聚合体验**
+   - 当前最小审计跳转闭环已完成
+   - 后续重点转为 method / skill / candidate 的独立详情页与聚合视图
 
 3. **usage 撤销增强**
    - 当前最小撤销机制已完成
@@ -2337,9 +2366,9 @@ Viewer 已完成最小收口：
 2. 第六阶段当前已具备最小消费闭环：
    - `P6-A` 数据底座已完成
    - `P6-B` 已覆盖多条真实消费入口
-   - `P6-C` 已可在 Viewer 中回看 usage
+   - `P6-C` 已可在 Viewer 中回看并跳转 usage / candidate / source asset
    - `P6-D` 已支持误记后的最小撤销修正
-3. 当前剩余问题主要是“usage 覆盖率与审计体验还可继续增强”，而不是“主链路不可用”
+3. 当前剩余问题主要是“usage 覆盖率与 Viewer 聚合体验还可继续增强”，而不是“主链路不可用”
 
 因此，如果当前发布目标是：
 

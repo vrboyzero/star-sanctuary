@@ -595,7 +595,7 @@ body::before {
   display: flex;
   flex-direction: column;
   align-content: start;
-  gap: 32px;
+  gap: 10px;
   scroll-behavior: smooth;
 }
 
@@ -603,10 +603,10 @@ body::before {
   /* Let msg-content-wrapper constrain the width */
   max-width: 100%;
   min-width: 0;
-  padding: 12px 18px;
+  padding: 10px 14px;
   font-size: 15px;
-  line-height: 1.6;
-  margin-bottom: 32px;
+  line-height: 1.46;
+  margin-bottom: 0;
   /* Fallback for gap */
   white-space: pre-wrap;
   word-break: normal;
@@ -635,7 +635,7 @@ body::before {
 
 /* Markdown 元素内部样式限制 */
 .msg p {
-  margin: 0.5em 0;
+  margin: 0.08em 0;
 }
 
 .msg p:first-child {
@@ -651,9 +651,9 @@ body::before {
   max-width: 100%;
   overflow-x: auto;
   background: rgba(0, 0, 0, 0.3);
-  padding: 10px;
+  padding: 8px 10px;
   border-radius: 6px;
-  margin: 0.5em 0;
+  margin: 0.28em 0;
 }
 
 /* Code Block Wrapper and Copy Button */
@@ -661,7 +661,7 @@ body::before {
   background: rgba(0, 0, 0, 0.4);
   border: 1px solid var(--glass-border);
   border-radius: 8px;
-  margin: 0.5em 0;
+  margin: 0.28em 0;
   overflow: hidden;
 }
 
@@ -729,7 +729,7 @@ body::before {
   display: block;
   overflow-x: auto;
   border-collapse: collapse;
-  margin: 1em 0;
+  margin: 0.5em 0;
   white-space: nowrap;
   /* 不换行，靠横向滚动查看长表格 */
 }
@@ -759,9 +759,9 @@ body::before {
 /* 消息包装器（头像 + 内容） */
 .msg-wrapper {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-start;
-  margin-bottom: 16px;
+  margin-bottom: 0;
   max-width: 100%;
   width: 100%;
   box-sizing: border-box;
@@ -779,8 +779,8 @@ body::before {
 
 /* 头像 */
 .msg-avatar {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   background: var(--glass-surface);
   border: 1px solid var(--glass-border);
@@ -803,18 +803,18 @@ body::before {
 .msg-content-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   /* 计算最大宽度：100% 减去头像及其 gap。并且保证能在极窄屏幕下也能缩回 */
-  max-width: calc(100% - 48px);
+  max-width: calc(100% - 42px);
   min-width: 0;
   /* 这是 Flex 子元素不被内部撑爆的关键 */
 }
 
 /* 名称 */
 .msg-name {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
-  padding: 0 4px;
+  padding: 0 2px;
 }
 
 .msg-wrapper.me .msg-name {
@@ -1130,6 +1130,7 @@ body::before {
   font-size: 16px;
   resize: none;
   height: auto;
+  min-height: calc(1.5em + 16px);
   max-height: 120px;
   padding: 8px 0;
   font-family: inherit;

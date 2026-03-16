@@ -91,19 +91,29 @@ function isMemoryLinkWhitelistPath(relativePath: string): boolean {
   return normalized === "memory.md" || normalized.startsWith("memory/");
 }
 
-function detectMethodUsagePath(relativePath: string): string | null {
-  const normalized = relativePath.replace(/\\/g, "/");
-  if (!normalized.startsWith("methods/")) return null;
-  const fileName = path.posix.basename(normalized);
-  if (!fileName || !fileName.toLowerCase().endsWith(".md")) return null;
-  return fileName;
+function pathHasSegment(value: string, segment: string): boolean {
+  return value
+    .replace(/\\/g, "/")
+    .toLowerCase()
+    .split("/")
+    .filter(Boolean)
+    .includes(segment.toLowerCase());
 }
 
-function detectSkillUsageName(relativePath: string, content: string): string | null {
+function detectMethodUsagePath(relativePath: string, absolutePath: string): string | null {
   const normalized = relativePath.replace(/\\/g, "/");
-  if (!normalized.startsWith("skills/") || !normalized.toLowerCase().endsWith("/skill.md")) {
-    return null;
+  const fileName = path.posix.basename(normalized);
+  if (!fileName || !fileName.toLowerCase().endsWith(".md")) return null;
+  if (pathHasSegment(normalized, "methods") || pathHasSegment(absolutePath, "methods")) {
+    return fileName;
   }
+  return null;
+}
+
+function detectSkillUsageName(relativePath: string, absolutePath: string, content: string): string | null {
+  const normalized = relativePath.replace(/\\/g, "/");
+  const fileName = path.posix.basename(normalized).toLowerCase();
+  if (fileName !== "skill.md" && path.basename(absolutePath).toLowerCase() !== "skill.md") return null;
 
   try {
     const parsed = parseSkillMd(content, { type: "user", path: normalized });
@@ -113,19 +123,19 @@ function detectSkillUsageName(relativePath: string, content: string): string | n
   }
 }
 
-function tryRecordExperienceUsageFromFileRead(relativePath: string, content: string, conversationId: string) {
+function tryRecordExperienceUsageFromFileRead(relativePath: string, absolutePath: string, content: string, conversationId: string) {
   try {
     const manager = getGlobalMemoryManager();
     const task = manager?.getTaskByConversation(conversationId);
     if (!manager || !task) return;
 
-    const methodFile = detectMethodUsagePath(relativePath);
+    const methodFile = detectMethodUsagePath(relativePath, absolutePath);
     if (methodFile) {
       manager.recordMethodUsage(task.id, methodFile, { usedVia: "tool" });
       return;
     }
 
-    const skillName = detectSkillUsageName(relativePath, content);
+    const skillName = detectSkillUsageName(relativePath, absolutePath, content);
     if (skillName) {
       manager.recordSkillUsage(task.id, skillName, { usedVia: "tool" });
     }
@@ -275,11 +285,11 @@ export const fileReadTool: Tool = {
 
         const manager = getGlobalMemoryManager();
         const underMainRoot = isUnderRoot(absolute, context.workspaceRoot);
-        if (manager && underMainRoot.ok) {
-          if (isMemoryLinkWhitelistPath(relative)) {
+        if (manager) {
+          if (underMainRoot.ok && isMemoryLinkWhitelistPath(relative)) {
             await manager.linkTaskMemoriesFromSource(context.conversationId, relative, "used");
           }
-          tryRecordExperienceUsageFromFileRead(relative, content, context.conversationId);
+          tryRecordExperienceUsageFromFileRead(relative, absolute, content, context.conversationId);
         }
 
         return {

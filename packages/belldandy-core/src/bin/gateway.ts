@@ -48,9 +48,12 @@ import {
   taskRecentTool,
   taskPromoteMethodTool,
   taskPromoteSkillDraftTool,
+  experienceCandidateGetTool,
   experienceCandidateListTool,
   experienceCandidateAcceptTool,
   experienceCandidateRejectTool,
+  experienceUsageGetTool,
+  experienceUsageListTool,
   experienceUsageRecordTool,
   experienceUsageRevokeTool,
   browserOpenTool,
@@ -555,15 +558,18 @@ const toolsToRegister = toolsEnabled
     memoryWriteTool,
     memorySharePromoteTool,
     taskSearchTool,
-    taskGetTool,
-    taskRecentTool,
-    taskPromoteMethodTool,
-    taskPromoteSkillDraftTool,
-    experienceCandidateListTool,
-    experienceCandidateAcceptTool,
-    experienceCandidateRejectTool,
-    experienceUsageRecordTool,
-    experienceUsageRevokeTool,
+      taskGetTool,
+      taskRecentTool,
+      taskPromoteMethodTool,
+      taskPromoteSkillDraftTool,
+      experienceCandidateGetTool,
+      experienceCandidateListTool,
+      experienceCandidateAcceptTool,
+      experienceCandidateRejectTool,
+      experienceUsageGetTool,
+      experienceUsageListTool,
+      experienceUsageRecordTool,
+      experienceUsageRevokeTool,
     getUserUuidTool, // UUID获取工具（始终加载）
     getMessageSenderInfoTool, // 发送者信息工具（始终加载）
     getRoomMembersTool, // 房间成员工具（始终加载）
@@ -673,7 +679,7 @@ const toolExecutor = new ToolExecutor({
 
 // 4. Log enabled tools
 if (toolsEnabled) {
-  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, memory_share_promote, task_search, task_get, task_recent, browser_*, log_read, log_search";
+  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, memory_share_promote, task_search, task_get, task_recent, experience_candidate_get, experience_candidate_list, experience_usage_get, experience_usage_list, browser_*, log_read, log_search";
   if (dangerousToolsEnabled) {
     logger.warn("tools", "⚠️ DANGEROUS_TOOLS_ENABLED=true: run_command is active");
     logger.info("tools", `Tools enabled: ${safeTools}, run_command`);
@@ -2035,11 +2041,11 @@ try {
     // 注册 leave_room 和 join_room 工具（带 channel 实例）
     if (toolsEnabled) {
       const leaveRoomToolWithChannel = createLeaveRoomTool(communityChannel);
-      toolExecutor.registerTool(leaveRoomToolWithChannel);
+      toolExecutor.registerTool(leaveRoomToolWithChannel, { silentReplace: true });
       logger.info("community", "Registered leave_room tool with channel instance");
 
       const joinRoomToolWithChannel = createJoinRoomTool(communityChannel);
-      toolExecutor.registerTool(joinRoomToolWithChannel);
+      toolExecutor.registerTool(joinRoomToolWithChannel, { silentReplace: true });
       logger.info("community", "Registered join_room tool with channel instance");
     }
 

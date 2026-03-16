@@ -11,6 +11,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import spawn from "cross-spawn";
 import type { ChildProcess } from "node:child_process";
+import path from "node:path";
 
 import {
   type MCPServerConfig,
@@ -26,6 +27,64 @@ import {
   isSSETransport,
 } from "./types.js";
 import { mcpLog, mcpWarn, mcpError } from "./logger-adapter.js";
+
+const FILESYSTEM_SERVER_PACKAGE = "@modelcontextprotocol/server-filesystem";
+const EXTRA_WORKSPACE_ROOTS_ENV_KEY = "BELLDANDY_EXTRA_WORKSPACE_ROOTS";
+
+function normalizeComparablePath(input: string): string {
+  const resolved = path.resolve(input);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function parseExtraWorkspaceRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env[EXTRA_WORKSPACE_ROOTS_ENV_KEY]?.trim();
+  if (!raw) return [];
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const resolved = path.resolve(trimmed);
+    const comparable = normalizeComparablePath(resolved);
+    if (seen.has(comparable)) continue;
+    seen.add(comparable);
+    result.push(resolved);
+  }
+  return result;
+}
+
+export function expandFilesystemServerArgs(
+  command: string,
+  args: string[] | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] | undefined {
+  const currentArgs = [...(args ?? [])];
+  const extraRoots = parseExtraWorkspaceRoots(env);
+  if (!extraRoots.length) return currentArgs;
+
+  const packageIndex = currentArgs.lastIndexOf(FILESYSTEM_SERVER_PACKAGE);
+  const commandLooksFilesystem = command.includes("server-filesystem");
+  if (packageIndex < 0 && !commandLooksFilesystem) {
+    return currentArgs;
+  }
+
+  const rootsStartIndex = packageIndex >= 0 ? packageIndex + 1 : 0;
+  const prefix = currentArgs.slice(0, rootsStartIndex);
+  const existingRoots = currentArgs.slice(rootsStartIndex);
+  const seen = new Set(existingRoots.map((entry) => normalizeComparablePath(entry)));
+  const appendedRoots: string[] = [];
+
+  for (const root of extraRoots) {
+    const comparable = normalizeComparablePath(root);
+    if (seen.has(comparable)) continue;
+    seen.add(comparable);
+    appendedRoots.push(root);
+  }
+
+  if (!appendedRoots.length) return currentArgs;
+  return [...prefix, ...existingRoots, ...appendedRoots];
+}
 
 // ============================================================================
 // MCP 客户端类
@@ -359,12 +418,19 @@ export class MCPClient {
   private createStdioTransport(
     config: MCPServerConfig["transport"] & { type: "stdio" }
   ): Transport {
-    mcpLog(`mcp:${this.config.id}`, `创建 stdio 传输: ${config.command} ${(config.args || []).join(" ")}`);
+    const expandedArgs = expandFilesystemServerArgs(config.command, config.args, process.env);
+    if ((expandedArgs?.length ?? 0) !== (config.args?.length ?? 0)) {
+      mcpLog(
+        `mcp:${this.config.id}`,
+        `filesystem roots expanded from ${EXTRA_WORKSPACE_ROOTS_ENV_KEY}: ${(expandedArgs || []).join(" ")}`
+      );
+    }
+    mcpLog(`mcp:${this.config.id}`, `创建 stdio 传输: ${config.command} ${(expandedArgs || []).join(" ")}`);
 
     // 使用 cross-spawn 创建子进程，支持跨平台
     const transport = new StdioClientTransport({
       command: config.command,
-      args: config.args,
+      args: expandedArgs,
       env: config.env,
       cwd: config.cwd,
       stderr: "inherit",

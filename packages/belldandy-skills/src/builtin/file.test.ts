@@ -205,6 +205,62 @@ description: 用于网页自动化任务
         usedVia: "tool",
       });
     });
+
+    it("should record method usage when reading an absolute file under extraWorkspaceRoots", async () => {
+      const methodsRoot = path.join(tempDir, "external-methods");
+      const methodPath = path.join(methodsRoot, "methods", "跨根目录方法.md");
+      await fs.mkdir(path.dirname(methodPath), { recursive: true });
+      await fs.writeFile(methodPath, "# 方法\n\n跨根目录内容", "utf-8");
+      memoryManager.getTaskByConversation.mockReturnValue({
+        id: "task-file-method-extra-1",
+        conversationId: "test-conv",
+      });
+
+      const result = await fileReadTool.execute({
+        path: methodPath,
+      }, {
+        ...baseContext,
+        extraWorkspaceRoots: [methodsRoot],
+      });
+
+      expect(result.success).toBe(true);
+      expect(memoryManager.recordMethodUsage).toHaveBeenCalledWith("task-file-method-extra-1", "跨根目录方法.md", {
+        usedVia: "tool",
+      });
+    });
+
+    it("should record skill usage when reading an absolute SKILL.md under extraWorkspaceRoots", async () => {
+      const skillsRoot = path.join(tempDir, "external-skills");
+      const skillPath = path.join(skillsRoot, "web-auto", "SKILL.md");
+      await fs.mkdir(path.dirname(skillPath), { recursive: true });
+      await fs.writeFile(
+        skillPath,
+        `---
+name: 跨根目录 Skill
+description: 通过额外根目录读取
+---
+
+1. 打开浏览器
+2. 执行自动化`,
+        "utf-8",
+      );
+      memoryManager.getTaskByConversation.mockReturnValue({
+        id: "task-file-skill-extra-1",
+        conversationId: "test-conv",
+      });
+
+      const result = await fileReadTool.execute({
+        path: skillPath,
+      }, {
+        ...baseContext,
+        extraWorkspaceRoots: [skillsRoot],
+      });
+
+      expect(result.success).toBe(true);
+      expect(memoryManager.recordSkillUsage).toHaveBeenCalledWith("task-file-skill-extra-1", "跨根目录 Skill", {
+        usedVia: "tool",
+      });
+    });
   });
 
   describe("file_write", () => {

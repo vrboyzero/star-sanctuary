@@ -213,6 +213,36 @@ describe("ToolExecutor", () => {
 
     expect(definitions).toHaveLength(2);
   });
+
+  it("should support silent replacement for dynamic tools", () => {
+    const warns: string[] = [];
+    const replacementTool: Tool = {
+      ...echoTool,
+      async execute(args): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "echo",
+          success: true,
+          output: `Replacement: ${args.message}`,
+          durationMs: 0,
+        };
+      },
+    };
+    const executor = new ToolExecutor({
+      tools: [echoTool],
+      workspaceRoot: "/tmp/test",
+      logger: {
+        info() {},
+        warn(message) { warns.push(message); },
+        error() {},
+      },
+    });
+
+    executor.registerTool(replacementTool, { silentReplace: true });
+
+    expect(warns).toHaveLength(0);
+    expect(executor.hasTool("echo")).toBe(true);
+  });
 });
 
 describe("DEFAULT_POLICY", () => {
