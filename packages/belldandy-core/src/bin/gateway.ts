@@ -131,6 +131,7 @@ import { PluginRegistry } from "@belldandy/plugins";
 import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
+import { resolveMemoryIndexPaths } from "../memory-index-paths.js";
 
 // --- Env Loading ---
 let runtimePaths = resolveGatewayRuntimePaths({
@@ -1340,10 +1341,8 @@ const isTtsEnabledFn = () => {
   return ttsEnv === "true" || fs.existsSync(ttsEnabledPath);
 };
 
-// 7.7 Init unified MemoryManager (indexes both sessions and workspace memory files)
-const memoryDir = path.join(stateDir, "memory");
-const memoryAdditionalRoots: string[] = [memoryDir, ...(extraWorkspaceRoots ?? [])];
-const memoryAdditionalFiles: string[] = [path.join(stateDir, "MEMORY.md")];
+// 7.7 Init unified MemoryManager (indexes only state-dir memory sources)
+const memoryIndexPaths = resolveMemoryIndexPaths(stateDir);
 const embeddingApiKey = readEnv("BELLDANDY_EMBEDDING_OPENAI_API_KEY") ?? openaiApiKey;
 const embeddingBaseUrl = readEnv("BELLDANDY_EMBEDDING_OPENAI_BASE_URL") ?? openaiBaseUrl;
 const embeddingModel = readEnv("BELLDANDY_EMBEDDING_MODEL");
@@ -1398,9 +1397,9 @@ const rerankerMinScore = Number(readEnv("BELLDANDY_RERANKER_MIN_SCORE")) || unde
 const rerankerLengthNormAnchor = Number(readEnv("BELLDANDY_RERANKER_LENGTH_NORM_ANCHOR")) || undefined;
 
 const unifiedMemoryManager = new MemoryManager({
-  workspaceRoot: sessionsDir,
-  additionalRoots: memoryAdditionalRoots,
-  additionalFiles: memoryAdditionalFiles,
+  workspaceRoot: memoryIndexPaths.sessionsDir,
+  additionalRoots: memoryIndexPaths.additionalRoots,
+  additionalFiles: memoryIndexPaths.additionalFiles,
   storePath: path.join(stateDir, "memory.sqlite"),
   modelsDir: path.join(stateDir, "models"),
   stateDir,
@@ -1452,7 +1451,7 @@ unifiedMemoryManager.indexWorkspace().catch(err => {
 });
 logger.info(
   "memory",
-  `Unified MemoryManager initialized (sessions + ${memoryAdditionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
+  `Unified MemoryManager initialized (stateDir memory sources: sessions + ${memoryIndexPaths.additionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
 );
 
 // ========== 后台任务调度：pause/resume + 空闲摘要 ==========

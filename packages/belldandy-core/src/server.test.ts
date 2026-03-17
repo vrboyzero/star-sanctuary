@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, test, beforeAll } from "vitest";
+import { expect, test, beforeAll, vi } from "vitest";
 import WebSocket from "ws";
 
 import { AgentRegistry, type BelldandyAgent, MockAgent } from "@belldandy/agent";
@@ -214,6 +214,191 @@ test("message.send forwards modelId to AgentRegistry.create as modelOverride", a
     await closeP;
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+  }
+});
+
+test("message.send emits auto run token result and conversation.meta returns persisted records", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      yield { type: "status", status: "running" as const };
+      yield {
+        type: "usage" as const,
+        systemPromptTokens: 3,
+        contextTokens: 7,
+        inputTokens: 12,
+        outputTokens: 8,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        modelCalls: 1,
+      };
+      yield { type: "final" as const, text: `echo:${input.text}` };
+      yield { type: "status" as const, status: "done" };
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => agent,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    const conversationId = "conv-token-auto";
+    const reqId = "token-auto";
+    ws.send(JSON.stringify({
+      type: "req",
+      id: reqId,
+      method: "message.send",
+      params: { text: "统计一下", conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "token.counter.result"));
+
+    const taskEvent = frames.find((f) => f.type === "event" && f.event === "token.counter.result");
+    expect(taskEvent.payload).toMatchObject({
+      conversationId,
+      name: "run",
+      inputTokens: 12,
+      outputTokens: 8,
+      totalTokens: 20,
+      auto: true,
+    });
+
+    const metaReqId = "conversation-meta";
+    ws.send(JSON.stringify({
+      type: "req",
+      id: metaReqId,
+      method: "conversation.meta",
+      params: { conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === metaReqId && f.ok === true));
+    const metaRes = frames.find((f) => f.type === "res" && f.id === metaReqId);
+    expect(metaRes.payload.taskTokenResults).toHaveLength(1);
+    expect(metaRes.payload.taskTokenResults[0]).toMatchObject({
+      name: "run",
+      inputTokens: 12,
+      outputTokens: 8,
+      totalTokens: 20,
+      auto: true,
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("message.send userUuid overrides handshake userUuid for agent input and token upload", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const seenUserUuids: Array<string | undefined> = [];
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      seenUserUuids.push(input.userUuid);
+      yield {
+        type: "usage" as const,
+        systemPromptTokens: 0,
+        contextTokens: 0,
+        inputTokens: 5,
+        outputTokens: 4,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        modelCalls: 1,
+      };
+      yield { type: "final" as const, text: "ok" };
+    },
+  };
+
+  try {
+    await withEnv({
+      BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED: "true",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_URL: "http://token-upload.local/api/internal/token-usage",
+      BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY: "gro_test_upload_key",
+    }, async () => {
+      const server = await startGatewayServer({
+        port: 0,
+        auth: { mode: "none" },
+        webRoot: resolveWebRoot(),
+        stateDir,
+        agentFactory: () => agent,
+      });
+
+      const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+      const frames: any[] = [];
+      const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+      ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+      try {
+        await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+        ws.send(JSON.stringify({
+          type: "connect",
+          role: "web",
+          auth: { mode: "none" },
+          userUuid: "connect-uuid",
+        }));
+        await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+
+        ws.send(JSON.stringify({
+          type: "req",
+          id: "pairing-message-uuid",
+          method: "message.send",
+          params: { text: "pairing-init" },
+        }));
+        await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
+        const pairingEvents = frames.filter((f) => f.type === "event" && f.event === "pairing.required");
+        const pairing = pairingEvents[pairingEvents.length - 1];
+        const code = pairing?.payload?.code ? String(pairing.payload.code) : "";
+        expect(code.length).toBeGreaterThan(0);
+        const approved = await approvePairingCode({ code, stateDir });
+        expect(approved.ok).toBe(true);
+
+        const reqId = "message-uuid-override";
+        ws.send(JSON.stringify({
+          type: "req",
+          id: reqId,
+          method: "message.send",
+          params: {
+            text: "覆盖 uuid",
+            userUuid: "message-uuid",
+          },
+        }));
+
+        await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId && f.ok === true));
+        await waitFor(() => fetchSpy.mock.calls.length > 0);
+
+        expect(seenUserUuids).toEqual(["message-uuid"]);
+        const [url, init] = fetchSpy.mock.calls[0];
+        expect(String(url)).toBe("http://token-upload.local/api/internal/token-usage");
+        expect(init && typeof init === "object" ? (init as RequestInit).headers : undefined).toMatchObject({
+          Authorization: "Bearer gro_test_upload_key",
+        });
+        expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
+          userUuid: "message-uuid",
+          deltaTokens: 9,
+        });
+      } finally {
+        ws.close();
+        await closeP;
+        await server.close();
+      }
+    });
+  } finally {
+    fetchSpy.mockRestore();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

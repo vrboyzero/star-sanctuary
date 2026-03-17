@@ -59,7 +59,8 @@
         <!-- 可操作区输入 + 保存按钮 -->
         <div class="panel-input-group workspace-input-group">
           <div class="input-label-row">
-            <span class="panel-label">可操作区<span class="panel-hint">：额外允许读写的盘符与目录</span></span>
+            <span class="panel-label">可操作区</span>
+            <span class="panel-hint">：额外允许读写的盘符与目录</span>
           </div>
           <div class="input-with-btn">
             <input id="workspaceRoots" class="input input-sm" placeholder="E:/,D:/Game"
@@ -84,15 +85,21 @@
         <!-- UUID 输入 -->
         <div class="panel-input-group uuid-input-group">
           <div class="input-label-row">
-            <span class="panel-label">UUID<span class="panel-hint">：用户身份标识（可选）</span></span>
+            <span class="panel-label">UUID</span>
+            <span class="panel-hint">：用户身份标识（可选）</span>
           </div>
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <input id="userUuid" class="input input-sm" placeholder="输入你的UUID（可选）" title="用于身份权力验证，如SOUL.md中定义的主人UUID匹配"
-              style="flex: 1;" />
-            <button id="saveUuid" class="button" style="padding: 6px 12px; font-size: 12px;">保存</button>
+          <div class="uuid-controls">
+            <input id="userUuid" class="input input-sm" placeholder="输入你的UUID（可选）" title="用于身份权力验证，如SOUL.md中定义的主人UUID匹配" />
+            <button id="saveUuid" class="button uuid-save-btn">保存</button>
           </div>
         </div>
-        <button id="connect" class="button">Connect</button>
+        <button id="connect" class="button panel-connect-btn">Connect</button>
+      </div>
+      <div class="task-token-history-bar">
+        <div class="task-token-history-label">最近任务 Token</div>
+        <div class="task-token-history" id="taskTokenHistory">
+          <div class="task-token-history-empty">暂无任务级 Token 记录</div>
+        </div>
       </div>
     </section>
 

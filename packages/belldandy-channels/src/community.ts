@@ -449,8 +449,15 @@ export class CommunityChannel implements Channel {
         },
       });
 
+      const runStartedAt = Date.now();
       let finalText = "";
       let lastUploadedUsageTotal = 0;
+      let latestUsage:
+        | {
+          inputTokens: number;
+          outputTokens: number;
+        }
+        | undefined;
 
       const tokenUploadLog = {
         warn: (module: string, message: string, data?: unknown) => {
@@ -466,6 +473,12 @@ export class CommunityChannel implements Channel {
       for await (const item of stream) {
         if (item.type === "final") {
           finalText = item.text;
+        }
+        if (item.type === "usage") {
+          latestUsage = {
+            inputTokens: Number(item.inputTokens ?? 0),
+            outputTokens: Number(item.outputTokens ?? 0),
+          };
         }
         if (item.type === "usage" && this.tokenUsageUpload?.enabled) {
           const usageTotal = Math.max(0, Number(item.inputTokens ?? 0) + Number(item.outputTokens ?? 0));
@@ -484,6 +497,17 @@ export class CommunityChannel implements Channel {
             });
           }
         }
+      }
+
+      if (latestUsage) {
+        this.conversationStore.recordTaskTokenResult(conversationId, {
+          name: "run",
+          inputTokens: latestUsage.inputTokens,
+          outputTokens: latestUsage.outputTokens,
+          totalTokens: latestUsage.inputTokens + latestUsage.outputTokens,
+          durationMs: Date.now() - runStartedAt,
+          auto: true,
+        });
       }
 
       // 发送回复

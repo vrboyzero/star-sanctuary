@@ -35,6 +35,16 @@ export type ActiveCounterSnapshot = {
   savedGlobalOutputTokens: number;
 };
 
+export type TaskTokenRecord = {
+    name: string;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    durationMs: number;
+    createdAt: number;
+    auto?: boolean;
+};
+
 /**
  * 会话对象
  */
@@ -60,6 +70,8 @@ export type Conversation = {
     };
     /** 跨 run 持久化的活跃 token 计数器快照 */
     activeCounters?: ActiveCounterSnapshot[];
+    /** 最近任务级 token 统计结果 */
+    taskTokenRecords?: TaskTokenRecord[];
 };
 
 /**
@@ -176,16 +188,69 @@ export class ConversationStore {
                 ? messages.slice(messages.length - this.maxHistory)
                 : messages;
 
+            const meta = this.loadMetaFromFile(id);
+
             return {
                 id,
                 messages: finalMessages,
                 createdAt,
                 updatedAt: updatedAt || Date.now(),
+                activeCounters: meta?.activeCounters,
+                taskTokenRecords: meta?.taskTokenRecords,
             };
         } catch (err) {
             console.error(`Failed to load conversation ${id}:`, err);
             return undefined;
         }
+    }
+
+    private getMetaFilePath(id: string): string | undefined {
+        if (!this.dataDir) return undefined;
+        return path.join(this.dataDir, `${id}.meta.json`);
+    }
+
+    private loadMetaFromFile(id: string): Pick<Conversation, "activeCounters" | "taskTokenRecords"> | undefined {
+        const filePath = this.getMetaFilePath(id);
+        if (!filePath || !fs.existsSync(filePath)) return undefined;
+
+        try {
+            const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
+                activeCounters?: ActiveCounterSnapshot[];
+                taskTokenRecords?: TaskTokenRecord[];
+            };
+            return {
+                activeCounters: Array.isArray(parsed.activeCounters) ? parsed.activeCounters : undefined,
+                taskTokenRecords: Array.isArray(parsed.taskTokenRecords) ? parsed.taskTokenRecords : undefined,
+            };
+        } catch {
+            return undefined;
+        }
+    }
+
+    private persistConversationMeta(id: string, conv: Conversation): void {
+        const filePath = this.getMetaFilePath(id);
+        if (!filePath) return;
+
+        const payload = {
+            activeCounters: conv.activeCounters,
+            taskTokenRecords: conv.taskTokenRecords,
+        };
+        if (!payload.activeCounters && !payload.taskTokenRecords) {
+            if (fs.existsSync(filePath)) {
+                fs.unlink(filePath, (err) => {
+                    if (err && err.code !== "ENOENT") {
+                        console.error(`Failed to delete conversation meta for ${id}:`, err);
+                    }
+                });
+            }
+            return;
+        }
+
+        fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf-8", (err) => {
+            if (err) {
+                console.error(`Failed to save conversation meta for ${id}:`, err);
+            }
+        });
     }
 
     /**
@@ -442,6 +507,7 @@ export class ConversationStore {
         if (!conv) return;
         conv.activeCounters = snapshots.length > 0 ? snapshots : undefined;
         conv.updatedAt = Date.now();
+        this.persistConversationMeta(conversationId, conv);
     }
 
     /**
@@ -450,6 +516,39 @@ export class ConversationStore {
     getActiveCounters(conversationId: string): ActiveCounterSnapshot[] {
         const conv = this.get(conversationId);
         return conv?.activeCounters ?? [];
+    }
+
+    recordTaskTokenResult(
+        conversationId: string,
+        record: Omit<TaskTokenRecord, "createdAt"> & { createdAt?: number },
+        limit: number = 20,
+    ): void {
+        let conv = this.get(conversationId);
+        const now = Date.now();
+        if (!conv) {
+            conv = {
+                id: conversationId,
+                messages: [],
+                createdAt: now,
+                updatedAt: now,
+            };
+            this.conversations.set(conversationId, conv);
+        }
+
+        const nextRecord: TaskTokenRecord = {
+            ...record,
+            createdAt: typeof record.createdAt === "number" ? record.createdAt : now,
+        };
+        const existing = conv.taskTokenRecords ?? [];
+        conv.taskTokenRecords = [nextRecord, ...existing].slice(0, Math.max(1, limit));
+        conv.updatedAt = now;
+        this.persistConversationMeta(conversationId, conv);
+    }
+
+    getTaskTokenResults(conversationId: string, limit: number = 10): TaskTokenRecord[] {
+        const conv = this.get(conversationId);
+        if (!conv?.taskTokenRecords?.length) return [];
+        return conv.taskTokenRecords.slice(0, Math.max(1, limit));
     }
 
     /**

@@ -198,6 +198,31 @@ export interface ConversationStoreInterface {
     conversationId: string,
   ): Array<{ type: "user" | "agent"; id: string; name?: string; identity?: string }> | undefined;
   clearRoomMembersCache(conversationId: string): void;
+  recordTaskTokenResult(
+    conversationId: string,
+    record: {
+      name: string;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      durationMs: number;
+      createdAt?: number;
+      auto?: boolean;
+    },
+    limit?: number,
+  ): void;
+  getTaskTokenResults(
+    conversationId: string,
+    limit?: number,
+  ): Array<{
+    name: string;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    durationMs: number;
+    createdAt: number;
+    auto?: boolean;
+  }>;
 }
 
 

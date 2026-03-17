@@ -1,4 +1,4 @@
-﻿const statusEl = document.getElementById("status");
+const statusEl = document.getElementById("status");
 const authModeEl = document.getElementById("authMode");
 const authValueEl = document.getElementById("authValue");
 const userUuidEl = document.getElementById("userUuid"); // UUID输入框
@@ -43,6 +43,7 @@ const memoryTaskSourceFilterEl = document.getElementById("memoryTaskSourceFilter
 const memoryChunkTypeFilterEl = document.getElementById("memoryChunkTypeFilter");
 const memoryChunkVisibilityFilterEl = document.getElementById("memoryChunkVisibilityFilter");
 const memoryChunkCategoryFilterEl = document.getElementById("memoryChunkCategoryFilter");
+const taskTokenHistoryEl = document.getElementById("taskTokenHistory");
 
 const STORE_KEY = "belldandy.webchat.auth";
 const CLIENT_KEY = "belldandy.webchat.clientId";
@@ -55,6 +56,7 @@ const WEBCHAT_DEBUG_KEY = "belldandy.webchat.debug";
 let ws = null;
 let isReady = false;
 let activeConversationId = null;
+const taskTokenHistoryByConversation = new Map();
 let botMsgEl = null;
 let botRawHtmlBuffer = "";
 let transientUrlToken = null;
@@ -676,10 +678,15 @@ function connect() {
 
       // 重置 token 累计
       sessionTotalTokens = 0;
+      taskTokenHistoryByConversation.clear();
       ["tuSys", "tuCtx", "tuIn", "tuOut", "tuAll"].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.textContent = "--";
       });
+      renderTaskTokenHistory();
+      if (activeConversationId) {
+        void loadConversationMeta(activeConversationId);
+      }
       flushQueuedText();
 
       // 若服务端告知 AI 模型尚未配置（无 API Key），自动弹出设置面板引导用户
@@ -1021,6 +1028,7 @@ async function sendMessage() {
 
   if (payload && payload.ok && payload.payload && payload.payload.conversationId) {
     activeConversationId = String(payload.payload.conversationId);
+    void loadConversationMeta(activeConversationId);
   }
 }
 
@@ -1422,6 +1430,102 @@ function formatTokenCount(n) {
   return String(n);
 }
 
+function formatDurationMs(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "--";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}s`;
+}
+
+function formatTaskTokenTime(ts) {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return "--";
+  return new Date(ts).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function normalizeTaskTokenRecord(record) {
+  if (!record || typeof record !== "object") return null;
+  return {
+    name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : "task",
+    inputTokens: Number(record.inputTokens || 0),
+    outputTokens: Number(record.outputTokens || 0),
+    totalTokens: Number(record.totalTokens || 0),
+    durationMs: Number(record.durationMs || 0),
+    createdAt: typeof record.createdAt === "number" ? record.createdAt : Date.now(),
+    auto: record.auto === true,
+  };
+}
+
+function setTaskTokenHistory(conversationId, items) {
+  if (!conversationId) return;
+  const normalized = Array.isArray(items)
+    ? items.map(normalizeTaskTokenRecord).filter(Boolean).slice(0, 8)
+    : [];
+  taskTokenHistoryByConversation.set(conversationId, normalized);
+  if (conversationId === activeConversationId) {
+    renderTaskTokenHistory();
+  }
+}
+
+function prependTaskTokenHistory(conversationId, item) {
+  if (!conversationId) return;
+  const normalized = normalizeTaskTokenRecord(item);
+  if (!normalized) return;
+  const current = taskTokenHistoryByConversation.get(conversationId) || [];
+  taskTokenHistoryByConversation.set(conversationId, [normalized, ...current].slice(0, 8));
+  if (conversationId === activeConversationId) {
+    renderTaskTokenHistory();
+  }
+}
+
+async function loadConversationMeta(conversationId) {
+  if (!conversationId || !ws || !isReady) {
+    renderTaskTokenHistory();
+    return;
+  }
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "conversation.meta",
+    params: { conversationId, limit: 8 },
+  });
+  if (res && res.ok && res.payload && Array.isArray(res.payload.taskTokenResults)) {
+    setTaskTokenHistory(conversationId, res.payload.taskTokenResults);
+    return;
+  }
+  renderTaskTokenHistory();
+}
+
+function renderTaskTokenHistory() {
+  if (!taskTokenHistoryEl) return;
+  const items = activeConversationId
+    ? (taskTokenHistoryByConversation.get(activeConversationId) || [])
+    : [];
+
+  if (!items.length) {
+    taskTokenHistoryEl.innerHTML = '<div class="task-token-history-empty">暂无任务级 Token 记录</div>';
+    return;
+  }
+
+  taskTokenHistoryEl.innerHTML = items.map((item) => `
+    <div class="task-token-chip${item.auto ? " auto" : ""}">
+      <div class="task-token-chip-top">
+        <span class="task-token-chip-name">${escapeHtml(item.name)}</span>
+        <span class="task-token-chip-badge">${item.auto ? "AUTO" : "MANUAL"}</span>
+      </div>
+      <div class="task-token-chip-sep">|</div>
+      <div class="task-token-chip-total">TOTAL ${escapeHtml(formatTokenCount(item.totalTokens))}</div>
+      <div class="task-token-chip-sep">|</div>
+      <div class="task-token-chip-meta">IN ${escapeHtml(formatTokenCount(item.inputTokens))} <span style="opacity:0.5;margin:0 2px;">/</span> OUT ${escapeHtml(formatTokenCount(item.outputTokens))}</div>
+      <div class="task-token-chip-sep">|</div>
+      <div class="task-token-chip-meta">${escapeHtml(formatDurationMs(item.durationMs))} <span style="opacity:0.5;margin:0 2px;">/</span> ${escapeHtml(formatTaskTokenTime(item.createdAt))}</div>
+    </div>
+  `).join("");
+}
+
 let sessionTotalTokens = 0;
 
 function updateTokenUsage(payload) {
@@ -1448,6 +1552,10 @@ function showTaskTokenResult(payload) {
   if (!payload) return;
   const panel = document.getElementById("taskTokenUsage");
   if (!panel) return;
+
+  if (payload.conversationId) {
+    prependTaskTokenHistory(String(payload.conversationId), payload);
+  }
 
   const set = (id, val) => {
     const el = document.getElementById(id);
@@ -3751,6 +3859,7 @@ window._belldandyLoadConversation = (conversationId) => {
     hint.textContent = `已切换到会话: ${conversationId}`;
     messagesEl.appendChild(hint);
   }
+  void loadConversationMeta(conversationId);
 };
 
 // Initialize canvas app (canvas.js creates window._canvasApp)

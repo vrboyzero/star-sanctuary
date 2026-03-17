@@ -102,6 +102,7 @@ const DEFAULT_METHODS = [
   "workspace.readSource",
   "workspace.write",
   "context.compact",
+  "conversation.meta",
   "tools.list",
   "tools.update",
   "agents.list",
@@ -323,11 +324,32 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
           senderInfo,
         });
 
+        const runStartedAt = Date.now();
         let finalText = "";
+        let latestUsage:
+          | {
+            inputTokens: number;
+            outputTokens: number;
+          }
+          | undefined;
         for await (const item of stream) {
           if (item.type === "final") {
             finalText = item.text;
           }
+          if (item.type === "usage") {
+            latestUsage = {
+              inputTokens: Number(item.inputTokens ?? 0),
+              outputTokens: Number(item.outputTokens ?? 0),
+            };
+          }
+        }
+        if (latestUsage) {
+          emitAutoRunTaskTokenResult(conversationStore, {
+            conversationId,
+            inputTokens: latestUsage.inputTokens,
+            outputTokens: latestUsage.outputTokens,
+            durationMs: Date.now() - runStartedAt,
+          });
         }
 
         // Return success response
@@ -453,11 +475,32 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
           agentId: requestedAgentId,
         });
 
+        const runStartedAt = Date.now();
         let finalText = "";
+        let latestUsage:
+          | {
+            inputTokens: number;
+            outputTokens: number;
+          }
+          | undefined;
         for await (const item of stream) {
           if (item.type === "final") {
             finalText = item.text;
           }
+          if (item.type === "usage") {
+            latestUsage = {
+              inputTokens: Number(item.inputTokens ?? 0),
+              outputTokens: Number(item.outputTokens ?? 0),
+            };
+          }
+        }
+        if (latestUsage) {
+          emitAutoRunTaskTokenResult(conversationStore, {
+            conversationId,
+            inputTokens: latestUsage.inputTokens,
+            outputTokens: latestUsage.outputTokens,
+            durationMs: Date.now() - runStartedAt,
+          });
         }
 
         // Build response
@@ -733,6 +776,36 @@ function acceptConnect(
   return { ok: false, message: "invalid auth mode" };
 }
 
+function emitAutoRunTaskTokenResult(
+  conversationStore: ConversationStore,
+  payload: {
+    conversationId: string;
+    inputTokens: number;
+    outputTokens: number;
+    durationMs: number;
+  },
+  ws?: WebSocket,
+): void {
+  const result = {
+    name: "run",
+    inputTokens: Math.max(0, Number(payload.inputTokens ?? 0)),
+    outputTokens: Math.max(0, Number(payload.outputTokens ?? 0)),
+    totalTokens: Math.max(0, Number(payload.inputTokens ?? 0) + Number(payload.outputTokens ?? 0)),
+    durationMs: Math.max(0, Number(payload.durationMs ?? 0)),
+    auto: true,
+  };
+  conversationStore.recordTaskTokenResult(payload.conversationId, result);
+  if (!ws) return;
+  sendEvent(ws, {
+    type: "event",
+    event: "token.counter.result",
+    payload: {
+      conversationId: payload.conversationId,
+      ...result,
+    },
+  });
+}
+
 async function handleReq(
   ws: WebSocket,
   req: GatewayReqFrame,
@@ -771,6 +844,7 @@ async function handleReq(
     "workspace.readSource",
     "workspace.list",
     "context.compact",
+    "conversation.meta",
     "tools.update",
     "memory.search",
     "memory.get",
@@ -876,6 +950,7 @@ async function handleReq(
       }
 
       const conversationId = parsed.value.conversationId ?? crypto.randomUUID();
+      const effectiveUserUuid = parsed.value.userUuid ?? ctx.userUuid;
       const { history } = await ctx.conversationStore.getHistoryCompacted(conversationId);
 
       // Agent-会话绑定校验：防止不同 Agent 共享同一会话导致上下文污染
@@ -894,7 +969,8 @@ async function handleReq(
 
       ctx.log.debug("message", "Processing message.send", {
         conversationId,
-        hasUserUuid: Boolean(ctx.userUuid),
+        hasUserUuid: Boolean(effectiveUserUuid),
+        userUuidSource: parsed.value.userUuid ? "message.send" : (ctx.userUuid ? "connect" : "none"),
         payloadKeys: Object.keys(parsed.value),
       });
       if ('attachments' in parsed.value) {
@@ -1019,6 +1095,24 @@ async function handleReq(
       }
 
       void (async () => {
+        const runStartedAt = Date.now();
+        let latestUsage:
+          | {
+            inputTokens: number;
+            outputTokens: number;
+          }
+          | undefined;
+        let didEmitAutoRunTaskResult = false;
+        const maybeEmitAutoRunTaskResult = () => {
+          if (didEmitAutoRunTaskResult || !latestUsage) return;
+          emitAutoRunTaskTokenResult(ctx.conversationStore, {
+            conversationId,
+            inputTokens: latestUsage.inputTokens,
+            outputTokens: latestUsage.outputTokens,
+            durationMs: Date.now() - runStartedAt,
+          }, ws);
+          didEmitAutoRunTaskResult = true;
+        };
         try {
           let lastUploadedUsageTotal = 0;
           const runInput: any = {
@@ -1027,7 +1121,7 @@ async function handleReq(
             userInput: parsed.value.text,
             history,
             agentId: requestedAgentId,
-            userUuid: ctx.userUuid, // 传递UUID给Agent
+            userUuid: effectiveUserUuid, // 优先使用 message.send 的 userUuid
             senderInfo: parsed.value.senderInfo, // 传递发送者信息
             roomContext: parsed.value.roomContext, // 传递房间上下文
           };
@@ -1076,6 +1170,10 @@ async function handleReq(
               }
             }
             if (item.type === "usage") {
+              latestUsage = {
+                inputTokens: Number(item.inputTokens ?? 0),
+                outputTokens: Number(item.outputTokens ?? 0),
+              };
               sendEvent(ws, {
                 type: "event", event: "token.usage", payload: {
                   conversationId,
@@ -1089,7 +1187,7 @@ async function handleReq(
                 }
               });
 
-              if (ctx.tokenUsageUploadConfig.enabled && ctx.userUuid) {
+              if (ctx.tokenUsageUploadConfig.enabled && effectiveUserUuid) {
                 const usageTotal = Math.max(0, Number(item.inputTokens ?? 0) + Number(item.outputTokens ?? 0));
                 const deltaTokens = Math.max(0, usageTotal - lastUploadedUsageTotal);
                 if (usageTotal > lastUploadedUsageTotal) {
@@ -1098,7 +1196,7 @@ async function handleReq(
                 if (deltaTokens > 0) {
                   void uploadTokenUsage({
                     config: ctx.tokenUsageUploadConfig,
-                    userUuid: ctx.userUuid,
+                    userUuid: effectiveUserUuid,
                     conversationId,
                     source: parsed.value.from ?? "webchat",
                     deltaTokens,
@@ -1108,6 +1206,8 @@ async function handleReq(
               }
             }
           }
+
+          maybeEmitAutoRunTaskResult();
 
           // Server-side auto TTS: generate audio and send combined response
           if (isTts && fullResponse && ctx.ttsSynthesize) {
@@ -1137,6 +1237,7 @@ async function handleReq(
             });
           }
         } catch (err) {
+          maybeEmitAutoRunTaskResult();
           ctx.log.error("agent", "Agent run failed", err);
           sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "error" } });
           sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: `Error: ${String(err)}` } });
@@ -1934,6 +2035,28 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "compact_failed", message: String(err) } };
       }
     }
+
+    case "conversation.meta": {
+      const params = req.params as { conversationId?: string; limit?: number } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const limit = typeof params?.limit === "number" && Number.isFinite(params.limit)
+        ? Math.max(1, Math.min(50, Math.floor(params.limit)))
+        : 10;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          conversationId,
+          taskTokenResults: ctx.conversationStore.getTaskTokenResults(conversationId, limit),
+        },
+      };
+    }
   }
 
   return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Unknown method." } };
@@ -1984,12 +2107,13 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   const from = typeof obj.from === "string" && obj.from.trim() ? obj.from.trim() : undefined;
   const agentId = typeof obj.agentId === "string" && obj.agentId.trim() ? obj.agentId.trim() : undefined;
   const modelId = typeof obj.modelId === "string" && obj.modelId.trim() ? obj.modelId.trim() : undefined;
+  const userUuid = typeof obj.userUuid === "string" && obj.userUuid.trim() ? obj.userUuid.trim() : undefined;
 
   // 解析 senderInfo 和 roomContext（用于 office.goddess.ai 社区）
   const senderInfo = obj.senderInfo && typeof obj.senderInfo === "object" ? obj.senderInfo as any : undefined;
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
-  return { ok: true, value: { text, conversationId, from, agentId, modelId, attachments, senderInfo, roomContext } };
+  return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext } };
 }
 
 function safeParseFrame(raw: string): GatewayFrame | null {

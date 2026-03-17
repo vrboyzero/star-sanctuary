@@ -98,4 +98,52 @@ describe("ConversationStore", () => {
 
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
+
+    it("should persist task token records and active counters in meta file", async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "belldandy-conversation-"));
+        const dataDir = path.join(tempDir, "sessions");
+        const store = new ConversationStore({ dataDir });
+
+        store.addMessage("conv-meta", "user", "hello");
+        store.recordTaskTokenResult("conv-meta", {
+            name: "run",
+            inputTokens: 12,
+            outputTokens: 8,
+            totalTokens: 20,
+            durationMs: 450,
+            auto: true,
+            createdAt: 1234567890,
+        });
+        store.setActiveCounters("conv-meta", [{
+            name: "counter-1",
+            startTime: 1234,
+            baseInputTokens: 10,
+            baseOutputTokens: 5,
+            savedGlobalInputTokens: 15,
+            savedGlobalOutputTokens: 9,
+        }]);
+
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        const reloaded = new ConversationStore({ dataDir });
+        expect(reloaded.getTaskTokenResults("conv-meta")).toEqual([{
+            name: "run",
+            inputTokens: 12,
+            outputTokens: 8,
+            totalTokens: 20,
+            durationMs: 450,
+            auto: true,
+            createdAt: 1234567890,
+        }]);
+        expect(reloaded.getActiveCounters("conv-meta")).toEqual([{
+            name: "counter-1",
+            startTime: 1234,
+            baseInputTokens: 10,
+            baseOutputTokens: 5,
+            savedGlobalInputTokens: 15,
+            savedGlobalOutputTokens: 9,
+        }]);
+
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
 });

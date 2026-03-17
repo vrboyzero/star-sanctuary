@@ -86,6 +86,7 @@ export const tokenCounterStopTool: Tool = {
     }
     try {
       const result = context.tokenCounter.stop(name);
+      context.conversationStore?.recordTaskTokenResult(context.conversationId, result);
       // 扩展 B：广播 token.counter.result 事件到前端
       context.broadcast?.("token.counter.result", {
         conversationId: context.conversationId,

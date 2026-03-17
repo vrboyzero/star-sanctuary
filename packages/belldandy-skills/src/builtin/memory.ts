@@ -47,7 +47,7 @@ function getMemoryManager(workspaceRoot: string): MemoryManager {
 export const memorySearchTool: Tool = {
     definition: {
         name: "memory_search",
-        description: "Search the runtime memory index using hybrid retrieval (semantic vector search + keyword search). The index covers sessions, memory files, and any extra workspace roots configured by the gateway. Supports optional metadata filtering by memory type, channel, topic, category, and date range. Use detail_level='summary' (default) for quick overview, or 'full' for complete content.",
+        description: "Search the runtime memory index using hybrid retrieval (semantic vector search + keyword search). The index covers BELLDANDY_STATE_DIR sessions, memory files, and MEMORY.md. Supports optional metadata filtering by memory type, channel, topic, category, and date range. Use detail_level='summary' (default) for quick overview, or 'full' for complete content.",
         parameters: {
             type: "object",
             properties: {
