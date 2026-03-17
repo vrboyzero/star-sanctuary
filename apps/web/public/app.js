@@ -57,6 +57,7 @@ let ws = null;
 let isReady = false;
 let activeConversationId = null;
 const taskTokenHistoryByConversation = new Map();
+const TASK_TOKEN_HISTORY_LIMIT = 2;
 let botMsgEl = null;
 let botRawHtmlBuffer = "";
 let transientUrlToken = null;
@@ -1462,7 +1463,7 @@ function normalizeTaskTokenRecord(record) {
 function setTaskTokenHistory(conversationId, items) {
   if (!conversationId) return;
   const normalized = Array.isArray(items)
-    ? items.map(normalizeTaskTokenRecord).filter(Boolean).slice(0, 8)
+    ? items.map(normalizeTaskTokenRecord).filter(Boolean).slice(0, TASK_TOKEN_HISTORY_LIMIT)
     : [];
   taskTokenHistoryByConversation.set(conversationId, normalized);
   if (conversationId === activeConversationId) {
@@ -1475,7 +1476,7 @@ function prependTaskTokenHistory(conversationId, item) {
   const normalized = normalizeTaskTokenRecord(item);
   if (!normalized) return;
   const current = taskTokenHistoryByConversation.get(conversationId) || [];
-  taskTokenHistoryByConversation.set(conversationId, [normalized, ...current].slice(0, 8));
+  taskTokenHistoryByConversation.set(conversationId, [normalized, ...current].slice(0, TASK_TOKEN_HISTORY_LIMIT));
   if (conversationId === activeConversationId) {
     renderTaskTokenHistory();
   }
@@ -1490,7 +1491,7 @@ async function loadConversationMeta(conversationId) {
     type: "req",
     id: makeId(),
     method: "conversation.meta",
-    params: { conversationId, limit: 8 },
+    params: { conversationId, limit: TASK_TOKEN_HISTORY_LIMIT },
   });
   if (res && res.ok && res.payload && Array.isArray(res.payload.taskTokenResults)) {
     setTaskTokenHistory(conversationId, res.payload.taskTokenResults);
