@@ -339,6 +339,14 @@ test("memory viewer rpc returns task and memory data", async () => {
     content: "phase4decision marker: complete category minimum loop first.",
     category: "decision",
   });
+  (memoryManager as any).store.upsertChunk({
+    id: "chunk-topic-viewer",
+    sourcePath: "memory/topic-viewer.md",
+    sourceType: "manual",
+    memoryType: "other",
+    content: "viewer topic marker: topic filtered memory for rpc viewer.",
+    topic: "viewer-audit",
+  });
   registerGlobalMemoryManager(memoryManager);
 
   const recentChunk = memoryManager.getRecent(5).find((item) => item.sourcePath.endsWith("MEMORY.md")) ?? memoryManager.getRecent(1)[0];
@@ -409,6 +417,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     ws.send(JSON.stringify({ type: "req", id: "memory-recent", method: "memory.recent", params: { limit: 5 } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-recent-uncategorized", method: "memory.recent", params: { limit: 5, filter: { uncategorized: true } } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-search", method: "memory.search", params: { query: "viewer", limit: 5 } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-search-topic", method: "memory.search", params: { query: "viewer topic", limit: 5, filter: { topic: "viewer-audit" } } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-recent-category", method: "memory.recent", params: { limit: 5, filter: { category: "decision" } } }));
     ws.send(JSON.stringify({ type: "req", id: "usage-list", method: "experience.usage.list", params: { limit: 10, filter: { taskId: completedTaskId } } }));
     ws.send(JSON.stringify({ type: "req", id: "usage-stats", method: "experience.usage.stats", params: { limit: 10, filter: { assetType: "method" } } }));
@@ -420,6 +429,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-uncategorized"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-search"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-search-topic"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-category"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-list"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-stats"));
@@ -430,6 +440,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     const memoryRecentRes = frames.find((f) => f.type === "res" && f.id === "memory-recent");
     const memoryRecentUncategorizedRes = frames.find((f) => f.type === "res" && f.id === "memory-recent-uncategorized");
     const memorySearchRes = frames.find((f) => f.type === "res" && f.id === "memory-search");
+    const memorySearchTopicRes = frames.find((f) => f.type === "res" && f.id === "memory-search-topic");
     const memoryRecentCategoryRes = frames.find((f) => f.type === "res" && f.id === "memory-recent-category");
     const statsRes = frames.find((f) => f.type === "res" && f.id === "memory-stats");
     const usageListRes = frames.find((f) => f.type === "res" && f.id === "usage-list");
@@ -450,6 +461,9 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(memoryRecentUncategorizedRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentUncategorizedRes.payload.items[0].category).toBeUndefined();
     expect(memorySearchRes.ok).toBe(true);
+    expect(memorySearchTopicRes.ok).toBe(true);
+    expect(memorySearchTopicRes.payload.items.length).toBeGreaterThan(0);
+    expect(memorySearchTopicRes.payload.items.every((item: any) => item.sourcePath === "memory/topic-viewer.md")).toBe(true);
     expect(memoryRecentCategoryRes.ok).toBe(true);
     expect(memoryRecentCategoryRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentCategoryRes.payload.items[0].category).toBe("decision");

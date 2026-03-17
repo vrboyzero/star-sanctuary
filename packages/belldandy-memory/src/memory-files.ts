@@ -170,8 +170,15 @@ export async function ensureMemoryDir(workspaceDir: string): Promise<string> {
  * 获取今天的 memory 文件路径
  */
 export function getTodayMemoryPath(workspaceDir: string): string {
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const today = formatLocalDate();
     return path.join(workspaceDir, "memory", `${today}.md`);
+}
+
+export function formatLocalDate(date = new Date()): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
 }
 
 /**
@@ -240,13 +247,14 @@ export async function readMemoryFile(params: {
 export async function appendToTodayMemory(
     workspaceDir: string,
     content: string,
+    date = new Date(),
 ): Promise<string> {
     await ensureMemoryDir(workspaceDir);
-    const filePath = getTodayMemoryPath(workspaceDir);
+    const filePath = getTodayMemoryPathForDate(workspaceDir, date);
 
     // 如果文件不存在，创建带日期头的新文件
     if (!(await exists(filePath))) {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = formatLocalDate(date);
         const header = `# ${today}\n\n`;
         await fs.writeFile(filePath, header + content.trim() + "\n", "utf-8");
     } else {
@@ -255,6 +263,10 @@ export async function appendToTodayMemory(
     }
 
     return filePath;
+}
+
+function getTodayMemoryPathForDate(workspaceDir: string, date: Date): string {
+    return path.join(workspaceDir, "memory", `${formatLocalDate(date)}.md`);
 }
 
 /**

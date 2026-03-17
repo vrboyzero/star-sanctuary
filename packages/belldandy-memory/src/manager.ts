@@ -9,6 +9,7 @@ import type { MemorySearchResult, MemoryIndexStatus, MemorySearchOptions, Memory
 import { ExperiencePromoter } from "./experience-promoter.js";
 import { TaskProcessor } from "./task-processor.js";
 import { TaskSummarizer } from "./task-summarizer.js";
+import { buildOpenAIChatCompletionsUrl } from "./openai-url.js";
 import type { TaskConversationStore, TaskMemoryRelation, TaskRecord, TaskSearchFilter, TaskSearchOptions, TaskSource, TaskToolCallSummary } from "./task-types.js";
 import type {
     ExperienceAssetType,
@@ -58,6 +59,8 @@ export interface MemoryManagerOptions {
     workspaceRoot: string;
     /** Additional directories to index alongside workspaceRoot */
     additionalRoots?: string[];
+    /** Additional explicit files to index/watch alongside directories */
+    additionalFiles?: string[];
     storePath?: string;
     openaiApiKey?: string;
     openaiBaseUrl?: string;
@@ -111,6 +114,7 @@ export class MemoryManager {
     private embeddingProvider: EmbeddingProvider;
     private workspaceRoot: string;
     private additionalRoots: string[];
+    private additionalFiles: string[];
     private embeddingBatchSize: number;
     // 后台任务暂停控制（Agent 活跃时暂停，避免抢占 API 并发）
     private _paused = false;
@@ -145,6 +149,7 @@ export class MemoryManager {
     constructor(options: MemoryManagerOptions) {
         this.workspaceRoot = options.workspaceRoot;
         this.additionalRoots = options.additionalRoots ?? [];
+        this.additionalFiles = options.additionalFiles ?? [];
 
         // Default store path: .star_sanctuary/memory.sqlite（带旧目录回退）
         const workspaceStateDir = resolveWorkspaceStateDir(options.workspaceRoot);
@@ -246,12 +251,27 @@ export class MemoryManager {
             }
         }
 
+        // Index explicit files (e.g. stateDir/MEMORY.md)
+        for (const filePath of this.additionalFiles) {
+            try {
+                const stats = await fs.stat(filePath);
+                if (stats.isFile()) {
+                    await this.indexer.indexFile(filePath);
+                }
+            } catch (err) {
+                const code = (err as NodeJS.ErrnoException | undefined)?.code;
+                if (code !== "ENOENT") {
+                    console.warn(`[MemoryManager] Failed to index additional file ${filePath}:`, err);
+                }
+            }
+        }
+
         await this.processPendingEmbeddings();
 
         // L0 摘要不再在启动时自动运行，改由 gateway 空闲定时器触发（runIdleSummaries）
 
         // Watch all directories for changes
-        const allRoots = [this.workspaceRoot, ...this.additionalRoots];
+        const allRoots = dedupePaths([this.workspaceRoot, ...this.additionalRoots, ...this.additionalFiles]);
         await this.indexer.startWatching(allRoots);
     }
 
@@ -262,16 +282,18 @@ export class MemoryManager {
         // 兼容旧签名 search(query, limit) 和新签名 search(query, options)
         let limit = 5;
         let filter: MemorySearchFilter | undefined;
+        let retrievalMode: MemorySearchOptions["retrievalMode"] = "explicit";
 
         if (typeof limitOrOptions === "number") {
             limit = limitOrOptions;
         } else if (limitOrOptions) {
             limit = limitOrOptions.limit ?? 5;
             filter = limitOrOptions.filter;
+            retrievalMode = limitOrOptions.retrievalMode ?? "explicit";
         }
 
-        // 0. 自适应检索：对问候/命令/简单确认跳过检索
-        if (shouldSkipRetrieval(query)) {
+        // 0. 自适应检索：仅对隐式召回生效，显式 memory_search / RPC 不应被跳过
+        if (retrievalMode === "implicit" && shouldSkipRetrieval(query)) {
             return [];
         }
 
@@ -887,13 +909,36 @@ export class MemoryManager {
 
     private resolveSourcePath(sourcePath: string): string {
         if (!sourcePath) return sourcePath;
-        return path.isAbsolute(sourcePath) ? sourcePath : path.resolve(this.workspaceRoot, sourcePath);
+        if (path.isAbsolute(sourcePath)) {
+            return sourcePath;
+        }
+        const resolutionRoots = this.getSourceResolutionRoots();
+        return resolutionRoots.length > 0
+            ? path.resolve(resolutionRoots[0], sourcePath)
+            : path.resolve(this.workspaceRoot, sourcePath);
     }
 
     private resolveSourcePathCandidates(sourcePath: string): string[] {
         if (!sourcePath) return [];
-        const resolved = this.resolveSourcePath(sourcePath);
-        return sourcePath === resolved ? [resolved] : [sourcePath, resolved];
+        if (path.isAbsolute(sourcePath)) {
+            return [sourcePath];
+        }
+
+        const candidates = [sourcePath];
+        for (const root of this.getSourceResolutionRoots()) {
+            candidates.push(path.resolve(root, sourcePath));
+        }
+        return dedupePaths(candidates);
+    }
+
+    private getSourceResolutionRoots(): string[] {
+        const explicitFileRoots = this.additionalFiles.map((filePath) => path.dirname(filePath));
+        return dedupePaths([
+            this.publishStateDir,
+            this.workspaceRoot,
+            ...this.additionalRoots,
+            ...explicitFileRoots,
+        ]);
     }
 
     getStatus(): MemoryIndexStatus {
@@ -966,7 +1011,7 @@ export class MemoryManager {
     private async callLLMForSummary(content: string): Promise<string | null> {
         const truncated = content.length > 4000 ? content.slice(0, 4000) + "..." : content;
 
-        const response = await fetch(`${this.summaryBaseUrl}/chat/completions`, {
+        const response = await fetch(buildOpenAIChatCompletionsUrl(this.summaryBaseUrl), {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -1085,7 +1130,7 @@ export class MemoryManager {
     private async callLLMForExtraction(
         conversationText: string,
     ): Promise<Array<{ type: string; content: string; category: string }> | null> {
-        const response = await fetch(`${this.evolutionBaseUrl}/chat/completions`, {
+        const response = await fetch(buildOpenAIChatCompletionsUrl(this.evolutionBaseUrl), {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -1276,4 +1321,18 @@ function normalizeAsciiToken(value: string, fallback: string): string {
         .replace(/-+/g, "-")
         .replace(/^-+|-+$/g, "");
     return normalized || fallback;
+}
+
+function dedupePaths(items: string[]): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const item of items) {
+        const normalized = String(item ?? "").trim();
+        if (!normalized) continue;
+        const resolved = path.resolve(normalized);
+        if (seen.has(resolved)) continue;
+        seen.add(resolved);
+        result.push(normalized);
+    }
+    return result;
 }

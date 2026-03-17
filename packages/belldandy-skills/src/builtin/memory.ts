@@ -47,7 +47,7 @@ function getMemoryManager(workspaceRoot: string): MemoryManager {
 export const memorySearchTool: Tool = {
     definition: {
         name: "memory_search",
-        description: "Search the knowledge base (files in workspace) using hybrid retrieval (semantic vector search + keyword search). Use this to find information, code snippets, or context from the project. Supports optional metadata filtering by memory type, channel, topic, and date range. Use detail_level='summary' (default) for quick overview, or 'full' for complete content.",
+        description: "Search the runtime memory index using hybrid retrieval (semantic vector search + keyword search). The index covers sessions, memory files, and any extra workspace roots configured by the gateway. Supports optional metadata filtering by memory type, channel, topic, category, and date range. Use detail_level='summary' (default) for quick overview, or 'full' for complete content.",
         parameters: {
             type: "object",
             properties: {
@@ -71,6 +71,10 @@ export const memorySearchTool: Tool = {
                 channel: {
                     type: "string",
                     description: "Filter by source channel: 'webchat', 'feishu', 'heartbeat', etc.",
+                },
+                topic: {
+                    type: "string",
+                    description: "Filter by topic tag stored on the memory chunk.",
                 },
                 category: {
                     type: "string",
@@ -104,6 +108,7 @@ export const memorySearchTool: Tool = {
                 filter.memoryType = types.length === 1 ? types[0] as any : types as any;
             }
             if (args.channel) filter.channel = args.channel as string;
+            if (args.topic) filter.topic = args.topic as string;
             if (args.category) filter.category = args.category as MemorySearchFilter["category"];
             if (args.date_from) filter.dateFrom = args.date_from as string;
             if (args.date_to) filter.dateTo = args.date_to as string;
@@ -124,7 +129,7 @@ export const memorySearchTool: Tool = {
                 const categoryTag = r.category ? ` [${r.category}]` : "";
                 const location = `[${r.sourcePath}:${r.startLine || 0}]${visibilityTag}${categoryTag} (Score: ${r.score.toFixed(3)})`;
                 if (detailLevel === "full") {
-                    return `${location}\n${r.snippet}`;
+                    return `${location}\n${r.content ?? r.snippet}`;
                 }
                 // summary mode: prefer summary, fallback to truncated content
                 const text = r.summary || truncateForSummary(r.snippet, 200);
@@ -447,11 +452,6 @@ export const taskSearchTool: Tool = {
                     type: "string",
                     description: "Filter results up to this date (YYYY-MM-DD).",
                 },
-                scope: {
-                    type: "string",
-                    enum: ["private", "shared", "all"],
-                    description: "Explicit retrieval scope. 'private' = current agent private + system memory, 'shared' = shared memory + system memory, 'all' = current agent private + shared memory + system memory. Default keeps legacy behavior unchanged.",
-                },
             },
             required: ["query"],
         },
@@ -463,6 +463,16 @@ export const taskSearchTool: Tool = {
             const manager = getMemoryManager(context.workspaceRoot);
             const query = String(args.query ?? "").trim();
             const limit = (args.limit as number) || 5;
+            if (typeof args.scope === "string" && args.scope.trim()) {
+                return {
+                    id: "task_search",
+                    name: "task_search",
+                    success: false,
+                    output: "",
+                    error: "task_search does not support scope. Task history is isolated by agentId only. Use status/source/date filters, or use memory_search for scoped memory retrieval.",
+                    durationMs: Date.now() - start,
+                };
+            }
             const filter = buildTaskFilter(args, context.agentId);
             const results = manager.searchTasks(query, { limit, filter });
 

@@ -563,7 +563,11 @@ export class MemoryStore {
       WHERE id = ?
     `);
     const result = stmt.run(visibility, new Date().toISOString(), chunkId);
-    return Number(result.changes) > 0;
+    if (Number(result.changes) > 0) {
+      this.setChunkVisibility(chunkId, visibility);
+      return true;
+    }
+    return false;
   }
 
   promoteSourceVisibility(sourcePath: string, visibility: MemoryVisibility = "shared"): number {
@@ -574,6 +578,9 @@ export class MemoryStore {
       WHERE source_path = ?
     `);
     const result = stmt.run(visibility, new Date().toISOString(), sourcePath);
+    if (Number(result.changes) > 0) {
+      this.setSourceVisibility(sourcePath, visibility);
+    }
     return Number(result.changes);
   }
 
@@ -1522,6 +1529,7 @@ export class MemoryStore {
       memoryType: row.memory_type as MemoryType,
       category: normalizeCategory(row.category),
       visibility: (row.visibility ?? "private") as MemoryVisibility,
+      content: row.content ?? undefined,
       startLine: row.start_line ?? undefined,
       endLine: row.end_line ?? undefined,
       snippet: truncateContent(row.content, 500),
@@ -1688,6 +1696,22 @@ export class MemoryStore {
     this.setMeta(sourceAgentMetaKey(sourcePath), agentId);
   }
 
+  getSourceVisibility(sourcePath: string): MemoryVisibility | null {
+    return normalizeVisibility(this.getMeta(sourceVisibilityMetaKey(sourcePath)));
+  }
+
+  setSourceVisibility(sourcePath: string, visibility: MemoryVisibility): void {
+    this.setMeta(sourceVisibilityMetaKey(sourcePath), visibility);
+  }
+
+  getChunkVisibility(chunkId: string): MemoryVisibility | null {
+    return normalizeVisibility(this.getMeta(chunkVisibilityMetaKey(chunkId)));
+  }
+
+  setChunkVisibility(chunkId: string, visibility: MemoryVisibility): void {
+    this.setMeta(chunkVisibilityMetaKey(chunkId), visibility);
+  }
+
   // ========== 派生索引清理（自愈重建用） ==========
 
   clearEmbeddingCache(): void {
@@ -1849,6 +1873,7 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     memoryType: row.memory_type as MemoryType,
     category: normalizeCategory(row.category),
     visibility: (row.visibility ?? "private") as MemoryVisibility,
+    content: row.content ?? undefined,
     startLine: row.start_line ?? undefined,
     endLine: row.end_line ?? undefined,
     snippet: truncateContent(row.content, 500),
@@ -1872,8 +1897,26 @@ function normalizeCategory(value: unknown): MemoryCategory | undefined {
   }
 }
 
+function normalizeVisibility(value: unknown): MemoryVisibility | null {
+  switch (value) {
+    case "private":
+    case "shared":
+      return value;
+    default:
+      return null;
+  }
+}
+
 function sourceAgentMetaKey(sourcePath: string): string {
   return `source_agent:${sourcePath}`;
+}
+
+function sourceVisibilityMetaKey(sourcePath: string): string {
+  return `source_visibility:${sourcePath}`;
+}
+
+function chunkVisibilityMetaKey(chunkId: string): string {
+  return `chunk_visibility:${chunkId}`;
 }
 
 function rowToTaskRecord(row: Record<string, unknown>): TaskRecord {

@@ -10,6 +10,9 @@ export type MemoryVisibility = "private" | "shared";
 /** 检索范围（P3-2） */
 export type MemorySearchScope = "private" | "shared" | "all";
 
+/** 检索触发模式：显式工具检索 vs 隐式自动召回 */
+export type MemoryRetrievalMode = "explicit" | "implicit";
+
 export interface MemoryChunk {
   id: string;
   sourcePath: string;
@@ -44,6 +47,7 @@ export interface MemorySearchFilter {
 export interface MemorySearchOptions {
   limit?: number;
   filter?: MemorySearchFilter;
+  retrievalMode?: MemoryRetrievalMode;
 }
 
 /** 检索结果 */

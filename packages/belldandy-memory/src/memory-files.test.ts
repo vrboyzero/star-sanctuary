@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { mkdtempSync } from "node:fs";
-import { readMemoryFile, writeMemoryFile } from "./memory-files.js";
+import { appendToTodayMemory, formatLocalDate, readMemoryFile, writeMemoryFile } from "./memory-files.js";
 
 describe("memory-files", () => {
   const tempDirs: string[] = [];
@@ -46,5 +46,21 @@ describe("memory-files", () => {
       relPath: "notes/test.md",
       content: "not allowed",
     })).rejects.toThrow("Path is not a memory file");
+  });
+
+  it("should use local date instead of UTC date when appending today memory", async () => {
+    const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "belldandy-memory-files-"));
+    tempDirs.push(workspaceDir);
+
+    const fakeLocalDate = new Date(2026, 2, 17, 0, 30, 0);
+    const filePath = await appendToTodayMemory(workspaceDir, "- 本地日期测试", fakeLocalDate);
+
+    expect(filePath.endsWith(path.join("memory", "2026-03-17.md"))).toBe(true);
+    const content = await fs.readFile(filePath, "utf-8");
+    expect(content).toContain("# 2026-03-17");
+  });
+
+  it("should format local calendar dates with zero padding", () => {
+    expect(formatLocalDate(new Date(2026, 0, 2, 8, 0, 0))).toBe("2026-01-02");
   });
 });

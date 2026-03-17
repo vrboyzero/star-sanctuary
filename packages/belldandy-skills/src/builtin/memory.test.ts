@@ -104,6 +104,30 @@ describe("memory tools", () => {
     expect(manager.linkTaskMemories).toHaveBeenCalledWith("conv-1", ["chunk-1"], "used");
   });
 
+  it("memory_search should render full content when detail_level=full", async () => {
+    manager.search.mockResolvedValue([
+      {
+        id: "chunk-full",
+        sourcePath: "memory/full.md",
+        sourceType: "file",
+        snippet: "被截断的片段",
+        content: "完整内容第一行\n完整内容第二行",
+        score: 0.92,
+        startLine: 5,
+      },
+    ]);
+
+    const result = await mod.memorySearchTool.execute({
+      query: "完整内容",
+      detail_level: "full",
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("完整内容第一行");
+    expect(result.output).toContain("完整内容第二行");
+    expect(result.output).not.toContain("被截断的片段");
+  });
+
   it("memory_search should pass explicit shared scope with agent context", async () => {
     manager.search.mockResolvedValue([
       {
@@ -163,6 +187,34 @@ describe("memory tools", () => {
       },
     });
     expect(result.output).toContain("[decision]");
+  });
+
+  it("memory_search should pass topic filter", async () => {
+    manager.search.mockResolvedValue([
+      {
+        id: "chunk-topic",
+        sourcePath: "memory/topic.md",
+        sourceType: "file",
+        snippet: "Topic filtered memory",
+        summary: "Topic summary",
+        score: 0.87,
+        startLine: 2,
+      },
+    ]);
+
+    const result = await mod.memorySearchTool.execute({
+      query: "viewer topic",
+      topic: "viewer-audit",
+      limit: 2,
+    }, baseContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.search).toHaveBeenCalledWith("viewer topic", {
+      limit: 2,
+      filter: {
+        topic: "viewer-audit",
+      },
+    });
   });
 
   it("memory_read should render file content", async () => {
@@ -276,6 +328,17 @@ describe("memory tools", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("修复任务");
     expect(result.output).toContain("task_1");
+  });
+
+  it("task_search should reject unsupported scope parameter", async () => {
+    const result = await mod.taskSearchTool.execute({
+      query: "viewer",
+      scope: "shared",
+    }, agentContext);
+
+    expect(result.success).toBe(false);
+    expect(manager.searchTasks).not.toHaveBeenCalled();
+    expect(result.error).toContain("does not support scope");
   });
 
   it("task_get should render readable detail with memory links", async () => {

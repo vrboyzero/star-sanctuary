@@ -847,12 +847,13 @@ if (contextInjectionEnabled || autoRecallEnabled) {
     handler: async (event, _ctx) => {
       const mm = getGlobalMemoryManager();
       if (!mm) return undefined;
+      const implicitFilter = { agentId: _ctx.agentId ?? null };
 
       const blocks: string[] = [];
 
       if (contextInjectionEnabled) {
         try {
-          const recent = mm.getRecent(contextInjectionLimit);
+          const recent = mm.getRecent(contextInjectionLimit, implicitFilter);
           if (recent.length > 0) {
             const lines = recent.map((r) => {
               const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
@@ -870,7 +871,11 @@ if (contextInjectionEnabled || autoRecallEnabled) {
           const queryText = event.userInput?.trim() || event.prompt?.trim();
           if (queryText) {
             const results = await Promise.race([
-              mm.search(queryText, { limit: autoRecallLimit }),
+              mm.search(queryText, {
+                limit: autoRecallLimit,
+                filter: implicitFilter,
+                retrievalMode: "implicit",
+              }),
               new Promise<never[]>((resolve) => setTimeout(() => resolve([]), 2000)),
             ]);
 
@@ -1337,11 +1342,8 @@ const isTtsEnabledFn = () => {
 
 // 7.7 Init unified MemoryManager (indexes both sessions and workspace memory files)
 const memoryDir = path.join(stateDir, "memory");
-const memoryAdditionalRoots: string[] = [memoryDir];
-// Also index MEMORY.md at stateDir root — add stateDir itself but with .md-only scope
-// We handle this by adding the stateDir as an additional root; the indexer will only pick up
-// files matching the configured extensions (.md, .txt, .jsonl). Subdirs like logs/, models/
-// are excluded by ignorePatterns.
+const memoryAdditionalRoots: string[] = [memoryDir, ...(extraWorkspaceRoots ?? [])];
+const memoryAdditionalFiles: string[] = [path.join(stateDir, "MEMORY.md")];
 const embeddingApiKey = readEnv("BELLDANDY_EMBEDDING_OPENAI_API_KEY") ?? openaiApiKey;
 const embeddingBaseUrl = readEnv("BELLDANDY_EMBEDDING_OPENAI_BASE_URL") ?? openaiBaseUrl;
 const embeddingModel = readEnv("BELLDANDY_EMBEDDING_MODEL");
@@ -1398,6 +1400,7 @@ const rerankerLengthNormAnchor = Number(readEnv("BELLDANDY_RERANKER_LENGTH_NORM_
 const unifiedMemoryManager = new MemoryManager({
   workspaceRoot: sessionsDir,
   additionalRoots: memoryAdditionalRoots,
+  additionalFiles: memoryAdditionalFiles,
   storePath: path.join(stateDir, "memory.sqlite"),
   modelsDir: path.join(stateDir, "models"),
   stateDir,
@@ -1436,7 +1439,7 @@ const unifiedMemoryManager = new MemoryManager({
     ...(rerankerLengthNormAnchor != null ? { lengthNormAnchor: rerankerLengthNormAnchor } : {}),
   },
   indexerOptions: {
-    ignorePatterns: ["node_modules", ".git", "logs", "models", "plugins", "skills", "methods"],
+    ignorePatterns: ["node_modules", ".git", "logs", "models", "plugins", "skills", "methods", ".star_sanctuary", ".belldandy"],
     extensions: [".md", ".txt", ".jsonl"],
     watch: true,
   },

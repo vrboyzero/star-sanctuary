@@ -20,6 +20,7 @@ export class MemoryIndexer {
     private chunker: Chunker;
     private options: Required<IndexerOptions>;
     private watcher: chokidar.FSWatcher | null = null;
+    private watchRoots: string[] = [];
 
     constructor(store: MemoryStore, options: IndexerOptions = {}) {
         this.store = store;
@@ -34,18 +35,18 @@ export class MemoryIndexer {
     }
 
     /** 索引指定目录（递归） */
-    async indexDirectory(dirPath: string): Promise<void> {
+    async indexDirectory(dirPath: string, scanRoot = dirPath): Promise<void> {
         const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
         for (const entry of entries) {
             const fullPath = path.join(dirPath, entry.name);
 
-            if (this.options.ignorePatterns.some((pattern) => fullPath.includes(pattern))) {
+            if (this.shouldIgnore(fullPath, scanRoot)) {
                 continue;
             }
 
             if (entry.isDirectory()) {
-                await this.indexDirectory(fullPath);
+                await this.indexDirectory(fullPath, scanRoot);
             } else if (entry.isFile()) {
                 const ext = path.extname(entry.name).toLowerCase();
                 if (this.options.extensions.includes(ext)) {
@@ -114,11 +115,13 @@ export class MemoryIndexer {
             const channel = inferChannelFromPath(filePath, ext);
             const tsDate = inferTsDateFromPath(filePath, mtime);
             const agentId = this.store.getSourceAgentId(filePath) ?? undefined;
+            const sourceVisibility = this.store.getSourceVisibility(filePath) ?? undefined;
 
             for (let i = 0; i < chunksStr.length; i++) {
                 const chunkContent = chunksStr[i];
+                const chunkId = `${baseId}_${i}`;
                 const chunk: MemoryChunk = {
-                    id: `${baseId}_${i}`,
+                    id: chunkId,
                     sourcePath: filePath,
                     sourceType: ext === ".jsonl" ? "session" : "file",
                     memoryType: memoryType,
@@ -126,6 +129,7 @@ export class MemoryIndexer {
                     channel,
                     tsDate,
                     agentId,
+                    visibility: this.store.getChunkVisibility(chunkId) ?? sourceVisibility,
                     metadata: {
                         file_mtime: mtime, // 存入文件的实际修改时间
                         chunk_index: i,
@@ -155,11 +159,12 @@ export class MemoryIndexer {
         if (this.watcher) return;
 
         const paths = Array.isArray(dirPaths) ? dirPaths : [dirPaths];
+        this.watchRoots = paths.map((item) => path.resolve(item));
         console.log(`[MemoryIndexer] Starting watch on: ${paths.join(", ")}`);
 
         this.watcher = chokidar.watch(paths, {
             ignored: (pathStr: string) => {
-                return this.options.ignorePatterns.some(pattern => pathStr.includes(pattern));
+                return this.shouldIgnore(pathStr, this.watchRoots);
             },
             persistent: true,
             ignoreInitial: true,
@@ -191,6 +196,59 @@ export class MemoryIndexer {
             .on("unlink", handleRemove)
             .on("error", error => console.error(`[WatcherError] ${error}`));
     }
+
+    private shouldIgnore(targetPath: string, roots: string | string[]): boolean {
+        const candidateRoots = (Array.isArray(roots) ? roots : [roots])
+            .map((item) => path.resolve(item));
+        const resolvedTarget = path.resolve(targetPath);
+
+        for (const root of candidateRoots) {
+            const relative = this.toRelativePath(root, resolvedTarget);
+            if (relative !== null && this.matchesIgnorePattern(relative)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private toRelativePath(rootPath: string, targetPath: string): string | null {
+        const relative = path.relative(rootPath, targetPath);
+        if (!relative) return "";
+        if (relative.startsWith("..") || path.isAbsolute(relative)) {
+            return null;
+        }
+        return relative;
+    }
+
+    private matchesIgnorePattern(targetPath: string): boolean {
+        const targetSegments = normalizePathSegments(targetPath);
+        if (targetSegments.length === 0) {
+            return false;
+        }
+
+        return this.options.ignorePatterns.some((pattern) => {
+            const patternSegments = normalizePathSegments(pattern);
+            if (patternSegments.length === 0) return false;
+
+            if (patternSegments.length === 1) {
+                return targetSegments.includes(patternSegments[0]);
+            }
+
+            for (let i = 0; i <= targetSegments.length - patternSegments.length; i++) {
+                let matched = true;
+                for (let j = 0; j < patternSegments.length; j++) {
+                    if (targetSegments[i + j] !== patternSegments[j]) {
+                        matched = false;
+                        break;
+                    }
+                }
+                if (matched) return true;
+            }
+
+            return false;
+        });
+    }
 }
 
 // ========== Phase M-1: 元数据推断 ==========
@@ -218,4 +276,12 @@ function inferTsDateFromPath(filePath: string, mtime: string): string | undefine
     } catch {
         return undefined;
     }
+}
+
+function normalizePathSegments(input: string): string[] {
+    return String(input ?? "")
+        .replace(/\\/g, "/")
+        .split("/")
+        .map((segment) => segment.trim().toLowerCase())
+        .filter(Boolean);
 }

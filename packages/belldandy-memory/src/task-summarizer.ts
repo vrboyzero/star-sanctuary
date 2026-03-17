@@ -1,5 +1,7 @@
 import type { TaskRecord, TaskToolCallSummary } from "./task-types.js";
 
+import { buildOpenAIChatCompletionsUrl } from "./openai-url.js";
+
 export interface TaskSummarizerOptions {
   enabled?: boolean;
   model?: string;
@@ -136,9 +138,7 @@ export class TaskSummarizer {
   }
 
   private buildChatCompletionsUrl(): string {
-    return /\/v\d+$/.test(this.baseUrl)
-      ? `${this.baseUrl}/chat/completions`
-      : `${this.baseUrl}/v1/chat/completions`;
+    return buildOpenAIChatCompletionsUrl(this.baseUrl);
   }
 }
 
