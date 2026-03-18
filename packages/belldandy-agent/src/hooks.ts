@@ -282,6 +282,10 @@ export interface BeforeToolCallResult {
   block?: boolean;
   /** 阻止原因 */
   blockReason?: string;
+  /** 是否跳过本次实际工具执行，并返回一条合成结果给模型 */
+  skipExecution?: boolean;
+  /** 跳过执行时返回给模型的合成工具结果 */
+  syntheticResult?: string;
 }
 
 /**

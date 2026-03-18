@@ -152,6 +152,81 @@ describe("MemoryManager guardrails", () => {
     expect(recent.some((item) => item.sourcePath === safeFile)).toBe(true);
     expect(recent.some((item) => item.sourcePath === ignoredFile)).toBe(false);
   });
+
+  it("excludes session memories from context injection by default", async () => {
+    const stateMemoryPath = path.join(stateDir, "MEMORY.md");
+    const sessionFilePath = path.join(sessionsDir, "session-001.md");
+
+    manager = createManager({
+      workspaceRoot: sessionsDir,
+      stateDir,
+    });
+
+    const store = (manager as any).store;
+    store.upsertChunk({
+      id: "core-memory-1",
+      sourcePath: stateMemoryPath,
+      sourceType: "file",
+      memoryType: "core",
+      content: "Project decision marker",
+    });
+    store.upsertChunk({
+      id: "session-memory-1",
+      sourcePath: sessionFilePath,
+      sourceType: "session",
+      memoryType: "session",
+      content: "Just finished restarting service",
+    });
+
+    const injected = manager.getContextInjectionMemories({ limit: 10 });
+    const injectedWithSession = manager.getContextInjectionMemories({ limit: 10, includeSession: true });
+
+    expect(injected.some((item) => item.sourcePath === stateMemoryPath)).toBe(true);
+    expect(injected.some((item) => item.sourcePath === sessionFilePath)).toBe(false);
+    expect(injectedWithSession.some((item) => item.sourcePath === sessionFilePath)).toBe(true);
+  });
+
+  it("detects recent duplicate tool actions from successful tasks", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      taskMemoryEnabled: true,
+    });
+
+    const conversationId = "conv-dedup-1";
+    manager.startTaskCapture({
+      conversationId,
+      sessionKey: conversationId,
+      source: "chat",
+      objective: "restart gateway after config change",
+    });
+    manager.recordTaskToolCall(conversationId, {
+      toolName: "service_restart",
+      success: true,
+      actionKey: "service_restart:gateway",
+    });
+    manager.completeTaskCapture({
+      conversationId,
+      success: true,
+      durationMs: 1200,
+      messages: [],
+    });
+
+    const duplicated = manager.findRecentDuplicateToolAction({
+      toolName: "service_restart",
+      actionKey: "service_restart:gateway",
+      withinMinutes: 20,
+    });
+
+    const different = manager.findRecentDuplicateToolAction({
+      toolName: "service_restart",
+      actionKey: "service_restart:other",
+      withinMinutes: 20,
+    });
+
+    expect(duplicated?.conversationId).toBe(conversationId);
+    expect(different).toBeNull();
+  });
 });
 
 function createManager(options: ConstructorParameters<typeof MemoryManager>[0]): MemoryManager {

@@ -111,7 +111,7 @@ import {
   tokenCounterStartTool,
   tokenCounterStopTool,
 } from "@belldandy/skills";
-import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager } from "@belldandy/memory";
+import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, type MemoryCategory } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
 import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type TokenUsageUploadConfig } from "@belldandy/protocol";
@@ -132,6 +132,15 @@ import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
 import { resolveMemoryIndexPaths } from "../memory-index-paths.js";
+import {
+  buildToolActionKey,
+  buildWarnOnlyDuplicateNotice,
+  parseToolDedupGlobalMode,
+  parseToolDedupPolicy,
+  resolveToolDedupMode,
+  summarizeToolDedupPolicy,
+  shouldBypassToolDedup,
+} from "../task-dedup.js";
 
 // --- Env Loading ---
 let runtimePaths = resolveGatewayRuntimePaths({
@@ -834,11 +843,20 @@ const hookRegistry = new HookRegistry();
 // Context Injection: 对话开始时自动注入最近记忆摘要
 const contextInjectionEnabled = readEnv("BELLDANDY_CONTEXT_INJECTION") !== "false"; // 默认启用
 const contextInjectionLimit = Math.max(1, parseInt(readEnv("BELLDANDY_CONTEXT_INJECTION_LIMIT") || "5", 10));
+const contextInjectionIncludeSession = readEnv("BELLDANDY_CONTEXT_INJECTION_INCLUDE_SESSION") === "true";
+const contextInjectionTaskLimit = Math.max(0, parseInt(readEnv("BELLDANDY_CONTEXT_INJECTION_TASK_LIMIT") || "3", 10) || 3);
+const contextInjectionAllowedCategories = parseContextInjectionCategories(
+  readEnv("BELLDANDY_CONTEXT_INJECTION_ALLOWED_CATEGORIES") || "preference,fact,decision,entity",
+);
 // Auto-Recall: 对话开始时按当前用户输入自动进行语义召回（默认关闭）
 const autoRecallEnabled = readEnv("BELLDANDY_AUTO_RECALL_ENABLED") === "true";
 const autoRecallLimit = Math.max(1, parseInt(readEnv("BELLDANDY_AUTO_RECALL_LIMIT") || "3", 10) || 3);
 const autoRecallMinScoreRaw = Number(readEnv("BELLDANDY_AUTO_RECALL_MIN_SCORE") || "0.3");
 const autoRecallMinScore = Number.isFinite(autoRecallMinScoreRaw) ? autoRecallMinScoreRaw : 0.3;
+const taskDedupGuardEnabled = readEnv("BELLDANDY_TASK_DEDUP_GUARD_ENABLED") !== "false";
+const taskDedupWindowMinutes = Math.max(1, parseInt(readEnv("BELLDANDY_TASK_DEDUP_WINDOW_MINUTES") || "20", 10) || 20);
+const taskDedupGlobalMode = parseToolDedupGlobalMode(readEnv("BELLDANDY_TASK_DEDUP_MODE"));
+const taskDedupPolicy = parseToolDedupPolicy(readEnv("BELLDANDY_TASK_DEDUP_POLICY"));
 
 if (contextInjectionEnabled || autoRecallEnabled) {
   hookRegistry.register({
@@ -854,13 +872,45 @@ if (contextInjectionEnabled || autoRecallEnabled) {
 
       if (contextInjectionEnabled) {
         try {
-          const recent = mm.getRecent(contextInjectionLimit, implicitFilter);
+          const recent = mm.getContextInjectionMemories({
+            limit: contextInjectionLimit,
+            agentId: _ctx.agentId ?? null,
+            includeSession: contextInjectionIncludeSession,
+            allowedCategories: contextInjectionAllowedCategories,
+          });
           if (recent.length > 0) {
             const lines = recent.map((r) => {
               const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
-              return `- [${src}] ${r.snippet}`;
+              const label = [r.importance, r.category ?? r.memoryType ?? "memory", src].join("|");
+              const body = (r.summary ?? r.snippet).trim();
+              return `- [${label}] ${body}`;
             });
-            blocks.push(`<recent-memory>\n${lines.join("\n")}\n</recent-memory>`);
+            blocks.push(
+              `<recent-memory hint="以下是按重要性筛选后的近期记忆。优先把它们当作背景约束或已知事实，不要把它们直接当作待重新执行的任务。">\n${lines.join("\n")}\n</recent-memory>`,
+            );
+          }
+
+          if (contextInjectionTaskLimit > 0) {
+            const recentTasks = mm.getRecentTaskSummaries(contextInjectionTaskLimit, {
+              agentId: _ctx.agentId,
+            });
+            if (recentTasks.length > 0) {
+              const taskLines = recentTasks.map((task) => {
+                const title = task.title ?? task.objective ?? task.summary ?? task.taskId;
+                const tools = task.toolNames.slice(0, 3).join(", ");
+                const artifacts = task.artifactPaths.slice(0, 2).join(", ");
+                const extras = [
+                  tools ? `tools=${tools}` : "",
+                  artifacts ? `artifacts=${artifacts}` : "",
+                ].filter(Boolean).join("; ");
+                return extras
+                  ? `- [${task.status}] ${title} (${extras})`
+                  : `- [${task.status}] ${title}`;
+              });
+              blocks.push(
+                `<recent-tasks hint="以下是最近已完成或部分完成的任务摘要。若当前目标与其相同，优先复用结果，不要重复执行已成功完成的工具动作，除非用户明确要求重试。">\n${taskLines.join("\n")}\n</recent-tasks>`,
+              );
+            }
           }
         } catch (err) {
           logger.warn("context-injection", `Failed to fetch recent memory: ${err instanceof Error ? err.message : String(err)}`);
@@ -904,7 +954,12 @@ if (contextInjectionEnabled || autoRecallEnabled) {
         : undefined;
     },
   });
-  if (contextInjectionEnabled) logger.info("context-injection", `enabled (limit=${contextInjectionLimit})`);
+  if (contextInjectionEnabled) {
+    logger.info(
+      "context-injection",
+      `enabled (memoryLimit=${contextInjectionLimit}, taskLimit=${contextInjectionTaskLimit}, includeSession=${contextInjectionIncludeSession}, categories=${contextInjectionAllowedCategories.join(",") || "all"})`,
+    );
+  }
   if (autoRecallEnabled) logger.info("auto-recall", `enabled (limit=${autoRecallLimit}, minScore=${autoRecallMinScore})`);
 }
 
@@ -1527,6 +1582,15 @@ function detectTaskSource(sessionKey: string, meta?: Record<string, unknown>): "
   return "chat";
 }
 
+function parseContextInjectionCategories(raw: string | undefined): MemoryCategory[] {
+  const allowed = new Set<MemoryCategory>(["preference", "fact", "decision", "entity", "experience", "other"]);
+  const values = String(raw ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item): item is MemoryCategory => allowed.has(item as MemoryCategory));
+  return values.length > 0 ? values : ["preference", "fact", "decision", "entity"];
+}
+
 function extractTaskArtifactPaths(toolName: string, result: unknown, params: Record<string, unknown>): string[] {
   if (toolName === "file_write" && typeof params.path === "string" && params.path.trim()) {
     return [params.path.trim()];
@@ -1594,6 +1658,61 @@ if (taskMemoryEnabled) {
     },
   });
 
+  if (taskDedupGuardEnabled) {
+    hookRegistry.register({
+      source: "task-memory",
+      hookName: "before_tool_call",
+      priority: 40,
+      handler: async (event, ctx) => {
+        const mm = getGlobalMemoryManager();
+        if (!mm) return;
+
+        if (shouldBypassToolDedup(event.params ?? {})) {
+          return;
+        }
+
+        const mode = resolveToolDedupMode(event.toolName, {
+          globalMode: taskDedupGlobalMode,
+          policy: taskDedupPolicy,
+        });
+        if (mode === "off") return;
+
+        const actionKey = buildToolActionKey(event.toolName, event.params ?? {});
+        if (!actionKey) return;
+
+        const duplicated = mm.findRecentDuplicateToolAction({
+          toolName: event.toolName,
+          actionKey,
+          agentId: ctx.agentId,
+          withinMinutes: taskDedupWindowMinutes,
+        });
+        if (!duplicated) return;
+
+        const label = duplicated.title ?? duplicated.objective ?? duplicated.summary ?? duplicated.id;
+        const duplicateMessage = `检测到相同工具动作已在 ${duplicated.finishedAt ?? duplicated.updatedAt} 的任务「${label}」中成功执行`;
+
+        if (mode === "warn-only") {
+          logger.warn("task-dedup", `${duplicateMessage}，本次将把重复执行提示注入给 Agent: tool=${event.toolName}, actionKey=${actionKey}`);
+          return {
+            skipExecution: true,
+            syntheticResult: buildWarnOnlyDuplicateNotice({
+              toolName: event.toolName,
+              actionKey,
+              finishedAt: duplicated.finishedAt ?? duplicated.updatedAt,
+              taskLabel: label,
+              withinMinutes: taskDedupWindowMinutes,
+            }),
+          };
+        }
+
+        return {
+          block: true,
+          blockReason: `${duplicateMessage}。当前工具属于高风险重复动作，已阻止再次执行。若确需重试，请显式传入 retry=true、force=true 或 allowDuplicate=true。`,
+        };
+      },
+    });
+  }
+
   hookRegistry.register({
     source: "task-memory",
     hookName: "after_tool_call",
@@ -1616,6 +1735,7 @@ if (taskMemoryEnabled) {
         success: !event.error,
         durationMs: event.durationMs,
         note: event.error,
+        actionKey: buildToolActionKey(event.toolName, event.params ?? {}),
         artifactPaths,
       });
     },
@@ -1642,7 +1762,13 @@ if (taskMemoryEnabled) {
     },
   });
 
-  logger.info("task-memory", "Registered task memory hooks");
+  logger.info(
+    "task-memory",
+    `Registered task memory hooks (dedupGuard=${taskDedupGuardEnabled}, dedupWindowMinutes=${taskDedupWindowMinutes}, ${summarizeToolDedupPolicy({
+      globalMode: taskDedupGlobalMode,
+      policy: taskDedupPolicy,
+    })})`,
+  );
 }
 
 // M-N3: 注册 agent_end hook 用于会话记忆自动提取

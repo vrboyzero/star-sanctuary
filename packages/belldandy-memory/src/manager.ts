@@ -5,7 +5,14 @@ import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 import { OpenAIEmbeddingProvider } from "./embeddings/openai.js";
 import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import type { EmbeddingProvider } from "./embeddings/index.js";
-import type { MemorySearchResult, MemoryIndexStatus, MemorySearchOptions, MemorySearchFilter } from "./types.js";
+import type {
+    MemoryCategory,
+    MemoryImportance,
+    MemoryIndexStatus,
+    MemorySearchFilter,
+    MemorySearchOptions,
+    MemorySearchResult,
+} from "./types.js";
 import { ExperiencePromoter } from "./experience-promoter.js";
 import { TaskProcessor } from "./task-processor.js";
 import { TaskSummarizer } from "./task-summarizer.js";
@@ -106,6 +113,25 @@ export interface MemoryManagerOptions {
     experienceAutoMethodEnabled?: boolean;
     experienceAutoSkillEnabled?: boolean;
 }
+
+export type ContextInjectionMemory = MemorySearchResult & {
+    importance: MemoryImportance;
+    importanceScore: number;
+    rationale: string[];
+};
+
+export type RecentTaskSummary = {
+    taskId: string;
+    title?: string;
+    objective?: string;
+    summary?: string;
+    status: TaskRecord["status"];
+    source: TaskRecord["source"];
+    finishedAt?: string;
+    agentId?: string;
+    toolNames: string[];
+    artifactPaths: string[];
+};
 
 export class MemoryManager {
     private store: MemoryStore;
@@ -327,6 +353,88 @@ export class MemoryManager {
      */
     getRecent(limit = 5, filter?: MemorySearchFilter): MemorySearchResult[] {
         return this.store.getRecentChunks(limit, filter);
+    }
+
+    getContextInjectionMemories(options: {
+        limit?: number;
+        agentId?: string | null;
+        includeSession?: boolean;
+        allowedCategories?: MemoryCategory[];
+    } = {}): ContextInjectionMemory[] {
+        const limit = options.limit ?? 5;
+        const includeSession = options.includeSession ?? false;
+        const allowedCategories = options.allowedCategories?.length
+            ? new Set(options.allowedCategories)
+            : null;
+
+        const recent = this.store.getRecentChunks(Math.max(limit * 6, 24), {
+            agentId: options.agentId,
+        });
+
+        return recent
+            .filter((item) => includeSession || item.memoryType !== "session")
+            .filter((item) => !allowedCategories || (!!item.category && allowedCategories.has(item.category)))
+            .map((item) => {
+                const scored = scoreForContextInjection(item);
+                return {
+                    ...item,
+                    importance: classifyImportance(scored.score),
+                    importanceScore: scored.score,
+                    rationale: scored.rationale,
+                };
+            })
+            .sort((a, b) => b.importanceScore - a.importanceScore)
+            .slice(0, limit);
+    }
+
+    getRecentTaskSummaries(limit = 3, filter?: TaskSearchFilter): RecentTaskSummary[] {
+        return this.store
+            .listTasks(Math.max(limit * 3, 12), filter)
+            .filter((task) => task.status === "success" || task.status === "partial")
+            .slice(0, limit)
+            .map((task) => ({
+                taskId: task.id,
+                title: task.title,
+                objective: task.objective,
+                summary: task.summary,
+                status: task.status,
+                source: task.source,
+                finishedAt: task.finishedAt,
+                agentId: task.agentId,
+                toolNames: (task.toolCalls ?? []).map((item) => item.toolName),
+                artifactPaths: task.artifactPaths ?? [],
+            }));
+    }
+
+    findRecentDuplicateToolAction(input: {
+        toolName: string;
+        actionKey?: string;
+        agentId?: string;
+        withinMinutes?: number;
+    }): TaskRecord | null {
+        const actionKey = String(input.actionKey ?? "").trim();
+        if (!actionKey) return null;
+
+        const threshold = Date.now() - ((input.withinMinutes ?? 20) * 60 * 1000);
+        const candidates = this.store.listTasks(30, {
+            agentId: input.agentId,
+            status: "success",
+        });
+
+        for (const task of candidates) {
+            const finishedAt = Date.parse(task.finishedAt ?? task.updatedAt);
+            if (!Number.isFinite(finishedAt) || finishedAt < threshold) continue;
+
+            const matched = (task.toolCalls ?? []).some((item) => {
+                return item.success && item.toolName === input.toolName && item.actionKey === actionKey;
+            });
+
+            if (matched) {
+                return task;
+            }
+        }
+
+        return null;
     }
 
     startTaskCapture(input: {
@@ -1335,4 +1443,88 @@ function dedupePaths(items: string[]): string[] {
         result.push(normalized);
     }
     return result;
+}
+
+function scoreForContextInjection(item: MemorySearchResult): { score: number; rationale: string[] } {
+    let score = 0;
+    const rationale: string[] = [];
+
+    switch (item.memoryType) {
+        case "core":
+            score += 6;
+            rationale.push("core-memory");
+            break;
+        case "daily":
+            score += 4;
+            rationale.push("daily-memory");
+            break;
+        case "other":
+            score += 2;
+            rationale.push("general-memory");
+            break;
+        case "session":
+            score += 1;
+            rationale.push("session-memory");
+            break;
+        default:
+            break;
+    }
+
+    switch (item.category) {
+        case "decision":
+            score += 5;
+            rationale.push("decision");
+            break;
+        case "preference":
+        case "fact":
+            score += 4;
+            rationale.push(item.category);
+            break;
+        case "entity":
+            score += 3;
+            rationale.push("entity");
+            break;
+        case "experience":
+            score += 2;
+            rationale.push("experience");
+            break;
+        case "other":
+            score += 1;
+            rationale.push("other");
+            break;
+        default:
+            break;
+    }
+
+    const updatedAt = Date.parse(item.updatedAt ?? "");
+    if (Number.isFinite(updatedAt)) {
+        const ageHours = (Date.now() - updatedAt) / (1000 * 60 * 60);
+        if (ageHours <= 24) {
+            score += 4;
+            rationale.push("fresh-24h");
+        } else if (ageHours <= 24 * 3) {
+            score += 3;
+            rationale.push("fresh-3d");
+        } else if (ageHours <= 24 * 7) {
+            score += 2;
+            rationale.push("fresh-7d");
+        } else if (ageHours <= 24 * 30) {
+            score += 1;
+            rationale.push("fresh-30d");
+        }
+    }
+
+    const textLength = (item.summary ?? item.snippet ?? "").trim().length;
+    if (textLength >= 24 && textLength <= 220) {
+        score += 1;
+        rationale.push("concise");
+    }
+
+    return { score, rationale };
+}
+
+function classifyImportance(score: number): MemoryImportance {
+    if (score >= 11) return "high";
+    if (score >= 7) return "medium";
+    return "low";
 }

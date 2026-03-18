@@ -7,6 +7,7 @@ export interface TaskToolCallSummary {
   success: boolean;
   durationMs?: number;
   note?: string;
+  actionKey?: string;
   artifactPaths?: string[];
 }
 

@@ -505,7 +505,7 @@ export class MemoryStore {
     this.ensureOpen();
     const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line, category
+      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line, category, updated_at
       FROM chunks c
       WHERE 1 = 1${filterClause}
       ORDER BY c.updated_at DESC
@@ -525,6 +525,7 @@ export class MemoryStore {
       metadata: safeParseJson(row.metadata),
       startLine: row.start_line ?? undefined,
       endLine: row.end_line ?? undefined,
+      updatedAt: row.updated_at ?? undefined,
     }));
   }
 
@@ -1880,6 +1881,7 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     summary: row.summary ?? undefined,
     score,
     metadata: safeParseJson(row.metadata),
+    updatedAt: optionalString(row.updated_at),
   };
 }
 
@@ -2028,6 +2030,7 @@ function safeParseToolCalls(value: unknown): TaskToolCallSummary[] | undefined {
         success: Boolean(item.success),
         durationMs: typeof item.durationMs === "number" ? item.durationMs : undefined,
         note: typeof item.note === "string" ? item.note : undefined,
+        actionKey: typeof item.actionKey === "string" ? item.actionKey : undefined,
         artifactPaths: Array.isArray(item.artifactPaths)
           ? item.artifactPaths.map((artifactPath: unknown) => String(artifactPath)).filter(Boolean)
           : undefined,

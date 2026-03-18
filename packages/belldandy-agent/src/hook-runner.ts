@@ -349,6 +349,8 @@ export function createHookRunner(registry: HookRegistry, options: HookRunnerOpti
         params: next.params ?? acc?.params,
         block: next.block ?? acc?.block,
         blockReason: next.blockReason ?? acc?.blockReason,
+        skipExecution: next.skipExecution ?? acc?.skipExecution,
+        syntheticResult: next.syntheticResult ?? acc?.syntheticResult,
       }),
     );
   }

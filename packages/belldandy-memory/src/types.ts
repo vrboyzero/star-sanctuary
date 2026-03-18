@@ -7,6 +7,9 @@ export type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "ex
 /** 共享可见性（P3-1） */
 export type MemoryVisibility = "private" | "shared";
 
+/** 自动注入时使用的粗粒度重要性分层 */
+export type MemoryImportance = "high" | "medium" | "low";
+
 /** 检索范围（P3-2） */
 export type MemorySearchScope = "private" | "shared" | "all";
 
@@ -65,6 +68,7 @@ export interface MemorySearchResult {
   metadata?: Record<string, any>;
   startLine?: number;
   endLine?: number;
+  updatedAt?: string;
 }
 
 /** 索引状态 */

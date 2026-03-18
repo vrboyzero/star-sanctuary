@@ -412,6 +412,28 @@ export class ToolEnabledAgent implements BelldandyAgent {
                 yield* yieldItem({ type: "final", text: `工具 ${request.name} 执行被阻止: ${reason}` });
                 continue;
               }
+              if (hookRes?.skipExecution) {
+                const syntheticResult = hookRes.syntheticResult || `工具 ${request.name} 本次未执行。`;
+                yield* yieldItem({
+                  type: "tool_call",
+                  id: request.id,
+                  name: request.name,
+                  arguments: request.arguments,
+                });
+                yield* yieldItem({
+                  type: "tool_result",
+                  id: request.id,
+                  name: request.name,
+                  success: true,
+                  output: syntheticResult,
+                });
+                messages.push({
+                  role: "tool",
+                  tool_call_id: tc.id,
+                  content: syntheticResult,
+                });
+                continue;
+              }
               if (hookRes?.params) {
                 request.arguments = hookRes.params as JsonObject;
               }
