@@ -1,0 +1,90 @@
+{
+  "allowedPaths": [
+    "."
+  ],
+  "deniedPaths": [
+    ".git",
+    "node_modules",
+    ".env",
+    "logs",
+    "sessions"
+  ],
+  "allowedDomains": [
+    "github.com",
+    "raw.githubusercontent.com",
+    "developer.mozilla.org",
+    "docs.npmjs.com",
+    "registry.npmjs.org",
+    "pnpm.io"
+  ],
+  "deniedDomains": [
+    "mail.google.com",
+    "drive.google.com",
+    "onedrive.live.com"
+  ],
+  "maxTimeoutMs": 30000,
+  "maxResponseBytes": 524288,
+  "exec": {
+    "quickTimeoutMs": 5000,
+    "longTimeoutMs": 300000,
+    "quickCommands": [
+      "git",
+      "ls",
+      "dir",
+      "rg",
+      "fd",
+      "jq"
+    ],
+    "longCommands": [
+      "node",
+      "npm",
+      "pnpm",
+      "python",
+      "python3",
+      "pytest"
+    ],
+    "extraBlocklist": [
+      "scp",
+      "ssh"
+    ],
+    "nonInteractive": {
+      "enabled": true,
+      "rules": {
+        "npm init": "-y",
+        "pnpm dlx": "--yes",
+        "conda install": "-y"
+      }
+    }
+  },
+  "fileWrite": {
+    "allowedExtensions": [
+      ".js",
+      ".ts",
+      ".jsx",
+      ".tsx",
+      ".html",
+      ".css",
+      ".scss",
+      ".vue",
+      ".py",
+      ".go",
+      ".rs",
+      ".java",
+      ".c",
+      ".cpp",
+      ".sh",
+      ".bat",
+      ".ps1",
+      ".yaml",
+      ".yml",
+      ".toml",
+      ".xml",
+      ".conf",
+      ".md",
+      ".json",
+      ".txt"
+    ],
+    "allowDotFiles": false,
+    "allowBinary": false
+  }
+}

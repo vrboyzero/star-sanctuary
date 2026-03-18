@@ -414,6 +414,14 @@ BELLDANDY_EMBEDDING_MODEL=text-embedding-3-large
 # BELLDANDY_TOOLS_POLICY_FILE=./config/tools-policy.json
 ```
 
+The repository now includes three built-in tools policy examples:
+
+- `config/tools-policy.strict.json`: most restrictive
+- `config/tools-policy.balanced.json`: recommended default
+- `config/tools-policy.open.json`: controlled-open profile
+
+Start with `balanced` unless you explicitly need broader command execution, MCP, browser automation, or webhook-facing integrations.
+
 ### Scheduled Tasks and Context Compaction
 
 ```env
@@ -433,7 +441,23 @@ BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD=2000
 ```env
 BELLDANDY_BROWSER_RELAY_ENABLED=true
 BELLDANDY_RELAY_PORT=28892
+
+# Browser domain scope limits (recommended together with Relay)
+# BELLDANDY_BROWSER_ALLOWED_DOMAINS=github.com,developer.mozilla.org,docs.example.com
+# BELLDANDY_BROWSER_DENIED_DOMAINS=mail.google.com,drive.google.com,onedrive.live.com
 ```
+
+### Configuration Guides
+
+If you are tightening environment variables or doing a pre-release review, read these together:
+
+- [docs/security-config-guide.en.md](./docs/security-config-guide.en.md)
+- [docs/memory-token-config-guide.en.md](./docs/memory-token-config-guide.en.md)
+
+Recommended reading order:
+
+- Read `security-config-guide.en.md` first for host binding, auth, tool permissions, file boundaries, and external exposure
+- Then read `memory-token-config-guide.en.md` for memory retrieval, compaction, and token-cost tuning
 
 ### Multi-channel Configuration
 

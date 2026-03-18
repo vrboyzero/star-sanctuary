@@ -1,0 +1,98 @@
+{
+  "allowedPaths": [
+    "."
+  ],
+  "deniedPaths": [
+    ".git",
+    "node_modules",
+    ".env"
+  ],
+  "allowedDomains": [
+    "github.com",
+    "raw.githubusercontent.com",
+    "api.github.com",
+    "developer.mozilla.org",
+    "docs.npmjs.com",
+    "registry.npmjs.org",
+    "pnpm.io",
+    "pypi.org",
+    "files.pythonhosted.org"
+  ],
+  "deniedDomains": [
+    "mail.google.com",
+    "drive.google.com",
+    "onedrive.live.com",
+    "dropbox.com"
+  ],
+  "maxTimeoutMs": 120000,
+  "maxResponseBytes": 1048576,
+  "exec": {
+    "quickTimeoutMs": 5000,
+    "longTimeoutMs": 300000,
+    "quickCommands": [
+      "git",
+      "ls",
+      "dir",
+      "rg",
+      "fd",
+      "jq",
+      "curl"
+    ],
+    "longCommands": [
+      "node",
+      "npm",
+      "pnpm",
+      "python",
+      "python3",
+      "pytest",
+      "powershell",
+      "powershell.exe",
+      "pwsh"
+    ],
+    "extraBlocklist": [
+      "scp",
+      "ssh"
+    ],
+    "nonInteractive": {
+      "enabled": true,
+      "rules": {
+        "npm init": "-y",
+        "pnpm dlx": "--yes",
+        "conda install": "-y"
+      }
+    }
+  },
+  "fileWrite": {
+    "allowedExtensions": [
+      ".js",
+      ".ts",
+      ".jsx",
+      ".tsx",
+      ".html",
+      ".css",
+      ".scss",
+      ".vue",
+      ".py",
+      ".go",
+      ".rs",
+      ".java",
+      ".c",
+      ".cpp",
+      ".sh",
+      ".bat",
+      ".ps1",
+      ".yaml",
+      ".yml",
+      ".toml",
+      ".xml",
+      ".conf",
+      ".md",
+      ".json",
+      ".txt",
+      ".gitignore",
+      ".prettierrc"
+    ],
+    "allowDotFiles": true,
+    "allowBinary": false
+  }
+}

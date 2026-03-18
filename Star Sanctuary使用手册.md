@@ -2284,15 +2284,55 @@ Star Sanctuary 的工具系统默认处于 **Safe Mode**，并可通过策略文
 - **系统命令**：白名单执行 + 非交互参数注入 + 快速/构建命令分级超时（5s/300s）+ 超时强制 kill；危险参数（如 `rm -r/-rf`、`del /s /q`）会被拦截。
 - **策略覆盖**：通过 `BELLDANDY_TOOLS_POLICY_FILE` 指定 JSON 策略文件，覆盖默认策略（示例见 `.env.example`）。**未设置该变量时，`extraSafelist` 不生效。**
 
+推荐优先直接使用仓库内置的三挡策略示例：
+
+- `config/tools-policy.strict.json`：最保守档
+  适合只在本机使用、只希望保留极小写入面和少量外网访问的场景。
+- `config/tools-policy.balanced.json`：平衡推荐档
+  适合作为默认开发配置；允许常见代码/文档写入，仍保持对高风险命令和域名的收敛。
+- `config/tools-policy.open.json`：受控开放档
+  适合需要浏览器自动化、MCP、更多外部集成或更大执行面的场景，但仍保留黑名单与边界约束。
+
+默认推荐：
+
+- 如果你不确定选哪一个，先用 `balanced`
+- 如果你准备开启 `BELLDANDY_DANGEROUS_TOOLS_ENABLED=true`、Community API、Webhook、浏览器自动化或跨目录工作区，再考虑 `open`
+- 如果机器上有敏感资料，或者只是单机轻量使用，优先 `strict`
+
 可选配置示例（添加到 `.env.local`或`.env`）：
 
 ```env
 # 工具策略文件（JSON）
-BELLDANDY_TOOLS_POLICY_FILE=E:\project\belldandy\config\tools-policy.json
+# 推荐直接指向仓库内置的三挡示例之一
+BELLDANDY_TOOLS_POLICY_FILE=E:\project\star-sanctuary\config\tools-policy.balanced.json
 
 # 额外允许的工作区根目录（多项目协作）
 BELLDANDY_EXTRA_WORKSPACE_ROOTS=E:\projects,D:\workspace
 ```
+
+如果你同时开启了浏览器自动化，建议把浏览器访问范围也一起收紧：
+
+```env
+BELLDANDY_BROWSER_RELAY_ENABLED=true
+BELLDANDY_RELAY_PORT=28892
+BELLDANDY_BROWSER_ALLOWED_DOMAINS=github.com,developer.mozilla.org,docs.example.com
+BELLDANDY_BROWSER_DENIED_DOMAINS=mail.google.com,drive.google.com,onedrive.live.com
+```
+
+> 说明：浏览器 Relay 默认只监听本机，但浏览器工具默认不限制目标站点；因此开启浏览器自动化时，建议同时配置 `BELLDANDY_BROWSER_ALLOWED_DOMAINS` / `BELLDANDY_BROWSER_DENIED_DOMAINS`。
+
+进一步阅读建议：
+
+- [安全变量配置建议方案.md](./docs/安全变量配置建议方案.md)
+  用来确定 `HOST / AUTH / COMMUNITY_API / TOOLS_POLICY / EXTRA_WORKSPACE_ROOTS / 浏览器域名限制` 这些真正影响安全边界的变量。
+- [记忆与token变量配置建议方案.md](./docs/记忆与token变量配置建议方案.md)
+  用来确定 Embedding、自动召回、记忆摘要、压缩和 token 上限等运行成本与体验平衡。
+
+建议顺序：
+
+1. 先按“安全变量配置建议方案”选定安全档位
+2. 再按“记忆与token变量配置建议方案”决定记忆与 token 档位
+3. 最后把两套配置合并进 `.env.local` 或 `.env`
 
 ### 12.1.1 可视化工具管理 (Tool Settings)
 

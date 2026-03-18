@@ -1,0 +1,58 @@
+{
+  "allowedPaths": [
+    "memory",
+    "methods",
+    "facets",
+    "docs"
+  ],
+  "deniedPaths": [
+    ".git",
+    "node_modules",
+    ".env",
+    "logs",
+    "sessions",
+    "generated",
+    "agents"
+  ],
+  "allowedDomains": [
+    "github.com",
+    "raw.githubusercontent.com",
+    "developer.mozilla.org"
+  ],
+  "deniedDomains": [
+    "mail.google.com",
+    "drive.google.com",
+    "onedrive.live.com",
+    "dropbox.com"
+  ],
+  "maxTimeoutMs": 15000,
+  "maxResponseBytes": 262144,
+  "exec": {
+    "quickTimeoutMs": 5000,
+    "longTimeoutMs": 60000,
+    "extraBlocklist": [
+      "powershell",
+      "powershell.exe",
+      "pwsh",
+      "bash",
+      "curl",
+      "wget",
+      "scp",
+      "ssh"
+    ],
+    "nonInteractive": {
+      "enabled": true
+    }
+  },
+  "fileWrite": {
+    "allowedExtensions": [
+      ".md",
+      ".txt",
+      ".json",
+      ".yaml",
+      ".yml"
+    ],
+    "allowDotFiles": false,
+    "allowBinary": false
+  }
+}

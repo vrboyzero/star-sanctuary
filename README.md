@@ -413,6 +413,14 @@ BELLDANDY_EMBEDDING_MODEL=text-embedding-3-large
 # BELLDANDY_TOOLS_POLICY_FILE=./config/tools-policy.json
 ```
 
+工具策略文件现已提供三挡示例：
+
+- `config/tools-policy.strict.json`：最保守档
+- `config/tools-policy.balanced.json`：平衡推荐档
+- `config/tools-policy.open.json`：受控开放档
+
+默认建议优先采用 `balanced`，再按你是否需要 `run_command`、MCP、浏览器自动化、Webhook 等能力逐步放开。
+
 ### 定时任务与上下文压缩
 
 ```env
@@ -432,7 +440,23 @@ BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD=2000
 ```env
 BELLDANDY_BROWSER_RELAY_ENABLED=true
 BELLDANDY_RELAY_PORT=28892
+
+# 浏览器访问范围限制（建议与 Relay 一起配置）
+# BELLDANDY_BROWSER_ALLOWED_DOMAINS=github.com,developer.mozilla.org,docs.example.com
+# BELLDANDY_BROWSER_DENIED_DOMAINS=mail.google.com,drive.google.com,onedrive.live.com
 ```
+
+### 配置建议文档
+
+如果你正在做环境变量收口或准备上线前自查，建议同时查看：
+
+- [docs/安全变量配置建议方案.md](./docs/安全变量配置建议方案.md)
+- [docs/记忆与token变量配置建议方案.md](./docs/记忆与token变量配置建议方案.md)
+
+建议阅读顺序：
+
+- 先看“安全变量配置建议方案”，确定监听地址、鉴权、工具权限、文件边界和外网暴露面
+- 再看“记忆与token变量配置建议方案”，确定记忆召回、压缩和 token 成本策略
 
 ### 多渠道配置
 
