@@ -288,7 +288,7 @@
       <!-- 输入区 -->
       <div class="composer-input-row">
         <button id="attachBtn" class="attach-btn" title="添加附件">+</button>
-        <button id="voiceBtn" class="voice-btn" title="语音输入 (长按或点击录音)">🎤</button>
+        <button id="voiceBtn" class="voice-btn" title="语音输入（点击切换录音）">🎤</button>
         <span id="voiceDuration" class="voice-duration hidden">00:00</span>
         <input type="file" id="fileInput" class="hidden" multiple
           accept=".jpg,.jpeg,.png,.gif,.webp,.txt,.md,.json,.log,.mp4,.mov,.avi,.webm,.mkv" />
@@ -465,6 +465,15 @@
           <label class="form-label">DashScope API Key</label>
           <input id="cfgDashScopeApiKey" class="input" type="password" placeholder="仅 dashscope provider 需要" />
           <div class="form-help">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Voice Shortcut</label>
+          <input id="cfgVoiceShortcut" class="input" placeholder="聚焦后按下新的快捷键" readonly />
+          <div class="form-help" id="cfgVoiceShortcutStatus">本地快捷键，默认 Alt+R。聚焦输入框后按下组合键即可修改，不会写入服务端配置。</div>
+          <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+            <button id="cfgVoiceShortcutDefault" type="button" class="button">恢复默认</button>
+            <button id="cfgVoiceShortcutClear" type="button" class="button">禁用快捷键</button>
+          </div>
         </div>
 
         <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">

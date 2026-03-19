@@ -52,6 +52,15 @@ const MODEL_ID_KEY = "belldandy.webchat.modelId";
 const AGENT_ID_KEY = "belldandy.webchat.agentId";
 const UUID_KEY = "belldandy.webchat.userUuid"; // UUID存储键
 const WEBCHAT_DEBUG_KEY = "belldandy.webchat.debug";
+const VOICE_SHORTCUT_KEY = "belldandy.webchat.voiceShortcut";
+const VOICE_SHORTCUT_DISABLED_VALUE = "disabled";
+const DEFAULT_VOICE_SHORTCUT = Object.freeze({
+  code: "KeyR",
+  ctrlKey: false,
+  altKey: true,
+  shiftKey: false,
+  metaKey: false,
+});
 
 let ws = null;
 let isReady = false;
@@ -76,9 +85,170 @@ const webchatDebugEnabled = (() => {
   return flag === "1" || flag === "true";
 })();
 
+let voiceShortcutBinding = loadVoiceShortcutSetting();
+let voiceShortcutCaptureActive = false;
+let voiceInputController = createNoopVoiceInputController();
+
 function debugLog(...args) {
   if (!webchatDebugEnabled) return;
   console.debug(...args);
+}
+
+function createNoopVoiceInputController() {
+  return {
+    isSupported: false,
+    isRecording() {
+      return false;
+    },
+    async toggle() {
+      return false;
+    },
+    updateTitle() {},
+  };
+}
+
+function getDefaultVoiceShortcut() {
+  return { ...DEFAULT_VOICE_SHORTCUT };
+}
+
+function isVoiceShortcutFunctionKey(code) {
+  return /^F\d{1,2}$/.test(code);
+}
+
+function isModifierOnlyCode(code) {
+  return [
+    "ControlLeft",
+    "ControlRight",
+    "AltLeft",
+    "AltRight",
+    "ShiftLeft",
+    "ShiftRight",
+    "MetaLeft",
+    "MetaRight",
+  ].includes(code);
+}
+
+function normalizeVoiceShortcut(shortcut) {
+  if (!shortcut || typeof shortcut !== "object") return null;
+  const code = typeof shortcut.code === "string" ? shortcut.code.trim() : "";
+  if (!code || isModifierOnlyCode(code)) return null;
+  const normalized = {
+    code,
+    ctrlKey: shortcut.ctrlKey === true,
+    altKey: shortcut.altKey === true,
+    shiftKey: shortcut.shiftKey === true,
+    metaKey: shortcut.metaKey === true,
+  };
+  if (!isVoiceShortcutFunctionKey(code) && !(normalized.ctrlKey || normalized.altKey || normalized.metaKey)) {
+    return null;
+  }
+  return normalized;
+}
+
+function loadVoiceShortcutSetting() {
+  try {
+    const raw = localStorage.getItem(VOICE_SHORTCUT_KEY);
+    if (!raw) return getDefaultVoiceShortcut();
+    if (raw === VOICE_SHORTCUT_DISABLED_VALUE) return null;
+    return normalizeVoiceShortcut(JSON.parse(raw)) || getDefaultVoiceShortcut();
+  } catch {
+    return getDefaultVoiceShortcut();
+  }
+}
+
+function persistVoiceShortcutSetting(shortcut) {
+  const normalized = normalizeVoiceShortcut(shortcut);
+  voiceShortcutBinding = shortcut === null ? null : (normalized || getDefaultVoiceShortcut());
+  try {
+    if (voiceShortcutBinding === null) {
+      localStorage.setItem(VOICE_SHORTCUT_KEY, VOICE_SHORTCUT_DISABLED_VALUE);
+    } else {
+      localStorage.setItem(VOICE_SHORTCUT_KEY, JSON.stringify(voiceShortcutBinding));
+    }
+  } catch {
+    // ignore local persistence failures
+  }
+  renderVoiceShortcutSetting();
+  voiceInputController.updateTitle();
+}
+
+function formatVoiceShortcutKey(code) {
+  if (typeof code !== "string" || !code) return "";
+  if (code.startsWith("Key")) return code.slice(3).toUpperCase();
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code.startsWith("Numpad")) {
+    const suffix = code.slice(6);
+    const mapped = {
+      Add: "Num+",
+      Subtract: "Num-",
+      Multiply: "Num*",
+      Divide: "Num/",
+      Decimal: "Num.",
+      Enter: "NumEnter",
+    };
+    return mapped[suffix] || `Num${suffix}`;
+  }
+  const mapped = {
+    Space: "Space",
+    Escape: "Esc",
+    ArrowUp: "Up",
+    ArrowDown: "Down",
+    ArrowLeft: "Left",
+    ArrowRight: "Right",
+    Backquote: "`",
+    Minus: "-",
+    Equal: "=",
+    BracketLeft: "[",
+    BracketRight: "]",
+    Backslash: "\\",
+    Semicolon: ";",
+    Quote: "'",
+    Comma: ",",
+    Period: ".",
+    Slash: "/",
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    Delete: "Delete",
+  };
+  return mapped[code] || code;
+}
+
+function formatVoiceShortcut(shortcut) {
+  if (!shortcut) return "已禁用";
+  const parts = [];
+  if (shortcut.ctrlKey) parts.push("Ctrl");
+  if (shortcut.altKey) parts.push("Alt");
+  if (shortcut.shiftKey) parts.push("Shift");
+  if (shortcut.metaKey) parts.push("Meta");
+  parts.push(formatVoiceShortcutKey(shortcut.code));
+  return parts.join("+");
+}
+
+function describeVoiceShortcutForTitle() {
+  return voiceShortcutBinding ? `语音输入（点击或 ${formatVoiceShortcut(voiceShortcutBinding)} 切换录音）` : "语音输入（点击切换录音）";
+}
+
+function buildVoiceShortcutFromEvent(event) {
+  if (!event || typeof event.code !== "string") return null;
+  return normalizeVoiceShortcut({
+    code: event.code,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    metaKey: event.metaKey,
+  });
+}
+
+function matchesVoiceShortcut(event, shortcut) {
+  if (!shortcut) return false;
+  return (
+    event.code === shortcut.code &&
+    event.ctrlKey === shortcut.ctrlKey &&
+    event.altKey === shortcut.altKey &&
+    event.shiftKey === shortcut.shiftKey &&
+    event.metaKey === shortcut.metaKey
+  );
 }
 
 // 身份信息（从 hello-ok 获取）
@@ -282,9 +452,26 @@ if (document.fonts?.ready) {
 }
 
 // Initialize Voice Input
-initVoiceInput();
+voiceInputController = initVoiceInput();
+
+document.addEventListener("keydown", (event) => {
+  if (!shouldHandleVoiceShortcut(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  void voiceInputController.toggle();
+});
 
 connect();
+
+function shouldHandleVoiceShortcut(event) {
+  if (!voiceShortcutBinding || !voiceInputController.isSupported) return false;
+  if (!matchesVoiceShortcut(event, voiceShortcutBinding)) return false;
+  if (event.defaultPrevented || event.repeat || event.isComposing) return false;
+  if (voiceShortcutCaptureActive) return false;
+  if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
+  if (!composerSection || composerSection.classList.contains("hidden")) return false;
+  return true;
+}
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -1122,6 +1309,10 @@ const cfgTtsEnabled = document.getElementById("cfgTtsEnabled");
 const cfgTtsProvider = document.getElementById("cfgTtsProvider");
 const cfgTtsVoice = document.getElementById("cfgTtsVoice");
 const cfgDashScopeApiKey = document.getElementById("cfgDashScopeApiKey");
+const cfgVoiceShortcut = document.getElementById("cfgVoiceShortcut");
+const cfgVoiceShortcutStatus = document.getElementById("cfgVoiceShortcutStatus");
+const cfgVoiceShortcutDefault = document.getElementById("cfgVoiceShortcutDefault");
+const cfgVoiceShortcutClear = document.getElementById("cfgVoiceShortcutClear");
 const cfgFacetAnchor = document.getElementById("cfgFacetAnchor");
 const cfgInjectAgents = document.getElementById("cfgInjectAgents");
 const cfgInjectSoul = document.getElementById("cfgInjectSoul");
@@ -1143,13 +1334,86 @@ if (saveSettingsBtn) {
 if (restartBtn) {
   restartBtn.addEventListener("click", restartServer);
 }
+if (cfgVoiceShortcut) {
+  cfgVoiceShortcut.addEventListener("focus", () => {
+    voiceShortcutCaptureActive = true;
+    renderVoiceShortcutSetting("按下新的快捷键。Esc 取消，Backspace/Delete 禁用。");
+  });
+  cfgVoiceShortcut.addEventListener("blur", () => {
+    voiceShortcutCaptureActive = false;
+    renderVoiceShortcutSetting();
+  });
+  cfgVoiceShortcut.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") {
+      voiceShortcutCaptureActive = false;
+      renderVoiceShortcutSetting();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === "Escape") {
+      voiceShortcutCaptureActive = false;
+      cfgVoiceShortcut.blur();
+      renderVoiceShortcutSetting("已取消快捷键修改。");
+      return;
+    }
+    if (event.key === "Backspace" || event.key === "Delete") {
+      persistVoiceShortcutSetting(null);
+      voiceShortcutCaptureActive = false;
+      cfgVoiceShortcut.blur();
+      renderVoiceShortcutSetting("语音快捷键已禁用。");
+      return;
+    }
+
+    const nextShortcut = buildVoiceShortcutFromEvent(event);
+    if (!nextShortcut) {
+      renderVoiceShortcutSetting("请使用 Ctrl / Alt / Meta 组合键，或单独使用 F 键。");
+      return;
+    }
+
+    persistVoiceShortcutSetting(nextShortcut);
+    voiceShortcutCaptureActive = false;
+    cfgVoiceShortcut.blur();
+    renderVoiceShortcutSetting(`快捷键已保存为 ${formatVoiceShortcut(nextShortcut)}。`);
+  });
+}
+if (cfgVoiceShortcutDefault) {
+  cfgVoiceShortcutDefault.addEventListener("click", () => {
+    persistVoiceShortcutSetting(getDefaultVoiceShortcut());
+    renderVoiceShortcutSetting(`已恢复默认快捷键 ${formatVoiceShortcut(voiceShortcutBinding)}。`);
+  });
+}
+if (cfgVoiceShortcutClear) {
+  cfgVoiceShortcutClear.addEventListener("click", () => {
+    persistVoiceShortcutSetting(null);
+    renderVoiceShortcutSetting("语音快捷键已禁用。");
+  });
+}
+
+function renderVoiceShortcutSetting(message = "") {
+  if (cfgVoiceShortcut) {
+    cfgVoiceShortcut.value = formatVoiceShortcut(voiceShortcutBinding);
+  }
+  if (cfgVoiceShortcutStatus) {
+    if (voiceShortcutCaptureActive) {
+      cfgVoiceShortcutStatus.textContent = message || "按下新的快捷键。Esc 取消，Backspace/Delete 禁用。";
+    } else if (message) {
+      cfgVoiceShortcutStatus.textContent = message;
+    } else {
+      cfgVoiceShortcutStatus.textContent = `本地快捷键，当前：${formatVoiceShortcut(voiceShortcutBinding)}。默认 ${formatVoiceShortcut(DEFAULT_VOICE_SHORTCUT)}，不会写入服务端配置。`;
+    }
+  }
+}
 
 function toggleSettings(show) {
   if (show) {
     settingsModal.classList.remove("hidden");
+    renderVoiceShortcutSetting();
     loadConfig();
     runDoctor();
   } else {
+    voiceShortcutCaptureActive = false;
     settingsModal.classList.add("hidden");
   }
 }
@@ -4307,7 +4571,7 @@ async function saveToolSettings() {
 function initVoiceInput() {
   const voiceBtn = document.getElementById("voiceBtn");
   const voiceDuration = document.getElementById("voiceDuration");
-  if (!voiceBtn) return;
+  if (!voiceBtn) return createNoopVoiceInputController();
 
   let mediaRecorder = null;
   let audioChunks = [];
@@ -4321,18 +4585,37 @@ function initVoiceInput() {
 
   if (!hasMediaRecorder && !hasWebSpeech) {
     voiceBtn.style.display = "none";
-    return;
+    return createNoopVoiceInputController();
   }
 
-  voiceBtn.addEventListener("click", async () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
+  const controller = {
+    isSupported: true,
+    isRecording() {
+      return isRecording;
+    },
+    async toggle() {
+      if (isRecording) {
+        stopRecording();
+        return false;
+      }
+      await startRecording();
+      return true;
+    },
+    updateTitle() {
+      const title = describeVoiceShortcutForTitle();
+      voiceBtn.title = title;
+      voiceBtn.setAttribute("aria-label", title);
+    },
+  };
+
+  controller.updateTitle();
+
+  voiceBtn.addEventListener("click", () => {
+    void controller.toggle();
   });
 
   async function startRecording() {
+    if (isRecording) return;
     try {
       if (hasMediaRecorder) {
         // Mode A: MediaRecorder (Backend STT)
@@ -4356,7 +4639,8 @@ function initVoiceInput() {
         };
 
         mediaRecorder.onstop = async () => {
-          const mime = mediaRecorder.mimeType || "audio/webm";
+          const recorder = mediaRecorder;
+          const mime = recorder?.mimeType || "audio/webm";
           const blob = new Blob(audioChunks, { type: mime });
           const reader = new FileReader();
           reader.onloadend = () => {
@@ -4387,14 +4671,13 @@ function initVoiceInput() {
             });
             renderAttachmentsPreview();
 
-            // Auto-send if prompt is empty, or just let user send
-            // For better UX, we could auto-submit, but let's let user confirm for now (or auto-submit if separate setting)
             sendMessage(); // Auto-send voice message
           };
           reader.readAsDataURL(blob);
 
           // Stop tracks
           stream.getTracks().forEach(track => track.stop());
+          mediaRecorder = null;
         };
 
         mediaRecorder.start();
@@ -4418,7 +4701,7 @@ function initVoiceInput() {
           if (promptEl.value) promptEl.value += " " + text;
           else promptEl.value = text;
           // Trigger input event to resize
-          promptEl.dispatchEvent(new Event('input'));
+          promptEl.dispatchEvent(new Event("input"));
         };
 
         recognition.onerror = (event) => {
@@ -4427,7 +4710,9 @@ function initVoiceInput() {
         };
 
         recognition.onend = () => {
-          stopRecording();
+          isRecording = false;
+          mediaRecorder = null;
+          updateUI(false);
         };
 
         recognition.start();
@@ -4436,26 +4721,32 @@ function initVoiceInput() {
       }
     } catch (err) {
       console.error("Failed to start recording:", err);
-      alert("无法启动录音: " + err.message);
+      alert("无法启动录音: " + (err?.message || String(err)));
       isRecording = false;
+      mediaRecorder = null;
       updateUI(false);
     }
   }
 
   function stopRecording() {
     if (!isRecording) return;
-
-    if (hasMediaRecorder && mediaRecorder instanceof MediaRecorder) {
-      if (mediaRecorder.state !== "inactive") {
-        mediaRecorder.stop();
-      }
-    } else if (hasWebSpeech && mediaRecorder) {
-      // In Web Speech mode, mediaRecorder holds the recognition instance
-      mediaRecorder.stop();
-    }
+    const activeRecorder = mediaRecorder;
 
     isRecording = false;
     updateUI(false);
+
+    if (hasMediaRecorder && activeRecorder instanceof MediaRecorder) {
+      if (activeRecorder.state !== "inactive") {
+        activeRecorder.stop();
+      }
+    } else if (hasWebSpeech && activeRecorder && typeof activeRecorder.stop === "function") {
+      // In Web Speech mode, mediaRecorder holds the recognition instance
+      try {
+        activeRecorder.stop();
+      } catch {
+        mediaRecorder = null;
+      }
+    }
   }
 
   function updateUI(recording, mode = "recording") {
@@ -4479,5 +4770,7 @@ function initVoiceInput() {
       }
     }
   }
+
+  return controller;
 }
 
