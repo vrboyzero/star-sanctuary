@@ -102,6 +102,7 @@ export type MessageSendParams = {
   roomContext?: {
     roomId?: string;
     environment: "local" | "community"; // 本地WebChat vs office.goddess.ai社区
+    clientId?: string;
     members?: Array<{
       type: "user" | "agent";
       id: string;
@@ -114,6 +115,36 @@ export type MessageSendParams = {
     type: string;
     base64: string;
   }>;
+};
+
+export type ToolSettingsConfirmDecision = "approve" | "reject";
+
+export type ToolSettingsConfirmParams = {
+  requestId: string;
+  decision: ToolSettingsConfirmDecision;
+  conversationId?: string;
+};
+
+export type ToolSettingsConfirmRequiredEvent = {
+  source: string;
+  mode: "confirm";
+  conversationId: string;
+  requestId: string;
+  requestedByAgentId?: string;
+  summary: string[];
+  impact: string;
+  expiresAt: number;
+  targetClientId?: string;
+};
+
+export type ToolSettingsConfirmResolvedEvent = {
+  source: string;
+  conversationId: string;
+  requestId: string;
+  decision: "approved" | "rejected";
+  summary: string[];
+  resolvedAt: number;
+  targetClientId?: string;
 };
 
 export type ChatDeltaEvent = {

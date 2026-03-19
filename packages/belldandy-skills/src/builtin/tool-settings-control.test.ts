@@ -106,7 +106,7 @@ function createContext(overrides: Partial<ToolContext> = {}): ToolContext {
 function createControlTool(
   mode: AgentToolControlMode,
   history: Array<{ role: "user" | "assistant"; content: string }> = [],
-  options: { hasConfirmPassword?: boolean } = {},
+  options: { hasConfirmPassword?: boolean; contextOverrides?: Partial<ToolContext> } = {},
 ) {
   const configManager = createConfigManager();
   const confirmationStore = createConfirmationStore();
@@ -133,6 +133,7 @@ function createControlTool(
       recordTaskTokenResult() {},
       getTaskTokenResults() { return []; },
     },
+    ...options.contextOverrides,
   });
   return { tool, configManager, confirmationStore, context };
 }
@@ -228,6 +229,31 @@ describe("tool_settings_control", () => {
     expect(result.output).toContain("已配置的工具开关确认口令");
     expect(result.output).not.toContain("如确认，请回复：批准工具设置变更");
     expect(result.output).not.toContain("requestId=\"");
+  });
+
+  it("emits webchat confirm event and hides legacy approval prompt in local webchat mode", async () => {
+    const broadcasts: Array<{ event: string; payload: Record<string, unknown> }> = [];
+    const { tool, context, confirmationStore } = createControlTool("confirm", [], {
+      hasConfirmPassword: true,
+      contextOverrides: {
+        roomContext: { environment: "local", clientId: "client-web-1" },
+        broadcast: (event, payload) => broadcasts.push({ event, payload }),
+      },
+    });
+    const result = await tool.execute({
+      action: "apply",
+      disableBuiltin: ["file_write"],
+    }, context);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("WebChat 页面确认窗口");
+    expect(result.output).not.toContain("批准工具设置变更");
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0].event).toBe("tool_settings.confirm.required");
+    expect(broadcasts[0].payload.targetClientId).toBe("client-web-1");
+    expect(Array.isArray(broadcasts[0].payload.summary)).toBe(true);
+    const requestId = String(broadcasts[0].payload.requestId ?? "");
+    expect(confirmationStore.get(requestId)?.changes.disableBuiltin).toEqual(["file_write"]);
   });
 
   it("requires password approval marker before confirm applies changes", async () => {

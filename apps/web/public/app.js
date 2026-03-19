@@ -1143,6 +1143,7 @@ async function sendMessage() {
     conversationId: activeConversationId || undefined,
     text: finalText,
     from: "web",
+    roomContext: { environment: "local" },
     modelId: modelSelectEl?.value || undefined,
     agentId: agentSelectEl?.value || undefined,
     attachments,
@@ -1594,6 +1595,14 @@ function handleEvent(event, payload) {
   }
   if (event === "token.counter.result") {
     showTaskTokenResult(payload);
+    return;
+  }
+  if (event === "tool_settings.confirm.required") {
+    handleToolSettingsConfirmRequired(payload);
+    return;
+  }
+  if (event === "tool_settings.confirm.resolved") {
+    handleToolSettingsConfirmResolved(payload);
     return;
   }
   if (event === "tools.config.updated") {
@@ -4326,6 +4335,12 @@ function isSafeAssistantUrl(value, tag, attrName) {
 }
 
 // ── Tool Settings (调用设置) ──
+const toolSettingsConfirmModal = document.getElementById("toolSettingsConfirmModal");
+const toolSettingsConfirmImpactEl = document.getElementById("toolSettingsConfirmImpact");
+const toolSettingsConfirmSummaryEl = document.getElementById("toolSettingsConfirmSummary");
+const toolSettingsConfirmExpiryEl = document.getElementById("toolSettingsConfirmExpiry");
+const toolSettingsConfirmApproveBtn = document.getElementById("toolSettingsConfirmApprove");
+const toolSettingsConfirmRejectBtn = document.getElementById("toolSettingsConfirmReject");
 const toolSettingsModal = document.getElementById("toolSettingsModal");
 const openToolSettingsBtn = document.getElementById("openToolSettings");
 const closeToolSettingsBtn = document.getElementById("closeToolSettings");
@@ -4335,6 +4350,8 @@ const toolSettingsBody = document.getElementById("toolSettingsBody");
 let toolSettingsData = null; // { builtin, mcp, plugins, skills, disabled }
 let toolSettingsActiveTab = "builtin";
 let toolSettingsLoadSeq = 0;
+let pendingToolSettingsConfirm = null;
+let toolSettingsConfirmTimer = null;
 
 if (openToolSettingsBtn) {
   openToolSettingsBtn.addEventListener("click", () => toggleToolSettings(true));
@@ -4344,6 +4361,16 @@ if (closeToolSettingsBtn) {
 }
 if (saveToolSettingsBtn) {
   saveToolSettingsBtn.addEventListener("click", saveToolSettings);
+}
+if (toolSettingsConfirmApproveBtn) {
+  toolSettingsConfirmApproveBtn.addEventListener("click", () => {
+    void submitToolSettingsConfirm("approve");
+  });
+}
+if (toolSettingsConfirmRejectBtn) {
+  toolSettingsConfirmRejectBtn.addEventListener("click", () => {
+    void submitToolSettingsConfirm("reject");
+  });
 }
 
 // Tab switching
@@ -4364,6 +4391,145 @@ function toggleToolSettings(show) {
   } else {
     toolSettingsModal.classList.add("hidden");
   }
+}
+
+function shouldHandleToolSettingsConfirmPayload(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  const targetClientId = payload.targetClientId ? String(payload.targetClientId).trim() : "";
+  return !targetClientId || targetClientId === clientId;
+}
+
+function normalizeToolSettingsConfirmPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const requestId = payload.requestId ? String(payload.requestId).trim() : "";
+  const conversationId = payload.conversationId ? String(payload.conversationId).trim() : "";
+  if (!requestId || !conversationId) return null;
+  const summary = Array.isArray(payload.summary)
+    ? payload.summary.map((item) => String(item ?? "").trim()).filter(Boolean)
+    : [];
+  return {
+    requestId,
+    conversationId,
+    impact: payload.impact ? String(payload.impact) : "这是全局工具设置变更，会影响当前 Gateway 的其他会话。",
+    summary,
+    expiresAt: Number(payload.expiresAt || 0),
+  };
+}
+
+function setToolSettingsConfirmBusy(busy) {
+  if (toolSettingsConfirmApproveBtn) toolSettingsConfirmApproveBtn.disabled = busy;
+  if (toolSettingsConfirmRejectBtn) toolSettingsConfirmRejectBtn.disabled = busy;
+}
+
+function stopToolSettingsConfirmTimer() {
+  if (toolSettingsConfirmTimer) {
+    clearInterval(toolSettingsConfirmTimer);
+    toolSettingsConfirmTimer = null;
+  }
+}
+
+function formatToolSettingsConfirmExpiry(expiresAt) {
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) return "";
+  const remainingMs = expiresAt - Date.now();
+  if (remainingMs <= 0) return "该确认请求已过期，请重新发起工具开关变更。";
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  if (remainingSec < 60) return `请在 ${remainingSec} 秒内完成确认。`;
+  const minutes = Math.floor(remainingSec / 60);
+  const seconds = remainingSec % 60;
+  return `请在 ${minutes} 分 ${seconds.toString().padStart(2, "0")} 秒内完成确认。`;
+}
+
+function renderToolSettingsConfirmModal() {
+  if (!pendingToolSettingsConfirm || !toolSettingsConfirmModal) return;
+  if (toolSettingsConfirmImpactEl) {
+    toolSettingsConfirmImpactEl.textContent = pendingToolSettingsConfirm.impact;
+  }
+  if (toolSettingsConfirmSummaryEl) {
+    const lines = pendingToolSettingsConfirm.summary.length > 0
+      ? pendingToolSettingsConfirm.summary
+      : ["本次请求未提供可展示的变更摘要。"];
+    toolSettingsConfirmSummaryEl.innerHTML = lines
+      .map((line) => `<li>${escapeHtml(line)}</li>`)
+      .join("");
+  }
+  if (toolSettingsConfirmExpiryEl) {
+    toolSettingsConfirmExpiryEl.textContent = formatToolSettingsConfirmExpiry(pendingToolSettingsConfirm.expiresAt);
+  }
+}
+
+function clearToolSettingsConfirmModal() {
+  pendingToolSettingsConfirm = null;
+  stopToolSettingsConfirmTimer();
+  setToolSettingsConfirmBusy(false);
+  if (toolSettingsConfirmModal) toolSettingsConfirmModal.classList.add("hidden");
+}
+
+function handleToolSettingsConfirmRequired(payload) {
+  if (!shouldHandleToolSettingsConfirmPayload(payload)) return;
+  const normalized = normalizeToolSettingsConfirmPayload(payload);
+  if (!normalized) return;
+  pendingToolSettingsConfirm = normalized;
+  setToolSettingsConfirmBusy(false);
+  renderToolSettingsConfirmModal();
+  if (toolSettingsConfirmModal) toolSettingsConfirmModal.classList.remove("hidden");
+  stopToolSettingsConfirmTimer();
+  toolSettingsConfirmTimer = setInterval(() => {
+    if (!pendingToolSettingsConfirm) {
+      stopToolSettingsConfirmTimer();
+      return;
+    }
+    renderToolSettingsConfirmModal();
+  }, 1000);
+}
+
+function handleToolSettingsConfirmResolved(payload) {
+  if (!shouldHandleToolSettingsConfirmPayload(payload)) return;
+  const requestId = payload && payload.requestId ? String(payload.requestId).trim() : "";
+  if (!pendingToolSettingsConfirm || pendingToolSettingsConfirm.requestId !== requestId) return;
+  const approved = payload && payload.decision === "approved";
+  clearToolSettingsConfirmModal();
+  showNotice(
+    approved ? "工具设置已确认" : "工具设置已拒绝",
+    approved ? "全局工具开关变更已应用。" : "本次工具开关变更已拒绝。",
+    approved ? "success" : "info",
+    2600,
+  );
+}
+
+async function submitToolSettingsConfirm(decision) {
+  if (!pendingToolSettingsConfirm) return;
+  if (!ws || !isReady) {
+    showNotice("无法处理确认", "当前未连接到服务器。", "error");
+    return;
+  }
+  setToolSettingsConfirmBusy(true);
+  const currentRequest = pendingToolSettingsConfirm;
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "tool_settings.confirm",
+    params: {
+      requestId: currentRequest.requestId,
+      conversationId: currentRequest.conversationId,
+      decision,
+    },
+  });
+  if (!res || res.ok === false) {
+    setToolSettingsConfirmBusy(false);
+    const title = decision === "approve" ? "确认失败" : "拒绝失败";
+    showNotice(title, res?.error?.message || "请求未完成。", "error");
+    if (res?.error?.code === "not_found") {
+      clearToolSettingsConfirmModal();
+    }
+    return;
+  }
+  clearToolSettingsConfirmModal();
+  showNotice(
+    decision === "approve" ? "工具设置已确认" : "工具设置已拒绝",
+    decision === "approve" ? "全局工具开关变更已应用。" : "本次工具开关变更已拒绝。",
+    decision === "approve" ? "success" : "info",
+    2600,
+  );
 }
 
 async function loadToolSettings() {

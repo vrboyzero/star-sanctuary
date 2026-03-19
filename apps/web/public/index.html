@@ -555,6 +555,29 @@
     </div>
   </div>
 
+  <div id="toolSettingsConfirmModal" class="modal-overlay hidden">
+    <div class="modal tool-settings-confirm-modal">
+      <div class="modal-header">
+        <span>确认工具开关变更</span>
+      </div>
+      <div class="modal-body tool-settings-confirm-body">
+        <p class="tool-settings-confirm-copy">
+          这次操作会修改当前 Gateway 的全局工具可用性，并影响其他会话。为避免确认口令在聊天区暴露，请直接在这里处理。
+        </p>
+        <div id="toolSettingsConfirmImpact" class="tool-settings-confirm-impact"></div>
+        <div>
+          <div class="tool-settings-confirm-label">变更摘要</div>
+          <ul id="toolSettingsConfirmSummary" class="tool-settings-confirm-summary"></ul>
+        </div>
+        <div id="toolSettingsConfirmExpiry" class="tool-settings-confirm-expiry"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="toolSettingsConfirmReject" class="button">拒绝</button>
+        <button id="toolSettingsConfirmApprove" class="button" style="background: var(--text-main); color: #000;">确认</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Awakening Overlay -->
   <div id="awakening" class="awakening-overlay hidden">
     <div class="scanline"></div>

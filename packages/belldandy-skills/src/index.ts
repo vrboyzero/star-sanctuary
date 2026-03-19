@@ -64,8 +64,12 @@ export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-re
 export {
   createToolSettingsControlTool,
   TOOL_SETTINGS_CONTROL_NAME,
+  applyToolControlChanges,
+  buildToolControlDisabledPayload,
+  summarizeToolControlChanges,
   type AgentToolControlMode,
   type AgentToolControlDeps,
+  type ToolControlChanges,
 } from "./builtin/tool-settings-control.js";
 export {
   checkAndConsumeRestartCooldown,

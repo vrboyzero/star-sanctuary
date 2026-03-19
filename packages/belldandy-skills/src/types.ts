@@ -145,6 +145,7 @@ export type RoomContext = {
   roomId?: string;
   environment: "local" | "community"; // 本地WebChat vs office.goddess.ai社区
   members?: RoomMember[];
+  clientId?: string;
 };
 
 /** Token 计数器服务接口（由 belldandy-agent 实现，此处定义以避免循环依赖） */

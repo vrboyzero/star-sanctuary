@@ -700,6 +700,218 @@ test("message.send hides tool control confirm password from agent input and appl
   }
 });
 
+test("message.send emits webchat confirm event and tool_settings.confirm approves without chat prompt noise", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const confirmationStore = new ToolControlConfirmationStore();
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  let toolExecutor!: ToolExecutor;
+  let server!: Awaited<ReturnType<typeof startGatewayServer>>;
+
+  toolExecutor = new ToolExecutor({
+    tools: [
+      createTestTool("alpha_builtin"),
+      createToolSettingsControlTool({
+        toolsConfigManager,
+        getControlMode: () => "confirm",
+        getHasConfirmPassword: () => true,
+        listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+        confirmationStore,
+      }),
+    ],
+    workspaceRoot: process.cwd(),
+    alwaysEnabledTools: [TOOL_SETTINGS_CONTROL_NAME],
+    broadcast: (event, payload) => {
+      server?.broadcast({ type: "event", event, payload });
+    },
+  });
+
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      yield { type: "status", status: "running" as const };
+      const request = {
+        id: "tool-call-webchat-confirm",
+        name: TOOL_SETTINGS_CONTROL_NAME,
+        arguments: {
+          action: "apply",
+          disableBuiltin: ["alpha_builtin"],
+        },
+      };
+      yield {
+        type: "tool_call" as const,
+        id: request.id,
+        name: request.name,
+        arguments: request.arguments,
+      };
+      const result = await toolExecutor.execute(request, input.conversationId, input.agentId, input.userUuid, input.senderInfo, input.roomContext);
+      yield {
+        type: "tool_result" as const,
+        id: result.id,
+        name: result.name,
+        success: result.success,
+        output: result.output,
+        error: result.error,
+      };
+      yield { type: "final" as const, text: "收到" };
+      yield { type: "status", status: "done" as const };
+    },
+  };
+
+  server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+    toolsConfigManager,
+    toolExecutor,
+    toolControlConfirmationStore: confirmationStore,
+    getAgentToolControlMode: () => "confirm",
+    getAgentToolControlConfirmPassword: () => "星河123",
+    agentFactory: () => agent,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-send-webchat-confirm",
+      method: "message.send",
+      params: {
+        text: "请关闭 alpha_builtin",
+        conversationId: "conv-webchat-confirm",
+        from: "web",
+        roomContext: {
+          environment: "local",
+        },
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-send-webchat-confirm" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tool_result"));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tool_settings.confirm.required"));
+
+    const toolResultEvent = frames.find((f) => f.type === "event" && f.event === "tool_result");
+    expect(toolResultEvent?.payload?.success).toBe(true);
+    expect(String(toolResultEvent?.payload?.output ?? "")).toContain("WebChat 页面确认窗口");
+    expect(String(toolResultEvent?.payload?.output ?? "")).not.toContain("批准工具设置变更");
+
+    const requiredEvent = frames.find((f) => f.type === "event" && f.event === "tool_settings.confirm.required");
+    expect(requiredEvent?.payload?.conversationId).toBe("conv-webchat-confirm");
+    expect(requiredEvent?.payload?.summary).toEqual(["关闭 builtin: alpha_builtin"]);
+    expect(String(requiredEvent?.payload?.targetClientId ?? "").length).toBeGreaterThan(0);
+
+    const requestId = String(requiredEvent?.payload?.requestId ?? "");
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "approve-webchat-confirm",
+      method: "tool_settings.confirm",
+      params: {
+        requestId,
+        conversationId: "conv-webchat-confirm",
+        decision: "approve",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "approve-webchat-confirm" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tools.config.updated"));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tool_settings.confirm.resolved"));
+
+    expect(toolsConfigManager.getConfig().disabled.builtin).toEqual(["alpha_builtin"]);
+    expect(confirmationStore.get(requestId)).toBeUndefined();
+
+    const resolvedEvent = frames.find((f) => f.type === "event" && f.event === "tool_settings.confirm.resolved");
+    expect(resolvedEvent?.payload?.decision).toBe("approved");
+
+    const storedHistory = conversationStore.getHistory("conv-webchat-confirm");
+    expect(storedHistory.some((item) => item.content.includes("批准工具设置变更"))).toBe(false);
+    expect(storedHistory.some((item) => item.content.includes("请在页面确认窗口中处理"))).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("tool_settings.confirm rejects pending request without applying config change", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const confirmationStore = new ToolControlConfirmationStore();
+  confirmationStore.create({
+    requestId: "UI001",
+    conversationId: "conv-webchat-reject",
+    requestedByAgentId: "default",
+    changes: {
+      enableBuiltin: [],
+      disableBuiltin: ["alpha_builtin"],
+      enableMcpServers: [],
+      disableMcpServers: [],
+      enablePlugins: [],
+      disablePlugins: [],
+    },
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolControlConfirmationStore: confirmationStore,
+    getAgentToolControlMode: () => "confirm",
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "reject-webchat-confirm",
+      method: "tool_settings.confirm",
+      params: {
+        requestId: "UI001",
+        conversationId: "conv-webchat-reject",
+        decision: "reject",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "reject-webchat-confirm" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tool_settings.confirm.resolved"));
+
+    expect(toolsConfigManager.getConfig().disabled.builtin).toEqual([]);
+    expect(confirmationStore.get("UI001")).toBeUndefined();
+
+    const resolvedEvent = frames.find((f) => f.type === "event" && f.event === "tool_settings.confirm.resolved");
+    expect(resolvedEvent?.payload?.decision).toBe("rejected");
+    expect(frames.some((f) => f.type === "event" && f.event === "tools.config.updated")).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("tools.list hides tool_settings_control from builtin tools", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const toolsConfigManager = new ToolsConfigManager(stateDir);

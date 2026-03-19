@@ -5,7 +5,7 @@ export const TOOL_SETTINGS_CONTROL_NAME = "tool_settings_control";
 
 export type AgentToolControlMode = "disabled" | "confirm" | "auto";
 
-type ToolSettingsDisabledConfig = {
+export type ToolSettingsDisabledConfig = {
   builtin: string[];
   mcp_servers: string[];
   plugins: string[];
@@ -49,7 +49,7 @@ export type AgentToolControlDeps = {
   confirmationStore: ToolControlConfirmationStoreLike;
 };
 
-type ToolControlChanges = {
+export type ToolControlChanges = {
   enableBuiltin: string[];
   disableBuiltin: string[];
   enableMcpServers: string[];
@@ -131,7 +131,7 @@ function validateChanges(changes: ToolControlChanges, snapshot: ReturnType<typeo
   return undefined;
 }
 
-function applyChanges(
+export function applyToolControlChanges(
   config: ToolSettingsDisabledConfig,
   changes: ToolControlChanges,
 ): Pick<ToolSettingsDisabledConfig, "builtin" | "mcp_servers" | "plugins"> {
@@ -221,7 +221,7 @@ function sameChanges(a: ToolControlChanges, b: ToolControlChanges): boolean {
   });
 }
 
-function summarizeChanges(changes: ToolControlChanges): string[] {
+export function summarizeToolControlChanges(changes: ToolControlChanges): string[] {
   const lines: string[] = [];
   if (changes.enableBuiltin.length > 0) lines.push(`启用 builtin: ${changes.enableBuiltin.join(", ")}`);
   if (changes.disableBuiltin.length > 0) lines.push(`关闭 builtin: ${changes.disableBuiltin.join(", ")}`);
@@ -245,13 +245,24 @@ function buildStatusOutput(mode: AgentToolControlMode, snapshot: ReturnType<type
   return lines.join("\n");
 }
 
-function buildBroadcastDisabledPayload(disabled: ToolSettingsDisabledConfig) {
+export function buildToolControlDisabledPayload(disabled: ToolSettingsDisabledConfig) {
   return {
     builtin: sortStrings(disabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME)),
     mcp_servers: sortStrings(disabled.mcp_servers),
     plugins: sortStrings(disabled.plugins),
     skills: sortStrings(disabled.skills),
   };
+}
+
+function isWebChatUiConfirmContext(context: ToolContext): boolean {
+  return context.roomContext?.environment === "local";
+}
+
+function getConfirmTargetClientId(context: ToolContext): string | undefined {
+  const roomContext = context.roomContext as (ToolContext["roomContext"] & { clientId?: string }) | undefined;
+  return typeof roomContext?.clientId === "string" && roomContext.clientId.trim()
+    ? roomContext.clientId.trim()
+    : undefined;
 }
 
 export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool {
@@ -356,13 +367,13 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
         if (mode === "confirm" && pendingApproved) {
           if (pendingApproved && pendingApproved.conversationId === context.conversationId) {
             if (sameChanges(pendingApproved.changes, changes)) {
-              const nextDisabled = applyChanges(config, pendingApproved.changes);
+              const nextDisabled = applyToolControlChanges(config, pendingApproved.changes);
               await deps.toolsConfigManager.updateConfig(nextDisabled);
               const latestDisabled = deps.toolsConfigManager.getConfig().disabled;
               context.broadcast?.("tools.config.updated", {
                 source: "agent",
                 mode,
-                disabled: buildBroadcastDisabledPayload(latestDisabled),
+                disabled: buildToolControlDisabledPayload(latestDisabled),
               });
               deps.confirmationStore.delete(pendingApproved.requestId);
               return {
@@ -371,7 +382,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
                 success: true,
                 output: [
                   "检测到用户已回复确认口令，已直接执行待确认的全局工具设置变更。",
-                  ...summarizeChanges(pendingApproved.changes),
+                  ...summarizeToolControlChanges(pendingApproved.changes),
                   `Disabled builtin: ${latestDisabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME).join(", ") || "(none)"}`,
                   `Disabled MCP servers: ${latestDisabled.mcp_servers.join(", ") || "(none)"}`,
                   `Disabled plugins: ${latestDisabled.plugins.join(", ") || "(none)"}`,
@@ -394,13 +405,13 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
         }
 
         if (mode === "auto") {
-          const nextDisabled = applyChanges(config, changes);
+          const nextDisabled = applyToolControlChanges(config, changes);
           await deps.toolsConfigManager.updateConfig(nextDisabled);
           const latestDisabled = deps.toolsConfigManager.getConfig().disabled;
           context.broadcast?.("tools.config.updated", {
             source: "agent",
             mode,
-            disabled: buildBroadcastDisabledPayload(latestDisabled),
+            disabled: buildToolControlDisabledPayload(latestDisabled),
           });
           return {
             id: "",
@@ -408,7 +419,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
             success: true,
             output: [
               "已执行全局工具设置变更。",
-              ...summarizeChanges(changes),
+              ...summarizeToolControlChanges(changes),
               `Disabled builtin: ${latestDisabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME).join(", ") || "(none)"}`,
               `Disabled MCP servers: ${latestDisabled.mcp_servers.join(", ") || "(none)"}`,
               `Disabled plugins: ${latestDisabled.plugins.join(", ") || "(none)"}`,
@@ -418,12 +429,39 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
         }
 
         const requestId = normalizeRequestId(crypto.randomUUID().slice(0, 5));
-        deps.confirmationStore.create({
+        const pendingRequest = deps.confirmationStore.create({
           requestId,
           conversationId: context.conversationId,
           requestedByAgentId: context.agentId,
           changes,
         });
+
+        if (isWebChatUiConfirmContext(context)) {
+          const summary = summarizeToolControlChanges(changes);
+          context.broadcast?.("tool_settings.confirm.required", {
+            source: "agent",
+            mode,
+            conversationId: context.conversationId,
+            requestId,
+            requestedByAgentId: context.agentId,
+            summary,
+            impact: "这是全局工具设置变更，会影响当前 Gateway 的其他会话。",
+            expiresAt: pendingRequest.expiresAt,
+            targetClientId: getConfirmTargetClientId(context),
+          });
+          return {
+            id: "",
+            name: TOOL_SETTINGS_CONTROL_NAME,
+            success: true,
+            output: [
+              "已创建待确认的全局工具设置变更请求。",
+              "当前通道将通过 WebChat 页面确认窗口处理后续审批。",
+              "不要要求用户在聊天区输入确认口令或确认短语；等待页面确认结果后再继续。",
+              ...summary,
+            ].join("\n"),
+            durationMs: Date.now() - start,
+          };
+        }
 
         return {
           id: "",
@@ -431,7 +469,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           success: true,
           output: [
             "本次请求尚未执行。",
-            ...summarizeChanges(changes),
+            ...summarizeToolControlChanges(changes),
             "这是全局调用设置变更，会影响当前 Gateway 的其他会话。",
             ...buildPendingApprovalHint(hasConfirmPassword, requestId),
           ].join("\n"),
@@ -486,13 +524,13 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           if (requestIdFromMessage && requestIdFromMessage !== requestId) {
             const fallbackPending = deps.confirmationStore.get(requestIdFromMessage);
             if (fallbackPending && fallbackPending.conversationId === context.conversationId) {
-              const nextDisabled = applyChanges(config, fallbackPending.changes);
+              const nextDisabled = applyToolControlChanges(config, fallbackPending.changes);
               await deps.toolsConfigManager.updateConfig(nextDisabled);
               const latestDisabled = deps.toolsConfigManager.getConfig().disabled;
               context.broadcast?.("tools.config.updated", {
                 source: "agent",
                 mode,
-                disabled: buildBroadcastDisabledPayload(latestDisabled),
+                disabled: buildToolControlDisabledPayload(latestDisabled),
               });
               deps.confirmationStore.delete(requestIdFromMessage);
               return {
@@ -501,7 +539,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
                 success: true,
                 output: [
                   `传入的 requestId="${requestId}" 无效；已改用最近用户确认口令中的 requestId="${requestIdFromMessage}" 完成变更。`,
-                  ...summarizeChanges(fallbackPending.changes),
+                  ...summarizeToolControlChanges(fallbackPending.changes),
                   `Disabled builtin: ${latestDisabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME).join(", ") || "(none)"}`,
                   `Disabled MCP servers: ${latestDisabled.mcp_servers.join(", ") || "(none)"}`,
                   `Disabled plugins: ${latestDisabled.plugins.join(", ") || "(none)"}`,
@@ -513,13 +551,13 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           if (latestApprovedPending && latestApprovedPending.requestId !== requestId) {
             const fallbackPending = deps.confirmationStore.get(latestApprovedPending.requestId);
             if (fallbackPending && fallbackPending.conversationId === context.conversationId) {
-              const nextDisabled = applyChanges(config, fallbackPending.changes);
+              const nextDisabled = applyToolControlChanges(config, fallbackPending.changes);
               await deps.toolsConfigManager.updateConfig(nextDisabled);
               const latestDisabled = deps.toolsConfigManager.getConfig().disabled;
               context.broadcast?.("tools.config.updated", {
                 source: "agent",
                 mode,
-                disabled: buildBroadcastDisabledPayload(latestDisabled),
+                disabled: buildToolControlDisabledPayload(latestDisabled),
               });
               deps.confirmationStore.delete(latestApprovedPending.requestId);
               return {
@@ -530,7 +568,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
                   hasConfirmPassword
                     ? "传入的 requestId 无效；已改用当前会话最近一次已完成确认的待确认请求完成变更。"
                     : `传入的 requestId="${requestId}" 无效；已改用最近已完成确认的 requestId="${latestApprovedPending.requestId}" 完成变更。`,
-                  ...summarizeChanges(fallbackPending.changes),
+                  ...summarizeToolControlChanges(fallbackPending.changes),
                   `Disabled builtin: ${latestDisabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME).join(", ") || "(none)"}`,
                   `Disabled MCP servers: ${latestDisabled.mcp_servers.join(", ") || "(none)"}`,
                   `Disabled plugins: ${latestDisabled.plugins.join(", ") || "(none)"}`,
@@ -571,13 +609,13 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           };
         }
 
-        const nextDisabled = applyChanges(config, pending.changes);
+        const nextDisabled = applyToolControlChanges(config, pending.changes);
         await deps.toolsConfigManager.updateConfig(nextDisabled);
         const latestDisabled = deps.toolsConfigManager.getConfig().disabled;
         context.broadcast?.("tools.config.updated", {
           source: "agent",
           mode,
-          disabled: buildBroadcastDisabledPayload(latestDisabled),
+          disabled: buildToolControlDisabledPayload(latestDisabled),
         });
         deps.confirmationStore.delete(requestId);
 
@@ -587,7 +625,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           success: true,
           output: [
             "已根据用户确认执行全局工具设置变更。",
-            ...summarizeChanges(pending.changes),
+            ...summarizeToolControlChanges(pending.changes),
             `Disabled builtin: ${latestDisabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME).join(", ") || "(none)"}`,
             `Disabled MCP servers: ${latestDisabled.mcp_servers.join(", ") || "(none)"}`,
             `Disabled plugins: ${latestDisabled.plugins.join(", ") || "(none)"}`,

@@ -79,6 +79,7 @@ export type RoomContext = {
   roomId?: string;
   environment: "local" | "community"; // 本地WebChat vs office.goddess.ai社区
   members?: RoomMember[];
+  clientId?: string;
 };
 
 export type AgentRunInput = {

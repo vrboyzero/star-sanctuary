@@ -104,6 +104,7 @@ type GatewayLog = {
 
 const DEFAULT_METHODS = [
   "message.send",
+  "tool_settings.confirm",
   "models.list",
   "config.read",
   "config.update",
@@ -133,7 +134,17 @@ const DEFAULT_METHODS = [
   "experience.usage.stats",
   "experience.usage.revoke",
 ];
-const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required", "tools.config.updated"];
+const DEFAULT_EVENTS = [
+  "chat.delta",
+  "chat.final",
+  "agent.status",
+  "token.usage",
+  "token.counter.result",
+  "pairing.required",
+  "tools.config.updated",
+  "tool_settings.confirm.required",
+  "tool_settings.confirm.resolved",
+];
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
 
@@ -195,6 +206,77 @@ function estimateBase64DecodedBytes(base64: string): number | null {
   if (normalized.length % 4 !== 0) return null;
   const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
   return Math.max(0, (normalized.length / 4) * 3 - padding);
+}
+
+type ToolControlChangesLike = {
+  enableBuiltin: string[];
+  disableBuiltin: string[];
+  enableMcpServers: string[];
+  disableMcpServers: string[];
+  enablePlugins: string[];
+  disablePlugins: string[];
+};
+
+function sortStringList(values: Iterable<string>): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
+
+function applyToolControlChangesLocally(
+  disabled: {
+    builtin: string[];
+    mcp_servers: string[];
+    plugins: string[];
+  },
+  changes: ToolControlChangesLike,
+): {
+  builtin: string[];
+  mcp_servers: string[];
+  plugins: string[];
+} {
+  const builtin = new Set(disabled.builtin);
+  const mcpServers = new Set(disabled.mcp_servers);
+  const plugins = new Set(disabled.plugins);
+
+  for (const name of changes.enableBuiltin) builtin.delete(name);
+  for (const name of changes.disableBuiltin) builtin.add(name);
+  builtin.delete(TOOL_SETTINGS_CONTROL_NAME);
+
+  for (const name of changes.enableMcpServers) mcpServers.delete(name);
+  for (const name of changes.disableMcpServers) mcpServers.add(name);
+
+  for (const name of changes.enablePlugins) plugins.delete(name);
+  for (const name of changes.disablePlugins) plugins.add(name);
+
+  return {
+    builtin: sortStringList(builtin),
+    mcp_servers: sortStringList(mcpServers),
+    plugins: sortStringList(plugins),
+  };
+}
+
+function summarizeToolControlChangesLocally(changes: ToolControlChangesLike): string[] {
+  const lines: string[] = [];
+  if (changes.enableBuiltin.length > 0) lines.push(`启用 builtin: ${changes.enableBuiltin.join(", ")}`);
+  if (changes.disableBuiltin.length > 0) lines.push(`关闭 builtin: ${changes.disableBuiltin.join(", ")}`);
+  if (changes.enableMcpServers.length > 0) lines.push(`启用 MCP: ${changes.enableMcpServers.join(", ")}`);
+  if (changes.disableMcpServers.length > 0) lines.push(`关闭 MCP: ${changes.disableMcpServers.join(", ")}`);
+  if (changes.enablePlugins.length > 0) lines.push(`启用插件: ${changes.enablePlugins.join(", ")}`);
+  if (changes.disablePlugins.length > 0) lines.push(`关闭插件: ${changes.disablePlugins.join(", ")}`);
+  return lines;
+}
+
+function buildToolControlDisabledPayloadLocally(disabled: {
+  builtin: string[];
+  mcp_servers: string[];
+  plugins: string[];
+  skills: string[];
+}) {
+  return {
+    builtin: sortStringList(disabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME)),
+    mcp_servers: sortStringList(disabled.mcp_servers),
+    plugins: sortStringList(disabled.plugins),
+    skills: sortStringList(disabled.skills),
+  };
 }
 
 export async function startGatewayServer(opts: GatewayServerOptions): Promise<GatewayServer> {
@@ -592,6 +674,13 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       return allowed;
     },
   });
+  const broadcastEvent = (frame: GatewayEventFrame) => {
+    for (const client of wss.clients) {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify(frame));
+      }
+    }
+  };
 
   // 初始化会话存储
   const stateDir = opts.stateDir ?? resolveStateDir();
@@ -719,6 +808,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         pluginRegistry: opts.pluginRegistry,
         skillRegistry: opts.skillRegistry,
         tokenUsageUploadConfig,
+        broadcastEvent,
         log,
       });
       if (res) sendRes(ws, res);
@@ -743,13 +833,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     },
-    broadcast: (frame: GatewayEventFrame) => {
-      for (const client of wss.clients) {
-        if (client.readyState === 1) {
-          client.send(JSON.stringify(frame));
-        }
-      }
-    },
+    broadcast: broadcastEvent,
   };
 }
 
@@ -847,10 +931,12 @@ async function handleReq(
     pluginRegistry?: PluginRegistry;
     skillRegistry?: SkillRegistry;
     tokenUsageUploadConfig: TokenUsageUploadConfig;
+    broadcastEvent?: (frame: GatewayEventFrame) => void;
   },
 ): Promise<GatewayResFrame | null> {
   const secureMethods = [
     "message.send",
+    "tool_settings.confirm",
     "config.read",
     "config.readRaw",
     "config.update",
@@ -970,6 +1056,11 @@ async function handleReq(
       const conversationId = parsed.value.conversationId ?? crypto.randomUUID();
       const effectiveUserUuid = parsed.value.userUuid ?? ctx.userUuid;
       let userText = parsed.value.text;
+      const normalizedRoomContext = parsed.value.roomContext
+        ? { ...parsed.value.roomContext, clientId: ctx.clientId }
+        : parsed.value.from === "web"
+          ? { environment: "local" as const, clientId: ctx.clientId }
+          : undefined;
       const confirmPassword = String(ctx.getAgentToolControlConfirmPassword?.() ?? "").trim();
       if (
         ctx.getAgentToolControlMode?.() === "confirm"
@@ -1155,7 +1246,7 @@ async function handleReq(
             agentId: requestedAgentId,
             userUuid: effectiveUserUuid, // 优先使用 message.send 的 userUuid
             senderInfo: parsed.value.senderInfo, // 传递发送者信息
-            roomContext: parsed.value.roomContext, // 传递房间上下文
+            roomContext: normalizedRoomContext, // 传递房间上下文
           };
           if (textAttachmentCount > 0) {
             runInput.meta = {
@@ -1277,6 +1368,122 @@ async function handleReq(
       })();
 
       return { type: "res", id: req.id, ok: true, payload: { conversationId } };
+    }
+
+    case "tool_settings.confirm": {
+      const parsed = parseToolSettingsConfirmParams(req.params);
+      if (!parsed.ok) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
+      }
+      if (ctx.getAgentToolControlMode?.() !== "confirm") {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "invalid_state", message: "当前工具开关控制模式不是 confirm。" },
+        };
+      }
+      if (!ctx.toolControlConfirmationStore || !ctx.toolsConfigManager) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "unsupported", message: "当前服务未启用工具开关确认处理。" },
+        };
+      }
+
+      const pending = ctx.toolControlConfirmationStore.get(parsed.value.requestId);
+      if (!pending) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "not_found", message: `未找到待确认请求: ${parsed.value.requestId}` },
+        };
+      }
+      if (parsed.value.conversationId && parsed.value.conversationId !== pending.conversationId) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "conversation_mismatch", message: "待确认请求不属于当前会话。" },
+        };
+      }
+
+      const summary = summarizeToolControlChangesLocally(pending.changes);
+      const emitEvent = (frame: GatewayEventFrame) => {
+        if (ctx.broadcastEvent) {
+          ctx.broadcastEvent(frame);
+        } else {
+          sendEvent(ws, frame);
+        }
+      };
+
+      if (parsed.value.decision === "reject") {
+        ctx.toolControlConfirmationStore.delete(pending.requestId);
+        emitEvent({
+          type: "event",
+          event: "tool_settings.confirm.resolved",
+          payload: {
+            source: "webchat_ui",
+            conversationId: pending.conversationId,
+            requestId: pending.requestId,
+            decision: "rejected",
+            summary,
+            resolvedAt: Date.now(),
+            targetClientId: ctx.clientId,
+          },
+        });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            conversationId: pending.conversationId,
+            requestId: pending.requestId,
+            decision: "rejected",
+          },
+        };
+      }
+
+      const nextDisabled = applyToolControlChangesLocally(ctx.toolsConfigManager.getConfig().disabled, pending.changes);
+      await ctx.toolsConfigManager.updateConfig(nextDisabled);
+      const latestDisabled = ctx.toolsConfigManager.getConfig().disabled;
+      ctx.toolControlConfirmationStore.delete(pending.requestId);
+
+      emitEvent({
+        type: "event",
+        event: "tools.config.updated",
+        payload: {
+          source: "webchat_ui",
+          mode: "confirm",
+          disabled: buildToolControlDisabledPayloadLocally(latestDisabled),
+        },
+      });
+      emitEvent({
+        type: "event",
+        event: "tool_settings.confirm.resolved",
+        payload: {
+          source: "webchat_ui",
+          conversationId: pending.conversationId,
+          requestId: pending.requestId,
+          decision: "approved",
+          summary,
+          resolvedAt: Date.now(),
+          targetClientId: ctx.clientId,
+        },
+      });
+
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          conversationId: pending.conversationId,
+          requestId: pending.requestId,
+          decision: "approved",
+        },
+      };
     }
 
     case "config.read": {
@@ -2160,6 +2367,22 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
   return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext } };
+}
+
+function parseToolSettingsConfirmParams(
+  value: unknown,
+): { ok: true; value: { requestId: string; decision: "approve" | "reject"; conversationId?: string } } | { ok: false; message: string } {
+  if (!value || typeof value !== "object") return { ok: false, message: "params must be an object" };
+  const obj = value as Record<string, unknown>;
+  const requestId = typeof obj.requestId === "string" ? obj.requestId.trim().toUpperCase() : "";
+  const decision = typeof obj.decision === "string" ? obj.decision.trim().toLowerCase() : "";
+  const conversationId =
+    typeof obj.conversationId === "string" && obj.conversationId.trim() ? obj.conversationId.trim() : undefined;
+  if (!requestId) return { ok: false, message: "requestId is required" };
+  if (decision !== "approve" && decision !== "reject") {
+    return { ok: false, message: 'decision must be "approve" or "reject"' };
+  }
+  return { ok: true, value: { requestId, decision, conversationId } };
 }
 
 function safeParseFrame(raw: string): GatewayFrame | null {
