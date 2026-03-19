@@ -392,6 +392,7 @@ const agentToolControlMode: AgentToolControlMode = (
     ? agentToolControlModeRaw
     : "disabled"
 );
+const agentToolControlConfirmPassword = (readEnv("BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD") ?? "").trim();
 const toolGroups = new Set(
   (readEnv("BELLDANDY_TOOL_GROUPS") ?? "all").split(",").map(s => s.trim().toLowerCase()),
 );
@@ -757,6 +758,7 @@ if (toolsEnabled) {
   toolExecutor.registerTool(createToolSettingsControlTool({
     toolsConfigManager,
     getControlMode: () => agentToolControlMode,
+    getHasConfirmPassword: () => Boolean(agentToolControlConfirmPassword),
     listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
     listPluginIds: () => pluginRegistry.getPluginIds(),
     confirmationStore: toolControlConfirmationStore,
@@ -1929,6 +1931,9 @@ const server = await startGatewayServer({
   logger,
   toolsConfigManager,
   toolExecutor: toolsEnabled ? toolExecutor : undefined,
+  toolControlConfirmationStore,
+  getAgentToolControlMode: () => agentToolControlMode,
+  getAgentToolControlConfirmPassword: () => agentToolControlConfirmPassword,
   pluginRegistry,
   skillRegistry,
   ttsEnabled: isTtsEnabledFn,

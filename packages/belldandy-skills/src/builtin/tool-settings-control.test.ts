@@ -49,6 +49,29 @@ function createConfirmationStore() {
     get(requestId: string) {
       return entries.get(requestId);
     },
+    getLatestByConversation(conversationId: string) {
+      let latest;
+      for (const entry of entries.values()) {
+        if (entry.conversationId !== conversationId) continue;
+        if (!latest || entry.createdAt > latest.createdAt) latest = entry;
+      }
+      return latest;
+    },
+    getLatestApprovedByConversation(conversationId: string) {
+      let latest;
+      for (const entry of entries.values()) {
+        if (entry.conversationId !== conversationId || !entry.passwordApprovedAt) continue;
+        if (!latest || entry.passwordApprovedAt > latest.passwordApprovedAt) latest = entry;
+      }
+      return latest;
+    },
+    markPasswordApproved(requestId: string, approvedAt = Date.now()) {
+      const existing = entries.get(requestId);
+      if (!existing) return undefined;
+      const updated = { ...existing, passwordApprovedAt: approvedAt };
+      entries.set(requestId, updated);
+      return updated;
+    },
     delete(requestId: string) {
       entries.delete(requestId);
     },
@@ -80,12 +103,17 @@ function createContext(overrides: Partial<ToolContext> = {}): ToolContext {
   };
 }
 
-function createControlTool(mode: AgentToolControlMode, history: Array<{ role: "user" | "assistant"; content: string }> = []) {
+function createControlTool(
+  mode: AgentToolControlMode,
+  history: Array<{ role: "user" | "assistant"; content: string }> = [],
+  options: { hasConfirmPassword?: boolean } = {},
+) {
   const configManager = createConfigManager();
   const confirmationStore = createConfirmationStore();
   const tool = createToolSettingsControlTool({
     toolsConfigManager: configManager,
     getControlMode: () => mode,
+    getHasConfirmPassword: () => options.hasConfirmPassword === true,
     listRegisteredTools: () => [
       TOOL_SETTINGS_CONTROL_NAME,
       "file_read",
@@ -185,6 +213,55 @@ describe("tool_settings_control", () => {
       changes: pending.changes,
     });
     const confirmResult = await approved.tool.execute({ action: "confirm", requestId }, approved.context);
+    expect(confirmResult.success).toBe(true);
+    expect(approved.configManager.state.disabled.builtin).toEqual(["file_write"]);
+  });
+
+  it("uses password-specific prompt when confirm password is configured", async () => {
+    const { tool, context } = createControlTool("confirm", [], { hasConfirmPassword: true });
+    const result = await tool.execute({
+      action: "apply",
+      disableBuiltin: ["file_write"],
+    }, context);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已配置的工具开关确认口令");
+    expect(result.output).not.toContain("如确认，请回复：批准工具设置变更");
+    expect(result.output).not.toContain("requestId=\"");
+  });
+
+  it("requires password approval marker before confirm applies changes", async () => {
+    const first = createControlTool("confirm", [], { hasConfirmPassword: true });
+    const applyResult = await first.tool.execute({
+      action: "apply",
+      disableBuiltin: ["file_write"],
+    }, first.context);
+
+    expect(applyResult.success).toBe(true);
+    const requestId = first.confirmationStore.getLatestByConversation("conv-1")?.requestId;
+    expect(requestId).toBeTruthy();
+
+    const pending = first.confirmationStore.get(requestId!);
+    const denied = createControlTool("confirm", [], { hasConfirmPassword: true });
+    denied.confirmationStore.create({
+      requestId: pending.requestId,
+      conversationId: pending.conversationId,
+      requestedByAgentId: pending.requestedByAgentId,
+      changes: pending.changes,
+    });
+    const deniedResult = await denied.tool.execute({ action: "confirm" }, denied.context);
+    expect(deniedResult.success).toBe(false);
+    expect(deniedResult.error).toContain("已配置的工具开关确认口令");
+
+    const approved = createControlTool("confirm", [], { hasConfirmPassword: true });
+    approved.confirmationStore.create({
+      requestId: pending.requestId,
+      conversationId: pending.conversationId,
+      requestedByAgentId: pending.requestedByAgentId,
+      changes: pending.changes,
+      passwordApprovedAt: Date.now(),
+    });
+    const confirmResult = await approved.tool.execute({ action: "confirm" }, approved.context);
     expect(confirmResult.success).toBe(true);
     expect(approved.configManager.state.disabled.builtin).toEqual(["file_write"]);
   });

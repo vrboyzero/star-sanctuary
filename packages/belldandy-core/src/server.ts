@@ -23,6 +23,7 @@ import type {
 import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
+import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
 import {
   checkAndConsumeRestartCooldown,
@@ -67,6 +68,12 @@ export type GatewayServerOptions = {
   toolsConfigManager?: ToolsConfigManager;
   /** 工具执行器（用于获取已注册工具列表） */
   toolExecutor?: ToolExecutor;
+  /** 工具调用设置确认存储 */
+  toolControlConfirmationStore?: ToolControlConfirmationStore;
+  /** 获取 Agent 工具控制模式 */
+  getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
+  /** 获取 Agent 工具控制确认密码 */
+  getAgentToolControlConfirmPassword?: () => string | undefined;
   /** STT implementation: transcribe speech from audio buffer */
   sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
   /** 插件注册表（用于获取已加载插件列表） */
@@ -705,6 +712,9 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         ttsSynthesize: opts.ttsSynthesize,
         toolsConfigManager: opts.toolsConfigManager,
         toolExecutor: opts.toolExecutor,
+        toolControlConfirmationStore: opts.toolControlConfirmationStore,
+        getAgentToolControlMode: opts.getAgentToolControlMode,
+        getAgentToolControlConfirmPassword: opts.getAgentToolControlConfirmPassword,
         sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
         skillRegistry: opts.skillRegistry,
@@ -830,6 +840,9 @@ async function handleReq(
     ttsSynthesize?: (text: string) => Promise<{ webPath: string; htmlAudio: string } | null>;
     toolsConfigManager?: ToolsConfigManager;
     toolExecutor?: ToolExecutor;
+    toolControlConfirmationStore?: ToolControlConfirmationStore;
+    getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
+    getAgentToolControlConfirmPassword?: () => string | undefined;
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     pluginRegistry?: PluginRegistry;
     skillRegistry?: SkillRegistry;
@@ -956,6 +969,20 @@ async function handleReq(
 
       const conversationId = parsed.value.conversationId ?? crypto.randomUUID();
       const effectiveUserUuid = parsed.value.userUuid ?? ctx.userUuid;
+      let userText = parsed.value.text;
+      const confirmPassword = String(ctx.getAgentToolControlConfirmPassword?.() ?? "").trim();
+      if (
+        ctx.getAgentToolControlMode?.() === "confirm"
+        && confirmPassword
+        && ctx.toolControlConfirmationStore
+        && userText.trim() === confirmPassword
+      ) {
+        const pending = ctx.toolControlConfirmationStore.getLatestByConversation(conversationId);
+        if (pending) {
+          ctx.toolControlConfirmationStore.markPasswordApproved(pending.requestId);
+          userText = "【已提交工具开关确认口令】";
+        }
+      }
       const { history } = await ctx.conversationStore.getHistoryCompacted(conversationId);
 
       // Agent-会话绑定校验：防止不同 Agent 共享同一会话导致上下文污染
@@ -967,7 +994,7 @@ async function handleReq(
         };
       }
 
-      ctx.conversationStore.addMessage(conversationId, "user", parsed.value.text, {
+      ctx.conversationStore.addMessage(conversationId, "user", userText, {
         agentId: requestedAgentId,
         channel: "webchat",
       });
@@ -989,7 +1016,7 @@ async function handleReq(
       }
 
       // Handle Attachments
-      let promptText = parsed.value.text;
+      let promptText = userText;
       const attachments = parsed.value.attachments;
       const contentParts: Array<any> = []; // Changed from strictly typed imageParts to allow flexible content
       const TEXT_ATTACHMENT_CHAR_LIMIT = 200_000;
@@ -1123,7 +1150,7 @@ async function handleReq(
           const runInput: any = {
             conversationId,
             text: promptText,
-            userInput: parsed.value.text,
+            userInput: userText,
             history,
             agentId: requestedAgentId,
             userUuid: effectiveUserUuid, // 优先使用 message.send 的 userUuid
@@ -1315,6 +1342,7 @@ async function handleReq(
         "BELLDANDY_MCP_ENABLED", "BELLDANDY_CRON_ENABLED",
         "BELLDANDY_TOOLS_ENABLED",
         "BELLDANDY_AGENT_TOOL_CONTROL_MODE",
+        "BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD",
         "BELLDANDY_EMBEDDING_ENABLED",
         "BELLDANDY_EMBEDDING_OPENAI_API_KEY", "BELLDANDY_EMBEDDING_OPENAI_BASE_URL",
         "BELLDANDY_EMBEDDING_MODEL",

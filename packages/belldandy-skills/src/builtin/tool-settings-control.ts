@@ -27,11 +27,15 @@ type PendingToolControlRequestLike = {
   changes: ToolControlChanges;
   createdAt: number;
   expiresAt: number;
+  passwordApprovedAt?: number;
 };
 
 type ToolControlConfirmationStoreLike = {
   create(req: Omit<PendingToolControlRequestLike, "createdAt" | "expiresAt">): PendingToolControlRequestLike;
   get(requestId: string): PendingToolControlRequestLike | undefined;
+  getLatestByConversation(conversationId: string): PendingToolControlRequestLike | undefined;
+  getLatestApprovedByConversation(conversationId: string): PendingToolControlRequestLike | undefined;
+  markPasswordApproved(requestId: string, approvedAt?: number): PendingToolControlRequestLike | undefined;
   delete(requestId: string): void;
   cleanupExpired(now?: number): void;
 };
@@ -39,6 +43,7 @@ type ToolControlConfirmationStoreLike = {
 export type AgentToolControlDeps = {
   toolsConfigManager: ToolSettingsConfigManagerLike;
   getControlMode: () => AgentToolControlMode;
+  getHasConfirmPassword?: () => boolean;
   listRegisteredTools: () => string[];
   listPluginIds?: () => string[];
   confirmationStore: ToolControlConfirmationStoreLike;
@@ -155,6 +160,26 @@ function buildApprovalText(requestId: string): string {
   return `${APPROVAL_PREFIX} ${normalizeRequestId(requestId)}`;
 }
 
+function buildPendingApprovalHint(hasConfirmPassword: boolean, requestId: string): string[] {
+  if (hasConfirmPassword) {
+    return [
+      "如确认，请让用户回复已配置的工具开关确认口令。",
+      `收到确认后，再次调用 ${TOOL_SETTINGS_CONTROL_NAME}，参数使用 action=\"confirm\" 即可。`,
+    ];
+  }
+  return [
+    `如确认，请回复：${buildApprovalText(requestId)}`,
+    `收到确认后，再次调用 ${TOOL_SETTINGS_CONTROL_NAME}，参数使用 action=\"confirm\" 与 requestId=\"${requestId}\"。`,
+  ];
+}
+
+function buildMissingApprovalError(hasConfirmPassword: boolean, requestId: string): string {
+  if (hasConfirmPassword) {
+    return "尚未检测到有效确认口令。请让用户回复已配置的工具开关确认口令。";
+  }
+  return `尚未检测到精确确认口令。请让用户回复：${buildApprovalText(requestId)}`;
+}
+
 function getLatestUserMessage(context: ToolContext): string | undefined {
   const history = context.conversationStore?.getHistory(context.conversationId) ?? [];
   for (let i = history.length - 1; i >= 0; i--) {
@@ -267,6 +292,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
 
       const action = String(args.action ?? "status").trim().toLowerCase();
       const mode = deps.getControlMode();
+      const hasConfirmPassword = deps.getHasConfirmPassword?.() ?? false;
       const config = deps.toolsConfigManager.getConfig().disabled;
       const snapshot = collectRegistrySnapshot(deps);
 
@@ -316,10 +342,18 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           };
         }
 
-        const latestUserMessage = getLatestUserMessage(context);
-        const approvedRequestId = extractApprovalRequestId(latestUserMessage);
-        if (mode === "confirm" && approvedRequestId) {
-          const pendingApproved = deps.confirmationStore.get(approvedRequestId);
+        const latestUserMessage = hasConfirmPassword ? undefined : getLatestUserMessage(context);
+        const approvedRequestId = hasConfirmPassword ? undefined : extractApprovalRequestId(latestUserMessage);
+        const latestPending = hasConfirmPassword
+          ? deps.confirmationStore.getLatestByConversation(context.conversationId)
+          : undefined;
+        const passwordApprovedPending = hasConfirmPassword
+          ? deps.confirmationStore.getLatestApprovedByConversation(context.conversationId)
+          : undefined;
+        const pendingApproved = approvedRequestId
+          ? deps.confirmationStore.get(approvedRequestId)
+          : passwordApprovedPending;
+        if (mode === "confirm" && pendingApproved) {
           if (pendingApproved && pendingApproved.conversationId === context.conversationId) {
             if (sameChanges(pendingApproved.changes, changes)) {
               const nextDisabled = applyChanges(config, pendingApproved.changes);
@@ -330,7 +364,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
                 mode,
                 disabled: buildBroadcastDisabledPayload(latestDisabled),
               });
-              deps.confirmationStore.delete(approvedRequestId);
+              deps.confirmationStore.delete(pendingApproved.requestId);
               return {
                 id: "",
                 name: TOOL_SETTINGS_CONTROL_NAME,
@@ -351,7 +385,9 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
               name: TOOL_SETTINGS_CONTROL_NAME,
               success: false,
               output: "",
-              error: `检测到用户已经批准待确认请求 ${approvedRequestId}，但本次 apply 的变更内容与待确认请求不一致。请改用 action="confirm" 并传入 requestId="${approvedRequestId}"，或重新发起新的确认。`,
+              error: hasConfirmPassword
+                ? "检测到用户已经批准当前会话最近一次待确认请求，但本次 apply 的变更内容与已批准请求不一致。请改用 action=\"confirm\" 完成原请求，或重新发起新的确认。"
+                : `检测到用户已经批准待确认请求 ${pendingApproved.requestId}，但本次 apply 的变更内容与待确认请求不一致。请改用 action="confirm" 并传入 requestId="${pendingApproved.requestId}"，或重新发起新的确认。`,
               durationMs: Date.now() - start,
             };
           }
@@ -397,8 +433,7 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
             "本次请求尚未执行。",
             ...summarizeChanges(changes),
             "这是全局调用设置变更，会影响当前 Gateway 的其他会话。",
-            `如确认，请回复：${buildApprovalText(requestId)}`,
-            `收到确认后，再次调用 ${TOOL_SETTINGS_CONTROL_NAME}，参数使用 action=\"confirm\" 与 requestId=\"${requestId}\"。`,
+            ...buildPendingApprovalHint(hasConfirmPassword, requestId),
           ].join("\n"),
           durationMs: Date.now() - start,
         };
@@ -416,10 +451,18 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           };
         }
 
-        const latestUserMessage = getLatestUserMessage(context);
-        const requestIdFromMessage = extractApprovalRequestId(latestUserMessage);
+        const latestUserMessage = hasConfirmPassword ? undefined : getLatestUserMessage(context);
+        const requestIdFromMessage = hasConfirmPassword ? undefined : extractApprovalRequestId(latestUserMessage);
+        const latestPending = hasConfirmPassword
+          ? deps.confirmationStore.getLatestByConversation(context.conversationId)
+          : undefined;
+        const latestApprovedPending = hasConfirmPassword
+          ? deps.confirmationStore.getLatestApprovedByConversation(context.conversationId)
+          : undefined;
         const requestIdArg = normalizeRequestId(args.requestId);
-        const requestId = isUnknownRequestId(requestIdArg) ? (requestIdFromMessage ?? "") : requestIdArg;
+        const requestId = isUnknownRequestId(requestIdArg)
+          ? (requestIdFromMessage ?? latestApprovedPending?.requestId ?? latestPending?.requestId ?? "")
+          : requestIdArg;
 
         if (!requestId) {
           return {
@@ -427,9 +470,13 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
             name: TOOL_SETTINGS_CONTROL_NAME,
             success: false,
             output: "",
-            error: requestIdFromMessage
-              ? `缺少有效 requestId。可直接使用最近用户确认口令中的 requestId=${requestIdFromMessage}。`
-              : "缺少 requestId。",
+            error: hasConfirmPassword
+              ? "当前会话没有待确认的工具设置请求。"
+              : requestIdFromMessage
+                ? `缺少有效 requestId。可直接使用最近用户确认口令中的 requestId=${requestIdFromMessage}。`
+                : latestApprovedPending
+                  ? `缺少有效 requestId。可直接使用最近已完成确认的 requestId=${latestApprovedPending.requestId}。`
+                  : "缺少 requestId。",
             durationMs: Date.now() - start,
           };
         }
@@ -463,6 +510,35 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
               };
             }
           }
+          if (latestApprovedPending && latestApprovedPending.requestId !== requestId) {
+            const fallbackPending = deps.confirmationStore.get(latestApprovedPending.requestId);
+            if (fallbackPending && fallbackPending.conversationId === context.conversationId) {
+              const nextDisabled = applyChanges(config, fallbackPending.changes);
+              await deps.toolsConfigManager.updateConfig(nextDisabled);
+              const latestDisabled = deps.toolsConfigManager.getConfig().disabled;
+              context.broadcast?.("tools.config.updated", {
+                source: "agent",
+                mode,
+                disabled: buildBroadcastDisabledPayload(latestDisabled),
+              });
+              deps.confirmationStore.delete(latestApprovedPending.requestId);
+              return {
+                id: "",
+                name: TOOL_SETTINGS_CONTROL_NAME,
+                success: true,
+                output: [
+                  hasConfirmPassword
+                    ? "传入的 requestId 无效；已改用当前会话最近一次已完成确认的待确认请求完成变更。"
+                    : `传入的 requestId="${requestId}" 无效；已改用最近已完成确认的 requestId="${latestApprovedPending.requestId}" 完成变更。`,
+                  ...summarizeChanges(fallbackPending.changes),
+                  `Disabled builtin: ${latestDisabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME).join(", ") || "(none)"}`,
+                  `Disabled MCP servers: ${latestDisabled.mcp_servers.join(", ") || "(none)"}`,
+                  `Disabled plugins: ${latestDisabled.plugins.join(", ") || "(none)"}`,
+                ].join("\n"),
+                durationMs: Date.now() - start,
+              };
+            }
+          }
           return {
             id: "",
             name: TOOL_SETTINGS_CONTROL_NAME,
@@ -484,14 +560,13 @@ export function createToolSettingsControlTool(deps: AgentToolControlDeps): Tool 
           };
         }
 
-        const expectedApprovalText = buildApprovalText(requestId);
-        if (extractApprovalRequestId(latestUserMessage) !== requestId) {
+        if (hasConfirmPassword ? !pending.passwordApprovedAt : extractApprovalRequestId(latestUserMessage) !== requestId) {
           return {
             id: "",
             name: TOOL_SETTINGS_CONTROL_NAME,
             success: false,
             output: "",
-            error: `尚未检测到精确确认口令。请让用户回复：${expectedApprovalText}`,
+            error: buildMissingApprovalError(hasConfirmPassword, requestId),
             durationMs: Date.now() - start,
           };
         }

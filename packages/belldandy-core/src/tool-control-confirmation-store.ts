@@ -12,6 +12,7 @@ export type PendingToolControlRequest = {
   };
   createdAt: number;
   expiresAt: number;
+  passwordApprovedAt?: number;
 };
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
@@ -45,6 +46,42 @@ export class ToolControlConfirmationStore {
 
   delete(requestId: string): void {
     this.requests.delete(requestId);
+  }
+
+  getLatestByConversation(conversationId: string): PendingToolControlRequest | undefined {
+    this.cleanupExpired();
+    let latest: PendingToolControlRequest | undefined;
+    for (const req of this.requests.values()) {
+      if (req.conversationId !== conversationId) continue;
+      if (!latest || req.createdAt > latest.createdAt) {
+        latest = req;
+      }
+    }
+    return latest;
+  }
+
+  getLatestApprovedByConversation(conversationId: string): PendingToolControlRequest | undefined {
+    this.cleanupExpired();
+    let latest: PendingToolControlRequest | undefined;
+    for (const req of this.requests.values()) {
+      if (req.conversationId !== conversationId || !req.passwordApprovedAt) continue;
+      if (!latest || req.passwordApprovedAt > (latest.passwordApprovedAt ?? 0)) {
+        latest = req;
+      }
+    }
+    return latest;
+  }
+
+  markPasswordApproved(requestId: string, approvedAt = Date.now()): PendingToolControlRequest | undefined {
+    this.cleanupExpired();
+    const existing = this.requests.get(requestId);
+    if (!existing) return undefined;
+    const updated: PendingToolControlRequest = {
+      ...existing,
+      passwordApprovedAt: approvedAt,
+    };
+    this.requests.set(requestId, updated);
+    return updated;
   }
 
   cleanupExpired(now = Date.now()): void {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test, beforeAll, vi } from "vitest";
 import WebSocket from "ws";
 
-import { AgentRegistry, type BelldandyAgent, MockAgent } from "@belldandy/agent";
+import { AgentRegistry, type BelldandyAgent, ConversationStore, MockAgent } from "@belldandy/agent";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import {
   SkillRegistry,
@@ -507,7 +507,7 @@ test("secure methods require pairing for config raw and tools update", async () 
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
 
-test("config.update persists BELLDANDY_AGENT_TOOL_CONTROL_MODE for config.read", async () => {
+test("config.update persists tool control mode and redacts confirm password in config.read", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
   await fs.promises.writeFile(path.join(envDir, ".env"), 'BELLDANDY_AGENT_TOOL_CONTROL_MODE="disabled"\n', "utf-8");
@@ -535,6 +535,7 @@ test("config.update persists BELLDANDY_AGENT_TOOL_CONTROL_MODE for config.read",
       params: {
         updates: {
           BELLDANDY_AGENT_TOOL_CONTROL_MODE: "confirm",
+          BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD: "星河123",
         },
       },
     }));
@@ -547,15 +548,155 @@ test("config.update persists BELLDANDY_AGENT_TOOL_CONTROL_MODE for config.read",
     const readRes = frames.find((f) => f.type === "res" && f.id === "config-read-agent-tool-control");
     expect(readRes.ok).toBe(true);
     expect(readRes.payload?.config?.BELLDANDY_AGENT_TOOL_CONTROL_MODE).toBe("confirm");
+    expect(readRes.payload?.config?.BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD).toBe("[REDACTED]");
 
     const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
     expect(envLocalContent).toContain('BELLDANDY_AGENT_TOOL_CONTROL_MODE="confirm"');
+    expect(envLocalContent).toContain('BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD="星河123"');
   } finally {
     ws.close();
     await closeP;
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("message.send hides tool control confirm password from agent input and applies confirmed change", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const confirmationStore = new ToolControlConfirmationStore();
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  let toolExecutor!: ToolExecutor;
+  const seenInputs: Array<{ text: string; userInput?: string; history: Array<{ role: string; content: string }> }> = [];
+
+  toolExecutor = new ToolExecutor({
+    tools: [
+      createTestTool("alpha_builtin"),
+      createToolSettingsControlTool({
+        toolsConfigManager,
+        getControlMode: () => "confirm",
+        getHasConfirmPassword: () => true,
+        listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+        confirmationStore,
+      }),
+    ],
+    workspaceRoot: process.cwd(),
+    alwaysEnabledTools: [TOOL_SETTINGS_CONTROL_NAME],
+  });
+
+  const conversationId = "conv-tool-confirm-password";
+  confirmationStore.create({
+    requestId: "PW123",
+    conversationId,
+    requestedByAgentId: "default",
+    changes: {
+      enableBuiltin: [],
+      disableBuiltin: ["alpha_builtin"],
+      enableMcpServers: [],
+      disableMcpServers: [],
+      enablePlugins: [],
+      disablePlugins: [],
+    },
+  });
+
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      seenInputs.push({
+        text: input.text,
+        userInput: input.userInput,
+        history: (input.history ?? []).map((item) => ({
+          role: item.role,
+          content: typeof item.content === "string" ? item.content : JSON.stringify(item.content),
+        })),
+      });
+      yield { type: "status", status: "running" as const };
+      const request = {
+        id: "tool-call-confirm-password",
+        name: TOOL_SETTINGS_CONTROL_NAME,
+        arguments: {
+          action: "confirm",
+          requestId: "PW123",
+        },
+      };
+      yield {
+        type: "tool_call" as const,
+        id: request.id,
+        name: request.name,
+        arguments: request.arguments,
+      };
+      const result = await toolExecutor.execute(request, input.conversationId, input.agentId, input.userUuid, input.senderInfo, input.roomContext);
+      yield {
+        type: "tool_result" as const,
+        id: result.id,
+        name: result.name,
+        success: result.success,
+        output: result.output,
+        error: result.error,
+      };
+      yield { type: "final" as const, text: input.text };
+      yield { type: "status", status: "done" as const };
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+    toolsConfigManager,
+    toolExecutor,
+    toolControlConfirmationStore: confirmationStore,
+    getAgentToolControlMode: () => "confirm",
+    getAgentToolControlConfirmPassword: () => "星河123",
+    agentFactory: () => agent,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "confirm-password-message",
+      method: "message.send",
+      params: {
+        text: "星河123",
+        conversationId,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "confirm-password-message" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tool_result"));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+    const toolResultEvent = frames.find((f) => f.type === "event" && f.event === "tool_result");
+    expect(toolResultEvent?.payload?.success).toBe(true);
+    expect(String(toolResultEvent?.payload?.output ?? "")).not.toContain("星河123");
+    expect(seenInputs).toHaveLength(1);
+    expect(seenInputs[0].text).toBe("【已提交工具开关确认口令】");
+    expect(seenInputs[0].userInput).toBe("【已提交工具开关确认口令】");
+    expect(seenInputs[0].history.some((item) => item.content.includes("星河123"))).toBe(false);
+    expect(toolsConfigManager.getConfig().disabled.builtin).toEqual(["alpha_builtin"]);
+
+    const storedHistory = conversationStore.getHistory(conversationId);
+    expect(storedHistory.some((item) => item.content === "星河123")).toBe(false);
+    expect(storedHistory.some((item) => item.content === "【已提交工具开关确认口令】")).toBe(true);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

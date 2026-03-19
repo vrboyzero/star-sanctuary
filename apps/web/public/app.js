@@ -1305,6 +1305,7 @@ const cfgEmbeddingBaseUrl = document.getElementById("cfgEmbeddingBaseUrl");
 const cfgEmbeddingModel = document.getElementById("cfgEmbeddingModel");
 const cfgToolsEnabled = document.getElementById("cfgToolsEnabled");
 const cfgAgentToolControlMode = document.getElementById("cfgAgentToolControlMode");
+const cfgAgentToolControlConfirmPassword = document.getElementById("cfgAgentToolControlConfirmPassword");
 const cfgTtsEnabled = document.getElementById("cfgTtsEnabled");
 const cfgTtsProvider = document.getElementById("cfgTtsProvider");
 const cfgTtsVoice = document.getElementById("cfgTtsVoice");
@@ -1441,6 +1442,7 @@ async function loadConfig() {
     cfgEmbeddingModel.value = c["BELLDANDY_EMBEDDING_MODEL"] || "";
     cfgToolsEnabled.checked = c["BELLDANDY_TOOLS_ENABLED"] === "true";
     cfgAgentToolControlMode.value = c["BELLDANDY_AGENT_TOOL_CONTROL_MODE"] || "disabled";
+    cfgAgentToolControlConfirmPassword.value = c["BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD"] || "";
     cfgTtsEnabled.checked = c["BELLDANDY_TTS_ENABLED"] === "true";
     cfgTtsProvider.value = c["BELLDANDY_TTS_PROVIDER"] || "edge";
     cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
@@ -1509,6 +1511,7 @@ async function saveConfig() {
   updates["BELLDANDY_EMBEDDING_MODEL"] = cfgEmbeddingModel.value.trim();
   updates["BELLDANDY_TOOLS_ENABLED"] = cfgToolsEnabled.checked ? "true" : "false";
   updates["BELLDANDY_AGENT_TOOL_CONTROL_MODE"] = cfgAgentToolControlMode.value.trim() || "disabled";
+  assignSecretUpdate(updates, "BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD", cfgAgentToolControlConfirmPassword);
   updates["BELLDANDY_TTS_ENABLED"] = cfgTtsEnabled.checked ? "true" : "false";
   updates["BELLDANDY_TTS_PROVIDER"] = cfgTtsProvider.value.trim() || "edge";
   updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
