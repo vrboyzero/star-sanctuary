@@ -1117,6 +1117,7 @@ const cfgEmbeddingApiKey = document.getElementById("cfgEmbeddingApiKey");
 const cfgEmbeddingBaseUrl = document.getElementById("cfgEmbeddingBaseUrl");
 const cfgEmbeddingModel = document.getElementById("cfgEmbeddingModel");
 const cfgToolsEnabled = document.getElementById("cfgToolsEnabled");
+const cfgAgentToolControlMode = document.getElementById("cfgAgentToolControlMode");
 const cfgTtsEnabled = document.getElementById("cfgTtsEnabled");
 const cfgTtsProvider = document.getElementById("cfgTtsProvider");
 const cfgTtsVoice = document.getElementById("cfgTtsVoice");
@@ -1175,6 +1176,7 @@ async function loadConfig() {
     cfgEmbeddingBaseUrl.value = c["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] || "";
     cfgEmbeddingModel.value = c["BELLDANDY_EMBEDDING_MODEL"] || "";
     cfgToolsEnabled.checked = c["BELLDANDY_TOOLS_ENABLED"] === "true";
+    cfgAgentToolControlMode.value = c["BELLDANDY_AGENT_TOOL_CONTROL_MODE"] || "disabled";
     cfgTtsEnabled.checked = c["BELLDANDY_TTS_ENABLED"] === "true";
     cfgTtsProvider.value = c["BELLDANDY_TTS_PROVIDER"] || "edge";
     cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
@@ -1242,6 +1244,7 @@ async function saveConfig() {
   updates["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] = cfgEmbeddingBaseUrl.value.trim();
   updates["BELLDANDY_EMBEDDING_MODEL"] = cfgEmbeddingModel.value.trim();
   updates["BELLDANDY_TOOLS_ENABLED"] = cfgToolsEnabled.checked ? "true" : "false";
+  updates["BELLDANDY_AGENT_TOOL_CONTROL_MODE"] = cfgAgentToolControlMode.value.trim() || "disabled";
   updates["BELLDANDY_TTS_ENABLED"] = cfgTtsEnabled.checked ? "true" : "false";
   updates["BELLDANDY_TTS_PROVIDER"] = cfgTtsProvider.value.trim() || "edge";
   updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
@@ -1324,6 +1327,18 @@ function handleEvent(event, payload) {
   }
   if (event === "token.counter.result") {
     showTaskTokenResult(payload);
+    return;
+  }
+  if (event === "tools.config.updated") {
+    if (toolSettingsModal && !toolSettingsModal.classList.contains("hidden")) {
+      loadToolSettings();
+    } else if (payload && payload.disabled) {
+      if (!toolSettingsData) {
+        toolSettingsData = { builtin: [], mcp: {}, plugins: [], skills: [], disabled: payload.disabled };
+      } else {
+        toolSettingsData.disabled = payload.disabled;
+      }
+    }
     return;
   }
   if (event === "chat.delta") {
@@ -4052,6 +4067,7 @@ const toolSettingsBody = document.getElementById("toolSettingsBody");
 
 let toolSettingsData = null; // { builtin, mcp, plugins, skills, disabled }
 let toolSettingsActiveTab = "builtin";
+let toolSettingsLoadSeq = 0;
 
 if (openToolSettingsBtn) {
   openToolSettingsBtn.addEventListener("click", () => toggleToolSettings(true));
@@ -4076,6 +4092,7 @@ document.querySelectorAll(".tool-tab").forEach(tab => {
 function toggleToolSettings(show) {
   if (show) {
     toolSettingsModal.classList.remove("hidden");
+    toolSettingsData = null;
     loadToolSettings();
   } else {
     toolSettingsModal.classList.add("hidden");
@@ -4083,6 +4100,7 @@ function toggleToolSettings(show) {
 }
 
 async function loadToolSettings() {
+  const seq = ++toolSettingsLoadSeq;
   if (!ws || !isReady) {
     toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未连接</div>';
     return;
@@ -4091,6 +4109,7 @@ async function loadToolSettings() {
 
   const id = makeId();
   const res = await sendReq({ type: "req", id, method: "tools.list" });
+  if (seq !== toolSettingsLoadSeq) return;
   if (res && res.ok && res.payload) {
     toolSettingsData = res.payload;
     renderToolSettingsTab();

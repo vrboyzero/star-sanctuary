@@ -62,6 +62,12 @@ export { switchFacetTool } from "./builtin/switch-facet.js";
 // 服务重启工具
 export { createServiceRestartTool, type BroadcastFn } from "./builtin/service-restart.js";
 export {
+  createToolSettingsControlTool,
+  TOOL_SETTINGS_CONTROL_NAME,
+  type AgentToolControlMode,
+  type AgentToolControlDeps,
+} from "./builtin/tool-settings-control.js";
+export {
   checkAndConsumeRestartCooldown,
   formatRestartCooldownMessage,
   getRestartCommandCooldownSeconds,

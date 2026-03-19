@@ -214,6 +214,44 @@ describe("ToolExecutor", () => {
     expect(definitions).toHaveLength(2);
   });
 
+  it("should keep always enabled tools available even when disabled by runtime config", async () => {
+    const executor = new ToolExecutor({
+      tools: [echoTool, failTool],
+      workspaceRoot: "/tmp/test",
+      alwaysEnabledTools: ["echo"],
+      isToolDisabled: (toolName) => toolName === "echo" || toolName === "fail",
+    });
+
+    const definitions = executor.getDefinitions();
+    expect(definitions).toHaveLength(1);
+    expect(definitions[0].function.name).toBe("echo");
+
+    const result = await executor.execute(
+      { id: "req-7", name: "echo", arguments: { message: "still works" } },
+      "conv-1",
+    );
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("Echo: still works");
+  });
+
+  it("should still enforce agent whitelist for always enabled tools", async () => {
+    const executor = new ToolExecutor({
+      tools: [echoTool],
+      workspaceRoot: "/tmp/test",
+      alwaysEnabledTools: ["echo"],
+      isToolDisabled: (toolName) => toolName === "echo",
+      isToolAllowedForAgent: (_toolName, agentId) => agentId !== "blocked-agent",
+    });
+
+    const result = await executor.execute(
+      { id: "req-8", name: "echo", arguments: { message: "denied" } },
+      "conv-1",
+      "blocked-agent",
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("不允许给 Agent \"blocked-agent\" 使用");
+  });
+
   it("should support silent replacement for dynamic tools", () => {
     const warns: string[] = [];
     const replacementTool: Tool = {

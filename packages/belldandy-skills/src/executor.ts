@@ -30,6 +30,8 @@ export type ToolExecutorOptions = {
   workspaceRoot: string;
   /** 额外允许的文件操作根目录（Agent 可读写这些目录下的文件） */
   extraWorkspaceRoots?: string[];
+  /** 始终可用的保留工具名（不受 disabled 开关影响） */
+  alwaysEnabledTools?: string[];
   policy?: Partial<ToolPolicy>;
   auditLogger?: (log: ToolAuditLog) => void;
   agentCapabilities?: AgentCapabilities;
@@ -53,6 +55,7 @@ export class ToolExecutor {
   private readonly tools: Map<string, Tool>;
   private readonly workspaceRoot: string;
   private readonly extraWorkspaceRoots: string[];
+  private readonly alwaysEnabledTools: Set<string>;
   private readonly policy: ToolPolicy;
   private readonly auditLogger?: (log: ToolAuditLog) => void;
   private agentCapabilities?: AgentCapabilities;
@@ -67,6 +70,7 @@ export class ToolExecutor {
     this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
     this.workspaceRoot = options.workspaceRoot;
     this.extraWorkspaceRoots = options.extraWorkspaceRoots ?? [];
+    this.alwaysEnabledTools = new Set(options.alwaysEnabledTools ?? []);
     this.policy = { ...DEFAULT_POLICY, ...options.policy };
     this.auditLogger = options.auditLogger;
     this.agentCapabilities = options.agentCapabilities;
@@ -270,7 +274,7 @@ export class ToolExecutor {
   }
 
   private isToolAvailable(toolName: string, agentId?: string): boolean {
-    if (this.isToolDisabled?.(toolName)) {
+    if (!this.alwaysEnabledTools.has(toolName) && this.isToolDisabled?.(toolName)) {
       return false;
     }
 
@@ -282,7 +286,7 @@ export class ToolExecutor {
   }
 
   private buildToolUnavailableMessage(toolName: string, agentId?: string): string {
-    if (this.isToolDisabled?.(toolName)) {
+    if (!this.alwaysEnabledTools.has(toolName) && this.isToolDisabled?.(toolName)) {
       return `工具 ${toolName} 已被禁用`;
     }
 

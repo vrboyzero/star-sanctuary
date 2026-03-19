@@ -32,6 +32,9 @@ import {
   ToolExecutor,
   DEFAULT_POLICY,
   type ToolPolicy,
+  TOOL_SETTINGS_CONTROL_NAME,
+  createToolSettingsControlTool,
+  type AgentToolControlMode,
   fetchTool,
   applyPatchTool,
   fileReadTool,
@@ -127,6 +130,7 @@ import {
 } from "../mcp/index.js";
 import { createLoggerFromEnv } from "../logger/index.js";
 import { ToolsConfigManager } from "../tools-config.js";
+import { ToolControlConfirmationStore } from "../tool-control-confirmation-store.js";
 import { PluginRegistry } from "@belldandy/plugins";
 import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
@@ -382,6 +386,12 @@ const maxSystemPromptChars = maxSystemPromptCharsRaw ? parseInt(maxSystemPromptC
 
 
 const toolsEnabled = (readEnv("BELLDANDY_TOOLS_ENABLED") ?? "false") === "true";
+const agentToolControlModeRaw = (readEnv("BELLDANDY_AGENT_TOOL_CONTROL_MODE") ?? "disabled").trim().toLowerCase();
+const agentToolControlMode: AgentToolControlMode = (
+  agentToolControlModeRaw === "auto" || agentToolControlModeRaw === "confirm"
+    ? agentToolControlModeRaw
+    : "disabled"
+);
 const toolGroups = new Set(
   (readEnv("BELLDANDY_TOOL_GROUPS") ?? "all").split(",").map(s => s.trim().toLowerCase()),
 );
@@ -544,6 +554,7 @@ const toolsConfigManager = new ToolsConfigManager(stateDir, {
   warn: (m) => logger.warn("tools-config", m),
 });
 await toolsConfigManager.load();
+const toolControlConfirmationStore = new ToolControlConfirmationStore();
 
 // 3. Init Executor (conditional)
 // Inject browser logger before registering tools
@@ -655,6 +666,7 @@ const toolExecutor = new ToolExecutor({
   tools: toolsToRegister,
   workspaceRoot: stateDir, // Use the resolved state directory as the workspace root for file operations
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
+  alwaysEnabledTools: toolsEnabled ? [TOOL_SETTINGS_CONTROL_NAME] : [],
   policy: toolsPolicy,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
   isToolAllowedForAgent: (toolName, agentId) => {
@@ -739,6 +751,17 @@ try {
   }
 } catch (err) {
   logger.warn("plugins", `插件加载失败: ${String(err)}`);
+}
+
+if (toolsEnabled) {
+  toolExecutor.registerTool(createToolSettingsControlTool({
+    toolsConfigManager,
+    getControlMode: () => agentToolControlMode,
+    listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+    listPluginIds: () => pluginRegistry.getPluginIds(),
+    confirmationStore: toolControlConfirmationStore,
+  }));
+  logger.info("tools", `registered ${TOOL_SETTINGS_CONTROL_NAME} (mode=${agentToolControlMode})`);
 }
 
 // 4.3 Init SkillRegistry

@@ -189,6 +189,9 @@ export type ToolContext = {
 
 /** ConversationStore 接口（避免循环依赖） */
 export interface ConversationStoreInterface {
+  getHistory(
+    conversationId: string,
+  ): Array<{ role: "user" | "assistant"; content: string }>;
   setRoomMembersCache(
     conversationId: string,
     members: Array<{ type: "user" | "agent"; id: string; name?: string; identity?: string }>,

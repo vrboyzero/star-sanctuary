@@ -428,6 +428,15 @@
           </label>
           <div class="form-help">工具系统总开关。关闭后模型将无法调用文件、浏览器、命令等工具。</div>
         </div>
+        <div class="form-group">
+          <label class="form-label">Agent Tool Control</label>
+          <select id="cfgAgentToolControlMode" class="input">
+            <option value="disabled">disabled</option>
+            <option value="confirm">confirm</option>
+            <option value="auto">auto</option>
+          </select>
+          <div class="form-help">控制 Agent 是否可修改已注册工具的全局调用开关：disabled=禁止，confirm=文本确认，auto=直接执行。</div>
+        </div>
 
         <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
 

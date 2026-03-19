@@ -24,7 +24,12 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
-import { checkAndConsumeRestartCooldown, formatRestartCooldownMessage, publishSkillCandidate } from "@belldandy/skills";
+import {
+  checkAndConsumeRestartCooldown,
+  formatRestartCooldownMessage,
+  publishSkillCandidate,
+  TOOL_SETTINGS_CONTROL_NAME,
+} from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
@@ -121,7 +126,7 @@ const DEFAULT_METHODS = [
   "experience.usage.stats",
   "experience.usage.revoke",
 ];
-const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required"];
+const DEFAULT_EVENTS = ["chat.delta", "chat.final", "agent.status", "token.usage", "token.counter.result", "pairing.required", "tools.config.updated"];
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
 
@@ -1309,6 +1314,7 @@ async function handleReq(
         "BELLDANDY_BROWSER_RELAY_ENABLED", "BELLDANDY_RELAY_PORT",
         "BELLDANDY_MCP_ENABLED", "BELLDANDY_CRON_ENABLED",
         "BELLDANDY_TOOLS_ENABLED",
+        "BELLDANDY_AGENT_TOOL_CONTROL_MODE",
         "BELLDANDY_EMBEDDING_ENABLED",
         "BELLDANDY_EMBEDDING_OPENAI_API_KEY", "BELLDANDY_EMBEDDING_OPENAI_BASE_URL",
         "BELLDANDY_EMBEDDING_MODEL",
@@ -1431,8 +1437,12 @@ async function handleReq(
       if (!ctx.toolExecutor || !ctx.toolsConfigManager) {
         return { type: "res", id: req.id, ok: true, payload: { builtin: [], mcp: {}, plugins: [], skills: [], disabled: { builtin: [], mcp_servers: [], plugins: [], skills: [] } } };
       }
-      const allNames = ctx.toolExecutor.getRegisteredToolNames();
+      const allNames = ctx.toolExecutor.getRegisteredToolNames().filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME);
       const config = ctx.toolsConfigManager.getConfig();
+      const visibleDisabled = {
+        ...config.disabled,
+        builtin: config.disabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME),
+      };
 
       // 分类工具
       const builtin: string[] = [];
@@ -1460,7 +1470,7 @@ async function handleReq(
         tags: s.tags ?? [],
       }));
 
-      return { type: "res", id: req.id, ok: true, payload: { builtin, mcp, plugins: ctx.pluginRegistry?.getPluginIds() ?? [], skills, disabled: config.disabled } };
+      return { type: "res", id: req.id, ok: true, payload: { builtin, mcp, plugins: ctx.pluginRegistry?.getPluginIds() ?? [], skills, disabled: visibleDisabled } };
     }
 
     case "tools.update": {
@@ -1472,7 +1482,13 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "Missing disabled" } };
       }
       try {
-        await ctx.toolsConfigManager.updateConfig(params.disabled);
+        const sanitizedDisabled = {
+          ...params.disabled,
+          builtin: Array.isArray(params.disabled.builtin)
+            ? params.disabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME)
+            : params.disabled.builtin,
+        };
+        await ctx.toolsConfigManager.updateConfig(sanitizedDisabled);
         return { type: "res", id: req.id, ok: true };
       } catch (e) {
         return { type: "res", id: req.id, ok: false, error: { code: "save_failed", message: String(e) } };

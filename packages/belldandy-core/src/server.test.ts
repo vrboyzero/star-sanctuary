@@ -7,9 +7,17 @@ import WebSocket from "ws";
 
 import { AgentRegistry, type BelldandyAgent, MockAgent } from "@belldandy/agent";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
-import { SkillRegistry } from "@belldandy/skills";
+import {
+  SkillRegistry,
+  ToolExecutor,
+  createToolSettingsControlTool,
+  type Tool,
+  TOOL_SETTINGS_CONTROL_NAME,
+} from "@belldandy/skills";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
+import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import { ToolsConfigManager } from "./tools-config.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
 
 // MemoryManager 内部会初始化 OpenAIEmbeddingProvider，需要 OPENAI_API_KEY
@@ -497,6 +505,318 @@ test("secure methods require pairing for config raw and tools update", async () 
   await closeP;
   await server.close();
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("config.update persists BELLDANDY_AGENT_TOOL_CONTROL_MODE for config.read", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
+  await fs.promises.writeFile(path.join(envDir, ".env"), 'BELLDANDY_AGENT_TOOL_CONTROL_MODE="disabled"\n', "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-update-agent-tool-control",
+      method: "config.update",
+      params: {
+        updates: {
+          BELLDANDY_AGENT_TOOL_CONTROL_MODE: "confirm",
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-update-agent-tool-control"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "config-update-agent-tool-control");
+    expect(updateRes.ok).toBe(true);
+
+    ws.send(JSON.stringify({ type: "req", id: "config-read-agent-tool-control", method: "config.read", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-read-agent-tool-control"));
+    const readRes = frames.find((f) => f.type === "res" && f.id === "config-read-agent-tool-control");
+    expect(readRes.ok).toBe(true);
+    expect(readRes.payload?.config?.BELLDANDY_AGENT_TOOL_CONTROL_MODE).toBe("confirm");
+
+    const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
+    expect(envLocalContent).toContain('BELLDANDY_AGENT_TOOL_CONTROL_MODE="confirm"');
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("tools.list hides tool_settings_control from builtin tools", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const confirmationStore = new ToolControlConfirmationStore();
+  let toolExecutor!: ToolExecutor;
+  toolExecutor = new ToolExecutor({
+    tools: [
+      createTestTool("alpha_builtin"),
+      createTestTool("mcp_demo_ping"),
+      createToolSettingsControlTool({
+        toolsConfigManager,
+        getControlMode: () => "auto",
+        listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+        confirmationStore,
+      }),
+    ],
+    workspaceRoot: process.cwd(),
+    alwaysEnabledTools: [TOOL_SETTINGS_CONTROL_NAME],
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "tools-list-hidden-control", method: "tools.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-hidden-control"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-hidden-control");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.builtin).toContain("alpha_builtin");
+    expect(listRes.payload?.builtin).not.toContain(TOOL_SETTINGS_CONTROL_NAME);
+    expect(listRes.payload?.mcp).toEqual({
+      demo: {
+        tools: ["mcp_demo_ping"],
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("tools.update ignores tool_settings_control in disabled builtin list", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const confirmationStore = new ToolControlConfirmationStore();
+  let toolExecutor!: ToolExecutor;
+  toolExecutor = new ToolExecutor({
+    tools: [
+      createTestTool("alpha_builtin"),
+      createToolSettingsControlTool({
+        toolsConfigManager,
+        getControlMode: () => "auto",
+        listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+        confirmationStore,
+      }),
+    ],
+    workspaceRoot: process.cwd(),
+    alwaysEnabledTools: [TOOL_SETTINGS_CONTROL_NAME],
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-update-filter-control",
+      method: "tools.update",
+      params: {
+        disabled: {
+          builtin: [TOOL_SETTINGS_CONTROL_NAME, "alpha_builtin"],
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-update-filter-control"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "tools-update-filter-control");
+    expect(updateRes.ok).toBe(true);
+    expect(toolsConfigManager.getConfig().disabled.builtin).toEqual(["alpha_builtin"]);
+
+    ws.send(JSON.stringify({ type: "req", id: "tools-list-filter-control", method: "tools.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-filter-control"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-filter-control");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.disabled?.builtin).toEqual(["alpha_builtin"]);
+    expect(listRes.payload?.disabled?.builtin).not.toContain(TOOL_SETTINGS_CONTROL_NAME);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("message.send emits tools.config.updated when agent changes tool settings", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const confirmationStore = new ToolControlConfirmationStore();
+  let toolExecutor!: ToolExecutor;
+  let gatewayServer!: Awaited<ReturnType<typeof startGatewayServer>>;
+
+  toolExecutor = new ToolExecutor({
+    tools: [
+      createTestTool("alpha_builtin"),
+      createToolSettingsControlTool({
+        toolsConfigManager,
+        getControlMode: () => "auto",
+        listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+        confirmationStore,
+      }),
+    ],
+    workspaceRoot: process.cwd(),
+    alwaysEnabledTools: [TOOL_SETTINGS_CONTROL_NAME],
+  });
+
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      yield { type: "status", status: "running" as const };
+      const request = {
+        id: "tool-call-1",
+        name: TOOL_SETTINGS_CONTROL_NAME,
+        arguments: {
+          action: "apply",
+          disableBuiltin: ["alpha_builtin"],
+        },
+      };
+      yield {
+        type: "tool_call" as const,
+        id: request.id,
+        name: request.name,
+        arguments: request.arguments,
+      };
+      const result = await toolExecutor.execute(request, input.conversationId, input.agentId, input.userUuid, input.senderInfo, input.roomContext);
+      yield {
+        type: "tool_result" as const,
+        id: result.id,
+        name: result.name,
+        success: result.success,
+        output: result.output,
+        error: result.error,
+      };
+      if (result.success) {
+        const disabled = toolsConfigManager.getConfig().disabled;
+        gatewayServer.broadcast({
+          type: "event",
+          event: "tools.config.updated",
+          payload: {
+            source: "agent",
+            mode: "auto",
+            disabled: {
+              builtin: disabled.builtin,
+              mcp_servers: disabled.mcp_servers,
+              plugins: disabled.plugins,
+              skills: disabled.skills,
+            },
+          },
+        });
+      }
+      yield { type: "final", text: "tool settings updated" };
+      yield { type: "status", status: "done" as const };
+    },
+  };
+
+  gatewayServer = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+    agentFactory: () => agent,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${gatewayServer.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-send-tool-settings-update",
+      method: "message.send",
+      params: {
+        text: "please update tool settings",
+        conversationId: "conv-tool-settings-update",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-send-tool-settings-update" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "tool_result"));
+    const toolResultEvent = frames.find((f) => f.type === "event" && f.event === "tool_result");
+    expect(toolResultEvent?.payload?.success).toBe(true);
+    expect(toolsConfigManager.getConfig().disabled.builtin).toEqual(["alpha_builtin"]);
+    await waitFor(
+      () => frames.some((f) => f.type === "event" && f.event === "tools.config.updated"),
+      1000,
+    );
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+    const configUpdatedEvent = frames.find((f) => f.type === "event" && f.event === "tools.config.updated");
+    expect(configUpdatedEvent?.payload).toEqual({
+      source: "agent",
+      mode: "auto",
+      disabled: {
+        builtin: ["alpha_builtin"],
+        mcp_servers: [],
+        plugins: [],
+        skills: [],
+      },
+    });
+
+    ws.send(JSON.stringify({ type: "req", id: "tools-list-after-agent-update", method: "tools.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-after-agent-update"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-after-agent-update");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.disabled?.builtin).toEqual(["alpha_builtin"]);
+  } finally {
+    ws.close();
+    await closeP;
+    await gatewayServer.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("memory viewer rpc returns task and memory data", async () => {
@@ -1232,6 +1552,28 @@ async function pairWebSocketClient(ws: WebSocket, frames: any[], stateDir: strin
   expect(code.length).toBeGreaterThan(0);
   const approved = await approvePairingCode({ code, stateDir });
   expect(approved.ok).toBe(true);
+}
+
+function createTestTool(name: string): Tool {
+  return {
+    definition: {
+      name,
+      description: `test tool ${name}`,
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+    async execute() {
+      return {
+        id: "",
+        name,
+        success: true,
+        output: name,
+        durationMs: 0,
+      };
+    },
+  };
 }
 
 function toBase64(value: string): string {
