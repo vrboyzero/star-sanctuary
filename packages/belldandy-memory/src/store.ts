@@ -1225,6 +1225,11 @@ export class MemoryStore {
       params.push(filter.parentConversationId);
     }
 
+    if (filter.goalId) {
+      conditions.push(`json_extract(t.metadata, '$.goalId') = ?`);
+      params.push(filter.goalId);
+    }
+
     return {
       clause: conditions.length > 0 ? ` AND ${conditions.join(" AND ")}` : "",
       params,

@@ -21,6 +21,7 @@ import type { TaskConversationStore, TaskMemoryRelation, TaskRecord, TaskSearchF
 import type {
     ExperienceAssetType,
     ExperienceCandidate,
+    ExperienceCandidateType,
     ExperienceCandidateListFilter,
     ExperiencePromoteResult,
     ExperienceUsage,
@@ -444,6 +445,7 @@ export class MemoryManager {
         source: TaskSource;
         objective?: string;
         parentConversationId?: string;
+        metadata?: Record<string, unknown>;
     }): string | null {
         return this.taskProcessor.startTask(input);
     }
@@ -561,6 +563,32 @@ export class MemoryManager {
 
     getExperienceCandidate(candidateId: string): ExperienceCandidate | null {
         return this.store.getExperienceCandidate(candidateId);
+    }
+
+    findExperienceCandidateByTaskAndType(taskId: string, type: ExperienceCandidateType): ExperienceCandidate | null {
+        return this.store.findExperienceCandidateByTaskAndType(taskId, type);
+    }
+
+    upsertExperienceCandidate(candidate: ExperienceCandidate): ExperienceCandidate {
+        const existing = this.store.findExperienceCandidateByTaskAndType(candidate.taskId, candidate.type);
+        if (existing) {
+            return this.store.updateExperienceCandidate(existing.id, {
+                status: candidate.status,
+                title: candidate.title,
+                slug: candidate.slug,
+                content: candidate.content,
+                summary: candidate.summary,
+                qualityScore: candidate.qualityScore,
+                sourceTaskSnapshot: candidate.sourceTaskSnapshot,
+                publishedPath: candidate.publishedPath,
+                reviewedAt: candidate.reviewedAt,
+                acceptedAt: candidate.acceptedAt,
+                rejectedAt: candidate.rejectedAt,
+            }) ?? existing;
+        }
+
+        this.store.createExperienceCandidate(candidate);
+        return this.store.getExperienceCandidate(candidate.id) ?? candidate;
     }
 
     listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter): ExperienceCandidate[] {

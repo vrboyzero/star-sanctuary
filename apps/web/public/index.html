@@ -115,6 +115,8 @@
             style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧩 模组编辑</button>
           <button id="switchMemory" class="sidebar-action-btn"
             style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧠 记忆查看</button>
+          <button id="switchGoals" class="sidebar-action-btn"
+            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎯 长期任务</button>
           <button id="switchCanvas" class="sidebar-action-btn"
             style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎨 画布工作区</button>
         </div>
@@ -178,6 +180,7 @@
               <button class="canvas-tb-btn canvas-tb-close" id="canvasClose" title="返回聊天">✕</button>
             </div>
           </div>
+          <div class="canvas-context-bar hidden" id="canvasContextBar"></div>
           <!-- SVG 画布 -->
           <svg id="canvasSvg" class="canvas-svg" width="100%" height="100%">
             <defs>
@@ -268,12 +271,48 @@
               </div>
             </div>
 
+            <div id="memoryTaskGoalFilterBar" class="memory-context-bar hidden">
+              <span id="memoryTaskGoalFilterLabel" class="memory-context-text">当前仅查看某个长期任务的 tasks</span>
+              <button id="memoryTaskGoalFilterClear" class="button">清除过滤</button>
+            </div>
+
             <div class="memory-viewer-body">
               <aside class="memory-viewer-list" id="memoryViewerList">
                 <div class="memory-viewer-empty">等待加载…</div>
               </aside>
               <section class="memory-viewer-detail" id="memoryViewerDetail">
                 <div class="memory-viewer-empty">选择左侧条目查看详情。</div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="memory-viewer hidden" id="goalsSection">
+          <div class="memory-viewer-shell goals-viewer-shell">
+            <div class="memory-viewer-header">
+              <div>
+                <div class="memory-viewer-kicker">Long Tasks</div>
+                <div class="memory-viewer-title">Goal Channel</div>
+              </div>
+              <div class="goals-viewer-actions">
+                <button id="goalsRefresh" class="button">刷新</button>
+                <button id="goalCreate" class="button">新建长期任务</button>
+              </div>
+            </div>
+
+            <div class="memory-viewer-stats" id="goalsSummary">
+              <div class="memory-stat-card">
+                <span class="memory-stat-label">长期任务</span>
+                <strong class="memory-stat-value">--</strong>
+              </div>
+            </div>
+
+            <div class="memory-viewer-body">
+              <aside class="memory-viewer-list" id="goalsList">
+                <div class="memory-viewer-empty">等待加载…</div>
+              </aside>
+              <section class="memory-viewer-detail" id="goalsDetail">
+                <div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>
               </section>
             </div>
           </div>
@@ -524,6 +563,95 @@
       <div class="modal-footer">
         <button id="restartBtn" class="button" style="color: #666;">Restart Server</button>
         <button id="saveSettings" class="button" style="background: #333; color: white;">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="goalCreateModal" class="modal-overlay hidden">
+    <div class="modal goal-create-modal">
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <span>新建长期任务</span>
+        <button id="goalCreateClose" class="settings-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="goalCreateTitle">标题</label>
+          <input id="goalCreateTitle" class="input" placeholder="例如：WebChat 超长期任务系统落地" />
+          <div class="form-help">必填。建议直接写项目或阶段目标，而不是临时动作。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="goalCreateObjective">Objective</label>
+          <textarea id="goalCreateObjective" class="input" rows="4" placeholder="描述这个长期任务要达成的最终结果、边界与预期交付物"></textarea>
+          <div class="form-help">可选。这里的内容会直接写入初始 `00-goal.md` / `NORTHSTAR.md`。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="goalCreateRoot">自定义 Goal Root</label>
+          <input id="goalCreateRoot" class="input" placeholder="留空则使用 ~/.star_sanctuary/goals/" />
+          <div class="form-help">可选。用于把某个长期任务的运行态和文档落到项目目录、D 盘或 E 盘路径。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="goalCreateAutoResume">
+            <input id="goalCreateAutoResume" type="checkbox" style="margin-right: 8px;" checked />
+            创建后立即进入独立 goal channel
+          </label>
+          <div class="form-help">建议保持开启。这样创建完成后会立刻切到该长期任务的专用执行通道。</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="goalCreateCancel" class="button">取消</button>
+        <button id="goalCreateSubmit" class="button" style="background: var(--text-main); color: #000;">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="goalCheckpointActionModal" class="modal-overlay hidden">
+    <div class="modal goal-checkpoint-action-modal">
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <span id="goalCheckpointActionTitle">处理 Checkpoint</span>
+        <button id="goalCheckpointActionClose" class="settings-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="goal-checkpoint-action-copy">
+          <div id="goalCheckpointActionHint" class="form-help">在这里完成 checkpoint 审批或状态流转，避免使用临时 prompt 输入。</div>
+        </div>
+        <div id="goalCheckpointActionContext" class="goal-checkpoint-action-context"></div>
+        <div class="goal-checkpoint-action-form-grid">
+          <div class="form-group">
+            <label class="form-label" for="goalCheckpointActionReviewer">Reviewer</label>
+            <input id="goalCheckpointActionReviewer" class="input" placeholder="例如：producer / qa / @reviewer" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="goalCheckpointActionReviewerRole">Reviewer Role</label>
+            <input id="goalCheckpointActionReviewerRole" class="input" placeholder="例如：产品验收 / 技术审阅" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="goalCheckpointActionRequestedBy">Requested By</label>
+            <input id="goalCheckpointActionRequestedBy" class="input" placeholder="例如：main-agent / user / worker-1" />
+          </div>
+          <div class="form-group">
+            <label id="goalCheckpointActionActorLabel" class="form-label" for="goalCheckpointActionActor">Approver</label>
+            <input id="goalCheckpointActionActor" class="input" placeholder="例如：designer / reviewer / producer" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="goalCheckpointActionSlaAt">SLA</label>
+            <input id="goalCheckpointActionSlaAt" class="input" type="datetime-local" />
+            <div class="form-help">可选。用于表示本次 checkpoint 的目标处理截止时间。</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="goalCheckpointActionSummary">Summary</label>
+          <input id="goalCheckpointActionSummary" class="input" placeholder="例如：Approved / Rejected / Expired / Reopened" />
+          <div class="form-help">会写入 `checkpoints.json` 与 `progress.md`，建议保持简短明确。</div>
+        </div>
+        <div class="form-group">
+          <label id="goalCheckpointActionNoteLabel" class="form-label" for="goalCheckpointActionNote">说明</label>
+          <textarea id="goalCheckpointActionNote" class="input" rows="5" placeholder="补充审批意见、过期原因或重新打开说明"></textarea>
+          <div id="goalCheckpointActionNoteHelp" class="form-help">部分操作要求填写原因，避免只留下状态没有上下文。</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="goalCheckpointActionCancel" class="button">取消</button>
+        <button id="goalCheckpointActionSubmit" class="button" style="background: var(--text-main); color: #000;">提交</button>
       </div>
     </div>
   </div>

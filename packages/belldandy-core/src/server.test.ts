@@ -1215,6 +1215,10 @@ test("memory viewer rpc returns task and memory data", async () => {
     sessionKey: "session-memory-viewer",
     source: "chat",
     objective: "Implement memory viewer",
+    metadata: {
+      goalId: "goal_memory_viewer",
+      goalSession: true,
+    },
   });
   expect(startedTaskId).toBeTruthy();
   if (recentChunk?.id) {
@@ -1236,6 +1240,19 @@ test("memory viewer rpc returns task and memory data", async () => {
   expect(methodCandidate?.candidate.id).toBeTruthy();
   const acceptedMethodCandidate = memoryManager.acceptExperienceCandidate(methodCandidate!.candidate.id);
   expect(acceptedMethodCandidate?.publishedPath).toBeTruthy();
+  (memoryManager as any).store.createTask({
+    id: "task-non-goal-viewer",
+    conversationId: "conv-memory-viewer-other",
+    sessionKey: "session-memory-viewer-other",
+    source: "manual",
+    status: "success",
+    title: "Unrelated maintenance task",
+    objective: "should not appear in goal-filtered task list",
+    startedAt: "2026-03-16T00:05:00.000Z",
+    finishedAt: "2026-03-16T00:05:10.000Z",
+    createdAt: "2026-03-16T00:05:00.000Z",
+    updatedAt: "2026-03-16T00:05:10.000Z",
+  });
   (memoryManager as any).store.createExperienceUsage({
     id: "usage-viewer-method",
     taskId: completedTaskId!,
@@ -1272,6 +1289,7 @@ test("memory viewer rpc returns task and memory data", async () => {
 
     ws.send(JSON.stringify({ type: "req", id: "memory-stats", method: "memory.stats" }));
     ws.send(JSON.stringify({ type: "req", id: "task-list", method: "memory.task.list", params: { limit: 5 } }));
+    ws.send(JSON.stringify({ type: "req", id: "task-list-goal", method: "memory.task.list", params: { limit: 5, filter: { goalId: "goal_memory_viewer" } } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-recent", method: "memory.recent", params: { limit: 5 } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-recent-uncategorized", method: "memory.recent", params: { limit: 5, filter: { uncategorized: true } } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-search", method: "memory.search", params: { query: "viewer", limit: 5 } }));
@@ -1284,6 +1302,7 @@ test("memory viewer rpc returns task and memory data", async () => {
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-stats"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list-goal"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent-uncategorized"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-search"));
@@ -1295,6 +1314,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-get"));
 
     const taskListRes = frames.find((f) => f.type === "res" && f.id === "task-list");
+    const taskListGoalRes = frames.find((f) => f.type === "res" && f.id === "task-list-goal");
     const memoryRecentRes = frames.find((f) => f.type === "res" && f.id === "memory-recent");
     const memoryRecentUncategorizedRes = frames.find((f) => f.type === "res" && f.id === "memory-recent-uncategorized");
     const memorySearchRes = frames.find((f) => f.type === "res" && f.id === "memory-search");
@@ -1313,6 +1333,10 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(statsRes.payload.status.categoryBuckets.decision).toBeGreaterThan(0);
     expect(taskListRes.ok).toBe(true);
     expect(taskListRes.payload.items.length).toBeGreaterThan(0);
+    expect(taskListGoalRes.ok).toBe(true);
+    expect(taskListGoalRes.payload.items.length).toBeGreaterThan(0);
+    expect(taskListGoalRes.payload.items.every((item: any) => item?.metadata?.goalId === "goal_memory_viewer")).toBe(true);
+    expect(taskListGoalRes.payload.items.some((item: any) => item?.id === "task-non-goal-viewer")).toBe(false);
     expect(memoryRecentRes.ok).toBe(true);
     expect(memoryRecentRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentUncategorizedRes.ok).toBe(true);

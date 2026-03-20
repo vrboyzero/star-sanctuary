@@ -231,7 +231,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       input.roomContext,
     );
     const textAttachmentChars = readTextAttachmentChars(input.meta);
-    const tools = this.opts.toolExecutor.getDefinitions(input.agentId);
+    const tools = this.opts.toolExecutor.getDefinitions(input.agentId, input.conversationId);
     let toolCallCount = 0;
     const generatedItems: AgentStreamItem[] = [];
     let runSuccess = true;

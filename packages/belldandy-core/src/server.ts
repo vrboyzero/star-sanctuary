@@ -35,6 +35,7 @@ import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
+import type { GoalManager } from "./goals/manager.js";
 
 export type GatewayServerOptions = {
   port: number;
@@ -82,6 +83,8 @@ export type GatewayServerOptions = {
   isConfigured?: () => boolean;
   /** 技能注册表（用于获取已加载技能列表） */
   skillRegistry?: SkillRegistry;
+  /** 长期任务管理器 */
+  goalManager?: GoalManager;
   /** Webhook 配置 */
   webhookConfig?: WebhookConfig;
   /** Webhook 幂等性管理器 */
@@ -133,6 +136,40 @@ const DEFAULT_METHODS = [
   "experience.usage.list",
   "experience.usage.stats",
   "experience.usage.revoke",
+  "goal.create",
+  "goal.list",
+  "goal.get",
+  "goal.resume",
+  "goal.pause",
+  "goal.handoff.generate",
+  "goal.retrospect.generate",
+  "goal.experience.suggest",
+  "goal.method_candidates.generate",
+  "goal.skill_candidates.generate",
+  "goal.flow_patterns.generate",
+  "goal.flow_patterns.cross_goal",
+  "goal.review_governance.summary",
+  "goal.suggestion_review.list",
+  "goal.suggestion_review.workflow.set",
+  "goal.suggestion_review.decide",
+  "goal.suggestion_review.escalate",
+  "goal.suggestion.publish",
+  "goal.checkpoint.list",
+  "goal.checkpoint.request",
+  "goal.checkpoint.approve",
+  "goal.checkpoint.reject",
+  "goal.checkpoint.expire",
+  "goal.checkpoint.reopen",
+  "goal.task_graph.read",
+  "goal.task_graph.create",
+  "goal.task_graph.update",
+  "goal.task_graph.claim",
+  "goal.task_graph.pending_review",
+  "goal.task_graph.validating",
+  "goal.task_graph.complete",
+  "goal.task_graph.block",
+  "goal.task_graph.fail",
+  "goal.task_graph.skip",
 ];
 const DEFAULT_EVENTS = [
   "chat.delta",
@@ -140,6 +177,7 @@ const DEFAULT_EVENTS = [
   "agent.status",
   "token.usage",
   "token.counter.result",
+  "goal.update",
   "pairing.required",
   "tools.config.updated",
   "tool_settings.confirm.required",
@@ -807,6 +845,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
         skillRegistry: opts.skillRegistry,
+        goalManager: opts.goalManager,
         tokenUsageUploadConfig,
         broadcastEvent,
         log,
@@ -930,6 +969,7 @@ async function handleReq(
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     pluginRegistry?: PluginRegistry;
     skillRegistry?: SkillRegistry;
+    goalManager?: GoalManager;
     tokenUsageUploadConfig: TokenUsageUploadConfig;
     broadcastEvent?: (frame: GatewayEventFrame) => void;
   },
@@ -964,6 +1004,24 @@ async function handleReq(
       "experience.usage.list",
       "experience.usage.stats",
       "experience.usage.revoke",
+      "goal.create",
+      "goal.list",
+      "goal.get",
+      "goal.resume",
+      "goal.pause",
+      "goal.handoff.generate",
+      "goal.retrospect.generate",
+      "goal.experience.suggest",
+      "goal.method_candidates.generate",
+      "goal.skill_candidates.generate",
+      "goal.flow_patterns.generate",
+      "goal.flow_patterns.cross_goal",
+      "goal.review_governance.summary",
+      "goal.suggestion_review.list",
+      "goal.suggestion_review.workflow.set",
+      "goal.suggestion_review.decide",
+      "goal.suggestion_review.escalate",
+      "goal.suggestion.publish",
   ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
@@ -1781,6 +1839,961 @@ async function handleReq(
       return { type: "res", id: req.id, ok: true, payload: { agents } };
     }
 
+    case "goal.create": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const title = typeof params.title === "string" ? params.title.trim() : "";
+      const objective = typeof params.objective === "string" ? params.objective.trim() : undefined;
+      const slug = typeof params.slug === "string" ? params.slug.trim() : undefined;
+      const goalRoot = typeof params.goalRoot === "string" ? params.goalRoot.trim() : undefined;
+      if (!title) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "title is required" } };
+      }
+      try {
+        const goal = await ctx.goalManager.createGoal({ title, objective, slug, goalRoot });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            goal,
+            conversationId: goal.activeConversationId,
+          },
+        };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_create_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.list": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const goals = await ctx.goalManager.listGoals();
+      return { type: "res", id: req.id, ok: true, payload: { goals } };
+    }
+
+    case "goal.get": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      const goal = await ctx.goalManager.getGoal(goalId);
+      if (!goal) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Goal not found." } };
+      }
+      return { type: "res", id: req.id, ok: true, payload: { goal } };
+    }
+
+    case "goal.resume": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : undefined;
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.resumeGoal(goalId, nodeId);
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: result as unknown as Record<string, unknown>,
+        };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_resume_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.pause": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const goal = await ctx.goalManager.pauseGoal(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { goal } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_pause_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.handoff.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateHandoff(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_handoff_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.retrospect.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateRetrospective(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_retrospect_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.experience.suggest": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateExperienceSuggestions(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_experience_suggest_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.method_candidates.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateMethodCandidates(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_method_candidates_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.skill_candidates.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateSkillCandidates(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_skill_candidates_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.flow_patterns.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateFlowPatterns(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_flow_patterns_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.flow_patterns.cross_goal": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      try {
+        const result = await ctx.goalManager.generateCrossGoalFlowPatterns();
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_cross_goal_flow_patterns_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.review_governance.summary": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const summary = await ctx.goalManager.getReviewGovernanceSummary(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { summary } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_review_governance_summary_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.list": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const reviews = await ctx.goalManager.listSuggestionReviews(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { reviews } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_list_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.workflow.set": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const mode = typeof params.mode === "string" ? params.mode.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId || !mode) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and mode are required" } };
+      }
+      if (!["single", "chain", "quorum"].includes(mode)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "mode is invalid" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.configureSuggestionReviewWorkflow(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          mode: mode as "single" | "chain" | "quorum",
+          reviewers: Array.isArray(params.reviewers)
+            ? params.reviewers.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
+            : undefined,
+          reviewerRoles: Array.isArray(params.reviewerRoles)
+            ? params.reviewerRoles.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
+            : undefined,
+          minApprovals: typeof params.minApprovals === "number" && Number.isFinite(params.minApprovals) ? params.minApprovals : undefined,
+          stages: Array.isArray(params.stages)
+            ? params.stages.map((item) => {
+              const stage = isObjectRecord(item) ? item : {};
+              return {
+                title: typeof stage.title === "string" ? stage.title.trim() || undefined : undefined,
+                reviewers: Array.isArray(stage.reviewers)
+                  ? stage.reviewers.map((reviewer) => typeof reviewer === "string" ? reviewer.trim() : "").filter(Boolean)
+                  : [],
+                reviewerRoles: Array.isArray(stage.reviewerRoles)
+                  ? stage.reviewerRoles.map((role) => typeof role === "string" ? role.trim() : "").filter(Boolean)
+                  : undefined,
+                minApprovals: typeof stage.minApprovals === "number" && Number.isFinite(stage.minApprovals) ? stage.minApprovals : undefined,
+                slaHours: typeof stage.slaHours === "number" && Number.isFinite(stage.slaHours) ? stage.slaHours : undefined,
+              };
+            }).filter((item) => item.reviewers.length > 0)
+            : undefined,
+          slaHours: typeof params.slaHours === "number" && Number.isFinite(params.slaHours) ? params.slaHours : undefined,
+          escalationMode: typeof params.escalationMode === "string" && (params.escalationMode === "none" || params.escalationMode === "manual")
+            ? params.escalationMode
+            : undefined,
+          escalationReviewer: typeof params.escalationReviewer === "string" ? params.escalationReviewer.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_workflow_set_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.decide": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const decision = typeof params.decision === "string" ? params.decision.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId || !decision) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and decision are required" } };
+      }
+      if (!["accepted", "rejected", "deferred", "needs_revision"].includes(decision)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "decision is invalid" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.decideSuggestionReview(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          decision: decision as "accepted" | "rejected" | "deferred" | "needs_revision",
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_decide_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.escalate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.escalateSuggestionReview(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          escalatedBy: typeof params.escalatedBy === "string" ? params.escalatedBy.trim() || undefined : undefined,
+          escalatedTo: typeof params.escalatedTo === "string" ? params.escalatedTo.trim() || undefined : undefined,
+          reason: typeof params.reason === "string" ? params.reason.trim() || undefined : undefined,
+          force: Boolean(params.force),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_escalate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion.publish": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.publishSuggestion(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_publish_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.list": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const checkpoints = await ctx.goalManager.listCheckpoints(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { checkpoints } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_list_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.request": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.requestCheckpoint(goalId, nodeId, {
+          title: typeof params.title === "string" ? params.title.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_request_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.approve": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.approveCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_approve_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.reject": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.rejectCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_reject_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.expire": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.expireCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_expire_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.reopen": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.reopenCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_reopen_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.read": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const graph = await ctx.goalManager.readTaskGraph(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { graph } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_read_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.create": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const title = typeof params.title === "string" ? params.title.trim() : "";
+      if (!goalId || !title) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and title are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.createTaskNode(goalId, {
+          id: typeof params.nodeId === "string" ? params.nodeId.trim() || undefined : undefined,
+          title,
+          description: typeof params.description === "string" ? params.description.trim() || undefined : undefined,
+          phase: typeof params.phase === "string" ? params.phase.trim() || undefined : undefined,
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          dependsOn: Array.isArray(params.dependsOn) ? params.dependsOn.map((item) => String(item)) : undefined,
+          acceptance: Array.isArray(params.acceptance) ? params.acceptance.map((item) => String(item)) : undefined,
+          checkpointRequired: typeof params.checkpointRequired === "boolean" ? params.checkpointRequired : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          status: parseGoalTaskCreateStatus(params.status),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_create_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.update": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.updateTaskNode(goalId, nodeId, {
+          title: typeof params.title === "string" ? params.title.trim() || undefined : undefined,
+          description: typeof params.description === "string" ? params.description : undefined,
+          phase: typeof params.phase === "string" ? params.phase : undefined,
+          owner: typeof params.owner === "string" ? params.owner : undefined,
+          dependsOn: Array.isArray(params.dependsOn) ? params.dependsOn.map((item) => String(item)) : undefined,
+          acceptance: Array.isArray(params.acceptance) ? params.acceptance.map((item) => String(item)) : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointRequired: typeof params.checkpointRequired === "boolean" ? params.checkpointRequired : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_update_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.claim": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.claimTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_claim_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.pending_review": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.markTaskNodePendingReview(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_pending_review_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.validating": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.markTaskNodeValidating(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_validating_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.complete": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.completeTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_complete_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.block": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      const blockReason = typeof params.blockReason === "string" ? params.blockReason.trim() : "";
+      if (!goalId || !nodeId || !blockReason) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId, nodeId and blockReason are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.blockTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_block_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.fail": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.failTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_fail_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.skip": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.skipTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_skip_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
     case "memory.search": {
       const manager = getGlobalMemoryManager();
       if (!manager) {
@@ -2454,6 +3467,34 @@ function clampListLimit(value: unknown, fallback: number, max = 100): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
   return Math.min(parsed, max);
+}
+
+function parseGoalTaskCheckpointStatus(value: unknown): "not_required" | "required" | "waiting_user" | "approved" | "rejected" | "expired" | undefined {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  switch (normalized) {
+    case "not_required":
+    case "required":
+    case "waiting_user":
+    case "approved":
+    case "rejected":
+    case "expired":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function parseGoalTaskCreateStatus(value: unknown): "draft" | "ready" | "blocked" | "skipped" | undefined {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  switch (normalized) {
+    case "draft":
+    case "ready":
+    case "blocked":
+    case "skipped":
+      return normalized;
+    default:
+      return undefined;
+  }
 }
 
 function sendRes(ws: WebSocket, frame: GatewayResFrame) {

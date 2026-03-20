@@ -20,6 +20,7 @@ const fileTreeEl = document.getElementById("fileTree");
 const refreshTreeBtn = document.getElementById("refreshTree");
 const chatSection = document.getElementById("chatSection");
 const editorSection = document.getElementById("editorSection");
+const canvasContextBarEl = document.getElementById("canvasContextBar");
 const editorPath = document.getElementById("editorPath");
 const editorModeBadge = document.getElementById("editorModeBadge");
 const editorTextarea = document.getElementById("editorTextarea");
@@ -40,9 +41,43 @@ const memoryTaskFiltersEl = document.getElementById("memoryTaskFilters");
 const memoryChunkFiltersEl = document.getElementById("memoryChunkFilters");
 const memoryTaskStatusFilterEl = document.getElementById("memoryTaskStatusFilter");
 const memoryTaskSourceFilterEl = document.getElementById("memoryTaskSourceFilter");
+const memoryTaskGoalFilterBarEl = document.getElementById("memoryTaskGoalFilterBar");
+const memoryTaskGoalFilterLabelEl = document.getElementById("memoryTaskGoalFilterLabel");
+const memoryTaskGoalFilterClearBtn = document.getElementById("memoryTaskGoalFilterClear");
 const memoryChunkTypeFilterEl = document.getElementById("memoryChunkTypeFilter");
 const memoryChunkVisibilityFilterEl = document.getElementById("memoryChunkVisibilityFilter");
 const memoryChunkCategoryFilterEl = document.getElementById("memoryChunkCategoryFilter");
+const goalsSection = document.getElementById("goalsSection");
+const goalsSummaryEl = document.getElementById("goalsSummary");
+const goalsListEl = document.getElementById("goalsList");
+const goalsDetailEl = document.getElementById("goalsDetail");
+const goalsRefreshBtn = document.getElementById("goalsRefresh");
+const goalCreateBtn = document.getElementById("goalCreate");
+const goalCreateModal = document.getElementById("goalCreateModal");
+const goalCreateCloseBtn = document.getElementById("goalCreateClose");
+const goalCreateCancelBtn = document.getElementById("goalCreateCancel");
+const goalCreateSubmitBtn = document.getElementById("goalCreateSubmit");
+const goalCreateTitleEl = document.getElementById("goalCreateTitle");
+const goalCreateObjectiveEl = document.getElementById("goalCreateObjective");
+const goalCreateRootEl = document.getElementById("goalCreateRoot");
+const goalCreateAutoResumeEl = document.getElementById("goalCreateAutoResume");
+const goalCheckpointActionModal = document.getElementById("goalCheckpointActionModal");
+const goalCheckpointActionTitleEl = document.getElementById("goalCheckpointActionTitle");
+const goalCheckpointActionHintEl = document.getElementById("goalCheckpointActionHint");
+const goalCheckpointActionContextEl = document.getElementById("goalCheckpointActionContext");
+const goalCheckpointActionReviewerEl = document.getElementById("goalCheckpointActionReviewer");
+const goalCheckpointActionReviewerRoleEl = document.getElementById("goalCheckpointActionReviewerRole");
+const goalCheckpointActionRequestedByEl = document.getElementById("goalCheckpointActionRequestedBy");
+const goalCheckpointActionActorLabelEl = document.getElementById("goalCheckpointActionActorLabel");
+const goalCheckpointActionActorEl = document.getElementById("goalCheckpointActionActor");
+const goalCheckpointActionSlaAtEl = document.getElementById("goalCheckpointActionSlaAt");
+const goalCheckpointActionSummaryEl = document.getElementById("goalCheckpointActionSummary");
+const goalCheckpointActionNoteLabelEl = document.getElementById("goalCheckpointActionNoteLabel");
+const goalCheckpointActionNoteHelpEl = document.getElementById("goalCheckpointActionNoteHelp");
+const goalCheckpointActionNoteEl = document.getElementById("goalCheckpointActionNote");
+const goalCheckpointActionCloseBtn = document.getElementById("goalCheckpointActionClose");
+const goalCheckpointActionCancelBtn = document.getElementById("goalCheckpointActionCancel");
+const goalCheckpointActionSubmitBtn = document.getElementById("goalCheckpointActionSubmit");
 const taskTokenHistoryEl = document.getElementById("taskTokenHistory");
 
 const STORE_KEY = "belldandy.webchat.auth";
@@ -272,6 +307,7 @@ const memoryViewerState = {
   selectedId: null,
   selectedTask: null,
   selectedCandidate: null,
+  goalIdFilter: null,
   pendingUsageRevokeId: null,
   usageOverview: {
     loading: false,
@@ -280,6 +316,23 @@ const memoryViewerState = {
   },
   usageOverviewSeq: 0,
 };
+const goalsState = {
+  items: [],
+  selectedId: null,
+  loadSeq: 0,
+  trackingSeq: 0,
+  canvasSeq: 0,
+  progressSeq: 0,
+  capabilitySeq: 0,
+  handoffSeq: 0,
+  trackingCheckpoints: [],
+  capabilityCache: {},
+  capabilityPending: {},
+  liveUpdateDelayMs: 120,
+  liveUpdateTimers: {},
+  liveUpdatePending: {},
+};
+let pendingGoalCheckpointAction = null;
 
 // 附件状态
 const attachmentsPreviewEl = document.getElementById("attachmentsPreview");
@@ -363,6 +416,88 @@ if (memoryTabMemoriesBtn) {
 }
 if (memorySearchBtn) {
   memorySearchBtn.addEventListener("click", () => loadMemoryViewer(true));
+}
+if (goalsRefreshBtn) {
+  goalsRefreshBtn.addEventListener("click", () => loadGoals(true));
+}
+if (goalCreateBtn) {
+  goalCreateBtn.addEventListener("click", () => {
+    toggleGoalCreateModal(true);
+  });
+}
+if (goalCreateCloseBtn) {
+  goalCreateCloseBtn.addEventListener("click", () => toggleGoalCreateModal(false));
+}
+if (goalCreateCancelBtn) {
+  goalCreateCancelBtn.addEventListener("click", () => toggleGoalCreateModal(false));
+}
+if (goalCreateSubmitBtn) {
+  goalCreateSubmitBtn.addEventListener("click", () => {
+    void submitGoalCreateForm();
+  });
+}
+if (goalCreateModal) {
+  goalCreateModal.addEventListener("click", (event) => {
+    if (event.target === goalCreateModal) {
+      toggleGoalCreateModal(false);
+    }
+  });
+}
+if (goalCheckpointActionCloseBtn) {
+  goalCheckpointActionCloseBtn.addEventListener("click", () => toggleGoalCheckpointActionModal(false));
+}
+if (goalCheckpointActionCancelBtn) {
+  goalCheckpointActionCancelBtn.addEventListener("click", () => toggleGoalCheckpointActionModal(false));
+}
+if (goalCheckpointActionSubmitBtn) {
+  goalCheckpointActionSubmitBtn.addEventListener("click", () => {
+    void submitGoalCheckpointActionForm();
+  });
+}
+if (goalCheckpointActionModal) {
+  goalCheckpointActionModal.addEventListener("click", (event) => {
+    if (event.target === goalCheckpointActionModal) {
+      if (goalCheckpointActionSubmitBtn?.disabled) return;
+      toggleGoalCheckpointActionModal(false);
+    }
+  });
+}
+if (goalCreateTitleEl) {
+  goalCreateTitleEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void submitGoalCreateForm();
+    }
+  });
+}
+if (goalCreateObjectiveEl) {
+  goalCreateObjectiveEl.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      void submitGoalCreateForm();
+    }
+  });
+}
+if (goalCheckpointActionSummaryEl) {
+  goalCheckpointActionSummaryEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void submitGoalCheckpointActionForm();
+    }
+  });
+}
+if (goalCheckpointActionNoteEl) {
+  goalCheckpointActionNoteEl.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      void submitGoalCheckpointActionForm();
+    }
+  });
+}
+if (memoryTaskGoalFilterClearBtn) {
+  memoryTaskGoalFilterClearBtn.addEventListener("click", () => {
+    void clearMemoryTaskGoalFilter();
+  });
 }
 if (memorySearchInputEl) {
   memorySearchInputEl.addEventListener("keydown", (e) => {
@@ -749,6 +884,7 @@ if (agentSelectEl) {
 
     // 切换 Agent = 新建会话（隔离上下文）
     activeConversationId = null;
+    renderCanvasGoalContext();
     botMsgEl = null;
     messagesEl.innerHTML = "";
     const displayName = agentSelectEl.options[agentSelectEl.selectedIndex]?.text || agentSelectEl.value;
@@ -903,6 +1039,9 @@ function connect() {
       loadModelList();
       if (memoryViewerSection && !memoryViewerSection.classList.contains("hidden")) {
         loadMemoryViewer(true);
+      }
+      if (goalsSection && !goalsSection.classList.contains("hidden")) {
+        loadGoals(true);
       }
 
       // Check if we should play boot sequence
@@ -1217,6 +1356,7 @@ async function sendMessage() {
 
   if (payload && payload.ok && payload.payload && payload.payload.conversationId) {
     activeConversationId = String(payload.payload.conversationId);
+    renderCanvasGoalContext();
     void loadConversationMeta(activeConversationId);
   }
 }
@@ -1595,6 +1735,10 @@ function handleEvent(event, payload) {
   }
   if (event === "token.counter.result") {
     showTaskTokenResult(payload);
+    return;
+  }
+  if (event === "goal.update") {
+    queueGoalUpdateEvent(payload);
     return;
   }
   if (event === "tool_settings.confirm.required") {
@@ -2490,6 +2634,7 @@ if (openEnvEditorBtn) {
 const switchRootBtn = document.getElementById("switchRoot");
 const switchFacetBtn = document.getElementById("switchFacet");
 const switchMemoryBtn = document.getElementById("switchMemory");
+const switchGoalsBtn = document.getElementById("switchGoals");
 
 if (switchRootBtn) {
   switchRootBtn.addEventListener("click", () => switchTreeMode("root"));
@@ -2501,6 +2646,12 @@ if (switchMemoryBtn) {
   switchMemoryBtn.addEventListener("click", async () => {
     switchMode("memory");
     await loadMemoryViewer(false);
+  });
+}
+if (switchGoalsBtn) {
+  switchGoalsBtn.addEventListener("click", async () => {
+    switchMode("goals");
+    await loadGoals(false);
   });
 }
 
@@ -2549,6 +2700,7 @@ function updateSidebarModeButtons(treeModeOverride) {
   setSidebarActionButtonState(switchRootBtn, treeMode === "root");
   setSidebarActionButtonState(switchFacetBtn, treeMode === "facets");
   setSidebarActionButtonState(switchMemoryBtn, memoryViewerSection && !memoryViewerSection.classList.contains("hidden"));
+  setSidebarActionButtonState(switchGoalsBtn, goalsSection && !goalsSection.classList.contains("hidden"));
   const canvasSection = document.getElementById("canvasSection");
   setSidebarActionButtonState(switchCanvasBtn, canvasSection && !canvasSection.classList.contains("hidden"));
 }
@@ -2864,6 +3016,23 @@ async function openSourcePath(sourcePath, options = {}) {
   showNotice("来源文件已打开", "当前为只读视图，不会写回原文件。", "info", 2600);
 }
 
+async function readSourceFile(sourcePath) {
+  if (!ws || !isReady) return null;
+  if (!sourcePath || typeof sourcePath !== "string") return null;
+  const id = makeId();
+  const res = await sendReq({
+    type: "req",
+    id,
+    method: "workspace.readSource",
+    params: { path: sourcePath },
+  });
+  if (!res || !res.ok) return null;
+  return {
+    path: res.payload?.path || sourcePath,
+    content: typeof res.payload?.content === "string" ? res.payload.content : "",
+  };
+}
+
 // 保存文件
 async function saveFile() {
   if (!ws || !isReady) {
@@ -2960,6 +3129,7 @@ function switchMode(mode) {
     if (editorSection) editorSection.classList.remove("hidden");
     if (canvasSection) canvasSection.classList.add("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+    if (goalsSection) goalsSection.classList.add("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.remove("hidden");
   } else if (mode === "canvas") {
@@ -2967,6 +3137,7 @@ function switchMode(mode) {
     if (editorSection) editorSection.classList.add("hidden");
     if (canvasSection) canvasSection.classList.remove("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+    if (goalsSection) goalsSection.classList.add("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   } else if (mode === "memory") {
@@ -2974,6 +3145,15 @@ function switchMode(mode) {
     if (editorSection) editorSection.classList.add("hidden");
     if (canvasSection) canvasSection.classList.add("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.remove("hidden");
+    if (goalsSection) goalsSection.classList.add("hidden");
+    if (composerSection) composerSection.classList.add("hidden");
+    if (editorActions) editorActions.classList.add("hidden");
+  } else if (mode === "goals") {
+    if (chatSection) chatSection.classList.add("hidden");
+    if (editorSection) editorSection.classList.add("hidden");
+    if (canvasSection) canvasSection.classList.add("hidden");
+    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+    if (goalsSection) goalsSection.classList.remove("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   } else {
@@ -2982,11 +3162,2437 @@ function switchMode(mode) {
     if (editorSection) editorSection.classList.add("hidden");
     if (canvasSection) canvasSection.classList.add("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+    if (goalsSection) goalsSection.classList.add("hidden");
     if (composerSection) composerSection.classList.remove("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   }
 
   updateSidebarModeButtons();
+  if (mode === "canvas") {
+    renderCanvasGoalContext();
+  }
+}
+
+function goalBaseConversationId(goalId) {
+  return `goal:${goalId}`;
+}
+
+function isGoalConversationId(conversationId) {
+  return typeof conversationId === "string" && conversationId.startsWith("goal:");
+}
+
+function isConversationForGoal(conversationId, goalId) {
+  return typeof conversationId === "string" && conversationId.startsWith(goalBaseConversationId(goalId));
+}
+
+function parseGoalConversationContext(conversationId) {
+  if (!isGoalConversationId(conversationId)) return null;
+  const match = /^goal:([^:]+)(?::node:([^:]+):run:([^:]+))?$/.exec(String(conversationId).trim());
+  if (!match) return null;
+  return {
+    goalId: match[1] || "",
+    nodeId: match[2] || "",
+    runId: match[3] || "",
+    conversationId: String(conversationId).trim(),
+  };
+}
+
+function renderCanvasGoalContext() {
+  if (!canvasContextBarEl) return;
+  const boardId = normalizeGoalBoardId(window._canvasApp?.currentBoardId);
+  const conversation = parseGoalConversationContext(activeConversationId);
+  const mappedGoal = boardId
+    ? (Array.isArray(goalsState.items)
+      ? goalsState.items.find((goal) => normalizeGoalBoardId(goal?.boardId) === boardId) || null
+      : null)
+    : null;
+  const goalId = conversation?.goalId || mappedGoal?.id || "";
+  const goal = goalId ? getGoalById(goalId) || mappedGoal : mappedGoal;
+  const goalName = goal?.title || goalId || "";
+  const nodeId = conversation?.nodeId || (typeof goal?.activeNodeId === "string" ? goal.activeNodeId.trim() : "");
+  const runId = conversation?.runId || (typeof goal?.lastRunId === "string" ? goal.lastRunId.trim() : "");
+  const capabilityEntry = goalId ? getCachedGoalCapabilityEntry(goalId) : null;
+  const capabilityPlans = Array.isArray(capabilityEntry?.plans) ? capabilityEntry.plans : [];
+  const capabilityPlan = capabilityPlans.find((plan) => plan.nodeId === nodeId)
+    || capabilityPlans.find((plan) => plan.nodeId === (typeof goal?.activeNodeId === "string" ? goal.activeNodeId.trim() : ""))
+    || capabilityPlans[0]
+    || null;
+  window._canvasApp?.setGoalContext?.({
+    goalId: goalId || "",
+    goalTitle: goalName || "",
+    nodeId: nodeId || "",
+    runId: runId || "",
+    conversationId: conversation?.conversationId || "",
+    boardId: boardId || "",
+    capabilityPlanId: capabilityPlan?.id || "",
+    capabilityMode: capabilityPlan?.executionMode || "",
+    capabilityRisk: capabilityPlan?.riskLevel || "",
+    capabilityStatus: capabilityPlan?.status || "",
+    capabilityAlignment: capabilityPlan?.analysis?.status || "",
+  });
+
+  if (!boardId && !goalId && !conversation) {
+    canvasContextBarEl.classList.add("hidden");
+    canvasContextBarEl.innerHTML = "";
+    return;
+  }
+
+  let note = "当前处于画布工作区。";
+  if (conversation?.goalId && goalName) {
+    note = nodeId
+      ? `当前画布可回跳到 ${goalName} 的节点通道。`
+      : `当前画布可回跳到 ${goalName} 的 goal 通道。`;
+  } else if (goalName && boardId) {
+    note = `当前画布已匹配到长期任务 ${goalName} 的主板。`;
+  } else if (boardId) {
+    note = "当前画布尚未匹配到长期任务，可继续独立使用。";
+  }
+
+  const actions = [];
+  if (goalId) {
+    actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-detail="${escapeHtml(goalId)}">打开长期任务详情</button>`);
+  }
+  if (goalId) {
+    actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-tasks="${escapeHtml(goalId)}">查看 Goal Tasks</button>`);
+  }
+  if (conversation?.conversationId) {
+    actions.push(`
+      <button
+        class="canvas-tb-btn"
+        data-canvas-open-conversation="${escapeHtml(conversation.conversationId)}"
+        data-canvas-conversation-label="${escapeHtml(nodeId ? `返回节点通道：${goalName || goalId} / ${nodeId}` : `返回长期任务通道：${goalName || goalId}`)}"
+      >
+        ${nodeId ? "返回当前节点通道" : "返回当前 Goal 通道"}
+      </button>
+    `);
+  }
+  if (goal?.runtimeRoot) {
+    actions.push(`<button class="canvas-tb-btn" data-canvas-open-capability-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">打开 capabilityPlan</button>`);
+  }
+
+  const capabilityMeta = capabilityPlan ? `
+    <span class="canvas-context-item canvas-context-item-capability">
+      <span class="canvas-context-label">Plan</span>
+      <span class="canvas-context-value">${escapeHtml(capabilityPlan.nodeId || capabilityPlan.id)}</span>
+    </span>
+    <span class="canvas-context-item canvas-context-item-capability">
+      <span class="canvas-context-label">Mode</span>
+      <span class="canvas-context-value">${escapeHtml(capabilityPlan.executionMode || "-")}</span>
+    </span>
+    <span class="canvas-context-item canvas-context-item-capability">
+      <span class="canvas-context-label">Risk</span>
+      <span class="canvas-context-value">${escapeHtml(capabilityPlan.riskLevel || "-")}</span>
+    </span>
+    <span class="canvas-context-item canvas-context-item-capability">
+      <span class="canvas-context-label">Align</span>
+      <span class="canvas-context-value">${escapeHtml(capabilityPlan.analysis?.status || "-")}</span>
+    </span>
+    <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityPlan.summary || capabilityPlan.analysis?.summary || "当前节点已有 capabilityPlan 可回看。")}</span>
+  ` : goalId ? `
+    <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityEntry ? "当前 goal 尚未匹配到对应 node 的 capabilityPlan。" : "正在读取 capabilityPlan 上下文…")}</span>
+  ` : "";
+
+  canvasContextBarEl.classList.remove("hidden");
+  canvasContextBarEl.innerHTML = `
+    <div class="canvas-context-meta">
+      <span class="canvas-context-item"><span class="canvas-context-label">Board</span><span class="canvas-context-value">${escapeHtml(boardId || "-")}</span></span>
+      <span class="canvas-context-item"><span class="canvas-context-label">Goal</span><span class="canvas-context-value">${escapeHtml(goalName || "-")}</span></span>
+      ${nodeId ? `<span class="canvas-context-item"><span class="canvas-context-label">Node</span><span class="canvas-context-value">${escapeHtml(nodeId)}</span></span>` : ""}
+      ${runId ? `<span class="canvas-context-item"><span class="canvas-context-label">Run</span><span class="canvas-context-value">${escapeHtml(runId)}</span></span>` : ""}
+      ${capabilityMeta}
+      <span class="canvas-context-note">${escapeHtml(note)}</span>
+    </div>
+    <div class="canvas-context-actions">
+      ${actions.join("")}
+    </div>
+  `;
+
+  canvasContextBarEl.querySelectorAll("[data-canvas-open-goal-detail]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const nextGoalId = node.getAttribute("data-canvas-open-goal-detail");
+      if (!nextGoalId) return;
+      switchMode("goals");
+      await loadGoals(true, nextGoalId);
+    });
+  });
+  canvasContextBarEl.querySelectorAll("[data-canvas-open-goal-tasks]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const nextGoalId = node.getAttribute("data-canvas-open-goal-tasks");
+      if (!nextGoalId) return;
+      await openGoalTaskViewer(nextGoalId);
+    });
+  });
+  canvasContextBarEl.querySelectorAll("[data-canvas-open-conversation]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const conversationId = node.getAttribute("data-canvas-open-conversation");
+      if (!conversationId) return;
+      const hint = node.getAttribute("data-canvas-conversation-label") || undefined;
+      openConversationSession(conversationId, hint);
+    });
+  });
+  canvasContextBarEl.querySelectorAll("[data-canvas-open-capability-source]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const sourcePath = node.getAttribute("data-canvas-open-capability-source");
+      if (!sourcePath) return;
+      void openSourcePath(sourcePath);
+    });
+  });
+
+  if (goal && goalId && (!capabilityEntry || (nodeId && !capabilityPlan)) && !goalsState.capabilityPending?.[goalId]) {
+    void ensureGoalCapabilityCache(goal, { forceReload: Boolean(capabilityEntry) }).then(() => {
+      const latestBoardId = normalizeGoalBoardId(window._canvasApp?.currentBoardId);
+      const latestConversation = parseGoalConversationContext(activeConversationId);
+      const latestGoalId = latestConversation?.goalId
+        || (latestBoardId
+          ? (Array.isArray(goalsState.items)
+            ? (goalsState.items.find((item) => normalizeGoalBoardId(item?.boardId) === latestBoardId)?.id || "")
+            : "")
+          : "");
+      if (latestGoalId === goalId) {
+        renderCanvasGoalContext();
+      }
+    }).catch(() => {});
+  }
+}
+
+function getGoalById(goalId) {
+  return Array.isArray(goalsState.items)
+    ? goalsState.items.find((goal) => goal && goal.id === goalId) || null
+    : null;
+}
+
+function upsertGoalStateItem(goal) {
+  if (!goal || !goal.id) return null;
+  const current = Array.isArray(goalsState.items) ? goalsState.items : [];
+  const next = [...current.filter((item) => item && item.id !== goal.id), goal];
+  goalsState.items = sortGoals(next);
+  return getGoalById(goal.id);
+}
+
+function sortGoals(items) {
+  return [...items].sort((a, b) => {
+    const aActive = a?.status === "executing" ? 1 : 0;
+    const bActive = b?.status === "executing" ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    const aUpdated = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
+    const bUpdated = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
+    if (aUpdated !== bUpdated) return bUpdated - aUpdated;
+    return String(a?.title || "").localeCompare(String(b?.title || ""));
+  });
+}
+
+function isGoalsViewActive() {
+  return Boolean(goalsSection && !goalsSection.classList.contains("hidden"));
+}
+
+function needsGoalDetailRerender(previousGoal, nextGoal) {
+  if (!previousGoal) return true;
+  const fields = [
+    "title",
+    "objective",
+    "status",
+    "currentPhase",
+    "pathSource",
+    "activeConversationId",
+    "activeNodeId",
+    "lastNodeId",
+    "lastRunId",
+    "pausedAt",
+    "goalRoot",
+    "docRoot",
+    "runtimeRoot",
+    "northstarPath",
+    "tasksPath",
+    "progressPath",
+    "handoffPath",
+    "boardId",
+  ];
+  return fields.some((field) => String(previousGoal?.[field] || "") !== String(nextGoal?.[field] || ""));
+}
+
+function refreshGoalDetailAreas(goal, areas) {
+  if (!goal || !Array.isArray(areas) || !isGoalsViewActive() || goalsState.selectedId !== goal.id) return;
+  const areaSet = new Set(areas);
+  if (areaSet.has("tracking")) void loadGoalTrackingData(goal);
+  if (areaSet.has("progress")) void loadGoalProgressData(goal);
+  if (areaSet.has("handoff")) void loadGoalHandoffData(goal);
+  if (areaSet.has("capability")) void loadGoalCapabilityData(goal);
+  if (areaSet.has("goal") && areaSet.has("tracking")) void loadGoalCanvasData(goal);
+}
+
+function flushGoalUpdate(goalId) {
+  if (!goalId) return;
+  if (goalsState.liveUpdateTimers?.[goalId]) {
+    clearTimeout(goalsState.liveUpdateTimers[goalId]);
+    delete goalsState.liveUpdateTimers[goalId];
+  }
+  const pending = goalsState.liveUpdatePending?.[goalId];
+  if (!pending?.goal) return;
+  delete goalsState.liveUpdatePending[goalId];
+
+  const previousGoal = getGoalById(goalId);
+  const mergedGoal = upsertGoalStateItem(pending.goal) || pending.goal;
+  if (isGoalsViewActive()) {
+    renderGoalsSummary(goalsState.items);
+    renderGoalList(goalsState.items);
+  }
+  if (goalsState.selectedId === goalId && isGoalsViewActive()) {
+    if (needsGoalDetailRerender(previousGoal, mergedGoal)) {
+      renderGoalDetail(mergedGoal);
+    } else {
+      refreshGoalDetailAreas(mergedGoal, pending.areas);
+    }
+  }
+  renderCanvasGoalContext();
+}
+
+function queueGoalUpdateEvent(payload) {
+  const goal = payload && payload.goal && typeof payload.goal === "object" ? payload.goal : null;
+  const goalId = typeof goal?.id === "string" ? goal.id : "";
+  if (!goalId) return;
+  const areas = Array.isArray(payload?.areas)
+    ? payload.areas.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const pending = goalsState.liveUpdatePending?.[goalId];
+  goalsState.liveUpdatePending[goalId] = {
+    goal,
+    areas: pending?.areas
+      ? [...new Set([...pending.areas, ...areas])]
+      : [...new Set(areas)],
+    reason: payload?.reason || pending?.reason || "",
+    at: payload?.at || pending?.at || "",
+  };
+  if (goalsState.liveUpdateTimers?.[goalId]) {
+    clearTimeout(goalsState.liveUpdateTimers[goalId]);
+  }
+  goalsState.liveUpdateTimers[goalId] = setTimeout(() => {
+    flushGoalUpdate(goalId);
+  }, goalsState.liveUpdateDelayMs || 120);
+}
+
+function formatGoalStatus(status) {
+  if (!status) return "-";
+  const labels = {
+    draft: "draft",
+    aligning: "aligning",
+    planning: "planning",
+    ready: "ready",
+    executing: "executing",
+    blocked: "blocked",
+    pending_approval: "pending_approval",
+    reviewing: "reviewing",
+    paused: "paused",
+    completed: "completed",
+    archived: "archived",
+  };
+  return labels[status] || String(status);
+}
+
+function formatGoalPathSource(source) {
+  return source === "user-configured" ? "user-configured" : "default";
+}
+
+function goalDocFilePath(goal, fileName) {
+  if (!goal?.docRoot) return "";
+  return /[\\/]$/.test(goal.docRoot) ? `${goal.docRoot}${fileName}` : `${goal.docRoot}/${fileName}`;
+}
+
+function goalRuntimeFilePath(goal, fileName) {
+  if (!goal?.runtimeRoot) return "";
+  return /[\\/]$/.test(goal.runtimeRoot) ? `${goal.runtimeRoot}${fileName}` : `${goal.runtimeRoot}/${fileName}`;
+}
+
+function getTaskGoalId(task) {
+  const goalId = task?.metadata?.goalId;
+  return typeof goalId === "string" && goalId.trim() ? goalId.trim() : "";
+}
+
+function getGoalDisplayName(goalId) {
+  if (!goalId) return "-";
+  const goal = getGoalById(goalId);
+  return goal?.title || goalId;
+}
+
+function syncMemoryTaskGoalFilterUi() {
+  if (!memoryTaskGoalFilterBarEl || !memoryTaskGoalFilterLabelEl) return;
+  const goalId = memoryViewerState.goalIdFilter;
+  const visible = memoryViewerState.tab === "tasks" && Boolean(goalId);
+  memoryTaskGoalFilterBarEl.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  memoryTaskGoalFilterLabelEl.textContent = `当前仅查看长期任务：${getGoalDisplayName(goalId)} (${goalId})`;
+}
+
+async function clearMemoryTaskGoalFilter() {
+  if (!memoryViewerState.goalIdFilter) return;
+  memoryViewerState.goalIdFilter = null;
+  syncMemoryTaskGoalFilterUi();
+  if (memoryViewerState.tab === "tasks") {
+    await loadMemoryViewer(true);
+  }
+}
+
+async function openGoalTaskViewer(goalId) {
+  if (!goalId) return;
+  if (memoryViewerState.tab !== "tasks") {
+    memoryViewerState.tab = "tasks";
+    memoryViewerState.items = [];
+    memoryViewerState.selectedTask = null;
+    memoryViewerState.selectedCandidate = null;
+  }
+  memoryViewerState.goalIdFilter = goalId;
+  memoryViewerState.selectedId = null;
+  syncMemoryViewerUi();
+  syncMemoryTaskGoalFilterUi();
+  switchMode("memory");
+  await loadMemoryViewer(true);
+  showNotice("已切到任务视图", `当前仅展示 ${getGoalDisplayName(goalId)} 的关联 tasks。`, "info", 2200);
+}
+
+function resetGoalCreateForm() {
+  if (goalCreateTitleEl) goalCreateTitleEl.value = "";
+  if (goalCreateObjectiveEl) goalCreateObjectiveEl.value = "";
+  if (goalCreateRootEl) goalCreateRootEl.value = "";
+  if (goalCreateAutoResumeEl) goalCreateAutoResumeEl.checked = true;
+}
+
+function toggleGoalCreateModal(show) {
+  if (!goalCreateModal) return;
+  if (show) {
+    resetGoalCreateForm();
+    goalCreateModal.classList.remove("hidden");
+    setTimeout(() => goalCreateTitleEl?.focus(), 0);
+  } else {
+    goalCreateModal.classList.add("hidden");
+  }
+}
+
+function getGoalCheckpointActionConfig(action) {
+  const actionMap = {
+    approve: {
+      method: "goal.checkpoint.approve",
+      modalTitle: "批准 Checkpoint",
+      successTitle: "已批准 checkpoint",
+      submitLabel: "批准",
+      defaultSummary: "Approved",
+      actorLabel: "审批人",
+      noteLabel: "审批说明",
+      notePlaceholder: "可选，例如：验证通过，可进入下一节点",
+      noteHelp: "可选。用于记录批准依据、验证结果或补充说明。",
+      noteRequired: false,
+      hint: "批准后会把 checkpoint 推进到下一状态，并把摘要写入进度时间线。",
+    },
+    reject: {
+      method: "goal.checkpoint.reject",
+      modalTitle: "拒绝 Checkpoint",
+      successTitle: "已拒绝 checkpoint",
+      submitLabel: "拒绝",
+      defaultSummary: "Rejected",
+      actorLabel: "审批人",
+      noteLabel: "拒绝原因",
+      notePlaceholder: "必填，例如：需要补充修改后再提交",
+      noteHelp: "必填。拒绝不能只留下状态，必须给出明确原因。",
+      noteRequired: true,
+      hint: "拒绝会保留 checkpoint 记录，并让后续恢复动作有明确依据。",
+    },
+    expire: {
+      method: "goal.checkpoint.expire",
+      modalTitle: "标记 Checkpoint 过期",
+      successTitle: "已标记 checkpoint 过期",
+      submitLabel: "标记过期",
+      defaultSummary: "Expired",
+      actorLabel: "操作人",
+      noteLabel: "过期原因",
+      notePlaceholder: "必填，例如：审批超时，需要重新发起",
+      noteHelp: "必填。建议写明为什么当前 checkpoint 需要作废。",
+      noteRequired: true,
+      hint: "过期适用于审批超时、上下文失效或产物已被新版本替换的场景。",
+    },
+    reopen: {
+      method: "goal.checkpoint.reopen",
+      modalTitle: "重新打开 Checkpoint",
+      successTitle: "已重新打开 checkpoint",
+      submitLabel: "重新打开",
+      defaultSummary: "Reopened",
+      actorLabel: "重新发起人",
+      noteLabel: "重新打开说明",
+      notePlaceholder: "必填，例如：已完成补充修改，重新发起审批",
+      noteHelp: "必填。说明为什么重新打开，以及期望下一步如何处理。",
+      noteRequired: true,
+      hint: "重新打开会让 checkpoint 回到可继续处理状态，并保留历史记录。",
+    },
+  };
+  return actionMap[action] || null;
+}
+
+function setGoalCheckpointActionBusy(busy) {
+  const config = pendingGoalCheckpointAction
+    ? getGoalCheckpointActionConfig(pendingGoalCheckpointAction.action)
+    : null;
+  if (goalCheckpointActionCloseBtn) goalCheckpointActionCloseBtn.disabled = busy;
+  if (goalCheckpointActionCancelBtn) goalCheckpointActionCancelBtn.disabled = busy;
+  if (goalCheckpointActionSubmitBtn) {
+    goalCheckpointActionSubmitBtn.disabled = busy;
+    goalCheckpointActionSubmitBtn.textContent = busy
+      ? `${config?.submitLabel || "提交"}中...`
+      : config?.submitLabel || "提交";
+  }
+  if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.disabled = busy;
+  if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.disabled = busy;
+  if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.disabled = busy;
+  if (goalCheckpointActionActorEl) goalCheckpointActionActorEl.disabled = busy;
+  if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.disabled = busy;
+  if (goalCheckpointActionSummaryEl) goalCheckpointActionSummaryEl.disabled = busy;
+  if (goalCheckpointActionNoteEl) goalCheckpointActionNoteEl.disabled = busy;
+}
+
+function resetGoalCheckpointActionForm() {
+  if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = "处理 Checkpoint";
+  if (goalCheckpointActionHintEl) {
+    goalCheckpointActionHintEl.textContent = "在这里完成 checkpoint 审批或状态流转，避免使用临时 prompt 输入。";
+  }
+  if (goalCheckpointActionContextEl) goalCheckpointActionContextEl.innerHTML = "";
+  if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.value = "";
+  if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.value = "";
+  if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.value = "";
+  if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = "Approver";
+  if (goalCheckpointActionActorEl) goalCheckpointActionActorEl.value = "";
+  if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.value = "";
+  if (goalCheckpointActionSummaryEl) {
+    goalCheckpointActionSummaryEl.value = "";
+    goalCheckpointActionSummaryEl.placeholder = "例如：Approved / Rejected / Expired / Reopened";
+  }
+  if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = "说明";
+  if (goalCheckpointActionNoteHelpEl) {
+    goalCheckpointActionNoteHelpEl.textContent = "部分操作要求填写原因，避免只留下状态没有上下文。";
+  }
+  if (goalCheckpointActionNoteEl) {
+    goalCheckpointActionNoteEl.value = "";
+    goalCheckpointActionNoteEl.placeholder = "补充审批意见、过期原因或重新打开说明";
+  }
+}
+
+function findTrackedGoalCheckpoint(goalId, checkpointId) {
+  if (!goalId || !checkpointId) return null;
+  return goalsState.trackingCheckpoints.find((item) => item.goalId === goalId && item.id === checkpointId) || null;
+}
+
+function formatDateTimeLocalValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (input) => String(input).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseDateTimeLocalValue(value) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
+function getGoalCheckpointSlaBadge(checkpoint) {
+  if (!checkpoint?.slaAt) return "";
+  const deadline = new Date(checkpoint.slaAt);
+  if (Number.isNaN(deadline.getTime())) {
+    return `<span class="memory-badge">SLA ${escapeHtml(checkpoint.slaAt)}</span>`;
+  }
+  const overdue = deadline.getTime() < Date.now();
+  return `<span class="memory-badge ${overdue ? "is-overdue" : ""}">${overdue ? "SLA 已超时" : "SLA"} ${escapeHtml(formatDateTime(checkpoint.slaAt))}</span>`;
+}
+
+function renderGoalCheckpointActionContext(context) {
+  if (!goalCheckpointActionContextEl || !context) return;
+  goalCheckpointActionContextEl.innerHTML = `
+    <div class="goal-checkpoint-action-context-item">
+      <span class="goal-summary-label">Goal</span>
+      <strong>${escapeHtml(context.goalId)}</strong>
+    </div>
+    <div class="goal-checkpoint-action-context-item">
+      <span class="goal-summary-label">Node</span>
+      <strong>${escapeHtml(context.nodeId)}</strong>
+    </div>
+    <div class="goal-checkpoint-action-context-item">
+      <span class="goal-summary-label">Checkpoint</span>
+      <strong>${escapeHtml(context.checkpointId)}</strong>
+    </div>
+    <div class="goal-checkpoint-action-context-item">
+      <span class="goal-summary-label">Status</span>
+      <strong>${escapeHtml(context.status || "-")}</strong>
+    </div>
+    <div class="goal-checkpoint-action-context-item">
+      <span class="goal-summary-label">Reviewer</span>
+      <strong>${escapeHtml(context.reviewer || "-")}</strong>
+    </div>
+    <div class="goal-checkpoint-action-context-item">
+      <span class="goal-summary-label">SLA</span>
+      <strong>${escapeHtml(context.slaAt ? formatDateTime(context.slaAt) : "-")}</strong>
+    </div>
+  `;
+}
+
+function toggleGoalCheckpointActionModal(show, context = null) {
+  if (!goalCheckpointActionModal) return;
+  if (show) {
+    const nextContext = context && typeof context === "object" ? { ...context } : null;
+    const config = nextContext ? getGoalCheckpointActionConfig(nextContext.action) : null;
+    if (!nextContext || !config) return;
+    pendingGoalCheckpointAction = nextContext;
+    resetGoalCheckpointActionForm();
+    if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = config.modalTitle;
+    if (goalCheckpointActionHintEl) goalCheckpointActionHintEl.textContent = config.hint;
+    if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.value = nextContext.reviewer || "";
+    if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.value = nextContext.reviewerRole || "";
+    if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.value = nextContext.requestedBy || "";
+    if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = config.actorLabel;
+    if (goalCheckpointActionActorEl) {
+      goalCheckpointActionActorEl.value = config.method === "goal.checkpoint.reopen"
+        ? nextContext.requestedBy || ""
+        : nextContext.decidedBy || "";
+    }
+    if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.value = formatDateTimeLocalValue(nextContext.slaAt);
+    if (goalCheckpointActionSummaryEl) goalCheckpointActionSummaryEl.value = nextContext.summary || config.defaultSummary;
+    if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = config.noteLabel;
+    if (goalCheckpointActionNoteHelpEl) goalCheckpointActionNoteHelpEl.textContent = config.noteHelp;
+    if (goalCheckpointActionNoteEl) {
+      goalCheckpointActionNoteEl.placeholder = config.notePlaceholder;
+      goalCheckpointActionNoteEl.value = nextContext.note || "";
+    }
+    renderGoalCheckpointActionContext(nextContext);
+    setGoalCheckpointActionBusy(false);
+    goalCheckpointActionModal.classList.remove("hidden");
+    setTimeout(() => {
+      if (config.noteRequired) {
+        goalCheckpointActionNoteEl?.focus();
+      } else {
+        goalCheckpointActionSummaryEl?.focus();
+        goalCheckpointActionSummaryEl?.select();
+      }
+    }, 0);
+    return;
+  }
+
+  pendingGoalCheckpointAction = null;
+  resetGoalCheckpointActionForm();
+  setGoalCheckpointActionBusy(false);
+  goalCheckpointActionModal.classList.add("hidden");
+}
+
+function renderGoalsLoading(message) {
+  if (goalsListEl) {
+    goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  }
+  if (goalsDetailEl) {
+    goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>`;
+  }
+}
+
+function renderGoalsSummary(items) {
+  if (!goalsSummaryEl) return;
+  const goals = Array.isArray(items) ? items : [];
+  const executingCount = goals.filter((goal) => goal?.status === "executing").length;
+  const pausedCount = goals.filter((goal) => goal?.status === "paused").length;
+  const customRootCount = goals.filter((goal) => goal?.pathSource === "user-configured").length;
+  goalsSummaryEl.innerHTML = `
+    <div class="memory-stat-card"><span class="memory-stat-label">长期任务</span><strong class="memory-stat-value">${escapeHtml(String(goals.length))}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">执行中</span><strong class="memory-stat-value">${escapeHtml(String(executingCount))}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">已暂停</span><strong class="memory-stat-value">${escapeHtml(String(pausedCount))}</strong></div>
+    <div class="memory-stat-card"><span class="memory-stat-label">自定义 Root</span><strong class="memory-stat-value">${escapeHtml(String(customRootCount))}</strong></div>
+  `;
+}
+
+function renderGoalsEmpty(message) {
+  renderGoalsSummary([]);
+  if (goalsListEl) {
+    goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  }
+  if (goalsDetailEl) {
+    goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">新建一个长期任务后，这里会显示 NORTHSTAR.md、路径和执行状态。</div>`;
+  }
+}
+
+function renderGoalList(items) {
+  if (!goalsListEl) return;
+  if (!Array.isArray(items) || items.length === 0) {
+    goalsListEl.innerHTML = `<div class="memory-viewer-empty">当前还没有长期任务。</div>`;
+    return;
+  }
+  goalsListEl.innerHTML = items.map((goal) => {
+    const isActive = goal.id === goalsState.selectedId;
+    const isCurrentConversation = isConversationForGoal(activeConversationId, goal.id);
+    const objective = goal.objective ? String(goal.objective).trim() : "";
+    return `
+      <div class="memory-list-item goal-list-item${isActive ? " active" : ""}" data-goal-id="${escapeHtml(goal.id)}">
+        <div class="goal-list-item-head">
+          <div class="memory-list-item-title">${escapeHtml(goal.title || goal.id)}</div>
+          ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">current</span>' : ""}
+        </div>
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(formatGoalStatus(goal.status))}</span>
+          <span>${escapeHtml(goal.currentPhase || "-")}</span>
+          <span>${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</span>
+        </div>
+        <div class="memory-list-item-snippet">${escapeHtml(objective || "未填写 objective，可进入 NORTHSTAR.md 补充目标说明。")}</div>
+        <div class="goal-list-item-meta">
+          <span>${escapeHtml(summarizeSourcePath(goal.goalRoot || "-"))}</span>
+          <span>${escapeHtml(formatGoalPathSource(goal.pathSource))}</span>
+        </div>
+        <div class="goal-list-item-actions">
+          <button class="button goal-inline-action" data-goal-resume="${escapeHtml(goal.id)}">恢复</button>
+          <button class="button goal-inline-action goal-inline-action-secondary" data-goal-pause="${escapeHtml(goal.id)}">暂停</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  goalsListEl.querySelectorAll("[data-goal-id]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-id");
+      if (!goalId) return;
+      goalsState.selectedId = goalId;
+      renderGoalList(goalsState.items);
+      renderGoalDetail(getGoalById(goalId));
+    });
+  });
+  goalsListEl.querySelectorAll("[data-goal-resume]").forEach((node) => {
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const goalId = node.getAttribute("data-goal-resume");
+      if (!goalId) return;
+      void resumeGoal(goalId);
+    });
+  });
+  goalsListEl.querySelectorAll("[data-goal-pause]").forEach((node) => {
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const goalId = node.getAttribute("data-goal-pause");
+      if (!goalId) return;
+      void pauseGoal(goalId);
+    });
+  });
+}
+
+function bindGoalDetailActions(goal) {
+  if (!goalsDetailEl || !goal) return;
+  goalsDetailEl.querySelectorAll("[data-goal-resume-detail]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-resume-detail");
+      if (!goalId) return;
+      void resumeGoal(goalId);
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-goal-pause-detail]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-pause-detail");
+      if (!goalId) return;
+      void pauseGoal(goalId);
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-open-source]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const sourcePath = node.getAttribute("data-open-source");
+      if (!sourcePath) return;
+      void openSourcePath(sourcePath);
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-open-goal-tasks]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-open-goal-tasks");
+      if (!goalId) return;
+      void openGoalTaskViewer(goalId);
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-goal-resume-last-node]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-resume-last-node");
+      if (!goalId) return;
+      const lastNodeId = node.getAttribute("data-goal-last-node-id");
+      void resumeGoal(goalId, { nodeId: lastNodeId || undefined });
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-open-goal-board]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const boardId = node.getAttribute("data-open-goal-board");
+      void openGoalCanvasBoard(boardId, goal.id);
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-open-goal-board-list]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-open-goal-board-list") || goal.id;
+      void openGoalCanvasList(goalId);
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-goal-checkpoint-action]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const action = node.getAttribute("data-goal-checkpoint-action");
+      const goalId = node.getAttribute("data-goal-checkpoint-goal-id") || goal.id;
+      const nodeId = node.getAttribute("data-goal-checkpoint-node-id");
+      const checkpointId = node.getAttribute("data-goal-checkpoint-id");
+      if (!action || !goalId || !nodeId || !checkpointId) return;
+      void runGoalCheckpointAction(goalId, nodeId, checkpointId, action);
+    });
+  });
+  goalsDetailEl.querySelectorAll("[data-goal-generate-handoff]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-generate-handoff") || goal.id;
+      if (!goalId) return;
+      void generateGoalHandoff(goalId);
+    });
+  });
+}
+
+async function runGoalCheckpointAction(goalId, nodeId, checkpointId, action) {
+  if (!ws || !isReady) {
+    showNotice("无法执行 checkpoint 操作", "未连接到服务器。", "error");
+    return;
+  }
+
+  const config = getGoalCheckpointActionConfig(action);
+  if (!config) return;
+  if (!goalCheckpointActionModal) {
+    showNotice("checkpoint 操作失败", "前端操作面板未初始化。", "error");
+    return;
+  }
+
+  const checkpoint = findTrackedGoalCheckpoint(goalId, checkpointId);
+  toggleGoalCheckpointActionModal(true, {
+    action,
+    goalId,
+    nodeId,
+    checkpointId,
+    status: checkpoint?.status || "",
+    reviewer: checkpoint?.reviewer || "",
+    reviewerRole: checkpoint?.reviewerRole || "",
+    requestedBy: checkpoint?.requestedBy || "",
+    decidedBy: checkpoint?.decidedBy || "",
+    slaAt: checkpoint?.slaAt || "",
+    summary: checkpoint?.summary || "",
+    note: checkpoint?.note || "",
+  });
+}
+
+async function submitGoalCheckpointActionForm() {
+  if (!pendingGoalCheckpointAction) return;
+  if (!ws || !isReady) {
+    showNotice("无法执行 checkpoint 操作", "未连接到服务器。", "error");
+    return;
+  }
+
+  const context = pendingGoalCheckpointAction;
+  const config = getGoalCheckpointActionConfig(context.action);
+  if (!config) return;
+
+  const reviewer = goalCheckpointActionReviewerEl?.value.trim() || "";
+  const reviewerRole = goalCheckpointActionReviewerRoleEl?.value.trim() || "";
+  const requestedBy = goalCheckpointActionRequestedByEl?.value.trim() || "";
+  const actor = goalCheckpointActionActorEl?.value.trim() || "";
+  const slaAt = parseDateTimeLocalValue(goalCheckpointActionSlaAtEl?.value || "") || "";
+  const summary = goalCheckpointActionSummaryEl?.value.trim() || config.defaultSummary;
+  const note = goalCheckpointActionNoteEl?.value.trim() || "";
+  if (config.noteRequired && !note) {
+    showNotice("无法执行 checkpoint 操作", `${config.noteLabel}不能为空。`, "error");
+    goalCheckpointActionNoteEl?.focus();
+    return;
+  }
+
+  setGoalCheckpointActionBusy(true);
+  try {
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: config.method,
+      params: {
+        goalId: context.goalId,
+        nodeId: context.nodeId,
+        checkpointId: context.checkpointId,
+        reviewer: reviewer || undefined,
+        reviewerRole: reviewerRole || undefined,
+        requestedBy: (context.action === "reopen" ? actor : requestedBy) || undefined,
+        decidedBy: (context.action === "approve" || context.action === "reject" || context.action === "expire")
+          ? (actor || undefined)
+          : undefined,
+        slaAt: slaAt || undefined,
+        summary: summary || config.defaultSummary,
+        note: note || undefined,
+      },
+    });
+    if (!res || !res.ok) {
+      showNotice("checkpoint 操作失败", res?.error?.message || "未知错误。", "error");
+      return;
+    }
+
+    toggleGoalCheckpointActionModal(false);
+    await loadGoals(true, context.goalId);
+    showNotice(config.successTitle, `${context.goalId} / ${context.nodeId} 已更新。`, "success", 2200);
+  } catch (error) {
+    showNotice("checkpoint 操作失败", error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    if (pendingGoalCheckpointAction) {
+      setGoalCheckpointActionBusy(false);
+    }
+  }
+}
+
+function buildGoalRuntimeSummaryCard(goal, options) {
+  const {
+    activeNodeId,
+    lastNodeId,
+    lastRunId,
+    isCurrentConversation,
+  } = options;
+  const currentChannel = goal.activeConversationId || goalBaseConversationId(goal.id);
+  return `
+    <div class="memory-detail-card goal-summary-card">
+      <div class="goal-summary-header">
+        <div>
+          <div class="goal-summary-title">运行摘要</div>
+          <div class="goal-summary-text">当前 goal channel、最近节点与运行记录一览。</div>
+        </div>
+        ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">当前正在此通道</span>' : '<span class="memory-badge">可恢复</span>'}
+      </div>
+      <div class="goal-summary-grid">
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">状态</span>
+          <strong class="goal-summary-value">${escapeHtml(formatGoalStatus(goal.status))}</strong>
+        </div>
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">当前节点</span>
+          <strong class="goal-summary-value">${escapeHtml(activeNodeId || "-")}</strong>
+        </div>
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">上次节点</span>
+          <strong class="goal-summary-value">${escapeHtml(lastNodeId || "-")}</strong>
+        </div>
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">上次 Run</span>
+          <strong class="goal-summary-value">${escapeHtml(lastRunId || "-")}</strong>
+        </div>
+      </div>
+      <div class="memory-detail-pre">${escapeHtml(currentChannel)}</div>
+    </div>
+  `;
+}
+
+function buildGoalRecoveryCard(goal, options) {
+  const {
+    activeNodeId,
+    lastNodeId,
+    isCurrentConversation,
+  } = options;
+  let title = "恢复建议";
+  let text = "可以直接进入该长期任务的基础 goal channel。";
+  let actions = `
+    <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
+  `;
+
+  if (goal.status === "executing" && isCurrentConversation) {
+    title = "建议继续当前通道";
+    text = "你已经位于该长期任务的执行通道中，优先继续当前上下文，避免重复恢复。";
+    actions = `
+      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">刷新并继续当前通道</button>
+      <button class="button" data-open-goal-tasks="${escapeHtml(goal.id)}">查看关联 Tasks</button>
+    `;
+  } else if (goal.status === "executing" && activeNodeId) {
+    title = "建议恢复当前执行节点";
+    text = `该长期任务目前记录的活动节点是 ${activeNodeId}，优先回到这个节点继续执行。`;
+    actions = `
+      <button class="button" data-goal-resume-last-node="${escapeHtml(goal.id)}" data-goal-last-node-id="${escapeHtml(activeNodeId)}">恢复当前节点</button>
+      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
+    `;
+  } else if (lastNodeId) {
+    title = "建议按上次节点恢复";
+    text = `检测到最近一次活跃节点为 ${lastNodeId}，优先按该节点恢复，比直接回基础通道更连续。`;
+    actions = `
+      <button class="button" data-goal-resume-last-node="${escapeHtml(goal.id)}" data-goal-last-node-id="${escapeHtml(lastNodeId)}">按上次节点恢复</button>
+      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
+    `;
+  } else if (goal.status === "planning" || goal.status === "aligning" || goal.status === "ready") {
+    title = "建议先进入基础通道";
+    text = "当前还没有可恢复的节点历史，建议先进入基础 goal channel，继续拆解方案与任务。";
+    actions = `
+      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
+      <button class="button" data-open-source="${escapeHtml(goal.northstarPath)}">打开 NORTHSTAR.md</button>
+    `;
+  }
+
+  return `
+    <div class="memory-detail-card goal-recovery-card">
+      <div class="goal-summary-header">
+        <div>
+          <div class="goal-summary-title">${escapeHtml(title)}</div>
+          <div class="goal-summary-text">${escapeHtml(text)}</div>
+        </div>
+      </div>
+      <div class="goal-detail-actions">
+        ${actions}
+      </div>
+    </div>
+  `;
+}
+
+function normalizeGoalNodeStatus(status) {
+  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (!normalized) return "pending";
+  if (["done", "completed", "complete", "success", "succeeded", "approved"].includes(normalized)) return "completed";
+  if (["running", "executing", "in_progress", "processing"].includes(normalized)) return "running";
+  if (["blocked", "failed", "error"].includes(normalized)) return "blocked";
+  return normalized;
+}
+
+function normalizeCheckpointStatus(status) {
+  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (!normalized) return "required";
+  return normalized;
+}
+
+function parseGoalGraphNodes(rawGraph) {
+  if (!rawGraph || typeof rawGraph !== "object") return [];
+  const rawNodes = Array.isArray(rawGraph.nodes)
+    ? rawGraph.nodes
+    : rawGraph.nodes && typeof rawGraph.nodes === "object"
+      ? Object.values(rawGraph.nodes)
+      : [];
+  return rawNodes.map((node, index) => {
+    const item = node && typeof node === "object" ? node : {};
+    const data = item.data && typeof item.data === "object" ? item.data : {};
+    const id = item.id || data.id || `node-${index + 1}`;
+    const title = item.title || data.title || item.name || data.name || id;
+    const status = normalizeGoalNodeStatus(item.status || data.status);
+    const phase = item.phase || data.phase || item.stage || data.stage || "";
+    const owner = item.owner || data.owner || "";
+    return {
+      id: String(id),
+      title: String(title),
+      status,
+      phase: phase ? String(phase) : "",
+      owner: owner ? String(owner) : "",
+    };
+  });
+}
+
+function parseGoalCheckpoints(rawCheckpoints) {
+  if (!rawCheckpoints || typeof rawCheckpoints !== "object") return [];
+  const items = Array.isArray(rawCheckpoints.items) ? rawCheckpoints.items : [];
+  return items.map((item, index) => {
+    const data = item && typeof item === "object" ? item : {};
+    const id = data.id || `checkpoint-${index + 1}`;
+    const title = data.title || data.summary || id;
+    const history = Array.isArray(data.history)
+      ? data.history.map((entry, historyIndex) => {
+        const historyItem = entry && typeof entry === "object" ? entry : {};
+        return {
+          action: historyItem.action ? String(historyItem.action) : `history-${historyIndex + 1}`,
+          status: normalizeCheckpointStatus(historyItem.status),
+          at: historyItem.at ? String(historyItem.at) : "",
+          summary: historyItem.summary ? String(historyItem.summary) : "",
+          note: historyItem.note ? String(historyItem.note) : "",
+          actor: historyItem.actor ? String(historyItem.actor) : "",
+          reviewer: historyItem.reviewer ? String(historyItem.reviewer) : "",
+          reviewerRole: historyItem.reviewerRole ? String(historyItem.reviewerRole) : "",
+          requestedBy: historyItem.requestedBy ? String(historyItem.requestedBy) : "",
+          decidedBy: historyItem.decidedBy ? String(historyItem.decidedBy) : "",
+          slaAt: historyItem.slaAt ? String(historyItem.slaAt) : "",
+          runId: historyItem.runId ? String(historyItem.runId) : "",
+        };
+      })
+      : [];
+    return {
+      id: String(id),
+      title: String(title),
+      status: normalizeCheckpointStatus(data.status),
+      updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+      requestedAt: data.requestedAt ? String(data.requestedAt) : "",
+      decidedAt: data.decidedAt ? String(data.decidedAt) : "",
+      summary: data.summary ? String(data.summary) : "",
+      note: data.note ? String(data.note) : "",
+      reviewer: data.reviewer ? String(data.reviewer) : "",
+      reviewerRole: data.reviewerRole ? String(data.reviewerRole) : "",
+      requestedBy: data.requestedBy ? String(data.requestedBy) : "",
+      decidedBy: data.decidedBy ? String(data.decidedBy) : "",
+      slaAt: data.slaAt ? String(data.slaAt) : "",
+      nodeId: data.nodeId ? String(data.nodeId) : "",
+      runId: data.runId ? String(data.runId) : "",
+      history,
+    };
+  });
+}
+
+function normalizeGoalCapabilityPlanStatus(status) {
+  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (normalized === "orchestrated") return "orchestrated";
+  return "planned";
+}
+
+function normalizeGoalCapabilityExecutionMode(mode) {
+  const normalized = typeof mode === "string" ? mode.trim().toLowerCase() : "";
+  return normalized === "multi_agent" ? "multi_agent" : "single_agent";
+}
+
+function normalizeGoalCapabilityRiskLevel(level) {
+  const normalized = typeof level === "string" ? level.trim().toLowerCase() : "";
+  if (normalized === "high") return "high";
+  if (normalized === "medium") return "medium";
+  return "low";
+}
+
+function parseStringList(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => typeof item === "string" ? item.trim() : "")
+    .filter(Boolean);
+}
+
+function parseGoalCapabilityPlans(rawPlans) {
+  if (!rawPlans || typeof rawPlans !== "object") return [];
+  const items = Array.isArray(rawPlans.items) ? rawPlans.items : [];
+  return items
+    .map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      const checkpoint = data.checkpoint && typeof data.checkpoint === "object" ? data.checkpoint : {};
+      const actualUsage = data.actualUsage && typeof data.actualUsage === "object" ? data.actualUsage : {};
+      const analysis = data.analysis && typeof data.analysis === "object" ? data.analysis : {};
+      const methods = Array.isArray(data.methods) ? data.methods : [];
+      const skills = Array.isArray(data.skills) ? data.skills : [];
+      const mcpServers = Array.isArray(data.mcpServers) ? data.mcpServers : [];
+      const subAgents = Array.isArray(data.subAgents) ? data.subAgents : [];
+      const deviations = Array.isArray(analysis.deviations) ? analysis.deviations : [];
+      return {
+        id: data.id ? String(data.id) : `plan-${index + 1}`,
+        goalId: data.goalId ? String(data.goalId) : "",
+        nodeId: data.nodeId ? String(data.nodeId) : "",
+        runId: data.runId ? String(data.runId) : "",
+        status: normalizeGoalCapabilityPlanStatus(data.status),
+        executionMode: normalizeGoalCapabilityExecutionMode(data.executionMode),
+        riskLevel: normalizeGoalCapabilityRiskLevel(data.riskLevel),
+        objective: data.objective ? String(data.objective) : "",
+        summary: data.summary ? String(data.summary) : "",
+        queryHints: parseStringList(data.queryHints),
+        reasoning: parseStringList(data.reasoning),
+        methods: methods
+          .map((entry) => entry && typeof entry === "object" ? {
+            file: entry.file ? String(entry.file) : "",
+            title: entry.title ? String(entry.title) : "",
+            score: Number.isFinite(entry.score) ? Number(entry.score) : null,
+            reason: entry.reason ? String(entry.reason) : "",
+          } : null)
+          .filter((entry) => entry && entry.file),
+        skills: skills
+          .map((entry) => entry && typeof entry === "object" ? {
+            name: entry.name ? String(entry.name) : "",
+            description: entry.description ? String(entry.description) : "",
+            score: Number.isFinite(entry.score) ? Number(entry.score) : null,
+            priority: entry.priority ? String(entry.priority) : "",
+            source: entry.source ? String(entry.source) : "",
+            reason: entry.reason ? String(entry.reason) : "",
+          } : null)
+          .filter((entry) => entry && entry.name),
+        mcpServers: mcpServers
+          .map((entry) => entry && typeof entry === "object" ? {
+            serverId: entry.serverId ? String(entry.serverId) : "",
+            status: entry.status ? String(entry.status) : "unknown",
+            toolCount: Number.isFinite(entry.toolCount) ? Number(entry.toolCount) : null,
+            resourceCount: Number.isFinite(entry.resourceCount) ? Number(entry.resourceCount) : null,
+            reason: entry.reason ? String(entry.reason) : "",
+          } : null)
+          .filter((entry) => entry && entry.serverId),
+        subAgents: subAgents
+          .map((entry) => entry && typeof entry === "object" ? {
+            agentId: entry.agentId ? String(entry.agentId) : "",
+            objective: entry.objective ? String(entry.objective) : "",
+            reason: entry.reason ? String(entry.reason) : "",
+          } : null)
+          .filter((entry) => entry && entry.agentId && entry.objective),
+        gaps: parseStringList(data.gaps),
+        checkpoint: {
+          required: checkpoint.required === true,
+          reasons: parseStringList(checkpoint.reasons),
+          approvalMode: checkpoint.approvalMode ? String(checkpoint.approvalMode) : "none",
+          requiredRequestFields: parseStringList(checkpoint.requiredRequestFields),
+          requiredDecisionFields: parseStringList(checkpoint.requiredDecisionFields),
+          suggestedTitle: checkpoint.suggestedTitle ? String(checkpoint.suggestedTitle) : "",
+          suggestedNote: checkpoint.suggestedNote ? String(checkpoint.suggestedNote) : "",
+          suggestedReviewer: checkpoint.suggestedReviewer ? String(checkpoint.suggestedReviewer) : "",
+          suggestedReviewerRole: checkpoint.suggestedReviewerRole ? String(checkpoint.suggestedReviewerRole) : "",
+          suggestedSlaHours: Number.isFinite(checkpoint.suggestedSlaHours) ? Number(checkpoint.suggestedSlaHours) : null,
+          escalationMode: checkpoint.escalationMode ? String(checkpoint.escalationMode) : "none",
+        },
+        actualUsage: {
+          methods: parseStringList(actualUsage.methods),
+          skills: parseStringList(actualUsage.skills),
+          mcpServers: parseStringList(actualUsage.mcpServers),
+          toolNames: parseStringList(actualUsage.toolNames),
+          updatedAt: actualUsage.updatedAt ? String(actualUsage.updatedAt) : "",
+        },
+        analysis: {
+          status: typeof analysis.status === "string" && analysis.status.trim() ? String(analysis.status).trim() : "pending",
+          summary: analysis.summary ? String(analysis.summary) : "",
+          deviations: deviations
+            .map((entry) => entry && typeof entry === "object" ? {
+              kind: entry.kind ? String(entry.kind) : "",
+              area: entry.area ? String(entry.area) : "",
+              severity: entry.severity ? String(entry.severity) : "",
+              summary: entry.summary ? String(entry.summary) : "",
+              planned: parseStringList(entry.planned),
+              actual: parseStringList(entry.actual),
+            } : null)
+            .filter(Boolean),
+          recommendations: parseStringList(analysis.recommendations),
+          updatedAt: analysis.updatedAt ? String(analysis.updatedAt) : "",
+        },
+        generatedAt: data.generatedAt ? String(data.generatedAt) : "",
+        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+        orchestratedAt: data.orchestratedAt ? String(data.orchestratedAt) : "",
+      };
+    })
+    .sort((a, b) => {
+      const left = new Date(b.updatedAt || b.generatedAt || 0).getTime();
+      const right = new Date(a.updatedAt || a.generatedAt || 0).getTime();
+      return left - right;
+    });
+}
+
+function formatCapabilityMode(mode) {
+  return mode === "multi_agent" ? "Multi Agent" : "Single Agent";
+}
+
+function formatCapabilityRisk(level) {
+  if (level === "high") return "High Risk";
+  if (level === "medium") return "Medium Risk";
+  return "Low Risk";
+}
+
+function renderCapabilityTagList(items, emptyText) {
+  if (!Array.isArray(items) || !items.length) {
+    return `<div class="memory-viewer-empty">${escapeHtml(emptyText)}</div>`;
+  }
+  return `
+    <div class="goal-capability-tag-list">
+      ${items.map((item) => `<span class="memory-badge">${escapeHtml(item)}</span>`).join("")}
+    </div>
+  `;
+}
+
+function renderGoalCapabilityPanelLoading() {
+  const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 capability-plans.json …</div>`;
+}
+
+function renderGoalCapabilityPanelError(message) {
+  const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+}
+
+function renderGoalCapabilityPanel(goal, payload) {
+  const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
+  if (!panel) return;
+  const plans = Array.isArray(payload?.plans) ? payload.plans : [];
+  const nodeMap = payload?.nodeMap && typeof payload.nodeMap === "object" ? payload.nodeMap : {};
+  const planCount = plans.length;
+  const orchestratedCount = plans.filter((plan) => plan.status === "orchestrated").length;
+  const highRiskCount = plans.filter((plan) => plan.riskLevel === "high").length;
+  const driftCount = plans.filter((plan) => plan.analysis?.status === "partial" || plan.analysis?.status === "diverged").length;
+  const actualMethodCount = new Set(plans.flatMap((plan) => plan.actualUsage.methods)).size;
+  const actualSkillCount = new Set(plans.flatMap((plan) => plan.actualUsage.skills)).size;
+  const actualMcpCount = new Set(plans.flatMap((plan) => plan.actualUsage.mcpServers)).size;
+  const preferredNodeIds = [goal?.activeNodeId, goal?.lastNodeId]
+    .map((item) => typeof item === "string" ? item.trim() : "")
+    .filter(Boolean);
+  const focusPlan = preferredNodeIds.map((nodeId) => plans.find((plan) => plan.nodeId === nodeId)).find(Boolean) || plans[0] || null;
+  const recentPlans = plans.slice(0, 6);
+
+  if (!planCount) {
+    panel.innerHTML = `
+      <div class="memory-viewer-empty">
+        capability-plans.json 中还没有计划记录。可先在 goal channel 中执行
+        <code>goal_capability_plan</code> / <code>goal_orchestrate</code>。
+      </div>
+    `;
+    return;
+  }
+
+  const focusNodeTitle = focusPlan?.nodeId ? (nodeMap[focusPlan.nodeId] || focusPlan.nodeId) : "当前节点";
+  panel.innerHTML = `
+    <div class="goal-capability-stats">
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">Plan 总数</span>
+        <strong class="goal-summary-value">${escapeHtml(String(planCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">已编排</span>
+        <strong class="goal-summary-value">${escapeHtml(String(orchestratedCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">高风险</span>
+        <strong class="goal-summary-value">${escapeHtml(String(highRiskCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">偏差计划</span>
+        <strong class="goal-summary-value">${escapeHtml(String(driftCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">实际 Methods</span>
+        <strong class="goal-summary-value">${escapeHtml(String(actualMethodCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">实际 Skills</span>
+        <strong class="goal-summary-value">${escapeHtml(String(actualSkillCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">实际 MCP</span>
+        <strong class="goal-summary-value">${escapeHtml(String(actualMcpCount))}</strong>
+      </div>
+    </div>
+
+    ${focusPlan ? `
+      <div class="goal-capability-focus">
+        <div class="goal-tracking-item-head">
+          <div>
+            <div class="goal-summary-title">当前重点 Plan</div>
+            <div class="goal-summary-text">${escapeHtml(focusNodeTitle)} · ${escapeHtml(focusPlan.nodeId || focusPlan.id)}</div>
+          </div>
+          <div class="goal-checkpoint-meta">
+            <span class="memory-badge ${focusPlan.status === "orchestrated" ? "memory-badge-shared" : ""}">${escapeHtml(focusPlan.status)}</span>
+            <span class="memory-badge">${escapeHtml(formatCapabilityMode(focusPlan.executionMode))}</span>
+            <span class="memory-badge ${focusPlan.riskLevel === "high" ? "is-overdue" : ""}">${escapeHtml(formatCapabilityRisk(focusPlan.riskLevel))}</span>
+            <span class="memory-badge ${focusPlan.analysis?.status === "diverged" ? "is-overdue" : focusPlan.analysis?.status === "aligned" ? "memory-badge-shared" : ""}">${escapeHtml(focusPlan.analysis?.status || "pending")}</span>
+          </div>
+        </div>
+        ${focusPlan.summary ? `<div class="memory-list-item-snippet">${escapeHtml(focusPlan.summary)}</div>` : ""}
+        ${focusPlan.objective ? `<div class="memory-list-item-snippet">${escapeHtml(focusPlan.objective)}</div>` : ""}
+        ${focusPlan.analysis?.summary ? `<div class="memory-list-item-snippet">${escapeHtml(focusPlan.analysis.summary)}</div>` : ""}
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(focusPlan.id)}</span>
+          ${focusPlan.runId ? `<span>${escapeHtml(focusPlan.runId)}</span>` : ""}
+          <span>${escapeHtml(formatDateTime(focusPlan.updatedAt || focusPlan.generatedAt))}</span>
+          ${focusPlan.orchestratedAt ? `<span>orchestrated ${escapeHtml(formatDateTime(focusPlan.orchestratedAt))}</span>` : ""}
+        </div>
+
+        <div class="goal-capability-columns">
+          <div class="goal-capability-column">
+            <div class="goal-summary-label">Plan 能力编排</div>
+            ${renderCapabilityTagList(
+              [
+                ...focusPlan.methods.map((item) => item.title || item.file),
+                ...focusPlan.skills.map((item) => item.name),
+                ...focusPlan.mcpServers.map((item) => item.serverId),
+                ...focusPlan.subAgents.map((item) => `${item.agentId}: ${item.objective}`),
+              ],
+              "当前 plan 还没有明确列出 methods / skills / MCP / sub-agent。",
+            )}
+          </div>
+          <div class="goal-capability-column">
+            <div class="goal-summary-label">Actual Usage</div>
+            ${renderCapabilityTagList(
+              [
+                ...focusPlan.actualUsage.methods.map((item) => `method:${item}`),
+                ...focusPlan.actualUsage.skills.map((item) => `skill:${item}`),
+                ...focusPlan.actualUsage.mcpServers.map((item) => `mcp:${item}`),
+              ],
+              "当前还没有采集到实际 usage。",
+            )}
+            ${focusPlan.actualUsage.toolNames.length ? `
+              <div class="goal-capability-tool-list">
+                ${focusPlan.actualUsage.toolNames.map((item) => `<code>${escapeHtml(item)}</code>`).join("")}
+              </div>
+            ` : ""}
+            ${focusPlan.actualUsage.updatedAt ? `
+              <div class="memory-list-item-meta">
+                <span>usage updated</span>
+                <span>${escapeHtml(formatDateTime(focusPlan.actualUsage.updatedAt))}</span>
+              </div>
+            ` : ""}
+          </div>
+        </div>
+
+        <div class="goal-capability-columns">
+          <div class="goal-capability-column">
+            <div class="goal-summary-label">Reasoning / Query Hints</div>
+            ${renderCapabilityTagList(
+              [...focusPlan.reasoning, ...focusPlan.queryHints.map((item) => `hint:${item}`)],
+              "当前 plan 没有额外 reasoning / query hints。",
+            )}
+          </div>
+          <div class="goal-capability-column">
+            <div class="goal-summary-label">Risk / Checkpoint / Gaps</div>
+            ${renderCapabilityTagList(
+              [
+                focusPlan.checkpoint.required ? "checkpoint:required" : "checkpoint:optional",
+                `mode:${focusPlan.checkpoint.approvalMode || "none"}`,
+                ...focusPlan.checkpoint.requiredRequestFields.map((item) => `request:${item}`),
+                ...focusPlan.checkpoint.requiredDecisionFields.map((item) => `decision:${item}`),
+                focusPlan.checkpoint.suggestedReviewer ? `reviewer:${focusPlan.checkpoint.suggestedReviewer}` : "",
+                focusPlan.checkpoint.suggestedReviewerRole ? `role:${focusPlan.checkpoint.suggestedReviewerRole}` : "",
+                focusPlan.checkpoint.suggestedSlaHours ? `sla:${focusPlan.checkpoint.suggestedSlaHours}h` : "",
+                focusPlan.checkpoint.escalationMode && focusPlan.checkpoint.escalationMode !== "none" ? `escalation:${focusPlan.checkpoint.escalationMode}` : "",
+                ...focusPlan.checkpoint.reasons,
+                ...focusPlan.gaps.map((item) => `gap:${item}`),
+              ],
+              "当前 plan 没有额外风险说明或能力缺口。",
+            )}
+          </div>
+        </div>
+
+        <div class="goal-capability-columns">
+          <div class="goal-capability-column">
+            <div class="goal-summary-label">Deviation Analysis</div>
+            ${renderCapabilityTagList(
+              (focusPlan.analysis?.deviations || []).map((item) => `${item.area}:${item.summary}`),
+              "当前没有检测到明显偏差。",
+            )}
+          </div>
+          <div class="goal-capability-column">
+            <div class="goal-summary-label">Suggestions</div>
+            ${renderCapabilityTagList(
+              focusPlan.analysis?.recommendations || [],
+              "当前没有额外补建议。",
+            )}
+          </div>
+        </div>
+      </div>
+    ` : ""}
+
+    <div class="goal-tracking-column">
+      <div class="goal-summary-title">最近 Capability Plans</div>
+      <div class="goal-tracking-list">
+        ${recentPlans.map((plan) => {
+          const nodeTitle = plan.nodeId ? (nodeMap[plan.nodeId] || plan.nodeId) : plan.id;
+          return `
+            <div class="goal-tracking-item">
+              <div class="goal-tracking-item-head">
+                <span class="goal-tracking-item-title">${escapeHtml(nodeTitle)}</span>
+                <div class="goal-checkpoint-meta">
+                  <span class="memory-badge ${plan.status === "orchestrated" ? "memory-badge-shared" : ""}">${escapeHtml(plan.status)}</span>
+                  <span class="memory-badge">${escapeHtml(plan.executionMode)}</span>
+                  <span class="memory-badge ${plan.riskLevel === "high" ? "is-overdue" : ""}">${escapeHtml(plan.riskLevel)}</span>
+                </div>
+              </div>
+              ${plan.summary ? `<div class="memory-list-item-snippet">${escapeHtml(plan.summary)}</div>` : ""}
+              <div class="memory-list-item-meta">
+                <span>${escapeHtml(plan.id)}</span>
+                ${plan.nodeId ? `<span>${escapeHtml(plan.nodeId)}</span>` : ""}
+                <span>${escapeHtml(formatDateTime(plan.updatedAt || plan.generatedAt))}</span>
+              </div>
+              <div class="goal-checkpoint-meta">
+                <span class="memory-badge">plan m=${escapeHtml(String(plan.methods.length))}</span>
+                <span class="memory-badge">s=${escapeHtml(String(plan.skills.length))}</span>
+                <span class="memory-badge">mcp=${escapeHtml(String(plan.mcpServers.length))}</span>
+                <span class="memory-badge">actual=${escapeHtml(String(
+                  plan.actualUsage.methods.length + plan.actualUsage.skills.length + plan.actualUsage.mcpServers.length,
+                ))}</span>
+              </div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function getCachedGoalCapabilityEntry(goalId) {
+  if (!goalId || !goalsState.capabilityCache || typeof goalsState.capabilityCache !== "object") return null;
+  return goalsState.capabilityCache[goalId] || null;
+}
+
+async function ensureGoalCapabilityCache(goal, options = {}) {
+  if (!goal?.id) return null;
+  const goalId = goal.id;
+  const forceReload = options.forceReload === true;
+  const cached = getCachedGoalCapabilityEntry(goalId);
+  if (cached && !forceReload) return cached;
+  if (!forceReload && goalsState.capabilityPending?.[goalId]) {
+    return goalsState.capabilityPending[goalId];
+  }
+
+  const pending = (async () => {
+    const [tasksFile, capabilityPlansFile] = await Promise.all([
+      readSourceFile(goal.tasksPath),
+      readSourceFile(goalRuntimeFilePath(goal, "capability-plans.json")),
+    ]);
+    const rawGraph = tasksFile?.content ? safeJsonParse(tasksFile.content) : null;
+    const rawPlans = capabilityPlansFile?.content ? safeJsonParse(capabilityPlansFile.content) : null;
+    const nodes = parseGoalGraphNodes(rawGraph);
+    const entry = {
+      plans: parseGoalCapabilityPlans(rawPlans),
+      nodeMap: Object.fromEntries(nodes.map((node) => [node.id, node.title])),
+      capabilityPath: goalRuntimeFilePath(goal, "capability-plans.json"),
+      loadedAt: new Date().toISOString(),
+      readError: !tasksFile && !capabilityPlansFile,
+    };
+    goalsState.capabilityCache[goalId] = entry;
+    return entry;
+  })();
+
+  goalsState.capabilityPending[goalId] = pending;
+  try {
+    return await pending;
+  } finally {
+    delete goalsState.capabilityPending[goalId];
+  }
+}
+
+async function loadGoalCapabilityData(goal) {
+  if (!goal || !goalsDetailEl) return;
+  const trackingGoalId = goal.id;
+  const seq = goalsState.capabilitySeq + 1;
+  goalsState.capabilitySeq = seq;
+  renderGoalCapabilityPanelLoading();
+
+  const entry = await ensureGoalCapabilityCache(goal, { forceReload: true });
+  if (goalsState.capabilitySeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+  if (!entry || entry.readError) {
+    renderGoalCapabilityPanelError("无法读取 tasks.json / capability-plans.json。若使用了自定义路径，请确认该路径已加入可操作区。");
+    return;
+  }
+
+  renderGoalCapabilityPanel(goal, {
+    plans: entry.plans,
+    nodeMap: entry.nodeMap,
+  });
+}
+
+function parseGoalProgressEntries(rawContent) {
+  if (typeof rawContent !== "string" || !rawContent.trim()) return [];
+  const entries = [];
+  const sections = rawContent.split(/^##\s+/m).filter(Boolean);
+  for (const section of sections) {
+    const newlineIndex = section.indexOf("\n");
+    const at = newlineIndex >= 0 ? section.slice(0, newlineIndex).trim() : section.trim();
+    const body = newlineIndex >= 0 ? section.slice(newlineIndex + 1) : "";
+    const lines = body
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const data = {};
+    for (const line of lines) {
+      const itemMatch = /^-\s+([^:]+):\s*(.*)$/.exec(line);
+      if (!itemMatch) continue;
+      data[itemMatch[1].trim().toLowerCase()] = itemMatch[2].trim();
+    }
+    entries.push({
+      at,
+      event: data.event || "",
+      title: data.title || "",
+      nodeId: data.node || "",
+      status: data.status || "",
+      runId: data.run || "",
+      checkpointId: data.checkpoint || "",
+      summary: data.summary || "",
+      note: data.note || "",
+    });
+  }
+  return entries;
+}
+
+function normalizeGoalBoardId(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function parseGoalBoardRef(rawBoardRef) {
+  const item = rawBoardRef && typeof rawBoardRef === "object" ? rawBoardRef : {};
+  return {
+    boardId: normalizeGoalBoardId(item.boardId || item.id),
+    linkedAt: typeof item.linkedAt === "string" && item.linkedAt.trim() ? item.linkedAt.trim() : "",
+    updatedAt: typeof item.updatedAt === "string" && item.updatedAt.trim() ? item.updatedAt.trim() : "",
+  };
+}
+
+function renderGoalCanvasPanelLoading() {
+  const panel = goalsDetailEl?.querySelector("#goalCanvasPanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 board-ref.json …</div>`;
+}
+
+function renderGoalCanvasPanel(goal, payload) {
+  const panel = goalsDetailEl?.querySelector("#goalCanvasPanel");
+  if (!panel || !goal) return;
+
+  const registryBoardId = normalizeGoalBoardId(goal.boardId);
+  const runtimeBoardId = normalizeGoalBoardId(payload?.runtimeBoardId);
+  const effectiveBoardId = runtimeBoardId || registryBoardId;
+  const hasMismatch = Boolean(runtimeBoardId && registryBoardId && runtimeBoardId !== registryBoardId);
+  const linkedAt = payload?.linkedAt || payload?.updatedAt || "";
+  const boardRefPath = goalRuntimeFilePath(goal, "board-ref.json");
+  const source = runtimeBoardId ? "runtime board-ref" : registryBoardId ? "goal registry" : "-";
+
+  let statusLabel = "未绑定";
+  let statusClass = "memory-badge";
+  let hint = "当前还没有检测到 Canvas 主板绑定，可先进入画布列表查看或新建。";
+
+  if (effectiveBoardId && hasMismatch) {
+    statusLabel = "绑定存在差异";
+    statusClass = "memory-badge";
+    hint = `运行态 board-ref (${runtimeBoardId}) 与注册表默认主板 (${registryBoardId}) 不一致，当前优先按运行态绑定打开。`;
+  } else if (effectiveBoardId && runtimeBoardId) {
+    statusLabel = "已绑定";
+    statusClass = "memory-badge memory-badge-shared";
+    hint = "已检测到运行态 Canvas 绑定，可直接从长期任务详情跳转到关联画布。";
+  } else if (effectiveBoardId) {
+    statusLabel = "待确认";
+    statusClass = "memory-badge";
+    hint = "当前仅检测到注册表中的默认主板声明；若打开失败，可先进入画布列表创建或校正绑定。";
+  } else if (payload?.readError) {
+    hint = "无法读取 board-ref.json；若使用了自定义路径，请确认该路径已加入可操作区。";
+  }
+
+  panel.innerHTML = `
+    <div class="goal-summary-header">
+      <div>
+        <div class="goal-summary-title">Canvas 联动</div>
+        <div class="goal-summary-text">${escapeHtml(hint)}</div>
+      </div>
+      <span class="${statusClass}">${escapeHtml(statusLabel)}</span>
+    </div>
+    <div class="goal-summary-grid">
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">当前主板</span>
+        <strong class="goal-summary-value">${escapeHtml(effectiveBoardId || "-")}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">来源</span>
+        <strong class="goal-summary-value">${escapeHtml(source)}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">runtime board-ref</span>
+        <strong class="goal-summary-value">${escapeHtml(runtimeBoardId || "-")}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">registry boardId</span>
+        <strong class="goal-summary-value">${escapeHtml(registryBoardId || "-")}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">最近绑定时间</span>
+        <strong class="goal-summary-value">${escapeHtml(formatDateTime(linkedAt))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">board-ref 路径</span>
+        <strong class="goal-summary-value">${escapeHtml(boardRefPath || "-")}</strong>
+      </div>
+    </div>
+    <div class="goal-detail-actions">
+      <button class="button" data-open-goal-board="${escapeHtml(effectiveBoardId)}" ${effectiveBoardId ? "" : "disabled"}>打开关联画布</button>
+      <button class="button goal-inline-action-secondary" data-open-goal-board-list="${escapeHtml(goal.id)}">查看画布列表</button>
+      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(boardRefPath)}">打开 board-ref.json</button>
+    </div>
+  `;
+}
+
+async function loadGoalCanvasData(goal) {
+  if (!goal || !goalsDetailEl) return;
+  const trackingGoalId = goal.id;
+  const seq = goalsState.canvasSeq + 1;
+  goalsState.canvasSeq = seq;
+  renderGoalCanvasPanelLoading();
+
+  const boardRefFile = await readSourceFile(goalRuntimeFilePath(goal, "board-ref.json"));
+  if (goalsState.canvasSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+  const rawBoardRef = boardRefFile?.content ? safeJsonParse(boardRefFile.content) : null;
+  const parsed = parseGoalBoardRef(rawBoardRef);
+
+  renderGoalCanvasPanel(goal, {
+    runtimeBoardId: parsed.boardId,
+    linkedAt: parsed.linkedAt,
+    updatedAt: parsed.updatedAt,
+    readError: !boardRefFile,
+  });
+}
+
+async function openGoalCanvasList(goalId) {
+  if (!window._canvasApp) {
+    showNotice("Canvas 不可用", "前端 Canvas 组件尚未初始化。", "error");
+    return;
+  }
+  switchMode("canvas");
+  await window._canvasApp.showBoardList();
+  if (goalId) {
+    showNotice("已切到画布列表", `可从画布列表继续处理 ${getGoalDisplayName(goalId)} 的主板。`, "info", 2200);
+  }
+}
+
+async function openGoalCanvasBoard(boardId, goalId) {
+  if (!window._canvasApp) {
+    showNotice("Canvas 不可用", "前端 Canvas 组件尚未初始化。", "error");
+    return;
+  }
+  const normalizedBoardId = normalizeGoalBoardId(boardId);
+  if (!normalizedBoardId) {
+    await openGoalCanvasList(goalId);
+    return;
+  }
+
+  switchMode("canvas");
+  await window._canvasApp.openBoard(normalizedBoardId);
+
+  if (window._canvasApp.currentBoardId === normalizedBoardId && window._canvasApp.manager?.board) {
+    window._canvasApp._showCanvasView?.();
+    return;
+  }
+
+  await window._canvasApp.showBoardList();
+  showNotice("未找到关联画布", `未能打开 ${normalizedBoardId}，已切换到画布列表。`, "error", 3200);
+}
+
+function renderGoalTrackingPanelLoading() {
+  const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 tasks.json / checkpoints.json …</div>`;
+}
+
+function renderGoalTrackingPanel(goal, payload) {
+  const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
+  if (!panel) return;
+  const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+  const checkpoints = Array.isArray(payload?.checkpoints) ? payload.checkpoints : [];
+  const completedNodeCount = nodes.filter((node) => node.status === "completed").length;
+  const runningNodeCount = nodes.filter((node) => node.status === "running").length;
+  const blockedNodeCount = nodes.filter((node) => node.status === "blocked").length;
+  const waitingCheckpointCount = checkpoints.filter((item) => item.status === "waiting_user" || item.status === "required").length;
+  const approvedCheckpointCount = checkpoints.filter((item) => item.status === "approved").length;
+  const rejectedCheckpointCount = checkpoints.filter((item) => item.status === "rejected").length;
+  const recentNodes = nodes.slice(0, 6);
+  const recentCheckpoints = checkpoints
+    .slice()
+    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+    .slice(0, 6);
+
+  panel.innerHTML = `
+    <div class="goal-tracking-stats">
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">节点总数</span>
+        <strong class="goal-summary-value">${escapeHtml(String(nodes.length))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">已完成</span>
+        <strong class="goal-summary-value">${escapeHtml(String(completedNodeCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">进行中</span>
+        <strong class="goal-summary-value">${escapeHtml(String(runningNodeCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">阻塞</span>
+        <strong class="goal-summary-value">${escapeHtml(String(blockedNodeCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">Checkpoint</span>
+        <strong class="goal-summary-value">${escapeHtml(String(checkpoints.length))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">待处理</span>
+        <strong class="goal-summary-value">${escapeHtml(String(waitingCheckpointCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">已批准</span>
+        <strong class="goal-summary-value">${escapeHtml(String(approvedCheckpointCount))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">已拒绝</span>
+        <strong class="goal-summary-value">${escapeHtml(String(rejectedCheckpointCount))}</strong>
+      </div>
+    </div>
+
+    <div class="goal-tracking-columns">
+      <div class="goal-tracking-column">
+        <div class="goal-summary-title">最近节点</div>
+        ${recentNodes.length ? `
+          <div class="goal-tracking-list">
+            ${recentNodes.map((node) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(node.title)}</span>
+                  <span class="memory-badge ${node.status === "completed" ? "memory-badge-shared" : ""}">${escapeHtml(node.status)}</span>
+                </div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(node.id)}</span>
+                  ${node.phase ? `<span>${escapeHtml(node.phase)}</span>` : ""}
+                  ${node.owner ? `<span>${escapeHtml(node.owner)}</span>` : ""}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">tasks.json 中还没有节点。</div>`}
+      </div>
+      <div class="goal-tracking-column">
+        <div class="goal-summary-title">最近 Checkpoint</div>
+        ${recentCheckpoints.length ? `
+          <div class="goal-tracking-list">
+            ${recentCheckpoints.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
+                  <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(item.status)}</span>
+                </div>
+                <div class="memory-list-item-snippet">${escapeHtml(item.summary || item.note || "暂无摘要")}</div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(item.id)}</span>
+                  ${item.nodeId ? `<span>${escapeHtml(item.nodeId)}</span>` : ""}
+                  <span>${escapeHtml(formatDateTime(item.updatedAt))}</span>
+                </div>
+                <div class="goal-checkpoint-meta">
+                  ${item.reviewer ? `<span class="memory-badge">Reviewer ${escapeHtml(item.reviewer)}</span>` : ""}
+                  ${item.reviewerRole ? `<span class="memory-badge">${escapeHtml(item.reviewerRole)}</span>` : ""}
+                  ${item.requestedBy ? `<span class="memory-badge">发起 ${escapeHtml(item.requestedBy)}</span>` : ""}
+                  ${item.decidedBy ? `<span class="memory-badge">审批 ${escapeHtml(item.decidedBy)}</span>` : ""}
+                  ${getGoalCheckpointSlaBadge(item)}
+                </div>
+                <div class="goal-detail-actions goal-checkpoint-actions">
+                  ${["waiting_user", "required"].includes(item.status) ? `
+                    <button class="button goal-inline-action" data-goal-checkpoint-action="approve" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">批准</button>
+                    <button class="button goal-inline-action-secondary" data-goal-checkpoint-action="reject" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">拒绝</button>
+                    <button class="button goal-inline-action-secondary" data-goal-checkpoint-action="expire" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">过期</button>
+                  ` : ""}
+                  ${["rejected", "expired"].includes(item.status) ? `
+                    <button class="button goal-inline-action" data-goal-checkpoint-action="reopen" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">重新打开</button>
+                  ` : ""}
+                </div>
+                ${item.history.length ? `
+                  <div class="goal-checkpoint-history">
+                    ${item.history.slice().reverse().slice(0, 4).map((history) => `
+                      <div class="goal-checkpoint-history-item">
+                        <span class="memory-badge">${escapeHtml(history.action)}</span>
+                        <span>${escapeHtml(formatDateTime(history.at))}</span>
+                        ${history.actor ? `<span>${escapeHtml(history.actor)}</span>` : ""}
+                        ${history.note ? `<span>${escapeHtml(history.note)}</span>` : ""}
+                      </div>
+                    `).join("")}
+                  </div>
+                ` : ""}
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">checkpoints.json 中还没有 checkpoint。</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderGoalTrackingPanelError(message) {
+  const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+}
+
+async function loadGoalTrackingData(goal) {
+  if (!goal || !goalsDetailEl) return;
+  const trackingGoalId = goal.id;
+  const seq = goalsState.trackingSeq + 1;
+  goalsState.trackingSeq = seq;
+  renderGoalTrackingPanelLoading();
+
+  const [tasksFile, checkpointsFile] = await Promise.all([
+    readSourceFile(goal.tasksPath),
+    readSourceFile(goalRuntimeFilePath(goal, "checkpoints.json")),
+  ]);
+
+  if (goalsState.trackingSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+  const rawGraph = tasksFile?.content ? safeJsonParse(tasksFile.content) : null;
+  const rawCheckpoints = checkpointsFile?.content ? safeJsonParse(checkpointsFile.content) : null;
+
+  if (!tasksFile && !checkpointsFile) {
+    goalsState.trackingCheckpoints = [];
+    renderGoalTrackingPanelError("无法读取 tasks.json / checkpoints.json。若使用了自定义路径，请确认该路径已加入可操作区。");
+    return;
+  }
+
+  const parsedCheckpoints = parseGoalCheckpoints(rawCheckpoints).map((item) => ({
+    ...item,
+    goalId: item.goalId || trackingGoalId,
+  }));
+  goalsState.trackingCheckpoints = parsedCheckpoints;
+  renderGoalTrackingPanel(goal, {
+    nodes: parseGoalGraphNodes(rawGraph),
+    checkpoints: parsedCheckpoints,
+  });
+}
+
+function renderGoalProgressPanelLoading() {
+  const panel = goalsDetailEl?.querySelector("#goalProgressPanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 progress.md …</div>`;
+}
+
+function renderGoalProgressPanel(entries) {
+  const panel = goalsDetailEl?.querySelector("#goalProgressPanel");
+  if (!panel) return;
+  const recentEntries = Array.isArray(entries) ? entries.slice().reverse().slice(0, 18) : [];
+  if (!recentEntries.length) {
+    panel.innerHTML = `<div class="memory-viewer-empty">progress.md 中还没有时间线记录。</div>`;
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="goal-progress-timeline">
+      ${recentEntries.map((entry) => `
+        <div class="goal-progress-item">
+          <div class="goal-progress-item-head">
+            <span class="goal-tracking-item-title">${escapeHtml(entry.title || entry.event || "timeline")}</span>
+            <span class="memory-badge">${escapeHtml(entry.event || "-")}</span>
+          </div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(formatDateTime(entry.at))}</span>
+            ${entry.nodeId ? `<span>${escapeHtml(entry.nodeId)}</span>` : ""}
+            ${entry.status ? `<span>${escapeHtml(entry.status)}</span>` : ""}
+            ${entry.checkpointId ? `<span>${escapeHtml(entry.checkpointId)}</span>` : ""}
+          </div>
+          ${entry.summary ? `<div class="memory-list-item-snippet">${escapeHtml(entry.summary)}</div>` : ""}
+          ${entry.note ? `<div class="memory-list-item-snippet">${escapeHtml(entry.note)}</div>` : ""}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+async function loadGoalProgressData(goal) {
+  if (!goal || !goalsDetailEl) return;
+  const trackingGoalId = goal.id;
+  const seq = (goalsState.progressSeq || 0) + 1;
+  goalsState.progressSeq = seq;
+  renderGoalProgressPanelLoading();
+
+  const progressFile = await readSourceFile(goal.progressPath);
+  if (goalsState.progressSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+  renderGoalProgressPanel(parseGoalProgressEntries(progressFile?.content || ""));
+}
+
+// ========================== GOAL HANDOFF ==========================
+
+function parseGoalHandoffKeyValueSection(rawContent) {
+  const data = {};
+  if (typeof rawContent !== "string") return data;
+  rawContent
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      const match = /^-\s+([^:]+):\s*(.*)$/.exec(line);
+      if (!match) return;
+      data[match[1].trim().toLowerCase()] = match[2].trim();
+    });
+  return data;
+}
+
+function parseGoalHandoffListSection(rawContent) {
+  if (typeof rawContent !== "string") return [];
+  return rawContent
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(2).trim())
+    .filter(Boolean)
+    .filter((line) => line !== "(none)");
+}
+
+function parseGoalHandoffDocument(rawContent) {
+  if (typeof rawContent !== "string" || !rawContent.trim()) return null;
+  const sections = rawContent.split(/^##\s+/m).filter(Boolean);
+  if (!sections.length) return null;
+  const parsed = {};
+  for (const section of sections) {
+    const newlineIndex = section.indexOf("\n");
+    const title = (newlineIndex >= 0 ? section.slice(0, newlineIndex) : section).trim().toLowerCase();
+    const body = newlineIndex >= 0 ? section.slice(newlineIndex + 1).trim() : "";
+    parsed[title] = body;
+  }
+  const meta = parseGoalHandoffKeyValueSection(parsed["meta"] || "");
+  const tracking = parseGoalHandoffKeyValueSection(parsed["tracking"] || "");
+  const focus = parseGoalHandoffKeyValueSection(parsed["focus capability"] || "");
+  const summary = typeof parsed["summary"] === "string" ? parsed["summary"].trim() : "";
+  const nextAction = typeof parsed["next action"] === "string" ? parsed["next action"].trim() : "";
+  return {
+    generatedAt: meta["generated at"] || "",
+    goalStatus: meta["goal status"] || "",
+    currentPhase: meta["current phase"] || "",
+    resumeMode: meta["resume mode"] || "",
+    resumeNode: meta["resume node"] || "",
+    activeNode: meta["active node"] || "",
+    lastNode: meta["last node"] || "",
+    lastRun: meta["last run"] || "",
+    summary,
+    nextAction,
+    focusPlan: focus["plan"] || "",
+    focusSummary: focus["summary"] || "",
+    tracking: {
+      totalNodes: tracking["total nodes"] || "0",
+      completedNodes: tracking["completed nodes"] || "0",
+      inProgressNodes: tracking["in progress nodes"] || "0",
+      blockedNodes: tracking["blocked nodes"] || "0",
+      openCheckpoints: tracking["open checkpoints"] || "0",
+    },
+    openCheckpoints: parseGoalHandoffListSection(parsed["open checkpoints"] || ""),
+    blockers: parseGoalHandoffListSection(parsed["blockers"] || ""),
+    recentTimeline: parseGoalHandoffListSection(parsed["recent timeline"] || ""),
+  };
+}
+
+function renderGoalHandoffPanelLoading() {
+  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 handoff.md …</div>`;
+}
+
+function bindGoalHandoffPanelActions(goal) {
+  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
+  if (!panel || !goal) return;
+  panel.querySelectorAll("[data-goal-generate-handoff]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-generate-handoff") || goal.id;
+      if (!goalId) return;
+      void generateGoalHandoff(goalId);
+    });
+  });
+  panel.querySelectorAll("[data-open-source]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const sourcePath = node.getAttribute("data-open-source");
+      if (!sourcePath) return;
+      void openSourcePath(sourcePath);
+    });
+  });
+}
+
+function renderGoalHandoffPanelError(goal, message) {
+  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
+  if (!panel) return;
+  panel.innerHTML = `
+    <div class="memory-viewer-empty">${escapeHtml(message)}</div>
+    <div class="goal-detail-actions">
+      <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">生成 handoff</button>
+      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
+    </div>
+  `;
+  bindGoalHandoffPanelActions(goal);
+}
+
+function renderGoalHandoffPanel(goal, handoff) {
+  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
+  if (!panel || !goal) return;
+
+  if (!handoff || !handoff.generatedAt) {
+    panel.innerHTML = `
+      <div class="memory-viewer-empty">当前还没有正式 handoff。可在节点切换、暂停前或需要交接时手动生成。</div>
+      <div class="goal-detail-actions">
+        <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">生成 handoff</button>
+        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
+      </div>
+    `;
+    bindGoalHandoffPanelActions(goal);
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="goal-summary-header">
+      <div>
+        <div class="goal-summary-title">Handoff / 恢复交接</div>
+        <div class="goal-summary-text">从 handoff.md 读取当前 goal 的恢复建议、阻塞点与最近交接摘要。</div>
+      </div>
+      <span class="memory-badge memory-badge-shared">已生成</span>
+    </div>
+    <div class="goal-summary-grid">
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">生成时间</span>
+        <strong class="goal-summary-value">${escapeHtml(formatDateTime(handoff.generatedAt))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">恢复模式</span>
+        <strong class="goal-summary-value">${escapeHtml(handoff.resumeMode || "-")}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">建议节点</span>
+        <strong class="goal-summary-value">${escapeHtml(handoff.resumeNode || "-")}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">Open Checkpoint</span>
+        <strong class="goal-summary-value">${escapeHtml(String(handoff.openCheckpoints.length))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">阻塞项</span>
+        <strong class="goal-summary-value">${escapeHtml(String(handoff.blockers.length))}</strong>
+      </div>
+      <div class="goal-summary-item">
+        <span class="goal-summary-label">上次 Run</span>
+        <strong class="goal-summary-value">${escapeHtml(handoff.lastRun || "-")}</strong>
+      </div>
+    </div>
+
+    <div class="goal-tracking-columns">
+      <div class="goal-tracking-column">
+        <div class="goal-summary-title">交接摘要</div>
+        <div class="memory-list-item-snippet">${escapeHtml(handoff.summary || "暂无摘要")}</div>
+        <div class="goal-summary-title">下一步建议</div>
+        <div class="memory-list-item-snippet">${escapeHtml(handoff.nextAction || "暂无建议")}</div>
+        <div class="goal-summary-title">Tracking Snapshot</div>
+        <div class="memory-list-item-meta">
+          <span>nodes ${escapeHtml(String(handoff.tracking.totalNodes || "0"))}</span>
+          <span>done ${escapeHtml(String(handoff.tracking.completedNodes || "0"))}</span>
+          <span>running ${escapeHtml(String(handoff.tracking.inProgressNodes || "0"))}</span>
+          <span>blocked ${escapeHtml(String(handoff.tracking.blockedNodes || "0"))}</span>
+          <span>checkpoint ${escapeHtml(String(handoff.tracking.openCheckpoints || "0"))}</span>
+        </div>
+        ${handoff.focusPlan ? `
+          <div class="goal-summary-title">Focus Capability</div>
+          <div class="memory-list-item-snippet">${escapeHtml(handoff.focusPlan)}</div>
+          ${handoff.focusSummary ? `<div class="memory-list-item-snippet">${escapeHtml(handoff.focusSummary)}</div>` : ""}
+        ` : ""}
+      </div>
+      <div class="goal-tracking-column">
+        <div class="goal-summary-title">阻塞 / 待处理</div>
+        ${handoff.blockers.length || handoff.openCheckpoints.length ? `
+          <div class="goal-tracking-list">
+            ${handoff.blockers.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
+              </div>
+            `).join("")}
+            ${handoff.openCheckpoints.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">当前 handoff 中没有阻塞或待审批项。</div>`}
+
+        <div class="goal-summary-title">最近 Timeline</div>
+        ${handoff.recentTimeline.length ? `
+          <div class="goal-tracking-list">
+            ${handoff.recentTimeline.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">handoff 中还没有最近时间线摘要。</div>`}
+      </div>
+    </div>
+
+    <div class="goal-detail-actions">
+      <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">刷新 handoff</button>
+      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
+    </div>
+  `;
+  bindGoalHandoffPanelActions(goal);
+}
+
+async function loadGoalHandoffData(goal) {
+  if (!goal || !goalsDetailEl) return;
+  const trackingGoalId = goal.id;
+  const seq = (goalsState.handoffSeq || 0) + 1;
+  goalsState.handoffSeq = seq;
+  renderGoalHandoffPanelLoading();
+
+  const handoffFile = await readSourceFile(goal.handoffPath);
+  if (goalsState.handoffSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+  if (!handoffFile) {
+    renderGoalHandoffPanelError(goal, "无法读取 handoff.md。若使用了自定义路径，请确认该路径已加入可操作区。");
+    return;
+  }
+  renderGoalHandoffPanel(goal, parseGoalHandoffDocument(handoffFile.content || ""));
+}
+
+function renderGoalDetail(goal) {
+  if (!goalsDetailEl) return;
+  if (!goal) {
+    goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>`;
+    return;
+  }
+  const isCurrentConversation = isConversationForGoal(activeConversationId, goal.id);
+  const objective = goal.objective ? String(goal.objective).trim() : "";
+  const lastNodeId = typeof goal.lastNodeId === "string" && goal.lastNodeId.trim() ? goal.lastNodeId.trim() : "";
+  const lastRunId = typeof goal.lastRunId === "string" && goal.lastRunId.trim() ? goal.lastRunId.trim() : "";
+  const activeNodeId = typeof goal.activeNodeId === "string" && goal.activeNodeId.trim() ? goal.activeNodeId.trim() : "";
+  const runtimeSummaryCard = buildGoalRuntimeSummaryCard(goal, {
+    activeNodeId,
+    lastNodeId,
+    lastRunId,
+    isCurrentConversation,
+  });
+  const recoveryCard = buildGoalRecoveryCard(goal, {
+    activeNodeId,
+    lastNodeId,
+    isCurrentConversation,
+  });
+  goalsDetailEl.innerHTML = `
+    <div class="memory-detail-shell">
+      <div class="memory-detail-header">
+        <div>
+          <div class="memory-detail-title">${escapeHtml(goal.title || goal.id)}</div>
+          <div class="memory-list-item-snippet">${escapeHtml(objective || "未填写 objective，可直接打开 NORTHSTAR.md 或 00-goal.md 继续完善。")}</div>
+        </div>
+        <div class="memory-detail-badges">
+          <span class="memory-badge memory-badge-shared">${escapeHtml(formatGoalStatus(goal.status))}</span>
+          <span class="memory-badge">${escapeHtml(goal.currentPhase || "-")}</span>
+          ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">current channel</span>' : ""}
+        </div>
+      </div>
+
+      ${runtimeSummaryCard}
+      ${recoveryCard}
+
+      <div class="memory-detail-card goal-handoff-card">
+        <div id="goalHandoffPanel">
+          <div class="memory-viewer-empty">正在读取 handoff.md …</div>
+        </div>
+      </div>
+
+      <div class="memory-detail-grid">
+        <div class="memory-detail-card"><span class="memory-detail-label">Goal ID</span><div class="memory-detail-text">${escapeHtml(goal.id)}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">更新时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">创建时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.createdAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Path Source</span><div class="memory-detail-text">${escapeHtml(formatGoalPathSource(goal.pathSource))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">当前 Active Node</span><div class="memory-detail-text">${escapeHtml(activeNodeId || "-")}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">上次 Active Node</span><div class="memory-detail-text">${escapeHtml(lastNodeId || "-")}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">上次 Run ID</span><div class="memory-detail-text">${escapeHtml(lastRunId || "-")}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">最近活跃时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.lastActiveAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">最近暂停时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.pausedAt))}</div></div>
+      </div>
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">执行通道</span>
+        <div class="memory-detail-pre">${escapeHtml(goal.activeConversationId || goalBaseConversationId(goal.id))}</div>
+      </div>
+
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">关键路径</span>
+        <div class="goal-path-list">
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goalDocFilePath(goal, "00-goal.md"))}">打开 00-goal</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.northstarPath)}">打开 NORTHSTAR.md</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.tasksPath)}">打开任务图</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">打开 capability-plans.json</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "checkpoints.json"))}">打开 checkpoints.json</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.progressPath)}">打开 progress</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "state.json"))}">打开 state.json</button>
+          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "runtime.json"))}">打开 runtime.json</button>
+        </div>
+      </div>
+
+      <div class="memory-detail-grid">
+        <div class="memory-detail-card"><span class="memory-detail-label">Goal Root</span><div class="memory-detail-pre">${escapeHtml(goal.goalRoot || "-")}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Doc Root</span><div class="memory-detail-pre">${escapeHtml(goal.docRoot || "-")}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">Runtime Root</span><div class="memory-detail-pre">${escapeHtml(goal.runtimeRoot || "-")}</div></div>
+      </div>
+
+      <div class="goal-detail-actions">
+        <button class="button" data-open-goal-tasks="${escapeHtml(goal.id)}">查看关联 Tasks</button>
+        <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">恢复并进入通道</button>
+        ${lastNodeId ? `<button class="button" data-goal-resume-last-node="${escapeHtml(goal.id)}" data-goal-last-node-id="${escapeHtml(lastNodeId)}">按上次节点恢复</button>` : ""}
+        <button class="button goal-inline-action-secondary" data-goal-pause-detail="${escapeHtml(goal.id)}">暂停</button>
+      </div>
+
+      <div class="memory-detail-card goal-canvas-card">
+        <div id="goalCanvasPanel">
+          <div class="memory-viewer-empty">正在读取 board-ref.json …</div>
+        </div>
+      </div>
+
+      <div class="memory-detail-card goal-tracking-card">
+        <div class="goal-summary-header">
+          <div>
+            <div class="goal-summary-title">Checkpoint / Node 追踪</div>
+            <div class="goal-summary-text">从 tasks.json 与 checkpoints.json 读取当前长期任务的结构化执行进度。</div>
+          </div>
+        </div>
+        <div id="goalTrackingPanel">
+          <div class="memory-viewer-empty">正在读取 tasks.json / checkpoints.json …</div>
+        </div>
+      </div>
+
+      <div class="memory-detail-card goal-capability-card">
+        <div class="goal-summary-header">
+          <div>
+            <div class="goal-summary-title">Capability Plan</div>
+            <div class="goal-summary-text">从 capability-plans.json 读取节点执行前规划，以及运行后回写的 actual usage。</div>
+          </div>
+        </div>
+        <div id="goalCapabilityPanel">
+          <div class="memory-viewer-empty">正在读取 capability-plans.json …</div>
+        </div>
+      </div>
+
+      <div class="memory-detail-card goal-progress-card">
+        <div class="goal-summary-header">
+          <div>
+            <div class="goal-summary-title">执行时间线</div>
+            <div class="goal-summary-text">从 progress.md 读取节点流转与 checkpoint 审批时间线。</div>
+          </div>
+        </div>
+        <div id="goalProgressPanel">
+          <div class="memory-viewer-empty">正在读取 progress.md …</div>
+        </div>
+      </div>
+    </div>
+  `;
+  bindGoalDetailActions(goal);
+  void loadGoalCanvasData(goal);
+  void loadGoalTrackingData(goal);
+  void loadGoalCapabilityData(goal);
+  void loadGoalProgressData(goal);
+  void loadGoalHandoffData(goal);
+}
+
+async function loadGoals(forceReload = false, preferredGoalId) {
+  if (!goalsSection) return;
+  if (!ws || !isReady) {
+    renderGoalsLoading("未连接");
+    return;
+  }
+  if (forceReload || goalsState.items.length === 0) {
+    renderGoalsLoading("加载中...");
+  }
+  const seq = goalsState.loadSeq + 1;
+  goalsState.loadSeq = seq;
+  const res = await sendReq({ type: "req", id: makeId(), method: "goal.list" });
+  if (seq !== goalsState.loadSeq) return;
+  if (!res || !res.ok || !Array.isArray(res.payload?.goals)) {
+    renderGoalsEmpty("长期任务列表加载失败。");
+    return;
+  }
+  const items = sortGoals(res.payload.goals);
+  goalsState.items = items;
+  renderGoalsSummary(items);
+  if (items.length === 0) {
+    goalsState.selectedId = null;
+    renderGoalsEmpty("当前还没有长期任务。");
+    return;
+  }
+  const selectedExists = items.some((goal) => goal.id === goalsState.selectedId);
+  goalsState.selectedId = preferredGoalId && items.some((goal) => goal.id === preferredGoalId)
+    ? preferredGoalId
+    : selectedExists
+      ? goalsState.selectedId
+      : items[0].id;
+  renderGoalList(items);
+  renderGoalDetail(getGoalById(goalsState.selectedId));
+  renderCanvasGoalContext();
+}
+
+async function submitGoalCreateForm() {
+  if (!ws || !isReady) {
+    showNotice("无法创建长期任务", "未连接到服务器。", "error");
+    return;
+  }
+  const normalizedTitle = goalCreateTitleEl?.value.trim() || "";
+  if (!normalizedTitle) {
+    showNotice("无法创建长期任务", "标题不能为空。", "error");
+    goalCreateTitleEl?.focus();
+    return;
+  }
+  const objective = goalCreateObjectiveEl?.value.trim() || "";
+  const goalRoot = goalCreateRootEl?.value.trim() || "";
+  const autoResume = goalCreateAutoResumeEl?.checked !== false;
+  if (goalCreateSubmitBtn) {
+    goalCreateSubmitBtn.disabled = true;
+    goalCreateSubmitBtn.textContent = "创建中...";
+  }
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.create",
+    params: {
+      title: normalizedTitle,
+      objective: objective.trim() || undefined,
+      goalRoot: goalRoot.trim() || undefined,
+    },
+  });
+  if (goalCreateSubmitBtn) {
+    goalCreateSubmitBtn.disabled = false;
+    goalCreateSubmitBtn.textContent = "创建";
+  }
+  if (!res || !res.ok || !res.payload?.goal?.id) {
+    showNotice("长期任务创建失败", res?.error?.message || "未知错误。", "error");
+    return;
+  }
+  const goal = res.payload.goal;
+  toggleGoalCreateModal(false);
+  showNotice("长期任务已创建", `${goal.title || goal.id} 已创建，准备进入执行通道。`, "success", 2200);
+  await loadGoals(true, goal.id);
+  if (autoResume) {
+    await resumeGoal(goal.id, { silent: true });
+  }
+}
+
+async function resumeGoal(goalId, options = {}) {
+  if (!ws || !isReady) {
+    showNotice("无法恢复长期任务", "未连接到服务器。", "error");
+    return;
+  }
+  const nodeId = typeof options.nodeId === "string" && options.nodeId.trim() ? options.nodeId.trim() : undefined;
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.resume",
+    params: { goalId, nodeId },
+  });
+  if (!res || !res.ok) {
+    showNotice("长期任务恢复失败", res?.error?.message || "未知错误。", "error");
+    return;
+  }
+  const goal = res.payload?.goal || getGoalById(goalId);
+  const conversationId = res.payload?.conversationId || goal?.activeConversationId || goalBaseConversationId(goalId);
+  await loadGoals(true, goalId);
+  openConversationSession(conversationId, nodeId
+    ? `已进入长期任务节点通道：${goal?.title || goalId} / ${nodeId}`
+    : `已进入长期任务通道：${goal?.title || goalId}`);
+  if (!options.silent) {
+    showNotice(
+      "已恢复长期任务",
+      nodeId
+        ? `${goal?.title || goalId} 已按上次节点 ${nodeId} 恢复。`
+        : `${goal?.title || goalId} 已切到独立 goal channel。`,
+      "success",
+      2200,
+    );
+  }
+}
+
+async function pauseGoal(goalId) {
+  if (!ws || !isReady) {
+    showNotice("无法暂停长期任务", "未连接到服务器。", "error");
+    return;
+  }
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.pause",
+    params: { goalId },
+  });
+  if (!res || !res.ok) {
+    showNotice("长期任务暂停失败", res?.error?.message || "未知错误。", "error");
+    return;
+  }
+  if (isConversationForGoal(activeConversationId, goalId)) {
+    activeConversationId = null;
+    renderCanvasGoalContext();
+    botMsgEl = null;
+  }
+  const goal = res.payload?.goal || getGoalById(goalId);
+  await loadGoals(true, goalId);
+  showNotice("已暂停长期任务", `${goal?.title || goalId} 已暂停，普通聊天通道不受影响。`, "info", 2400);
+}
+
+async function generateGoalHandoff(goalId) {
+  if (!ws || !isReady) {
+    showNotice("无法生成 handoff", "未连接到服务器。", "error");
+    return;
+  }
+  const goal = getGoalById(goalId);
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.handoff.generate",
+    params: { goalId },
+  });
+  if (!res || !res.ok) {
+    showNotice("handoff 生成失败", res?.error?.message || "未知错误。", "error");
+    return;
+  }
+  if (goal && goalsState.selectedId === goalId) {
+    void loadGoalHandoffData(goal);
+  }
+  showNotice("已生成 handoff", `${goal?.title || goalId} 的恢复交接摘要已更新。`, "success", 2200);
 }
 
 function switchMemoryViewerTab(tab) {
@@ -2996,6 +5602,9 @@ function switchMemoryViewerTab(tab) {
   memoryViewerState.selectedId = null;
   memoryViewerState.selectedTask = null;
   memoryViewerState.selectedCandidate = null;
+  if (tab !== "tasks") {
+    memoryViewerState.goalIdFilter = null;
+  }
   syncMemoryViewerUi();
   loadMemoryViewer(true);
 }
@@ -3006,6 +5615,7 @@ function syncMemoryViewerUi() {
   if (memoryTabMemoriesBtn) memoryTabMemoriesBtn.classList.toggle("active", !isTasks);
   if (memoryTaskFiltersEl) memoryTaskFiltersEl.classList.toggle("hidden", !isTasks);
   if (memoryChunkFiltersEl) memoryChunkFiltersEl.classList.toggle("hidden", isTasks);
+  syncMemoryTaskGoalFilterUi();
 }
 
 async function loadMemoryViewer(forceSelectFirst = false) {
@@ -3091,6 +5701,7 @@ async function loadTaskViewer(forceSelectFirst = false) {
   const filter = {};
   if (memoryTaskStatusFilterEl?.value) filter.status = memoryTaskStatusFilterEl.value;
   if (memoryTaskSourceFilterEl?.value) filter.source = memoryTaskSourceFilterEl.value;
+  if (memoryViewerState.goalIdFilter) filter.goalId = memoryViewerState.goalIdFilter;
   if (Object.keys(filter).length > 0) params.filter = filter;
 
   const id = makeId();
@@ -3318,12 +5929,15 @@ function renderMemoryViewerStats(stats) {
   const usedMethods = Array.isArray(selectedTask?.usedMethods) ? selectedTask.usedMethods : [];
   const usedSkills = Array.isArray(selectedTask?.usedSkills) ? selectedTask.usedSkills : [];
   const lastUsedAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
+  const activeGoalId = memoryViewerState.goalIdFilter;
+  const activeGoalLabel = activeGoalId ? getGoalDisplayName(activeGoalId) : "-";
 
   memoryViewerStatsEl.innerHTML = `
     <div class="memory-stat-card"><span class="memory-stat-label">当前 Task 结果</span><strong class="memory-stat-value">${formatCount(Array.isArray(memoryViewerState.items) ? memoryViewerState.items.length : 0)}</strong></div>
     <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Method</span><strong class="memory-stat-value">${formatCount(usedMethods.length)}</strong></div>
     <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Skill</span><strong class="memory-stat-value">${formatCount(usedSkills.length)}</strong></div>
     <div class="memory-stat-card"><span class="memory-stat-label">最近采用时间</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(formatDateTime(lastUsedAt))}</strong></div>
+    ${activeGoalId ? `<div class="memory-stat-card"><span class="memory-stat-label">Goal Filter</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(activeGoalLabel)}</strong><div class="memory-stat-caption">${escapeHtml(activeGoalId)}</div></div>` : ""}
     ${renderTaskUsageOverviewCard()}
   `;
   bindStatsAuditJumpLinks();
@@ -3340,12 +5954,14 @@ function renderTaskList(items) {
     const title = item.title || item.objective || item.summary || item.conversationId || item.id;
     const snippet = item.summary || item.outcome || item.objective || "暂无摘要";
     const isActive = item.id === memoryViewerState.selectedId;
+    const goalId = getTaskGoalId(item);
     return `
       <div class="memory-list-item ${isActive ? "active" : ""}" data-task-id="${escapeHtml(item.id)}">
         <div class="memory-list-item-title">${escapeHtml(title)}</div>
         <div class="memory-list-item-meta">
           <span>${escapeHtml(item.status || "unknown")}</span>
           <span>${escapeHtml(item.source || "unknown")}</span>
+          ${goalId ? `<span class="memory-badge memory-badge-shared">${escapeHtml(getGoalDisplayName(goalId))}</span>` : ""}
           <span>${escapeHtml(formatDateTime(item.finishedAt || item.startedAt || item.createdAt))}</span>
         </div>
         <div class="memory-list-item-snippet">${escapeHtml(snippet)}</div>
@@ -3418,6 +6034,7 @@ function renderTaskDetail(task) {
   const usedSkills = Array.isArray(task.usedSkills) ? task.usedSkills : [];
   const lastUsageAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
   const candidatePanel = renderCandidateDetailPanel(memoryViewerState.selectedCandidate);
+  const goalId = getTaskGoalId(task);
 
   memoryViewerDetailEl.innerHTML = `
     <div class="memory-detail-shell">
@@ -3434,6 +6051,7 @@ function renderTaskDetail(task) {
           <span class="memory-badge">${escapeHtml(task.status || "unknown")}</span>
           <span class="memory-badge">${escapeHtml(task.source || "unknown")}</span>
           ${task.agentId ? `<span class="memory-badge">${escapeHtml(task.agentId)}</span>` : ""}
+          ${goalId ? `<span class="memory-badge memory-badge-shared">${escapeHtml(getGoalDisplayName(goalId))}</span>` : ""}
         </div>
       </div>
 
@@ -3442,7 +6060,15 @@ function renderTaskDetail(task) {
         <div class="memory-detail-card"><span class="memory-detail-label">结束时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.finishedAt))}</div></div>
         <div class="memory-detail-card"><span class="memory-detail-label">耗时</span><div class="memory-detail-text">${escapeHtml(formatDuration(task.durationMs))}</div></div>
         <div class="memory-detail-card"><span class="memory-detail-label">Token</span><div class="memory-detail-text">${escapeHtml(formatCount(task.tokenTotal))}</div></div>
+        ${goalId ? `<div class="memory-detail-card"><span class="memory-detail-label">Goal</span><div class="memory-detail-text">${escapeHtml(getGoalDisplayName(goalId))}</div></div>` : ""}
       </div>
+
+      ${goalId ? `
+        <div class="goal-detail-actions">
+          <button class="button" data-open-goal-id="${escapeHtml(goalId)}">打开长期任务</button>
+          <button class="button" data-open-goal-tasks="${escapeHtml(goalId)}">按该 Goal 过滤 Tasks</button>
+        </div>
+      ` : ""}
 
       <div class="memory-detail-grid memory-detail-grid-usage">
         <div class="memory-detail-card"><span class="memory-detail-label">Method 使用数</span><div class="memory-detail-text">${escapeHtml(formatCount(usedMethods.length))}</div></div>
@@ -3634,6 +6260,14 @@ function bindStatsAuditJumpLinks() {
       await loadCandidateDetail(candidateId);
     });
   });
+  memoryViewerStatsEl.querySelectorAll("[data-open-goal-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const goalId = node.getAttribute("data-open-goal-id");
+      if (!goalId) return;
+      switchMode("goals");
+      await loadGoals(true, goalId);
+    });
+  });
 }
 
 function bindTaskAuditJumpLinks() {
@@ -3648,6 +6282,21 @@ function bindTaskAuditJumpLinks() {
     node.addEventListener("click", async () => {
       const candidateId = node.getAttribute("data-open-candidate-id");
       await loadCandidateDetail(candidateId);
+    });
+  });
+  memoryViewerDetailEl.querySelectorAll("[data-open-goal-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const goalId = node.getAttribute("data-open-goal-id");
+      if (!goalId) return;
+      switchMode("goals");
+      await loadGoals(true, goalId);
+    });
+  });
+  memoryViewerDetailEl.querySelectorAll("[data-open-goal-tasks]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      const goalId = node.getAttribute("data-open-goal-tasks");
+      if (!goalId) return;
+      await openGoalTaskViewer(goalId);
     });
   });
   memoryViewerDetailEl.querySelectorAll("[data-close-candidate-panel]").forEach((node) => {
@@ -4137,21 +6786,30 @@ updateSidebarModeButtons();
 // Expose switchMode for canvas.js
 window._belldandySwitchMode = switchMode;
 
+// Expose canvas context refresh for canvas.js
+window._belldandySyncCanvasContext = renderCanvasGoalContext;
+
 // Expose openFile for canvas.js (method node double-click → editor)
 window._belldandyOpenFile = (filePath) => openFile(filePath);
 
-// Expose loadConversation for canvas.js (session node double-click → chat)
-window._belldandyLoadConversation = (conversationId) => {
+function openConversationSession(conversationId, hintText) {
+  if (!conversationId) return;
   activeConversationId = conversationId;
+  renderCanvasGoalContext();
   switchMode("chat");
   if (messagesEl) {
     messagesEl.innerHTML = "";
     const hint = document.createElement("div");
     hint.className = "system-msg";
-    hint.textContent = `已切换到会话: ${conversationId}`;
+    hint.textContent = hintText || `已切换到会话: ${conversationId}`;
     messagesEl.appendChild(hint);
   }
   void loadConversationMeta(conversationId);
+}
+
+// Expose loadConversation for canvas.js (session node double-click → chat)
+window._belldandyLoadConversation = (conversationId) => {
+  openConversationSession(conversationId);
 };
 
 // Initialize canvas app (canvas.js creates window._canvasApp)

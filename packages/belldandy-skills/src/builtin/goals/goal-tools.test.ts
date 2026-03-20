@@ -1,0 +1,2140 @@
+import { describe, expect, it, vi } from "vitest";
+import { goalInitTool } from "./goal-init.js";
+import { goalListTool } from "./goal-list.js";
+import { goalResumeTool } from "./goal-resume.js";
+import { goalCheckpointApproveTool } from "./goal-checkpoint-approve.js";
+import { goalCheckpointExpireTool } from "./goal-checkpoint-expire.js";
+import { goalCheckpointListTool } from "./goal-checkpoint-list.js";
+import { goalCheckpointReopenTool } from "./goal-checkpoint-reopen.js";
+import { goalCheckpointRejectTool } from "./goal-checkpoint-reject.js";
+import { goalCheckpointRequestTool } from "./goal-checkpoint-request.js";
+import { goalCapabilityPlanTool } from "./goal-capability-plan.js";
+import { goalHandoffGenerateTool } from "./goal-handoff-generate.js";
+import { goalExperienceSuggestTool } from "./goal-experience-suggest.js";
+import { goalMethodCandidatesGenerateTool } from "./goal-method-candidates-generate.js";
+import { goalRetrospectGenerateTool } from "./goal-retrospect-generate.js";
+import { goalSkillCandidatesGenerateTool } from "./goal-skill-candidates-generate.js";
+import { goalFlowPatternsGenerateTool } from "./goal-flow-patterns-generate.js";
+import { goalCrossGoalFlowPatternsTool } from "./goal-cross-goal-flow-patterns.js";
+import { goalReviewGovernanceSummaryTool } from "./goal-review-governance-summary.js";
+import { goalSuggestionReviewListTool } from "./goal-suggestion-review-list.js";
+import { goalSuggestionReviewWorkflowSetTool } from "./goal-suggestion-review-workflow-set.js";
+import { goalSuggestionReviewDecideTool } from "./goal-suggestion-review-decide.js";
+import { goalSuggestionReviewEscalateTool } from "./goal-suggestion-review-escalate.js";
+import { goalSuggestionPublishTool } from "./goal-suggestion-publish.js";
+import { goalOrchestrateTool } from "./goal-orchestrate.js";
+import { taskGraphClaimTool } from "./task-graph-claim.js";
+import { taskGraphCreateTool } from "./task-graph-create.js";
+import { taskGraphFailTool } from "./task-graph-fail.js";
+import { taskGraphPendingReviewTool } from "./task-graph-pending-review.js";
+import { taskGraphReadTool } from "./task-graph-read.js";
+import { taskGraphSkipTool } from "./task-graph-skip.js";
+import { taskGraphValidatingTool } from "./task-graph-validating.js";
+import type { ToolContext } from "../../types.js";
+
+const baseContext: ToolContext = {
+  conversationId: "conv-1",
+  workspaceRoot: "E:/project/star-sanctuary",
+  policy: {
+    allowedPaths: [],
+    deniedPaths: [],
+    allowedDomains: [],
+    deniedDomains: [],
+    maxTimeoutMs: 30_000,
+    maxResponseBytes: 512_000,
+  },
+  agentCapabilities: {
+    spawnParallel: vi.fn(async (tasks) => tasks.map(() => ({
+      success: true,
+      output: "delegated",
+      sessionId: "session_1",
+    }))),
+  },
+  goalCapabilities: {
+    createGoal: vi.fn(async (input) => ({
+      id: "goal_alpha",
+      slug: "alpha",
+      title: input.title,
+      status: "planning",
+      goalRoot: "E:/goals/goal_alpha",
+      runtimeRoot: "E:/goals/goal_alpha",
+      docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+      northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+      tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+      progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+      registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+      pathSource: "default",
+      objective: input.objective,
+      createdAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+    })),
+    listGoals: vi.fn(async () => [
+      {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "planning",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    ]),
+    resumeGoal: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      conversationId: "goal:goal_alpha",
+      runId: undefined,
+    })),
+    readTaskGraph: vi.fn(async () => ({
+      version: 2 as const,
+      goalId: "goal_alpha",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+      nodes: [
+        {
+          id: "node_root",
+          title: "Root Node",
+          status: "ready" as const,
+          dependsOn: [],
+          acceptance: [],
+          artifacts: [],
+          checkpointRequired: false,
+          checkpointStatus: "not_required" as const,
+          createdAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:00.000Z",
+        },
+      ],
+      edges: [],
+    })),
+    createTaskNode: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "planning",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: {
+        version: 2 as const,
+        goalId: "goal_alpha",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+        nodes: [
+          {
+            id: "node_root",
+            title: "Root Node",
+            status: "ready" as const,
+            dependsOn: [],
+            acceptance: [],
+            artifacts: [],
+            checkpointRequired: false,
+            checkpointStatus: "not_required" as const,
+            createdAt: "2026-03-20T00:00:00.000Z",
+            updatedAt: "2026-03-20T00:00:00.000Z",
+          },
+        ],
+        edges: [],
+      },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "ready" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: false,
+        checkpointStatus: "not_required" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+    claimTaskNode: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: {
+        version: 2 as const,
+        goalId: "goal_alpha",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+        nodes: [
+          {
+            id: "node_root",
+            title: "Root Node",
+            status: "in_progress" as const,
+            dependsOn: [],
+            acceptance: [],
+            artifacts: [],
+            checkpointRequired: false,
+            checkpointStatus: "not_required" as const,
+            createdAt: "2026-03-20T00:00:00.000Z",
+            updatedAt: "2026-03-20T00:00:00.000Z",
+          },
+        ],
+        edges: [],
+      },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "in_progress" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: false,
+        checkpointStatus: "not_required" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+    markTaskNodePendingReview: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "reviewing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: { version: 2 as const, goalId: "goal_alpha", updatedAt: "2026-03-20T00:00:00.000Z", nodes: [], edges: [] },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "pending_review" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: false,
+        checkpointStatus: "not_required" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+    markTaskNodeValidating: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "reviewing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: { version: 2 as const, goalId: "goal_alpha", updatedAt: "2026-03-20T00:00:00.000Z", nodes: [], edges: [] },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "validating" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: false,
+        checkpointStatus: "not_required" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+    listCheckpoints: vi.fn(async () => ({
+      version: 2 as const,
+      items: [
+        {
+          id: "checkpoint_1",
+          goalId: "goal_alpha",
+          nodeId: "node_root",
+          runId: "run_1",
+          status: "waiting_user" as const,
+          title: "Root checkpoint",
+          summary: "Need approval",
+          note: "Please review",
+          reviewer: "producer",
+          reviewerRole: "产品验收",
+          requestedBy: "main-agent",
+          slaAt: "2026-03-21T12:00:00.000Z",
+          requestedAt: "2026-03-20T00:00:00.000Z",
+          createdAt: "2026-03-20T00:00:00.000Z",
+          updatedAt: "2026-03-20T00:00:00.000Z",
+          history: [
+            {
+              action: "requested" as const,
+              status: "waiting_user" as const,
+              at: "2026-03-20T00:00:00.000Z",
+              summary: "Need approval",
+              note: "Please review",
+              actor: "main-agent",
+              runId: "run_1",
+            },
+          ],
+        },
+      ],
+    })),
+    requestCheckpoint: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "pending_approval",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: {
+        version: 2 as const,
+        goalId: "goal_alpha",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+        nodes: [],
+        edges: [],
+      },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "pending_review" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: true,
+        checkpointStatus: "waiting_user" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      checkpoints: {
+        version: 2 as const,
+        items: [],
+      },
+      checkpoint: {
+        id: "checkpoint_1",
+        goalId: "goal_alpha",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "waiting_user" as const,
+        title: "Root checkpoint",
+        summary: "Need approval",
+        note: "Please review",
+        reviewer: "producer",
+        reviewerRole: "产品验收",
+        requestedBy: "main-agent",
+        slaAt: "2026-03-21T12:00:00.000Z",
+        requestedAt: "2026-03-20T00:00:00.000Z",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+        history: [
+          {
+            action: "requested" as const,
+            status: "waiting_user" as const,
+            at: "2026-03-20T00:00:00.000Z",
+            summary: "Need approval",
+            note: "Please review",
+            actor: "main-agent",
+            runId: "run_1",
+          },
+        ],
+      },
+    })),
+    approveCheckpoint: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "reviewing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: {
+        version: 2 as const,
+        goalId: "goal_alpha",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+        nodes: [],
+        edges: [],
+      },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "validating" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: true,
+        checkpointStatus: "approved" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      checkpoints: {
+        version: 2 as const,
+        items: [],
+      },
+      checkpoint: {
+        id: "checkpoint_1",
+        goalId: "goal_alpha",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "approved" as const,
+        title: "Root checkpoint",
+        summary: "Approved",
+        note: "Looks good",
+        requestedAt: "2026-03-20T00:00:00.000Z",
+        decidedAt: "2026-03-20T01:00:00.000Z",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T01:00:00.000Z",
+        history: [
+          { action: "requested" as const, status: "waiting_user" as const, at: "2026-03-20T00:00:00.000Z" },
+          { action: "approved" as const, status: "approved" as const, at: "2026-03-20T01:00:00.000Z" },
+        ],
+      },
+    })),
+    rejectCheckpoint: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "blocked",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: {
+        version: 2 as const,
+        goalId: "goal_alpha",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+        nodes: [],
+        edges: [],
+      },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "blocked" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: true,
+        checkpointStatus: "rejected" as const,
+        blockReason: "Need changes",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      checkpoints: {
+        version: 2 as const,
+        items: [],
+      },
+      checkpoint: {
+        id: "checkpoint_1",
+        goalId: "goal_alpha",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "rejected" as const,
+        title: "Root checkpoint",
+        summary: "Rejected",
+        note: "Need changes",
+        requestedAt: "2026-03-20T00:00:00.000Z",
+        decidedAt: "2026-03-20T01:00:00.000Z",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T01:00:00.000Z",
+        history: [
+          { action: "requested" as const, status: "waiting_user" as const, at: "2026-03-20T00:00:00.000Z" },
+          { action: "rejected" as const, status: "rejected" as const, at: "2026-03-20T01:00:00.000Z" },
+        ],
+      },
+    })),
+    expireCheckpoint: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "blocked",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: { version: 2 as const, goalId: "goal_alpha", updatedAt: "2026-03-20T00:00:00.000Z", nodes: [], edges: [] },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "blocked" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: true,
+        checkpointStatus: "expired" as const,
+        blockReason: "Timeout",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      checkpoints: { version: 2 as const, items: [] },
+      checkpoint: {
+        id: "checkpoint_1",
+        goalId: "goal_alpha",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "expired" as const,
+        title: "Root checkpoint",
+        summary: "Expired",
+        note: "Timeout",
+        requestedAt: "2026-03-20T00:00:00.000Z",
+        decidedAt: "2026-03-20T01:00:00.000Z",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T01:00:00.000Z",
+        history: [
+          { action: "requested" as const, status: "waiting_user" as const, at: "2026-03-20T00:00:00.000Z" },
+          { action: "expired" as const, status: "expired" as const, at: "2026-03-20T01:00:00.000Z", note: "Timeout" },
+        ],
+      },
+    })),
+    reopenCheckpoint: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "pending_approval",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: { version: 2 as const, goalId: "goal_alpha", updatedAt: "2026-03-20T00:00:00.000Z", nodes: [], edges: [] },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "pending_review" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: true,
+        checkpointStatus: "waiting_user" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      checkpoints: { version: 2 as const, items: [] },
+      checkpoint: {
+        id: "checkpoint_1",
+        goalId: "goal_alpha",
+        nodeId: "node_root",
+        runId: "run_2",
+        status: "waiting_user" as const,
+        title: "Root checkpoint",
+        summary: "Reopened",
+        note: "Retry",
+        requestedAt: "2026-03-20T02:00:00.000Z",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T02:00:00.000Z",
+        history: [
+          { action: "requested" as const, status: "waiting_user" as const, at: "2026-03-20T00:00:00.000Z" },
+          { action: "expired" as const, status: "expired" as const, at: "2026-03-20T01:00:00.000Z" },
+          { action: "reopened" as const, status: "waiting_user" as const, at: "2026-03-20T02:00:00.000Z" },
+        ],
+      },
+    })),
+    failTaskNode: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "blocked",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: { version: 2 as const, goalId: "goal_alpha", updatedAt: "2026-03-20T00:00:00.000Z", nodes: [], edges: [] },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "failed" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: false,
+        checkpointStatus: "not_required" as const,
+        blockReason: "Failure reason",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+    skipTaskNode: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      graph: { version: 2 as const, goalId: "goal_alpha", updatedAt: "2026-03-20T00:00:00.000Z", nodes: [], edges: [] },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "skipped" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: false,
+        checkpointStatus: "not_required" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+    listCapabilityPlans: vi.fn(async () => ({
+      version: 1 as const,
+      items: [],
+    })),
+    getCapabilityPlan: vi.fn(async () => ({
+      id: "plan_1",
+      goalId: "goal_alpha",
+      nodeId: "node_root",
+      status: "planned" as const,
+      executionMode: "multi_agent" as const,
+      riskLevel: "low" as const,
+      objective: "Plan Root Node",
+      summary: "Need methods and delegation",
+      queryHints: ["Root Node", "Alpha Goal"],
+      reasoning: ["Need explicit planning before execute"],
+      methods: [{ file: "Refactor-Plan.md", title: "Refactor Plan", score: 20 }],
+      skills: [{ name: "find-skills", score: 10 }],
+      mcpServers: [{ serverId: "docs", status: "connected" as const, toolCount: 3 }],
+      subAgents: [{ agentId: "coder", objective: "Implement Root Node" }],
+      gaps: ["Need more skill coverage"],
+      checkpoint: {
+        required: false,
+        reasons: [],
+        approvalMode: "none" as const,
+        requiredRequestFields: [],
+        requiredDecisionFields: [],
+        escalationMode: "none" as const,
+      },
+      actualUsage: { methods: [], skills: [], mcpServers: [], toolNames: [] },
+      analysis: {
+        status: "pending" as const,
+        summary: "尚未记录实际 usage，待执行后再比较计划与实际偏差。",
+        deviations: [],
+        recommendations: [],
+      },
+      generatedAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+    })),
+    saveCapabilityPlan: vi.fn(async (_goalId, _nodeId, input) => ({
+      id: "plan_1",
+      goalId: "goal_alpha",
+      nodeId: "node_root",
+      runId: input.runId,
+      status: input.status ?? "planned",
+      executionMode: input.executionMode,
+      riskLevel: input.riskLevel ?? "low",
+      objective: input.objective,
+      summary: input.summary,
+      queryHints: input.queryHints ?? [],
+      reasoning: input.reasoning ?? [],
+      methods: input.methods ?? [],
+      skills: input.skills ?? [],
+      mcpServers: input.mcpServers ?? [],
+      subAgents: input.subAgents ?? [],
+      gaps: input.gaps ?? [],
+      checkpoint: input.checkpoint ?? {
+        required: false,
+        reasons: [],
+        approvalMode: "none" as const,
+        requiredRequestFields: [],
+        requiredDecisionFields: [],
+        escalationMode: "none" as const,
+      },
+      actualUsage: input.actualUsage ?? { methods: [], skills: [], mcpServers: [], toolNames: [] },
+      analysis: {
+        status: "pending" as const,
+        summary: "尚未记录实际 usage，待执行后再比较计划与实际偏差。",
+        deviations: [],
+        recommendations: [],
+      },
+      generatedAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+      orchestratedAt: input.orchestratedAt,
+      orchestration: input.orchestration,
+    })),
+    generateCapabilityPlan: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      node: {
+        id: "node_root",
+        title: "Root Node",
+        status: "ready" as const,
+        dependsOn: [],
+        acceptance: [],
+        artifacts: [],
+        checkpointRequired: false,
+        checkpointStatus: "not_required" as const,
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      plan: {
+        id: "plan_1",
+        goalId: "goal_alpha",
+        nodeId: "node_root",
+        status: "planned" as const,
+        executionMode: "multi_agent" as const,
+        riskLevel: "low" as const,
+        objective: "Plan Root Node",
+        summary: "Need methods and delegation",
+        queryHints: ["Root Node", "Alpha Goal"],
+        reasoning: ["Need explicit planning before execute"],
+        methods: [{ file: "Refactor-Plan.md", title: "Refactor Plan", score: 20 }],
+        skills: [{ name: "find-skills", score: 10 }],
+        mcpServers: [{ serverId: "docs", status: "connected" as const, toolCount: 3 }],
+        subAgents: [{ agentId: "coder", objective: "Implement Root Node" }],
+        gaps: ["Need more skill coverage"],
+        checkpoint: {
+          required: false,
+          reasons: [],
+          approvalMode: "none" as const,
+          requiredRequestFields: [],
+          requiredDecisionFields: [],
+          escalationMode: "none" as const,
+        },
+        actualUsage: { methods: [], skills: [], mcpServers: [], toolNames: [] },
+        analysis: {
+          status: "pending" as const,
+          summary: "尚未记录实际 usage，待执行后再比较计划与实际偏差。",
+          deviations: [],
+          recommendations: [],
+        },
+        generatedAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+    generateHandoff: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      handoff: {
+        version: 1 as const,
+        goalId: "goal_alpha",
+        generatedAt: "2026-03-20T10:00:00.000Z",
+        goalStatus: "executing",
+        currentPhase: "implementation",
+        activeConversationId: "goal:goal_alpha:node:node_root:run:run_1",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        resumeMode: "current_node" as const,
+        recommendedNodeId: "node_root",
+        summary: "Resume current node.",
+        nextAction: "Continue node_root.",
+        tracking: {
+          totalNodes: 1,
+          completedNodes: 0,
+          inProgressNodes: 1,
+          blockedNodes: 0,
+          pendingReviewNodes: 0,
+          validatingNodes: 0,
+          failedNodes: 0,
+          skippedNodes: 0,
+          openCheckpointCount: 0,
+        },
+        openCheckpoints: [],
+        blockers: [],
+        focusCapability: {
+          planId: "plan_1",
+          nodeId: "node_root",
+          status: "planned" as const,
+          executionMode: "single_agent" as const,
+          riskLevel: "low" as const,
+          alignment: "pending" as const,
+          summary: "Plan summary",
+        },
+        recentProgress: [],
+      },
+      content: "# handoff",
+    })),
+    generateRetrospective: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      retrospective: {
+        version: 1 as const,
+        goalId: "goal_alpha",
+        generatedAt: "2026-03-20T11:00:00.000Z",
+        goalStatus: "executing",
+        currentPhase: "implementation",
+        objective: "Build it",
+        outcome: "in_progress" as const,
+        summary: "Goal 当前仍在推进，已具备最小 retrospective。",
+        nextFocus: "Continue node_root.",
+        handoffSummary: "Resume current node.",
+        taskSummary: {
+          totalNodes: 1,
+          completedNodes: 0,
+          inProgressNodes: 1,
+          blockedNodes: 0,
+          pendingReviewNodes: 0,
+          validatingNodes: 0,
+          failedNodes: 0,
+          skippedNodes: 0,
+          openCheckpointCount: 0,
+        },
+        checkpointSummary: {
+          total: 1,
+          waitingUserCount: 0,
+          approvedCount: 1,
+          rejectedCount: 0,
+          expiredCount: 0,
+        },
+        capabilitySummary: {
+          totalPlans: 1,
+          orchestratedPlans: 1,
+          highRiskPlans: 0,
+          divergedPlans: 0,
+          uniqueMethods: ["Refactor-Plan.md"],
+          uniqueSkills: ["find-skills"],
+          uniqueMcpServers: ["docs"],
+          topGaps: ["Need more skill coverage (1)"],
+        },
+        achievements: ["已形成一版 capability 计划。"],
+        blockers: [],
+        recommendations: ["Continue node_root."],
+        highlightedNodes: [
+          {
+            id: "node_root",
+            title: "Root Node",
+            status: "in_progress" as const,
+            checkpointStatus: "not_required" as const,
+            artifacts: [],
+            updatedAt: "2026-03-20T11:00:00.000Z",
+          },
+        ],
+        recentProgress: [],
+        markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md",
+        jsonPath: "E:/goals/goal_alpha/retrospective.json",
+      },
+      content: "# 06-retrospective",
+    })),
+    generateExperienceSuggestions: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      generatedAt: "2026-03-20T13:30:00.000Z",
+      retrospective: {
+        version: 1 as const,
+        goalId: "goal_alpha",
+        generatedAt: "2026-03-20T11:00:00.000Z",
+        goalStatus: "executing",
+        currentPhase: "delivery",
+        objective: "Ship alpha",
+        outcome: "in_progress" as const,
+        summary: "Alpha is progressing with one active root node.",
+        nextFocus: "Continue node_root",
+        handoffSummary: "Resume node_root",
+        taskSummary: {
+          totalNodes: 1,
+          completedNodes: 0,
+          inProgressNodes: 1,
+          blockedNodes: 0,
+          openCheckpointCount: 0,
+        },
+        checkpointSummary: {
+          total: 0,
+          waitingUserCount: 0,
+          approvedCount: 0,
+          rejectedCount: 0,
+          expiredCount: 0,
+        },
+        capabilitySummary: {
+          totalPlans: 1,
+          orchestratedPlans: 1,
+          highRiskPlans: 0,
+          divergedPlans: 0,
+          uniqueMethods: ["Refactor-Plan.md"],
+          uniqueSkills: ["find-skills"],
+          uniqueMcpServers: ["docs"],
+          topGaps: ["Need more skill coverage (1)"],
+        },
+        achievements: ["已形成一版 capability 计划。"],
+        blockers: [],
+        recommendations: ["Continue node_root."],
+        highlightedNodes: [
+          {
+            id: "node_root",
+            title: "Root Node",
+            status: "in_progress" as const,
+            checkpointStatus: "not_required" as const,
+            artifacts: [],
+            updatedAt: "2026-03-20T11:00:00.000Z",
+          },
+        ],
+        recentProgress: [],
+        markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md",
+        jsonPath: "E:/goals/goal_alpha/retrospective.json",
+      },
+      methodCandidates: {
+        count: 1,
+        items: [
+          {
+            id: "method_candidate_node_root",
+            goalId: "goal_alpha",
+            nodeId: "node_root",
+            runId: "run_1",
+            title: "Root Node 方法候选",
+            slug: "alpha-node-root-root-node",
+            status: "suggested" as const,
+            summary: "Root node execution summary",
+            rationale: ["节点已完成，具备较高的流程稳定性。"],
+            qualityScore: 82,
+            evidence: {
+              nodeId: "node_root",
+              runId: "run_1",
+              nodeStatus: "done" as const,
+              checkpointStatus: "approved" as const,
+              artifacts: ["artifacts/root.txt"],
+              acceptance: ["Regression passes"],
+              methodsUsed: ["Refactor-Plan.md"],
+              skillsUsed: ["find-skills"],
+              mcpServersUsed: ["docs"],
+              progressEvents: ["task_node_claimed", "task_node_completed"],
+              references: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+            },
+            draftContent: "# Root Node 方法候选",
+            createdAt: "2026-03-20T12:00:00.000Z",
+          },
+        ],
+        markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/07-method-candidates.md",
+        jsonPath: "E:/goals/goal_alpha/method-candidates.json",
+      },
+      skillCandidates: {
+        count: 1,
+        items: [
+          {
+            id: "skill_candidate_node_root",
+            goalId: "goal_alpha",
+            nodeId: "node_root",
+            runId: "run_1",
+            title: "node_root skill 候选",
+            slug: "alpha-node-root-skill",
+            status: "suggested" as const,
+            summary: "Node root shows repeated capability gaps.",
+            rationale: ["存在能力缺口：Need automation wrapper。"],
+            qualityScore: 78,
+            evidence: {
+              nodeId: "node_root",
+              runId: "run_1",
+              executionMode: "multi_agent" as const,
+              riskLevel: "medium" as const,
+              planStatus: "orchestrated" as const,
+              objective: "Implement root flow",
+              summary: "Need automation wrapper",
+              gaps: ["Need automation wrapper"],
+              methodsUsed: ["Refactor-Plan.md"],
+              skillsUsed: ["find-skills"],
+              mcpServersUsed: ["docs"],
+              toolNamesUsed: ["file_read", "apply_patch"],
+              deviations: ["[tooling] unplanned tool chain"],
+              references: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+            },
+            draftContent: "# node_root skill draft",
+            createdAt: "2026-03-20T12:30:00.000Z",
+          },
+        ],
+        markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/08-skill-candidates.md",
+        jsonPath: "E:/goals/goal_alpha/skill-candidates.json",
+      },
+      flowPatterns: {
+        count: 1,
+        items: [
+          {
+            id: "flow_pattern_1",
+            goalId: "goal_alpha",
+            signature: "events=task_node_claimed>task_node_completed|mode=single_agent|checkpoint=none|risk=low|tools=file_read|mcp=",
+            summary: "Pattern summary",
+            count: 2,
+            action: "promote_method" as const,
+            confidence: 72,
+            eventSequence: ["task_node_claimed", "task_node_completed"],
+            executionMode: "single_agent" as const,
+            riskLevel: "low" as const,
+            checkpointMode: "none" as const,
+            toolNames: ["file_read"],
+            mcpServers: [],
+            methods: ["Refactor-Plan.md"],
+            skills: [],
+            gaps: [],
+            nodeRefs: [
+              { nodeId: "node_root", status: "done" as const, checkpointStatus: "not_required" as const },
+              { nodeId: "node_child", status: "done" as const, checkpointStatus: "not_required" as const },
+            ],
+            recommendations: ["该流程已具备重复执行特征，建议优先沉淀为 method。"],
+          },
+        ],
+        markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/09-flow-patterns.md",
+        jsonPath: "E:/goals/goal_alpha/flow-patterns.json",
+      },
+      summary: "Alpha is progressing with one active root node. | method=1 | skill=1 | flow=1",
+      recommendations: [
+        "Continue node_root.",
+        "优先审阅 method candidate：Root Node 方法候选",
+      ],
+    })),
+    generateMethodCandidates: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      candidates: [
+        {
+          id: "method_candidate_node_root",
+          goalId: "goal_alpha",
+          nodeId: "node_root",
+          runId: "run_1",
+          title: "Root Node 方法候选",
+          slug: "alpha-node-root-root-node",
+          status: "suggested" as const,
+          summary: "Root node execution summary",
+          rationale: ["节点已完成，具备较高的流程稳定性。"],
+          qualityScore: 82,
+          evidence: {
+            nodeId: "node_root",
+            runId: "run_1",
+            nodeStatus: "done" as const,
+            checkpointStatus: "approved" as const,
+            artifacts: ["artifacts/root.txt"],
+            acceptance: ["Regression passes"],
+            methodsUsed: ["Refactor-Plan.md"],
+            skillsUsed: ["find-skills"],
+            mcpServersUsed: ["docs"],
+            progressEvents: ["task_node_claimed", "task_node_completed"],
+            references: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+          },
+          draftContent: "# Root Node 方法候选",
+          createdAt: "2026-03-20T12:00:00.000Z",
+        },
+      ],
+      markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/07-method-candidates.md",
+      jsonPath: "E:/goals/goal_alpha/method-candidates.json",
+      content: "# 07-method-candidates",
+    })),
+    generateSkillCandidates: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      candidates: [
+        {
+          id: "skill_candidate_node_root",
+          goalId: "goal_alpha",
+          nodeId: "node_root",
+          runId: "run_1",
+          title: "node_root skill 候选",
+          slug: "alpha-node-root-skill",
+          status: "suggested" as const,
+          summary: "Node root shows repeated capability gaps.",
+          rationale: ["存在能力缺口：Need automation wrapper。"],
+          qualityScore: 78,
+          evidence: {
+            nodeId: "node_root",
+            runId: "run_1",
+            executionMode: "multi_agent" as const,
+            riskLevel: "medium" as const,
+            planStatus: "orchestrated" as const,
+            objective: "Implement root flow",
+            summary: "Need automation wrapper",
+            gaps: ["Need automation wrapper"],
+            methodsUsed: ["Refactor-Plan.md"],
+            skillsUsed: ["find-skills"],
+            mcpServersUsed: ["docs"],
+            toolNamesUsed: ["file_read", "apply_patch"],
+            deviations: ["[tooling] unplanned tool chain"],
+            references: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+          },
+          draftContent: "# node_root skill draft",
+          createdAt: "2026-03-20T12:30:00.000Z",
+        },
+      ],
+      markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/08-skill-candidates.md",
+      jsonPath: "E:/goals/goal_alpha/skill-candidates.json",
+      content: "# 08-skill-candidates",
+    })),
+    generateFlowPatterns: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      patterns: [
+        {
+          id: "flow_pattern_1",
+          goalId: "goal_alpha",
+          signature: "events=task_node_claimed>task_node_completed|mode=single_agent|checkpoint=none|risk=low|tools=file_read|mcp=",
+          summary: "Pattern summary",
+          count: 2,
+          action: "promote_method" as const,
+          confidence: 72,
+          eventSequence: ["task_node_claimed", "task_node_completed"],
+          executionMode: "single_agent" as const,
+          riskLevel: "low" as const,
+          checkpointMode: "none" as const,
+          toolNames: ["file_read"],
+          mcpServers: [],
+          methods: ["Refactor-Plan.md"],
+          skills: [],
+          gaps: [],
+          nodeRefs: [
+            { nodeId: "node_root", status: "done" as const, checkpointStatus: "not_required" as const },
+            { nodeId: "node_child", status: "done" as const, checkpointStatus: "not_required" as const },
+          ],
+          recommendations: ["该流程已具备重复执行特征，建议优先沉淀为 method。"],
+        },
+      ],
+      markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/09-flow-patterns.md",
+      jsonPath: "E:/goals/goal_alpha/flow-patterns.json",
+      content: "# 09-flow-patterns",
+    })),
+    generateCrossGoalFlowPatterns: vi.fn(async () => ({
+      generatedAt: "2026-03-20T15:00:00.000Z",
+      goalsScanned: 2,
+      patterns: [
+        {
+          id: "cross_goal_flow_1",
+          signature: "events=task_node_claimed>task_node_completed|mode=single_agent|checkpoint=none|risk=low|tools=file_read|mcp=",
+          summary: "该流程在 2 个 goal 中共出现 4 次，主要特征为 task_node_claimed -> task_node_completed。",
+          goalCount: 2,
+          occurrenceCount: 4,
+          recommendedAction: "promote_method" as const,
+          confidence: 82,
+          eventSequence: ["task_node_claimed", "task_node_completed"],
+          executionMode: "single_agent" as const,
+          riskLevel: "low" as const,
+          checkpointMode: "none" as const,
+          toolNames: ["file_read"],
+          mcpServers: [],
+          methods: ["Refactor-Plan.md"],
+          skills: [],
+          gaps: [],
+          goalRefs: [
+            {
+              goalId: "goal_alpha",
+              goalTitle: "Alpha Goal",
+              patternId: "flow_pattern_1",
+              count: 2,
+              confidence: 72,
+              nodeRefs: [{ nodeId: "node_root", status: "done" as const, checkpointStatus: "not_required" as const }],
+            },
+            {
+              goalId: "goal_beta",
+              goalTitle: "Beta Goal",
+              patternId: "flow_pattern_2",
+              count: 2,
+              confidence: 74,
+              nodeRefs: [{ nodeId: "node_beta", status: "done" as const, checkpointStatus: "not_required" as const }],
+            },
+          ],
+          recommendations: ["该模式已跨 2 个 goal 重复出现，可进入更高优先级治理。"],
+        },
+      ],
+      markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/cross-goal-flow-patterns.md",
+      jsonPath: "C:/Users/admin/.star_sanctuary/goals/cross-goal-flow-patterns.json",
+      content: "# 12-cross-goal-flow-patterns",
+    })),
+    getReviewGovernanceSummary: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      generatedAt: "2026-03-20T15:10:00.000Z",
+      reviews: {
+        version: 1 as const,
+        syncedAt: "2026-03-20T15:10:00.000Z",
+        items: [
+          {
+            id: "review_method_candidate_node_root",
+            goalId: "goal_alpha",
+            suggestionType: "method_candidate" as const,
+            suggestionId: "method_candidate_node_root",
+            title: "Root Node 方法候选",
+            summary: "Root node execution summary",
+            sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+            nodeId: "node_root",
+            runId: "run_1",
+            status: "accepted" as const,
+            reviewer: "producer",
+            decidedBy: "producer",
+            evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+            createdAt: "2026-03-20T14:00:00.000Z",
+            updatedAt: "2026-03-20T15:00:00.000Z",
+          },
+        ],
+      },
+      publishRecords: {
+        version: 1 as const,
+        items: [
+          {
+            id: "publish_review_method_candidate_node_root",
+            goalId: "goal_alpha",
+            reviewId: "review_method_candidate_node_root",
+            suggestionType: "method_candidate" as const,
+            suggestionId: "method_candidate_node_root",
+            assetType: "method" as const,
+            title: "Root Node 方法候选",
+            publishedPath: "C:/Users/admin/.star_sanctuary/methods/method-root-node.md",
+            assetKey: "method-root-node.md",
+            experienceCandidateId: "goal_exp_goal_alpha_method_candidate_node_root_method",
+            reviewer: "producer",
+            decidedBy: "producer",
+            nodeId: "node_root",
+            runId: "run_1",
+            sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+            publishedAt: "2026-03-20T15:05:00.000Z",
+          },
+        ],
+      },
+      crossGoal: {
+        goalsScanned: 2,
+        markdownPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/cross-goal-flow-patterns.md",
+        jsonPath: "C:/Users/admin/.star_sanctuary/goals/cross-goal-flow-patterns.json",
+        items: [
+          {
+            id: "cross_goal_flow_1",
+            signature: "events=task_node_claimed>task_node_completed|mode=single_agent|checkpoint=none|risk=low|tools=file_read|mcp=",
+            summary: "该流程在 2 个 goal 中共出现 4 次，主要特征为 task_node_claimed -> task_node_completed。",
+            goalCount: 2,
+            occurrenceCount: 4,
+            recommendedAction: "promote_method" as const,
+            confidence: 82,
+            eventSequence: ["task_node_claimed", "task_node_completed"],
+            executionMode: "single_agent" as const,
+            riskLevel: "low" as const,
+            checkpointMode: "none" as const,
+            toolNames: ["file_read"],
+            mcpServers: [],
+            methods: ["Refactor-Plan.md"],
+            skills: [],
+            gaps: [],
+            goalRefs: [
+              {
+                goalId: "goal_alpha",
+                goalTitle: "Alpha Goal",
+                patternId: "flow_pattern_1",
+                count: 2,
+                confidence: 72,
+                nodeRefs: [{ nodeId: "node_root", status: "done" as const, checkpointStatus: "not_required" as const }],
+              },
+            ],
+            recommendations: ["该模式已跨 2 个 goal 重复出现，可进入更高优先级治理。"],
+          },
+        ],
+      },
+      reviewStatusCounts: {
+        pending_review: 0,
+        accepted: 1,
+        rejected: 0,
+        deferred: 0,
+        needs_revision: 0,
+      },
+      reviewTypeCounts: {
+        method_candidate: 1,
+        skill_candidate: 0,
+        flow_pattern: 0,
+      },
+      actionableReviews: [],
+      summary: "reviews=1 | pending=0 | accepted_unpublished=0 | published=1 | cross_goal_matches=1",
+      recommendations: ["当前 goal 已命中跨 goal 高频流程：cross_goal_flow_1，可作为 method/skill 治理优先级依据"],
+    })),
+    listSuggestionReviews: vi.fn(async () => ({
+      version: 1 as const,
+      syncedAt: "2026-03-20T14:00:00.000Z",
+      items: [
+        {
+          id: "review_method_candidate_node_root",
+          goalId: "goal_alpha",
+          suggestionType: "method_candidate" as const,
+          suggestionId: "method_candidate_node_root",
+          title: "Root Node 方法候选",
+          summary: "Root node execution summary",
+          sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+          nodeId: "node_root",
+          runId: "run_1",
+          status: "pending_review" as const,
+          reviewer: "producer",
+          evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+          createdAt: "2026-03-20T14:00:00.000Z",
+          updatedAt: "2026-03-20T14:00:00.000Z",
+        },
+      ],
+    })),
+    configureSuggestionReviewWorkflow: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      reviews: {
+        version: 1 as const,
+        syncedAt: "2026-03-20T14:03:00.000Z",
+        items: [],
+      },
+      review: {
+        id: "review_method_candidate_node_root",
+        goalId: "goal_alpha",
+        suggestionType: "method_candidate" as const,
+        suggestionId: "method_candidate_node_root",
+        title: "Root Node 方法候选",
+        summary: "Root node execution summary",
+        sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "pending_review" as const,
+        reviewer: "tech-lead",
+        evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+        workflow: {
+          mode: "chain" as const,
+          status: "pending_review" as const,
+          currentStageIndex: 0,
+          configuredAt: "2026-03-20T14:03:00.000Z",
+          updatedAt: "2026-03-20T14:03:00.000Z",
+          stages: [
+            {
+              id: "stage_1",
+              title: "Chain Stage 1",
+              mode: "single" as const,
+              reviewers: [{ reviewer: "tech-lead" }],
+              minApprovals: 1,
+              status: "pending_review" as const,
+              votes: [],
+              startedAt: "2026-03-20T14:03:00.000Z",
+              escalation: { mode: "manual" as const, count: 0, history: [] },
+            },
+            {
+              id: "stage_2",
+              title: "Chain Stage 2",
+              mode: "single" as const,
+              reviewers: [{ reviewer: "producer" }],
+              minApprovals: 1,
+              status: "pending_review" as const,
+              votes: [],
+              startedAt: "2026-03-20T14:03:00.000Z",
+              escalation: { mode: "manual" as const, count: 0, history: [] },
+            },
+          ],
+        },
+        createdAt: "2026-03-20T14:00:00.000Z",
+        updatedAt: "2026-03-20T14:03:00.000Z",
+      },
+    })),
+    decideSuggestionReview: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      reviews: {
+        version: 1 as const,
+        syncedAt: "2026-03-20T14:05:00.000Z",
+        items: [
+          {
+            id: "review_method_candidate_node_root",
+            goalId: "goal_alpha",
+            suggestionType: "method_candidate" as const,
+            suggestionId: "method_candidate_node_root",
+            title: "Root Node 方法候选",
+            summary: "Root node execution summary",
+            sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+            nodeId: "node_root",
+            runId: "run_1",
+            status: "accepted" as const,
+            reviewer: "producer",
+            decidedBy: "producer",
+            note: "Looks reusable",
+            decidedAt: "2026-03-20T14:05:00.000Z",
+            evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+            createdAt: "2026-03-20T14:00:00.000Z",
+            updatedAt: "2026-03-20T14:05:00.000Z",
+          },
+        ],
+      },
+      review: {
+        id: "review_method_candidate_node_root",
+        goalId: "goal_alpha",
+        suggestionType: "method_candidate" as const,
+        suggestionId: "method_candidate_node_root",
+        title: "Root Node 方法候选",
+        summary: "Root node execution summary",
+        sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "accepted" as const,
+        reviewer: "producer",
+        decidedBy: "producer",
+        note: "Looks reusable",
+        decidedAt: "2026-03-20T14:05:00.000Z",
+        evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+        workflow: {
+          mode: "chain" as const,
+          status: "accepted" as const,
+          currentStageIndex: 1,
+          configuredAt: "2026-03-20T14:03:00.000Z",
+          updatedAt: "2026-03-20T14:05:00.000Z",
+          stages: [
+            {
+              id: "stage_1",
+              title: "Chain Stage 1",
+              mode: "single" as const,
+              reviewers: [{ reviewer: "tech-lead" }],
+              minApprovals: 1,
+              status: "accepted" as const,
+              votes: [{ reviewer: "tech-lead", decision: "accepted" as const, decidedBy: "tech-lead", decidedAt: "2026-03-20T14:04:00.000Z" }],
+              startedAt: "2026-03-20T14:03:00.000Z",
+              decidedAt: "2026-03-20T14:04:00.000Z",
+              escalation: { mode: "manual" as const, count: 0, history: [] },
+            },
+            {
+              id: "stage_2",
+              title: "Chain Stage 2",
+              mode: "single" as const,
+              reviewers: [{ reviewer: "producer" }],
+              minApprovals: 1,
+              status: "accepted" as const,
+              votes: [{ reviewer: "producer", decision: "accepted" as const, decidedBy: "producer", decidedAt: "2026-03-20T14:05:00.000Z" }],
+              startedAt: "2026-03-20T14:03:00.000Z",
+              decidedAt: "2026-03-20T14:05:00.000Z",
+              escalation: { mode: "manual" as const, count: 0, history: [] },
+            },
+          ],
+        },
+        createdAt: "2026-03-20T14:00:00.000Z",
+        updatedAt: "2026-03-20T14:05:00.000Z",
+      },
+    })),
+    escalateSuggestionReview: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      reviews: {
+        version: 1 as const,
+        syncedAt: "2026-03-20T14:06:00.000Z",
+        items: [],
+      },
+      review: {
+        id: "review_method_candidate_node_root",
+        goalId: "goal_alpha",
+        suggestionType: "method_candidate" as const,
+        suggestionId: "method_candidate_node_root",
+        title: "Root Node 方法候选",
+        summary: "Root node execution summary",
+        sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "pending_review" as const,
+        reviewer: "owner",
+        evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+        workflow: {
+          mode: "chain" as const,
+          status: "pending_review" as const,
+          currentStageIndex: 0,
+          configuredAt: "2026-03-20T14:03:00.000Z",
+          updatedAt: "2026-03-20T14:06:00.000Z",
+          stages: [
+            {
+              id: "stage_1",
+              title: "Chain Stage 1",
+              mode: "single" as const,
+              reviewers: [{ reviewer: "tech-lead" }, { reviewer: "owner" }],
+              minApprovals: 1,
+              status: "pending_review" as const,
+              votes: [],
+              startedAt: "2026-03-20T14:03:00.000Z",
+              escalation: {
+                mode: "manual" as const,
+                count: 1,
+                lastEscalatedAt: "2026-03-20T14:06:00.000Z",
+                escalatedTo: "owner",
+                escalatedBy: "producer",
+                reason: "SLA timeout",
+                history: [{ at: "2026-03-20T14:06:00.000Z", by: "producer", to: "owner", reason: "SLA timeout" }],
+              },
+            },
+          ],
+        },
+        createdAt: "2026-03-20T14:00:00.000Z",
+        updatedAt: "2026-03-20T14:06:00.000Z",
+      },
+    })),
+    publishSuggestion: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      review: {
+        id: "review_method_candidate_node_root",
+        goalId: "goal_alpha",
+        suggestionType: "method_candidate" as const,
+        suggestionId: "method_candidate_node_root",
+        title: "Root Node 方法候选",
+        summary: "Root node execution summary",
+        sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+        nodeId: "node_root",
+        runId: "run_1",
+        status: "accepted" as const,
+        reviewer: "producer",
+        decidedBy: "producer",
+        note: "Looks reusable",
+        decidedAt: "2026-03-20T14:05:00.000Z",
+        evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+        createdAt: "2026-03-20T14:00:00.000Z",
+        updatedAt: "2026-03-20T14:05:00.000Z",
+      },
+      record: {
+        id: "publish_review_method_candidate_node_root",
+        goalId: "goal_alpha",
+        reviewId: "review_method_candidate_node_root",
+        suggestionType: "method_candidate" as const,
+        suggestionId: "method_candidate_node_root",
+        assetType: "method" as const,
+        title: "Root Node 方法候选",
+        publishedPath: "C:/Users/admin/.star_sanctuary/methods/method-root-node.md",
+        assetKey: "method-root-node.md",
+        experienceCandidateId: "goal_exp_goal_alpha_method_candidate_node_root_method",
+        reviewer: "producer",
+        decidedBy: "producer",
+        note: "Looks reusable",
+        nodeId: "node_root",
+        runId: "run_1",
+        sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+        publishedAt: "2026-03-20T14:10:00.000Z",
+      },
+      records: {
+        version: 1 as const,
+        items: [],
+      },
+    })),
+  },
+};
+
+const goalContext: ToolContext = {
+  ...baseContext,
+  conversationId: "goal:goal_alpha",
+};
+
+describe("goal tools", () => {
+  it("goal_init should create a goal", async () => {
+    const result = await goalInitTool.execute({ title: "Alpha Goal", objective: "Build it" }, baseContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("超长期任务已创建");
+    expect(result.output).toContain("Alpha Goal");
+  });
+
+  it("goal_list should render goals", async () => {
+    const result = await goalListTool.execute({}, baseContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("goal_alpha");
+  });
+
+  it("goal_resume should resume a goal", async () => {
+    const result = await goalResumeTool.execute({ goal_id: "goal_alpha" }, baseContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已恢复超长期任务");
+    expect(result.output).toContain("goal:goal_alpha");
+  });
+
+  it("goal_handoff_generate should generate a handoff", async () => {
+    const result = await goalHandoffGenerateTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 handoff");
+    expect(result.output).toContain("Resume Mode: current_node");
+  });
+
+  it("goal_retrospect_generate should generate a retrospective", async () => {
+    const result = await goalRetrospectGenerateTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 retrospective");
+    expect(result.output).toContain("Outcome: in_progress");
+    expect(result.output).toContain("06-retrospective.md");
+  });
+
+  it("goal_experience_suggest should aggregate experience suggestions", async () => {
+    const result = await goalExperienceSuggestTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 goal experience suggestions");
+    expect(result.output).toContain("Method Candidates: 1");
+    expect(result.output).toContain("Flow Patterns: 1");
+  });
+
+  it("goal_method_candidates_generate should generate method candidates", async () => {
+    const result = await goalMethodCandidatesGenerateTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 method candidates");
+    expect(result.output).toContain("method_candidate_node_root");
+    expect(result.output).toContain("07-method-candidates.md");
+  });
+
+  it("goal_skill_candidates_generate should generate skill candidates", async () => {
+    const result = await goalSkillCandidatesGenerateTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 skill candidates");
+    expect(result.output).toContain("skill_candidate_node_root");
+    expect(result.output).toContain("08-skill-candidates.md");
+  });
+
+  it("goal_flow_patterns_generate should generate flow patterns", async () => {
+    const result = await goalFlowPatternsGenerateTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 flow patterns");
+    expect(result.output).toContain("flow_pattern_1");
+    expect(result.output).toContain("09-flow-patterns.md");
+  });
+
+  it("goal_cross_goal_flow_patterns should render aggregated cross-goal patterns", async () => {
+    const result = await goalCrossGoalFlowPatternsTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成跨 goal flow patterns");
+    expect(result.output).toContain("Goals Scanned: 2");
+    expect(result.output).toContain("cross_goal_flow_1");
+  });
+
+  it("goal_review_governance_summary should render governance summary", async () => {
+    const result = await goalReviewGovernanceSummaryTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 goal review governance 摘要");
+    expect(result.output).toContain("Publish Count: 1");
+    expect(result.output).toContain("cross_goal_flow_1");
+  });
+
+  it("goal_suggestion_review_list should render suggestion reviews", async () => {
+    const result = await goalSuggestionReviewListTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("review_method_candidate_node_root");
+    expect(result.output).toContain("method_candidate");
+  });
+
+  it("goal_suggestion_review_workflow_set should configure review workflow", async () => {
+    const result = await goalSuggestionReviewWorkflowSetTool.execute({
+      review_id: "review_method_candidate_node_root",
+      mode: "chain",
+      reviewers: ["tech-lead", "producer"],
+      escalation_mode: "manual",
+    }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已配置 suggestion review workflow");
+    expect(result.output).toContain("Mode: chain");
+    expect(result.output).toContain("Stage: 1/2");
+  });
+
+  it("goal_suggestion_review_decide should update suggestion review status", async () => {
+    const result = await goalSuggestionReviewDecideTool.execute({
+      review_id: "review_method_candidate_node_root",
+      decision: "accepted",
+      reviewer: "producer",
+      decided_by: "producer",
+      note: "Looks reusable",
+    }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已更新 suggestion review");
+    expect(result.output).toContain("Status: accepted");
+  });
+
+  it("goal_suggestion_review_escalate should escalate current workflow stage", async () => {
+    const result = await goalSuggestionReviewEscalateTool.execute({
+      review_id: "review_method_candidate_node_root",
+      escalated_by: "producer",
+      escalated_to: "owner",
+      reason: "SLA timeout",
+      force: true,
+    }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已执行 suggestion review escalation");
+    expect(result.output).toContain("Escalation Count: 1");
+    expect(result.output).toContain("Reviewer: owner");
+  });
+
+  it("goal_suggestion_publish should publish accepted suggestion", async () => {
+    const result = await goalSuggestionPublishTool.execute({
+      review_id: "review_method_candidate_node_root",
+      reviewer: "producer",
+      decided_by: "producer",
+      note: "Looks reusable",
+    }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已发布 suggestion");
+    expect(result.output).toContain("Asset Type: method");
+    expect(result.output).toContain("method-root-node.md");
+  });
+
+  it("task_graph_read should infer current goal and render graph", async () => {
+    const result = await taskGraphReadTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Goal ID: goal_alpha");
+    expect(result.output).toContain("node_root");
+  });
+
+  it("task_graph_create should create a node", async () => {
+    const result = await taskGraphCreateTool.execute({ title: "Root Node" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已创建 task graph 节点");
+    expect(result.output).toContain("Node ID: node_root");
+  });
+
+  it("task_graph_claim should claim a node", async () => {
+    const result = await taskGraphClaimTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已认领并启动节点");
+    expect(result.output).toContain("Status: in_progress");
+  });
+
+  it("goal_checkpoint_list should render checkpoints", async () => {
+    const result = await goalCheckpointListTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("checkpoint_1");
+  });
+
+  it("goal_checkpoint_request should request checkpoint", async () => {
+    const result = await goalCheckpointRequestTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已发起 checkpoint 请求");
+    expect(result.output).toContain("Status: waiting_user");
+    expect(result.output).toContain("Reviewer: producer");
+  });
+
+  it("goal_checkpoint_approve should approve checkpoint", async () => {
+    const result = await goalCheckpointApproveTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已批准 checkpoint");
+    expect(result.output).toContain("Status: approved");
+  });
+
+  it("goal_checkpoint_reject should reject checkpoint", async () => {
+    const result = await goalCheckpointRejectTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已拒绝 checkpoint");
+    expect(result.output).toContain("Status: rejected");
+  });
+
+  it("goal_checkpoint_expire should expire checkpoint", async () => {
+    const result = await goalCheckpointExpireTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已标记 checkpoint 过期");
+    expect(result.output).toContain("Status: expired");
+  });
+
+  it("goal_checkpoint_reopen should reopen checkpoint", async () => {
+    const result = await goalCheckpointReopenTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已重新打开 checkpoint");
+    expect(result.output).toContain("Status: waiting_user");
+  });
+
+  it("goal_capability_plan should generate a capability plan", async () => {
+    const result = await goalCapabilityPlanTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已生成 capabilityPlan");
+    expect(result.output).toContain("Execution Mode: multi_agent");
+    expect(result.output).toContain("Refactor-Plan.md");
+  });
+
+  it("goal_orchestrate should claim node and delegate sub agents", async () => {
+    const result = await goalOrchestrateTool.execute({ node_id: "node_root", auto_delegate: true }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("节点已 claim 并进入执行态");
+    expect(result.output).toContain("coder: success");
+    expect(result.output).toContain("Execution Mode: multi_agent");
+    expect(result.output).toContain("Status: orchestrated");
+  });
+
+  it("goal_orchestrate should auto request checkpoint for high-risk node and skip delegation", async () => {
+    const spawnParallel = vi.fn(async (tasks) => tasks.map(() => ({
+      success: true,
+      output: "delegated",
+      sessionId: "session_1",
+    })));
+    const requestCheckpoint = vi.fn(baseContext.goalCapabilities?.requestCheckpoint);
+    const updateTaskNode = vi.fn(baseContext.goalCapabilities?.updateTaskNode);
+    const listCheckpoints = vi.fn(async () => ({
+      version: 2 as const,
+      items: [],
+    }));
+    const getCapabilityPlan = vi.fn(async () => ({
+      id: "plan_high_risk",
+      goalId: "goal_alpha",
+      nodeId: "node_root",
+      status: "planned" as const,
+      executionMode: "multi_agent" as const,
+      riskLevel: "high" as const,
+      objective: "Deploy Root Node",
+      summary: "Need gated execution",
+      queryHints: ["deploy", "Root Node"],
+      reasoning: ["Deployment requires approval before execution"],
+      methods: [{ file: "Deploy-Checklist.md", title: "Deploy Checklist", score: 30 }],
+      skills: [{ name: "find-skills", score: 10 }],
+      mcpServers: [{ serverId: "docs", status: "connected" as const, toolCount: 3 }],
+      subAgents: [{ agentId: "coder", objective: "Implement Root Node" }],
+      gaps: [],
+      checkpoint: {
+        required: true,
+        reasons: ["涉及部署/上线/发布。", "涉及外部系统调用或对外写入。"],
+        approvalMode: "strict" as const,
+        requiredRequestFields: ["reviewerRole", "slaAt", "note"],
+        requiredDecisionFields: ["summary", "note", "decidedBy"],
+        suggestedTitle: "High-risk execution checkpoint",
+        suggestedNote: "先审批影响范围、回滚方案与验证方式。",
+        suggestedReviewerRole: "producer",
+        suggestedSlaHours: 12,
+        escalationMode: "manual" as const,
+      },
+      actualUsage: { methods: [], skills: [], mcpServers: [], toolNames: [] },
+      analysis: {
+        status: "pending" as const,
+        summary: "尚未记录实际 usage，待执行后再比较计划与实际偏差。",
+        deviations: [],
+        recommendations: [],
+      },
+      generatedAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+    }));
+
+    const context: ToolContext = {
+      ...goalContext,
+      agentCapabilities: {
+        spawnParallel,
+      },
+      goalCapabilities: {
+        ...goalContext.goalCapabilities,
+        getCapabilityPlan,
+        listCheckpoints,
+        requestCheckpoint,
+        updateTaskNode,
+      },
+    };
+
+    const result = await goalOrchestrateTool.execute({ node_id: "node_root", auto_delegate: true }, context);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已自动发起高风险 checkpoint");
+    expect(result.output).toContain("已进入 checkpoint 审批阶段，暂不触发子代理委托");
+    expect(requestCheckpoint).toHaveBeenCalledTimes(1);
+    expect(requestCheckpoint).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
+      reviewerRole: "producer",
+      requestedBy: "main-agent",
+      note: "先审批影响范围、回滚方案与验证方式。",
+    }));
+    expect(updateTaskNode).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
+      checkpointRequired: true,
+      checkpointStatus: "required",
+    }));
+    expect(spawnParallel).not.toHaveBeenCalled();
+  });
+
+  it("task_graph_pending_review should move node into pending_review", async () => {
+    const result = await taskGraphPendingReviewTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("pending_review");
+  });
+
+  it("task_graph_validating should move node into validating", async () => {
+    const result = await taskGraphValidatingTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("validating");
+  });
+
+  it("task_graph_fail should mark node failed", async () => {
+    const result = await taskGraphFailTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("failed");
+  });
+
+  it("task_graph_skip should mark node skipped", async () => {
+    const result = await taskGraphSkipTool.execute({ node_id: "node_root" }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("skipped");
+  });
+});

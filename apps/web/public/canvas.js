@@ -40,11 +40,27 @@ const DEFAULT_SIZE = {
   screenshot: [320, 240], session: [200, 80], group: [400, 300],
 };
 
-function renderNodeHTML(node) {
+function matchesGoalNode(node, activeGoalNodeId) {
+  const normalizedGoalNodeId = typeof activeGoalNodeId === "string" ? activeGoalNodeId.trim() : "";
+  if (!normalizedGoalNodeId || !node || typeof node !== "object") return false;
+  const d = node.data && typeof node.data === "object" ? node.data : {};
+  const candidates = [
+    node.id,
+    d.nodeId,
+    d.goalNodeId,
+    d.taskNodeId,
+    d.ref && typeof d.ref === "object" ? d.ref.id : "",
+  ];
+  return candidates.some((value) => typeof value === "string" && value.trim() === normalizedGoalNodeId);
+}
+
+function renderNodeHTML(node, options = {}) {
   const d = node.data;
   const icon = NODE_ICONS[node.type] || "\u25A0";
   const statusCls = d.status ? ` node-status-${d.status}` : "";
   const typeCls = `node-${node.type}`;
+  const isGoalActive = matchesGoalNode(node, options.activeGoalNodeId);
+  const activeCls = isGoalActive ? " goal-active" : "";
 
   let body = "";
   if (!d.collapsed && d.content) {
@@ -64,13 +80,15 @@ function renderNodeHTML(node) {
   }
 
   const statusDot = node.type === "task" ? `<span class="node-status-dot"></span>` : "";
+  const activeBadge = isGoalActive ? `<span class="node-active-badge" title="当前 activeNode">ACTIVE</span>` : "";
   const refBadge = d.ref ? `<span class="node-ref-badge" title="${esc(d.ref.type)}: ${esc(d.ref.id)}">\u{1F517}</span>` : "";
 
-  return `<div class="canvas-node ${typeCls}${statusCls}" data-node-id="${node.id}" style="${d.color ? `border-left-color:${d.color}` : ""}">
+  return `<div class="canvas-node ${typeCls}${statusCls}${activeCls}" data-node-id="${node.id}" style="${d.color ? `border-left-color:${d.color}` : ""}">
   <div class="node-header">
     <span class="node-type-icon">${icon}</span>
     ${statusDot}
     <span class="node-title">${esc(d.title)}</span>
+    ${activeBadge}
     ${refBadge}
   </div>
   ${extra}${body}${tags}
@@ -265,6 +283,7 @@ class CanvasRenderer {
     // interaction state
     this.selectedNodeId = null;
     this.selectedEdgeId = null;
+    this.activeGoalNodeId = null;
     this._dragState = null;   // { nodeId, startX, startY, origX, origY }
     this._panState = null;    // { startX, startY, origPanX, origPanY }
     this._connectState = null; // { fromNodeId, fromPort, tempLine }
@@ -360,7 +379,7 @@ class CanvasRenderer {
     body.style.position = "relative";
     body.style.width = node.width + "px";
     body.style.height = node.height + "px";
-    body.innerHTML = renderNodeHTML(node);
+    body.innerHTML = renderNodeHTML(node, { activeGoalNodeId: this.activeGoalNodeId });
 
     fo.appendChild(body);
     this.nodesLayer.appendChild(fo);
@@ -645,6 +664,7 @@ class CanvasApp {
     this._autoSaveTimer = null;
     this._contextMenuEl = null;
     this.currentBoardId = null;
+    this.goalContext = null;
     // ReAct visualization state
     this.reactEnabled = false;
     this._reactNodes = new Map(); // toolCallId → nodeId
@@ -794,6 +814,7 @@ class CanvasApp {
         this.renderer.fitView(board);
       }
       this._updateZoomLabel();
+      window._belldandySyncCanvasContext?.();
     } catch (e) {
       console.error("Canvas: failed to open board", e);
     }
@@ -807,6 +828,7 @@ class CanvasApp {
     this._updateBoardName();
     this.renderer.setTransform(0, 0, 1);
     this._updateZoomLabel();
+    window._belldandySyncCanvasContext?.();
     return board.id;
   }
 
@@ -854,6 +876,7 @@ class CanvasApp {
       this.renderer.nodesLayer.innerHTML = "";
       this.renderer.edgesLayer.innerHTML = "";
     }
+    window._belldandySyncCanvasContext?.();
   }
 
   /** Show board list UI in the canvas section */
@@ -924,6 +947,7 @@ class CanvasApp {
     }
 
     section.appendChild(listEl);
+    window._belldandySyncCanvasContext?.();
   }
 
   /** Switch from board list to canvas view */
@@ -936,6 +960,7 @@ class CanvasApp {
     if (listEl) listEl.remove();
     if (svg) svg.style.display = "";
     if (toolbar) toolbar.style.display = "";
+    window._belldandySyncCanvasContext?.();
   }
 
   // ── Event bridge (called from app.js handleEvent) ──
@@ -980,8 +1005,23 @@ class CanvasApp {
 
   // ── Internal ──
 
+  setGoalContext(context) {
+    this.goalContext = context && typeof context === "object" ? { ...context } : null;
+    if (this.renderer) {
+      this.renderer.activeGoalNodeId = typeof this.goalContext?.nodeId === "string" && this.goalContext.nodeId.trim()
+        ? this.goalContext.nodeId.trim()
+        : null;
+    }
+    if (this.manager.board) {
+      this._rerender();
+    }
+  }
+
   _rerender() {
     if (this.renderer && this.manager.board) {
+      this.renderer.activeGoalNodeId = typeof this.goalContext?.nodeId === "string" && this.goalContext.nodeId.trim()
+        ? this.goalContext.nodeId.trim()
+        : null;
       this.renderer.renderAll(this.manager.board);
     }
   }
