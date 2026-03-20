@@ -6,7 +6,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 Belldandy is a **local-first personal AI assistant** — a pnpm monorepo using TypeScript (ESM). It runs on the user's device and communicates through WebChat, Feishu (Lark), and extensible chat channels.
 
-**Workspace boundary**: Only develop in `e:\project\Belldandy`. The sibling `openclaw/` and `UI-TARS-desktop-main/` directories are **read-only** reference code.
+**Workspace boundary**: Only develop in `e:\project\star-sanctuary`. The sibling `openclaw/` and `UI-TARS-desktop-main/` directories are **read-only** reference code.
 
 ## Commands
 
