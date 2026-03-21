@@ -1,3 +1,30 @@
+import {
+  persistAuthFields,
+  persistConnectionFields,
+  persistUuidField,
+  persistWorkspaceRootsField,
+  restoreAuthFields,
+  restoreUuidField,
+  restoreWorkspaceRootsField,
+} from "./app/features/persistence.js";
+import { createAttachmentsFeature } from "./app/features/attachments.js";
+import { createChatEventsFeature } from "./app/features/chat-events.js";
+import { createChatNetworkFeature } from "./app/features/chat-network.js";
+import { createChatUiFeature } from "./app/features/chat-ui.js";
+import { createCanvasContextFeature } from "./app/features/canvas-context.js";
+import { createGoalsDetailFeature } from "./app/features/goals-detail.js";
+import { createGoalsGovernancePanelFeature } from "./app/features/goals-governance-panel.js";
+import { createGoalsCapabilityPanelFeature } from "./app/features/goals-capability-panel.js";
+import { createGoalsOverviewFeature } from "./app/features/goals-overview.js";
+import { createGoalsReadonlyPanelsFeature } from "./app/features/goals-readonly-panels.js";
+import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-panel.js";
+import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
+import { initPromptController } from "./app/features/prompt.js";
+import { createSettingsController } from "./app/features/settings.js";
+import { createToolSettingsController } from "./app/features/tool-settings.js";
+import { createVoiceFeature } from "./app/features/voice.js";
+import { createWorkspaceFeature } from "./app/features/workspace.js";
+
 const statusEl = document.getElementById("status");
 const authModeEl = document.getElementById("authMode");
 const authValueEl = document.getElementById("authValue");
@@ -7,11 +34,11 @@ const workspaceRootsEl = document.getElementById("workspaceRoots");
 const connectBtn = document.getElementById("connect");
 const sendBtn = document.getElementById("send");
 const promptEl = document.getElementById("prompt");
+const voiceBtn = document.getElementById("voiceBtn");
+const voiceDurationEl = document.getElementById("voiceDuration");
 const messagesEl = document.getElementById("messages");
 const modelSelectEl = document.getElementById("modelSelect");
 const agentSelectEl = document.getElementById("agentSelect");
-const PROMPT_MAX_HEIGHT_PX = 120;
-let promptBaseHeightPx = 0;
 
 // 文件树和编辑器 DOM 元素
 const sidebarEl = document.getElementById("sidebar");
@@ -28,6 +55,12 @@ const composerSection = document.getElementById("composerSection");
 const editorActions = document.getElementById("editorActions");
 const cancelEditBtn = document.getElementById("cancelEdit");
 const saveEditBtn = document.getElementById("saveEdit");
+const openEnvEditorBtn = document.getElementById("openEnvEditor");
+const switchRootBtn = document.getElementById("switchRoot");
+const switchFacetBtn = document.getElementById("switchFacet");
+const switchMemoryBtn = document.getElementById("switchMemory");
+const switchGoalsBtn = document.getElementById("switchGoals");
+const switchCanvasBtn = document.getElementById("switchCanvas");
 const memoryViewerSection = document.getElementById("memoryViewerSection");
 const memoryViewerStatsEl = document.getElementById("memoryViewerStats");
 const memoryViewerListEl = document.getElementById("memoryViewerList");
@@ -79,6 +112,24 @@ const goalCheckpointActionCloseBtn = document.getElementById("goalCheckpointActi
 const goalCheckpointActionCancelBtn = document.getElementById("goalCheckpointActionCancel");
 const goalCheckpointActionSubmitBtn = document.getElementById("goalCheckpointActionSubmit");
 const taskTokenHistoryEl = document.getElementById("taskTokenHistory");
+const tokenUsageEl = document.getElementById("tokenUsage");
+const restartOverlayEl = document.getElementById("restartOverlay");
+const restartCountdownEl = document.getElementById("restartCountdown");
+const restartReasonEl = document.getElementById("restartReason");
+const tokenUsageValueEls = {
+  tuSys: document.getElementById("tuSys"),
+  tuCtx: document.getElementById("tuCtx"),
+  tuIn: document.getElementById("tuIn"),
+  tuOut: document.getElementById("tuOut"),
+  tuAll: document.getElementById("tuAll"),
+};
+const taskTokenUsagePanelEl = document.getElementById("taskTokenUsage");
+const taskTokenValueEls = {
+  taskName: document.getElementById("taskName"),
+  taskIn: document.getElementById("taskIn"),
+  taskOut: document.getElementById("taskOut"),
+  taskTotal: document.getElementById("taskTotal"),
+};
 
 const STORE_KEY = "belldandy.webchat.auth";
 const CLIENT_KEY = "belldandy.webchat.clientId";
@@ -102,10 +153,7 @@ let isReady = false;
 let activeConversationId = null;
 const taskTokenHistoryByConversation = new Map();
 const TASK_TOKEN_HISTORY_LIMIT = 2;
-let botMsgEl = null;
-let botRawHtmlBuffer = "";
 let transientUrlToken = null;
-const pendingReq = new Map();
 const clientId = resolveClientId();
 let queuedText = null;
 
@@ -120,171 +168,55 @@ const webchatDebugEnabled = (() => {
   return flag === "1" || flag === "true";
 })();
 
-let voiceShortcutBinding = loadVoiceShortcutSetting();
-let voiceShortcutCaptureActive = false;
-let voiceInputController = createNoopVoiceInputController();
+const promptController = initPromptController({
+  promptEl,
+  onSubmit: () => sendMessage(),
+});
+
+let attachmentsFeature = null;
+let workspaceFeature = null;
+let chatEventsFeature = null;
+let chatNetworkFeature = null;
+let chatUiFeature = null;
+let canvasContextFeature = null;
+let goalsCapabilityPanelFeature = null;
+let goalsDetailFeature = null;
+let goalsGovernancePanelFeature = null;
+let goalsOverviewFeature = null;
+let goalsReadonlyPanelsFeature = null;
+let goalsTrackingPanelFeature = null;
+let memoryViewerFeature = null;
 
 function debugLog(...args) {
   if (!webchatDebugEnabled) return;
   console.debug(...args);
 }
 
-function createNoopVoiceInputController() {
-  return {
-    isSupported: false,
-    isRecording() {
-      return false;
-    },
-    async toggle() {
-      return false;
-    },
-    updateTitle() {},
-  };
-}
-
-function getDefaultVoiceShortcut() {
-  return { ...DEFAULT_VOICE_SHORTCUT };
-}
-
-function isVoiceShortcutFunctionKey(code) {
-  return /^F\d{1,2}$/.test(code);
-}
-
-function isModifierOnlyCode(code) {
-  return [
-    "ControlLeft",
-    "ControlRight",
-    "AltLeft",
-    "AltRight",
-    "ShiftLeft",
-    "ShiftRight",
-    "MetaLeft",
-    "MetaRight",
-  ].includes(code);
-}
-
-function normalizeVoiceShortcut(shortcut) {
-  if (!shortcut || typeof shortcut !== "object") return null;
-  const code = typeof shortcut.code === "string" ? shortcut.code.trim() : "";
-  if (!code || isModifierOnlyCode(code)) return null;
-  const normalized = {
-    code,
-    ctrlKey: shortcut.ctrlKey === true,
-    altKey: shortcut.altKey === true,
-    shiftKey: shortcut.shiftKey === true,
-    metaKey: shortcut.metaKey === true,
-  };
-  if (!isVoiceShortcutFunctionKey(code) && !(normalized.ctrlKey || normalized.altKey || normalized.metaKey)) {
-    return null;
-  }
-  return normalized;
-}
-
-function loadVoiceShortcutSetting() {
-  try {
-    const raw = localStorage.getItem(VOICE_SHORTCUT_KEY);
-    if (!raw) return getDefaultVoiceShortcut();
-    if (raw === VOICE_SHORTCUT_DISABLED_VALUE) return null;
-    return normalizeVoiceShortcut(JSON.parse(raw)) || getDefaultVoiceShortcut();
-  } catch {
-    return getDefaultVoiceShortcut();
-  }
-}
-
-function persistVoiceShortcutSetting(shortcut) {
-  const normalized = normalizeVoiceShortcut(shortcut);
-  voiceShortcutBinding = shortcut === null ? null : (normalized || getDefaultVoiceShortcut());
-  try {
-    if (voiceShortcutBinding === null) {
-      localStorage.setItem(VOICE_SHORTCUT_KEY, VOICE_SHORTCUT_DISABLED_VALUE);
-    } else {
-      localStorage.setItem(VOICE_SHORTCUT_KEY, JSON.stringify(voiceShortcutBinding));
-    }
-  } catch {
-    // ignore local persistence failures
-  }
-  renderVoiceShortcutSetting();
-  voiceInputController.updateTitle();
-}
-
-function formatVoiceShortcutKey(code) {
-  if (typeof code !== "string" || !code) return "";
-  if (code.startsWith("Key")) return code.slice(3).toUpperCase();
-  if (code.startsWith("Digit")) return code.slice(5);
-  if (code.startsWith("Numpad")) {
-    const suffix = code.slice(6);
-    const mapped = {
-      Add: "Num+",
-      Subtract: "Num-",
-      Multiply: "Num*",
-      Divide: "Num/",
-      Decimal: "Num.",
-      Enter: "NumEnter",
-    };
-    return mapped[suffix] || `Num${suffix}`;
-  }
-  const mapped = {
-    Space: "Space",
-    Escape: "Esc",
-    ArrowUp: "Up",
-    ArrowDown: "Down",
-    ArrowLeft: "Left",
-    ArrowRight: "Right",
-    Backquote: "`",
-    Minus: "-",
-    Equal: "=",
-    BracketLeft: "[",
-    BracketRight: "]",
-    Backslash: "\\",
-    Semicolon: ";",
-    Quote: "'",
-    Comma: ",",
-    Period: ".",
-    Slash: "/",
-    Enter: "Enter",
-    Tab: "Tab",
-    Backspace: "Backspace",
-    Delete: "Delete",
-  };
-  return mapped[code] || code;
-}
-
-function formatVoiceShortcut(shortcut) {
-  if (!shortcut) return "已禁用";
-  const parts = [];
-  if (shortcut.ctrlKey) parts.push("Ctrl");
-  if (shortcut.altKey) parts.push("Alt");
-  if (shortcut.shiftKey) parts.push("Shift");
-  if (shortcut.metaKey) parts.push("Meta");
-  parts.push(formatVoiceShortcutKey(shortcut.code));
-  return parts.join("+");
-}
-
-function describeVoiceShortcutForTitle() {
-  return voiceShortcutBinding ? `语音输入（点击或 ${formatVoiceShortcut(voiceShortcutBinding)} 切换录音）` : "语音输入（点击切换录音）";
-}
-
-function buildVoiceShortcutFromEvent(event) {
-  if (!event || typeof event.code !== "string") return null;
-  return normalizeVoiceShortcut({
-    code: event.code,
-    ctrlKey: event.ctrlKey,
-    altKey: event.altKey,
-    shiftKey: event.shiftKey,
-    metaKey: event.metaKey,
-  });
-}
-
-function matchesVoiceShortcut(event, shortcut) {
-  if (!shortcut) return false;
-  return (
-    event.code === shortcut.code &&
-    event.ctrlKey === shortcut.ctrlKey &&
-    event.altKey === shortcut.altKey &&
-    event.shiftKey === shortcut.shiftKey &&
-    event.metaKey === shortcut.metaKey
-  );
-}
+const voiceFeature = createVoiceFeature({
+  storageKey: VOICE_SHORTCUT_KEY,
+  disabledValue: VOICE_SHORTCUT_DISABLED_VALUE,
+  defaultShortcut: DEFAULT_VOICE_SHORTCUT,
+  promptEl,
+  composerSection,
+  voiceButtonEl: voiceBtn,
+  voiceDurationEl,
+  getIsSettingsOpen: () => Boolean(settingsModal && !settingsModal.classList.contains("hidden")),
+  syncPromptHeight: () => promptController.syncHeight(),
+  estimateDataUrlBytes,
+  estimatePendingAttachmentTotalBytes: () => attachmentsFeature?.estimatePendingAttachmentTotalBytes() ?? 0,
+  getAttachmentLimits: () => attachmentsFeature?.getAttachmentLimits() ?? {
+    maxFileBytes: DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
+    maxTotalBytes: DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
+  },
+  formatBytes,
+  addAttachment: (attachment) => {
+    attachmentsFeature?.addAttachment(attachment);
+  },
+  renderAttachmentsPreview: (hintMessage) => {
+    attachmentsFeature?.renderAttachmentsPreview(hintMessage);
+  },
+  onSendMessage: () => sendMessage(),
+});
 
 // 身份信息（从 hello-ok 获取）
 let agentName = "Agent";
@@ -292,14 +224,6 @@ let agentAvatar = "🤖";
 let userName = "User";
 let userAvatar = "👤";
 
-// 编辑器状态
-let editorMode = false;
-let currentEditPath = null;
-let originalContent = null;
-let currentEditReadOnly = false;
-// Tree Mode: "root" | "facets"
-let currentTreeMode = "root";
-const expandedFolders = new Set();
 const memoryViewerState = {
   tab: "tasks",
   stats: null,
@@ -340,36 +264,75 @@ let pendingGoalCheckpointAction = null;
 const attachmentsPreviewEl = document.getElementById("attachmentsPreview");
 const attachBtn = document.getElementById("attachBtn");
 const fileInput = document.getElementById("fileInput");
-let pendingAttachments = []; // { name, type, mimeType, content }
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
-let attachmentLimits = {
-  maxFileBytes: DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
-  maxTotalBytes: DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
-};
 const IMAGE_COMPRESS_TRIGGER_BYTES = 800 * 1024;
 const IMAGE_COMPRESS_TARGET_BYTES = 1200 * 1024;
 const IMAGE_COMPRESS_MAX_EDGE = 2048;
 const IMAGE_COMPRESS_RESIZE_FACTOR = 0.85;
 const IMAGE_COMPRESS_QUALITIES = [0.86, 0.78, 0.7, 0.62, 0.54];
-const attachmentHintEl = ensureAttachmentHintElement();
+attachmentsFeature = createAttachmentsFeature({
+  refs: {
+    attachmentsPreviewEl,
+    attachBtn,
+    fileInput,
+    composerSection,
+    promptEl,
+  },
+  defaultLimits: {
+    maxFileBytes: DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
+    maxTotalBytes: DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
+  },
+  imageCompression: {
+    triggerBytes: IMAGE_COMPRESS_TRIGGER_BYTES,
+    targetBytes: IMAGE_COMPRESS_TARGET_BYTES,
+    maxEdge: IMAGE_COMPRESS_MAX_EDGE,
+    resizeFactor: IMAGE_COMPRESS_RESIZE_FACTOR,
+    qualities: IMAGE_COMPRESS_QUALITIES,
+  },
+  estimateDataUrlBytes,
+  formatBytes,
+});
 
-// 侧边栏状态（默认收起）
-let sidebarExpanded = false;
-if (sidebarEl) {
-  sidebarEl.classList.add("collapsed");
-}
+workspaceFeature = createWorkspaceFeature({
+  refs: {
+    sidebarEl,
+    sidebarTitleEl,
+    fileTreeEl,
+    refreshTreeBtn,
+    editorPathEl: editorPath,
+    editorModeBadgeEl: editorModeBadge,
+    editorTextareaEl: editorTextarea,
+    cancelEditBtn,
+    saveEditBtn,
+    openEnvEditorBtn,
+    switchRootBtn,
+    switchFacetBtn,
+    workspaceRootsEl,
+  },
+  keys: {
+    workspaceRootsKey: WORKSPACE_ROOTS_KEY,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  switchMode: (mode) => switchMode(mode),
+  showNotice,
+  escapeHtml,
+  syncAttachmentLimitsFromConfig,
+  persistWorkspaceRootsField,
+});
 
-restoreAuth();
-restoreWorkspaceRoots();
-restoreUuid(); // 恢复UUID
+restoreAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl });
+restoreWorkspaceRootsField({ workspaceRootsKey: WORKSPACE_ROOTS_KEY, workspaceRootsEl });
+restoreUuidField({ uuidKey: UUID_KEY, userUuidEl });
 
 // 监听 UUID 保存按钮
 if (saveUuidBtn && userUuidEl) {
   saveUuidBtn.addEventListener("click", () => {
     const uuid = userUuidEl.value.trim();
     debugLog("[UUID] Saving UUID", { hasUuid: Boolean(uuid) });
-    persistUuid();
+    persistUuidField({ uuidKey: UUID_KEY, userUuidEl });
     // 如果 WebSocket 已连接，重新连接以更新 UUID
     if (ws && isReady) {
       debugLog("[UUID] UUID changed, reconnecting");
@@ -384,7 +347,7 @@ if (saveUuidBtn && userUuidEl) {
 // 监听 UUID 输入框的变化，自动保存并重新连接（备用方案）
 if (userUuidEl) {
   userUuidEl.addEventListener("blur", () => {
-    persistUuid();
+    persistUuidField({ uuidKey: UUID_KEY, userUuidEl });
     // 如果 WebSocket 已连接，重新连接以更新 UUID
     if (ws && isReady) {
       debugLog("[UUID] UUID changed (blur), reconnecting");
@@ -403,7 +366,7 @@ if (urlToken) {
 }
 
 setStatus("disconnected");
-updateAttachmentHint();
+attachmentsFeature.renderAttachmentsPreview();
 
 connectBtn.addEventListener("click", () => connect());
 sendBtn.addEventListener("click", () => sendMessage());
@@ -534,81 +497,9 @@ if (memoryChunkCategoryFilterEl) {
     if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
   });
 }
-function measurePromptBaseHeight() {
-  if (!promptEl) return;
-  const computed = window.getComputedStyle(promptEl);
-  const lineHeight = parseFloat(computed.lineHeight) || 24;
-  const paddingTop = parseFloat(computed.paddingTop) || 0;
-  const paddingBottom = parseFloat(computed.paddingBottom) || 0;
-  const borderTop = parseFloat(computed.borderTopWidth) || 0;
-  const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
-  promptBaseHeightPx = Math.max(
-    promptBaseHeightPx,
-    Math.ceil(lineHeight + paddingTop + paddingBottom + borderTop + borderBottom)
-  );
-}
-
-function syncPromptHeight() {
-  if (!promptEl) return;
-  const baseHeight = promptBaseHeightPx || promptEl.scrollHeight;
-  const hasText = Boolean(promptEl.value);
-  if (!hasText) {
-    promptEl.style.height = baseHeight + "px";
-    promptEl.style.overflowY = "hidden";
-    return;
-  }
-  promptEl.style.height = "auto";
-  const nextHeight = Math.min(promptEl.scrollHeight, PROMPT_MAX_HEIGHT_PX);
-  promptEl.style.height = Math.max(baseHeight, nextHeight) + "px";
-  promptEl.style.overflowY = promptEl.scrollHeight > PROMPT_MAX_HEIGHT_PX ? "auto" : "hidden";
-}
-
-function initializePromptHeight() {
-  measurePromptBaseHeight();
-  syncPromptHeight();
-}
-
-promptEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
-  // Auto-resize on keydown (for Shift+Enter immediately)
-  requestAnimationFrame(syncPromptHeight);
-});
-
-promptEl.addEventListener("input", () => {
-  syncPromptHeight();
-});
-
-initializePromptHeight();
-if (document.fonts?.ready) {
-  document.fonts.ready.then(() => {
-    initializePromptHeight();
-  }).catch(() => {});
-}
-
-// Initialize Voice Input
-voiceInputController = initVoiceInput();
-
 document.addEventListener("keydown", (event) => {
-  if (!shouldHandleVoiceShortcut(event)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  void voiceInputController.toggle();
+  voiceFeature.handleGlobalKeydown(event);
 });
-
-connect();
-
-function shouldHandleVoiceShortcut(event) {
-  if (!voiceShortcutBinding || !voiceInputController.isSupported) return false;
-  if (!matchesVoiceShortcut(event, voiceShortcutBinding)) return false;
-  if (event.defaultPrevented || event.repeat || event.isComposing) return false;
-  if (voiceShortcutCaptureActive) return false;
-  if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
-  if (!composerSection || composerSection.classList.contains("hidden")) return false;
-  return true;
-}
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -617,80 +508,12 @@ function setStatus(text) {
   if (hint) hint.remove();
 }
 
-function restoreAuth() {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      if (parsed.mode) authModeEl.value = String(parsed.mode);
-      if (parsed.value) authValueEl.value = String(parsed.value);
-    }
-  } catch {
-    // ignore
-  }
-}
-
-function persistAuth() {
-  try {
-    const mode = authModeEl.value;
-    const value = authValueEl.value.trim();
-    if (transientUrlToken && mode === "token" && value === transientUrlToken) {
-      return;
-    }
-    localStorage.setItem(
-      STORE_KEY,
-      JSON.stringify({ mode, value }),
-    );
-  } catch {
-    // ignore
-  }
-}
-
-function restoreWorkspaceRoots() {
-  try {
-    const saved = localStorage.getItem(WORKSPACE_ROOTS_KEY);
-    if (saved && workspaceRootsEl) workspaceRootsEl.value = saved;
-  } catch {
-    // ignore
-  }
-}
-
-function restoreUuid() {
-  try {
-    const saved = localStorage.getItem(UUID_KEY);
-    if (saved && userUuidEl) userUuidEl.value = saved;
-  } catch {
-    // ignore
-  }
-}
-
-function persistUuid() {
-  try {
-    if (userUuidEl) {
-      localStorage.setItem(UUID_KEY, userUuidEl.value.trim());
-    }
-  } catch {
-    // ignore
-  }
-}
-
-function persistWorkspaceRoots() {
-  try {
-    if (workspaceRootsEl) {
-      localStorage.setItem(WORKSPACE_ROOTS_KEY, workspaceRootsEl.value);
-    }
-  } catch {
-    // ignore
-  }
-}
-
 async function syncWorkspaceRoots() {
   if (!ws || !isReady || !workspaceRootsEl) return;
   const value = workspaceRootsEl.value.trim();
   if (!value) return;
 
-  persistWorkspaceRoots();
+  persistWorkspaceRootsField({ workspaceRootsKey: WORKSPACE_ROOTS_KEY, workspaceRootsEl });
   const id = makeId();
   await sendReq({
     type: "req",
@@ -700,184 +523,287 @@ async function syncWorkspaceRoots() {
   });
 }
 
-function parsePositiveIntOrDefault(raw, fallback) {
-  if (raw === undefined || raw === null) return fallback;
-  const parsed = Number.parseInt(String(raw).trim(), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
-
-function ensureAttachmentHintElement() {
-  if (!attachmentsPreviewEl || !attachmentsPreviewEl.parentElement) return null;
-  const existing = document.getElementById("attachmentHint");
-  if (existing) return existing;
-
-  const hint = document.createElement("div");
-  hint.id = "attachmentHint";
-  hint.style.fontSize = "12px";
-  hint.style.lineHeight = "1.4";
-  hint.style.color = "#9ca3af";
-  hint.style.margin = "6px 2px 0";
-  hint.style.whiteSpace = "pre-wrap";
-  hint.style.wordBreak = "break-word";
-  attachmentsPreviewEl.parentElement.insertBefore(hint, attachmentsPreviewEl.nextSibling);
-  return hint;
-}
-
-function estimateTextBytes(text) {
-  if (typeof text !== "string") return 0;
-  if (typeof TextEncoder !== "undefined") {
-    return new TextEncoder().encode(text).length;
-  }
-  return unescape(encodeURIComponent(text)).length;
-}
-
-function estimateAttachmentBytes(att) {
-  if (!att || typeof att !== "object") return 0;
-  if (typeof att.content !== "string") return 0;
-  if (att.content.startsWith("data:")) return estimateDataUrlBytes(att.content);
-  return estimateTextBytes(att.content);
-}
-
-function estimatePendingAttachmentTotalBytes() {
-  return pendingAttachments.reduce((sum, att) => sum + estimateAttachmentBytes(att), 0);
-}
-
-function updateAttachmentHint(extraMessage) {
-  if (!attachmentHintEl) return;
-
-  const totalBytes = estimatePendingAttachmentTotalBytes();
-  const summary = pendingAttachments.length > 0
-    ? `已选 ${pendingAttachments.length} 个附件，约 ${formatBytes(totalBytes)} / ${formatBytes(attachmentLimits.maxTotalBytes)}。单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}。`
-    : `附件上限：单文件 ${formatBytes(attachmentLimits.maxFileBytes)}，总计 ${formatBytes(attachmentLimits.maxTotalBytes)}。`;
-
-  attachmentHintEl.textContent = extraMessage ? `${extraMessage}\n${summary}` : summary;
-  attachmentHintEl.style.color = extraMessage ? "#f59e0b" : "#9ca3af";
-}
-
 function syncAttachmentLimitsFromConfig(config) {
-  if (!config || typeof config !== "object") return;
-
-  const maxFileBytes = parsePositiveIntOrDefault(
-    config["BELLDANDY_ATTACHMENT_MAX_FILE_BYTES"],
-    DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
-  );
-  const maxTotalBytes = parsePositiveIntOrDefault(
-    config["BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES"],
-    DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
-  );
-
-  attachmentLimits = { maxFileBytes, maxTotalBytes };
-  updateAttachmentHint();
+  attachmentsFeature?.syncLimitsFromConfig(config);
 }
 
 // 从服务器加载可操作区配置值
 async function loadWorkspaceRootsFromServer() {
-  if (!ws || !isReady) return;
+  return workspaceFeature?.loadWorkspaceRootsFromServer();
+}
 
-  const id = makeId();
-  const res = await sendReq({
-    type: "req",
-    id,
-    method: "config.read",
+function handleHelloOk(frame) {
+  if (frame.agentName) agentName = frame.agentName;
+  if (frame.agentAvatar) agentAvatar = frame.agentAvatar;
+  if (frame.userName) userName = frame.userName;
+  if (frame.userAvatar) userAvatar = frame.userAvatar;
+
+  sessionTotalTokens = 0;
+  taskTokenHistoryByConversation.clear();
+  Object.values(tokenUsageValueEls).forEach((el) => {
+    if (el) el.textContent = "--";
   });
+  renderTaskTokenHistory();
+  if (activeConversationId) {
+    void loadConversationMeta(activeConversationId);
+  }
+  flushQueuedText();
 
-  if (res && res.ok && res.payload && res.payload.config) {
-    const config = res.payload.config;
-    syncAttachmentLimitsFromConfig(config);
-    const serverValue = res.payload.config["BELLDANDY_EXTRA_WORKSPACE_ROOTS"];
-    if (workspaceRootsEl && serverValue && serverValue !== "[REDACTED]") {
-      workspaceRootsEl.value = serverValue;
-      persistWorkspaceRoots(); // 同步到 localStorage
-    }
+  if (frame.configOk === false) {
+    setTimeout(() => {
+      toggleSettings(true);
+      const guideMsg = appendMessage("bot", "👋 欢迎使用 Star Sanctuary！\n\n检测到 AI 模型尚未配置。请在右侧设置面板填入你的 API Key，然后点击 Save 保存。");
+      if (guideMsg) guideMsg.style.whiteSpace = "pre-wrap";
+    }, 500);
+  }
+
+  if (restartOverlayEl) restartOverlayEl.classList.add("hidden");
+
+  workspaceFeature?.refreshAfterConnectionReady();
+  loadWorkspaceRootsFromServer();
+  void loadAgentList();
+  void loadModelList();
+
+  if (memoryViewerSection && !memoryViewerSection.classList.contains("hidden")) {
+    loadMemoryViewer(true);
+  }
+  if (goalsSection && !goalsSection.classList.contains("hidden")) {
+    loadGoals(true);
+  }
+
+  if (!sessionStorage.getItem("booted")) {
+    playBootSequence();
+    sessionStorage.setItem("booted", "true");
   }
 }
 
-// ── Agent 选择器 ──
-async function loadAgentList() {
-  if (!ws || !isReady || !agentSelectEl) return;
+chatNetworkFeature = createChatNetworkFeature({
+  refs: {
+    statusEl,
+    sendBtn,
+    authModeEl,
+    authValueEl,
+    workspaceRootsEl,
+    userUuidEl,
+    agentSelectEl,
+    modelSelectEl,
+  },
+  keys: {
+    storeKey: STORE_KEY,
+    workspaceRootsKey: WORKSPACE_ROOTS_KEY,
+    uuidKey: UUID_KEY,
+    agentIdKey: AGENT_ID_KEY,
+    modelIdKey: MODEL_ID_KEY,
+    clientId,
+  },
+  getTransientUrlToken: () => transientUrlToken,
+  getSocket: () => ws,
+  setSocket: (socket) => {
+    ws = socket;
+  },
+  getReady: () => isReady,
+  setReady: (ready) => {
+    isReady = ready;
+  },
+  persistConnectionFields,
+  setStatus,
+  safeJsonParse,
+  makeId,
+  debugLog,
+  onHelloOk: (frame) => handleHelloOk(frame),
+  onEvent: (event, payload) => handleEvent(event, payload),
+});
 
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "agents.list",
-  });
+canvasContextFeature = createCanvasContextFeature({
+  refs: {
+    canvasContextBarEl,
+  },
+  getCanvasApp: () => window._canvasApp,
+  getGoalsState: () => goalsState,
+  getActiveConversationId: () => activeConversationId,
+  getGoalById,
+  normalizeGoalBoardId,
+  getCachedGoalCapabilityEntry,
+  goalRuntimeFilePath,
+  escapeHtml,
+  ensureGoalCapabilityCache,
+  switchMode,
+  loadGoals,
+  openGoalTaskViewer,
+  openConversationSession,
+  openSourcePath,
+  showNotice,
+  getGoalDisplayName,
+});
 
-  if (!res || !res.ok || !res.payload || !Array.isArray(res.payload.agents)) return;
+chatUiFeature = createChatUiFeature({
+  refs: {
+    messagesEl,
+    chatSection,
+  },
+  getAgentProfile: () => ({
+    name: agentName,
+    avatar: agentAvatar,
+  }),
+  getUserProfile: () => ({
+    name: userName,
+    avatar: userAvatar,
+  }),
+  escapeHtml,
+});
 
-  const agents = res.payload.agents;
+chatUiFeature.initCopyButtonDelegation();
 
-  // 仅 1 个 agent 时隐藏选择器
-  if (agents.length <= 1) {
-    agentSelectEl.classList.add("hidden");
-    return;
-  }
+goalsOverviewFeature = createGoalsOverviewFeature({
+  refs: {
+    goalsSection,
+    goalsSummaryEl,
+    goalsListEl,
+    goalsDetailEl,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  getGoalsState: () => goalsState,
+  getActiveConversationId: () => activeConversationId,
+  isConversationForGoal,
+  escapeHtml,
+  formatGoalStatus,
+  formatDateTime,
+  summarizeSourcePath,
+  formatGoalPathSource,
+  sortGoals,
+  getGoalById,
+  renderGoalDetail,
+  renderCanvasGoalContext,
+  onResumeGoal: (goalId) => resumeGoal(goalId),
+  onPauseGoal: (goalId) => pauseGoal(goalId),
+});
 
-  agentSelectEl.innerHTML = "";
-  for (const a of agents) {
-    const opt = document.createElement("option");
-    opt.value = a.id;
-    opt.textContent = a.displayName;
-    agentSelectEl.appendChild(opt);
-  }
+goalsDetailFeature = createGoalsDetailFeature({
+  refs: {
+    goalsDetailEl,
+  },
+  getActiveConversationId: () => activeConversationId,
+  isConversationForGoal,
+  escapeHtml,
+  formatGoalStatus,
+  formatDateTime,
+  formatGoalPathSource,
+  goalDocFilePath,
+  goalRuntimeFilePath,
+  goalBaseConversationId,
+  onBindDetailActions: (goal) => bindGoalDetailActions(goal),
+  onLoadGoalCanvasData: (goal) => {
+    void loadGoalCanvasData(goal);
+  },
+  onLoadGoalTrackingData: (goal) => {
+    void loadGoalTrackingData(goal);
+  },
+  onLoadGoalCapabilityData: (goal) => {
+    void loadGoalCapabilityData(goal);
+  },
+  onLoadGoalProgressData: (goal) => {
+    void loadGoalProgressData(goal);
+  },
+  onLoadGoalHandoffData: (goal) => {
+    void loadGoalHandoffData(goal);
+  },
+  onLoadGoalReviewGovernanceData: (goal) => {
+    void loadGoalReviewGovernanceData(goal);
+  },
+});
 
-  // 恢复上次选择
-  const saved = localStorage.getItem(AGENT_ID_KEY);
-  if (saved && agents.some(a => a.id === saved)) {
-    agentSelectEl.value = saved;
-  }
+goalsReadonlyPanelsFeature = createGoalsReadonlyPanelsFeature({
+  refs: {
+    goalsDetailEl,
+  },
+  escapeHtml,
+  formatDateTime,
+  normalizeGoalBoardId,
+  goalRuntimeFilePath,
+  onBindHandoffPanelActions: (goal) => bindGoalHandoffPanelActions(goal),
+});
 
-  agentSelectEl.classList.remove("hidden");
+goalsTrackingPanelFeature = createGoalsTrackingPanelFeature({
+  refs: {
+    goalsDetailEl,
+  },
+  escapeHtml,
+  formatDateTime,
+  getGoalCheckpointSlaBadge,
+});
+
+goalsGovernancePanelFeature = createGoalsGovernancePanelFeature({
+  refs: {
+    goalsDetailEl,
+  },
+  escapeHtml,
+  formatDateTime,
+  goalRuntimeFilePath,
+});
+
+goalsCapabilityPanelFeature = createGoalsCapabilityPanelFeature({
+  refs: {
+    goalsDetailEl,
+  },
+  escapeHtml,
+  formatDateTime,
+});
+
+memoryViewerFeature = createMemoryViewerFeature({
+  refs: {
+    memoryViewerSection,
+    memoryViewerStatsEl,
+    memoryViewerListEl,
+    memoryViewerDetailEl,
+    memoryTabTasksBtn,
+    memoryTabMemoriesBtn,
+    memoryTaskFiltersEl,
+    memoryChunkFiltersEl,
+    memorySearchInputEl,
+    memoryTaskStatusFilterEl,
+    memoryTaskSourceFilterEl,
+    memoryChunkTypeFilterEl,
+    memoryChunkVisibilityFilterEl,
+    memoryChunkCategoryFilterEl,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  getMemoryViewerState: () => memoryViewerState,
+  syncMemoryTaskGoalFilterUi,
+  renderMemoryViewerListEmpty,
+  renderMemoryViewerDetailEmpty,
+  loadTaskDetail: (taskId) => loadTaskDetail(taskId),
+  loadMemoryDetail: (chunkId) => loadMemoryDetail(chunkId),
+  escapeHtml,
+  formatCount,
+  formatDateTime,
+  formatDuration,
+  formatLineRange,
+  formatScore,
+  formatMemoryCategory,
+  normalizeMemoryVisibility,
+  getVisibilityBadgeClass,
+  summarizeSourcePath,
+  getTaskGoalId,
+  getGoalDisplayName,
+  getLatestExperienceUsageTimestamp,
+  getActiveMemoryCategoryLabel,
+  renderMemoryCategoryDistribution,
+  renderTaskUsageOverviewCard,
+  bindStatsAuditJumpLinks,
+  bindMemoryPathLinks,
+  bindTaskAuditJumpLinks,
+});
+
+function loadAgentList() {
+  return chatNetworkFeature?.loadAgentList();
 }
 
-// ── 模型选择器 ──
-async function loadModelList() {
-  if (!ws || !isReady || !modelSelectEl) return;
-
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "models.list",
-  });
-
-  if (!res || !res.ok || !res.payload || !Array.isArray(res.payload.models)) return;
-
-  const models = res.payload.models;
-  const currentDefault = typeof res.payload.currentDefault === "string" && res.payload.currentDefault.trim()
-    ? res.payload.currentDefault.trim()
-    : "primary";
-
-  const defaultModel = models.find((m) => m.id === currentDefault);
-  const defaultLabel = defaultModel?.displayName || defaultModel?.model || "默认模型";
-
-  modelSelectEl.innerHTML = "";
-  const defaultOpt = document.createElement("option");
-  defaultOpt.value = "";
-  defaultOpt.textContent = `默认模型 (${defaultLabel})`;
-  modelSelectEl.appendChild(defaultOpt);
-
-  for (const m of models) {
-    if (!m || typeof m !== "object") continue;
-    if (m.id === currentDefault) continue;
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = m.displayName || m.model || m.id;
-    modelSelectEl.appendChild(opt);
-  }
-
-  const saved = localStorage.getItem(MODEL_ID_KEY);
-  if (saved && [...modelSelectEl.options].some((opt) => opt.value === saved)) {
-    modelSelectEl.value = saved;
-  } else {
-    modelSelectEl.value = "";
-  }
-
-  // 有备选模型时显示；只有默认模型时隐藏
-  if (modelSelectEl.options.length > 1) {
-    modelSelectEl.classList.remove("hidden");
-  } else {
-    modelSelectEl.classList.add("hidden");
-  }
+function loadModelList() {
+  return chatNetworkFeature?.loadModelList();
 }
 
 if (agentSelectEl) {
@@ -887,7 +813,7 @@ if (agentSelectEl) {
     // 切换 Agent = 新建会话（隔离上下文）
     activeConversationId = null;
     renderCanvasGoalContext();
-    botMsgEl = null;
+    chatEventsFeature?.resetStreamingState();
     messagesEl.innerHTML = "";
     const displayName = agentSelectEl.options[agentSelectEl.selectedIndex]?.text || agentSelectEl.value;
     appendMessage("system", `已切换到 ${displayName}`);
@@ -917,7 +843,7 @@ if (saveWorkspaceRootsBtn) {
     const value = workspaceRootsEl ? workspaceRootsEl.value.trim() : "";
 
     // 保存到 localStorage
-    persistWorkspaceRoots();
+    persistWorkspaceRootsField({ workspaceRootsKey: WORKSPACE_ROOTS_KEY, workspaceRootsEl });
 
     // 更新 .env
     const id = makeId();
@@ -941,145 +867,11 @@ if (saveWorkspaceRootsBtn) {
 }
 
 function connect() {
-  persistAuth();
-  persistWorkspaceRoots();
-  persistUuid(); // 保存UUID
-  teardown();
-
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const url = `${proto}//${location.host}`;
-  ws = new WebSocket(url);
-  isReady = false;
-  sendBtn.disabled = true;
-  setStatus("connecting");
-
-  ws.addEventListener("open", () => {
-    setStatus("connected (awaiting challenge)");
-  });
-
-  ws.addEventListener("close", () => {
-    // Determine the URL we tried to connect to
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${location.host}`;
-
-    setStatus(`disconnected (retrying ${url} in 3s...)`);
-    if (!document.getElementById("status-hint")) {
-      const hint = document.createElement("div");
-      hint.id = "status-hint";
-      hint.style.color = "#ff6b6b";
-      hint.style.fontSize = "12px";
-      hint.style.marginTop = "4px";
-      hint.textContent = "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.";
-      statusEl.parentElement.appendChild(hint);
-    }
-
-    isReady = false;
-    sendBtn.disabled = true;
-    setTimeout(() => {
-      if (!ws || ws.readyState === WebSocket.CLOSED) {
-        connect();
-      }
-    }, 3000);
-  });
-
-  ws.addEventListener("message", (evt) => {
-    const frame = safeJsonParse(evt.data);
-    if (!frame || typeof frame !== "object") return;
-
-    if (frame.type === "connect.challenge") {
-      sendConnect();
-      return;
-    }
-
-    if (frame.type === "hello-ok") {
-      isReady = true;
-      sendBtn.disabled = false;
-      setStatus("ready");
-
-      // 保存身份信息
-      if (frame.agentName) agentName = frame.agentName;
-      if (frame.agentAvatar) agentAvatar = frame.agentAvatar;
-      if (frame.userName) userName = frame.userName;
-      if (frame.userAvatar) userAvatar = frame.userAvatar;
-
-      // 重置 token 累计
-      sessionTotalTokens = 0;
-      taskTokenHistoryByConversation.clear();
-      ["tuSys", "tuCtx", "tuIn", "tuOut", "tuAll"].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = "--";
-      });
-      renderTaskTokenHistory();
-      if (activeConversationId) {
-        void loadConversationMeta(activeConversationId);
-      }
-      flushQueuedText();
-
-      // 若服务端告知 AI 模型尚未配置（无 API Key），自动弹出设置面板引导用户
-      if (frame.configOk === false) {
-        setTimeout(() => {
-          toggleSettings(true);
-          // 在聊天区显示一条引导消息
-          const guideMsg = appendMessage("bot", "👋 欢迎使用 Star Sanctuary！\n\n检测到 AI 模型尚未配置。请在右侧设置面板填入你的 API Key，然后点击 Save 保存。");
-          if (guideMsg) guideMsg.style.whiteSpace = "pre-wrap";
-        }, 500);
-      }
-
-      // 重连成功后隐藏重启倒计时浮层
-      const restartOverlay = document.getElementById("restartOverlay");
-      if (restartOverlay) restartOverlay.classList.add("hidden");
-
-      // 如果侧边栏已展开，加载文件树
-      if (sidebarExpanded) loadFileTree();
-
-      // 从服务器加载当前配置并填充可操作区输入框
-      loadWorkspaceRootsFromServer();
-
-      // 加载 Agent 列表并填充选择器
-      loadAgentList();
-      // 加载模型列表并填充选择器
-      loadModelList();
-      if (memoryViewerSection && !memoryViewerSection.classList.contains("hidden")) {
-        loadMemoryViewer(true);
-      }
-      if (goalsSection && !goalsSection.classList.contains("hidden")) {
-        loadGoals(true);
-      }
-
-      // Check if we should play boot sequence
-      if (!sessionStorage.getItem("booted")) {
-        playBootSequence();
-        sessionStorage.setItem("booted", "true");
-      }
-      return;
-    }
-
-    if (frame.type === "res") {
-      const inflight = pendingReq.get(frame.id);
-      if (inflight) {
-        pendingReq.delete(frame.id);
-        inflight.resolve(frame);
-      }
-      return;
-    }
-
-    if (frame.type === "event") {
-      handleEvent(frame.event, frame.payload || {});
-      return;
-    }
-  });
+  return chatNetworkFeature?.connect();
 }
 
 function teardown() {
-  if (ws) {
-    try {
-      ws.close();
-    } catch {
-      // ignore
-    }
-  }
-  ws = null;
-  isReady = false;
+  return chatNetworkFeature?.teardown();
 }
 
 async function playBootSequence() {
@@ -1110,41 +902,6 @@ async function playBootSequence() {
   await new Promise(r => setTimeout(r, 800));
   overlay.classList.add("hidden");
 }
-
-
-function sendConnect() {
-  if (!ws) return;
-  const mode = authModeEl.value;
-  const v = authValueEl.value.trim();
-  const uuid = userUuidEl ? userUuidEl.value.trim() : ""; // 获取UUID
-  debugLog("[UUID] sendConnect", { hasUuid: Boolean(uuid) });
-  const auth =
-    mode === "token"
-      ? { mode: "token", token: v.startsWith("setup-") ? v : (v.match(/^\d+-\d+$/) ? `setup-${v}` : v) }
-      : mode === "password"
-        ? { mode: "password", password: v }
-        : { mode: "none" };
-
-  const connectFrame = {
-    type: "connect",
-    role: "web",
-    clientId,
-    auth,
-    clientName: "belldandy-webchat",
-    clientVersion: "0.0.0",
-  };
-
-  // 如果有UUID，添加到连接帧
-  if (uuid) {
-    connectFrame.userUuid = uuid;
-    debugLog("[UUID] Adding UUID to connect frame");
-  } else {
-    debugLog("[UUID] No UUID to send in connect frame");
-  }
-
-  ws.send(JSON.stringify(connectFrame));
-}
-
 function estimateBase64DecodedBytes(base64) {
   if (typeof base64 !== "string") return 0;
   const normalized = base64.trim().replace(/\s+/g, "");
@@ -1161,9 +918,7 @@ function formatBytes(bytes) {
 }
 
 function restorePromptText(text) {
-  if (!text) return;
-  promptEl.value = text;
-  syncPromptHeight();
+  promptController.restoreText(text);
 }
 
 function buildAttachmentsPayload(attachments) {
@@ -1189,9 +944,15 @@ function buildAttachmentsPayload(attachments) {
 
 async function sendMessage() {
   const text = promptEl.value.trim();
+  const pendingAttachments = attachmentsFeature ? attachmentsFeature.getPendingAttachments() : [];
+  const attachmentLimits = attachmentsFeature ? attachmentsFeature.getAttachmentLimits() : {
+    maxFileBytes: DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
+    maxTotalBytes: DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
+  };
+
   if (!text && !pendingAttachments.length) return;
   promptEl.value = "";
-  syncPromptHeight();
+  promptController.syncHeight();
 
   if (!ws || !isReady) {
     queuedText = text;
@@ -1329,11 +1090,9 @@ async function sendMessage() {
 
   const displayText = text || (pendingAttachments.length ? "[语音消息]" : "");
   appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""));
-  botMsgEl = appendMessage("bot", "");
-  botRawHtmlBuffer = "";
+  const botMsgEl = chatEventsFeature?.beginStreamingReply() || appendMessage("bot", "");
 
-  pendingAttachments = [];
-  renderAttachmentsPreview();
+  attachmentsFeature?.clearPendingAttachments();
 
   const id = makeId();
   const payload = await sendReq({
@@ -1346,11 +1105,15 @@ async function sendMessage() {
   if (payload && payload.ok === false) {
     if (payload.error && payload.error.code === "pairing_required") {
       const msg = payload.error.message ? String(payload.error.message) : "Pairing required.";
-      botMsgEl.innerHTML = `\n        <div style="line-height: 1.6;">\n          ${msg}<br><br>\n          <b>新手操作指南：</b><br>\n          1. 不要关闭当前网页。<br>\n          2. <b>保持那个运行着服务的黑色窗口不要关</b>，然后在项目目录下重新打开一个<b>新的黑色终端窗口</b>。<br>\n          3. 在这个新窗口里，复制并粘贴下面的完整命令，然后按回车键：<br>\n          <div style="background: var(--bg-secondary); padding: 8px; border-radius: 4px; margin: 8px 0; font-family: monospace;">\n            corepack pnpm bdd pairing approve &lt;CODE&gt;\n          </div>\n          <i style="color: var(--text-tertiary); font-size: 0.9em;">（注意：请把 <code>&lt;CODE&gt;</code> 换成上方实际给你的配对码）</i><br><br>\n          4. 终端提示成功后，在这个网页再发一次消息即可。\n        </div>\n      `;
+      if (botMsgEl) {
+        botMsgEl.innerHTML = `\n        <div style="line-height: 1.6;">\n          ${escapeHtml(msg)}<br><br>\n          <b>新手操作指南：</b><br>\n          1. 不要关闭当前网页。<br>\n          2. <b>保持那个运行着服务的黑色窗口不要关</b>，然后在项目目录下重新打开一个<b>新的黑色终端窗口</b>。<br>\n          3. 在这个新窗口里，复制并粘贴下面的完整命令，然后按回车键：<br>\n          <div style="background: var(--bg-secondary); padding: 8px; border-radius: 4px; margin: 8px 0; font-family: monospace;">\n            corepack pnpm bdd pairing approve &lt;CODE&gt;\n          </div>\n          <i style="color: var(--text-tertiary); font-size: 0.9em;">（注意：请把 <code>&lt;CODE&gt;</code> 换成上方实际给你的配对码）</i><br><br>\n          4. 终端提示成功后，在这个网页再发一次消息即可。\n        </div>\n      `;
+      }
       return;
     }
     if (payload.error && payload.error.code === "config_required") {
-      botMsgEl.textContent = `❌ 配置缺失：${payload.error.message}\n请点击右上角设置图标（⚙️）完善配置。`;
+      if (botMsgEl) {
+        botMsgEl.textContent = `❌ 配置缺失：${payload.error.message}\n请点击右上角设置图标（⚙️）完善配置。`;
+      }
       toggleSettings(true); // Auto open settings
       return;
     }
@@ -1375,45 +1138,6 @@ const restartBtn = document.getElementById("restartBtn");
 // 暴露给 WebView 等环境的接口
 window.__BELLDANDY_WEBCHAT_READY__ = true;
 
-// 全局委托复制按钮事件
-document.addEventListener("click", async (e) => {
-  const codeBtn = e.target.closest(".copy-code-btn");
-  if (codeBtn) {
-    const wrapper = codeBtn.closest(".code-block-wrapper");
-    if (wrapper) {
-      const codeEl = wrapper.querySelector("code");
-      if (codeEl) {
-        try {
-          await navigator.clipboard.writeText(codeEl.textContent);
-          const originalHTML = codeBtn.innerHTML;
-          codeBtn.innerHTML = "已复制";
-          setTimeout(() => { codeBtn.innerHTML = originalHTML; }, 2000);
-        } catch (err) {
-          console.error("复制失败", err);
-        }
-      }
-    }
-    return;
-  }
-
-  const msgBtn = e.target.closest(".copy-msg-btn");
-  if (msgBtn) {
-    const wrapper = msgBtn.closest(".msg-content-wrapper");
-    if (wrapper) {
-      const bubble = wrapper.querySelector(".msg");
-      if (bubble) {
-        try {
-          await navigator.clipboard.writeText(bubble.textContent);
-          const originalHTML = msgBtn.innerHTML;
-          msgBtn.innerHTML = "已复制";
-          setTimeout(() => { msgBtn.innerHTML = originalHTML; }, 2000);
-        } catch (err) {
-          console.error("复制失败", err);
-        }
-      }
-    }
-  }
-});
 // Initialize Recommend API Link
 const recommendApiLink = document.getElementById("recommendApiLink");
 if (recommendApiLink && window.BELLDANDY_WEB_CONFIG?.recommendApiUrl) {
@@ -1466,398 +1190,108 @@ const cfgMaxHistory = document.getElementById("cfgMaxHistory");
 const doctorStatusEl = document.getElementById("doctorStatus");
 const REDACTED_PLACEHOLDER = "[REDACTED]";
 
-if (openSettingsBtn) {
-  openSettingsBtn.addEventListener("click", () => toggleSettings(true));
-}
-if (closeSettingsBtn) {
-  closeSettingsBtn.addEventListener("click", () => toggleSettings(false));
-}
-if (saveSettingsBtn) {
-  saveSettingsBtn.addEventListener("click", saveConfig);
-}
-if (restartBtn) {
-  restartBtn.addEventListener("click", restartServer);
-}
-if (cfgVoiceShortcut) {
-  cfgVoiceShortcut.addEventListener("focus", () => {
-    voiceShortcutCaptureActive = true;
-    renderVoiceShortcutSetting("按下新的快捷键。Esc 取消，Backspace/Delete 禁用。");
-  });
-  cfgVoiceShortcut.addEventListener("blur", () => {
-    voiceShortcutCaptureActive = false;
-    renderVoiceShortcutSetting();
-  });
-  cfgVoiceShortcut.addEventListener("keydown", (event) => {
-    if (event.key === "Tab") {
-      voiceShortcutCaptureActive = false;
-      renderVoiceShortcutSetting();
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
+voiceFeature.bindSettingsUI({
+  inputEl: cfgVoiceShortcut,
+  statusEl: cfgVoiceShortcutStatus,
+  defaultBtn: cfgVoiceShortcutDefault,
+  clearBtn: cfgVoiceShortcutClear,
+});
 
-    if (event.key === "Escape") {
-      voiceShortcutCaptureActive = false;
-      cfgVoiceShortcut.blur();
-      renderVoiceShortcutSetting("已取消快捷键修改。");
-      return;
-    }
-    if (event.key === "Backspace" || event.key === "Delete") {
-      persistVoiceShortcutSetting(null);
-      voiceShortcutCaptureActive = false;
-      cfgVoiceShortcut.blur();
-      renderVoiceShortcutSetting("语音快捷键已禁用。");
-      return;
-    }
-
-    const nextShortcut = buildVoiceShortcutFromEvent(event);
-    if (!nextShortcut) {
-      renderVoiceShortcutSetting("请使用 Ctrl / Alt / Meta 组合键，或单独使用 F 键。");
-      return;
-    }
-
-    persistVoiceShortcutSetting(nextShortcut);
-    voiceShortcutCaptureActive = false;
-    cfgVoiceShortcut.blur();
-    renderVoiceShortcutSetting(`快捷键已保存为 ${formatVoiceShortcut(nextShortcut)}。`);
-  });
-}
-if (cfgVoiceShortcutDefault) {
-  cfgVoiceShortcutDefault.addEventListener("click", () => {
-    persistVoiceShortcutSetting(getDefaultVoiceShortcut());
-    renderVoiceShortcutSetting(`已恢复默认快捷键 ${formatVoiceShortcut(voiceShortcutBinding)}。`);
-  });
-}
-if (cfgVoiceShortcutClear) {
-  cfgVoiceShortcutClear.addEventListener("click", () => {
-    persistVoiceShortcutSetting(null);
-    renderVoiceShortcutSetting("语音快捷键已禁用。");
-  });
-}
-
-function renderVoiceShortcutSetting(message = "") {
-  if (cfgVoiceShortcut) {
-    cfgVoiceShortcut.value = formatVoiceShortcut(voiceShortcutBinding);
-  }
-  if (cfgVoiceShortcutStatus) {
-    if (voiceShortcutCaptureActive) {
-      cfgVoiceShortcutStatus.textContent = message || "按下新的快捷键。Esc 取消，Backspace/Delete 禁用。";
-    } else if (message) {
-      cfgVoiceShortcutStatus.textContent = message;
-    } else {
-      cfgVoiceShortcutStatus.textContent = `本地快捷键，当前：${formatVoiceShortcut(voiceShortcutBinding)}。默认 ${formatVoiceShortcut(DEFAULT_VOICE_SHORTCUT)}，不会写入服务端配置。`;
-    }
-  }
-}
+const settingsController = createSettingsController({
+  refs: {
+    settingsModal,
+    openSettingsBtn,
+    closeSettingsBtn,
+    saveSettingsBtn,
+    restartBtn,
+    doctorStatusEl,
+    cfgApiKey,
+    cfgBaseUrl,
+    cfgModel,
+    cfgHeartbeat,
+    cfgHeartbeatEnabled,
+    cfgHeartbeatActiveHours,
+    cfgBrowserRelayEnabled,
+    cfgRelayPort,
+    cfgMcpEnabled,
+    cfgCronEnabled,
+    cfgEmbeddingEnabled,
+    cfgEmbeddingApiKey,
+    cfgEmbeddingBaseUrl,
+    cfgEmbeddingModel,
+    cfgToolsEnabled,
+    cfgAgentToolControlMode,
+    cfgAgentToolControlConfirmPassword,
+    cfgTtsEnabled,
+    cfgTtsProvider,
+    cfgTtsVoice,
+    cfgDashScopeApiKey,
+    cfgFacetAnchor,
+    cfgInjectAgents,
+    cfgInjectSoul,
+    cfgInjectMemory,
+    cfgMaxSystemPromptChars,
+    cfgMaxHistory,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  setStatus,
+  syncAttachmentLimitsFromConfig,
+  onToggle: (show) => voiceFeature.onSettingsToggle(show),
+  redactedPlaceholder: REDACTED_PLACEHOLDER,
+});
 
 function toggleSettings(show) {
-  if (show) {
-    settingsModal.classList.remove("hidden");
-    renderVoiceShortcutSetting();
-    loadConfig();
-    runDoctor();
-  } else {
-    voiceShortcutCaptureActive = false;
-    settingsModal.classList.add("hidden");
-  }
+  void settingsController.toggle(show);
 }
 
-async function loadConfig() {
-  if (!ws || !isReady) return;
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "config.read" });
-  if (res && res.ok && res.payload && res.payload.config) {
-    const c = res.payload.config;
-    syncAttachmentLimitsFromConfig(c);
-    cfgApiKey.value = c["BELLDANDY_OPENAI_API_KEY"] || "";
-    cfgBaseUrl.value = c["BELLDANDY_OPENAI_BASE_URL"] || "";
-    cfgModel.value = c["BELLDANDY_OPENAI_MODEL"] || "";
-    cfgHeartbeat.value = c["BELLDANDY_HEARTBEAT_INTERVAL"] || "";
-    cfgHeartbeatEnabled.checked = c["BELLDANDY_HEARTBEAT_ENABLED"] === "true";
-    cfgHeartbeatActiveHours.value = c["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] || "";
-    cfgBrowserRelayEnabled.checked = c["BELLDANDY_BROWSER_RELAY_ENABLED"] === "true";
-    cfgRelayPort.value = c["BELLDANDY_RELAY_PORT"] || "";
-    cfgMcpEnabled.checked = c["BELLDANDY_MCP_ENABLED"] === "true";
-    cfgCronEnabled.checked = c["BELLDANDY_CRON_ENABLED"] === "true";
-    cfgEmbeddingEnabled.checked = c["BELLDANDY_EMBEDDING_ENABLED"] === "true";
-    cfgEmbeddingApiKey.value = c["BELLDANDY_EMBEDDING_OPENAI_API_KEY"] || "";
-    cfgEmbeddingBaseUrl.value = c["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] || "";
-    cfgEmbeddingModel.value = c["BELLDANDY_EMBEDDING_MODEL"] || "";
-    cfgToolsEnabled.checked = c["BELLDANDY_TOOLS_ENABLED"] === "true";
-    cfgAgentToolControlMode.value = c["BELLDANDY_AGENT_TOOL_CONTROL_MODE"] || "disabled";
-    cfgAgentToolControlConfirmPassword.value = c["BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD"] || "";
-    cfgTtsEnabled.checked = c["BELLDANDY_TTS_ENABLED"] === "true";
-    cfgTtsProvider.value = c["BELLDANDY_TTS_PROVIDER"] || "edge";
-    cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
-    cfgDashScopeApiKey.value = c["DASHSCOPE_API_KEY"] || "";
-    cfgFacetAnchor.value = c["BELLDANDY_FACET_ANCHOR"] || "";
-    cfgInjectAgents.checked = c["BELLDANDY_INJECT_AGENTS"] === "true";
-    cfgInjectSoul.checked = c["BELLDANDY_INJECT_SOUL"] === "true";
-    cfgInjectMemory.checked = c["BELLDANDY_INJECT_MEMORY"] === "true";
-    cfgMaxSystemPromptChars.value = c["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] || "";
-    cfgMaxHistory.value = c["BELLDANDY_MAX_HISTORY"] || "";
-  }
-}
+chatEventsFeature = createChatEventsFeature({
+  appendMessage,
+  showRestartCountdown,
+  setTokenUsageRunning: (running) => {
+    if (!tokenUsageEl) return;
+    tokenUsageEl.classList.toggle("updating", Boolean(running));
+  },
+  updateTokenUsage,
+  showTaskTokenResult,
+  queueGoalUpdateEvent,
+  onToolSettingsConfirmRequired: (payload) => toolSettingsController.handleConfirmRequired(payload),
+  onToolSettingsConfirmResolved: (payload) => toolSettingsController.handleConfirmResolved(payload),
+  onToolsConfigUpdated: (payload) => toolSettingsController.handleToolsConfigUpdated(payload),
+  stripThinkBlocks,
+  configureMarkedOnce,
+  parseMarkdown: (text) => (window.marked ? window.marked.parse(text) : text),
+  sanitizeAssistantHtml,
+  processMediaInMessage,
+  forceScrollToBottom,
+  getCanvasApp: () => window._canvasApp,
+  escapeHtml,
+});
 
-function assignSecretUpdate(updates, key, inputEl) {
-  if (!inputEl) return;
-  const value = inputEl.value.trim();
-  if (value === REDACTED_PLACEHOLDER) return;
-  updates[key] = value;
-}
+connect();
 
-async function runDoctor() {
-  if (!ws || !isReady) {
-    doctorStatusEl.innerHTML = '<span class="badge fail">Disconnected</span>';
-    return;
-  }
-  doctorStatusEl.innerHTML = '<span class="badge">Checking...</span>';
-
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "system.doctor" });
-  if (res && res.ok && res.payload && res.payload.checks) {
-    doctorStatusEl.innerHTML = "";
-    res.payload.checks.forEach(check => {
-      const badge = document.createElement("span");
-      badge.className = `badge ${check.status}`;
-      badge.textContent = `${check.name}: ${check.message || check.status}`;
-      doctorStatusEl.appendChild(badge);
-    });
-  } else {
-    doctorStatusEl.innerHTML = '<span class="badge fail">Check Failed</span>';
-  }
-}
-
-async function saveConfig() {
-  if (!ws || !isReady) {
-    alert("Error: Not connected to server.\nPlease refresh the page or check if the Gateway is running.");
-    return;
-  }
-  saveSettingsBtn.textContent = "Saving...";
-  saveSettingsBtn.disabled = true;
-
-  const updates = {};
-  const mainApiKey = cfgApiKey.value.trim();
-  assignSecretUpdate(updates, "BELLDANDY_OPENAI_API_KEY", cfgApiKey);
-  updates["BELLDANDY_OPENAI_BASE_URL"] = cfgBaseUrl.value.trim() || "https://api.openai.com/v1";
-  updates["BELLDANDY_OPENAI_MODEL"] = cfgModel.value.trim();
-  updates["BELLDANDY_HEARTBEAT_ENABLED"] = cfgHeartbeatEnabled.checked ? "true" : "false";
-  updates["BELLDANDY_HEARTBEAT_INTERVAL"] = cfgHeartbeat.value.trim();
-  updates["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] = cfgHeartbeatActiveHours.value.trim();
-  updates["BELLDANDY_BROWSER_RELAY_ENABLED"] = cfgBrowserRelayEnabled.checked ? "true" : "false";
-  updates["BELLDANDY_RELAY_PORT"] = cfgRelayPort.value.trim();
-  updates["BELLDANDY_MCP_ENABLED"] = cfgMcpEnabled.checked ? "true" : "false";
-  updates["BELLDANDY_CRON_ENABLED"] = cfgCronEnabled.checked ? "true" : "false";
-  updates["BELLDANDY_EMBEDDING_ENABLED"] = cfgEmbeddingEnabled.checked ? "true" : "false";
-  assignSecretUpdate(updates, "BELLDANDY_EMBEDDING_OPENAI_API_KEY", cfgEmbeddingApiKey);
-  updates["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] = cfgEmbeddingBaseUrl.value.trim();
-  updates["BELLDANDY_EMBEDDING_MODEL"] = cfgEmbeddingModel.value.trim();
-  updates["BELLDANDY_TOOLS_ENABLED"] = cfgToolsEnabled.checked ? "true" : "false";
-  updates["BELLDANDY_AGENT_TOOL_CONTROL_MODE"] = cfgAgentToolControlMode.value.trim() || "disabled";
-  assignSecretUpdate(updates, "BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD", cfgAgentToolControlConfirmPassword);
-  updates["BELLDANDY_TTS_ENABLED"] = cfgTtsEnabled.checked ? "true" : "false";
-  updates["BELLDANDY_TTS_PROVIDER"] = cfgTtsProvider.value.trim() || "edge";
-  updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
-  assignSecretUpdate(updates, "DASHSCOPE_API_KEY", cfgDashScopeApiKey);
-  updates["BELLDANDY_FACET_ANCHOR"] = cfgFacetAnchor.value.trim();
-  updates["BELLDANDY_INJECT_AGENTS"] = cfgInjectAgents.checked ? "true" : "false";
-  updates["BELLDANDY_INJECT_SOUL"] = cfgInjectSoul.checked ? "true" : "false";
-  updates["BELLDANDY_INJECT_MEMORY"] = cfgInjectMemory.checked ? "true" : "false";
-  updates["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] = cfgMaxSystemPromptChars.value.trim();
-  updates["BELLDANDY_MAX_HISTORY"] = cfgMaxHistory.value.trim();
-
-  // Set Provider to openai if key present (Lenient mode auto-enable)
-  if (mainApiKey && mainApiKey !== REDACTED_PLACEHOLDER) {
-    updates["BELLDANDY_AGENT_PROVIDER"] = "openai";
-  }
-
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "config.update", params: { updates } });
-
-  if (res && res.ok) {
-    saveSettingsBtn.textContent = "Saved";
-    setTimeout(() => {
-      saveSettingsBtn.textContent = "Save";
-      saveSettingsBtn.disabled = false;
-      alert("Configuration saved. Please restart server to apply changes.");
-    }, 1000);
-  } else {
-    saveSettingsBtn.textContent = "Failed";
-    saveSettingsBtn.disabled = false;
-    alert("Save failed: " + (res.error ? res.error.message : "Unknown error"));
-  }
-}
-
-async function restartServer() {
-  if (!confirm("Are you sure you want to restart the server?")) return;
-  if (!ws || !isReady) return;
-
-  const id = makeId();
-  await sendReq({ type: "req", id, method: "system.restart" });
-  setStatus("Restarting...");
-  ws.close();
-  // setTimeout(() => location.reload(), 3000); // Rely on auto-reconnect
-}
-
-// ... existing helpers ...
 function handleEvent(event, payload) {
-  if (event === "pairing.required") {
-    const code = payload && payload.code ? String(payload.code) : "";
-    if (!botMsgEl) botMsgEl = appendMessage("bot", "");
-    botMsgEl.innerHTML = `
-      <div style="line-height: 1.6;">
-        需要配对（Pairing）。配对码：<b>${code}</b><br><br>
-        <b>新手操作指南：</b><br>
-        1. 不要关闭当前网页。<br>
-        2. <b>保持那个运行着服务的黑色窗口不要关</b>，然后在项目目录下重新打开一个<b>新的黑色终端窗口</b>。<br>
-        3. 在这个新窗口里，复制并粘贴下面的完整命令，然后按回车键：<br>
-        <div style="background: var(--bg-secondary); padding: 8px; border-radius: 4px; margin: 8px 0; font-family: monospace;">
-          corepack pnpm bdd pairing approve ${code}
-        </div>
-        4. 终端提示成功后，在这个网页再发一次消息即可。
-      </div>
-    `;
-    return;
-  }
-  if (event === "agent.status") {
-    if (payload && payload.status === "restarting" && payload.countdown !== undefined) {
-      showRestartCountdown(payload.countdown, payload.reason || "");
-    }
-    // 运行中时给 token-usage 加 updating 样式
-    const tuEl = document.getElementById("tokenUsage");
-    if (tuEl && payload) {
-      if (payload.status === "running") tuEl.classList.add("updating");
-      else tuEl.classList.remove("updating");
-    }
-    return;
-  }
-  if (event === "token.usage") {
-    updateTokenUsage(payload);
-    return;
-  }
-  if (event === "token.counter.result") {
-    showTaskTokenResult(payload);
-    return;
-  }
-  if (event === "goal.update") {
-    queueGoalUpdateEvent(payload);
-    return;
-  }
-  if (event === "tool_settings.confirm.required") {
-    handleToolSettingsConfirmRequired(payload);
-    return;
-  }
-  if (event === "tool_settings.confirm.resolved") {
-    handleToolSettingsConfirmResolved(payload);
-    return;
-  }
-  if (event === "tools.config.updated") {
-    if (toolSettingsModal && !toolSettingsModal.classList.contains("hidden")) {
-      loadToolSettings();
-    } else if (payload && payload.disabled) {
-      if (!toolSettingsData) {
-        toolSettingsData = { builtin: [], mcp: {}, plugins: [], skills: [], disabled: payload.disabled };
-      } else {
-        toolSettingsData.disabled = payload.disabled;
-      }
-    }
-    return;
-  }
-  if (event === "chat.delta") {
-    const delta = payload && payload.delta ? String(payload.delta) : "";
-    if (!delta) return;
-    if (!botMsgEl) {
-      botMsgEl = appendMessage("bot", "");
-      botRawHtmlBuffer = "";
-    }
-    botRawHtmlBuffer += delta;
-
-    // 剥离 <think> 标签并解析 Markdown，然后再安全过滤
-    const strippedText = stripThinkBlocks(botRawHtmlBuffer);
-    configureMarkedOnce();
-    const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
-    botMsgEl.innerHTML = sanitizeAssistantHtml(parsedHtml);
-
-    // 强制滚动到底部（测试模式）
-    forceScrollToBottom();
-    return;
-  }
-  if (event === "chat.final") {
-    const text = payload && payload.text ? String(payload.text) : "";
-    if (!botMsgEl) botMsgEl = appendMessage("bot", "");
-    botRawHtmlBuffer = text;
-
-    // 剥离 <think> 标签并解析 Markdown，然后再安全过滤
-    const strippedText = stripThinkBlocks(botRawHtmlBuffer);
-    configureMarkedOnce();
-    const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
-    botMsgEl.innerHTML = sanitizeAssistantHtml(parsedHtml);
-
-    // 处理图片和视频缩略图
-    processMediaInMessage(botMsgEl);
-
-    // [NEW] Auto-play audio if present
-    const audioEl = botMsgEl.querySelector("audio");
-    if (audioEl) {
-      audioEl.play().catch(err => {
-        console.warn("Auto-play blocked:", err);
-      });
-    }
-
-    // 强制滚动到底部（测试模式）
-    // 强制滚动到底部（测试模式）
-    forceScrollToBottom();
-    // ReAct 可视化：chat.final → 总结节点
-    if (window._canvasApp) {
-      window._canvasApp.handleReactFinal(text);
-    }
-    return;
-  }
-  // Canvas 实时更新事件
-  if (event === "canvas.update") {
-    if (window._canvasApp && payload) {
-      const boardId = payload.boardId;
-      const action = payload.action;
-      const data = payload.payload;
-      if (window._canvasApp.currentBoardId === boardId) {
-        window._canvasApp.handleCanvasEvent(action, data);
-      }
-    }
-    return;
-  }
-  // ReAct 可视化：tool_call / tool_result → canvas 临时节点
-  if (event === "tool_call") {
-    if (window._canvasApp) {
-      window._canvasApp.handleReactEvent("tool_call", payload);
-    }
-    return;
-  }
-  if (event === "tool_result") {
-    if (window._canvasApp) {
-      window._canvasApp.handleReactEvent("tool_result", payload);
-    }
-    return;
-  }
+  chatEventsFeature?.handleEvent(event, payload);
 }
 
 function showRestartCountdown(countdown, reason) {
-  const overlay = document.getElementById("restartOverlay");
-  const countdownEl = document.getElementById("restartCountdown");
-  const reasonEl = document.getElementById("restartReason");
-  if (!overlay || !countdownEl) return;
+  if (!restartOverlayEl || !restartCountdownEl) return;
 
   if (countdown > 0) {
     // 显示倒计时
-    overlay.classList.remove("hidden");
-    reasonEl.textContent = reason;
-    countdownEl.textContent = String(countdown);
+    restartOverlayEl.classList.remove("hidden");
+    if (restartReasonEl) {
+      restartReasonEl.textContent = reason;
+    }
+    restartCountdownEl.textContent = String(countdown);
     // pulse 动画
-    countdownEl.classList.remove("pulse");
-    void countdownEl.offsetWidth; // force reflow
-    countdownEl.classList.add("pulse");
+    restartCountdownEl.classList.remove("pulse");
+    void restartCountdownEl.offsetWidth; // force reflow
+    restartCountdownEl.classList.add("pulse");
   } else {
     // countdown === 0，服务即将断开
-    countdownEl.textContent = "…";
+    restartCountdownEl.textContent = "…";
     setStatus("Restarting…");
   }
 }
@@ -1969,7 +1403,7 @@ let sessionTotalTokens = 0;
 function updateTokenUsage(payload) {
   if (!payload) return;
   const set = (id, val) => {
-    const el = document.getElementById(id);
+    const el = tokenUsageValueEls[id];
     if (el) el.textContent = formatTokenCount(val);
   };
   set("tuSys", payload.systemPromptTokens);
@@ -1980,23 +1414,21 @@ function updateTokenUsage(payload) {
   sessionTotalTokens += (payload.inputTokens || 0) + (payload.outputTokens || 0);
   set("tuAll", sessionTotalTokens);
   // 移除 updating 动画
-  const tuEl = document.getElementById("tokenUsage");
-  if (tuEl) tuEl.classList.remove("updating");
+  if (tokenUsageEl) tokenUsageEl.classList.remove("updating");
 }
 
 let taskTokenHideTimer = null;
 
 function showTaskTokenResult(payload) {
   if (!payload) return;
-  const panel = document.getElementById("taskTokenUsage");
-  if (!panel) return;
+  if (!taskTokenUsagePanelEl) return;
 
   if (payload.conversationId) {
     prependTaskTokenHistory(String(payload.conversationId), payload);
   }
 
   const set = (id, val) => {
-    const el = document.getElementById(id);
+    const el = taskTokenValueEls[id];
     if (el) el.textContent = typeof val === "number" ? formatTokenCount(val) : String(val ?? "--");
   };
   set("taskName", payload.name);
@@ -2004,12 +1436,12 @@ function showTaskTokenResult(payload) {
   set("taskOut", payload.outputTokens);
   set("taskTotal", payload.totalTokens);
 
-  panel.style.display = "flex";
+  taskTokenUsagePanelEl.style.display = "flex";
 
   // 8 秒后自动隐藏
   if (taskTokenHideTimer) clearTimeout(taskTokenHideTimer);
   taskTokenHideTimer = setTimeout(() => {
-    panel.style.display = "none";
+    taskTokenUsagePanelEl.style.display = "none";
   }, 8000);
 }
 
@@ -2022,100 +1454,7 @@ function flushQueuedText() {
 }
 
 function appendMessage(kind, text) {
-  const wrapper = document.createElement("div");
-  wrapper.className = `msg-wrapper ${kind}`;
-
-  // 头像
-  const avatar = document.createElement("div");
-  avatar.className = "msg-avatar";
-
-  const avatarSrc = kind === "bot" ? agentAvatar : userAvatar;
-
-  // 判断是否为图片路径/URL
-  if (isImagePath(avatarSrc)) {
-    avatar.style.backgroundImage = `url(${avatarSrc})`;
-    avatar.classList.add("avatar-image");
-  } else {
-    avatar.textContent = avatarSrc;
-  }
-
-  // 消息内容容器
-  const contentWrapper = document.createElement("div");
-  contentWrapper.className = "msg-content-wrapper";
-
-  // 名称
-  const nameEl = document.createElement("div");
-  nameEl.className = "msg-name";
-  nameEl.textContent = kind === "bot" ? agentName : userName;
-
-  // 消息气泡
-  const bubble = document.createElement("div");
-  bubble.className = `msg ${kind}`;
-  bubble.textContent = text;
-
-  contentWrapper.appendChild(nameEl);
-  contentWrapper.appendChild(bubble);
-
-  // 对于机器人的回复，在气泡外加一个复制全文按钮
-  if (kind === "bot") {
-    const actionsEl = document.createElement("div");
-    actionsEl.className = "msg-actions";
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-msg-btn";
-    copyBtn.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-      </svg> 复制
-    `;
-    copyBtn.title = "复制全文";
-
-    actionsEl.appendChild(copyBtn);
-    contentWrapper.appendChild(actionsEl);
-  }
-
-  wrapper.appendChild(avatar);
-  wrapper.appendChild(contentWrapper);
-
-  messagesEl.appendChild(wrapper);
-  forceScrollToBottom();
-  return bubble; // 返回气泡元素，用于后续更新
-}
-
-/**
- * 判断字符串是否为图片路径或 URL
- */
-function isImagePath(str) {
-  if (!str || typeof str !== "string") return false;
-
-  // 检查是否为 URL
-  if (str.startsWith("http://") || str.startsWith("https://") || str.startsWith("//")) {
-    return true;
-  }
-
-  // 检查是否为本地路径（以 / 或 ./ 或 ../ 开头）
-  if (str.startsWith("/") || str.startsWith("./") || str.startsWith("../")) {
-    return true;
-  }
-
-  // 检查是否包含图片扩展名
-  const imageExts = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".ico"];
-  const lowerStr = str.toLowerCase();
-  return imageExts.some(ext => lowerStr.includes(ext));
-}
-
-// ==================== 自动滚动逻辑 ====================
-
-/** 检测滚动条是否接近底部 */
-function isNearBottom(el, threshold = 100) {
-  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-}
-
-/** 如果用户在底部附近，自动滚动到最新消息 */
-function scrollToBottomIfNeeded() {
-  if (isNearBottom(chatSection)) {
-    forceScrollToBottom();
-  }
+  return chatUiFeature?.appendMessage(kind, text) || null;
 }
 
 /**
@@ -2123,47 +1462,7 @@ function scrollToBottomIfNeeded() {
  * @param {HTMLElement} msgEl - 消息气泡元素
  */
 function processMediaInMessage(msgEl) {
-  // 处理图片
-  const images = msgEl.querySelectorAll("img");
-  images.forEach(img => {
-    const originalSrc = img.src;
-    const wrapper = document.createElement("div");
-    wrapper.className = "media-thumbnail";
-    wrapper.style.backgroundImage = `url(${originalSrc})`;
-    wrapper.title = "点击查看原图";
-    wrapper.addEventListener("click", () => openMediaModal(originalSrc, "image"));
-    img.replaceWith(wrapper);
-  });
-
-  // 处理视频
-  const videos = msgEl.querySelectorAll("video");
-  videos.forEach(video => {
-    const originalSrc = video.src || (video.querySelector("source")?.src);
-    if (!originalSrc) return;
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "media-thumbnail video-thumbnail";
-    wrapper.title = "点击播放视频";
-
-    // 创建播放图标
-    const playIcon = document.createElement("div");
-    playIcon.className = "play-icon";
-    playIcon.textContent = "▶";
-    wrapper.appendChild(playIcon);
-
-    // 尝试使用视频第一帧作为缩略图（如果可能）
-    const canvas = document.createElement("canvas");
-    canvas.width = 200;
-    canvas.height = 150;
-    const ctx = canvas.getContext("2d");
-    video.addEventListener("loadeddata", () => {
-      ctx.drawImage(video, 0, 0, 200, 150);
-      wrapper.style.backgroundImage = `url(${canvas.toDataURL()})`;
-    }, { once: true });
-
-    wrapper.addEventListener("click", () => openMediaModal(originalSrc, "video"));
-    video.replaceWith(wrapper);
-  });
+  return chatUiFeature?.processMediaInMessage(msgEl);
 }
 
 /**
@@ -2172,44 +1471,12 @@ function processMediaInMessage(msgEl) {
  * @param {string} type - 媒体类型 ("image" 或 "video")
  */
 function openMediaModal(src, type) {
-  // 创建弹窗
-  const modal = document.createElement("div");
-  modal.className = "media-modal";
-  modal.addEventListener("click", () => modal.remove());
-
-  const content = document.createElement("div");
-  content.className = "media-modal-content";
-  content.addEventListener("click", (e) => e.stopPropagation());
-
-  if (type === "image") {
-    const img = document.createElement("img");
-    img.src = src;
-    img.style.maxWidth = "90vw";
-    img.style.maxHeight = "90vh";
-    content.appendChild(img);
-  } else if (type === "video") {
-    const video = document.createElement("video");
-    video.src = src;
-    video.controls = true;
-    video.autoplay = true;
-    video.style.maxWidth = "90vw";
-    video.style.maxHeight = "90vh";
-    content.appendChild(video);
-  }
-
-  const closeBtn = document.createElement("button");
-  closeBtn.className = "media-modal-close";
-  closeBtn.textContent = "✕";
-  closeBtn.addEventListener("click", () => modal.remove());
-
-  modal.appendChild(content);
-  modal.appendChild(closeBtn);
-  document.body.appendChild(modal);
+  return chatUiFeature?.openMediaModal(src, type);
 }
 
 /** 强制滚动到底部 - 使用 chatSection 作为滚动容器 */
 function forceScrollToBottom() {
-  chatSection.scrollTop = chatSection.scrollHeight;
+  return chatUiFeature?.forceScrollToBottom();
 }
 
 function safeJsonParse(raw) {
@@ -2226,17 +1493,7 @@ function makeId() {
 }
 
 function sendReq(frame) {
-  if (!ws) return Promise.resolve(null);
-  ws.send(JSON.stringify(frame));
-  return new Promise((resolve) => {
-    pendingReq.set(frame.id, { resolve });
-    setTimeout(() => {
-      if (pendingReq.has(frame.id)) {
-        pendingReq.delete(frame.id);
-        resolve(null);
-      }
-    }, 30_000);
-  });
+  return chatNetworkFeature?.sendReq(frame) ?? Promise.resolve(null);
 }
 
 function resolveClientId() {
@@ -2257,162 +1514,6 @@ function resolveClientId() {
 
 // ==================== 附件处理逻辑 ====================
 
-// 附件按钮点击
-if (attachBtn) {
-  attachBtn.addEventListener("click", () => fileInput?.click());
-}
-
-// 文件选择
-if (fileInput) {
-  fileInput.addEventListener("change", () => {
-    if (fileInput.files) handleFiles(fileInput.files);
-    fileInput.value = ""; // 重置以允许再次选择相同文件
-  });
-}
-
-// 拖拽支持 (composerSection 已在文件顶部声明)
-if (composerSection) {
-  composerSection.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    composerSection.classList.add("drag-over");
-  });
-  composerSection.addEventListener("dragleave", () => {
-    composerSection.classList.remove("drag-over");
-  });
-  composerSection.addEventListener("drop", (e) => {
-    e.preventDefault();
-    composerSection.classList.remove("drag-over");
-    if (e.dataTransfer?.files) handleFiles(e.dataTransfer.files);
-  });
-}
-
-// 粘贴图片支持
-promptEl.addEventListener("paste", (e) => {
-  const items = e.clipboardData?.items;
-  if (!items) return;
-  const files = [];
-  for (const item of items) {
-    if (item.kind === "file" && item.type.startsWith("image/")) {
-      const file = item.getAsFile();
-      if (file) {
-        // 剪贴板图片默认名无辨识度，加时间戳
-        const ext = file.type.split("/")[1] || "png";
-        const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
-        const named = new File([file], `paste-${ts}.${ext}`, { type: file.type });
-        files.push(named);
-      }
-    }
-  }
-  if (files.length > 0) {
-    e.preventDefault();
-    handleFiles(files);
-  }
-});
-
-// 处理文件列表
-async function handleFiles(files) {
-  const allowedTypes = {
-    image: [".jpg", ".jpeg", ".png", ".gif", ".webp"],
-    video: [".mp4", ".mov", ".avi", ".webm", ".mkv"],
-    text: [".txt", ".md", ".json", ".log", ".js", ".ts", ".xml", ".html", ".css", ".csv"] // Added more text types
-  };
-  const rejected = [];
-  let projectedTotalBytes = estimatePendingAttachmentTotalBytes();
-
-  for (const file of files) {
-    const ext = "." + file.name.split(".").pop().toLowerCase();
-    const isImage = allowedTypes.image.includes(ext);
-    const isVideo = allowedTypes.video.includes(ext);
-    const isText = allowedTypes.text.includes(ext);
-
-    if (!isImage && !isVideo && !isText) {
-      console.warn(`不支持的文件类型: ${file.name}`);
-      rejected.push(`${file.name}：不支持的文件类型`);
-      continue;
-    }
-
-    try {
-      let content = "";
-      let mimeType = file.type || (isImage ? "image/png" : (isVideo ? "video/mp4" : "text/plain"));
-      let attachmentBytes = 0;
-
-      if (!isImage && file.size > attachmentLimits.maxFileBytes) {
-        rejected.push(`${file.name}：文件大小 ${formatBytes(file.size)} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}`);
-        continue;
-      }
-      if (!isImage && projectedTotalBytes + file.size > attachmentLimits.maxTotalBytes) {
-        rejected.push(`${file.name}：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}`);
-        continue;
-      }
-
-      if (isImage) {
-        const processed = await readImageForAttachment(file);
-        content = processed.content;
-        mimeType = processed.mimeType;
-        attachmentBytes = estimateDataUrlBytes(content);
-      } else {
-        // Videos use Data URL directly; text files are read as UTF-8 text
-        content = await readFileContent(file, isVideo);
-        attachmentBytes = isVideo
-          ? estimateDataUrlBytes(content)
-          : estimateTextBytes(typeof content === "string" ? content : "");
-      }
-
-      if (attachmentBytes > attachmentLimits.maxFileBytes) {
-        rejected.push(`${file.name}：处理后大小 ${formatBytes(attachmentBytes)} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}`);
-        continue;
-      }
-      if (projectedTotalBytes + attachmentBytes > attachmentLimits.maxTotalBytes) {
-        rejected.push(`${file.name}：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}`);
-        continue;
-      }
-
-      pendingAttachments.push({
-        name: file.name,
-        type: isImage ? "image" : (isVideo ? "video" : "text"),
-        mimeType,
-        content
-      });
-      projectedTotalBytes += attachmentBytes;
-    } catch (err) {
-      console.error(`读取文件失败: ${file.name}`, err);
-      rejected.push(`${file.name}：读取失败`);
-    }
-  }
-
-  if (rejected.length > 0) {
-    const lines = rejected.slice(0, 3).map((item) => `- ${item}`);
-    if (rejected.length > 3) {
-      lines.push(`- 另有 ${rejected.length - 3} 个文件被跳过`);
-    }
-    renderAttachmentsPreview(`⚠️ 以下文件未加入：\n${lines.join("\n")}`);
-    return;
-  }
-
-  renderAttachmentsPreview();
-}
-
-// 读取文件内容
-function readFileContent(file, asBase64) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (asBase64) {
-        // 返回完整的 data URL
-        resolve(reader.result);
-      } else {
-        resolve(reader.result);
-      }
-    };
-    reader.onerror = () => reject(reader.error);
-    if (asBase64) {
-      reader.readAsDataURL(file);
-    } else {
-      reader.readAsText(file);
-    }
-  });
-}
-
 function estimateDataUrlBytes(dataUrl) {
   if (typeof dataUrl !== "string") return 0;
   const comma = dataUrl.indexOf(",");
@@ -2420,230 +1521,6 @@ function estimateDataUrlBytes(dataUrl) {
   return estimateBase64DecodedBytes(dataUrl.slice(comma + 1));
 }
 
-function loadImageElementFromFile(file) {
-  return new Promise((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(image);
-    };
-    image.onerror = (err) => {
-      URL.revokeObjectURL(objectUrl);
-      reject(err);
-    };
-    image.src = objectUrl;
-  });
-}
-
-function canvasToDataUrl(canvas, mimeType, quality) {
-  try {
-    return canvas.toDataURL(mimeType, quality);
-  } catch {
-    return "";
-  }
-}
-
-async function compressImageToDataUrl(file, sourceType) {
-  const image = await loadImageElementFromFile(file);
-  const sourceWidth = image.naturalWidth || image.width || 1;
-  const sourceHeight = image.naturalHeight || image.height || 1;
-  let scale = Math.min(1, IMAGE_COMPRESS_MAX_EDGE / Math.max(sourceWidth, sourceHeight));
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Canvas context unavailable");
-  }
-
-  let best = null;
-  const preferredType = sourceType === "image/webp" ? "image/webp" : "image/jpeg";
-  const fallbackType = preferredType === "image/webp" ? "image/jpeg" : "image/webp";
-
-  for (let resizeAttempt = 0; resizeAttempt < 4; resizeAttempt += 1) {
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
-    canvas.width = width;
-    canvas.height = height;
-    ctx.clearRect(0, 0, width, height);
-    ctx.drawImage(image, 0, 0, width, height);
-
-    const tryTypes = [preferredType, fallbackType];
-    for (const type of tryTypes) {
-      for (const quality of IMAGE_COMPRESS_QUALITIES) {
-        const dataUrl = canvasToDataUrl(canvas, type, quality);
-        if (!dataUrl) continue;
-        const bytes = estimateDataUrlBytes(dataUrl);
-        if (!best || bytes < best.bytes) {
-          best = { dataUrl, bytes, mimeType: type };
-        }
-        if (bytes <= IMAGE_COMPRESS_TARGET_BYTES) {
-          return { dataUrl, bytes, mimeType: type };
-        }
-      }
-    }
-
-    scale *= IMAGE_COMPRESS_RESIZE_FACTOR;
-  }
-
-  return best;
-}
-
-async function readImageForAttachment(file) {
-  const sourceType = (file.type || "image/png").toLowerCase();
-  const originalDataUrl = await readFileContent(file, true);
-  const originalBytes = estimateDataUrlBytes(originalDataUrl);
-
-  // GIF/SVG 保持原样，避免破坏动画或矢量内容
-  if (sourceType.includes("gif") || sourceType.includes("svg")) {
-    return { content: originalDataUrl, mimeType: sourceType };
-  }
-  if (originalBytes <= IMAGE_COMPRESS_TRIGGER_BYTES) {
-    return { content: originalDataUrl, mimeType: sourceType };
-  }
-
-  try {
-    const compressed = await compressImageToDataUrl(file, sourceType);
-    if (compressed && compressed.dataUrl && compressed.bytes > 0 && compressed.bytes < originalBytes) {
-      console.info("Image compressed before upload", {
-        name: file.name,
-        originalBytes,
-        compressedBytes: compressed.bytes,
-        mimeType: compressed.mimeType,
-      });
-      return {
-        content: compressed.dataUrl,
-        mimeType: compressed.mimeType
-      };
-    }
-  } catch (err) {
-    console.warn("Image compression failed, use original file", { name: file.name, error: String(err) });
-  }
-
-  return { content: originalDataUrl, mimeType: sourceType };
-}
-
-// 渲染附件预览
-function renderAttachmentsPreview(hintMessage = "") {
-  if (!attachmentsPreviewEl) return;
-  attachmentsPreviewEl.innerHTML = "";
-
-  pendingAttachments.forEach((att, idx) => {
-    const item = document.createElement("div");
-    item.className = "attachment-item";
-
-    if (att.type === "image") {
-      // 图片缩略图
-      const thumbnail = document.createElement("div");
-      thumbnail.className = "attachment-thumbnail";
-      thumbnail.style.backgroundImage = `url(${att.content})`;
-      thumbnail.title = att.name;
-      item.appendChild(thumbnail);
-    } else if (att.type === "video") {
-      // 视频缩略图（带播放图标）
-      const thumbnail = document.createElement("div");
-      thumbnail.className = "attachment-thumbnail video-thumbnail";
-      thumbnail.title = att.name;
-
-      // 尝试生成视频第一帧作为缩略图
-      const video = document.createElement("video");
-      video.src = att.content;
-      video.addEventListener("loadeddata", () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 80;
-        canvas.height = 60;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0, 80, 60);
-        thumbnail.style.backgroundImage = `url(${canvas.toDataURL()})`;
-      }, { once: true });
-
-      const playIcon = document.createElement("div");
-      playIcon.className = "play-icon-small";
-      playIcon.textContent = "▶";
-      thumbnail.appendChild(playIcon);
-
-      item.appendChild(thumbnail);
-    } else {
-      // 文本/音频文件图标
-      const icon = document.createElement("div");
-      icon.className = "file-icon";
-      icon.textContent = att.type === "audio" ? "🎤" : "📄";
-      icon.style.fontSize = "24px";
-      item.appendChild(icon);
-    }
-
-    const nameSpan = document.createElement("span");
-    nameSpan.textContent = att.name.length > 15 ? att.name.slice(0, 12) + "..." : att.name;
-    item.appendChild(nameSpan);
-
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "remove-btn";
-    removeBtn.textContent = "×";
-    removeBtn.onclick = () => {
-      pendingAttachments.splice(idx, 1);
-      renderAttachmentsPreview();
-    };
-    item.appendChild(removeBtn);
-
-    attachmentsPreviewEl.appendChild(item);
-  });
-
-  updateAttachmentHint(hintMessage);
-}
-
-// ==================== 文件树和编辑器逻辑 ====================
-
-// 侧边栏标题点击事件（展开/收起）
-// 侧边栏标题点击事件（不再作为模式切换，仅展开/收起）
-if (sidebarTitleEl) {
-  sidebarTitleEl.addEventListener("click", () => toggleSidebar());
-}
-
-// 切换侧边栏展开/收起
-function toggleSidebar() {
-  sidebarExpanded = !sidebarExpanded;
-  if (sidebarEl) {
-    if (sidebarExpanded) {
-      sidebarEl.classList.remove("collapsed");
-      // 展开时加载文件树
-      if (isReady) loadFileTree();
-    } else {
-      sidebarEl.classList.add("collapsed");
-    }
-  }
-}
-
-// 刷新按钮事件
-if (refreshTreeBtn) {
-  refreshTreeBtn.addEventListener("click", () => loadFileTree());
-}
-
-// 编辑器按钮事件
-if (cancelEditBtn) {
-  cancelEditBtn.addEventListener("click", () => cancelEdit());
-}
-if (saveEditBtn) {
-  saveEditBtn.addEventListener("click", () => saveFile());
-}
-
-// 配置按钮事件
-const openEnvEditorBtn = document.getElementById("openEnvEditor");
-if (openEnvEditorBtn) {
-  openEnvEditorBtn.addEventListener("click", () => openEnvFile());
-}
-
-// 导航按钮
-const switchRootBtn = document.getElementById("switchRoot");
-const switchFacetBtn = document.getElementById("switchFacet");
-const switchMemoryBtn = document.getElementById("switchMemory");
-const switchGoalsBtn = document.getElementById("switchGoals");
-
-if (switchRootBtn) {
-  switchRootBtn.addEventListener("click", () => switchTreeMode("root"));
-}
-if (switchFacetBtn) {
-  switchFacetBtn.addEventListener("click", () => switchTreeMode("facets"));
-}
 if (switchMemoryBtn) {
   switchMemoryBtn.addEventListener("click", async () => {
     switchMode("memory");
@@ -2658,7 +1535,6 @@ if (switchGoalsBtn) {
 }
 
 // 画布工作区按钮
-const switchCanvasBtn = document.getElementById("switchCanvas");
 if (switchCanvasBtn) {
   switchCanvasBtn.addEventListener("click", async () => {
     if (window._canvasApp) {
@@ -2668,27 +1544,40 @@ if (switchCanvasBtn) {
   });
 }
 
-// 切换文件树模式
+function renderAttachmentsPreview(hintMessage = "") {
+  attachmentsFeature?.renderAttachmentsPreview(hintMessage);
+}
+
+function openEnvFile() {
+  return workspaceFeature?.openEnvFile();
+}
+
+function loadFileTree(folderPath = "") {
+  return workspaceFeature?.loadFileTree(folderPath);
+}
+
+function openFile(filePath) {
+  return workspaceFeature?.openFile(filePath);
+}
+
+function openSourcePath(sourcePath, options = {}) {
+  return workspaceFeature?.openSourcePath(sourcePath, options);
+}
+
+function readSourceFile(sourcePath) {
+  return workspaceFeature?.readSourceFile(sourcePath);
+}
+
+function saveFile() {
+  return workspaceFeature?.saveFile();
+}
+
+function cancelEdit() {
+  return workspaceFeature?.cancelEdit();
+}
+
 function switchTreeMode(mode) {
-  if (currentTreeMode === mode) {
-    if (!sidebarExpanded) toggleSidebar();
-    else loadFileTree();
-    switchMode("chat");
-    return;
-  }
-
-  currentTreeMode = mode;
-  expandedFolders.clear();
-
-  switchMode("chat");
-  updateSidebarModeButtons(mode);
-
-  // 确保侧边栏展开
-  if (!sidebarExpanded) {
-    toggleSidebar();
-  } else {
-    loadFileTree();
-  }
+  return workspaceFeature?.switchTreeMode(mode);
 }
 
 function setSidebarActionButtonState(button, active) {
@@ -2698,7 +1587,7 @@ function setSidebarActionButtonState(button, active) {
 }
 
 function updateSidebarModeButtons(treeModeOverride) {
-  const treeMode = treeModeOverride ?? currentTreeMode;
+  const treeMode = treeModeOverride ?? workspaceFeature?.getTreeMode() ?? "root";
   setSidebarActionButtonState(switchRootBtn, treeMode === "root");
   setSidebarActionButtonState(switchFacetBtn, treeMode === "facets");
   setSidebarActionButtonState(switchMemoryBtn, memoryViewerSection && !memoryViewerSection.classList.contains("hidden"));
@@ -2733,397 +1622,8 @@ function showNotice(title, message, tone = "info", durationMs = 3200) {
   setTimeout(remove, durationMs);
 }
 
-function applyEditorSession({ path, content, readOnly = false, label, startLine }) {
-  currentEditPath = path;
-  originalContent = content;
-  currentEditReadOnly = readOnly;
-
-  if (editorPath) {
-    editorPath.textContent = label || path || "文件路径";
-  }
-  if (editorTextarea) {
-    editorTextarea.value = content || "";
-    editorTextarea.readOnly = readOnly;
-  }
-  if (editorModeBadge) {
-    editorModeBadge.classList.toggle("hidden", !readOnly);
-    editorModeBadge.textContent = readOnly ? "只读来源" : "可编辑";
-  }
-  if (saveEditBtn) {
-    saveEditBtn.disabled = readOnly;
-    saveEditBtn.textContent = readOnly ? "只读" : "保存";
-    saveEditBtn.title = readOnly ? "当前为只读源文件视图" : "";
-  }
-
-  switchMode("editor");
-  if (typeof startLine === "number" && startLine > 0) {
-    focusEditorLine(startLine);
-  }
-}
-
-function focusEditorLine(lineNumber) {
-  if (!editorTextarea || typeof lineNumber !== "number" || lineNumber <= 0) return;
-  const lines = editorTextarea.value.split("\n");
-  const safeLine = Math.max(1, Math.min(lineNumber, lines.length));
-  let offset = 0;
-  for (let i = 0; i < safeLine - 1; i += 1) {
-    offset += lines[i].length + 1;
-  }
-  const lineText = lines[safeLine - 1] || "";
-  editorTextarea.focus();
-  editorTextarea.setSelectionRange(offset, offset + lineText.length);
-  const lineHeight = parseFloat(getComputedStyle(editorTextarea).lineHeight || "22");
-  editorTextarea.scrollTop = Math.max(0, (safeLine - 3) * lineHeight);
-}
-
-function resetEditorAccessState() {
-  currentEditReadOnly = false;
-  if (editorTextarea) editorTextarea.readOnly = false;
-  if (editorModeBadge) {
-    editorModeBadge.classList.add("hidden");
-    editorModeBadge.textContent = "只读来源";
-  }
-  if (saveEditBtn) {
-    saveEditBtn.disabled = false;
-    saveEditBtn.textContent = "保存";
-    saveEditBtn.title = "";
-  }
-}
-
-// 打开 .env 文件进行编辑
-async function openEnvFile() {
-  if (!ws || !isReady) {
-    showNotice("无法打开配置", "未连接到服务器。", "error");
-    return;
-  }
-
-  const id = makeId();
-  const res = await sendReq({
-    type: "req",
-    id,
-    method: "config.readRaw",
-  });
-
-  if (!res || !res.ok) {
-    const msg = res && res.error ? res.error.message : "读取失败";
-    showNotice("无法读取配置文件", msg, "error");
-    return;
-  }
-
-  applyEditorSession({
-    path: ".env",
-    content: res.payload.content,
-    readOnly: false,
-    label: ".env (环境配置)",
-  });
-}
-
-// 加载文件树
-async function loadFileTree(folderPath = "") {
-  if (!ws || !isReady) {
-    if (fileTreeEl) fileTreeEl.innerHTML = '<div class="tree-loading">未连接</div>';
-    return;
-  }
-
-  const id = makeId();
-  const res = await sendReq({
-    type: "req",
-    id,
-    method: "workspace.list",
-    params: { path: currentTreeMode === "facets" && !folderPath ? "facets" : folderPath },
-  });
-
-  if (!res || !res.ok || !res.payload || !res.payload.items) {
-    if (fileTreeEl && !folderPath) {
-      fileTreeEl.innerHTML = '<div class="tree-loading">加载失败</div>';
-    }
-    return [];
-  }
-
-  const items = res.payload.items;
-
-  // 如果是根目录，渲染整个树
-  if (!folderPath) {
-    renderFileTree(items);
-  }
-
-  return items;
-}
-
-// 渲染文件树
-function renderFileTree(items) {
-  if (!fileTreeEl) return;
-
-  fileTreeEl.innerHTML = "";
-
-  if (items.length === 0) {
-    fileTreeEl.innerHTML = '<div class="tree-loading">无文件</div>';
-    return;
-  }
-
-  for (const item of items) {
-    const el = createTreeItem(item);
-    fileTreeEl.appendChild(el);
-  }
-}
-
-// 创建树节点
-function createTreeItem(item) {
-  if (item.type === "directory") {
-    const folder = document.createElement("div");
-    folder.className = "tree-folder";
-    if (expandedFolders.has(item.path)) {
-      folder.classList.add("expanded");
-    }
-
-    const header = document.createElement("div");
-    header.className = "tree-item";
-    header.innerHTML = `
-      <span class="tree-item-icon"></span>
-      <span class="tree-item-name">${escapeHtml(item.name)}</span>
-    `;
-    header.addEventListener("click", () => toggleFolder(item.path, folder));
-
-    const children = document.createElement("div");
-    children.className = "tree-children";
-
-    folder.appendChild(header);
-    folder.appendChild(children);
-
-    // 如果已展开，加载子项
-    if (expandedFolders.has(item.path)) {
-      loadFolderChildren(item.path, children);
-    }
-
-    return folder;
-  } else {
-    const file = document.createElement("div");
-    file.className = "tree-file";
-
-    const fileItem = document.createElement("div");
-    fileItem.className = "tree-item";
-    if (currentEditPath === item.path) {
-      fileItem.classList.add("active");
-    }
-    fileItem.innerHTML = `
-      <span class="tree-item-icon"></span>
-      <span class="tree-item-name">${escapeHtml(item.name)}</span>
-    `;
-    fileItem.addEventListener("click", () => openFile(item.path));
-
-    file.appendChild(fileItem);
-    return file;
-  }
-}
-
-// 展开/收起文件夹
-async function toggleFolder(folderPath, folderEl) {
-  if (expandedFolders.has(folderPath)) {
-    expandedFolders.delete(folderPath);
-    folderEl.classList.remove("expanded");
-  } else {
-    expandedFolders.add(folderPath);
-    folderEl.classList.add("expanded");
-
-    // 加载子项
-    const children = folderEl.querySelector(".tree-children");
-    if (children && children.children.length === 0) {
-      await loadFolderChildren(folderPath, children);
-    }
-  }
-}
-
-// 加载文件夹子项
-async function loadFolderChildren(folderPath, containerEl) {
-  containerEl.innerHTML = '<div class="tree-loading" style="padding: 4px 8px; font-size: 12px;">...</div>';
-
-  const items = await loadFileTree(folderPath);
-
-  containerEl.innerHTML = "";
-
-  if (!items || items.length === 0) {
-    containerEl.innerHTML = '<div class="tree-loading" style="padding: 4px 8px; font-size: 12px; color: var(--text-muted);">空</div>';
-    return;
-  }
-
-  for (const item of items) {
-    const el = createTreeItem(item);
-    containerEl.appendChild(el);
-  }
-}
-
-// 打开文件进行编辑
-async function openFile(filePath) {
-  if (!ws || !isReady) {
-    showNotice("无法打开文件", "未连接到服务器。", "error");
-    return;
-  }
-
-  const id = makeId();
-  const res = await sendReq({
-    type: "req",
-    id,
-    method: "workspace.read",
-    params: { path: filePath },
-  });
-
-  if (!res || !res.ok) {
-    const msg = res && res.error ? res.error.message : "读取失败";
-    showNotice("无法读取文件", msg, "error");
-    return;
-  }
-
-  applyEditorSession({
-    path: filePath,
-    content: res.payload.content,
-    readOnly: false,
-    label: filePath,
-  });
-
-  // 刷新文件树以更新 active 状态
-  loadFileTree();
-}
-
-async function openSourcePath(sourcePath, options = {}) {
-  if (!ws || !isReady) {
-    showNotice("无法打开来源文件", "未连接到服务器。", "error");
-    return;
-  }
-  if (!sourcePath || typeof sourcePath !== "string") {
-    showNotice("无法打开来源文件", "无效的来源路径。", "error");
-    return;
-  }
-
-  const id = makeId();
-  const res = await sendReq({
-    type: "req",
-    id,
-    method: "workspace.readSource",
-    params: { path: sourcePath },
-  });
-
-  if (!res || !res.ok) {
-    const msg = res && res.error ? res.error.message : "读取失败";
-    showNotice("无法打开来源文件", msg, "error", 4200);
-    return;
-  }
-
-  applyEditorSession({
-    path: res.payload.path || sourcePath,
-    content: res.payload.content,
-    readOnly: true,
-    label: `${res.payload.path || sourcePath} (只读来源)`,
-    startLine: options.startLine,
-  });
-  showNotice("来源文件已打开", "当前为只读视图，不会写回原文件。", "info", 2600);
-}
-
-async function readSourceFile(sourcePath) {
-  if (!ws || !isReady) return null;
-  if (!sourcePath || typeof sourcePath !== "string") return null;
-  const id = makeId();
-  const res = await sendReq({
-    type: "req",
-    id,
-    method: "workspace.readSource",
-    params: { path: sourcePath },
-  });
-  if (!res || !res.ok) return null;
-  return {
-    path: res.payload?.path || sourcePath,
-    content: typeof res.payload?.content === "string" ? res.payload.content : "",
-  };
-}
-
-// 保存文件
-async function saveFile() {
-  if (!ws || !isReady) {
-    showNotice("无法保存", "未连接到服务器。", "error");
-    return;
-  }
-  if (currentEditReadOnly) {
-    showNotice("当前不可保存", "这是只读来源视图，不能直接写回。", "error");
-    return;
-  }
-
-  if (!currentEditPath) {
-    showNotice("无法保存", "没有正在编辑的文件。", "error");
-    return;
-  }
-
-  const content = editorTextarea ? editorTextarea.value : "";
-
-  if (saveEditBtn) {
-    saveEditBtn.textContent = "保存中...";
-    saveEditBtn.disabled = true;
-  }
-
-  const id = makeId();
-  let res;
-
-  // 如果是 .env 文件，使用 config.writeRaw
-  if (currentEditPath === ".env") {
-    res = await sendReq({
-      type: "req",
-      id,
-      method: "config.writeRaw",
-      params: { content },
-    });
-  } else {
-    res = await sendReq({
-      type: "req",
-      id,
-      method: "workspace.write",
-      params: { path: currentEditPath, content },
-    });
-  }
-
-  if (saveEditBtn) {
-    saveEditBtn.disabled = false;
-  }
-
-  if (!res || !res.ok) {
-    if (saveEditBtn) saveEditBtn.textContent = "保存";
-    const msg = res && res.error ? res.error.message : "保存失败";
-    showNotice("保存失败", msg, "error");
-    return;
-  }
-
-  if (saveEditBtn) saveEditBtn.textContent = "已保存";
-  showNotice("保存成功", `${currentEditPath} 已写入。`, "success", 1800);
-
-  setTimeout(() => {
-    if (saveEditBtn) saveEditBtn.textContent = "保存";
-    switchMode("chat");
-    currentEditPath = null;
-    originalContent = null;
-    resetEditorAccessState();
-    loadFileTree();
-  }, 500);
-}
-
-// 取消编辑
-function cancelEdit() {
-  if (originalContent !== null && editorTextarea) {
-    const currentContent = editorTextarea.value;
-    if (currentContent !== originalContent) {
-      if (!confirm("放弃修改？")) {
-        return;
-      }
-    }
-  }
-
-  switchMode("chat");
-  currentEditPath = null;
-  originalContent = null;
-  resetEditorAccessState();
-  loadFileTree();
-}
-
 // 切换模式
 function switchMode(mode) {
-  editorMode = mode === "editor";
-
   const canvasSection = document.getElementById("canvasSection");
 
   if (mode === "editor") {
@@ -3176,185 +1676,25 @@ function switchMode(mode) {
 }
 
 function goalBaseConversationId(goalId) {
-  return `goal:${goalId}`;
+  return canvasContextFeature?.goalBaseConversationId(goalId) || `goal:${goalId}`;
 }
 
 function isGoalConversationId(conversationId) {
-  return typeof conversationId === "string" && conversationId.startsWith("goal:");
+  return canvasContextFeature?.isGoalConversationId(conversationId)
+    || (typeof conversationId === "string" && conversationId.startsWith("goal:"));
 }
 
 function isConversationForGoal(conversationId, goalId) {
-  return typeof conversationId === "string" && conversationId.startsWith(goalBaseConversationId(goalId));
+  return canvasContextFeature?.isConversationForGoal(conversationId, goalId)
+    || (typeof conversationId === "string" && conversationId.startsWith(goalBaseConversationId(goalId)));
 }
 
 function parseGoalConversationContext(conversationId) {
-  if (!isGoalConversationId(conversationId)) return null;
-  const match = /^goal:([^:]+)(?::node:([^:]+):run:([^:]+))?$/.exec(String(conversationId).trim());
-  if (!match) return null;
-  return {
-    goalId: match[1] || "",
-    nodeId: match[2] || "",
-    runId: match[3] || "",
-    conversationId: String(conversationId).trim(),
-  };
+  return canvasContextFeature?.parseGoalConversationContext(conversationId) || null;
 }
 
 function renderCanvasGoalContext() {
-  if (!canvasContextBarEl) return;
-  const boardId = normalizeGoalBoardId(window._canvasApp?.currentBoardId);
-  const conversation = parseGoalConversationContext(activeConversationId);
-  const mappedGoal = boardId
-    ? (Array.isArray(goalsState.items)
-      ? goalsState.items.find((goal) => normalizeGoalBoardId(goal?.boardId) === boardId) || null
-      : null)
-    : null;
-  const goalId = conversation?.goalId || mappedGoal?.id || "";
-  const goal = goalId ? getGoalById(goalId) || mappedGoal : mappedGoal;
-  const goalName = goal?.title || goalId || "";
-  const nodeId = conversation?.nodeId || (typeof goal?.activeNodeId === "string" ? goal.activeNodeId.trim() : "");
-  const runId = conversation?.runId || (typeof goal?.lastRunId === "string" ? goal.lastRunId.trim() : "");
-  const capabilityEntry = goalId ? getCachedGoalCapabilityEntry(goalId) : null;
-  const capabilityPlans = Array.isArray(capabilityEntry?.plans) ? capabilityEntry.plans : [];
-  const capabilityPlan = capabilityPlans.find((plan) => plan.nodeId === nodeId)
-    || capabilityPlans.find((plan) => plan.nodeId === (typeof goal?.activeNodeId === "string" ? goal.activeNodeId.trim() : ""))
-    || capabilityPlans[0]
-    || null;
-  window._canvasApp?.setGoalContext?.({
-    goalId: goalId || "",
-    goalTitle: goalName || "",
-    nodeId: nodeId || "",
-    runId: runId || "",
-    conversationId: conversation?.conversationId || "",
-    boardId: boardId || "",
-    capabilityPlanId: capabilityPlan?.id || "",
-    capabilityMode: capabilityPlan?.executionMode || "",
-    capabilityRisk: capabilityPlan?.riskLevel || "",
-    capabilityStatus: capabilityPlan?.status || "",
-    capabilityAlignment: capabilityPlan?.analysis?.status || "",
-  });
-
-  if (!boardId && !goalId && !conversation) {
-    canvasContextBarEl.classList.add("hidden");
-    canvasContextBarEl.innerHTML = "";
-    return;
-  }
-
-  let note = "当前处于画布工作区。";
-  if (conversation?.goalId && goalName) {
-    note = nodeId
-      ? `当前画布可回跳到 ${goalName} 的节点通道。`
-      : `当前画布可回跳到 ${goalName} 的 goal 通道。`;
-  } else if (goalName && boardId) {
-    note = `当前画布已匹配到长期任务 ${goalName} 的主板。`;
-  } else if (boardId) {
-    note = "当前画布尚未匹配到长期任务，可继续独立使用。";
-  }
-
-  const actions = [];
-  if (goalId) {
-    actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-detail="${escapeHtml(goalId)}">打开长期任务详情</button>`);
-  }
-  if (goalId) {
-    actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-tasks="${escapeHtml(goalId)}">查看 Goal Tasks</button>`);
-  }
-  if (conversation?.conversationId) {
-    actions.push(`
-      <button
-        class="canvas-tb-btn"
-        data-canvas-open-conversation="${escapeHtml(conversation.conversationId)}"
-        data-canvas-conversation-label="${escapeHtml(nodeId ? `返回节点通道：${goalName || goalId} / ${nodeId}` : `返回长期任务通道：${goalName || goalId}`)}"
-      >
-        ${nodeId ? "返回当前节点通道" : "返回当前 Goal 通道"}
-      </button>
-    `);
-  }
-  if (goal?.runtimeRoot) {
-    actions.push(`<button class="canvas-tb-btn" data-canvas-open-capability-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">打开 capabilityPlan</button>`);
-  }
-
-  const capabilityMeta = capabilityPlan ? `
-    <span class="canvas-context-item canvas-context-item-capability">
-      <span class="canvas-context-label">Plan</span>
-      <span class="canvas-context-value">${escapeHtml(capabilityPlan.nodeId || capabilityPlan.id)}</span>
-    </span>
-    <span class="canvas-context-item canvas-context-item-capability">
-      <span class="canvas-context-label">Mode</span>
-      <span class="canvas-context-value">${escapeHtml(capabilityPlan.executionMode || "-")}</span>
-    </span>
-    <span class="canvas-context-item canvas-context-item-capability">
-      <span class="canvas-context-label">Risk</span>
-      <span class="canvas-context-value">${escapeHtml(capabilityPlan.riskLevel || "-")}</span>
-    </span>
-    <span class="canvas-context-item canvas-context-item-capability">
-      <span class="canvas-context-label">Align</span>
-      <span class="canvas-context-value">${escapeHtml(capabilityPlan.analysis?.status || "-")}</span>
-    </span>
-    <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityPlan.summary || capabilityPlan.analysis?.summary || "当前节点已有 capabilityPlan 可回看。")}</span>
-  ` : goalId ? `
-    <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityEntry ? "当前 goal 尚未匹配到对应 node 的 capabilityPlan。" : "正在读取 capabilityPlan 上下文…")}</span>
-  ` : "";
-
-  canvasContextBarEl.classList.remove("hidden");
-  canvasContextBarEl.innerHTML = `
-    <div class="canvas-context-meta">
-      <span class="canvas-context-item"><span class="canvas-context-label">Board</span><span class="canvas-context-value">${escapeHtml(boardId || "-")}</span></span>
-      <span class="canvas-context-item"><span class="canvas-context-label">Goal</span><span class="canvas-context-value">${escapeHtml(goalName || "-")}</span></span>
-      ${nodeId ? `<span class="canvas-context-item"><span class="canvas-context-label">Node</span><span class="canvas-context-value">${escapeHtml(nodeId)}</span></span>` : ""}
-      ${runId ? `<span class="canvas-context-item"><span class="canvas-context-label">Run</span><span class="canvas-context-value">${escapeHtml(runId)}</span></span>` : ""}
-      ${capabilityMeta}
-      <span class="canvas-context-note">${escapeHtml(note)}</span>
-    </div>
-    <div class="canvas-context-actions">
-      ${actions.join("")}
-    </div>
-  `;
-
-  canvasContextBarEl.querySelectorAll("[data-canvas-open-goal-detail]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const nextGoalId = node.getAttribute("data-canvas-open-goal-detail");
-      if (!nextGoalId) return;
-      switchMode("goals");
-      await loadGoals(true, nextGoalId);
-    });
-  });
-  canvasContextBarEl.querySelectorAll("[data-canvas-open-goal-tasks]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const nextGoalId = node.getAttribute("data-canvas-open-goal-tasks");
-      if (!nextGoalId) return;
-      await openGoalTaskViewer(nextGoalId);
-    });
-  });
-  canvasContextBarEl.querySelectorAll("[data-canvas-open-conversation]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const conversationId = node.getAttribute("data-canvas-open-conversation");
-      if (!conversationId) return;
-      const hint = node.getAttribute("data-canvas-conversation-label") || undefined;
-      openConversationSession(conversationId, hint);
-    });
-  });
-  canvasContextBarEl.querySelectorAll("[data-canvas-open-capability-source]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const sourcePath = node.getAttribute("data-canvas-open-capability-source");
-      if (!sourcePath) return;
-      void openSourcePath(sourcePath);
-    });
-  });
-
-  if (goal && goalId && (!capabilityEntry || (nodeId && !capabilityPlan)) && !goalsState.capabilityPending?.[goalId]) {
-    void ensureGoalCapabilityCache(goal, { forceReload: Boolean(capabilityEntry) }).then(() => {
-      const latestBoardId = normalizeGoalBoardId(window._canvasApp?.currentBoardId);
-      const latestConversation = parseGoalConversationContext(activeConversationId);
-      const latestGoalId = latestConversation?.goalId
-        || (latestBoardId
-          ? (Array.isArray(goalsState.items)
-            ? (goalsState.items.find((item) => normalizeGoalBoardId(item?.boardId) === latestBoardId)?.id || "")
-            : "")
-          : "");
-      if (latestGoalId === goalId) {
-        renderCanvasGoalContext();
-      }
-    }).catch(() => {});
-  }
+  return canvasContextFeature?.renderCanvasGoalContext();
 }
 
 function getGoalById(goalId) {
@@ -3782,97 +2122,19 @@ function toggleGoalCheckpointActionModal(show, context = null) {
 }
 
 function renderGoalsLoading(message) {
-  if (goalsListEl) {
-    goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
-  }
-  if (goalsDetailEl) {
-    goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>`;
-  }
+  goalsOverviewFeature?.renderGoalsLoading(message);
 }
 
 function renderGoalsSummary(items) {
-  if (!goalsSummaryEl) return;
-  const goals = Array.isArray(items) ? items : [];
-  const executingCount = goals.filter((goal) => goal?.status === "executing").length;
-  const pausedCount = goals.filter((goal) => goal?.status === "paused").length;
-  const customRootCount = goals.filter((goal) => goal?.pathSource === "user-configured").length;
-  goalsSummaryEl.innerHTML = `
-    <div class="memory-stat-card"><span class="memory-stat-label">长期任务</span><strong class="memory-stat-value">${escapeHtml(String(goals.length))}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">执行中</span><strong class="memory-stat-value">${escapeHtml(String(executingCount))}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">已暂停</span><strong class="memory-stat-value">${escapeHtml(String(pausedCount))}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">自定义 Root</span><strong class="memory-stat-value">${escapeHtml(String(customRootCount))}</strong></div>
-  `;
+  goalsOverviewFeature?.renderGoalsSummary(items);
 }
 
 function renderGoalsEmpty(message) {
-  renderGoalsSummary([]);
-  if (goalsListEl) {
-    goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
-  }
-  if (goalsDetailEl) {
-    goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">新建一个长期任务后，这里会显示 NORTHSTAR.md、路径和执行状态。</div>`;
-  }
+  goalsOverviewFeature?.renderGoalsEmpty(message);
 }
 
 function renderGoalList(items) {
-  if (!goalsListEl) return;
-  if (!Array.isArray(items) || items.length === 0) {
-    goalsListEl.innerHTML = `<div class="memory-viewer-empty">当前还没有长期任务。</div>`;
-    return;
-  }
-  goalsListEl.innerHTML = items.map((goal) => {
-    const isActive = goal.id === goalsState.selectedId;
-    const isCurrentConversation = isConversationForGoal(activeConversationId, goal.id);
-    const objective = goal.objective ? String(goal.objective).trim() : "";
-    return `
-      <div class="memory-list-item goal-list-item${isActive ? " active" : ""}" data-goal-id="${escapeHtml(goal.id)}">
-        <div class="goal-list-item-head">
-          <div class="memory-list-item-title">${escapeHtml(goal.title || goal.id)}</div>
-          ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">current</span>' : ""}
-        </div>
-        <div class="memory-list-item-meta">
-          <span>${escapeHtml(formatGoalStatus(goal.status))}</span>
-          <span>${escapeHtml(goal.currentPhase || "-")}</span>
-          <span>${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</span>
-        </div>
-        <div class="memory-list-item-snippet">${escapeHtml(objective || "未填写 objective，可进入 NORTHSTAR.md 补充目标说明。")}</div>
-        <div class="goal-list-item-meta">
-          <span>${escapeHtml(summarizeSourcePath(goal.goalRoot || "-"))}</span>
-          <span>${escapeHtml(formatGoalPathSource(goal.pathSource))}</span>
-        </div>
-        <div class="goal-list-item-actions">
-          <button class="button goal-inline-action" data-goal-resume="${escapeHtml(goal.id)}">恢复</button>
-          <button class="button goal-inline-action goal-inline-action-secondary" data-goal-pause="${escapeHtml(goal.id)}">暂停</button>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  goalsListEl.querySelectorAll("[data-goal-id]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-id");
-      if (!goalId) return;
-      goalsState.selectedId = goalId;
-      renderGoalList(goalsState.items);
-      renderGoalDetail(getGoalById(goalId));
-    });
-  });
-  goalsListEl.querySelectorAll("[data-goal-resume]").forEach((node) => {
-    node.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const goalId = node.getAttribute("data-goal-resume");
-      if (!goalId) return;
-      void resumeGoal(goalId);
-    });
-  });
-  goalsListEl.querySelectorAll("[data-goal-pause]").forEach((node) => {
-    node.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const goalId = node.getAttribute("data-goal-pause");
-      if (!goalId) return;
-      void pauseGoal(goalId);
-    });
-  });
+  goalsOverviewFeature?.renderGoalList(items);
 }
 
 function bindGoalDetailActions(goal) {
@@ -4162,103 +2424,6 @@ async function submitGoalCheckpointActionForm() {
   }
 }
 
-function buildGoalRuntimeSummaryCard(goal, options) {
-  const {
-    activeNodeId,
-    lastNodeId,
-    lastRunId,
-    isCurrentConversation,
-  } = options;
-  const currentChannel = goal.activeConversationId || goalBaseConversationId(goal.id);
-  return `
-    <div class="memory-detail-card goal-summary-card">
-      <div class="goal-summary-header">
-        <div>
-          <div class="goal-summary-title">运行摘要</div>
-          <div class="goal-summary-text">当前 goal channel、最近节点与运行记录一览。</div>
-        </div>
-        ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">当前正在此通道</span>' : '<span class="memory-badge">可恢复</span>'}
-      </div>
-      <div class="goal-summary-grid">
-        <div class="goal-summary-item">
-          <span class="goal-summary-label">状态</span>
-          <strong class="goal-summary-value">${escapeHtml(formatGoalStatus(goal.status))}</strong>
-        </div>
-        <div class="goal-summary-item">
-          <span class="goal-summary-label">当前节点</span>
-          <strong class="goal-summary-value">${escapeHtml(activeNodeId || "-")}</strong>
-        </div>
-        <div class="goal-summary-item">
-          <span class="goal-summary-label">上次节点</span>
-          <strong class="goal-summary-value">${escapeHtml(lastNodeId || "-")}</strong>
-        </div>
-        <div class="goal-summary-item">
-          <span class="goal-summary-label">上次 Run</span>
-          <strong class="goal-summary-value">${escapeHtml(lastRunId || "-")}</strong>
-        </div>
-      </div>
-      <div class="memory-detail-pre">${escapeHtml(currentChannel)}</div>
-    </div>
-  `;
-}
-
-function buildGoalRecoveryCard(goal, options) {
-  const {
-    activeNodeId,
-    lastNodeId,
-    isCurrentConversation,
-  } = options;
-  let title = "恢复建议";
-  let text = "可以直接进入该长期任务的基础 goal channel。";
-  let actions = `
-    <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
-  `;
-
-  if (goal.status === "executing" && isCurrentConversation) {
-    title = "建议继续当前通道";
-    text = "你已经位于该长期任务的执行通道中，优先继续当前上下文，避免重复恢复。";
-    actions = `
-      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">刷新并继续当前通道</button>
-      <button class="button" data-open-goal-tasks="${escapeHtml(goal.id)}">查看关联 Tasks</button>
-    `;
-  } else if (goal.status === "executing" && activeNodeId) {
-    title = "建议恢复当前执行节点";
-    text = `该长期任务目前记录的活动节点是 ${activeNodeId}，优先回到这个节点继续执行。`;
-    actions = `
-      <button class="button" data-goal-resume-last-node="${escapeHtml(goal.id)}" data-goal-last-node-id="${escapeHtml(activeNodeId)}">恢复当前节点</button>
-      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
-    `;
-  } else if (lastNodeId) {
-    title = "建议按上次节点恢复";
-    text = `检测到最近一次活跃节点为 ${lastNodeId}，优先按该节点恢复，比直接回基础通道更连续。`;
-    actions = `
-      <button class="button" data-goal-resume-last-node="${escapeHtml(goal.id)}" data-goal-last-node-id="${escapeHtml(lastNodeId)}">按上次节点恢复</button>
-      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
-    `;
-  } else if (goal.status === "planning" || goal.status === "aligning" || goal.status === "ready") {
-    title = "建议先进入基础通道";
-    text = "当前还没有可恢复的节点历史，建议先进入基础 goal channel，继续拆解方案与任务。";
-    actions = `
-      <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">进入基础通道</button>
-      <button class="button" data-open-source="${escapeHtml(goal.northstarPath)}">打开 NORTHSTAR.md</button>
-    `;
-  }
-
-  return `
-    <div class="memory-detail-card goal-recovery-card">
-      <div class="goal-summary-header">
-        <div>
-          <div class="goal-summary-title">${escapeHtml(title)}</div>
-          <div class="goal-summary-text">${escapeHtml(text)}</div>
-        </div>
-      </div>
-      <div class="goal-detail-actions">
-        ${actions}
-      </div>
-    </div>
-  `;
-}
-
 function normalizeGoalNodeStatus(status) {
   const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
   if (!normalized) return "pending";
@@ -4481,243 +2646,16 @@ function parseGoalCapabilityPlans(rawPlans) {
     });
 }
 
-function formatCapabilityMode(mode) {
-  return mode === "multi_agent" ? "Multi Agent" : "Single Agent";
-}
-
-function formatCapabilityRisk(level) {
-  if (level === "high") return "High Risk";
-  if (level === "medium") return "Medium Risk";
-  return "Low Risk";
-}
-
-function renderCapabilityTagList(items, emptyText) {
-  if (!Array.isArray(items) || !items.length) {
-    return `<div class="memory-viewer-empty">${escapeHtml(emptyText)}</div>`;
-  }
-  return `
-    <div class="goal-capability-tag-list">
-      ${items.map((item) => `<span class="memory-badge">${escapeHtml(item)}</span>`).join("")}
-    </div>
-  `;
-}
-
 function renderGoalCapabilityPanelLoading() {
-  const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 capability-plans.json …</div>`;
+  return goalsCapabilityPanelFeature?.renderGoalCapabilityPanelLoading();
 }
 
 function renderGoalCapabilityPanelError(message) {
-  const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  return goalsCapabilityPanelFeature?.renderGoalCapabilityPanelError(message);
 }
 
 function renderGoalCapabilityPanel(goal, payload) {
-  const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
-  if (!panel) return;
-  const plans = Array.isArray(payload?.plans) ? payload.plans : [];
-  const nodeMap = payload?.nodeMap && typeof payload.nodeMap === "object" ? payload.nodeMap : {};
-  const planCount = plans.length;
-  const orchestratedCount = plans.filter((plan) => plan.status === "orchestrated").length;
-  const highRiskCount = plans.filter((plan) => plan.riskLevel === "high").length;
-  const driftCount = plans.filter((plan) => plan.analysis?.status === "partial" || plan.analysis?.status === "diverged").length;
-  const actualMethodCount = new Set(plans.flatMap((plan) => plan.actualUsage.methods)).size;
-  const actualSkillCount = new Set(plans.flatMap((plan) => plan.actualUsage.skills)).size;
-  const actualMcpCount = new Set(plans.flatMap((plan) => plan.actualUsage.mcpServers)).size;
-  const preferredNodeIds = [goal?.activeNodeId, goal?.lastNodeId]
-    .map((item) => typeof item === "string" ? item.trim() : "")
-    .filter(Boolean);
-  const focusPlan = preferredNodeIds.map((nodeId) => plans.find((plan) => plan.nodeId === nodeId)).find(Boolean) || plans[0] || null;
-  const recentPlans = plans.slice(0, 6);
-
-  if (!planCount) {
-    panel.innerHTML = `
-      <div class="memory-viewer-empty">
-        capability-plans.json 中还没有计划记录。可先在 goal channel 中执行
-        <code>goal_capability_plan</code> / <code>goal_orchestrate</code>。
-      </div>
-    `;
-    return;
-  }
-
-  const focusNodeTitle = focusPlan?.nodeId ? (nodeMap[focusPlan.nodeId] || focusPlan.nodeId) : "当前节点";
-  panel.innerHTML = `
-    <div class="goal-capability-stats">
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">Plan 总数</span>
-        <strong class="goal-summary-value">${escapeHtml(String(planCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">已编排</span>
-        <strong class="goal-summary-value">${escapeHtml(String(orchestratedCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">高风险</span>
-        <strong class="goal-summary-value">${escapeHtml(String(highRiskCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">偏差计划</span>
-        <strong class="goal-summary-value">${escapeHtml(String(driftCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">实际 Methods</span>
-        <strong class="goal-summary-value">${escapeHtml(String(actualMethodCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">实际 Skills</span>
-        <strong class="goal-summary-value">${escapeHtml(String(actualSkillCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">实际 MCP</span>
-        <strong class="goal-summary-value">${escapeHtml(String(actualMcpCount))}</strong>
-      </div>
-    </div>
-
-    ${focusPlan ? `
-      <div class="goal-capability-focus">
-        <div class="goal-tracking-item-head">
-          <div>
-            <div class="goal-summary-title">当前重点 Plan</div>
-            <div class="goal-summary-text">${escapeHtml(focusNodeTitle)} · ${escapeHtml(focusPlan.nodeId || focusPlan.id)}</div>
-          </div>
-          <div class="goal-checkpoint-meta">
-            <span class="memory-badge ${focusPlan.status === "orchestrated" ? "memory-badge-shared" : ""}">${escapeHtml(focusPlan.status)}</span>
-            <span class="memory-badge">${escapeHtml(formatCapabilityMode(focusPlan.executionMode))}</span>
-            <span class="memory-badge ${focusPlan.riskLevel === "high" ? "is-overdue" : ""}">${escapeHtml(formatCapabilityRisk(focusPlan.riskLevel))}</span>
-            <span class="memory-badge ${focusPlan.analysis?.status === "diverged" ? "is-overdue" : focusPlan.analysis?.status === "aligned" ? "memory-badge-shared" : ""}">${escapeHtml(focusPlan.analysis?.status || "pending")}</span>
-          </div>
-        </div>
-        ${focusPlan.summary ? `<div class="memory-list-item-snippet">${escapeHtml(focusPlan.summary)}</div>` : ""}
-        ${focusPlan.objective ? `<div class="memory-list-item-snippet">${escapeHtml(focusPlan.objective)}</div>` : ""}
-        ${focusPlan.analysis?.summary ? `<div class="memory-list-item-snippet">${escapeHtml(focusPlan.analysis.summary)}</div>` : ""}
-        <div class="memory-list-item-meta">
-          <span>${escapeHtml(focusPlan.id)}</span>
-          ${focusPlan.runId ? `<span>${escapeHtml(focusPlan.runId)}</span>` : ""}
-          <span>${escapeHtml(formatDateTime(focusPlan.updatedAt || focusPlan.generatedAt))}</span>
-          ${focusPlan.orchestratedAt ? `<span>orchestrated ${escapeHtml(formatDateTime(focusPlan.orchestratedAt))}</span>` : ""}
-        </div>
-
-        <div class="goal-capability-columns">
-          <div class="goal-capability-column">
-            <div class="goal-summary-label">Plan 能力编排</div>
-            ${renderCapabilityTagList(
-              [
-                ...focusPlan.methods.map((item) => item.title || item.file),
-                ...focusPlan.skills.map((item) => item.name),
-                ...focusPlan.mcpServers.map((item) => item.serverId),
-                ...focusPlan.subAgents.map((item) => `${item.agentId}: ${item.objective}`),
-              ],
-              "当前 plan 还没有明确列出 methods / skills / MCP / sub-agent。",
-            )}
-          </div>
-          <div class="goal-capability-column">
-            <div class="goal-summary-label">Actual Usage</div>
-            ${renderCapabilityTagList(
-              [
-                ...focusPlan.actualUsage.methods.map((item) => `method:${item}`),
-                ...focusPlan.actualUsage.skills.map((item) => `skill:${item}`),
-                ...focusPlan.actualUsage.mcpServers.map((item) => `mcp:${item}`),
-              ],
-              "当前还没有采集到实际 usage。",
-            )}
-            ${focusPlan.actualUsage.toolNames.length ? `
-              <div class="goal-capability-tool-list">
-                ${focusPlan.actualUsage.toolNames.map((item) => `<code>${escapeHtml(item)}</code>`).join("")}
-              </div>
-            ` : ""}
-            ${focusPlan.actualUsage.updatedAt ? `
-              <div class="memory-list-item-meta">
-                <span>usage updated</span>
-                <span>${escapeHtml(formatDateTime(focusPlan.actualUsage.updatedAt))}</span>
-              </div>
-            ` : ""}
-          </div>
-        </div>
-
-        <div class="goal-capability-columns">
-          <div class="goal-capability-column">
-            <div class="goal-summary-label">Reasoning / Query Hints</div>
-            ${renderCapabilityTagList(
-              [...focusPlan.reasoning, ...focusPlan.queryHints.map((item) => `hint:${item}`)],
-              "当前 plan 没有额外 reasoning / query hints。",
-            )}
-          </div>
-          <div class="goal-capability-column">
-            <div class="goal-summary-label">Risk / Checkpoint / Gaps</div>
-            ${renderCapabilityTagList(
-              [
-                focusPlan.checkpoint.required ? "checkpoint:required" : "checkpoint:optional",
-                `mode:${focusPlan.checkpoint.approvalMode || "none"}`,
-                ...focusPlan.checkpoint.requiredRequestFields.map((item) => `request:${item}`),
-                ...focusPlan.checkpoint.requiredDecisionFields.map((item) => `decision:${item}`),
-                focusPlan.checkpoint.suggestedReviewer ? `reviewer:${focusPlan.checkpoint.suggestedReviewer}` : "",
-                focusPlan.checkpoint.suggestedReviewerRole ? `role:${focusPlan.checkpoint.suggestedReviewerRole}` : "",
-                focusPlan.checkpoint.suggestedSlaHours ? `sla:${focusPlan.checkpoint.suggestedSlaHours}h` : "",
-                focusPlan.checkpoint.escalationMode && focusPlan.checkpoint.escalationMode !== "none" ? `escalation:${focusPlan.checkpoint.escalationMode}` : "",
-                ...focusPlan.checkpoint.reasons,
-                ...focusPlan.gaps.map((item) => `gap:${item}`),
-              ],
-              "当前 plan 没有额外风险说明或能力缺口。",
-            )}
-          </div>
-        </div>
-
-        <div class="goal-capability-columns">
-          <div class="goal-capability-column">
-            <div class="goal-summary-label">Deviation Analysis</div>
-            ${renderCapabilityTagList(
-              (focusPlan.analysis?.deviations || []).map((item) => `${item.area}:${item.summary}`),
-              "当前没有检测到明显偏差。",
-            )}
-          </div>
-          <div class="goal-capability-column">
-            <div class="goal-summary-label">Suggestions</div>
-            ${renderCapabilityTagList(
-              focusPlan.analysis?.recommendations || [],
-              "当前没有额外补建议。",
-            )}
-          </div>
-        </div>
-      </div>
-    ` : ""}
-
-    <div class="goal-tracking-column">
-      <div class="goal-summary-title">最近 Capability Plans</div>
-      <div class="goal-tracking-list">
-        ${recentPlans.map((plan) => {
-          const nodeTitle = plan.nodeId ? (nodeMap[plan.nodeId] || plan.nodeId) : plan.id;
-          return `
-            <div class="goal-tracking-item">
-              <div class="goal-tracking-item-head">
-                <span class="goal-tracking-item-title">${escapeHtml(nodeTitle)}</span>
-                <div class="goal-checkpoint-meta">
-                  <span class="memory-badge ${plan.status === "orchestrated" ? "memory-badge-shared" : ""}">${escapeHtml(plan.status)}</span>
-                  <span class="memory-badge">${escapeHtml(plan.executionMode)}</span>
-                  <span class="memory-badge ${plan.riskLevel === "high" ? "is-overdue" : ""}">${escapeHtml(plan.riskLevel)}</span>
-                </div>
-              </div>
-              ${plan.summary ? `<div class="memory-list-item-snippet">${escapeHtml(plan.summary)}</div>` : ""}
-              <div class="memory-list-item-meta">
-                <span>${escapeHtml(plan.id)}</span>
-                ${plan.nodeId ? `<span>${escapeHtml(plan.nodeId)}</span>` : ""}
-                <span>${escapeHtml(formatDateTime(plan.updatedAt || plan.generatedAt))}</span>
-              </div>
-              <div class="goal-checkpoint-meta">
-                <span class="memory-badge">plan m=${escapeHtml(String(plan.methods.length))}</span>
-                <span class="memory-badge">s=${escapeHtml(String(plan.skills.length))}</span>
-                <span class="memory-badge">mcp=${escapeHtml(String(plan.mcpServers.length))}</span>
-                <span class="memory-badge">actual=${escapeHtml(String(
-                  plan.actualUsage.methods.length + plan.actualUsage.skills.length + plan.actualUsage.mcpServers.length,
-                ))}</span>
-              </div>
-            </div>
-          `;
-        }).join("")}
-      </div>
-    </div>
-  `;
+  return goalsCapabilityPanelFeature?.renderGoalCapabilityPanel(goal, payload);
 }
 
 function getCachedGoalCapabilityEntry(goalId) {
@@ -4830,83 +2768,11 @@ function parseGoalBoardRef(rawBoardRef) {
 }
 
 function renderGoalCanvasPanelLoading() {
-  const panel = goalsDetailEl?.querySelector("#goalCanvasPanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 board-ref.json …</div>`;
+  return goalsReadonlyPanelsFeature?.renderGoalCanvasPanelLoading();
 }
 
 function renderGoalCanvasPanel(goal, payload) {
-  const panel = goalsDetailEl?.querySelector("#goalCanvasPanel");
-  if (!panel || !goal) return;
-
-  const registryBoardId = normalizeGoalBoardId(goal.boardId);
-  const runtimeBoardId = normalizeGoalBoardId(payload?.runtimeBoardId);
-  const effectiveBoardId = runtimeBoardId || registryBoardId;
-  const hasMismatch = Boolean(runtimeBoardId && registryBoardId && runtimeBoardId !== registryBoardId);
-  const linkedAt = payload?.linkedAt || payload?.updatedAt || "";
-  const boardRefPath = goalRuntimeFilePath(goal, "board-ref.json");
-  const source = runtimeBoardId ? "runtime board-ref" : registryBoardId ? "goal registry" : "-";
-
-  let statusLabel = "未绑定";
-  let statusClass = "memory-badge";
-  let hint = "当前还没有检测到 Canvas 主板绑定，可先进入画布列表查看或新建。";
-
-  if (effectiveBoardId && hasMismatch) {
-    statusLabel = "绑定存在差异";
-    statusClass = "memory-badge";
-    hint = `运行态 board-ref (${runtimeBoardId}) 与注册表默认主板 (${registryBoardId}) 不一致，当前优先按运行态绑定打开。`;
-  } else if (effectiveBoardId && runtimeBoardId) {
-    statusLabel = "已绑定";
-    statusClass = "memory-badge memory-badge-shared";
-    hint = "已检测到运行态 Canvas 绑定，可直接从长期任务详情跳转到关联画布。";
-  } else if (effectiveBoardId) {
-    statusLabel = "待确认";
-    statusClass = "memory-badge";
-    hint = "当前仅检测到注册表中的默认主板声明；若打开失败，可先进入画布列表创建或校正绑定。";
-  } else if (payload?.readError) {
-    hint = "无法读取 board-ref.json；若使用了自定义路径，请确认该路径已加入可操作区。";
-  }
-
-  panel.innerHTML = `
-    <div class="goal-summary-header">
-      <div>
-        <div class="goal-summary-title">Canvas 联动</div>
-        <div class="goal-summary-text">${escapeHtml(hint)}</div>
-      </div>
-      <span class="${statusClass}">${escapeHtml(statusLabel)}</span>
-    </div>
-    <div class="goal-summary-grid">
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">当前主板</span>
-        <strong class="goal-summary-value">${escapeHtml(effectiveBoardId || "-")}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">来源</span>
-        <strong class="goal-summary-value">${escapeHtml(source)}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">runtime board-ref</span>
-        <strong class="goal-summary-value">${escapeHtml(runtimeBoardId || "-")}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">registry boardId</span>
-        <strong class="goal-summary-value">${escapeHtml(registryBoardId || "-")}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">最近绑定时间</span>
-        <strong class="goal-summary-value">${escapeHtml(formatDateTime(linkedAt))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">board-ref 路径</span>
-        <strong class="goal-summary-value">${escapeHtml(boardRefPath || "-")}</strong>
-      </div>
-    </div>
-    <div class="goal-detail-actions">
-      <button class="button" data-open-goal-board="${escapeHtml(effectiveBoardId)}" ${effectiveBoardId ? "" : "disabled"}>打开关联画布</button>
-      <button class="button goal-inline-action-secondary" data-open-goal-board-list="${escapeHtml(goal.id)}">查看画布列表</button>
-      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(boardRefPath)}">打开 board-ref.json</button>
-    </div>
-  `;
+  return goalsReadonlyPanelsFeature?.renderGoalCanvasPanel(goal, payload);
 }
 
 async function loadGoalCanvasData(goal) {
@@ -4931,178 +2797,23 @@ async function loadGoalCanvasData(goal) {
 }
 
 async function openGoalCanvasList(goalId) {
-  if (!window._canvasApp) {
-    showNotice("Canvas 不可用", "前端 Canvas 组件尚未初始化。", "error");
-    return;
-  }
-  switchMode("canvas");
-  await window._canvasApp.showBoardList();
-  if (goalId) {
-    showNotice("已切到画布列表", `可从画布列表继续处理 ${getGoalDisplayName(goalId)} 的主板。`, "info", 2200);
-  }
+  return canvasContextFeature?.openGoalCanvasList(goalId);
 }
 
 async function openGoalCanvasBoard(boardId, goalId) {
-  if (!window._canvasApp) {
-    showNotice("Canvas 不可用", "前端 Canvas 组件尚未初始化。", "error");
-    return;
-  }
-  const normalizedBoardId = normalizeGoalBoardId(boardId);
-  if (!normalizedBoardId) {
-    await openGoalCanvasList(goalId);
-    return;
-  }
-
-  switchMode("canvas");
-  await window._canvasApp.openBoard(normalizedBoardId);
-
-  if (window._canvasApp.currentBoardId === normalizedBoardId && window._canvasApp.manager?.board) {
-    window._canvasApp._showCanvasView?.();
-    return;
-  }
-
-  await window._canvasApp.showBoardList();
-  showNotice("未找到关联画布", `未能打开 ${normalizedBoardId}，已切换到画布列表。`, "error", 3200);
+  return canvasContextFeature?.openGoalCanvasBoard(boardId, goalId);
 }
 
 function renderGoalTrackingPanelLoading() {
-  const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 tasks.json / checkpoints.json …</div>`;
+  return goalsTrackingPanelFeature?.renderGoalTrackingPanelLoading();
 }
 
 function renderGoalTrackingPanel(goal, payload) {
-  const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
-  if (!panel) return;
-  const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
-  const checkpoints = Array.isArray(payload?.checkpoints) ? payload.checkpoints : [];
-  const completedNodeCount = nodes.filter((node) => node.status === "completed").length;
-  const runningNodeCount = nodes.filter((node) => node.status === "running").length;
-  const blockedNodeCount = nodes.filter((node) => node.status === "blocked").length;
-  const waitingCheckpointCount = checkpoints.filter((item) => item.status === "waiting_user" || item.status === "required").length;
-  const approvedCheckpointCount = checkpoints.filter((item) => item.status === "approved").length;
-  const rejectedCheckpointCount = checkpoints.filter((item) => item.status === "rejected").length;
-  const recentNodes = nodes.slice(0, 6);
-  const recentCheckpoints = checkpoints
-    .slice()
-    .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
-    .slice(0, 6);
-
-  panel.innerHTML = `
-    <div class="goal-tracking-stats">
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">节点总数</span>
-        <strong class="goal-summary-value">${escapeHtml(String(nodes.length))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">已完成</span>
-        <strong class="goal-summary-value">${escapeHtml(String(completedNodeCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">进行中</span>
-        <strong class="goal-summary-value">${escapeHtml(String(runningNodeCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">阻塞</span>
-        <strong class="goal-summary-value">${escapeHtml(String(blockedNodeCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">Checkpoint</span>
-        <strong class="goal-summary-value">${escapeHtml(String(checkpoints.length))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">待处理</span>
-        <strong class="goal-summary-value">${escapeHtml(String(waitingCheckpointCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">已批准</span>
-        <strong class="goal-summary-value">${escapeHtml(String(approvedCheckpointCount))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">已拒绝</span>
-        <strong class="goal-summary-value">${escapeHtml(String(rejectedCheckpointCount))}</strong>
-      </div>
-    </div>
-
-    <div class="goal-tracking-columns">
-      <div class="goal-tracking-column">
-        <div class="goal-summary-title">最近节点</div>
-        ${recentNodes.length ? `
-          <div class="goal-tracking-list">
-            ${recentNodes.map((node) => `
-              <div class="goal-tracking-item">
-                <div class="goal-tracking-item-head">
-                  <span class="goal-tracking-item-title">${escapeHtml(node.title)}</span>
-                  <span class="memory-badge ${node.status === "completed" ? "memory-badge-shared" : ""}">${escapeHtml(node.status)}</span>
-                </div>
-                <div class="memory-list-item-meta">
-                  <span>${escapeHtml(node.id)}</span>
-                  ${node.phase ? `<span>${escapeHtml(node.phase)}</span>` : ""}
-                  ${node.owner ? `<span>${escapeHtml(node.owner)}</span>` : ""}
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">tasks.json 中还没有节点。</div>`}
-      </div>
-      <div class="goal-tracking-column">
-        <div class="goal-summary-title">最近 Checkpoint</div>
-        ${recentCheckpoints.length ? `
-          <div class="goal-tracking-list">
-            ${recentCheckpoints.map((item) => `
-              <div class="goal-tracking-item">
-                <div class="goal-tracking-item-head">
-                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
-                  <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(item.status)}</span>
-                </div>
-                <div class="memory-list-item-snippet">${escapeHtml(item.summary || item.note || "暂无摘要")}</div>
-                <div class="memory-list-item-meta">
-                  <span>${escapeHtml(item.id)}</span>
-                  ${item.nodeId ? `<span>${escapeHtml(item.nodeId)}</span>` : ""}
-                  <span>${escapeHtml(formatDateTime(item.updatedAt))}</span>
-                </div>
-                <div class="goal-checkpoint-meta">
-                  ${item.reviewer ? `<span class="memory-badge">Reviewer ${escapeHtml(item.reviewer)}</span>` : ""}
-                  ${item.reviewerRole ? `<span class="memory-badge">${escapeHtml(item.reviewerRole)}</span>` : ""}
-                  ${item.requestedBy ? `<span class="memory-badge">发起 ${escapeHtml(item.requestedBy)}</span>` : ""}
-                  ${item.decidedBy ? `<span class="memory-badge">审批 ${escapeHtml(item.decidedBy)}</span>` : ""}
-                  ${getGoalCheckpointSlaBadge(item)}
-                </div>
-                <div class="goal-detail-actions goal-checkpoint-actions">
-                  ${["waiting_user", "required"].includes(item.status) ? `
-                    <button class="button goal-inline-action" data-goal-checkpoint-action="approve" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">批准</button>
-                    <button class="button goal-inline-action-secondary" data-goal-checkpoint-action="reject" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">拒绝</button>
-                    <button class="button goal-inline-action-secondary" data-goal-checkpoint-action="expire" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">过期</button>
-                  ` : ""}
-                  ${["rejected", "expired"].includes(item.status) ? `
-                    <button class="button goal-inline-action" data-goal-checkpoint-action="reopen" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">重新打开</button>
-                  ` : ""}
-                </div>
-                ${item.history.length ? `
-                  <div class="goal-checkpoint-history">
-                    ${item.history.slice().reverse().slice(0, 4).map((history) => `
-                      <div class="goal-checkpoint-history-item">
-                        <span class="memory-badge">${escapeHtml(history.action)}</span>
-                        <span>${escapeHtml(formatDateTime(history.at))}</span>
-                        ${history.actor ? `<span>${escapeHtml(history.actor)}</span>` : ""}
-                        ${history.note ? `<span>${escapeHtml(history.note)}</span>` : ""}
-                      </div>
-                    `).join("")}
-                  </div>
-                ` : ""}
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">checkpoints.json 中还没有 checkpoint。</div>`}
-      </div>
-    </div>
-  `;
+  return goalsTrackingPanelFeature?.renderGoalTrackingPanel(goal, payload);
 }
 
 function renderGoalTrackingPanelError(message) {
-  const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  return goalsTrackingPanelFeature?.renderGoalTrackingPanelError(message);
 }
 
 async function loadGoalTrackingData(goal) {
@@ -5140,40 +2851,11 @@ async function loadGoalTrackingData(goal) {
 }
 
 function renderGoalProgressPanelLoading() {
-  const panel = goalsDetailEl?.querySelector("#goalProgressPanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 progress.md …</div>`;
+  return goalsReadonlyPanelsFeature?.renderGoalProgressPanelLoading();
 }
 
 function renderGoalProgressPanel(entries) {
-  const panel = goalsDetailEl?.querySelector("#goalProgressPanel");
-  if (!panel) return;
-  const recentEntries = Array.isArray(entries) ? entries.slice().reverse().slice(0, 18) : [];
-  if (!recentEntries.length) {
-    panel.innerHTML = `<div class="memory-viewer-empty">progress.md 中还没有时间线记录。</div>`;
-    return;
-  }
-
-  panel.innerHTML = `
-    <div class="goal-progress-timeline">
-      ${recentEntries.map((entry) => `
-        <div class="goal-progress-item">
-          <div class="goal-progress-item-head">
-            <span class="goal-tracking-item-title">${escapeHtml(entry.title || entry.event || "timeline")}</span>
-            <span class="memory-badge">${escapeHtml(entry.event || "-")}</span>
-          </div>
-          <div class="memory-list-item-meta">
-            <span>${escapeHtml(formatDateTime(entry.at))}</span>
-            ${entry.nodeId ? `<span>${escapeHtml(entry.nodeId)}</span>` : ""}
-            ${entry.status ? `<span>${escapeHtml(entry.status)}</span>` : ""}
-            ${entry.checkpointId ? `<span>${escapeHtml(entry.checkpointId)}</span>` : ""}
-          </div>
-          ${entry.summary ? `<div class="memory-list-item-snippet">${escapeHtml(entry.summary)}</div>` : ""}
-          ${entry.note ? `<div class="memory-list-item-snippet">${escapeHtml(entry.note)}</div>` : ""}
-        </div>
-      `).join("")}
-    </div>
-  `;
+  return goalsReadonlyPanelsFeature?.renderGoalProgressPanel(entries);
 }
 
 async function loadGoalProgressData(goal) {
@@ -5260,9 +2942,7 @@ function parseGoalHandoffDocument(rawContent) {
 }
 
 function renderGoalHandoffPanelLoading() {
-  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">正在读取 handoff.md …</div>`;
+  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanelLoading();
 }
 
 function bindGoalHandoffPanelActions(goal) {
@@ -5285,125 +2965,11 @@ function bindGoalHandoffPanelActions(goal) {
 }
 
 function renderGoalHandoffPanelError(goal, message) {
-  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
-  if (!panel) return;
-  panel.innerHTML = `
-    <div class="memory-viewer-empty">${escapeHtml(message)}</div>
-    <div class="goal-detail-actions">
-      <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">生成 handoff</button>
-      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
-    </div>
-  `;
-  bindGoalHandoffPanelActions(goal);
+  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanelError(goal, message);
 }
 
 function renderGoalHandoffPanel(goal, handoff) {
-  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
-  if (!panel || !goal) return;
-
-  if (!handoff || !handoff.generatedAt) {
-    panel.innerHTML = `
-      <div class="memory-viewer-empty">当前还没有正式 handoff。可在节点切换、暂停前或需要交接时手动生成。</div>
-      <div class="goal-detail-actions">
-        <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">生成 handoff</button>
-        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
-      </div>
-    `;
-    bindGoalHandoffPanelActions(goal);
-    return;
-  }
-
-  panel.innerHTML = `
-    <div class="goal-summary-header">
-      <div>
-        <div class="goal-summary-title">Handoff / 恢复交接</div>
-        <div class="goal-summary-text">从 handoff.md 读取当前 goal 的恢复建议、阻塞点与最近交接摘要。</div>
-      </div>
-      <span class="memory-badge memory-badge-shared">已生成</span>
-    </div>
-    <div class="goal-summary-grid">
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">生成时间</span>
-        <strong class="goal-summary-value">${escapeHtml(formatDateTime(handoff.generatedAt))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">恢复模式</span>
-        <strong class="goal-summary-value">${escapeHtml(handoff.resumeMode || "-")}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">建议节点</span>
-        <strong class="goal-summary-value">${escapeHtml(handoff.resumeNode || "-")}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">Open Checkpoint</span>
-        <strong class="goal-summary-value">${escapeHtml(String(handoff.openCheckpoints.length))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">阻塞项</span>
-        <strong class="goal-summary-value">${escapeHtml(String(handoff.blockers.length))}</strong>
-      </div>
-      <div class="goal-summary-item">
-        <span class="goal-summary-label">上次 Run</span>
-        <strong class="goal-summary-value">${escapeHtml(handoff.lastRun || "-")}</strong>
-      </div>
-    </div>
-
-    <div class="goal-tracking-columns">
-      <div class="goal-tracking-column">
-        <div class="goal-summary-title">交接摘要</div>
-        <div class="memory-list-item-snippet">${escapeHtml(handoff.summary || "暂无摘要")}</div>
-        <div class="goal-summary-title">下一步建议</div>
-        <div class="memory-list-item-snippet">${escapeHtml(handoff.nextAction || "暂无建议")}</div>
-        <div class="goal-summary-title">Tracking Snapshot</div>
-        <div class="memory-list-item-meta">
-          <span>nodes ${escapeHtml(String(handoff.tracking.totalNodes || "0"))}</span>
-          <span>done ${escapeHtml(String(handoff.tracking.completedNodes || "0"))}</span>
-          <span>running ${escapeHtml(String(handoff.tracking.inProgressNodes || "0"))}</span>
-          <span>blocked ${escapeHtml(String(handoff.tracking.blockedNodes || "0"))}</span>
-          <span>checkpoint ${escapeHtml(String(handoff.tracking.openCheckpoints || "0"))}</span>
-        </div>
-        ${handoff.focusPlan ? `
-          <div class="goal-summary-title">Focus Capability</div>
-          <div class="memory-list-item-snippet">${escapeHtml(handoff.focusPlan)}</div>
-          ${handoff.focusSummary ? `<div class="memory-list-item-snippet">${escapeHtml(handoff.focusSummary)}</div>` : ""}
-        ` : ""}
-      </div>
-      <div class="goal-tracking-column">
-        <div class="goal-summary-title">阻塞 / 待处理</div>
-        ${handoff.blockers.length || handoff.openCheckpoints.length ? `
-          <div class="goal-tracking-list">
-            ${handoff.blockers.map((item) => `
-              <div class="goal-tracking-item">
-                <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
-              </div>
-            `).join("")}
-            ${handoff.openCheckpoints.map((item) => `
-              <div class="goal-tracking-item">
-                <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">当前 handoff 中没有阻塞或待审批项。</div>`}
-
-        <div class="goal-summary-title">最近 Timeline</div>
-        ${handoff.recentTimeline.length ? `
-          <div class="goal-tracking-list">
-            ${handoff.recentTimeline.map((item) => `
-              <div class="goal-tracking-item">
-                <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">handoff 中还没有最近时间线摘要。</div>`}
-      </div>
-    </div>
-
-    <div class="goal-detail-actions">
-      <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">刷新 handoff</button>
-      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
-    </div>
-  `;
-  bindGoalHandoffPanelActions(goal);
+  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanel(goal, handoff);
 }
 
 async function loadGoalHandoffData(goal) {
@@ -5524,160 +3090,15 @@ function parseGoalReviewGovernanceSummary(rawSummary) {
 }
 
 function renderGoalReviewGovernancePanelLoading() {
-  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">正在汇总 review governance / approval workflow …</div>`;
+  return goalsGovernancePanelFeature?.renderGoalReviewGovernancePanelLoading();
 }
 
 function renderGoalReviewGovernancePanelError(message) {
-  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
-  if (!panel) return;
-  panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  return goalsGovernancePanelFeature?.renderGoalReviewGovernancePanelError(message);
 }
 
 function renderGoalReviewGovernancePanel(goal, data) {
-  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
-  if (!panel || !goal) return;
-  if (!data) {
-    panel.innerHTML = `<div class="memory-viewer-empty">当前还没有 review governance 汇总。</div>`;
-    return;
-  }
-  panel.innerHTML = `
-    <div class="goal-summary-header">
-      <div>
-        <div class="goal-summary-title">Review Governance / Unified Approval</div>
-        <div class="goal-summary-text">在现有 goal detail 内汇总 reviewer/template、suggestion review、checkpoint workflow 与 reminder 状态。</div>
-      </div>
-      <div class="goal-detail-actions">
-        <button class="button" data-goal-approval-scan="${escapeHtml(goal.id)}">执行 Approval Scan</button>
-        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationsPath || goalRuntimeFilePath(goal, "review-notifications.json"))}">打开 Notifications</button>
-        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationDispatchesPath || goalRuntimeFilePath(goal, "review-notification-dispatches.json"))}">打开 Dispatch Outbox</button>
-        ${data.governanceConfigPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.governanceConfigPath)}">打开 Governance Config</button>` : ""}
-      </div>
-    </div>
-    <div class="goal-summary-grid">
-      <div class="goal-summary-item"><span class="goal-summary-label">Review Pending</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowPendingCount))}</strong></div>
-      <div class="goal-summary-item"><span class="goal-summary-label">Review Overdue</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowOverdueCount))}</strong></div>
-      <div class="goal-summary-item"><span class="goal-summary-label">Checkpoint Pending</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowPendingCount))}</strong></div>
-      <div class="goal-summary-item"><span class="goal-summary-label">Checkpoint Overdue</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowOverdueCount))}</strong></div>
-      <div class="goal-summary-item"><span class="goal-summary-label">Reviewers</span><strong class="goal-summary-value">${escapeHtml(String(data.reviewers.length))}</strong></div>
-      <div class="goal-summary-item"><span class="goal-summary-label">Templates</span><strong class="goal-summary-value">${escapeHtml(String(data.templates.length))}</strong></div>
-      <div class="goal-summary-item"><span class="goal-summary-label">Dispatches</span><strong class="goal-summary-value">${escapeHtml(String(data.notificationDispatchCounts?.total || data.notificationDispatches.length || 0))}</strong></div>
-    </div>
-    <div class="goal-tracking-columns">
-      <div class="goal-tracking-column">
-        <div class="goal-summary-title">Actionable Suggestion Reviews</div>
-        ${data.actionableReviews.length ? `
-          <div class="goal-tracking-list">
-            ${data.actionableReviews.map((item) => `
-              <div class="goal-tracking-item">
-                <div class="goal-tracking-item-head">
-                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
-                  <span class="memory-badge">${escapeHtml(item.status)}</span>
-                </div>
-                <div class="memory-list-item-meta">
-                  <span>${escapeHtml(item.id)}</span>
-                  <span>${escapeHtml(item.suggestionType)}</span>
-                  ${item.reviewer ? `<span>${escapeHtml(item.reviewer)}</span>` : ""}
-                </div>
-                <div class="goal-detail-actions">
-                  <button class="button goal-inline-action" data-goal-suggestion-decision="accepted" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">通过</button>
-                  <button class="button goal-inline-action-secondary" data-goal-suggestion-decision="rejected" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">拒绝</button>
-                  <button class="button goal-inline-action-secondary" data-goal-suggestion-escalate="true" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">升级</button>
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">当前没有待处理 suggestion review。</div>`}
-        <div class="goal-summary-title">Templates</div>
-        ${data.templates.length ? `
-          <div class="goal-tracking-list">
-            ${data.templates.map((item) => `
-              <div class="goal-tracking-item">
-                <div class="goal-tracking-item-head">
-                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
-                  <span class="memory-badge">${escapeHtml(item.mode)}</span>
-                </div>
-                <div class="memory-list-item-meta">
-                  <span>${escapeHtml(item.id)}</span>
-                  <span>${escapeHtml(item.target)}</span>
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">当前 organization governance 尚未配置模板。</div>`}
-      </div>
-      <div class="goal-tracking-column">
-        <div class="goal-summary-title">Actionable Checkpoints</div>
-        ${data.actionableCheckpoints.length ? `
-          <div class="goal-tracking-list">
-            ${data.actionableCheckpoints.map((item) => `
-              <div class="goal-tracking-item">
-                <div class="goal-tracking-item-head">
-                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
-                  <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(item.status)}</span>
-                </div>
-                <div class="memory-list-item-meta">
-                  <span>${escapeHtml(item.id)}</span>
-                  ${item.nodeId ? `<span>${escapeHtml(item.nodeId)}</span>` : ""}
-                  ${item.reviewer ? `<span>${escapeHtml(item.reviewer)}</span>` : ""}
-                  ${item.slaAt ? `<span>${escapeHtml(formatDateTime(item.slaAt))}</span>` : ""}
-                </div>
-                <div class="goal-detail-actions">
-                  <button class="button goal-inline-action" data-goal-checkpoint-action="approve" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">批准</button>
-                  <button class="button goal-inline-action-secondary" data-goal-checkpoint-action="reject" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">拒绝</button>
-                  <button class="button goal-inline-action-secondary" data-goal-checkpoint-escalate="true" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">升级</button>
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">当前没有待处理 checkpoint workflow。</div>`}
-        <div class="goal-summary-title">Recent Notifications</div>
-        ${data.notifications.length ? `
-          <div class="goal-tracking-list">
-            ${data.notifications.slice().reverse().slice(0, 6).map((item) => `
-              <div class="goal-tracking-item">
-                <div class="goal-tracking-item-head">
-                  <span class="goal-tracking-item-title">${escapeHtml(item.kind)}</span>
-                  <span class="memory-badge">${escapeHtml(item.targetType)}</span>
-                </div>
-                <div class="memory-list-item-snippet">${escapeHtml(item.message || "")}</div>
-                <div class="memory-list-item-meta">
-                  <span>${escapeHtml(item.targetId || "")}</span>
-                  ${item.recipient ? `<span>${escapeHtml(item.recipient)}</span>` : ""}
-                  ${item.createdAt ? `<span>${escapeHtml(formatDateTime(item.createdAt))}</span>` : ""}
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">当前还没有 reminder / escalation 通知。</div>`}
-        <div class="goal-summary-title">Dispatch Channels / Outbox</div>
-        ${data.notificationDispatches.length ? `
-          <div class="memory-list-item-meta" style="margin-bottom:10px;">
-            <span>by channel: ${escapeHtml(Object.entries(data.notificationDispatchCounts?.byChannel || {}).map(([key, value]) => `${key}=${value}`).join(" | ") || "(none)")}</span>
-            <span>by status: ${escapeHtml(Object.entries(data.notificationDispatchCounts?.byStatus || {}).map(([key, value]) => `${key}=${value}`).join(" | ") || "(none)")}</span>
-          </div>
-          <div class="goal-tracking-list">
-            ${data.notificationDispatches.slice().reverse().slice(0, 8).map((item) => `
-              <div class="goal-tracking-item">
-                <div class="goal-tracking-item-head">
-                  <span class="goal-tracking-item-title">${escapeHtml(item.channel)}</span>
-                  <span class="memory-badge">${escapeHtml(item.status)}</span>
-                </div>
-                <div class="memory-list-item-snippet">${escapeHtml(item.message || "")}</div>
-                <div class="memory-list-item-meta">
-                  <span>${escapeHtml(item.targetType || "")}:${escapeHtml(item.targetId || "")}</span>
-                  ${item.recipient ? `<span>${escapeHtml(item.recipient)}</span>` : ""}
-                  ${item.routeKey ? `<span>${escapeHtml(item.routeKey)}</span>` : ""}
-                  ${item.createdAt ? `<span>${escapeHtml(formatDateTime(item.createdAt))}</span>` : ""}
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-viewer-empty">当前还没有 materialized dispatch / outbox 记录。</div>`}
-      </div>
-    </div>
-  `;
+  return goalsGovernancePanelFeature?.renderGoalReviewGovernancePanel(goal, data);
 }
 
 function bindGoalReviewGovernanceActions(goal) {
@@ -5755,187 +3176,11 @@ async function loadGoalReviewGovernanceData(goal) {
 }
 
 function renderGoalDetail(goal) {
-  if (!goalsDetailEl) return;
-  if (!goal) {
-    goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>`;
-    return;
-  }
-  const isCurrentConversation = isConversationForGoal(activeConversationId, goal.id);
-  const objective = goal.objective ? String(goal.objective).trim() : "";
-  const lastNodeId = typeof goal.lastNodeId === "string" && goal.lastNodeId.trim() ? goal.lastNodeId.trim() : "";
-  const lastRunId = typeof goal.lastRunId === "string" && goal.lastRunId.trim() ? goal.lastRunId.trim() : "";
-  const activeNodeId = typeof goal.activeNodeId === "string" && goal.activeNodeId.trim() ? goal.activeNodeId.trim() : "";
-  const runtimeSummaryCard = buildGoalRuntimeSummaryCard(goal, {
-    activeNodeId,
-    lastNodeId,
-    lastRunId,
-    isCurrentConversation,
-  });
-  const recoveryCard = buildGoalRecoveryCard(goal, {
-    activeNodeId,
-    lastNodeId,
-    isCurrentConversation,
-  });
-  goalsDetailEl.innerHTML = `
-    <div class="memory-detail-shell">
-      <div class="memory-detail-header">
-        <div>
-          <div class="memory-detail-title">${escapeHtml(goal.title || goal.id)}</div>
-          <div class="memory-list-item-snippet">${escapeHtml(objective || "未填写 objective，可直接打开 NORTHSTAR.md 或 00-goal.md 继续完善。")}</div>
-        </div>
-        <div class="memory-detail-badges">
-          <span class="memory-badge memory-badge-shared">${escapeHtml(formatGoalStatus(goal.status))}</span>
-          <span class="memory-badge">${escapeHtml(goal.currentPhase || "-")}</span>
-          ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">current channel</span>' : ""}
-        </div>
-      </div>
-
-      ${runtimeSummaryCard}
-      ${recoveryCard}
-
-      <div class="memory-detail-card goal-handoff-card">
-        <div id="goalHandoffPanel">
-          <div class="memory-viewer-empty">正在读取 handoff.md …</div>
-        </div>
-      </div>
-
-      <div class="memory-detail-card goal-governance-card">
-        <div id="goalGovernancePanel">
-          <div class="memory-viewer-empty">正在汇总 review governance / approval workflow …</div>
-        </div>
-      </div>
-
-      <div class="memory-detail-grid">
-        <div class="memory-detail-card"><span class="memory-detail-label">Goal ID</span><div class="memory-detail-text">${escapeHtml(goal.id)}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">更新时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">创建时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.createdAt))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Path Source</span><div class="memory-detail-text">${escapeHtml(formatGoalPathSource(goal.pathSource))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">当前 Active Node</span><div class="memory-detail-text">${escapeHtml(activeNodeId || "-")}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">上次 Active Node</span><div class="memory-detail-text">${escapeHtml(lastNodeId || "-")}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">上次 Run ID</span><div class="memory-detail-text">${escapeHtml(lastRunId || "-")}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">最近活跃时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.lastActiveAt))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">最近暂停时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.pausedAt))}</div></div>
-      </div>
-
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">执行通道</span>
-        <div class="memory-detail-pre">${escapeHtml(goal.activeConversationId || goalBaseConversationId(goal.id))}</div>
-      </div>
-
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">关键路径</span>
-        <div class="goal-path-list">
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goalDocFilePath(goal, "00-goal.md"))}">打开 00-goal</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.northstarPath)}">打开 NORTHSTAR.md</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.tasksPath)}">打开任务图</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">打开 capability-plans.json</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "checkpoints.json"))}">打开 checkpoints.json</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.progressPath)}">打开 progress</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "state.json"))}">打开 state.json</button>
-          <button class="button goal-path-button" data-open-source="${escapeHtml(goalRuntimeFilePath(goal, "runtime.json"))}">打开 runtime.json</button>
-        </div>
-      </div>
-
-      <div class="memory-detail-grid">
-        <div class="memory-detail-card"><span class="memory-detail-label">Goal Root</span><div class="memory-detail-pre">${escapeHtml(goal.goalRoot || "-")}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Doc Root</span><div class="memory-detail-pre">${escapeHtml(goal.docRoot || "-")}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Runtime Root</span><div class="memory-detail-pre">${escapeHtml(goal.runtimeRoot || "-")}</div></div>
-      </div>
-
-      <div class="goal-detail-actions">
-        <button class="button" data-open-goal-tasks="${escapeHtml(goal.id)}">查看关联 Tasks</button>
-        <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">恢复并进入通道</button>
-        ${lastNodeId ? `<button class="button" data-goal-resume-last-node="${escapeHtml(goal.id)}" data-goal-last-node-id="${escapeHtml(lastNodeId)}">按上次节点恢复</button>` : ""}
-        <button class="button goal-inline-action-secondary" data-goal-pause-detail="${escapeHtml(goal.id)}">暂停</button>
-      </div>
-
-      <div class="memory-detail-card goal-canvas-card">
-        <div id="goalCanvasPanel">
-          <div class="memory-viewer-empty">正在读取 board-ref.json …</div>
-        </div>
-      </div>
-
-      <div class="memory-detail-card goal-tracking-card">
-        <div class="goal-summary-header">
-          <div>
-            <div class="goal-summary-title">Checkpoint / Node 追踪</div>
-            <div class="goal-summary-text">从 tasks.json 与 checkpoints.json 读取当前长期任务的结构化执行进度。</div>
-          </div>
-        </div>
-        <div id="goalTrackingPanel">
-          <div class="memory-viewer-empty">正在读取 tasks.json / checkpoints.json …</div>
-        </div>
-      </div>
-
-      <div class="memory-detail-card goal-capability-card">
-        <div class="goal-summary-header">
-          <div>
-            <div class="goal-summary-title">Capability Plan</div>
-            <div class="goal-summary-text">从 capability-plans.json 读取节点执行前规划，以及运行后回写的 actual usage。</div>
-          </div>
-        </div>
-        <div id="goalCapabilityPanel">
-          <div class="memory-viewer-empty">正在读取 capability-plans.json …</div>
-        </div>
-      </div>
-
-      <div class="memory-detail-card goal-progress-card">
-        <div class="goal-summary-header">
-          <div>
-            <div class="goal-summary-title">执行时间线</div>
-            <div class="goal-summary-text">从 progress.md 读取节点流转与 checkpoint 审批时间线。</div>
-          </div>
-        </div>
-        <div id="goalProgressPanel">
-          <div class="memory-viewer-empty">正在读取 progress.md …</div>
-        </div>
-      </div>
-    </div>
-  `;
-  bindGoalDetailActions(goal);
-  void loadGoalCanvasData(goal);
-  void loadGoalTrackingData(goal);
-  void loadGoalCapabilityData(goal);
-  void loadGoalProgressData(goal);
-  void loadGoalHandoffData(goal);
-  void loadGoalReviewGovernanceData(goal);
+  return goalsDetailFeature?.renderGoalDetail(goal);
 }
 
 async function loadGoals(forceReload = false, preferredGoalId) {
-  if (!goalsSection) return;
-  if (!ws || !isReady) {
-    renderGoalsLoading("未连接");
-    return;
-  }
-  if (forceReload || goalsState.items.length === 0) {
-    renderGoalsLoading("加载中...");
-  }
-  const seq = goalsState.loadSeq + 1;
-  goalsState.loadSeq = seq;
-  const res = await sendReq({ type: "req", id: makeId(), method: "goal.list" });
-  if (seq !== goalsState.loadSeq) return;
-  if (!res || !res.ok || !Array.isArray(res.payload?.goals)) {
-    renderGoalsEmpty("长期任务列表加载失败。");
-    return;
-  }
-  const items = sortGoals(res.payload.goals);
-  goalsState.items = items;
-  renderGoalsSummary(items);
-  if (items.length === 0) {
-    goalsState.selectedId = null;
-    renderGoalsEmpty("当前还没有长期任务。");
-    return;
-  }
-  const selectedExists = items.some((goal) => goal.id === goalsState.selectedId);
-  goalsState.selectedId = preferredGoalId && items.some((goal) => goal.id === preferredGoalId)
-    ? preferredGoalId
-    : selectedExists
-      ? goalsState.selectedId
-      : items[0].id;
-  renderGoalList(items);
-  renderGoalDetail(getGoalById(goalsState.selectedId));
-  renderCanvasGoalContext();
+  return goalsOverviewFeature?.loadGoals(forceReload, preferredGoalId);
 }
 
 async function submitGoalCreateForm() {
@@ -6035,7 +3280,7 @@ async function pauseGoal(goalId) {
   if (isConversationForGoal(activeConversationId, goalId)) {
     activeConversationId = null;
     renderCanvasGoalContext();
-    botMsgEl = null;
+    chatEventsFeature?.resetStreamingState();
   }
   const goal = res.payload?.goal || getGoalById(goalId);
   await loadGoals(true, goalId);
@@ -6065,144 +3310,27 @@ async function generateGoalHandoff(goalId) {
 }
 
 function switchMemoryViewerTab(tab) {
-  if (memoryViewerState.tab === tab) return;
-  memoryViewerState.tab = tab;
-  memoryViewerState.items = [];
-  memoryViewerState.selectedId = null;
-  memoryViewerState.selectedTask = null;
-  memoryViewerState.selectedCandidate = null;
-  if (tab !== "tasks") {
-    memoryViewerState.goalIdFilter = null;
-  }
-  syncMemoryViewerUi();
-  loadMemoryViewer(true);
+  return memoryViewerFeature?.switchMemoryViewerTab(tab);
 }
 
 function syncMemoryViewerUi() {
-  const isTasks = memoryViewerState.tab === "tasks";
-  if (memoryTabTasksBtn) memoryTabTasksBtn.classList.toggle("active", isTasks);
-  if (memoryTabMemoriesBtn) memoryTabMemoriesBtn.classList.toggle("active", !isTasks);
-  if (memoryTaskFiltersEl) memoryTaskFiltersEl.classList.toggle("hidden", !isTasks);
-  if (memoryChunkFiltersEl) memoryChunkFiltersEl.classList.toggle("hidden", isTasks);
-  syncMemoryTaskGoalFilterUi();
+  return memoryViewerFeature?.syncMemoryViewerUi();
 }
 
 async function loadMemoryViewer(forceSelectFirst = false) {
-  if (!memoryViewerSection) return;
-  syncMemoryViewerUi();
-
-  if (!ws || !isReady) {
-    renderMemoryViewerStats(null);
-    renderMemoryViewerListEmpty("未连接到服务器。");
-    renderMemoryViewerDetailEmpty("连接完成后可查看任务与记忆。");
-    return;
-  }
-
-  if (memoryViewerState.tab === "tasks") {
-    await Promise.all([
-      loadMemoryViewerStats(),
-      loadTaskUsageOverview(),
-    ]);
-    await loadTaskViewer(forceSelectFirst);
-  } else {
-    memoryViewerState.selectedTask = null;
-    memoryViewerState.selectedCandidate = null;
-    await loadMemoryViewerStats();
-    await loadMemoryChunkViewer(forceSelectFirst);
-  }
+  return memoryViewerFeature?.loadMemoryViewer(forceSelectFirst);
 }
 
 async function loadMemoryViewerStats() {
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "memory.stats" });
-  if (!res || !res.ok) {
-    renderMemoryViewerStats(null);
-    return;
-  }
-  memoryViewerState.stats = res.payload?.status ?? null;
-  renderMemoryViewerStats(memoryViewerState.stats);
+  return memoryViewerFeature?.loadMemoryViewerStats();
 }
 
 async function loadTaskUsageOverview() {
-  const seq = memoryViewerState.usageOverviewSeq + 1;
-  memoryViewerState.usageOverviewSeq = seq;
-  memoryViewerState.usageOverview = {
-    ...memoryViewerState.usageOverview,
-    loading: true,
-  };
-  renderMemoryViewerStats(memoryViewerState.stats);
-
-  const [methodsRes, skillsRes] = await Promise.all([
-    sendReq({
-      type: "req",
-      id: makeId(),
-      method: "experience.usage.stats",
-      params: { limit: 6, filter: { assetType: "method" } },
-    }),
-    sendReq({
-      type: "req",
-      id: makeId(),
-      method: "experience.usage.stats",
-      params: { limit: 6, filter: { assetType: "skill" } },
-    }),
-  ]);
-
-  if (memoryViewerState.tab !== "tasks" || memoryViewerState.usageOverviewSeq !== seq) return;
-
-  memoryViewerState.usageOverview = {
-    loading: false,
-    methods: methodsRes?.ok && Array.isArray(methodsRes.payload?.items) ? methodsRes.payload.items : [],
-    skills: skillsRes?.ok && Array.isArray(skillsRes.payload?.items) ? skillsRes.payload.items : [],
-  };
-  renderMemoryViewerStats(memoryViewerState.stats);
+  return memoryViewerFeature?.loadTaskUsageOverview();
 }
 
 async function loadTaskViewer(forceSelectFirst = false) {
-  renderMemoryViewerListEmpty("Tasks 加载中…");
-  renderMemoryViewerDetailEmpty("正在加载 task 详情…");
-  memoryViewerState.selectedTask = null;
-  renderMemoryViewerStats(memoryViewerState.stats);
-
-  const params = { limit: 20 };
-  const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
-  if (query) params.query = query;
-
-  const filter = {};
-  if (memoryTaskStatusFilterEl?.value) filter.status = memoryTaskStatusFilterEl.value;
-  if (memoryTaskSourceFilterEl?.value) filter.source = memoryTaskSourceFilterEl.value;
-  if (memoryViewerState.goalIdFilter) filter.goalId = memoryViewerState.goalIdFilter;
-  if (Object.keys(filter).length > 0) params.filter = filter;
-
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "memory.task.list", params });
-  if (!res || !res.ok) {
-    memoryViewerState.selectedTask = null;
-    renderMemoryViewerListEmpty("Task 列表加载失败。");
-    renderMemoryViewerDetailEmpty(res?.error?.message || "无法读取 task 数据。");
-    renderMemoryViewerStats(memoryViewerState.stats);
-    return;
-  }
-
-  const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
-  memoryViewerState.items = items;
-  renderMemoryViewerStats(memoryViewerState.stats);
-
-  if (!items.length) {
-    memoryViewerState.selectedId = null;
-    memoryViewerState.selectedTask = null;
-    renderTaskList(items);
-    renderMemoryViewerDetailEmpty("没有匹配的 task。");
-    renderMemoryViewerStats(memoryViewerState.stats);
-    return;
-  }
-
-  const selectedExists = items.some((item) => item.id === memoryViewerState.selectedId);
-  if (forceSelectFirst || !selectedExists) {
-    memoryViewerState.selectedId = items[0].id;
-  }
-
-  renderTaskList(items);
-  await loadTaskDetail(memoryViewerState.selectedId);
+  return memoryViewerFeature?.loadTaskViewer(forceSelectFirst);
 }
 
 async function loadTaskDetail(taskId) {
@@ -6242,52 +3370,7 @@ async function loadTaskDetail(taskId) {
 }
 
 async function loadMemoryChunkViewer(forceSelectFirst = false) {
-  renderMemoryViewerListEmpty("Memories 加载中…");
-  renderMemoryViewerDetailEmpty("正在加载 memory 详情…");
-
-  const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
-  const filter = {};
-  if (memoryChunkTypeFilterEl?.value) filter.memoryType = memoryChunkTypeFilterEl.value;
-  if (memoryChunkVisibilityFilterEl?.value) filter.scope = memoryChunkVisibilityFilterEl.value;
-  if (memoryChunkCategoryFilterEl?.value) {
-    if (memoryChunkCategoryFilterEl.value === "uncategorized") {
-      filter.uncategorized = true;
-    } else {
-      filter.category = memoryChunkCategoryFilterEl.value;
-    }
-  }
-
-  const params = { limit: 20 };
-  if (Object.keys(filter).length > 0) params.filter = filter;
-  if (query) params.query = query;
-
-  const method = query ? "memory.search" : "memory.recent";
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method, params });
-  if (!res || !res.ok) {
-    renderMemoryViewerListEmpty("Memory 列表加载失败。");
-    renderMemoryViewerDetailEmpty(res?.error?.message || "无法读取 memory 数据。");
-    return;
-  }
-
-  const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
-  memoryViewerState.items = items;
-  renderMemoryViewerStats(memoryViewerState.stats);
-
-  if (!items.length) {
-    memoryViewerState.selectedId = null;
-    renderMemoryList(items);
-    renderMemoryViewerDetailEmpty("没有匹配的 memory。");
-    return;
-  }
-
-  const selectedExists = items.some((item) => item.id === memoryViewerState.selectedId);
-  if (forceSelectFirst || !selectedExists) {
-    memoryViewerState.selectedId = items[0].id;
-  }
-
-  renderMemoryList(items);
-  await loadMemoryDetail(memoryViewerState.selectedId);
+  return memoryViewerFeature?.loadMemoryChunkViewer(forceSelectFirst);
 }
 
 async function loadMemoryDetail(chunkId) {
@@ -6364,128 +3447,15 @@ async function loadCandidateDetail(candidateId) {
 }
 
 function renderMemoryViewerStats(stats) {
-  if (!memoryViewerStatsEl) return;
-  if (!stats) {
-    memoryViewerStatsEl.innerHTML = `
-      <div class="memory-stat-card"><span class="memory-stat-label">记忆文件</span><strong class="memory-stat-value">--</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">记忆块</span><strong class="memory-stat-value">--</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">向量索引</span><strong class="memory-stat-value">--</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">摘要完成</span><strong class="memory-stat-value">--</strong></div>
-    `;
-    return;
-  }
-
-  if (memoryViewerState.tab === "memories") {
-    const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
-    const currentCategorized = items.filter((item) => Boolean(item?.category)).length;
-    const currentUncategorized = items.length - currentCategorized;
-    const activeCategoryLabel = getActiveMemoryCategoryLabel();
-    const distributionCard = renderMemoryCategoryDistribution(stats);
-
-    memoryViewerStatsEl.innerHTML = `
-      <div class="memory-stat-card"><span class="memory-stat-label">当前结果</span><strong class="memory-stat-value">${formatCount(items.length)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">筛选分类</span><strong class="memory-stat-value">${escapeHtml(activeCategoryLabel)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">当前已分类</span><strong class="memory-stat-value">${formatCount(currentCategorized)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">当前未分类</span><strong class="memory-stat-value">${formatCount(currentUncategorized)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">全库已分类</span><strong class="memory-stat-value">${formatCount(stats.categorized)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">全库未分类</span><strong class="memory-stat-value">${formatCount(stats.uncategorized)}</strong></div>
-      ${distributionCard}
-    `;
-    return;
-  }
-
-  const selectedTask = memoryViewerState.selectedTask;
-  const usedMethods = Array.isArray(selectedTask?.usedMethods) ? selectedTask.usedMethods : [];
-  const usedSkills = Array.isArray(selectedTask?.usedSkills) ? selectedTask.usedSkills : [];
-  const lastUsedAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
-  const activeGoalId = memoryViewerState.goalIdFilter;
-  const activeGoalLabel = activeGoalId ? getGoalDisplayName(activeGoalId) : "-";
-
-  memoryViewerStatsEl.innerHTML = `
-    <div class="memory-stat-card"><span class="memory-stat-label">当前 Task 结果</span><strong class="memory-stat-value">${formatCount(Array.isArray(memoryViewerState.items) ? memoryViewerState.items.length : 0)}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Method</span><strong class="memory-stat-value">${formatCount(usedMethods.length)}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Skill</span><strong class="memory-stat-value">${formatCount(usedSkills.length)}</strong></div>
-    <div class="memory-stat-card"><span class="memory-stat-label">最近采用时间</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(formatDateTime(lastUsedAt))}</strong></div>
-    ${activeGoalId ? `<div class="memory-stat-card"><span class="memory-stat-label">Goal Filter</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(activeGoalLabel)}</strong><div class="memory-stat-caption">${escapeHtml(activeGoalId)}</div></div>` : ""}
-    ${renderTaskUsageOverviewCard()}
-  `;
-  bindStatsAuditJumpLinks();
+  return memoryViewerFeature?.renderMemoryViewerStats(stats);
 }
 
 function renderTaskList(items) {
-  if (!memoryViewerListEl) return;
-  if (!items.length) {
-    renderMemoryViewerListEmpty("没有可展示的 task。");
-    return;
-  }
-
-  memoryViewerListEl.innerHTML = items.map((item) => {
-    const title = item.title || item.objective || item.summary || item.conversationId || item.id;
-    const snippet = item.summary || item.outcome || item.objective || "暂无摘要";
-    const isActive = item.id === memoryViewerState.selectedId;
-    const goalId = getTaskGoalId(item);
-    return `
-      <div class="memory-list-item ${isActive ? "active" : ""}" data-task-id="${escapeHtml(item.id)}">
-        <div class="memory-list-item-title">${escapeHtml(title)}</div>
-        <div class="memory-list-item-meta">
-          <span>${escapeHtml(item.status || "unknown")}</span>
-          <span>${escapeHtml(item.source || "unknown")}</span>
-          ${goalId ? `<span class="memory-badge memory-badge-shared">${escapeHtml(getGoalDisplayName(goalId))}</span>` : ""}
-          <span>${escapeHtml(formatDateTime(item.finishedAt || item.startedAt || item.createdAt))}</span>
-        </div>
-        <div class="memory-list-item-snippet">${escapeHtml(snippet)}</div>
-      </div>
-    `;
-  }).join("");
-
-  memoryViewerListEl.querySelectorAll("[data-task-id]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const taskId = node.getAttribute("data-task-id");
-      if (!taskId) return;
-      memoryViewerState.selectedId = taskId;
-      renderTaskList(memoryViewerState.items);
-      await loadTaskDetail(taskId);
-    });
-  });
+  return memoryViewerFeature?.renderTaskList(items);
 }
 
 function renderMemoryList(items) {
-  if (!memoryViewerListEl) return;
-  if (!items.length) {
-    renderMemoryViewerListEmpty("没有可展示的 memory。");
-    return;
-  }
-
-  memoryViewerListEl.innerHTML = items.map((item) => {
-    const title = summarizeSourcePath(item.sourcePath);
-    const summary = item.summary || item.snippet || "暂无摘要";
-    const isActive = item.id === memoryViewerState.selectedId;
-    const visibility = normalizeMemoryVisibility(item.visibility);
-    const category = formatMemoryCategory(item.category);
-    return `
-      <div class="memory-list-item ${isActive ? "active" : ""}" data-memory-id="${escapeHtml(item.id)}">
-        <div class="memory-list-item-title">${escapeHtml(title)}</div>
-        <div class="memory-list-item-meta">
-          <span>${escapeHtml(item.memoryType || "other")}</span>
-          <span>${escapeHtml(item.sourceType || "unknown")}</span>
-          <span class="memory-badge ${getVisibilityBadgeClass(visibility)}">${escapeHtml(visibility)}</span>
-          <span class="memory-badge">${escapeHtml(category)}</span>
-          <span>score ${formatScore(item.score)}</span>
-        </div>
-        <div class="memory-list-item-snippet">${escapeHtml(summary)}</div>
-      </div>
-    `;
-  }).join("");
-
-  memoryViewerListEl.querySelectorAll("[data-memory-id]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      const chunkId = node.getAttribute("data-memory-id");
-      if (!chunkId) return;
-      memoryViewerState.selectedId = chunkId;
-      renderMemoryList(memoryViewerState.items);
-      await loadMemoryDetail(chunkId);
-    });
-  });
+  return memoryViewerFeature?.renderMemoryList(items);
 }
 
 function renderTaskDetail(task) {
@@ -6617,74 +3587,11 @@ function renderTaskDetail(task) {
 }
 
 function renderCandidateOnlyDetail(candidate) {
-  if (!memoryViewerDetailEl) return;
-  if (!candidate) {
-    renderMemoryViewerDetailEmpty("Candidate 不存在。");
-    return;
-  }
-  memoryViewerDetailEl.innerHTML = `
-    <div class="memory-detail-shell">
-      ${renderCandidateDetailPanel(candidate)}
-    </div>
-  `;
-  bindMemoryPathLinks();
-  bindTaskAuditJumpLinks();
+  return memoryViewerFeature?.renderCandidateOnlyDetail(candidate);
 }
 
 function renderMemoryDetail(item) {
-  if (!memoryViewerDetailEl) return;
-  if (!item) {
-    renderMemoryViewerDetailEmpty("Memory 不存在。");
-    return;
-  }
-
-  const visibility = normalizeMemoryVisibility(item.visibility);
-  const category = formatMemoryCategory(item.category);
-  memoryViewerDetailEl.innerHTML = `
-    <div class="memory-detail-shell">
-      <div class="memory-detail-header">
-        <div>
-          <div class="memory-detail-title">${escapeHtml(summarizeSourcePath(item.sourcePath))}</div>
-          <div class="memory-list-item-meta">
-            <span>${escapeHtml(item.id)}</span>
-          </div>
-        </div>
-        <div class="memory-detail-badges">
-          <span class="memory-badge">${escapeHtml(item.memoryType || "other")}</span>
-          <span class="memory-badge">${escapeHtml(item.sourceType || "unknown")}</span>
-          <span class="memory-badge ${getVisibilityBadgeClass(visibility)}">${escapeHtml(visibility)}</span>
-          <span class="memory-badge">${escapeHtml(category)}</span>
-          <span class="memory-badge">score ${formatScore(item.score)}</span>
-        </div>
-      </div>
-
-      <div class="memory-detail-grid">
-        <div class="memory-detail-card"><span class="memory-detail-label">Source Path</span><div class="memory-detail-text">${item.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(item.sourcePath)}" data-open-line="${typeof item.startLine === "number" ? item.startLine : ""}">${escapeHtml(item.sourcePath)}</button>` : "-"}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Lines</span><div class="memory-detail-text">${escapeHtml(formatLineRange(item.startLine, item.endLine))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Visibility</span><div class="memory-detail-text">${escapeHtml(visibility)}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">分类</span><div class="memory-detail-text">${escapeHtml(category)}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Summary</span><div class="memory-detail-text">${escapeHtml(item.summary || "暂无摘要")}</div></div>
-      </div>
-
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">Snippet</span>
-        <div class="memory-detail-text">${escapeHtml(item.snippet || "暂无内容")}</div>
-      </div>
-
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">Content</span>
-        <pre class="memory-detail-pre">${escapeHtml(item.content || item.snippet || "暂无内容")}</pre>
-      </div>
-
-      ${item.metadata ? `
-        <div class="memory-detail-card">
-          <span class="memory-detail-label">Metadata</span>
-          <pre class="memory-detail-pre">${escapeHtml(JSON.stringify(item.metadata, null, 2))}</pre>
-        </div>
-      ` : ""}
-    </div>
-  `;
-  bindMemoryPathLinks();
+  return memoryViewerFeature?.renderMemoryDetail(item);
 }
 
 function renderMemoryViewerListEmpty(message) {
@@ -7074,94 +3981,7 @@ function formatUsageVia(value) {
 }
 
 function renderCandidateDetailPanel(candidate) {
-  if (!candidate) return "";
-  const snapshot = candidate.sourceTaskSnapshot || {};
-  const memoryLinks = Array.isArray(snapshot.memoryLinks) ? snapshot.memoryLinks : [];
-  const artifactPaths = Array.isArray(snapshot.artifactPaths) ? snapshot.artifactPaths : [];
-  const toolCalls = Array.isArray(snapshot.toolCalls) ? snapshot.toolCalls : [];
-
-  return `
-    <div class="memory-detail-card">
-      <div class="memory-inline-item-head">
-        <span class="memory-detail-label">Candidate 详情面板</span>
-        <div class="memory-detail-badges">
-          <span class="memory-badge">${escapeHtml(candidate.type || "unknown")}</span>
-          <span class="memory-badge">${escapeHtml(candidate.status || "unknown")}</span>
-          <button class="memory-usage-action-btn" data-close-candidate-panel="1">关闭</button>
-        </div>
-      </div>
-      <div class="memory-detail-text"><strong>${escapeHtml(candidate.title || candidate.id || "未命名候选")}</strong></div>
-      <div class="memory-detail-grid">
-        <div class="memory-detail-card"><span class="memory-detail-label">Candidate ID</span><div class="memory-detail-text">${escapeHtml(candidate.id || "-")}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Source Task</span><div class="memory-detail-text">${candidate.taskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(candidate.taskId)}">${escapeHtml(candidate.taskId)}</button>` : "-"}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Slug</span><div class="memory-detail-text">${escapeHtml(candidate.slug || "-")}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Published Path</span><div class="memory-detail-text">${candidate.publishedPath ? `<button class="memory-path-link" data-open-source="${escapeHtml(candidate.publishedPath)}">${escapeHtml(candidate.publishedPath)}</button>` : "-"}</div></div>
-      </div>
-      ${candidate.summary ? `<div class="memory-detail-text">${escapeHtml(candidate.summary)}</div>` : ""}
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">来源快照</span>
-        <div class="memory-detail-grid">
-          <div class="memory-detail-card"><span class="memory-detail-label">Conversation</span><div class="memory-detail-text">${escapeHtml(snapshot.conversationId || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">状态</span><div class="memory-detail-text">${escapeHtml(snapshot.status || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Source</span><div class="memory-detail-text">${escapeHtml(snapshot.source || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">开始</span><div class="memory-detail-text">${escapeHtml(formatDateTime(snapshot.startedAt))}</div></div>
-        </div>
-        ${snapshot.objective ? `<div class="memory-detail-text"><strong>Objective:</strong> ${escapeHtml(snapshot.objective)}</div>` : ""}
-        ${snapshot.summary ? `<div class="memory-detail-text"><strong>Summary:</strong> ${escapeHtml(snapshot.summary)}</div>` : ""}
-      </div>
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">来源记忆 (${memoryLinks.length})</span>
-        ${memoryLinks.length ? `
-          <div class="memory-inline-list">
-            ${memoryLinks.map((link) => `
-              <div class="memory-inline-item">
-                <div class="memory-inline-item-head">
-                  <span class="memory-badge">${escapeHtml(link.relation || "used")}</span>
-                  ${link.memoryType ? `<span class="memory-badge">${escapeHtml(link.memoryType)}</span>` : ""}
-                  <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "open memory")}</button>
-                </div>
-                ${link.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(link.sourcePath)}">${escapeHtml(link.sourcePath)}</button>` : ""}
-                ${link.snippet ? `<div class="memory-detail-text">${escapeHtml(link.snippet)}</div>` : ""}
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-detail-text">无来源记忆链接。</div>`}
-      </div>
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">来源产物 (${artifactPaths.length})</span>
-        ${artifactPaths.length ? `
-          <div class="memory-inline-list">
-            ${artifactPaths.map((artifactPath) => `
-              <div class="memory-inline-item">
-                <button class="memory-path-link" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(artifactPath)}</button>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-detail-text">无来源产物。</div>`}
-      </div>
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">Tool Calls (${toolCalls.length})</span>
-        ${toolCalls.length ? `
-          <div class="memory-inline-list">
-            ${toolCalls.map((call) => `
-              <div class="memory-inline-item">
-                <div class="memory-inline-item-head">
-                  <span class="memory-badge">${escapeHtml(call.toolName || "unknown")}</span>
-                  <span class="memory-badge">${call.success ? "success" : "failed"}</span>
-                  <span class="memory-badge">${escapeHtml(formatDuration(call.durationMs))}</span>
-                </div>
-                ${call.note ? `<div class="memory-detail-text">${escapeHtml(call.note)}</div>` : ""}
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="memory-detail-text">无工具调用记录。</div>`}
-      </div>
-      <div class="memory-detail-card">
-        <span class="memory-detail-label">Candidate Content</span>
-        <pre class="memory-detail-pre">${escapeHtml(candidate.content || "暂无内容")}</pre>
-      </div>
-    </div>
-  `;
+  return memoryViewerFeature?.renderCandidateDetailPanel(candidate) || "";
 }
 
 function renderMemoryCategoryDistribution(stats) {
@@ -7266,6 +4086,7 @@ function openConversationSession(conversationId, hintText) {
   activeConversationId = conversationId;
   renderCanvasGoalContext();
   switchMode("chat");
+  chatEventsFeature?.resetStreamingState();
   if (messagesEl) {
     messagesEl.innerHTML = "";
     const hint = document.createElement("div");
@@ -7311,6 +4132,7 @@ function consumeUrlTokenParam() {
 if (authModeEl) {
   authModeEl.addEventListener("change", () => {
     if (authModeEl.value !== "token") transientUrlToken = null;
+    persistAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl, transientUrlToken });
   });
 }
 if (authValueEl) {
@@ -7318,147 +4140,20 @@ if (authValueEl) {
     if (transientUrlToken && authValueEl.value.trim() !== transientUrlToken) {
       transientUrlToken = null;
     }
+    persistAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl, transientUrlToken });
   });
 }
 
-const SAFE_ASSISTANT_TAGS = new Set([
-  "A", "AUDIO", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "H5", "H6", "HR",
-  "I", "IMG", "LI", "OL", "P", "PRE", "SOURCE", "SPAN", "STRONG", "UL", "VIDEO", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "BUTTON", "SVG", "PATH", "RECT"
-]);
-
-const SAFE_ASSISTANT_ATTRS = {
-  A: new Set(["href", "title", "target", "rel"]),
-  AUDIO: new Set(["src", "controls", "autoplay", "preload", "loop"]),
-  IMG: new Set(["src", "alt", "title"]),
-  SOURCE: new Set(["src", "type"]),
-  VIDEO: new Set(["src", "controls", "autoplay", "muted", "loop", "playsinline", "preload", "poster"]),
-  CODE: new Set(["class", "language"]), // For syntax highlighting classes from marked
-  PRE: new Set(["class"]),
-  DIV: new Set(["class"]),
-  SPAN: new Set(["class"]),
-  BUTTON: new Set(["class", "title", "onclick"]),
-  SVG: new Set(["width", "height", "viewBox", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "xmlns", "class"]),
-  PATH: new Set(["d", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"]),
-  RECT: new Set(["x", "y", "width", "height", "rx", "ry", "fill", "stroke", "stroke-width"]),
-};
-
-let markedConfigured = false;
 function configureMarkedOnce() {
-  if (markedConfigured || !window.marked) return;
-  const renderer = new window.marked.Renderer();
-  renderer.code = function (code, language) {
-    return `<div class="code-block-wrapper">
-  <div class="code-block-header">
-    <span class="code-block-lang">${language || ''}</span>
-    <button class="copy-code-btn" title="复制代码">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> 复制
-    </button>
-  </div>
-  <pre><code class="language-${language}">${escapeHtml(code)}</code></pre>
-</div>`;
-  };
-  window.marked.use({ renderer });
-  markedConfigured = true;
+  return chatUiFeature?.configureMarkedOnce();
 }
 
 function stripThinkBlocks(text) {
-  if (!text) return "";
-  // 移除完整的 think 块
-  let stripped = text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
-  // 移除末尾处于未完成状态的 think 块 (适配流式输出)
-  stripped = stripped.replace(/<think>[\s\S]*$/, "");
-  return stripped;
+  return chatUiFeature?.stripThinkBlocks(text) || "";
 }
 
 function sanitizeAssistantHtml(rawHtml) {
-  if (!rawHtml) return "";
-  const template = document.createElement("template");
-  template.innerHTML = rawHtml;
-  for (const node of Array.from(template.content.childNodes)) {
-    sanitizeAssistantNode(node);
-  }
-  return template.innerHTML;
-}
-
-function sanitizeAssistantNode(node) {
-  if (!node) return;
-  if (node.nodeType === Node.TEXT_NODE) return;
-  if (node.nodeType !== Node.ELEMENT_NODE) {
-    node.remove();
-    return;
-  }
-
-  const el = node;
-  const tag = el.tagName;
-  if (!SAFE_ASSISTANT_TAGS.has(tag)) {
-    const parent = el.parentNode;
-    if (!parent) {
-      el.remove();
-      return;
-    }
-    const children = Array.from(el.childNodes);
-    for (const child of children) {
-      parent.insertBefore(child, el);
-      sanitizeAssistantNode(child);
-    }
-    parent.removeChild(el);
-    return;
-  }
-
-  const allowedAttrs = SAFE_ASSISTANT_ATTRS[tag];
-  for (const attr of Array.from(el.attributes)) {
-    const name = attr.name.toLowerCase();
-    if (name.startsWith("on")) {
-      el.removeAttribute(attr.name);
-      continue;
-    }
-    if (!allowedAttrs || !allowedAttrs.has(name)) {
-      el.removeAttribute(attr.name);
-      continue;
-    }
-    if ((name === "src" || name === "href") && !isSafeAssistantUrl(attr.value, tag, name)) {
-      el.removeAttribute(attr.name);
-    }
-  }
-
-  if (tag === "A" && el.getAttribute("target") === "_blank") {
-    el.setAttribute("rel", "noopener noreferrer");
-  }
-
-  for (const child of Array.from(el.childNodes)) {
-    sanitizeAssistantNode(child);
-  }
-}
-
-function isSafeAssistantUrl(value, tag, attrName) {
-  if (typeof value !== "string") return false;
-  const normalized = value.trim();
-  if (!normalized) return false;
-  const lower = normalized.toLowerCase();
-
-  if (normalized.startsWith("/") || normalized.startsWith("./") || normalized.startsWith("../") || normalized.startsWith("#")) {
-    return true;
-  }
-
-  if (lower.startsWith("blob:")) {
-    return true;
-  }
-
-  if (attrName === "src" && (tag === "IMG" || tag === "AUDIO" || tag === "VIDEO" || tag === "SOURCE")) {
-    if (lower.startsWith("data:image/") || lower.startsWith("data:audio/") || lower.startsWith("data:video/")) {
-      return true;
-    }
-  }
-
-  try {
-    const parsed = new URL(normalized, window.location.origin);
-    if (attrName === "href") {
-      return parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "mailto:" || parsed.protocol === "tel:";
-    }
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return chatUiFeature?.sanitizeAssistantHtml(rawHtml) || "";
 }
 
 // ── Tool Settings (调用设置) ──
@@ -7473,600 +4168,27 @@ const openToolSettingsBtn = document.getElementById("openToolSettings");
 const closeToolSettingsBtn = document.getElementById("closeToolSettings");
 const saveToolSettingsBtn = document.getElementById("saveToolSettings");
 const toolSettingsBody = document.getElementById("toolSettingsBody");
+const toolTabButtons = [...document.querySelectorAll(".tool-tab")];
 
-let toolSettingsData = null; // { builtin, mcp, plugins, skills, disabled }
-let toolSettingsActiveTab = "builtin";
-let toolSettingsLoadSeq = 0;
-let pendingToolSettingsConfirm = null;
-let toolSettingsConfirmTimer = null;
-
-if (openToolSettingsBtn) {
-  openToolSettingsBtn.addEventListener("click", () => toggleToolSettings(true));
-}
-if (closeToolSettingsBtn) {
-  closeToolSettingsBtn.addEventListener("click", () => toggleToolSettings(false));
-}
-if (saveToolSettingsBtn) {
-  saveToolSettingsBtn.addEventListener("click", saveToolSettings);
-}
-if (toolSettingsConfirmApproveBtn) {
-  toolSettingsConfirmApproveBtn.addEventListener("click", () => {
-    void submitToolSettingsConfirm("approve");
-  });
-}
-if (toolSettingsConfirmRejectBtn) {
-  toolSettingsConfirmRejectBtn.addEventListener("click", () => {
-    void submitToolSettingsConfirm("reject");
-  });
-}
-
-// Tab switching
-document.querySelectorAll(".tool-tab").forEach(tab => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tool-tab").forEach(t => t.classList.remove("active"));
-    tab.classList.add("active");
-    toolSettingsActiveTab = tab.dataset.tab;
-    renderToolSettingsTab();
-  });
+const toolSettingsController = createToolSettingsController({
+  refs: {
+    toolSettingsConfirmModal,
+    toolSettingsConfirmImpactEl,
+    toolSettingsConfirmSummaryEl,
+    toolSettingsConfirmExpiryEl,
+    toolSettingsConfirmApproveBtn,
+    toolSettingsConfirmRejectBtn,
+    toolSettingsModal,
+    openToolSettingsBtn,
+    closeToolSettingsBtn,
+    saveToolSettingsBtn,
+    toolSettingsBody,
+    toolTabButtons,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  clientId,
+  escapeHtml,
+  showNotice,
 });
-
-function toggleToolSettings(show) {
-  if (show) {
-    toolSettingsModal.classList.remove("hidden");
-    toolSettingsData = null;
-    loadToolSettings();
-  } else {
-    toolSettingsModal.classList.add("hidden");
-  }
-}
-
-function shouldHandleToolSettingsConfirmPayload(payload) {
-  if (!payload || typeof payload !== "object") return false;
-  const targetClientId = payload.targetClientId ? String(payload.targetClientId).trim() : "";
-  return !targetClientId || targetClientId === clientId;
-}
-
-function normalizeToolSettingsConfirmPayload(payload) {
-  if (!payload || typeof payload !== "object") return null;
-  const requestId = payload.requestId ? String(payload.requestId).trim() : "";
-  const conversationId = payload.conversationId ? String(payload.conversationId).trim() : "";
-  if (!requestId || !conversationId) return null;
-  const summary = Array.isArray(payload.summary)
-    ? payload.summary.map((item) => String(item ?? "").trim()).filter(Boolean)
-    : [];
-  return {
-    requestId,
-    conversationId,
-    impact: payload.impact ? String(payload.impact) : "这是全局工具设置变更，会影响当前 Gateway 的其他会话。",
-    summary,
-    expiresAt: Number(payload.expiresAt || 0),
-  };
-}
-
-function setToolSettingsConfirmBusy(busy) {
-  if (toolSettingsConfirmApproveBtn) toolSettingsConfirmApproveBtn.disabled = busy;
-  if (toolSettingsConfirmRejectBtn) toolSettingsConfirmRejectBtn.disabled = busy;
-}
-
-function stopToolSettingsConfirmTimer() {
-  if (toolSettingsConfirmTimer) {
-    clearInterval(toolSettingsConfirmTimer);
-    toolSettingsConfirmTimer = null;
-  }
-}
-
-function formatToolSettingsConfirmExpiry(expiresAt) {
-  if (!Number.isFinite(expiresAt) || expiresAt <= 0) return "";
-  const remainingMs = expiresAt - Date.now();
-  if (remainingMs <= 0) return "该确认请求已过期，请重新发起工具开关变更。";
-  const remainingSec = Math.ceil(remainingMs / 1000);
-  if (remainingSec < 60) return `请在 ${remainingSec} 秒内完成确认。`;
-  const minutes = Math.floor(remainingSec / 60);
-  const seconds = remainingSec % 60;
-  return `请在 ${minutes} 分 ${seconds.toString().padStart(2, "0")} 秒内完成确认。`;
-}
-
-function renderToolSettingsConfirmModal() {
-  if (!pendingToolSettingsConfirm || !toolSettingsConfirmModal) return;
-  if (toolSettingsConfirmImpactEl) {
-    toolSettingsConfirmImpactEl.textContent = pendingToolSettingsConfirm.impact;
-  }
-  if (toolSettingsConfirmSummaryEl) {
-    const lines = pendingToolSettingsConfirm.summary.length > 0
-      ? pendingToolSettingsConfirm.summary
-      : ["本次请求未提供可展示的变更摘要。"];
-    toolSettingsConfirmSummaryEl.innerHTML = lines
-      .map((line) => `<li>${escapeHtml(line)}</li>`)
-      .join("");
-  }
-  if (toolSettingsConfirmExpiryEl) {
-    toolSettingsConfirmExpiryEl.textContent = formatToolSettingsConfirmExpiry(pendingToolSettingsConfirm.expiresAt);
-  }
-}
-
-function clearToolSettingsConfirmModal() {
-  pendingToolSettingsConfirm = null;
-  stopToolSettingsConfirmTimer();
-  setToolSettingsConfirmBusy(false);
-  if (toolSettingsConfirmModal) toolSettingsConfirmModal.classList.add("hidden");
-}
-
-function handleToolSettingsConfirmRequired(payload) {
-  if (!shouldHandleToolSettingsConfirmPayload(payload)) return;
-  const normalized = normalizeToolSettingsConfirmPayload(payload);
-  if (!normalized) return;
-  pendingToolSettingsConfirm = normalized;
-  setToolSettingsConfirmBusy(false);
-  renderToolSettingsConfirmModal();
-  if (toolSettingsConfirmModal) toolSettingsConfirmModal.classList.remove("hidden");
-  stopToolSettingsConfirmTimer();
-  toolSettingsConfirmTimer = setInterval(() => {
-    if (!pendingToolSettingsConfirm) {
-      stopToolSettingsConfirmTimer();
-      return;
-    }
-    renderToolSettingsConfirmModal();
-  }, 1000);
-}
-
-function handleToolSettingsConfirmResolved(payload) {
-  if (!shouldHandleToolSettingsConfirmPayload(payload)) return;
-  const requestId = payload && payload.requestId ? String(payload.requestId).trim() : "";
-  if (!pendingToolSettingsConfirm || pendingToolSettingsConfirm.requestId !== requestId) return;
-  const approved = payload && payload.decision === "approved";
-  clearToolSettingsConfirmModal();
-  showNotice(
-    approved ? "工具设置已确认" : "工具设置已拒绝",
-    approved ? "全局工具开关变更已应用。" : "本次工具开关变更已拒绝。",
-    approved ? "success" : "info",
-    2600,
-  );
-}
-
-async function submitToolSettingsConfirm(decision) {
-  if (!pendingToolSettingsConfirm) return;
-  if (!ws || !isReady) {
-    showNotice("无法处理确认", "当前未连接到服务器。", "error");
-    return;
-  }
-  setToolSettingsConfirmBusy(true);
-  const currentRequest = pendingToolSettingsConfirm;
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "tool_settings.confirm",
-    params: {
-      requestId: currentRequest.requestId,
-      conversationId: currentRequest.conversationId,
-      decision,
-    },
-  });
-  if (!res || res.ok === false) {
-    setToolSettingsConfirmBusy(false);
-    const title = decision === "approve" ? "确认失败" : "拒绝失败";
-    showNotice(title, res?.error?.message || "请求未完成。", "error");
-    if (res?.error?.code === "not_found") {
-      clearToolSettingsConfirmModal();
-    }
-    return;
-  }
-  clearToolSettingsConfirmModal();
-  showNotice(
-    decision === "approve" ? "工具设置已确认" : "工具设置已拒绝",
-    decision === "approve" ? "全局工具开关变更已应用。" : "本次工具开关变更已拒绝。",
-    decision === "approve" ? "success" : "info",
-    2600,
-  );
-}
-
-async function loadToolSettings() {
-  const seq = ++toolSettingsLoadSeq;
-  if (!ws || !isReady) {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未连接</div>';
-    return;
-  }
-  toolSettingsBody.innerHTML = '<div class="tool-settings-empty">加载中...</div>';
-
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "tools.list" });
-  if (seq !== toolSettingsLoadSeq) return;
-  if (res && res.ok && res.payload) {
-    toolSettingsData = res.payload;
-    renderToolSettingsTab();
-  } else {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">加载失败</div>';
-  }
-}
-
-function renderToolSettingsTab() {
-  if (!toolSettingsData) return;
-  const { builtin, mcp, plugins, skills, disabled } = toolSettingsData;
-
-  if (toolSettingsActiveTab === "builtin") {
-    renderBuiltinTab(builtin, disabled.builtin || []);
-  } else if (toolSettingsActiveTab === "mcp") {
-    renderMCPTab(mcp, disabled.mcp_servers || []);
-  } else if (toolSettingsActiveTab === "skills") {
-    renderSkillsTab(skills || [], disabled.skills || []);
-  } else {
-    renderPluginsTab(plugins, disabled.plugins || []);
-  }
-}
-
-function renderBuiltinTab(tools, disabledList) {
-  if (!tools || tools.length === 0) {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未启用工具系统 (BELLDANDY_TOOLS_ENABLED=false)</div>';
-    return;
-  }
-  const disabledSet = new Set(disabledList);
-  const enabledCount = tools.length - disabledSet.size;
-
-  let html = `<div class="tool-section-header"><span>内置工具</span><span class="tool-section-count">${enabledCount}/${tools.length} 已启用</span></div>`;
-  for (const name of tools.sort()) {
-    const checked = !disabledSet.has(name);
-    html += `<div class="tool-item${checked ? "" : " disabled"}">
-      <span class="tool-item-name">${escapeHtml(name)}</span>
-      <label class="toggle-switch">
-        <input type="checkbox" data-category="builtin" data-name="${escapeHtml(name)}" ${checked ? "checked" : ""}>
-        <span class="toggle-slider"></span>
-      </label>
-    </div>`;
-  }
-  toolSettingsBody.innerHTML = html;
-  bindToggleEvents();
-}
-
-function renderMCPTab(mcpServers, disabledList) {
-  const serverIds = Object.keys(mcpServers || {});
-  if (serverIds.length === 0) {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未配置 MCP 服务器</div>';
-    return;
-  }
-  const disabledSet = new Set(disabledList);
-  const enabledCount = serverIds.length - disabledSet.size;
-
-  let html = `<div class="tool-section-header"><span>MCP 服务器</span><span class="tool-section-count">${enabledCount}/${serverIds.length} 已启用</span></div>`;
-  for (const serverId of serverIds.sort()) {
-    const server = mcpServers[serverId];
-    const checked = !disabledSet.has(serverId);
-    const toolList = (server.tools || []).map(t => {
-      // 去掉 mcp_{serverId}_ 前缀显示
-      const short = t.replace(`mcp_${serverId}_`, "");
-      return escapeHtml(short);
-    }).join(", ");
-
-    html += `<div class="mcp-group">
-      <div class="mcp-group-header">
-        <span class="mcp-group-name">${escapeHtml(serverId)}</span>
-        <label class="toggle-switch">
-          <input type="checkbox" data-category="mcp_servers" data-name="${escapeHtml(serverId)}" ${checked ? "checked" : ""}>
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-      <div class="mcp-group-tools">${toolList || "无工具"}</div>
-    </div>`;
-  }
-  toolSettingsBody.innerHTML = html;
-  bindToggleEvents();
-}
-
-function renderPluginsTab(pluginList, disabledList) {
-  if (!pluginList || pluginList.length === 0) {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载插件（将 .js/.mjs 文件放入 ~/.star_sanctuary/plugins/ 目录）</div>';
-    return;
-  }
-  const disabledSet = new Set(disabledList);
-  const enabledCount = pluginList.length - disabledSet.size;
-
-  let html = `<div class="tool-section-header"><span>插件</span><span class="tool-section-count">${enabledCount}/${pluginList.length} 已启用</span></div>`;
-  for (const name of pluginList.sort()) {
-    const checked = !disabledSet.has(name);
-    html += `<div class="tool-item${checked ? "" : " disabled"}">
-      <span class="tool-item-name">${escapeHtml(name)}</span>
-      <label class="toggle-switch">
-        <input type="checkbox" data-category="plugins" data-name="${escapeHtml(name)}" ${checked ? "checked" : ""}>
-        <span class="toggle-slider"></span>
-      </label>
-    </div>`;
-  }
-  toolSettingsBody.innerHTML = html;
-  bindToggleEvents();
-}
-
-function renderSkillsTab(skillList, disabledList) {
-  if (!skillList || skillList.length === 0) {
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载技能（将 SKILL.md 放入 ~/.star_sanctuary/skills/ 目录）</div>';
-    return;
-  }
-  const disabledSet = new Set(disabledList);
-  const enabledCount = skillList.length - disabledSet.size;
-
-  const sourceLabel = { bundled: "内置", user: "用户", plugin: "插件" };
-  const priorityLabel = { always: "始终注入", high: "高优先", normal: "普通", low: "低优先" };
-
-  let html = `<div class="tool-section-header"><span>技能</span><span class="tool-section-count">${enabledCount}/${skillList.length} 已启用</span></div>`;
-  for (const skill of skillList.sort((a, b) => a.name.localeCompare(b.name))) {
-    const checked = !disabledSet.has(skill.name);
-    const src = sourceLabel[skill.source] || skill.source;
-    const pri = priorityLabel[skill.priority] || skill.priority;
-    const tags = (skill.tags || []).map(t => `<span class="skill-tag">${escapeHtml(t)}</span>`).join("");
-    html += `<div class="tool-item${checked ? "" : " disabled"}">
-      <div class="skill-item-info">
-        <span class="tool-item-name">${escapeHtml(skill.name)}</span>
-        <span class="skill-meta">${src} · ${pri}</span>
-        ${skill.description ? `<span class="skill-desc">${escapeHtml(skill.description)}</span>` : ""}
-        ${tags ? `<div class="skill-tags">${tags}</div>` : ""}
-      </div>
-      <label class="toggle-switch">
-        <input type="checkbox" data-category="skills" data-name="${escapeHtml(skill.name)}" ${checked ? "checked" : ""}>
-        <span class="toggle-slider"></span>
-      </label>
-    </div>`;
-  }
-  toolSettingsBody.innerHTML = html;
-  bindToggleEvents();
-}
-
-function bindToggleEvents() {
-  toolSettingsBody.querySelectorAll("input[type=checkbox]").forEach(cb => {
-    cb.addEventListener("change", () => {
-      // 更新本地 disabled 数据
-      const category = cb.dataset.category;
-      const name = cb.dataset.name;
-      if (!toolSettingsData || !category || !name) return;
-
-      const list = toolSettingsData.disabled[category] || [];
-      if (cb.checked) {
-        // 移除 disabled
-        toolSettingsData.disabled[category] = list.filter(n => n !== name);
-      } else {
-        // 添加 disabled
-        if (!list.includes(name)) list.push(name);
-        toolSettingsData.disabled[category] = list;
-      }
-
-      // 更新视觉状态
-      const item = cb.closest(".tool-item");
-      if (item) {
-        item.classList.toggle("disabled", !cb.checked);
-      }
-
-      // 更新计数
-      renderToolSettingsTab();
-    });
-  });
-}
-
-async function saveToolSettings() {
-  if (!ws || !isReady || !toolSettingsData) return;
-
-  saveToolSettingsBtn.textContent = "保存中...";
-  saveToolSettingsBtn.disabled = true;
-
-  const id = makeId();
-  const res = await sendReq({
-    type: "req", id, method: "tools.update",
-    params: { disabled: toolSettingsData.disabled },
-  });
-
-  if (res && res.ok) {
-    saveToolSettingsBtn.textContent = "已保存";
-    setTimeout(() => {
-      saveToolSettingsBtn.textContent = "保存";
-      saveToolSettingsBtn.disabled = false;
-    }, 1500);
-  } else {
-    saveToolSettingsBtn.textContent = "失败";
-    saveToolSettingsBtn.disabled = false;
-    alert("保存失败: " + (res?.error?.message || "未知错误"));
-  }
-}
-
-// ─── Voice Input Implementation ───
-
-function initVoiceInput() {
-  const voiceBtn = document.getElementById("voiceBtn");
-  const voiceDuration = document.getElementById("voiceDuration");
-  if (!voiceBtn) return createNoopVoiceInputController();
-
-  let mediaRecorder = null;
-  let audioChunks = [];
-  let startTime = 0;
-  let timerInterval = null;
-  let isRecording = false;
-
-  // Check support
-  const hasMediaRecorder = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
-  const hasWebSpeech = !!(window.webkitSpeechRecognition || window.SpeechRecognition);
-
-  if (!hasMediaRecorder && !hasWebSpeech) {
-    voiceBtn.style.display = "none";
-    return createNoopVoiceInputController();
-  }
-
-  const controller = {
-    isSupported: true,
-    isRecording() {
-      return isRecording;
-    },
-    async toggle() {
-      if (isRecording) {
-        stopRecording();
-        return false;
-      }
-      await startRecording();
-      return true;
-    },
-    updateTitle() {
-      const title = describeVoiceShortcutForTitle();
-      voiceBtn.title = title;
-      voiceBtn.setAttribute("aria-label", title);
-    },
-  };
-
-  controller.updateTitle();
-
-  voiceBtn.addEventListener("click", () => {
-    void controller.toggle();
-  });
-
-  async function startRecording() {
-    if (isRecording) return;
-    try {
-      if (hasMediaRecorder) {
-        // Mode A: MediaRecorder (Backend STT)
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        let mimeType = "audio/webm;codecs=opus";
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = "audio/mp4"; // Safari fallback
-          if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = ""; // Let browser choose
-          }
-        }
-
-        const options = mimeType ? { mimeType } : undefined;
-        mediaRecorder = new MediaRecorder(stream, options);
-        audioChunks = [];
-
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            audioChunks.push(event.data);
-          }
-        };
-
-        mediaRecorder.onstop = async () => {
-          const recorder = mediaRecorder;
-          const mime = recorder?.mimeType || "audio/webm";
-          const blob = new Blob(audioChunks, { type: mime });
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            // reader.result is a full data URL: "data:audio/webm;base64,..."
-            const ext = mime.includes("mp4") ? "m4a" : (mime.includes("wav") ? "wav" : "webm");
-            const fileName = `voice_${Date.now()}.${ext}`;
-            const content = typeof reader.result === "string" ? reader.result : "";
-            const audioBytes = estimateDataUrlBytes(content);
-
-            if (audioBytes > attachmentLimits.maxFileBytes) {
-              renderAttachmentsPreview(
-                `⚠️ 语音附件未加入：${fileName} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}。`
-              );
-              return;
-            }
-            if (estimatePendingAttachmentTotalBytes() + audioBytes > attachmentLimits.maxTotalBytes) {
-              renderAttachmentsPreview(
-                `⚠️ 语音附件未加入：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}。`
-              );
-              return;
-            }
-
-            pendingAttachments.push({
-              name: fileName,
-              type: "audio",
-              mimeType: mime,
-              content, // data URL, consistent with image attachments
-            });
-            renderAttachmentsPreview();
-
-            sendMessage(); // Auto-send voice message
-          };
-          reader.readAsDataURL(blob);
-
-          // Stop tracks
-          stream.getTracks().forEach(track => track.stop());
-          mediaRecorder = null;
-        };
-
-        mediaRecorder.start();
-        isRecording = true;
-        updateUI(true);
-      } else if (hasWebSpeech) {
-        // Mode B: Web Speech API (Frontend STT)
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'zh-CN'; // Default to Chinese, could be configurable
-        recognition.interimResults = false;
-        recognition.maxAlternatives = 1;
-
-        recognition.onstart = () => {
-          isRecording = true;
-          updateUI(true, "listening");
-        };
-
-        recognition.onresult = (event) => {
-          const text = event.results[0][0].transcript;
-          if (promptEl.value) promptEl.value += " " + text;
-          else promptEl.value = text;
-          // Trigger input event to resize
-          promptEl.dispatchEvent(new Event("input"));
-        };
-
-        recognition.onerror = (event) => {
-          console.error("Speech recognition error", event.error);
-          stopRecording();
-        };
-
-        recognition.onend = () => {
-          isRecording = false;
-          mediaRecorder = null;
-          updateUI(false);
-        };
-
-        recognition.start();
-        // Save reference to stop it later
-        mediaRecorder = recognition;
-      }
-    } catch (err) {
-      console.error("Failed to start recording:", err);
-      alert("无法启动录音: " + (err?.message || String(err)));
-      isRecording = false;
-      mediaRecorder = null;
-      updateUI(false);
-    }
-  }
-
-  function stopRecording() {
-    if (!isRecording) return;
-    const activeRecorder = mediaRecorder;
-
-    isRecording = false;
-    updateUI(false);
-
-    if (hasMediaRecorder && activeRecorder instanceof MediaRecorder) {
-      if (activeRecorder.state !== "inactive") {
-        activeRecorder.stop();
-      }
-    } else if (hasWebSpeech && activeRecorder && typeof activeRecorder.stop === "function") {
-      // In Web Speech mode, mediaRecorder holds the recognition instance
-      try {
-        activeRecorder.stop();
-      } catch {
-        mediaRecorder = null;
-      }
-    }
-  }
-
-  function updateUI(recording, mode = "recording") {
-    if (recording) {
-      voiceBtn.classList.add(mode);
-      voiceDuration.classList.remove("hidden");
-      startTime = Date.now();
-      voiceDuration.textContent = "00:00";
-      timerInterval = setInterval(() => {
-        const diff = Math.floor((Date.now() - startTime) / 1000);
-        const m = Math.floor(diff / 60).toString().padStart(2, "0");
-        const s = (diff % 60).toString().padStart(2, "0");
-        voiceDuration.textContent = `${m}:${s}`;
-      }, 1000);
-    } else {
-      voiceBtn.classList.remove("recording", "listening");
-      voiceDuration.classList.add("hidden");
-      if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-      }
-    }
-  }
-
-  return controller;
-}
-

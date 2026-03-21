@@ -18,6 +18,7 @@
     "pretest": "pnpm run version:generate",
     "build:force": "tsc -b --force",
     "verify:build": "node scripts/verify-workspace-build.mjs",
+    "verify:webchat": "node scripts/verify-webchat-modules.mjs",
     "build": "pnpm run build:force && pnpm run verify:build",
     "build:portable": "node packages/star-sanctuary-distribution/scripts/build-portable.mjs",
     "build:portable:full": "node packages/star-sanctuary-distribution/scripts/build-portable.mjs --mode full",

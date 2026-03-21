@@ -1,0 +1,180 @@
+export function createGoalsOverviewFeature({
+  refs,
+  isConnected,
+  sendReq,
+  makeId,
+  getGoalsState,
+  getActiveConversationId,
+  isConversationForGoal,
+  escapeHtml,
+  formatGoalStatus,
+  formatDateTime,
+  summarizeSourcePath,
+  formatGoalPathSource,
+  sortGoals,
+  getGoalById,
+  renderGoalDetail,
+  renderCanvasGoalContext,
+  onResumeGoal,
+  onPauseGoal,
+}) {
+  const {
+    goalsSection,
+    goalsSummaryEl,
+    goalsListEl,
+    goalsDetailEl,
+  } = refs;
+
+  function renderGoalsLoading(message) {
+    if (goalsListEl) {
+      goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+    }
+    if (goalsDetailEl) {
+      goalsDetailEl.innerHTML = '<div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>';
+    }
+  }
+
+  function renderGoalsSummary(items) {
+    if (!goalsSummaryEl) return;
+    const goals = Array.isArray(items) ? items : [];
+    const executingCount = goals.filter((goal) => goal?.status === "executing").length;
+    const pausedCount = goals.filter((goal) => goal?.status === "paused").length;
+    const customRootCount = goals.filter((goal) => goal?.pathSource === "user-configured").length;
+
+    goalsSummaryEl.innerHTML = `
+      <div class="memory-stat-card"><span class="memory-stat-label">长期任务</span><strong class="memory-stat-value">${escapeHtml(String(goals.length))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">执行中</span><strong class="memory-stat-value">${escapeHtml(String(executingCount))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">已暂停</span><strong class="memory-stat-value">${escapeHtml(String(pausedCount))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">自定义 Root</span><strong class="memory-stat-value">${escapeHtml(String(customRootCount))}</strong></div>
+    `;
+  }
+
+  function renderGoalsEmpty(message) {
+    renderGoalsSummary([]);
+    if (goalsListEl) {
+      goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+    }
+    if (goalsDetailEl) {
+      goalsDetailEl.innerHTML = '<div class="memory-viewer-empty">新建一个长期任务后，这里会显示 NORTHSTAR.md、路径和执行状态。</div>';
+    }
+  }
+
+  function renderGoalList(items) {
+    if (!goalsListEl) return;
+    if (!Array.isArray(items) || items.length === 0) {
+      goalsListEl.innerHTML = '<div class="memory-viewer-empty">当前还没有长期任务。</div>';
+      return;
+    }
+
+    const goalsState = getGoalsState();
+    const activeConversationId = getActiveConversationId();
+
+    goalsListEl.innerHTML = items.map((goal) => {
+      const isActive = goal.id === goalsState.selectedId;
+      const isCurrentConversation = isConversationForGoal(activeConversationId, goal.id);
+      const objective = goal.objective ? String(goal.objective).trim() : "";
+      return `
+        <div class="memory-list-item goal-list-item${isActive ? " active" : ""}" data-goal-id="${escapeHtml(goal.id)}">
+          <div class="goal-list-item-head">
+            <div class="memory-list-item-title">${escapeHtml(goal.title || goal.id)}</div>
+            ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">current</span>' : ""}
+          </div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(formatGoalStatus(goal.status))}</span>
+            <span>${escapeHtml(goal.currentPhase || "-")}</span>
+            <span>${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</span>
+          </div>
+          <div class="memory-list-item-snippet">${escapeHtml(objective || "未填写 objective，可进入 NORTHSTAR.md 补充目标说明。")}</div>
+          <div class="goal-list-item-meta">
+            <span>${escapeHtml(summarizeSourcePath(goal.goalRoot || "-"))}</span>
+            <span>${escapeHtml(formatGoalPathSource(goal.pathSource))}</span>
+          </div>
+          <div class="goal-list-item-actions">
+            <button class="button goal-inline-action" data-goal-resume="${escapeHtml(goal.id)}">恢复</button>
+            <button class="button goal-inline-action goal-inline-action-secondary" data-goal-pause="${escapeHtml(goal.id)}">暂停</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    goalsListEl.querySelectorAll("[data-goal-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const goalId = node.getAttribute("data-goal-id");
+        if (!goalId) return;
+        goalsState.selectedId = goalId;
+        renderGoalList(goalsState.items);
+        renderGoalDetail(getGoalById(goalId));
+      });
+    });
+
+    goalsListEl.querySelectorAll("[data-goal-resume]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const goalId = node.getAttribute("data-goal-resume");
+        if (!goalId) return;
+        void onResumeGoal(goalId);
+      });
+    });
+
+    goalsListEl.querySelectorAll("[data-goal-pause]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const goalId = node.getAttribute("data-goal-pause");
+        if (!goalId) return;
+        void onPauseGoal(goalId);
+      });
+    });
+  }
+
+  async function loadGoals(forceReload = false, preferredGoalId) {
+    if (!goalsSection) return;
+    if (!isConnected()) {
+      renderGoalsLoading("未连接");
+      return;
+    }
+
+    const goalsState = getGoalsState();
+    if (forceReload || goalsState.items.length === 0) {
+      renderGoalsLoading("加载中...");
+    }
+
+    const seq = goalsState.loadSeq + 1;
+    goalsState.loadSeq = seq;
+    const res = await sendReq({ type: "req", id: makeId(), method: "goal.list" });
+    if (seq !== goalsState.loadSeq) return;
+
+    if (!res || !res.ok || !Array.isArray(res.payload?.goals)) {
+      renderGoalsEmpty("长期任务列表加载失败。");
+      return;
+    }
+
+    const items = sortGoals(res.payload.goals);
+    goalsState.items = items;
+    renderGoalsSummary(items);
+
+    if (items.length === 0) {
+      goalsState.selectedId = null;
+      renderGoalsEmpty("当前还没有长期任务。");
+      return;
+    }
+
+    const selectedExists = items.some((goal) => goal.id === goalsState.selectedId);
+    goalsState.selectedId = preferredGoalId && items.some((goal) => goal.id === preferredGoalId)
+      ? preferredGoalId
+      : selectedExists
+        ? goalsState.selectedId
+        : items[0].id;
+
+    renderGoalList(items);
+    renderGoalDetail(getGoalById(goalsState.selectedId));
+    renderCanvasGoalContext();
+  }
+
+  return {
+    loadGoals,
+    renderGoalList,
+    renderGoalsEmpty,
+    renderGoalsLoading,
+    renderGoalsSummary,
+  };
+}

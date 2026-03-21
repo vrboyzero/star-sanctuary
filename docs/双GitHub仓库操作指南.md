@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "Agent开关工具增加了确认弹窗"
+git commit -m "更新了README等文件，添加了长期任务使用指南"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
