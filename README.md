@@ -16,6 +16,7 @@
   <a href="#核心能力">核心能力</a> •
   <a href="#项目结构">项目结构</a> •
   <a href="#个性化与长期能力">个性化能力</a> •
+  <a href="#长期任务快速入口">长期任务</a> •
   <a href="#配置指南">配置指南</a> •
   <a href="#渠道与集成">渠道与集成</a> •
   <a href="#部署方式">部署方式</a> •
@@ -720,6 +721,106 @@ corepack pnpm bdd community
 
 ---
 
+## 长期任务快速入口
+
+如果你准备开始使用超长期任务 / Long-term Goals，推荐先看：
+
+- [docs/长期任务使用指南.md](./docs/%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md)
+- [docs/超长期任务系统实现方案.md](./docs/%E8%B6%85%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E7%B3%BB%E7%BB%9F%E5%AE%9E%E7%8E%B0%E6%96%B9%E6%A1%88.md)
+
+### 长期任务最小上手清单
+
+1. 配好最小运行环境：
+
+   ```env
+   BELLDANDY_AGENT_PROVIDER=openai
+   BELLDANDY_OPENAI_BASE_URL=https://api.openai.com/v1
+   BELLDANDY_OPENAI_API_KEY=<your-api-key>
+   BELLDANDY_OPENAI_MODEL=<your-model>
+   BELLDANDY_TOOLS_ENABLED=true
+   BELLDANDY_CRON_ENABLED=true
+   ```
+
+2. 可选但强烈建议创建组织级治理配置：
+
+   - `~/.star_sanctuary/governance/review-governance.json`
+
+   最小示例：
+
+   ```json
+   {
+     "version": 1,
+     "reviewers": [
+       {
+         "id": "producer",
+         "name": "制作人",
+         "reviewerRole": "owner",
+         "channels": ["reviewer_inbox"],
+         "active": true
+       }
+     ],
+     "templates": [],
+     "defaults": {
+       "reminderMinutes": [240, 60, 15],
+       "notificationChannels": ["goal_detail", "reviewer_inbox"]
+     },
+     "updatedAt": "2026-03-21T00:00:00.000Z"
+   }
+   ```
+
+3. 创建一个长期任务：
+
+   - WebChat → Goals 面板
+   - 或工具 `goal_init`
+   - 或 RPC `goal.create`
+
+4. 先拆 task graph，再执行节点：
+
+   - `task_graph_create`
+   - `goal_orchestrate`
+   - `task_graph_claim / complete / block ...`
+
+5. 对高风险节点使用 checkpoint：
+
+   - `goal.checkpoint.request`
+   - `goal.checkpoint.approve / reject / escalate`
+
+6. 节点完成后生成沉淀资产：
+
+   - `goal.retrospect.generate`
+   - `goal.method_candidates.generate`
+   - `goal.skill_candidates.generate`
+   - `goal.flow_patterns.generate`
+
+7. 进入治理闭环：
+
+   - `goal.suggestion_review.list`
+   - `goal.suggestion_review.workflow.set`
+   - `goal.suggestion_review.decide`
+   - `goal.suggestion.publish`
+
+8. 查看统一审批治理面板 / 摘要：
+
+   - `goal.review_governance.summary`
+   - `goal.approval.scan`
+
+9. 如需自动扫描超时审批，创建 cron：
+
+   - 打开 `BELLDANDY_CRON_ENABLED=true`
+   - 用 `cron` 工具添加 `goalApprovalScan` 任务
+
+10. 不需要手工创建这些运行态文件，它们会自动生成：
+
+   - `~/.star_sanctuary/cron-jobs.json`
+   - `<goal.runtimeRoot>/suggestion-reviews.json`
+   - `<goal.runtimeRoot>/publish-records.json`
+   - `<goal.runtimeRoot>/review-notifications.json`
+   - `<goal.runtimeRoot>/review-notification-dispatches.json`
+
+> 说明：当前 `review-notification-dispatches.json` 中的 `im_dm / webhook` 仅是运行态 outbox，不会直接对外发送。
+
+---
+
 ## 常见问题
 
 ### 启动时报 `Cannot find module ... dist/...`
@@ -791,6 +892,8 @@ BELLDANDY_AUTH_TOKEN=your-secure-token
 - [Star Sanctuary使用手册.md](./Star%20Sanctuary使用手册.md)
 - [Star Sanctuary实现内容说明.md](./Star%20Sanctuary实现内容说明.md)
 - [项目使用指南.md](./项目使用指南.md)
+- [docs/长期任务使用指南.md](./docs/%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md)
+- [docs/超长期任务系统实现方案.md](./docs/%E8%B6%85%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E7%B3%BB%E7%BB%9F%E5%AE%9E%E7%8E%B0%E6%96%B9%E6%A1%88.md)
 - [Agent官网对接使用手册.md](./Agent官网对接使用手册.md)
 - [DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)
 - [docs/webhook.md](./docs/webhook.md)
