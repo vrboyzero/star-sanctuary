@@ -88,10 +88,12 @@ import {
   goalFlowPatternsGenerateTool,
   goalCrossGoalFlowPatternsTool,
   goalReviewGovernanceSummaryTool,
+  goalApprovalScanTool,
   goalSuggestionReviewListTool,
   goalSuggestionReviewWorkflowSetTool,
   goalSuggestionReviewDecideTool,
   goalSuggestionReviewEscalateTool,
+  goalSuggestionReviewScanTool,
   goalSuggestionPublishTool,
   goalCheckpointListTool,
   goalCheckpointRequestTool,
@@ -99,6 +101,7 @@ import {
   goalCheckpointRejectTool,
   goalCheckpointExpireTool,
   goalCheckpointReopenTool,
+  goalCheckpointEscalateTool,
   goalCapabilityPlanTool,
   goalOrchestrateTool,
   taskGraphReadTool,
@@ -172,10 +175,12 @@ const GOAL_TOOL_NAMES = new Set([
   "goal_flow_patterns_generate",
   "goal_cross_goal_flow_patterns",
   "goal_review_governance_summary",
+  "goal_approval_scan",
   "goal_suggestion_review_list",
   "goal_suggestion_review_workflow_set",
   "goal_suggestion_review_decide",
   "goal_suggestion_review_escalate",
+  "goal_suggestion_review_scan",
   "goal_suggestion_publish",
   "goal_checkpoint_list",
   "goal_checkpoint_request",
@@ -183,6 +188,7 @@ const GOAL_TOOL_NAMES = new Set([
   "goal_checkpoint_reject",
   "goal_checkpoint_expire",
   "goal_checkpoint_reopen",
+  "goal_checkpoint_escalate",
   "goal_capability_plan",
   "goal_orchestrate",
   "task_graph_read",
@@ -199,7 +205,7 @@ const GOAL_TOOL_NAMES = new Set([
 
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
-import { CronStore, startCronScheduler, type CronSchedulerHandle } from "../cron/index.js";
+import { CronStore, startCronScheduler, type CronGoalApprovalScanPayload, type CronSchedulerHandle } from "../cron/index.js";
 import {
   initMCPIntegration,
   shutdownMCPIntegration,
@@ -707,10 +713,12 @@ const toolsToRegister = toolsEnabled
     goalFlowPatternsGenerateTool,
     goalCrossGoalFlowPatternsTool,
     goalReviewGovernanceSummaryTool,
+    goalApprovalScanTool,
     goalSuggestionReviewListTool,
     goalSuggestionReviewWorkflowSetTool,
     goalSuggestionReviewDecideTool,
     goalSuggestionReviewEscalateTool,
+    goalSuggestionReviewScanTool,
     goalSuggestionPublishTool,
     goalCheckpointListTool,
     goalCheckpointRequestTool,
@@ -718,6 +726,7 @@ const toolsToRegister = toolsEnabled
     goalCheckpointRejectTool,
     goalCheckpointExpireTool,
     goalCheckpointReopenTool,
+    goalCheckpointEscalateTool,
     goalCapabilityPlanTool,
     goalOrchestrateTool,
     taskGraphReadTool,
@@ -2234,10 +2243,12 @@ toolExecutor.setGoalCapabilities({
   generateFlowPatterns: (goalId) => goalManager.generateFlowPatterns(goalId),
   generateCrossGoalFlowPatterns: () => goalManager.generateCrossGoalFlowPatterns(),
   getReviewGovernanceSummary: (goalId) => goalManager.getReviewGovernanceSummary(goalId),
+  scanApprovalWorkflows: (goalId, input) => goalManager.scanApprovalWorkflows(goalId, input),
   listSuggestionReviews: (goalId) => goalManager.listSuggestionReviews(goalId),
   configureSuggestionReviewWorkflow: (goalId, input) => goalManager.configureSuggestionReviewWorkflow(goalId, input),
   decideSuggestionReview: (goalId, input) => goalManager.decideSuggestionReview(goalId, input),
   escalateSuggestionReview: (goalId, input) => goalManager.escalateSuggestionReview(goalId, input),
+  scanSuggestionReviewWorkflows: (goalId, input) => goalManager.scanSuggestionReviewWorkflows(goalId, input),
   publishSuggestion: (goalId, input) => goalManager.publishSuggestion(goalId, input),
   listCheckpoints: (goalId) => goalManager.listCheckpoints(goalId),
   requestCheckpoint: (goalId, nodeId, input) => goalManager.requestCheckpoint(goalId, nodeId, input),
@@ -2245,6 +2256,7 @@ toolExecutor.setGoalCapabilities({
   rejectCheckpoint: (goalId, nodeId, input) => goalManager.rejectCheckpoint(goalId, nodeId, input),
   expireCheckpoint: (goalId, nodeId, input) => goalManager.expireCheckpoint(goalId, nodeId, input),
   reopenCheckpoint: (goalId, nodeId, input) => goalManager.reopenCheckpoint(goalId, nodeId, input),
+  escalateCheckpoint: (goalId, nodeId, input) => goalManager.escalateCheckpoint(goalId, nodeId, input),
   listCapabilityPlans: (goalId) => goalManager.listCapabilityPlans(goalId),
   getCapabilityPlan: (goalId, nodeId) => goalManager.getCapabilityPlan(goalId, nodeId),
   saveCapabilityPlan: (goalId, nodeId, input) => goalManager.saveCapabilityPlan(goalId, nodeId, input),
@@ -2666,66 +2678,137 @@ if (heartbeatEnabled && createAgent) {
 }
 
 // 11. Start Cron Scheduler (if configured)
-if (cronEnabled && createAgent) {
-  try {
-    const cronAgent = createAgent();
-    const activeHours = parseActiveHours(heartbeatActiveHoursRaw); // 复用 Heartbeat 活跃时段
+if (cronEnabled) {
+  const activeHours = parseActiveHours(heartbeatActiveHoursRaw); // 复用 Heartbeat 活跃时段
 
-    // 复用 Heartbeat 的 sendMessage / deliverToUser 模式
-    const cronSendMessage = async (prompt: string): Promise<string> => {
-      let result = "";
-      for await (const item of cronAgent.run({
-        conversationId: `cron-${Date.now()}`,
-        text: prompt,
-      })) {
-        if (item.type === "delta") {
-          result += item.delta;
-        } else if (item.type === "final") {
-          result = item.text;
+  let cronSendMessage: ((prompt: string) => Promise<string>) | undefined;
+  if (createAgent) {
+    try {
+      const cronAgent = createAgent();
+      cronSendMessage = async (prompt: string): Promise<string> => {
+        let result = "";
+        for await (const item of cronAgent.run({
+          conversationId: `cron-${Date.now()}`,
+          text: prompt,
+        })) {
+          if (item.type === "delta") {
+            result += item.delta;
+          } else if (item.type === "final") {
+            result = item.text;
+          }
         }
-      }
-      return result;
-    };
+        return result;
+      };
+    } catch (e) {
+      logger.warn("cron", "Agent creation failed; systemEvent cron jobs will be disabled, but structured approval scan jobs remain available.");
+    }
+  } else {
+    logger.info("cron", "No Agent configured; systemEvent cron jobs are disabled, but structured approval scan jobs remain available.");
+  }
 
-    const cronDeliverToUser = async (message: string): Promise<void> => {
-      // 1. Broadcast 到 WebChat
-      server.broadcast({
-        type: "event",
-        event: "chat.final",
-        payload: {
-          conversationId: "cron-broadcast",
-          text: message,
-        },
-      });
-
-      // 2. 推送到飞书（如果配置了）
-      if (feishuChannel) {
-        logger.info("cron", "Delivering to user via Feishu...");
-        const sent = await feishuChannel.sendProactiveMessage(message);
-        if (!sent) {
-          logger.warn("cron", "Failed to deliver: No active Feishu chat session.");
-        }
-      } else {
-        logger.info("cron", "Broadcasted to local Web clients (Feishu disabled).");
-      }
-    };
-
-    cronSchedulerHandle = startCronScheduler({
-      store: cronStore,
-      sendMessage: cronSendMessage,
-      deliverToUser: cronDeliverToUser,
-      activeHours,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      isBusy,
-      log: (msg) => logger.info("cron", msg),
+  const cronDeliverToUser = async (message: string): Promise<void> => {
+    // 1. Broadcast 到 WebChat
+    server.broadcast({
+      type: "event",
+      event: "chat.final",
+      payload: {
+        conversationId: "cron-broadcast",
+        text: message,
+      },
     });
 
-    logger.info("cron", `scheduler enabled (activeHours=${heartbeatActiveHoursRaw ?? "all"})`);
-  } catch (e) {
-    logger.warn("cron", "Agent creation failed, skipping Cron scheduler startup.");
-  }
-} else if (cronEnabled && !createAgent) {
-  logger.warn("cron", "enabled but no Agent configured, skipping.");
+    // 2. 推送到飞书（如果配置了）
+    if (feishuChannel) {
+      logger.info("cron", "Delivering to user via Feishu...");
+      const sent = await feishuChannel.sendProactiveMessage(message);
+      if (!sent) {
+        logger.warn("cron", "Failed to deliver: No active Feishu chat session.");
+      }
+    } else {
+      logger.info("cron", "Broadcasted to local Web clients (Feishu disabled).");
+    }
+  };
+
+  const runGoalApprovalScan = async (payload: CronGoalApprovalScanPayload): Promise<{ summary: string; notifyMessage?: string }> => {
+    const requestedGoalIds = [
+      payload.goalId?.trim(),
+      ...(payload.goalIds ?? []).map((goalId) => goalId.trim()).filter(Boolean),
+    ].filter(Boolean) as string[];
+    const listedGoals = payload.allGoals ? await goalManager.listGoals() : [];
+    const goalIds = Array.from(new Set([
+      ...requestedGoalIds,
+      ...listedGoals.map((goal) => goal.id),
+    ]));
+    if (goalIds.length === 0) {
+      return {
+        summary: "approval_scan goals=0 ok=0 failed=0 review_overdue=0 review_escalated=0 checkpoint_overdue=0 checkpoint_escalated=0 notifications=0",
+      };
+    }
+
+    let reviewOverdue = 0;
+    let reviewEscalated = 0;
+    let checkpointOverdue = 0;
+    let checkpointEscalated = 0;
+    let notifications = 0;
+    const failures: Array<{ goalId: string; error: string }> = [];
+
+    for (const goalId of goalIds) {
+      try {
+        const result = await goalManager.scanApprovalWorkflows(goalId, {
+          autoEscalate: payload.autoEscalate ?? true,
+        });
+        reviewOverdue += result.reviewResult.overdueCount;
+        reviewEscalated += result.reviewResult.escalatedCount;
+        checkpointOverdue += result.checkpointItems.filter((item) => item.overdue).length;
+        checkpointEscalated += result.checkpointItems.filter((item) => item.escalated).length;
+        notifications += result.notifications.length;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push({ goalId, error: message });
+        logger.warn("cron", `Approval scan failed for goal "${goalId}": ${message}`);
+      }
+    }
+
+    const summary = [
+      `approval_scan goals=${goalIds.length}`,
+      `ok=${goalIds.length - failures.length}`,
+      `failed=${failures.length}`,
+      `review_overdue=${reviewOverdue}`,
+      `review_escalated=${reviewEscalated}`,
+      `checkpoint_overdue=${checkpointOverdue}`,
+      `checkpoint_escalated=${checkpointEscalated}`,
+      `notifications=${notifications}`,
+    ].join(" ");
+    const shouldNotify = failures.length > 0
+      || reviewOverdue > 0
+      || reviewEscalated > 0
+      || checkpointOverdue > 0
+      || checkpointEscalated > 0
+      || notifications > 0;
+    const notifyMessage = shouldNotify
+      ? [
+        `审批扫描完成：${summary}`,
+        failures.length > 0 ? `失败目标：${failures.map((item) => item.goalId).join(", ")}` : "",
+      ].filter(Boolean).join("\n")
+      : undefined;
+    return { summary, notifyMessage };
+  };
+
+  cronSchedulerHandle = startCronScheduler({
+    store: cronStore,
+    sendMessage: cronSendMessage,
+    runGoalApprovalScan,
+    deliverToUser: cronDeliverToUser,
+    activeHours,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    isBusy,
+    log: (msg) => logger.info("cron", msg),
+  });
+
+  logger.info(
+    "cron",
+    `scheduler enabled (activeHours=${heartbeatActiveHoursRaw ?? "all"}, systemEvent=${cronSendMessage ? "enabled" : "disabled"}, structured=goalApprovalScan)`
+  );
 } else {
   logger.info("cron", "scheduler disabled (set BELLDANDY_CRON_ENABLED=true to enable)");
 }

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import { getGoalUpdateAreas } from "./goal-events.js";
 import { GoalManager } from "./manager.js";
+import { getReviewGovernanceConfigPath } from "./review-governance.js";
 
 describe("GoalManager", () => {
   it("creates goals with default and custom roots, and supports resume/pause", async () => {
@@ -1208,6 +1209,224 @@ describe("GoalManager", () => {
     expect(progress).toContain("suggestion_review_escalated");
   });
 
+  it("scans overdue suggestion review workflows and auto escalates configured reviewers", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Suggestion Review SLA Goal",
+      objective: "Scan overdue review workflow",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_review_scan",
+      title: "Review Scan Node",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["Regression passes"],
+    });
+    await manager.claimTaskNode(goal.id, "node_review_scan", { runId: "run_review_scan_1", summary: "Started review scan node" });
+    await manager.requestCheckpoint(goal.id, "node_review_scan", {
+      title: "Review scan checkpoint",
+      summary: "Ready for approval",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      runId: "run_review_scan_1",
+    });
+    await manager.approveCheckpoint(goal.id, "node_review_scan", {
+      summary: "Approved",
+      note: "Looks stable",
+      decidedBy: "producer",
+      runId: "run_review_scan_1",
+    });
+    await manager.completeTaskNode(goal.id, "node_review_scan", {
+      summary: "Review scan node completed",
+      artifacts: ["artifacts/review-scan.md"],
+      runId: "run_review_scan_1",
+    });
+    await manager.saveCapabilityPlan(goal.id, "node_review_scan", {
+      executionMode: "single_agent",
+      riskLevel: "medium",
+      objective: "Generate scan-review suggestions",
+      summary: "Need SLA governance",
+      actualUsage: {
+        methods: ["Review-Checklist.md"],
+        skills: [],
+        mcpServers: [],
+        toolNames: ["file_read"],
+      },
+      status: "orchestrated",
+      orchestratedAt: "2026-03-20T16:25:00.000Z",
+    });
+
+    await manager.generateMethodCandidates(goal.id);
+    const reviews = await manager.listSuggestionReviews(goal.id);
+    const methodReview = reviews.items.find((item) => item.suggestionType === "method_candidate");
+    expect(methodReview).toBeTruthy();
+
+    const configured = await manager.configureSuggestionReviewWorkflow(goal.id, {
+      reviewId: methodReview?.id,
+      mode: "single",
+      reviewers: ["tech-lead"],
+      slaHours: 1,
+      escalationMode: "manual",
+      escalationReviewer: "owner",
+      note: "SLA review required",
+    });
+    const slaAt = configured.review.workflow?.stages[0]?.slaAt;
+    expect(slaAt).toBeTruthy();
+    const scanTime = new Date(new Date(slaAt as string).getTime() + 5 * 60 * 1000).toISOString();
+
+    const scanned = await manager.scanSuggestionReviewWorkflows(goal.id, {
+      now: scanTime,
+      autoEscalate: true,
+    });
+    expect(scanned.overdueCount).toBe(1);
+    expect(scanned.escalatedCount).toBe(1);
+    expect(scanned.items[0]?.action).toBe("auto_escalated");
+    expect(scanned.items[0]?.escalatedTo).toBe("owner");
+    expect(scanned.reviews.items.find((item) => item.id === methodReview?.id)?.reviewer).toBe("owner");
+    expect(scanned.reviews.items.find((item) => item.id === methodReview?.id)?.workflow?.stages[0]?.escalation.count).toBe(1);
+    expect(scanned.reviews.items.find((item) => item.id === methodReview?.id)?.workflow?.stages[0]?.escalation.overdueAt).toBe(scanTime);
+
+    const rescanned = await manager.scanSuggestionReviewWorkflows(goal.id, {
+      now: new Date(new Date(scanTime).getTime() + 5 * 60 * 1000).toISOString(),
+      autoEscalate: true,
+    });
+    expect(rescanned.overdueCount).toBe(1);
+    expect(rescanned.escalatedCount).toBe(0);
+    expect(rescanned.items[0]?.action).toBe("overdue");
+
+    const progress = await fs.readFile(goal.progressPath, "utf-8");
+    expect(progress).toContain("suggestion_review_scanned");
+  });
+
+  it("materializes approval notifications into dispatch outbox channels without duplicate fanout", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    await fs.mkdir(path.join(stateDir, "governance"), { recursive: true });
+    await fs.writeFile(getReviewGovernanceConfigPath(stateDir), JSON.stringify({
+      version: 1,
+      reviewers: [
+        {
+          id: "owner",
+          name: "Owner",
+          reviewerRole: "approver",
+          channels: ["reviewer_inbox", "im_dm", "webhook"],
+          active: true,
+        },
+      ],
+      templates: [],
+      defaults: {
+        reminderMinutes: [60, 15],
+        notificationChannels: ["goal_detail"],
+        notificationRoutes: {
+          im_dm: "im://review/{recipient}",
+          webhook: "webhook://review/{recipient}",
+          org_feed: "org://review-feed",
+        },
+      },
+      updatedAt: "2026-03-21T00:00:00.000Z",
+    }, null, 2), "utf-8");
+
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Approval Dispatch Goal",
+      objective: "Materialize approval dispatch channels",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_dispatch",
+      title: "Dispatch Node",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["Dispatch runtime exists"],
+    });
+    await manager.claimTaskNode(goal.id, "node_dispatch", { runId: "run_dispatch_1", summary: "Started dispatch node" });
+    await manager.requestCheckpoint(goal.id, "node_dispatch", {
+      title: "Dispatch checkpoint",
+      summary: "Ready for approval",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      runId: "run_dispatch_1",
+    });
+    await manager.approveCheckpoint(goal.id, "node_dispatch", {
+      summary: "Approved",
+      note: "Proceed",
+      decidedBy: "producer",
+      runId: "run_dispatch_1",
+    });
+    await manager.completeTaskNode(goal.id, "node_dispatch", {
+      summary: "Dispatch node completed",
+      artifacts: ["artifacts/dispatch.md"],
+      runId: "run_dispatch_1",
+    });
+    await manager.saveCapabilityPlan(goal.id, "node_dispatch", {
+      executionMode: "single_agent",
+      riskLevel: "medium",
+      objective: "Generate dispatchable suggestion review",
+      summary: "Need approval notification fanout",
+      actualUsage: {
+        methods: ["Dispatch-Checklist.md"],
+        skills: [],
+        mcpServers: [],
+        toolNames: ["file_read"],
+      },
+      status: "orchestrated",
+      orchestratedAt: "2026-03-21T01:00:00.000Z",
+    });
+
+    await manager.generateMethodCandidates(goal.id);
+    const reviews = await manager.listSuggestionReviews(goal.id);
+    const methodReview = reviews.items.find((item) => item.suggestionType === "method_candidate");
+    expect(methodReview).toBeTruthy();
+
+    const configured = await manager.configureSuggestionReviewWorkflow(goal.id, {
+      reviewId: methodReview?.id,
+      mode: "single",
+      reviewers: ["tech-lead"],
+      slaHours: 1,
+      escalationMode: "manual",
+      escalationReviewer: "owner",
+      note: "Dispatch workflow",
+    });
+    const slaAt = configured.review.workflow?.stages[0]?.slaAt;
+    expect(slaAt).toBeTruthy();
+    const scanTime = new Date(new Date(slaAt as string).getTime() + 5 * 60 * 1000).toISOString();
+
+    const scanned = await manager.scanApprovalWorkflows(goal.id, {
+      now: scanTime,
+      autoEscalate: true,
+    });
+    expect(scanned.notifications.map((item) => item.kind).sort()).toEqual(["auto_escalated", "sla_overdue"]);
+    expect(scanned.dispatches.length).toBeGreaterThanOrEqual(6);
+    expect(scanned.dispatches.some((item) => item.channel === "goal_detail" && item.status === "materialized")).toBe(true);
+    expect(scanned.dispatches.some((item) => item.channel === "goal_channel" && item.status === "materialized")).toBe(true);
+    expect(scanned.dispatches.some((item) => item.channel === "org_feed" && item.status === "materialized")).toBe(true);
+    expect(scanned.dispatches.some((item) => item.channel === "reviewer_inbox" && item.recipient === "owner")).toBe(true);
+    expect(scanned.dispatches.some((item) => item.channel === "im_dm" && item.status === "pending" && item.routeKey === "im://review/owner")).toBe(true);
+    expect(scanned.dispatches.some((item) => item.channel === "webhook" && item.status === "pending" && item.routeKey === "webhook://review/owner")).toBe(true);
+    expect(scanned.summary).toContain("dispatches=");
+
+    const dispatchState = JSON.parse(await fs.readFile(path.join(goal.runtimeRoot, "review-notification-dispatches.json"), "utf-8")) as {
+      items: Array<{ channel: string; status: string; notificationId: string }>;
+    };
+    expect(dispatchState.items).toHaveLength(scanned.dispatches.length);
+    expect(dispatchState.items.every((item) => Boolean(item.notificationId))).toBe(true);
+
+    const rescanned = await manager.scanApprovalWorkflows(goal.id, {
+      now: new Date(new Date(scanTime).getTime() + 5 * 60 * 1000).toISOString(),
+      autoEscalate: true,
+    });
+    expect(rescanned.notifications).toHaveLength(0);
+    expect(rescanned.dispatches).toHaveLength(0);
+
+    const summary = await manager.getReviewGovernanceSummary(goal.id);
+    expect(summary.notificationDispatchesPath).toContain("review-notification-dispatches.json");
+    expect(summary.notificationDispatchCounts.total).toBe(scanned.dispatches.length);
+    expect(summary.notificationDispatchCounts.byChannel.goal_detail).toBeGreaterThanOrEqual(1);
+    expect(summary.notificationDispatchCounts.byStatus.pending).toBeGreaterThanOrEqual(1);
+    expect(summary.summary).toContain("dispatches=");
+  });
+
   it("publishes accepted method and skill suggestions into formal asset directories", async () => {
     if (!process.env.OPENAI_API_KEY) {
       process.env.OPENAI_API_KEY = "test-placeholder-key";
@@ -1515,6 +1734,8 @@ describe("GoalManager", () => {
     const summary = await manager.getReviewGovernanceSummary(goal.id);
     expect(summary.reviewStatusCounts.accepted).toBeGreaterThanOrEqual(1);
     expect(summary.reviewTypeCounts.method_candidate).toBeGreaterThanOrEqual(1);
+    expect(summary.workflowPendingCount).toBeGreaterThanOrEqual(0);
+    expect(summary.workflowOverdueCount).toBeGreaterThanOrEqual(0);
     expect(summary.publishRecords.items.length).toBeGreaterThanOrEqual(1);
     expect(summary.crossGoal.jsonPath).toContain("cross-goal-flow-patterns.json");
     expect(summary.summary).toContain("published=1");

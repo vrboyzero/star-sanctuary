@@ -11,7 +11,7 @@
  * - every 类型自动计算下次触发时间
  */
 
-import type { CronJob } from "./types.js";
+import type { CronGoalApprovalScanPayload, CronJob } from "./types.js";
 import { CronStore, computeNextRun } from "./store.js";
 
 /** 调度器轮询间隔：30 秒 */
@@ -24,7 +24,9 @@ export interface CronSchedulerOptions {
     /** CronStore 实例 */
     store: CronStore;
     /** 发送消息到 Agent 并获取回复 */
-    sendMessage: (prompt: string) => Promise<string>;
+    sendMessage?: (prompt: string) => Promise<string>;
+    /** 直接执行 goal approval scan */
+    runGoalApprovalScan?: (payload: CronGoalApprovalScanPayload) => Promise<CronGoalApprovalScanResult>;
     /** 推送消息到用户渠道 */
     deliverToUser?: (message: string) => Promise<void>;
     /** 系统是否忙碌 */
@@ -52,10 +54,18 @@ export interface CronSchedulerStatus {
     lastTickAtMs?: number;
 }
 
+export interface CronGoalApprovalScanResult {
+    /** 执行摘要，用于日志与状态观测 */
+    summary: string;
+    /** 可选用户通知文案；为空时仅记录运行态，不主动通知 */
+    notifyMessage?: string;
+}
+
 export function startCronScheduler(options: CronSchedulerOptions): CronSchedulerHandle {
     const {
         store,
         sendMessage,
+        runGoalApprovalScan,
         deliverToUser,
         isBusy,
         activeHours,
@@ -119,25 +129,39 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
         log(`[cron] 执行任务 "${job.name}" (${job.id})`);
 
         try {
-            const response = await sendMessage(job.payload.text);
+            let summary = "";
+            let notifyMessage: string | undefined;
+            if (job.payload.kind === "systemEvent") {
+                if (!sendMessage) {
+                    throw new Error("Cron systemEvent executor is not available.");
+                }
+                const response = await sendMessage(job.payload.text);
+                summary = response?.trim() || "systemEvent completed";
+                notifyMessage = response?.trim() || undefined;
+            } else if (job.payload.kind === "goalApprovalScan") {
+                if (!runGoalApprovalScan) {
+                    throw new Error("Cron goalApprovalScan executor is not available.");
+                }
+                const result = await runGoalApprovalScan(job.payload);
+                summary = result.summary.trim();
+                notifyMessage = result.notifyMessage?.trim() || undefined;
+            }
 
             job.state.lastRunAtMs = Date.now();
             job.state.lastDurationMs = Date.now() - startedAt;
             job.state.lastStatus = "ok";
             job.state.lastError = undefined;
 
-            // 投递非空响应到用户
-            const trimmed = response?.trim();
-            if (trimmed && deliverToUser) {
+            if (notifyMessage && deliverToUser) {
                 try {
-                    await deliverToUser(`🕐 [Cron: ${job.name}] ${trimmed}`);
-                    log(`[cron] 任务 "${job.name}" 完成并已投递 (${job.state.lastDurationMs}ms)`);
+                    await deliverToUser(`🕐 [Cron: ${job.name}] ${notifyMessage}`);
+                    log(`[cron] 任务 "${job.name}" 完成并已投递 (${job.state.lastDurationMs}ms) | ${summary}`);
                 } catch (deliverErr) {
                     const msg = deliverErr instanceof Error ? deliverErr.message : String(deliverErr);
                     log(`[cron] 任务 "${job.name}" 投递失败: ${msg}`);
                 }
             } else {
-                log(`[cron] 任务 "${job.name}" 完成 (${job.state.lastDurationMs}ms)`);
+                log(`[cron] 任务 "${job.name}" 完成 (${job.state.lastDurationMs}ms) | ${summary}`);
             }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);

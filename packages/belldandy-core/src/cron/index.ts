@@ -5,6 +5,7 @@
 export { CronStore, computeNextRun } from "./store.js";
 export {
     startCronScheduler,
+    type CronGoalApprovalScanResult,
     type CronSchedulerOptions,
     type CronSchedulerHandle,
     type CronSchedulerStatus,
@@ -17,6 +18,8 @@ export type {
     CronScheduleAt,
     CronScheduleEvery,
     CronPayload,
+    CronSystemEventPayload,
+    CronGoalApprovalScanPayload,
     CronJobState,
     CronJobStatus,
     CronStoreFile,

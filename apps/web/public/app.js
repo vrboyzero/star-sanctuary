@@ -325,7 +325,9 @@ const goalsState = {
   progressSeq: 0,
   capabilitySeq: 0,
   handoffSeq: 0,
+  governanceSeq: 0,
   trackingCheckpoints: [],
+  governanceCache: {},
   capabilityCache: {},
   capabilityPending: {},
   liveUpdateDelayMs: 120,
@@ -3417,6 +3419,7 @@ function refreshGoalDetailAreas(goal, areas) {
   if (areaSet.has("progress")) void loadGoalProgressData(goal);
   if (areaSet.has("handoff")) void loadGoalHandoffData(goal);
   if (areaSet.has("capability")) void loadGoalCapabilityData(goal);
+  if (areaSet.has("goal") || areaSet.has("tracking") || areaSet.has("capability")) void loadGoalReviewGovernanceData(goal);
   if (areaSet.has("goal") && areaSet.has("tracking")) void loadGoalCanvasData(goal);
 }
 
@@ -3971,6 +3974,132 @@ async function runGoalCheckpointAction(goalId, nodeId, checkpointId, action) {
   });
 }
 
+function getGoalActionActor() {
+  const uuid = userUuidEl?.value.trim() || "";
+  return uuid || "web-ui";
+}
+
+async function runGoalApprovalScan(goalId, options = {}) {
+  if (!ws || !isReady) {
+    showNotice("无法执行审批扫描", "未连接到服务器。", "error");
+    return;
+  }
+  const goal = getGoalById(goalId);
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.approval.scan",
+    params: {
+      goalId,
+      autoEscalate: options.autoEscalate !== false,
+    },
+  });
+  if (!res?.ok) {
+    showNotice("审批扫描失败", res?.error?.message || "goal.approval.scan 调用失败。", "error");
+    return;
+  }
+  showNotice("审批扫描完成", res.payload?.summary || "已刷新 approval workflow 状态。", "success");
+  if (goal) {
+    void loadGoalReviewGovernanceData(goal);
+    void loadGoalTrackingData(goal);
+  }
+}
+
+async function runGoalSuggestionReviewDecision(goalId, input) {
+  if (!ws || !isReady) {
+    showNotice("无法执行 suggestion review", "未连接到服务器。", "error");
+    return;
+  }
+  const actor = window.prompt("审批人 / Reviewer", getGoalActionActor()) || getGoalActionActor();
+  const note = window.prompt("审批备注（可留空）", "") || "";
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.suggestion_review.decide",
+    params: {
+      goalId,
+      reviewId: input.reviewId,
+      suggestionType: input.suggestionType || undefined,
+      suggestionId: input.suggestionId || undefined,
+      decision: input.decision,
+      reviewer: actor,
+      decidedBy: actor,
+      note: note || undefined,
+    },
+  });
+  if (!res?.ok) {
+    showNotice("suggestion review 失败", res?.error?.message || "goal.suggestion_review.decide 调用失败。", "error");
+    return;
+  }
+  showNotice("suggestion review 已提交", `${input.decision} 已写入审批流。`, "success");
+  const goal = getGoalById(goalId);
+  if (goal) void loadGoalReviewGovernanceData(goal);
+}
+
+async function runGoalSuggestionReviewEscalation(goalId, input) {
+  if (!ws || !isReady) {
+    showNotice("无法升级 suggestion review", "未连接到服务器。", "error");
+    return;
+  }
+  const escalatedTo = window.prompt("升级到的 Reviewer", "") || "";
+  const reason = window.prompt("升级原因", "Need escalation") || "";
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.suggestion_review.escalate",
+    params: {
+      goalId,
+      reviewId: input.reviewId,
+      suggestionType: input.suggestionType || undefined,
+      suggestionId: input.suggestionId || undefined,
+      escalatedBy: getGoalActionActor(),
+      escalatedTo: escalatedTo || undefined,
+      reason: reason || undefined,
+      force: true,
+    },
+  });
+  if (!res?.ok) {
+    showNotice("suggestion review 升级失败", res?.error?.message || "goal.suggestion_review.escalate 调用失败。", "error");
+    return;
+  }
+  showNotice("suggestion review 已升级", "当前审批 stage 已升级。", "success");
+  const goal = getGoalById(goalId);
+  if (goal) void loadGoalReviewGovernanceData(goal);
+}
+
+async function runGoalCheckpointEscalation(goalId, nodeId, checkpointId) {
+  if (!ws || !isReady) {
+    showNotice("无法升级 checkpoint", "未连接到服务器。", "error");
+    return;
+  }
+  const escalatedTo = window.prompt("升级到的 Reviewer", "") || "";
+  const reason = window.prompt("升级原因", "Need escalation") || "";
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.checkpoint.escalate",
+    params: {
+      goalId,
+      nodeId,
+      checkpointId,
+      escalatedBy: getGoalActionActor(),
+      escalatedTo: escalatedTo || undefined,
+      reason: reason || undefined,
+      force: true,
+    },
+  });
+  if (!res?.ok) {
+    showNotice("checkpoint 升级失败", res?.error?.message || "goal.checkpoint.escalate 调用失败。", "error");
+    return;
+  }
+  showNotice("checkpoint 已升级", "当前 checkpoint 审批 stage 已升级。", "success");
+  const goal = getGoalById(goalId);
+  if (goal) {
+    void loadGoalReviewGovernanceData(goal);
+    void loadGoalTrackingData(goal);
+  }
+}
+
 async function submitGoalCheckpointActionForm() {
   if (!pendingGoalCheckpointAction) return;
   if (!ws || !isReady) {
@@ -4212,6 +4341,7 @@ function parseGoalCheckpoints(rawCheckpoints) {
       slaAt: data.slaAt ? String(data.slaAt) : "",
       nodeId: data.nodeId ? String(data.nodeId) : "",
       runId: data.runId ? String(data.runId) : "",
+      workflow: data.workflow && typeof data.workflow === "object" ? data.workflow : null,
       history,
     };
   });
@@ -5292,6 +5422,338 @@ async function loadGoalHandoffData(goal) {
   renderGoalHandoffPanel(goal, parseGoalHandoffDocument(handoffFile.content || ""));
 }
 
+function parseGoalReviewGovernanceSummary(rawSummary) {
+  if (!rawSummary || typeof rawSummary !== "object") return null;
+  const summary = rawSummary;
+  const governanceConfig = summary.governanceConfig && typeof summary.governanceConfig === "object" ? summary.governanceConfig : {};
+  const notificationsState = summary.notifications && typeof summary.notifications === "object" ? summary.notifications : {};
+  const dispatchesState = summary.notificationDispatches && typeof summary.notificationDispatches === "object" ? summary.notificationDispatches : {};
+  const actionableReviews = Array.isArray(summary.actionableReviews) ? summary.actionableReviews : [];
+  const overdueReviews = Array.isArray(summary.overdueReviews) ? summary.overdueReviews : [];
+  const templates = Array.isArray(governanceConfig.templates) ? governanceConfig.templates : [];
+  const reviewers = Array.isArray(governanceConfig.reviewers) ? governanceConfig.reviewers : [];
+  const notifications = Array.isArray(notificationsState.items) ? notificationsState.items : [];
+  const dispatches = Array.isArray(dispatchesState.items) ? dispatchesState.items : [];
+  return {
+    generatedAt: summary.generatedAt ? String(summary.generatedAt) : "",
+    summary: summary.summary ? String(summary.summary) : "",
+    governanceConfigPath: summary.governanceConfigPath ? String(summary.governanceConfigPath) : "",
+    notificationsPath: summary.notificationsPath ? String(summary.notificationsPath) : "",
+    notificationDispatchesPath: summary.notificationDispatchesPath ? String(summary.notificationDispatchesPath) : "",
+    notificationDispatchCounts: summary.notificationDispatchCounts && typeof summary.notificationDispatchCounts === "object"
+      ? summary.notificationDispatchCounts
+      : { total: dispatches.length, byChannel: {}, byStatus: {} },
+    reviewStatusCounts: summary.reviewStatusCounts && typeof summary.reviewStatusCounts === "object" ? summary.reviewStatusCounts : {},
+    reviewTypeCounts: summary.reviewTypeCounts && typeof summary.reviewTypeCounts === "object" ? summary.reviewTypeCounts : {},
+    workflowPendingCount: Number(summary.workflowPendingCount || 0),
+    workflowOverdueCount: Number(summary.workflowOverdueCount || 0),
+    checkpointWorkflowPendingCount: Number(summary.checkpointWorkflowPendingCount || 0),
+    checkpointWorkflowOverdueCount: Number(summary.checkpointWorkflowOverdueCount || 0),
+    templates: templates.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `template-${index + 1}`,
+        title: data.title ? String(data.title) : data.id ? String(data.id) : `template-${index + 1}`,
+        target: data.target ? String(data.target) : "all",
+        mode: data.mode ? String(data.mode) : "single",
+      };
+    }),
+    reviewers: reviewers.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `reviewer-${index + 1}`,
+        name: data.name ? String(data.name) : data.id ? String(data.id) : `reviewer-${index + 1}`,
+        reviewerRole: data.reviewerRole ? String(data.reviewerRole) : "",
+      };
+    }),
+    notifications: notifications.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `notification-${index + 1}`,
+        kind: data.kind ? String(data.kind) : "sla_reminder",
+        targetType: data.targetType ? String(data.targetType) : "suggestion_review",
+        targetId: data.targetId ? String(data.targetId) : "",
+        recipient: data.recipient ? String(data.recipient) : "",
+        message: data.message ? String(data.message) : "",
+        createdAt: data.createdAt ? String(data.createdAt) : "",
+      };
+    }),
+    notificationDispatches: dispatches.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `dispatch-${index + 1}`,
+        notificationId: data.notificationId ? String(data.notificationId) : "",
+        channel: data.channel ? String(data.channel) : "goal_detail",
+        status: data.status ? String(data.status) : "pending",
+        targetType: data.targetType ? String(data.targetType) : "suggestion_review",
+        targetId: data.targetId ? String(data.targetId) : "",
+        recipient: data.recipient ? String(data.recipient) : "",
+        routeKey: data.routeKey ? String(data.routeKey) : "",
+        message: data.message ? String(data.message) : "",
+        createdAt: data.createdAt ? String(data.createdAt) : "",
+        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+      };
+    }),
+    recommendations: parseStringList(summary.recommendations),
+    actionableReviews: actionableReviews.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `review-${index + 1}`,
+        title: data.title ? String(data.title) : data.id ? String(data.id) : `review-${index + 1}`,
+        suggestionType: data.suggestionType ? String(data.suggestionType) : "method_candidate",
+        status: data.status ? String(data.status) : "pending_review",
+        reviewer: data.reviewer ? String(data.reviewer) : "",
+        nodeId: data.nodeId ? String(data.nodeId) : "",
+        suggestionId: data.suggestionId ? String(data.suggestionId) : "",
+        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+      };
+    }),
+    overdueReviews: overdueReviews.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `overdue-review-${index + 1}`,
+        title: data.title ? String(data.title) : data.id ? String(data.id) : `overdue-review-${index + 1}`,
+        suggestionType: data.suggestionType ? String(data.suggestionType) : "method_candidate",
+        status: data.status ? String(data.status) : "pending_review",
+      };
+    }),
+    actionableCheckpoints: parseGoalCheckpoints({
+      items: Array.isArray(summary.actionableCheckpoints) ? summary.actionableCheckpoints : [],
+    }),
+  };
+}
+
+function renderGoalReviewGovernancePanelLoading() {
+  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">正在汇总 review governance / approval workflow …</div>`;
+}
+
+function renderGoalReviewGovernancePanelError(message) {
+  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
+  if (!panel) return;
+  panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+}
+
+function renderGoalReviewGovernancePanel(goal, data) {
+  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
+  if (!panel || !goal) return;
+  if (!data) {
+    panel.innerHTML = `<div class="memory-viewer-empty">当前还没有 review governance 汇总。</div>`;
+    return;
+  }
+  panel.innerHTML = `
+    <div class="goal-summary-header">
+      <div>
+        <div class="goal-summary-title">Review Governance / Unified Approval</div>
+        <div class="goal-summary-text">在现有 goal detail 内汇总 reviewer/template、suggestion review、checkpoint workflow 与 reminder 状态。</div>
+      </div>
+      <div class="goal-detail-actions">
+        <button class="button" data-goal-approval-scan="${escapeHtml(goal.id)}">执行 Approval Scan</button>
+        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationsPath || goalRuntimeFilePath(goal, "review-notifications.json"))}">打开 Notifications</button>
+        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationDispatchesPath || goalRuntimeFilePath(goal, "review-notification-dispatches.json"))}">打开 Dispatch Outbox</button>
+        ${data.governanceConfigPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.governanceConfigPath)}">打开 Governance Config</button>` : ""}
+      </div>
+    </div>
+    <div class="goal-summary-grid">
+      <div class="goal-summary-item"><span class="goal-summary-label">Review Pending</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowPendingCount))}</strong></div>
+      <div class="goal-summary-item"><span class="goal-summary-label">Review Overdue</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowOverdueCount))}</strong></div>
+      <div class="goal-summary-item"><span class="goal-summary-label">Checkpoint Pending</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowPendingCount))}</strong></div>
+      <div class="goal-summary-item"><span class="goal-summary-label">Checkpoint Overdue</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowOverdueCount))}</strong></div>
+      <div class="goal-summary-item"><span class="goal-summary-label">Reviewers</span><strong class="goal-summary-value">${escapeHtml(String(data.reviewers.length))}</strong></div>
+      <div class="goal-summary-item"><span class="goal-summary-label">Templates</span><strong class="goal-summary-value">${escapeHtml(String(data.templates.length))}</strong></div>
+      <div class="goal-summary-item"><span class="goal-summary-label">Dispatches</span><strong class="goal-summary-value">${escapeHtml(String(data.notificationDispatchCounts?.total || data.notificationDispatches.length || 0))}</strong></div>
+    </div>
+    <div class="goal-tracking-columns">
+      <div class="goal-tracking-column">
+        <div class="goal-summary-title">Actionable Suggestion Reviews</div>
+        ${data.actionableReviews.length ? `
+          <div class="goal-tracking-list">
+            ${data.actionableReviews.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
+                  <span class="memory-badge">${escapeHtml(item.status)}</span>
+                </div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(item.id)}</span>
+                  <span>${escapeHtml(item.suggestionType)}</span>
+                  ${item.reviewer ? `<span>${escapeHtml(item.reviewer)}</span>` : ""}
+                </div>
+                <div class="goal-detail-actions">
+                  <button class="button goal-inline-action" data-goal-suggestion-decision="accepted" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">通过</button>
+                  <button class="button goal-inline-action-secondary" data-goal-suggestion-decision="rejected" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">拒绝</button>
+                  <button class="button goal-inline-action-secondary" data-goal-suggestion-escalate="true" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">升级</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">当前没有待处理 suggestion review。</div>`}
+        <div class="goal-summary-title">Templates</div>
+        ${data.templates.length ? `
+          <div class="goal-tracking-list">
+            ${data.templates.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
+                  <span class="memory-badge">${escapeHtml(item.mode)}</span>
+                </div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(item.id)}</span>
+                  <span>${escapeHtml(item.target)}</span>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">当前 organization governance 尚未配置模板。</div>`}
+      </div>
+      <div class="goal-tracking-column">
+        <div class="goal-summary-title">Actionable Checkpoints</div>
+        ${data.actionableCheckpoints.length ? `
+          <div class="goal-tracking-list">
+            ${data.actionableCheckpoints.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
+                  <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(item.status)}</span>
+                </div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(item.id)}</span>
+                  ${item.nodeId ? `<span>${escapeHtml(item.nodeId)}</span>` : ""}
+                  ${item.reviewer ? `<span>${escapeHtml(item.reviewer)}</span>` : ""}
+                  ${item.slaAt ? `<span>${escapeHtml(formatDateTime(item.slaAt))}</span>` : ""}
+                </div>
+                <div class="goal-detail-actions">
+                  <button class="button goal-inline-action" data-goal-checkpoint-action="approve" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">批准</button>
+                  <button class="button goal-inline-action-secondary" data-goal-checkpoint-action="reject" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">拒绝</button>
+                  <button class="button goal-inline-action-secondary" data-goal-checkpoint-escalate="true" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">升级</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">当前没有待处理 checkpoint workflow。</div>`}
+        <div class="goal-summary-title">Recent Notifications</div>
+        ${data.notifications.length ? `
+          <div class="goal-tracking-list">
+            ${data.notifications.slice().reverse().slice(0, 6).map((item) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(item.kind)}</span>
+                  <span class="memory-badge">${escapeHtml(item.targetType)}</span>
+                </div>
+                <div class="memory-list-item-snippet">${escapeHtml(item.message || "")}</div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(item.targetId || "")}</span>
+                  ${item.recipient ? `<span>${escapeHtml(item.recipient)}</span>` : ""}
+                  ${item.createdAt ? `<span>${escapeHtml(formatDateTime(item.createdAt))}</span>` : ""}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">当前还没有 reminder / escalation 通知。</div>`}
+        <div class="goal-summary-title">Dispatch Channels / Outbox</div>
+        ${data.notificationDispatches.length ? `
+          <div class="memory-list-item-meta" style="margin-bottom:10px;">
+            <span>by channel: ${escapeHtml(Object.entries(data.notificationDispatchCounts?.byChannel || {}).map(([key, value]) => `${key}=${value}`).join(" | ") || "(none)")}</span>
+            <span>by status: ${escapeHtml(Object.entries(data.notificationDispatchCounts?.byStatus || {}).map(([key, value]) => `${key}=${value}`).join(" | ") || "(none)")}</span>
+          </div>
+          <div class="goal-tracking-list">
+            ${data.notificationDispatches.slice().reverse().slice(0, 8).map((item) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(item.channel)}</span>
+                  <span class="memory-badge">${escapeHtml(item.status)}</span>
+                </div>
+                <div class="memory-list-item-snippet">${escapeHtml(item.message || "")}</div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(item.targetType || "")}:${escapeHtml(item.targetId || "")}</span>
+                  ${item.recipient ? `<span>${escapeHtml(item.recipient)}</span>` : ""}
+                  ${item.routeKey ? `<span>${escapeHtml(item.routeKey)}</span>` : ""}
+                  ${item.createdAt ? `<span>${escapeHtml(formatDateTime(item.createdAt))}</span>` : ""}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-viewer-empty">当前还没有 materialized dispatch / outbox 记录。</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function bindGoalReviewGovernanceActions(goal) {
+  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
+  if (!panel || !goal) return;
+  panel.querySelectorAll("[data-goal-approval-scan]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-approval-scan") || goal.id;
+      if (!goalId) return;
+      void runGoalApprovalScan(goalId, { autoEscalate: node.getAttribute("data-goal-auto-escalate") !== "false" });
+    });
+  });
+  panel.querySelectorAll("[data-goal-suggestion-decision]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-suggestion-goal-id") || goal.id;
+      const reviewId = node.getAttribute("data-goal-suggestion-review-id");
+      const decision = node.getAttribute("data-goal-suggestion-decision");
+      const suggestionType = node.getAttribute("data-goal-suggestion-type");
+      const suggestionId = node.getAttribute("data-goal-suggestion-id");
+      if (!goalId || !reviewId || !decision) return;
+      void runGoalSuggestionReviewDecision(goalId, {
+        reviewId,
+        decision,
+        suggestionType,
+        suggestionId,
+      });
+    });
+  });
+  panel.querySelectorAll("[data-goal-suggestion-escalate]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-suggestion-goal-id") || goal.id;
+      const reviewId = node.getAttribute("data-goal-suggestion-review-id");
+      const suggestionType = node.getAttribute("data-goal-suggestion-type");
+      const suggestionId = node.getAttribute("data-goal-suggestion-id");
+      if (!goalId || !reviewId) return;
+      void runGoalSuggestionReviewEscalation(goalId, {
+        reviewId,
+        suggestionType,
+        suggestionId,
+      });
+    });
+  });
+  panel.querySelectorAll("[data-goal-checkpoint-escalate]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const goalId = node.getAttribute("data-goal-checkpoint-goal-id") || goal.id;
+      const nodeId = node.getAttribute("data-goal-checkpoint-node-id");
+      const checkpointId = node.getAttribute("data-goal-checkpoint-id");
+      if (!goalId || !nodeId || !checkpointId) return;
+      void runGoalCheckpointEscalation(goalId, nodeId, checkpointId);
+    });
+  });
+}
+
+async function loadGoalReviewGovernanceData(goal) {
+  if (!goal || !goalsDetailEl) return;
+  const trackingGoalId = goal.id;
+  const seq = (goalsState.governanceSeq || 0) + 1;
+  goalsState.governanceSeq = seq;
+  renderGoalReviewGovernancePanelLoading();
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.review_governance.summary",
+    params: { goalId: goal.id },
+  });
+  if (goalsState.governanceSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+  if (!res?.ok || !res.payload?.summary) {
+    renderGoalReviewGovernancePanelError(res?.error?.message || "无法读取 review governance summary。");
+    return;
+  }
+  const parsed = parseGoalReviewGovernanceSummary(res.payload.summary);
+  goalsState.governanceCache[goal.id] = parsed;
+  renderGoalReviewGovernancePanel(goal, parsed);
+  bindGoalReviewGovernanceActions(goal);
+}
+
 function renderGoalDetail(goal) {
   if (!goalsDetailEl) return;
   if (!goal) {
@@ -5334,6 +5796,12 @@ function renderGoalDetail(goal) {
       <div class="memory-detail-card goal-handoff-card">
         <div id="goalHandoffPanel">
           <div class="memory-viewer-empty">正在读取 handoff.md …</div>
+        </div>
+      </div>
+
+      <div class="memory-detail-card goal-governance-card">
+        <div id="goalGovernancePanel">
+          <div class="memory-viewer-empty">正在汇总 review governance / approval workflow …</div>
         </div>
       </div>
 
@@ -5431,6 +5899,7 @@ function renderGoalDetail(goal) {
   void loadGoalCapabilityData(goal);
   void loadGoalProgressData(goal);
   void loadGoalHandoffData(goal);
+  void loadGoalReviewGovernanceData(goal);
 }
 
 async function loadGoals(forceReload = false, preferredGoalId) {

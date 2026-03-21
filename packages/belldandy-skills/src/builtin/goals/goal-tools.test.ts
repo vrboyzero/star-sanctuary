@@ -21,6 +21,7 @@ import { goalSuggestionReviewListTool } from "./goal-suggestion-review-list.js";
 import { goalSuggestionReviewWorkflowSetTool } from "./goal-suggestion-review-workflow-set.js";
 import { goalSuggestionReviewDecideTool } from "./goal-suggestion-review-decide.js";
 import { goalSuggestionReviewEscalateTool } from "./goal-suggestion-review-escalate.js";
+import { goalSuggestionReviewScanTool } from "./goal-suggestion-review-scan.js";
 import { goalSuggestionPublishTool } from "./goal-suggestion-publish.js";
 import { goalOrchestrateTool } from "./goal-orchestrate.js";
 import { taskGraphClaimTool } from "./task-graph-claim.js";
@@ -1372,6 +1373,36 @@ const baseContext: ToolContext = {
         updatedAt: "2026-03-20T00:00:00.000Z",
       },
       generatedAt: "2026-03-20T15:10:00.000Z",
+      governanceConfig: {
+        version: 1 as const,
+        reviewers: [
+          {
+            id: "producer",
+            name: "Producer",
+            reviewerRole: "approver",
+            channels: ["reviewer_inbox", "im_dm"] as const,
+            active: true,
+          },
+        ],
+        templates: [
+          {
+            id: "tpl_default_review",
+            title: "Default Review",
+            target: "suggestion_review" as const,
+            enabled: true,
+            mode: "single" as const,
+          },
+        ],
+        defaults: {
+          reminderMinutes: [60, 15],
+          notificationChannels: ["goal_detail", "reviewer_inbox"] as const,
+          notificationRoutes: {
+            im_dm: "im://review/{recipient}",
+          },
+        },
+        updatedAt: "2026-03-20T15:10:00.000Z",
+      },
+      governanceConfigPath: "C:/Users/admin/.star_sanctuary/governance/review-governance.json",
       reviews: {
         version: 1 as const,
         syncedAt: "2026-03-20T15:10:00.000Z",
@@ -1417,6 +1448,72 @@ const baseContext: ToolContext = {
             publishedAt: "2026-03-20T15:05:00.000Z",
           },
         ],
+      },
+      notifications: {
+        version: 1 as const,
+        items: [
+          {
+            id: "review_notification_goal_alpha_method_overdue",
+            goalId: "goal_alpha",
+            targetType: "suggestion_review" as const,
+            targetId: "review_method_candidate_node_root",
+            recipient: "producer",
+            kind: "sla_overdue" as const,
+            message: "Root Node 方法候选 / Stage 1 已超过 SLA",
+            dedupeKey: "suggestion_review:review_method_candidate_node_root:stage_1:overdue",
+            createdAt: "2026-03-20T15:10:00.000Z",
+          },
+        ],
+      },
+      notificationsPath: "E:/goals/goal_alpha/review-notifications.json",
+      notificationDispatches: {
+        version: 1 as const,
+        items: [
+          {
+            id: "review_dispatch_goal_alpha_1",
+            notificationId: "review_notification_goal_alpha_method_overdue",
+            goalId: "goal_alpha",
+            targetType: "suggestion_review" as const,
+            targetId: "review_method_candidate_node_root",
+            kind: "sla_overdue" as const,
+            channel: "goal_detail" as const,
+            recipient: "producer",
+            routeKey: "goal:goal_alpha:detail",
+            message: "Root Node 方法候选 / Stage 1 已超过 SLA",
+            dedupeKey: "suggestion_review:review_method_candidate_node_root:stage_1:overdue:dispatch:goal_detail:goal:goal_alpha:detail",
+            status: "materialized" as const,
+            createdAt: "2026-03-20T15:10:00.000Z",
+            updatedAt: "2026-03-20T15:10:00.000Z",
+          },
+          {
+            id: "review_dispatch_goal_alpha_2",
+            notificationId: "review_notification_goal_alpha_method_overdue",
+            goalId: "goal_alpha",
+            targetType: "suggestion_review" as const,
+            targetId: "review_method_candidate_node_root",
+            kind: "sla_overdue" as const,
+            channel: "im_dm" as const,
+            recipient: "producer",
+            routeKey: "im://review/producer",
+            message: "Root Node 方法候选 / Stage 1 已超过 SLA",
+            dedupeKey: "suggestion_review:review_method_candidate_node_root:stage_1:overdue:dispatch:im_dm:im://review/producer",
+            status: "pending" as const,
+            createdAt: "2026-03-20T15:10:00.000Z",
+            updatedAt: "2026-03-20T15:10:00.000Z",
+          },
+        ],
+      },
+      notificationDispatchesPath: "E:/goals/goal_alpha/review-notification-dispatches.json",
+      notificationDispatchCounts: {
+        total: 2,
+        byChannel: {
+          goal_detail: 1,
+          im_dm: 1,
+        },
+        byStatus: {
+          materialized: 1,
+          pending: 1,
+        },
       },
       crossGoal: {
         goalsScanned: 2,
@@ -1466,7 +1563,30 @@ const baseContext: ToolContext = {
         skill_candidate: 0,
         flow_pattern: 0,
       },
+      workflowPendingCount: 1,
+      workflowOverdueCount: 1,
       actionableReviews: [],
+      actionableCheckpoints: [],
+      checkpointWorkflowPendingCount: 0,
+      checkpointWorkflowOverdueCount: 0,
+      overdueReviews: [
+        {
+          id: "review_method_candidate_node_root",
+          goalId: "goal_alpha",
+          suggestionType: "method_candidate" as const,
+          suggestionId: "method_candidate_node_root",
+          title: "Root Node 方法候选",
+          summary: "Root node execution summary",
+          sourcePath: "E:/goals/goal_alpha/method-candidates.json",
+          nodeId: "node_root",
+          runId: "run_1",
+          status: "pending_review" as const,
+          reviewer: "producer",
+          evidenceRefs: ["C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/06-retrospective.md"],
+          createdAt: "2026-03-20T14:00:00.000Z",
+          updatedAt: "2026-03-20T14:00:00.000Z",
+        },
+      ],
       summary: "reviews=1 | pending=0 | accepted_unpublished=0 | published=1 | cross_goal_matches=1",
       recommendations: ["当前 goal 已命中跨 goal 高频流程：cross_goal_flow_1，可作为 method/skill 治理优先级依据"],
     })),
@@ -1736,6 +1856,63 @@ const baseContext: ToolContext = {
         updatedAt: "2026-03-20T14:06:00.000Z",
       },
     })),
+    scanSuggestionReviewWorkflows: vi.fn(async () => ({
+      goal: {
+        id: "goal_alpha",
+        slug: "alpha",
+        title: "Alpha Goal",
+        status: "executing",
+        goalRoot: "E:/goals/goal_alpha",
+        runtimeRoot: "E:/goals/goal_alpha",
+        docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+        northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+        tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+        progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+        handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+        registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+        pathSource: "default",
+        activeNodeId: "node_root",
+        lastNodeId: "node_root",
+        lastRunId: "run_1",
+        createdAt: "2026-03-20T00:00:00.000Z",
+        updatedAt: "2026-03-20T00:00:00.000Z",
+      },
+      reviews: {
+        version: 1 as const,
+        syncedAt: "2026-03-20T14:08:00.000Z",
+        items: [],
+      },
+      scannedAt: "2026-03-20T14:08:00.000Z",
+      scannedCount: 1,
+      overdueCount: 1,
+      escalatedCount: 1,
+      items: [
+        {
+          goalId: "goal_alpha",
+          reviewId: "review_method_candidate_node_root",
+          suggestionType: "method_candidate" as const,
+          suggestionId: "method_candidate_node_root",
+          title: "Root Node 方法候选",
+          nodeId: "node_root",
+          runId: "run_1",
+          workflowMode: "chain" as const,
+          stageId: "stage_1",
+          stageTitle: "Chain Stage 1",
+          stageIndex: 0,
+          status: "pending_review" as const,
+          reviewer: "owner",
+          slaAt: "2026-03-20T13:00:00.000Z",
+          overdue: true,
+          overdueMinutes: 68,
+          escalated: true,
+          action: "auto_escalated" as const,
+          escalatedTo: "owner",
+          scannedAt: "2026-03-20T14:08:00.000Z",
+        },
+      ],
+      summary: "scanned=1 | overdue=1 | escalated=1",
+      recommendations: ["已自动升级 1 个 suggestion review，建议尽快由升级 reviewer 处理。"],
+    })),
     publishSuggestion: vi.fn(async () => ({
       goal: {
         id: "goal_alpha",
@@ -1889,6 +2066,7 @@ describe("goal tools", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("已生成 goal review governance 摘要");
     expect(result.output).toContain("Publish Count: 1");
+    expect(result.output).toContain("Dispatch Count: total=2");
     expect(result.output).toContain("cross_goal_flow_1");
   });
 
@@ -1937,6 +2115,16 @@ describe("goal tools", () => {
     expect(result.output).toContain("已执行 suggestion review escalation");
     expect(result.output).toContain("Escalation Count: 1");
     expect(result.output).toContain("Reviewer: owner");
+  });
+
+  it("goal_suggestion_review_scan should scan overdue workflows", async () => {
+    const result = await goalSuggestionReviewScanTool.execute({
+      auto_escalate: true,
+    }, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("已执行 suggestion review workflow SLA scan");
+    expect(result.output).toContain("overdue=1");
+    expect(result.output).toContain("escalated=1");
   });
 
   it("goal_suggestion_publish should publish accepted suggestion", async () => {

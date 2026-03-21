@@ -30,6 +30,7 @@ export type GoalProgressEntry = {
     | "suggestion_review_decided"
     | "suggestion_review_workflow_configured"
     | "suggestion_review_escalated"
+    | "suggestion_review_scanned"
     | "suggestion_published";
   title: string;
   nodeId?: string;

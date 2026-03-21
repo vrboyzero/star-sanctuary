@@ -149,10 +149,12 @@ const DEFAULT_METHODS = [
   "goal.flow_patterns.generate",
   "goal.flow_patterns.cross_goal",
   "goal.review_governance.summary",
+  "goal.approval.scan",
   "goal.suggestion_review.list",
   "goal.suggestion_review.workflow.set",
   "goal.suggestion_review.decide",
   "goal.suggestion_review.escalate",
+  "goal.suggestion_review.scan",
   "goal.suggestion.publish",
   "goal.checkpoint.list",
   "goal.checkpoint.request",
@@ -160,6 +162,7 @@ const DEFAULT_METHODS = [
   "goal.checkpoint.reject",
   "goal.checkpoint.expire",
   "goal.checkpoint.reopen",
+  "goal.checkpoint.escalate",
   "goal.task_graph.read",
   "goal.task_graph.create",
   "goal.task_graph.update",
@@ -1017,11 +1020,20 @@ async function handleReq(
       "goal.flow_patterns.generate",
       "goal.flow_patterns.cross_goal",
       "goal.review_governance.summary",
+      "goal.approval.scan",
       "goal.suggestion_review.list",
       "goal.suggestion_review.workflow.set",
       "goal.suggestion_review.decide",
       "goal.suggestion_review.escalate",
+      "goal.suggestion_review.scan",
       "goal.suggestion.publish",
+      "goal.checkpoint.list",
+      "goal.checkpoint.request",
+      "goal.checkpoint.approve",
+      "goal.checkpoint.reject",
+      "goal.checkpoint.expire",
+      "goal.checkpoint.reopen",
+      "goal.checkpoint.escalate",
   ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
@@ -2117,6 +2129,31 @@ async function handleReq(
       }
     }
 
+    case "goal.approval.scan": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.scanApprovalWorkflows(goalId, {
+          now: typeof params.now === "string" ? params.now.trim() || undefined : undefined,
+          autoEscalate: Boolean(params.autoEscalate),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_approval_scan_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
     case "goal.suggestion_review.list": {
       if (!ctx.goalManager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
@@ -2271,6 +2308,31 @@ async function handleReq(
           id: req.id,
           ok: false,
           error: { code: "goal_suggestion_review_escalate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.scan": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.scanSuggestionReviewWorkflows(goalId, {
+          now: typeof params.now === "string" ? params.now.trim() || undefined : undefined,
+          autoEscalate: Boolean(params.autoEscalate),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_scan_failed", message: err instanceof Error ? err.message : String(err) },
         };
       }
     }
@@ -2490,6 +2552,36 @@ async function handleReq(
           id: req.id,
           ok: false,
           error: { code: "goal_checkpoint_reopen_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.escalate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.escalateCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          escalatedBy: typeof params.escalatedBy === "string" ? params.escalatedBy.trim() || undefined : undefined,
+          escalatedTo: typeof params.escalatedTo === "string" ? params.escalatedTo.trim() || undefined : undefined,
+          reason: typeof params.reason === "string" ? params.reason.trim() || undefined : undefined,
+          force: Boolean(params.force),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_escalate_failed", message: err instanceof Error ? err.message : String(err) },
         };
       }
     }

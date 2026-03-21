@@ -24,6 +24,7 @@ import type {
   GoalMethodCandidateState,
   GoalFlowPattern,
   GoalFlowPatternState,
+  GoalReviewDeliveryChannel,
   GoalSuggestionReviewItem,
   GoalSuggestionReviewWorkflow,
   GoalSuggestionReviewWorkflowEscalation,
@@ -31,6 +32,12 @@ import type {
   GoalSuggestionReviewWorkflowReviewer,
   GoalSuggestionReviewWorkflowStage,
   GoalSuggestionReviewWorkflowVote,
+  GoalReviewNotification,
+  GoalReviewNotificationDispatch,
+  GoalReviewNotificationDispatchState,
+  GoalReviewNotificationDispatchStatus,
+  GoalReviewNotificationKind,
+  GoalReviewNotificationState,
   GoalSuggestionPublishRecord,
   GoalSuggestionPublishState,
   GoalSuggestionReviewState,
@@ -42,6 +49,12 @@ import type {
   LongTermGoal,
 } from "./types.js";
 import { getDefaultCapabilityPlanAnalysis } from "./capability-analysis.js";
+import {
+  getDefaultGoalReviewNotificationDispatches,
+  getDefaultGoalReviewNotifications,
+  getGoalReviewNotificationDispatchesPath,
+  getGoalReviewNotificationsPath,
+} from "./review-governance.js";
 
 async function atomicWriteJson(targetPath: string, value: unknown): Promise<void> {
   mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -147,6 +160,8 @@ export async function ensureGoalRuntime(goal: LongTermGoal): Promise<void> {
   await ensureJsonFile(getGoalFlowPatternsPath(goal), initialFlowPatterns);
   await ensureJsonFile(getGoalSuggestionReviewsPath(goal), initialSuggestionReviews);
   await ensureJsonFile(getGoalPublishRecordsPath(goal), initialPublishRecords);
+  await ensureJsonFile(getGoalReviewNotificationsPath(goal), getDefaultGoalReviewNotifications());
+  await ensureJsonFile(getGoalReviewNotificationDispatchesPath(goal), getDefaultGoalReviewNotificationDispatches());
   await ensureJsonFile(getGoalBoardRefPath(goal), { boardId: goal.boardId ?? null });
 }
 
@@ -203,19 +218,37 @@ function normalizeCheckpointPolicy(value: unknown): GoalCheckpointPolicy | undef
   const rationale = Array.isArray(source.rationale)
     ? source.rationale.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
     : [];
+  const reviewers = Array.isArray(source.reviewers)
+    ? source.reviewers.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+    : undefined;
+  const reviewerRoles = Array.isArray(source.reviewerRoles)
+    ? source.reviewerRoles.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+    : undefined;
+  const reminderMinutes = Array.isArray(source.reminderMinutes)
+    ? source.reminderMinutes.filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item >= 0)
+    : undefined;
   const approvalMode = normalizeString(source.approvalMode);
   const escalationMode = normalizeString(source.escalationMode);
+  const workflowMode = normalizeString(source.workflowMode);
   return {
     riskLevel: normalizeCapabilityRiskLevel(source.riskLevel),
     approvalMode: approvalMode === "single" || approvalMode === "strict" ? approvalMode : "none",
     requiredRequestFields,
     requiredDecisionFields,
+    templateId: normalizeString(source.templateId),
+    workflowMode: workflowMode === "chain" || workflowMode === "quorum" ? workflowMode : "single",
+    reviewers,
+    reviewerRoles,
+    minApprovals: typeof source.minApprovals === "number" && Number.isFinite(source.minApprovals) ? source.minApprovals : undefined,
+    stages: Array.isArray(source.stages) ? source.stages.filter((item) => Boolean(item)) as GoalCheckpointPolicy["stages"] : undefined,
     suggestedReviewer: normalizeString(source.suggestedReviewer),
     suggestedReviewerRole: normalizeString(source.suggestedReviewerRole),
     suggestedSlaHours: typeof source.suggestedSlaHours === "number" && Number.isFinite(source.suggestedSlaHours)
       ? source.suggestedSlaHours
       : undefined,
+    reminderMinutes,
     escalationMode: escalationMode === "manual" ? "manual" : "none",
+    escalationReviewer: normalizeString(source.escalationReviewer),
     rationale,
   };
 }
@@ -235,7 +268,7 @@ function normalizeCheckpointItem(value: unknown, index: number, goalId?: string)
       const at = normalizeString(entry.at);
       const status = normalizeString(entry.status);
       if (!action || !at || !status) return null;
-      if (!["requested", "approved", "rejected", "expired", "reopened"].includes(action)) return null;
+      if (!["requested", "reviewed", "approved", "rejected", "expired", "reopened", "escalated", "reminded"].includes(action)) return null;
       if (!["required", "waiting_user", "approved", "rejected", "expired"].includes(status)) return null;
       return {
         action: action as GoalCheckpointHistoryEntry["action"],
@@ -272,6 +305,7 @@ function normalizeCheckpointItem(value: unknown, index: number, goalId?: string)
     createdAt: normalizeString(source.createdAt) ?? now,
     updatedAt: normalizeString(source.updatedAt) ?? now,
     policy: normalizeCheckpointPolicy(source.policy),
+    workflow: normalizeSuggestionReviewWorkflow(source.workflow),
     history,
   };
 }
@@ -385,14 +419,27 @@ function normalizeCapabilityPlanCheckpoint(value: unknown): GoalCapabilityPlanCh
   const requiredDecisionFields = Array.isArray(source.requiredDecisionFields)
     ? source.requiredDecisionFields.map((item) => normalizeString(item)).filter((item): item is GoalCheckpointPolicy["requiredDecisionFields"][number] => Boolean(item))
     : [];
+  const reviewers = Array.isArray(source.reviewers)
+    ? source.reviewers.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+    : undefined;
+  const reviewerRoles = Array.isArray(source.reviewerRoles)
+    ? source.reviewerRoles.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+    : undefined;
   const approvalMode = normalizeString(source.approvalMode);
   const escalationMode = normalizeString(source.escalationMode);
+  const workflowMode = normalizeString(source.workflowMode);
   return {
     required: Boolean(source.required),
     reasons,
     approvalMode: approvalMode === "single" || approvalMode === "strict" ? approvalMode : "none",
     requiredRequestFields,
     requiredDecisionFields,
+    templateId: normalizeString(source.templateId),
+    workflowMode: workflowMode === "chain" || workflowMode === "quorum" ? workflowMode : "single",
+    reviewers,
+    reviewerRoles,
+    minApprovals: typeof source.minApprovals === "number" && Number.isFinite(source.minApprovals) ? source.minApprovals : undefined,
+    stages: Array.isArray(source.stages) ? source.stages.filter((item) => Boolean(item)) as GoalCapabilityPlanCheckpointPolicy["stages"] : undefined,
     suggestedTitle: normalizeString(source.suggestedTitle),
     suggestedNote: normalizeString(source.suggestedNote),
     suggestedReviewer: normalizeString(source.suggestedReviewer),
@@ -400,7 +447,11 @@ function normalizeCapabilityPlanCheckpoint(value: unknown): GoalCapabilityPlanCh
     suggestedSlaHours: typeof source.suggestedSlaHours === "number" && Number.isFinite(source.suggestedSlaHours)
       ? source.suggestedSlaHours
       : undefined,
+    reminderMinutes: Array.isArray(source.reminderMinutes)
+      ? source.reminderMinutes.filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item >= 0)
+      : undefined,
     escalationMode: escalationMode === "manual" ? "manual" : "none",
+    escalationReviewer: normalizeString(source.escalationReviewer),
   };
 }
 
@@ -764,9 +815,11 @@ function normalizeSuggestionReviewWorkflowEscalation(value: unknown): GoalSugges
   return {
     mode: mode === "manual" ? "manual" : "none",
     count: typeof source.count === "number" && Number.isFinite(source.count) ? source.count : history.length,
+    defaultReviewer: normalizeString(source.defaultReviewer),
     lastEscalatedAt: normalizeString(source.lastEscalatedAt),
     escalatedTo: normalizeString(source.escalatedTo),
     escalatedBy: normalizeString(source.escalatedBy),
+    overdueAt: normalizeString(source.overdueAt),
     reason: normalizeString(source.reason),
     history,
   };
@@ -800,6 +853,9 @@ function normalizeSuggestionReviewWorkflowStage(value: unknown, index: number): 
     startedAt: normalizeString(source.startedAt) ?? new Date().toISOString(),
     decidedAt: normalizeString(source.decidedAt),
     slaAt: normalizeString(source.slaAt),
+    reminderMinutes: Array.isArray(source.reminderMinutes)
+      ? source.reminderMinutes.filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item >= 0)
+      : undefined,
     escalation: normalizeSuggestionReviewWorkflowEscalation(source.escalation),
   };
 }
@@ -857,6 +913,132 @@ function normalizeSuggestionReviewItem(value: unknown, index: number, goalId?: s
     workflow: normalizeSuggestionReviewWorkflow(source.workflow),
     createdAt: normalizeString(source.createdAt) ?? now,
     updatedAt: normalizeString(source.updatedAt) ?? now,
+  };
+}
+
+function normalizeReviewNotification(value: unknown, index: number, goalId?: string): GoalReviewNotification | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const targetType = normalizeString(source.targetType);
+  const kind = normalizeString(source.kind);
+  const targetId = normalizeString(source.targetId);
+  const message = normalizeString(source.message);
+  const dedupeKey = normalizeString(source.dedupeKey);
+  const createdAt = normalizeString(source.createdAt);
+  if (
+    (targetType !== "suggestion_review" && targetType !== "checkpoint")
+    || (kind !== "sla_reminder" && kind !== "sla_overdue" && kind !== "auto_escalated")
+    || !targetId
+    || !message
+    || !dedupeKey
+    || !createdAt
+  ) {
+    return null;
+  }
+  return {
+    id: normalizeString(source.id) ?? `review_notification_${index + 1}`,
+    goalId: normalizeString(source.goalId) ?? goalId ?? "",
+    targetType,
+    targetId,
+    nodeId: normalizeString(source.nodeId),
+    stageId: normalizeString(source.stageId),
+    recipient: normalizeString(source.recipient),
+    kind,
+    message,
+    dedupeKey,
+    createdAt,
+  };
+}
+
+function normalizeReviewDeliveryChannel(value: unknown): GoalReviewDeliveryChannel | undefined {
+  const normalized = normalizeString(value);
+  switch (normalized) {
+    case "goal_detail":
+    case "goal_channel":
+    case "reviewer_inbox":
+    case "org_feed":
+    case "im_dm":
+    case "webhook":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeReviewNotificationKind(value: unknown): GoalReviewNotificationKind | undefined {
+  const normalized = normalizeString(value);
+  switch (normalized) {
+    case "sla_reminder":
+    case "sla_overdue":
+    case "auto_escalated":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeReviewNotificationDispatchStatus(value: unknown): GoalReviewNotificationDispatchStatus {
+  const normalized = normalizeString(value);
+  switch (normalized) {
+    case "pending":
+    case "materialized":
+    case "delivered":
+    case "skipped":
+    case "acked":
+    case "failed":
+      return normalized;
+    default:
+      return "pending";
+  }
+}
+
+function normalizeReviewNotificationDispatch(
+  value: unknown,
+  index: number,
+  goalId?: string,
+): GoalReviewNotificationDispatch | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const targetType = normalizeString(source.targetType);
+  const kind = normalizeReviewNotificationKind(source.kind);
+  const targetId = normalizeString(source.targetId);
+  const notificationId = normalizeString(source.notificationId);
+  const channel = normalizeReviewDeliveryChannel(source.channel);
+  const message = normalizeString(source.message);
+  const dedupeKey = normalizeString(source.dedupeKey);
+  const createdAt = normalizeString(source.createdAt);
+  const updatedAt = normalizeString(source.updatedAt);
+  if (
+    (targetType !== "suggestion_review" && targetType !== "checkpoint")
+    || !kind
+    || !targetId
+    || !notificationId
+    || !channel
+    || !message
+    || !dedupeKey
+    || !createdAt
+    || !updatedAt
+  ) {
+    return null;
+  }
+  return {
+    id: normalizeString(source.id) ?? `review_notification_dispatch_${index + 1}`,
+    notificationId,
+    goalId: normalizeString(source.goalId) ?? goalId ?? "",
+    targetType,
+    targetId,
+    nodeId: normalizeString(source.nodeId),
+    stageId: normalizeString(source.stageId),
+    kind,
+    channel,
+    recipient: normalizeString(source.recipient),
+    routeKey: normalizeString(source.routeKey),
+    message,
+    dedupeKey,
+    status: normalizeReviewNotificationDispatchStatus(source.status),
+    createdAt,
+    updatedAt,
+    lastError: normalizeString(source.lastError),
   };
 }
 
@@ -1160,6 +1342,61 @@ export async function writeGoalPublishRecords(goal: Pick<LongTermGoal, "runtimeR
     version: 1,
     items: state.items,
   } satisfies GoalSuggestionPublishState);
+}
+
+export async function readGoalReviewNotifications(goal: Pick<LongTermGoal, "runtimeRoot" | "id">): Promise<GoalReviewNotificationState> {
+  const notificationsPath = getGoalReviewNotificationsPath(goal);
+  try {
+    const raw = await fs.readFile(notificationsPath, "utf-8");
+    const parsed = JSON.parse(raw) as { items?: unknown };
+    const items = Array.isArray(parsed.items)
+      ? parsed.items.map((item, index) => normalizeReviewNotification(item, index, goal.id)).filter((item): item is GoalReviewNotification => Boolean(item))
+      : [];
+    return { version: 1, items };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return getDefaultGoalReviewNotifications();
+    }
+    throw err;
+  }
+}
+
+export async function writeGoalReviewNotifications(goal: Pick<LongTermGoal, "runtimeRoot">, state: GoalReviewNotificationState): Promise<void> {
+  await atomicWriteJson(getGoalReviewNotificationsPath(goal), {
+    version: 1,
+    items: state.items,
+  } satisfies GoalReviewNotificationState);
+}
+
+export async function readGoalReviewNotificationDispatches(
+  goal: Pick<LongTermGoal, "runtimeRoot" | "id">,
+): Promise<GoalReviewNotificationDispatchState> {
+  const dispatchesPath = getGoalReviewNotificationDispatchesPath(goal);
+  try {
+    const raw = await fs.readFile(dispatchesPath, "utf-8");
+    const parsed = JSON.parse(raw) as { items?: unknown };
+    const items = Array.isArray(parsed.items)
+      ? parsed.items
+        .map((item, index) => normalizeReviewNotificationDispatch(item, index, goal.id))
+        .filter((item): item is GoalReviewNotificationDispatch => Boolean(item))
+      : [];
+    return { version: 1, items };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return getDefaultGoalReviewNotificationDispatches();
+    }
+    throw err;
+  }
+}
+
+export async function writeGoalReviewNotificationDispatches(
+  goal: Pick<LongTermGoal, "runtimeRoot">,
+  state: GoalReviewNotificationDispatchState,
+): Promise<void> {
+  await atomicWriteJson(getGoalReviewNotificationDispatchesPath(goal), {
+    version: 1,
+    items: state.items,
+  } satisfies GoalReviewNotificationDispatchState);
 }
 
 async function ensureJsonFile(targetPath: string, value: unknown): Promise<void> {

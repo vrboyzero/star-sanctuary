@@ -368,15 +368,20 @@ export function formatExperienceSuggestions(result: GoalExperienceSuggestRecord)
 export function formatSuggestionReviews(items: GoalSuggestionReviewItemRecord[]): string {
   if (items.length === 0) return "当前没有 suggestion reviews。";
   return items
-    .map((item, index) => [
+    .map((item, index) => {
+      const stage = item.workflow?.stages[item.workflow.currentStageIndex];
+      const overdue = Boolean(stage?.slaAt && stage.status === "pending_review" && new Date().getTime() > new Date(stage.slaAt).getTime());
+      return [
       `${index + 1}. [${item.status}] ${item.id} | ${item.suggestionType} | ${item.title}`,
       `   Suggestion: ${item.suggestionId}`,
       `   Summary: ${item.summary}`,
       `   Reviewer: ${item.reviewer ?? "(none)"} | Decided By: ${item.decidedBy ?? "(none)"} | Decided At: ${item.decidedAt ?? "(none)"}`,
       `   Workflow: ${item.workflow ? `${item.workflow.mode} | stage=${item.workflow.currentStageIndex + 1}/${item.workflow.stages.length} | status=${item.workflow.status}` : "(none)"}`,
+      `   SLA: ${stage?.slaAt ?? "(none)"} | Overdue: ${overdue ? "yes" : "no"} | Escalation: ${stage?.escalation.count ?? 0}${stage?.escalation.defaultReviewer ? ` | default=${stage.escalation.defaultReviewer}` : ""}`,
       `   Source: ${item.sourcePath}`,
       `   Evidence: ${item.evidenceRefs.join(" | ") || "(none)"}`,
-    ].join("\n"))
+    ].join("\n");
+    })
     .join("\n");
 }
 
@@ -400,14 +405,47 @@ export function formatSuggestionPublishRecord(record: GoalSuggestionPublishRecor
 export function formatReviewGovernanceSummary(summary: import("../../types.js").GoalReviewGovernanceSummaryRecord): string {
   const reviewCounts = summary.reviewStatusCounts;
   const typeCounts = summary.reviewTypeCounts;
+  const governanceConfig = summary.governanceConfig ?? { reviewers: [], templates: [] };
+  const notifications = summary.notifications?.items ?? [];
+  const dispatches = summary.notificationDispatches?.items ?? [];
+  const dispatchCounts = summary.notificationDispatchCounts ?? { total: dispatches.length, byChannel: {}, byStatus: {} };
   const actionable = summary.actionableReviews.length > 0
     ? summary.actionableReviews.map((item, index) => `${index + 1}. [${item.status}] ${item.id} | ${item.suggestionType} | ${item.title}`).join("\n")
+    : "(none)";
+  const overdue = summary.overdueReviews.length > 0
+    ? summary.overdueReviews.map((item, index) => `${index + 1}. [${item.status}] ${item.id} | ${item.suggestionType} | ${item.title}`).join("\n")
+    : "(none)";
+  const actionableCheckpoints = (summary.actionableCheckpoints ?? []).length > 0
+    ? (summary.actionableCheckpoints ?? []).map((item, index) =>
+      `${index + 1}. [${item.status}] ${item.id} | ${item.nodeId ?? "(no-node)"} | ${item.title}${item.reviewer ? ` | reviewer=${item.reviewer}` : ""}`,
+    ).join("\n")
     : "(none)";
   const published = summary.publishRecords.items.length > 0
     ? summary.publishRecords.items
       .slice(-3)
       .reverse()
       .map((item, index) => `${index + 1}. ${item.id} | ${item.assetType} | ${item.assetKey}`)
+      .join("\n")
+    : "(none)";
+  const recentNotifications = notifications.length > 0
+    ? notifications
+      .slice(-5)
+      .reverse()
+      .map((item, index) => `${index + 1}. [${item.kind}] ${item.targetType}:${item.targetId}${item.recipient ? ` | to=${item.recipient}` : ""} | ${item.message}`)
+      .join("\n")
+    : "(none)";
+  const recentDispatches = dispatches.length > 0
+    ? dispatches
+      .slice(-5)
+      .reverse()
+      .map((item, index) =>
+        `${index + 1}. [${item.channel}/${item.status}] ${item.targetType}:${item.targetId}${item.recipient ? ` | to=${item.recipient}` : ""}${item.routeKey ? ` | route=${item.routeKey}` : ""} | ${item.message}`)
+      .join("\n")
+    : "(none)";
+  const templates = governanceConfig.templates.length > 0
+    ? governanceConfig.templates
+      .slice(0, 5)
+      .map((item, index) => `${index + 1}. ${item.id} | ${item.target} | mode=${item.mode}${item.enabled ? "" : " | disabled"}`)
       .join("\n")
     : "(none)";
   const crossGoal = summary.crossGoal.items.length > 0
@@ -423,12 +461,74 @@ export function formatReviewGovernanceSummary(summary: import("../../types.js").
     `Summary: ${summary.summary}`,
     `Review Counts: pending=${reviewCounts.pending_review} | accepted=${reviewCounts.accepted} | needs_revision=${reviewCounts.needs_revision} | rejected=${reviewCounts.rejected} | deferred=${reviewCounts.deferred}`,
     `Type Counts: method=${typeCounts.method_candidate} | skill=${typeCounts.skill_candidate} | flow=${typeCounts.flow_pattern}`,
+    `Workflow Counts: pending=${summary.workflowPendingCount} | overdue=${summary.workflowOverdueCount}`,
+    `Checkpoint Workflow Counts: pending=${summary.checkpointWorkflowPendingCount ?? 0} | overdue=${summary.checkpointWorkflowOverdueCount ?? 0}`,
+    `Governance: reviewers=${governanceConfig.reviewers.length} | templates=${governanceConfig.templates.length}`,
+    `Governance Paths: ${summary.governanceConfigPath ?? "(none)"} | ${summary.notificationsPath ?? "(none)"} | ${summary.notificationDispatchesPath ?? "(none)"}`,
     `Publish Count: ${summary.publishRecords.items.length}`,
+    `Dispatch Count: total=${dispatchCounts.total} | channels=${Object.entries(dispatchCounts.byChannel ?? {}).map(([key, value]) => `${key}=${value}`).join(", ") || "(none)"} | status=${Object.entries(dispatchCounts.byStatus ?? {}).map(([key, value]) => `${key}=${value}`).join(", ") || "(none)"}`,
     `Cross Goal Matches: ${summary.crossGoal.items.length} / scanned=${summary.crossGoal.goalsScanned}`,
     `Cross Goal Paths: ${summary.crossGoal.markdownPath} | ${summary.crossGoal.jsonPath}`,
     `Actionable Reviews:\n${actionable}`,
+    `Overdue Reviews:\n${overdue}`,
+    `Actionable Checkpoints:\n${actionableCheckpoints}`,
+    `Templates:\n${templates}`,
+    `Recent Notifications:\n${recentNotifications}`,
+    `Recent Dispatches:\n${recentDispatches}`,
     `Recent Publish Records:\n${published}`,
     `Cross Goal Focus:\n${crossGoal}`,
+    `Recommendations:\n${recommendations}`,
+  ].join("\n");
+}
+
+export function formatSuggestionReviewWorkflowScanResult(
+  result: import("../../types.js").GoalSuggestionReviewWorkflowScanResultRecord,
+): string {
+  const items = result.items.length > 0
+    ? result.items.map((item, index) =>
+      `${index + 1}. [${item.action}] ${item.reviewId} | stage=${item.stageIndex + 1} | overdue=${item.overdue ? "yes" : "no"} | escalated=${item.escalated ? "yes" : "no"}${item.escalatedTo ? ` | to=${item.escalatedTo}` : ""}`,
+    ).join("\n")
+    : "(none)";
+  const recommendations = result.recommendations.length > 0
+    ? result.recommendations.map((item, index) => `${index + 1}. ${item}`).join("\n")
+    : "(none)";
+  return [
+    `Scanned At: ${result.scannedAt}`,
+    `Summary: ${result.summary}`,
+    `Workflow Count: scanned=${result.scannedCount} | overdue=${result.overdueCount} | escalated=${result.escalatedCount}`,
+    `Items:\n${items}`,
+    `Recommendations:\n${recommendations}`,
+  ].join("\n");
+}
+
+export function formatApprovalWorkflowScanResult(
+  result: import("../../types.js").GoalApprovalWorkflowScanResultRecord,
+): string {
+  const checkpointItems = result.checkpointItems.length > 0
+    ? result.checkpointItems.map((item, index) =>
+      `${index + 1}. [${item.action}] ${item.targetId} | stage=${item.stageIndex + 1} | overdue=${item.overdue ? "yes" : "no"} | escalated=${item.escalated ? "yes" : "no"}`,
+    ).join("\n")
+    : "(none)";
+  const notifications = result.notifications.length > 0
+    ? result.notifications.map((item, index) =>
+      `${index + 1}. [${item.kind}] ${item.targetType}:${item.targetId}${item.recipient ? ` | to=${item.recipient}` : ""} | ${item.message}`,
+    ).join("\n")
+    : "(none)";
+  const dispatches = result.dispatches.length > 0
+    ? result.dispatches.map((item, index) =>
+      `${index + 1}. [${item.channel}/${item.status}] ${item.targetType}:${item.targetId}${item.recipient ? ` | to=${item.recipient}` : ""}${item.routeKey ? ` | route=${item.routeKey}` : ""} | ${item.message}`,
+    ).join("\n")
+    : "(none)";
+  const recommendations = result.recommendations.length > 0
+    ? result.recommendations.map((item, index) => `${index + 1}. ${item}`).join("\n")
+    : "(none)";
+  return [
+    `Scanned At: ${result.scannedAt}`,
+    `Summary: ${result.summary}`,
+    `Review Scan: ${result.reviewResult.summary}`,
+    `Checkpoint Items:\n${checkpointItems}`,
+    `Notifications:\n${notifications}`,
+    `Dispatches:\n${dispatches}`,
     `Recommendations:\n${recommendations}`,
   ].join("\n");
 }

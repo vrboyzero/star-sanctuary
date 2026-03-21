@@ -93,6 +93,10 @@ export const GOAL_UPDATE_PROTOCOL: Record<GoalUpdateReason, { areas: GoalUpdateA
     areas: ["goal", "progress", "capability"],
     summary: "suggestion review escalation 更新后会影响 goal 摘要、timeline 与建议/能力相关视图。",
   },
+  suggestion_review_scanned: {
+    areas: ["goal", "progress", "capability"],
+    summary: "suggestion review SLA 扫描后会影响 goal 摘要、timeline 与建议/能力相关视图。",
+  },
   suggestion_published: {
     areas: ["goal", "progress", "capability"],
     summary: "suggestion 发布后会影响 goal 摘要、timeline 与建议/能力相关视图。",

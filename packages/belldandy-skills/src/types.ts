@@ -178,10 +178,13 @@ export type GoalCheckpointItemStatus =
 
 export type GoalCheckpointHistoryAction =
   | "requested"
+  | "reviewed"
   | "approved"
   | "rejected"
   | "expired"
-  | "reopened";
+  | "reopened"
+  | "escalated"
+  | "reminded";
 
 export type GoalCheckpointPolicyModeRecord = "none" | "single" | "strict";
 
@@ -199,10 +202,25 @@ export type GoalCheckpointPolicyRecord = {
   approvalMode: GoalCheckpointPolicyModeRecord;
   requiredRequestFields: GoalCheckpointPolicyFieldRecord[];
   requiredDecisionFields: GoalCheckpointPolicyFieldRecord[];
+  templateId?: string;
+  workflowMode?: GoalSuggestionReviewWorkflowModeRecord;
+  reviewers?: string[];
+  reviewerRoles?: string[];
+  minApprovals?: number;
+  stages?: Array<{
+    title?: string;
+    reviewers: string[];
+    reviewerRoles?: string[];
+    minApprovals?: number;
+    slaHours?: number;
+    reminderMinutes?: number[];
+  }>;
   suggestedReviewer?: string;
   suggestedReviewerRole?: string;
   suggestedSlaHours?: number;
+  reminderMinutes?: number[];
   escalationMode?: "none" | "manual";
+  escalationReviewer?: string;
   rationale?: string[];
 };
 
@@ -263,6 +281,7 @@ export type GoalCheckpointRecord = {
   createdAt: string;
   updatedAt: string;
   policy?: GoalCheckpointPolicyRecord;
+  workflow?: GoalSuggestionReviewWorkflowRecord;
   history: GoalCheckpointHistoryRecord[];
 };
 
@@ -335,12 +354,27 @@ export type GoalCapabilityPlanCheckpointPolicyRecord = {
   approvalMode: GoalCheckpointPolicyModeRecord;
   requiredRequestFields: GoalCheckpointPolicyFieldRecord[];
   requiredDecisionFields: GoalCheckpointPolicyFieldRecord[];
+  templateId?: string;
+  workflowMode?: GoalSuggestionReviewWorkflowModeRecord;
+  reviewers?: string[];
+  reviewerRoles?: string[];
+  minApprovals?: number;
+  stages?: Array<{
+    title?: string;
+    reviewers: string[];
+    reviewerRoles?: string[];
+    minApprovals?: number;
+    slaHours?: number;
+    reminderMinutes?: number[];
+  }>;
   suggestedTitle?: string;
   suggestedNote?: string;
   suggestedReviewer?: string;
   suggestedReviewerRole?: string;
   suggestedSlaHours?: number;
+  reminderMinutes?: number[];
   escalationMode?: "none" | "manual";
+  escalationReviewer?: string;
 };
 
 export type GoalCapabilityPlanActualUsageRecord = {
@@ -727,9 +761,11 @@ export type GoalSuggestionReviewWorkflowEscalationEventRecord = {
 export type GoalSuggestionReviewWorkflowEscalationRecord = {
   mode: GoalSuggestionReviewWorkflowEscalationModeRecord;
   count: number;
+  defaultReviewer?: string;
   lastEscalatedAt?: string;
   escalatedTo?: string;
   escalatedBy?: string;
+  overdueAt?: string;
   reason?: string;
   history: GoalSuggestionReviewWorkflowEscalationEventRecord[];
 };
@@ -747,6 +783,7 @@ export type GoalSuggestionReviewWorkflowStageRecord = {
   startedAt: string;
   decidedAt?: string;
   slaAt?: string;
+  reminderMinutes?: number[];
   escalation: GoalSuggestionReviewWorkflowEscalationRecord;
 };
 
@@ -784,6 +821,43 @@ export type GoalSuggestionReviewStateRecord = {
   version: 1;
   items: GoalSuggestionReviewItemRecord[];
   syncedAt?: string;
+};
+
+export type GoalSuggestionReviewWorkflowScanActionRecord = "noop" | "overdue" | "auto_escalated";
+
+export type GoalSuggestionReviewWorkflowScanItemRecord = {
+  goalId: string;
+  reviewId: string;
+  suggestionType: GoalSuggestionTypeRecord;
+  suggestionId: string;
+  title: string;
+  nodeId?: string;
+  runId?: string;
+  workflowMode: GoalSuggestionReviewWorkflowModeRecord;
+  stageId: string;
+  stageTitle: string;
+  stageIndex: number;
+  status: GoalSuggestionReviewStatusRecord;
+  reviewer?: string;
+  slaAt?: string;
+  overdue: boolean;
+  overdueMinutes?: number;
+  escalated: boolean;
+  action: GoalSuggestionReviewWorkflowScanActionRecord;
+  escalatedTo?: string;
+  scannedAt: string;
+};
+
+export type GoalSuggestionReviewWorkflowScanResultRecord = {
+  goal: GoalRecord;
+  reviews: GoalSuggestionReviewStateRecord;
+  scannedAt: string;
+  scannedCount: number;
+  overdueCount: number;
+  escalatedCount: number;
+  items: GoalSuggestionReviewWorkflowScanItemRecord[];
+  summary: string;
+  recommendations: string[];
 };
 
 export type GoalSuggestionPublishAssetTypeRecord = "method" | "skill";
@@ -827,11 +901,163 @@ export type GoalSuggestionReviewTypeCountsRecord = {
   flow_pattern: number;
 };
 
+export type GoalReviewerDirectoryEntryRecord = {
+  id: string;
+  name: string;
+  reviewerRole?: string;
+  channels?: GoalReviewDeliveryChannelRecord[];
+  tags?: string[];
+  active: boolean;
+};
+
+export type GoalReviewTemplateRecord = {
+  id: string;
+  title: string;
+  target: "suggestion_review" | "checkpoint" | "all";
+  enabled: boolean;
+  mode: GoalSuggestionReviewWorkflowModeRecord;
+  reviewers?: string[];
+  reviewerRoles?: string[];
+  minApprovals?: number;
+  stages?: Array<{
+    title?: string;
+    reviewers: string[];
+    reviewerRoles?: string[];
+    minApprovals?: number;
+    slaHours?: number;
+    reminderMinutes?: number[];
+  }>;
+  slaHours?: number;
+  reminderMinutes?: number[];
+  escalationMode?: GoalSuggestionReviewWorkflowEscalationModeRecord;
+  escalationReviewer?: string;
+  suggestionTypes?: GoalSuggestionTypeRecord[];
+  riskLevels?: GoalCapabilityRiskLevel[];
+  approvalModes?: GoalCheckpointPolicyModeRecord[];
+};
+
+export type GoalReviewGovernanceConfigRecord = {
+  version: 1;
+  reviewers: GoalReviewerDirectoryEntryRecord[];
+  templates: GoalReviewTemplateRecord[];
+  defaults: {
+    suggestionTemplateId?: string;
+    checkpointTemplateByRisk?: Partial<Record<GoalCapabilityRiskLevel, string>>;
+    checkpointTemplateByApprovalMode?: Partial<Record<GoalCheckpointPolicyModeRecord, string>>;
+    reminderMinutes?: number[];
+    notificationChannels?: GoalReviewDeliveryChannelRecord[];
+    notificationRoutes?: Partial<Record<GoalReviewDeliveryChannelRecord, string>>;
+  };
+  updatedAt: string;
+};
+
+export type GoalReviewNotificationKindRecord = "sla_reminder" | "sla_overdue" | "auto_escalated";
+
+export type GoalReviewDeliveryChannelRecord =
+  | "goal_detail"
+  | "goal_channel"
+  | "reviewer_inbox"
+  | "org_feed"
+  | "im_dm"
+  | "webhook";
+
+export type GoalReviewNotificationRecord = {
+  id: string;
+  goalId: string;
+  targetType: "suggestion_review" | "checkpoint";
+  targetId: string;
+  nodeId?: string;
+  stageId?: string;
+  recipient?: string;
+  kind: GoalReviewNotificationKindRecord;
+  message: string;
+  dedupeKey: string;
+  createdAt: string;
+};
+
+export type GoalReviewNotificationStateRecord = {
+  version: 1;
+  items: GoalReviewNotificationRecord[];
+};
+
+export type GoalReviewNotificationDispatchStatusRecord =
+  | "pending"
+  | "materialized"
+  | "delivered"
+  | "skipped"
+  | "acked"
+  | "failed";
+
+export type GoalReviewNotificationDispatchRecord = {
+  id: string;
+  notificationId: string;
+  goalId: string;
+  targetType: "suggestion_review" | "checkpoint";
+  targetId: string;
+  nodeId?: string;
+  stageId?: string;
+  kind: GoalReviewNotificationKindRecord;
+  channel: GoalReviewDeliveryChannelRecord;
+  recipient?: string;
+  routeKey?: string;
+  message: string;
+  dedupeKey: string;
+  status: GoalReviewNotificationDispatchStatusRecord;
+  createdAt: string;
+  updatedAt: string;
+  lastError?: string;
+};
+
+export type GoalReviewNotificationDispatchStateRecord = {
+  version: 1;
+  items: GoalReviewNotificationDispatchRecord[];
+};
+
+export type GoalReviewNotificationDispatchCountsRecord = {
+  total: number;
+  byChannel: Partial<Record<GoalReviewDeliveryChannelRecord, number>>;
+  byStatus: Partial<Record<GoalReviewNotificationDispatchStatusRecord, number>>;
+};
+
+export type GoalApprovalWorkflowScanItemRecord = {
+  targetType: "suggestion_review" | "checkpoint";
+  targetId: string;
+  title: string;
+  nodeId?: string;
+  stageId: string;
+  stageTitle: string;
+  stageIndex: number;
+  reviewer?: string;
+  slaAt?: string;
+  overdue: boolean;
+  overdueMinutes?: number;
+  escalated: boolean;
+  action: GoalSuggestionReviewWorkflowScanActionRecord;
+};
+
+export type GoalApprovalWorkflowScanResultRecord = {
+  goal: GoalRecord;
+  scannedAt: string;
+  reviewResult: GoalSuggestionReviewWorkflowScanResultRecord;
+  checkpointItems: GoalApprovalWorkflowScanItemRecord[];
+  notifications: GoalReviewNotificationRecord[];
+  dispatches: GoalReviewNotificationDispatchRecord[];
+  summary: string;
+  recommendations: string[];
+};
+
 export type GoalReviewGovernanceSummaryRecord = {
   goal: GoalRecord;
   generatedAt: string;
+  governanceConfig: GoalReviewGovernanceConfigRecord;
+  governanceConfigPath: string;
   reviews: GoalSuggestionReviewStateRecord;
   publishRecords: GoalSuggestionPublishStateRecord;
+  notifications: GoalReviewNotificationStateRecord;
+  notificationsPath: string;
+  notificationDispatches: GoalReviewNotificationDispatchStateRecord;
+  notificationDispatchesPath: string;
+  notificationDispatchCounts: GoalReviewNotificationDispatchCountsRecord;
   crossGoal: {
     goalsScanned: number;
     markdownPath: string;
@@ -840,7 +1066,13 @@ export type GoalReviewGovernanceSummaryRecord = {
   };
   reviewStatusCounts: GoalSuggestionReviewStatusCountsRecord;
   reviewTypeCounts: GoalSuggestionReviewTypeCountsRecord;
+  workflowPendingCount: number;
+  workflowOverdueCount: number;
   actionableReviews: GoalSuggestionReviewItemRecord[];
+  overdueReviews: GoalSuggestionReviewItemRecord[];
+  actionableCheckpoints: GoalCheckpointRecord[];
+  checkpointWorkflowPendingCount: number;
+  checkpointWorkflowOverdueCount: number;
   summary: string;
   recommendations: string[];
 };
@@ -1063,6 +1295,20 @@ export type GoalCapabilities = {
     checkpoints: GoalCheckpointStateRecord;
     checkpoint: GoalCheckpointRecord;
   }>;
+  escalateCheckpoint?: (goalId: string, nodeId: string, input?: {
+    checkpointId?: string;
+    escalatedBy?: string;
+    escalatedTo?: string;
+    reason?: string;
+    force?: boolean;
+    runId?: string;
+  }) => Promise<{
+    goal: GoalRecord;
+    graph: GoalTaskGraphRecord;
+    node: GoalTaskNodeRecord;
+    checkpoints: GoalCheckpointStateRecord;
+    checkpoint: GoalCheckpointRecord;
+  }>;
   listCapabilityPlans?: (goalId: string) => Promise<GoalCapabilityPlanStateRecord>;
   getCapabilityPlan?: (goalId: string, nodeId: string) => Promise<GoalCapabilityPlanRecord | null>;
   saveCapabilityPlan?: (goalId: string, nodeId: string, input: {
@@ -1136,11 +1382,16 @@ export type GoalCapabilities = {
     content: string;
   }>;
   getReviewGovernanceSummary?: (goalId: string) => Promise<GoalReviewGovernanceSummaryRecord>;
+  scanApprovalWorkflows?: (goalId: string, input?: {
+    now?: string;
+    autoEscalate?: boolean;
+  }) => Promise<GoalApprovalWorkflowScanResultRecord>;
   listSuggestionReviews?: (goalId: string) => Promise<GoalSuggestionReviewStateRecord>;
   configureSuggestionReviewWorkflow?: (goalId: string, input: {
     reviewId?: string;
     suggestionType?: GoalSuggestionTypeRecord;
     suggestionId?: string;
+    templateId?: string;
     mode: GoalSuggestionReviewWorkflowModeRecord;
     reviewers?: string[];
     reviewerRoles?: string[];
@@ -1151,6 +1402,7 @@ export type GoalCapabilities = {
       reviewerRoles?: string[];
       minApprovals?: number;
       slaHours?: number;
+      reminderMinutes?: number[];
     }>;
     slaHours?: number;
     escalationMode?: GoalSuggestionReviewWorkflowEscalationModeRecord;
@@ -1161,6 +1413,10 @@ export type GoalCapabilities = {
     reviews: GoalSuggestionReviewStateRecord;
     review: GoalSuggestionReviewItemRecord;
   }>;
+  scanSuggestionReviewWorkflows?: (goalId: string, input?: {
+    now?: string;
+    autoEscalate?: boolean;
+  }) => Promise<GoalSuggestionReviewWorkflowScanResultRecord>;
   decideSuggestionReview?: (goalId: string, input: {
     reviewId?: string;
     suggestionType?: GoalSuggestionTypeRecord;
