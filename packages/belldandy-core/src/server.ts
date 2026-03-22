@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -10,13 +11,15 @@ import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
 
 import { getGlobalMemoryManager } from "@belldandy/memory";
 import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig, uploadTokenUsage } from "@belldandy/protocol";
-import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type ModelProfile } from "@belldandy/agent";
+import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile } from "@belldandy/agent";
 import type {
   GatewayFrame,
   GatewayReqFrame,
   GatewayResFrame,
   GatewayEventFrame,
   MessageSendParams,
+  ChatMessageMeta,
+  ConversationMetaMessage,
   ConnectRequestFrame,
   BelldandyRole,
   GatewayAuth,
@@ -331,6 +334,15 @@ async function writeTextFileAtomic(filePath: string, content: string, options: {
   await fsp.rename(tmpFile, filePath);
 }
 
+async function writeBinaryFileAtomic(filePath: string, content: Buffer, options: { ensureParent?: boolean; mode?: number } = {}): Promise<void> {
+  if (options.ensureParent) {
+    await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: options.mode });
+  }
+  const tmpFile = `${filePath}.${crypto.randomUUID()}.tmp`;
+  await fsp.writeFile(tmpFile, content);
+  await fsp.rename(tmpFile, filePath);
+}
+
 async function updateEnvFile(filePath: string, changes: Record<string, string>): Promise<boolean> {
   if (Object.keys(changes).length === 0) return true;
 
@@ -379,6 +391,122 @@ async function updateEnvFile(filePath: string, changes: Record<string, string>):
   } catch {
     return false;
   }
+}
+
+const AVATAR_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+const AVATAR_ALLOWED_MIME_TYPES = new Map<string, string>([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/jpg", ".jpg"],
+  ["image/gif", ".gif"],
+  ["image/webp", ".webp"],
+]);
+
+type AvatarUploadRole = "user" | "agent";
+
+type AvatarUploadFileLike = File;
+
+function normalizeAvatarUploadRole(value: unknown): AvatarUploadRole | null {
+  const role = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (role === "user" || role === "agent") {
+    return role;
+  }
+  return null;
+}
+
+function isAvatarUploadFileLike(value: FormDataEntryValue | null): value is AvatarUploadFileLike {
+  return Boolean(value)
+    && typeof value === "object"
+    && typeof (value as AvatarUploadFileLike).arrayBuffer === "function"
+    && typeof (value as AvatarUploadFileLike).size === "number"
+    && typeof (value as AvatarUploadFileLike).type === "string"
+    && typeof (value as AvatarUploadFileLike).name === "string";
+}
+
+function resolveAvatarUploadExtension(file: AvatarUploadFileLike): string | null {
+  const mimeType = file.type.trim().toLowerCase();
+  if (AVATAR_ALLOWED_MIME_TYPES.has(mimeType)) {
+    return AVATAR_ALLOWED_MIME_TYPES.get(mimeType) ?? null;
+  }
+
+  const ext = path.extname(file.name).toLowerCase();
+  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg" || ext === ".gif" || ext === ".webp") {
+    if (ext === ".jpeg") return ".jpg";
+    return ext;
+  }
+
+  return null;
+}
+
+function replaceAvatarMarkdown(content: string, avatarPath: string): string {
+  const avatarLinePattern = /^(\s*[-*]?\s*\*\*头像[：:]\*\*\s*)(.*)$/m;
+  if (avatarLinePattern.test(content)) {
+    return content.replace(avatarLinePattern, `$1${avatarPath}`);
+  }
+
+  const emojiLinePattern = /^(\s*[-*]?\s*\*\*Emoji[：:]\*\*\s*.*)$/m;
+  const avatarLine = `- **头像：** ${avatarPath}`;
+  if (!content.trim()) {
+    return `${avatarLine}\n`;
+  }
+  if (emojiLinePattern.test(content)) {
+    return content.replace(emojiLinePattern, `$1\n${avatarLine}`);
+  }
+
+  const nameLinePattern = /^(\s*[-*]?\s*\*\*名字[：:]\*\*\s*.*)$/m;
+  if (nameLinePattern.test(content)) {
+    return content.replace(nameLinePattern, `$1\n${avatarLine}`);
+  }
+
+  return `${content.trimEnd()}\n\n${avatarLine}\n`;
+}
+
+function readHeaderValue(headers: http.IncomingHttpHeaders, name: string): string | undefined {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    return value[0]?.trim() || undefined;
+  }
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  return undefined;
+}
+
+function isAuthorizedAvatarUpload(req: http.IncomingMessage, auth: GatewayServerOptions["auth"]): boolean {
+  if (auth.mode === "none") {
+    return true;
+  }
+
+  if (auth.mode === "token") {
+    const bearer = readHeaderValue(req.headers, "authorization");
+    const token = bearer?.startsWith("Bearer ") ? bearer.slice("Bearer ".length).trim() : "";
+    return Boolean(auth.token?.trim()) && token === auth.token?.trim();
+  }
+
+  const password = readHeaderValue(req.headers, "x-belldandy-password");
+  return Boolean(auth.password?.trim()) && password === auth.password?.trim();
+}
+
+async function requestToFormData(req: http.IncomingMessage): Promise<FormData> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (typeof value === "undefined") continue;
+    if (Array.isArray(value)) {
+      headers.set(name, value.join(", "));
+    } else {
+      headers.set(name, value);
+    }
+  }
+
+  const url = `http://127.0.0.1${req.url ?? "/"}`;
+  const request = new Request(url, {
+    method: req.method ?? "POST",
+    headers,
+    body: Readable.toWeb(req) as unknown as BodyInit,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+
+  return request.formData();
 }
 
 type ToolControlChangesLike = {
@@ -452,8 +580,53 @@ function buildToolControlDisabledPayloadLocally(disabled: {
   };
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatLocalMessageTime(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absOffset = Math.abs(offsetMinutes);
+  const hours = Math.floor(absOffset / 60);
+  const minutes = absOffset % 60;
+  const offsetText = minutes > 0 ? `GMT${sign}${hours}:${pad2(minutes)}` : `GMT${sign}${hours}`;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())} ${offsetText}`;
+}
+
+function toChatMessageMeta(timestampMs: number, isLatest = false): ChatMessageMeta {
+  return {
+    timestampMs,
+    displayTimeText: formatLocalMessageTime(timestampMs),
+    isLatest,
+  };
+}
+
+function normalizeConversationMessage(message: ConversationMessage, isLatest: boolean): ConversationMetaMessage {
+  return {
+    role: message.role,
+    content: message.content,
+    timestampMs: message.timestamp,
+    displayTimeText: formatLocalMessageTime(message.timestamp),
+    isLatest,
+    agentId: message.agentId,
+    clientContext: message.clientContext,
+  };
+}
+
+function buildConversationMetaMessages(conversation?: Conversation): ConversationMetaMessage[] {
+  if (!conversation?.messages?.length) return [];
+  return conversation.messages.map((message, index) => normalizeConversationMessage(message, index === conversation.messages.length - 1));
+}
+
 export async function startGatewayServer(opts: GatewayServerOptions): Promise<GatewayServer> {
   await ensureWebRoot(opts.webRoot);
+  const stateDir = opts.stateDir ?? resolveStateDir();
+  const avatarDir = path.join(stateDir, "avatar");
 
   const log: GatewayLog = opts.logger
     ? {
@@ -480,6 +653,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     app.use("/generated", express.static(generatedDir));
     log.info("gateway", `Static: serving /generated -> ${generatedDir}`);
   }
+  app.use("/avatar", express.static(avatarDir));
+  log.info("gateway", `Static: serving /avatar -> ${avatarDir}`);
 
   app.use(express.static(opts.webRoot));
   app.get("/", (_req, res) => {
@@ -493,6 +668,112 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       timestamp: new Date().toISOString(),
       version: BELLDANDY_VERSION,
     });
+  });
+
+  app.post("/api/avatar/upload", async (req, res) => {
+    try {
+      if (!isAuthorizedAvatarUpload(req, opts.auth)) {
+        const challenge = opts.auth.mode === "token"
+          ? { header: "WWW-Authenticate", value: 'Bearer realm="belldandy-upload"' }
+          : null;
+        if (challenge) {
+          res.setHeader(challenge.header, challenge.value);
+        }
+        return res.status(401).json({
+          ok: false,
+          error: {
+            code: "unauthorized",
+            message: opts.auth.mode === "password"
+              ? "Missing or invalid x-belldandy-password header."
+              : "Missing or invalid bearer token.",
+          },
+        });
+      }
+
+      const formData = await requestToFormData(req);
+      const role = normalizeAvatarUploadRole(formData.get("role"));
+      if (!role) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "invalid_role", message: 'role must be "user" or "agent".' },
+        });
+      }
+
+      const rawFile = formData.get("file");
+      if (!isAvatarUploadFileLike(rawFile)) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "missing_file", message: "file is required." },
+        });
+      }
+
+      if (rawFile.size <= 0) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "missing_file", message: "file is empty." },
+        });
+      }
+      if (rawFile.size > AVATAR_UPLOAD_MAX_BYTES) {
+        return res.status(413).json({
+          ok: false,
+          error: { code: "file_too_large", message: `file exceeds ${AVATAR_UPLOAD_MAX_BYTES} bytes.` },
+        });
+      }
+
+      const ext = resolveAvatarUploadExtension(rawFile);
+      if (!ext) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "invalid_file_type", message: "Only png, jpg, gif, and webp images are allowed." },
+        });
+      }
+
+      await fsp.mkdir(avatarDir, { recursive: true });
+      const fileName = `avatar-${role}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}${ext}`;
+      const avatarPath = `/avatar/${fileName}`;
+      const targetFile = path.join(avatarDir, fileName);
+      const mdPath = path.join(stateDir, role === "user" ? "USER.md" : "IDENTITY.md");
+
+      let previousMarkdown = "";
+      try {
+        previousMarkdown = await fsp.readFile(mdPath, "utf-8");
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException | undefined;
+        if (err?.code === "ENOENT") {
+          return res.status(404).json({
+            ok: false,
+            error: { code: "md_not_found", message: `${path.basename(mdPath)} does not exist.` },
+          });
+        }
+        throw error;
+      }
+
+      const fileBuffer = Buffer.from(await rawFile.arrayBuffer());
+      await writeBinaryFileAtomic(targetFile, fileBuffer, { ensureParent: true, mode: 0o600 });
+
+      try {
+        const nextMarkdown = replaceAvatarMarkdown(previousMarkdown, avatarPath);
+        await writeTextFileAtomic(mdPath, nextMarkdown, { ensureParent: true, mode: 0o600 });
+      } catch (error) {
+        await fsp.unlink(targetFile).catch(() => {});
+        return res.status(500).json({
+          ok: false,
+          error: { code: "md_update_failed", message: error instanceof Error ? error.message : String(error) },
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        role,
+        avatarPath,
+        mdPath,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: { code: "write_failed", message: error instanceof Error ? error.message : String(error) },
+      });
+    }
   });
 
   // Community message endpoint (for office.goddess.ai integration)
@@ -879,11 +1160,11 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   };
 
   // 初始化会话存储
-  const stateDir = opts.stateDir ?? resolveStateDir();
   const sessionsDir = path.join(stateDir, "sessions");
 
   // Ensure sessions dir exists
   await fsp.mkdir(sessionsDir, { recursive: true });
+  await fsp.mkdir(avatarDir, { recursive: true });
 
   const conversationStore = opts.conversationStore ?? new ConversationStore({
     ...opts.conversationStoreOptions,
@@ -1309,9 +1590,12 @@ async function handleReq(
         };
       }
 
-      ctx.conversationStore.addMessage(conversationId, "user", userText, {
+      const userMessageTimestamp = Date.now();
+      const userMessage = ctx.conversationStore.addMessage(conversationId, "user", userText, {
         agentId: requestedAgentId,
         channel: "webchat",
+        timestampMs: userMessageTimestamp,
+        clientContext: parsed.value.clientContext,
       });
 
       ctx.log.debug("message", "Processing message.send", {
@@ -1521,9 +1805,19 @@ async function handleReq(
             userUuid: effectiveUserUuid, // 优先使用 message.send 的 userUuid
             senderInfo: parsed.value.senderInfo, // 传递发送者信息
             roomContext: normalizedRoomContext, // 传递房间上下文
+            meta: {
+              currentMessageTime: {
+                timestampMs: userMessage.timestamp,
+                displayTimeText: formatLocalMessageTime(userMessage.timestamp),
+                isLatest: true,
+                role: "user",
+                clientContext: parsed.value.clientContext,
+              },
+            },
           };
           if (textAttachmentCount > 0) {
             runInput.meta = {
+              ...(runInput.meta ?? {}),
               attachmentStats: {
                 textAttachmentCount,
                 textAttachmentChars,
@@ -1536,6 +1830,7 @@ async function handleReq(
             };
           } else if (audioTranscriptChars > 0) {
             runInput.meta = {
+              ...(runInput.meta ?? {}),
               attachmentStats: {
                 textAttachmentCount: 0,
                 textAttachmentChars: 0,
@@ -1557,6 +1852,8 @@ async function handleReq(
 
           const isTts = ctx.ttsEnabled?.() ?? false;
           let fullResponse = "";
+          let finalEventText = "";
+          let receivedFinal = false;
 
           for await (const item of agent.run(runInput)) {
             if (item.type === "status") {
@@ -1576,11 +1873,8 @@ async function handleReq(
               }
             }
             if (item.type === "final") {
+              receivedFinal = true;
               fullResponse = item.text;
-              // TTS mode: defer chat.final until after TTS generation
-              if (!isTts) {
-                sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: item.text } });
-              }
             }
             if (item.type === "usage") {
               latestUsage = {
@@ -1622,42 +1916,70 @@ async function handleReq(
 
           maybeEmitAutoRunTaskResult();
 
+          finalEventText = fullResponse;
+
           // Server-side auto TTS: generate audio and send combined response
           if (isTts && fullResponse && ctx.ttsSynthesize) {
             sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "generating_audio" } });
             const ttsResult = await ctx.ttsSynthesize(fullResponse);
             if (ttsResult) {
-              const finalWithAudio = ttsResult.htmlAudio + "\n\n" + fullResponse;
-              sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: finalWithAudio } });
-            } else {
-              // TTS failed, fallback to text-only
-              sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: fullResponse } });
+              finalEventText = ttsResult.htmlAudio + "\n\n" + fullResponse;
             }
-          } else if (isTts && fullResponse) {
-            // TTS enabled but no synthesize function — send text-only
-            sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: fullResponse } });
           }
 
-          if (fullResponse) {
+          if (receivedFinal) {
             // Strip <audio> tags and download links before persisting — leave no trace for LLM to copy
             const sanitized = fullResponse
               .replace(/<audio[^>]*>.*?<\/audio>/gi, "")
               .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
               .replace(/\n{3,}/g, "\n\n")
               .trim();
-            ctx.conversationStore.addMessage(conversationId, "assistant", sanitized || fullResponse, {
-              agentId: requestedAgentId,
+            let assistantTimestamp = Date.now();
+            if (sanitized || fullResponse) {
+              const assistantMessage = ctx.conversationStore.addMessage(conversationId, "assistant", sanitized || fullResponse, {
+                agentId: requestedAgentId,
+                timestampMs: assistantTimestamp,
+              });
+              assistantTimestamp = assistantMessage.timestamp;
+            }
+            sendEvent(ws, {
+              type: "event",
+              event: "chat.final",
+              payload: {
+                conversationId,
+                role: "assistant",
+                text: finalEventText || fullResponse,
+                messageMeta: toChatMessageMeta(assistantTimestamp, true),
+              },
             });
           }
         } catch (err) {
           maybeEmitAutoRunTaskResult();
           ctx.log.error("agent", "Agent run failed", err);
+          const errorTimestamp = Date.now();
           sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "error" } });
-          sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: `Error: ${String(err)}` } });
+          sendEvent(ws, {
+            type: "event",
+            event: "chat.final",
+            payload: {
+              conversationId,
+              role: "assistant",
+              text: `Error: ${String(err)}`,
+              messageMeta: toChatMessageMeta(errorTimestamp, true),
+            },
+          });
         }
       })();
 
-      return { type: "res", id: req.id, ok: true, payload: { conversationId } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          conversationId,
+          messageMeta: toChatMessageMeta(userMessage.timestamp, true),
+        },
+      };
     }
 
     case "tool_settings.confirm": {
@@ -3567,12 +3889,14 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
       }
 
+      const conversation = ctx.conversationStore.get(conversationId);
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
           conversationId,
+          messages: buildConversationMetaMessages(conversation),
           taskTokenResults: ctx.conversationStore.getTaskTokenResults(conversationId, limit),
         },
       };
@@ -3628,12 +3952,28 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   const agentId = typeof obj.agentId === "string" && obj.agentId.trim() ? obj.agentId.trim() : undefined;
   const modelId = typeof obj.modelId === "string" && obj.modelId.trim() ? obj.modelId.trim() : undefined;
   const userUuid = typeof obj.userUuid === "string" && obj.userUuid.trim() ? obj.userUuid.trim() : undefined;
+  const clientContextObj = obj.clientContext && typeof obj.clientContext === "object"
+    ? obj.clientContext as Record<string, unknown>
+    : undefined;
+  const clientContext = clientContextObj
+    ? {
+      sentAtMs: typeof clientContextObj.sentAtMs === "number"
+        ? clientContextObj.sentAtMs as number
+        : undefined,
+      timezoneOffsetMinutes: typeof clientContextObj.timezoneOffsetMinutes === "number"
+        ? clientContextObj.timezoneOffsetMinutes as number
+        : undefined,
+      locale: typeof clientContextObj.locale === "string"
+        ? clientContextObj.locale.trim() || undefined
+        : undefined,
+    }
+    : undefined;
 
   // 解析 senderInfo 和 roomContext（用于 office.goddess.ai 社区）
   const senderInfo = obj.senderInfo && typeof obj.senderInfo === "object" ? obj.senderInfo as any : undefined;
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
-  return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext } };
+  return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext, clientContext } };
 }
 
 function parseToolSettingsConfirmParams(

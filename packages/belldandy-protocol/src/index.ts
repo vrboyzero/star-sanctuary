@@ -85,6 +85,11 @@ export type MessageSendParams = {
   conversationId?: string;
   text: string;
   from?: string;
+  clientContext?: {
+    sentAtMs?: number;
+    timezoneOffsetMinutes?: number;
+    locale?: string;
+  };
   /** 指定使用的 Agent Profile ID（可选，缺省使用 "default"） */
   agentId?: string;
   /** 指定使用的模型 ID（可选，缺省使用默认模型） */
@@ -152,9 +157,31 @@ export type ChatDeltaEvent = {
   delta: string;
 };
 
+export type ChatMessageMeta = {
+  timestampMs: number;
+  displayTimeText: string;
+  isLatest?: boolean;
+};
+
 export type ChatFinalEvent = {
   conversationId: string;
   text: string;
+  role?: "user" | "assistant";
+  messageMeta?: ChatMessageMeta;
+};
+
+export type ConversationMetaMessage = {
+  role: "user" | "assistant";
+  content: string;
+  timestampMs: number;
+  displayTimeText: string;
+  isLatest: boolean;
+  agentId?: string;
+  clientContext?: {
+    sentAtMs?: number;
+    timezoneOffsetMinutes?: number;
+    locale?: string;
+  };
 };
 
 export type AgentStatusEvent = {

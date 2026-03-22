@@ -74,8 +74,16 @@ test("gateway handshake and message.send streams chat", async () => {
   await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId2 && f.ok === true));
   await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
 
+  const sendRes = frames.find((f) => f.type === "res" && f.id === reqId2);
+  expect(sendRes.payload.messageMeta).toMatchObject({
+    isLatest: true,
+  });
   const final = frames.find((f) => f.type === "event" && f.event === "chat.final");
   expect(final.payload.text).toContain("你好");
+  expect(final.payload.messageMeta).toMatchObject({
+    isLatest: true,
+  });
+  expect(typeof final.payload.messageMeta?.timestampMs).toBe("number");
 
   ws.close();
   await closeP;
@@ -99,6 +107,57 @@ test("/health includes version", async () => {
     expect(res.status).toBe(200);
     expect(payload.status).toBe("ok");
     expect(payload.version).toBe(BELLDANDY_VERSION);
+  } finally {
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("/api/avatar/upload writes avatar file and updates USER.md in stateDir", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.writeFile(
+    path.join(stateDir, "USER.md"),
+    "- **名字：** Test User\n- **头像：** 👤\n",
+    "utf-8",
+  );
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const pngBuffer = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=",
+    "base64",
+  );
+
+  try {
+    const formData = new FormData();
+    formData.append("role", "user");
+    formData.append("file", new Blob([pngBuffer], { type: "image/png" }), "avatar.png");
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/avatar/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    const payload = await res.json() as { ok?: boolean; role?: string; avatarPath?: string; mdPath?: string };
+
+    expect(res.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(payload.role).toBe("user");
+    expect(payload.avatarPath).toMatch(/^\/avatar\/avatar-user-\d+-[0-9a-f]{8}\.png$/);
+    expect(payload.mdPath).toBe(path.join(stateDir, "USER.md"));
+
+    const userMd = await fs.promises.readFile(path.join(stateDir, "USER.md"), "utf-8");
+    expect(userMd).toContain(`- **头像：** ${payload.avatarPath}`);
+
+    const avatarFiles = await fs.promises.readdir(path.join(stateDir, "avatar"));
+    expect(avatarFiles).toHaveLength(1);
+
+    const assetRes = await fetch(`http://127.0.0.1:${server.port}${payload.avatarPath}`);
+    expect(assetRes.status).toBe(200);
+    expect(Buffer.from(await assetRes.arrayBuffer()).equals(pngBuffer)).toBe(true);
   } finally {
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
@@ -359,6 +418,113 @@ test("message.send emits auto run token result and conversation.meta returns per
       totalTokens: 20,
       auto: true,
     });
+    expect(metaRes.payload.messages).toHaveLength(2);
+    expect(metaRes.payload.messages[0]).toMatchObject({
+      role: "user",
+      content: "统计一下",
+    });
+    expect(metaRes.payload.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "echo:统计一下",
+      isLatest: true,
+    });
+    expect(typeof metaRes.payload.messages[0].timestampMs).toBe("number");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("conversation.meta keeps time metadata on every message and marks only the newest message as latest", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      yield { type: "final" as const, text: `echo:${input.text}` };
+      yield { type: "status" as const, status: "done" };
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => agent,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    const conversationId = "conv-meta-latest";
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-meta-1",
+      method: "message.send",
+      params: { text: "第一轮", conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-meta-1" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.text === "echo:第一轮"));
+
+    const firstSendRes = frames.find((f) => f.type === "res" && f.id === "message-meta-1");
+    const firstFinal = frames.find((f) => f.type === "event" && f.event === "chat.final" && f.payload?.text === "echo:第一轮");
+    expect(firstSendRes.payload.messageMeta).toMatchObject({
+      isLatest: true,
+    });
+    expect(firstFinal.payload.messageMeta).toMatchObject({
+      isLatest: true,
+    });
+    expect(typeof firstSendRes.payload.messageMeta?.timestampMs).toBe("number");
+    expect(typeof firstFinal.payload.messageMeta?.timestampMs).toBe("number");
+    expect(String(firstSendRes.payload.messageMeta?.displayTimeText ?? "").length).toBeGreaterThan(0);
+    expect(String(firstFinal.payload.messageMeta?.displayTimeText ?? "").length).toBeGreaterThan(0);
+
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-meta-2",
+      method: "message.send",
+      params: { text: "第二轮", conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-meta-2" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.text === "echo:第二轮"));
+
+    const metaReqId = "conversation-meta-latest";
+    ws.send(JSON.stringify({
+      type: "req",
+      id: metaReqId,
+      method: "conversation.meta",
+      params: { conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === metaReqId && f.ok === true));
+    const metaRes = frames.find((f) => f.type === "res" && f.id === metaReqId);
+    const messages = metaRes.payload.messages;
+
+    expect(messages).toHaveLength(4);
+    for (const message of messages) {
+      expect(typeof message.timestampMs).toBe("number");
+      expect(String(message.displayTimeText ?? "").length).toBeGreaterThan(0);
+    }
+
+    expect(messages).toMatchObject([
+      { role: "user", content: "第一轮", isLatest: false },
+      { role: "assistant", content: "echo:第一轮", isLatest: false },
+      { role: "user", content: "第二轮", isLatest: false },
+      { role: "assistant", content: "echo:第二轮", isLatest: true },
+    ]);
+    expect(messages.filter((message: { isLatest: boolean }) => message.isLatest)).toHaveLength(1);
   } finally {
     ws.close();
     await closeP;

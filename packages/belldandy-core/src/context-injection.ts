@@ -11,6 +11,7 @@ type ContextInjectionMemoryLike = {
   importance?: string;
   category?: string;
   memoryType?: string;
+  updatedAt?: string;
 };
 
 type RecentTaskSummaryLike = {
@@ -21,6 +22,8 @@ type RecentTaskSummaryLike = {
   status?: string;
   toolNames?: string[];
   artifactPaths?: string[];
+  finishedAt?: string;
+  updatedAt?: string;
 };
 
 type AutoRecallMemoryLike = {
@@ -29,7 +32,63 @@ type AutoRecallMemoryLike = {
   snippet: string;
   score: number;
   summary?: string;
+  updatedAt?: string;
 };
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatLocalTimeLabel(value?: string | number | Date): string | undefined {
+  if (!value) return undefined;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absOffset = Math.abs(offsetMinutes);
+  const hours = Math.floor(absOffset / 60);
+  const minutes = absOffset % 60;
+  const offsetText = minutes > 0
+    ? `GMT${sign}${hours}:${pad2(minutes)}`
+    : `GMT${sign}${hours}`;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())} ${offsetText}`;
+}
+
+function buildTaggedLine(input: {
+  time?: string;
+  latest?: boolean;
+  source?: string;
+  body: string;
+}): string | null {
+  const body = input.body.trim();
+  if (!body) return null;
+  const tags = [input.time, input.latest ? "latest" : undefined, input.source].filter((item): item is string => Boolean(item));
+  return `- [${tags.join(" | ")}] ${body}`;
+}
+
+function extractCurrentMessageBlock(meta: unknown, userInput?: string): string | null {
+  if (!meta || typeof meta !== "object") return null;
+  const currentMessageTime = (meta as Record<string, unknown>).currentMessageTime;
+  if (!currentMessageTime || typeof currentMessageTime !== "object") return null;
+  const payload = currentMessageTime as Record<string, unknown>;
+  const timestampMs = typeof payload.timestampMs === "number" && Number.isFinite(payload.timestampMs)
+    ? payload.timestampMs
+    : undefined;
+  const displayTimeText = typeof payload.displayTimeText === "string" && payload.displayTimeText.trim()
+    ? payload.displayTimeText.trim()
+    : formatLocalTimeLabel(timestampMs);
+  const role = typeof payload.role === "string" && payload.role.trim() ? payload.role.trim() : "user";
+  const body = String(userInput ?? "").trim();
+  if (!body) return null;
+  const tagged = buildTaggedLine({
+    time: displayTimeText,
+    latest: payload.isLatest === true,
+    source: role,
+    body,
+  });
+  if (!tagged) return null;
+  return `<current-turn hint="以下是当前这轮用户输入的时间锚点。若你需要判断时间先后、最近记忆与当前输入的关系，优先参考这一条。">\n${tagged}\n</current-turn>`;
+}
 
 export type ContextInjectionMemoryProvider = {
   getContextInjectionMemories(input: {
@@ -70,6 +129,10 @@ export async function buildContextInjectionPrelude(
   const implicitFilter = { agentId: ctx.agentId ?? null };
   const deduper = createContextInjectionDeduper(event.messages);
   const blocks: string[] = [];
+  const currentTurnBlock = extractCurrentMessageBlock(event.meta, event.userInput);
+  if (currentTurnBlock) {
+    blocks.push(currentTurnBlock);
+  }
 
   if (config.contextInjectionEnabled) {
     const recent = memoryManager.getContextInjectionMemories({
@@ -79,6 +142,11 @@ export async function buildContextInjectionPrelude(
       allowedCategories: config.contextInjectionAllowedCategories,
     });
     if (recent.length > 0) {
+      const latestUpdatedAt = recent.reduce((latest, item) => {
+        const updatedAt = item.updatedAt ? Date.parse(item.updatedAt) : Number.NaN;
+        if (!Number.isFinite(updatedAt)) return latest;
+        return updatedAt > latest ? updatedAt : latest;
+      }, Number.NEGATIVE_INFINITY);
       const lines = recent.flatMap((item) => {
         if (!deduper.shouldIncludeMemory(item)) {
           return [];
@@ -86,7 +154,15 @@ export async function buildContextInjectionPrelude(
         const src = item.sourcePath.split(/[/\\]/).pop() ?? item.sourcePath;
         const label = [item.importance, item.category ?? item.memoryType ?? "memory", src].join("|");
         const body = String(item.summary ?? item.snippet ?? "").trim();
-        return body ? [`- [${label}] ${body}`] : [];
+        const time = formatLocalTimeLabel(item.updatedAt);
+        const latest = Number.isFinite(latestUpdatedAt) && item.updatedAt ? Date.parse(item.updatedAt) === latestUpdatedAt : false;
+        const tagged = buildTaggedLine({
+          time,
+          latest,
+          source: "memory",
+          body: `[${label}] ${body}`,
+        });
+        return tagged ? [tagged] : [];
       });
       if (lines.length > 0) {
         blocks.push(
@@ -100,6 +176,13 @@ export async function buildContextInjectionPrelude(
         agentId: ctx.agentId,
       });
       if (recentTasks.length > 0) {
+        const latestFinishedAt = recentTasks.reduce((latest, task) => {
+          const finishedAt = task.finishedAt ? Date.parse(task.finishedAt) : Number.NaN;
+          const updatedAt = task.updatedAt ? Date.parse(task.updatedAt) : Number.NaN;
+          const candidate = Number.isFinite(finishedAt) ? finishedAt : updatedAt;
+          if (!Number.isFinite(candidate)) return latest;
+          return candidate > latest ? candidate : latest;
+        }, Number.NEGATIVE_INFINITY);
         const taskLines = recentTasks.flatMap((task) => {
           if (!deduper.shouldIncludeTask(task)) {
             return [];
@@ -111,9 +194,19 @@ export async function buildContextInjectionPrelude(
             tools ? `tools=${tools}` : "",
             artifacts ? `artifacts=${artifacts}` : "",
           ].filter(Boolean).join("; ");
-          return [extras
-            ? `- [${task.status ?? "unknown"}] ${title} (${extras})`
-            : `- [${task.status ?? "unknown"}] ${title}`];
+          const body = extras
+            ? `${title} (${extras})`
+            : title;
+          const timeSource = task.finishedAt ?? task.updatedAt;
+          const time = formatLocalTimeLabel(timeSource);
+          const latest = Number.isFinite(latestFinishedAt) && timeSource ? Date.parse(timeSource) === latestFinishedAt : false;
+          const tagged = buildTaggedLine({
+            time,
+            latest,
+            source: "task",
+            body,
+          });
+          return tagged ? [tagged] : [];
         });
         if (taskLines.length > 0) {
           blocks.push(
@@ -138,6 +231,11 @@ export async function buildContextInjectionPrelude(
 
       const filtered = results.filter((item) => item.score >= config.autoRecallMinScore);
       if (filtered.length > 0) {
+        const latestUpdatedAt = filtered.reduce((latest, item) => {
+          const updatedAt = item.updatedAt ? Date.parse(item.updatedAt) : Number.NaN;
+          if (!Number.isFinite(updatedAt)) return latest;
+          return updatedAt > latest ? updatedAt : latest;
+        }, Number.NEGATIVE_INFINITY);
         const lines = filtered.flatMap((item) => {
           if (!deduper.shouldIncludeMemory(item)) {
             return [];
@@ -146,7 +244,15 @@ export async function buildContextInjectionPrelude(
           const snippet = item.snippet.length > 200
             ? `${item.snippet.slice(0, 200)}...`
             : item.snippet;
-          return [`- [${src}, score=${item.score.toFixed(2)}] ${snippet}`];
+          const time = formatLocalTimeLabel(item.updatedAt);
+          const latest = Number.isFinite(latestUpdatedAt) && item.updatedAt ? Date.parse(item.updatedAt) === latestUpdatedAt : false;
+          const tagged = buildTaggedLine({
+            time,
+            latest,
+            source: "memory",
+            body: `[${src}, score=${item.score.toFixed(2)}] ${snippet}`,
+          });
+          return tagged ? [tagged] : [];
         });
         if (lines.length > 0) {
           blocks.push(

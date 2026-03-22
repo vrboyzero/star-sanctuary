@@ -21,6 +21,12 @@ export type ConversationMessage = {
     timestamp: number;
     /** 产生此消息的 Agent Profile ID（多 Agent 预留） */
     agentId?: string;
+    /** 客户端发送上下文（用于诊断和时间回填） */
+    clientContext?: {
+        sentAtMs?: number;
+        timezoneOffsetMinutes?: number;
+        locale?: string;
+    };
 };
 
 /**
@@ -537,9 +543,16 @@ export class ConversationStore {
      * 添加消息到会话
      * 如果会话不存在会自动创建
      */
-    addMessage(id: string, role: "user" | "assistant", content: string, opts?: { agentId?: string; channel?: string }): void {
+    addMessage(
+        id: string,
+        role: "user" | "assistant",
+        content: string,
+        opts?: { agentId?: string; channel?: string; timestampMs?: number; clientContext?: ConversationMessage["clientContext"] },
+    ): ConversationMessage {
         let conv = this.get(id); // get() now handles loadFromFile
-        const now = Date.now();
+        const now = typeof opts?.timestampMs === "number" && Number.isFinite(opts.timestampMs)
+            ? Math.max(0, Math.floor(opts.timestampMs))
+            : Date.now();
         let headerChanged = false;
 
         if (!conv) {
@@ -567,6 +580,7 @@ export class ConversationStore {
 
         const newMessage: ConversationMessage = { role, content, timestamp: now };
         if (opts?.agentId) newMessage.agentId = opts.agentId;
+        if (opts?.clientContext) newMessage.clientContext = opts.clientContext;
         conv.messages.push(newMessage);
         conv.updatedAt = now;
 
@@ -583,6 +597,8 @@ export class ConversationStore {
             }
             this.appendToFile(id, newMessage);
         }
+
+        return newMessage;
     }
 
     /**

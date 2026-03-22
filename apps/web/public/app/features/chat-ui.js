@@ -24,10 +24,126 @@ export function createChatUiFeature({
   getAgentProfile,
   getUserProfile,
   escapeHtml,
+  showNotice,
+  getAvatarUploadHeaders,
+  onAvatarUploaded,
 }) {
   const { messagesEl, chatSection } = refs;
   let markedConfigured = false;
   let copyDelegationBound = false;
+  let avatarUploadInput = null;
+  let avatarUploadBusy = false;
+
+  function pad2(value) {
+    return String(value).padStart(2, "0");
+  }
+
+  function formatLocalTimeShort(timestampMs) {
+    if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) return "";
+    const date = new Date(timestampMs);
+    if (Number.isNaN(date.getTime())) return "";
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+  }
+
+  function formatLocalTimeLong(timestampMs) {
+    if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) return "";
+    const date = new Date(timestampMs);
+    if (Number.isNaN(date.getTime())) return "";
+    const offsetMinutes = -date.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? "+" : "-";
+    const absOffset = Math.abs(offsetMinutes);
+    const hours = Math.floor(absOffset / 60);
+    const minutes = absOffset % 60;
+    const offsetText = minutes > 0 ? `GMT${sign}${hours}:${pad2(minutes)}` : `GMT${sign}${hours}`;
+    return `${formatLocalTimeShort(timestampMs)} ${offsetText}`;
+  }
+
+  function clearLatestMarkers() {
+    if (!messagesEl) return;
+    messagesEl.querySelectorAll(".msg-wrapper[data-latest='true']").forEach((node) => {
+      node.setAttribute("data-latest", "false");
+      const badge = node.querySelector(".msg-latest-badge");
+      if (badge) {
+        badge.classList.add("hidden");
+      }
+    });
+  }
+
+  function ensureMetaRow(bubble) {
+    if (!(bubble instanceof HTMLElement)) return null;
+    const wrapper = bubble.closest(".msg-wrapper");
+    const contentWrapper = bubble.closest(".msg-content-wrapper");
+    if (!(wrapper instanceof HTMLElement) || !(contentWrapper instanceof HTMLElement)) return null;
+
+    let metaRow = contentWrapper.querySelector(".msg-meta");
+    if (!(metaRow instanceof HTMLElement)) {
+      metaRow = document.createElement("div");
+      metaRow.className = "msg-meta";
+
+      const timeEl = document.createElement("span");
+      timeEl.className = "msg-time";
+      metaRow.appendChild(timeEl);
+
+      const latestEl = document.createElement("span");
+      latestEl.className = "msg-latest-badge hidden";
+      latestEl.textContent = "最新";
+      metaRow.appendChild(latestEl);
+
+      bubble.insertAdjacentElement("afterend", metaRow);
+    }
+
+    return metaRow;
+  }
+
+  function updateMessageMeta(bubble, meta = {}) {
+    if (!(bubble instanceof HTMLElement)) return;
+    const wrapper = bubble.closest(".msg-wrapper");
+    if (!(wrapper instanceof HTMLElement)) return;
+
+    const metaRow = ensureMetaRow(bubble);
+    if (!(metaRow instanceof HTMLElement)) return;
+
+    const timeEl = metaRow.querySelector(".msg-time");
+    const latestEl = metaRow.querySelector(".msg-latest-badge");
+    const timestampMs = typeof meta.timestampMs === "number" && Number.isFinite(meta.timestampMs)
+      ? meta.timestampMs
+      : undefined;
+    const displayTimeText = typeof meta.displayTimeText === "string" && meta.displayTimeText.trim()
+      ? meta.displayTimeText.trim()
+      : (timestampMs !== undefined ? formatLocalTimeLong(timestampMs) : "");
+    const displayTimeShort = timestampMs !== undefined ? formatLocalTimeShort(timestampMs) : "";
+    const isLatest = meta.isLatest === true;
+
+    if (timestampMs !== undefined) {
+      wrapper.dataset.timestampMs = String(timestampMs);
+      bubble.dataset.timestampMs = String(timestampMs);
+    }
+
+    if (timeEl instanceof HTMLElement) {
+      const shortText = displayTimeShort || displayTimeText || "";
+      timeEl.textContent = shortText;
+      timeEl.title = displayTimeText || shortText;
+      timeEl.classList.toggle("hidden", !shortText);
+    }
+
+    if (isLatest) {
+      clearLatestMarkers();
+    }
+    wrapper.setAttribute("data-latest", isLatest ? "true" : "false");
+    bubble.setAttribute("data-latest", isLatest ? "true" : "false");
+    if (latestEl instanceof HTMLElement) {
+      latestEl.classList.toggle("hidden", !isLatest);
+    }
+  }
+
+  function renderAssistantMessage(bubble, rawText) {
+    if (!(bubble instanceof HTMLElement)) return;
+    const strippedText = stripThinkBlocks(rawText || "");
+    configureMarkedOnce();
+    const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
+    bubble.innerHTML = sanitizeAssistantHtml(parsedHtml);
+    processMediaInMessage(bubble);
+  }
 
   function isImagePath(value) {
     if (!value || typeof value !== "string") return false;
@@ -42,28 +158,143 @@ export function createChatUiFeature({
     return imageExts.some((ext) => lowerValue.includes(ext));
   }
 
+  function applyAvatarVisual(avatarEl, avatarSrc) {
+    if (!avatarEl) return;
+    avatarEl.style.backgroundImage = "";
+    avatarEl.classList.remove("avatar-image");
+    avatarEl.textContent = "";
+
+    if (isImagePath(avatarSrc)) {
+      avatarEl.style.backgroundImage = `url(${avatarSrc})`;
+      avatarEl.classList.add("avatar-image");
+      return;
+    }
+
+    avatarEl.textContent = avatarSrc || "";
+  }
+
+  function refreshAvatar(kind, avatarSrc) {
+    if (!messagesEl) return;
+    const selector = kind === "bot" ? ".msg-wrapper.bot .msg-avatar" : ".msg-wrapper.me .msg-avatar";
+    messagesEl.querySelectorAll(selector).forEach((avatarEl) => {
+      applyAvatarVisual(avatarEl, avatarSrc);
+      avatarEl.title = kind === "bot" ? "点击更换 Agent 头像" : "点击更换用户头像";
+      avatarEl.classList.add("avatar-clickable");
+    });
+  }
+
+  function ensureAvatarUploadInput() {
+    if (avatarUploadInput) return avatarUploadInput;
+    avatarUploadInput = document.createElement("input");
+    avatarUploadInput.type = "file";
+    avatarUploadInput.accept = "image/png,image/jpeg,image/gif,image/webp";
+    avatarUploadInput.className = "hidden";
+    document.body.appendChild(avatarUploadInput);
+    return avatarUploadInput;
+  }
+
+  function buildUploadHeaders() {
+    if (typeof getAvatarUploadHeaders !== "function") return {};
+    const headers = getAvatarUploadHeaders();
+    return headers && typeof headers === "object" ? headers : {};
+  }
+
+  async function uploadAvatar(role, file) {
+    if (avatarUploadBusy) return;
+    avatarUploadBusy = true;
+
+    try {
+      const formData = new FormData();
+      formData.append("role", role);
+      formData.append("file", file, file.name || "avatar.png");
+
+      const res = await fetch("/api/avatar/upload", {
+        method: "POST",
+        body: formData,
+        headers: buildUploadHeaders(),
+      });
+
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        const message = payload?.error?.message || "头像上传失败。";
+        showNotice?.("头像上传失败", message, "error", 3800);
+        return;
+      }
+
+      const avatarPath = typeof payload.avatarPath === "string" ? payload.avatarPath : "";
+      if (!avatarPath) {
+        showNotice?.("头像上传失败", "服务端未返回头像路径。", "error", 3800);
+        return;
+      }
+
+      onAvatarUploaded?.({
+        role,
+        avatarPath,
+        mdPath: typeof payload.mdPath === "string" ? payload.mdPath : "",
+      });
+
+      showNotice?.(
+        "头像已更新",
+        role === "agent" ? "Agent 头像已写入 IDENTITY.md。" : "用户头像已写入 USER.md。",
+        "success",
+        2200,
+      );
+    } catch (error) {
+      showNotice?.(
+        "头像上传失败",
+        error instanceof Error ? error.message : String(error),
+        "error",
+        3800,
+      );
+    } finally {
+      avatarUploadBusy = false;
+    }
+  }
+
+  function openAvatarPicker(kind) {
+    const input = ensureAvatarUploadInput();
+    input.value = "";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      input.value = "";
+      if (!file) return;
+      const role = kind === "bot" ? "agent" : "user";
+      await uploadAvatar(role, file);
+    };
+    input.click();
+  }
+
   function forceScrollToBottom() {
     if (!chatSection) return;
     chatSection.scrollTop = chatSection.scrollHeight;
   }
 
-  function appendMessage(kind, text) {
+  function appendMessage(kind, text, meta = {}) {
     if (!messagesEl) return null;
+
+    if (kind === "system") {
+      const systemEl = document.createElement("div");
+      systemEl.className = "system-msg";
+      systemEl.textContent = text;
+      messagesEl.appendChild(systemEl);
+      forceScrollToBottom();
+      return systemEl;
+    }
 
     const wrapper = document.createElement("div");
     wrapper.className = `msg-wrapper ${kind}`;
 
     const avatar = document.createElement("div");
-    avatar.className = "msg-avatar";
+    avatar.className = "msg-avatar avatar-clickable";
 
     const profile = kind === "bot" ? getAgentProfile?.() : getUserProfile?.();
     const avatarSrc = profile?.avatar || "";
-    if (isImagePath(avatarSrc)) {
-      avatar.style.backgroundImage = `url(${avatarSrc})`;
-      avatar.classList.add("avatar-image");
-    } else {
-      avatar.textContent = avatarSrc;
-    }
+    applyAvatarVisual(avatar, avatarSrc);
+    avatar.title = kind === "bot" ? "点击更换 Agent 头像" : "点击更换用户头像";
+    avatar.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openAvatarPicker(kind);
+    });
 
     const contentWrapper = document.createElement("div");
     contentWrapper.className = "msg-content-wrapper";
@@ -98,6 +329,7 @@ export function createChatUiFeature({
     wrapper.appendChild(avatar);
     wrapper.appendChild(contentWrapper);
     messagesEl.appendChild(wrapper);
+    updateMessageMeta(bubble, meta);
     forceScrollToBottom();
     return bubble;
   }
@@ -346,7 +578,10 @@ export function createChatUiFeature({
     initCopyButtonDelegation,
     openMediaModal,
     processMediaInMessage,
+    refreshAvatar,
+    renderAssistantMessage,
     sanitizeAssistantHtml,
     stripThinkBlocks,
+    updateMessageMeta,
   };
 }

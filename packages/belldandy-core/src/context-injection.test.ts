@@ -18,6 +18,7 @@ describe("buildContextInjectionPrelude", () => {
           importance: "high",
           category: "decision",
           memoryType: "other",
+          updatedAt: "2026-03-22T10:00:00.000Z",
         },
         {
           id: "mem-recent-distinct",
@@ -27,6 +28,7 @@ describe("buildContextInjectionPrelude", () => {
           importance: "high",
           category: "decision",
           memoryType: "other",
+          updatedAt: "2026-03-22T10:05:00.000Z",
         },
       ],
       getRecentTaskSummaries: () => [],
@@ -36,12 +38,14 @@ describe("buildContextInjectionPrelude", () => {
           sourcePath: "memory/release-policy.md",
           snippet: duplicateFromHistory,
           score: 0.98,
+          updatedAt: "2026-03-22T10:00:00.000Z",
         },
         {
           id: "mem-auto-distinct",
           sourcePath: "memory/release-policy.md",
           snippet: autoRecallDistinct,
           score: 0.91,
+          updatedAt: "2026-03-22T10:06:00.000Z",
         },
       ],
     };
@@ -51,6 +55,14 @@ describe("buildContextInjectionPrelude", () => {
       {
         prompt: "继续优化网关重试和 transcript 策略",
         userInput: "继续优化网关重试和 transcript 策略",
+        meta: {
+          currentMessageTime: {
+            timestampMs: Date.parse("2026-03-22T10:07:00.000Z"),
+            displayTimeText: "2026-03-22 10:07:00 GMT+0",
+            isLatest: true,
+            role: "user",
+          },
+        },
         messages: [
           {
             role: "assistant",
@@ -77,6 +89,8 @@ describe("buildContextInjectionPrelude", () => {
 
     expect(result?.prependContext).toContain("<recent-memory");
     expect(result?.prependContext).toContain("<auto-recall");
+    expect(result?.prependContext).toContain("<current-turn");
+    expect(result?.prependContext).toContain("latest | user");
     expect(result?.prependContext).toContain(recentDistinct);
     expect(result?.prependContext).toContain(autoRecallDistinct);
     expect(result?.prependContext).not.toContain(duplicateFromHistory);

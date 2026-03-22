@@ -926,6 +926,17 @@ body::before {
   overflow: hidden;
 }
 
+.msg-avatar.avatar-clickable {
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.msg-avatar.avatar-clickable:hover {
+  transform: translateY(-1px);
+  border-color: rgba(212, 160, 23, 0.65);
+  box-shadow: 0 0 0 3px rgba(212, 160, 23, 0.12);
+}
+
 /* 图片头像 */
 .msg-avatar.avatar-image {
   background-size: cover;
@@ -953,6 +964,41 @@ body::before {
 
 .msg-wrapper.me .msg-name {
   text-align: right;
+}
+
+.msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.85;
+}
+
+.msg-wrapper.me .msg-meta {
+  justify-content: flex-end;
+}
+
+.msg-time {
+  white-space: nowrap;
+}
+
+.msg-latest-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(212, 160, 23, 0.16);
+  color: #d4a017;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.msg-latest-badge.hidden {
+  display: none;
 }
 
 /* 气泡下方的操作栏 */

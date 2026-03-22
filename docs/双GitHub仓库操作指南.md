@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "更新了README等文件，添加了长期任务使用指南"
+git commit -m "还技术债，完成了服务端的性能优化和token消耗优化，修复了一些隐藏的bug"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
@@ -53,7 +53,11 @@ git pull private main
 ```bash
 # 确保本地分支是最新的稳定版本后，直接推送到开源仓库
 git push origin main
+
+git push origin standard
+
 ```
+
 
 ### 多分支管理建议（可选）
 

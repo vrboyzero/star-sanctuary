@@ -10,29 +10,35 @@ export function createChatEventsFeature({
   onToolsConfigUpdated,
   stripThinkBlocks,
   configureMarkedOnce,
-  parseMarkdown,
-  sanitizeAssistantHtml,
-  processMediaInMessage,
+  renderAssistantMessage,
+  updateMessageMeta,
   forceScrollToBottom,
   getCanvasApp,
   escapeHtml,
 }) {
   let botMessageEl = null;
   let botRawHtmlBuffer = "";
+  let botMessageMeta = null;
 
   function resetStreamingState() {
     botMessageEl = null;
     botRawHtmlBuffer = "";
+    botMessageMeta = null;
   }
 
-  function beginStreamingReply() {
+  function beginStreamingReply(initialMeta = {}) {
     resetStreamingState();
-    return ensureBotMessage();
+    return ensureBotMessage(initialMeta);
   }
 
-  function ensureBotMessage() {
+  function ensureBotMessage(initialMeta = {}) {
     if (!botMessageEl) {
-      botMessageEl = appendMessage("bot", "");
+      botMessageMeta = {
+        timestampMs: typeof initialMeta.timestampMs === "number" ? initialMeta.timestampMs : Date.now(),
+        displayTimeText: typeof initialMeta.displayTimeText === "string" ? initialMeta.displayTimeText : "",
+        isLatest: Boolean(initialMeta.isLatest),
+      };
+      botMessageEl = appendMessage("bot", "", botMessageMeta);
       botRawHtmlBuffer = "";
     }
     return botMessageEl;
@@ -41,10 +47,10 @@ export function createChatEventsFeature({
   function renderStreamingMarkdown(rawText) {
     const target = ensureBotMessage();
     botRawHtmlBuffer = rawText;
-    const strippedText = stripThinkBlocks(botRawHtmlBuffer);
-    configureMarkedOnce();
-    const parsedHtml = parseMarkdown(strippedText);
-    target.innerHTML = sanitizeAssistantHtml(parsedHtml);
+    renderAssistantMessage?.(target, botRawHtmlBuffer);
+    if (botMessageMeta) {
+      updateMessageMeta?.(target, { ...botMessageMeta, isLatest: true });
+    }
     return target;
   }
 
@@ -126,7 +132,19 @@ export function createChatEventsFeature({
     if (event === "chat.final") {
       const text = payload && payload.text ? String(payload.text) : "";
       const target = renderStreamingMarkdown(text);
-      processMediaInMessage(target);
+      const meta = payload?.messageMeta && typeof payload.messageMeta === "object"
+        ? payload.messageMeta
+        : {};
+      if (meta && typeof meta === "object") {
+        botMessageMeta = {
+          timestampMs: typeof meta.timestampMs === "number" ? meta.timestampMs : (botMessageMeta?.timestampMs ?? Date.now()),
+          displayTimeText: typeof meta.displayTimeText === "string" ? meta.displayTimeText : (botMessageMeta?.displayTimeText ?? ""),
+          isLatest: meta.isLatest === true,
+        };
+        updateMessageMeta?.(target, { ...botMessageMeta, isLatest: true });
+      } else if (botMessageMeta) {
+        updateMessageMeta?.(target, { ...botMessageMeta, isLatest: true });
+      }
       autoplayAssistantAudio(target);
       forceScrollToBottom();
       getCanvasApp()?.handleReactFinal(text);
@@ -135,11 +153,11 @@ export function createChatEventsFeature({
 
     if (event === "canvas.update") {
       if (payload) {
-        const canvasApp = getCanvasApp();
-        const boardId = payload.boardId;
-        const action = payload.action;
-        const data = payload.payload;
-        if (canvasApp && canvasApp.currentBoardId === boardId) {
+      const canvasApp = getCanvasApp();
+      const boardId = payload.boardId;
+      const action = payload.action;
+      const data = payload.payload;
+      if (canvasApp && canvasApp.currentBoardId === boardId) {
           canvasApp.handleCanvasEvent(action, data);
         }
       }

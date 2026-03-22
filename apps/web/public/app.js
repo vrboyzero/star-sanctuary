@@ -582,6 +582,8 @@ function handleHelloOk(frame) {
   if (frame.agentAvatar) agentAvatar = frame.agentAvatar;
   if (frame.userName) userName = frame.userName;
   if (frame.userAvatar) userAvatar = frame.userAvatar;
+  chatUiFeature?.refreshAvatar("bot", agentAvatar);
+  chatUiFeature?.refreshAvatar("me", userAvatar);
 
   sessionTotalTokens = 0;
   taskTokenHistoryByConversation.clear();
@@ -620,6 +622,25 @@ function handleHelloOk(frame) {
     playBootSequence();
     sessionStorage.setItem("booted", "true");
   }
+}
+
+function getHttpAuthHeaders() {
+  const mode = authModeEl?.value || "none";
+  const rawValue = authValueEl?.value.trim() || "";
+  if (mode === "token" && rawValue) {
+    const token = rawValue.startsWith("setup-") || !/^\d+-\d+$/.test(rawValue)
+      ? rawValue
+      : `setup-${rawValue}`;
+    return {
+      Authorization: `Bearer ${token}`,
+    };
+  }
+  if (mode === "password" && rawValue) {
+    return {
+      "x-belldandy-password": rawValue,
+    };
+  }
+  return {};
 }
 
 chatNetworkFeature = createChatNetworkFeature({
@@ -695,6 +716,18 @@ chatUiFeature = createChatUiFeature({
     avatar: userAvatar,
   }),
   escapeHtml,
+  showNotice,
+  getAvatarUploadHeaders: () => getHttpAuthHeaders(),
+  onAvatarUploaded: ({ role, avatarPath }) => {
+    const bustedPath = `${avatarPath}${avatarPath.includes("?") ? "&" : "?"}v=${Date.now()}`;
+    if (role === "agent") {
+      agentAvatar = bustedPath;
+      chatUiFeature?.refreshAvatar("bot", agentAvatar);
+      return;
+    }
+    userAvatar = bustedPath;
+    chatUiFeature?.refreshAvatar("me", userAvatar);
+  },
 });
 
 chatUiFeature.initCopyButtonDelegation();
@@ -1091,6 +1124,11 @@ async function sendMessage() {
     conversationId: activeConversationId || undefined,
     text: finalText,
     from: "web",
+    clientContext: {
+      sentAtMs: Date.now(),
+      timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+      locale: typeof navigator !== "undefined" ? navigator.language : undefined,
+    },
     roomContext: { environment: "local" },
     modelId: modelSelectEl?.value || undefined,
     agentId: agentSelectEl?.value || undefined,
@@ -1135,8 +1173,15 @@ async function sendMessage() {
   }
 
   const displayText = text || (pendingAttachments.length ? "[语音消息]" : "");
-  appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""));
-  const botMsgEl = chatEventsFeature?.beginStreamingReply() || appendMessage("bot", "");
+  const optimisticUserMeta = {
+    timestampMs: params.clientContext.sentAtMs,
+    isLatest: true,
+  };
+  appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""), optimisticUserMeta);
+  const botMsgEl = chatEventsFeature?.beginStreamingReply({
+    timestampMs: Date.now(),
+    isLatest: false,
+  }) || appendMessage("bot", "", { timestampMs: Date.now(), isLatest: false });
 
   attachmentsFeature?.clearPendingAttachments();
 
@@ -1167,8 +1212,15 @@ async function sendMessage() {
 
   if (payload && payload.ok && payload.payload && payload.payload.conversationId) {
     activeConversationId = String(payload.payload.conversationId);
+    if (payload.payload.messageMeta) {
+      const wrappers = messagesEl?.querySelectorAll(".msg-wrapper.me .msg[data-latest='true']") || [];
+      const latestUserBubble = wrappers.length ? wrappers[wrappers.length - 1] : null;
+      if (latestUserBubble) {
+        chatUiFeature?.updateMessageMeta?.(latestUserBubble, payload.payload.messageMeta);
+      }
+    }
     renderCanvasGoalContext();
-    void loadConversationMeta(activeConversationId);
+    void loadConversationMeta(activeConversationId, { renderMessages: false });
   }
 }
 
@@ -1309,9 +1361,8 @@ chatEventsFeature = createChatEventsFeature({
   onToolsConfigUpdated: (payload) => toolSettingsController.handleToolsConfigUpdated(payload),
   stripThinkBlocks,
   configureMarkedOnce,
-  parseMarkdown: (text) => (window.marked ? window.marked.parse(text) : text),
-  sanitizeAssistantHtml,
-  processMediaInMessage,
+  renderAssistantMessage: (bubble, rawText) => chatUiFeature?.renderAssistantMessage?.(bubble, rawText),
+  updateMessageMeta: (bubble, meta) => chatUiFeature?.updateMessageMeta?.(bubble, meta),
   forceScrollToBottom,
   getCanvasApp: () => window._canvasApp,
   escapeHtml,
@@ -1401,7 +1452,37 @@ function prependTaskTokenHistory(conversationId, item) {
   }
 }
 
-async function loadConversationMeta(conversationId) {
+function renderConversationMessages(messages) {
+  if (!messagesEl) return;
+  messagesEl.innerHTML = "";
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "system-msg";
+    empty.textContent = "当前会话暂无消息";
+    messagesEl.appendChild(empty);
+    return;
+  }
+
+  for (const item of messages) {
+    if (!item || typeof item !== "object") continue;
+    const role = item.role === "assistant" ? "bot" : "me";
+    const content = typeof item.content === "string" ? item.content : String(item.content ?? "");
+    const meta = {
+      timestampMs: typeof item.timestampMs === "number" && Number.isFinite(item.timestampMs) ? item.timestampMs : undefined,
+      displayTimeText: typeof item.displayTimeText === "string" ? item.displayTimeText : undefined,
+      isLatest: item.isLatest === true,
+    };
+    const bubble = appendMessage(role, role === "bot" ? "" : content, meta);
+    if (role === "bot") {
+      chatUiFeature?.renderAssistantMessage?.(bubble, content);
+    }
+    chatUiFeature?.updateMessageMeta?.(bubble, meta);
+  }
+}
+
+async function loadConversationMeta(conversationId, options = {}) {
+  const renderMessages = options.renderMessages !== false;
   if (!conversationId || !ws || !isReady) {
     renderTaskTokenHistory();
     return;
@@ -1412,8 +1493,15 @@ async function loadConversationMeta(conversationId) {
     method: "conversation.meta",
     params: { conversationId, limit: TASK_TOKEN_HISTORY_LIMIT },
   });
-  if (res && res.ok && res.payload && Array.isArray(res.payload.taskTokenResults)) {
-    setTaskTokenHistory(conversationId, res.payload.taskTokenResults);
+  if (res && res.ok && res.payload) {
+    if (Array.isArray(res.payload.taskTokenResults)) {
+      setTaskTokenHistory(conversationId, res.payload.taskTokenResults);
+    } else {
+      renderTaskTokenHistory();
+    }
+    if (renderMessages && Array.isArray(res.payload.messages)) {
+      renderConversationMessages(res.payload.messages);
+    }
     return;
   }
   renderTaskTokenHistory();
@@ -1501,8 +1589,8 @@ function flushQueuedText() {
   sendMessage();
 }
 
-function appendMessage(kind, text) {
-  return chatUiFeature?.appendMessage(kind, text) || null;
+function appendMessage(kind, text, meta) {
+  return chatUiFeature?.appendMessage(kind, text, meta) || null;
 }
 
 /**
