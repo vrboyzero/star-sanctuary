@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "还技术债，完成了服务端的性能优化和token消耗优化，修复了一些隐藏的bug"
+git commit -m "新实现了webchat中的用户与Agent头像选用功能，给对话信息增加了Agent可识别的时间戳与最新标签"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
@@ -46,6 +46,15 @@ git pull private main
 ```
 
 ## 4. 对外发布版本流程 (推送到 Origin)
+
+### 1. 切换到 standard 分支
+git checkout standard
+### 2. 把 main 的新功能合并过来
+git merge main
+### 3. 再推送到开源库
+git push origin standard
+### 4. 做完后切回你日常开发的 main
+git checkout main
 
 当内部版本开发完成，测试稳定，或者到达了一个可以开源的里程碑时，将代码同步推送到 `origin`（开源仓库）。
 
