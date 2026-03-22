@@ -22,6 +22,7 @@ export function createWorkspaceFeature({
   switchMode,
   showNotice,
   escapeHtml,
+  loadServerConfig,
   syncAttachmentLimitsFromConfig,
   persistWorkspaceRootsField,
 }) {
@@ -98,10 +99,8 @@ export function createWorkspaceFeature({
   async function loadWorkspaceRootsFromServer() {
     if (!isConnected()) return;
 
-    const res = await createReq(sendReq, makeId, "config.read");
-    if (!res?.ok || !res.payload?.config) return;
-
-    const config = res.payload.config;
+    const config = await loadServerConfig?.();
+    if (!config) return;
     syncAttachmentLimitsFromConfig?.(config);
     const serverValue = config.BELLDANDY_EXTRA_WORKSPACE_ROOTS;
     if (workspaceRootsEl && serverValue && serverValue !== "[REDACTED]") {

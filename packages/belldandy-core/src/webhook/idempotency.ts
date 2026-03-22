@@ -8,17 +8,31 @@ interface IdempotencyRecord {
   response: WebhookResponse;
 }
 
+interface PendingIdempotencyRecord {
+  startedAt: number;
+  promise: Promise<WebhookResponse>;
+  resolve: (response: WebhookResponse) => void;
+  reject: (error: unknown) => void;
+}
+
+export type IdempotencyAcquireResult =
+  | { status: "owner" }
+  | { status: "cached"; response: WebhookResponse }
+  | { status: "pending"; promise: Promise<WebhookResponse> };
+
 /**
  * 幂等性管理器（内存缓存）
  */
 export class IdempotencyManager {
   private cache = new Map<string, IdempotencyRecord>();
+  private inflight = new Map<string, PendingIdempotencyRecord>();
   private windowMs: number;
 
   constructor(windowMs: number = 10 * 60 * 1000) {
     this.windowMs = windowMs;
     // 定期清理过期记录（每分钟）
-    setInterval(() => this.cleanup(), 60_000);
+    const timer = setInterval(() => this.cleanup(), 60_000);
+    timer.unref?.();
   }
 
   /**
@@ -74,6 +88,57 @@ export class IdempotencyManager {
     });
   }
 
+  acquireRequest(webhookId: string, idempotencyKey: string): IdempotencyAcquireResult {
+    const cached = this.getCachedResponse(webhookId, idempotencyKey);
+    if (cached) {
+      return { status: "cached", response: cached };
+    }
+
+    const key = this.makeKey(webhookId, idempotencyKey);
+    const pending = this.inflight.get(key);
+    if (pending) {
+      return { status: "pending", promise: pending.promise };
+    }
+
+    let resolve!: (response: WebhookResponse) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<WebhookResponse>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+
+    this.inflight.set(key, {
+      startedAt: Date.now(),
+      promise,
+      resolve,
+      reject,
+    });
+
+    return { status: "owner" };
+  }
+
+  completeRequest(webhookId: string, idempotencyKey: string, response: WebhookResponse): void {
+    const key = this.makeKey(webhookId, idempotencyKey);
+    this.cache.set(key, {
+      timestamp: Date.now(),
+      response,
+    });
+
+    const pending = this.inflight.get(key);
+    if (pending) {
+      pending.resolve(response);
+      this.inflight.delete(key);
+    }
+  }
+
+  failRequest(webhookId: string, idempotencyKey: string, error: unknown): void {
+    const key = this.makeKey(webhookId, idempotencyKey);
+    const pending = this.inflight.get(key);
+    if (!pending) return;
+    pending.reject(error);
+    this.inflight.delete(key);
+  }
+
   /**
    * 清理过期记录
    */
@@ -91,6 +156,14 @@ export class IdempotencyManager {
     for (const key of keysToDelete) {
       this.cache.delete(key);
     }
+
+    for (const [key, pending] of this.inflight.entries()) {
+      const age = now - pending.startedAt;
+      if (age > this.windowMs) {
+        pending.reject(new Error(`Idempotency request timed out after ${age}ms`));
+        this.inflight.delete(key);
+      }
+    }
   }
 
   /**
@@ -103,9 +176,10 @@ export class IdempotencyManager {
   /**
    * 获取缓存统计信息
    */
-  getStats(): { size: number; windowMs: number } {
+  getStats(): { size: number; inflight: number; windowMs: number } {
     return {
       size: this.cache.size,
+      inflight: this.inflight.size,
       windowMs: this.windowMs,
     };
   }

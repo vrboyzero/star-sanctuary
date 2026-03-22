@@ -4,6 +4,8 @@ import { uploadTokenUsage, type TokenUsageUploadConfig } from "@belldandy/protoc
 import type { Channel } from "./types.js";
 import { ConversationStore } from "@belldandy/agent";
 import { updateAgentRoom } from "./community-config.js";
+import { lookup as dnsLookup } from "node:dns/promises";
+import net from "node:net";
 
 /**
  * 社区 Agent 配置
@@ -74,6 +76,28 @@ interface ConnectionState {
   reconnectTimer?: NodeJS.Timeout;
   /** 本地维护的房间成员列表 */
   members: RoomMember[];
+}
+
+interface CommunityConnectivityDiagnostic {
+  requestUrl: string;
+  host: string;
+  port: number;
+  dns: {
+    ok: boolean;
+    addresses?: string[];
+    error?: string;
+  };
+  tcp: {
+    ok: boolean;
+    address?: string;
+    error?: string;
+  };
+  failure: {
+    name: string;
+    message: string;
+    code?: string;
+    cause?: string;
+  };
 }
 
 /**
@@ -161,6 +185,7 @@ export class CommunityChannel implements Channel {
     }
 
     this.connections.clear();
+    this.messageQueues.clear();
     this._running = false;
     console.log(`[${this.name}] Community channel stopped`);
   }
@@ -203,8 +228,9 @@ export class CommunityChannel implements Channel {
 
     // 1. 通过房间名称查询房间 ID
     let roomId: string;
+    const roomLookupUrl = `${this.endpoint}/api/rooms/by-name/${encodeURIComponent(room.name)}`;
     try {
-      const roomResponse = await fetch(`${this.endpoint}/api/rooms/by-name/${encodeURIComponent(room.name)}`, {
+      const roomResponse = await fetch(roomLookupUrl, {
         headers: {
           "X-API-Key": agentConfig.apiKey,
           "X-Agent-ID": encodeURIComponent(agentConfig.name),
@@ -213,6 +239,12 @@ export class CommunityChannel implements Channel {
 
       if (!roomResponse.ok) {
         const errorText = await roomResponse.text();
+        console.error(`[${this.name}] Failed to resolve room name "${room.name}" (http ${roomResponse.status}):`, {
+          requestUrl: roomLookupUrl,
+          status: roomResponse.status,
+          statusText: roomResponse.statusText,
+          bodyPreview: errorText.slice(0, 300),
+        });
         throw new Error(`Failed to find room "${room.name}": ${roomResponse.statusText} - ${errorText}`);
       }
 
@@ -220,13 +252,17 @@ export class CommunityChannel implements Channel {
       roomId = roomData.room.id;
       console.log(`[${this.name}] Resolved room "${room.name}" to ID: ${roomId}`);
     } catch (error) {
-      console.error(`[${this.name}] Failed to resolve room name "${room.name}":`, error);
+      if (!(error instanceof Error && error.message.startsWith(`Failed to find room "${room.name}":`))) {
+        const diagnostic = await this.diagnoseHttpConnectivity(roomLookupUrl, error);
+        console.error(`[${this.name}] Failed to resolve room name "${room.name}" (network):`, diagnostic);
+      }
       throw error;
     }
 
     // 2. 调用 HTTP API 加入房间
+    const joinRoomUrl = `${this.endpoint}/api/rooms/${roomId}/join`;
     try {
-      const joinResponse = await fetch(`${this.endpoint}/api/rooms/${roomId}/join`, {
+      const joinResponse = await fetch(joinRoomUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -240,12 +276,21 @@ export class CommunityChannel implements Channel {
 
       if (!joinResponse.ok) {
         const errorText = await joinResponse.text();
+        console.error(`[${this.name}] Failed to join room ${room.name} (http ${joinResponse.status}):`, {
+          requestUrl: joinRoomUrl,
+          status: joinResponse.status,
+          statusText: joinResponse.statusText,
+          bodyPreview: errorText.slice(0, 300),
+        });
         throw new Error(`Failed to join room: ${joinResponse.statusText} - ${errorText}`);
       }
 
       console.log(`[${this.name}] Agent ${agentConfig.name} joined room ${room.name} (${roomId})`);
     } catch (error) {
-      console.error(`[${this.name}] Failed to join room ${room.name}:`, error);
+      if (!(error instanceof Error && error.message.startsWith("Failed to join room:"))) {
+        const diagnostic = await this.diagnoseHttpConnectivity(joinRoomUrl, error);
+        console.error(`[${this.name}] Failed to join room ${room.name} (network):`, diagnostic);
+      }
       throw error;
     }
 
@@ -314,6 +359,93 @@ export class CommunityChannel implements Channel {
         clearTimeout(timeout);
         reject(error);
       });
+    });
+  }
+
+  private async diagnoseHttpConnectivity(
+    requestUrl: string,
+    error: unknown,
+  ): Promise<CommunityConnectivityDiagnostic> {
+    const url = new URL(requestUrl);
+    const host = url.hostname;
+    const port = url.port
+      ? Number(url.port)
+      : url.protocol === "https:"
+        ? 443
+        : 80;
+
+    let dns: CommunityConnectivityDiagnostic["dns"];
+    try {
+      const records = await dnsLookup(host, { all: true });
+      dns = {
+        ok: true,
+        addresses: records.map((record) => record.address),
+      };
+    } catch (lookupError) {
+      dns = {
+        ok: false,
+        error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+      };
+    }
+
+    const tcp = await this.probeTcpConnectivity(host, port);
+
+    const failureError = error instanceof Error ? error : new Error(String(error));
+    const cause = (failureError as Error & { cause?: unknown }).cause;
+    return {
+      requestUrl,
+      host,
+      port,
+      dns,
+      tcp,
+      failure: {
+        name: failureError.name,
+        message: failureError.message,
+        code: typeof (failureError as Error & { code?: unknown }).code === "string"
+          ? (failureError as Error & { code?: string }).code
+          : undefined,
+        cause: cause instanceof Error ? cause.message : cause ? String(cause) : undefined,
+      },
+    };
+  }
+
+  private async probeTcpConnectivity(
+    host: string,
+    port: number,
+    timeoutMs = 3000,
+  ): Promise<CommunityConnectivityDiagnostic["tcp"]> {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      let settled = false;
+
+      const finish = (result: CommunityConnectivityDiagnostic["tcp"]) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        resolve(result);
+      };
+
+      socket.setTimeout(timeoutMs);
+      socket.once("connect", () => {
+        finish({
+          ok: true,
+          address: `${socket.remoteAddress}:${socket.remotePort}`,
+        });
+      });
+      socket.once("timeout", () => {
+        finish({
+          ok: false,
+          error: `TCP connect timeout after ${timeoutMs}ms`,
+        });
+      });
+      socket.once("error", (socketError) => {
+        finish({
+          ok: false,
+          error: socketError instanceof Error ? socketError.message : String(socketError),
+        });
+      });
+
+      socket.connect(port, host);
     });
   }
 
@@ -400,6 +532,12 @@ export class CommunityChannel implements Channel {
       console.error(`[${this.name}] Queued message handler error for room ${roomId}:`, err);
     });
     this.messageQueues.set(roomId, next);
+    void next.finally(() => {
+      if (this.messageQueues.get(roomId) === next) {
+        this.messageQueues.delete(roomId);
+      }
+    });
+    await next;
   }
 
   /**
@@ -584,6 +722,7 @@ export class CommunityChannel implements Channel {
 
     // 3. 从连接池移除（WS 会被服务端关闭，无需主动 close）
     this.connections.delete(agentName);
+    this.messageQueues.delete(state.roomId);
 
     console.log(`[${this.name}] Agent ${agentName} disconnected from room (reason: ${reason})`);
   }
@@ -633,6 +772,7 @@ export class CommunityChannel implements Channel {
 
     // 4. 从连接池移除
     this.connections.delete(agentConfig.name);
+    this.messageQueues.delete(state.roomId);
 
     console.log(`[${this.name}] Left room "${roomIdOrName}"`);
   }

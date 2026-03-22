@@ -227,6 +227,50 @@ describe("MemoryManager guardrails", () => {
     expect(duplicated?.conversationId).toBe(conversationId);
     expect(different).toBeNull();
   });
+
+  it("builds recent task summaries without requiring full task hydration", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      taskMemoryEnabled: true,
+    });
+
+    const store = (manager as any).store;
+    store.createTask({
+      id: "task-summary-1",
+      conversationId: "conv-summary-1",
+      sessionKey: "session-summary-1",
+      source: "chat",
+      status: "success",
+      title: "Refresh memory usage dashboard",
+      objective: "verify recent task summary projection",
+      summary: "dashboard refreshed with memory usage overview",
+      reflection: "heavy reflection body should not matter for summary reads",
+      outcome: "done",
+      toolCalls: [
+        { toolName: "memory_search", success: true, durationMs: 80 },
+        { toolName: "experience_usage_stats", success: true, durationMs: 40 },
+      ],
+      artifactPaths: ["reports/memory-usage.md"],
+      startedAt: "2026-03-21T10:00:00.000Z",
+      finishedAt: "2026-03-21T10:00:30.000Z",
+      createdAt: "2026-03-21T10:00:00.000Z",
+      updatedAt: "2026-03-21T10:00:30.000Z",
+    });
+
+    const summaries = manager.getRecentTaskSummaries(5);
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      taskId: "task-summary-1",
+      title: "Refresh memory usage dashboard",
+      summary: "dashboard refreshed with memory usage overview",
+      status: "success",
+      source: "chat",
+      toolNames: ["memory_search", "experience_usage_stats"],
+      artifactPaths: ["reports/memory-usage.md"],
+    });
+  });
 });
 
 function createManager(options: ConstructorParameters<typeof MemoryManager>[0]): MemoryManager {

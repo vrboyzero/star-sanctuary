@@ -91,7 +91,7 @@ function hasMultimodalContentInMessages(messages: Array<{ role: string; content:
 function readTextAttachmentChars(meta?: JsonObject): number {
   if (!meta || typeof meta !== "object") return 0;
   const stats = (meta as any).attachmentStats;
-  const value = stats?.textAttachmentChars;
+  const value = stats?.promptAugmentationChars ?? stats?.textAttachmentChars;
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : 0;

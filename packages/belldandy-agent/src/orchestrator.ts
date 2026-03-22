@@ -119,6 +119,15 @@ export class SubAgentOrchestrator {
     this.hookRunner = options.hookRunner;
   }
 
+  private emitEvent(event: SubAgentEvent): void {
+    if (!this.onEvent) return;
+    try {
+      this.onEvent(event);
+    } catch (err) {
+      this.logger?.warn(`Sub-agent event handler error: ${err}`);
+    }
+  }
+
   /**
    * Spawn a sub-agent, run it to completion, and return the aggregated result.
    * If concurrency limit is reached, the request is queued (up to maxQueueSize).
@@ -154,7 +163,7 @@ export class SubAgentOrchestrator {
         const position = this.pendingQueue.length + 1;
         this.pendingQueue.push({ opts, resolve, reject, enqueuedAt: Date.now() });
 
-        this.onEvent?.({
+        this.emitEvent({
           type: "queued",
           sessionId: `sub_queued_${agentId}`,
           position,
@@ -202,7 +211,7 @@ export class SubAgentOrchestrator {
       instruction: opts.instruction.slice(0, 200),
     });
 
-    this.onEvent?.({
+    this.emitEvent({
       type: "started",
       sessionId,
       agentId,
@@ -338,16 +347,21 @@ export class SubAgentOrchestrator {
 
     return new Promise<SpawnResult>((resolve) => {
       let settled = false;
+      let timedOut = false;
+
+      const stream = this.createAgentStream(agent, opts, conversationId, history);
+      const iterator = stream[Symbol.asyncIterator]();
 
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        timedOut = true;
         session.status = "timeout";
         session.finishedAt = Date.now();
         session.error = `Sub-agent timed out after ${this.sessionTimeoutMs}ms`;
 
         this.logger?.warn(`Sub-agent timeout: ${session.id}`);
-        this.onEvent?.({
+        this.emitEvent({
           type: "completed",
           sessionId: session.id,
           success: false,
@@ -361,6 +375,8 @@ export class SubAgentOrchestrator {
           { agentId: session.agentId, sessionId: session.id },
         ).catch((err) => this.logger?.warn(`session_end hook error: ${err}`));
 
+        void this.closeIterator(iterator, session.id);
+
         resolve({
           success: false,
           output: "",
@@ -369,7 +385,7 @@ export class SubAgentOrchestrator {
         });
       }, this.sessionTimeoutMs);
 
-      this.consumeStream(agent, session, conversationId, history, opts)
+      this.consumeStream(iterator, session, conversationId, () => timedOut)
         .then((result) => {
           if (settled) return;
           settled = true;
@@ -387,7 +403,7 @@ export class SubAgentOrchestrator {
           session.error = errorMsg;
 
           this.logger?.error(`Sub-agent error: ${session.id}`, { error: errorMsg });
-          this.onEvent?.({
+          this.emitEvent({
             type: "completed",
             sessionId: session.id,
             success: false,
@@ -411,19 +427,14 @@ export class SubAgentOrchestrator {
     });
   }
 
-  private async consumeStream(
+  private createAgentStream(
     agent: BelldandyAgent,
-    session: SubAgentSession,
+    opts: SpawnOptions,
     conversationId: string,
     history: Array<{ role: "user" | "assistant"; content: string }>,
-    opts: SpawnOptions,
-  ): Promise<SpawnResult> {
-    let finalText = "";
-    let lastDelta = "";
-
+  ): AsyncIterable<AgentStreamItem> {
     const depth = ((opts.context?._orchestratorDepth as number) ?? 0) + 1;
-
-    const stream = agent.run({
+    return agent.run({
       conversationId,
       text: opts.instruction,
       history,
@@ -433,14 +444,43 @@ export class SubAgentOrchestrator {
         _parentConversationId: opts.parentConversationId,
       },
     });
+  }
 
-    for await (const item of stream as AsyncIterable<AgentStreamItem>) {
+  private async closeIterator(
+    iterator: AsyncIterator<AgentStreamItem>,
+    sessionId: string,
+  ): Promise<void> {
+    if (typeof iterator.return !== "function") return;
+    try {
+      await iterator.return(undefined);
+    } catch (err) {
+      this.logger?.warn(`Sub-agent iterator close error: ${sessionId} ${err}`);
+    }
+  }
+
+  private async consumeStream(
+    iterator: AsyncIterator<AgentStreamItem>,
+    session: SubAgentSession,
+    conversationId: string,
+    isTimedOut: () => boolean,
+  ): Promise<SpawnResult> {
+    let finalText = "";
+    let lastDelta = "";
+
+    while (true) {
+      const { value: item, done } = await iterator.next();
+      if (done) break;
+
+      if (isTimedOut()) {
+        break;
+      }
+
       switch (item.type) {
         case "delta":
           lastDelta += item.delta;
           // Batch deltas to avoid flooding the event bus
           if (lastDelta.length >= 50) {
-            this.onEvent?.({
+            this.emitEvent({
               type: "thought_delta",
               sessionId: session.id,
               delta: lastDelta,
@@ -457,9 +497,18 @@ export class SubAgentOrchestrator {
       }
     }
 
+    if (isTimedOut() || session.status === "timeout") {
+      return {
+        success: false,
+        output: "",
+        error: session.error ?? `Sub-agent timed out after ${this.sessionTimeoutMs}ms`,
+        sessionId: session.id,
+      };
+    }
+
     // Flush remaining delta
     if (lastDelta.length > 0) {
-      this.onEvent?.({
+      this.emitEvent({
         type: "thought_delta",
         sessionId: session.id,
         delta: lastDelta,
@@ -482,7 +531,7 @@ export class SubAgentOrchestrator {
       durationMs: session.finishedAt - session.createdAt,
     });
 
-    this.onEvent?.({
+    this.emitEvent({
       type: "completed",
       sessionId: session.id,
       success: true,

@@ -151,7 +151,7 @@ export function createMemoryViewerFeature({
     memoryViewerState.selectedTask = null;
     renderMemoryViewerStats(memoryViewerState.stats);
 
-    const params = { limit: 20 };
+    const params = { limit: 20, summaryOnly: true };
     const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
     if (query) params.query = query;
 
@@ -208,7 +208,7 @@ export function createMemoryViewerFeature({
       }
     }
 
-    const params = { limit: 20 };
+    const params = { limit: 20, includeContent: false };
     if (Object.keys(filter).length > 0) params.filter = filter;
     if (query) params.query = query;
 

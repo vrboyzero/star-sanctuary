@@ -6,6 +6,7 @@ import type {
   ExperienceAssetType,
   ExperienceCandidate,
   ExperienceCandidateListFilter,
+  ExperienceCandidateStatus,
   ExperienceCandidateType,
   ExperienceSourceTaskSnapshot,
   ExperienceUsage,
@@ -17,6 +18,19 @@ import { cosineSimilarity, vectorToBuffer, vectorFromBuffer, type EmbeddingVecto
 import { loadSqliteVec } from "./sqlite-vec.js";
 
 const KNOWN_MEMORY_CATEGORIES = ["preference", "experience", "fact", "decision", "entity", "other"] as const;
+
+export type TaskSummaryRecord = {
+  id: string;
+  title?: string;
+  objective?: string;
+  summary?: string;
+  status: TaskStatus;
+  source: TaskSource;
+  finishedAt?: string;
+  agentId?: string;
+  toolNames: string[];
+  artifactPaths: string[];
+};
 
 // 基础表结构。
 const SCHEMA_BASE = `
@@ -353,6 +367,53 @@ export class MemoryStore {
     return Number(result.changes);
   }
 
+  replaceSourceChunks(sourcePath: string, chunks: MemoryChunk[]): void {
+    this.ensureOpen();
+    const now = new Date().toISOString();
+    const upsertChunkStmt = this.db.prepare(`
+      INSERT INTO chunks (id, source_path, source_type, memory_type, visibility, start_line, end_line, content, metadata, channel, topic, ts_date, category, agent_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        content = excluded.content,
+        metadata = excluded.metadata,
+        updated_at = excluded.updated_at,
+        memory_type = excluded.memory_type,
+        visibility = excluded.visibility,
+        channel = excluded.channel,
+        topic = excluded.topic,
+        ts_date = excluded.ts_date,
+        category = excluded.category,
+        agent_id = excluded.agent_id
+    `);
+
+    const tx = this.db.transaction(() => {
+      this.deleteBySource(sourcePath);
+      for (const chunk of chunks) {
+        const visibility = chunk.visibility ?? "private";
+        upsertChunkStmt.run(
+          chunk.id,
+          chunk.sourcePath,
+          chunk.sourceType,
+          chunk.memoryType,
+          visibility,
+          chunk.startLine ?? null,
+          chunk.endLine ?? null,
+          chunk.content,
+          JSON.stringify(chunk.metadata ?? {}),
+          chunk.channel ?? null,
+          chunk.topic ?? null,
+          chunk.tsDate ?? null,
+          chunk.category ?? null,
+          chunk.agentId ?? null,
+          now,
+          now,
+        );
+      }
+    });
+
+    tx();
+  }
+
   /** 删除所有 chunks */
   deleteAll(): number {
     this.ensureOpen();
@@ -436,7 +497,7 @@ export class MemoryStore {
   }
 
   /** 关键词搜索（有 FTS5 用全文索引，否则用 LIKE 降级） */
-  searchKeyword(query: string, limit = 10, filter?: MemorySearchFilter): MemorySearchResult[] {
+  searchKeyword(query: string, limit = 10, filter?: MemorySearchFilter, includeContent = true): MemorySearchResult[] {
     this.ensureOpen();
 
     const tokens = tokenizeForSearch(query);
@@ -451,7 +512,8 @@ export class MemoryStore {
         const stmt = this.db.prepare(`
           SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.visibility, c.start_line, c.end_line,
-            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary, c.category,
+            ${includeContent ? "c.content" : "NULL AS content"}, substr(c.content, 1, 500) AS snippet_text,
+            c.metadata, c.channel, c.topic, c.ts_date, c.summary, c.category,
             bm25(chunks_fts) as rank
           FROM chunks_fts f
           JOIN chunks c ON c.rowid = f.rowid
@@ -471,7 +533,9 @@ export class MemoryStore {
     const likeConditions = tokens.map(() => `content LIKE ? ESCAPE '\\'`).join(" AND ");
     const likeArgs = tokens.map((t) => `%${escapeLike(t)}%`);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, visibility, start_line, end_line, content, metadata, channel, topic, ts_date, summary, category
+      SELECT id, source_path, source_type, memory_type, visibility, start_line, end_line,
+             ${includeContent ? "content" : "NULL AS content"}, substr(content, 1, 500) AS snippet_text,
+             metadata, channel, topic, ts_date, summary, category
       FROM chunks c
       WHERE ${likeConditions}${filterClause}
       LIMIT ?
@@ -501,32 +565,20 @@ export class MemoryStore {
   }
 
   /** 获取最近更新的记忆块（按 updated_at 降序） */
-  getRecentChunks(limit = 5, filter?: MemorySearchFilter): MemorySearchResult[] {
+  getRecentChunks(limit = 5, filter?: MemorySearchFilter, includeContent = true): MemorySearchResult[] {
     this.ensureOpen();
     const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
     const stmt = this.db.prepare(`
-      SELECT id, source_path, source_type, memory_type, visibility, content, metadata, start_line, end_line, category, updated_at
+      SELECT id, source_path, source_type, memory_type, visibility,
+             ${includeContent ? "content" : "NULL AS content"}, substr(content, 1, 500) AS snippet_text,
+             metadata, start_line, end_line, category, updated_at
       FROM chunks c
       WHERE 1 = 1${filterClause}
       ORDER BY c.updated_at DESC
       LIMIT ?
     `);
     const rows = stmt.all(...filterParams, limit) as any[];
-    return rows.map((row) => ({
-      id: row.id,
-      sourcePath: row.source_path,
-      sourceType: row.source_type,
-      memoryType: row.memory_type,
-      category: normalizeCategory(row.category),
-      visibility: row.visibility ?? "private",
-      snippet: (row.content ?? "").slice(0, 500),
-      content: row.content,
-      score: 1,
-      metadata: safeParseJson(row.metadata),
-      startLine: row.start_line ?? undefined,
-      endLine: row.end_line ?? undefined,
-      updatedAt: row.updated_at ?? undefined,
-    }));
+    return rows.map((row) => rowToSearchResult(row, 1));
   }
 
   getChunk(chunkId: string): MemorySearchResult | null {
@@ -635,6 +687,30 @@ export class MemoryStore {
     `);
     const rows = stmt.all(...params, limit) as Record<string, unknown>[];
     return rows.map(rowToTaskRecord);
+  }
+
+  listTaskSummaries(limit = 10, filter?: TaskSearchFilter): TaskSummaryRecord[] {
+    this.ensureOpen();
+    const { clause, params } = this.buildTaskFilterClause(filter);
+    const stmt = this.db.prepare(`
+      SELECT
+        t.id,
+        t.title,
+        t.objective,
+        t.summary,
+        t.status,
+        t.source,
+        t.finished_at,
+        t.agent_id,
+        t.tool_calls_json,
+        t.artifact_paths_json
+      FROM tasks t
+      WHERE 1 = 1${clause}
+      ORDER BY COALESCE(t.finished_at, t.started_at) DESC, t.created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(...params, limit) as Record<string, unknown>[];
+    return rows.map(rowToTaskSummaryRecord);
   }
 
   searchTasksKeyword(query: string, limit = 10, filter?: TaskSearchFilter): TaskRecord[] {
@@ -896,46 +972,86 @@ export class MemoryStore {
 
   getExperienceUsageStats(assetType: ExperienceAssetType, assetKey: string): ExperienceUsageStats {
     this.ensureOpen();
-    const countRow = this.db.prepare(`
-      SELECT COUNT(*) as usage_count, MAX(created_at) as last_used_at
-      FROM experience_usages
-      WHERE asset_type = ? AND asset_key = ?
-    `).get(assetType, assetKey) as { usage_count?: number; last_used_at?: string | null } | undefined;
+    const row = this.db.prepare(`
+      WITH aggregated AS (
+        SELECT COUNT(*) AS usage_count, MAX(created_at) AS last_used_at
+        FROM experience_usages
+        WHERE asset_type = ? AND asset_key = ?
+      ),
+      latest AS (
+        SELECT source_candidate_id, task_id AS last_used_task_id
+        FROM experience_usages
+        WHERE asset_type = ? AND asset_key = ?
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+      )
+      SELECT
+        ? AS asset_type,
+        ? AS asset_key,
+        latest.source_candidate_id,
+        latest.last_used_task_id,
+        aggregated.usage_count,
+        aggregated.last_used_at,
+        candidate.type AS source_candidate_type,
+        candidate.title AS source_candidate_title,
+        candidate.status AS source_candidate_status,
+        candidate.task_id AS source_candidate_task_id,
+        candidate.published_path AS source_candidate_published_path
+      FROM aggregated
+      LEFT JOIN latest ON 1 = 1
+      LEFT JOIN experience_candidates candidate ON candidate.id = latest.source_candidate_id
+    `).get(assetType, assetKey, assetType, assetKey, assetType, assetKey) as Record<string, unknown> | undefined;
 
-    const lastUsageRow = this.db.prepare(`
-      SELECT task_id, source_candidate_id
-      FROM experience_usages
-      WHERE asset_type = ? AND asset_key = ?
-      ORDER BY created_at DESC
-      LIMIT 1
-    `).get(assetType, assetKey) as Record<string, unknown> | undefined;
-
-    return {
-      assetType,
-      assetKey,
-      sourceCandidateId: lastUsageRow ? optionalString(lastUsageRow.source_candidate_id) : undefined,
-      usageCount: Number(countRow?.usage_count ?? 0),
-      lastUsedAt: countRow?.last_used_at ?? undefined,
-      lastUsedTaskId: lastUsageRow ? optionalString(lastUsageRow.task_id) : undefined,
-    };
+    return rowToExperienceUsageStats(row ?? {
+      asset_type: assetType,
+      asset_key: assetKey,
+      usage_count: 0,
+    });
   }
 
   listExperienceUsageStats(limit = 50, filter?: Pick<ExperienceUsageListFilter, "assetType" | "assetKey" | "sourceCandidateId">): ExperienceUsageStats[] {
     this.ensureOpen();
     const { clause, params } = this.buildExperienceUsageStatsFilterClause(filter);
     const stmt = this.db.prepare(`
-      SELECT asset_type, asset_key
-      FROM experience_usages
-      WHERE 1 = 1${clause}
-      GROUP BY asset_type, asset_key
-      ORDER BY MAX(created_at) DESC
+      WITH filtered AS (
+        SELECT rowid, asset_type, asset_key, source_candidate_id, task_id, created_at
+        FROM experience_usages
+        WHERE 1 = 1${clause}
+      ),
+      ranked AS (
+        SELECT
+          asset_type,
+          asset_key,
+          source_candidate_id,
+          task_id,
+          created_at,
+          COUNT(*) OVER (PARTITION BY asset_type, asset_key) AS usage_count,
+          ROW_NUMBER() OVER (
+            PARTITION BY asset_type, asset_key
+            ORDER BY created_at DESC, rowid DESC
+          ) AS row_rank
+        FROM filtered
+      )
+      SELECT
+        ranked.asset_type,
+        ranked.asset_key,
+        ranked.source_candidate_id,
+        ranked.task_id AS last_used_task_id,
+        ranked.usage_count,
+        ranked.created_at AS last_used_at,
+        candidate.type AS source_candidate_type,
+        candidate.title AS source_candidate_title,
+        candidate.status AS source_candidate_status,
+        candidate.task_id AS source_candidate_task_id,
+        candidate.published_path AS source_candidate_published_path
+      FROM ranked
+      LEFT JOIN experience_candidates candidate ON candidate.id = ranked.source_candidate_id
+      WHERE row_rank = 1
+      ORDER BY last_used_at DESC
       LIMIT ?
     `);
     const rows = stmt.all(...params, limit) as Record<string, unknown>[];
-    return rows.map((row) => this.getExperienceUsageStats(
-      String(row.asset_type) as ExperienceAssetType,
-      String(row.asset_key),
-    ));
+    return rows.map(rowToExperienceUsageStats);
   }
 
   /** 获取索引状态 */
@@ -1487,7 +1603,7 @@ export class MemoryStore {
    * 向量搜索：返回与查询向量最相似的 chunks
    * filter 通过 post-filter 实现（chunks_vec 无 metadata 列）
    */
-  searchVector(queryVec: EmbeddingVector, limit = 10, filter?: MemorySearchFilter): MemorySearchResult[] {
+  searchVector(queryVec: EmbeddingVector, limit = 10, filter?: MemorySearchFilter, includeContent = true): MemorySearchResult[] {
     this.ensureOpen();
     if (!this.vecDims) return [];
 
@@ -1502,7 +1618,8 @@ export class MemoryStore {
     const stmt = this.db.prepare(`
         SELECT
             c.id, c.source_path, c.source_type, c.memory_type, c.visibility, c.start_line, c.end_line,
-            c.content, c.metadata, c.channel, c.topic, c.ts_date, c.summary, c.category,
+            ${includeContent ? "c.content" : "NULL AS content"}, substr(c.content, 1, 500) AS snippet_text,
+            c.metadata, c.channel, c.topic, c.ts_date, c.summary, c.category,
             v.distance
         FROM chunks_vec v
         JOIN chunks c ON c.rowid = v.rowid
@@ -1529,19 +1646,7 @@ export class MemoryStore {
     }>;
 
     return rows.slice(0, limit).map((row) => ({
-      id: row.id,
-      sourcePath: row.source_path,
-      sourceType: row.source_type as "file" | "session" | "manual",
-      memoryType: row.memory_type as MemoryType,
-      category: normalizeCategory(row.category),
-      visibility: (row.visibility ?? "private") as MemoryVisibility,
-      content: row.content ?? undefined,
-      startLine: row.start_line ?? undefined,
-      endLine: row.end_line ?? undefined,
-      snippet: truncateContent(row.content, 500),
-      summary: row.summary ?? undefined,
-      score: 1 / (1 + row.distance),
-      metadata: safeParseJson(row.metadata),
+      ...rowToSearchResult(row, 1 / (1 + row.distance)),
     }));
   }
 
@@ -1556,12 +1661,13 @@ export class MemoryStore {
       vectorWeight?: number;
       textWeight?: number;
       filter?: MemorySearchFilter;
+      includeContent?: boolean;
     } = {}
   ): MemorySearchResult[] {
-    const { limit = 10, vectorWeight = 0.7, textWeight = 0.3, filter } = options;
+    const { limit = 10, vectorWeight = 0.7, textWeight = 0.3, filter, includeContent = true } = options;
 
     // 获取关键词搜索结果
-    const keywordResults = this.searchKeyword(query, limit * 2, filter);
+    const keywordResults = this.searchKeyword(query, limit * 2, filter, includeContent);
 
     // 如果没有向量，只返回关键词结果
     if (!queryVec || queryVec.length === 0) {
@@ -1569,7 +1675,7 @@ export class MemoryStore {
     }
 
     // 获取向量搜索结果
-    const vectorResults = this.searchVector(queryVec, limit * 2, filter);
+    const vectorResults = this.searchVector(queryVec, limit * 2, filter, includeContent);
 
     // 合并结果（使用 RRF - Reciprocal Rank Fusion）
     const scoreMap = new Map<string, { result: MemorySearchResult; score: number }>();
@@ -1872,6 +1978,9 @@ function safeParseJson(str: string | null): Record<string, unknown> | undefined 
 
 /** 将 DB row 转为 MemorySearchResult（消除重复映射代码） */
 function rowToSearchResult(row: any, score: number): MemorySearchResult {
+  const snippet = typeof row.snippet_text === "string"
+    ? row.snippet_text
+    : truncateContent(row.content ?? "", 500);
   return {
     id: row.id,
     sourcePath: row.source_path,
@@ -1882,7 +1991,7 @@ function rowToSearchResult(row: any, score: number): MemorySearchResult {
     content: row.content ?? undefined,
     startLine: row.start_line ?? undefined,
     endLine: row.end_line ?? undefined,
-    snippet: truncateContent(row.content, 500),
+    snippet,
     summary: row.summary ?? undefined,
     score,
     metadata: safeParseJson(row.metadata),
@@ -1957,6 +2066,23 @@ function rowToTaskRecord(row: Record<string, unknown>): TaskRecord {
   };
 }
 
+function rowToTaskSummaryRecord(row: Record<string, unknown>): TaskSummaryRecord {
+  const toolCalls = safeParseToolCalls(row.tool_calls_json) ?? [];
+  const artifactPaths = safeParseStringArray(row.artifact_paths_json) ?? [];
+  return {
+    id: String(row.id),
+    title: optionalString(row.title),
+    objective: optionalString(row.objective),
+    summary: optionalString(row.summary),
+    status: String(row.status) as TaskStatus,
+    source: String(row.source) as TaskSource,
+    finishedAt: optionalString(row.finished_at),
+    agentId: optionalString(row.agent_id),
+    toolNames: toolCalls.map((item) => item.toolName),
+    artifactPaths,
+  };
+}
+
 function rowToExperienceCandidate(row: Record<string, unknown>): ExperienceCandidate {
   const sourceTaskSnapshot = safeParseExperienceSnapshot(asNullableString(row.source_task_snapshot_json));
   return {
@@ -1987,6 +2113,22 @@ function rowToExperienceUsage(row: Record<string, unknown>): ExperienceUsage {
     sourceCandidateId: optionalString(row.source_candidate_id),
     usedVia: String(row.used_via) as ExperienceUsageVia,
     createdAt: String(row.created_at),
+  };
+}
+
+function rowToExperienceUsageStats(row: Record<string, unknown>): ExperienceUsageStats {
+  return {
+    assetType: String(row.asset_type) as ExperienceAssetType,
+    assetKey: String(row.asset_key),
+    sourceCandidateId: optionalString(row.source_candidate_id),
+    sourceCandidateType: optionalString(row.source_candidate_type) as ExperienceCandidateType | undefined,
+    sourceCandidateTitle: optionalString(row.source_candidate_title),
+    sourceCandidateStatus: optionalString(row.source_candidate_status) as ExperienceCandidateStatus | undefined,
+    sourceCandidateTaskId: optionalString(row.source_candidate_task_id),
+    sourceCandidatePublishedPath: optionalString(row.source_candidate_published_path),
+    usageCount: optionalNumber(row.usage_count) ?? 0,
+    lastUsedAt: optionalString(row.last_used_at),
+    lastUsedTaskId: optionalString(row.last_used_task_id),
   };
 }
 

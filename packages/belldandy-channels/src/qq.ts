@@ -18,6 +18,15 @@ interface WsPayload {
     t?: string;
 }
 
+type QqReplyContext = {
+    channelId?: string;
+    guildId?: string;
+    groupOpenId?: string;
+    userOpenId?: string;
+    messageId?: string;
+    eventType: string;
+};
+
 // WebSocket OpCodes
 const OpCode = {
     DISPATCH: 0,        // 服务端推送事件
@@ -51,8 +60,8 @@ export class QqChannel implements Channel {
     private readonly router?: ChannelRouter;
 
     private _running = false;
-    private lastChatId?: string;
-    private lastReplyContext?: any;
+    private latestActiveChatId?: string;
+    private readonly replyContextByChatId = new Map<string, QqReplyContext>();
 
     private readonly processedMessages = new Set<string>();
     private readonly MESSAGE_CACHE_SIZE = 1000;
@@ -61,6 +70,7 @@ export class QqChannel implements Channel {
     private accessToken: string = "";
     private tokenExpiresAt: number = 0;
     private tokenRefreshTimer?: NodeJS.Timeout;
+    private reconnectTimer?: NodeJS.Timeout;
 
     // WebSocket
     private ws?: WebSocket;
@@ -68,6 +78,7 @@ export class QqChannel implements Channel {
     private sessionId?: string;
     private sequence: number = 0;
     private gatewayUrl?: string;
+    private suppressCloseReconnect = false;
 
     get isRunning(): boolean {
         return this._running;
@@ -96,6 +107,26 @@ export class QqChannel implements Channel {
         if (eventType === "DIRECT_MESSAGE_CREATE" || eventType === "C2C_MESSAGE_CREATE") return "dm";
         if (eventType === "GROUP_AT_MESSAGE_CREATE") return "group";
         return "channel";
+    }
+
+    private resolveChatId(message: any): string | undefined {
+        const chatId = message.channel_id || message.guild_id || message.group_openid || message.author?.id;
+        return typeof chatId === "string" && chatId.length > 0 ? chatId : undefined;
+    }
+
+    private rememberReplyContext(chatId: string, replyContext: QqReplyContext): void {
+        this.latestActiveChatId = chatId;
+        this.replyContextByChatId.set(chatId, replyContext);
+    }
+
+    private getReplyContext(chatId?: string): QqReplyContext | undefined {
+        if (chatId) {
+            return this.replyContextByChatId.get(chatId);
+        }
+        if (!this.latestActiveChatId) {
+            return undefined;
+        }
+        return this.replyContextByChatId.get(this.latestActiveChatId);
     }
 
     /**
@@ -160,6 +191,30 @@ export class QqChannel implements Channel {
         }, safeExpiresIn * 1000);
     }
 
+    private clearReconnectTimer(): void {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = undefined;
+        }
+    }
+
+    private scheduleReconnect(delayMs: number): void {
+        this.clearReconnectTimer();
+        if (!this._running) {
+            return;
+        }
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = undefined;
+            if (!this._running) {
+                return;
+            }
+            void this.connectWebSocket().catch((error) => {
+                console.error(`[${this.name}] Failed to reconnect WebSocket:`, error);
+                this.scheduleReconnect(delayMs);
+            });
+        }, delayMs);
+    }
+
     /**
      * 获取 Gateway URL
      */
@@ -201,6 +256,8 @@ export class QqChannel implements Channel {
         this.ws = new WebSocket(this.gatewayUrl);
 
         this.ws.on("open", () => {
+            this.clearReconnectTimer();
+            this.suppressCloseReconnect = false;
             console.log(`[${this.name}] WebSocket connected`);
         });
 
@@ -226,7 +283,10 @@ export class QqChannel implements Channel {
                 this.heartbeatInterval = undefined;
             }
 
+            const shouldSuppressReconnect = this.suppressCloseReconnect;
+            this.suppressCloseReconnect = false;
             if (!this._running) return;
+            if (shouldSuppressReconnect) return;
 
             // 按 QQ 官方文档分类处理 close code:
             // https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/error-trace/websocket.html
@@ -253,7 +313,7 @@ export class QqChannel implements Channel {
 
             const delay = code === 4008 ? 10000 : 5000;
             console.log(`[${this.name}] Reconnecting in ${delay / 1000}s...`);
-            setTimeout(() => this.connectWebSocket(), delay);
+            this.scheduleReconnect(delay);
         });
 
         this.ws.on("error", (error) => {
@@ -322,7 +382,7 @@ export class QqChannel implements Channel {
                 console.log(`[${this.name}] Invalid session, reconnecting...`);
                 this.sessionId = undefined;
                 this.sequence = 0;
-                setTimeout(() => this.connectWebSocket(), 5000);
+                this.scheduleReconnect(5000);
                 break;
 
             default:
@@ -399,13 +459,16 @@ export class QqChannel implements Channel {
      * 重连
      */
     private reconnect(): void {
+        this.suppressCloseReconnect = true;
+        this.clearReconnectTimer();
         if (this.ws) {
             this.ws.close();
         }
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = undefined;
         }
-        setTimeout(() => this.connectWebSocket(), 1000);
+        this.scheduleReconnect(1000);
     }
 
     /**
@@ -438,9 +501,13 @@ export class QqChannel implements Channel {
 
         console.log(`[${this.name}] Received message: ${content.substring(0, 50)}...`);
 
-        // 保存上下文用于回复
-        this.lastChatId = message.channel_id || message.guild_id || message.group_openid || message.author?.id;
-        this.lastReplyContext = {
+        const chatId = this.resolveChatId(message);
+        if (!chatId) {
+            console.warn(`[${this.name}] Unable to resolve chat ID for message ${msgId}`);
+            return;
+        }
+
+        const replyContext: QqReplyContext = {
             channelId: message.channel_id,
             guildId: message.guild_id,
             groupOpenId: message.group_openid,
@@ -448,6 +515,7 @@ export class QqChannel implements Channel {
             messageId: message.id,
             eventType,
         };
+        this.rememberReplyContext(chatId, replyContext);
 
         const chatKind = this.inferChatKind(eventType);
         const mentions = eventType.includes("_AT_") ? ["__mention__"] : [];
@@ -456,7 +524,7 @@ export class QqChannel implements Channel {
             ? this.router.decide({
                 channel: "qq",
                 chatKind,
-                chatId: String(this.lastChatId ?? ""),
+                chatId,
                 text: content,
                 senderId: typeof message.author?.id === "string" ? message.author.id : undefined,
                 senderName: typeof message.author?.username === "string" ? message.author.username : undefined,
@@ -480,7 +548,7 @@ export class QqChannel implements Channel {
         console.log(`[${this.name}] Route decision for ${msgId}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
 
         // 获取或创建会话
-        const conversationId = `qq_${this.lastChatId}`;
+        const conversationId = `qq_${chatId}`;
 
         // 添加用户消息到会话历史
         this.conversationStore.addMessage(conversationId, "user", content, {
@@ -504,7 +572,7 @@ export class QqChannel implements Channel {
                 },
             })) {
                 if (item.type === "final") {
-                    await this.sendReply(item.text);
+                    await this.sendReply(item.text, replyContext);
                     // 添加助手回复到会话历史
                     this.conversationStore.addMessage(conversationId, "assistant", item.text, {
                         agentId: selectedAgentId,
@@ -514,20 +582,21 @@ export class QqChannel implements Channel {
             }
         } catch (error) {
             console.error(`[${this.name}] Agent error:`, error);
-            await this.sendReply("抱歉，处理消息时出错了。");
+            await this.sendReply("抱歉，处理消息时出错了。", replyContext);
         }
     }
 
     /**
      * 发送回复
      */
-    private async sendReply(content: string): Promise<void> {
-        if (!this.lastReplyContext) {
+    private async sendReply(content: string, replyContext?: QqReplyContext): Promise<void> {
+        const targetContext = replyContext ?? this.getReplyContext();
+        if (!targetContext) {
             console.warn(`[${this.name}] No reply context available`);
             return;
         }
 
-        const { channelId, guildId, groupOpenId, userOpenId, messageId, eventType } = this.lastReplyContext;
+        const { channelId, guildId, groupOpenId, userOpenId, messageId, eventType } = targetContext;
 
         try {
             const baseUrl = this.config.sandbox
@@ -605,11 +674,15 @@ export class QqChannel implements Channel {
     async stop(): Promise<void> {
         if (!this._running) return;
 
+        this._running = false;
+        this.suppressCloseReconnect = false;
+
         // 清理定时器
         if (this.tokenRefreshTimer) {
             clearTimeout(this.tokenRefreshTimer);
             this.tokenRefreshTimer = undefined;
         }
+        this.clearReconnectTimer();
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = undefined;
@@ -621,20 +694,22 @@ export class QqChannel implements Channel {
             this.ws = undefined;
         }
 
-        this._running = false;
         this.processedMessages.clear();
+        this.latestActiveChatId = undefined;
+        this.replyContextByChatId.clear();
         console.log(`[${this.name}] Channel stopped.`);
     }
 
     async sendProactiveMessage(content: string, chatId?: string): Promise<boolean> {
-        const targetChatId = chatId || this.lastChatId;
-        if (!targetChatId || !this.lastReplyContext) {
+        const targetChatId = chatId || this.latestActiveChatId;
+        const targetContext = this.getReplyContext(targetChatId);
+        if (!targetChatId || !targetContext) {
             console.warn(`[${this.name}] Cannot send proactive message - no active chat ID found.`);
             return false;
         }
 
         try {
-            await this.sendReply(content);
+            await this.sendReply(content, targetContext);
             console.log(`[${this.name}] Proactive message sent to ${targetChatId}`);
             return true;
         } catch (e) {

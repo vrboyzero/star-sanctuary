@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConversationStore } from "@belldandy/agent";
 
@@ -19,6 +19,11 @@ import { CommunityChannel } from "./community.js";
 describe("community token usage upload", () => {
   beforeEach(() => {
     uploadTokenUsageMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("uploads cumulative usage deltas to the agent owner", async () => {
@@ -217,5 +222,135 @@ describe("community token usage upload", () => {
       deltaTokens: 9,
     }));
     expect(uploadTokenUsageMock.mock.calls[0][0].userUuid).toBeUndefined();
+  });
+
+  it("cleans per-room message queue after queued work finishes", async () => {
+    let releaseRun: (() => void) | undefined;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const agent = {
+      run: vi.fn(async function* () {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          releaseRun = resolve;
+        });
+        yield { type: "final", text: "done" };
+      }),
+    };
+
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: agent as any,
+      conversationStore: new ConversationStore(),
+    });
+
+    const state = {
+      ws: { send: vi.fn() },
+      agentConfig: { name: "贝露丹蒂", apiKey: "gro_test_key" },
+      roomId: "room-queue",
+      reconnectAttempts: 0,
+      members: [],
+    };
+
+    const pending = (channel as any).enqueueMessage({
+      id: "msg-queue-1",
+      content: "排队测试",
+      sender: {
+        type: "user",
+        id: "u-queue",
+        uid: "u-queue",
+        name: "Queue User",
+      },
+    }, state);
+
+    expect((channel as any).messageQueues.get("room-queue")).toBeTruthy();
+
+    await started;
+    releaseRun?.();
+    await pending;
+
+    expect((channel as any).messageQueues.has("room-queue")).toBe(false);
+  });
+
+  it("logs DNS/TCP diagnostics when room lookup fails at network layer", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: { run: vi.fn() } as any,
+      conversationStore: new ConversationStore(),
+    });
+
+    const diagnoseSpy = vi.spyOn(channel as any, "diagnoseHttpConnectivity").mockResolvedValue({
+      requestUrl: "https://office.goddess.ai/api/rooms/by-name/vrboyzero",
+      host: "office.goddess.ai",
+      port: 443,
+      dns: { ok: true, addresses: ["1.1.1.1"] },
+      tcp: { ok: true, address: "1.1.1.1:443" },
+      failure: { name: "TypeError", message: "fetch failed" },
+    });
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect((channel as any).connectAgent({
+      name: "贝露丹蒂",
+      apiKey: "gro_test_key",
+      room: { name: "vrboyzero" },
+    })).rejects.toThrow("fetch failed");
+
+    expect(diagnoseSpy).toHaveBeenCalledWith(
+      "https://office.goddess.ai/api/rooms/by-name/vrboyzero",
+      expect.any(TypeError),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[community] Failed to resolve room name "vrboyzero" (network):',
+      expect.objectContaining({
+        host: "office.goddess.ai",
+        port: 443,
+        dns: expect.objectContaining({ ok: true }),
+        tcp: expect.objectContaining({ ok: true }),
+      }),
+    );
+  });
+
+  it("logs HTTP status details when room lookup returns non-ok response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("room not found", {
+        status: 404,
+        statusText: "Not Found",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: { run: vi.fn() } as any,
+      conversationStore: new ConversationStore(),
+    });
+
+    const diagnoseSpy = vi.spyOn(channel as any, "diagnoseHttpConnectivity");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect((channel as any).connectAgent({
+      name: "贝露丹蒂",
+      apiKey: "gro_test_key",
+      room: { name: "vrboyzero" },
+    })).rejects.toThrow('Failed to find room "vrboyzero": Not Found - room not found');
+
+    expect(diagnoseSpy).not.toHaveBeenCalled();
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[community] Failed to resolve room name "vrboyzero" (http 404):',
+      expect.objectContaining({
+        requestUrl: "https://office.goddess.ai/api/rooms/by-name/vrboyzero",
+        status: 404,
+        statusText: "Not Found",
+        bodyPreview: "room not found",
+      }),
+    );
   });
 });

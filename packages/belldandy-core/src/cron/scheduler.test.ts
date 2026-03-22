@@ -111,4 +111,57 @@ describe("startCronScheduler", () => {
     expect(job.enabled).toBe(false);
     expect(job.state.nextRunAtMs).toBeUndefined();
   });
+
+  it("does not overlap scheduler ticks while a previous job is still running", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-21T08:20:00.000Z");
+    vi.setSystemTime(now);
+    const job: CronJob = {
+      id: "cron_overlap_guard",
+      name: "slow system event",
+      enabled: true,
+      createdAtMs: now.getTime() - 60_000,
+      updatedAtMs: now.getTime() - 60_000,
+      schedule: {
+        kind: "every",
+        everyMs: 60_000,
+        anchorMs: now.getTime() - 60_000,
+      },
+      payload: {
+        kind: "systemEvent",
+        text: "slow run",
+      },
+      state: {
+        nextRunAtMs: now.getTime() - 1,
+      },
+    };
+    const jobs = [job];
+    const store = {
+      list: vi.fn(async () => jobs),
+      saveJobs: vi.fn(async (nextJobs: CronJob[]) => {
+        jobs.splice(0, jobs.length, ...nextJobs);
+      }),
+    };
+
+    let releaseRun: (() => void) | undefined;
+    const sendMessage = vi.fn().mockImplementation(() => new Promise<string>((resolve) => {
+      releaseRun = () => resolve("done");
+    }));
+
+    const scheduler = startCronScheduler({
+      store: store as never,
+      sendMessage,
+      log: () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    releaseRun?.();
+    await vi.runOnlyPendingTimersAsync();
+    scheduler.stop();
+  });
 });

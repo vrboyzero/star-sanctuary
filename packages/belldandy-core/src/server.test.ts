@@ -19,6 +19,7 @@ import { approvePairingCode } from "./security/store.js";
 import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import { ToolsConfigManager } from "./tools-config.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
+import { IdempotencyManager } from "./webhook/index.js";
 
 // MemoryManager 内部会初始化 OpenAIEmbeddingProvider，需要 OPENAI_API_KEY
 // 测试环境中设置一个占位值，避免构造函数抛错（不会实际调用 API）
@@ -217,6 +218,62 @@ test("message.send forwards modelId to AgentRegistry.create as modelOverride", a
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId && f.ok === true));
     expect(capturedOverrides).toContain("kimi-k2.5");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+  }
+});
+
+test("message.send reuses conversation snapshot to avoid one extra conversationStore.get on hot path", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const conversationId = "conv-hot-path";
+  conversationStore.addMessage(conversationId, "assistant", "previous", {
+    agentId: "default",
+  });
+
+  const getSpy = vi.spyOn(conversationStore, "get");
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      yield { type: "final" as const, text: `reply:${input.text}` };
+      yield { type: "status", status: "done" as const };
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+    agentFactory: () => agent,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-send-hot-path",
+      method: "message.send",
+      params: {
+        conversationId,
+        text: "hello",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-send-hot-path" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+    expect(getSpy).toHaveBeenCalledTimes(2);
   } finally {
     ws.close();
     await closeP;
@@ -559,6 +616,43 @@ test("config.update persists tool control mode and redacts confirm password in c
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor reads memory db status without blocking sync fs path", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.writeFile(path.join(stateDir, "memory.sqlite"), Buffer.alloc(2048, 1));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor");
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "memory_db",
+        status: "pass",
+        message: expect.stringContaining("Size: 2.0 KB"),
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -1288,19 +1382,21 @@ test("memory viewer rpc returns task and memory data", async () => {
     await pairWebSocketClient(ws, frames, stateDir);
 
     ws.send(JSON.stringify({ type: "req", id: "memory-stats", method: "memory.stats" }));
-    ws.send(JSON.stringify({ type: "req", id: "task-list", method: "memory.task.list", params: { limit: 5 } }));
-    ws.send(JSON.stringify({ type: "req", id: "task-list-goal", method: "memory.task.list", params: { limit: 5, filter: { goalId: "goal_memory_viewer" } } }));
-    ws.send(JSON.stringify({ type: "req", id: "memory-recent", method: "memory.recent", params: { limit: 5 } }));
-    ws.send(JSON.stringify({ type: "req", id: "memory-recent-uncategorized", method: "memory.recent", params: { limit: 5, filter: { uncategorized: true } } }));
-    ws.send(JSON.stringify({ type: "req", id: "memory-search", method: "memory.search", params: { query: "viewer", limit: 5 } }));
-    ws.send(JSON.stringify({ type: "req", id: "memory-search-topic", method: "memory.search", params: { query: "viewer topic", limit: 5, filter: { topic: "viewer-audit" } } }));
-    ws.send(JSON.stringify({ type: "req", id: "memory-recent-category", method: "memory.recent", params: { limit: 5, filter: { category: "decision" } } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-stats-with-recent", method: "memory.stats", params: { includeRecentTasks: true } }));
+    ws.send(JSON.stringify({ type: "req", id: "task-list", method: "memory.task.list", params: { limit: 5, summaryOnly: true } }));
+    ws.send(JSON.stringify({ type: "req", id: "task-list-goal", method: "memory.task.list", params: { limit: 5, summaryOnly: true, filter: { goalId: "goal_memory_viewer" } } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-recent", method: "memory.recent", params: { limit: 5, includeContent: false } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-recent-uncategorized", method: "memory.recent", params: { limit: 5, includeContent: false, filter: { uncategorized: true } } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-search", method: "memory.search", params: { query: "viewer", limit: 5, includeContent: false } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-search-topic", method: "memory.search", params: { query: "viewer topic", limit: 5, includeContent: false, filter: { topic: "viewer-audit" } } }));
+    ws.send(JSON.stringify({ type: "req", id: "memory-recent-category", method: "memory.recent", params: { limit: 5, includeContent: false, filter: { category: "decision" } } }));
     ws.send(JSON.stringify({ type: "req", id: "usage-list", method: "experience.usage.list", params: { limit: 10, filter: { taskId: completedTaskId } } }));
     ws.send(JSON.stringify({ type: "req", id: "usage-stats", method: "experience.usage.stats", params: { limit: 10, filter: { assetType: "method" } } }));
     ws.send(JSON.stringify({ type: "req", id: "usage-get", method: "experience.usage.get", params: { usageId: "usage-viewer-method" } }));
     ws.send(JSON.stringify({ type: "req", id: "candidate-get", method: "experience.candidate.get", params: { candidateId: methodCandidate!.candidate.id } }));
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-stats"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-stats-with-recent"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-list-goal"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-recent"));
@@ -1321,6 +1417,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     const memorySearchTopicRes = frames.find((f) => f.type === "res" && f.id === "memory-search-topic");
     const memoryRecentCategoryRes = frames.find((f) => f.type === "res" && f.id === "memory-recent-category");
     const statsRes = frames.find((f) => f.type === "res" && f.id === "memory-stats");
+    const statsWithRecentRes = frames.find((f) => f.type === "res" && f.id === "memory-stats-with-recent");
     const usageListRes = frames.find((f) => f.type === "res" && f.id === "usage-list");
     const usageStatsRes = frames.find((f) => f.type === "res" && f.id === "usage-stats");
     const usageGetRes = frames.find((f) => f.type === "res" && f.id === "usage-get");
@@ -1331,24 +1428,36 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(statsRes.payload.status.categorized).toBeGreaterThan(0);
     expect(statsRes.payload.status.uncategorized).toBeGreaterThan(0);
     expect(statsRes.payload.status.categoryBuckets.decision).toBeGreaterThan(0);
+    expect(statsRes.payload.recentTasks).toBeUndefined();
+    expect(statsWithRecentRes.ok).toBe(true);
+    expect(Array.isArray(statsWithRecentRes.payload.recentTasks)).toBe(true);
+    expect(statsWithRecentRes.payload.recentTasks.length).toBeGreaterThan(0);
     expect(taskListRes.ok).toBe(true);
     expect(taskListRes.payload.items.length).toBeGreaterThan(0);
+    expect(taskListRes.payload.items[0].toolCalls).toBeUndefined();
+    expect(taskListRes.payload.items[0].artifactPaths).toBeUndefined();
     expect(taskListGoalRes.ok).toBe(true);
     expect(taskListGoalRes.payload.items.length).toBeGreaterThan(0);
     expect(taskListGoalRes.payload.items.every((item: any) => item?.metadata?.goalId === "goal_memory_viewer")).toBe(true);
     expect(taskListGoalRes.payload.items.some((item: any) => item?.id === "task-non-goal-viewer")).toBe(false);
     expect(memoryRecentRes.ok).toBe(true);
     expect(memoryRecentRes.payload.items.length).toBeGreaterThan(0);
+    expect(memoryRecentRes.payload.items[0].content).toBeUndefined();
     expect(memoryRecentUncategorizedRes.ok).toBe(true);
     expect(memoryRecentUncategorizedRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentUncategorizedRes.payload.items[0].category).toBeUndefined();
+    expect(memoryRecentUncategorizedRes.payload.items[0].content).toBeUndefined();
     expect(memorySearchRes.ok).toBe(true);
+    expect(Array.isArray(memorySearchRes.payload.items)).toBe(true);
+    expect(memorySearchRes.payload.items.every((item: any) => item.content === undefined)).toBe(true);
     expect(memorySearchTopicRes.ok).toBe(true);
     expect(memorySearchTopicRes.payload.items.length).toBeGreaterThan(0);
     expect(memorySearchTopicRes.payload.items.every((item: any) => item.sourcePath === "memory/topic-viewer.md")).toBe(true);
+    expect(memorySearchTopicRes.payload.items[0].content).toBeUndefined();
     expect(memoryRecentCategoryRes.ok).toBe(true);
     expect(memoryRecentCategoryRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentCategoryRes.payload.items[0].category).toBe("decision");
+    expect(memoryRecentCategoryRes.payload.items[0].content).toBeUndefined();
     expect(usageListRes.ok).toBe(true);
     expect(usageListRes.payload.items.length).toBe(2);
     expect(usageStatsRes.ok).toBe(true);
@@ -1625,6 +1734,52 @@ test("workspace methods reject sibling-prefix path traversal", async () => {
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
 
+test("workspace methods keep list/read/write behavior after async fs refactor", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.mkdir(path.join(stateDir, "docs"), { recursive: true });
+  await fs.promises.writeFile(path.join(stateDir, "docs", "note.md"), "# hello", "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  await pairWebSocketClient(ws, frames, stateDir);
+
+  ws.send(JSON.stringify({ type: "req", id: "workspace-list-ok", method: "workspace.list", params: { path: "docs" } }));
+  ws.send(JSON.stringify({ type: "req", id: "workspace-read-ok", method: "workspace.read", params: { path: "docs/note.md" } }));
+  ws.send(JSON.stringify({ type: "req", id: "workspace-write-ok", method: "workspace.write", params: { path: "docs/generated.md", content: "generated" } }));
+
+  await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-list-ok"));
+  await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-read-ok"));
+  await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-write-ok"));
+
+  const listRes = frames.find((f) => f.type === "res" && f.id === "workspace-list-ok");
+  const readRes = frames.find((f) => f.type === "res" && f.id === "workspace-read-ok");
+  const writeRes = frames.find((f) => f.type === "res" && f.id === "workspace-write-ok");
+
+  expect(listRes.ok).toBe(true);
+  expect(listRes.payload?.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: "note.md", type: "file", path: "docs/note.md" }),
+  ]));
+  expect(readRes.ok).toBe(true);
+  expect(readRes.payload?.content).toBe("# hello");
+  expect(writeRes.ok).toBe(true);
+  await expect(fs.promises.readFile(path.join(stateDir, "docs", "generated.md"), "utf-8")).resolves.toBe("generated");
+
+  ws.close();
+  await closeP;
+  await server.close();
+  await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
 test("message.send rejects attachment larger than configured per-file limit", async () => {
   await withEnv({
     BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "8",
@@ -1777,6 +1932,143 @@ test("message.send accepts multiple attachments within configured limits", async
   });
 });
 
+test("message.send caps total injected text attachment chars across files", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_TEXT_CHAR_LIMIT: "50",
+    BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT: "70",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const seenInputs: any[] = [];
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        seenInputs.push(input);
+        yield { type: "final" as const, text: "ok" };
+        yield { type: "status", status: "done" as const };
+      },
+    };
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "att-char-budget",
+        method: "message.send",
+        params: {
+          text: "attachments budget",
+          attachments: [
+            { name: "a.txt", type: "text/plain", base64: toBase64("A".repeat(60)) },
+            { name: "b.txt", type: "text/plain", base64: toBase64("B".repeat(60)) },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "att-char-budget" && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+      expect(seenInputs).toHaveLength(1);
+      expect(seenInputs[0].meta?.attachmentStats).toMatchObject({
+        textAttachmentCount: 2,
+        textAttachmentChars: 70,
+        promptAugmentationChars: 70,
+        textAttachmentTruncatedCharLimit: 50,
+        textAttachmentTotalCharLimit: 70,
+      });
+      expect(String(seenInputs[0].text)).toContain("A".repeat(35));
+      expect(String(seenInputs[0].text)).toContain("B".repeat(5));
+      expect(String(seenInputs[0].text)).not.toContain("B".repeat(6));
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send caps appended audio transcript chars when user text already exists", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT: "30",
+    BELLDANDY_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT: "20",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const seenInputs: any[] = [];
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        seenInputs.push(input);
+        yield { type: "final" as const, text: "ok" };
+        yield { type: "status", status: "done" as const };
+      },
+    };
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+      sttTranscribe: async () => ({
+        text: "ABCDEFGHIJABCDEFGHIJABCDEFGHIJ",
+        provider: "test",
+        model: "mock-stt",
+      }),
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "audio-transcript-budget",
+        method: "message.send",
+        params: {
+          text: "summarize this audio",
+          attachments: [
+            { name: "voice.webm", type: "audio/webm", base64: toBase64("fake-audio") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "audio-transcript-budget" && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+      expect(seenInputs).toHaveLength(1);
+      expect(seenInputs[0].meta?.attachmentStats).toMatchObject({
+        textAttachmentCount: 0,
+        textAttachmentChars: 0,
+        audioTranscriptChars: 20,
+        promptAugmentationChars: 20,
+        textAttachmentTotalCharLimit: 30,
+        audioTranscriptAppendCharLimit: 20,
+      });
+      expect(String(seenInputs[0].text)).toContain('语音转录: "ABCDE');
+      expect(String(seenInputs[0].text)).toContain("ABCDEFGHIJABCDEFGHIJ");
+      expect(String(seenInputs[0].text)).not.toContain("ABCDEFGHIJABCDEFGHIJABCDEFGHIJ");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 test("/api/message is disabled by default", async () => {
   await withEnv({
     BELLDANDY_COMMUNITY_API_ENABLED: undefined,
@@ -1913,6 +2205,63 @@ test("/api/message accepts valid bearer token", async () => {
       await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }
   });
+});
+
+test("/api/webhook reuses in-flight response for concurrent idempotency key", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  let runCount = 0;
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      runCount += 1;
+      await sleep(25);
+      yield { type: "final", text: `webhook:${input.text}` };
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => agent,
+    webhookConfig: {
+      version: 1,
+      webhooks: [
+        {
+          id: "audit",
+          enabled: true,
+          token: "webhook-test-token",
+        },
+      ],
+    },
+    webhookIdempotency: new IdempotencyManager(60_000),
+  });
+
+  try {
+    const request = () =>
+      fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer webhook-test-token",
+          "x-idempotency-key": "dup-1",
+        },
+        body: JSON.stringify({ text: "hello from webhook" }),
+      });
+
+    const [first, second] = await Promise.all([request(), request()]);
+    const payloads = await Promise.all([first.json(), second.json()]) as Array<{ ok?: boolean; duplicate?: boolean; payload?: { response?: string } }>;
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(runCount).toBe(1);
+    expect(payloads.every((item) => item.ok === true)).toBe(true);
+    expect(payloads.every((item) => item.payload?.response === "webhook:hello from webhook")).toBe(true);
+    expect(payloads.filter((item) => item.duplicate === true)).toHaveLength(1);
+  } finally {
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 async function pairWebSocketClient(ws: WebSocket, frames: any[], stateDir: string): Promise<void> {

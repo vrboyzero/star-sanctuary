@@ -132,6 +132,15 @@ export class MCPClient {
   /** 重连计数器 */
   private reconnectCount = 0;
 
+  /** 当前进行中的重连任务 */
+  private reconnectPromise: Promise<void> | null = null;
+
+  /** 当前重连等待的取消控制器 */
+  private reconnectDelayAbortController: AbortController | null = null;
+
+  /** 重连是否已被取消 */
+  private reconnectCancelled = false;
+
   constructor(config: MCPServerConfig) {
     this.config = config;
   }
@@ -239,6 +248,8 @@ export class MCPClient {
 
     mcpLog(`mcp:${this.config.id}`, "正在断开连接...");
 
+    this.cancelPendingReconnect();
+
     await this.cleanup();
     this.setStatus("disconnected");
 
@@ -249,29 +260,23 @@ export class MCPClient {
    * 重新连接
    */
   async reconnect(): Promise<void> {
-    if (this.reconnectCount >= (this.config.retryCount ?? 3)) {
-      mcpError(`mcp:${this.config.id}`, "已达到最大重试次数");
-      this.setStatus("error");
-      this.error = "重连失败：已达到最大重试次数";
-      return;
+    if (this.reconnectPromise) {
+      return this.reconnectPromise;
     }
 
-    this.reconnectCount++;
-    this.setStatus("reconnecting");
-    
-    mcpLog(`mcp:${this.config.id}`, `正在重连 (${this.reconnectCount}/${this.config.retryCount ?? 3})...`);
+    this.reconnectCancelled = false;
 
-    // 等待重试间隔
-    const delay = this.config.retryDelay ?? 1000;
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    let reconnectPromise: Promise<void>;
+    reconnectPromise = this.runReconnectLoop().finally(() => {
+      if (this.reconnectPromise === reconnectPromise) {
+        this.reconnectPromise = null;
+      }
+      this.reconnectDelayAbortController = null;
+      this.reconnectCancelled = false;
+    });
 
-    try {
-      await this.cleanup();
-      await this.connect();
-    } catch {
-      // 连接失败，递归重试
-      await this.reconnect();
-    }
+    this.reconnectPromise = reconnectPromise;
+    return reconnectPromise;
   }
 
   /**
@@ -547,6 +552,86 @@ export class MCPClient {
     this.resources = [];
     this.metadata = undefined;
     this.connectedAt = undefined;
+  }
+
+  private async runReconnectLoop(): Promise<void> {
+    const maxRetries = this.config.retryCount ?? 3;
+    const delay = this.config.retryDelay ?? 1000;
+
+    while (!this.reconnectCancelled) {
+      if (this.reconnectCount >= maxRetries) {
+        mcpError(`mcp:${this.config.id}`, "已达到最大重试次数");
+        this.setStatus("error");
+        this.error = "重连失败：已达到最大重试次数";
+        return;
+      }
+
+      this.reconnectCount++;
+      this.setStatus("reconnecting");
+
+      mcpLog(
+        `mcp:${this.config.id}`,
+        `正在重连 (${this.reconnectCount}/${maxRetries})...`
+      );
+
+      const shouldContinue = await this.waitReconnectDelay(delay);
+      if (!shouldContinue || this.reconnectCancelled) {
+        mcpLog(`mcp:${this.config.id}`, "重连等待已取消");
+        return;
+      }
+
+      try {
+        await this.cleanup();
+        if (this.reconnectCancelled) {
+          return;
+        }
+
+        await this.connect();
+
+        if (this.reconnectCancelled) {
+          await this.cleanup();
+          this.setStatus("disconnected");
+        }
+        return;
+      } catch {
+        if (this.reconnectCancelled) {
+          return;
+        }
+      }
+    }
+  }
+
+  private async waitReconnectDelay(delay: number): Promise<boolean> {
+    this.reconnectDelayAbortController?.abort();
+    const controller = new AbortController();
+    this.reconnectDelayAbortController = controller;
+
+    try {
+      return await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          controller.signal.removeEventListener("abort", onAbort);
+          resolve(true);
+        }, delay);
+
+        const onAbort = () => {
+          clearTimeout(timer);
+          controller.signal.removeEventListener("abort", onAbort);
+          resolve(false);
+        };
+
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+      });
+    } finally {
+      if (this.reconnectDelayAbortController === controller) {
+        this.reconnectDelayAbortController = null;
+      }
+    }
+  }
+
+  private cancelPendingReconnect(): void {
+    this.reconnectCancelled = true;
+    this.reconnectDelayAbortController?.abort();
+    this.reconnectDelayAbortController = null;
   }
 
   /**

@@ -102,13 +102,6 @@ export class MemoryIndexer {
 
             const chunksStr = this.chunker.splitText(content);
 
-            // 事务性更新：先删旧，再插新
-            // 注意：SQLite DatabaseSync 暂时没有显式 transaction API (Node 22)，
-            // 但我们可以顺序执行。如果中间失败，可能导致数据不一致。
-            // 对于 MVP，我们可以接受。
-
-            this.store.deleteBySource(filePath);
-
             const baseId = crypto.createHash("md5").update(filePath).digest("hex");
 
             // Phase M-1: 推断元数据
@@ -116,11 +109,12 @@ export class MemoryIndexer {
             const tsDate = inferTsDateFromPath(filePath, mtime);
             const agentId = this.store.getSourceAgentId(filePath) ?? undefined;
             const sourceVisibility = this.store.getSourceVisibility(filePath) ?? undefined;
+            const chunks: MemoryChunk[] = [];
 
             for (let i = 0; i < chunksStr.length; i++) {
                 const chunkContent = chunksStr[i];
                 const chunkId = `${baseId}_${i}`;
-                const chunk: MemoryChunk = {
+                chunks.push({
                     id: chunkId,
                     sourcePath: filePath,
                     sourceType: ext === ".jsonl" ? "session" : "file",
@@ -135,9 +129,11 @@ export class MemoryIndexer {
                         chunk_index: i,
                         total_chunks: chunksStr.length
                     }
-                };
-                this.store.upsertChunk(chunk);
+                });
             }
+
+            // 使用单事务替换同一 source 的索引内容，避免先删后写的中间态暴露给查询方。
+            this.store.replaceSourceChunks(filePath, chunks);
 
             // 更新全局索引时间
             this.store.updateLastIndexedAt();

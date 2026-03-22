@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 
@@ -188,10 +189,19 @@ const DEFAULT_EVENTS = [
 ];
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_TEXT_CHAR_LIMIT = 200_000;
+const DEFAULT_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT = 200_000;
+const DEFAULT_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT = 12_000;
 
 type AttachmentLimits = {
   maxFileBytes: number;
   maxTotalBytes: number;
+};
+
+type AttachmentPromptLimits = {
+  textCharLimit: number;
+  totalTextCharLimit: number;
+  audioTranscriptAppendCharLimit: number;
 };
 
 function isUnderRoot(root: string, target: string): boolean {
@@ -240,6 +250,30 @@ function getAttachmentLimits(): AttachmentLimits {
   };
 }
 
+function getAttachmentPromptLimits(): AttachmentPromptLimits {
+  return {
+    textCharLimit: parsePositiveIntEnv("BELLDANDY_ATTACHMENT_TEXT_CHAR_LIMIT", DEFAULT_ATTACHMENT_TEXT_CHAR_LIMIT),
+    totalTextCharLimit: parsePositiveIntEnv("BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT", DEFAULT_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT),
+    audioTranscriptAppendCharLimit: parsePositiveIntEnv("BELLDANDY_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT", DEFAULT_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT),
+  };
+}
+
+function truncateTextForPrompt(text: string, limit: number, suffix: string): { text: string; truncated: boolean } {
+  if (text.length <= limit) {
+    return { text, truncated: false };
+  }
+  if (limit <= 0) {
+    return { text: "", truncated: true };
+  }
+  if (limit <= suffix.length) {
+    return { text: text.slice(0, limit), truncated: true };
+  }
+  return {
+    text: `${text.slice(0, Math.max(0, limit - suffix.length))}${suffix}`,
+    truncated: true,
+  };
+}
+
 function estimateBase64DecodedBytes(base64: string): number | null {
   const normalized = base64.trim().replace(/\s+/g, "");
   if (!normalized) return 0;
@@ -247,6 +281,104 @@ function estimateBase64DecodedBytes(base64: string): number | null {
   if (normalized.length % 4 !== 0) return null;
   const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
   return Math.max(0, (normalized.length / 4) * 3 - padding);
+}
+
+async function statIfExists(targetPath: string): Promise<fs.Stats | null> {
+  try {
+    return await fsp.stat(targetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function mergeEnvContentIntoConfig(raw: string, config: Record<string, string>): void {
+  raw.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith("#")) {
+      const eq = trimmed.indexOf("=");
+      if (eq > 0) {
+        const key = trimmed.slice(0, eq).trim();
+        let val = trimmed.slice(eq + 1).trim();
+        if ((val.startsWith("\"") && val.endsWith("\"")) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        config[key] = val;
+      }
+    }
+  });
+}
+
+async function readEnvFileIntoConfig(filePath: string, config: Record<string, string>): Promise<void> {
+  try {
+    const raw = await fsp.readFile(filePath, "utf-8");
+    mergeEnvContentIntoConfig(raw, config);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return;
+    }
+  }
+}
+
+async function writeTextFileAtomic(filePath: string, content: string, options: { ensureParent?: boolean; mode?: number } = {}): Promise<void> {
+  if (options.ensureParent) {
+    await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: options.mode });
+  }
+  const tmpFile = `${filePath}.${crypto.randomUUID()}.tmp`;
+  await fsp.writeFile(tmpFile, content, "utf-8");
+  await fsp.rename(tmpFile, filePath);
+}
+
+async function updateEnvFile(filePath: string, changes: Record<string, string>): Promise<boolean> {
+  if (Object.keys(changes).length === 0) return true;
+
+  let lines: string[] = [];
+  try {
+    lines = (await fsp.readFile(filePath, "utf-8")).split(/\r?\n/);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      return false;
+    }
+  }
+
+  const newKeys = new Set(Object.keys(changes));
+  const nextLines: string[] = [];
+  const handledKeys = new Set<string>();
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    let matched = false;
+    if (trimmed && !trimmed.startsWith("#")) {
+      const eq = trimmed.indexOf("=");
+      if (eq > 0) {
+        const key = trimmed.slice(0, eq).trim();
+        if (newKeys.has(key)) {
+          nextLines.push(`${key}="${changes[key]}"`);
+          handledKeys.add(key);
+          matched = true;
+        }
+      }
+    }
+    if (!matched) nextLines.push(line);
+  }
+
+  for (const key of newKeys) {
+    if (!handledKeys.has(key)) {
+      if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
+      nextLines.push(`${key}="${changes[key]}"`);
+    }
+  }
+
+  if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
+
+  try {
+    await writeTextFileAtomic(filePath, nextLines.join("\n"), { ensureParent: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 type ToolControlChangesLike = {
@@ -321,7 +453,7 @@ function buildToolControlDisabledPayloadLocally(disabled: {
 }
 
 export async function startGatewayServer(opts: GatewayServerOptions): Promise<GatewayServer> {
-  ensureWebRoot(opts.webRoot);
+  await ensureWebRoot(opts.webRoot);
 
   const log: GatewayLog = opts.logger
     ? {
@@ -341,7 +473,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   if (opts.stateDir) {
     const generatedDir = path.join(opts.stateDir, "generated");
     try {
-      fs.mkdirSync(generatedDir, { recursive: true });
+      await fsp.mkdir(generatedDir, { recursive: true });
     } catch {
       // ignore
     }
@@ -562,12 +694,31 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
 
         // Check idempotency
         const idempotencyKey = req.headers["x-idempotency-key"];
-        if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
-          const cached = opts.webhookIdempotency.getCachedResponse(webhookId, idempotencyKey);
-          if (cached) {
-            log.info("webhook", `Duplicate request detected: ${webhookId} / ${idempotencyKey}`);
-            return res.json({ ...cached, duplicate: true });
+        const idempotencyManager =
+          idempotencyKey && typeof idempotencyKey === "string" ? opts.webhookIdempotency : undefined;
+        let ownsIdempotencySlot = false;
+        if (idempotencyManager && typeof idempotencyKey === "string") {
+          const acquired = idempotencyManager.acquireRequest(webhookId, idempotencyKey);
+          if (acquired.status === "cached") {
+            log.info("webhook", `Duplicate request detected from cache: ${webhookId} / ${idempotencyKey}`);
+            return res.json({ ...acquired.response, duplicate: true });
           }
+          if (acquired.status === "pending") {
+            log.info("webhook", `Duplicate request joined in-flight execution: ${webhookId} / ${idempotencyKey}`);
+            try {
+              const response = await acquired.promise;
+              return res.json({ ...response, duplicate: true });
+            } catch (err) {
+              return res.status(500).json({
+                ok: false,
+                error: {
+                  code: "INTERNAL_ERROR",
+                  message: err instanceof Error ? err.message : "Unknown error",
+                },
+              });
+            }
+          }
+          ownsIdempotencySlot = true;
         }
 
         // Parse request body
@@ -649,8 +800,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         };
 
         // Cache response for idempotency
-        if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
-          opts.webhookIdempotency.cacheResponse(webhookId, idempotencyKey, response);
+        if (idempotencyManager && typeof idempotencyKey === "string") {
+          idempotencyManager.completeRequest(webhookId, idempotencyKey, response);
         }
 
         // Return success response
@@ -658,6 +809,10 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
 
         log.info("webhook", `Webhook processed successfully: ${finalText.substring(0, 50)}...`);
       } catch (error) {
+        const idempotencyKey = req.headers["x-idempotency-key"];
+        if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
+          opts.webhookIdempotency.failRequest(req.params.id, idempotencyKey, error);
+        }
         log.error("webhook", "Failed to process webhook", error);
         res.status(500).json({
           ok: false,
@@ -728,7 +883,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   const sessionsDir = path.join(stateDir, "sessions");
 
   // Ensure sessions dir exists
-  fs.mkdirSync(sessionsDir, { recursive: true });
+  await fsp.mkdir(sessionsDir, { recursive: true });
 
   const conversationStore = opts.conversationStore ?? new ConversationStore({
     ...opts.conversationStoreOptions,
@@ -1144,10 +1299,9 @@ async function handleReq(
           userText = "【已提交工具开关确认口令】";
         }
       }
-      const { history } = await ctx.conversationStore.getHistoryCompacted(conversationId);
+      const { conversation: existingConv, history } = await ctx.conversationStore.getConversationHistoryCompacted(conversationId);
 
       // Agent-会话绑定校验：防止不同 Agent 共享同一会话导致上下文污染
-      const existingConv = ctx.conversationStore.get(conversationId);
       if (existingConv?.agentId && requestedAgentId && existingConv.agentId !== requestedAgentId) {
         return {
           type: "res", id: req.id, ok: false,
@@ -1180,9 +1334,10 @@ async function handleReq(
       let promptText = userText;
       const attachments = parsed.value.attachments;
       const contentParts: Array<any> = []; // Changed from strictly typed imageParts to allow flexible content
-      const TEXT_ATTACHMENT_CHAR_LIMIT = 200_000;
+      const attachmentPromptLimits = getAttachmentPromptLimits();
       let textAttachmentCount = 0;
       let textAttachmentChars = 0;
+      let audioTranscriptChars = 0;
 
       if (attachments && attachments.length > 0) {
         ctx.log.debug("message", "Processing attachments", { count: attachments.length, conversationId });
@@ -1230,10 +1385,51 @@ async function handleReq(
                     ctx.log.debug("stt", "Audio transcribed", { name: att.name, textLength: sttResult.text.length });
                     if (!promptText?.trim()) {
                       // If user didn't type anything, treat audio as the main prompt
-                      promptText = sttResult.text;
+                      const truncatedTranscript = truncateTextForPrompt(
+                        sttResult.text,
+                        attachmentPromptLimits.totalTextCharLimit,
+                        "\n...[Transcript truncated]",
+                      );
+                      promptText = truncatedTranscript.text;
+                      audioTranscriptChars += truncatedTranscript.text.length;
+                      if (truncatedTranscript.truncated) {
+                        ctx.log.debug("stt", "Primary audio transcript truncated by total prompt limit", {
+                          name: att.name,
+                          originalChars: sttResult.text.length,
+                          keptChars: truncatedTranscript.text.length,
+                          totalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                        });
+                      }
                     } else {
                       // Otherwise append as context
-                      attachmentPrompts.push(`\n[语音转录: "${sttResult.text}"]`);
+                      const remainingChars = Math.max(
+                        0,
+                        attachmentPromptLimits.totalTextCharLimit - textAttachmentChars - audioTranscriptChars,
+                      );
+                      const transcriptCharLimit = Math.min(
+                        attachmentPromptLimits.audioTranscriptAppendCharLimit,
+                        remainingChars,
+                      );
+                      if (transcriptCharLimit <= 0) {
+                        attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录已完成，但因本次上下文预算已用尽未注入全文）]`);
+                      } else {
+                        const truncatedTranscript = truncateTextForPrompt(
+                          sttResult.text,
+                          transcriptCharLimit,
+                          "\n...[Transcript truncated]",
+                        );
+                        audioTranscriptChars += truncatedTranscript.text.length;
+                        if (truncatedTranscript.truncated) {
+                          ctx.log.debug("stt", "Audio transcript truncated for appended context", {
+                            name: att.name,
+                            originalChars: sttResult.text.length,
+                            keptChars: truncatedTranscript.text.length,
+                            appendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
+                            remainingChars,
+                          });
+                        }
+                        attachmentPrompts.push(`\n[语音转录: "${truncatedTranscript.text}"]`);
+                      }
                     }
                   } else {
                     attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录失败）]`);
@@ -1257,21 +1453,29 @@ async function handleReq(
 
               if (isText) {
                 const content = buffer.toString("utf-8");
-                const wasTruncated = content.length > TEXT_ATTACHMENT_CHAR_LIMIT;
-                const truncated = wasTruncated
-                  ? content.slice(0, TEXT_ATTACHMENT_CHAR_LIMIT) + "\n...[Truncated]"
-                  : content;
+                const remainingChars = Math.max(
+                  0,
+                  attachmentPromptLimits.totalTextCharLimit - textAttachmentChars - audioTranscriptChars,
+                );
+                const fileCharLimit = Math.min(attachmentPromptLimits.textCharLimit, remainingChars);
+                if (fileCharLimit <= 0) {
+                  attachmentPrompts.push(`\n[用户上传了文本附件: ${att.name}（因本次上下文预算已用尽，未注入全文）]`);
+                  continue;
+                }
+                const truncated = truncateTextForPrompt(content, fileCharLimit, "\n...[Truncated]");
                 textAttachmentCount += 1;
-                textAttachmentChars += truncated.length;
-                if (wasTruncated) {
+                textAttachmentChars += truncated.text.length;
+                if (truncated.truncated) {
                   ctx.log.debug("message", "Text attachment truncated by char limit", {
                     name: att.name,
                     originalChars: content.length,
-                    keptChars: truncated.length,
-                    charLimit: TEXT_ATTACHMENT_CHAR_LIMIT,
+                    keptChars: truncated.text.length,
+                    charLimit: attachmentPromptLimits.textCharLimit,
+                    totalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                    remainingChars,
                   });
                 }
-                attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated}\n--- End of Attachment ---\n`);
+                attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated.text}\n--- End of Attachment ---\n`);
               } else {
                 attachmentPrompts.push(`\n[User uploaded a file: ${att.name} (type: ${att.type}), saved at: ${savePath}]`);
               }
@@ -1323,7 +1527,23 @@ async function handleReq(
               attachmentStats: {
                 textAttachmentCount,
                 textAttachmentChars,
-                textAttachmentTruncatedCharLimit: TEXT_ATTACHMENT_CHAR_LIMIT,
+                audioTranscriptChars,
+                promptAugmentationChars: textAttachmentChars + audioTranscriptChars,
+                textAttachmentTruncatedCharLimit: attachmentPromptLimits.textCharLimit,
+                textAttachmentTotalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                audioTranscriptAppendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
+              },
+            };
+          } else if (audioTranscriptChars > 0) {
+            runInput.meta = {
+              attachmentStats: {
+                textAttachmentCount: 0,
+                textAttachmentChars: 0,
+                audioTranscriptChars,
+                promptAugmentationChars: audioTranscriptChars,
+                textAttachmentTruncatedCharLimit: attachmentPromptLimits.textCharLimit,
+                textAttachmentTotalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                audioTranscriptAppendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
               },
             };
           }
@@ -1560,32 +1780,10 @@ async function handleReq(
       const { envPath, envLocalPath: localEnvPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       const config: Record<string, string> = {};
 
-      const readEnvFile = (p: string) => {
-        try {
-          if (fs.existsSync(p)) {
-            const raw = fs.readFileSync(p, "utf-8");
-            raw.split(/\r?\n/).forEach(line => {
-              const trimmed = line.trim();
-              if (trimmed && !trimmed.startsWith("#")) {
-                const eq = trimmed.indexOf("=");
-                if (eq > 0) {
-                  const key = trimmed.slice(0, eq).trim();
-                  let val = trimmed.slice(eq + 1).trim();
-                  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-                    val = val.slice(1, -1);
-                  }
-                  config[key] = val;
-                }
-              }
-            });
-          }
-        } catch { }
-      };
-
       // 1. Read .env (Base)
-      readEnvFile(envPath);
+      await readEnvFileIntoConfig(envPath, config);
       // 2. Read .env.local (Override)
-      readEnvFile(localEnvPath);
+      await readEnvFileIntoConfig(localEnvPath, config);
 
       // [SECURITY] 对敏感字段进行脱敏处理
       const REDACT_PATTERNS = [/KEY/i, /SECRET/i, /TOKEN/i, /PASSWORD/i, /CREDENTIAL/i];
@@ -1649,58 +1847,9 @@ async function handleReq(
         }
       }
 
-      const updateEnvFile = (filePath: string, changes: Record<string, string>) => {
-        if (Object.keys(changes).length === 0) return true;
-
-        let lines: string[] = [];
-        try {
-          if (fs.existsSync(filePath)) {
-            lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-          }
-        } catch { }
-
-        const newKeys = new Set(Object.keys(changes));
-        const nextLines: string[] = [];
-        const handledKeys = new Set<string>();
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          let matched = false;
-          if (trimmed && !trimmed.startsWith("#")) {
-            const eq = trimmed.indexOf("=");
-            if (eq > 0) {
-              const key = trimmed.slice(0, eq).trim();
-              if (newKeys.has(key)) {
-                const val = changes[key];
-                nextLines.push(`${key}="${val}"`);
-                handledKeys.add(key);
-                matched = true;
-              }
-            }
-          }
-          if (!matched) nextLines.push(line);
-        }
-
-        for (const key of newKeys) {
-          if (!handledKeys.has(key)) {
-            if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
-            nextLines.push(`${key}="${changes[key]}"`);
-          }
-        }
-
-        if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
-
-        try {
-          fs.writeFileSync(filePath, nextLines.join("\n"), "utf-8");
-          return true;
-        } catch (e) {
-          return false;
-        }
-      };
-
       const { envPath, envLocalPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
-      const envOk = updateEnvFile(envPath, envUpdates);
-      const localOk = updateEnvFile(envLocalPath, localUpdates);
+      const envOk = await updateEnvFile(envPath, envUpdates);
+      const localOk = await updateEnvFile(envLocalPath, localUpdates);
 
       if (!envOk || !localOk) {
         return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: "Failed to write config files" } };
@@ -1713,10 +1862,11 @@ async function handleReq(
     case "config.readRaw": {
       const { envPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       try {
-        if (!fs.existsSync(envPath)) {
+        const stat = await statIfExists(envPath);
+        if (!stat?.isFile()) {
           return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: ".env 文件不存在" } };
         }
-        const content = fs.readFileSync(envPath, "utf-8");
+        const content = await fsp.readFile(envPath, "utf-8");
         return { type: "res", id: req.id, ok: true, payload: { content } };
       } catch (e) {
         return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(e) } };
@@ -1731,7 +1881,7 @@ async function handleReq(
       }
       const { envPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       try {
-        fs.writeFileSync(envPath, content, "utf-8");
+        await writeTextFileAtomic(envPath, content, { ensureParent: true });
         return { type: "res", id: req.id, ok: true };
       } catch (e) {
         return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: String(e) } };
@@ -1823,8 +1973,8 @@ async function handleReq(
       ];
 
       const dbPath = path.join(ctx.stateDir, "memory.sqlite");
-      if (fs.existsSync(dbPath)) {
-        const stat = fs.statSync(dbPath);
+      const stat = await statIfExists(dbPath);
+      if (stat?.isFile()) {
         checks[1].message = `Size: ${(stat.size / 1024).toFixed(1)} KB`;
       } else {
         checks[1].status = "warn";
@@ -2899,9 +3049,19 @@ async function handleReq(
       }
 
       const limit = clampListLimit(params.limit, 20);
+      const includeContent = params.includeContent !== false;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = await manager.search(query, { limit, filter: filter as any });
-      return { type: "res", id: req.id, ok: true, payload: { items, query, limit } };
+      const items = await manager.search(query, { limit, filter: filter as any, includeContent });
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: toMemoryListPayloadItems(items, includeContent),
+          query,
+          limit,
+        },
+      };
     }
 
     case "memory.get": {
@@ -2932,9 +3092,18 @@ async function handleReq(
 
       const params = isObjectRecord(req.params) ? req.params : {};
       const limit = clampListLimit(params.limit, 20);
+      const includeContent = params.includeContent !== false;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = manager.getRecent(limit, filter as any);
-      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+      const items = manager.getRecent(limit, filter as any, includeContent);
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: toMemoryListPayloadItems(items, includeContent),
+          limit,
+        },
+      };
     }
 
     case "memory.stats": {
@@ -2943,13 +3112,15 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const includeRecentTasks = params.includeRecentTasks === true;
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
           status: manager.getStatus(),
-          recentTasks: manager.getRecentTasks(5),
+          ...(includeRecentTasks ? { recentTasks: manager.getRecentTasks(5) } : {}),
         },
       };
     }
@@ -2963,6 +3134,7 @@ async function handleReq(
       const params = isObjectRecord(req.params) ? req.params : {};
       const query = typeof params.query === "string" ? params.query.trim() : "";
       const limit = clampListLimit(params.limit, 20);
+      const summaryOnly = params.summaryOnly === true;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = query
         ? manager.searchTasks(query, { limit, filter: filter as any })
@@ -2973,7 +3145,7 @@ async function handleReq(
         id: req.id,
         ok: true,
         payload: {
-          items,
+          items: toTaskListPayloadItems(items, summaryOnly),
           query,
           limit,
         },
@@ -3190,18 +3362,18 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
       }
 
-      // 检查目录是否存在
-      if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "目录不存在" } };
-      }
-
-      // 允许的文件扩展名
-      const ALLOWED_EXTENSIONS = [".md", ".json", ".txt"];
-      // 忽略的目录和文件
-      const IGNORED_NAMES = ["generated", "memory.db", ".DS_Store", "node_modules"];
-
       try {
-        const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+        const stat = await statIfExists(targetDir);
+        if (!stat?.isDirectory()) {
+          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "目录不存在" } };
+        }
+
+        // 允许的文件扩展名
+        const ALLOWED_EXTENSIONS = [".md", ".json", ".txt"];
+        // 忽略的目录和文件
+        const IGNORED_NAMES = ["generated", "memory.db", ".DS_Store", "node_modules"];
+
+        const entries = await fsp.readdir(targetDir, { withFileTypes: true });
         const items: Array<{ name: string; type: "file" | "directory"; path: string }> = [];
 
         for (const entry of entries) {
@@ -3261,13 +3433,12 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "forbidden", message: "禁止访问内部状态文件" } };
       }
 
-      // 检查文件是否存在
-      if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
-      }
-
       try {
-        const content = fs.readFileSync(targetFile, "utf-8");
+        const stat = await statIfExists(targetFile);
+        if (!stat?.isFile()) {
+          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
+        }
+        const content = await fsp.readFile(targetFile, "utf-8");
         return { type: "res", id: req.id, ok: true, payload: { content, path: relativePath } };
       } catch (err) {
         return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(err) } };
@@ -3304,12 +3475,12 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_type", message: "不支持的源文件类型" } };
       }
 
-      if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
-      }
-
       try {
-        const content = fs.readFileSync(targetFile, "utf-8");
+        const stat = await statIfExists(targetFile);
+        if (!stat?.isFile()) {
+          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
+        }
+        const content = await fsp.readFile(targetFile, "utf-8");
         return {
           type: "res",
           id: req.id,
@@ -3351,16 +3522,7 @@ async function handleReq(
       }
 
       try {
-        // 确保父目录存在
-        const parentDir = path.dirname(targetFile);
-        if (!fs.existsSync(parentDir)) {
-          fs.mkdirSync(parentDir, { recursive: true, mode: 0o700 });
-        }
-
-        // 原子写入：先写临时文件再 rename
-        const tmpFile = `${targetFile}.${crypto.randomUUID()}.tmp`;
-        fs.writeFileSync(tmpFile, content, "utf-8");
-        fs.renameSync(tmpFile, targetFile);
+        await writeTextFileAtomic(targetFile, content, { ensureParent: true, mode: 0o700 });
 
         return { type: "res", id: req.id, ok: true, payload: { path: relativePath } };
       } catch (err) {
@@ -3561,6 +3723,32 @@ function clampListLimit(value: unknown, fallback: number, max = 100): number {
   return Math.min(parsed, max);
 }
 
+function toMemoryListPayloadItems(items: Array<any>, includeContent: boolean): Array<Record<string, unknown>> {
+  if (includeContent) {
+    return items as Array<Record<string, unknown>>;
+  }
+  return items.map(({ content, ...rest }) => rest);
+}
+
+function toTaskListPayloadItems(items: Array<any>, summaryOnly: boolean): Array<Record<string, unknown>> {
+  if (!summaryOnly) {
+    return items as Array<Record<string, unknown>>;
+  }
+  return items.map((item) => ({
+    id: item.id,
+    conversationId: item.conversationId,
+    title: item.title,
+    objective: item.objective,
+    summary: item.summary,
+    status: item.status,
+    source: item.source,
+    startedAt: item.startedAt,
+    finishedAt: item.finishedAt,
+    createdAt: item.createdAt,
+    metadata: item.metadata,
+  }));
+}
+
 function parseGoalTaskCheckpointStatus(value: unknown): "not_required" | "required" | "waiting_user" | "approved" | "rejected" | "expired" | undefined {
   const normalized = typeof value === "string" ? value.trim() : "";
   switch (normalized) {
@@ -3610,14 +3798,8 @@ function safeClose(ws: WebSocket, code: number, reason: string) {
   }
 }
 
-function ensureWebRoot(webRoot: string) {
-  const stat = (() => {
-    try {
-      return fs.statSync(webRoot);
-    } catch {
-      return null;
-    }
-  })();
+async function ensureWebRoot(webRoot: string): Promise<void> {
+  const stat = await statIfExists(webRoot);
   if (!stat || !stat.isDirectory()) {
     throw new Error(`Invalid webRoot: ${webRoot}`);
   }

@@ -77,6 +77,7 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
     let timer: ReturnType<typeof setInterval> | null = null;
     let activeRuns = 0;
     let lastTickAtMs: number | undefined;
+    let tickInFlight = false;
 
     // 活跃时段检查（复用 Heartbeat 的逻辑）
     const isWithinActiveHours = (now: number): boolean => {
@@ -193,60 +194,66 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
     // 调度 tick
     const tick = async (): Promise<void> => {
         if (stopped) return;
+        if (tickInFlight) return;
+        tickInFlight = true;
 
-        const now = Date.now();
-        lastTickAtMs = now;
-
-        // 活跃时段检查
-        if (!isWithinActiveHours(now)) {
-            return;
-        }
-
-        // 忙碌检查
-        if (isBusy?.()) {
-            return;
-        }
-
-        // 加载任务列表
-        let jobs: CronJob[];
         try {
-            jobs = await store.list();
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log(`[cron] 加载任务失败: ${msg}`);
-            return;
-        }
+            const now = Date.now();
+            lastTickAtMs = now;
 
-        if (jobs.length === 0) return;
-
-        // 筛选需要执行的任务
-        const dueJobs = jobs.filter(
-            (j) => j.enabled && j.state.nextRunAtMs !== undefined && j.state.nextRunAtMs <= now
-        );
-
-        if (dueJobs.length === 0) return;
-
-        // 限制并发
-        const toRun = dueJobs.slice(0, MAX_CONCURRENT_RUNS - activeRuns);
-        if (toRun.length === 0) return;
-
-        // 顺序执行（避免 Agent 并发问题）
-        for (const job of toRun) {
-            if (stopped) break;
-            activeRuns++;
-            try {
-                await executeJob(job, jobs);
-            } finally {
-                activeRuns--;
+            // 活跃时段检查
+            if (!isWithinActiveHours(now)) {
+                return;
             }
-        }
 
-        // 持久化状态
-        try {
-            await store.saveJobs(jobs);
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log(`[cron] 保存状态失败: ${msg}`);
+            // 忙碌检查
+            if (isBusy?.()) {
+                return;
+            }
+
+            // 加载任务列表
+            let jobs: CronJob[];
+            try {
+                jobs = await store.list();
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                log(`[cron] 加载任务失败: ${msg}`);
+                return;
+            }
+
+            if (jobs.length === 0) return;
+
+            // 筛选需要执行的任务
+            const dueJobs = jobs.filter(
+                (j) => j.enabled && j.state.nextRunAtMs !== undefined && j.state.nextRunAtMs <= now
+            );
+
+            if (dueJobs.length === 0) return;
+
+            // 限制并发
+            const toRun = dueJobs.slice(0, MAX_CONCURRENT_RUNS - activeRuns);
+            if (toRun.length === 0) return;
+
+            // 顺序执行（避免 Agent 并发问题）
+            for (const job of toRun) {
+                if (stopped) break;
+                activeRuns++;
+                try {
+                    await executeJob(job, jobs);
+                } finally {
+                    activeRuns--;
+                }
+            }
+
+            // 持久化状态
+            try {
+                await store.saveJobs(jobs);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                log(`[cron] 保存状态失败: ${msg}`);
+            }
+        } finally {
+            tickInFlight = false;
         }
     };
 

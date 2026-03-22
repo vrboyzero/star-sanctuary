@@ -151,6 +151,10 @@ const DEFAULT_VOICE_SHORTCUT = Object.freeze({
 let ws = null;
 let isReady = false;
 let activeConversationId = null;
+const CONFIG_CACHE_TTL_MS = 2000;
+let configCacheData = null;
+let configCacheLoadedAt = 0;
+let configCachePromise = null;
 const taskTokenHistoryByConversation = new Map();
 const TASK_TOKEN_HISTORY_LIMIT = 2;
 let transientUrlToken = null;
@@ -319,6 +323,7 @@ workspaceFeature = createWorkspaceFeature({
   switchMode: (mode) => switchMode(mode),
   showNotice,
   escapeHtml,
+  loadServerConfig,
   syncAttachmentLimitsFromConfig,
   persistWorkspaceRootsField,
 });
@@ -508,6 +513,44 @@ function setStatus(text) {
   if (hint) hint.remove();
 }
 
+function invalidateServerConfigCache() {
+  configCacheData = null;
+  configCacheLoadedAt = 0;
+  configCachePromise = null;
+}
+
+async function loadServerConfig(options = {}) {
+  const { force = false } = options;
+  if (!ws || !isReady) return null;
+
+  const now = Date.now();
+  if (!force && configCacheData && now - configCacheLoadedAt < CONFIG_CACHE_TTL_MS) {
+    return configCacheData;
+  }
+  if (!force && configCachePromise) {
+    return configCachePromise;
+  }
+
+  const promise = (async () => {
+    const res = await sendReq({ type: "req", id: makeId(), method: "config.read" });
+    if (!(res && res.ok && res.payload && res.payload.config)) {
+      return null;
+    }
+    configCacheData = res.payload.config;
+    configCacheLoadedAt = Date.now();
+    return configCacheData;
+  })();
+
+  configCachePromise = promise;
+  try {
+    return await promise;
+  } finally {
+    if (configCachePromise === promise) {
+      configCachePromise = null;
+    }
+  }
+}
+
 async function syncWorkspaceRoots() {
   if (!ws || !isReady || !workspaceRootsEl) return;
   const value = workspaceRootsEl.value.trim();
@@ -521,6 +564,7 @@ async function syncWorkspaceRoots() {
     method: "config.update",
     params: { updates: { "BELLDANDY_EXTRA_WORKSPACE_ROOTS": value } }
   });
+  invalidateServerConfigCache();
 }
 
 function syncAttachmentLimitsFromConfig(config) {
@@ -533,6 +577,7 @@ async function loadWorkspaceRootsFromServer() {
 }
 
 function handleHelloOk(frame) {
+  invalidateServerConfigCache();
   if (frame.agentName) agentName = frame.agentName;
   if (frame.agentAvatar) agentAvatar = frame.agentAvatar;
   if (frame.userName) userName = frame.userName;
@@ -855,6 +900,7 @@ if (saveWorkspaceRootsBtn) {
     });
 
     if (res && res.ok) {
+      invalidateServerConfigCache();
       saveWorkspaceRootsBtn.innerHTML = "<u>已保存</u>";
       setTimeout(() => {
         saveWorkspaceRootsBtn.innerHTML = "<u>保存</u>";
@@ -1237,6 +1283,8 @@ const settingsController = createSettingsController({
   sendReq,
   makeId,
   setStatus,
+  loadServerConfig,
+  invalidateServerConfigCache,
   syncAttachmentLimitsFromConfig,
   onToggle: (show) => voiceFeature.onSettingsToggle(show),
   redactedPlaceholder: REDACTED_PLACEHOLDER,

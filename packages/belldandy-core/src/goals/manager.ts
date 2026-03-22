@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "@belldandy/protocol";
 import { getGlobalMemoryManager, type ExperienceCandidate } from "@belldandy/memory";
-import { publishSkillCandidate, getGlobalSkillRegistry } from "@belldandy/skills";
+import { publishSkillCandidate, getGlobalSkillRegistry, getUserSkillsDir } from "@belldandy/skills";
 import { getGoalUpdateAreas } from "./goal-events.js";
 import { normalizeGoalId, normalizeGoalSlug, resolveGoalPaths } from "./paths.js";
 import { generateGoalHandoff } from "./handoff.js";
@@ -89,6 +89,8 @@ import type {
   GoalHandoffGenerateResult,
   GoalMethodCandidateGenerateResult,
   GoalRetrospectiveGenerateResult,
+  GoalRuntimeState,
+  GoalSkillCandidate,
   GoalSkillCandidateGenerateResult,
   GoalFlowPatternGenerateResult,
   GoalCapabilityPlanSaveInput,
@@ -123,6 +125,7 @@ type GoalCheckpointMutationResult = GoalTaskMutationResult & {
 
 export class GoalManager {
   private eventSink?: (event: GoalUpdateEvent) => void | Promise<void>;
+  private readonly goalMutationLocks = new Map<string, Promise<void>>();
 
   constructor(private readonly stateDir = resolveStateDir(process.env)) {}
 
@@ -177,76 +180,62 @@ export class GoalManager {
   }
 
   async resumeGoal(goalId: string, nodeId?: string): Promise<{ goal: LongTermGoal; conversationId: string; runId?: string }> {
-    const goal = await this.requireGoal(goalId);
-    const runId = nodeId ? createGoalRunId() : undefined;
-    const conversationId = nodeId
-      ? createGoalNodeConversationId(goal.id, nodeId, runId)
-      : createGoalConversationId(goal.id);
-    const now = new Date().toISOString();
-    const updatedGoal: LongTermGoal = {
-      ...goal,
-      status: "executing",
-      activeConversationId: conversationId,
-      activeNodeId: nodeId,
-      lastNodeId: nodeId ?? goal.lastNodeId,
-      lastRunId: runId ?? goal.lastRunId,
-      lastActiveAt: now,
-      pausedAt: undefined,
-      updatedAt: now,
-    };
-    await upsertGoalRegistryEntry(this.stateDir, updatedGoal);
-    await writeGoalRuntime(updatedGoal, {
-      ...(await readGoalRuntime(updatedGoal)),
-      goalId: updatedGoal.id,
-      status: updatedGoal.status,
-      activeConversationId: conversationId,
-      activeNodeId: nodeId,
-      lastNodeId: updatedGoal.lastNodeId,
-      lastRunId: updatedGoal.lastRunId,
-      resumedAt: now,
-      pausedAt: undefined,
-      updatedAt: now,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const runId = nodeId ? createGoalRunId() : undefined;
+      const conversationId = nodeId
+        ? createGoalNodeConversationId(goal.id, nodeId, runId)
+        : createGoalConversationId(goal.id);
+      const now = new Date().toISOString();
+      const updatedGoal: LongTermGoal = {
+        ...goal,
+        status: "executing",
+        activeConversationId: conversationId,
+        activeNodeId: nodeId,
+        lastNodeId: nodeId ?? goal.lastNodeId,
+        lastRunId: runId ?? goal.lastRunId,
+        lastActiveAt: now,
+        pausedAt: undefined,
+        updatedAt: now,
+      };
+      await this.persistGoalHeaderState(goal, updatedGoal, {
+        resumedAt: now,
+        pausedAt: undefined,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "goal_resumed",
+        nodeId,
+        runId,
+      });
+      return { goal: updatedGoal, conversationId, runId };
     });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "goal_resumed",
-      nodeId,
-      runId,
-    });
-    return { goal: updatedGoal, conversationId, runId };
   }
 
   async pauseGoal(goalId: string): Promise<LongTermGoal> {
-    const goal = await this.requireGoal(goalId);
-    const now = new Date().toISOString();
-    const updatedGoal: LongTermGoal = {
-      ...goal,
-      status: "paused",
-      pausedAt: now,
-      activeConversationId: undefined,
-      activeNodeId: undefined,
-      lastNodeId: goal.activeNodeId ?? goal.lastNodeId,
-      updatedAt: now,
-    };
-    await upsertGoalRegistryEntry(this.stateDir, updatedGoal);
-    await writeGoalRuntime(updatedGoal, {
-      ...(await readGoalRuntime(updatedGoal)),
-      goalId: updatedGoal.id,
-      status: updatedGoal.status,
-      activeConversationId: undefined,
-      activeNodeId: undefined,
-      lastNodeId: updatedGoal.lastNodeId,
-      lastRunId: updatedGoal.lastRunId,
-      pausedAt: now,
-      updatedAt: now,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const now = new Date().toISOString();
+      const updatedGoal: LongTermGoal = {
+        ...goal,
+        status: "paused",
+        pausedAt: now,
+        activeConversationId: undefined,
+        activeNodeId: undefined,
+        lastNodeId: goal.activeNodeId ?? goal.lastNodeId,
+        updatedAt: now,
+      };
+      await this.persistGoalHeaderState(goal, updatedGoal, {
+        pausedAt: now,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "goal_paused",
+        nodeId: updatedGoal.lastNodeId,
+        runId: updatedGoal.lastRunId,
+      });
+      return updatedGoal;
     });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "goal_paused",
-      nodeId: updatedGoal.lastNodeId,
-      runId: updatedGoal.lastRunId,
-    });
-    return updatedGoal;
   }
 
   async readTaskGraph(goalId: string): Promise<GoalTaskGraph> {
@@ -259,251 +248,269 @@ export class GoalManager {
   }
 
   async createTaskNode(goalId: string, input: GoalTaskNodeCreateInput): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = createGoalTaskNode(graph, input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal);
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_created",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.description,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = createGoalTaskNode(graph, input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal);
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_created",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.description,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_created",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_created",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async updateTaskNode(goalId: string, nodeId: string, patch: GoalTaskNodeUpdateInput): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = updateGoalTaskNode(graph, nodeId, patch);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal);
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_updated",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary ?? result.node.description,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = updateGoalTaskNode(graph, nodeId, patch);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal);
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_updated",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary ?? result.node.description,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_updated",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_updated",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async claimTaskNode(goalId: string, nodeId: string, input: GoalTaskNodeTransitionInput = {}): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = transitionGoalTaskNode(graph, nodeId, "in_progress", input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "executing",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: input.runId?.trim() || goal.lastRunId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = transitionGoalTaskNode(graph, nodeId, "in_progress", input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "executing",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: input.runId?.trim() || goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_claimed",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary,
+        runId: result.node.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_claimed",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_claimed",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary,
-      runId: result.node.lastRunId,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_claimed",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async markTaskNodePendingReview(goalId: string, nodeId: string, input: GoalTaskNodeTransitionInput = {}): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = transitionGoalTaskNode(graph, nodeId, "pending_review", input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "reviewing",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: input.runId?.trim() || goal.lastRunId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = transitionGoalTaskNode(graph, nodeId, "pending_review", input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "reviewing",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: input.runId?.trim() || goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_pending_review",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary,
+        runId: result.node.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_pending_review",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_pending_review",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary,
-      runId: result.node.lastRunId,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_pending_review",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async markTaskNodeValidating(goalId: string, nodeId: string, input: GoalTaskNodeTransitionInput = {}): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = transitionGoalTaskNode(graph, nodeId, "validating", input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "reviewing",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: input.runId?.trim() || goal.lastRunId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = transitionGoalTaskNode(graph, nodeId, "validating", input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "reviewing",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: input.runId?.trim() || goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_validating",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary,
+        runId: result.node.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_validating",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_validating",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary,
-      runId: result.node.lastRunId,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_validating",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async completeTaskNode(goalId: string, nodeId: string, input: GoalTaskNodeTransitionInput = {}): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const currentNode = graph.nodes.find((node) => node.id === nodeId);
-    if (!currentNode) {
-      throw new Error(`Task node not found: ${nodeId}`);
-    }
-    if (currentNode.checkpointRequired && currentNode.checkpointStatus !== "approved") {
-      throw new Error(`Task node "${nodeId}" still requires an approved checkpoint before completion.`);
-    }
-    const result = transitionGoalTaskNode(graph, nodeId, "done", input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "executing",
-      lastNodeId: nodeId,
-      lastRunId: input.runId?.trim() || goal.lastRunId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const currentNode = graph.nodes.find((node) => node.id === nodeId);
+      if (!currentNode) {
+        throw new Error(`Task node not found: ${nodeId}`);
+      }
+      if (currentNode.checkpointRequired && currentNode.checkpointStatus !== "approved") {
+        throw new Error(`Task node "${nodeId}" still requires an approved checkpoint before completion.`);
+      }
+      const result = transitionGoalTaskNode(graph, nodeId, "done", input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "executing",
+        lastNodeId: nodeId,
+        lastRunId: input.runId?.trim() || goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_completed",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary,
+        runId: result.node.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_completed",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_completed",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary,
-      runId: result.node.lastRunId,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_completed",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async blockTaskNode(goalId: string, nodeId: string, input: GoalTaskNodeTransitionInput = {}): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = transitionGoalTaskNode(graph, nodeId, "blocked", input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal, {
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: input.runId?.trim() || goal.lastRunId,
-      status: "blocked",
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = transitionGoalTaskNode(graph, nodeId, "blocked", input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal, {
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: input.runId?.trim() || goal.lastRunId,
+        status: "blocked",
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_blocked",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary,
+        note: result.node.blockReason,
+        runId: result.node.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_blocked",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_blocked",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary,
-      note: result.node.blockReason,
-      runId: result.node.lastRunId,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_blocked",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async failTaskNode(goalId: string, nodeId: string, input: GoalTaskNodeTransitionInput = {}): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = transitionGoalTaskNode(graph, nodeId, "failed", input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "blocked",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: input.runId?.trim() || goal.lastRunId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = transitionGoalTaskNode(graph, nodeId, "failed", input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "blocked",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: input.runId?.trim() || goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_failed",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary,
+        note: result.node.blockReason,
+        runId: result.node.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_failed",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_failed",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary,
-      note: result.node.blockReason,
-      runId: result.node.lastRunId,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_failed",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async skipTaskNode(goalId: string, nodeId: string, input: GoalTaskNodeTransitionInput = {}): Promise<GoalTaskMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const result = transitionGoalTaskNode(graph, nodeId, "skipped", input);
-    const savedGraph = await writeGoalTaskGraph(goal, result.graph);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "executing",
-      lastNodeId: nodeId,
-      lastRunId: input.runId?.trim() || goal.lastRunId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const result = transitionGoalTaskNode(graph, nodeId, "skipped", input);
+      const savedGraph = await writeGoalTaskGraph(goal, result.graph);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "executing",
+        lastNodeId: nodeId,
+        lastRunId: input.runId?.trim() || goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "task_node_skipped",
+        title: result.node.title,
+        nodeId: result.node.id,
+        status: result.node.status,
+        summary: result.node.summary,
+        note: result.node.blockReason,
+        runId: result.node.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "task_node_skipped",
+        nodeId: result.node.id,
+        runId: result.node.lastRunId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: result.node };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "task_node_skipped",
-      title: result.node.title,
-      nodeId: result.node.id,
-      status: result.node.status,
-      summary: result.node.summary,
-      note: result.node.blockReason,
-      runId: result.node.lastRunId,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "task_node_skipped",
-      nodeId: result.node.id,
-      runId: result.node.lastRunId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: result.node };
   }
 
   async listCheckpoints(goalId: string): Promise<GoalCheckpointState> {
@@ -628,6 +635,13 @@ export class GoalManager {
     goalId: string,
     input: GoalSuggestionReviewWorkflowScanInput = {},
   ): Promise<GoalSuggestionReviewWorkflowScanResult> {
+    return this.withGoalMutationLock(goalId, () => this.scanSuggestionReviewWorkflowsUnlocked(goalId, input));
+  }
+
+  private async scanSuggestionReviewWorkflowsUnlocked(
+    goalId: string,
+    input: GoalSuggestionReviewWorkflowScanInput = {},
+  ): Promise<GoalSuggestionReviewWorkflowScanResult> {
     const goal = await this.requireGoal(goalId);
     const reviews = await this.syncSuggestionReviews(goal);
     const scannedAt = input.now?.trim() || new Date().toISOString();
@@ -742,163 +756,171 @@ export class GoalManager {
   }
 
   async configureSuggestionReviewWorkflow(goalId: string, input: GoalSuggestionReviewWorkflowConfigureInput): Promise<GoalSuggestionReviewMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const reviews = await this.syncSuggestionReviews(goal);
-    const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
-    const governanceConfig = await readReviewGovernanceConfig(this.stateDir);
-    const effectiveInput = this.resolveSuggestionReviewWorkflowInput(review, input, governanceConfig);
-    const now = new Date().toISOString();
-    const workflow = this.buildSuggestionReviewWorkflow(review, effectiveInput, now);
-    const nextReview: GoalSuggestionReviewItem = {
-      ...review,
-      status: "pending_review",
-      decidedBy: undefined,
-      decidedAt: undefined,
-      note: effectiveInput.note?.trim() || review.note,
-      reviewer: this.getCurrentWorkflowReviewer(workflow) ?? review.reviewer,
-      workflow,
-      updatedAt: now,
-    };
-    const nextReviews: GoalSuggestionReviewState = {
-      version: 1,
-      syncedAt: now,
-      items: reviews.items.map((item) => item.id === nextReview.id ? nextReview : item),
-    };
-    await writeGoalSuggestionReviews(goal, nextReviews);
-    const updatedGoal = await this.touchGoal(goal);
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "suggestion_review_workflow_configured",
-      title: nextReview.title,
-      nodeId: nextReview.nodeId,
-      status: `${workflow.mode}:${workflow.currentStageIndex + 1}/${workflow.stages.length}`,
-      summary: `${workflow.mode} workflow configured`,
-      note: nextReview.note,
-      runId: nextReview.runId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const reviews = await this.syncSuggestionReviews(goal);
+      const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
+      const governanceConfig = await readReviewGovernanceConfig(this.stateDir);
+      const effectiveInput = this.resolveSuggestionReviewWorkflowInput(review, input, governanceConfig);
+      const now = new Date().toISOString();
+      const workflow = this.buildSuggestionReviewWorkflow(review, effectiveInput, now);
+      const nextReview: GoalSuggestionReviewItem = {
+        ...review,
+        status: "pending_review",
+        decidedBy: undefined,
+        decidedAt: undefined,
+        note: effectiveInput.note?.trim() || review.note,
+        reviewer: this.getCurrentWorkflowReviewer(workflow) ?? review.reviewer,
+        workflow,
+        updatedAt: now,
+      };
+      const nextReviews: GoalSuggestionReviewState = {
+        version: 1,
+        syncedAt: now,
+        items: reviews.items.map((item) => item.id === nextReview.id ? nextReview : item),
+      };
+      await writeGoalSuggestionReviews(goal, nextReviews);
+      const updatedGoal = await this.touchGoal(goal);
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "suggestion_review_workflow_configured",
+        title: nextReview.title,
+        nodeId: nextReview.nodeId,
+        status: `${workflow.mode}:${workflow.currentStageIndex + 1}/${workflow.stages.length}`,
+        summary: `${workflow.mode} workflow configured`,
+        note: nextReview.note,
+        runId: nextReview.runId,
+      });
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "suggestion_review_updated",
+        nodeId: nextReview.nodeId,
+        runId: nextReview.runId,
+      });
+      return { goal: updatedGoal, reviews: nextReviews, review: nextReview };
     });
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "suggestion_review_updated",
-      nodeId: nextReview.nodeId,
-      runId: nextReview.runId,
-    });
-    return { goal: updatedGoal, reviews: nextReviews, review: nextReview };
   }
 
   async decideSuggestionReview(goalId: string, input: GoalSuggestionReviewDecisionInput): Promise<GoalSuggestionReviewMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const reviews = await this.syncSuggestionReviews(goal);
-    const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
-    const now = new Date().toISOString();
-    const nextReview = review.workflow
-      ? this.applySuggestionReviewWorkflowDecision(review, input, now)
-      : {
-        ...review,
-        status: input.decision,
-        reviewer: input.reviewer?.trim() || review.reviewer,
-        decidedBy: input.decidedBy?.trim() || review.decidedBy,
-        note: input.note?.trim() || review.note,
-        decidedAt: now,
-        updatedAt: now,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const reviews = await this.syncSuggestionReviews(goal);
+      const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
+      const now = new Date().toISOString();
+      const nextReview = review.workflow
+        ? this.applySuggestionReviewWorkflowDecision(review, input, now)
+        : {
+          ...review,
+          status: input.decision,
+          reviewer: input.reviewer?.trim() || review.reviewer,
+          decidedBy: input.decidedBy?.trim() || review.decidedBy,
+          note: input.note?.trim() || review.note,
+          decidedAt: now,
+          updatedAt: now,
+        };
+      const nextReviews: GoalSuggestionReviewState = {
+        version: 1,
+        syncedAt: now,
+        items: reviews.items.map((item) => item.id === nextReview.id ? nextReview : item),
       };
-    const nextReviews: GoalSuggestionReviewState = {
-      version: 1,
-      syncedAt: now,
-      items: reviews.items.map((item) => item.id === nextReview.id ? nextReview : item),
-    };
-    await writeGoalSuggestionReviews(goal, nextReviews);
-    const updatedGoal = await this.touchGoal(goal);
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "suggestion_review_decided",
-      title: nextReview.title,
-      nodeId: nextReview.nodeId,
-      status: nextReview.status,
-      summary: nextReview.summary,
-      note: nextReview.note,
-      runId: nextReview.runId,
+      await writeGoalSuggestionReviews(goal, nextReviews);
+      const updatedGoal = await this.touchGoal(goal);
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "suggestion_review_decided",
+        title: nextReview.title,
+        nodeId: nextReview.nodeId,
+        status: nextReview.status,
+        summary: nextReview.summary,
+        note: nextReview.note,
+        runId: nextReview.runId,
+      });
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "suggestion_review_updated",
+        nodeId: nextReview.nodeId,
+        runId: nextReview.runId,
+      });
+      return { goal: updatedGoal, reviews: nextReviews, review: nextReview };
     });
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "suggestion_review_updated",
-      nodeId: nextReview.nodeId,
-      runId: nextReview.runId,
-    });
-    return { goal: updatedGoal, reviews: nextReviews, review: nextReview };
   }
 
   async escalateSuggestionReview(goalId: string, input: GoalSuggestionReviewEscalateInput): Promise<GoalSuggestionReviewMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const reviews = await this.syncSuggestionReviews(goal);
-    const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
-    const now = new Date().toISOString();
-    const nextReview = this.applySuggestionReviewEscalation(review, input, now);
-    const nextReviews: GoalSuggestionReviewState = {
-      version: 1,
-      syncedAt: now,
-      items: reviews.items.map((item) => item.id === nextReview.id ? nextReview : item),
-    };
-    await writeGoalSuggestionReviews(goal, nextReviews);
-    const updatedGoal = await this.touchGoal(goal);
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "suggestion_review_escalated",
-      title: nextReview.title,
-      nodeId: nextReview.nodeId,
-      status: nextReview.workflow ? `${nextReview.workflow.mode}:${nextReview.workflow.currentStageIndex + 1}/${nextReview.workflow.stages.length}` : nextReview.status,
-      summary: nextReview.summary,
-      note: input.reason?.trim() || input.escalatedTo?.trim() || nextReview.note,
-      runId: nextReview.runId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const reviews = await this.syncSuggestionReviews(goal);
+      const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
+      const now = new Date().toISOString();
+      const nextReview = this.applySuggestionReviewEscalation(review, input, now);
+      const nextReviews: GoalSuggestionReviewState = {
+        version: 1,
+        syncedAt: now,
+        items: reviews.items.map((item) => item.id === nextReview.id ? nextReview : item),
+      };
+      await writeGoalSuggestionReviews(goal, nextReviews);
+      const updatedGoal = await this.touchGoal(goal);
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "suggestion_review_escalated",
+        title: nextReview.title,
+        nodeId: nextReview.nodeId,
+        status: nextReview.workflow ? `${nextReview.workflow.mode}:${nextReview.workflow.currentStageIndex + 1}/${nextReview.workflow.stages.length}` : nextReview.status,
+        summary: nextReview.summary,
+        note: input.reason?.trim() || input.escalatedTo?.trim() || nextReview.note,
+        runId: nextReview.runId,
+      });
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "suggestion_review_updated",
+        nodeId: nextReview.nodeId,
+        runId: nextReview.runId,
+      });
+      return { goal: updatedGoal, reviews: nextReviews, review: nextReview };
     });
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "suggestion_review_updated",
-      nodeId: nextReview.nodeId,
-      runId: nextReview.runId,
-    });
-    return { goal: updatedGoal, reviews: nextReviews, review: nextReview };
   }
 
   async publishSuggestion(goalId: string, input: GoalSuggestionPublishInput = {}): Promise<GoalSuggestionPublishMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const reviews = await this.syncSuggestionReviews(goal);
-    const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
-    if (review.status !== "accepted") {
-      throw new Error(`Suggestion review "${review.id}" must be accepted before publishing. Current status: ${review.status}.`);
-    }
-    if (review.suggestionType === "flow_pattern") {
-      throw new Error("Flow pattern suggestions are not publishable in Phase 6 P6-2.");
-    }
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const reviews = await this.syncSuggestionReviews(goal);
+      const review = this.resolveSuggestionReview(reviews, input.reviewId, input.suggestionType, input.suggestionId);
+      if (review.status !== "accepted") {
+        throw new Error(`Suggestion review "${review.id}" must be accepted before publishing. Current status: ${review.status}.`);
+      }
+      if (review.suggestionType === "flow_pattern") {
+        throw new Error("Flow pattern suggestions are not publishable in Phase 6 P6-2.");
+      }
 
-    const records = await readGoalPublishRecords(goal);
-    const existing = records.items.find((item) => item.reviewId === review.id);
-    if (existing) {
-      return { goal, review, record: existing, records };
-    }
+      const records = await readGoalPublishRecords(goal);
+      const existing = records.items.find((item) => item.reviewId === review.id);
+      if (existing) {
+        return { goal, review, record: existing, records };
+      }
 
-    const publishedAt = new Date().toISOString();
-    const publishRecord = review.suggestionType === "method_candidate"
-      ? await this.publishMethodSuggestion(goal, review, publishedAt, input)
-      : await this.publishSkillSuggestion(goal, review, publishedAt, input);
-    const syncedCandidate = await this.syncPublishedSuggestionToExperienceCandidate(goal, review, publishRecord);
-    if (syncedCandidate) {
-      publishRecord.experienceCandidateId = syncedCandidate.id;
-    }
-    const nextRecords: GoalSuggestionPublishState = {
-      version: 1,
-      items: [...records.items, publishRecord].sort((left, right) => left.publishedAt.localeCompare(right.publishedAt)),
-    };
-    await writeGoalPublishRecords(goal, nextRecords);
-    const updatedGoal = await this.touchGoal(goal);
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "suggestion_published",
-      title: publishRecord.title,
-      nodeId: publishRecord.nodeId,
-      status: publishRecord.assetType,
-      summary: `${publishRecord.suggestionType} -> ${publishRecord.assetType}`,
-      note: publishRecord.publishedPath,
-      runId: publishRecord.runId,
+      const publishRecord = await this.recoverPublishedSuggestionRecord(goal, review, input)
+        ?? (review.suggestionType === "method_candidate"
+          ? await this.publishMethodSuggestion(goal, review, new Date().toISOString(), input)
+          : await this.publishSkillSuggestion(goal, review, new Date().toISOString(), input));
+      const syncedCandidate = await this.syncPublishedSuggestionToExperienceCandidate(goal, review, publishRecord);
+      if (syncedCandidate) {
+        publishRecord.experienceCandidateId = syncedCandidate.id;
+      }
+      const nextRecords: GoalSuggestionPublishState = {
+        version: 1,
+        items: [...records.items, publishRecord].sort((left, right) => left.publishedAt.localeCompare(right.publishedAt)),
+      };
+      await writeGoalPublishRecords(goal, nextRecords);
+      const updatedGoal = await this.touchGoal(goal);
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "suggestion_published",
+        title: publishRecord.title,
+        nodeId: publishRecord.nodeId,
+        status: publishRecord.assetType,
+        summary: `${publishRecord.suggestionType} -> ${publishRecord.assetType}`,
+        note: publishRecord.publishedPath,
+        runId: publishRecord.runId,
+      });
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "suggestion_published",
+        nodeId: publishRecord.nodeId,
+        runId: publishRecord.runId,
+      });
+      return { goal: updatedGoal, review, record: publishRecord, records: nextRecords };
     });
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "suggestion_published",
-      nodeId: publishRecord.nodeId,
-      runId: publishRecord.runId,
-    });
-    return { goal: updatedGoal, review, record: publishRecord, records: nextRecords };
   }
 
   async listCapabilityPlans(goalId: string): Promise<GoalCapabilityPlanState> {
@@ -913,80 +935,83 @@ export class GoalManager {
   }
 
   async saveCapabilityPlan(goalId: string, nodeId: string, input: GoalCapabilityPlanSaveInput): Promise<GoalCapabilityPlan> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const node = graph.nodes.find((item) => item.id === nodeId);
-    if (!node) {
-      throw new Error(`Task node not found: ${nodeId}`);
-    }
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const node = graph.nodes.find((item) => item.id === nodeId);
+      if (!node) {
+        throw new Error(`Task node not found: ${nodeId}`);
+      }
 
-    const plans = await readGoalCapabilityPlans(goal);
-    const existing = input.id
-      ? plans.items.find((item) => item.id === input.id)
-      : this.resolveCapabilityPlanForNode(plans, nodeId);
-    const now = new Date().toISOString();
-    const nextPlanBase: GoalCapabilityPlan = {
-      id: existing?.id ?? (input.id?.trim() || `plan_${crypto.randomUUID().slice(0, 8)}`),
-      goalId: goal.id,
-      nodeId,
-      runId: input.runId?.trim() || existing?.runId || node.lastRunId,
-      status: input.status ?? existing?.status ?? "planned",
-      executionMode: input.executionMode,
-      riskLevel: input.riskLevel ?? existing?.riskLevel ?? "low",
-      objective: input.objective.trim(),
-      summary: input.summary.trim(),
-      queryHints: input.queryHints?.map((item) => item.trim()).filter(Boolean) ?? existing?.queryHints ?? [],
-      reasoning: input.reasoning?.map((item) => item.trim()).filter(Boolean) ?? existing?.reasoning ?? [],
-      methods: input.methods ?? existing?.methods ?? [],
-      skills: input.skills ?? existing?.skills ?? [],
-      mcpServers: input.mcpServers ?? existing?.mcpServers ?? [],
-      subAgents: input.subAgents ?? existing?.subAgents ?? [],
-      gaps: input.gaps?.map((item) => item.trim()).filter(Boolean) ?? existing?.gaps ?? [],
-      checkpoint: input.checkpoint ?? existing?.checkpoint ?? {
-        required: false,
-        reasons: [],
-        approvalMode: "none",
-        requiredRequestFields: [],
-        requiredDecisionFields: [],
-        escalationMode: "none",
-      },
-      actualUsage: input.actualUsage ?? existing?.actualUsage ?? { methods: [], skills: [], mcpServers: [], toolNames: [] },
-      analysis: existing?.analysis ?? getDefaultCapabilityPlanAnalysis(),
-      generatedAt: existing?.generatedAt ?? now,
-      updatedAt: now,
-      orchestratedAt: input.orchestratedAt ?? existing?.orchestratedAt,
-      orchestration: input.orchestration ?? existing?.orchestration,
-    };
-    const nextPlan: GoalCapabilityPlan = {
-      ...nextPlanBase,
-      analysis: analyzeGoalCapabilityPlan(nextPlanBase),
-    };
-    const nextPlans: GoalCapabilityPlanState = {
-      version: 1,
-      items: [
-        ...plans.items.filter((item) => item.id !== nextPlan.id),
-        nextPlan,
-      ].sort((left, right) => left.nodeId.localeCompare(right.nodeId, "zh-CN") || left.generatedAt.localeCompare(right.generatedAt)),
-    };
-    await writeGoalCapabilityPlans(goal, nextPlans);
-    await appendGoalProgressEntry(goal, {
-      kind: nextPlan.status === "orchestrated" ? "node_orchestrated" : "capability_plan_generated",
-      title: node.title,
-      nodeId,
-      status: nextPlan.status,
-      summary: nextPlan.summary,
-      note: nextPlan.executionMode === "multi_agent"
-        ? `execution=multi_agent; subAgents=${nextPlan.subAgents.length}; gaps=${nextPlan.gaps.length}`
-        : `execution=single_agent; methods=${nextPlan.methods.length}; skills=${nextPlan.skills.length}`,
-      runId: nextPlan.runId,
+      const plans = await readGoalCapabilityPlans(goal);
+      const existing = input.id
+        ? plans.items.find((item) => item.id === input.id)
+        : this.resolveCapabilityPlanForNode(plans, nodeId);
+      const now = new Date().toISOString();
+      const nextPlanBase: GoalCapabilityPlan = {
+        id: existing?.id ?? (input.id?.trim() || `plan_${crypto.randomUUID().slice(0, 8)}`),
+        goalId: goal.id,
+        nodeId,
+        runId: input.runId?.trim() || existing?.runId || node.lastRunId,
+        status: input.status ?? existing?.status ?? "planned",
+        executionMode: input.executionMode,
+        riskLevel: input.riskLevel ?? existing?.riskLevel ?? "low",
+        objective: input.objective.trim(),
+        summary: input.summary.trim(),
+        queryHints: input.queryHints?.map((item) => item.trim()).filter(Boolean) ?? existing?.queryHints ?? [],
+        reasoning: input.reasoning?.map((item) => item.trim()).filter(Boolean) ?? existing?.reasoning ?? [],
+        methods: input.methods ?? existing?.methods ?? [],
+        skills: input.skills ?? existing?.skills ?? [],
+        mcpServers: input.mcpServers ?? existing?.mcpServers ?? [],
+        subAgents: input.subAgents ?? existing?.subAgents ?? [],
+        gaps: input.gaps?.map((item) => item.trim()).filter(Boolean) ?? existing?.gaps ?? [],
+        checkpoint: input.checkpoint ?? existing?.checkpoint ?? {
+          required: false,
+          reasons: [],
+          approvalMode: "none",
+          requiredRequestFields: [],
+          requiredDecisionFields: [],
+          escalationMode: "none",
+        },
+        actualUsage: input.actualUsage ?? existing?.actualUsage ?? { methods: [], skills: [], mcpServers: [], toolNames: [] },
+        analysis: existing?.analysis ?? getDefaultCapabilityPlanAnalysis(),
+        generatedAt: existing?.generatedAt ?? now,
+        updatedAt: now,
+        orchestratedAt: input.orchestratedAt ?? existing?.orchestratedAt,
+        orchestration: input.orchestration ?? existing?.orchestration,
+      };
+      const nextPlan: GoalCapabilityPlan = {
+        ...nextPlanBase,
+        analysis: analyzeGoalCapabilityPlan(nextPlanBase),
+      };
+      const nextPlans: GoalCapabilityPlanState = {
+        version: 1,
+        items: [
+          ...plans.items.filter((item) => item.id !== nextPlan.id),
+          nextPlan,
+        ].sort((left, right) => left.nodeId.localeCompare(right.nodeId, "zh-CN") || left.generatedAt.localeCompare(right.generatedAt)),
+      };
+      await writeGoalCapabilityPlans(goal, nextPlans);
+      const updatedGoal = await this.touchGoal(goal);
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: nextPlan.status === "orchestrated" ? "node_orchestrated" : "capability_plan_generated",
+        title: node.title,
+        nodeId,
+        status: nextPlan.status,
+        summary: nextPlan.summary,
+        note: nextPlan.executionMode === "multi_agent"
+          ? `execution=multi_agent; subAgents=${nextPlan.subAgents.length}; gaps=${nextPlan.gaps.length}`
+          : `execution=single_agent; methods=${nextPlan.methods.length}; skills=${nextPlan.skills.length}`,
+        runId: nextPlan.runId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: nextPlan.status === "orchestrated" ? "capability_plan_orchestrated" : "capability_plan_saved",
+        nodeId,
+        runId: nextPlan.runId,
+      });
+      return nextPlan;
     });
-    await this.refreshHandoffAfterMutation(goal);
-    await this.emitGoalUpdate(goal, {
-      reason: nextPlan.status === "orchestrated" ? "capability_plan_orchestrated" : "capability_plan_saved",
-      nodeId,
-      runId: nextPlan.runId,
-    });
-    return nextPlan;
   }
 
   async generateHandoff(goalId: string): Promise<GoalHandoffGenerateResult> {
@@ -1221,436 +1246,455 @@ export class GoalManager {
   }
 
   async requestCheckpoint(goalId: string, nodeId: string, input: GoalCheckpointRequestInput = {}): Promise<GoalCheckpointMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const currentNode = graph.nodes.find((node) => node.id === nodeId);
-    if (!currentNode) {
-      throw new Error(`Task node not found: ${nodeId}`);
-    }
-    if (!currentNode.checkpointRequired) {
-      throw new Error(`Task node "${nodeId}" does not require a checkpoint.`);
-    }
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const currentNode = graph.nodes.find((node) => node.id === nodeId);
+      if (!currentNode) {
+        throw new Error(`Task node not found: ${nodeId}`);
+      }
+      if (!currentNode.checkpointRequired) {
+        throw new Error(`Task node "${nodeId}" does not require a checkpoint.`);
+      }
 
-    const checkpoints = await readGoalCheckpoints(goal);
-    const plans = await readGoalCapabilityPlans(goal);
-    const governanceConfig = await readReviewGovernanceConfig(this.stateDir);
-    const existingOpen = checkpoints.items.find((item) => item.nodeId === nodeId && (item.status === "required" || item.status === "waiting_user"));
-    if (existingOpen) {
-      throw new Error(`Task node "${nodeId}" already has a pending checkpoint: ${existingOpen.id}`);
-    }
-    const policy = this.resolveCheckpointPolicyForNode(plans, nodeId, currentNode.checkpointRequired, governanceConfig);
-    const context = this.resolveCheckpointContext(input);
-    this.assertCheckpointRequestPolicy(policy, {
-      summary: input.summary?.trim(),
-      note: input.note?.trim(),
-      reviewer: context.reviewer,
-      reviewerRole: context.reviewerRole,
-      requestedBy: context.requestedBy,
-      slaAt: context.slaAt,
-    });
-
-    const requestedNode = transitionGoalTaskNode(graph, nodeId, "pending_review", {
-      summary: input.summary,
-      checkpointStatus: "waiting_user",
-      runId: input.runId,
-    });
-    const savedGraph = await writeGoalTaskGraph(goal, requestedNode.graph);
-    const now = new Date().toISOString();
-    const checkpoint: GoalCheckpointItem = {
-      id: `checkpoint_${crypto.randomUUID().slice(0, 8)}`,
-      goalId: goal.id,
-      nodeId,
-      runId: input.runId?.trim() || requestedNode.node.lastRunId,
-      status: "waiting_user",
-      title: input.title?.trim() || `${requestedNode.node.title} checkpoint`,
-      summary: input.summary?.trim() || requestedNode.node.summary,
-      note: input.note?.trim() || undefined,
-      reviewer: context.reviewer,
-      reviewerRole: context.reviewerRole,
-      requestedBy: context.requestedBy,
-      decidedBy: undefined,
-      slaAt: context.slaAt,
-      requestedAt: now,
-      createdAt: now,
-      updatedAt: now,
-      policy,
-      workflow: undefined,
-      history: [{
-        action: "requested",
-        status: "waiting_user",
-        at: now,
-        summary: input.summary?.trim() || requestedNode.node.summary,
-        note: input.note?.trim() || undefined,
-        actor: context.requestedBy,
+      const checkpoints = await readGoalCheckpoints(goal);
+      const plans = await readGoalCapabilityPlans(goal);
+      const governanceConfig = await readReviewGovernanceConfig(this.stateDir);
+      const existingOpen = checkpoints.items.find((item) => item.nodeId === nodeId && (item.status === "required" || item.status === "waiting_user"));
+      if (existingOpen) {
+        throw new Error(`Task node "${nodeId}" already has a pending checkpoint: ${existingOpen.id}`);
+      }
+      const policy = this.resolveCheckpointPolicyForNode(plans, nodeId, currentNode.checkpointRequired, governanceConfig);
+      const context = this.resolveCheckpointContext(input);
+      this.assertCheckpointRequestPolicy(policy, {
+        summary: input.summary?.trim(),
+        note: input.note?.trim(),
         reviewer: context.reviewer,
         reviewerRole: context.reviewerRole,
         requestedBy: context.requestedBy,
         slaAt: context.slaAt,
+      });
+
+      const requestedNode = transitionGoalTaskNode(graph, nodeId, "pending_review", {
+        summary: input.summary,
+        checkpointStatus: "waiting_user",
+        runId: input.runId,
+      });
+      const savedGraph = await writeGoalTaskGraph(goal, requestedNode.graph);
+      const now = new Date().toISOString();
+      const checkpoint: GoalCheckpointItem = {
+        id: `checkpoint_${crypto.randomUUID().slice(0, 8)}`,
+        goalId: goal.id,
+        nodeId,
         runId: input.runId?.trim() || requestedNode.node.lastRunId,
-      }],
-    };
-    checkpoint.workflow = this.buildCheckpointWorkflow(checkpoint, policy, now);
-    checkpoint.reviewer = checkpoint.workflow
-      ? this.getCurrentWorkflowReviewer(checkpoint.workflow) ?? checkpoint.reviewer
-      : checkpoint.reviewer;
-    const nextCheckpoints: GoalCheckpointState = {
-      version: 2,
-      items: [...checkpoints.items, checkpoint],
-    };
-    await writeGoalCheckpoints(goal, nextCheckpoints);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "pending_approval",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: checkpoint.runId ?? goal.lastRunId,
+        status: "waiting_user",
+        title: input.title?.trim() || `${requestedNode.node.title} checkpoint`,
+        summary: input.summary?.trim() || requestedNode.node.summary,
+        note: input.note?.trim() || undefined,
+        reviewer: context.reviewer,
+        reviewerRole: context.reviewerRole,
+        requestedBy: context.requestedBy,
+        decidedBy: undefined,
+        slaAt: context.slaAt,
+        requestedAt: now,
+        createdAt: now,
+        updatedAt: now,
+        policy,
+        workflow: undefined,
+        history: [{
+          action: "requested",
+          status: "waiting_user",
+          at: now,
+          summary: input.summary?.trim() || requestedNode.node.summary,
+          note: input.note?.trim() || undefined,
+          actor: context.requestedBy,
+          reviewer: context.reviewer,
+          reviewerRole: context.reviewerRole,
+          requestedBy: context.requestedBy,
+          slaAt: context.slaAt,
+          runId: input.runId?.trim() || requestedNode.node.lastRunId,
+        }],
+      };
+      checkpoint.workflow = this.buildCheckpointWorkflow(checkpoint, policy, now);
+      checkpoint.reviewer = checkpoint.workflow
+        ? this.getCurrentWorkflowReviewer(checkpoint.workflow) ?? checkpoint.reviewer
+        : checkpoint.reviewer;
+      const nextCheckpoints: GoalCheckpointState = {
+        version: 2,
+        items: [...checkpoints.items, checkpoint],
+      };
+      await writeGoalCheckpoints(goal, nextCheckpoints);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "pending_approval",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: checkpoint.runId ?? goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "checkpoint_requested",
+        title: checkpoint.title,
+        nodeId,
+        status: checkpoint.status,
+        summary: checkpoint.summary,
+        note: checkpoint.note,
+        runId: checkpoint.runId,
+        checkpointId: checkpoint.id,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "checkpoint_requested",
+        nodeId,
+        checkpointId: checkpoint.id,
+        runId: checkpoint.runId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: requestedNode.node, checkpoints: nextCheckpoints, checkpoint };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "checkpoint_requested",
-      title: checkpoint.title,
-      nodeId,
-      status: checkpoint.status,
-      summary: checkpoint.summary,
-      note: checkpoint.note,
-      runId: checkpoint.runId,
-      checkpointId: checkpoint.id,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "checkpoint_requested",
-      nodeId,
-      checkpointId: checkpoint.id,
-      runId: checkpoint.runId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: requestedNode.node, checkpoints: nextCheckpoints, checkpoint };
   }
 
   async approveCheckpoint(goalId: string, nodeId: string, input: GoalCheckpointDecisionInput = {}): Promise<GoalCheckpointMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const checkpoints = await readGoalCheckpoints(goal);
-    const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
-    if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
-      throw new Error(`Checkpoint "${checkpoint.id}" is not awaiting approval.`);
-    }
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const checkpoints = await readGoalCheckpoints(goal);
+      const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
+      if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
+        throw new Error(`Checkpoint "${checkpoint.id}" is not awaiting approval.`);
+      }
 
-    const now = new Date().toISOString();
-    const context = this.resolveCheckpointContext(input, checkpoint);
-    this.assertCheckpointDecisionPolicy(checkpoint.policy, {
-      summary: input.summary?.trim() || checkpoint.summary,
-      note: input.note?.trim() || checkpoint.note,
-      decidedBy: context.decidedBy,
-    }, "approve");
-    const nextCheckpoint = checkpoint.workflow
-      ? this.applyCheckpointWorkflowDecision(checkpoint, input, context, "accepted", now)
-      : this.applyCheckpointTerminalDecision(checkpoint, input, context, "approved", "approved", now);
-    const approvedNode = transitionGoalTaskNode(
-      graph,
-      nodeId,
-      nextCheckpoint.status === "approved" ? "validating" : "pending_review",
-      {
-        summary: input.summary,
-        checkpointStatus: nextCheckpoint.status === "approved" ? "approved" : "waiting_user",
-        runId: input.runId,
-      },
-    );
-    const savedGraph = await writeGoalTaskGraph(goal, approvedNode.graph);
-    const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
-    await writeGoalCheckpoints(goal, nextCheckpoints);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: nextCheckpoint.status === "approved" ? "reviewing" : "pending_approval",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
-    });
-    if (nextCheckpoint.status === "approved") {
-      await appendGoalProgressEntry(updatedGoal, {
-        kind: "checkpoint_approved",
-        title: nextCheckpoint.title,
+      const now = new Date().toISOString();
+      const context = this.resolveCheckpointContext(input, checkpoint);
+      this.assertCheckpointDecisionPolicy(checkpoint.policy, {
+        summary: input.summary?.trim() || checkpoint.summary,
+        note: input.note?.trim() || checkpoint.note,
+        decidedBy: context.decidedBy,
+      }, "approve");
+      const nextCheckpoint = checkpoint.workflow
+        ? this.applyCheckpointWorkflowDecision(checkpoint, input, context, "accepted", now)
+        : this.applyCheckpointTerminalDecision(checkpoint, input, context, "approved", "approved", now);
+      const approvedNode = transitionGoalTaskNode(
+        graph,
         nodeId,
-        status: nextCheckpoint.status,
-        summary: nextCheckpoint.summary,
-        note: nextCheckpoint.note,
-        runId: nextCheckpoint.runId,
-        checkpointId: nextCheckpoint.id,
+        nextCheckpoint.status === "approved" ? "validating" : "pending_review",
+        {
+          summary: input.summary,
+          checkpointStatus: nextCheckpoint.status === "approved" ? "approved" : "waiting_user",
+          runId: input.runId,
+        },
+      );
+      const savedGraph = await writeGoalTaskGraph(goal, approvedNode.graph);
+      const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
+      await writeGoalCheckpoints(goal, nextCheckpoints);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: nextCheckpoint.status === "approved" ? "reviewing" : "pending_approval",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
       });
-    }
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: nextCheckpoint.status === "approved" ? "checkpoint_approved" : "checkpoint_requested",
-      nodeId,
-      checkpointId: nextCheckpoint.id,
-      runId: nextCheckpoint.runId,
+      if (nextCheckpoint.status === "approved") {
+        await appendGoalProgressEntry(updatedGoal, {
+          kind: "checkpoint_approved",
+          title: nextCheckpoint.title,
+          nodeId,
+          status: nextCheckpoint.status,
+          summary: nextCheckpoint.summary,
+          note: nextCheckpoint.note,
+          runId: nextCheckpoint.runId,
+          checkpointId: nextCheckpoint.id,
+        });
+      }
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: nextCheckpoint.status === "approved" ? "checkpoint_approved" : "checkpoint_requested",
+        nodeId,
+        checkpointId: nextCheckpoint.id,
+        runId: nextCheckpoint.runId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: approvedNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
     });
-    return { goal: updatedGoal, graph: savedGraph, node: approvedNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
   }
 
   async rejectCheckpoint(goalId: string, nodeId: string, input: GoalCheckpointDecisionInput = {}): Promise<GoalCheckpointMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const checkpoints = await readGoalCheckpoints(goal);
-    const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
-    if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
-      throw new Error(`Checkpoint "${checkpoint.id}" is not awaiting approval.`);
-    }
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const checkpoints = await readGoalCheckpoints(goal);
+      const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
+      if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
+        throw new Error(`Checkpoint "${checkpoint.id}" is not awaiting approval.`);
+      }
 
-    const rejectNote = input.note?.trim() || "Checkpoint rejected";
-    const now = new Date().toISOString();
-    const context = this.resolveCheckpointContext(input, checkpoint);
-    this.assertCheckpointDecisionPolicy(checkpoint.policy, {
-      summary: input.summary?.trim() || checkpoint.summary,
-      note: rejectNote,
-      decidedBy: context.decidedBy,
-    }, "reject");
-    const nextCheckpoint = checkpoint.workflow
-      ? this.applyCheckpointWorkflowDecision(checkpoint, { ...input, note: rejectNote }, context, "rejected", now)
-      : this.applyCheckpointTerminalDecision(checkpoint, { ...input, note: rejectNote }, context, "rejected", "rejected", now);
-    const rejectedNode = transitionGoalTaskNode(
-      graph,
-      nodeId,
-      nextCheckpoint.status === "rejected" ? "blocked" : "pending_review",
-      {
-        summary: input.summary,
-        blockReason: nextCheckpoint.status === "rejected" ? rejectNote : undefined,
-        checkpointStatus: nextCheckpoint.status === "rejected" ? "rejected" : "waiting_user",
-        runId: input.runId,
-      },
-    );
-    const savedGraph = await writeGoalTaskGraph(goal, rejectedNode.graph);
-    const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
-    await writeGoalCheckpoints(goal, nextCheckpoints);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: nextCheckpoint.status === "rejected" ? "blocked" : "pending_approval",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
-    });
-    if (nextCheckpoint.status === "rejected") {
-      await appendGoalProgressEntry(updatedGoal, {
-        kind: "checkpoint_rejected",
-        title: nextCheckpoint.title,
+      const rejectNote = input.note?.trim() || "Checkpoint rejected";
+      const now = new Date().toISOString();
+      const context = this.resolveCheckpointContext(input, checkpoint);
+      this.assertCheckpointDecisionPolicy(checkpoint.policy, {
+        summary: input.summary?.trim() || checkpoint.summary,
+        note: rejectNote,
+        decidedBy: context.decidedBy,
+      }, "reject");
+      const nextCheckpoint = checkpoint.workflow
+        ? this.applyCheckpointWorkflowDecision(checkpoint, { ...input, note: rejectNote }, context, "rejected", now)
+        : this.applyCheckpointTerminalDecision(checkpoint, { ...input, note: rejectNote }, context, "rejected", "rejected", now);
+      const rejectedNode = transitionGoalTaskNode(
+        graph,
         nodeId,
-        status: nextCheckpoint.status,
-        summary: nextCheckpoint.summary,
-        note: nextCheckpoint.note,
-        runId: nextCheckpoint.runId,
-        checkpointId: nextCheckpoint.id,
+        nextCheckpoint.status === "rejected" ? "blocked" : "pending_review",
+        {
+          summary: input.summary,
+          blockReason: nextCheckpoint.status === "rejected" ? rejectNote : undefined,
+          checkpointStatus: nextCheckpoint.status === "rejected" ? "rejected" : "waiting_user",
+          runId: input.runId,
+        },
+      );
+      const savedGraph = await writeGoalTaskGraph(goal, rejectedNode.graph);
+      const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
+      await writeGoalCheckpoints(goal, nextCheckpoints);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: nextCheckpoint.status === "rejected" ? "blocked" : "pending_approval",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
       });
-    }
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: nextCheckpoint.status === "rejected" ? "checkpoint_rejected" : "checkpoint_requested",
-      nodeId,
-      checkpointId: nextCheckpoint.id,
-      runId: nextCheckpoint.runId,
+      if (nextCheckpoint.status === "rejected") {
+        await appendGoalProgressEntry(updatedGoal, {
+          kind: "checkpoint_rejected",
+          title: nextCheckpoint.title,
+          nodeId,
+          status: nextCheckpoint.status,
+          summary: nextCheckpoint.summary,
+          note: nextCheckpoint.note,
+          runId: nextCheckpoint.runId,
+          checkpointId: nextCheckpoint.id,
+        });
+      }
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: nextCheckpoint.status === "rejected" ? "checkpoint_rejected" : "checkpoint_requested",
+        nodeId,
+        checkpointId: nextCheckpoint.id,
+        runId: nextCheckpoint.runId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: rejectedNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
     });
-    return { goal: updatedGoal, graph: savedGraph, node: rejectedNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
   }
 
   async expireCheckpoint(goalId: string, nodeId: string, input: GoalCheckpointDecisionInput = {}): Promise<GoalCheckpointMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const checkpoints = await readGoalCheckpoints(goal);
-    const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
-    if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
-      throw new Error(`Checkpoint "${checkpoint.id}" is not active and cannot expire.`);
-    }
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const checkpoints = await readGoalCheckpoints(goal);
+      const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
+      if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
+        throw new Error(`Checkpoint "${checkpoint.id}" is not active and cannot expire.`);
+      }
 
-    const expireNote = input.note?.trim() || "Checkpoint expired";
-    const expiredNode = transitionGoalTaskNode(graph, nodeId, "blocked", {
-      summary: input.summary,
-      blockReason: expireNote,
-      checkpointStatus: "expired",
-      runId: input.runId,
-    });
-    const savedGraph = await writeGoalTaskGraph(goal, expiredNode.graph);
-    const now = new Date().toISOString();
-    const context = this.resolveCheckpointContext(input, checkpoint);
-    this.assertCheckpointDecisionPolicy(checkpoint.policy, {
-      summary: input.summary?.trim() || checkpoint.summary,
-      note: expireNote,
-      decidedBy: context.decidedBy,
-    }, "expire");
-    const nextCheckpoint: GoalCheckpointItem = {
-      ...checkpoint,
-      status: "expired",
-      summary: input.summary?.trim() || checkpoint.summary,
-      note: expireNote,
-      reviewer: context.reviewer,
-      reviewerRole: context.reviewerRole,
-      requestedBy: context.requestedBy,
-      decidedBy: context.decidedBy,
-      slaAt: context.slaAt,
-      decidedAt: now,
-      updatedAt: now,
-      runId: input.runId?.trim() || checkpoint.runId,
-      history: this.appendCheckpointHistory(checkpoint, {
-        action: "expired",
-        status: "expired",
-        at: now,
+      const expireNote = input.note?.trim() || "Checkpoint expired";
+      const expiredNode = transitionGoalTaskNode(graph, nodeId, "blocked", {
+        summary: input.summary,
+        blockReason: expireNote,
+        checkpointStatus: "expired",
+        runId: input.runId,
+      });
+      const savedGraph = await writeGoalTaskGraph(goal, expiredNode.graph);
+      const now = new Date().toISOString();
+      const context = this.resolveCheckpointContext(input, checkpoint);
+      this.assertCheckpointDecisionPolicy(checkpoint.policy, {
         summary: input.summary?.trim() || checkpoint.summary,
         note: expireNote,
-        actor: context.decidedBy,
+        decidedBy: context.decidedBy,
+      }, "expire");
+      const nextCheckpoint: GoalCheckpointItem = {
+        ...checkpoint,
+        status: "expired",
+        summary: input.summary?.trim() || checkpoint.summary,
+        note: expireNote,
         reviewer: context.reviewer,
         reviewerRole: context.reviewerRole,
         requestedBy: context.requestedBy,
         decidedBy: context.decidedBy,
         slaAt: context.slaAt,
+        decidedAt: now,
+        updatedAt: now,
         runId: input.runId?.trim() || checkpoint.runId,
-      }),
-    };
-    const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
-    await writeGoalCheckpoints(goal, nextCheckpoints);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "blocked",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
+        history: this.appendCheckpointHistory(checkpoint, {
+          action: "expired",
+          status: "expired",
+          at: now,
+          summary: input.summary?.trim() || checkpoint.summary,
+          note: expireNote,
+          actor: context.decidedBy,
+          reviewer: context.reviewer,
+          reviewerRole: context.reviewerRole,
+          requestedBy: context.requestedBy,
+          decidedBy: context.decidedBy,
+          slaAt: context.slaAt,
+          runId: input.runId?.trim() || checkpoint.runId,
+        }),
+      };
+      const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
+      await writeGoalCheckpoints(goal, nextCheckpoints);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "blocked",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "checkpoint_expired",
+        title: nextCheckpoint.title,
+        nodeId,
+        status: nextCheckpoint.status,
+        summary: nextCheckpoint.summary,
+        note: nextCheckpoint.note,
+        runId: nextCheckpoint.runId,
+        checkpointId: nextCheckpoint.id,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "checkpoint_expired",
+        nodeId,
+        checkpointId: nextCheckpoint.id,
+        runId: nextCheckpoint.runId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: expiredNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "checkpoint_expired",
-      title: nextCheckpoint.title,
-      nodeId,
-      status: nextCheckpoint.status,
-      summary: nextCheckpoint.summary,
-      note: nextCheckpoint.note,
-      runId: nextCheckpoint.runId,
-      checkpointId: nextCheckpoint.id,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "checkpoint_expired",
-      nodeId,
-      checkpointId: nextCheckpoint.id,
-      runId: nextCheckpoint.runId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: expiredNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
   }
 
   async reopenCheckpoint(goalId: string, nodeId: string, input: GoalCheckpointDecisionInput = {}): Promise<GoalCheckpointMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const checkpoints = await readGoalCheckpoints(goal);
-    const plans = await readGoalCapabilityPlans(goal);
-    const governanceConfig = await readReviewGovernanceConfig(this.stateDir);
-    const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
-    if (checkpoint.status !== "rejected" && checkpoint.status !== "expired") {
-      throw new Error(`Checkpoint "${checkpoint.id}" is not rejected/expired and cannot reopen.`);
-    }
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const checkpoints = await readGoalCheckpoints(goal);
+      const plans = await readGoalCapabilityPlans(goal);
+      const governanceConfig = await readReviewGovernanceConfig(this.stateDir);
+      const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
+      if (checkpoint.status !== "rejected" && checkpoint.status !== "expired") {
+        throw new Error(`Checkpoint "${checkpoint.id}" is not rejected/expired and cannot reopen.`);
+      }
 
-    const reopenedNode = transitionGoalTaskNode(graph, nodeId, "pending_review", {
-      summary: input.summary,
-      checkpointStatus: "waiting_user",
-      runId: input.runId,
-    });
-    const savedGraph = await writeGoalTaskGraph(goal, reopenedNode.graph);
-    const now = new Date().toISOString();
-    const context = this.resolveCheckpointContext(input, checkpoint, { clearDecidedBy: true });
-    const policy = this.resolveCheckpointPolicyForNode(plans, nodeId, true, governanceConfig, checkpoint.policy);
-    this.assertCheckpointRequestPolicy(policy, {
-      summary: input.summary?.trim() || checkpoint.summary,
-      note: input.note?.trim() || checkpoint.note,
-      reviewer: context.reviewer,
-      reviewerRole: context.reviewerRole,
-      requestedBy: context.requestedBy,
-      slaAt: context.slaAt,
-    }, "reopen");
-    const nextCheckpoint: GoalCheckpointItem = {
-      ...checkpoint,
-      status: "waiting_user",
-      summary: input.summary?.trim() || checkpoint.summary,
-      note: input.note?.trim() || checkpoint.note,
-      reviewer: context.reviewer,
-      reviewerRole: context.reviewerRole,
-      requestedBy: context.requestedBy,
-      decidedBy: undefined,
-      slaAt: context.slaAt,
-      requestedAt: now,
-      decidedAt: undefined,
-      updatedAt: now,
-      runId: input.runId?.trim() || checkpoint.runId,
-      policy,
-      workflow: undefined,
-      history: this.appendCheckpointHistory(checkpoint, {
-        action: "reopened",
-        status: "waiting_user",
-        at: now,
+      const reopenedNode = transitionGoalTaskNode(graph, nodeId, "pending_review", {
+        summary: input.summary,
+        checkpointStatus: "waiting_user",
+        runId: input.runId,
+      });
+      const savedGraph = await writeGoalTaskGraph(goal, reopenedNode.graph);
+      const now = new Date().toISOString();
+      const context = this.resolveCheckpointContext(input, checkpoint, { clearDecidedBy: true });
+      const policy = this.resolveCheckpointPolicyForNode(plans, nodeId, true, governanceConfig, checkpoint.policy);
+      this.assertCheckpointRequestPolicy(policy, {
         summary: input.summary?.trim() || checkpoint.summary,
         note: input.note?.trim() || checkpoint.note,
-        actor: context.requestedBy ?? context.decidedBy,
         reviewer: context.reviewer,
         reviewerRole: context.reviewerRole,
         requestedBy: context.requestedBy,
         slaAt: context.slaAt,
+      }, "reopen");
+      const nextCheckpoint: GoalCheckpointItem = {
+        ...checkpoint,
+        status: "waiting_user",
+        summary: input.summary?.trim() || checkpoint.summary,
+        note: input.note?.trim() || checkpoint.note,
+        reviewer: context.reviewer,
+        reviewerRole: context.reviewerRole,
+        requestedBy: context.requestedBy,
+        decidedBy: undefined,
+        slaAt: context.slaAt,
+        requestedAt: now,
+        decidedAt: undefined,
+        updatedAt: now,
         runId: input.runId?.trim() || checkpoint.runId,
-      }),
-    };
-    nextCheckpoint.workflow = this.buildCheckpointWorkflow(nextCheckpoint, policy, now);
-    nextCheckpoint.reviewer = nextCheckpoint.workflow
-      ? this.getCurrentWorkflowReviewer(nextCheckpoint.workflow) ?? nextCheckpoint.reviewer
-      : nextCheckpoint.reviewer;
-    const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
-    await writeGoalCheckpoints(goal, nextCheckpoints);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "pending_approval",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
+        policy,
+        workflow: undefined,
+        history: this.appendCheckpointHistory(checkpoint, {
+          action: "reopened",
+          status: "waiting_user",
+          at: now,
+          summary: input.summary?.trim() || checkpoint.summary,
+          note: input.note?.trim() || checkpoint.note,
+          actor: context.requestedBy ?? context.decidedBy,
+          reviewer: context.reviewer,
+          reviewerRole: context.reviewerRole,
+          requestedBy: context.requestedBy,
+          slaAt: context.slaAt,
+          runId: input.runId?.trim() || checkpoint.runId,
+        }),
+      };
+      nextCheckpoint.workflow = this.buildCheckpointWorkflow(nextCheckpoint, policy, now);
+      nextCheckpoint.reviewer = nextCheckpoint.workflow
+        ? this.getCurrentWorkflowReviewer(nextCheckpoint.workflow) ?? nextCheckpoint.reviewer
+        : nextCheckpoint.reviewer;
+      const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
+      await writeGoalCheckpoints(goal, nextCheckpoints);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "pending_approval",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
+      });
+      await appendGoalProgressEntry(updatedGoal, {
+        kind: "checkpoint_reopened",
+        title: nextCheckpoint.title,
+        nodeId,
+        status: nextCheckpoint.status,
+        summary: nextCheckpoint.summary,
+        note: nextCheckpoint.note,
+        runId: nextCheckpoint.runId,
+        checkpointId: nextCheckpoint.id,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "checkpoint_reopened",
+        nodeId,
+        checkpointId: nextCheckpoint.id,
+        runId: nextCheckpoint.runId,
+      });
+      return { goal: updatedGoal, graph: savedGraph, node: reopenedNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
     });
-    await appendGoalProgressEntry(updatedGoal, {
-      kind: "checkpoint_reopened",
-      title: nextCheckpoint.title,
-      nodeId,
-      status: nextCheckpoint.status,
-      summary: nextCheckpoint.summary,
-      note: nextCheckpoint.note,
-      runId: nextCheckpoint.runId,
-      checkpointId: nextCheckpoint.id,
-    });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "checkpoint_reopened",
-      nodeId,
-      checkpointId: nextCheckpoint.id,
-      runId: nextCheckpoint.runId,
-    });
-    return { goal: updatedGoal, graph: savedGraph, node: reopenedNode.node, checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
   }
 
   async escalateCheckpoint(goalId: string, nodeId: string, input: GoalCheckpointEscalateInput = {}): Promise<GoalCheckpointMutationResult> {
-    const goal = await this.requireGoal(goalId);
-    const graph = await readGoalTaskGraph(goal);
-    const checkpoints = await readGoalCheckpoints(goal);
-    const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
-    if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
-      throw new Error(`Checkpoint "${checkpoint.id}" is not active and cannot escalate.`);
-    }
-    const now = new Date().toISOString();
-    const nextCheckpoint = this.applyCheckpointWorkflowEscalation(checkpoint, input, now);
-    const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
-    await writeGoalCheckpoints(goal, nextCheckpoints);
-    const updatedGoal = await this.touchGoal(goal, {
-      status: "pending_approval",
-      activeNodeId: nodeId,
-      lastNodeId: nodeId,
-      lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
+    return this.withGoalMutationLock(goalId, async () => {
+      const goal = await this.requireGoal(goalId);
+      const graph = await readGoalTaskGraph(goal);
+      const checkpoints = await readGoalCheckpoints(goal);
+      const checkpoint = this.resolveCheckpointForDecision(checkpoints, nodeId, input.checkpointId);
+      if (checkpoint.status !== "required" && checkpoint.status !== "waiting_user") {
+        throw new Error(`Checkpoint "${checkpoint.id}" is not active and cannot escalate.`);
+      }
+      const now = new Date().toISOString();
+      const nextCheckpoint = this.applyCheckpointWorkflowEscalation(checkpoint, input, now);
+      const nextCheckpoints = this.replaceCheckpoint(checkpoints, nextCheckpoint);
+      await writeGoalCheckpoints(goal, nextCheckpoints);
+      const updatedGoal = await this.touchGoal(goal, {
+        status: "pending_approval",
+        activeNodeId: nodeId,
+        lastNodeId: nodeId,
+        lastRunId: nextCheckpoint.runId ?? goal.lastRunId,
+      });
+      await this.refreshHandoffAfterMutation(updatedGoal);
+      await this.emitGoalUpdate(updatedGoal, {
+        reason: "checkpoint_requested",
+        nodeId,
+        checkpointId: nextCheckpoint.id,
+        runId: nextCheckpoint.runId,
+      });
+      return { goal: updatedGoal, graph, node: graph.nodes.find((item) => item.id === nodeId) ?? this.resolveTaskNode(graph, nodeId), checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
     });
-    await this.refreshHandoffAfterMutation(updatedGoal);
-    await this.emitGoalUpdate(updatedGoal, {
-      reason: "checkpoint_requested",
-      nodeId,
-      checkpointId: nextCheckpoint.id,
-      runId: nextCheckpoint.runId,
-    });
-    return { goal: updatedGoal, graph, node: graph.nodes.find((item) => item.id === nodeId) ?? this.resolveTaskNode(graph, nodeId), checkpoints: nextCheckpoints, checkpoint: nextCheckpoint };
   }
 
   async scanApprovalWorkflows(
     goalId: string,
     input: GoalSuggestionReviewWorkflowScanInput = {},
   ): Promise<GoalApprovalWorkflowScanResult> {
+    return this.withGoalMutationLock(goalId, () => this.scanApprovalWorkflowsUnlocked(goalId, input));
+  }
+
+  private async scanApprovalWorkflowsUnlocked(
+    goalId: string,
+    input: GoalSuggestionReviewWorkflowScanInput = {},
+  ): Promise<GoalApprovalWorkflowScanResult> {
     const goal = await this.requireGoal(goalId);
     const governanceConfig = await readReviewGovernanceConfig(this.stateDir);
-    const reviewResult = await this.scanSuggestionReviewWorkflows(goalId, input);
+    const reviewResult = await this.scanSuggestionReviewWorkflowsUnlocked(goalId, input);
     const checkpoints = await readGoalCheckpoints(goal);
     const existingNotifications = await readGoalReviewNotifications(goal);
     const existingDispatches = await readGoalReviewNotificationDispatches(goal);
@@ -1672,17 +1716,17 @@ export class GoalManager {
       checkpointScan.scanItems,
       scannedAt,
     );
-    if (notifications.state.items.length !== existingNotifications.items.length) {
+    if (JSON.stringify(notifications.state) !== JSON.stringify(existingNotifications)) {
       await writeGoalReviewNotifications(goal, notifications.state);
     }
     const dispatches = this.materializeNotificationDispatches(
       goal,
       governanceConfig,
       existingDispatches,
-      notifications.created,
+      notifications.state.items,
       scannedAt,
     );
-    if (dispatches.state.items.length !== existingDispatches.items.length) {
+    if (JSON.stringify(dispatches.state) !== JSON.stringify(existingDispatches)) {
       await writeGoalReviewNotificationDispatches(goal, dispatches.state);
     }
     const updatedGoal = checkpointScan.mutated ? await this.touchGoal(reviewResult.goal) : reviewResult.goal;
@@ -1717,6 +1761,25 @@ export class GoalManager {
       throw new Error(`Goal not found: ${goalId}`);
     }
     return goal;
+  }
+
+  private async withGoalMutationLock<T>(goalId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.goalMutationLocks.get(goalId) ?? Promise.resolve();
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const tail = previous.catch(() => undefined).then(() => current);
+    this.goalMutationLocks.set(goalId, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await fn();
+    } finally {
+      releaseCurrent();
+      if (this.goalMutationLocks.get(goalId) === tail) {
+        this.goalMutationLocks.delete(goalId);
+      }
+    }
   }
 
   private async syncSuggestionReviews(goal: LongTermGoal): Promise<GoalSuggestionReviewState> {
@@ -2289,24 +2352,13 @@ export class GoalManager {
     await fs.mkdir(methodsDir, { recursive: true });
     const publishedPath = await this.resolveMethodPublishPath(methodsDir, candidate.slug, candidate.nodeId, candidate.id);
     await fs.writeFile(publishedPath, candidate.draftContent, "utf-8");
-    return {
-      id: `publish_${review.id}`,
-      goalId: goal.id,
-      reviewId: review.id,
-      suggestionType: review.suggestionType,
-      suggestionId: review.suggestionId,
+    return this.buildGoalSuggestionPublishRecord(goal, review, input, {
       assetType: "method",
-      title: review.title,
       publishedPath,
       assetKey: path.basename(publishedPath),
-      reviewer: input.reviewer?.trim() || review.reviewer,
-      decidedBy: input.decidedBy?.trim() || review.decidedBy,
-      note: input.note?.trim() || review.note,
-      nodeId: review.nodeId,
-      runId: review.runId,
       sourcePath: getGoalMethodCandidatesPath(goal),
       publishedAt,
-    };
+    });
   }
 
   private async publishSkillSuggestion(
@@ -2320,52 +2372,78 @@ export class GoalManager {
     if (!candidate) {
       throw new Error(`Skill candidate not found: ${review.suggestionId}`);
     }
-    const syntheticCandidate: ExperienceCandidate = {
-      id: review.id,
-      taskId: `${goal.id}:${review.nodeId ?? review.suggestionId}`,
-      type: "skill",
-      status: "draft",
-      title: candidate.title,
-      slug: candidate.slug,
-      content: candidate.draftContent,
-      summary: candidate.summary,
-      qualityScore: candidate.qualityScore,
-      sourceTaskSnapshot: {
-        taskId: `${goal.id}:${review.nodeId ?? review.suggestionId}`,
-        conversationId: goal.activeConversationId ?? `goal:${goal.id}`,
-        source: "manual",
-        status: "success",
-        title: candidate.title,
-        objective: candidate.evidence.objective,
-        summary: candidate.summary,
-        reflection: candidate.rationale.join(" | "),
-        outcome: candidate.summary,
-        toolCalls: candidate.evidence.toolNamesUsed.map((toolName) => ({ toolName, success: true })),
-        artifactPaths: [],
-        startedAt: candidate.createdAt,
-        finishedAt: publishedAt,
-      },
-      createdAt: candidate.createdAt,
-    };
+    const syntheticCandidate = this.buildSyntheticGoalSkillCandidate(goal, review, candidate, publishedAt);
     const publishedPath = await publishSkillCandidate(syntheticCandidate, this.stateDir, getGlobalSkillRegistry());
-    return {
-      id: `publish_${review.id}`,
-      goalId: goal.id,
-      reviewId: review.id,
-      suggestionType: review.suggestionType,
-      suggestionId: review.suggestionId,
+    return this.buildGoalSuggestionPublishRecord(goal, review, input, {
       assetType: "skill",
-      title: review.title,
       publishedPath,
       assetKey: path.basename(path.dirname(publishedPath)),
-      reviewer: input.reviewer?.trim() || review.reviewer,
-      decidedBy: input.decidedBy?.trim() || review.decidedBy,
-      note: input.note?.trim() || review.note,
-      nodeId: review.nodeId,
-      runId: review.runId,
       sourcePath: getGoalSkillCandidatesPath(goal),
       publishedAt,
-    };
+    });
+  }
+
+  private async recoverPublishedSuggestionRecord(
+    goal: LongTermGoal,
+    review: GoalSuggestionReviewItem,
+    input: GoalSuggestionPublishInput,
+  ): Promise<GoalSuggestionPublishRecord | null> {
+    return review.suggestionType === "method_candidate"
+      ? this.recoverPublishedMethodSuggestion(goal, review, input)
+      : this.recoverPublishedSkillSuggestion(goal, review, input);
+  }
+
+  private async recoverPublishedMethodSuggestion(
+    goal: LongTermGoal,
+    review: GoalSuggestionReviewItem,
+    input: GoalSuggestionPublishInput,
+  ): Promise<GoalSuggestionPublishRecord | null> {
+    const methodCandidates = await readGoalMethodCandidates(goal);
+    const candidate = methodCandidates.items.find((item) => item.id === review.suggestionId);
+    if (!candidate) {
+      return null;
+    }
+    const methodsDir = path.join(this.stateDir, "methods");
+    const publishedPath = await this.findMatchingPublishedArtifactPath(
+      this.getMethodPublishPathCandidates(methodsDir, candidate.slug, candidate.nodeId, candidate.id),
+      candidate.draftContent,
+    );
+    if (!publishedPath) {
+      return null;
+    }
+    return this.buildGoalSuggestionPublishRecord(goal, review, input, {
+      assetType: "method",
+      publishedPath,
+      assetKey: path.basename(publishedPath),
+      sourcePath: getGoalMethodCandidatesPath(goal),
+      publishedAt: await this.getPublishedArtifactTimestamp(publishedPath),
+    });
+  }
+
+  private async recoverPublishedSkillSuggestion(
+    goal: LongTermGoal,
+    review: GoalSuggestionReviewItem,
+    input: GoalSuggestionPublishInput,
+  ): Promise<GoalSuggestionPublishRecord | null> {
+    const skillCandidates = await readGoalSkillCandidates(goal);
+    const candidate = skillCandidates.items.find((item) => item.id === review.suggestionId);
+    if (!candidate) {
+      return null;
+    }
+    const publishedPath = await this.findMatchingPublishedArtifactPath(
+      this.getSkillPublishPathCandidates(getUserSkillsDir(this.stateDir), candidate.slug, `${goal.id}:${review.nodeId ?? review.suggestionId}`, review.id),
+      candidate.draftContent,
+    );
+    if (!publishedPath) {
+      return null;
+    }
+    return this.buildGoalSuggestionPublishRecord(goal, review, input, {
+      assetType: "skill",
+      publishedPath,
+      assetKey: path.basename(path.dirname(publishedPath)),
+      sourcePath: getGoalSkillCandidatesPath(goal),
+      publishedAt: await this.getPublishedArtifactTimestamp(publishedPath),
+    });
   }
 
   private async syncPublishedSuggestionToExperienceCandidate(
@@ -2475,9 +2553,18 @@ export class GoalManager {
       updatedAt: now,
       lastActiveAt: patch.lastActiveAt ?? now,
     };
-    await upsertGoalRegistryEntry(this.stateDir, updatedGoal);
-    await writeGoalRuntime(updatedGoal, {
-      ...(await readGoalRuntime(updatedGoal)),
+    await this.persistGoalHeaderState(goal, updatedGoal);
+    return updatedGoal;
+  }
+
+  private async persistGoalHeaderState(
+    previousGoal: LongTermGoal,
+    updatedGoal: LongTermGoal,
+    runtimePatch: Partial<GoalRuntimeState> = {},
+  ): Promise<void> {
+    const previousRuntime = await readGoalRuntime(previousGoal);
+    const nextRuntime: GoalRuntimeState = {
+      ...previousRuntime,
       goalId: updatedGoal.id,
       status: updatedGoal.status,
       activeConversationId: updatedGoal.activeConversationId,
@@ -2485,9 +2572,20 @@ export class GoalManager {
       lastNodeId: updatedGoal.lastNodeId,
       lastRunId: updatedGoal.lastRunId,
       pausedAt: updatedGoal.pausedAt,
-      updatedAt: now,
-    });
-    return updatedGoal;
+      updatedAt: updatedGoal.updatedAt,
+      ...runtimePatch,
+    };
+    await writeGoalRuntime(updatedGoal, nextRuntime);
+    try {
+      await upsertGoalRegistryEntry(this.stateDir, updatedGoal);
+    } catch (error) {
+      try {
+        await writeGoalRuntime(previousGoal, previousRuntime);
+      } catch {
+        // best effort rollback: preserve original error and avoid masking the primary failure
+      }
+      throw error;
+    }
   }
 
   private resolveCheckpointForDecision(
@@ -2605,21 +2703,134 @@ export class GoalManager {
     return `goal_suggestion:${goalId}:${suggestionType}:${suggestionId}`;
   }
 
-  private async resolveMethodPublishPath(methodsDir: string, slug: string, nodeId: string | undefined, candidateId: string): Promise<string> {
+  private buildGoalSuggestionPublishRecord(
+    goal: LongTermGoal,
+    review: GoalSuggestionReviewItem,
+    input: GoalSuggestionPublishInput,
+    payload: {
+      assetType: GoalSuggestionPublishRecord["assetType"];
+      publishedPath: string;
+      assetKey: string;
+      sourcePath: string;
+      publishedAt: string;
+    },
+  ): GoalSuggestionPublishRecord {
+    return {
+      id: `publish_${review.id}`,
+      goalId: goal.id,
+      reviewId: review.id,
+      suggestionType: review.suggestionType,
+      suggestionId: review.suggestionId,
+      assetType: payload.assetType,
+      title: review.title,
+      publishedPath: payload.publishedPath,
+      assetKey: payload.assetKey,
+      reviewer: input.reviewer?.trim() || review.reviewer,
+      decidedBy: input.decidedBy?.trim() || review.decidedBy,
+      note: input.note?.trim() || review.note,
+      nodeId: review.nodeId,
+      runId: review.runId,
+      sourcePath: payload.sourcePath,
+      publishedAt: payload.publishedAt,
+    };
+  }
+
+  private buildSyntheticGoalSkillCandidate(
+    goal: LongTermGoal,
+    review: GoalSuggestionReviewItem,
+    candidate: GoalSkillCandidate,
+    publishedAt: string,
+  ): ExperienceCandidate {
+    return {
+      id: review.id,
+      taskId: `${goal.id}:${review.nodeId ?? review.suggestionId}`,
+      type: "skill",
+      status: "draft",
+      title: candidate.title,
+      slug: candidate.slug,
+      content: candidate.draftContent,
+      summary: candidate.summary,
+      qualityScore: candidate.qualityScore,
+      sourceTaskSnapshot: {
+        taskId: `${goal.id}:${review.nodeId ?? review.suggestionId}`,
+        conversationId: goal.activeConversationId ?? `goal:${goal.id}`,
+        source: "manual",
+        status: "success",
+        title: candidate.title,
+        objective: candidate.evidence.objective,
+        summary: candidate.summary,
+        reflection: candidate.rationale.join(" | "),
+        outcome: candidate.summary,
+        toolCalls: candidate.evidence.toolNamesUsed.map((toolName: string) => ({ toolName, success: true })),
+        artifactPaths: [],
+        startedAt: candidate.createdAt,
+        finishedAt: publishedAt,
+      },
+      createdAt: candidate.createdAt,
+    };
+  }
+
+  private getMethodPublishPathCandidates(
+    methodsDir: string,
+    slug: string,
+    nodeId: string | undefined,
+    candidateId: string,
+  ): string[] {
     const baseName = this.toSafeMethodFilenameBase(slug, nodeId ?? candidateId);
     const suffixNodeId = this.normalizeAsciiToken(nodeId, "node");
     const suffixCandidateId = this.normalizeAsciiToken(candidateId, "candidate");
-    const candidates = [
-      `${baseName}.md`,
-      `${baseName}-${suffixNodeId}.md`,
-      `${baseName}-${suffixCandidateId}.md`,
+    return [
+      path.join(methodsDir, `${baseName}.md`),
+      path.join(methodsDir, `${baseName}-${suffixNodeId}.md`),
+      path.join(methodsDir, `${baseName}-${suffixCandidateId}.md`),
     ];
-    for (const filename of candidates) {
-      const filePath = path.join(methodsDir, filename);
+  }
+
+  private getSkillPublishPathCandidates(
+    skillsDir: string,
+    slug: string,
+    taskId: string,
+    candidateId: string,
+  ): string[] {
+    const baseDirName = this.toSafeSkillDirName(slug, taskId);
+    const taskToken = this.normalizeAsciiToken(taskId, "task");
+    const candidateToken = this.normalizeAsciiToken(candidateId, "candidate");
+    return [
+      path.join(skillsDir, baseDirName, "SKILL.md"),
+      path.join(skillsDir, `${baseDirName}-${taskToken}`, "SKILL.md"),
+      path.join(skillsDir, `${baseDirName}-${candidateToken}`, "SKILL.md"),
+    ];
+  }
+
+  private async findMatchingPublishedArtifactPath(
+    candidates: string[],
+    expectedContent: string,
+  ): Promise<string | null> {
+    for (const candidatePath of candidates) {
+      if (!(await this.pathExists(candidatePath))) {
+        continue;
+      }
+      const content = await fs.readFile(candidatePath, "utf-8").catch(() => null);
+      if (content === expectedContent) {
+        return candidatePath;
+      }
+    }
+    return null;
+  }
+
+  private async getPublishedArtifactTimestamp(targetPath: string): Promise<string> {
+    const stat = await fs.stat(targetPath);
+    return stat.mtime.toISOString();
+  }
+
+  private async resolveMethodPublishPath(methodsDir: string, slug: string, nodeId: string | undefined, candidateId: string): Promise<string> {
+    for (const filePath of this.getMethodPublishPathCandidates(methodsDir, slug, nodeId, candidateId)) {
       if (!(await this.pathExists(filePath))) {
         return filePath;
       }
     }
+    const baseName = this.toSafeMethodFilenameBase(slug, nodeId ?? candidateId);
+    const suffixCandidateId = this.normalizeAsciiToken(candidateId, "candidate");
     return path.join(methodsDir, `${baseName}-${suffixCandidateId}-${Date.now()}.md`);
   }
 
@@ -2632,6 +2843,17 @@ export class GoalManager {
       .replace(/-+/g, "-")
       .replace(/^-+|-+$/g, "");
     return normalized || `method-${this.normalizeAsciiToken(fallback, "goal")}`;
+  }
+
+  private toSafeSkillDirName(slug: string, fallback: string): string {
+    const normalized = String(slug ?? "")
+      .trim()
+      .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+    return normalized || `skill-${this.normalizeAsciiToken(fallback, "task")}`;
   }
 
   private normalizeAsciiToken(value: string | undefined, fallback: string): string {

@@ -4,6 +4,8 @@ export function createSettingsController({
   sendReq,
   makeId,
   setStatus,
+  loadServerConfig,
+  invalidateServerConfigCache,
   syncAttachmentLimitsFromConfig,
   onToggle,
   redactedPlaceholder = "[REDACTED]",
@@ -80,10 +82,8 @@ export function createSettingsController({
 
   async function loadConfig() {
     if (!isConnected()) return;
-    const res = await sendReq({ type: "req", id: makeId(), method: "config.read" });
-    if (!(res && res.ok && res.payload && res.payload.config)) return;
-
-    const c = res.payload.config;
+    const c = await loadServerConfig?.();
+    if (!c) return;
     syncAttachmentLimitsFromConfig(c);
     cfgApiKey.value = c["BELLDANDY_OPENAI_API_KEY"] || "";
     cfgBaseUrl.value = c["BELLDANDY_OPENAI_BASE_URL"] || "";
@@ -195,6 +195,7 @@ export function createSettingsController({
     });
 
     if (res && res.ok) {
+      invalidateServerConfigCache?.();
       if (saveSettingsBtn) {
         saveSettingsBtn.textContent = "Saved";
       }

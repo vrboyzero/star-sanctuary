@@ -1,11 +1,15 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import { getGoalUpdateAreas } from "./goal-events.js";
 import { GoalManager } from "./manager.js";
-import { getReviewGovernanceConfigPath } from "./review-governance.js";
+import {
+  getGoalReviewNotificationDispatchesPath,
+  getGoalReviewNotificationsPath,
+  getReviewGovernanceConfigPath,
+} from "./review-governance.js";
 
 describe("GoalManager", () => {
   it("creates goals with default and custom roots, and supports resume/pause", async () => {
@@ -53,6 +57,99 @@ describe("GoalManager", () => {
 
     const registry = JSON.parse(await fs.readFile(path.join(stateDir, "goals", "index.json"), "utf-8"));
     expect(registry.goals).toHaveLength(2);
+  });
+
+  it("does not advance goal registry when runtime header persistence fails during resume", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Runtime Failure Goal",
+      objective: "Keep registry/runtime consistent on runtime write failure",
+    });
+
+    const runtimePath = path.join(goal.runtimeRoot, "runtime.json");
+    const originalRuntime = JSON.parse(await fs.readFile(runtimePath, "utf-8")) as {
+      status: string;
+      activeNodeId?: string;
+    };
+    const originalRegistry = JSON.parse(await fs.readFile(goal.registryPath, "utf-8")) as {
+      goals: Array<{ id: string; status: string; activeNodeId?: string }>;
+    };
+
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (target === runtimePath) {
+        const error = new Error("runtime persistence failure") as NodeJS.ErrnoException;
+        error.code = "EIO";
+        throw error;
+      }
+      return originalRename(source, target);
+    });
+
+    try {
+      await expect(manager.resumeGoal(goal.id, "node_runtime_fail")).rejects.toThrow("runtime persistence failure");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    const runtimeAfterFailure = JSON.parse(await fs.readFile(runtimePath, "utf-8")) as {
+      status: string;
+      activeNodeId?: string;
+    };
+    const registryAfterFailure = JSON.parse(await fs.readFile(goal.registryPath, "utf-8")) as {
+      goals: Array<{ id: string; status: string; activeNodeId?: string }>;
+    };
+    const storedGoal = registryAfterFailure.goals.find((item) => item.id === goal.id);
+    expect(runtimeAfterFailure.status).toBe(originalRuntime.status);
+    expect(runtimeAfterFailure.activeNodeId).toBe(originalRuntime.activeNodeId);
+    expect(storedGoal?.status).toBe(originalRegistry.goals.find((item) => item.id === goal.id)?.status);
+    expect(storedGoal?.activeNodeId).toBeUndefined();
+  });
+
+  it("rolls runtime header state back when registry persistence fails during resume", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Registry Failure Goal",
+      objective: "Keep runtime rolled back on registry write failure",
+    });
+
+    const runtimePath = path.join(goal.runtimeRoot, "runtime.json");
+    const originalRuntime = JSON.parse(await fs.readFile(runtimePath, "utf-8")) as {
+      status: string;
+      activeNodeId?: string;
+    };
+
+    const originalRename = fs.rename.bind(fs);
+    let registryFailed = false;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (!registryFailed && target === goal.registryPath) {
+        registryFailed = true;
+        const error = new Error("registry persistence failure") as NodeJS.ErrnoException;
+        error.code = "EIO";
+        throw error;
+      }
+      return originalRename(source, target);
+    });
+
+    try {
+      await expect(manager.resumeGoal(goal.id, "node_registry_fail")).rejects.toThrow("registry persistence failure");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    const runtimeAfterFailure = JSON.parse(await fs.readFile(runtimePath, "utf-8")) as {
+      status: string;
+      activeNodeId?: string;
+    };
+    const registryAfterFailure = JSON.parse(await fs.readFile(goal.registryPath, "utf-8")) as {
+      goals: Array<{ id: string; status: string; activeNodeId?: string }>;
+    };
+    const storedGoal = registryAfterFailure.goals.find((item) => item.id === goal.id);
+    expect(runtimeAfterFailure.status).toBe(originalRuntime.status);
+    expect(runtimeAfterFailure.activeNodeId).toBe(originalRuntime.activeNodeId);
+    expect(storedGoal?.status).toBe("planning");
+    expect(storedGoal?.activeNodeId).toBeUndefined();
   });
 
   it("reads and mutates formal task graph with dependency guards", async () => {
@@ -119,6 +216,44 @@ describe("GoalManager", () => {
     expect(progress).toContain("task_node_created");
     expect(progress).toContain("task_node_completed");
     expect(progress).toContain("task_node_blocked");
+  });
+
+  it("serializes concurrent mutations for the same goal without losing graph updates", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Concurrent Goal",
+      objective: "Protect task graph updates",
+    });
+
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        manager.createTaskNode(goal.id, {
+          id: `node_${index}`,
+          title: `Node ${index}`,
+          status: "ready",
+        })),
+    );
+
+    const graphAfterCreate = await manager.readTaskGraph(goal.id);
+    expect(graphAfterCreate.nodes).toHaveLength(8);
+    expect(new Set(graphAfterCreate.nodes.map((item) => item.id)).size).toBe(8);
+
+    await Promise.all([
+      manager.updateTaskNode(goal.id, "node_0", { acceptance: ["acceptance-0"] }),
+      manager.updateTaskNode(goal.id, "node_1", { artifacts: ["artifacts/node-1.md"] }),
+      manager.createTaskNode(goal.id, {
+        id: "node_8",
+        title: "Node 8",
+        status: "ready",
+      }),
+    ]);
+
+    const graphAfterMixedWrites = await manager.readTaskGraph(goal.id);
+    expect(graphAfterMixedWrites.nodes).toHaveLength(9);
+    expect(graphAfterMixedWrites.nodes.find((item) => item.id === "node_0")?.acceptance).toContain("acceptance-0");
+    expect(graphAfterMixedWrites.nodes.find((item) => item.id === "node_1")?.artifacts).toContain("artifacts/node-1.md");
+    expect(graphAfterMixedWrites.nodes.some((item) => item.id === "node_8")).toBe(true);
   });
 
   it("supports checkpoint request, approve and reject with progress tracking", async () => {
@@ -1427,6 +1562,220 @@ describe("GoalManager", () => {
     expect(summary.summary).toContain("dispatches=");
   });
 
+  it("persists capped approval notification state changes even when item counts stay flat", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    await fs.mkdir(path.join(stateDir, "governance"), { recursive: true });
+    await fs.writeFile(getReviewGovernanceConfigPath(stateDir), JSON.stringify({
+      version: 1,
+      reviewers: [],
+      templates: [],
+      defaults: {
+        reminderMinutes: [60],
+        notificationChannels: ["goal_detail"],
+      },
+      updatedAt: "2026-03-21T00:00:00.000Z",
+    }, null, 2), "utf-8");
+
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Approval Notification Cap Goal",
+      objective: "Persist bounded notification state updates",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_cap",
+      title: "Cap Node",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["Checkpoint overdue state is persisted"],
+    });
+    await manager.claimTaskNode(goal.id, "node_cap", { runId: "run_cap_1", summary: "Started cap node" });
+    const requested = await manager.requestCheckpoint(goal.id, "node_cap", {
+      title: "Cap checkpoint",
+      summary: "Ready for cap scan",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      slaAt: "2026-03-21T01:00:00.000Z",
+      runId: "run_cap_1",
+    });
+
+    const notificationsPath = getGoalReviewNotificationsPath(goal);
+    const dispatchesPath = getGoalReviewNotificationDispatchesPath(goal);
+    const seededNotifications = Array.from({ length: 200 }, (_, index) => {
+      const createdAt = new Date(Date.UTC(2026, 2, 20, 0, index, 0)).toISOString();
+      return {
+        id: `review_notification_seed_${index}`,
+        goalId: goal.id,
+        targetType: "checkpoint" as const,
+        targetId: `seed_target_${index}`,
+        nodeId: "seed_node",
+        stageId: "checkpoint",
+        recipient: "seed-reviewer",
+        kind: "sla_overdue" as const,
+        message: `Seed notification ${index}`,
+        dedupeKey: `checkpoint:seed_target_${index}:checkpoint:overdue`,
+        createdAt,
+      };
+    });
+    const seededDispatches = seededNotifications.flatMap((notification, index) => {
+      const createdAt = notification.createdAt;
+      return [
+        {
+          id: `review_dispatch_seed_${index}_detail`,
+          notificationId: notification.id,
+          goalId: goal.id,
+          targetType: "checkpoint" as const,
+          targetId: notification.targetId,
+          nodeId: notification.nodeId,
+          stageId: notification.stageId,
+          kind: notification.kind,
+          channel: "goal_detail" as const,
+          routeKey: `goal:${goal.id}:detail`,
+          message: notification.message,
+          dedupeKey: `${notification.dedupeKey}:dispatch:goal_detail:goal:${goal.id}:detail`,
+          status: "materialized" as const,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        {
+          id: `review_dispatch_seed_${index}_channel`,
+          notificationId: notification.id,
+          goalId: goal.id,
+          targetType: "checkpoint" as const,
+          targetId: notification.targetId,
+          nodeId: notification.nodeId,
+          stageId: notification.stageId,
+          kind: notification.kind,
+          channel: "goal_channel" as const,
+          routeKey: `goal:${goal.id}:channel`,
+          message: notification.message,
+          dedupeKey: `${notification.dedupeKey}:dispatch:goal_channel:goal:${goal.id}:channel`,
+          status: "materialized" as const,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      ];
+    });
+    await fs.writeFile(notificationsPath, JSON.stringify({
+      version: 1,
+      items: seededNotifications,
+    }, null, 2), "utf-8");
+    await fs.writeFile(dispatchesPath, JSON.stringify({
+      version: 1,
+      items: seededDispatches,
+    }, null, 2), "utf-8");
+
+    const scanned = await manager.scanApprovalWorkflows(goal.id, {
+      now: "2026-03-21T02:00:00.000Z",
+      autoEscalate: false,
+    });
+    expect(scanned.notifications).toHaveLength(1);
+    expect(scanned.dispatches).toHaveLength(2);
+
+    const nextNotificationKey = `checkpoint:${requested.checkpoint.id}:checkpoint:overdue`;
+    const persistedNotifications = JSON.parse(await fs.readFile(notificationsPath, "utf-8")) as {
+      items: Array<{ dedupeKey: string }>;
+    };
+    expect(persistedNotifications.items).toHaveLength(200);
+    expect(persistedNotifications.items.some((item) => item.dedupeKey === nextNotificationKey)).toBe(true);
+    expect(persistedNotifications.items.some((item) => item.dedupeKey === seededNotifications[0]?.dedupeKey)).toBe(false);
+
+    const persistedDispatches = JSON.parse(await fs.readFile(dispatchesPath, "utf-8")) as {
+      items: Array<{ dedupeKey: string }>;
+    };
+    expect(persistedDispatches.items).toHaveLength(400);
+    expect(persistedDispatches.items.some((item) => item.dedupeKey === `${nextNotificationKey}:dispatch:goal_detail:goal:${goal.id}:detail`)).toBe(true);
+    expect(persistedDispatches.items.some((item) => item.dedupeKey === `${nextNotificationKey}:dispatch:goal_channel:goal:${goal.id}:channel`)).toBe(true);
+    expect(persistedDispatches.items.some((item) => item.dedupeKey === seededDispatches[0]?.dedupeKey)).toBe(false);
+  });
+
+  it("rebuilds missing dispatch outbox entries from persisted notifications on the next scan", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    await fs.mkdir(path.join(stateDir, "governance"), { recursive: true });
+    await fs.writeFile(getReviewGovernanceConfigPath(stateDir), JSON.stringify({
+      version: 1,
+      reviewers: [],
+      templates: [],
+      defaults: {
+        reminderMinutes: [60],
+        notificationChannels: ["goal_detail"],
+      },
+      updatedAt: "2026-03-21T00:00:00.000Z",
+    }, null, 2), "utf-8");
+
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Approval Dispatch Recovery Goal",
+      objective: "Recover dispatch outbox from persisted notifications",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_dispatch_recovery",
+      title: "Dispatch Recovery Node",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["Dispatch outbox can be rebuilt"],
+    });
+    await manager.claimTaskNode(goal.id, "node_dispatch_recovery", {
+      runId: "run_dispatch_recovery_1",
+      summary: "Started recovery node",
+    });
+    const requested = await manager.requestCheckpoint(goal.id, "node_dispatch_recovery", {
+      title: "Recovery checkpoint",
+      summary: "Ready for recovery scan",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      slaAt: "2026-03-21T01:00:00.000Z",
+      runId: "run_dispatch_recovery_1",
+    });
+
+    const notificationsPath = getGoalReviewNotificationsPath(goal);
+    const dispatchesPath = getGoalReviewNotificationDispatchesPath(goal);
+    const originalRename = fs.rename.bind(fs);
+    let failedOnce = false;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (!failedOnce && target === dispatchesPath) {
+        failedOnce = true;
+        const error = new Error("dispatch write failure") as NodeJS.ErrnoException;
+        error.code = "EIO";
+        throw error;
+      }
+      return originalRename(source, target);
+    });
+
+    try {
+      await expect(manager.scanApprovalWorkflows(goal.id, {
+        now: "2026-03-21T02:00:00.000Z",
+        autoEscalate: false,
+      })).rejects.toThrow("dispatch write failure");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    const notificationKey = `checkpoint:${requested.checkpoint.id}:checkpoint:overdue`;
+    const persistedNotifications = JSON.parse(await fs.readFile(notificationsPath, "utf-8")) as {
+      items: Array<{ dedupeKey: string }>;
+    };
+    expect(persistedNotifications.items.some((item) => item.dedupeKey === notificationKey)).toBe(true);
+    const initialDispatchState = JSON.parse(await fs.readFile(dispatchesPath, "utf-8")) as {
+      items: Array<{ dedupeKey: string }>;
+    };
+    expect(initialDispatchState.items).toHaveLength(0);
+
+    const rescanned = await manager.scanApprovalWorkflows(goal.id, {
+      now: "2026-03-21T02:01:00.000Z",
+      autoEscalate: false,
+    });
+    expect(rescanned.notifications).toHaveLength(0);
+    expect(rescanned.dispatches).toHaveLength(2);
+
+    const persistedDispatches = JSON.parse(await fs.readFile(dispatchesPath, "utf-8")) as {
+      items: Array<{ dedupeKey: string }>;
+    };
+    expect(persistedDispatches.items.some((item) => item.dedupeKey === `${notificationKey}:dispatch:goal_detail:goal:${goal.id}:detail`)).toBe(true);
+    expect(persistedDispatches.items.some((item) => item.dedupeKey === `${notificationKey}:dispatch:goal_channel:goal:${goal.id}:channel`)).toBe(true);
+  });
+
   it("publishes accepted method and skill suggestions into formal asset directories", async () => {
     if (!process.env.OPENAI_API_KEY) {
       process.env.OPENAI_API_KEY = "test-placeholder-key";
@@ -1571,6 +1920,135 @@ describe("GoalManager", () => {
 
     const progress = await fs.readFile(goal.progressPath, "utf-8");
     expect(progress).toContain("suggestion_published");
+    memoryManager.close();
+  });
+
+  it("reuses an already published method artifact when publish-record persistence failed previously", async () => {
+    if (!process.env.OPENAI_API_KEY) {
+      process.env.OPENAI_API_KEY = "test-placeholder-key";
+    }
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const memoryWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-memory-"));
+    const memoryManager = new MemoryManager({
+      workspaceRoot: memoryWorkspace,
+      stateDir,
+      taskMemoryEnabled: false,
+      experienceAutoPromotionEnabled: false,
+      experienceAutoMethodEnabled: false,
+      experienceAutoSkillEnabled: false,
+    });
+    registerGlobalMemoryManager(memoryManager);
+    const goal = await manager.createGoal({
+      title: "Suggestion Publish Recovery Goal",
+      objective: "Recover publish record after partial publish success",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_publish_recovery",
+      title: "Publish Recovery Node",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["Recovered publish record points to the original asset"],
+    });
+    await manager.claimTaskNode(goal.id, "node_publish_recovery", {
+      runId: "run_publish_recovery_1",
+      summary: "Started publish recovery node",
+    });
+    await manager.requestCheckpoint(goal.id, "node_publish_recovery", {
+      title: "Publish recovery checkpoint",
+      summary: "Ready for approval",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      runId: "run_publish_recovery_1",
+    });
+    await manager.approveCheckpoint(goal.id, "node_publish_recovery", {
+      summary: "Approved",
+      note: "Proceed",
+      decidedBy: "producer",
+      runId: "run_publish_recovery_1",
+    });
+    await manager.completeTaskNode(goal.id, "node_publish_recovery", {
+      summary: "Publish recovery node completed",
+      artifacts: ["artifacts/publish-recovery.md"],
+      runId: "run_publish_recovery_1",
+    });
+    await manager.saveCapabilityPlan(goal.id, "node_publish_recovery", {
+      executionMode: "single_agent",
+      riskLevel: "medium",
+      objective: "Generate recoverable method suggestion",
+      summary: "Need method publish retry recovery",
+      methods: [{ file: "Publish-Recovery-Checklist.md" }],
+      actualUsage: {
+        methods: ["Publish-Recovery-Checklist.md"],
+        skills: [],
+        mcpServers: [],
+        toolNames: ["file_read"],
+      },
+      status: "orchestrated",
+      orchestratedAt: "2026-03-20T17:00:00.000Z",
+    });
+
+    await manager.generateMethodCandidates(goal.id);
+    const reviews = await manager.listSuggestionReviews(goal.id);
+    const methodReview = reviews.items.find((item) => item.suggestionType === "method_candidate");
+    expect(methodReview).toBeTruthy();
+
+    await manager.decideSuggestionReview(goal.id, {
+      reviewId: methodReview?.id,
+      decision: "accepted",
+      reviewer: "producer",
+      decidedBy: "producer",
+      note: "Publish method after retry",
+    });
+
+    const publishRecordsPath = path.join(goal.runtimeRoot, "publish-records.json");
+    const originalRename = fs.rename.bind(fs);
+    let failedOnce = false;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (!failedOnce && target === publishRecordsPath) {
+        failedOnce = true;
+        const error = new Error("publish-record persistence failure") as NodeJS.ErrnoException;
+        error.code = "EIO";
+        throw error;
+      }
+      return originalRename(source, target);
+    });
+
+    try {
+      await expect(manager.publishSuggestion(goal.id, {
+        reviewId: methodReview?.id,
+        reviewer: "producer",
+        decidedBy: "producer",
+      })).rejects.toThrow("publish-record persistence failure");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    const methodsDir = path.join(stateDir, "methods");
+    const publishedFilesAfterFailure = (await fs.readdir(methodsDir)).filter((item) => item.endsWith(".md"));
+    expect(publishedFilesAfterFailure).toHaveLength(1);
+    const recoveredPath = path.join(methodsDir, publishedFilesAfterFailure[0] as string);
+    const publishStateAfterFailure = JSON.parse(await fs.readFile(publishRecordsPath, "utf-8").catch(() => "{\"version\":1,\"items\":[]}")) as {
+      items: Array<{ reviewId: string }>;
+    };
+    expect(publishStateAfterFailure.items.some((item) => item.reviewId === methodReview?.id)).toBe(false);
+
+    const recovered = await manager.publishSuggestion(goal.id, {
+      reviewId: methodReview?.id,
+      reviewer: "producer",
+      decidedBy: "producer",
+    });
+    expect(recovered.record.publishedPath).toBe(recoveredPath);
+
+    const publishedFilesAfterRetry = (await fs.readdir(methodsDir)).filter((item) => item.endsWith(".md"));
+    expect(publishedFilesAfterRetry).toHaveLength(1);
+
+    const publishState = JSON.parse(await fs.readFile(publishRecordsPath, "utf-8")) as {
+      items: Array<{ reviewId: string; publishedPath: string }>;
+    };
+    expect(publishState.items.filter((item) => item.reviewId === methodReview?.id)).toHaveLength(1);
+    expect(publishState.items.find((item) => item.reviewId === methodReview?.id)?.publishedPath).toBe(recoveredPath);
     memoryManager.close();
   });
 

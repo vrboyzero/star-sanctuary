@@ -160,6 +160,8 @@ import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type TokenUsageUploadConfi
 import { GoalManager } from "../goals/manager.js";
 import { buildGoalCapabilityPlan } from "../goals/capability-planner.js";
 import { parseGoalSessionKey } from "../goals/session.js";
+import { buildContextInjectionPrelude } from "../context-injection.js";
+import { truncateToolTranscriptContent } from "../tool-transcript.js";
 
 const GOAL_TOOL_NAMES = new Set([
   "goal_init",
@@ -1008,6 +1010,7 @@ const autoRecallEnabled = readEnv("BELLDANDY_AUTO_RECALL_ENABLED") === "true";
 const autoRecallLimit = Math.max(1, parseInt(readEnv("BELLDANDY_AUTO_RECALL_LIMIT") || "3", 10) || 3);
 const autoRecallMinScoreRaw = Number(readEnv("BELLDANDY_AUTO_RECALL_MIN_SCORE") || "0.3");
 const autoRecallMinScore = Number.isFinite(autoRecallMinScoreRaw) ? autoRecallMinScoreRaw : 0.3;
+const toolResultTranscriptCharLimit = Math.max(0, parseInt(readEnv("BELLDANDY_TOOL_RESULT_TRANSCRIPT_CHAR_LIMIT") || "12000", 10) || 12000);
 const taskDedupGuardEnabled = readEnv("BELLDANDY_TASK_DEDUP_GUARD_ENABLED") !== "false";
 const taskDedupWindowMinutes = Math.max(1, parseInt(readEnv("BELLDANDY_TASK_DEDUP_WINDOW_MINUTES") || "20", 10) || 20);
 const taskDedupGlobalMode = parseToolDedupGlobalMode(readEnv("BELLDANDY_TASK_DEDUP_MODE"));
@@ -1021,92 +1024,26 @@ if (contextInjectionEnabled || autoRecallEnabled) {
     handler: async (event, _ctx) => {
       const mm = getGlobalMemoryManager();
       if (!mm) return undefined;
-      const implicitFilter = { agentId: _ctx.agentId ?? null };
-
-      const blocks: string[] = [];
-
-      if (contextInjectionEnabled) {
-        try {
-          const recent = mm.getContextInjectionMemories({
-            limit: contextInjectionLimit,
-            agentId: _ctx.agentId ?? null,
-            includeSession: contextInjectionIncludeSession,
-            allowedCategories: contextInjectionAllowedCategories,
-          });
-          if (recent.length > 0) {
-            const lines = recent.map((r) => {
-              const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
-              const label = [r.importance, r.category ?? r.memoryType ?? "memory", src].join("|");
-              const body = (r.summary ?? r.snippet).trim();
-              return `- [${label}] ${body}`;
-            });
-            blocks.push(
-              `<recent-memory hint="以下是按重要性筛选后的近期记忆。优先把它们当作背景约束或已知事实，不要把它们直接当作待重新执行的任务。">\n${lines.join("\n")}\n</recent-memory>`,
-            );
-          }
-
-          if (contextInjectionTaskLimit > 0) {
-            const recentTasks = mm.getRecentTaskSummaries(contextInjectionTaskLimit, {
-              agentId: _ctx.agentId,
-            });
-            if (recentTasks.length > 0) {
-              const taskLines = recentTasks.map((task) => {
-                const title = task.title ?? task.objective ?? task.summary ?? task.taskId;
-                const tools = task.toolNames.slice(0, 3).join(", ");
-                const artifacts = task.artifactPaths.slice(0, 2).join(", ");
-                const extras = [
-                  tools ? `tools=${tools}` : "",
-                  artifacts ? `artifacts=${artifacts}` : "",
-                ].filter(Boolean).join("; ");
-                return extras
-                  ? `- [${task.status}] ${title} (${extras})`
-                  : `- [${task.status}] ${title}`;
-              });
-              blocks.push(
-                `<recent-tasks hint="以下是最近已完成或部分完成的任务摘要。若当前目标与其相同，优先复用结果，不要重复执行已成功完成的工具动作，除非用户明确要求重试。">\n${taskLines.join("\n")}\n</recent-tasks>`,
-              );
-            }
-          }
-        } catch (err) {
-          logger.warn("context-injection", `Failed to fetch recent memory: ${err instanceof Error ? err.message : String(err)}`);
+      try {
+        return await buildContextInjectionPrelude(mm, event, _ctx, {
+          contextInjectionEnabled,
+          contextInjectionLimit,
+          contextInjectionIncludeSession,
+          contextInjectionTaskLimit,
+          contextInjectionAllowedCategories,
+          autoRecallEnabled,
+          autoRecallLimit,
+          autoRecallMinScore,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.toLocaleLowerCase().includes("semantic memory")) {
+          logger.warn("auto-recall", `Failed to fetch semantic memory: ${message}`);
+        } else {
+          logger.warn("context-injection", `Failed to build context injection prelude: ${message}`);
         }
+        return undefined;
       }
-
-      if (autoRecallEnabled) {
-        try {
-          const queryText = event.userInput?.trim() || event.prompt?.trim();
-          if (queryText) {
-            const results = await Promise.race([
-              mm.search(queryText, {
-                limit: autoRecallLimit,
-                filter: implicitFilter,
-                retrievalMode: "implicit",
-              }),
-              new Promise<never[]>((resolve) => setTimeout(() => resolve([]), 2000)),
-            ]);
-
-            const filtered = results.filter((r) => r.score >= autoRecallMinScore);
-            if (filtered.length > 0) {
-              const lines = filtered.map((r) => {
-                const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
-                const snippet = r.snippet.length > 200
-                  ? `${r.snippet.slice(0, 200)}...`
-                  : r.snippet;
-                return `- [${src}, score=${r.score.toFixed(2)}] ${snippet}`;
-              });
-              blocks.push(
-                `<auto-recall hint="以下是与用户当前输入语义相关的历史记忆，仅供参考。无需再次调用 memory_search 除非需要更深入搜索。">\n${lines.join("\n")}\n</auto-recall>`,
-              );
-            }
-          }
-        } catch (err) {
-          logger.warn("auto-recall", `Failed to fetch semantic memory: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-      return blocks.length > 0
-        ? { prependContext: blocks.join("\n\n") }
-        : undefined;
     },
   });
   if (contextInjectionEnabled) {
@@ -1116,6 +1053,29 @@ if (contextInjectionEnabled || autoRecallEnabled) {
     );
   }
   if (autoRecallEnabled) logger.info("auto-recall", `enabled (limit=${autoRecallLimit}, minScore=${autoRecallMinScore})`);
+}
+
+if (toolResultTranscriptCharLimit > 0) {
+  hookRegistry.register({
+    source: "tool-transcript",
+    hookName: "tool_result_persist",
+    priority: 100,
+    handler: (event) => {
+      const content = typeof event.message.content === "string"
+        ? event.message.content
+        : String(event.message.content ?? "");
+      if (!content || content.length <= toolResultTranscriptCharLimit) {
+        return undefined;
+      }
+      return {
+        message: {
+          ...event.message,
+          content: truncateToolTranscriptContent(content, toolResultTranscriptCharLimit),
+        },
+      };
+    },
+  });
+  logger.info("tool-transcript", `enabled (limit=${toolResultTranscriptCharLimit})`);
 }
 
 // 7.6 Bridge legacy plugin hooks → HookRegistry
