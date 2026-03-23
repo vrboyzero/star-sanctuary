@@ -41,7 +41,9 @@ interface CronJobView {
     name: string;
     enabled: boolean;
     schedule: { kind: string; at?: string; everyMs?: number };
-    payload: { kind: string; text: string };
+    payload:
+        | { kind: "systemEvent"; text: string }
+        | { kind: "goalApprovalScan"; goalId?: string; goalIds?: string[]; allGoals?: boolean; autoEscalate?: boolean };
     state: {
         nextRunAtMs?: number;
         lastRunAtMs?: number;
@@ -52,7 +54,9 @@ interface CronJobView {
 interface CronJobCreateInput {
     name: string;
     schedule: { kind: "at"; at: string } | { kind: "every"; everyMs: number; anchorMs?: number };
-    payload: { kind: "systemEvent"; text: string };
+    payload:
+        | { kind: "systemEvent"; text: string }
+        | { kind: "goalApprovalScan"; goalId?: string; goalIds?: string[]; allGoals?: boolean; autoEscalate?: boolean };
     deleteAfterRun?: boolean;
 }
 
@@ -81,9 +85,17 @@ ACTIONS:
 - remove: 删除任务（需要 jobId）
 - status: 查看调度器状态
 
+payload 类型:
+- systemEvent: 发送文本给 Agent 执行
+- goalApprovalScan: 直接执行长期任务审批扫描（suggestion review + checkpoint workflow）
+
 创建任务 (add) 参数:
 - name: 任务名称（必填）
-- text: 发送给 Agent 的文本/提示（必填）
+- payloadKind: payload 类型，默认 systemEvent
+- text: 发送给 Agent 的文本/提示（payloadKind=systemEvent 时必填）
+- goalId: 指定单个 goal 扫描（payloadKind=goalApprovalScan 时可填）
+- allGoals: 扫描全部 goal（payloadKind=goalApprovalScan 时可填）
+- autoEscalate: 是否自动升级超时 stage（payloadKind=goalApprovalScan 时可填，默认 true）
 - scheduleKind: 调度类型 "at" 或 "every"（必填）
 - at: 一次性触发时间，ISO-8601 格式（scheduleKind="at" 时必填，如 "2026-02-10T09:00:00+08:00"）
 - everyMs: 重复间隔毫秒数（scheduleKind="every" 时必填，最小 60000 = 1分钟）
@@ -112,9 +124,26 @@ ACTIONS:
                         type: "string",
                         description: "任务名称（add 时必填）",
                     },
+                    payloadKind: {
+                        type: "string",
+                        description: "payload 类型：systemEvent 或 goalApprovalScan",
+                        enum: ["systemEvent", "goalApprovalScan"],
+                    },
                     text: {
                         type: "string",
-                        description: "发送给 Agent 的提示文本（add 时必填）",
+                        description: "发送给 Agent 的提示文本（payloadKind=systemEvent 时必填）",
+                    },
+                    goalId: {
+                        type: "string",
+                        description: "指定单个 goal 扫描（payloadKind=goalApprovalScan 时可填）",
+                    },
+                    allGoals: {
+                        type: "boolean",
+                        description: "是否扫描全部 goal（payloadKind=goalApprovalScan 时可填）",
+                    },
+                    autoEscalate: {
+                        type: "boolean",
+                        description: "是否自动升级超时 stage（payloadKind=goalApprovalScan 时可填）",
                     },
                     scheduleKind: {
                         type: "string",
@@ -167,6 +196,7 @@ ACTIONS:
                                 j.schedule.kind === "at"
                                     ? `一次性 @ ${j.schedule.at ?? "?"}`
                                     : `每 ${formatMs(j.schedule.everyMs ?? 0)} 重复`;
+                            const payloadDesc = formatPayload(j.payload);
                             const statusDesc = j.enabled ? "✅ 启用" : "⏸️ 禁用";
                             const nextRun = j.state.nextRunAtMs
                                 ? new Date(j.state.nextRunAtMs).toISOString()
@@ -181,7 +211,7 @@ ACTIONS:
                                 `   状态: ${statusDesc}`,
                                 `   下次执行: ${nextRun}`,
                                 `   上次执行: ${lastRun}`,
-                                `   内容: ${truncate(j.payload.text, 80)}`,
+                                `   内容: ${payloadDesc}`,
                             ].join("\n");
                         });
                         return makeResult(true, `共 ${jobs.length} 个定时任务:\n\n${lines.join("\n\n")}`);
@@ -190,11 +220,10 @@ ACTIONS:
                     // ── add ──
                     case "add": {
                         const jobName = typeof args.name === "string" ? args.name.trim() : "";
-                        const text = typeof args.text === "string" ? args.text.trim() : "";
+                        const payloadKind = typeof args.payloadKind === "string" ? args.payloadKind : "systemEvent";
                         const scheduleKind = typeof args.scheduleKind === "string" ? args.scheduleKind : "";
 
                         if (!jobName) return makeResult(false, "", "参数错误：name 不能为空");
-                        if (!text) return makeResult(false, "", "参数错误：text 不能为空");
 
                         if (scheduleKind === "at") {
                             const at = typeof args.at === "string" ? args.at.trim() : "";
@@ -205,15 +234,20 @@ ACTIONS:
                                 return makeResult(false, "", `参数错误：无法解析时间 "${at}"，请使用 ISO-8601 格式`);
                             }
 
+                            const payloadResult = buildPayload(args, payloadKind);
+                            if (!payloadResult.ok) {
+                                return makeResult(false, "", payloadResult.error);
+                            }
+
                             const job = await store.add({
                                 name: jobName,
                                 schedule: { kind: "at", at },
-                                payload: { kind: "systemEvent", text },
+                                payload: payloadResult.payload,
                                 deleteAfterRun: args.deleteAfterRun === true,
                             });
                             return makeResult(
                                 true,
-                                `✅ 已创建一次性任务 "${job.name}"\n   ID: ${job.id}\n   触发时间: ${at}\n   内容: ${truncate(text, 80)}`
+                                `✅ 已创建一次性任务 "${job.name}"\n   ID: ${job.id}\n   触发时间: ${at}\n   内容: ${formatPayload(job.payload)}`
                             );
                         }
 
@@ -227,14 +261,18 @@ ACTIONS:
                                     "参数错误：everyMs 最小为 60000（1 分钟）"
                                 );
                             }
+                            const payloadResult = buildPayload(args, payloadKind);
+                            if (!payloadResult.ok) {
+                                return makeResult(false, "", payloadResult.error);
+                            }
                             const job = await store.add({
                                 name: jobName,
                                 schedule: { kind: "every", everyMs, anchorMs: Date.now() },
-                                payload: { kind: "systemEvent", text },
+                                payload: payloadResult.payload,
                             });
                             return makeResult(
                                 true,
-                                `✅ 已创建周期任务 "${job.name}"\n   ID: ${job.id}\n   间隔: 每 ${formatMs(everyMs)}\n   内容: ${truncate(text, 80)}`
+                                `✅ 已创建周期任务 "${job.name}"\n   ID: ${job.id}\n   间隔: 每 ${formatMs(everyMs)}\n   内容: ${formatPayload(job.payload)}`
                             );
                         }
 
@@ -303,4 +341,47 @@ function formatMs(ms: number): string {
 function truncate(text: string, maxLen: number): string {
     if (text.length <= maxLen) return text;
     return text.slice(0, maxLen - 3) + "...";
+}
+
+function buildPayload(
+    args: JsonObject,
+    payloadKind: string,
+): { ok: true; payload: CronJobCreateInput["payload"] } | { ok: false; error: string } {
+    if (payloadKind === "goalApprovalScan") {
+        const goalId = typeof args.goalId === "string" ? args.goalId.trim() : "";
+        const allGoals = args.allGoals === true;
+        if (!goalId && !allGoals) {
+            return { ok: false, error: "参数错误：payloadKind=goalApprovalScan 时，goalId 和 allGoals 至少需要提供一个" };
+        }
+        return {
+            ok: true,
+            payload: {
+                kind: "goalApprovalScan",
+                goalId: goalId || undefined,
+                allGoals,
+                autoEscalate: typeof args.autoEscalate === "boolean" ? args.autoEscalate : true,
+            },
+        };
+    }
+    if (payloadKind !== "systemEvent") {
+        return { ok: false, error: "参数错误：payloadKind 必须为 'systemEvent' 或 'goalApprovalScan'" };
+    }
+    const text = typeof args.text === "string" ? args.text.trim() : "";
+    if (!text) {
+        return { ok: false, error: "参数错误：payloadKind=systemEvent 时 text 不能为空" };
+    }
+    return {
+        ok: true,
+        payload: { kind: "systemEvent", text },
+    };
+}
+
+function formatPayload(payload: CronJobView["payload"]): string {
+    if (payload.kind === "systemEvent") {
+        return truncate(payload.text, 80);
+    }
+    if (payload.allGoals) {
+        return `approval scan / all goals / autoEscalate=${payload.autoEscalate !== false}`;
+    }
+    return `approval scan / goal=${payload.goalId ?? payload.goalIds?.join(", ") ?? "?"} / autoEscalate=${payload.autoEscalate !== false}`;
 }

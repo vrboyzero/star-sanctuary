@@ -91,6 +91,69 @@
   text-align: center;
 }
 
+.canvas-context-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 243, 255, 0.06);
+  border-bottom: 1px solid rgba(0, 243, 255, 0.12);
+  flex-shrink: 0;
+  z-index: 9;
+}
+
+.canvas-context-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.canvas-context-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.canvas-context-item-capability {
+  background: rgba(92, 201, 121, 0.08);
+  border-color: rgba(92, 201, 121, 0.18);
+}
+
+.canvas-context-label {
+  color: var(--text-muted);
+}
+
+.canvas-context-value {
+  color: var(--primary);
+  font-family: var(--font-mono);
+}
+
+.canvas-context-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.canvas-context-note-capability {
+  max-width: 480px;
+}
+
+.canvas-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 /* ─── SVG Canvas ─────────────────────────────────────────── */
 .canvas-svg {
   flex: 1;
@@ -392,6 +455,25 @@
 
 .node-ref-badge:hover {
   opacity: 1;
+}
+
+.node-active-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(0, 243, 255, 0.14);
+  border: 1px solid rgba(0, 243, 255, 0.28);
+  color: var(--primary);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.canvas-node.goal-active {
+  border-color: rgba(0, 243, 255, 0.5);
+  box-shadow: 0 0 0 1px rgba(0, 243, 255, 0.2), 0 0 18px rgba(0, 243, 255, 0.18);
 }
 
 /* ── Resource Picker / Edit Dialog ── */

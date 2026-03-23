@@ -86,6 +86,26 @@ describe("ExperienceUsage", () => {
   });
 
   it("aggregates usage stats by asset", () => {
+    (manager as any).store.createExperienceCandidate({
+      id: "exp-method-1",
+      taskId: "task_usage_1",
+      type: "method",
+      status: "accepted",
+      title: "Web Browser Automation",
+      slug: "web-browser-automation",
+      content: "# Web Browser Automation",
+      sourceTaskSnapshot: {
+        taskId: "task_usage_1",
+        conversationId: "conv_usage_1",
+        source: "chat",
+        status: "success",
+        startedAt: "2026-03-16T00:00:00.000Z",
+      },
+      publishedPath: path.join(workspaceRoot, "methods", "web-browser-automation.md"),
+      createdAt: "2026-03-16T00:00:00.000Z",
+      acceptedAt: "2026-03-16T00:10:00.000Z",
+    });
+
     manager.recordMethodUsage("task_usage_1", "web-browser-automation.md", {
       sourceCandidateId: "exp-method-1",
       usedVia: "tool",
@@ -118,11 +138,21 @@ describe("ExperienceUsage", () => {
     expect(stats.lastUsedTaskId).toBe("task_usage_2");
     expect(stats.lastUsedAt).toBeTruthy();
     expect(stats.sourceCandidateId).toBe("exp-method-1");
+    expect(stats.sourceCandidateType).toBe("method");
+    expect(stats.sourceCandidateTitle).toBe("Web Browser Automation");
+    expect(stats.sourceCandidateStatus).toBe("accepted");
+    expect(stats.sourceCandidateTaskId).toBe("task_usage_1");
+    expect(stats.sourceCandidatePublishedPath).toBe(path.join(workspaceRoot, "methods", "web-browser-automation.md"));
 
     const listedStats = manager.listExperienceUsageStats(10, { assetType: "method" });
     expect(listedStats).toHaveLength(1);
     expect(listedStats[0].assetKey).toBe("web-browser-automation.md");
     expect(listedStats[0].usageCount).toBe(2);
+    expect(listedStats[0].sourceCandidateType).toBe("method");
+    expect(listedStats[0].sourceCandidateTitle).toBe("Web Browser Automation");
+    expect(listedStats[0].sourceCandidateStatus).toBe("accepted");
+    expect(listedStats[0].sourceCandidateTaskId).toBe("task_usage_1");
+    expect(listedStats[0].sourceCandidatePublishedPath).toBe(path.join(workspaceRoot, "methods", "web-browser-automation.md"));
   });
 
   it("infers method source candidate from published method filename", () => {

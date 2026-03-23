@@ -17,6 +17,7 @@ interface TaskDraft {
   source: TaskSource;
   objective?: string;
   parentConversationId?: string;
+  metadata?: Record<string, unknown>;
   startedAt: string;
   toolCalls: TaskToolCallSummary[];
   artifactPaths: string[];
@@ -61,6 +62,7 @@ export class TaskProcessor {
     source: TaskSource;
     objective?: string;
     parentConversationId?: string;
+    metadata?: Record<string, unknown>;
   }): string | null {
     if (!this.enabled) return null;
 
@@ -73,6 +75,7 @@ export class TaskProcessor {
       source: input.source,
       objective: sanitizeObjective(input.objective),
       parentConversationId: input.parentConversationId,
+      metadata: sanitizeMetadata(input.metadata),
       startedAt: new Date().toISOString(),
       toolCalls: [],
       artifactPaths: [],
@@ -167,6 +170,7 @@ export class TaskProcessor {
       startedAt: draft.startedAt,
       finishedAt: now,
       metadata: {
+        ...(draft.metadata ?? {}),
         toolCallCount: draft.toolCalls.length,
       },
       createdAt: now,
@@ -249,6 +253,13 @@ export class TaskProcessor {
   private summarizerModelName(): string | undefined {
     return this.summarizer?.modelName;
   }
+}
+
+function sanitizeMetadata(metadata?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!metadata) return undefined;
+  const entries = Object.entries(metadata).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
 }
 
 function sanitizeObjective(value?: string): string | undefined {

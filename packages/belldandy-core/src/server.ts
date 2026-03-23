@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -9,13 +11,15 @@ import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
 
 import { getGlobalMemoryManager } from "@belldandy/memory";
 import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig, uploadTokenUsage } from "@belldandy/protocol";
-import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type ModelProfile } from "@belldandy/agent";
+import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile } from "@belldandy/agent";
 import type {
   GatewayFrame,
   GatewayReqFrame,
   GatewayResFrame,
   GatewayEventFrame,
   MessageSendParams,
+  ChatMessageMeta,
+  ConversationMetaMessage,
   ConnectRequestFrame,
   BelldandyRole,
   GatewayAuth,
@@ -35,6 +39,7 @@ import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
+import type { GoalManager } from "./goals/manager.js";
 
 export type GatewayServerOptions = {
   port: number;
@@ -82,6 +87,8 @@ export type GatewayServerOptions = {
   isConfigured?: () => boolean;
   /** 技能注册表（用于获取已加载技能列表） */
   skillRegistry?: SkillRegistry;
+  /** 长期任务管理器 */
+  goalManager?: GoalManager;
   /** Webhook 配置 */
   webhookConfig?: WebhookConfig;
   /** Webhook 幂等性管理器 */
@@ -133,6 +140,43 @@ const DEFAULT_METHODS = [
   "experience.usage.list",
   "experience.usage.stats",
   "experience.usage.revoke",
+  "goal.create",
+  "goal.list",
+  "goal.get",
+  "goal.resume",
+  "goal.pause",
+  "goal.handoff.generate",
+  "goal.retrospect.generate",
+  "goal.experience.suggest",
+  "goal.method_candidates.generate",
+  "goal.skill_candidates.generate",
+  "goal.flow_patterns.generate",
+  "goal.flow_patterns.cross_goal",
+  "goal.review_governance.summary",
+  "goal.approval.scan",
+  "goal.suggestion_review.list",
+  "goal.suggestion_review.workflow.set",
+  "goal.suggestion_review.decide",
+  "goal.suggestion_review.escalate",
+  "goal.suggestion_review.scan",
+  "goal.suggestion.publish",
+  "goal.checkpoint.list",
+  "goal.checkpoint.request",
+  "goal.checkpoint.approve",
+  "goal.checkpoint.reject",
+  "goal.checkpoint.expire",
+  "goal.checkpoint.reopen",
+  "goal.checkpoint.escalate",
+  "goal.task_graph.read",
+  "goal.task_graph.create",
+  "goal.task_graph.update",
+  "goal.task_graph.claim",
+  "goal.task_graph.pending_review",
+  "goal.task_graph.validating",
+  "goal.task_graph.complete",
+  "goal.task_graph.block",
+  "goal.task_graph.fail",
+  "goal.task_graph.skip",
 ];
 const DEFAULT_EVENTS = [
   "chat.delta",
@@ -140,6 +184,7 @@ const DEFAULT_EVENTS = [
   "agent.status",
   "token.usage",
   "token.counter.result",
+  "goal.update",
   "pairing.required",
   "tools.config.updated",
   "tool_settings.confirm.required",
@@ -147,10 +192,19 @@ const DEFAULT_EVENTS = [
 ];
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
+const DEFAULT_ATTACHMENT_TEXT_CHAR_LIMIT = 200_000;
+const DEFAULT_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT = 200_000;
+const DEFAULT_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT = 12_000;
 
 type AttachmentLimits = {
   maxFileBytes: number;
   maxTotalBytes: number;
+};
+
+type AttachmentPromptLimits = {
+  textCharLimit: number;
+  totalTextCharLimit: number;
+  audioTranscriptAppendCharLimit: number;
 };
 
 function isUnderRoot(root: string, target: string): boolean {
@@ -199,6 +253,30 @@ function getAttachmentLimits(): AttachmentLimits {
   };
 }
 
+function getAttachmentPromptLimits(): AttachmentPromptLimits {
+  return {
+    textCharLimit: parsePositiveIntEnv("BELLDANDY_ATTACHMENT_TEXT_CHAR_LIMIT", DEFAULT_ATTACHMENT_TEXT_CHAR_LIMIT),
+    totalTextCharLimit: parsePositiveIntEnv("BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT", DEFAULT_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT),
+    audioTranscriptAppendCharLimit: parsePositiveIntEnv("BELLDANDY_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT", DEFAULT_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT),
+  };
+}
+
+function truncateTextForPrompt(text: string, limit: number, suffix: string): { text: string; truncated: boolean } {
+  if (text.length <= limit) {
+    return { text, truncated: false };
+  }
+  if (limit <= 0) {
+    return { text: "", truncated: true };
+  }
+  if (limit <= suffix.length) {
+    return { text: text.slice(0, limit), truncated: true };
+  }
+  return {
+    text: `${text.slice(0, Math.max(0, limit - suffix.length))}${suffix}`,
+    truncated: true,
+  };
+}
+
 function estimateBase64DecodedBytes(base64: string): number | null {
   const normalized = base64.trim().replace(/\s+/g, "");
   if (!normalized) return 0;
@@ -206,6 +284,229 @@ function estimateBase64DecodedBytes(base64: string): number | null {
   if (normalized.length % 4 !== 0) return null;
   const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
   return Math.max(0, (normalized.length / 4) * 3 - padding);
+}
+
+async function statIfExists(targetPath: string): Promise<fs.Stats | null> {
+  try {
+    return await fsp.stat(targetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function mergeEnvContentIntoConfig(raw: string, config: Record<string, string>): void {
+  raw.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith("#")) {
+      const eq = trimmed.indexOf("=");
+      if (eq > 0) {
+        const key = trimmed.slice(0, eq).trim();
+        let val = trimmed.slice(eq + 1).trim();
+        if ((val.startsWith("\"") && val.endsWith("\"")) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        config[key] = val;
+      }
+    }
+  });
+}
+
+async function readEnvFileIntoConfig(filePath: string, config: Record<string, string>): Promise<void> {
+  try {
+    const raw = await fsp.readFile(filePath, "utf-8");
+    mergeEnvContentIntoConfig(raw, config);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return;
+    }
+  }
+}
+
+async function writeTextFileAtomic(filePath: string, content: string, options: { ensureParent?: boolean; mode?: number } = {}): Promise<void> {
+  if (options.ensureParent) {
+    await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: options.mode });
+  }
+  const tmpFile = `${filePath}.${crypto.randomUUID()}.tmp`;
+  await fsp.writeFile(tmpFile, content, "utf-8");
+  await fsp.rename(tmpFile, filePath);
+}
+
+async function writeBinaryFileAtomic(filePath: string, content: Buffer, options: { ensureParent?: boolean; mode?: number } = {}): Promise<void> {
+  if (options.ensureParent) {
+    await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: options.mode });
+  }
+  const tmpFile = `${filePath}.${crypto.randomUUID()}.tmp`;
+  await fsp.writeFile(tmpFile, content);
+  await fsp.rename(tmpFile, filePath);
+}
+
+async function updateEnvFile(filePath: string, changes: Record<string, string>): Promise<boolean> {
+  if (Object.keys(changes).length === 0) return true;
+
+  let lines: string[] = [];
+  try {
+    lines = (await fsp.readFile(filePath, "utf-8")).split(/\r?\n/);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      return false;
+    }
+  }
+
+  const newKeys = new Set(Object.keys(changes));
+  const nextLines: string[] = [];
+  const handledKeys = new Set<string>();
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    let matched = false;
+    if (trimmed && !trimmed.startsWith("#")) {
+      const eq = trimmed.indexOf("=");
+      if (eq > 0) {
+        const key = trimmed.slice(0, eq).trim();
+        if (newKeys.has(key)) {
+          nextLines.push(`${key}="${changes[key]}"`);
+          handledKeys.add(key);
+          matched = true;
+        }
+      }
+    }
+    if (!matched) nextLines.push(line);
+  }
+
+  for (const key of newKeys) {
+    if (!handledKeys.has(key)) {
+      if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
+      nextLines.push(`${key}="${changes[key]}"`);
+    }
+  }
+
+  if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
+
+  try {
+    await writeTextFileAtomic(filePath, nextLines.join("\n"), { ensureParent: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const AVATAR_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+const AVATAR_ALLOWED_MIME_TYPES = new Map<string, string>([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/jpg", ".jpg"],
+  ["image/gif", ".gif"],
+  ["image/webp", ".webp"],
+]);
+
+type AvatarUploadRole = "user" | "agent";
+
+type AvatarUploadFileLike = File;
+
+function normalizeAvatarUploadRole(value: unknown): AvatarUploadRole | null {
+  const role = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (role === "user" || role === "agent") {
+    return role;
+  }
+  return null;
+}
+
+function isAvatarUploadFileLike(value: FormDataEntryValue | null): value is AvatarUploadFileLike {
+  return Boolean(value)
+    && typeof value === "object"
+    && typeof (value as AvatarUploadFileLike).arrayBuffer === "function"
+    && typeof (value as AvatarUploadFileLike).size === "number"
+    && typeof (value as AvatarUploadFileLike).type === "string"
+    && typeof (value as AvatarUploadFileLike).name === "string";
+}
+
+function resolveAvatarUploadExtension(file: AvatarUploadFileLike): string | null {
+  const mimeType = file.type.trim().toLowerCase();
+  if (AVATAR_ALLOWED_MIME_TYPES.has(mimeType)) {
+    return AVATAR_ALLOWED_MIME_TYPES.get(mimeType) ?? null;
+  }
+
+  const ext = path.extname(file.name).toLowerCase();
+  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg" || ext === ".gif" || ext === ".webp") {
+    if (ext === ".jpeg") return ".jpg";
+    return ext;
+  }
+
+  return null;
+}
+
+function replaceAvatarMarkdown(content: string, avatarPath: string): string {
+  const avatarLinePattern = /^(\s*[-*]?\s*\*\*头像[：:]\*\*\s*)(.*)$/m;
+  if (avatarLinePattern.test(content)) {
+    return content.replace(avatarLinePattern, `$1${avatarPath}`);
+  }
+
+  const emojiLinePattern = /^(\s*[-*]?\s*\*\*Emoji[：:]\*\*\s*.*)$/m;
+  const avatarLine = `- **头像：** ${avatarPath}`;
+  if (!content.trim()) {
+    return `${avatarLine}\n`;
+  }
+  if (emojiLinePattern.test(content)) {
+    return content.replace(emojiLinePattern, `$1\n${avatarLine}`);
+  }
+
+  const nameLinePattern = /^(\s*[-*]?\s*\*\*名字[：:]\*\*\s*.*)$/m;
+  if (nameLinePattern.test(content)) {
+    return content.replace(nameLinePattern, `$1\n${avatarLine}`);
+  }
+
+  return `${content.trimEnd()}\n\n${avatarLine}\n`;
+}
+
+function readHeaderValue(headers: http.IncomingHttpHeaders, name: string): string | undefined {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    return value[0]?.trim() || undefined;
+  }
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  return undefined;
+}
+
+function isAuthorizedAvatarUpload(req: http.IncomingMessage, auth: GatewayServerOptions["auth"]): boolean {
+  if (auth.mode === "none") {
+    return true;
+  }
+
+  if (auth.mode === "token") {
+    const bearer = readHeaderValue(req.headers, "authorization");
+    const token = bearer?.startsWith("Bearer ") ? bearer.slice("Bearer ".length).trim() : "";
+    return Boolean(auth.token?.trim()) && token === auth.token?.trim();
+  }
+
+  const password = readHeaderValue(req.headers, "x-belldandy-password");
+  return Boolean(auth.password?.trim()) && password === auth.password?.trim();
+}
+
+async function requestToFormData(req: http.IncomingMessage): Promise<FormData> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (typeof value === "undefined") continue;
+    if (Array.isArray(value)) {
+      headers.set(name, value.join(", "));
+    } else {
+      headers.set(name, value);
+    }
+  }
+
+  const url = `http://127.0.0.1${req.url ?? "/"}`;
+  const request = new Request(url, {
+    method: req.method ?? "POST",
+    headers,
+    body: Readable.toWeb(req) as unknown as BodyInit,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+
+  return request.formData();
 }
 
 type ToolControlChangesLike = {
@@ -279,8 +580,53 @@ function buildToolControlDisabledPayloadLocally(disabled: {
   };
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatLocalMessageTime(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absOffset = Math.abs(offsetMinutes);
+  const hours = Math.floor(absOffset / 60);
+  const minutes = absOffset % 60;
+  const offsetText = minutes > 0 ? `GMT${sign}${hours}:${pad2(minutes)}` : `GMT${sign}${hours}`;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())} ${offsetText}`;
+}
+
+function toChatMessageMeta(timestampMs: number, isLatest = false): ChatMessageMeta {
+  return {
+    timestampMs,
+    displayTimeText: formatLocalMessageTime(timestampMs),
+    isLatest,
+  };
+}
+
+function normalizeConversationMessage(message: ConversationMessage, isLatest: boolean): ConversationMetaMessage {
+  return {
+    role: message.role,
+    content: message.content,
+    timestampMs: message.timestamp,
+    displayTimeText: formatLocalMessageTime(message.timestamp),
+    isLatest,
+    agentId: message.agentId,
+    clientContext: message.clientContext,
+  };
+}
+
+function buildConversationMetaMessages(conversation?: Conversation): ConversationMetaMessage[] {
+  if (!conversation?.messages?.length) return [];
+  return conversation.messages.map((message, index) => normalizeConversationMessage(message, index === conversation.messages.length - 1));
+}
+
 export async function startGatewayServer(opts: GatewayServerOptions): Promise<GatewayServer> {
-  ensureWebRoot(opts.webRoot);
+  await ensureWebRoot(opts.webRoot);
+  const stateDir = opts.stateDir ?? resolveStateDir();
+  const avatarDir = path.join(stateDir, "avatar");
 
   const log: GatewayLog = opts.logger
     ? {
@@ -300,13 +646,15 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   if (opts.stateDir) {
     const generatedDir = path.join(opts.stateDir, "generated");
     try {
-      fs.mkdirSync(generatedDir, { recursive: true });
+      await fsp.mkdir(generatedDir, { recursive: true });
     } catch {
       // ignore
     }
     app.use("/generated", express.static(generatedDir));
     log.info("gateway", `Static: serving /generated -> ${generatedDir}`);
   }
+  app.use("/avatar", express.static(avatarDir));
+  log.info("gateway", `Static: serving /avatar -> ${avatarDir}`);
 
   app.use(express.static(opts.webRoot));
   app.get("/", (_req, res) => {
@@ -320,6 +668,112 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       timestamp: new Date().toISOString(),
       version: BELLDANDY_VERSION,
     });
+  });
+
+  app.post("/api/avatar/upload", async (req, res) => {
+    try {
+      if (!isAuthorizedAvatarUpload(req, opts.auth)) {
+        const challenge = opts.auth.mode === "token"
+          ? { header: "WWW-Authenticate", value: 'Bearer realm="belldandy-upload"' }
+          : null;
+        if (challenge) {
+          res.setHeader(challenge.header, challenge.value);
+        }
+        return res.status(401).json({
+          ok: false,
+          error: {
+            code: "unauthorized",
+            message: opts.auth.mode === "password"
+              ? "Missing or invalid x-belldandy-password header."
+              : "Missing or invalid bearer token.",
+          },
+        });
+      }
+
+      const formData = await requestToFormData(req);
+      const role = normalizeAvatarUploadRole(formData.get("role"));
+      if (!role) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "invalid_role", message: 'role must be "user" or "agent".' },
+        });
+      }
+
+      const rawFile = formData.get("file");
+      if (!isAvatarUploadFileLike(rawFile)) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "missing_file", message: "file is required." },
+        });
+      }
+
+      if (rawFile.size <= 0) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "missing_file", message: "file is empty." },
+        });
+      }
+      if (rawFile.size > AVATAR_UPLOAD_MAX_BYTES) {
+        return res.status(413).json({
+          ok: false,
+          error: { code: "file_too_large", message: `file exceeds ${AVATAR_UPLOAD_MAX_BYTES} bytes.` },
+        });
+      }
+
+      const ext = resolveAvatarUploadExtension(rawFile);
+      if (!ext) {
+        return res.status(400).json({
+          ok: false,
+          error: { code: "invalid_file_type", message: "Only png, jpg, gif, and webp images are allowed." },
+        });
+      }
+
+      await fsp.mkdir(avatarDir, { recursive: true });
+      const fileName = `avatar-${role}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}${ext}`;
+      const avatarPath = `/avatar/${fileName}`;
+      const targetFile = path.join(avatarDir, fileName);
+      const mdPath = path.join(stateDir, role === "user" ? "USER.md" : "IDENTITY.md");
+
+      let previousMarkdown = "";
+      try {
+        previousMarkdown = await fsp.readFile(mdPath, "utf-8");
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException | undefined;
+        if (err?.code === "ENOENT") {
+          return res.status(404).json({
+            ok: false,
+            error: { code: "md_not_found", message: `${path.basename(mdPath)} does not exist.` },
+          });
+        }
+        throw error;
+      }
+
+      const fileBuffer = Buffer.from(await rawFile.arrayBuffer());
+      await writeBinaryFileAtomic(targetFile, fileBuffer, { ensureParent: true, mode: 0o600 });
+
+      try {
+        const nextMarkdown = replaceAvatarMarkdown(previousMarkdown, avatarPath);
+        await writeTextFileAtomic(mdPath, nextMarkdown, { ensureParent: true, mode: 0o600 });
+      } catch (error) {
+        await fsp.unlink(targetFile).catch(() => {});
+        return res.status(500).json({
+          ok: false,
+          error: { code: "md_update_failed", message: error instanceof Error ? error.message : String(error) },
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        role,
+        avatarPath,
+        mdPath,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        error: { code: "write_failed", message: error instanceof Error ? error.message : String(error) },
+      });
+    }
   });
 
   // Community message endpoint (for office.goddess.ai integration)
@@ -521,12 +975,31 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
 
         // Check idempotency
         const idempotencyKey = req.headers["x-idempotency-key"];
-        if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
-          const cached = opts.webhookIdempotency.getCachedResponse(webhookId, idempotencyKey);
-          if (cached) {
-            log.info("webhook", `Duplicate request detected: ${webhookId} / ${idempotencyKey}`);
-            return res.json({ ...cached, duplicate: true });
+        const idempotencyManager =
+          idempotencyKey && typeof idempotencyKey === "string" ? opts.webhookIdempotency : undefined;
+        let ownsIdempotencySlot = false;
+        if (idempotencyManager && typeof idempotencyKey === "string") {
+          const acquired = idempotencyManager.acquireRequest(webhookId, idempotencyKey);
+          if (acquired.status === "cached") {
+            log.info("webhook", `Duplicate request detected from cache: ${webhookId} / ${idempotencyKey}`);
+            return res.json({ ...acquired.response, duplicate: true });
           }
+          if (acquired.status === "pending") {
+            log.info("webhook", `Duplicate request joined in-flight execution: ${webhookId} / ${idempotencyKey}`);
+            try {
+              const response = await acquired.promise;
+              return res.json({ ...response, duplicate: true });
+            } catch (err) {
+              return res.status(500).json({
+                ok: false,
+                error: {
+                  code: "INTERNAL_ERROR",
+                  message: err instanceof Error ? err.message : "Unknown error",
+                },
+              });
+            }
+          }
+          ownsIdempotencySlot = true;
         }
 
         // Parse request body
@@ -608,8 +1081,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         };
 
         // Cache response for idempotency
-        if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
-          opts.webhookIdempotency.cacheResponse(webhookId, idempotencyKey, response);
+        if (idempotencyManager && typeof idempotencyKey === "string") {
+          idempotencyManager.completeRequest(webhookId, idempotencyKey, response);
         }
 
         // Return success response
@@ -617,6 +1090,10 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
 
         log.info("webhook", `Webhook processed successfully: ${finalText.substring(0, 50)}...`);
       } catch (error) {
+        const idempotencyKey = req.headers["x-idempotency-key"];
+        if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
+          opts.webhookIdempotency.failRequest(req.params.id, idempotencyKey, error);
+        }
         log.error("webhook", "Failed to process webhook", error);
         res.status(500).json({
           ok: false,
@@ -683,11 +1160,11 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   };
 
   // 初始化会话存储
-  const stateDir = opts.stateDir ?? resolveStateDir();
   const sessionsDir = path.join(stateDir, "sessions");
 
   // Ensure sessions dir exists
-  fs.mkdirSync(sessionsDir, { recursive: true });
+  await fsp.mkdir(sessionsDir, { recursive: true });
+  await fsp.mkdir(avatarDir, { recursive: true });
 
   const conversationStore = opts.conversationStore ?? new ConversationStore({
     ...opts.conversationStoreOptions,
@@ -807,6 +1284,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
         skillRegistry: opts.skillRegistry,
+        goalManager: opts.goalManager,
         tokenUsageUploadConfig,
         broadcastEvent,
         log,
@@ -930,6 +1408,7 @@ async function handleReq(
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     pluginRegistry?: PluginRegistry;
     skillRegistry?: SkillRegistry;
+    goalManager?: GoalManager;
     tokenUsageUploadConfig: TokenUsageUploadConfig;
     broadcastEvent?: (frame: GatewayEventFrame) => void;
   },
@@ -964,6 +1443,33 @@ async function handleReq(
       "experience.usage.list",
       "experience.usage.stats",
       "experience.usage.revoke",
+      "goal.create",
+      "goal.list",
+      "goal.get",
+      "goal.resume",
+      "goal.pause",
+      "goal.handoff.generate",
+      "goal.retrospect.generate",
+      "goal.experience.suggest",
+      "goal.method_candidates.generate",
+      "goal.skill_candidates.generate",
+      "goal.flow_patterns.generate",
+      "goal.flow_patterns.cross_goal",
+      "goal.review_governance.summary",
+      "goal.approval.scan",
+      "goal.suggestion_review.list",
+      "goal.suggestion_review.workflow.set",
+      "goal.suggestion_review.decide",
+      "goal.suggestion_review.escalate",
+      "goal.suggestion_review.scan",
+      "goal.suggestion.publish",
+      "goal.checkpoint.list",
+      "goal.checkpoint.request",
+      "goal.checkpoint.approve",
+      "goal.checkpoint.reject",
+      "goal.checkpoint.expire",
+      "goal.checkpoint.reopen",
+      "goal.checkpoint.escalate",
   ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
@@ -1074,10 +1580,9 @@ async function handleReq(
           userText = "【已提交工具开关确认口令】";
         }
       }
-      const { history } = await ctx.conversationStore.getHistoryCompacted(conversationId);
+      const { conversation: existingConv, history } = await ctx.conversationStore.getConversationHistoryCompacted(conversationId);
 
       // Agent-会话绑定校验：防止不同 Agent 共享同一会话导致上下文污染
-      const existingConv = ctx.conversationStore.get(conversationId);
       if (existingConv?.agentId && requestedAgentId && existingConv.agentId !== requestedAgentId) {
         return {
           type: "res", id: req.id, ok: false,
@@ -1085,9 +1590,12 @@ async function handleReq(
         };
       }
 
-      ctx.conversationStore.addMessage(conversationId, "user", userText, {
+      const userMessageTimestamp = Date.now();
+      const userMessage = ctx.conversationStore.addMessage(conversationId, "user", userText, {
         agentId: requestedAgentId,
         channel: "webchat",
+        timestampMs: userMessageTimestamp,
+        clientContext: parsed.value.clientContext,
       });
 
       ctx.log.debug("message", "Processing message.send", {
@@ -1110,9 +1618,10 @@ async function handleReq(
       let promptText = userText;
       const attachments = parsed.value.attachments;
       const contentParts: Array<any> = []; // Changed from strictly typed imageParts to allow flexible content
-      const TEXT_ATTACHMENT_CHAR_LIMIT = 200_000;
+      const attachmentPromptLimits = getAttachmentPromptLimits();
       let textAttachmentCount = 0;
       let textAttachmentChars = 0;
+      let audioTranscriptChars = 0;
 
       if (attachments && attachments.length > 0) {
         ctx.log.debug("message", "Processing attachments", { count: attachments.length, conversationId });
@@ -1160,10 +1669,51 @@ async function handleReq(
                     ctx.log.debug("stt", "Audio transcribed", { name: att.name, textLength: sttResult.text.length });
                     if (!promptText?.trim()) {
                       // If user didn't type anything, treat audio as the main prompt
-                      promptText = sttResult.text;
+                      const truncatedTranscript = truncateTextForPrompt(
+                        sttResult.text,
+                        attachmentPromptLimits.totalTextCharLimit,
+                        "\n...[Transcript truncated]",
+                      );
+                      promptText = truncatedTranscript.text;
+                      audioTranscriptChars += truncatedTranscript.text.length;
+                      if (truncatedTranscript.truncated) {
+                        ctx.log.debug("stt", "Primary audio transcript truncated by total prompt limit", {
+                          name: att.name,
+                          originalChars: sttResult.text.length,
+                          keptChars: truncatedTranscript.text.length,
+                          totalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                        });
+                      }
                     } else {
                       // Otherwise append as context
-                      attachmentPrompts.push(`\n[语音转录: "${sttResult.text}"]`);
+                      const remainingChars = Math.max(
+                        0,
+                        attachmentPromptLimits.totalTextCharLimit - textAttachmentChars - audioTranscriptChars,
+                      );
+                      const transcriptCharLimit = Math.min(
+                        attachmentPromptLimits.audioTranscriptAppendCharLimit,
+                        remainingChars,
+                      );
+                      if (transcriptCharLimit <= 0) {
+                        attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录已完成，但因本次上下文预算已用尽未注入全文）]`);
+                      } else {
+                        const truncatedTranscript = truncateTextForPrompt(
+                          sttResult.text,
+                          transcriptCharLimit,
+                          "\n...[Transcript truncated]",
+                        );
+                        audioTranscriptChars += truncatedTranscript.text.length;
+                        if (truncatedTranscript.truncated) {
+                          ctx.log.debug("stt", "Audio transcript truncated for appended context", {
+                            name: att.name,
+                            originalChars: sttResult.text.length,
+                            keptChars: truncatedTranscript.text.length,
+                            appendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
+                            remainingChars,
+                          });
+                        }
+                        attachmentPrompts.push(`\n[语音转录: "${truncatedTranscript.text}"]`);
+                      }
                     }
                   } else {
                     attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录失败）]`);
@@ -1187,21 +1737,29 @@ async function handleReq(
 
               if (isText) {
                 const content = buffer.toString("utf-8");
-                const wasTruncated = content.length > TEXT_ATTACHMENT_CHAR_LIMIT;
-                const truncated = wasTruncated
-                  ? content.slice(0, TEXT_ATTACHMENT_CHAR_LIMIT) + "\n...[Truncated]"
-                  : content;
+                const remainingChars = Math.max(
+                  0,
+                  attachmentPromptLimits.totalTextCharLimit - textAttachmentChars - audioTranscriptChars,
+                );
+                const fileCharLimit = Math.min(attachmentPromptLimits.textCharLimit, remainingChars);
+                if (fileCharLimit <= 0) {
+                  attachmentPrompts.push(`\n[用户上传了文本附件: ${att.name}（因本次上下文预算已用尽，未注入全文）]`);
+                  continue;
+                }
+                const truncated = truncateTextForPrompt(content, fileCharLimit, "\n...[Truncated]");
                 textAttachmentCount += 1;
-                textAttachmentChars += truncated.length;
-                if (wasTruncated) {
+                textAttachmentChars += truncated.text.length;
+                if (truncated.truncated) {
                   ctx.log.debug("message", "Text attachment truncated by char limit", {
                     name: att.name,
                     originalChars: content.length,
-                    keptChars: truncated.length,
-                    charLimit: TEXT_ATTACHMENT_CHAR_LIMIT,
+                    keptChars: truncated.text.length,
+                    charLimit: attachmentPromptLimits.textCharLimit,
+                    totalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                    remainingChars,
                   });
                 }
-                attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated}\n--- End of Attachment ---\n`);
+                attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated.text}\n--- End of Attachment ---\n`);
               } else {
                 attachmentPrompts.push(`\n[User uploaded a file: ${att.name} (type: ${att.type}), saved at: ${savePath}]`);
               }
@@ -1247,13 +1805,40 @@ async function handleReq(
             userUuid: effectiveUserUuid, // 优先使用 message.send 的 userUuid
             senderInfo: parsed.value.senderInfo, // 传递发送者信息
             roomContext: normalizedRoomContext, // 传递房间上下文
+            meta: {
+              currentMessageTime: {
+                timestampMs: userMessage.timestamp,
+                displayTimeText: formatLocalMessageTime(userMessage.timestamp),
+                isLatest: true,
+                role: "user",
+                clientContext: parsed.value.clientContext,
+              },
+            },
           };
           if (textAttachmentCount > 0) {
             runInput.meta = {
+              ...(runInput.meta ?? {}),
               attachmentStats: {
                 textAttachmentCount,
                 textAttachmentChars,
-                textAttachmentTruncatedCharLimit: TEXT_ATTACHMENT_CHAR_LIMIT,
+                audioTranscriptChars,
+                promptAugmentationChars: textAttachmentChars + audioTranscriptChars,
+                textAttachmentTruncatedCharLimit: attachmentPromptLimits.textCharLimit,
+                textAttachmentTotalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                audioTranscriptAppendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
+              },
+            };
+          } else if (audioTranscriptChars > 0) {
+            runInput.meta = {
+              ...(runInput.meta ?? {}),
+              attachmentStats: {
+                textAttachmentCount: 0,
+                textAttachmentChars: 0,
+                audioTranscriptChars,
+                promptAugmentationChars: audioTranscriptChars,
+                textAttachmentTruncatedCharLimit: attachmentPromptLimits.textCharLimit,
+                textAttachmentTotalCharLimit: attachmentPromptLimits.totalTextCharLimit,
+                audioTranscriptAppendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
               },
             };
           }
@@ -1267,6 +1852,8 @@ async function handleReq(
 
           const isTts = ctx.ttsEnabled?.() ?? false;
           let fullResponse = "";
+          let finalEventText = "";
+          let receivedFinal = false;
 
           for await (const item of agent.run(runInput)) {
             if (item.type === "status") {
@@ -1286,11 +1873,8 @@ async function handleReq(
               }
             }
             if (item.type === "final") {
+              receivedFinal = true;
               fullResponse = item.text;
-              // TTS mode: defer chat.final until after TTS generation
-              if (!isTts) {
-                sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: item.text } });
-              }
             }
             if (item.type === "usage") {
               latestUsage = {
@@ -1332,42 +1916,70 @@ async function handleReq(
 
           maybeEmitAutoRunTaskResult();
 
+          finalEventText = fullResponse;
+
           // Server-side auto TTS: generate audio and send combined response
           if (isTts && fullResponse && ctx.ttsSynthesize) {
             sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "generating_audio" } });
             const ttsResult = await ctx.ttsSynthesize(fullResponse);
             if (ttsResult) {
-              const finalWithAudio = ttsResult.htmlAudio + "\n\n" + fullResponse;
-              sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: finalWithAudio } });
-            } else {
-              // TTS failed, fallback to text-only
-              sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: fullResponse } });
+              finalEventText = ttsResult.htmlAudio + "\n\n" + fullResponse;
             }
-          } else if (isTts && fullResponse) {
-            // TTS enabled but no synthesize function — send text-only
-            sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: fullResponse } });
           }
 
-          if (fullResponse) {
+          if (receivedFinal) {
             // Strip <audio> tags and download links before persisting — leave no trace for LLM to copy
             const sanitized = fullResponse
               .replace(/<audio[^>]*>.*?<\/audio>/gi, "")
               .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
               .replace(/\n{3,}/g, "\n\n")
               .trim();
-            ctx.conversationStore.addMessage(conversationId, "assistant", sanitized || fullResponse, {
-              agentId: requestedAgentId,
+            let assistantTimestamp = Date.now();
+            if (sanitized || fullResponse) {
+              const assistantMessage = ctx.conversationStore.addMessage(conversationId, "assistant", sanitized || fullResponse, {
+                agentId: requestedAgentId,
+                timestampMs: assistantTimestamp,
+              });
+              assistantTimestamp = assistantMessage.timestamp;
+            }
+            sendEvent(ws, {
+              type: "event",
+              event: "chat.final",
+              payload: {
+                conversationId,
+                role: "assistant",
+                text: finalEventText || fullResponse,
+                messageMeta: toChatMessageMeta(assistantTimestamp, true),
+              },
             });
           }
         } catch (err) {
           maybeEmitAutoRunTaskResult();
           ctx.log.error("agent", "Agent run failed", err);
+          const errorTimestamp = Date.now();
           sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "error" } });
-          sendEvent(ws, { type: "event", event: "chat.final", payload: { conversationId, text: `Error: ${String(err)}` } });
+          sendEvent(ws, {
+            type: "event",
+            event: "chat.final",
+            payload: {
+              conversationId,
+              role: "assistant",
+              text: `Error: ${String(err)}`,
+              messageMeta: toChatMessageMeta(errorTimestamp, true),
+            },
+          });
         }
       })();
 
-      return { type: "res", id: req.id, ok: true, payload: { conversationId } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          conversationId,
+          messageMeta: toChatMessageMeta(userMessage.timestamp, true),
+        },
+      };
     }
 
     case "tool_settings.confirm": {
@@ -1490,32 +2102,10 @@ async function handleReq(
       const { envPath, envLocalPath: localEnvPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       const config: Record<string, string> = {};
 
-      const readEnvFile = (p: string) => {
-        try {
-          if (fs.existsSync(p)) {
-            const raw = fs.readFileSync(p, "utf-8");
-            raw.split(/\r?\n/).forEach(line => {
-              const trimmed = line.trim();
-              if (trimmed && !trimmed.startsWith("#")) {
-                const eq = trimmed.indexOf("=");
-                if (eq > 0) {
-                  const key = trimmed.slice(0, eq).trim();
-                  let val = trimmed.slice(eq + 1).trim();
-                  if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-                    val = val.slice(1, -1);
-                  }
-                  config[key] = val;
-                }
-              }
-            });
-          }
-        } catch { }
-      };
-
       // 1. Read .env (Base)
-      readEnvFile(envPath);
+      await readEnvFileIntoConfig(envPath, config);
       // 2. Read .env.local (Override)
-      readEnvFile(localEnvPath);
+      await readEnvFileIntoConfig(localEnvPath, config);
 
       // [SECURITY] 对敏感字段进行脱敏处理
       const REDACT_PATTERNS = [/KEY/i, /SECRET/i, /TOKEN/i, /PASSWORD/i, /CREDENTIAL/i];
@@ -1579,58 +2169,9 @@ async function handleReq(
         }
       }
 
-      const updateEnvFile = (filePath: string, changes: Record<string, string>) => {
-        if (Object.keys(changes).length === 0) return true;
-
-        let lines: string[] = [];
-        try {
-          if (fs.existsSync(filePath)) {
-            lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-          }
-        } catch { }
-
-        const newKeys = new Set(Object.keys(changes));
-        const nextLines: string[] = [];
-        const handledKeys = new Set<string>();
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          let matched = false;
-          if (trimmed && !trimmed.startsWith("#")) {
-            const eq = trimmed.indexOf("=");
-            if (eq > 0) {
-              const key = trimmed.slice(0, eq).trim();
-              if (newKeys.has(key)) {
-                const val = changes[key];
-                nextLines.push(`${key}="${val}"`);
-                handledKeys.add(key);
-                matched = true;
-              }
-            }
-          }
-          if (!matched) nextLines.push(line);
-        }
-
-        for (const key of newKeys) {
-          if (!handledKeys.has(key)) {
-            if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
-            nextLines.push(`${key}="${changes[key]}"`);
-          }
-        }
-
-        if (nextLines.length > 0 && nextLines[nextLines.length - 1] !== "") nextLines.push("");
-
-        try {
-          fs.writeFileSync(filePath, nextLines.join("\n"), "utf-8");
-          return true;
-        } catch (e) {
-          return false;
-        }
-      };
-
       const { envPath, envLocalPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
-      const envOk = updateEnvFile(envPath, envUpdates);
-      const localOk = updateEnvFile(envLocalPath, localUpdates);
+      const envOk = await updateEnvFile(envPath, envUpdates);
+      const localOk = await updateEnvFile(envLocalPath, localUpdates);
 
       if (!envOk || !localOk) {
         return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: "Failed to write config files" } };
@@ -1643,10 +2184,11 @@ async function handleReq(
     case "config.readRaw": {
       const { envPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       try {
-        if (!fs.existsSync(envPath)) {
+        const stat = await statIfExists(envPath);
+        if (!stat?.isFile()) {
           return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: ".env 文件不存在" } };
         }
-        const content = fs.readFileSync(envPath, "utf-8");
+        const content = await fsp.readFile(envPath, "utf-8");
         return { type: "res", id: req.id, ok: true, payload: { content } };
       } catch (e) {
         return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(e) } };
@@ -1661,7 +2203,7 @@ async function handleReq(
       }
       const { envPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       try {
-        fs.writeFileSync(envPath, content, "utf-8");
+        await writeTextFileAtomic(envPath, content, { ensureParent: true });
         return { type: "res", id: req.id, ok: true };
       } catch (e) {
         return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: String(e) } };
@@ -1753,8 +2295,8 @@ async function handleReq(
       ];
 
       const dbPath = path.join(ctx.stateDir, "memory.sqlite");
-      if (fs.existsSync(dbPath)) {
-        const stat = fs.statSync(dbPath);
+      const stat = await statIfExists(dbPath);
+      if (stat?.isFile()) {
         checks[1].message = `Size: ${(stat.size / 1024).toFixed(1)} KB`;
       } else {
         checks[1].status = "warn";
@@ -1781,6 +2323,1041 @@ async function handleReq(
       return { type: "res", id: req.id, ok: true, payload: { agents } };
     }
 
+    case "goal.create": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const title = typeof params.title === "string" ? params.title.trim() : "";
+      const objective = typeof params.objective === "string" ? params.objective.trim() : undefined;
+      const slug = typeof params.slug === "string" ? params.slug.trim() : undefined;
+      const goalRoot = typeof params.goalRoot === "string" ? params.goalRoot.trim() : undefined;
+      if (!title) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "title is required" } };
+      }
+      try {
+        const goal = await ctx.goalManager.createGoal({ title, objective, slug, goalRoot });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            goal,
+            conversationId: goal.activeConversationId,
+          },
+        };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_create_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.list": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const goals = await ctx.goalManager.listGoals();
+      return { type: "res", id: req.id, ok: true, payload: { goals } };
+    }
+
+    case "goal.get": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      const goal = await ctx.goalManager.getGoal(goalId);
+      if (!goal) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Goal not found." } };
+      }
+      return { type: "res", id: req.id, ok: true, payload: { goal } };
+    }
+
+    case "goal.resume": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : undefined;
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.resumeGoal(goalId, nodeId);
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: result as unknown as Record<string, unknown>,
+        };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_resume_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.pause": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const goal = await ctx.goalManager.pauseGoal(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { goal } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_pause_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.handoff.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateHandoff(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_handoff_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.retrospect.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateRetrospective(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_retrospect_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.experience.suggest": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateExperienceSuggestions(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_experience_suggest_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.method_candidates.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateMethodCandidates(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_method_candidates_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.skill_candidates.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateSkillCandidates(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_skill_candidates_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.flow_patterns.generate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.generateFlowPatterns(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_flow_patterns_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.flow_patterns.cross_goal": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      try {
+        const result = await ctx.goalManager.generateCrossGoalFlowPatterns();
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_cross_goal_flow_patterns_generate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.review_governance.summary": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const summary = await ctx.goalManager.getReviewGovernanceSummary(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { summary } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_review_governance_summary_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.approval.scan": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.scanApprovalWorkflows(goalId, {
+          now: typeof params.now === "string" ? params.now.trim() || undefined : undefined,
+          autoEscalate: Boolean(params.autoEscalate),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_approval_scan_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.list": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const reviews = await ctx.goalManager.listSuggestionReviews(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { reviews } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_list_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.workflow.set": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const mode = typeof params.mode === "string" ? params.mode.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId || !mode) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and mode are required" } };
+      }
+      if (!["single", "chain", "quorum"].includes(mode)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "mode is invalid" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.configureSuggestionReviewWorkflow(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          mode: mode as "single" | "chain" | "quorum",
+          reviewers: Array.isArray(params.reviewers)
+            ? params.reviewers.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
+            : undefined,
+          reviewerRoles: Array.isArray(params.reviewerRoles)
+            ? params.reviewerRoles.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean)
+            : undefined,
+          minApprovals: typeof params.minApprovals === "number" && Number.isFinite(params.minApprovals) ? params.minApprovals : undefined,
+          stages: Array.isArray(params.stages)
+            ? params.stages.map((item) => {
+              const stage = isObjectRecord(item) ? item : {};
+              return {
+                title: typeof stage.title === "string" ? stage.title.trim() || undefined : undefined,
+                reviewers: Array.isArray(stage.reviewers)
+                  ? stage.reviewers.map((reviewer) => typeof reviewer === "string" ? reviewer.trim() : "").filter(Boolean)
+                  : [],
+                reviewerRoles: Array.isArray(stage.reviewerRoles)
+                  ? stage.reviewerRoles.map((role) => typeof role === "string" ? role.trim() : "").filter(Boolean)
+                  : undefined,
+                minApprovals: typeof stage.minApprovals === "number" && Number.isFinite(stage.minApprovals) ? stage.minApprovals : undefined,
+                slaHours: typeof stage.slaHours === "number" && Number.isFinite(stage.slaHours) ? stage.slaHours : undefined,
+              };
+            }).filter((item) => item.reviewers.length > 0)
+            : undefined,
+          slaHours: typeof params.slaHours === "number" && Number.isFinite(params.slaHours) ? params.slaHours : undefined,
+          escalationMode: typeof params.escalationMode === "string" && (params.escalationMode === "none" || params.escalationMode === "manual")
+            ? params.escalationMode
+            : undefined,
+          escalationReviewer: typeof params.escalationReviewer === "string" ? params.escalationReviewer.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_workflow_set_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.decide": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const decision = typeof params.decision === "string" ? params.decision.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId || !decision) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and decision are required" } };
+      }
+      if (!["accepted", "rejected", "deferred", "needs_revision"].includes(decision)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "decision is invalid" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.decideSuggestionReview(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          decision: decision as "accepted" | "rejected" | "deferred" | "needs_revision",
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_decide_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.escalate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.escalateSuggestionReview(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          escalatedBy: typeof params.escalatedBy === "string" ? params.escalatedBy.trim() || undefined : undefined,
+          escalatedTo: typeof params.escalatedTo === "string" ? params.escalatedTo.trim() || undefined : undefined,
+          reason: typeof params.reason === "string" ? params.reason.trim() || undefined : undefined,
+          force: Boolean(params.force),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_escalate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion_review.scan": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.scanSuggestionReviewWorkflows(goalId, {
+          now: typeof params.now === "string" ? params.now.trim() || undefined : undefined,
+          autoEscalate: Boolean(params.autoEscalate),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_review_scan_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.suggestion.publish": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const suggestionType = typeof params.suggestionType === "string" ? params.suggestionType.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      if (suggestionType && !["method_candidate", "skill_candidate", "flow_pattern"].includes(suggestionType)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "suggestionType is invalid" } };
+      }
+      try {
+        const result = await ctx.goalManager.publishSuggestion(goalId, {
+          reviewId: typeof params.reviewId === "string" ? params.reviewId.trim() || undefined : undefined,
+          suggestionType: suggestionType ? suggestionType as "method_candidate" | "skill_candidate" | "flow_pattern" : undefined,
+          suggestionId: typeof params.suggestionId === "string" ? params.suggestionId.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_suggestion_publish_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.list": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const checkpoints = await ctx.goalManager.listCheckpoints(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { checkpoints } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_list_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.request": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.requestCheckpoint(goalId, nodeId, {
+          title: typeof params.title === "string" ? params.title.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_request_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.approve": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.approveCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_approve_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.reject": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.rejectCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_reject_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.expire": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.expireCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_expire_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.reopen": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.reopenCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+          reviewer: typeof params.reviewer === "string" ? params.reviewer.trim() || undefined : undefined,
+          reviewerRole: typeof params.reviewerRole === "string" ? params.reviewerRole.trim() || undefined : undefined,
+          requestedBy: typeof params.requestedBy === "string" ? params.requestedBy.trim() || undefined : undefined,
+          decidedBy: typeof params.decidedBy === "string" ? params.decidedBy.trim() || undefined : undefined,
+          slaAt: typeof params.slaAt === "string" ? params.slaAt.trim() || undefined : undefined,
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_reopen_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.checkpoint.escalate": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.escalateCheckpoint(goalId, nodeId, {
+          checkpointId: typeof params.checkpointId === "string" ? params.checkpointId.trim() || undefined : undefined,
+          escalatedBy: typeof params.escalatedBy === "string" ? params.escalatedBy.trim() || undefined : undefined,
+          escalatedTo: typeof params.escalatedTo === "string" ? params.escalatedTo.trim() || undefined : undefined,
+          reason: typeof params.reason === "string" ? params.reason.trim() || undefined : undefined,
+          force: Boolean(params.force),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_checkpoint_escalate_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.read": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const graph = await ctx.goalManager.readTaskGraph(goalId);
+        return { type: "res", id: req.id, ok: true, payload: { graph } };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_read_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.create": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const title = typeof params.title === "string" ? params.title.trim() : "";
+      if (!goalId || !title) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and title are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.createTaskNode(goalId, {
+          id: typeof params.nodeId === "string" ? params.nodeId.trim() || undefined : undefined,
+          title,
+          description: typeof params.description === "string" ? params.description.trim() || undefined : undefined,
+          phase: typeof params.phase === "string" ? params.phase.trim() || undefined : undefined,
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          dependsOn: Array.isArray(params.dependsOn) ? params.dependsOn.map((item) => String(item)) : undefined,
+          acceptance: Array.isArray(params.acceptance) ? params.acceptance.map((item) => String(item)) : undefined,
+          checkpointRequired: typeof params.checkpointRequired === "boolean" ? params.checkpointRequired : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          status: parseGoalTaskCreateStatus(params.status),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_create_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.update": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.updateTaskNode(goalId, nodeId, {
+          title: typeof params.title === "string" ? params.title.trim() || undefined : undefined,
+          description: typeof params.description === "string" ? params.description : undefined,
+          phase: typeof params.phase === "string" ? params.phase : undefined,
+          owner: typeof params.owner === "string" ? params.owner : undefined,
+          dependsOn: Array.isArray(params.dependsOn) ? params.dependsOn.map((item) => String(item)) : undefined,
+          acceptance: Array.isArray(params.acceptance) ? params.acceptance.map((item) => String(item)) : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointRequired: typeof params.checkpointRequired === "boolean" ? params.checkpointRequired : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_update_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.claim": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.claimTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_claim_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.pending_review": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.markTaskNodePendingReview(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_pending_review_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.validating": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.markTaskNodeValidating(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_validating_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.complete": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.completeTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_complete_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.block": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      const blockReason = typeof params.blockReason === "string" ? params.blockReason.trim() : "";
+      if (!goalId || !nodeId || !blockReason) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId, nodeId and blockReason are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.blockTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_block_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.fail": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.failTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_fail_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.task_graph.skip": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : "";
+      if (!goalId || !nodeId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId and nodeId are required" } };
+      }
+      try {
+        const result = await ctx.goalManager.skipTaskNode(goalId, nodeId, {
+          owner: typeof params.owner === "string" ? params.owner.trim() || undefined : undefined,
+          summary: typeof params.summary === "string" ? params.summary.trim() || undefined : undefined,
+          blockReason: typeof params.blockReason === "string" ? params.blockReason.trim() || undefined : undefined,
+          artifacts: Array.isArray(params.artifacts) ? params.artifacts.map((item) => String(item)) : undefined,
+          checkpointStatus: parseGoalTaskCheckpointStatus(params.checkpointStatus),
+          runId: typeof params.runId === "string" ? params.runId.trim() || undefined : undefined,
+        });
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_task_graph_skip_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
     case "memory.search": {
       const manager = getGlobalMemoryManager();
       if (!manager) {
@@ -1794,9 +3371,19 @@ async function handleReq(
       }
 
       const limit = clampListLimit(params.limit, 20);
+      const includeContent = params.includeContent !== false;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = await manager.search(query, { limit, filter: filter as any });
-      return { type: "res", id: req.id, ok: true, payload: { items, query, limit } };
+      const items = await manager.search(query, { limit, filter: filter as any, includeContent });
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: toMemoryListPayloadItems(items, includeContent),
+          query,
+          limit,
+        },
+      };
     }
 
     case "memory.get": {
@@ -1827,9 +3414,18 @@ async function handleReq(
 
       const params = isObjectRecord(req.params) ? req.params : {};
       const limit = clampListLimit(params.limit, 20);
+      const includeContent = params.includeContent !== false;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = manager.getRecent(limit, filter as any);
-      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+      const items = manager.getRecent(limit, filter as any, includeContent);
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: toMemoryListPayloadItems(items, includeContent),
+          limit,
+        },
+      };
     }
 
     case "memory.stats": {
@@ -1838,13 +3434,15 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const includeRecentTasks = params.includeRecentTasks === true;
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
           status: manager.getStatus(),
-          recentTasks: manager.getRecentTasks(5),
+          ...(includeRecentTasks ? { recentTasks: manager.getRecentTasks(5) } : {}),
         },
       };
     }
@@ -1858,6 +3456,7 @@ async function handleReq(
       const params = isObjectRecord(req.params) ? req.params : {};
       const query = typeof params.query === "string" ? params.query.trim() : "";
       const limit = clampListLimit(params.limit, 20);
+      const summaryOnly = params.summaryOnly === true;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = query
         ? manager.searchTasks(query, { limit, filter: filter as any })
@@ -1868,7 +3467,7 @@ async function handleReq(
         id: req.id,
         ok: true,
         payload: {
-          items,
+          items: toTaskListPayloadItems(items, summaryOnly),
           query,
           limit,
         },
@@ -2085,18 +3684,18 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
       }
 
-      // 检查目录是否存在
-      if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "目录不存在" } };
-      }
-
-      // 允许的文件扩展名
-      const ALLOWED_EXTENSIONS = [".md", ".json", ".txt"];
-      // 忽略的目录和文件
-      const IGNORED_NAMES = ["generated", "memory.db", ".DS_Store", "node_modules"];
-
       try {
-        const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+        const stat = await statIfExists(targetDir);
+        if (!stat?.isDirectory()) {
+          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "目录不存在" } };
+        }
+
+        // 允许的文件扩展名
+        const ALLOWED_EXTENSIONS = [".md", ".json", ".txt"];
+        // 忽略的目录和文件
+        const IGNORED_NAMES = ["generated", "memory.db", ".DS_Store", "node_modules"];
+
+        const entries = await fsp.readdir(targetDir, { withFileTypes: true });
         const items: Array<{ name: string; type: "file" | "directory"; path: string }> = [];
 
         for (const entry of entries) {
@@ -2156,13 +3755,12 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "forbidden", message: "禁止访问内部状态文件" } };
       }
 
-      // 检查文件是否存在
-      if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
-      }
-
       try {
-        const content = fs.readFileSync(targetFile, "utf-8");
+        const stat = await statIfExists(targetFile);
+        if (!stat?.isFile()) {
+          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
+        }
+        const content = await fsp.readFile(targetFile, "utf-8");
         return { type: "res", id: req.id, ok: true, payload: { content, path: relativePath } };
       } catch (err) {
         return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(err) } };
@@ -2199,12 +3797,12 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_type", message: "不支持的源文件类型" } };
       }
 
-      if (!fs.existsSync(targetFile) || !fs.statSync(targetFile).isFile()) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
-      }
-
       try {
-        const content = fs.readFileSync(targetFile, "utf-8");
+        const stat = await statIfExists(targetFile);
+        if (!stat?.isFile()) {
+          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
+        }
+        const content = await fsp.readFile(targetFile, "utf-8");
         return {
           type: "res",
           id: req.id,
@@ -2246,16 +3844,7 @@ async function handleReq(
       }
 
       try {
-        // 确保父目录存在
-        const parentDir = path.dirname(targetFile);
-        if (!fs.existsSync(parentDir)) {
-          fs.mkdirSync(parentDir, { recursive: true, mode: 0o700 });
-        }
-
-        // 原子写入：先写临时文件再 rename
-        const tmpFile = `${targetFile}.${crypto.randomUUID()}.tmp`;
-        fs.writeFileSync(tmpFile, content, "utf-8");
-        fs.renameSync(tmpFile, targetFile);
+        await writeTextFileAtomic(targetFile, content, { ensureParent: true, mode: 0o700 });
 
         return { type: "res", id: req.id, ok: true, payload: { path: relativePath } };
       } catch (err) {
@@ -2300,12 +3889,14 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
       }
 
+      const conversation = ctx.conversationStore.get(conversationId);
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
           conversationId,
+          messages: buildConversationMetaMessages(conversation),
           taskTokenResults: ctx.conversationStore.getTaskTokenResults(conversationId, limit),
         },
       };
@@ -2361,12 +3952,28 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   const agentId = typeof obj.agentId === "string" && obj.agentId.trim() ? obj.agentId.trim() : undefined;
   const modelId = typeof obj.modelId === "string" && obj.modelId.trim() ? obj.modelId.trim() : undefined;
   const userUuid = typeof obj.userUuid === "string" && obj.userUuid.trim() ? obj.userUuid.trim() : undefined;
+  const clientContextObj = obj.clientContext && typeof obj.clientContext === "object"
+    ? obj.clientContext as Record<string, unknown>
+    : undefined;
+  const clientContext = clientContextObj
+    ? {
+      sentAtMs: typeof clientContextObj.sentAtMs === "number"
+        ? clientContextObj.sentAtMs as number
+        : undefined,
+      timezoneOffsetMinutes: typeof clientContextObj.timezoneOffsetMinutes === "number"
+        ? clientContextObj.timezoneOffsetMinutes as number
+        : undefined,
+      locale: typeof clientContextObj.locale === "string"
+        ? clientContextObj.locale.trim() || undefined
+        : undefined,
+    }
+    : undefined;
 
   // 解析 senderInfo 和 roomContext（用于 office.goddess.ai 社区）
   const senderInfo = obj.senderInfo && typeof obj.senderInfo === "object" ? obj.senderInfo as any : undefined;
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
-  return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext } };
+  return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext, clientContext } };
 }
 
 function parseToolSettingsConfirmParams(
@@ -2456,6 +4063,60 @@ function clampListLimit(value: unknown, fallback: number, max = 100): number {
   return Math.min(parsed, max);
 }
 
+function toMemoryListPayloadItems(items: Array<any>, includeContent: boolean): Array<Record<string, unknown>> {
+  if (includeContent) {
+    return items as Array<Record<string, unknown>>;
+  }
+  return items.map(({ content, ...rest }) => rest);
+}
+
+function toTaskListPayloadItems(items: Array<any>, summaryOnly: boolean): Array<Record<string, unknown>> {
+  if (!summaryOnly) {
+    return items as Array<Record<string, unknown>>;
+  }
+  return items.map((item) => ({
+    id: item.id,
+    conversationId: item.conversationId,
+    title: item.title,
+    objective: item.objective,
+    summary: item.summary,
+    status: item.status,
+    source: item.source,
+    startedAt: item.startedAt,
+    finishedAt: item.finishedAt,
+    createdAt: item.createdAt,
+    metadata: item.metadata,
+  }));
+}
+
+function parseGoalTaskCheckpointStatus(value: unknown): "not_required" | "required" | "waiting_user" | "approved" | "rejected" | "expired" | undefined {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  switch (normalized) {
+    case "not_required":
+    case "required":
+    case "waiting_user":
+    case "approved":
+    case "rejected":
+    case "expired":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function parseGoalTaskCreateStatus(value: unknown): "draft" | "ready" | "blocked" | "skipped" | undefined {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  switch (normalized) {
+    case "draft":
+    case "ready":
+    case "blocked":
+    case "skipped":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
 function sendRes(ws: WebSocket, frame: GatewayResFrame) {
   sendFrame(ws, frame);
 }
@@ -2477,14 +4138,8 @@ function safeClose(ws: WebSocket, code: number, reason: string) {
   }
 }
 
-function ensureWebRoot(webRoot: string) {
-  const stat = (() => {
-    try {
-      return fs.statSync(webRoot);
-    } catch {
-      return null;
-    }
-  })();
+async function ensureWebRoot(webRoot: string): Promise<void> {
+  const stat = await statIfExists(webRoot);
   if (!stat || !stat.isDirectory()) {
     throw new Error(`Invalid webRoot: ${webRoot}`);
   }

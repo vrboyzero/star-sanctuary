@@ -216,6 +216,52 @@ describe("SubAgentOrchestrator", () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain("timed out");
     }, 10_000);
+
+    it("should keep timeout terminal state and avoid late completion overwrite", async () => {
+      const events: any[] = [];
+      const lateAgent: BelldandyAgent = {
+        async *run(_input: AgentRunInput): AsyncIterable<AgentStreamItem> {
+          yield { type: "status", status: "running" };
+          await new Promise((r) => setTimeout(r, 80));
+          yield { type: "final", text: "late result" };
+          yield { type: "status", status: "done" };
+        },
+      };
+      const registry = new AgentRegistry(() => lateAgent);
+      registry.register(defaultProfile);
+      const conversationStore = new ConversationStore();
+
+      const orch = new SubAgentOrchestrator({
+        agentRegistry: registry,
+        conversationStore,
+        sessionTimeoutMs: 20,
+        onEvent: (event) => events.push(event),
+      });
+
+      const result = await orch.spawn({
+        parentConversationId: "p1",
+        instruction: "Late task",
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("timed out");
+
+      await new Promise((r) => setTimeout(r, 120));
+
+      const session = orch.getSession(result.sessionId);
+      expect(session?.status).toBe("timeout");
+      expect(session?.result).toBeUndefined();
+      expect(conversationStore.getHistory(result.sessionId)).toEqual([
+        { role: "user", content: "Late task" },
+      ]);
+
+      const completedEvents = events.filter((event) => event.type === "completed");
+      expect(completedEvents).toHaveLength(1);
+      expect(completedEvents[0]).toMatchObject({
+        sessionId: result.sessionId,
+        success: false,
+      });
+    });
   });
 
   describe("spawnParallel", () => {
@@ -331,6 +377,27 @@ describe("SubAgentOrchestrator", () => {
       expect(events[0].agentId).toBe("default");
       expect(events[events.length - 1].type).toBe("completed");
       expect(events[events.length - 1].success).toBe(true);
+    });
+
+    it("should not fail or leak slots when onEvent throws", async () => {
+      const { orchestrator } = setup({
+        onEvent: () => {
+          throw new Error("event boom");
+        },
+      });
+
+      const result1 = await orchestrator.spawn({
+        parentConversationId: "p1",
+        instruction: "Task 1",
+      });
+      const result2 = await orchestrator.spawn({
+        parentConversationId: "p1",
+        instruction: "Task 2",
+      });
+
+      expect(result1.success).toBe(true);
+      expect(result2.success).toBe(true);
+      expect(orchestrator.queueSize).toBe(0);
     });
   });
 

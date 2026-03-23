@@ -4,10 +4,12 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { gzipSync } from "node:zlib";
 import { resolveDistributionMode, resolvePortableArtifactRoot, resolveSingleExeArtifactRoot } from "./distribution-mode.mjs";
-import { renderSingleExeGuide } from "./distribution-user-guide.mjs";
+import { renderSingleExeGuide, renderSingleExeGuideZh } from "./distribution-user-guide.mjs";
 
 const workspaceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")), "..", "..", "..");
 const require = createRequire(import.meta.url);
+const rootPackageJson = JSON.parse(fs.readFileSync(path.join(workspaceRoot, "package.json"), "utf-8"));
+const workspaceVersion = String(rootPackageJson.version || "0.0.0");
 const platform = process.platform;
 const arch = process.arch;
 const distribution = resolveDistributionMode();
@@ -24,7 +26,7 @@ const singleExeRoot = resolveSingleExeArtifactRoot({
   arch,
   mode,
 });
-const buildRoot = path.join(singleExeRoot, "build");
+const buildRoot = path.join(workspaceRoot, "artifacts", "_cache", "single-exe-build", path.basename(singleExeRoot));
 const runtimeManifestPath = path.join(portableRoot, "runtime-manifest.json");
 const portableVersionPath = path.join(portableRoot, "version.json");
 const portableExecutablePath = path.join(portableRoot, "star-sanctuary.exe");
@@ -41,6 +43,7 @@ const seaBlobPath = path.join(buildRoot, "sea-prep.blob");
 const executablePath = path.join(singleExeRoot, "star-sanctuary-single.exe");
 const metadataPath = path.join(singleExeRoot, "single-exe.json");
 const readmePath = path.join(singleExeRoot, "README-single-exe.md");
+const readmeZhPath = path.join(singleExeRoot, "README-single-exe-zh.md");
 const envExamplePath = path.join(singleExeRoot, ".env.example");
 const NODE_SEA_SENTINEL_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 const embeddedNodeRuntimeAssetPath = path.join(buildRoot, "node-runtime.exe.gz");
@@ -84,6 +87,18 @@ function portableArtifactExists() {
     && fs.existsSync(portableExecutablePath)
     && fs.existsSync(path.join(portableRoot, "runtime"))
   );
+}
+
+function assertPortableVersionMatchesWorkspace() {
+  assertExists(portableVersionPath, "portable version metadata");
+  const portableVersionFile = JSON.parse(fs.readFileSync(portableVersionPath, "utf-8"));
+  const portableVersion = String(portableVersionFile.version || "");
+  if (portableVersion !== workspaceVersion) {
+    throw new Error(
+      `Portable artifact version mismatch: expected ${workspaceVersion}, got ${portableVersion}. `
+      + `Run 'corepack pnpm build:portable${mode === "full" ? ":full" : ""}' first.`,
+    );
+  }
 }
 
 function runCommand(command, args, options = {}) {
@@ -170,13 +185,14 @@ function injectSeaBlob() {
 
 function writeSingleExeReadme(versionFile) {
   const versionKey = `${versionFile.version}-${versionFile.platform}-${versionFile.arch}`;
-  const content = renderSingleExeGuide({
+  const params = {
     executableName: path.basename(executablePath),
     distributionPolicy: versionFile.distributionPolicy,
     mode: versionFile.distributionMode ?? (versionFile.includeOptionalNative ? "full" : "slim"),
     runtimeHomeHint: `%LOCALAPPDATA%\\StarSanctuary\\runtime\\${versionKey}`,
-  });
-  fs.writeFileSync(readmePath, content, "utf-8");
+  };
+  fs.writeFileSync(readmePath, renderSingleExeGuide(params), "utf-8");
+  fs.writeFileSync(readmeZhPath, renderSingleExeGuideZh(params), "utf-8");
 }
 
 function writeSingleExeMetadata(runtimeManifest) {
@@ -195,6 +211,7 @@ function writeSingleExeMetadata(runtimeManifest) {
     },
     documentation: {
       readme: path.basename(readmePath),
+      readmeZh: path.basename(readmeZhPath),
       envExample: path.basename(envExamplePath),
     },
     embeddedRuntime: {
@@ -216,8 +233,11 @@ async function main() {
       `Portable artifact is missing or incomplete at ${portableRoot}. Run 'corepack pnpm build:portable${mode === "full" ? ":full" : ""}' first.`,
     );
   }
+  assertPortableVersionMatchesWorkspace();
 
   const archivedRoot = archiveExistingDirectory(singleExeRoot);
+  removePath(buildRoot);
+  ensureDir(singleExeRoot);
   ensureDir(buildRoot);
 
   try {

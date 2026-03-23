@@ -31,11 +31,26 @@ export type CronSchedule = CronScheduleAt | CronScheduleEvery;
 // ── Payload ──
 
 /** 系统事件：注入文本到 Agent 主会话 */
-export type CronPayload = {
+export type CronSystemEventPayload = {
     kind: "systemEvent";
     /** 发送给 Agent 的提示文本 */
     text: string;
 };
+
+/** Goal 审批扫描：直接驱动 approval workflow scan，而不是走自然语言 prompt */
+export type CronGoalApprovalScanPayload = {
+    kind: "goalApprovalScan";
+    /** 单个 goal 扫描目标 */
+    goalId?: string;
+    /** 多个 goal 扫描目标 */
+    goalIds?: string[];
+    /** 是否扫描所有 goal */
+    allGoals?: boolean;
+    /** 是否自动升级超时 stage；默认由执行器决定 */
+    autoEscalate?: boolean;
+};
+
+export type CronPayload = CronSystemEventPayload | CronGoalApprovalScanPayload;
 
 // ── Job 状态 ──
 

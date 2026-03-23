@@ -75,6 +75,45 @@ import {
   methodReadTool,
   methodCreateTool,
   methodSearchTool,
+  goalInitTool,
+  goalGetTool,
+  goalListTool,
+  goalResumeTool,
+  goalPauseTool,
+  goalHandoffGenerateTool,
+  goalRetrospectGenerateTool,
+  goalExperienceSuggestTool,
+  goalMethodCandidatesGenerateTool,
+  goalSkillCandidatesGenerateTool,
+  goalFlowPatternsGenerateTool,
+  goalCrossGoalFlowPatternsTool,
+  goalReviewGovernanceSummaryTool,
+  goalApprovalScanTool,
+  goalSuggestionReviewListTool,
+  goalSuggestionReviewWorkflowSetTool,
+  goalSuggestionReviewDecideTool,
+  goalSuggestionReviewEscalateTool,
+  goalSuggestionReviewScanTool,
+  goalSuggestionPublishTool,
+  goalCheckpointListTool,
+  goalCheckpointRequestTool,
+  goalCheckpointApproveTool,
+  goalCheckpointRejectTool,
+  goalCheckpointExpireTool,
+  goalCheckpointReopenTool,
+  goalCheckpointEscalateTool,
+  goalCapabilityPlanTool,
+  goalOrchestrateTool,
+  taskGraphReadTool,
+  taskGraphCreateTool,
+  taskGraphUpdateTool,
+  taskGraphClaimTool,
+  taskGraphPendingReviewTool,
+  taskGraphValidatingTool,
+  taskGraphCompleteTool,
+  taskGraphBlockTool,
+  taskGraphFailTool,
+  taskGraphSkipTool,
   logReadTool,
   logSearchTool,
   createCronTool,
@@ -118,14 +157,62 @@ import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemo
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
 import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type TokenUsageUploadConfig } from "@belldandy/protocol";
+import { GoalManager } from "../goals/manager.js";
+import { buildGoalCapabilityPlan } from "../goals/capability-planner.js";
+import { parseGoalSessionKey } from "../goals/session.js";
+import { buildContextInjectionPrelude } from "../context-injection.js";
+import { truncateToolTranscriptContent } from "../tool-transcript.js";
+
+const GOAL_TOOL_NAMES = new Set([
+  "goal_init",
+  "goal_get",
+  "goal_list",
+  "goal_resume",
+  "goal_pause",
+  "goal_handoff_generate",
+  "goal_retrospect_generate",
+  "goal_experience_suggest",
+  "goal_method_candidates_generate",
+  "goal_skill_candidates_generate",
+  "goal_flow_patterns_generate",
+  "goal_cross_goal_flow_patterns",
+  "goal_review_governance_summary",
+  "goal_approval_scan",
+  "goal_suggestion_review_list",
+  "goal_suggestion_review_workflow_set",
+  "goal_suggestion_review_decide",
+  "goal_suggestion_review_escalate",
+  "goal_suggestion_review_scan",
+  "goal_suggestion_publish",
+  "goal_checkpoint_list",
+  "goal_checkpoint_request",
+  "goal_checkpoint_approve",
+  "goal_checkpoint_reject",
+  "goal_checkpoint_expire",
+  "goal_checkpoint_reopen",
+  "goal_checkpoint_escalate",
+  "goal_capability_plan",
+  "goal_orchestrate",
+  "task_graph_read",
+  "task_graph_create",
+  "task_graph_update",
+  "task_graph_claim",
+  "task_graph_pending_review",
+  "task_graph_validating",
+  "task_graph_complete",
+  "task_graph_block",
+  "task_graph_fail",
+  "task_graph_skip",
+]);
 
 import { startGatewayServer } from "../server.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
-import { CronStore, startCronScheduler, type CronSchedulerHandle } from "../cron/index.js";
+import { CronStore, startCronScheduler, type CronGoalApprovalScanPayload, type CronSchedulerHandle } from "../cron/index.js";
 import {
   initMCPIntegration,
   shutdownMCPIntegration,
   registerMCPToolsToExecutor,
+  getMCPDiagnostics,
   printMCPStatus,
 } from "../mcp/index.js";
 import { createLoggerFromEnv } from "../logger/index.js";
@@ -615,6 +702,45 @@ const toolsToRegister = toolsEnabled
     timerTool, // 计时器工具（始终加载）
     tokenCounterStartTool, // 任务级 token 计数器（始终加载）
     tokenCounterStopTool,
+    goalInitTool,
+    goalGetTool,
+    goalListTool,
+    goalResumeTool,
+    goalPauseTool,
+    goalHandoffGenerateTool,
+    goalRetrospectGenerateTool,
+    goalExperienceSuggestTool,
+    goalMethodCandidatesGenerateTool,
+    goalSkillCandidatesGenerateTool,
+    goalFlowPatternsGenerateTool,
+    goalCrossGoalFlowPatternsTool,
+    goalReviewGovernanceSummaryTool,
+    goalApprovalScanTool,
+    goalSuggestionReviewListTool,
+    goalSuggestionReviewWorkflowSetTool,
+    goalSuggestionReviewDecideTool,
+    goalSuggestionReviewEscalateTool,
+    goalSuggestionReviewScanTool,
+    goalSuggestionPublishTool,
+    goalCheckpointListTool,
+    goalCheckpointRequestTool,
+    goalCheckpointApproveTool,
+    goalCheckpointRejectTool,
+    goalCheckpointExpireTool,
+    goalCheckpointReopenTool,
+    goalCheckpointEscalateTool,
+    goalCapabilityPlanTool,
+    goalOrchestrateTool,
+    taskGraphReadTool,
+    taskGraphCreateTool,
+    taskGraphUpdateTool,
+    taskGraphClaimTool,
+    taskGraphPendingReviewTool,
+    taskGraphValidatingTool,
+    taskGraphCompleteTool,
+    taskGraphBlockTool,
+    taskGraphFailTool,
+    taskGraphSkipTool,
 
     // ── browser 组 ──
     ...(hasToolGroup("browser") ? [
@@ -682,6 +808,12 @@ const toolExecutor = new ToolExecutor({
     }
 
     return whitelist.includes(toolName);
+  },
+  isToolAllowedInConversation: (toolName, conversationId) => {
+    if (!GOAL_TOOL_NAMES.has(toolName)) {
+      return true;
+    }
+    return Boolean(parseGoalSessionKey(conversationId));
   },
   broadcast: (event, payload) => {
     serverBroadcast?.({ type: "event", event, payload });
@@ -878,6 +1010,7 @@ const autoRecallEnabled = readEnv("BELLDANDY_AUTO_RECALL_ENABLED") === "true";
 const autoRecallLimit = Math.max(1, parseInt(readEnv("BELLDANDY_AUTO_RECALL_LIMIT") || "3", 10) || 3);
 const autoRecallMinScoreRaw = Number(readEnv("BELLDANDY_AUTO_RECALL_MIN_SCORE") || "0.3");
 const autoRecallMinScore = Number.isFinite(autoRecallMinScoreRaw) ? autoRecallMinScoreRaw : 0.3;
+const toolResultTranscriptCharLimit = Math.max(0, parseInt(readEnv("BELLDANDY_TOOL_RESULT_TRANSCRIPT_CHAR_LIMIT") || "12000", 10) || 12000);
 const taskDedupGuardEnabled = readEnv("BELLDANDY_TASK_DEDUP_GUARD_ENABLED") !== "false";
 const taskDedupWindowMinutes = Math.max(1, parseInt(readEnv("BELLDANDY_TASK_DEDUP_WINDOW_MINUTES") || "20", 10) || 20);
 const taskDedupGlobalMode = parseToolDedupGlobalMode(readEnv("BELLDANDY_TASK_DEDUP_MODE"));
@@ -891,92 +1024,26 @@ if (contextInjectionEnabled || autoRecallEnabled) {
     handler: async (event, _ctx) => {
       const mm = getGlobalMemoryManager();
       if (!mm) return undefined;
-      const implicitFilter = { agentId: _ctx.agentId ?? null };
-
-      const blocks: string[] = [];
-
-      if (contextInjectionEnabled) {
-        try {
-          const recent = mm.getContextInjectionMemories({
-            limit: contextInjectionLimit,
-            agentId: _ctx.agentId ?? null,
-            includeSession: contextInjectionIncludeSession,
-            allowedCategories: contextInjectionAllowedCategories,
-          });
-          if (recent.length > 0) {
-            const lines = recent.map((r) => {
-              const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
-              const label = [r.importance, r.category ?? r.memoryType ?? "memory", src].join("|");
-              const body = (r.summary ?? r.snippet).trim();
-              return `- [${label}] ${body}`;
-            });
-            blocks.push(
-              `<recent-memory hint="以下是按重要性筛选后的近期记忆。优先把它们当作背景约束或已知事实，不要把它们直接当作待重新执行的任务。">\n${lines.join("\n")}\n</recent-memory>`,
-            );
-          }
-
-          if (contextInjectionTaskLimit > 0) {
-            const recentTasks = mm.getRecentTaskSummaries(contextInjectionTaskLimit, {
-              agentId: _ctx.agentId,
-            });
-            if (recentTasks.length > 0) {
-              const taskLines = recentTasks.map((task) => {
-                const title = task.title ?? task.objective ?? task.summary ?? task.taskId;
-                const tools = task.toolNames.slice(0, 3).join(", ");
-                const artifacts = task.artifactPaths.slice(0, 2).join(", ");
-                const extras = [
-                  tools ? `tools=${tools}` : "",
-                  artifacts ? `artifacts=${artifacts}` : "",
-                ].filter(Boolean).join("; ");
-                return extras
-                  ? `- [${task.status}] ${title} (${extras})`
-                  : `- [${task.status}] ${title}`;
-              });
-              blocks.push(
-                `<recent-tasks hint="以下是最近已完成或部分完成的任务摘要。若当前目标与其相同，优先复用结果，不要重复执行已成功完成的工具动作，除非用户明确要求重试。">\n${taskLines.join("\n")}\n</recent-tasks>`,
-              );
-            }
-          }
-        } catch (err) {
-          logger.warn("context-injection", `Failed to fetch recent memory: ${err instanceof Error ? err.message : String(err)}`);
+      try {
+        return await buildContextInjectionPrelude(mm, event, _ctx, {
+          contextInjectionEnabled,
+          contextInjectionLimit,
+          contextInjectionIncludeSession,
+          contextInjectionTaskLimit,
+          contextInjectionAllowedCategories,
+          autoRecallEnabled,
+          autoRecallLimit,
+          autoRecallMinScore,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.toLocaleLowerCase().includes("semantic memory")) {
+          logger.warn("auto-recall", `Failed to fetch semantic memory: ${message}`);
+        } else {
+          logger.warn("context-injection", `Failed to build context injection prelude: ${message}`);
         }
+        return undefined;
       }
-
-      if (autoRecallEnabled) {
-        try {
-          const queryText = event.userInput?.trim() || event.prompt?.trim();
-          if (queryText) {
-            const results = await Promise.race([
-              mm.search(queryText, {
-                limit: autoRecallLimit,
-                filter: implicitFilter,
-                retrievalMode: "implicit",
-              }),
-              new Promise<never[]>((resolve) => setTimeout(() => resolve([]), 2000)),
-            ]);
-
-            const filtered = results.filter((r) => r.score >= autoRecallMinScore);
-            if (filtered.length > 0) {
-              const lines = filtered.map((r) => {
-                const src = r.sourcePath.split(/[/\\]/).pop() ?? r.sourcePath;
-                const snippet = r.snippet.length > 200
-                  ? `${r.snippet.slice(0, 200)}...`
-                  : r.snippet;
-                return `- [${src}, score=${r.score.toFixed(2)}] ${snippet}`;
-              });
-              blocks.push(
-                `<auto-recall hint="以下是与用户当前输入语义相关的历史记忆，仅供参考。无需再次调用 memory_search 除非需要更深入搜索。">\n${lines.join("\n")}\n</auto-recall>`,
-              );
-            }
-          }
-        } catch (err) {
-          logger.warn("auto-recall", `Failed to fetch semantic memory: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-      return blocks.length > 0
-        ? { prependContext: blocks.join("\n\n") }
-        : undefined;
     },
   });
   if (contextInjectionEnabled) {
@@ -986,6 +1053,29 @@ if (contextInjectionEnabled || autoRecallEnabled) {
     );
   }
   if (autoRecallEnabled) logger.info("auto-recall", `enabled (limit=${autoRecallLimit}, minScore=${autoRecallMinScore})`);
+}
+
+if (toolResultTranscriptCharLimit > 0) {
+  hookRegistry.register({
+    source: "tool-transcript",
+    hookName: "tool_result_persist",
+    priority: 100,
+    handler: (event) => {
+      const content = typeof event.message.content === "string"
+        ? event.message.content
+        : String(event.message.content ?? "");
+      if (!content || content.length <= toolResultTranscriptCharLimit) {
+        return undefined;
+      }
+      return {
+        message: {
+          ...event.message,
+          content: truncateToolTranscriptContent(content, toolResultTranscriptCharLimit),
+        },
+      };
+    },
+  });
+  logger.info("tool-transcript", `enabled (limit=${toolResultTranscriptCharLimit})`);
 }
 
 // 7.6 Bridge legacy plugin hooks → HookRegistry
@@ -1607,6 +1697,32 @@ function detectTaskSource(sessionKey: string, meta?: Record<string, unknown>): "
   return "chat";
 }
 
+function extractGoalTaskMetadata(
+  sessionKey: string,
+  meta?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const parsed = parseGoalSessionKey(sessionKey);
+  const goalId = typeof meta?.goalId === "string" && meta.goalId.trim()
+    ? meta.goalId.trim()
+    : parsed?.goalId;
+  const nodeId = typeof meta?.nodeId === "string" && meta.nodeId.trim()
+    ? meta.nodeId.trim()
+    : parsed?.kind === "goal_node" ? parsed.nodeId : undefined;
+  const runId = typeof meta?.runId === "string" && meta.runId.trim()
+    ? meta.runId.trim()
+    : parsed?.kind === "goal_node" ? parsed.runId : undefined;
+  const goalSession = typeof meta?.goalSession === "boolean"
+    ? meta.goalSession
+    : Boolean(parsed?.goalSession);
+
+  const result: Record<string, unknown> = {};
+  if (goalId) result.goalId = goalId;
+  if (nodeId) result.nodeId = nodeId;
+  if (runId) result.runId = runId;
+  if (goalSession) result.goalSession = true;
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function parseContextInjectionCategories(raw: string | undefined): MemoryCategory[] {
   const allowed = new Set<MemoryCategory>(["preference", "fact", "decision", "entity", "experience", "other"]);
   const values = String(raw ?? "")
@@ -1679,6 +1795,7 @@ if (taskMemoryEnabled) {
         parentConversationId: typeof meta?._parentConversationId === "string"
           ? meta._parentConversationId
           : undefined,
+        metadata: extractGoalTaskMetadata(sessionKey, meta),
       });
     },
   });
@@ -1908,6 +2025,214 @@ const webhookConfig = loadWebhookConfig(webhookConfigPath, {
 
 const webhookIdempotency = new IdempotencyManager(webhookIdempotencyWindowMs);
 
+function normalizeCapabilityHint(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function buildCapabilityQueryHints(goal: { title: string; objective?: string }, node: { title: string; description?: string; phase?: string }, extraHints?: string[]): string[] {
+  const values = [
+    node.title,
+    node.phase,
+    goal.title,
+    goal.objective,
+    node.description,
+    ...(extraHints ?? []),
+  ];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (!trimmed) continue;
+    const key = normalizeCapabilityHint(trimmed);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result.slice(0, 8);
+}
+
+function countCapabilityHits(source: string, hints: string[]): number {
+  const lower = source.toLowerCase();
+  return hints.reduce((score, hint) => {
+    const normalized = normalizeCapabilityHint(hint);
+    if (!normalized) return score;
+    if (lower.includes(normalized)) return score + 10;
+    const parts = normalized.split(/\s+/).filter(Boolean);
+    const matchedParts = parts.filter((part) => lower.includes(part)).length;
+    return score + matchedParts * 3;
+  }, 0);
+}
+
+function searchCapabilityMethods(hints: string[]) {
+  if (!fs.existsSync(methodsDir)) return [];
+  const mdFiles = fs.readdirSync(methodsDir).filter((file) => file.endsWith(".md"));
+  const matches: Array<{ file: string; title?: string; score: number; reason: string }> = [];
+  for (const file of mdFiles) {
+      const fullPath = path.join(methodsDir, file);
+      const content = fs.readFileSync(fullPath, "utf-8");
+      const score = countCapabilityHits(`${file}\n${content}`, hints);
+      if (score <= 0) continue;
+      const titleMatch = /^#\s+(.+)$/m.exec(content);
+      matches.push({
+        file,
+        title: titleMatch?.[1]?.trim(),
+        score,
+        reason: `匹配 query hints: ${hints.slice(0, 3).join(" / ")}`,
+      });
+  }
+  return matches.sort((left, right) => right.score - left.score).slice(0, 4);
+}
+
+function searchCapabilitySkills(hints: string[]) {
+  const scoreByName = new Map<string, number>();
+  const skillByName = new Map<string, NonNullable<ReturnType<typeof skillRegistry.getSkill>>>();
+  for (const hint of hints) {
+    for (const skill of skillRegistry.searchSkills(hint)) {
+      if (toolsConfigManager.isSkillDisabled(skill.name)) continue;
+      scoreByName.set(skill.name, (scoreByName.get(skill.name) ?? 0) + 10);
+      if (!skillByName.has(skill.name)) {
+        const resolved = skillRegistry.getSkill(skill.name);
+        if (resolved) {
+          skillByName.set(skill.name, resolved);
+        }
+      }
+    }
+  }
+  const matches: Array<{ name: string; description?: string; priority?: string; source?: string; score: number; reason: string }> = [];
+  for (const [name, score] of scoreByName.entries()) {
+    const skill = skillByName.get(name);
+    if (!skill) continue;
+    matches.push({
+        name,
+        description: skill.description,
+        priority: skill.priority,
+        source: skill.source.type,
+        score,
+        reason: `匹配 query hints: ${hints.slice(0, 3).join(" / ")}`,
+      });
+  }
+  return matches.sort((left, right) => right.score - left.score).slice(0, 5);
+}
+
+function searchCapabilityMcpServers(hints: string[]) {
+  const diag = getMCPDiagnostics();
+  if (!diag) return [];
+  const joinedHints = hints.join(" ").toLowerCase();
+  const prefersExternal = /(网页|browser|api|文档|research|调研|外部|抓取|搜索|file|filesystem|database)/i.test(joinedHints);
+  return diag.servers
+    .filter((server) => server.status === "connected")
+    .filter((server) => !toolsConfigManager.getConfig().disabled.mcp_servers.includes(server.id))
+    .map((server) => {
+      const score = prefersExternal
+        ? countCapabilityHits(`${server.id} ${server.name}`, hints) + 5
+        : countCapabilityHits(`${server.id} ${server.name}`, hints);
+      return {
+        serverId: server.id,
+        status: server.status === "connected" ? "connected" as const : "unknown" as const,
+        toolCount: server.toolCount,
+        reason: prefersExternal
+          ? "节点含外部上下文/远程能力信号，建议优先检查 MCP 入口。"
+          : "当前可用的 MCP 能力候选。",
+        score,
+      };
+    })
+    .filter((item) => prefersExternal || item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 4)
+    .map(({ score, ...item }) => item);
+}
+
+async function generateCapabilityPlanForNode(
+  goalId: string,
+  nodeId: string,
+  input: {
+    runId?: string;
+    objective?: string;
+    queryHints?: string[];
+    forceMode?: "single_agent" | "multi_agent";
+  } = {},
+) {
+  const goal = await goalManager.getGoal(goalId);
+  if (!goal) {
+    throw new Error(`Goal not found: ${goalId}`);
+  }
+  const graph = await goalManager.readTaskGraph(goalId);
+  const node = graph.nodes.find((item) => item.id === nodeId);
+  if (!node) {
+    throw new Error(`Task node not found: ${nodeId}`);
+  }
+
+  const queryHints = buildCapabilityQueryHints(goal, node, input.queryHints);
+  const methods = searchCapabilityMethods(queryHints);
+  const skills = searchCapabilitySkills(queryHints);
+  const mcpServers = searchCapabilityMcpServers(queryHints);
+  const availableAgentIds = agentRegistry?.list().map((profile) => profile.id) ?? ["default"];
+  const planInput = buildGoalCapabilityPlan({
+    goalTitle: goal.title,
+    goalObjective: input.objective?.trim() || goal.objective,
+    nodeId: node.id,
+    nodeTitle: node.title,
+    nodeDescription: node.description,
+    nodePhase: node.phase,
+    nodeOwner: node.owner,
+    queryHints,
+    methods,
+    skills,
+    mcpServers,
+    availableAgentIds,
+    forceMode: input.forceMode,
+    runId: input.runId ?? node.lastRunId,
+  });
+  const plan = await goalManager.saveCapabilityPlan(goalId, nodeId, planInput);
+  return { goal, node, plan };
+}
+
+const goalManager = new GoalManager(stateDir);
+
+toolExecutor.setGoalCapabilities({
+  createGoal: (input) => goalManager.createGoal(input),
+  listGoals: () => goalManager.listGoals(),
+  getGoal: (goalId) => goalManager.getGoal(goalId),
+  resumeGoal: (goalId, nodeId) => goalManager.resumeGoal(goalId, nodeId),
+  pauseGoal: (goalId) => goalManager.pauseGoal(goalId),
+  generateHandoff: (goalId) => goalManager.generateHandoff(goalId),
+  generateRetrospective: (goalId) => goalManager.generateRetrospective(goalId),
+  generateExperienceSuggestions: (goalId) => goalManager.generateExperienceSuggestions(goalId),
+  generateMethodCandidates: (goalId) => goalManager.generateMethodCandidates(goalId),
+  generateSkillCandidates: (goalId) => goalManager.generateSkillCandidates(goalId),
+  generateFlowPatterns: (goalId) => goalManager.generateFlowPatterns(goalId),
+  generateCrossGoalFlowPatterns: () => goalManager.generateCrossGoalFlowPatterns(),
+  getReviewGovernanceSummary: (goalId) => goalManager.getReviewGovernanceSummary(goalId),
+  scanApprovalWorkflows: (goalId, input) => goalManager.scanApprovalWorkflows(goalId, input),
+  listSuggestionReviews: (goalId) => goalManager.listSuggestionReviews(goalId),
+  configureSuggestionReviewWorkflow: (goalId, input) => goalManager.configureSuggestionReviewWorkflow(goalId, input),
+  decideSuggestionReview: (goalId, input) => goalManager.decideSuggestionReview(goalId, input),
+  escalateSuggestionReview: (goalId, input) => goalManager.escalateSuggestionReview(goalId, input),
+  scanSuggestionReviewWorkflows: (goalId, input) => goalManager.scanSuggestionReviewWorkflows(goalId, input),
+  publishSuggestion: (goalId, input) => goalManager.publishSuggestion(goalId, input),
+  listCheckpoints: (goalId) => goalManager.listCheckpoints(goalId),
+  requestCheckpoint: (goalId, nodeId, input) => goalManager.requestCheckpoint(goalId, nodeId, input),
+  approveCheckpoint: (goalId, nodeId, input) => goalManager.approveCheckpoint(goalId, nodeId, input),
+  rejectCheckpoint: (goalId, nodeId, input) => goalManager.rejectCheckpoint(goalId, nodeId, input),
+  expireCheckpoint: (goalId, nodeId, input) => goalManager.expireCheckpoint(goalId, nodeId, input),
+  reopenCheckpoint: (goalId, nodeId, input) => goalManager.reopenCheckpoint(goalId, nodeId, input),
+  escalateCheckpoint: (goalId, nodeId, input) => goalManager.escalateCheckpoint(goalId, nodeId, input),
+  listCapabilityPlans: (goalId) => goalManager.listCapabilityPlans(goalId),
+  getCapabilityPlan: (goalId, nodeId) => goalManager.getCapabilityPlan(goalId, nodeId),
+  saveCapabilityPlan: (goalId, nodeId, input) => goalManager.saveCapabilityPlan(goalId, nodeId, input),
+  generateCapabilityPlan: (goalId, nodeId, input) => generateCapabilityPlanForNode(goalId, nodeId, input),
+  readTaskGraph: (goalId) => goalManager.readTaskGraph(goalId),
+  createTaskNode: (goalId, input) => goalManager.createTaskNode(goalId, input),
+  updateTaskNode: (goalId, nodeId, input) => goalManager.updateTaskNode(goalId, nodeId, input),
+  claimTaskNode: (goalId, nodeId, input) => goalManager.claimTaskNode(goalId, nodeId, input),
+  markTaskNodePendingReview: (goalId, nodeId, input) => goalManager.markTaskNodePendingReview(goalId, nodeId, input),
+  markTaskNodeValidating: (goalId, nodeId, input) => goalManager.markTaskNodeValidating(goalId, nodeId, input),
+  completeTaskNode: (goalId, nodeId, input) => goalManager.completeTaskNode(goalId, nodeId, input),
+  blockTaskNode: (goalId, nodeId, input) => goalManager.blockTaskNode(goalId, nodeId, input),
+  failTaskNode: (goalId, nodeId, input) => goalManager.failTaskNode(goalId, nodeId, input),
+  skipTaskNode: (goalId, nodeId, input) => goalManager.skipTaskNode(goalId, nodeId, input),
+});
+
 if (webhookConfig.webhooks.length > 0) {
   logger.info("webhook", `Loaded ${webhookConfig.webhooks.length} webhook(s) from ${webhookConfigPath}`);
 } else {
@@ -1936,6 +2261,7 @@ const server = await startGatewayServer({
   getAgentToolControlConfirmPassword: () => agentToolControlConfirmPassword,
   pluginRegistry,
   skillRegistry,
+  goalManager,
   ttsEnabled: isTtsEnabledFn,
   ttsSynthesize: async (text: string) => {
     const result = await synthesizeSpeech({ text, stateDir });
@@ -1955,6 +2281,14 @@ const server = await startGatewayServer({
   isConfigured: () => agentProvider === "openai" && !!openaiApiKey,
   webhookConfig,
   webhookIdempotency,
+});
+
+goalManager.setEventSink((payload) => {
+  server.broadcast({
+    type: "event",
+    event: "goal.update",
+    payload,
+  });
 });
 
 // 绑定 broadcast 给 service_restart 工具使用
@@ -2304,66 +2638,137 @@ if (heartbeatEnabled && createAgent) {
 }
 
 // 11. Start Cron Scheduler (if configured)
-if (cronEnabled && createAgent) {
-  try {
-    const cronAgent = createAgent();
-    const activeHours = parseActiveHours(heartbeatActiveHoursRaw); // 复用 Heartbeat 活跃时段
+if (cronEnabled) {
+  const activeHours = parseActiveHours(heartbeatActiveHoursRaw); // 复用 Heartbeat 活跃时段
 
-    // 复用 Heartbeat 的 sendMessage / deliverToUser 模式
-    const cronSendMessage = async (prompt: string): Promise<string> => {
-      let result = "";
-      for await (const item of cronAgent.run({
-        conversationId: `cron-${Date.now()}`,
-        text: prompt,
-      })) {
-        if (item.type === "delta") {
-          result += item.delta;
-        } else if (item.type === "final") {
-          result = item.text;
+  let cronSendMessage: ((prompt: string) => Promise<string>) | undefined;
+  if (createAgent) {
+    try {
+      const cronAgent = createAgent();
+      cronSendMessage = async (prompt: string): Promise<string> => {
+        let result = "";
+        for await (const item of cronAgent.run({
+          conversationId: `cron-${Date.now()}`,
+          text: prompt,
+        })) {
+          if (item.type === "delta") {
+            result += item.delta;
+          } else if (item.type === "final") {
+            result = item.text;
+          }
         }
-      }
-      return result;
-    };
+        return result;
+      };
+    } catch (e) {
+      logger.warn("cron", "Agent creation failed; systemEvent cron jobs will be disabled, but structured approval scan jobs remain available.");
+    }
+  } else {
+    logger.info("cron", "No Agent configured; systemEvent cron jobs are disabled, but structured approval scan jobs remain available.");
+  }
 
-    const cronDeliverToUser = async (message: string): Promise<void> => {
-      // 1. Broadcast 到 WebChat
-      server.broadcast({
-        type: "event",
-        event: "chat.final",
-        payload: {
-          conversationId: "cron-broadcast",
-          text: message,
-        },
-      });
-
-      // 2. 推送到飞书（如果配置了）
-      if (feishuChannel) {
-        logger.info("cron", "Delivering to user via Feishu...");
-        const sent = await feishuChannel.sendProactiveMessage(message);
-        if (!sent) {
-          logger.warn("cron", "Failed to deliver: No active Feishu chat session.");
-        }
-      } else {
-        logger.info("cron", "Broadcasted to local Web clients (Feishu disabled).");
-      }
-    };
-
-    cronSchedulerHandle = startCronScheduler({
-      store: cronStore,
-      sendMessage: cronSendMessage,
-      deliverToUser: cronDeliverToUser,
-      activeHours,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      isBusy,
-      log: (msg) => logger.info("cron", msg),
+  const cronDeliverToUser = async (message: string): Promise<void> => {
+    // 1. Broadcast 到 WebChat
+    server.broadcast({
+      type: "event",
+      event: "chat.final",
+      payload: {
+        conversationId: "cron-broadcast",
+        text: message,
+      },
     });
 
-    logger.info("cron", `scheduler enabled (activeHours=${heartbeatActiveHoursRaw ?? "all"})`);
-  } catch (e) {
-    logger.warn("cron", "Agent creation failed, skipping Cron scheduler startup.");
-  }
-} else if (cronEnabled && !createAgent) {
-  logger.warn("cron", "enabled but no Agent configured, skipping.");
+    // 2. 推送到飞书（如果配置了）
+    if (feishuChannel) {
+      logger.info("cron", "Delivering to user via Feishu...");
+      const sent = await feishuChannel.sendProactiveMessage(message);
+      if (!sent) {
+        logger.warn("cron", "Failed to deliver: No active Feishu chat session.");
+      }
+    } else {
+      logger.info("cron", "Broadcasted to local Web clients (Feishu disabled).");
+    }
+  };
+
+  const runGoalApprovalScan = async (payload: CronGoalApprovalScanPayload): Promise<{ summary: string; notifyMessage?: string }> => {
+    const requestedGoalIds = [
+      payload.goalId?.trim(),
+      ...(payload.goalIds ?? []).map((goalId) => goalId.trim()).filter(Boolean),
+    ].filter(Boolean) as string[];
+    const listedGoals = payload.allGoals ? await goalManager.listGoals() : [];
+    const goalIds = Array.from(new Set([
+      ...requestedGoalIds,
+      ...listedGoals.map((goal) => goal.id),
+    ]));
+    if (goalIds.length === 0) {
+      return {
+        summary: "approval_scan goals=0 ok=0 failed=0 review_overdue=0 review_escalated=0 checkpoint_overdue=0 checkpoint_escalated=0 notifications=0",
+      };
+    }
+
+    let reviewOverdue = 0;
+    let reviewEscalated = 0;
+    let checkpointOverdue = 0;
+    let checkpointEscalated = 0;
+    let notifications = 0;
+    const failures: Array<{ goalId: string; error: string }> = [];
+
+    for (const goalId of goalIds) {
+      try {
+        const result = await goalManager.scanApprovalWorkflows(goalId, {
+          autoEscalate: payload.autoEscalate ?? true,
+        });
+        reviewOverdue += result.reviewResult.overdueCount;
+        reviewEscalated += result.reviewResult.escalatedCount;
+        checkpointOverdue += result.checkpointItems.filter((item) => item.overdue).length;
+        checkpointEscalated += result.checkpointItems.filter((item) => item.escalated).length;
+        notifications += result.notifications.length;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push({ goalId, error: message });
+        logger.warn("cron", `Approval scan failed for goal "${goalId}": ${message}`);
+      }
+    }
+
+    const summary = [
+      `approval_scan goals=${goalIds.length}`,
+      `ok=${goalIds.length - failures.length}`,
+      `failed=${failures.length}`,
+      `review_overdue=${reviewOverdue}`,
+      `review_escalated=${reviewEscalated}`,
+      `checkpoint_overdue=${checkpointOverdue}`,
+      `checkpoint_escalated=${checkpointEscalated}`,
+      `notifications=${notifications}`,
+    ].join(" ");
+    const shouldNotify = failures.length > 0
+      || reviewOverdue > 0
+      || reviewEscalated > 0
+      || checkpointOverdue > 0
+      || checkpointEscalated > 0
+      || notifications > 0;
+    const notifyMessage = shouldNotify
+      ? [
+        `审批扫描完成：${summary}`,
+        failures.length > 0 ? `失败目标：${failures.map((item) => item.goalId).join(", ")}` : "",
+      ].filter(Boolean).join("\n")
+      : undefined;
+    return { summary, notifyMessage };
+  };
+
+  cronSchedulerHandle = startCronScheduler({
+    store: cronStore,
+    sendMessage: cronSendMessage,
+    runGoalApprovalScan,
+    deliverToUser: cronDeliverToUser,
+    activeHours,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    isBusy,
+    log: (msg) => logger.info("cron", msg),
+  });
+
+  logger.info(
+    "cron",
+    `scheduler enabled (activeHours=${heartbeatActiveHoursRaw ?? "all"}, systemEvent=${cronSendMessage ? "enabled" : "disabled"}, structured=goalApprovalScan)`
+  );
 } else {
   logger.info("cron", "scheduler disabled (set BELLDANDY_CRON_ENABLED=true to enable)");
 }

@@ -130,7 +130,7 @@
     - [使用场景](#使用场景)
       - [场景1：本地WebChat（无UUID）](#场景1本地webchat无uuid)
       - [场景2：本地WebChat（有UUID）](#场景2本地webchat有uuid)
-      - [场景3：office.goddess.ai社区](#场景3officegoddessai社区)
+      - [场景3：官网社区](#场景3官网社区)
     - [与SOUL.md的集成](#与soulmd的集成)
     - [安全特性](#安全特性)
     - [价值](#价值-2)
@@ -219,7 +219,7 @@
         - 迁移范围：仅涉及 `store.ts` 和 `sqlite-vec.ts` 两个文件，API 高度兼容，改动量约 10 行。
     - **智能索引**：
         - `Chunker`：基于 Token 估算的智能文本分块。
-        - `MemoryIndexer`：增量式文件索引，自动扫描 `~/.belldandy/memory/` 目录，支持 `.md`、`.txt`、`.jsonl`（会话历史）格式。
+        - `MemoryIndexer`：增量式文件索引，自动扫描 `~/.star_sanctuary/memory/` 目录，支持 `.md`、`.txt`、`.jsonl`（会话历史）格式。
     - **物理分层存储**：
         - **数据库层**：SQLite 中 `chunks` 表新增 `memory_type` 字段 (`core` | `daily` | `session` | `other`)，实现物理隔离与差异化检索。
         - **文件映射**：
@@ -286,7 +286,7 @@
 
 - **目标**：赋予 Agent 独特、连续且可配置的个性，使其不仅仅是一个问答机器。
 - **实现内容**：
-    - **Workspace 引导体系**：系统启动时自动加载 `~/.belldandy/` 下的定义文件
+    - **Workspace 引导体系**：系统启动时自动加载 `~/.star_sanctuary/` 下的定义文件
     - **动态注入**：Gateway 在每一轮对话中都会将这些设定动态组合进 System Prompt
 - **价值**：提供了高度的可玩性与定制化空间，用户可以像写小说一样塑造自己专属 AI 的性格。
 
@@ -383,7 +383,7 @@
         - 批量检查时 bin 结果缓存，避免重复 I/O。
     - **SkillRegistry（三来源注册表）**：
         - **Bundled skills**：随项目发布的内置技能（`packages/belldandy-skills/src/bundled-skills/`）
-        - **User skills**：用户自定义技能（`~/.belldandy/skills/*/SKILL.md`）
+        - **User skills**：用户自定义技能（`~/.star_sanctuary/skills/*/SKILL.md`）
         - **Plugin skills**：插件附带的技能（通过 `PluginRegistry.getPluginSkillDirs()` 获取）
         - 内部用 `source:name` 作为唯一键防冲突，查询按 user > plugin > bundled 优先级覆盖。
     - **两级 Prompt 注入**：
@@ -469,7 +469,7 @@
     - **错误分类**：429/5xx/408/超时 → 触发 failover；400 → 不可重试直接返回。
     - **Cooldown 策略**：rate_limit 冷却 2 分钟，billing (402) 冷却 10 分钟，其他 1 分钟。
     - **Agent 集成**：`OpenAIChatAgent` 和 `ToolEnabledAgent` 均已接入 `FailoverClient.fetchWithFailover`。
-    - **配置加载**：Gateway 启动时自动从 `~/.belldandy/models.json`（或 `BELLDANDY_MODEL_CONFIG_FILE`）加载备用 Profile。
+    - **配置加载**：Gateway 启动时自动从 `~/.star_sanctuary/models.json`（或 `BELLDANDY_MODEL_CONFIG_FILE`）加载备用 Profile。
     - **向后兼容**：未配置 `models.json` 时行为与之前完全一致。
 - **价值**：提升系统的鲁棒性，确保关键时刻 AI 不"掉链子"。多 Key 负载均衡 + 跨 Provider 降级双重保障。
 
@@ -568,7 +568,7 @@
         - `method_read`：读取 SOP 步骤。
         - `method_create`：沉淀新的经验方法。
     - **Prompt Injection**：System Prompt 中注入 "Methodology Protocol"，强制 Agent 在复杂任务前查阅、任务后反思。
-    - **Runtime Support**：自动管理 `~/.belldandy/methods` 目录。
+    - **Runtime Support**：自动管理 `~/.star_sanctuary/methods` 目录。
 - **价值**：解决 Agent "用完即忘"的问题，将隐性知识显性化为可复用的 Markdown 文档。
 
 ### 16. 会话持久化与向量记忆 (Persistence & Vector Memory) Phase 4.6
@@ -578,7 +578,7 @@
 - **实现内容**：
     - **Session Persistence**：
         - `ConversationStore` 升级为文件支持。
-        - 实时将会话写入 `.belldandy/sessions/<conversationId>.jsonl`。
+        - 实时将会话写入 `.star_sanctuary/sessions/<conversationId>.jsonl`。
         - 重启后自动加载最近会话，上下文不丢失。
     - **Session Indexing**：
         - `MemoryIndexer` 支持 `.jsonl` 格式解析。
@@ -662,7 +662,7 @@
         - 支持独立配置摘要专用模型、API 地址和密钥（`BELLDANDY_COMPACTION_MODEL` / `BELLDANDY_COMPACTION_BASE_URL` / `BELLDANDY_COMPACTION_API_KEY`），可使用便宜模型降低成本。
         - 不配置时复用主模型。
     - **CompactionState 持久化**：
-        - 每个会话的压缩状态（滚动摘要、归档摘要、已压缩消息数、时间戳）保存到 `~/.belldandy/sessions/{会话ID}.compaction.json`。
+        - 每个会话的压缩状态（滚动摘要、归档摘要、已压缩消息数、时间戳）保存到 `~/.star_sanctuary/sessions/{会话ID}.compaction.json`。
         - 重启后自动加载，摘要不丢失。
     - **Hook 系统接入**：
         - `before_compaction` / `after_compaction` 钩子已接入实际压缩流程，事件增加 `tier`（rolling/archival）和 `source`（request/loop）字段。
@@ -706,7 +706,7 @@
     - **8 种节点类型**：task（任务，带 todo/doing/done 状态流转）、note（笔记）、method（方法论关联）、knowledge（知识关联）、agent-output（Agent 输出）、screenshot（浏览器快照）、session（会话关联）、group（分组容器）。
     - **dagre.js 自动布局**：CDN 引入 dagre.js（~30KB），支持 TB/LR 方向的有向图自动布局，pinned 节点在布局时固定不动。
     - **贝塞尔曲线连线**：SVG `<path>` 渲染，带箭头标记，支持 solid/dashed/dotted 三种线型。
-    - **持久化**：复用 `workspace.read/write` 协议，画布数据存储为 `~/.belldandy/canvas/<boardId>.json`，包含完整的节点、连线、视口状态。
+    - **持久化**：复用 `workspace.read/write` 协议，画布数据存储为 `~/.star_sanctuary/canvas/<boardId>.json`，包含完整的节点、连线、视口状态。
     - **10 个 Agent 工具**（`packages/belldandy-skills/src/builtin/canvas.ts`）：
         - `canvas_list` / `canvas_create` / `canvas_read`：画布 CRUD
         - `canvas_add_node` / `canvas_update_node` / `canvas_remove_node`：节点操作
@@ -832,7 +832,7 @@
     - **ChannelManager**：渠道管理器，支持统一注册、启停、广播消息。
     - **FeishuChannel 适配**：飞书渠道已实现新接口，完全向后兼容。
     - **QQ 渠道**：已接入 QQ 官方 Bot API（AccessToken 自动换取与刷新）。
-    - **Community 渠道**：已支持 office.goddess.ai 房间接入与多 Agent 协作。
+    - **Community 渠道**：已支持官网社区房间接入与多 Agent 协作。
     - **Discord 渠道**：已完成对接并验证可用（消息收发、主动推送、状态持久化）。
     - **完成情况同步**：本节渠道状态已按 `Star Sanctuary渠道对接说明.md` 同步更新（2026-02-27）。
 - **接口设计**：
@@ -890,7 +890,7 @@
 - **实现内容**：
     - **核心模块** (`packages/belldandy-core/src/cron/`)：
         - `types.ts`：调度类型（`at` 一次性 / `every` 周期重复）、`systemEvent` Payload、Job 状态
-        - `store.ts`：JSON 文件持久化（`~/.belldandy/cron-jobs.json`），原子写入，CRUD
+        - `store.ts`：JSON 文件持久化（`~/.star_sanctuary/cron-jobs.json`），原子写入，CRUD
         - `scheduler.ts`：30s 轮询引擎，活跃时段过滤，忙碌检测，`at` 执行后自动禁用/删除
         - `index.ts`：统一导出
     - **Agent 工具** (`packages/belldandy-skills/src/builtin/cron-tool.ts`)：
@@ -995,7 +995,7 @@
 - **实现内容**：
     - **AgentProfile 类型** (`packages/belldandy-agent/src/agent-profile.ts`)：
         - 描述一个 Agent 的完整配置：`id`、`displayName`、`model`（引用 models.json 中的条目或 `"primary"` 使用环境变量）、`systemPromptOverride`、`workspaceDir`、`toolsEnabled`、`toolWhitelist`、`maxInputTokens`。
-        - `loadAgentProfiles(filePath)` 从 `~/.belldandy/agents.json` 加载配置，文件不存在时静默返回空数组。
+        - `loadAgentProfiles(filePath)` 从 `~/.star_sanctuary/agents.json` 加载配置，文件不存在时静默返回空数组。
         - `resolveModelConfig()` 将 `model` 字段解析为实际的 baseUrl/apiKey/model 配置。
         - `buildDefaultProfile()` 构建隐式的 `"default"` profile（始终存在，映射到环境变量配置）。
     - **AgentRegistry 注册表** (`packages/belldandy-agent/src/agent-registry.ts`)：
@@ -1010,7 +1010,7 @@
     - **Gateway 集成** (`packages/belldandy-core/src/bin/gateway.ts`)：
         - 启动时加载 `agents.json` → 构建 AgentRegistry → 注册所有 Profile。
         - 无 `agents.json` 时行为与改动前完全一致（向后兼容）。
-- **配置格式** (`~/.belldandy/agents.json`)：
+- **配置格式** (`~/.star_sanctuary/agents.json`)：
     ```json
     {
       "agents": [
@@ -1055,7 +1055,7 @@
 - **状态**：✅ 已完成（通过构建 + 97 个测试用例验证）
 - **实现内容**：
     - **Per-Agent Workspace 目录**：
-        - `ensureAgentWorkspace()` 创建 `~/.belldandy/agents/{agentId}/` 和 `facets/` 子目录。
+        - `ensureAgentWorkspace()` 创建 `~/.star_sanctuary/agents/{agentId}/` 和 `facets/` 子目录。
         - `loadAgentWorkspaceFiles()` 按优先级加载：优先从 `agents/{id}/` 读取，缺失则 fallback 到根目录。
         - 可继承文件：SOUL.md、IDENTITY.md、USER.md、AGENTS.md、TOOLS.md、MEMORY.md。
     - **switch_facet 多 Agent 适配**：
@@ -1070,7 +1070,7 @@
         - 启动时为每个非 default Agent 创建 workspace 目录、预加载 workspace 文件、构建独立 system prompt（缓存到 `agentWorkspaceCache`）。
 - **目录结构**：
     ```
-    ~/.belldandy/
+    ~/.star_sanctuary/
     ├── SOUL.md              # default Agent
     ├── IDENTITY.md
     ├── agents/
@@ -1158,7 +1158,7 @@
 - **实现内容**：
     - **新建 `@belldandy/mcp` 包**：完整的 MCP 客户端实现
     - **类型定义 (types.ts)**：配置类型、运行时状态、事件类型等
-    - **配置加载 (config.ts)**：使用 Zod 验证 `~/.belldandy/mcp.json` 配置，支持双格式兼容
+    - **配置加载 (config.ts)**：使用 Zod 验证 `~/.star_sanctuary/mcp.json` 配置，支持双格式兼容
     - **MCP 客户端 (client.ts)**：支持 stdio/SSE 两种传输方式
     - **工具桥接 (tool-bridge.ts)**：MCP 工具 → Star Sanctuary Skills 转换
     - **管理器 (manager.ts)**：多服务器连接管理、工具发现、事件处理
@@ -1235,7 +1235,7 @@
     ```
 - **日志目录**：
     ```
-    ~/.belldandy/
+    ~/.star_sanctuary/
     ├── logs/                       # 日志目录
     │   ├── 2026-02-05.log          # 当天日志
     │   ├── 2026-02-05.1.log        # 当天轮转文件
@@ -1246,7 +1246,7 @@
     | 变量 | 说明 | 默认值 |
     |------|------|--------|
     | `BELLDANDY_LOG_LEVEL` | 最低日志级别 | `debug` |
-    | `BELLDANDY_LOG_DIR` | 日志目录 | `~/.belldandy/logs` |
+    | `BELLDANDY_LOG_DIR` | 日志目录 | `~/.star_sanctuary/logs` |
     | `BELLDANDY_LOG_MAX_SIZE` | 单文件最大大小 | `10MB` |
     | `BELLDANDY_LOG_RETENTION_DAYS` | 日志保留天数 | `7` |
 - **与方法论系统的协同**：
@@ -1781,7 +1781,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 | Slack | ⏳ 待实现 | Channel 接口已就绪 |
 | Discord | ✅ 已实现 | 已完成对接并验证可用（详见 `Star Sanctuary渠道对接说明.md`） |
 | QQ | ✅ 已实现 | 官方 Bot API 接入，AccessToken 自动刷新 |
-| 社区（office.goddess.ai） | ✅ 已实现 | 多 Agent 房间协作 + `join_room` / `leave_room` |
+| 官网社区 | ✅ 已实现 | 多 Agent 房间协作 + `join_room` / `leave_room` |
 | Telegram | ⏳ 待实现 | Channel 接口已就绪 |
 | WhatsApp | ⏳ 待实现 | Channel 接口已就绪 |
 | 飞书 | ✅ 已实现 | 完整实现 Channel 接口 |
@@ -1868,7 +1868,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
 - **docker-compose.yml** - 服务编排
   - `belldandy-gateway` 服务：主 Gateway 服务，支持健康检查、自动重启
   - `belldandy-cli` 服务：CLI 管理工具（profile: cli，按需启动）
-  - Volume 挂载：`~/.belldandy`（状态目录）、`./workspace`（工作区）
+  - Volume 挂载：`~/.star_sanctuary`（状态目录）、`./workspace`（工作区）
   - 环境变量注入：支持所有 `BELLDANDY_*` 配置项
 
 - **.env.example** - 环境变量模板
@@ -1927,7 +1927,7 @@ Moltbot 支持大量第三方集成插件（Skills），例如：
    - 自动重启不健康容器
 
 4. **数据持久化**
-   - Volume 挂载 `~/.belldandy`（配置、会话、记忆数据库）
+   - Volume 挂载 `~/.star_sanctuary`（配置、会话、记忆数据库）
    - Volume 挂载 `workspace/`（文件工具访问范围）
    - 支持自定义挂载路径
 
@@ -2039,7 +2039,7 @@ cp .env.example .env
 
 ### 目标
 
-扩展UUID系统，实现通用的身份上下文机制，支持多人聊天场景（如office.goddess.ai社区）中的身份权力规则。
+扩展UUID系统，实现通用的身份上下文机制，支持多人聊天场景（如官网社区）中的身份权力规则。
 
 ### 核心功能
 
@@ -2117,7 +2117,7 @@ BELLDANDY_ROOM_MEMBERS_CACHE_TTL=300000
 - System Prompt包含UUID信息
 - 身份权力规则激活
 
-#### 场景3：office.goddess.ai社区
+#### 场景3：官网社区
 - 后端提供完整身份上下文（senderInfo + roomContext）
 - System Prompt包含发送者信息和房间成员列表
 - Agent可调用工具验证身份和查询成员
@@ -2155,7 +2155,7 @@ const hasSuperior = membersResult.agents.some(a =>
 
 ### 价值
 
-- ✅ 支持多人聊天场景（office.goddess.ai社区）
+- ✅ 支持多人聊天场景（官网社区）
 - ✅ 为SOUL.md身份权力规则提供技术支撑
 - ✅ 智能注入 + 缓存机制大幅降低token消耗
 - ✅ 协议层传递防止身份伪造
@@ -2167,7 +2167,7 @@ const hasSuperior = membersResult.agents.some(a =>
 
 ### 目标
 
-让 Agent 能够加入 office.goddess.ai 社区聊天室，与其他 Agent 或用户进行实时多人对话。
+让 Agent 能够加入官网社区聊天室，与其他 Agent 或用户进行实时多人对话。
 
 ### 实现内容
 
@@ -2188,13 +2188,13 @@ const hasSuperior = membersResult.agents.some(a =>
 
 **文件**: `packages/belldandy-channels/src/community-config.ts`
 
-- **配置文件**：`~/.belldandy/community.json`
+- **配置文件**：`~/.star_sanctuary/community.json`
 - **运行时持久化**：`join_room` / `leave_room` 操作自动更新配置文件，重启后自动重连
 
 配置结构：
 ```json
 {
-  "endpoint": "https://office.goddess.ai",
+  "endpoint": "https://recwcppxiamd.sealosgzg.site",
   "agents": [
     {
       "name": "星辰圣所",
@@ -2236,7 +2236,7 @@ const hasSuperior = membersResult.agents.some(a =>
 
 **文件**: `packages/belldandy-core/src/bin/gateway.ts`
 
-启动时检测 `~/.belldandy/community.json` 是否存在：
+启动时检测 `~/.star_sanctuary/community.json` 是否存在：
 1. 加载配置，创建默认 Agent 实例
 2. 创建 `CommunityChannel` 并注册带实例的 `join_room` / `leave_room` 工具
 3. 后台启动连接（配置了 room 的 Agent 自动加入）
@@ -2257,7 +2257,7 @@ const hasSuperior = membersResult.agents.some(a =>
    → 建立实时连接，开始收发消息
 ```
 
-服务端（office.goddess.ai）对 `X-Agent-ID` header 做 `decodeURIComponent` 解码，Agent 查询支持按 `id`（UUID）或 `name` 双匹配。
+服务端（官网社区服务）对 `X-Agent-ID` header 做 `decodeURIComponent` 解码，Agent 查询支持按 `id`（UUID）或 `name` 双匹配。
 
 ### 关键修复记录
 
@@ -2269,7 +2269,7 @@ const hasSuperior = membersResult.agents.some(a =>
 
 ### 价值
 
-- ✅ Agent 可加入 office.goddess.ai 社区与其他 Agent/用户实时对话
+- ✅ Agent 可加入官网社区与其他 Agent/用户实时对话
 - ✅ 工具化操作（join_room/leave_room），Agent 可自主决定加入/离开房间
 - ✅ 配置持久化，重启后自动重连
 - ✅ 支持中文 Agent 名称等非 ASCII 字符
@@ -2343,5 +2343,4 @@ const hasSuperior = membersResult.agents.some(a =>
 - ✅ 高风险越权路径（命令执行、配置读写、路径边界、来源校验）完成收敛
 - ✅ WebChat 与 HTTP 入口的生产安全基线显著提升
 - ✅ 日志从“高噪声 console”收敛到“可分级、可控、可审计”的统一体系
-
 

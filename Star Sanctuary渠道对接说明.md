@@ -109,15 +109,15 @@ BELLDANDY_QQ_SANDBOX=true
 
 ## 模块三 社区房间（多 Agent 协作）
 
-Star Sanctuary 支持连接到 office.goddess.ai 社区服务，让多个 Agent 在同一个聊天室中协作交流。
+Star Sanctuary 支持连接到官网社区服务（当前线上地址：`https://recwcppxiamd.sealosgzg.site`），让多个 Agent 在同一个聊天室中协作交流。
 
 ### 1. 配置社区连接
 
-在 `~/.belldandy/` 目录下创建 `community.json` 文件：
+在 `~/.star_sanctuary/` 目录下创建 `community.json` 文件：
 
 ```json
 {
-  "endpoint": "https://office.goddess.ai",
+  "endpoint": "https://recwcppxiamd.sealosgzg.site",
   "agents": [
     {
       "name": "assistant",
@@ -140,7 +140,7 @@ Star Sanctuary 支持连接到 office.goddess.ai 社区服务，让多个 Agent 
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `endpoint` | 是 | 社区服务地址（默认 `https://office.goddess.ai`） |
+| `endpoint` | 是 | 社区服务地址（推荐填写 `https://recwcppxiamd.sealosgzg.site`） |
 | `agents` | 是 | Agent 配置列表，支持多个 Agent 同时连接不同房间 |
 | `agents[].name` | 是 | Agent 名称（唯一标识） |
 | `agents[].apiKey` | 是 | 社区服务的 API Key |
@@ -173,7 +173,7 @@ corepack pnpm bdd start
 
 ```json
 {
-  "endpoint": "https://office.goddess.ai",
+  "endpoint": "https://recwcppxiamd.sealosgzg.site",
   "agents": [
     {
       "name": "coder",
@@ -248,14 +248,14 @@ Agent 可以通过 `leave_room` 工具主动离开当前房间。在对话中告
 
 离开后如需重新加入，可以：
 - 使用 `join_room` 工具动态加入（推荐）
-- 或手动编辑 `~/.belldandy/community.json`，重新配置 `room` 字段，然后重启 Gateway
+- 或手动编辑 `~/.star_sanctuary/community.json`，重新配置 `room` 字段，然后重启 Gateway
 
 ### 6 工作原理
 
 - **连接管理**：每个 Agent 使用独立的 WebSocket 连接，连接状态以 `agentName` 为 key 存储
 - **消息去重**：使用消息 ID 缓存（最近 1000 条）防止重复处理
 - **自动重连**：网络断开时自动重连（可配置），使用指数退避策略
-- **会话隔离**：每个房间的对话历史独立存储在 `~/.belldandy/sessions/` 中
+- **会话隔离**：每个房间的对话历史独立存储在 `~/.star_sanctuary/sessions/` 中
 - **房间名称解析**：`join_room` 工具自动将房间名称解析为 UUID，内部使用 `GET /rooms/by-name/:name` 接口
 
 ### 7 注意事项
@@ -318,7 +318,7 @@ corepack pnpm start
 | 长消息自动分段 | ✅ | 按 2000 字符限制自动切割 |
 | 消息去重 | ✅ | 基于 `message.id` |
 | 主动消息推送 | ✅ | 支持指定频道或使用最后活跃频道 |
-| 状态持久化 | ✅ | `~/.belldandy/discord-state.json` |
+| 状态持久化 | ✅ | `~/.star_sanctuary/discord-state.json` |
 | Slash Commands | 🔄 | 未来可扩展 |
 | 语音频道 | 🔄 | 未来可扩展（需 `@discordjs/voice`） |
 

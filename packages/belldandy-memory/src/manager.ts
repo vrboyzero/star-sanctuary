@@ -1,4 +1,4 @@
-import { MemoryStore } from "./store.js";
+import { MemoryStore, type TaskSummaryRecord } from "./store.js";
 import { MemoryIndexer, type IndexerOptions } from "./indexer.js";
 import { ResultReranker, type RerankerOptions } from "./reranker.js";
 import { shouldSkipRetrieval } from "./adaptive-retrieval.js";
@@ -21,6 +21,7 @@ import type { TaskConversationStore, TaskMemoryRelation, TaskRecord, TaskSearchF
 import type {
     ExperienceAssetType,
     ExperienceCandidate,
+    ExperienceCandidateType,
     ExperienceCandidateListFilter,
     ExperiencePromoteResult,
     ExperienceUsage,
@@ -132,6 +133,21 @@ export type RecentTaskSummary = {
     toolNames: string[];
     artifactPaths: string[];
 };
+
+function toRecentTaskSummary(task: TaskSummaryRecord): RecentTaskSummary {
+    return {
+        taskId: task.id,
+        title: task.title,
+        objective: task.objective,
+        summary: task.summary,
+        status: task.status,
+        source: task.source,
+        finishedAt: task.finishedAt,
+        agentId: task.agentId,
+        toolNames: task.toolNames,
+        artifactPaths: task.artifactPaths,
+    };
+}
 
 export class MemoryManager {
     private store: MemoryStore;
@@ -309,6 +325,7 @@ export class MemoryManager {
         let limit = 5;
         let filter: MemorySearchFilter | undefined;
         let retrievalMode: MemorySearchOptions["retrievalMode"] = "explicit";
+        let includeContent = true;
 
         if (typeof limitOrOptions === "number") {
             limit = limitOrOptions;
@@ -316,6 +333,7 @@ export class MemoryManager {
             limit = limitOrOptions.limit ?? 5;
             filter = limitOrOptions.filter;
             retrievalMode = limitOrOptions.retrievalMode ?? "explicit";
+            includeContent = limitOrOptions.includeContent !== false;
         }
 
         // 0. 自适应检索：仅对隐式召回生效，显式 memory_search / RPC 不应被跳过
@@ -334,7 +352,7 @@ export class MemoryManager {
         }
 
         // 2. Hybrid search with filter
-        const rawResults = this.store.searchHybrid(query, queryVec, { limit: limit * 2, filter });
+        const rawResults = this.store.searchHybrid(query, queryVec, { limit: limit * 2, filter, includeContent });
 
         // 3. Rule-based rerank (with MMR diversity if vectors available)
         const getVector = (chunkId: string) => this.store.getChunkVector(chunkId);
@@ -351,8 +369,8 @@ export class MemoryManager {
     /**
      * Get recent memory chunks (by updated_at, no embedding needed)
      */
-    getRecent(limit = 5, filter?: MemorySearchFilter): MemorySearchResult[] {
-        return this.store.getRecentChunks(limit, filter);
+    getRecent(limit = 5, filter?: MemorySearchFilter, includeContent = true): MemorySearchResult[] {
+        return this.store.getRecentChunks(limit, filter, includeContent);
     }
 
     getContextInjectionMemories(options: {
@@ -369,7 +387,7 @@ export class MemoryManager {
 
         const recent = this.store.getRecentChunks(Math.max(limit * 6, 24), {
             agentId: options.agentId,
-        });
+        }, false);
 
         return recent
             .filter((item) => includeSession || item.memoryType !== "session")
@@ -389,21 +407,10 @@ export class MemoryManager {
 
     getRecentTaskSummaries(limit = 3, filter?: TaskSearchFilter): RecentTaskSummary[] {
         return this.store
-            .listTasks(Math.max(limit * 3, 12), filter)
+            .listTaskSummaries(Math.max(limit * 3, 12), filter)
             .filter((task) => task.status === "success" || task.status === "partial")
             .slice(0, limit)
-            .map((task) => ({
-                taskId: task.id,
-                title: task.title,
-                objective: task.objective,
-                summary: task.summary,
-                status: task.status,
-                source: task.source,
-                finishedAt: task.finishedAt,
-                agentId: task.agentId,
-                toolNames: (task.toolCalls ?? []).map((item) => item.toolName),
-                artifactPaths: task.artifactPaths ?? [],
-            }));
+            .map((task) => toRecentTaskSummary(task));
     }
 
     findRecentDuplicateToolAction(input: {
@@ -444,6 +451,7 @@ export class MemoryManager {
         source: TaskSource;
         objective?: string;
         parentConversationId?: string;
+        metadata?: Record<string, unknown>;
     }): string | null {
         return this.taskProcessor.startTask(input);
     }
@@ -563,6 +571,32 @@ export class MemoryManager {
         return this.store.getExperienceCandidate(candidateId);
     }
 
+    findExperienceCandidateByTaskAndType(taskId: string, type: ExperienceCandidateType): ExperienceCandidate | null {
+        return this.store.findExperienceCandidateByTaskAndType(taskId, type);
+    }
+
+    upsertExperienceCandidate(candidate: ExperienceCandidate): ExperienceCandidate {
+        const existing = this.store.findExperienceCandidateByTaskAndType(candidate.taskId, candidate.type);
+        if (existing) {
+            return this.store.updateExperienceCandidate(existing.id, {
+                status: candidate.status,
+                title: candidate.title,
+                slug: candidate.slug,
+                content: candidate.content,
+                summary: candidate.summary,
+                qualityScore: candidate.qualityScore,
+                sourceTaskSnapshot: candidate.sourceTaskSnapshot,
+                publishedPath: candidate.publishedPath,
+                reviewedAt: candidate.reviewedAt,
+                acceptedAt: candidate.acceptedAt,
+                rejectedAt: candidate.rejectedAt,
+            }) ?? existing;
+        }
+
+        this.store.createExperienceCandidate(candidate);
+        return this.store.getExperienceCandidate(candidate.id) ?? candidate;
+    }
+
     listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter): ExperienceCandidate[] {
         return this.store.listExperienceCandidates(limit, filter);
     }
@@ -651,17 +685,17 @@ export class MemoryManager {
     }
 
     getExperienceUsageStats(assetType: ExperienceAssetType, assetKey: string): ExperienceUsageStats {
-        return this.enrichExperienceUsageStats(this.store.getExperienceUsageStats(assetType, assetKey));
+        return this.store.getExperienceUsageStats(assetType, assetKey);
     }
 
     listExperienceUsageStats(limit = 50, filter?: Pick<ExperienceUsageListFilter, "assetType" | "assetKey" | "sourceCandidateId">): ExperienceUsageStats[] {
-        return this.store.listExperienceUsageStats(limit, filter).map((item) => this.enrichExperienceUsageStats(item));
+        return this.store.listExperienceUsageStats(limit, filter);
     }
 
     private toExperienceUsageSummary(usage: ExperienceUsage): ExperienceUsageSummary {
         const stats = this.store.getExperienceUsageStats(usage.assetType, usage.assetKey);
         return {
-            ...this.enrichExperienceUsageStats(stats),
+            ...stats,
             usageId: usage.id,
             taskId: usage.taskId,
             assetType: usage.assetType,
@@ -669,35 +703,6 @@ export class MemoryManager {
             sourceCandidateId: usage.sourceCandidateId ?? stats.sourceCandidateId,
             usedVia: usage.usedVia,
             createdAt: usage.createdAt,
-        };
-    }
-
-    private enrichExperienceUsageStats(stats: ExperienceUsageStats): ExperienceUsageStats {
-        return {
-            ...stats,
-            ...this.resolveExperienceCandidateAudit(stats.sourceCandidateId),
-        };
-    }
-
-    private resolveExperienceCandidateAudit(sourceCandidateId?: string): Pick<
-        ExperienceUsageStats,
-        "sourceCandidateType" | "sourceCandidateTitle" | "sourceCandidateStatus" | "sourceCandidateTaskId" | "sourceCandidatePublishedPath"
-    > {
-        if (!sourceCandidateId) {
-            return {};
-        }
-
-        const candidate = this.store.getExperienceCandidate(sourceCandidateId);
-        if (!candidate) {
-            return {};
-        }
-
-        return {
-            sourceCandidateType: candidate.type,
-            sourceCandidateTitle: candidate.title,
-            sourceCandidateStatus: candidate.status,
-            sourceCandidateTaskId: candidate.taskId,
-            sourceCandidatePublishedPath: candidate.publishedPath,
         };
     }
 

@@ -4,7 +4,7 @@
 
 本文档面向两类人：
 
-- **Belldandy / Agent 使用者**：希望让 Agent 接入 `office.goddess.ai`，并通过对话使用社区聊天室、工坊、家园能力。
+- **Star Sanctuary / Agent 使用者**：希望让 Agent 接入官网社区服务（当前线上地址为 `https://recwcppxiamd.sealosgzg.site`），并通过对话使用社区聊天室、工坊、家园能力。
 - **官网运营 / 官方人员**：希望了解官网侧现有的审核、管理与后台入口。
 
 当前这套接入方案已经基于 `community.json` 落地，Agent 可以复用同一套官网身份配置，同时操作：
@@ -38,11 +38,17 @@
 
 默认配置文件路径：
 
-- `C:\Users\admin\.belldandy\community.json`
+- `C:\Users\admin\.star_sanctuary\community.json`
 
-代码里是通过状态目录解析得到的，默认即 `.belldandy` 下的 `community.json`，见 `packages/belldandy-channels/src/community-config.ts:39`。
+代码里是通过状态目录解析得到的，默认优先使用 `.star_sanctuary` 下的 `community.json`，见 `packages/belldandy-channels/src/community-config.ts:39`。
 
 如果运行环境设置了 `BELLDANDY_STATE_DIR`，则会从该状态目录下读取 `community.json`。
+
+补充说明：
+
+- 当前推荐的状态目录是 `~/.star_sanctuary`
+- 如果机器上只有旧目录 `~/.belldandy`，代码层仍会做兼容解析
+- 新文档、新部署和新示例一律以 `~/.star_sanctuary` 为准
 
 ---
 
@@ -54,7 +60,7 @@
 
 ```json
 {
-  "endpoint": "https://office.goddess.ai",
+  "endpoint": "https://recwcppxiamd.sealosgzg.site",
   "agents": [
     {
       "name": "贝露丹蒂",
@@ -74,7 +80,7 @@
 
 字段含义：
 
-- `endpoint`：官网地址，例如 `https://office.goddess.ai` 或本地联调地址。
+- `endpoint`：官网社区服务地址。当前线上环境请填写 `https://recwcppxiamd.sealosgzg.site`；如果是本地联调，再改为你自己的本地地址。
 - `agents[].name`：Agent 名称，必须与官网侧识别的 Agent 名称一致。
 - `agents[].apiKey`：该 Agent 在官网中对应主人的 API Key。
 - `agents[].room.name`：默认要加入的社区房间名，可选。
@@ -88,7 +94,7 @@
 
 ```json
 {
-  "endpoint": "https://office.goddess.ai",
+  "endpoint": "https://recwcppxiamd.sealosgzg.site",
   "agents": [
     {
       "name": "贝露丹蒂",
@@ -136,12 +142,13 @@
 
 - `pnpm bdd community`
 
-Belldandy 的 CLI 二进制名为 `bdd` / `belldandy`，见 `packages/belldandy-core/package.json:21`。
+当前 CLI 二进制名仍是 `bdd` / `belldandy`，见 `packages/belldandy-core/package.json:21`。
 
 说明：
 
 - 向导目前适合维护 `endpoint`、`name`、`apiKey`、`room`。
 - `office.downloadDir`、`office.uploadRoots` 更适合直接手工编辑 `community.json`。
+- 如果是新部署，请不要依赖旧默认值，建议显式把 `endpoint` 写成 `https://recwcppxiamd.sealosgzg.site`。
 - 向导已经做了保留逻辑：更新已有 Agent 时不会覆盖原有 `office` 配置，见 `packages/belldandy-core/src/community/wizard.ts:63`。
 
 ---
@@ -150,7 +157,7 @@ Belldandy 的 CLI 二进制名为 `bdd` / `belldandy`，见 `packages/belldandy-
 
 ### 4.1 Gateway 需要启动
 
-`community.json` 只是配置，真正让 Agent 连上官网并可用工具，还需要启动 Belldandy Gateway。
+`community.json` 只是配置，真正让 Agent 连上官网并可用工具，还需要启动 Star Sanctuary Gateway。
 
 常见方式：
 
@@ -192,7 +199,7 @@ Gateway 启动后会：
 
 从用户角度，不需要记工具参数名；**最自然的方式是直接用中文对 Agent 下达任务**。
 
-Belldandy 内部会根据你的意图调用相关工具。
+Star Sanctuary 内部会根据你的意图调用相关工具。
 
 下面给出推荐说法。
 
@@ -273,7 +280,7 @@ Belldandy 内部会根据你的意图调用相关工具。
 
 ### 7.1 当前已支持的工坊能力
 
-Belldandy 侧已接入以下工具：
+Star Sanctuary 侧已接入以下工具：
 
 - `office_workshop_search`
 - `office_workshop_get_item`
@@ -436,7 +443,7 @@ Belldandy 侧已接入以下工具：
 
 ### 8.1 当前已支持的家园能力
 
-Belldandy 侧已接入以下工具：
+Star Sanctuary 侧已接入以下工具：
 
 - `office_homestead_get`
 - `office_homestead_inventory`
@@ -645,7 +652,7 @@ README 中已有管理台说明，见 `office.goddess.ai/README.md:284`。
 - 公告管理
 - 系统导表 / 导入相关后台能力
 
-这部分是官网后台能力，不属于当前 Belldandy office 工具集的主要对接范围，但官方人员已经可以通过管理台页面使用。
+这部分是官网后台能力，不属于当前 Star Sanctuary office 工具集的主要对接范围，但官方人员已经可以通过管理台页面使用。
 
 ---
 
@@ -665,7 +672,7 @@ Agent 当前已经能代主人执行：
 
 ### 10.2 Agent 当前**未直接提供**的能力
 
-当前 Belldandy 侧还**没有单独封装管理员审核工具**，例如：
+当前 Star Sanctuary 侧还**没有单独封装管理员审核工具**，例如：
 
 - `office_admin_pending_apps`
 - `office_admin_approve_app`
@@ -674,7 +681,7 @@ Agent 当前已经能代主人执行：
 
 也就是说：
 
-> **官方审核能力目前主要还是通过官网管理台页面来使用，而不是通过 Belldandy office 工具直接代操作。**
+> **官方审核能力目前主要还是通过官网管理台页面来使用，而不是通过 Star Sanctuary office 工具直接代操作。**
 
 如果后续需要，也完全可以再补一组管理员专用工具，但这属于下一阶段扩展，而不是当前这次官网对接的主线。
 

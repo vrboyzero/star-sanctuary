@@ -252,6 +252,47 @@ describe("ToolExecutor", () => {
     expect(result.error).toContain("不允许给 Agent \"blocked-agent\" 使用");
   });
 
+  it("should hide and block conversation-scoped tools outside allowed conversations", async () => {
+    const goalTool: Tool = {
+      definition: {
+        name: "goal_init",
+        description: "goal bootstrap tool",
+        parameters: { type: "object", properties: {} },
+      },
+      async execute(): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "goal_init",
+          success: true,
+          output: "ok",
+          durationMs: 0,
+        };
+      },
+    };
+
+    const executor = new ToolExecutor({
+      tools: [echoTool, goalTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedInConversation: (toolName, conversationId) => {
+        if (toolName !== "goal_init") return true;
+        return conversationId.startsWith("goal:");
+      },
+    });
+
+    const normalDefinitions = executor.getDefinitions("default", "conv-1");
+    expect(normalDefinitions.map((item) => item.function.name)).toEqual(["echo"]);
+
+    const goalDefinitions = executor.getDefinitions("default", "goal:goal_alpha");
+    expect(goalDefinitions.map((item) => item.function.name)).toContain("goal_init");
+
+    const blocked = await executor.execute(
+      { id: "req-goal-1", name: "goal_init", arguments: {} },
+      "conv-1",
+    );
+    expect(blocked.success).toBe(false);
+    expect(blocked.error).toContain("当前会话");
+  });
+
   it("should support silent replacement for dynamic tools", () => {
     const warns: string[] = [];
     const replacementTool: Tool = {

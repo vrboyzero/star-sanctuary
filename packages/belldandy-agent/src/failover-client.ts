@@ -239,6 +239,8 @@ export class FailoverClient {
     async fetchWithFailover(params: {
         /** 根据给定的 (baseUrl, apiKey, model) 构建 fetch 的 url 和 init */
         buildRequest: (profile: ModelProfile) => { url: string; init: RequestInit };
+        /** 可选：调用方取消信号。若触发，应立即停止 failover / retry / backoff。 */
+        signal?: AbortSignal;
         /** 单次请求超时（毫秒） */
         timeoutMs?: number;
         /** 请求超时下限（毫秒），会覆盖过小的 profile.requestTimeoutMs */
@@ -250,6 +252,7 @@ export class FailoverClient {
     }): Promise<FailoverResult> {
         const {
             buildRequest,
+            signal,
             timeoutMs = 120_000,
             minimumTimeoutMs,
             maxRetries = 0,
@@ -258,7 +261,10 @@ export class FailoverClient {
         const attempts: FailoverAttempt[] = [];
         let lastError: Error | undefined;
 
+        throwIfAborted(signal);
+
         for (const profile of this.profiles) {
+            throwIfAborted(signal);
             const profileId = profile.id ?? "unknown";
             const baseTimeoutMs = normalizePositiveInt(profile.requestTimeoutMs) ?? timeoutMs;
             const timeoutFloorMs = normalizePositiveInt(minimumTimeoutMs) ?? 0;
@@ -284,18 +290,28 @@ export class FailoverClient {
             }
 
             for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                throwIfAborted(signal);
                 // 构建请求
                 const { url, init } = buildRequest(profile);
+                const requestSignal = init.signal ?? undefined;
+                const externalSignal = signal ?? requestSignal;
+                throwIfAborted(externalSignal);
 
                 // 设置超时
                 const controller = new AbortController();
-                const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
+                let timedOut = false;
+                let removeAbortForwarder: (() => void) | undefined;
+                const timer = setTimeout(() => {
+                    timedOut = true;
+                    controller.abort();
+                }, resolvedTimeoutMs);
 
                 // 合并 signal
-                const originalSignal = init.signal;
-                if (originalSignal) {
+                if (externalSignal) {
                     // 如果调用方也传了 signal，任一触发都 abort
-                    originalSignal.addEventListener("abort", () => controller.abort());
+                    const onAbort = () => controller.abort();
+                    externalSignal.addEventListener("abort", onAbort, { once: true });
+                    removeAbortForwarder = () => externalSignal.removeEventListener("abort", onAbort);
                 }
 
                 try {
@@ -358,7 +374,7 @@ export class FailoverClient {
                             "failover",
                             `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
                         );
-                        await sleep(waitMs);
+                        await sleep(waitMs, externalSignal);
                         continue;
                     }
 
@@ -381,6 +397,9 @@ export class FailoverClient {
                 } catch (err) {
                     // 网络错误或超时
                     const isAbort = err instanceof Error && err.name === "AbortError";
+                    if (isAbort && externalSignal?.aborted && !timedOut) {
+                        throw toAbortError(externalSignal.reason);
+                    }
                     const reason: FailoverReason = isAbort ? "timeout" : "unknown";
                     const errorMsg = isAbort
                         ? `请求超时（${resolvedTimeoutMs}ms）`
@@ -408,7 +427,7 @@ export class FailoverClient {
                             "failover",
                             `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
                         );
-                        await sleep(waitMs);
+                        await sleep(waitMs, externalSignal);
                         continue;
                     }
 
@@ -420,6 +439,7 @@ export class FailoverClient {
                     break;
                 } finally {
                     clearTimeout(timer);
+                    removeAbortForwarder?.();
                 }
             }
         }
@@ -468,8 +488,41 @@ function calcBackoffDelay(baseMs: number, attempt: number): number {
     return Math.min(safeBase * Math.pow(2, exponent), 5_000);
 }
 
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    throwIfAborted(signal);
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            cleanup();
+            reject(toAbortError(signal.reason));
+        };
+        const cleanup = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", onAbort);
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+    });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+    if (!signal?.aborted) return;
+    throw toAbortError(signal.reason);
+}
+
+function toAbortError(reason?: unknown): Error {
+    if (reason instanceof Error) {
+        reason.name = "AbortError";
+        return reason;
+    }
+    const error = new Error(typeof reason === "string" && reason.trim() ? reason : "The operation was aborted.");
+    error.name = "AbortError";
+    return error;
 }
 
 async function getProxyDispatcher(proxyUrl?: string): Promise<unknown | undefined> {

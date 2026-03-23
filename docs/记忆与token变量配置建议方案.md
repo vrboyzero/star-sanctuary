@@ -558,7 +558,7 @@ BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=false
 - 只会增加一条额外网络上报链路
 - 本地自己用时没有必要
 
-### 接 office.goddess.ai 做统一统计
+### 接官网社区服务做统一统计
 
 建议：
 

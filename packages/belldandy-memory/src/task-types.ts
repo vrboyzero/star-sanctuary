@@ -35,6 +35,14 @@ export interface TaskRecord {
   finishedAt?: string;
   summaryModel?: string;
   summaryVersion?: string;
+  /**
+   * 预留扩展字段。
+   * 长期任务 Phase 1 会在此写入：
+   * - goalId
+   * - nodeId
+   * - runId
+   * - goalSession
+   */
   metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -47,6 +55,7 @@ export interface TaskSearchFilter {
   dateFrom?: string;
   dateTo?: string;
   parentConversationId?: string;
+  goalId?: string;
 }
 
 export interface TaskSearchOptions {

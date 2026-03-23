@@ -8,7 +8,7 @@ import type { JsonObject } from "@belldandy/protocol";
 import type { ToolExecutor, ToolCallRequest } from "@belldandy/skills";
 import type { AgentRunInput, AgentStreamItem, AgentUsage, BelldandyAgent, AgentHooks } from "./index.js";
 import type { HookRunner } from "./hook-runner.js";
-import type { HookAgentContext, HookToolContext } from "./hooks.js";
+import type { HookAgentContext, HookToolContext, HookToolResultPersistContext } from "./hooks.js";
 import { FailoverClient, type ModelProfile, type FailoverLogger } from "./failover-client.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
 import {
@@ -29,6 +29,8 @@ const MIN_LARGE_TEXT_ATTACHMENT_TIMEOUT_MS = 120_000;
 const MIN_HUGE_TEXT_ATTACHMENT_TIMEOUT_MS = 300_000;
 const DATA_URI_BASE64_PREFIX_RE = /^data:([^;]+);base64,/i;
 const BASE64_FIELD_KEY_RE = /^(base64|data)$/i;
+const DEFAULT_REASONING_TRANSCRIPT_CHAR_LIMIT = 4_000;
+const MIN_REASONING_DEDUPE_CHARS = 96;
 
 export type ToolEnabledAgentOptions = {
   baseUrl: string;
@@ -104,10 +106,213 @@ function hasMultimodalContentInMessages(messages: Message[]): boolean {
 function readTextAttachmentChars(meta?: JsonObject): number {
   if (!meta || typeof meta !== "object") return 0;
   const stats = (meta as any).attachmentStats;
-  const value = stats?.textAttachmentChars;
+  const value = stats?.promptAugmentationChars ?? stats?.textAttachmentChars;
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : 0;
+}
+
+export function applyPrependContextToInput(input: AgentRunInput, prependContext: string): AgentRunInput {
+  const normalized = prependContext.trim();
+  if (!normalized) return input;
+
+  const nextText = input.text?.trim()
+    ? `${normalized}\n\n${input.text}`
+    : normalized;
+
+  if (Array.isArray(input.content)) {
+    const nextContent = [...input.content];
+    const firstTextIndex = nextContent.findIndex((part: any) => part?.type === "text" && typeof part?.text === "string");
+    if (firstTextIndex >= 0) {
+      const current = nextContent[firstTextIndex] as { type: "text"; text: string };
+      nextContent[firstTextIndex] = {
+        ...current,
+        text: current.text?.trim()
+          ? `${normalized}\n\n${current.text}`
+          : normalized,
+      };
+    } else {
+      nextContent.unshift({ type: "text", text: normalized });
+    }
+    return { ...input, text: nextText, content: nextContent };
+  }
+
+  if (typeof input.content === "string") {
+    return {
+      ...input,
+      text: nextText,
+      content: input.content.trim()
+        ? `${normalized}\n\n${input.content}`
+        : normalized,
+    };
+  }
+
+  return { ...input, text: nextText };
+}
+
+export function sanitizeAssistantToolCallHistoryContent(content?: string): string | undefined {
+  if (typeof content !== "string") return undefined;
+  const stripped = stripToolCallsSection(content);
+  return stripped || undefined;
+}
+
+function normalizeTranscriptText(value?: string): string {
+  if (typeof value !== "string") return "";
+  return value
+    .toLocaleLowerCase()
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isNearDuplicateTranscript(candidate?: string, baseline?: string): boolean {
+  const normalizedCandidate = normalizeTranscriptText(candidate);
+  const normalizedBaseline = normalizeTranscriptText(baseline);
+  if (
+    normalizedCandidate.length < MIN_REASONING_DEDUPE_CHARS ||
+    normalizedBaseline.length < MIN_REASONING_DEDUPE_CHARS
+  ) {
+    return false;
+  }
+
+  const shorterLength = Math.min(normalizedCandidate.length, normalizedBaseline.length);
+  const longerLength = Math.max(normalizedCandidate.length, normalizedBaseline.length);
+  if (shorterLength / longerLength < 0.72) {
+    return false;
+  }
+
+  return normalizedBaseline.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedBaseline);
+}
+
+export function compactReasoningContentForHistory(
+  content?: string,
+  limit: number = DEFAULT_REASONING_TRANSCRIPT_CHAR_LIMIT,
+  assistantContent?: string,
+): string | undefined {
+  if (typeof content !== "string") return undefined;
+  const normalized = content.trim();
+  if (!normalized) return undefined;
+  if (isNearDuplicateTranscript(normalized, sanitizeAssistantToolCallHistoryContent(assistantContent) ?? assistantContent)) {
+    return undefined;
+  }
+  if (!Number.isFinite(limit) || limit <= 0 || normalized.length <= limit) {
+    return normalized;
+  }
+
+  const marker = `\n...[reasoning truncated, original=${normalized.length} chars]...\n`;
+  if (limit <= marker.length + 16) {
+    return normalized.slice(0, limit);
+  }
+
+  const remaining = limit - marker.length;
+  const head = Math.max(8, Math.ceil(remaining * 0.7));
+  const tail = Math.max(8, remaining - head);
+  return `${normalized.slice(0, head)}${marker}${normalized.slice(Math.max(head, normalized.length - tail))}`;
+}
+
+function estimateMessageContentTokens(content: unknown): number {
+  return estimateTokens(contentToTokenEstimateString(content) ?? "");
+}
+
+function estimateAssistantHistoryOverhead(message: Message): number {
+  if (message.role !== "assistant") {
+    return 0;
+  }
+
+  let total = 0;
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    total += estimateTokens(JSON.stringify(message.tool_calls));
+  }
+  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) {
+    total += estimateTokens(sanitizeStringForTokenEstimate(message.reasoning_content.trim()));
+  }
+  return total;
+}
+
+function estimateContextTokensFromMessages(
+  messages: Message[],
+  opts?: { includeSystem?: boolean; margin?: number },
+): number {
+  let total = 0;
+  for (const message of messages) {
+    if (!opts?.includeSystem && message.role === "system") {
+      continue;
+    }
+    total += estimateMessageContentTokens(message.content) + 4;
+    total += estimateAssistantHistoryOverhead(message);
+  }
+  if (opts?.margin && opts.margin > 0) {
+    return Math.ceil(total * opts.margin);
+  }
+  return total;
+}
+
+function estimateSystemPromptTokens(messages: Message[]): number {
+  let total = 0;
+  for (const message of messages) {
+    if (message.role !== "system") {
+      continue;
+    }
+    total += estimateMessageContentTokens(message.content);
+  }
+  return total;
+}
+
+function stringifyTranscriptContent(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "undefined") return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+export function buildToolTranscriptMessageForHistory(input: {
+  toolCallId: string;
+  toolName?: string;
+  output?: unknown;
+  error?: string;
+  success: boolean;
+  hookRunner?: Pick<HookRunner, "runToolResultPersist">;
+  persistCtx?: HookToolResultPersistContext;
+  isSynthetic?: boolean;
+}): Message {
+  let message: JsonObject = {
+    role: "tool",
+    tool_call_id: input.toolCallId,
+    content: input.success
+      ? stringifyTranscriptContent(input.output)
+      : `错误：${input.error ?? "unknown error"}`,
+  };
+
+  if (input.hookRunner) {
+    const hookRes = input.hookRunner.runToolResultPersist(
+      {
+        toolName: input.toolName,
+        toolCallId: input.toolCallId,
+        message,
+        isSynthetic: input.isSynthetic,
+      },
+      input.persistCtx ?? {
+        toolName: input.toolName,
+        toolCallId: input.toolCallId,
+      },
+    );
+    if (hookRes?.message && typeof hookRes.message === "object") {
+      message = hookRes.message;
+    }
+  }
+
+  return {
+    role: "tool",
+    tool_call_id: typeof message.tool_call_id === "string" && message.tool_call_id.trim()
+      ? message.tool_call_id
+      : input.toolCallId,
+    content: stringifyTranscriptContent(message.content),
+  };
 }
 
 function resolveMinimumAdaptiveTimeoutMs(messages: Message[], textAttachmentChars: number): number | undefined {
@@ -127,6 +332,7 @@ function resolveMinimumAdaptiveTimeoutMs(messages: Message[], textAttachmentChar
 }
 
 export class ToolEnabledAgent implements BelldandyAgent {
+  private conversationRunChains = new Map<string, Promise<void>>();
   private readonly opts: Required<Pick<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs" | "sanitizeResponsesToolSchema">> &
     Omit<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs" | "sanitizeResponsesToolSchema">;
   private readonly failoverClient: FailoverClient;
@@ -157,6 +363,53 @@ export class ToolEnabledAgent implements BelldandyAgent {
     });
   }
 
+  private async withStageTimeout<T>(label: string, task: Promise<T>): Promise<T> {
+    const timeoutMs = this.opts.timeoutMs;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return task;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        task,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async acquireConversationRunSlot(conversationId?: string): Promise<() => void> {
+    if (!conversationId) {
+      return () => {};
+    }
+
+    const previous = this.conversationRunChains.get(conversationId) ?? Promise.resolve();
+    const waitForPrevious = previous.catch(() => undefined);
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const chain = waitForPrevious.then(() => current);
+    this.conversationRunChains.set(conversationId, chain);
+    await waitForPrevious;
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      releaseCurrent();
+      if (this.conversationRunChains.get(conversationId) === chain) {
+        this.conversationRunChains.delete(conversationId);
+      }
+    };
+  }
+
   async *run(input: AgentRunInput): AsyncIterable<AgentStreamItem> {
     const startTime = Date.now();
     const resolvedAgentId = input.agentId ?? "tool-agent";
@@ -168,46 +421,54 @@ export class ToolEnabledAgent implements BelldandyAgent {
       sessionKey: input.conversationId,
     };
 
-    // Hook: beforeRun / before_agent_start
-    // 优先使用新版 hookRunner，向后兼容旧版 hooks
-    if (this.opts.hookRunner) {
-      try {
-        const normalizedPrompt = typeof input.content === "string" ? input.content : input.text;
-        const normalizedUserInput = input.userInput?.trim() || normalizedPrompt;
-        const hookRes = await this.opts.hookRunner.runBeforeAgentStart(
-          { prompt: normalizedPrompt, messages: input.history as any, userInput: normalizedUserInput, meta: input.meta }, // TODO: Update hook types for multimodal
-          agentHookCtx,
-        );
-        if (hookRes) {
-          // 注入系统提示词前置上下文
-          if (hookRes.prependContext) {
-            input = { ...input, text: `${hookRes.prependContext}\n\n${input.text}` };
+    const releaseConversationRunSlot = await this.acquireConversationRunSlot(input.conversationId);
+    try {
+      // Hook: beforeRun / before_agent_start
+      // 优先使用新版 hookRunner，向后兼容旧版 hooks
+      if (this.opts.hookRunner) {
+        try {
+          const normalizedPrompt = typeof input.content === "string" ? input.content : input.text;
+          const normalizedUserInput = input.userInput?.trim() || normalizedPrompt;
+          const hookRes = await this.withStageTimeout(
+            "before_agent_start",
+            this.opts.hookRunner.runBeforeAgentStart(
+              { prompt: normalizedPrompt, messages: input.history as any, userInput: normalizedUserInput, meta: input.meta }, // TODO: Update hook types for multimodal
+              agentHookCtx,
+            ),
+          );
+          if (hookRes) {
+            // 注入系统提示词前置上下文
+            if (hookRes.prependContext) {
+              input = applyPrependContextToInput(input, hookRes.prependContext);
+            }
+            // systemPrompt 由 hook 返回时，覆盖原有
+            // 这里暂不处理 systemPrompt，保留给调用方在 opts 中设置
           }
-          // systemPrompt 由 hook 返回时，覆盖原有
-          // 这里暂不处理 systemPrompt，保留给调用方在 opts 中设置
+        } catch (err) {
+          yield { type: "status", status: "error" };
+          yield { type: "final", text: `钩子 before_agent_start 执行失败: ${err}` };
+          return;
         }
-      } catch (err) {
-        yield { type: "status", status: "error" };
-        yield { type: "final", text: `钩子 before_agent_start 执行失败: ${err}` };
-        return;
-      }
-    } else if (this.opts.hooks?.beforeRun) {
-      // 向后兼容：旧版 hooks
-      try {
-        const hookRes = await this.opts.hooks.beforeRun({ input }, legacyHookCtx);
-        if (hookRes && typeof hookRes === "object") {
-          input = { ...input, ...hookRes };
+      } else if (this.opts.hooks?.beforeRun) {
+        // 向后兼容：旧版 hooks
+        try {
+          const hookRes = await this.withStageTimeout(
+            "beforeRun",
+            Promise.resolve(this.opts.hooks.beforeRun({ input }, legacyHookCtx)),
+          );
+          if (hookRes && typeof hookRes === "object") {
+            input = { ...input, ...hookRes };
+          }
+        } catch (err) {
+          yield { type: "status", status: "error" };
+          yield { type: "final", text: `Hook beforeRun failed: ${err}` };
+          return;
         }
-      } catch (err) {
-        yield { type: "status", status: "error" };
-        yield { type: "final", text: `Hook beforeRun failed: ${err}` };
-        return;
       }
-    }
 
-    yield { type: "status", status: "running" };
+      yield { type: "status", status: "running" };
 
-    let content: string | Array<any> = input.content || input.text;
+      let content: string | Array<any> = input.content || input.text;
 
     // Preprocess: upload local videos to Moonshot
     const needsVideoUpload = Array.isArray(content) &&
@@ -231,7 +492,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       input.roomContext,
     );
     const textAttachmentChars = readTextAttachmentChars(input.meta);
-    const tools = this.opts.toolExecutor.getDefinitions(input.agentId);
+    const tools = this.opts.toolExecutor.getDefinitions(input.agentId, input.conversationId);
     let toolCallCount = 0;
     const generatedItems: AgentStreamItem[] = [];
     let runSuccess = true;
@@ -260,11 +521,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
     const buildUsageItem = (): AgentUsage => ({
       type: "usage",
-      systemPromptTokens: this.opts.systemPrompt ? estimateTokens(this.opts.systemPrompt) : 0,
-      contextTokens: (input.history ?? []).reduce(
-        (sum, m) => sum + estimateTokens(contentToTokenEstimateString(m.content)) + 4,
-        0,
-      ),
+      systemPromptTokens: estimateSystemPromptTokens(messages),
+      contextTokens: estimateContextTokensFromMessages(messages, { includeSystem: false }),
       inputTokens: totalInputTokens,
       outputTokens: totalOutputTokens,
       cacheCreationTokens: totalCacheCreation,
@@ -289,7 +547,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       console.error(`[agent] ${msg}`, data ?? "");
     };
 
-    try {
+      try {
       while (true) {
         // ReAct 循环内压缩检查：当上下文接近上限时，压缩历史消息
         const maxInput = this.opts.maxInputTokens;
@@ -377,9 +635,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
         // 将 assistant 消息（含 tool_calls）加入历史
         messages.push({
           role: "assistant",
-          content: response.content || undefined,
+          content: sanitizeAssistantToolCallHistoryContent(response.content),
           tool_calls: toolCalls,
-          reasoning_content: response.reasoning_content,
+          reasoning_content: compactReasoningContentForHistory(
+            response.reasoning_content,
+            DEFAULT_REASONING_TRANSCRIPT_CHAR_LIMIT,
+            response.content,
+          ),
         });
 
         // 执行工具调用
@@ -402,14 +664,45 @@ export class ToolEnabledAgent implements BelldandyAgent {
           // Hook: beforeToolCall / before_tool_call
           if (this.opts.hookRunner) {
             try {
-              const hookRes = await this.opts.hookRunner.runBeforeToolCall(
-                { toolName: request.name, params: request.arguments },
-                toolHookCtx,
+              const hookRes = await this.withStageTimeout(
+                "before_tool_call",
+                this.opts.hookRunner.runBeforeToolCall(
+                  { toolName: request.name, params: request.arguments },
+                  toolHookCtx,
+                ),
               );
               if (hookRes?.block) {
-                // 被钩子阻止
                 const reason = hookRes.blockReason || "被钩子阻止";
-                yield* yieldItem({ type: "final", text: `工具 ${request.name} 执行被阻止: ${reason}` });
+                const blockedError = `工具 ${request.name} 执行被阻止: ${reason}`;
+                yield* yieldItem({
+                  type: "tool_call",
+                  id: request.id,
+                  name: request.name,
+                  arguments: request.arguments,
+                });
+                yield* yieldItem({
+                  type: "tool_result",
+                  id: request.id,
+                  name: request.name,
+                  success: false,
+                  output: "",
+                  error: blockedError,
+                });
+                messages.push(buildToolTranscriptMessageForHistory({
+                  toolCallId: tc.id,
+                  toolName: request.name,
+                  output: "",
+                  error: blockedError,
+                  success: false,
+                  hookRunner: this.opts.hookRunner,
+                  persistCtx: {
+                    agentId: resolvedAgentId,
+                    sessionKey: input.conversationId,
+                    toolName: request.name,
+                    toolCallId: tc.id,
+                  },
+                  isSynthetic: true,
+                }));
                 continue;
               }
               if (hookRes?.skipExecution) {
@@ -427,38 +720,137 @@ export class ToolEnabledAgent implements BelldandyAgent {
                   success: true,
                   output: syntheticResult,
                 });
-                messages.push({
-                  role: "tool",
-                  tool_call_id: tc.id,
-                  content: syntheticResult,
-                });
+                messages.push(buildToolTranscriptMessageForHistory({
+                  toolCallId: tc.id,
+                  toolName: request.name,
+                  output: syntheticResult,
+                  success: true,
+                  hookRunner: this.opts.hookRunner,
+                  persistCtx: {
+                    agentId: resolvedAgentId,
+                    sessionKey: input.conversationId,
+                    toolName: request.name,
+                    toolCallId: tc.id,
+                  },
+                  isSynthetic: true,
+                }));
                 continue;
               }
               if (hookRes?.params) {
                 request.arguments = hookRes.params as JsonObject;
               }
             } catch (err) {
-              yield* yieldItem({ type: "final", text: `钩子 before_tool_call 执行失败: ${err}` });
+              const hookError = `钩子 before_tool_call 执行失败: ${err}`;
+              yield* yieldItem({
+                type: "tool_call",
+                id: request.id,
+                name: request.name,
+                arguments: request.arguments,
+              });
+              yield* yieldItem({
+                type: "tool_result",
+                id: request.id,
+                name: request.name,
+                success: false,
+                output: "",
+                error: hookError,
+              });
+              messages.push(buildToolTranscriptMessageForHistory({
+                toolCallId: tc.id,
+                toolName: request.name,
+                output: "",
+                error: hookError,
+                success: false,
+                hookRunner: this.opts.hookRunner,
+                persistCtx: {
+                  agentId: resolvedAgentId,
+                  sessionKey: input.conversationId,
+                  toolName: request.name,
+                  toolCallId: tc.id,
+                },
+                isSynthetic: true,
+              }));
               continue;
             }
           } else if (this.opts.hooks?.beforeToolCall) {
             // 向后兼容：旧版 hooks
             try {
-              const hookRes = await this.opts.hooks.beforeToolCall({
-                toolName: request.name,
-                arguments: request.arguments,
-                id: request.id
-              }, legacyHookCtx);
+              const hookRes = await this.withStageTimeout(
+                "beforeToolCall",
+                Promise.resolve(this.opts.hooks.beforeToolCall({
+                  toolName: request.name,
+                  arguments: request.arguments,
+                  id: request.id
+                }, legacyHookCtx)),
+              );
 
               if (hookRes === false) {
-                yield* yieldItem({ type: "final", text: `Tool execution cancelled by hook: ${request.name}` });
+                const blockedError = `Tool execution cancelled by hook: ${request.name}`;
+                yield* yieldItem({
+                  type: "tool_call",
+                  id: request.id,
+                  name: request.name,
+                  arguments: request.arguments,
+                });
+                yield* yieldItem({
+                  type: "tool_result",
+                  id: request.id,
+                  name: request.name,
+                  success: false,
+                  output: "",
+                  error: blockedError,
+                });
+                messages.push(buildToolTranscriptMessageForHistory({
+                  toolCallId: tc.id,
+                  toolName: request.name,
+                  output: "",
+                  error: blockedError,
+                  success: false,
+                  hookRunner: this.opts.hookRunner,
+                  persistCtx: {
+                    agentId: resolvedAgentId,
+                    sessionKey: input.conversationId,
+                    toolName: request.name,
+                    toolCallId: tc.id,
+                  },
+                  isSynthetic: true,
+                }));
                 continue;
               }
               if (hookRes && typeof hookRes === "object") {
                 request.arguments = hookRes as JsonObject;
               }
             } catch (err) {
-              yield* yieldItem({ type: "final", text: `Hook beforeToolCall failed: ${err}` });
+              const hookError = `Hook beforeToolCall failed: ${err}`;
+              yield* yieldItem({
+                type: "tool_call",
+                id: request.id,
+                name: request.name,
+                arguments: request.arguments,
+              });
+              yield* yieldItem({
+                type: "tool_result",
+                id: request.id,
+                name: request.name,
+                success: false,
+                output: "",
+                error: hookError,
+              });
+              messages.push(buildToolTranscriptMessageForHistory({
+                toolCallId: tc.id,
+                toolName: request.name,
+                output: "",
+                error: hookError,
+                success: false,
+                hookRunner: this.opts.hookRunner,
+                persistCtx: {
+                  agentId: resolvedAgentId,
+                  sessionKey: input.conversationId,
+                  toolName: request.name,
+                  toolCallId: tc.id,
+                },
+                isSynthetic: true,
+              }));
               continue;
             }
           }
@@ -485,15 +877,18 @@ export class ToolEnabledAgent implements BelldandyAgent {
           // Hook: afterToolCall / after_tool_call
           if (this.opts.hookRunner) {
             try {
-              await this.opts.hookRunner.runAfterToolCall(
-                {
-                  toolName: result.name,
-                  params: request.arguments,
-                  result: result.output,
-                  error: result.error,
-                  durationMs: toolDurationMs,
-                },
-                toolHookCtx,
+              await this.withStageTimeout(
+                "after_tool_call",
+                this.opts.hookRunner.runAfterToolCall(
+                  {
+                    toolName: result.name,
+                    params: request.arguments,
+                    result: result.output,
+                    error: result.error,
+                    durationMs: toolDurationMs,
+                  },
+                  toolHookCtx,
+                ),
               );
             } catch (err) {
               logError(`钩子 after_tool_call 执行失败: ${err}`);
@@ -501,14 +896,17 @@ export class ToolEnabledAgent implements BelldandyAgent {
           } else if (this.opts.hooks?.afterToolCall) {
             // 向后兼容：旧版 hooks
             try {
-              await this.opts.hooks.afterToolCall({
-                toolName: result.name,
-                arguments: request.arguments,
-                result: result.output,
-                success: result.success,
-                error: result.error,
-                id: result.id
-              }, legacyHookCtx);
+              await this.withStageTimeout(
+                "afterToolCall",
+                Promise.resolve(this.opts.hooks.afterToolCall({
+                  toolName: result.name,
+                  arguments: request.arguments,
+                  result: result.output,
+                  success: result.success,
+                  error: result.error,
+                  id: result.id
+                }, legacyHookCtx)),
+              );
             } catch (err) {
               logError(`Hook afterToolCall failed: ${err}`);
             }
@@ -525,16 +923,25 @@ export class ToolEnabledAgent implements BelldandyAgent {
           });
 
           // 将工具结果加入消息历史
-          messages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            content: result.success ? result.output : `错误：${result.error}`,
-          });
+          messages.push(buildToolTranscriptMessageForHistory({
+            toolCallId: tc.id,
+            toolName: result.name,
+            output: result.output,
+            error: result.error,
+            success: result.success,
+            hookRunner: this.opts.hookRunner,
+            persistCtx: {
+              agentId: resolvedAgentId,
+              sessionKey: input.conversationId,
+              toolName: result.name,
+              toolCallId: tc.id,
+            },
+          }));
         }
 
         // 继续循环，让模型处理工具结果
       }
-    } finally {
+      } finally {
       const durationMs = Date.now() - startTime;
 
       // Hook: afterRun / agent_end（在清理 token 计数器之前执行，
@@ -542,14 +949,17 @@ export class ToolEnabledAgent implements BelldandyAgent {
       // 用于扩展 C 自动任务边界检测等场景）
       if (this.opts.hookRunner) {
         try {
-          await this.opts.hookRunner.runAgentEnd(
-            {
-              messages: generatedItems,
-              success: runSuccess,
-              error: runError,
-              durationMs,
-            },
-            agentHookCtx,
+          await this.withStageTimeout(
+            "agent_end",
+            this.opts.hookRunner.runAgentEnd(
+              {
+                messages: generatedItems,
+                success: runSuccess,
+                error: runError,
+                durationMs,
+              },
+              agentHookCtx,
+            ),
           );
         } catch (err) {
           logError(`钩子 agent_end 执行失败: ${err}`);
@@ -557,7 +967,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
       } else if (this.opts.hooks?.afterRun) {
         // 向后兼容：旧版 hooks
         try {
-          await this.opts.hooks.afterRun({ input, items: generatedItems }, legacyHookCtx);
+          await this.withStageTimeout(
+            "afterRun",
+            Promise.resolve(this.opts.hooks.afterRun({ input, items: generatedItems }, legacyHookCtx)),
+          );
         } catch (err) {
           logError(`Hook afterRun failed: ${err}`);
         }
@@ -574,6 +987,9 @@ export class ToolEnabledAgent implements BelldandyAgent {
         logError(`Token counters leaked: ${leakedCounters.join(", ")}`);
       }
       this.opts.toolExecutor.clearTokenCounter(input.conversationId ?? "");
+      }
+    } finally {
+      releaseConversationRunSlot();
     }
   }
 
@@ -829,15 +1245,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
 /** 估算 messages 数组的总 token 数（用于循环内压缩判断） */
 function estimateMessagesTotal(messages: Message[]): number {
   const MARGIN = 1.2;
-  let total = 0;
-  for (const m of messages) {
-    const content = contentToTokenEstimateString(m.content);
-    total += estimateTokens(content ?? "") + 4;
-    if (m.role === "assistant" && (m as any).tool_calls) {
-      total += estimateTokens(JSON.stringify((m as any).tool_calls));
-    }
-  }
-  return Math.ceil(total * MARGIN);
+  return estimateContextTokensFromMessages(messages, {
+    includeSystem: true,
+    margin: MARGIN,
+  });
 }
 
 function buildInitialMessages(
@@ -1274,15 +1685,10 @@ function trimMessagesToFit(
 
   // 估算总 token
   const estimateTotal = () => {
-    let total = toolsTokens;
-    for (const m of messages) {
-      const content = contentToTokenEstimateString(m.content);
-      total += estimateTokens(content ?? "") + 4; // +4 for role/formatting
-      if (m.role === "assistant" && (m as any).tool_calls) {
-        total += estimateTokens(JSON.stringify((m as any).tool_calls));
-      }
-    }
-    return Math.ceil(total * SAFETY_MARGIN);
+    return toolsTokens + estimateContextTokensFromMessages(messages, {
+      includeSystem: true,
+      margin: SAFETY_MARGIN,
+    });
   };
 
   let total = estimateTotal();

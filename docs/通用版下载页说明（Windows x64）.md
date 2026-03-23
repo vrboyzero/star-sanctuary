@@ -11,10 +11,10 @@
 - `Portable` 便携目录版
 - `Single-Exe` 单文件启动版
 
-当前已提供两种能力档位：
+当前发布口径下：
 
-- `Slim`
-- `Full`
+- `Portable` 提供 `Slim` / `Full`
+- `Single-Exe` 当前仅提供 `Full`
 
 ## 2. 我该下载哪个版本
 
@@ -34,7 +34,7 @@
 - 双击 `start.bat` 启动
 - 包目录需要整体保留，不要随意删内部文件
 
-#### Single-Exe 单文件启动版
+#### Single-Exe 单文件启动版（当前仅 Full）
 
 适合：
 
@@ -94,11 +94,11 @@
 
 如果你明确想要“一个 exe 直接双击”：
 
-- 下载 `Single-Exe Slim`
+- 下载 `Single-Exe Full`
 
 如果你已经知道自己需要原生 PTY 或本地 embedding：
 
-- 下载对应的 `Full` 版本
+- 下载 `Portable Full` 或 `Single-Exe Full`
 
 ## 3. 如何启动
 
@@ -230,7 +230,10 @@
 为了更快定位问题，请附带：
 
 - 你下载的是哪一种包：`Portable` 或 `Single-Exe`
-- 你使用的是哪一种模式：`Slim` 或 `Full`
+- 你使用的是哪一种模式：
+  - `Portable Slim`
+  - `Portable Full`
+  - `Single-Exe Full`
 - 你的系统环境：`Windows x64`
 - 最后一段报错或控制台输出
 
@@ -250,7 +253,8 @@
 
 - 已提供 `Windows x64`
 - 已提供 `Portable` / `Single-Exe`
-- 已提供 `Slim` / `Full`
+- `Portable` 已提供 `Slim` / `Full`
+- `Single-Exe` 当前仅提供 `Full`
 - 已覆盖首次启动、自动恢复、基础自检说明
 
 当前不建议对外写死的内容：

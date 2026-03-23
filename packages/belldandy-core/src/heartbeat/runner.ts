@@ -172,6 +172,7 @@ export function startHeartbeatRunner(
 
     let timer: ReturnType<typeof setInterval> | null = null;
     let stopped = false;
+    let intervalRunInFlight = false;
 
     const runOnce = async (): Promise<HeartbeatResult> => {
         const startedAt = Date.now();
@@ -276,11 +277,18 @@ export function startHeartbeatRunner(
         if (stopped) return;
         timer = setInterval(async () => {
             if (stopped) return;
+            if (intervalRunInFlight) {
+                log(`[heartbeat] skipped: previous run still in flight`);
+                return;
+            }
+            intervalRunInFlight = true;
             try {
                 await runOnce();
             } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 log(`[heartbeat] error: ${message}`);
+            } finally {
+                intervalRunInFlight = false;
             }
         }, intervalMs);
     };

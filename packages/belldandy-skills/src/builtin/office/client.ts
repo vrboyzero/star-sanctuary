@@ -41,6 +41,31 @@ const SENSITIVE_PATTERNS = [
   "token",
 ];
 
+const DEFAULT_BELLDANDY_AGENT_LOOKUP_KEY = "__default_belldandy__";
+
+function normalizeAgentLookupName(input: string): string {
+  return input.trim().replace(/[\s_-]+/g, "").toLowerCase();
+}
+
+function canonicalizeAgentLookupName(input: string): string {
+  const normalized = normalizeAgentLookupName(input);
+  if (normalized === "belldandy" || normalized === "贝露丹蒂") {
+    return DEFAULT_BELLDANDY_AGENT_LOOKUP_KEY;
+  }
+  return normalized;
+}
+
+function findAgentConfig(
+  agents: OfficeCommunityAgentConfig[],
+  requestedAgentName: string,
+): OfficeCommunityAgentConfig | undefined {
+  const exactMatch = agents.find((agent) => agent.name === requestedAgentName);
+  if (exactMatch) return exactMatch;
+
+  const lookupKey = canonicalizeAgentLookupName(requestedAgentName);
+  return agents.find((agent) => canonicalizeAgentLookupName(agent.name) === lookupKey);
+}
+
 function getCommunityConfigPath(): string {
   return path.join(resolveStateDir(process.env), "community.json");
 }
@@ -191,7 +216,7 @@ export class OfficeSiteClient {
   constructor(agentName: string) {
     const config = this.loadConfig();
     this.endpoint = config.endpoint.replace(/\/+$/, "");
-    this.agentConfig = config.agents.find((agent) => agent.name === agentName)
+    this.agentConfig = findAgentConfig(config.agents, agentName)
       ?? (() => {
         throw new Error(`community.json 未找到 Agent 配置: ${agentName}`);
       })();

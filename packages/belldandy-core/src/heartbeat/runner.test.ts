@@ -95,4 +95,37 @@ describe("Heartbeat Runner", () => {
 
         expect(sendMessage).not.toHaveBeenCalled();
     });
+
+    it("does not overlap interval runs while a previous heartbeat is still in flight", async () => {
+        vi.useFakeTimers();
+        await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "check overlap");
+
+        let releaseSend: (() => void) | undefined;
+        let markCalled!: () => void;
+        const called = new Promise<void>((resolve) => {
+            markCalled = resolve;
+        });
+        const sendMessage = vi.fn().mockImplementation(() => new Promise<string>((resolve) => {
+            markCalled();
+            releaseSend = () => resolve(HEARTBEAT_OK_TOKEN);
+        }));
+
+        const runner = startHeartbeatRunner({
+            workspaceDir: tmpDir,
+            sendMessage,
+            intervalMs: 1000,
+            activeHours: { start: "00:00", end: "23:59" },
+        });
+
+        await vi.advanceTimersByTimeAsync(1000);
+        await called;
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+
+        releaseSend?.();
+        await vi.runOnlyPendingTimersAsync();
+        runner.stop();
+    });
 });

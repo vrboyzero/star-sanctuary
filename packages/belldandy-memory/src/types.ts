@@ -51,6 +51,7 @@ export interface MemorySearchOptions {
   limit?: number;
   filter?: MemorySearchFilter;
   retrievalMode?: MemoryRetrievalMode;
+  includeContent?: boolean;
 }
 
 /** 检索结果 */

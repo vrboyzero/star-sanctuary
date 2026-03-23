@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-03-23
+
+聚焦长期任务系统初版落地、WebChat 体验增强、服务端技术债清理与发布文档收口，作为 `v0.1.2` 后的功能增强版本发布。
+
+### Long-term Goals / Governance
+
+- 新增超长期任务 / Long-term Goals 初版能力，支持 goal 创建、恢复、暂停、任务图编排与执行
+- 增加 task graph、checkpoint、capability plan、handoff、retrospective、experience suggest 等长期任务核心链路
+- 增加 suggestion review / publish 工作流，支持 method / skill 建议进入正式审阅与发布流程
+- 增加 cross-goal flow patterns 聚合与 review governance summary，补齐跨任务复盘与治理视角
+- 增加 `goalApprovalScan` 等 cron 扫描能力，支持对审批与审阅工作流进行周期巡检
+
+### WebChat / UX
+
+- WebChat 进行了模块化整理，拆分出聊天、设置、记忆、工作区、语音、目标面板等前端功能模块，降低后续维护成本
+- 新增长期任务详情、治理面板、能力面板、追踪面板等界面入口，便于直接在 WebChat 中查看 goal 运行态
+- 新增用户头像与 Agent 头像选用能力，改善对话身份辨识
+- 为对话消息补充 Agent 可识别的时间戳与最新标签，改善长对话和自动化协同时的上下文判断
+- 修复 WebChat 启动时连接后端失败的问题，并补充 WebChat 模块结构校验脚本
+
+### Core / Runtime
+
+- 服务端、Agent 编排、工具调用与上下文注入链路完成一轮技术债处理，增强稳定性与可维护性
+- 优化服务端性能与 token 消耗控制，减少上下文注入与对话编排中的重复开销
+- 改进 goal、memory、MCP、community / Discord / QQ 等多条运行链路的异常处理与测试覆盖
+- 补强 webhook 幂等、工具转录、心跳、调度器等基础能力的边界处理
+
+### Distribution / Packaging
+
+- 完成 `v0.1.2` 标准 `Single-Exe` 产物整理与相关分发文档收口
+- 更新 single-exe 用户指南与发布清理脚本，进一步统一当前标准包发布口径
+
+### Documentation
+
+- `README.md`、`README.en.md` 与长期任务相关文档同步更新，增加长期任务快速入口与使用说明
+- 新增长期任务使用指南、双 Git 仓库发布操作说明等文档，补齐当前发布与协作流程说明
+- 对项目说明文档进行一轮收口和精简，使对外文档与当前实现状态更一致
+
 ## [0.1.2] - 2026-03-13
 
 聚焦发布分发能力增强与安装体验补强，作为 `v0.1.1` 后的首个补丁版本发布。
@@ -12,6 +50,12 @@ All notable changes to this project will be documented in this file.
 - 增加 portable / single-exe 的 build、prefetch、smoke、verify 生命周期脚本
 - 补充发布产物清理脚本与工作区构建校验，降低发版过程中的脏产物干扰
 - Docker 构建链路补齐 `protocol` 与 `distribution` 依赖拷贝，修复镜像内运行缺包问题
+- 收口当前标准包发布口径：
+  - `Portable` 保留 `Slim` / `Full`
+  - `Single-Exe` 当前收口为 `Windows x64 + Full`
+- `Single-Exe Full` 产物目录补齐中英双语 README 与元数据文件
+- `Single-Exe Full` 最终用户包默认不再携带 `build/` 中间目录
+- `build:single-exe`、`smoke:single-exe`、`verify:single-exe-*` 默认收口到 `Full`
 
 ### WebChat / Gateway
 
@@ -23,6 +67,7 @@ All notable changes to this project will be documented in this file.
 
 - `README.md` 与 `README.en.md` 增加安装说明
 - 补充标准包、单文件可执行版与安装流程相关文档
+- 同步更新下载页、升级手册、打包清单与 Single-Exe 新版实现计划，统一到当前发布口径
 
 ## [0.1.1] - 2026-03-10
 
@@ -85,7 +130,7 @@ All notable changes to this project will be documented in this file.
 - Chrome 扩展 (MV3) 配套
 - 支持在已登录态下控制浏览器页面
 
-### office.goddess.ai 生态
+### 官网生态
 
 - 社区接入与房间连接 (`bdd community`)
 - Workshop 工具：搜索、查看、下载、发布、更新、删除

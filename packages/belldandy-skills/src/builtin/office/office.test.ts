@@ -112,6 +112,27 @@ describe("office tools", () => {
     expect((init.headers as Record<string, string>)["X-Agent-ID"]).toBe(encodeURIComponent("贝露丹蒂"));
   });
 
+  it("should resolve default Belldandy alias to 贝露丹蒂 config", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      items: [{ id: "item-1", title: "测试技能" }],
+      total: 1,
+      page: 1,
+      limit: 5,
+    }));
+
+    const result = await officeWorkshopSearchTool.execute(
+      { agent_name: "Belldandy", category: "技能", limit: 5 },
+      context,
+    );
+
+    expect(result.success).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["X-API-Key"]).toBe("gro_test_key");
+    expect((init.headers as Record<string, string>)["X-Agent-ID"]).toBe(encodeURIComponent("贝露丹蒂"));
+  });
+
   it("should download workshop file into target directory", async () => {
     const content = Buffer.from("hello office");
     const expectedHash = crypto.createHash("sha256").update(content).digest("hex");

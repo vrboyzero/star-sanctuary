@@ -94,3 +94,47 @@ export function renderSingleExeGuide(params) {
     "",
   ].join("\r\n");
 }
+
+export function renderSingleExeGuideZh(params) {
+  const { executableName, distributionPolicy, mode, runtimeHomeHint } = params;
+  const modeDescription = mode === "full"
+    ? "这是 Full 单文件版：已内置本地 embedding 与原生 PTY 后端。"
+    : "这是 Slim 单文件版：保留浏览器/网页能力，但本地 embedding 与原生 PTY 仍为可选能力。";
+
+  return [
+    "# Star Sanctuary Single-Exe",
+    "",
+    "这是 Star Sanctuary 的 Windows 单文件版本目录。",
+    "",
+    "快速开始：",
+    `1. 双击 \`${executableName}\`。`,
+    `2. 首次启动时，程序会把运行时缓存解包到 \`${runtimeHomeHint}\`。`,
+    "3. 如果浏览器没有自动打开，可在程序启动后手动访问 http://127.0.0.1:28889/ 。",
+    "",
+    "文件与目录：",
+    "- 可执行程序保留在当前目录。",
+    `- 解包后的运行时缓存位于 \`${runtimeHomeHint}\`。`,
+    "- `.env` / `.env.local`、state、sessions、logs、workspace 数据默认位于 `~/.star_sanctuary`，除非通过高级环境变量覆盖。",
+    "",
+    "构建档位：",
+    `- ${modeDescription}`,
+    `- 分发策略：${distributionPolicy.summary}`,
+    `- 始终内置的运行时依赖：${distributionPolicy.alwaysIncluded.map((entry) => entry.dependency).join(", ")}。`,
+    `- 当前构建额外包含的可选依赖：${formatDependencyList(distributionPolicy.includedOptionalDependencies)}。`,
+    `- 当前构建未包含的可选依赖：${formatDependencyList(distributionPolicy.excludedOptionalDependencies)}。`,
+    "",
+    "自检说明：",
+    "- 首次启动、升级后首次启动、或自动修复运行时时，可能需要等待约 1 分钟。",
+    "- 如果第一次启动失败，先关闭程序后再运行一次；启动器会自动校验并尝试修复解包后的 runtime。",
+    `- 安全重置方式：关闭所有 Star Sanctuary 进程，删除 \`${runtimeHomeHint}\`，然后重新运行 \`${executableName}\`。`,
+    "- 如果程序已启动但浏览器没有打开，请手动访问 http://127.0.0.1:28889/ 。",
+    "- 反馈问题前，可先查看当前目录中的 `single-exe.json`，确认版本、模式与嵌入 runtime 摘要。",
+    "",
+    "反馈问题时建议附带：",
+    "- 当前目录中的 `single-exe.json`。",
+    `- 说明 \`${runtimeHomeHint}\` 中的 runtime 是首次解包、复用，还是自动修复后状态。`,
+    "- 最后一段可见错误信息或控制台输出（如果有）。",
+    "- 若需附上 `.env` 或 `.env.local`，请先删除其中的密钥、口令和 Token。",
+    "",
+  ].join("\r\n");
+}

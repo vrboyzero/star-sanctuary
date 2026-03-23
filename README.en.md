@@ -16,6 +16,7 @@
   <a href="#core-capabilities">Core Capabilities</a> •
   <a href="#project-structure">Project Structure</a> •
   <a href="#personalization-and-long-term-capabilities">Personalization</a> •
+  <a href="#long-term-goals-quick-entry">Long-term Goals</a> •
   <a href="#configuration">Configuration</a> •
   <a href="#channels-and-integrations">Channels</a> •
   <a href="#deployment">Deployment</a> •
@@ -61,6 +62,18 @@ This repository is no longer just a WebChat demo. It is now a full Agent infrast
 For non-technical general users, the project's community website provides a standard, easy-to-use client for download.
 
 - **Community Website**: [https://www.goddess-ai.top](https://www.goddess-ai.top)
+
+Current standard package policy:
+
+- `Portable`: available in `Slim` and `Full`
+- `Single-Exe`: currently available as `Windows x64 + Full`
+- `Single-Exe Full` currently ships with:
+  - `star-sanctuary-single.exe`
+  - `single-exe.json`
+  - `README-single-exe.md`
+  - `README-single-exe-zh.md`
+  - `.env.example`
+- On first launch, `Single-Exe` extracts its runtime to `%LOCALAPPDATA%\\StarSanctuary\\runtime\\<version>-win32-x64`
 
 > **The community website is more than just a download page; it features a rich ecosystem of modules:**
 > - **Co-Lab**: A hub for publishing tasks and accepting assignments
@@ -220,9 +233,9 @@ In short:
 - Methods answer "how it should do it next time"
 - Logs answer "what actually happened before"
 
-### office.goddess.ai Ecosystem Capabilities
+### Official Community Ecosystem Capabilities
 
-Star Sanctuary is already integrated with the `office.goddess.ai` ecosystem. It is not only a chat frontend, but can also work with community, workshop, and homestead modules.
+Star Sanctuary is already integrated with the official community ecosystem. The current online service address is `https://recwcppxiamd.sealosgzg.site`; it is not only a chat frontend, but can also work with community, workshop, and homestead modules.
 
 - `bdd community` configures community access and room connections
 - Built-in Workshop tools support search, inspect, download, publish, update, and delete flows
@@ -721,6 +734,106 @@ corepack pnpm bdd community
 
 ---
 
+## Long-term Goals Quick Entry
+
+If you plan to use the built-in Long-term Goals system, start with:
+
+- [docs/长期任务使用指南.md](./docs/%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md)
+- [docs/超长期任务系统实现方案.md](./docs/%E8%B6%85%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E7%B3%BB%E7%BB%9F%E5%AE%9E%E7%8E%B0%E6%96%B9%E6%A1%88.md)
+
+### Minimal Long-term Goals Checklist
+
+1. Configure the minimum runtime environment:
+
+   ```env
+   BELLDANDY_AGENT_PROVIDER=openai
+   BELLDANDY_OPENAI_BASE_URL=https://api.openai.com/v1
+   BELLDANDY_OPENAI_API_KEY=<your-api-key>
+   BELLDANDY_OPENAI_MODEL=<your-model>
+   BELLDANDY_TOOLS_ENABLED=true
+   BELLDANDY_CRON_ENABLED=true
+   ```
+
+2. Optionally but strongly recommended, create an org-level governance config:
+
+   - `~/.star_sanctuary/governance/review-governance.json`
+
+   Minimal example:
+
+   ```json
+   {
+     "version": 1,
+     "reviewers": [
+       {
+         "id": "producer",
+         "name": "Producer",
+         "reviewerRole": "owner",
+         "channels": ["reviewer_inbox"],
+         "active": true
+       }
+     ],
+     "templates": [],
+     "defaults": {
+       "reminderMinutes": [240, 60, 15],
+       "notificationChannels": ["goal_detail", "reviewer_inbox"]
+     },
+     "updatedAt": "2026-03-21T00:00:00.000Z"
+   }
+   ```
+
+3. Create a long-term goal:
+
+   - WebChat → Goals panel
+   - or tool `goal_init`
+   - or RPC `goal.create`
+
+4. Split the task graph, then execute nodes:
+
+   - `task_graph_create`
+   - `goal_orchestrate`
+   - `task_graph_claim / complete / block ...`
+
+5. Use checkpoints for high-risk nodes:
+
+   - `goal.checkpoint.request`
+   - `goal.checkpoint.approve / reject / escalate`
+
+6. Generate reusable assets after node / goal completion:
+
+   - `goal.retrospect.generate`
+   - `goal.method_candidates.generate`
+   - `goal.skill_candidates.generate`
+   - `goal.flow_patterns.generate`
+
+7. Enter the governance loop:
+
+   - `goal.suggestion_review.list`
+   - `goal.suggestion_review.workflow.set`
+   - `goal.suggestion_review.decide`
+   - `goal.suggestion.publish`
+
+8. View unified approval governance summary / panel:
+
+   - `goal.review_governance.summary`
+   - `goal.approval.scan`
+
+9. If you want automatic overdue approval scanning, create a cron job:
+
+   - enable `BELLDANDY_CRON_ENABLED=true`
+   - add a `goalApprovalScan` job via the `cron` tool
+
+10. You do not need to manually create these runtime files; they are auto-generated:
+
+   - `~/.star_sanctuary/cron-jobs.json`
+   - `<goal.runtimeRoot>/suggestion-reviews.json`
+   - `<goal.runtimeRoot>/publish-records.json`
+   - `<goal.runtimeRoot>/review-notifications.json`
+   - `<goal.runtimeRoot>/review-notification-dispatches.json`
+
+> Note: `im_dm / webhook` entries inside `review-notification-dispatches.json` are currently runtime outbox records only. They are not sent to external systems yet.
+
+---
+
 ## FAQ
 
 ### Startup says `Cannot find module ... dist/...`
@@ -792,6 +905,8 @@ Check:
 - [Star Sanctuary使用手册.md](./Star%20Sanctuary使用手册.md)
 - [Star Sanctuary实现内容说明.md](./Star%20Sanctuary实现内容说明.md)
 - [项目使用指南.md](./项目使用指南.md)
+- [docs/长期任务使用指南.md](./docs/%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md)
+- [docs/超长期任务系统实现方案.md](./docs/%E8%B6%85%E9%95%BF%E6%9C%9F%E4%BB%BB%E5%8A%A1%E7%B3%BB%E7%BB%9F%E5%AE%9E%E7%8E%B0%E6%96%B9%E6%A1%88.md)
 - [Agent官网对接使用手册.md](./Agent官网对接使用手册.md)
 - [DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)
 - [docs/webhook.md](./docs/webhook.md)

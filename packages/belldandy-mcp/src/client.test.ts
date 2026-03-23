@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { expandFilesystemServerArgs, parseExtraWorkspaceRoots } from "./client.js";
+import { MCPClient, expandFilesystemServerArgs, parseExtraWorkspaceRoots } from "./client.js";
 
 describe("parseExtraWorkspaceRoots", () => {
   it("splits BELLDANDY_EXTRA_WORKSPACE_ROOTS and removes duplicates", () => {
@@ -67,5 +67,63 @@ describe("expandFilesystemServerArgs", () => {
     );
 
     expect(args).toEqual(["-y", "@modelcontextprotocol/server-filesystem", "E:/project/star-sanctuary"]);
+  });
+});
+
+describe("MCPClient reconnect", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function createClient() {
+    return new MCPClient({
+      id: "test-server",
+      name: "Test Server",
+      transport: {
+        type: "sse",
+        url: "http://127.0.0.1:3000/sse",
+      },
+      retryCount: 3,
+      retryDelay: 1000,
+    });
+  }
+
+  it("cancels pending reconnect delay when disconnected", async () => {
+    const client = createClient();
+    const clientInternals = client as unknown as { cleanup: () => Promise<void> };
+    const cleanupSpy = vi.spyOn(clientInternals, "cleanup").mockResolvedValue(undefined);
+    const connectSpy = vi.spyOn(client, "connect").mockResolvedValue(undefined);
+
+    const reconnectPromise = client.reconnect();
+
+    await vi.advanceTimersByTimeAsync(200);
+    await client.disconnect();
+    await vi.runAllTimersAsync();
+    await reconnectPromise;
+
+    expect(connectSpy).not.toHaveBeenCalled();
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    expect(client.getState().status).toBe("disconnected");
+  });
+
+  it("reuses the same reconnect loop for concurrent callers", async () => {
+    const client = createClient();
+    const clientInternals = client as unknown as { cleanup: () => Promise<void> };
+    const cleanupSpy = vi.spyOn(clientInternals, "cleanup").mockResolvedValue(undefined);
+    const connectSpy = vi.spyOn(client, "connect").mockResolvedValue(undefined);
+
+    const reconnectA = client.reconnect();
+    const reconnectB = client.reconnect();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all([reconnectA, reconnectB]);
+
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    expect(connectSpy).toHaveBeenCalledTimes(1);
   });
 });

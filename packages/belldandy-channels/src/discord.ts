@@ -21,6 +21,8 @@ interface DiscordState {
 export class DiscordChannel implements Channel {
     readonly name = "discord";
     private client: Client | null = null;
+    private startPromise: Promise<void> | null = null;
+    private clientSession = 0;
     private agent: BelldandyAgent;
     private config: DiscordChannelConfig;
     private listeners: ChannelEventListener[] = [];
@@ -56,6 +58,10 @@ export class DiscordChannel implements Channel {
             console.warn("[Discord] Already running");
             return;
         }
+        if (this.startPromise) {
+            await this.startPromise;
+            return;
+        }
 
         const intents = this.config.intents ?? (
             GatewayIntentBits.Guilds |
@@ -64,30 +70,69 @@ export class DiscordChannel implements Channel {
             GatewayIntentBits.MessageContent
         );
 
-        this.client = new Client({ intents });
+        const client = new Client({ intents });
+        const session = ++this.clientSession;
+        this.client = client;
 
-        this.client.once("ready", () => {
-            console.log(`[Discord] Logged in as ${this.client!.user!.tag}`);
+        client.once("clientReady", () => {
+            if (this.client !== client || this.clientSession !== session) {
+                return;
+            }
+            console.log(`[Discord] Logged in as ${client.user!.tag}`);
             this._running = true;
             this.emit({ type: "started", channel: this.name });
         });
 
-        this.client.on("messageCreate", (msg) => this.handleMessage(msg));
+        client.on("messageCreate", (msg) => {
+            if (this.client !== client || this.clientSession !== session) {
+                return;
+            }
+            this.handleMessage(msg);
+        });
 
-        this.client.on("error", (error) => {
+        client.on("error", (error) => {
+            if (this.client !== client || this.clientSession !== session) {
+                return;
+            }
             console.error("[Discord] Client error:", error);
             this.emit({ type: "error", channel: this.name, error });
         });
 
-        await this.client.login(this.config.botToken);
+        const startPromise = (async () => {
+            try {
+                await client.login(this.config.botToken);
+                if (this.client !== client || this.clientSession !== session) {
+                    client.destroy();
+                }
+            } catch (error) {
+                if (this.client === client && this.clientSession === session) {
+                    this.client = null;
+                    this._running = false;
+                }
+                throw error;
+            }
+        })();
+        this.startPromise = startPromise;
+        try {
+            await startPromise;
+        } finally {
+            if (this.startPromise === startPromise) {
+                this.startPromise = null;
+            }
+        }
     }
 
     async stop(): Promise<void> {
-        if (!this.client) return;
-        this.client.destroy();
+        const client = this.client;
+        const session = this.clientSession;
+        if (!client && !this.startPromise) return;
         this.client = null;
+        this.clientSession = session + 1;
         this._running = false;
         this.processedMessages.clear();
+        if (client) {
+            client.destroy();
+        }
         console.log("[Discord] Stopped");
         this.emit({ type: "stopped", channel: this.name });
     }

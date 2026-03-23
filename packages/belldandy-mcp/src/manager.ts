@@ -54,11 +54,18 @@ export class MCPManager implements IMCPManager {
   
   /** 事件监听器 */
   private eventListeners: Set<MCPEventListener> = new Set();
+
+  /** 单 server 串行化操作锁 */
+  private readonly serverOperationLocks = new Map<string, Promise<void>>();
+
+  /** 绑定后的 client 事件监听器，便于 remove */
+  private readonly boundClientEventListener: MCPEventListener;
   
   /** 是否已初始化 */
   private initialized = false;
 
   constructor() {
+    this.boundClientEventListener = this.handleClientEvent.bind(this);
     // 创建工具桥接器，绑定工具调用函数
     this.toolBridge = new MCPToolBridge(
       this.handleToolCall.bind(this),
@@ -148,6 +155,10 @@ export class MCPManager implements IMCPManager {
    * @param serverId 服务器 ID
    */
   async connect(serverId: string): Promise<void> {
+    return this.withServerOperationLock(serverId, async () => this.connectUnlocked(serverId));
+  }
+
+  private async connectUnlocked(serverId: string): Promise<void> {
     // 检查是否已连接
     if (this.clients.has(serverId)) {
       const client = this.clients.get(serverId)!;
@@ -173,7 +184,7 @@ export class MCPManager implements IMCPManager {
     const client = new MCPClient(serverConfig);
 
     // 添加事件监听
-    client.addEventListener(this.handleClientEvent.bind(this));
+    client.addEventListener(this.boundClientEventListener);
 
     // 存储客户端
     this.clients.set(serverId, client);
@@ -188,6 +199,10 @@ export class MCPManager implements IMCPManager {
 
       mcpLog("MCPManager", `已连接到服务器 ${serverId}，注册了 ${state.tools.length} 个工具`);
     } catch (error) {
+      client.removeEventListener(this.boundClientEventListener);
+      if (this.clients.get(serverId) === client) {
+        this.clients.delete(serverId);
+      }
       mcpError("MCPManager", `连接服务器 ${serverId} 失败`, error);
       throw error;
     }
@@ -199,6 +214,10 @@ export class MCPManager implements IMCPManager {
    * @param serverId 服务器 ID
    */
   async disconnect(serverId: string): Promise<void> {
+    return this.withServerOperationLock(serverId, async () => this.disconnectUnlocked(serverId));
+  }
+
+  private async disconnectUnlocked(serverId: string): Promise<void> {
     const client = this.clients.get(serverId);
     if (!client) {
       mcpLog("MCPManager", `服务器 ${serverId} 未连接，跳过`);
@@ -212,9 +231,12 @@ export class MCPManager implements IMCPManager {
 
     // 断开连接
     await client.disconnect();
+    client.removeEventListener(this.boundClientEventListener);
 
     // 移除客户端
-    this.clients.delete(serverId);
+    if (this.clients.get(serverId) === client) {
+      this.clients.delete(serverId);
+    }
 
     mcpLog("MCPManager", `已断开服务器: ${serverId}`);
   }
@@ -225,8 +247,10 @@ export class MCPManager implements IMCPManager {
    * @param serverId 服务器 ID
    */
   async reconnect(serverId: string): Promise<void> {
-    await this.disconnect(serverId);
-    await this.connect(serverId);
+    return this.withServerOperationLock(serverId, async () => {
+      await this.disconnectUnlocked(serverId);
+      await this.connectUnlocked(serverId);
+    });
   }
 
   // ==========================================================================
@@ -441,6 +465,25 @@ export class MCPManager implements IMCPManager {
         // 重新注册工具
         this.toolBridge.unregisterServerTools(event.serverId);
         this.toolBridge.registerTools(client.getState().tools);
+      }
+    }
+  }
+
+  private async withServerOperationLock<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.serverOperationLocks.get(serverId) ?? Promise.resolve();
+    let releaseCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const tail = previous.catch(() => undefined).then(() => current);
+    this.serverOperationLocks.set(serverId, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await fn();
+    } finally {
+      releaseCurrent();
+      if (this.serverOperationLocks.get(serverId) === tail) {
+        this.serverOperationLocks.delete(serverId);
       }
     }
   }

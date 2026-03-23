@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { JsonObject } from "@belldandy/protocol";
-import type { Tool, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, AgentCapabilities, ConversationStoreInterface, ITokenCounterService } from "./types.js";
+import type { Tool, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, AgentCapabilities, GoalCapabilities, ConversationStoreInterface, ITokenCounterService } from "./types.js";
 
 /** 默认策略（最小权限） */
 export const DEFAULT_POLICY: ToolPolicy = {
@@ -35,12 +35,15 @@ export type ToolExecutorOptions = {
   policy?: Partial<ToolPolicy>;
   auditLogger?: (log: ToolAuditLog) => void;
   agentCapabilities?: AgentCapabilities;
+  goalCapabilities?: GoalCapabilities;
   /** 可选：传入后注入到 ToolContext，供工具使用 */
   logger?: ToolExecutorLogger;
   /** 可选：运行时判断工具是否被禁用（用于调用设置开关） */
   isToolDisabled?: (toolName: string) => boolean;
   /** 可选：运行时判断工具是否允许给指定 Agent 使用（用于 per-agent toolWhitelist） */
   isToolAllowedForAgent?: (toolName: string, agentId?: string) => boolean;
+  /** 可选：运行时判断工具是否允许在指定会话中使用（用于 goal channel 等场景） */
+  isToolAllowedInConversation?: (toolName: string, conversationId: string, agentId?: string) => boolean;
   /** 可选：会话存储（用于缓存等功能） */
   conversationStore?: ConversationStoreInterface;
   /** 可选：事件广播回调（用于工具主动推送事件到前端） */
@@ -59,9 +62,11 @@ export class ToolExecutor {
   private readonly policy: ToolPolicy;
   private readonly auditLogger?: (log: ToolAuditLog) => void;
   private agentCapabilities?: AgentCapabilities;
+  private goalCapabilities?: GoalCapabilities;
   private readonly logger?: ToolExecutorLogger;
   private readonly isToolDisabled?: (toolName: string) => boolean;
   private readonly isToolAllowedForAgent?: (toolName: string, agentId?: string) => boolean;
+  private readonly isToolAllowedInConversation?: (toolName: string, conversationId: string, agentId?: string) => boolean;
   private conversationStore?: ConversationStoreInterface; // 移除 readonly，允许后期绑定
   private readonly tokenCounters = new Map<string, ITokenCounterService>(); // 每个 conversation 的 token 计数器
   private readonly broadcast?: (event: string, payload: Record<string, unknown>) => void;
@@ -74,9 +79,11 @@ export class ToolExecutor {
     this.policy = { ...DEFAULT_POLICY, ...options.policy };
     this.auditLogger = options.auditLogger;
     this.agentCapabilities = options.agentCapabilities;
+    this.goalCapabilities = options.goalCapabilities;
     this.logger = options.logger;
     this.isToolDisabled = options.isToolDisabled;
     this.isToolAllowedForAgent = options.isToolAllowedForAgent;
+    this.isToolAllowedInConversation = options.isToolAllowedInConversation;
     this.conversationStore = options.conversationStore;
     this.broadcast = options.broadcast;
   }
@@ -86,6 +93,10 @@ export class ToolExecutor {
    */
   setAgentCapabilities(caps: AgentCapabilities): void {
     this.agentCapabilities = caps;
+  }
+
+  setGoalCapabilities(caps: GoalCapabilities): void {
+    this.goalCapabilities = caps;
   }
 
   /**
@@ -117,9 +128,9 @@ export class ToolExecutor {
   }
 
   /** 获取所有工具定义（用于发送给模型），已过滤禁用工具和 Agent 白名单 */
-  getDefinitions(agentId?: string): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
+  getDefinitions(agentId?: string, conversationId?: string): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
     const all = Array.from(this.tools.values());
-    const active = all.filter((tool) => this.isToolAvailable(tool.definition.name, agentId));
+    const active = all.filter((tool) => this.isToolAvailable(tool.definition.name, agentId, conversationId));
     return active.map(t => ({
       type: "function" as const,
       function: {
@@ -185,13 +196,13 @@ export class ToolExecutor {
     }
 
     // 防御性检查：拒绝已禁用或不在 Agent 白名单中的工具调用
-    if (!this.isToolAvailable(request.name, agentId)) {
+    if (!this.isToolAvailable(request.name, agentId, conversationId)) {
       const result: ToolCallResult = {
         id: request.id,
         name: request.name,
         success: false,
         output: "",
-        error: this.buildToolUnavailableMessage(request.name, agentId),
+        error: this.buildToolUnavailableMessage(request.name, agentId, conversationId),
         durationMs: Date.now() - start,
       };
       this.audit(result, conversationId, request.arguments);
@@ -211,6 +222,7 @@ export class ToolExecutor {
       broadcast: this.broadcast, // 传递事件广播回调（扩展 B）
       policy: this.policy,
       agentCapabilities: this.agentCapabilities,
+      goalCapabilities: this.goalCapabilities,
       logger: this.logger ? {
         info: (m) => this.logger!.info(m),
         warn: (m) => this.logger!.warn(m),
@@ -273,7 +285,7 @@ export class ToolExecutor {
     });
   }
 
-  private isToolAvailable(toolName: string, agentId?: string): boolean {
+  private isToolAvailable(toolName: string, agentId?: string, conversationId?: string): boolean {
     if (!this.alwaysEnabledTools.has(toolName) && this.isToolDisabled?.(toolName)) {
       return false;
     }
@@ -282,12 +294,20 @@ export class ToolExecutor {
       return false;
     }
 
+    if (conversationId && this.isToolAllowedInConversation && !this.isToolAllowedInConversation(toolName, conversationId, agentId)) {
+      return false;
+    }
+
     return true;
   }
 
-  private buildToolUnavailableMessage(toolName: string, agentId?: string): string {
+  private buildToolUnavailableMessage(toolName: string, agentId?: string, conversationId?: string): string {
     if (!this.alwaysEnabledTools.has(toolName) && this.isToolDisabled?.(toolName)) {
       return `工具 ${toolName} 已被禁用`;
+    }
+
+    if (conversationId && this.isToolAllowedInConversation && !this.isToolAllowedInConversation(toolName, conversationId, agentId)) {
+      return `工具 ${toolName} 不允许在当前会话中使用`;
     }
 
     const targetAgentId = typeof agentId === "string" && agentId.trim()

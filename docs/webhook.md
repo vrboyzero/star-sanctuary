@@ -355,7 +355,7 @@ GitHub 事件: pull_request
 
 | 维度 | `/api/message` | `/api/webhook/:id` |
 |------|----------------|-------------------|
-| 用途 | office.goddess.ai 社区集成 | 外部系统触发（CI/CD/监控） |
+| 用途 | 官网社区集成 | 外部系统触发（CI/CD/监控） |
 | 鉴权 | 单一全局 token | 每个 webhook 独立 token |
 | 配置 | 环境变量 | 配置文件（支持多个） |
 | 幂等性 | ❌ 无 | ✅ 有（X-Idempotency-Key） |
