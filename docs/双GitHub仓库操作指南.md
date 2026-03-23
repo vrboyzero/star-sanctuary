@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "新实现了webchat中的用户与Agent头像选用功能，给对话信息增加了Agent可识别的时间戳与最新标签"
+git commit -m "发布最新开源版本前备份"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
