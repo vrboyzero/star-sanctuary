@@ -29,7 +29,7 @@ except ImportError as e:
 def load_env() -> Optional[Path]:
     """
     加载 .env 配置文件
-    按优先级搜索: 当前目录 > 父目录 > ~/.belldandy/
+    按优先级搜索: 当前目录 > 父目录 > ~/.star_sanctuary/
     
     Returns:
         加载成功的文件路径，或 None（使用系统环境变量）
@@ -37,7 +37,7 @@ def load_env() -> Optional[Path]:
     candidates = [
         Path(__file__).with_name('.env'),
         Path(__file__).parent.parent / '.env',
-        Path.home() / '.belldandy' / '.env',
+        Path.home() / '.star_sanctuary' / '.env',
     ]
     
     for path in candidates:
@@ -66,7 +66,7 @@ def validate_env() -> Tuple[str, Optional[str], str]:
         print("💡 请检查:")
         print("   1. .env 文件是否存在且包含 OPENAI_API_KEY")
         print("   2. 环境变量是否正确加载")
-        print(f"   3. 搜索路径: {Path(__file__).parent}, {Path(__file__).parent.parent}, ~/.belldandy/")
+        print(f"   3. 搜索路径: {Path(__file__).parent}, {Path(__file__).parent.parent}, ~/.star_sanctuary/")
         sys.exit(1)
     
     base_url = os.getenv('OPENAI_BASE_URL')

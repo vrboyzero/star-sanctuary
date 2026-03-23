@@ -20,7 +20,7 @@ param(
     [string]$InputPath = '',
     [string]$Prompt = '请详细描述这张屏幕截图的内容，包括所有可见窗口、界面元素和文字',
     [string]$OutputDir = 'C:\Users\admin\Pictures\Screenshots',
-    [string]$EnvFile = 'C:\Users\admin\.belldandy\.env'
+    [string]$EnvFile = 'C:\Users\admin\.star_sanctuary\.env'
 )
 
 $ErrorActionPreference = 'Stop'

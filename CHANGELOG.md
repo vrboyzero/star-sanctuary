@@ -85,7 +85,7 @@ All notable changes to this project will be documented in this file.
 - Chrome 扩展 (MV3) 配套
 - 支持在已登录态下控制浏览器页面
 
-### office.goddess.ai 生态
+### 官网生态
 
 - 社区接入与房间连接 (`bdd community`)
 - Workshop 工具：搜索、查看、下载、发布、更新、删除

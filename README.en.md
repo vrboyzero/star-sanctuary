@@ -221,9 +221,9 @@ In short:
 - Methods answer "how it should do it next time"
 - Logs answer "what actually happened before"
 
-### office.goddess.ai Ecosystem Capabilities
+### Official Community Ecosystem Capabilities
 
-Star Sanctuary is already integrated with the `office.goddess.ai` ecosystem. It is not only a chat frontend, but can also work with community, workshop, and homestead modules.
+Star Sanctuary is already integrated with the official community ecosystem. The current online service address is `https://recwcppxiamd.sealosgzg.site`; it is not only a chat frontend, but can also work with community, workshop, and homestead modules.
 
 - `bdd community` configures community access and room connections
 - Built-in Workshop tools support search, inspect, download, publish, update, and delete flows

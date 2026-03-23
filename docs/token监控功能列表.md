@@ -11,7 +11,7 @@
 
 本仓库能直接验证的是 `Star Sanctuary / Belldandy` 侧实现，包括 WebChat、Gateway、community 渠道、任务级 token 计数器与前端展示。
 
-`office.goddess.ai` 接收端（如 `/api/internal/token-usage` 路由、数据库写库逻辑）不在当前仓库中，**本次未直接验代码**，这里只能验证“上传端已实现到什么程度”。
+官网社区服务接收端（如 `/api/internal/token-usage` 路由、数据库写库逻辑）不在当前仓库中，**本次未直接验代码**，这里只能验证“上传端已实现到什么程度”。
 
 ## 2. 已实现功能列表
 

@@ -17,7 +17,7 @@ eligibility:
 - ✅ **全屏捕获**：自动检测分辨率（支持多显示器）
 - ✅ **自动命名**：时间戳命名，避免覆盖
 - ✅ **图像分析**：可配合 vision 模型分析屏幕内容（需服务可用）
-- ✅ **`.env` 驱动**：从 `C:\Users\admin\.belldandy\.env` 读取模型配置
+- ✅ **`.env` 驱动**：从 `C:\Users\admin\.star_sanctuary\.env` 读取模型配置
 - ✅ **OpenAI 兼容接口**：支持 `OPENAI_BASE_URL`，可切 Moonshot / Kimi 等兼容服务
 - ✅ **健壮错误处理**：清晰的错误提示和诊断信息
 - ✅ **旧链路归档**：历史 `.sh` / Kimi 脚本已整理到 `scripts/legacy/`
@@ -29,7 +29,7 @@ eligibility:
 - **截图入口**：`skills/screen-capture/scripts/screen-capture.ps1`
 - **截图 + 分析入口**：`skills/screen-capture/scripts/screen-capture-analyze.ps1`
 - **Python 分析模块**：`skills/screen-capture/scripts/media-analyze-openai.py`
-- **配置文件**：`C:\Users\admin\.belldandy\.env`
+- **配置文件**：`C:\Users\admin\.star_sanctuary\.env`
 
 当前这条主链路已经验证通过：
 
@@ -56,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "skills/screen-capture/scrip
 ### 2. 截图并分析（正式入口）
 
 ```powershell
-# 截图并分析（默认从 C:\Users\admin\.belldandy\.env 读取配置）
+# 截图并分析（默认从 C:\Users\admin\.star_sanctuary\.env 读取配置）
 powershell -NoProfile -ExecutionPolicy Bypass -File "skills/screen-capture/scripts/screen-capture-analyze.ps1"
 
 # 截图并回答特定问题
@@ -262,7 +262,7 @@ pip install openai python-dotenv pillow
 - `OPENAI_VISION_MODEL`
 
 ### 默认 `.env` 路径
-- `C:\Users\admin\.belldandy\.env`
+- `C:\Users\admin\.star_sanctuary\.env`
 
 ## 故障排除
 
@@ -273,10 +273,10 @@ pip install openai python-dotenv pillow
 💡 请检查:
    1. .env 文件是否存在且包含 OPENAI_API_KEY
    2. 环境变量是否正确加载
-   3. 搜索路径: ..., ~/.belldandy/
+   3. 搜索路径: ..., ~/.star_sanctuary/
 ```
 
-**解决**：检查 `C:\Users\admin\.belldandy\.env` 中是否已配置 `OPENAI_API_KEY`
+**解决**：检查 `C:\Users\admin\.star_sanctuary\.env` 中是否已配置 `OPENAI_API_KEY`
 
 ## 相关资源
 
