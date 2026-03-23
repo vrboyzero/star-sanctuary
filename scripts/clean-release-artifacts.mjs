@@ -19,7 +19,7 @@ const TOP_LEVEL_REMOVE_PATTERNS = [
   /\.cleanup-\d+-/i,
 ];
 
-const RELEASE_DIR_KEEP_PATTERN = /^(win32|linux|darwin)-[a-z0-9]+(?:-full)?$/i;
+const RELEASE_DIR_KEEP_PATTERN = /^(?:star-sanctuary-single-exe-)?(win32|linux|darwin)-[a-z0-9]+(?:-full)?(?:-v[0-9A-Za-z._-]+)?$/i;
 const RELEASE_DIR_REMOVE_PATTERNS = [
   /\.failed-\d/i,
   /\.previous-/i,

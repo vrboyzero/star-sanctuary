@@ -12,6 +12,12 @@ All notable changes to this project will be documented in this file.
 - 增加 portable / single-exe 的 build、prefetch、smoke、verify 生命周期脚本
 - 补充发布产物清理脚本与工作区构建校验，降低发版过程中的脏产物干扰
 - Docker 构建链路补齐 `protocol` 与 `distribution` 依赖拷贝，修复镜像内运行缺包问题
+- 收口当前标准包发布口径：
+  - `Portable` 保留 `Slim` / `Full`
+  - `Single-Exe` 当前收口为 `Windows x64 + Full`
+- `Single-Exe Full` 产物目录补齐中英双语 README 与元数据文件
+- `Single-Exe Full` 最终用户包默认不再携带 `build/` 中间目录
+- `build:single-exe`、`smoke:single-exe`、`verify:single-exe-*` 默认收口到 `Full`
 
 ### WebChat / Gateway
 
@@ -23,6 +29,7 @@ All notable changes to this project will be documented in this file.
 
 - `README.md` 与 `README.en.md` 增加安装说明
 - 补充标准包、单文件可执行版与安装流程相关文档
+- 同步更新下载页、升级手册、打包清单与 Single-Exe 新版实现计划，统一到当前发布口径
 
 ## [0.1.1] - 2026-03-10
 

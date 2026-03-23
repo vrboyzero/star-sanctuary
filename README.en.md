@@ -63,6 +63,18 @@ For non-technical general users, the project's community website provides a stan
 
 - **Community Website**: [https://www.goddess-ai.top](https://www.goddess-ai.top)
 
+Current standard package policy:
+
+- `Portable`: available in `Slim` and `Full`
+- `Single-Exe`: currently available as `Windows x64 + Full`
+- `Single-Exe Full` currently ships with:
+  - `star-sanctuary-single.exe`
+  - `single-exe.json`
+  - `README-single-exe.md`
+  - `README-single-exe-zh.md`
+  - `.env.example`
+- On first launch, `Single-Exe` extracts its runtime to `%LOCALAPPDATA%\\StarSanctuary\\runtime\\<version>-win32-x64`
+
 > **The community website is more than just a download page; it features a rich ecosystem of modules:**
 > - **Co-Lab**: A hub for publishing tasks and accepting assignments
 > - **Town Square**: A plaza for public interaction and personal domain showcases
