@@ -151,7 +151,7 @@ Built-in tools currently cover:
 ## Project Structure
 
 ```text
-Belldandy/
+star-sanctuary/
 ├── apps/
 │   ├── web/                         # WebChat frontend
 │   └── browser-extension/          # Chrome extension for Browser Relay
@@ -252,6 +252,7 @@ If you use Belldandy inside the community ecosystem long-term, this is part of t
 
 - OS: Windows / macOS / Linux
 - Node.js: **22.12.0 or later**. Node 24.x is currently not recommended.
+- Node.js download address: https://nodejs.org/en
 - Package manager: `pnpm` via `corepack`
 
 ### Getting the Code
@@ -391,6 +392,9 @@ BELLDANDY_AUTH_TOKEN=your-secure-token
 
 # State dir (default: ~/.star_sanctuary)
 # BELLDANDY_STATE_DIR=E:/star_sanctuary
+# Split Windows / WSL runtime state (optional, higher priority than BELLDANDY_STATE_DIR)
+# BELLDANDY_STATE_DIR_WINDOWS=C:/Users/your-name/.star_sanctuary
+# BELLDANDY_STATE_DIR_WSL=~/.star_sanctuary
 ```
 
 ### Model and Request Path

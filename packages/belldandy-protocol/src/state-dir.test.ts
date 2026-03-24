@@ -31,6 +31,33 @@ describe("state-dir helpers", () => {
     expect(resolveStateDir(env, { homeDir })).toBe(explicit);
   });
 
+  it("prefers BELLDANDY_STATE_DIR_WINDOWS on Windows", async () => {
+    const homeDir = await makeTempHome();
+    const explicit = path.join(homeDir, "windows-state");
+    const env = {
+      BELLDANDY_STATE_DIR: path.join(homeDir, "fallback-state"),
+      BELLDANDY_STATE_DIR_WINDOWS: explicit,
+    } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env, { homeDir, platform: "win32" })).toBe(explicit);
+  });
+
+  it("prefers BELLDANDY_STATE_DIR_WSL inside WSL", async () => {
+    const homeDir = await makeTempHome();
+    const explicit = path.join(homeDir, "wsl-state");
+    const env = {
+      BELLDANDY_STATE_DIR: path.join(homeDir, "fallback-state"),
+      BELLDANDY_STATE_DIR_WSL: explicit,
+      WSL_DISTRO_NAME: "Ubuntu",
+    } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env, { homeDir, platform: "linux" })).toBe(explicit);
+  });
+
+  it("expands tilde for explicit state directory overrides", async () => {
+    const homeDir = await makeTempHome();
+    const env = { BELLDANDY_STATE_DIR: "~/.star_sanctuary" } as NodeJS.ProcessEnv;
+    expect(resolveStateDir(env, { homeDir })).toBe(path.join(homeDir, ".star_sanctuary"));
+  });
+
   it("prefers new default directory when it exists", async () => {
     const homeDir = await makeTempHome();
     const nextDir = path.join(homeDir, DEFAULT_STATE_DIR_BASENAME);
