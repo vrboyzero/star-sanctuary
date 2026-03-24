@@ -134,6 +134,11 @@ body::before {
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  box-sizing: border-box;
 }
 
 .sidebar-btn:hover {
@@ -470,12 +475,15 @@ body::before {
   color: var(--text-main);
   width: 36px;
   height: 36px;
+  padding: 0;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-origin: center;
+  line-height: 1;
 }
 
 .settings-btn:hover {

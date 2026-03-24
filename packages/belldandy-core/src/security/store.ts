@@ -12,6 +12,8 @@ export {
   DEFAULT_STATE_DIR_DISPLAY,
   LEGACY_STATE_DIR_BASENAME,
   LEGACY_STATE_DIR_DISPLAY,
+  STATE_DIR_WINDOWS_ENV_KEY,
+  STATE_DIR_WSL_ENV_KEY,
   resolveDefaultStateDir,
   resolveNamedCompatDir,
   resolveStateDir,

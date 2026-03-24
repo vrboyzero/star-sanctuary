@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 
 export const STATE_DIR_ENV_KEY = "BELLDANDY_STATE_DIR";
+export const STATE_DIR_WINDOWS_ENV_KEY = "BELLDANDY_STATE_DIR_WINDOWS";
+export const STATE_DIR_WSL_ENV_KEY = "BELLDANDY_STATE_DIR_WSL";
 export const LEGACY_STATE_DIR_BASENAME = ".belldandy";
 export const DEFAULT_STATE_DIR_BASENAME = ".star_sanctuary";
 export const LEGACY_STATE_DIR_DISPLAY = `~/${LEGACY_STATE_DIR_BASENAME}`;
@@ -46,13 +48,39 @@ export function resolveDefaultStateDir(params?: {
   });
 }
 
+function normalizeExplicitStateDir(rawPath: string, homeDir: string): string {
+  const trimmed = rawPath.trim();
+  if (trimmed === "~") return homeDir;
+  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+    return path.join(homeDir, trimmed.slice(2));
+  }
+  return trimmed;
+}
+
+function isWslRuntime(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): boolean {
+  return platform === "linux" && !!(env.WSL_DISTRO_NAME?.trim() || env.WSL_INTEROP?.trim());
+}
+
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
-  params?: { homeDir?: string; exists?: PathExists },
+  params?: { homeDir?: string; exists?: PathExists; platform?: NodeJS.Platform },
 ): string {
+  const homeDir = params?.homeDir ?? os.homedir();
+  const platform = params?.platform ?? process.platform;
+
+  if (platform === "win32") {
+    const explicitWindows = env[STATE_DIR_WINDOWS_ENV_KEY]?.trim();
+    if (explicitWindows) return normalizeExplicitStateDir(explicitWindows, homeDir);
+  }
+
+  if (isWslRuntime(env, platform)) {
+    const explicitWsl = env[STATE_DIR_WSL_ENV_KEY]?.trim();
+    if (explicitWsl) return normalizeExplicitStateDir(explicitWsl, homeDir);
+  }
+
   const explicit = env[STATE_DIR_ENV_KEY]?.trim();
-  if (explicit) return explicit;
-  return resolveDefaultStateDir(params);
+  if (explicit) return normalizeExplicitStateDir(explicit, homeDir);
+  return resolveDefaultStateDir({ homeDir, exists: params?.exists });
 }
 
 export function resolveWorkspaceStateDir(
