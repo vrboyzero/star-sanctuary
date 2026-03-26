@@ -270,6 +270,25 @@ git clone https://github.com/vrboyzero/star-sanctuary.git
 cd star-sanctuary
 ```
 
+### 配置环境文件
+
+首次运行前，先从示例文件复制一份本地配置：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+或：
+
+```bash
+cp .env.example .env
+```
+
+说明：
+
+- `.env` / `.env.local` 只用于本机，不应提交到 Git
+- 如需覆盖少量本地变量，优先新建 `.env.local`
+
 ### 一键启动
 
 **Windows**
