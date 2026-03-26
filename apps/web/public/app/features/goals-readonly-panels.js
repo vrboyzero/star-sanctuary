@@ -5,13 +5,14 @@ export function createGoalsReadonlyPanelsFeature({
   normalizeGoalBoardId,
   goalRuntimeFilePath,
   onBindHandoffPanelActions,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { goalsDetailEl } = refs;
 
   function renderGoalCanvasPanelLoading() {
     const panel = goalsDetailEl?.querySelector("#goalCanvasPanel");
     if (!panel) return;
-    panel.innerHTML = '<div class="memory-viewer-empty">正在读取 board-ref.json …</div>';
+    panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("goals.canvasPanelLoading", {}, "Loading board-ref.json ..."))}</div>`;
   }
 
   function renderGoalCanvasPanel(goal, payload) {
@@ -26,64 +27,64 @@ export function createGoalsReadonlyPanelsFeature({
     const boardRefPath = goalRuntimeFilePath(goal, "board-ref.json");
     const source = runtimeBoardId ? "runtime board-ref" : registryBoardId ? "goal registry" : "-";
 
-    let statusLabel = "未绑定";
+    let statusLabel = t("goals.canvasStatusUnbound", {}, "Unbound");
     let statusClass = "memory-badge";
-    let hint = "当前还没有检测到 Canvas 主板绑定，可先进入画布列表查看或新建。";
+    let hint = t("goals.canvasHintUnbound", {}, "No Canvas main-board binding is detected yet. You can open the board list or create one first.");
 
     if (effectiveBoardId && hasMismatch) {
-      statusLabel = "绑定存在差异";
+      statusLabel = t("goals.canvasStatusMismatch", {}, "Binding Mismatch");
       statusClass = "memory-badge";
-      hint = `运行态 board-ref (${runtimeBoardId}) 与注册表默认主板 (${registryBoardId}) 不一致，当前优先按运行态绑定打开。`;
+      hint = t("goals.canvasHintMismatch", { runtimeBoardId, registryBoardId }, `Runtime board-ref (${runtimeBoardId}) differs from registry default board (${registryBoardId}). The runtime binding is used first.`);
     } else if (effectiveBoardId && runtimeBoardId) {
-      statusLabel = "已绑定";
+      statusLabel = t("goals.canvasStatusBound", {}, "Bound");
       statusClass = "memory-badge memory-badge-shared";
-      hint = "已检测到运行态 Canvas 绑定，可直接从长期任务详情跳转到关联画布。";
+      hint = t("goals.canvasHintBoundRuntime", {}, "A runtime Canvas binding is detected. You can jump directly to the linked board from long task details.");
     } else if (effectiveBoardId) {
-      statusLabel = "待确认";
+      statusLabel = t("goals.canvasStatusPending", {}, "Pending");
       statusClass = "memory-badge";
-      hint = "当前仅检测到注册表中的默认主板声明；若打开失败，可先进入画布列表创建或校正绑定。";
+      hint = t("goals.canvasHintRegistryOnly", {}, "Only the default board declared in the registry is detected. If opening fails, open the board list to create or fix the binding first.");
     } else if (payload?.readError) {
-      hint = "无法读取 board-ref.json；若使用了自定义路径，请确认该路径已加入可操作区。";
+      hint = t("goals.canvasHintReadError", {}, "Unable to read board-ref.json. If you use a custom path, confirm it has been added to the workspace roots.");
     }
 
     panel.innerHTML = `
       <div class="goal-summary-header">
         <div>
-          <div class="goal-summary-title">Canvas 联动</div>
+          <div class="goal-summary-title">${escapeHtml(t("goals.canvasPanelTitle", {}, "Canvas Link"))}</div>
           <div class="goal-summary-text">${escapeHtml(hint)}</div>
         </div>
         <span class="${statusClass}">${escapeHtml(statusLabel)}</span>
       </div>
       <div class="goal-summary-grid">
         <div class="goal-summary-item">
-          <span class="goal-summary-label">当前主板</span>
+          <span class="goal-summary-label">${escapeHtml(t("goals.canvasCurrentBoard", {}, "Current Board"))}</span>
           <strong class="goal-summary-value">${escapeHtml(effectiveBoardId || "-")}</strong>
         </div>
         <div class="goal-summary-item">
-          <span class="goal-summary-label">来源</span>
+          <span class="goal-summary-label">${escapeHtml(t("goals.canvasSource", {}, "Source"))}</span>
           <strong class="goal-summary-value">${escapeHtml(source)}</strong>
         </div>
         <div class="goal-summary-item">
-          <span class="goal-summary-label">runtime board-ref</span>
+          <span class="goal-summary-label">${escapeHtml(t("goals.canvasRuntimeBoardRef", {}, "Runtime board-ref"))}</span>
           <strong class="goal-summary-value">${escapeHtml(runtimeBoardId || "-")}</strong>
         </div>
         <div class="goal-summary-item">
-          <span class="goal-summary-label">registry boardId</span>
+          <span class="goal-summary-label">${escapeHtml(t("goals.canvasRegistryBoardId", {}, "Registry boardId"))}</span>
           <strong class="goal-summary-value">${escapeHtml(registryBoardId || "-")}</strong>
         </div>
         <div class="goal-summary-item">
-          <span class="goal-summary-label">最近绑定时间</span>
+          <span class="goal-summary-label">${escapeHtml(t("goals.canvasLinkedAt", {}, "Linked At"))}</span>
           <strong class="goal-summary-value">${escapeHtml(formatDateTime(linkedAt))}</strong>
         </div>
         <div class="goal-summary-item">
-          <span class="goal-summary-label">board-ref 路径</span>
+          <span class="goal-summary-label">${escapeHtml(t("goals.canvasBoardRefPath", {}, "board-ref Path"))}</span>
           <strong class="goal-summary-value">${escapeHtml(boardRefPath || "-")}</strong>
         </div>
       </div>
       <div class="goal-detail-actions">
-        <button class="button" data-open-goal-board="${escapeHtml(effectiveBoardId)}" ${effectiveBoardId ? "" : "disabled"}>打开关联画布</button>
-        <button class="button goal-inline-action-secondary" data-open-goal-board-list="${escapeHtml(goal.id)}">查看画布列表</button>
-        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(boardRefPath)}">打开 board-ref.json</button>
+        <button class="button" data-open-goal-board="${escapeHtml(effectiveBoardId)}" ${effectiveBoardId ? "" : "disabled"}>${escapeHtml(t("goals.canvasOpenLinkedBoard", {}, "Open Linked Canvas"))}</button>
+        <button class="button goal-inline-action-secondary" data-open-goal-board-list="${escapeHtml(goal.id)}">${escapeHtml(t("goals.canvasOpenBoardList", {}, "Open Canvas List"))}</button>
+        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(boardRefPath)}">${escapeHtml(t("goals.canvasOpenBoardRef", {}, "Open board-ref.json"))}</button>
       </div>
     `;
   }

@@ -9,6 +9,7 @@ export function createSettingsController({
   syncAttachmentLimitsFromConfig,
   onToggle,
   redactedPlaceholder = "[REDACTED]",
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
     settingsModal,
@@ -124,10 +125,10 @@ export function createSettingsController({
   async function runDoctor() {
     if (!doctorStatusEl) return;
     if (!isConnected()) {
-      doctorStatusEl.innerHTML = '<span class="badge fail">Disconnected</span>';
+      doctorStatusEl.innerHTML = `<span class="badge fail">${t("settings.doctorDisconnected", {}, "Disconnected")}</span>`;
       return;
     }
-    doctorStatusEl.innerHTML = '<span class="badge">Checking...</span>';
+    doctorStatusEl.innerHTML = `<span class="badge">${t("settings.doctorChecking", {}, "Checking...")}</span>`;
 
     const res = await sendReq({ type: "req", id: makeId(), method: "system.doctor" });
     if (res && res.ok && res.payload && res.payload.checks) {
@@ -140,16 +141,16 @@ export function createSettingsController({
       });
       return;
     }
-    doctorStatusEl.innerHTML = '<span class="badge fail">Check Failed</span>';
+    doctorStatusEl.innerHTML = `<span class="badge fail">${t("settings.doctorCheckFailed", {}, "Check Failed")}</span>`;
   }
 
   async function saveConfig() {
     if (!isConnected()) {
-      alert("Error: Not connected to server.\nPlease refresh the page or check if the Gateway is running.");
+      alert(t("settings.notConnectedError", {}, "Error: Not connected to server.\nPlease refresh the page or check if the Gateway is running."));
       return;
     }
     if (saveSettingsBtn) {
-      saveSettingsBtn.textContent = "Saving...";
+      saveSettingsBtn.textContent = t("settings.saving", {}, "Saving...");
       saveSettingsBtn.disabled = true;
     }
 
@@ -197,30 +198,30 @@ export function createSettingsController({
     if (res && res.ok) {
       invalidateServerConfigCache?.();
       if (saveSettingsBtn) {
-        saveSettingsBtn.textContent = "Saved";
+        saveSettingsBtn.textContent = t("settings.saved", {}, "Saved");
       }
       setTimeout(() => {
         if (saveSettingsBtn) {
-          saveSettingsBtn.textContent = "Save";
+          saveSettingsBtn.textContent = t("settings.save", {}, "Save");
           saveSettingsBtn.disabled = false;
         }
-        alert("Configuration saved. Please restart server to apply changes.");
+        alert(t("settings.configSavedRestart", {}, "Configuration saved. Please restart server to apply changes."));
       }, 1000);
       return;
     }
 
     if (saveSettingsBtn) {
-      saveSettingsBtn.textContent = "Failed";
+      saveSettingsBtn.textContent = t("settings.failed", {}, "Failed");
       saveSettingsBtn.disabled = false;
     }
-    alert(`Save failed: ${res?.error ? res.error.message : "Unknown error"}`);
+    alert(t("settings.saveFailed", { message: res?.error ? res.error.message : "Unknown error" }, "Save failed: {message}"));
   }
 
   async function restartServer() {
-    if (!confirm("Are you sure you want to restart the server?")) return;
+    if (!confirm(t("settings.restartConfirm", {}, "Are you sure you want to restart the server?"))) return;
     if (!isConnected()) return;
     await sendReq({ type: "req", id: makeId(), method: "system.restart" });
-    setStatus("Restarting...");
+    setStatus(t("settings.restartingStatus", {}, "Restarting..."));
   }
 
   return {

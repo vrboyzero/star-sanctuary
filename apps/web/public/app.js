@@ -19,11 +19,14 @@ import { createGoalsOverviewFeature } from "./app/features/goals-overview.js";
 import { createGoalsReadonlyPanelsFeature } from "./app/features/goals-readonly-panels.js";
 import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-panel.js";
 import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
+import { createLocaleController } from "./app/features/locale.js";
 import { initPromptController } from "./app/features/prompt.js";
 import { createSettingsController } from "./app/features/settings.js";
+import { createThemeController } from "./app/features/theme.js";
 import { createToolSettingsController } from "./app/features/tool-settings.js";
 import { createVoiceFeature } from "./app/features/voice.js";
 import { createWorkspaceFeature } from "./app/features/workspace.js";
+import { LOCALE_DICTIONARIES, LOCALE_META } from "./app/i18n/index.js";
 
 const statusEl = document.getElementById("status");
 const authModeEl = document.getElementById("authMode");
@@ -39,6 +42,7 @@ const voiceDurationEl = document.getElementById("voiceDuration");
 const messagesEl = document.getElementById("messages");
 const modelSelectEl = document.getElementById("modelSelect");
 const agentSelectEl = document.getElementById("agentSelect");
+const themeToggleBtn = document.getElementById("themeToggleBtn");
 
 // 文件树和编辑器 DOM 元素
 const sidebarEl = document.getElementById("sidebar");
@@ -177,6 +181,20 @@ const promptController = initPromptController({
   onSubmit: () => sendMessage(),
 });
 
+const localeController = createLocaleController({
+  storageKey: "ss-webchat-locale",
+  defaultLocale: "zh-CN",
+  dictionaries: LOCALE_DICTIONARIES,
+  localeMeta: LOCALE_META,
+});
+
+const themeController = createThemeController({
+  storageKey: "ss-webchat-theme",
+  defaultTheme: "dark",
+  toggleButtonEl: themeToggleBtn,
+  translate: localeController.t,
+});
+
 let attachmentsFeature = null;
 let workspaceFeature = null;
 let chatEventsFeature = null;
@@ -220,6 +238,22 @@ const voiceFeature = createVoiceFeature({
     attachmentsFeature?.renderAttachmentsPreview(hintMessage);
   },
   onSendMessage: () => sendMessage(),
+  t: localeController.t,
+  getSpeechRecognitionLocale: () => localeController.getSpeechRecognitionLocale(),
+});
+
+localeController.subscribe(() => {
+  themeController.refreshLabels?.();
+  voiceFeature.refreshLocale?.();
+  chatNetworkFeature?.refreshLocale?.();
+  workspaceFeature?.refreshLocale?.();
+  canvasContextFeature?.refreshLocale?.();
+  window._canvasApp?.refreshLocale?.();
+  toolSettingsController.refreshLocale?.();
+  refreshGoalsLocale();
+  refreshMemoryLocale();
+  syncSaveWorkspaceRootsButton();
+  renderTaskTokenHistory();
 });
 
 // 身份信息（从 hello-ok 获取）
@@ -326,6 +360,7 @@ workspaceFeature = createWorkspaceFeature({
   loadServerConfig,
   syncAttachmentLimitsFromConfig,
   persistWorkspaceRootsField,
+  t: localeController.t,
 });
 
 restoreAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl });
@@ -370,7 +405,7 @@ if (urlToken) {
   transientUrlToken = urlToken;
 }
 
-setStatus("disconnected");
+setStatus(localeController.t("status.disconnected", {}, "disconnected"));
 attachmentsFeature.renderAttachmentsPreview();
 
 connectBtn.addEventListener("click", () => connect());
@@ -678,6 +713,7 @@ chatNetworkFeature = createChatNetworkFeature({
   debugLog,
   onHelloOk: (frame) => handleHelloOk(frame),
   onEvent: (event, payload) => handleEvent(event, payload),
+  t: localeController.t,
 });
 
 canvasContextFeature = createCanvasContextFeature({
@@ -700,6 +736,7 @@ canvasContextFeature = createCanvasContextFeature({
   openSourcePath,
   showNotice,
   getGoalDisplayName,
+  t: localeController.t,
 });
 
 chatUiFeature = createChatUiFeature({
@@ -756,6 +793,7 @@ goalsOverviewFeature = createGoalsOverviewFeature({
   renderCanvasGoalContext,
   onResumeGoal: (goalId) => resumeGoal(goalId),
   onPauseGoal: (goalId) => pauseGoal(goalId),
+  t: localeController.t,
 });
 
 goalsDetailFeature = createGoalsDetailFeature({
@@ -790,6 +828,7 @@ goalsDetailFeature = createGoalsDetailFeature({
   onLoadGoalReviewGovernanceData: (goal) => {
     void loadGoalReviewGovernanceData(goal);
   },
+  t: localeController.t,
 });
 
 goalsReadonlyPanelsFeature = createGoalsReadonlyPanelsFeature({
@@ -801,6 +840,7 @@ goalsReadonlyPanelsFeature = createGoalsReadonlyPanelsFeature({
   normalizeGoalBoardId,
   goalRuntimeFilePath,
   onBindHandoffPanelActions: (goal) => bindGoalHandoffPanelActions(goal),
+  t: localeController.t,
 });
 
 goalsTrackingPanelFeature = createGoalsTrackingPanelFeature({
@@ -874,6 +914,7 @@ memoryViewerFeature = createMemoryViewerFeature({
   bindStatsAuditJumpLinks,
   bindMemoryPathLinks,
   bindTaskAuditJumpLinks,
+  t: localeController.t,
 });
 
 function loadAgentList() {
@@ -911,10 +952,22 @@ if (modelSelectEl) {
 
 // 保存按钮点击事件
 const saveWorkspaceRootsBtn = document.getElementById("saveWorkspaceRoots");
+let saveWorkspaceRootsButtonState = "default";
+let saveWorkspaceRootsResetTimer = null;
+
+function syncSaveWorkspaceRootsButton() {
+  if (!saveWorkspaceRootsBtn) return;
+  const key = saveWorkspaceRootsButtonState === "saved" ? "common.saved" : "common.save";
+  const fallback = saveWorkspaceRootsButtonState === "saved" ? "Saved" : "Save";
+  saveWorkspaceRootsBtn.innerHTML = `<u>${localeController.t(key, {}, fallback)}</u>`;
+}
+
+syncSaveWorkspaceRootsButton();
+
 if (saveWorkspaceRootsBtn) {
   saveWorkspaceRootsBtn.addEventListener("click", async () => {
     if (!ws || !isReady) {
-      alert("请先连接到服务器");
+      alert(localeController.t("panel.saveWorkspaceNotConnected", {}, "Please connect to the server first"));
       return;
     }
 
@@ -934,13 +987,19 @@ if (saveWorkspaceRootsBtn) {
 
     if (res && res.ok) {
       invalidateServerConfigCache();
-      saveWorkspaceRootsBtn.innerHTML = "<u>已保存</u>";
-      setTimeout(() => {
-        saveWorkspaceRootsBtn.innerHTML = "<u>保存</u>";
+      saveWorkspaceRootsButtonState = "saved";
+      syncSaveWorkspaceRootsButton();
+      if (saveWorkspaceRootsResetTimer) {
+        clearTimeout(saveWorkspaceRootsResetTimer);
+      }
+      saveWorkspaceRootsResetTimer = setTimeout(() => {
+        saveWorkspaceRootsButtonState = "default";
+        syncSaveWorkspaceRootsButton();
+        saveWorkspaceRootsResetTimer = null;
       }, 1500);
     } else {
-      const msg = res && res.error ? res.error.message : "保存失败";
-      alert(`保存失败: ${msg}`);
+      const msg = res && res.error ? res.error.message : localeController.t("settings.failed", {}, "Failed");
+      alert(localeController.t("panel.saveWorkspaceFailed", { message: msg }, "Save failed: {message}"));
     }
   });
 }
@@ -1069,17 +1128,18 @@ async function sendMessage() {
   // ── 斜杠命令：/restart ──
   if (text === "/restart") {
     appendMessage("me", "/restart");
-    const statusEl = appendMessage("bot", "正在重启服务…");
+    const statusEl = appendMessage("bot", localeController.t("settings.restartCommandPending", {}, "Restarting service…"));
     const res = await sendReq({
       type: "req",
       id: makeId(),
       method: "system.restart",
     });
     if (res && res.ok) {
-      statusEl.textContent = "服务正在重启，请稍候…";
-      setStatus("Restarting...");
+      statusEl.textContent = localeController.t("settings.restartCommandAccepted", {}, "Service is restarting, please wait...");
+      setStatus(localeController.t("settings.restartingStatus", {}, "Restarting..."));
     } else {
-      statusEl.textContent = "重启失败：" + (res?.error?.message || "未知错误");
+      const message = res?.error?.message || localeController.t("settings.failed", {}, "Failed");
+      statusEl.textContent = localeController.t("settings.restartFailed", { message }, `Restart failed: ${message}`);
     }
     return;
   }
@@ -1255,6 +1315,7 @@ if (workshopLink && window.BELLDANDY_WEB_CONFIG?.workshopUrl) {
 }
 
 const cfgApiKey = document.getElementById("cfgApiKey");
+const cfgLocale = document.getElementById("cfgLocale");
 const cfgBaseUrl = document.getElementById("cfgBaseUrl");
 const cfgModel = document.getElementById("cfgModel");
 const cfgHeartbeat = document.getElementById("cfgHeartbeat");
@@ -1295,6 +1356,8 @@ voiceFeature.bindSettingsUI({
   clearBtn: cfgVoiceShortcutClear,
 });
 
+localeController.bindSelect(cfgLocale);
+
 const settingsController = createSettingsController({
   refs: {
     settingsModal,
@@ -1303,6 +1366,7 @@ const settingsController = createSettingsController({
     saveSettingsBtn,
     restartBtn,
     doctorStatusEl,
+    cfgLocale,
     cfgApiKey,
     cfgBaseUrl,
     cfgModel,
@@ -1340,6 +1404,7 @@ const settingsController = createSettingsController({
   syncAttachmentLimitsFromConfig,
   onToggle: (show) => voiceFeature.onSettingsToggle(show),
   redactedPlaceholder: REDACTED_PLACEHOLDER,
+  t: localeController.t,
 });
 
 function toggleSettings(show) {
@@ -1391,7 +1456,7 @@ function showRestartCountdown(countdown, reason) {
   } else {
     // countdown === 0，服务即将断开
     restartCountdownEl.textContent = "…";
-    setStatus("Restarting…");
+    setStatus(localeController.t("settings.restartingStatus", {}, "Restarting..."));
   }
 }
 
@@ -1514,7 +1579,7 @@ function renderTaskTokenHistory() {
     : [];
 
   if (!items.length) {
-    taskTokenHistoryEl.innerHTML = '<div class="task-token-history-empty">暂无任务级 Token 记录</div>';
+    taskTokenHistoryEl.innerHTML = `<div class="task-token-history-empty">${escapeHtml(localeController.t("panel.taskTokenEmpty", {}, "No task-level token records yet"))}</div>`;
     return;
   }
 
@@ -1718,8 +1783,7 @@ function switchTreeMode(mode) {
 
 function setSidebarActionButtonState(button, active) {
   if (!button) return;
-  button.style.background = active ? "rgba(255,255,255,0.1)" : "transparent";
-  button.style.opacity = active ? "1" : "0.7";
+  button.classList.toggle("is-active", Boolean(active));
 }
 
 function updateSidebarModeButtons(treeModeOverride) {
@@ -2024,7 +2088,12 @@ async function openGoalTaskViewer(goalId) {
   syncMemoryTaskGoalFilterUi();
   switchMode("memory");
   await loadMemoryViewer(true);
-  showNotice("已切到任务视图", `当前仅展示 ${getGoalDisplayName(goalId)} 的关联 tasks。`, "info", 2200);
+  showNotice(
+    localeController.t("goals.taskViewSwitchedTitle", {}, "Switched to task view"),
+    localeController.t("goals.taskViewSwitchedMessage", { goalName: getGoalDisplayName(goalId) }, `Now showing only tasks related to ${getGoalDisplayName(goalId)}.`),
+    "info",
+    2200,
+  );
 }
 
 function resetGoalCreateForm() {
@@ -2271,6 +2340,23 @@ function renderGoalsEmpty(message) {
 
 function renderGoalList(items) {
   goalsOverviewFeature?.renderGoalList(items);
+}
+
+function refreshGoalsLocale() {
+  if (!goalsSection) return;
+  if (!ws || !isReady) {
+    renderGoalsLoading(localeController.t("goals.loadingDisconnected", {}, "Disconnected"));
+    return;
+  }
+  if (Array.isArray(goalsState.items) && goalsState.items.length) {
+    renderGoalsSummary(goalsState.items);
+    renderGoalList(goalsState.items);
+    renderGoalDetail(getGoalById(goalsState.selectedId));
+    return;
+  }
+  if (goalsState.loadSeq > 0) {
+    renderGoalsLoading(localeController.t("goals.loading", {}, "Loading..."));
+  }
 }
 
 function bindGoalDetailActions(goal) {
@@ -3321,12 +3407,20 @@ async function loadGoals(forceReload = false, preferredGoalId) {
 
 async function submitGoalCreateForm() {
   if (!ws || !isReady) {
-    showNotice("无法创建长期任务", "未连接到服务器。", "error");
+    showNotice(
+      localeController.t("goals.createUnavailableTitle", {}, "Unable to create long task"),
+      localeController.t("goals.notConnected", {}, "Not connected to the server."),
+      "error",
+    );
     return;
   }
   const normalizedTitle = goalCreateTitleEl?.value.trim() || "";
   if (!normalizedTitle) {
-    showNotice("无法创建长期任务", "标题不能为空。", "error");
+    showNotice(
+      localeController.t("goals.createUnavailableTitle", {}, "Unable to create long task"),
+      localeController.t("goals.titleRequired", {}, "Title cannot be empty."),
+      "error",
+    );
     goalCreateTitleEl?.focus();
     return;
   }
@@ -3335,7 +3429,7 @@ async function submitGoalCreateForm() {
   const autoResume = goalCreateAutoResumeEl?.checked !== false;
   if (goalCreateSubmitBtn) {
     goalCreateSubmitBtn.disabled = true;
-    goalCreateSubmitBtn.textContent = "创建中...";
+    goalCreateSubmitBtn.textContent = localeController.t("goals.creating", {}, "Creating...");
   }
   const res = await sendReq({
     type: "req",
@@ -3349,15 +3443,24 @@ async function submitGoalCreateForm() {
   });
   if (goalCreateSubmitBtn) {
     goalCreateSubmitBtn.disabled = false;
-    goalCreateSubmitBtn.textContent = "创建";
+    goalCreateSubmitBtn.textContent = localeController.t("goals.createButton", {}, "Create");
   }
   if (!res || !res.ok || !res.payload?.goal?.id) {
-    showNotice("长期任务创建失败", res?.error?.message || "未知错误。", "error");
+    showNotice(
+      localeController.t("goals.createFailedTitle", {}, "Failed to create long task"),
+      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
+      "error",
+    );
     return;
   }
   const goal = res.payload.goal;
   toggleGoalCreateModal(false);
-  showNotice("长期任务已创建", `${goal.title || goal.id} 已创建，准备进入执行通道。`, "success", 2200);
+  showNotice(
+    localeController.t("goals.createdTitle", {}, "Long task created"),
+    localeController.t("goals.createdMessage", { goalName: goal.title || goal.id }, `${goal.title || goal.id} was created and is ready to enter its execution channel.`),
+    "success",
+    2200,
+  );
   await loadGoals(true, goal.id);
   if (autoResume) {
     await resumeGoal(goal.id, { silent: true });
@@ -3366,7 +3469,11 @@ async function submitGoalCreateForm() {
 
 async function resumeGoal(goalId, options = {}) {
   if (!ws || !isReady) {
-    showNotice("无法恢复长期任务", "未连接到服务器。", "error");
+    showNotice(
+      localeController.t("goals.resumeUnavailableTitle", {}, "Unable to resume long task"),
+      localeController.t("goals.notConnected", {}, "Not connected to the server."),
+      "error",
+    );
     return;
   }
   const nodeId = typeof options.nodeId === "string" && options.nodeId.trim() ? options.nodeId.trim() : undefined;
@@ -3377,21 +3484,25 @@ async function resumeGoal(goalId, options = {}) {
     params: { goalId, nodeId },
   });
   if (!res || !res.ok) {
-    showNotice("长期任务恢复失败", res?.error?.message || "未知错误。", "error");
+    showNotice(
+      localeController.t("goals.resumeFailedTitle", {}, "Failed to resume long task"),
+      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
+      "error",
+    );
     return;
   }
   const goal = res.payload?.goal || getGoalById(goalId);
   const conversationId = res.payload?.conversationId || goal?.activeConversationId || goalBaseConversationId(goalId);
   await loadGoals(true, goalId);
   openConversationSession(conversationId, nodeId
-    ? `已进入长期任务节点通道：${goal?.title || goalId} / ${nodeId}`
-    : `已进入长期任务通道：${goal?.title || goalId}`);
+    ? localeController.t("goals.resumedNodeChannelHint", { goalName: goal?.title || goalId, nodeId }, `Entered long task node channel: ${goal?.title || goalId} / ${nodeId}`)
+    : localeController.t("goals.resumedChannelHint", { goalName: goal?.title || goalId }, `Entered long task channel: ${goal?.title || goalId}`));
   if (!options.silent) {
     showNotice(
-      "已恢复长期任务",
+      localeController.t("goals.resumedTitle", {}, "Long task resumed"),
       nodeId
-        ? `${goal?.title || goalId} 已按上次节点 ${nodeId} 恢复。`
-        : `${goal?.title || goalId} 已切到独立 goal channel。`,
+        ? localeController.t("goals.resumedNodeMessage", { goalName: goal?.title || goalId, nodeId }, `${goal?.title || goalId} resumed from the last node ${nodeId}.`)
+        : localeController.t("goals.resumedMessage", { goalName: goal?.title || goalId }, `${goal?.title || goalId} switched to its dedicated goal channel.`),
       "success",
       2200,
     );
@@ -3400,7 +3511,11 @@ async function resumeGoal(goalId, options = {}) {
 
 async function pauseGoal(goalId) {
   if (!ws || !isReady) {
-    showNotice("无法暂停长期任务", "未连接到服务器。", "error");
+    showNotice(
+      localeController.t("goals.pauseUnavailableTitle", {}, "Unable to pause long task"),
+      localeController.t("goals.notConnected", {}, "Not connected to the server."),
+      "error",
+    );
     return;
   }
   const res = await sendReq({
@@ -3410,7 +3525,11 @@ async function pauseGoal(goalId) {
     params: { goalId },
   });
   if (!res || !res.ok) {
-    showNotice("长期任务暂停失败", res?.error?.message || "未知错误。", "error");
+    showNotice(
+      localeController.t("goals.pauseFailedTitle", {}, "Failed to pause long task"),
+      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
+      "error",
+    );
     return;
   }
   if (isConversationForGoal(activeConversationId, goalId)) {
@@ -3420,12 +3539,21 @@ async function pauseGoal(goalId) {
   }
   const goal = res.payload?.goal || getGoalById(goalId);
   await loadGoals(true, goalId);
-  showNotice("已暂停长期任务", `${goal?.title || goalId} 已暂停，普通聊天通道不受影响。`, "info", 2400);
+  showNotice(
+    localeController.t("goals.pausedTitle", {}, "Long task paused"),
+    localeController.t("goals.pausedMessage", { goalName: goal?.title || goalId }, `${goal?.title || goalId} has been paused. The normal chat channel is unaffected.`),
+    "info",
+    2400,
+  );
 }
 
 async function generateGoalHandoff(goalId) {
   if (!ws || !isReady) {
-    showNotice("无法生成 handoff", "未连接到服务器。", "error");
+    showNotice(
+      localeController.t("goals.handoffUnavailableTitle", {}, "Unable to generate handoff"),
+      localeController.t("goals.notConnected", {}, "Not connected to the server."),
+      "error",
+    );
     return;
   }
   const goal = getGoalById(goalId);
@@ -3436,13 +3564,22 @@ async function generateGoalHandoff(goalId) {
     params: { goalId },
   });
   if (!res || !res.ok) {
-    showNotice("handoff 生成失败", res?.error?.message || "未知错误。", "error");
+    showNotice(
+      localeController.t("goals.handoffFailedTitle", {}, "Failed to generate handoff"),
+      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
+      "error",
+    );
     return;
   }
   if (goal && goalsState.selectedId === goalId) {
     void loadGoalHandoffData(goal);
   }
-  showNotice("已生成 handoff", `${goal?.title || goalId} 的恢复交接摘要已更新。`, "success", 2200);
+  showNotice(
+    localeController.t("goals.handoffGeneratedTitle", {}, "Handoff generated"),
+    localeController.t("goals.handoffGeneratedMessage", { goalName: goal?.title || goalId }, `The recovery handoff summary for ${goal?.title || goalId} has been updated.`),
+    "success",
+    2200,
+  );
 }
 
 function switchMemoryViewerTab(tab) {
@@ -3474,19 +3611,19 @@ async function loadTaskDetail(taskId) {
     memoryViewerState.selectedTask = null;
     memoryViewerState.selectedCandidate = null;
     memoryViewerState.pendingUsageRevokeId = null;
-    renderMemoryViewerDetailEmpty("请选择一个 task。");
+    renderMemoryViewerDetailEmpty(localeController.t("memory.selectTask", {}, "Please select a task."));
     renderMemoryViewerStats(memoryViewerState.stats);
     return;
   }
 
-  renderMemoryViewerDetailEmpty("Task 详情加载中…");
+  renderMemoryViewerDetailEmpty(localeController.t("memory.taskDetailLoadingShort", {}, "Loading task details…"));
   const id = makeId();
   const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId } });
   if (!res || !res.ok) {
     memoryViewerState.selectedTask = null;
     memoryViewerState.selectedCandidate = null;
     memoryViewerState.pendingUsageRevokeId = null;
-    renderMemoryViewerDetailEmpty(res?.error?.message || "Task 详情加载失败。");
+    renderMemoryViewerDetailEmpty(res?.error?.message || localeController.t("memory.taskDetailLoadFailed", {}, "Failed to load task details."));
     renderMemoryViewerStats(memoryViewerState.stats);
     return;
   }
@@ -3511,15 +3648,15 @@ async function loadMemoryChunkViewer(forceSelectFirst = false) {
 
 async function loadMemoryDetail(chunkId) {
   if (!chunkId) {
-    renderMemoryViewerDetailEmpty("请选择一条 memory。");
+    renderMemoryViewerDetailEmpty(localeController.t("memory.selectMemory", {}, "Please select a memory."));
     return;
   }
 
-  renderMemoryViewerDetailEmpty("Memory 详情加载中…");
+  renderMemoryViewerDetailEmpty(localeController.t("memory.memoryDetailLoadingShort", {}, "Loading memory details…"));
   const id = makeId();
   const res = await sendReq({ type: "req", id, method: "memory.get", params: { chunkId } });
   if (!res || !res.ok) {
-    renderMemoryViewerDetailEmpty(res?.error?.message || "Memory 详情加载失败。");
+    renderMemoryViewerDetailEmpty(res?.error?.message || localeController.t("memory.memoryDetailLoadFailed", {}, "Failed to load memory details."));
     return;
   }
 
@@ -3594,10 +3731,40 @@ function renderMemoryList(items) {
   return memoryViewerFeature?.renderMemoryList(items);
 }
 
+function refreshMemoryLocale() {
+  if (!memoryViewerSection) return;
+  if (!ws || !isReady) {
+    renderMemoryViewerStats(null);
+    renderMemoryViewerListEmpty(localeController.t("memory.disconnectedList", {}, "Not connected to the server."));
+    renderMemoryViewerDetailEmpty(localeController.t("memory.disconnectedDetail", {}, "Tasks and memories will be available after connection is ready."));
+    return;
+  }
+  renderMemoryViewerStats(memoryViewerState.stats);
+  if (memoryViewerState.tab === "tasks") {
+    renderTaskList(memoryViewerState.items);
+    if (memoryViewerState.selectedTask) {
+      renderTaskDetail(memoryViewerState.selectedTask);
+      return;
+    }
+    if (memoryViewerState.selectedCandidate) {
+      renderCandidateOnlyDetail(memoryViewerState.selectedCandidate);
+      return;
+    }
+    renderMemoryViewerDetailEmpty(localeController.t("memory.selectTask", {}, "Please select a task."));
+    return;
+  }
+  renderMemoryList(memoryViewerState.items);
+  if (memoryViewerState.selectedId) {
+    void loadMemoryDetail(memoryViewerState.selectedId);
+    return;
+  }
+  renderMemoryViewerDetailEmpty(localeController.t("memory.selectMemory", {}, "Please select a memory."));
+}
+
 function renderTaskDetail(task) {
   if (!memoryViewerDetailEl) return;
   if (!task) {
-    renderMemoryViewerDetailEmpty("Task 不存在。");
+    renderMemoryViewerDetailEmpty(localeController.t("memory.taskMissing", {}, "Task not found."));
     return;
   }
 
@@ -3631,24 +3798,24 @@ function renderTaskDetail(task) {
       </div>
 
       <div class="memory-detail-grid">
-        <div class="memory-detail-card"><span class="memory-detail-label">开始时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.startedAt))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">结束时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.finishedAt))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">耗时</span><div class="memory-detail-text">${escapeHtml(formatDuration(task.durationMs))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.taskStartTime", {}, "Started At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.startedAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.taskEndTime", {}, "Finished At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.finishedAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.taskDuration", {}, "Duration"))}</span><div class="memory-detail-text">${escapeHtml(formatDuration(task.durationMs))}</div></div>
         <div class="memory-detail-card"><span class="memory-detail-label">Token</span><div class="memory-detail-text">${escapeHtml(formatCount(task.tokenTotal))}</div></div>
         ${goalId ? `<div class="memory-detail-card"><span class="memory-detail-label">Goal</span><div class="memory-detail-text">${escapeHtml(getGoalDisplayName(goalId))}</div></div>` : ""}
       </div>
 
       ${goalId ? `
         <div class="goal-detail-actions">
-          <button class="button" data-open-goal-id="${escapeHtml(goalId)}">打开长期任务</button>
-          <button class="button" data-open-goal-tasks="${escapeHtml(goalId)}">按该 Goal 过滤 Tasks</button>
+          <button class="button" data-open-goal-id="${escapeHtml(goalId)}">${escapeHtml(localeController.t("memory.openGoal", {}, "Open Long Task"))}</button>
+          <button class="button" data-open-goal-tasks="${escapeHtml(goalId)}">${escapeHtml(localeController.t("memory.filterTasksByGoal", {}, "Filter Tasks by Goal"))}</button>
         </div>
       ` : ""}
 
       <div class="memory-detail-grid memory-detail-grid-usage">
-        <div class="memory-detail-card"><span class="memory-detail-label">Method 使用数</span><div class="memory-detail-text">${escapeHtml(formatCount(usedMethods.length))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">Skill 使用数</span><div class="memory-detail-text">${escapeHtml(formatCount(usedSkills.length))}</div></div>
-        <div class="memory-detail-card"><span class="memory-detail-label">最近采用时间</span><div class="memory-detail-text">${escapeHtml(formatDateTime(lastUsageAt))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.methodUsageCount", {}, "Method Usage Count"))}</span><div class="memory-detail-text">${escapeHtml(formatCount(usedMethods.length))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.skillUsageCount", {}, "Skill Usage Count"))}</span><div class="memory-detail-text">${escapeHtml(formatCount(usedSkills.length))}</div></div>
+        <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.statLastUsedAt", {}, "Last Used At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(lastUsageAt))}</div></div>
       </div>
 
       ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">Objective</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
@@ -3657,12 +3824,12 @@ function renderTaskDetail(task) {
       ${task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">Reflection</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
 
       <div class="memory-detail-card">
-        <span class="memory-detail-label">Method Usage (${usedMethods.length})</span>
+        <span class="memory-detail-label">${escapeHtml(localeController.t("memory.methodUsageTitle", {}, "Method Usage"))} (${usedMethods.length})</span>
         ${renderTaskUsageItems(usedMethods, "method")}
       </div>
 
       <div class="memory-detail-card">
-        <span class="memory-detail-label">Skill Usage (${usedSkills.length})</span>
+        <span class="memory-detail-label">${escapeHtml(localeController.t("memory.skillUsageTitle", {}, "Skill Usage"))} (${usedSkills.length})</span>
         ${renderTaskUsageItems(usedSkills, "skill")}
       </div>
 
@@ -3681,11 +3848,11 @@ function renderTaskDetail(task) {
               </div>
             `).join("")}
           </div>
-        ` : `<div class="memory-detail-text">无工具调用记录。</div>`}
+        ` : `<div class="memory-detail-text">${escapeHtml(localeController.t("memory.noToolCalls", {}, "No tool call records."))}</div>`}
       </div>
 
       <div class="memory-detail-card">
-        <span class="memory-detail-label">Linked Memories (${memoryLinks.length})</span>
+        <span class="memory-detail-label">${escapeHtml(localeController.t("memory.linkedMemoriesTitle", {}, "Linked Memories"))} (${memoryLinks.length})</span>
         ${memoryLinks.length ? `
           <div class="memory-inline-list">
             ${memoryLinks.map((link) => `
@@ -3700,11 +3867,11 @@ function renderTaskDetail(task) {
               </div>
             `).join("")}
           </div>
-        ` : `<div class="memory-detail-text">暂无关联记忆。</div>`}
+        ` : `<div class="memory-detail-text">${escapeHtml(localeController.t("memory.noLinkedMemories", {}, "No linked memories."))}</div>`}
       </div>
 
       <div class="memory-detail-card">
-        <span class="memory-detail-label">Artifacts (${artifactPaths.length})</span>
+        <span class="memory-detail-label">${escapeHtml(localeController.t("memory.artifactsTitle", {}, "Artifacts"))} (${artifactPaths.length})</span>
         ${artifactPaths.length ? `
           <div class="memory-inline-list">
             ${artifactPaths.map((artifactPath) => `
@@ -3713,7 +3880,7 @@ function renderTaskDetail(task) {
               </div>
             `).join("")}
           </div>
-        ` : `<div class="memory-detail-text">暂无产物路径。</div>`}
+        ` : `<div class="memory-detail-text">${escapeHtml(localeController.t("memory.noArtifacts", {}, "No artifact paths."))}</div>`}
       </div>
     </div>
   `;
@@ -3817,7 +3984,7 @@ function bindTaskAuditJumpLinks() {
       if (memoryViewerState.selectedTask) {
         renderTaskDetail(memoryViewerState.selectedTask);
       } else {
-        renderMemoryViewerDetailEmpty("请选择一个 task。");
+        renderMemoryViewerDetailEmpty(localeController.t("memory.selectTask", {}, "Please select a task."));
       }
     });
   });
@@ -3839,7 +4006,13 @@ function bindTaskUsageRevokeButtons(task) {
       if (!usageId || !taskId) return;
       if (memoryViewerState.pendingUsageRevokeId) return;
 
-      const confirmed = window.confirm(`确认撤销这条 usage 记录？\n\n${assetKey || usageId}`);
+      const confirmed = window.confirm(
+        localeController.t(
+          "memory.usageRevokeConfirm",
+          { target: assetKey || usageId },
+          `Confirm revoking this usage record?\n\n${assetKey || usageId}`,
+        ),
+      );
       if (!confirmed) return;
 
       await revokeTaskUsage(usageId, taskId, assetKey);
@@ -3849,7 +4022,11 @@ function bindTaskUsageRevokeButtons(task) {
 
 async function revokeTaskUsage(usageId, taskId, assetKey = "") {
   if (!ws || !isReady) {
-    showNotice("无法撤销 usage", "未连接到服务器。", "error");
+    showNotice(
+      localeController.t("memory.usageRevokeUnavailableTitle", {}, "Unable to revoke usage"),
+      localeController.t("memory.disconnectedList", {}, "Not connected to the server."),
+      "error",
+    );
     return;
   }
 
@@ -3868,17 +4045,32 @@ async function revokeTaskUsage(usageId, taskId, assetKey = "") {
     });
 
     if (!res || !res.ok || !res.payload?.revoked) {
-      showNotice("撤销失败", res?.error?.message || "Usage 未撤销。", "error");
+      showNotice(
+        localeController.t("memory.usageRevokeFailedTitle", {}, "Revoke failed"),
+        res?.error?.message || localeController.t("memory.usageRevokeFailedMessage", {}, "Usage was not revoked."),
+        "error",
+      );
       return;
     }
 
-    showNotice("已撤销 usage", assetKey ? `${assetKey} 已从当前 task 的使用记录中移除。` : "该条经验使用记录已撤销。", "success", 2200);
+    showNotice(
+      localeController.t("memory.usageRevokedTitle", {}, "Usage revoked"),
+      assetKey
+        ? localeController.t("memory.usageRevokedWithAsset", { assetKey }, `${assetKey} was removed from the current task usage record.`)
+        : localeController.t("memory.usageRevokedMessage", {}, "This experience usage record has been revoked."),
+      "success",
+      2200,
+    );
     await Promise.all([
       loadTaskUsageOverview(),
       loadTaskDetail(taskId),
     ]);
   } catch (error) {
-    showNotice("撤销失败", error instanceof Error ? error.message : String(error), "error");
+    showNotice(
+      localeController.t("memory.usageRevokeFailedTitle", {}, "Revoke failed"),
+      error instanceof Error ? error.message : String(error),
+      "error",
+    );
   } finally {
     memoryViewerState.pendingUsageRevokeId = null;
     if (memoryViewerState.selectedTask?.id === taskId) {
@@ -3938,26 +4130,26 @@ function normalizeMemoryVisibility(value) {
 function formatMemoryCategory(value) {
   switch (value) {
     case "preference":
-      return "偏好";
+      return localeController.t("memory.filters.categoryPreference", {}, "Preference");
     case "experience":
-      return "经验";
+      return localeController.t("memory.filters.categoryExperience", {}, "Experience");
     case "fact":
-      return "事实";
+      return localeController.t("memory.filters.categoryFact", {}, "Fact");
     case "decision":
-      return "决策";
+      return localeController.t("memory.filters.categoryDecision", {}, "Decision");
     case "entity":
-      return "实体";
+      return localeController.t("memory.filters.categoryEntity", {}, "Entity");
     case "other":
-      return "其他";
+      return localeController.t("memory.filters.categoryOther", {}, "Other");
     default:
-      return "未分类";
+      return localeController.t("memory.filters.categoryUncategorized", {}, "Uncategorized");
   }
 }
 
 function getActiveMemoryCategoryLabel() {
   const value = memoryChunkCategoryFilterEl?.value || "";
-  if (!value) return "全部分类";
-  if (value === "uncategorized") return "未分类";
+  if (!value) return localeController.t("memory.filters.categoryAll", {}, "All Categories");
+  if (value === "uncategorized") return localeController.t("memory.filters.categoryUncategorized", {}, "Uncategorized");
   return formatMemoryCategory(value);
 }
 
@@ -3971,8 +4163,8 @@ function renderTaskUsageOverviewCard() {
     return `
       <div class="memory-stat-card memory-stat-card-wide">
         <div class="memory-stat-card-head">
-          <span class="memory-stat-label">经验消费总览</span>
-          <span class="memory-stat-caption">暂无 usage 数据</span>
+          <span class="memory-stat-label">${escapeHtml(localeController.t("memory.usageOverviewTitle", {}, "Experience Usage Overview"))}</span>
+          <span class="memory-stat-caption">${escapeHtml(localeController.t("memory.usageOverviewEmpty", {}, "No usage data yet"))}</span>
         </div>
       </div>
     `;
@@ -3981,12 +4173,14 @@ function renderTaskUsageOverviewCard() {
   return `
     <div class="memory-stat-card memory-stat-card-wide">
       <div class="memory-stat-card-head">
-        <span class="memory-stat-label">经验消费总览</span>
-        <span class="memory-stat-caption">${loading ? "统计更新中…" : "按全局累计使用次数展示"}</span>
+        <span class="memory-stat-label">${escapeHtml(localeController.t("memory.usageOverviewTitle", {}, "Experience Usage Overview"))}</span>
+        <span class="memory-stat-caption">${escapeHtml(loading
+          ? localeController.t("memory.usageOverviewLoading", {}, "Refreshing statistics…")
+          : localeController.t("memory.usageOverviewCaption", {}, "Shown by cumulative global usage count"))}</span>
       </div>
       <div class="memory-usage-overview-grid">
-        ${renderTaskUsageOverviewLane("热门 Methods", methods, "method")}
-        ${renderTaskUsageOverviewLane("热门 Skills", skills, "skill")}
+        ${renderTaskUsageOverviewLane(localeController.t("memory.usageOverviewHotMethods", {}, "Hot Methods"), methods, "method")}
+        ${renderTaskUsageOverviewLane(localeController.t("memory.usageOverviewHotSkills", {}, "Hot Skills"), skills, "skill")}
       </div>
     </div>
   `;
@@ -4000,7 +4194,7 @@ function renderTaskUsageOverviewLane(title, items, tone) {
         <div class="memory-usage-overview-head">
           <span class="memory-usage-overview-title">${escapeHtml(title)}</span>
         </div>
-        <div class="memory-usage-overview-empty">暂无记录</div>
+        <div class="memory-usage-overview-empty">${escapeHtml(localeController.t("memory.usageOverviewEmptyLane", {}, "No records"))}</div>
       </div>
     `;
   }
@@ -4023,12 +4217,12 @@ function renderTaskUsageOverviewLane(title, items, tone) {
                 <div class="memory-usage-overview-meta">
                   ${item?.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
                   ${item?.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
-                  <span>最近 ${escapeHtml(formatDateTime(item?.lastUsedAt))}</span>
+                  <span>${escapeHtml(localeController.t("memory.usageOverviewRecentAt", {}, "Recent"))} ${escapeHtml(formatDateTime(item?.lastUsedAt))}</span>
                 </div>
                 <div class="memory-detail-badges">
-                  ${item?.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">候选详情</button>` : ""}
-                  ${item?.lastUsedTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">最近 Task</button>` : ""}
-                  ${item?.sourceCandidatePublishedPath ? `<button class="memory-usage-action-btn" data-open-source="${escapeHtml(item.sourceCandidatePublishedPath)}">打开产物</button>` : ""}
+                  ${item?.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">${escapeHtml(localeController.t("memory.openCandidate", {}, "Candidate"))}</button>` : ""}
+                  ${item?.lastUsedTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">${escapeHtml(localeController.t("memory.openRecentTask", {}, "Recent Task"))}</button>` : ""}
+                  ${item?.sourceCandidatePublishedPath ? `<button class="memory-usage-action-btn" data-open-source="${escapeHtml(item.sourceCandidatePublishedPath)}">${escapeHtml(localeController.t("memory.openArtifact", {}, "Open Artifact"))}</button>` : ""}
                 </div>
               </div>
               <div class="memory-usage-overview-bar-track">
@@ -4046,7 +4240,7 @@ function renderTaskUsageOverviewLane(title, items, tone) {
 function renderTaskUsageItems(items, assetType) {
   const safeItems = Array.isArray(items) ? items : [];
   if (!safeItems.length) {
-    return `<div class="memory-detail-text">暂无 ${escapeHtml(assetType)} usage 记录。</div>`;
+    return `<div class="memory-detail-text">${escapeHtml(localeController.t("memory.noUsageRecords", { assetType }, `No ${assetType} usage records.`))}</div>`;
   }
 
   return `
@@ -4062,29 +4256,31 @@ function renderTaskUsageItems(items, assetType) {
             </div>
             <div class="memory-detail-badges">
               <span class="memory-badge">${escapeHtml(formatUsageVia(item.usedVia))}</span>
-              <span class="memory-badge">累计 ${formatCount(item.usageCount)}</span>
+              <span class="memory-badge">${escapeHtml(localeController.t("memory.usageCountTotal", {}, "Total"))} ${formatCount(item.usageCount)}</span>
             </div>
-            ${item.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">候选详情</button>` : ""}
-            ${item.sourceCandidateTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.sourceCandidateTaskId)}">源 Task</button>` : ""}
-            ${item.sourceCandidatePublishedPath ? `<button class="memory-usage-action-btn" data-open-source="${escapeHtml(item.sourceCandidatePublishedPath)}">打开产物</button>` : ""}
-            ${item.lastUsedTaskId && item.lastUsedTaskId !== item.taskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">最近 Task</button>` : ""}
+            ${item.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">${escapeHtml(localeController.t("memory.openCandidate", {}, "Candidate"))}</button>` : ""}
+            ${item.sourceCandidateTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.sourceCandidateTaskId)}">${escapeHtml(localeController.t("memory.usageSourceTask", {}, "Source Task"))}</button>` : ""}
+            ${item.sourceCandidatePublishedPath ? `<button class="memory-usage-action-btn" data-open-source="${escapeHtml(item.sourceCandidatePublishedPath)}">${escapeHtml(localeController.t("memory.openArtifact", {}, "Open Artifact"))}</button>` : ""}
+            ${item.lastUsedTaskId && item.lastUsedTaskId !== item.taskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">${escapeHtml(localeController.t("memory.usageRecentTask", {}, "Recent Task"))}</button>` : ""}
             <button
               class="memory-usage-action-btn"
                 data-revoke-usage-id="${escapeHtml(item.usageId || "")}"
                 data-revoke-task-id="${escapeHtml(item.taskId || "")}"
                 data-revoke-asset-key="${escapeHtml(item.assetKey || "")}"
                 ${memoryViewerState.pendingUsageRevokeId === item.usageId ? "disabled" : ""}
-              >${memoryViewerState.pendingUsageRevokeId === item.usageId ? "撤销中…" : "撤销"}</button>
+              >${escapeHtml(memoryViewerState.pendingUsageRevokeId === item.usageId
+                ? localeController.t("memory.usageRevoking", {}, "Revoking…")
+                : localeController.t("memory.usageRevoke", {}, "Revoke"))}</button>
             </div>
           </div>
           <div class="memory-usage-item-meta">
             <span>usage ${escapeHtml(item.usageId || "-")}</span>
-            <span>本 task 采用 ${escapeHtml(formatDateTime(item.createdAt))}</span>
-            <span>全局最近 ${escapeHtml(formatDateTime(item.lastUsedAt || item.createdAt))}</span>
+            <span>${escapeHtml(localeController.t("memory.usageUsedAtTask", {}, "Used in task"))} ${escapeHtml(formatDateTime(item.createdAt))}</span>
+            <span>${escapeHtml(localeController.t("memory.usageRecentGlobal", {}, "Global recent"))} ${escapeHtml(formatDateTime(item.lastUsedAt || item.createdAt))}</span>
             ${item.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
             ${item.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
-            ${item.sourceCandidateTaskId ? `<span>源 task ${escapeHtml(item.sourceCandidateTaskId)}</span>` : ""}
-            ${item.lastUsedTaskId ? `<span>最近 task ${escapeHtml(item.lastUsedTaskId)}</span>` : ""}
+            ${item.sourceCandidateTaskId ? `<span>${escapeHtml(localeController.t("memory.usageSourceTask", {}, "Source Task"))} ${escapeHtml(item.sourceCandidateTaskId)}</span>` : ""}
+            ${item.lastUsedTaskId ? `<span>${escapeHtml(localeController.t("memory.usageRecentTask", {}, "Recent Task"))} ${escapeHtml(item.lastUsedTaskId)}</span>` : ""}
           </div>
         </div>
       `).join("")}
@@ -4126,8 +4322,8 @@ function renderMemoryCategoryDistribution(stats) {
     return `
       <div class="memory-stat-card memory-stat-card-wide">
         <div class="memory-stat-card-head">
-          <span class="memory-stat-label">分类分布</span>
-          <span class="memory-stat-caption">暂无分类样本</span>
+          <span class="memory-stat-label">${escapeHtml(localeController.t("memory.categoryDistributionTitle", {}, "Category Distribution"))}</span>
+          <span class="memory-stat-caption">${escapeHtml(localeController.t("memory.categoryDistributionEmpty", {}, "No categorized samples"))}</span>
         </div>
       </div>
     `;
@@ -4138,8 +4334,8 @@ function renderMemoryCategoryDistribution(stats) {
   return `
     <div class="memory-stat-card memory-stat-card-wide">
       <div class="memory-stat-card-head">
-        <span class="memory-stat-label">分类分布</span>
-        <span class="memory-stat-caption">全库 ${formatCount(total)} 条</span>
+        <span class="memory-stat-label">${escapeHtml(localeController.t("memory.categoryDistributionTitle", {}, "Category Distribution"))}</span>
+        <span class="memory-stat-caption">${escapeHtml(localeController.t("memory.categoryDistributionTotal", { total: formatCount(total) }, `Library ${formatCount(total)}`))}</span>
       </div>
       <div class="memory-category-chart">
         ${entries.map((entry) => {
@@ -4166,13 +4362,13 @@ function renderMemoryCategoryDistribution(stats) {
 function getMemoryCategoryDistributionEntries(stats) {
   const buckets = stats?.categoryBuckets || {};
   const ordered = [
-    { key: "preference", label: "偏好", count: buckets.preference || 0 },
-    { key: "experience", label: "经验", count: buckets.experience || 0 },
-    { key: "fact", label: "事实", count: buckets.fact || 0 },
-    { key: "decision", label: "决策", count: buckets.decision || 0 },
-    { key: "entity", label: "实体", count: buckets.entity || 0 },
-    { key: "other", label: "其他", count: buckets.other || 0 },
-    { key: "uncategorized", label: "未分类", count: stats?.uncategorized || 0 },
+    { key: "preference", label: localeController.t("memory.filters.categoryPreference", {}, "Preference"), count: buckets.preference || 0 },
+    { key: "experience", label: localeController.t("memory.filters.categoryExperience", {}, "Experience"), count: buckets.experience || 0 },
+    { key: "fact", label: localeController.t("memory.filters.categoryFact", {}, "Fact"), count: buckets.fact || 0 },
+    { key: "decision", label: localeController.t("memory.filters.categoryDecision", {}, "Decision"), count: buckets.decision || 0 },
+    { key: "entity", label: localeController.t("memory.filters.categoryEntity", {}, "Entity"), count: buckets.entity || 0 },
+    { key: "other", label: localeController.t("memory.filters.categoryOther", {}, "Other"), count: buckets.other || 0 },
+    { key: "uncategorized", label: localeController.t("memory.filters.categoryUncategorized", {}, "Uncategorized"), count: stats?.uncategorized || 0 },
   ];
   return ordered.filter((entry) => entry.count > 0);
 }
@@ -4210,6 +4406,7 @@ updateSidebarModeButtons();
 
 // Expose switchMode for canvas.js
 window._belldandySwitchMode = switchMode;
+window._belldandyT = (key, params, fallback) => localeController.t(key, params, fallback);
 
 // Expose canvas context refresh for canvas.js
 window._belldandySyncCanvasContext = renderCanvasGoalContext;
@@ -4227,7 +4424,7 @@ function openConversationSession(conversationId, hintText) {
     messagesEl.innerHTML = "";
     const hint = document.createElement("div");
     hint.className = "system-msg";
-    hint.textContent = hintText || `已切换到会话: ${conversationId}`;
+    hint.textContent = hintText || localeController.t("canvas.switchedConversationHint", { conversationId }, `Switched to conversation: ${conversationId}`);
     messagesEl.appendChild(hint);
   }
   void loadConversationMeta(conversationId);
@@ -4241,6 +4438,7 @@ window._belldandyLoadConversation = (conversationId) => {
 // Initialize canvas app (canvas.js creates window._canvasApp)
 if (window._canvasApp) {
   window._canvasApp.init((req) => sendReq(req));
+  window._canvasApp.refreshLocale?.();
 }
 
 // HTML 转义
@@ -4327,4 +4525,5 @@ const toolSettingsController = createToolSettingsController({
   clientId,
   escapeHtml,
   showNotice,
+  t: localeController.t,
 });

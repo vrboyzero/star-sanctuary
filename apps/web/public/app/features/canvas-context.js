@@ -16,6 +16,7 @@ export function createCanvasContextFeature({
   openSourcePath,
   showNotice,
   getGoalDisplayName,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { canvasContextBarEl } = refs;
 
@@ -93,35 +94,39 @@ export function createCanvasContextFeature({
       return;
     }
 
-    let note = "当前处于画布工作区。";
+    let note = t("canvasContext.defaultNote", {}, "You are currently in the canvas workspace.");
     if (conversation?.goalId && goalName) {
       note = nodeId
-        ? `当前画布可回跳到 ${goalName} 的节点通道。`
-        : `当前画布可回跳到 ${goalName} 的 goal 通道。`;
+        ? t("canvasContext.jumpToNodeChannel", { goalName }, `This canvas can jump back to the node channel of ${goalName}.`)
+        : t("canvasContext.jumpToGoalChannel", { goalName }, `This canvas can jump back to the goal channel of ${goalName}.`);
     } else if (goalName && boardId) {
-      note = `当前画布已匹配到长期任务 ${goalName} 的主板。`;
+      note = t("canvasContext.matchedGoalBoard", { goalName }, `This canvas is matched to the main board of long task ${goalName}.`);
     } else if (boardId) {
-      note = "当前画布尚未匹配到长期任务，可继续独立使用。";
+      note = t("canvasContext.unmatchedBoard", {}, "This canvas is not matched to a long task yet and can continue to be used independently.");
     }
 
     const actions = [];
     if (goalId) {
-      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-detail="${escapeHtml(goalId)}">打开长期任务详情</button>`);
-      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-tasks="${escapeHtml(goalId)}">查看 Goal Tasks</button>`);
+      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-detail="${escapeHtml(goalId)}">${escapeHtml(t("canvasContext.openGoalDetail", {}, "Open Long Task Details"))}</button>`);
+      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-tasks="${escapeHtml(goalId)}">${escapeHtml(t("canvasContext.viewGoalTasks", {}, "View Goal Tasks"))}</button>`);
     }
     if (conversation?.conversationId) {
       actions.push(`
         <button
           class="canvas-tb-btn"
           data-canvas-open-conversation="${escapeHtml(conversation.conversationId)}"
-          data-canvas-conversation-label="${escapeHtml(nodeId ? `返回节点通道：${goalName || goalId} / ${nodeId}` : `返回长期任务通道：${goalName || goalId}`)}"
+          data-canvas-conversation-label="${escapeHtml(nodeId
+            ? t("canvasContext.returnNodeChannelLabel", { goalName: goalName || goalId, nodeId }, `Back to node channel: ${goalName || goalId} / ${nodeId}`)
+            : t("canvasContext.returnGoalChannelLabel", { goalName: goalName || goalId }, `Back to long task channel: ${goalName || goalId}`))}"
         >
-          ${nodeId ? "返回当前节点通道" : "返回当前 Goal 通道"}
+          ${escapeHtml(nodeId
+            ? t("canvasContext.returnNodeChannelButton", {}, "Back to Current Node Channel")
+            : t("canvasContext.returnGoalChannelButton", {}, "Back to Current Goal Channel"))}
         </button>
       `);
     }
     if (goal?.runtimeRoot) {
-      actions.push(`<button class="canvas-tb-btn" data-canvas-open-capability-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">打开 capabilityPlan</button>`);
+      actions.push(`<button class="canvas-tb-btn" data-canvas-open-capability-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">${escapeHtml(t("canvasContext.openCapabilityPlan", {}, "Open capabilityPlan"))}</button>`);
     }
 
     const capabilityMeta = capabilityPlan ? `
@@ -141,18 +146,20 @@ export function createCanvasContextFeature({
         <span class="canvas-context-label">Align</span>
         <span class="canvas-context-value">${escapeHtml(capabilityPlan.analysis?.status || "-")}</span>
       </span>
-      <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityPlan.summary || capabilityPlan.analysis?.summary || "当前节点已有 capabilityPlan 可回看。")}</span>
+      <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityPlan.summary || capabilityPlan.analysis?.summary || t("canvasContext.capabilityPlanHint", {}, "A capabilityPlan is available for the current node."))}</span>
     ` : goalId ? `
-      <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityEntry ? "当前 goal 尚未匹配到对应 node 的 capabilityPlan。" : "正在读取 capabilityPlan 上下文…")}</span>
+      <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityEntry
+        ? t("canvasContext.capabilityPlanMissing", {}, "The current goal has not matched a capabilityPlan for this node yet.")
+        : t("canvasContext.capabilityPlanLoading", {}, "Loading capabilityPlan context..."))}</span>
     ` : "";
 
     canvasContextBarEl.classList.remove("hidden");
     canvasContextBarEl.innerHTML = `
       <div class="canvas-context-meta">
-        <span class="canvas-context-item"><span class="canvas-context-label">Board</span><span class="canvas-context-value">${escapeHtml(boardId || "-")}</span></span>
-        <span class="canvas-context-item"><span class="canvas-context-label">Goal</span><span class="canvas-context-value">${escapeHtml(goalName || "-")}</span></span>
-        ${nodeId ? `<span class="canvas-context-item"><span class="canvas-context-label">Node</span><span class="canvas-context-value">${escapeHtml(nodeId)}</span></span>` : ""}
-        ${runId ? `<span class="canvas-context-item"><span class="canvas-context-label">Run</span><span class="canvas-context-value">${escapeHtml(runId)}</span></span>` : ""}
+        <span class="canvas-context-item"><span class="canvas-context-label">${escapeHtml(t("canvasContext.boardLabel", {}, "Board"))}</span><span class="canvas-context-value">${escapeHtml(boardId || "-")}</span></span>
+        <span class="canvas-context-item"><span class="canvas-context-label">${escapeHtml(t("canvasContext.goalLabel", {}, "Goal"))}</span><span class="canvas-context-value">${escapeHtml(goalName || "-")}</span></span>
+        ${nodeId ? `<span class="canvas-context-item"><span class="canvas-context-label">${escapeHtml(t("canvasContext.nodeLabel", {}, "Node"))}</span><span class="canvas-context-value">${escapeHtml(nodeId)}</span></span>` : ""}
+        ${runId ? `<span class="canvas-context-item"><span class="canvas-context-label">${escapeHtml(t("canvasContext.runLabel", {}, "Run"))}</span><span class="canvas-context-value">${escapeHtml(runId)}</span></span>` : ""}
         ${capabilityMeta}
         <span class="canvas-context-note">${escapeHtml(note)}</span>
       </div>
@@ -208,21 +215,34 @@ export function createCanvasContextFeature({
   async function openGoalCanvasList(goalId) {
     const canvasApp = getCanvasApp?.();
     if (!canvasApp) {
-      showNotice("Canvas 不可用", "前端 Canvas 组件尚未初始化。", "error");
+      showNotice(
+        t("canvasContext.canvasUnavailableTitle", {}, "Canvas unavailable"),
+        t("canvasContext.canvasUnavailableMessage", {}, "The frontend Canvas component is not initialized yet."),
+        "error",
+      );
       return;
     }
 
     switchMode("canvas");
     await canvasApp.showBoardList();
     if (goalId) {
-      showNotice("已切到画布列表", `可从画布列表继续处理 ${getGoalDisplayName(goalId)} 的主板。`, "info", 2200);
+      showNotice(
+        t("canvasContext.switchedToBoardListTitle", {}, "Switched to canvas list"),
+        t("canvasContext.switchedToBoardListMessage", { goalName: getGoalDisplayName(goalId) }, `You can continue with the main board of ${getGoalDisplayName(goalId)} from the canvas list.`),
+        "info",
+        2200,
+      );
     }
   }
 
   async function openGoalCanvasBoard(boardId, goalId) {
     const canvasApp = getCanvasApp?.();
     if (!canvasApp) {
-      showNotice("Canvas 不可用", "前端 Canvas 组件尚未初始化。", "error");
+      showNotice(
+        t("canvasContext.canvasUnavailableTitle", {}, "Canvas unavailable"),
+        t("canvasContext.canvasUnavailableMessage", {}, "The frontend Canvas component is not initialized yet."),
+        "error",
+      );
       return;
     }
 
@@ -241,7 +261,12 @@ export function createCanvasContextFeature({
     }
 
     await canvasApp.showBoardList();
-    showNotice("未找到关联画布", `未能打开 ${normalizedBoardId}，已切换到画布列表。`, "error", 3200);
+    showNotice(
+      t("canvasContext.linkedBoardMissingTitle", {}, "Linked canvas not found"),
+      t("canvasContext.linkedBoardMissingMessage", { boardId: normalizedBoardId }, `Unable to open ${normalizedBoardId}. Switched to the canvas list.`),
+      "error",
+      3200,
+    );
   }
 
   return {
@@ -250,6 +275,9 @@ export function createCanvasContextFeature({
     isConversationForGoal,
     parseGoalConversationContext,
     renderCanvasGoalContext,
+    refreshLocale() {
+      renderCanvasGoalContext();
+    },
     openGoalCanvasList,
     openGoalCanvasBoard,
   };

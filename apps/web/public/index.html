@@ -1,10 +1,47 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark" data-locale="zh-CN">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Star Sanctuary WebChat</title>
+  <title data-i18n="app.documentTitle">Star Sanctuary WebChat</title>
+  <script>
+    (() => {
+      const THEME_STORAGE_KEY = "ss-webchat-theme";
+      const LOCALE_STORAGE_KEY = "ss-webchat-locale";
+      const FALLBACK_THEME = "dark";
+      const FALLBACK_LOCALE = "zh-CN";
+      const VALID_THEMES = new Set(["dark", "light"]);
+      const VALID_LOCALES = new Set(["zh-CN", "en-US"]);
+
+      const normalizeLocale = (value) => {
+        if (!value) return FALLBACK_LOCALE;
+        if (VALID_LOCALES.has(value)) return value;
+        const normalized = String(value).trim().toLowerCase();
+        if (normalized.startsWith("zh")) return "zh-CN";
+        if (normalized.startsWith("en")) return "en-US";
+        return FALLBACK_LOCALE;
+      };
+
+      try {
+        const urlLocale = new URLSearchParams(window.location.search).get("lang");
+        const storedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+        const nextLocale = normalizeLocale(urlLocale || storedLocale || window.navigator.language);
+        document.documentElement.dataset.locale = nextLocale;
+        document.documentElement.lang = nextLocale;
+
+        const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+        const nextTheme = VALID_THEMES.has(storedTheme) ? storedTheme : FALLBACK_THEME;
+        document.documentElement.dataset.theme = nextTheme;
+        document.documentElement.style.colorScheme = nextTheme === "light" ? "light" : "dark";
+      } catch {
+        document.documentElement.dataset.locale = FALLBACK_LOCALE;
+        document.documentElement.lang = FALLBACK_LOCALE;
+        document.documentElement.dataset.theme = FALLBACK_THEME;
+        document.documentElement.style.colorScheme = FALLBACK_THEME;
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -12,6 +49,7 @@
     rel="stylesheet">
   <link rel="stylesheet" href="/styles.css?v=10.0" />
   <link rel="stylesheet" href="/canvas.css?v=1.0" />
+  <link rel="stylesheet" href="/theme.css?v=1.0" />
   <script src="/config.js?v=1.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 </head>
@@ -22,9 +60,7 @@
       <div style="display: flex; align-items: center; gap: 12px;">
         <img src="/logo06-256.png" alt="Star Sanctuary Logo" style="width: 52px; height: 52px; object-fit: contain;">
         <div class="title">Star Sanctuary WebChat</div>
-        <a id="officialHomeLink" href="#" target="_blank"
-          style="font-size: 15px; text-decoration: underline; color: #d4a017; transition: color 0.2s;"
-          onmouseover="this.style.color='#f0c040'" onmouseout="this.style.color='#d4a017'">官方主页</a>
+        <a id="officialHomeLink" href="#" target="_blank" class="theme-link theme-link-accent" data-i18n="header.officialHome">官方主页</a>
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
         <div class="token-usage" id="tokenUsage" title="Token Usage">
@@ -47,9 +83,10 @@
           <span class="token-sep">|</span>
           <span class="token-label">TOTAL</span><span class="token-val token-val-all" id="taskTotal">--</span>
         </div>
-        <div class="status" id="status">disconnected</div>
-        <button id="openToolSettings" class="settings-btn" title="调用设置">&#x1F527;</button>
-        <button id="openSettings" class="settings-btn" title="Settings">&#x2699;&#xFE0F;</button>
+        <div class="status" id="status" data-i18n="status.disconnected">disconnected</div>
+        <button id="openToolSettings" class="settings-btn" data-i18n-title="header.toolSettingsTitle" title="调用设置">&#x1F527;</button>
+        <button id="themeToggleBtn" class="theme-toggle-btn" type="button" title="切换到亮色主题">Light</button>
+        <button id="openSettings" class="settings-btn" data-i18n-title="header.settingsTitle" title="Settings">&#x2699;&#xFE0F;</button>
       </div>
     </header>
 
@@ -59,13 +96,13 @@
         <!-- 可操作区输入 + 保存按钮 -->
         <div class="panel-input-group workspace-input-group">
           <div class="input-label-row">
-            <span class="panel-label">可操作区</span>
-            <span class="panel-hint">：额外允许读写的盘符与目录</span>
+            <span class="panel-label" data-i18n="panel.workspaceLabel">可操作区</span>
+            <span class="panel-hint" data-i18n="panel.workspaceHint">：额外允许读写的盘符与目录</span>
           </div>
           <div class="input-with-btn">
             <input id="workspaceRoots" class="input input-sm" placeholder="E:/,D:/Game"
-              title="额外允许 Agent 读写的根目录，逗号分隔" />
-            <button id="saveWorkspaceRoots" class="save-link" title="保存到 .env"><u>保存</u></button>
+              data-i18n-title="panel.workspaceTitle" title="额外允许 Agent 读写的根目录，逗号分隔" />
+            <button id="saveWorkspaceRoots" class="save-link" data-i18n-title="panel.saveEnvTitle" title="保存到 .env"><u><span data-i18n="common.save">保存</span></u></button>
           </div>
         </div>
         <!-- Auth 选择 -->
@@ -86,19 +123,19 @@
         <div class="panel-input-group uuid-input-group">
           <div class="input-label-row">
             <span class="panel-label">UUID</span>
-            <span class="panel-hint">：用户身份标识（可选）</span>
+            <span class="panel-hint" data-i18n="panel.uuidHint">：用户身份标识（可选）</span>
           </div>
           <div class="uuid-controls">
-            <input id="userUuid" class="input input-sm" placeholder="输入你的UUID（可选）" title="用于身份权力验证，如SOUL.md中定义的主人UUID匹配" />
-            <button id="saveUuid" class="button uuid-save-btn">保存</button>
+            <input id="userUuid" class="input input-sm" data-i18n-placeholder="panel.uuidPlaceholder" placeholder="输入你的UUID（可选）" data-i18n-title="panel.uuidTitle" title="用于身份权力验证，如SOUL.md中定义的主人UUID匹配" />
+            <button id="saveUuid" class="button uuid-save-btn" data-i18n="common.save">保存</button>
           </div>
         </div>
-        <button id="connect" class="button panel-connect-btn">Connect</button>
+        <button id="connect" class="button panel-connect-btn" data-i18n="common.connect">Connect</button>
       </div>
       <div class="task-token-history-bar">
-        <div class="task-token-history-label">最近任务 Token</div>
+        <div class="task-token-history-label" data-i18n="panel.recentTaskToken">最近任务 Token</div>
         <div class="task-token-history" id="taskTokenHistory">
-          <div class="task-token-history-empty">暂无任务级 Token 记录</div>
+          <div class="task-token-history-empty" data-i18n="panel.taskTokenEmpty">暂无任务级 Token 记录</div>
         </div>
       </div>
     </section>
@@ -108,32 +145,30 @@
       <aside class="sidebar" id="sidebar">
         <!-- 导航区域 -->
         <div style="padding: 12px 16px 0; display: flex; flex-direction: column; gap: 8px;">
-          <button id="switchRoot" class="sidebar-action-btn"
-            style="text-align: left; font-weight: 600; background: rgba(255,255,255,0.1); justify-content: flex-start;">📂
-            智能体设置</button>
+          <button id="switchRoot" class="sidebar-action-btn is-active"
+            style="text-align: left; font-weight: 600; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">📂</span><span data-i18n="sidebar.rootSettings">智能体设置</span></button>
           <button id="switchFacet" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧩 模组编辑</button>
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧩</span><span data-i18n="sidebar.facetEditor">模组编辑</span></button>
           <button id="switchMemory" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧠 记忆查看</button>
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧠</span><span data-i18n="sidebar.memoryViewer">记忆查看</span></button>
           <button id="switchGoals" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎯 长期任务</button>
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🎯</span><span data-i18n="sidebar.longTasks">长期任务</span></button>
           <button id="switchCanvas" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎨 画布工作区</button>
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🎨</span><span data-i18n="sidebar.canvasWorkspace">画布工作区</span></button>
         </div>
 
         <!-- 树头部 -->
-        <div class="sidebar-header"
-          style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);">
-          <span class="sidebar-title" id="treeTitle" style="font-size: 0.85em; opacity: 0.5;">文件列表</span>
+        <div class="sidebar-header sidebar-header-divider">
+          <span class="sidebar-title" id="treeTitle" style="font-size: 0.85em; opacity: 0.5;" data-i18n="sidebar.fileList">文件列表</span>
           <div style="display: flex; gap: 4px; align-items: center;">
             <!-- 配置按钮移到这里 -->
-            <button id="openEnvEditor" class="sidebar-btn" title="编辑 .env 配置">⚙</button>
-            <button id="refreshTree" class="sidebar-btn" title="刷新">⟳</button>
+            <button id="openEnvEditor" class="sidebar-btn" data-i18n-title="sidebar.openEnvConfig" title="编辑 .env 配置">⚙</button>
+            <button id="refreshTree" class="sidebar-btn" data-i18n-title="common.refresh" title="刷新">⟳</button>
           </div>
         </div>
 
         <div class="file-tree" id="fileTree">
-          <div class="tree-loading">加载中...</div>
+          <div class="tree-loading" data-i18n="common.loading">加载中...</div>
         </div>
       </aside>
 
@@ -158,26 +193,26 @@
           <!-- 画布工具栏 -->
           <div class="canvas-toolbar" id="canvasToolbar">
             <div class="canvas-toolbar-left">
-              <span class="canvas-board-name" id="canvasBoardName">未命名画布</span>
+              <span class="canvas-board-name" id="canvasBoardName" data-i18n="canvas.unnamedBoard">未命名画布</span>
             </div>
             <div class="canvas-toolbar-center">
-              <button class="canvas-tb-btn" id="canvasAddTask" title="添加任务">+ 任务</button>
-              <button class="canvas-tb-btn" id="canvasAddNote" title="添加笔记">+ 笔记</button>
-              <button class="canvas-tb-btn" id="canvasAddMethod" title="添加方法论">+ 方法</button>
+              <button class="canvas-tb-btn" id="canvasAddTask" data-i18n="canvas.addTask" data-i18n-title="canvas.addTaskTitle" title="添加任务">+ 任务</button>
+              <button class="canvas-tb-btn" id="canvasAddNote" data-i18n="canvas.addNote" data-i18n-title="canvas.addNoteTitle" title="添加笔记">+ 笔记</button>
+              <button class="canvas-tb-btn" id="canvasAddMethod" data-i18n="canvas.addMethod" data-i18n-title="canvas.addMethodTitle" title="添加方法论">+ 方法</button>
               <span class="canvas-tb-sep"></span>
-              <button class="canvas-tb-btn" id="canvasAutoLayout" title="自动布局">布局</button>
-              <button class="canvas-tb-btn" id="canvasFitView" title="适应视图">适应</button>
+              <button class="canvas-tb-btn" id="canvasAutoLayout" data-i18n="canvas.autoLayout" data-i18n-title="canvas.autoLayoutTitle" title="自动布局">布局</button>
+              <button class="canvas-tb-btn" id="canvasFitView" data-i18n="canvas.fitView" data-i18n-title="canvas.fitViewTitle" title="适应视图">适应</button>
               <span class="canvas-tb-sep"></span>
-              <button class="canvas-tb-btn canvas-tb-analyze" id="canvasAnalyze" title="让 Agent 分析当前画布">分析画布</button>
-              <button class="canvas-tb-btn canvas-tb-react" id="canvasReactToggle" title="ReAct 可视化开关">ReAct</button>
+              <button class="canvas-tb-btn canvas-tb-analyze" id="canvasAnalyze" data-i18n="canvas.analyze" data-i18n-title="canvas.analyzeTitle" title="让 Agent 分析当前画布">分析画布</button>
+              <button class="canvas-tb-btn canvas-tb-react" id="canvasReactToggle" data-i18n-title="canvas.reactTitle" title="ReAct 可视化开关">ReAct</button>
             </div>
             <div class="canvas-toolbar-right">
               <span class="canvas-zoom-label" id="canvasZoomLabel">100%</span>
-              <button class="canvas-tb-btn" id="canvasZoomIn" title="放大">+</button>
-              <button class="canvas-tb-btn" id="canvasZoomOut" title="缩小">−</button>
+              <button class="canvas-tb-btn" id="canvasZoomIn" data-i18n-title="canvas.zoomInTitle" title="放大">+</button>
+              <button class="canvas-tb-btn" id="canvasZoomOut" data-i18n-title="canvas.zoomOutTitle" title="缩小">−</button>
               <span class="canvas-tb-sep"></span>
-              <button class="canvas-tb-btn" id="canvasSave" title="保存">保存</button>
-              <button class="canvas-tb-btn canvas-tb-close" id="canvasClose" title="返回聊天">✕</button>
+              <button class="canvas-tb-btn" id="canvasSave" data-i18n="canvas.save" data-i18n-title="canvas.saveTitle" title="保存">保存</button>
+              <button class="canvas-tb-btn canvas-tb-close" id="canvasClose" data-i18n-title="canvas.closeTitle" title="返回聊天">✕</button>
             </div>
           </div>
           <div class="canvas-context-bar hidden" id="canvasContextBar"></div>
@@ -205,36 +240,36 @@
           <div class="memory-viewer-shell">
             <div class="memory-viewer-header">
               <div>
-                <div class="memory-viewer-kicker">Memory Viewer</div>
-                <div class="memory-viewer-title">Belldandy Memory Viewer</div>
+                <div class="memory-viewer-kicker" data-i18n="memory.kicker">Memory Viewer</div>
+                <div class="memory-viewer-title" data-i18n="memory.title">Belldandy Memory Viewer</div>
               </div>
-              <button id="memoryViewerRefresh" class="button">刷新</button>
+              <button id="memoryViewerRefresh" class="button" data-i18n="common.refresh">刷新</button>
             </div>
 
             <div class="memory-viewer-stats" id="memoryViewerStats">
               <div class="memory-stat-card">
-                <span class="memory-stat-label">记忆块</span>
+                <span class="memory-stat-label" data-i18n="memory.statChunks">记忆块</span>
                 <strong class="memory-stat-value">--</strong>
               </div>
             </div>
 
             <div class="memory-viewer-toolbar">
               <div class="memory-viewer-tabs">
-                <button id="memoryTabTasks" class="memory-tab-btn active">Tasks</button>
-                <button id="memoryTabMemories" class="memory-tab-btn">Memories</button>
+                <button id="memoryTabTasks" class="memory-tab-btn active" data-i18n="memory.tabs.tasks">Tasks</button>
+                <button id="memoryTabMemories" class="memory-tab-btn" data-i18n="memory.tabs.memories">Memories</button>
               </div>
               <div class="memory-viewer-filters">
-                <input id="memorySearchInput" class="input input-sm memory-search-input" placeholder="搜索 task 标题、总结或 memory 内容" />
+                <input id="memorySearchInput" class="input input-sm memory-search-input" data-i18n-placeholder="memory.searchPlaceholder" placeholder="搜索 task 标题、总结或 memory 内容" />
                 <div id="memoryTaskFilters" class="memory-filter-group">
                   <select id="memoryTaskStatusFilter" class="select select-sm">
-                    <option value="">全部状态</option>
+                    <option value="" data-i18n="memory.filters.statusAll">全部状态</option>
                     <option value="running">running</option>
                     <option value="success">success</option>
                     <option value="failed">failed</option>
                     <option value="partial">partial</option>
                   </select>
                   <select id="memoryTaskSourceFilter" class="select select-sm">
-                    <option value="">全部来源</option>
+                    <option value="" data-i18n="memory.filters.sourceAll">全部来源</option>
                     <option value="chat">chat</option>
                     <option value="sub_agent">sub_agent</option>
                     <option value="cron">cron</option>
@@ -244,44 +279,44 @@
                 </div>
                 <div id="memoryChunkFilters" class="memory-filter-group hidden">
                   <select id="memoryChunkTypeFilter" class="select select-sm">
-                    <option value="">全部记忆类型</option>
+                    <option value="" data-i18n="memory.filters.chunkTypeAll">全部记忆类型</option>
                     <option value="core">core</option>
                     <option value="daily">daily</option>
                     <option value="session">session</option>
                     <option value="other">other</option>
                   </select>
                   <select id="memoryChunkVisibilityFilter" class="select select-sm">
-                    <option value="">默认范围</option>
-                    <option value="private">私有层+系统层</option>
-                    <option value="shared">共享层+系统层</option>
-                    <option value="all">全部层</option>
+                    <option value="" data-i18n="memory.filters.visibilityDefault">默认范围</option>
+                    <option value="private" data-i18n="memory.filters.visibilityPrivate">私有层+系统层</option>
+                    <option value="shared" data-i18n="memory.filters.visibilityShared">共享层+系统层</option>
+                    <option value="all" data-i18n="memory.filters.visibilityAll">全部层</option>
                   </select>
                   <select id="memoryChunkCategoryFilter" class="select select-sm">
-                    <option value="">全部分类</option>
-                    <option value="uncategorized">未分类</option>
-                    <option value="preference">偏好</option>
-                    <option value="experience">经验</option>
-                    <option value="fact">事实</option>
-                    <option value="decision">决策</option>
-                    <option value="entity">实体</option>
-                    <option value="other">其他</option>
+                    <option value="" data-i18n="memory.filters.categoryAll">全部分类</option>
+                    <option value="uncategorized" data-i18n="memory.filters.categoryUncategorized">未分类</option>
+                    <option value="preference" data-i18n="memory.filters.categoryPreference">偏好</option>
+                    <option value="experience" data-i18n="memory.filters.categoryExperience">经验</option>
+                    <option value="fact" data-i18n="memory.filters.categoryFact">事实</option>
+                    <option value="decision" data-i18n="memory.filters.categoryDecision">决策</option>
+                    <option value="entity" data-i18n="memory.filters.categoryEntity">实体</option>
+                    <option value="other" data-i18n="memory.filters.categoryOther">其他</option>
                   </select>
                 </div>
-                <button id="memorySearchBtn" class="button">查询</button>
+                <button id="memorySearchBtn" class="button" data-i18n="memory.search">查询</button>
               </div>
             </div>
 
             <div id="memoryTaskGoalFilterBar" class="memory-context-bar hidden">
-              <span id="memoryTaskGoalFilterLabel" class="memory-context-text">当前仅查看某个长期任务的 tasks</span>
-              <button id="memoryTaskGoalFilterClear" class="button">清除过滤</button>
+              <span id="memoryTaskGoalFilterLabel" class="memory-context-text" data-i18n="memory.goalFilterDefault">当前仅查看某个长期任务的 tasks</span>
+              <button id="memoryTaskGoalFilterClear" class="button" data-i18n="memory.clearFilter">清除过滤</button>
             </div>
 
             <div class="memory-viewer-body">
               <aside class="memory-viewer-list" id="memoryViewerList">
-                <div class="memory-viewer-empty">等待加载…</div>
+                <div class="memory-viewer-empty" data-i18n="memory.waiting">等待加载…</div>
               </aside>
               <section class="memory-viewer-detail" id="memoryViewerDetail">
-                <div class="memory-viewer-empty">选择左侧条目查看详情。</div>
+                <div class="memory-viewer-empty" data-i18n="memory.detailSelect">选择左侧条目查看详情。</div>
               </section>
             </div>
           </div>
@@ -291,28 +326,28 @@
           <div class="memory-viewer-shell goals-viewer-shell">
             <div class="memory-viewer-header">
               <div>
-                <div class="memory-viewer-kicker">Long Tasks</div>
-                <div class="memory-viewer-title">Goal Channel</div>
+                <div class="memory-viewer-kicker" data-i18n="goals.kicker">Long Tasks</div>
+                <div class="memory-viewer-title" data-i18n="goals.title">Goal Channel</div>
               </div>
               <div class="goals-viewer-actions">
-                <button id="goalsRefresh" class="button">刷新</button>
-                <button id="goalCreate" class="button">新建长期任务</button>
+                <button id="goalsRefresh" class="button" data-i18n="common.refresh">刷新</button>
+                <button id="goalCreate" class="button" data-i18n="goals.create">新建长期任务</button>
               </div>
             </div>
 
             <div class="memory-viewer-stats" id="goalsSummary">
               <div class="memory-stat-card">
-                <span class="memory-stat-label">长期任务</span>
+                <span class="memory-stat-label" data-i18n="goals.statGoals">长期任务</span>
                 <strong class="memory-stat-value">--</strong>
               </div>
             </div>
 
             <div class="memory-viewer-body">
               <aside class="memory-viewer-list" id="goalsList">
-                <div class="memory-viewer-empty">等待加载…</div>
+                <div class="memory-viewer-empty" data-i18n="goals.waiting">等待加载…</div>
               </aside>
               <section class="memory-viewer-detail" id="goalsDetail">
-                <div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>
+                <div class="memory-viewer-empty" data-i18n="goals.detailSelect">选择左侧长期任务查看详情。</div>
               </section>
             </div>
           </div>
@@ -326,17 +361,17 @@
       <div class="attachments-preview" id="attachmentsPreview"></div>
       <!-- 输入区 -->
       <div class="composer-input-row">
-        <button id="attachBtn" class="attach-btn" title="添加附件">+</button>
+        <button id="attachBtn" class="attach-btn" data-i18n-title="composer.attachTitle" title="添加附件">+</button>
         <button id="voiceBtn" class="voice-btn" title="语音输入（点击切换录音）">🎤</button>
         <span id="voiceDuration" class="voice-duration hidden">00:00</span>
         <input type="file" id="fileInput" class="hidden" multiple
           accept=".jpg,.jpeg,.png,.gif,.webp,.txt,.md,.json,.log,.mp4,.mov,.avi,.webm,.mkv" />
-        <textarea id="prompt" class="input" placeholder="输入消息… (可拖拽文件到此)" rows="1"></textarea>
-        <select id="modelSelect" class="agent-select hidden" title="选择模型">
-          <option value="">默认模型</option>
+        <textarea id="prompt" class="input" data-i18n-placeholder="composer.promptPlaceholder" placeholder="输入消息… (可拖拽文件到此)" rows="1"></textarea>
+        <select id="modelSelect" class="agent-select hidden" data-i18n-title="composer.modelSelectTitle" title="选择模型">
+          <option value="" data-i18n="composer.defaultModel">默认模型</option>
         </select>
-        <select id="agentSelect" class="agent-select hidden" title="选择 Agent"></select>
-        <button id="send" class="button" disabled>Send</button>
+        <select id="agentSelect" class="agent-select hidden" data-i18n-title="composer.agentSelectTitle" title="选择 Agent"></select>
+        <button id="send" class="button" data-i18n="common.send" disabled>Send</button>
       </div>
     </section>
 
@@ -352,217 +387,222 @@
     <div class="modal">
       <div class="modal-header" style="display: flex; align-items: center;">
         <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
-          <span>Settings</span>
-          <a id="recommendApiLink" href="#" target="_blank"
-            style="font-size: 14px; text-decoration: underline; color: #a3a3a3; transition: color 0.2s;"
-            onmouseover="this.style.color='#ffffff'" onmouseout="this.style.color='#a3a3a3'">推荐模型API</a>
+          <span data-i18n="settings.title">设置</span>
+          <a id="recommendApiLink" href="#" target="_blank" class="theme-link theme-link-muted" data-i18n="settings.recommendApi">推荐模型API</a>
         </div>
         <button id="closeSettings" class="settings-btn">✕</button>
       </div>
       <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="cfgLocale" data-i18n="settings.languageLabel">界面语言</label>
+          <select id="cfgLocale" class="input"></select>
+          <div class="form-help" data-i18n="settings.languageHelp">仅切换当前 WebChat 前端界面语言，不影响模型输出语言。</div>
+        </div>
+        <hr class="theme-divider">
+
         <!-- Doctor Status -->
         <div class="form-group">
-          <label class="form-label">System Doctor</label>
+          <label class="form-label" data-i18n="settings.systemDoctor">系统检查</label>
           <div id="doctorStatus" style="display: flex; flex-wrap: wrap; gap: 8px;">
-            <span class="badge">Checking...</span>
+            <span class="badge" data-i18n="settings.doctorChecking">检查中...</span>
           </div>
-          <div class="form-help">检查当前配置、依赖与运行状态，便于快速定位缺失项。</div>
+          <div class="form-help" data-i18n="settings.doctorHelp">检查当前配置、依赖与运行状态，便于快速定位缺失项。</div>
         </div>
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <!-- Config Fields -->
         <div class="form-group">
-          <label class="form-label">OpenAI API Key</label>
+          <label class="form-label" data-i18n="settings.apiKeyLabel">OpenAI API Key</label>
           <input id="cfgApiKey" class="input" type="password" placeholder="sk-..." />
-          <div class="form-help">主对话模型使用的 API Key。未配置时 WebChat 只能进入引导状态。</div>
+          <div class="form-help" data-i18n="settings.apiKeyHelp">主对话模型使用的 API Key。未配置时 WebChat 只能进入引导状态。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">OpenAI Base URL</label>
+          <label class="form-label" data-i18n="settings.baseUrlLabel">OpenAI Base URL</label>
           <input id="cfgBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
-          <div class="form-help">兼容 OpenAI 协议的接口地址。官方接口通常保持默认即可。</div>
+          <div class="form-help" data-i18n="settings.baseUrlHelp">兼容 OpenAI 协议的接口地址。官方接口通常保持默认即可。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">OpenAI Model</label>
+          <label class="form-label" data-i18n="settings.modelLabel">OpenAI Model</label>
           <input id="cfgModel" class="input" placeholder="gpt-4o" />
-          <div class="form-help">主聊天模型名称，例如 `gpt-4o`、`deepseek-chat`、`kimi-k2`。</div>
+          <div class="form-help" data-i18n="settings.modelHelp">主聊天模型名称，例如 `gpt-4o`、`deepseek-chat`、`kimi-k2`。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Heartbeat Interval</label>
+          <label class="form-label" data-i18n="settings.heartbeatLabel">Heartbeat Interval</label>
           <input id="cfgHeartbeat" class="input" placeholder="30m" />
-          <div class="form-help">心跳任务执行间隔，支持 `30m`、`1h`、`300s` 这类格式。</div>
+          <div class="form-help" data-i18n="settings.heartbeatHelp">心跳任务执行间隔，支持 `30m`、`1h`、`300s` 这类格式。</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="cfgHeartbeatEnabled">
             <input id="cfgHeartbeatEnabled" type="checkbox" style="margin-right: 8px;" />
-            Enable Heartbeat
+            <span data-i18n="settings.heartbeatEnabledLabel">Enable Heartbeat</span>
           </label>
-          <div class="form-help">启用后，Agent 会按心跳配置检查 `HEARTBEAT.md` 并主动联系你。</div>
+          <div class="form-help" data-i18n="settings.heartbeatEnabledHelp">启用后，Agent 会按心跳配置检查 `HEARTBEAT.md` 并主动联系你。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Heartbeat Active Hours</label>
+          <label class="form-label" data-i18n="settings.heartbeatActiveHoursLabel">Heartbeat Active Hours</label>
           <input id="cfgHeartbeatActiveHours" class="input" placeholder="08:00-23:00" />
-          <div class="form-help">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
+          <div class="form-help" data-i18n="settings.heartbeatActiveHoursHelp">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
         </div>
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgBrowserRelayEnabled">
             <input id="cfgBrowserRelayEnabled" type="checkbox" style="margin-right: 8px;" />
-            Enable Browser Relay
+            <span data-i18n="settings.browserRelayEnabledLabel">Enable Browser Relay</span>
           </label>
-          <div class="form-help">启用浏览器中继自动启动，需要配合 Chrome 扩展完成自动化操作。</div>
+          <div class="form-help" data-i18n="settings.browserRelayEnabledHelp">启用浏览器中继自动启动，需要配合 Chrome 扩展完成自动化操作。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Relay Port</label>
+          <label class="form-label" data-i18n="settings.relayPortLabel">Relay Port</label>
           <input id="cfgRelayPort" class="input" placeholder="28892" />
-          <div class="form-help">浏览器中继监听端口。只有在启用 Browser Relay 时才会用到。</div>
+          <div class="form-help" data-i18n="settings.relayPortHelp">浏览器中继监听端口。只有在启用 Browser Relay 时才会用到。</div>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="cfgMcpEnabled">
             <input id="cfgMcpEnabled" type="checkbox" style="margin-right: 8px;" />
-            Enable MCP
+            <span data-i18n="settings.mcpEnabledLabel">Enable MCP</span>
           </label>
-          <div class="form-help">启用 MCP 协议支持。通常需要同时打开工具系统。</div>
+          <div class="form-help" data-i18n="settings.mcpEnabledHelp">启用 MCP 协议支持。通常需要同时打开工具系统。</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="cfgCronEnabled">
             <input id="cfgCronEnabled" type="checkbox" style="margin-right: 8px;" />
-            Enable Cron Scheduler
+            <span data-i18n="settings.cronEnabledLabel">Enable Cron Scheduler</span>
           </label>
-          <div class="form-help">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
+          <div class="form-help" data-i18n="settings.cronEnabledHelp">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgEmbeddingEnabled">
             <input id="cfgEmbeddingEnabled" type="checkbox" style="margin-right: 8px;" />
-            Enable Embedding Retrieval
+            <span data-i18n="settings.embeddingEnabledLabel">Enable Embedding Retrieval</span>
           </label>
-          <div class="form-help">向量检索总开关。关闭后不会初始化 Embedding，也不会进行相关召回。</div>
+          <div class="form-help" data-i18n="settings.embeddingEnabledHelp">向量检索总开关。关闭后不会初始化 Embedding，也不会进行相关召回。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Embedding API Key</label>
-          <input id="cfgEmbeddingApiKey" class="input" type="password" placeholder="留空则复用主模型 API Key" />
-          <div class="form-help">向量模型专用 API Key。留空时默认复用主模型的 API Key。</div>
+          <label class="form-label" data-i18n="settings.embeddingApiKeyLabel">Embedding API Key</label>
+          <input id="cfgEmbeddingApiKey" class="input" type="password" data-i18n-placeholder="settings.embeddingApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+          <div class="form-help" data-i18n="settings.embeddingApiKeyHelp">向量模型专用 API Key。留空时默认复用主模型的 API Key。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Embedding Base URL</label>
-          <input id="cfgEmbeddingBaseUrl" class="input" placeholder="留空则复用主模型 Base URL" />
-          <div class="form-help">向量模型接口地址。留空时默认复用主模型 Base URL。</div>
+          <label class="form-label" data-i18n="settings.embeddingBaseUrlLabel">Embedding Base URL</label>
+          <input id="cfgEmbeddingBaseUrl" class="input" data-i18n-placeholder="settings.embeddingBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+          <div class="form-help" data-i18n="settings.embeddingBaseUrlHelp">向量模型接口地址。留空时默认复用主模型 Base URL。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Embedding Model</label>
+          <label class="form-label" data-i18n="settings.embeddingModelLabel">Embedding Model</label>
           <input id="cfgEmbeddingModel" class="input" placeholder="text-embedding-3-small" />
-          <div class="form-help">向量模型名称，例如 `text-embedding-3-small` 或兼容模型名。</div>
+          <div class="form-help" data-i18n="settings.embeddingModelHelp">向量模型名称，例如 `text-embedding-3-small` 或兼容模型名。</div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgToolsEnabled">
             <input id="cfgToolsEnabled" type="checkbox" style="margin-right: 8px;" />
-            Enable Tool Calls
+            <span data-i18n="settings.toolsEnabledLabel">Enable Tool Calls</span>
           </label>
-          <div class="form-help">工具系统总开关。关闭后模型将无法调用文件、浏览器、命令等工具。</div>
+          <div class="form-help" data-i18n="settings.toolsEnabledHelp">工具系统总开关。关闭后模型将无法调用文件、浏览器、命令等工具。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Agent Tool Control</label>
+          <label class="form-label" data-i18n="settings.agentToolControlLabel">Agent Tool Control</label>
           <select id="cfgAgentToolControlMode" class="input">
             <option value="disabled">disabled</option>
             <option value="confirm">confirm</option>
             <option value="auto">auto</option>
           </select>
-          <div class="form-help">控制 Agent 是否可修改已注册工具的全局调用开关：disabled=禁止，confirm=文本确认，auto=直接执行。</div>
+          <div class="form-help" data-i18n="settings.agentToolControlHelp">控制 Agent 是否可修改已注册工具的全局调用开关：disabled=禁止，confirm=文本确认，auto=直接执行。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Agent Tool Confirm Password</label>
-          <input id="cfgAgentToolControlConfirmPassword" class="input" type="password" placeholder="留空则使用 requestId 确认口令" />
-          <div class="form-help">仅在 confirm 模式下生效。留空时要求用户回复 `批准工具设置变更 &lt;requestId&gt;`；设置后改为输入你配置的确认口令。</div>
+          <label class="form-label" data-i18n="settings.agentToolControlPasswordLabel">Agent Tool Confirm Password</label>
+          <input id="cfgAgentToolControlConfirmPassword" class="input" type="password" data-i18n-placeholder="settings.agentToolControlPasswordPlaceholder" placeholder="留空则使用 requestId 确认口令" />
+          <div class="form-help" data-i18n="settings.agentToolControlPasswordHelp">仅在 confirm 模式下生效。留空时要求用户回复 `批准工具设置变更 &lt;requestId&gt;`；设置后改为输入你配置的确认口令。</div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgTtsEnabled">
             <input id="cfgTtsEnabled" type="checkbox" style="margin-right: 8px;" />
-            Enable TTS
+            <span data-i18n="settings.ttsEnabledLabel">Enable TTS</span>
           </label>
-          <div class="form-help">服务端自动语音开关。开启后回复可附带语音音频。</div>
+          <div class="form-help" data-i18n="settings.ttsEnabledHelp">服务端自动语音开关。开启后回复可附带语音音频。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">TTS Provider</label>
+          <label class="form-label" data-i18n="settings.ttsProviderLabel">TTS Provider</label>
           <select id="cfgTtsProvider" class="input">
             <option value="edge">edge</option>
             <option value="openai">openai</option>
             <option value="dashscope">dashscope</option>
           </select>
-          <div class="form-help">语音合成提供方。`edge` 免费可用，`openai` 和 `dashscope` 需要对应密钥。</div>
+          <div class="form-help" data-i18n="settings.ttsProviderHelp">语音合成提供方。`edge` 免费可用，`openai` 和 `dashscope` 需要对应密钥。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">TTS Voice</label>
-          <input id="cfgTtsVoice" class="input" placeholder="留空则使用 provider 默认音色" />
-          <div class="form-help">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
+          <label class="form-label" data-i18n="settings.ttsVoiceLabel">TTS Voice</label>
+          <input id="cfgTtsVoice" class="input" data-i18n-placeholder="settings.ttsVoicePlaceholder" placeholder="留空则使用 provider 默认音色" />
+          <div class="form-help" data-i18n="settings.ttsVoiceHelp">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">DashScope API Key</label>
-          <input id="cfgDashScopeApiKey" class="input" type="password" placeholder="仅 dashscope provider 需要" />
-          <div class="form-help">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
+          <label class="form-label" data-i18n="settings.dashScopeApiKeyLabel">DashScope API Key</label>
+          <input id="cfgDashScopeApiKey" class="input" type="password" data-i18n-placeholder="settings.dashScopeApiKeyPlaceholder" placeholder="仅 dashscope provider 需要" />
+          <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Voice Shortcut</label>
-          <input id="cfgVoiceShortcut" class="input" placeholder="聚焦后按下新的快捷键" readonly />
-          <div class="form-help" id="cfgVoiceShortcutStatus">本地快捷键，默认 Alt+R。聚焦输入框后按下组合键即可修改，不会写入服务端配置。</div>
+          <label class="form-label" data-i18n="settings.voiceShortcutLabel">Voice Shortcut</label>
+          <input id="cfgVoiceShortcut" class="input" data-i18n-placeholder="settings.voiceShortcutPlaceholder" placeholder="聚焦后按下新的快捷键" readonly />
+          <div class="form-help" id="cfgVoiceShortcutStatus" data-i18n="voice.shortcutStatusInitial">本地快捷键，默认 Alt+R。聚焦输入框后按下组合键即可修改，不会写入服务端配置。</div>
           <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
-            <button id="cfgVoiceShortcutDefault" type="button" class="button">恢复默认</button>
-            <button id="cfgVoiceShortcutClear" type="button" class="button">禁用快捷键</button>
+            <button id="cfgVoiceShortcutDefault" type="button" class="button" data-i18n="settings.voiceShortcutDefault">恢复默认</button>
+            <button id="cfgVoiceShortcutClear" type="button" class="button" data-i18n="settings.voiceShortcutClear">禁用快捷键</button>
           </div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
-          <label class="form-label">FACET Anchor</label>
+          <label class="form-label" data-i18n="settings.facetAnchorLabel">FACET Anchor</label>
           <input id="cfgFacetAnchor" class="input" placeholder="&lt;!-- FACET_ANCHOR --&gt;" />
-          <div class="form-help">`switch_facet` 工具在 `SOUL.md` 中查找的锚点文本，用来确定替换起点。</div>
+          <div class="form-help" data-i18n="settings.facetAnchorHelp">`switch_facet` 工具在 `SOUL.md` 中查找的锚点文本，用来确定替换起点。</div>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="cfgInjectAgents">
             <input id="cfgInjectAgents" type="checkbox" style="margin-right: 8px;" />
-            Inject AGENTS.md
+            <span data-i18n="settings.injectAgentsLabel">Inject AGENTS.md</span>
           </label>
-          <div class="form-help">决定是否把 `AGENTS.md` 注入到 System Prompt。</div>
+          <div class="form-help" data-i18n="settings.injectAgentsHelp">决定是否把 `AGENTS.md` 注入到 System Prompt。</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="cfgInjectSoul">
             <input id="cfgInjectSoul" type="checkbox" style="margin-right: 8px;" />
-            Inject SOUL.md
+            <span data-i18n="settings.injectSoulLabel">Inject SOUL.md</span>
           </label>
-          <div class="form-help">决定是否把 `SOUL.md` 注入到 System Prompt。</div>
+          <div class="form-help" data-i18n="settings.injectSoulHelp">决定是否把 `SOUL.md` 注入到 System Prompt。</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="cfgInjectMemory">
             <input id="cfgInjectMemory" type="checkbox" style="margin-right: 8px;" />
-            Inject MEMORY.md
+            <span data-i18n="settings.injectMemoryLabel">Inject MEMORY.md</span>
           </label>
-          <div class="form-help">决定是否把 `MEMORY.md` 注入到 System Prompt。</div>
+          <div class="form-help" data-i18n="settings.injectMemoryHelp">决定是否把 `MEMORY.md` 注入到 System Prompt。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Max System Prompt Chars</label>
+          <label class="form-label" data-i18n="settings.maxSystemPromptCharsLabel">Max System Prompt Chars</label>
           <input id="cfgMaxSystemPromptChars" class="input" placeholder="0 / 6000 / 20000" />
-          <div class="form-help">限制 System Prompt 最大字符数。设为 `0` 或留空表示不限制。</div>
+          <div class="form-help" data-i18n="settings.maxSystemPromptCharsHelp">限制 System Prompt 最大字符数。设为 `0` 或留空表示不限制。</div>
         </div>
         <div class="form-group">
-          <label class="form-label">Max History Rounds</label>
+          <label class="form-label" data-i18n="settings.maxHistoryLabel">Max History Rounds</label>
           <input id="cfgMaxHistory" class="input" placeholder="10" />
-          <div class="form-help">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
+          <div class="form-help" data-i18n="settings.maxHistoryHelp">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="restartBtn" class="button" style="color: #666;">Restart Server</button>
-        <button id="saveSettings" class="button" style="background: #333; color: white;">Save</button>
+        <button id="restartBtn" class="button button-muted" data-i18n="settings.restartButton">重启服务</button>
+        <button id="saveSettings" class="button" data-i18n="settings.save" style="background: var(--button-primary-bg); color: var(--button-primary-text);">保存</button>
       </div>
     </div>
   </div>
@@ -599,7 +639,7 @@
       </div>
       <div class="modal-footer">
         <button id="goalCreateCancel" class="button">取消</button>
-        <button id="goalCreateSubmit" class="button" style="background: var(--text-main); color: #000;">创建</button>
+        <button id="goalCreateSubmit" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">创建</button>
       </div>
     </div>
   </div>
@@ -651,7 +691,7 @@
       </div>
       <div class="modal-footer">
         <button id="goalCheckpointActionCancel" class="button">取消</button>
-        <button id="goalCheckpointActionSubmit" class="button" style="background: var(--text-main); color: #000;">提交</button>
+        <button id="goalCheckpointActionSubmit" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">提交</button>
       </div>
     </div>
   </div>
@@ -661,24 +701,22 @@
     <div class="modal tool-settings-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
         <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
-          <span>调用设置</span>
-          <a id="workshopLink" href="#" target="_blank"
-            style="font-size: 15px; text-decoration: underline; color: #d4a017; transition: color 0.2s;"
-            onmouseover="this.style.color='#f0c040'" onmouseout="this.style.color='#d4a017'">工坊入口</a>
+          <span data-i18n="toolSettings.title">调用设置</span>
+          <a id="workshopLink" href="#" target="_blank" class="theme-link theme-link-accent" data-i18n="toolSettings.workshop">工坊入口</a>
         </div>
         <button id="closeToolSettings" class="settings-btn">✕</button>
       </div>
       <div class="tool-settings-tabs">
-        <button class="tool-tab active" data-tab="builtin">工具</button>
-        <button class="tool-tab" data-tab="mcp">MCP</button>
-        <button class="tool-tab" data-tab="plugins">插件</button>
-        <button class="tool-tab" data-tab="skills">技能</button>
+        <button class="tool-tab active" data-tab="builtin" data-i18n="toolSettings.tabs.builtin">工具</button>
+        <button class="tool-tab" data-tab="mcp" data-i18n="toolSettings.tabs.mcp">MCP</button>
+        <button class="tool-tab" data-tab="plugins" data-i18n="toolSettings.tabs.plugins">插件</button>
+        <button class="tool-tab" data-tab="skills" data-i18n="toolSettings.tabs.skills">技能</button>
       </div>
       <div class="modal-body" id="toolSettingsBody">
-        <div class="tool-settings-empty">连接后可查看工具列表</div>
+        <div class="tool-settings-empty" data-i18n="toolSettings.emptyDisconnectedView">连接后可查看工具列表</div>
       </div>
       <div class="modal-footer">
-        <button id="saveToolSettings" class="button" style="background: var(--text-main); color: #000;">保存</button>
+        <button id="saveToolSettings" class="button" data-i18n="common.save" style="background: var(--button-primary-bg); color: var(--button-primary-text);">保存</button>
       </div>
     </div>
   </div>
@@ -686,22 +724,22 @@
   <div id="toolSettingsConfirmModal" class="modal-overlay hidden">
     <div class="modal tool-settings-confirm-modal">
       <div class="modal-header">
-        <span>确认工具开关变更</span>
+        <span data-i18n="toolSettings.confirmTitle">确认工具开关变更</span>
       </div>
       <div class="modal-body tool-settings-confirm-body">
-        <p class="tool-settings-confirm-copy">
+        <p class="tool-settings-confirm-copy" data-i18n="toolSettings.confirmCopy">
           这次操作会修改当前 Gateway 的全局工具可用性，并影响其他会话。为避免确认口令在聊天区暴露，请直接在这里处理。
         </p>
         <div id="toolSettingsConfirmImpact" class="tool-settings-confirm-impact"></div>
         <div>
-          <div class="tool-settings-confirm-label">变更摘要</div>
+          <div class="tool-settings-confirm-label" data-i18n="toolSettings.confirmSummary">变更摘要</div>
           <ul id="toolSettingsConfirmSummary" class="tool-settings-confirm-summary"></ul>
         </div>
         <div id="toolSettingsConfirmExpiry" class="tool-settings-confirm-expiry"></div>
       </div>
       <div class="modal-footer">
-        <button id="toolSettingsConfirmReject" class="button">拒绝</button>
-        <button id="toolSettingsConfirmApprove" class="button" style="background: var(--text-main); color: #000;">确认</button>
+        <button id="toolSettingsConfirmReject" class="button" data-i18n="toolSettings.reject">拒绝</button>
+        <button id="toolSettingsConfirmApprove" class="button" data-i18n="toolSettings.approve" style="background: var(--button-primary-bg); color: var(--button-primary-text);">确认</button>
       </div>
     </div>
   </div>
@@ -718,7 +756,7 @@
   <div id="restartOverlay" class="restart-overlay hidden">
     <div class="restart-content">
       <div class="restart-icon">⟳</div>
-      <div class="restart-title">Service Restarting</div>
+      <div class="restart-title" data-i18n="status.serviceRestarting">Service Restarting</div>
       <div id="restartReason" class="restart-reason"></div>
       <div id="restartCountdown" class="restart-countdown">3</div>
     </div>

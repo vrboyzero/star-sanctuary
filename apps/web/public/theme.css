@@ -1,0 +1,605 @@
+:root,
+html[data-theme="dark"] {
+  --color-bg-page: #050508;
+  --color-bg-page-accent: #0f1016;
+  --color-bg-page-accent-2: #1a1b2e;
+  --color-surface-1: rgba(255, 255, 255, 0.03);
+  --color-surface-2: rgba(255, 255, 255, 0.08);
+  --color-surface-3: rgba(255, 255, 255, 0.12);
+  --color-border-soft: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.15);
+  --color-text-primary: #ffffff;
+  --color-text-secondary: rgba(255, 255, 255, 0.72);
+  --color-text-muted: rgba(255, 255, 255, 0.6);
+  --color-text-tertiary: rgba(255, 255, 255, 0.5);
+  --color-text-dim: rgba(255, 255, 255, 0.42);
+  --color-accent: #00f3ff;
+  --color-accent-glow: rgba(0, 243, 255, 0.4);
+  --color-warning: #ffd700;
+  --color-warning-rgb: 255, 215, 0;
+  --color-danger: #ff6b6b;
+  --color-success: #34d399;
+  --overlay-backdrop: rgba(5, 5, 8, 0.72);
+
+  --header-bg: rgba(10, 10, 15, 0.6);
+  --header-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  --input-bg: rgba(0, 0, 0, 0.2);
+  --chat-bg: rgba(0, 0, 0, 0.1);
+  --chat-user-bubble-bg: var(--color-surface-1);
+  --chat-user-bubble-border: var(--color-border-soft);
+  --chat-bot-bubble-bg: linear-gradient(135deg, #005f6b 0%, #004a70 100%);
+  --chat-bot-bubble-text: #ffffff;
+  --chat-bot-bubble-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --modal-bg: rgba(12, 14, 24, 0.92);
+  --modal-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+  --code-block-bg: rgba(0, 0, 0, 0.4);
+  --code-block-header-bg: rgba(0, 0, 0, 0.3);
+  --code-inline-bg: rgba(0, 0, 0, 0.2);
+  --table-header-bg: rgba(0, 0, 0, 0.2);
+  --sidebar-active-bg: rgba(255, 255, 255, 0.1);
+  --sidebar-active-border: rgba(0, 243, 255, 0.3);
+  --bg-card: rgba(26, 26, 46, 0.96);
+  --bg-main: rgba(15, 16, 22, 0.96);
+  --bg-secondary: rgba(255, 255, 255, 0.05);
+  --bg-hover: rgba(255, 255, 255, 0.08);
+  --border: var(--color-border-soft);
+  --focus-ring: rgba(0, 243, 255, 0.1);
+  --composer-bg: var(--color-surface-1);
+  --composer-drag-shadow: 0 0 12px rgba(0, 243, 255, 0.3);
+  --attach-hover-bg: rgba(0, 243, 255, 0.05);
+  --attachment-chip-bg: rgba(0, 0, 0, 0.3);
+  --button-primary-bg: var(--color-text-primary);
+  --button-primary-text: #000000;
+  --button-primary-hover-bg: #e0e0e0;
+  --button-muted-text: rgba(255, 255, 255, 0.56);
+  --select-option-bg: #1a1a2e;
+  --select-option-text: #00e68a;
+  --divider-border: rgba(255, 255, 255, 0.08);
+  --hint-muted-color: rgba(255, 255, 255, 0.58);
+  --hint-warning-color: #f3d98a;
+  --canvas-grid-stroke: rgba(255, 255, 255, 0.03);
+  --canvas-section-bg: rgba(0, 0, 0, 0.15);
+  --canvas-toolbar-button-bg: rgba(255, 255, 255, 0.06);
+  --canvas-toolbar-button-hover-bg: rgba(255, 255, 255, 0.12);
+  --canvas-toolbar-button-border: rgba(255, 255, 255, 0.08);
+  --canvas-toolbar-button-hover-border: rgba(255, 255, 255, 0.15);
+  --canvas-close-text: rgba(255, 107, 107, 0.72);
+  --canvas-close-hover-bg: rgba(255, 107, 107, 0.12);
+  --canvas-context-bar-bg: rgba(0, 243, 255, 0.06);
+  --canvas-context-bar-border: rgba(0, 243, 255, 0.12);
+  --canvas-chip-bg: rgba(255, 255, 255, 0.05);
+  --canvas-chip-border: rgba(255, 255, 255, 0.08);
+  --canvas-capability-chip-bg: rgba(52, 211, 153, 0.08);
+  --canvas-capability-chip-border: rgba(52, 211, 153, 0.2);
+  --canvas-node-hover-border: rgba(255, 255, 255, 0.15);
+  --canvas-tag-bg: rgba(255, 255, 255, 0.06);
+  --canvas-group-bg: rgba(255, 255, 255, 0.01);
+  --canvas-group-border: rgba(255, 255, 255, 0.12);
+  --canvas-port-bg: rgba(255, 255, 255, 0.15);
+  --canvas-port-border: rgba(255, 255, 255, 0.25);
+  --canvas-edge-stroke: rgba(255, 255, 255, 0.15);
+  --canvas-selection-fill: rgba(0, 243, 255, 0.05);
+  --canvas-active-badge-bg: rgba(0, 243, 255, 0.14);
+  --canvas-active-badge-border: rgba(0, 243, 255, 0.28);
+  --canvas-goal-active-border: rgba(0, 243, 255, 0.5);
+  --canvas-goal-active-shadow: 0 0 0 1px rgba(0, 243, 255, 0.2), 0 0 18px rgba(0, 243, 255, 0.18);
+  --canvas-board-list-bg: rgba(5, 5, 8, 0.95);
+  --canvas-board-item-hover-bg: rgba(255, 255, 255, 0.05);
+  --canvas-menu-bg: rgba(20, 20, 30, 0.95);
+  --canvas-menu-hover-bg: rgba(255, 255, 255, 0.08);
+  --canvas-picker-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  --canvas-react-active-bg: rgba(99, 102, 241, 0.3);
+  --canvas-react-active-border: rgba(99, 102, 241, 0.5);
+  --canvas-react-active-text: #a5b4fc;
+  --canvas-react-analyze-text: #93c5fd;
+  --canvas-react-toggle-text: #c4b5fd;
+  --canvas-react-running-bg: rgba(245, 158, 11, 0.2);
+  --canvas-react-running-text: #fbbf24;
+  --canvas-react-done-bg: rgba(16, 185, 129, 0.2);
+  --canvas-react-done-text: #34d399;
+  --canvas-react-error-bg: rgba(239, 68, 68, 0.2);
+  --canvas-react-error-text: #f87171;
+  --canvas-react-final-bg: rgba(99, 102, 241, 0.2);
+  --canvas-react-final-text: #a5b4fc;
+  --canvas-react-pulse-start: rgba(245, 158, 11, 0.3);
+  --canvas-react-pulse-mid: rgba(245, 158, 11, 0.15);
+  --theme-toggle-bg: rgba(255, 255, 255, 0.04);
+  --theme-toggle-hover-bg: rgba(255, 255, 255, 0.1);
+  --theme-toggle-shadow: 0 0 12px rgba(0, 243, 255, 0.18);
+  --body-mesh-primary: rgba(0, 243, 255, 0.03);
+  --body-mesh-secondary: rgba(255, 215, 0, 0.02);
+  --memory-shell-bg:
+    linear-gradient(135deg, rgba(0, 243, 255, 0.06), rgba(255, 215, 0, 0.04)),
+    rgba(8, 10, 18, 0.72);
+  --memory-shell-border: rgba(0, 243, 255, 0.14);
+  --memory-shell-inset-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --memory-card-bg: rgba(255, 255, 255, 0.04);
+  --memory-card-border: rgba(255, 255, 255, 0.06);
+  --memory-row-bg: rgba(255, 255, 255, 0.02);
+  --memory-row-border: rgba(255, 255, 255, 0.04);
+  --memory-row-hover-bg: rgba(255, 255, 255, 0.04);
+  --memory-row-active-bg: rgba(0, 243, 255, 0.09);
+  --memory-row-active-border: rgba(0, 243, 255, 0.18);
+  --memory-kicker-color: var(--secondary);
+  --memory-name-strong: rgba(255, 255, 255, 0.86);
+  --memory-number-strong: rgba(255, 255, 255, 0.92);
+  --memory-tab-track-bg: rgba(255, 255, 255, 0.04);
+  --memory-tab-track-border: rgba(255, 255, 255, 0.06);
+  --memory-tab-active-bg: rgba(0, 243, 255, 0.14);
+  --memory-context-bg: rgba(255, 186, 73, 0.08);
+  --memory-context-border: rgba(255, 186, 73, 0.18);
+  --memory-context-text: rgba(255, 255, 255, 0.86);
+  --memory-badge-bg: rgba(255, 255, 255, 0.05);
+  --memory-badge-border: rgba(255, 255, 255, 0.08);
+  --memory-badge-shared-bg: rgba(0, 243, 255, 0.12);
+  --memory-badge-shared-border: rgba(0, 243, 255, 0.28);
+  --memory-track-bg: rgba(255, 255, 255, 0.08);
+  --memory-uncategorized-gradient: linear-gradient(90deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.72));
+  --memory-action-danger-bg: rgba(248, 113, 113, 0.08);
+  --memory-action-danger-bg-hover: rgba(248, 113, 113, 0.14);
+  --memory-action-danger-border: rgba(248, 113, 113, 0.24);
+  --memory-action-danger-border-hover: rgba(248, 113, 113, 0.34);
+  --memory-action-danger-text: #fecaca;
+  --goal-shell-bg:
+    linear-gradient(135deg, rgba(255, 186, 73, 0.08), rgba(0, 243, 255, 0.05)),
+    rgba(8, 10, 18, 0.72);
+  --goal-shell-border: rgba(255, 186, 73, 0.18);
+  --goal-secondary-button-bg: rgba(255, 255, 255, 0.06);
+  --goal-secondary-button-border: rgba(255, 255, 255, 0.08);
+  --goal-secondary-button-hover-bg: rgba(255, 255, 255, 0.12);
+  --goal-summary-card-bg:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(255, 186, 73, 0.04)),
+    rgba(255, 255, 255, 0.03);
+  --goal-canvas-card-bg:
+    linear-gradient(135deg, rgba(0, 243, 255, 0.05), rgba(255, 186, 73, 0.04)),
+    rgba(255, 255, 255, 0.03);
+  --goal-tracking-card-bg:
+    linear-gradient(135deg, rgba(0, 243, 255, 0.05), rgba(255, 186, 73, 0.04)),
+    rgba(255, 255, 255, 0.03);
+  --goal-progress-card-bg:
+    linear-gradient(135deg, rgba(255, 186, 73, 0.06), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.03);
+  --goal-capability-card-bg:
+    linear-gradient(135deg, rgba(92, 201, 121, 0.08), rgba(0, 243, 255, 0.04)),
+    rgba(255, 255, 255, 0.03);
+  --goal-item-bg: rgba(255, 255, 255, 0.03);
+  --goal-item-border: rgba(255, 255, 255, 0.05);
+  --goal-focus-bg: rgba(255, 255, 255, 0.035);
+  --goal-focus-border: rgba(92, 201, 121, 0.14);
+  --goal-copy-bg: rgba(0, 243, 255, 0.06);
+  --goal-copy-border: rgba(0, 243, 255, 0.16);
+  --goal-overdue-border: rgba(255, 120, 120, 0.45);
+  --goal-overdue-text: #ffb4b4;
+  --tool-confirm-impact-bg: rgba(212, 160, 23, 0.12);
+  --tool-confirm-impact-border: rgba(212, 160, 23, 0.28);
+  --tool-confirm-impact-text: #f3d98a;
+  --tool-toggle-track-bg: rgba(255, 255, 255, 0.1);
+  --tool-toggle-track-active-bg: rgba(0, 243, 255, 0.3);
+  --tool-item-border: rgba(255, 255, 255, 0.04);
+  --skill-tag-bg: rgba(255, 255, 255, 0.06);
+  --notice-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --notice-border: rgba(255, 255, 255, 0.08);
+  --notice-info-bg: rgba(16, 24, 40, 0.88);
+  --notice-success-bg: rgba(8, 48, 40, 0.9);
+  --notice-success-border: rgba(52, 211, 153, 0.25);
+  --notice-error-bg: rgba(60, 18, 18, 0.92);
+  --notice-error-border: rgba(248, 113, 113, 0.28);
+  --notice-message-color: rgba(255, 255, 255, 0.8);
+  --restart-backdrop: rgba(5, 5, 8, 0.85);
+  --restart-countdown-shadow: 0 0 20px var(--primary-glow);
+  --editor-textarea-bg: rgba(0, 0, 0, 0.2);
+  --editor-textarea-focus-bg: rgba(0, 0, 0, 0.3);
+  --badge-pass-border: rgba(52, 211, 153, 0.28);
+  --badge-pass-bg: rgba(52, 211, 153, 0.12);
+  --badge-pass-text: #6ee7b7;
+  --badge-fail-border: rgba(255, 107, 107, 0.28);
+  --badge-fail-bg: rgba(255, 107, 107, 0.12);
+  --badge-fail-text: #fca5a5;
+  --voice-recording-text: #ff6b6b;
+  --voice-recording-bg: rgba(255, 107, 107, 0.12);
+  --voice-recording-pulse-start: rgba(255, 107, 107, 0.36);
+  --voice-recording-pulse-end: rgba(255, 107, 107, 0);
+  --voice-listening-text: #34d399;
+  --voice-listening-bg: rgba(52, 211, 153, 0.12);
+  --voice-listening-pulse-start: rgba(52, 211, 153, 0.32);
+  --voice-listening-pulse-end: rgba(52, 211, 153, 0);
+  --voice-duration-text: var(--voice-recording-text);
+  --canvas-node-status-todo: rgba(148, 163, 184, 0.84);
+  --canvas-node-status-doing: var(--secondary);
+  --canvas-node-status-doing-glow: rgba(255, 215, 0, 0.4);
+  --canvas-node-status-done: #4ade80;
+  --canvas-node-task-accent: #60a5fa;
+  --canvas-node-note-accent: #a78bfa;
+  --canvas-node-method-accent: var(--secondary);
+  --canvas-node-knowledge-accent: #34d399;
+  --canvas-node-agent-output-accent: var(--primary);
+  --canvas-node-screenshot-accent: #f472b6;
+  --canvas-node-session-accent: #fb923c;
+
+  /* Compatibility aliases for existing styles */
+  --bg-dark: var(--color-bg-page);
+  --bg-gradient-start: var(--color-bg-page-accent);
+  --bg-gradient-end: var(--color-bg-page-accent-2);
+  --primary: var(--color-accent);
+  --primary-glow: var(--color-accent-glow);
+  --secondary: var(--color-warning);
+  --secondary-rgb: var(--color-warning-rgb);
+  --glass-surface: var(--color-surface-1);
+  --glass-bg: var(--color-surface-2);
+  --glass-border: var(--color-border-soft);
+  --glass-highlight: var(--color-surface-3);
+  --text-main: var(--color-text-primary);
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+  --text-tertiary: var(--color-text-tertiary);
+  --text-dim: var(--color-text-dim);
+  --accent: var(--color-accent);
+}
+
+html[data-theme="light"] {
+  --color-bg-page: #f5f6fa;
+  --color-bg-page-accent: #e8eaf2;
+  --color-bg-page-accent-2: #f0f1f8;
+  --color-surface-1: rgba(255, 255, 255, 0.74);
+  --color-surface-2: rgba(255, 255, 255, 0.9);
+  --color-surface-3: rgba(15, 23, 42, 0.08);
+  --color-border-soft: rgba(15, 23, 42, 0.1);
+  --color-border-strong: rgba(15, 23, 42, 0.18);
+  --color-text-primary: #162033;
+  --color-text-secondary: rgba(22, 32, 51, 0.76);
+  --color-text-muted: rgba(22, 32, 51, 0.58);
+  --color-text-tertiary: rgba(22, 32, 51, 0.46);
+  --color-text-dim: rgba(22, 32, 51, 0.36);
+  --color-accent: #0099aa;
+  --color-accent-glow: rgba(0, 153, 170, 0.24);
+  --color-warning: #c49000;
+  --color-warning-rgb: 196, 144, 0;
+  --color-danger: #d9485f;
+  --color-success: #0f9f6e;
+  --overlay-backdrop: rgba(226, 232, 240, 0.74);
+
+  --header-bg: rgba(255, 255, 255, 0.78);
+  --header-shadow: 0 10px 28px rgba(148, 163, 184, 0.22);
+  --input-bg: rgba(255, 255, 255, 0.9);
+  --chat-bg: rgba(255, 255, 255, 0.45);
+  --chat-user-bubble-bg: rgba(255, 255, 255, 0.78);
+  --chat-user-bubble-border: rgba(15, 23, 42, 0.08);
+  --chat-bot-bubble-bg: linear-gradient(135deg, #1597a3 0%, #3a79a5 100%);
+  --chat-bot-bubble-text: #ffffff;
+  --chat-bot-bubble-shadow: 0 10px 24px rgba(51, 65, 85, 0.16);
+  --modal-bg: rgba(255, 255, 255, 0.94);
+  --modal-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
+  --code-block-bg: rgba(226, 232, 240, 0.88);
+  --code-block-header-bg: rgba(226, 232, 240, 0.98);
+  --code-inline-bg: rgba(203, 213, 225, 0.45);
+  --table-header-bg: rgba(203, 213, 225, 0.5);
+  --sidebar-active-bg: rgba(0, 153, 170, 0.1);
+  --sidebar-active-border: rgba(0, 153, 170, 0.22);
+  --bg-card: rgba(255, 255, 255, 0.96);
+  --bg-main: rgba(255, 255, 255, 0.94);
+  --bg-secondary: rgba(203, 213, 225, 0.45);
+  --bg-hover: rgba(15, 23, 42, 0.06);
+  --canvas-grid-stroke: rgba(15, 23, 42, 0.05);
+  --focus-ring: rgba(0, 153, 170, 0.14);
+  --composer-bg: rgba(255, 255, 255, 0.74);
+  --composer-drag-shadow: 0 0 0 3px rgba(0, 153, 170, 0.12);
+  --attach-hover-bg: rgba(0, 153, 170, 0.08);
+  --attachment-chip-bg: rgba(226, 232, 240, 0.78);
+  --button-primary-bg: #162033;
+  --button-primary-text: #ffffff;
+  --button-primary-hover-bg: #0f172a;
+  --button-muted-text: rgba(22, 32, 51, 0.56);
+  --select-option-bg: #f8fafc;
+  --select-option-text: #0f766e;
+  --divider-border: rgba(15, 23, 42, 0.08);
+  --hint-muted-color: rgba(22, 32, 51, 0.58);
+  --hint-warning-color: #8a6200;
+  --canvas-section-bg: rgba(255, 255, 255, 0.52);
+  --canvas-toolbar-button-bg: rgba(255, 255, 255, 0.72);
+  --canvas-toolbar-button-hover-bg: rgba(255, 255, 255, 0.96);
+  --canvas-toolbar-button-border: rgba(15, 23, 42, 0.08);
+  --canvas-toolbar-button-hover-border: rgba(15, 23, 42, 0.16);
+  --canvas-close-text: rgba(217, 72, 95, 0.76);
+  --canvas-close-hover-bg: rgba(217, 72, 95, 0.08);
+  --canvas-context-bar-bg: rgba(0, 153, 170, 0.08);
+  --canvas-context-bar-border: rgba(0, 153, 170, 0.14);
+  --canvas-chip-bg: rgba(255, 255, 255, 0.78);
+  --canvas-chip-border: rgba(15, 23, 42, 0.08);
+  --canvas-capability-chip-bg: rgba(15, 159, 110, 0.08);
+  --canvas-capability-chip-border: rgba(15, 159, 110, 0.16);
+  --canvas-node-hover-border: rgba(15, 23, 42, 0.16);
+  --canvas-tag-bg: rgba(203, 213, 225, 0.56);
+  --canvas-group-bg: rgba(255, 255, 255, 0.4);
+  --canvas-group-border: rgba(15, 23, 42, 0.14);
+  --canvas-port-bg: rgba(15, 23, 42, 0.16);
+  --canvas-port-border: rgba(15, 23, 42, 0.24);
+  --canvas-edge-stroke: rgba(15, 23, 42, 0.16);
+  --canvas-selection-fill: rgba(0, 153, 170, 0.06);
+  --canvas-active-badge-bg: rgba(0, 153, 170, 0.12);
+  --canvas-active-badge-border: rgba(0, 153, 170, 0.22);
+  --canvas-goal-active-border: rgba(0, 153, 170, 0.34);
+  --canvas-goal-active-shadow: 0 0 0 1px rgba(0, 153, 170, 0.14), 0 0 18px rgba(0, 153, 170, 0.12);
+  --canvas-board-list-bg: rgba(248, 250, 252, 0.96);
+  --canvas-board-item-hover-bg: rgba(255, 255, 255, 0.96);
+  --canvas-menu-bg: rgba(255, 255, 255, 0.96);
+  --canvas-menu-hover-bg: rgba(15, 23, 42, 0.06);
+  --canvas-picker-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+  --canvas-react-active-bg: rgba(99, 102, 241, 0.12);
+  --canvas-react-active-border: rgba(99, 102, 241, 0.2);
+  --canvas-react-active-text: #4f46e5;
+  --canvas-react-analyze-text: #2563eb;
+  --canvas-react-toggle-text: #7c3aed;
+  --canvas-react-running-bg: rgba(245, 158, 11, 0.14);
+  --canvas-react-running-text: #b45309;
+  --canvas-react-done-bg: rgba(15, 159, 110, 0.12);
+  --canvas-react-done-text: #0f9f6e;
+  --canvas-react-error-bg: rgba(217, 72, 95, 0.12);
+  --canvas-react-error-text: #d9485f;
+  --canvas-react-final-bg: rgba(99, 102, 241, 0.1);
+  --canvas-react-final-text: #5b4ddb;
+  --canvas-react-pulse-start: rgba(245, 158, 11, 0.22);
+  --canvas-react-pulse-mid: rgba(245, 158, 11, 0.1);
+  --theme-toggle-bg: rgba(255, 255, 255, 0.92);
+  --theme-toggle-hover-bg: rgba(15, 23, 42, 0.06);
+  --theme-toggle-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  --body-mesh-primary: rgba(0, 153, 170, 0.06);
+  --body-mesh-secondary: rgba(196, 144, 0, 0.05);
+  --memory-shell-bg:
+    linear-gradient(135deg, rgba(0, 153, 170, 0.08), rgba(196, 144, 0, 0.06)),
+    rgba(255, 255, 255, 0.76);
+  --memory-shell-border: rgba(0, 153, 170, 0.16);
+  --memory-shell-inset-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  --memory-card-bg: rgba(255, 255, 255, 0.66);
+  --memory-card-border: rgba(15, 23, 42, 0.08);
+  --memory-row-bg: rgba(255, 255, 255, 0.5);
+  --memory-row-border: rgba(15, 23, 42, 0.06);
+  --memory-row-hover-bg: rgba(255, 255, 255, 0.82);
+  --memory-row-active-bg: rgba(0, 153, 170, 0.1);
+  --memory-row-active-border: rgba(0, 153, 170, 0.18);
+  --memory-kicker-color: var(--color-warning);
+  --memory-name-strong: rgba(22, 32, 51, 0.9);
+  --memory-number-strong: rgba(22, 32, 51, 0.94);
+  --memory-tab-track-bg: rgba(255, 255, 255, 0.62);
+  --memory-tab-track-border: rgba(15, 23, 42, 0.08);
+  --memory-tab-active-bg: rgba(0, 153, 170, 0.12);
+  --memory-context-bg: rgba(196, 144, 0, 0.1);
+  --memory-context-border: rgba(196, 144, 0, 0.18);
+  --memory-context-text: rgba(22, 32, 51, 0.84);
+  --memory-badge-bg: rgba(255, 255, 255, 0.72);
+  --memory-badge-border: rgba(15, 23, 42, 0.08);
+  --memory-badge-shared-bg: rgba(0, 153, 170, 0.12);
+  --memory-badge-shared-border: rgba(0, 153, 170, 0.22);
+  --memory-track-bg: rgba(148, 163, 184, 0.18);
+  --memory-uncategorized-gradient: linear-gradient(90deg, rgba(148, 163, 184, 0.3), rgba(100, 116, 139, 0.72));
+  --memory-action-danger-bg: rgba(217, 72, 95, 0.08);
+  --memory-action-danger-bg-hover: rgba(217, 72, 95, 0.14);
+  --memory-action-danger-border: rgba(217, 72, 95, 0.2);
+  --memory-action-danger-border-hover: rgba(217, 72, 95, 0.32);
+  --memory-action-danger-text: #b4233f;
+  --goal-shell-bg:
+    linear-gradient(135deg, rgba(196, 144, 0, 0.08), rgba(0, 153, 170, 0.06)),
+    rgba(255, 255, 255, 0.76);
+  --goal-shell-border: rgba(196, 144, 0, 0.18);
+  --goal-secondary-button-bg: rgba(255, 255, 255, 0.7);
+  --goal-secondary-button-border: rgba(15, 23, 42, 0.08);
+  --goal-secondary-button-hover-bg: rgba(255, 255, 255, 0.96);
+  --goal-summary-card-bg:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.68), rgba(196, 144, 0, 0.08)),
+    rgba(255, 255, 255, 0.6);
+  --goal-canvas-card-bg:
+    linear-gradient(135deg, rgba(0, 153, 170, 0.08), rgba(196, 144, 0, 0.08)),
+    rgba(255, 255, 255, 0.62);
+  --goal-tracking-card-bg:
+    linear-gradient(135deg, rgba(0, 153, 170, 0.08), rgba(196, 144, 0, 0.07)),
+    rgba(255, 255, 255, 0.62);
+  --goal-progress-card-bg:
+    linear-gradient(135deg, rgba(196, 144, 0, 0.1), rgba(255, 255, 255, 0.6)),
+    rgba(255, 255, 255, 0.62);
+  --goal-capability-card-bg:
+    linear-gradient(135deg, rgba(15, 159, 110, 0.1), rgba(0, 153, 170, 0.08)),
+    rgba(255, 255, 255, 0.62);
+  --goal-item-bg: rgba(255, 255, 255, 0.62);
+  --goal-item-border: rgba(15, 23, 42, 0.07);
+  --goal-focus-bg: rgba(255, 255, 255, 0.78);
+  --goal-focus-border: rgba(15, 159, 110, 0.16);
+  --goal-copy-bg: rgba(0, 153, 170, 0.08);
+  --goal-copy-border: rgba(0, 153, 170, 0.16);
+  --goal-overdue-border: rgba(217, 72, 95, 0.32);
+  --goal-overdue-text: #b4233f;
+  --tool-confirm-impact-bg: rgba(196, 144, 0, 0.12);
+  --tool-confirm-impact-border: rgba(196, 144, 0, 0.22);
+  --tool-confirm-impact-text: #8a6200;
+  --tool-toggle-track-bg: rgba(148, 163, 184, 0.22);
+  --tool-toggle-track-active-bg: rgba(0, 153, 170, 0.28);
+  --tool-item-border: rgba(15, 23, 42, 0.06);
+  --skill-tag-bg: rgba(203, 213, 225, 0.56);
+  --notice-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --notice-border: rgba(15, 23, 42, 0.08);
+  --notice-info-bg: rgba(255, 255, 255, 0.94);
+  --notice-success-bg: rgba(236, 253, 245, 0.96);
+  --notice-success-border: rgba(15, 159, 110, 0.2);
+  --notice-error-bg: rgba(254, 242, 242, 0.96);
+  --notice-error-border: rgba(217, 72, 95, 0.22);
+  --notice-message-color: rgba(22, 32, 51, 0.78);
+  --restart-backdrop: rgba(226, 232, 240, 0.84);
+  --restart-countdown-shadow: 0 0 18px rgba(0, 153, 170, 0.22);
+  --editor-textarea-bg: rgba(255, 255, 255, 0.88);
+  --editor-textarea-focus-bg: rgba(255, 255, 255, 0.96);
+  --badge-pass-border: rgba(15, 159, 110, 0.22);
+  --badge-pass-bg: rgba(15, 159, 110, 0.1);
+  --badge-pass-text: #0f9f6e;
+  --badge-fail-border: rgba(217, 72, 95, 0.22);
+  --badge-fail-bg: rgba(217, 72, 95, 0.1);
+  --badge-fail-text: #d9485f;
+  --voice-recording-text: #d9485f;
+  --voice-recording-bg: rgba(217, 72, 95, 0.1);
+  --voice-recording-pulse-start: rgba(217, 72, 95, 0.22);
+  --voice-recording-pulse-end: rgba(217, 72, 95, 0);
+  --voice-listening-text: #0f9f6e;
+  --voice-listening-bg: rgba(15, 159, 110, 0.1);
+  --voice-listening-pulse-start: rgba(15, 159, 110, 0.2);
+  --voice-listening-pulse-end: rgba(15, 159, 110, 0);
+  --voice-duration-text: var(--voice-recording-text);
+  --canvas-node-status-todo: rgba(100, 116, 139, 0.86);
+  --canvas-node-status-doing: var(--secondary);
+  --canvas-node-status-doing-glow: rgba(196, 144, 0, 0.28);
+  --canvas-node-status-done: #0f9f6e;
+  --canvas-node-task-accent: #3b82f6;
+  --canvas-node-note-accent: #8b5cf6;
+  --canvas-node-method-accent: var(--secondary);
+  --canvas-node-knowledge-accent: #0f9f6e;
+  --canvas-node-agent-output-accent: var(--primary);
+  --canvas-node-screenshot-accent: #db2777;
+  --canvas-node-session-accent: #ea580c;
+}
+
+html {
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+body {
+  background-color: var(--color-bg-page);
+  background: radial-gradient(circle at top left, var(--color-bg-page-accent) 0%, var(--color-bg-page) 100%);
+  color: var(--color-text-primary);
+}
+
+body::before {
+  background:
+    radial-gradient(circle at 50% 50%, var(--body-mesh-primary) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, var(--body-mesh-secondary) 0%, transparent 40%);
+}
+
+.header {
+  background: var(--header-bg);
+}
+
+.input,
+.select {
+  background: var(--input-bg);
+  color: var(--color-text-primary);
+}
+
+.chat,
+.canvas-section {
+  background: var(--chat-bg);
+}
+
+.modal {
+  background: var(--modal-bg);
+}
+
+.modal-overlay,
+.restart-overlay {
+  background: var(--overlay-backdrop);
+}
+
+.code-block-wrapper {
+  background: var(--code-block-bg);
+}
+
+.code-block-header,
+.msg pre {
+  background: var(--code-block-header-bg);
+}
+
+.msg code {
+  background: var(--code-inline-bg);
+}
+
+.theme-transitioning,
+.theme-transitioning *,
+.theme-transitioning *::before,
+.theme-transitioning *::after {
+  transition:
+    background-color 220ms ease,
+    color 220ms ease,
+    border-color 220ms ease,
+    box-shadow 220ms ease,
+    text-shadow 220ms ease;
+}
+
+.theme-toggle-btn {
+  min-width: 72px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--theme-toggle-bg);
+  color: var(--text-main);
+  font-family: var(--font-main);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.theme-toggle-btn:hover {
+  background: var(--theme-toggle-hover-bg);
+  border-color: var(--primary);
+  box-shadow: var(--theme-toggle-shadow);
+}
+
+.theme-toggle-btn:active {
+  transform: translateY(1px);
+}
+
+.theme-toggle-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.theme-toggle-btn[data-theme="light"] {
+  color: var(--primary);
+}
+
+.theme-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 180ms ease;
+}
+
+.theme-link-accent {
+  font-size: 15px;
+  color: var(--secondary);
+}
+
+.theme-link-accent:hover {
+  color: var(--primary);
+}
+
+.theme-link-muted {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.theme-link-muted:hover {
+  color: var(--text-main);
+}
+
+#cv-grid path {
+  stroke: var(--canvas-grid-stroke);
+}
+
+@media (max-width: 768px) {
+  .theme-toggle-btn {
+    min-width: 60px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+}

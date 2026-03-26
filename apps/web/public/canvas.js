@@ -26,6 +26,22 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
+function interpolate(template, params = {}) {
+  return String(template).replace(/\{(\w+)\}/g, (_, key) => {
+    if (Object.prototype.hasOwnProperty.call(params, key)) {
+      return String(params[key]);
+    }
+    return `{${key}}`;
+  });
+}
+
+function t(key, params = {}, fallback = key) {
+  if (typeof window._belldandyT === "function") {
+    return window._belldandyT(key, params, fallback);
+  }
+  return interpolate(fallback, params);
+}
+
 // ─── Node Templates ──────────────────────────────────────────
 
 const NODE_ICONS = {
@@ -61,6 +77,7 @@ function renderNodeHTML(node, options = {}) {
   const typeCls = `node-${node.type}`;
   const isGoalActive = matchesGoalNode(node, options.activeGoalNodeId);
   const activeCls = isGoalActive ? " goal-active" : "";
+  const reactRunningCls = Array.isArray(d.tags) && d.tags.includes("running") ? " react-running" : "";
 
   let body = "";
   if (!d.collapsed && d.content) {
@@ -70,7 +87,7 @@ function renderNodeHTML(node, options = {}) {
 
   let tags = "";
   if (d.tags && d.tags.length) {
-    tags = `<div class="node-tags">${d.tags.map(t => `<span class="node-tag">${esc(t)}</span>`).join("")}</div>`;
+    tags = `<div class="node-tags">${d.tags.map(t => `<span class="node-tag" data-tag="${esc(t)}">${esc(t)}</span>`).join("")}</div>`;
   }
 
   let extra = "";
@@ -80,10 +97,10 @@ function renderNodeHTML(node, options = {}) {
   }
 
   const statusDot = node.type === "task" ? `<span class="node-status-dot"></span>` : "";
-  const activeBadge = isGoalActive ? `<span class="node-active-badge" title="当前 activeNode">ACTIVE</span>` : "";
+  const activeBadge = isGoalActive ? `<span class="node-active-badge" title="${esc(t("canvas.activeNodeTitle", {}, "Current activeNode"))}">ACTIVE</span>` : "";
   const refBadge = d.ref ? `<span class="node-ref-badge" title="${esc(d.ref.type)}: ${esc(d.ref.id)}">\u{1F517}</span>` : "";
 
-  return `<div class="canvas-node ${typeCls}${statusCls}${activeCls}" data-node-id="${node.id}" style="${d.color ? `border-left-color:${d.color}` : ""}">
+  return `<div class="canvas-node ${typeCls}${statusCls}${activeCls}${reactRunningCls}" data-node-id="${node.id}" style="${d.color ? `border-left-color:${d.color}` : ""}">
   <div class="node-header">
     <span class="node-type-icon">${icon}</span>
     ${statusDot}
@@ -123,7 +140,7 @@ class BoardManager {
     const id = cvId();
     const now = new Date().toISOString();
     this.board = {
-      version: 1, id, name: name || "未命名画布",
+      version: 1, id, name: name || t("canvas.unnamedBoard", {}, "Untitled Board"),
       createdAt: now, updatedAt: now,
       viewport: { x: 0, y: 0, zoom: 1 },
       nodes: {}, edges: {},
@@ -729,19 +746,19 @@ class CanvasApp {
     };
     this.renderer.onCanvasContextMenu = (cx, cy) => {
       this._showContextMenu(cx, cy, [
-        { label: "+ 任务", action: () => this._addNodeInteractive("task") },
-        { label: "+ 笔记", action: () => this._addNodeInteractive("note") },
-        { label: "+ 方法", action: () => this._addNodeInteractive("method") },
-        { label: "+ 知识", action: () => this._addNodeInteractive("knowledge") },
+        { label: t("canvas.contextAddTask", {}, "+ Task"), action: () => this._addNodeInteractive("task") },
+        { label: t("canvas.contextAddNote", {}, "+ Note"), action: () => this._addNodeInteractive("note") },
+        { label: t("canvas.contextAddMethod", {}, "+ Method"), action: () => this._addNodeInteractive("method") },
+        { label: t("canvas.contextAddKnowledge", {}, "+ Knowledge"), action: () => this._addNodeInteractive("knowledge") },
         "sep",
-        { label: "自动布局", action: () => this.autoLayout() },
-        { label: "适应视图", action: () => this.fitView() },
+        { label: t("canvas.autoLayoutTitle", {}, "Auto Layout"), action: () => this.autoLayout() },
+        { label: t("canvas.fitViewTitle", {}, "Fit View"), action: () => this.fitView() },
       ]);
     };
     this.renderer.onNodeContextMenu = (nodeId, cx, cy) => {
       this._showContextMenu(cx, cy, [
-        { label: "删除节点", action: () => { this.manager.removeNode(nodeId); this._rerender(); this._scheduleSave(); } },
-        { label: "固定/取消固定", action: () => {
+        { label: t("canvas.deleteNode", {}, "Delete Node"), action: () => { this.manager.removeNode(nodeId); this._rerender(); this._scheduleSave(); } },
+        { label: t("canvas.togglePin", {}, "Pin/Unpin"), action: () => {
           const n = this.manager.board?.nodes[nodeId];
           if (n) { n.pinned = !n.pinned; this._rerender(); }
         }},
@@ -900,15 +917,18 @@ class CanvasApp {
     // Header
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;";
-    header.innerHTML = `<span style="font-size:16px;font-weight:600;color:var(--text-main);">画布工作区</span>`;
+    header.innerHTML = `<span style="font-size:16px;font-weight:600;color:var(--text-main);">${esc(t("canvas.boardListTitle", {}, "Canvas Workspace"))}</span>`;
     const headerBtns = document.createElement("div");
     headerBtns.style.cssText = "display:flex;gap:8px;";
 
     const newBtn = document.createElement("button");
     newBtn.className = "canvas-tb-btn";
-    newBtn.textContent = "+ 新建画布";
+    newBtn.textContent = t("canvas.newBoard", {}, "+ New Board");
     newBtn.addEventListener("click", async () => {
-      const name = prompt("画布名称:", "新画布");
+      const name = prompt(
+        t("canvas.boardNamePrompt", {}, "Board name:"),
+        t("canvas.newBoardDefaultName", {}, "New Board"),
+      );
       if (!name) return;
       await this.createBoard(name);
       this._showCanvasView();
@@ -917,7 +937,7 @@ class CanvasApp {
 
     const backBtn = document.createElement("button");
     backBtn.className = "canvas-tb-btn canvas-tb-close";
-    backBtn.textContent = "返回";
+    backBtn.textContent = t("canvas.back", {}, "Back");
     backBtn.addEventListener("click", () => {
       window._belldandySwitchMode?.("chat");
     });
@@ -930,7 +950,7 @@ class CanvasApp {
     if (boards.length === 0) {
       const empty = document.createElement("div");
       empty.style.cssText = "text-align:center;color:var(--text-muted);padding:40px 0;font-size:14px;";
-      empty.textContent = "还没有画布，点击上方按钮创建一个。";
+      empty.textContent = t("canvas.emptyBoards", {}, "No boards yet. Create one with the button above.");
       listEl.appendChild(empty);
     } else {
       for (const b of boards) {
@@ -1033,7 +1053,12 @@ class CanvasApp {
 
   _updateBoardName() {
     const el = document.getElementById("canvasBoardName");
-    if (el && this.manager.board) el.textContent = this.manager.board.name;
+    if (!el) return;
+    if (this.manager.board) {
+      el.textContent = this.manager.board.name;
+      return;
+    }
+    el.textContent = t("canvas.unnamedBoard", {}, "Untitled Board");
   }
 
   _updateZoomLabel() {
@@ -1047,7 +1072,7 @@ class CanvasApp {
       this._showResourcePicker(type);
       return;
     }
-    const title = prompt(`输入${NODE_ICONS[type] || ""} ${type} 节点标题:`);
+    const title = prompt(t("canvas.nodeTitlePrompt", { icon: NODE_ICONS[type] || "", type }, `Enter ${NODE_ICONS[type] || ""} ${type} node title:`));
     if (!title) return;
     const node = this.manager.addNode(type, title);
     if (node) {
@@ -1084,16 +1109,20 @@ class CanvasApp {
     const dialog = document.createElement("div");
     dialog.className = "canvas-picker-dialog";
 
-    const typeLabels = { method: "方法", knowledge: "知识", session: "会话" };
+    const typeLabels = {
+      method: t("canvas.resourceMethod", {}, "Method"),
+      knowledge: t("canvas.resourceKnowledge", {}, "Knowledge"),
+      session: t("canvas.resourceSession", {}, "Session"),
+    };
     const refType = type === "knowledge" ? "memory" : type;
 
     dialog.innerHTML = `<div class="canvas-picker-header">
-      <span>选择${typeLabels[type] || type}关联</span>
+      <span>${esc(t("canvas.resourcePickerTitle", { typeLabel: typeLabels[type] || type }, `Choose ${typeLabels[type] || type} resource`))}</span>
       <button class="canvas-picker-close">\u00D7</button>
     </div>
     <div class="canvas-picker-body"></div>
     <div class="canvas-picker-footer">
-      <button class="canvas-picker-manual">手动输入</button>
+      <button class="canvas-picker-manual">${esc(t("canvas.manualInput", {}, "Manual Input"))}</button>
     </div>`;
 
     overlay.appendChild(dialog);
@@ -1109,14 +1138,14 @@ class CanvasApp {
 
     manualBtn.addEventListener("click", () => {
       close();
-      const title = prompt(`输入${NODE_ICONS[type] || ""} ${type} 节点标题:`);
+      const title = prompt(t("canvas.nodeTitlePrompt", { icon: NODE_ICONS[type] || "", type }, `Enter ${NODE_ICONS[type] || ""} ${type} node title:`));
       if (!title) return;
       const node = this.manager.addNode(type, title);
       if (node) { this._rerender(); this._scheduleSave(); }
     });
 
     if (items.length === 0) {
-      body.innerHTML = `<div class="canvas-picker-empty">暂无可用的${typeLabels[type]}资源</div>`;
+      body.innerHTML = `<div class="canvas-picker-empty">${esc(t("canvas.noAvailableResources", { typeLabel: typeLabels[type] || type }, `No available ${typeLabels[type] || type} resources`))}</div>`;
     } else {
       for (const item of items) {
         const row = document.createElement("div");
@@ -1148,7 +1177,7 @@ class CanvasApp {
         if (!res.ok) return [];
         return (res.payload.items || [])
           .filter(i => i.type === "file" && i.name.endsWith(".md"))
-          .map(i => ({ id: i.name, name: i.name.replace(/\.md$/, ""), desc: "方法文档" }));
+          .map(i => ({ id: i.name, name: i.name.replace(/\.md$/, ""), desc: t("canvas.methodDoc", {}, "Method Doc") }));
       }
       if (type === "knowledge") {
         const res = await this._sendReq({
@@ -1159,7 +1188,7 @@ class CanvasApp {
         if (!res.ok) return [];
         return (res.payload.items || [])
           .filter(i => i.type === "file" && i.name.endsWith(".md"))
-          .map(i => ({ id: i.name, name: i.name.replace(/\.md$/, ""), desc: "记忆笔记" }));
+          .map(i => ({ id: i.name, name: i.name.replace(/\.md$/, ""), desc: t("canvas.memoryNote", {}, "Memory Note") }));
       }
       if (type === "session") {
         const res = await this._sendReq({
@@ -1172,7 +1201,7 @@ class CanvasApp {
           .filter(i => i.type === "file")
           .map(i => {
             const id = i.name.replace(/\.jsonl$/, "");
-            return { id, name: id, desc: "对话会话" };
+            return { id, name: id, desc: t("canvas.conversationSession", {}, "Conversation Session") };
           });
       }
     } catch { /* ignore */ }
@@ -1193,17 +1222,17 @@ class CanvasApp {
 
     const d = node.data;
     dialog.innerHTML = `<div class="canvas-picker-header">
-      <span>编辑节点</span>
+      <span>${esc(t("canvas.editNode", {}, "Edit Node"))}</span>
       <button class="canvas-picker-close">\u00D7</button>
     </div>
     <div class="canvas-picker-body" style="padding:12px;">
-      <label style="display:block;margin-bottom:8px;color:var(--text-muted);font-size:12px;">标题</label>
+      <label style="display:block;margin-bottom:8px;color:var(--text-muted);font-size:12px;">${esc(t("canvas.titleLabel", {}, "Title"))}</label>
       <input class="canvas-edit-title" value="${esc(d.title)}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-main);color:var(--text-main);margin-bottom:12px;box-sizing:border-box;"/>
-      <label style="display:block;margin-bottom:8px;color:var(--text-muted);font-size:12px;">内容</label>
+      <label style="display:block;margin-bottom:8px;color:var(--text-muted);font-size:12px;">${esc(t("canvas.contentLabel", {}, "Content"))}</label>
       <textarea class="canvas-edit-content" rows="5" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-main);color:var(--text-main);resize:vertical;box-sizing:border-box;">${esc(d.content || "")}</textarea>
     </div>
     <div class="canvas-picker-footer">
-      <button class="canvas-picker-save">保存</button>
+      <button class="canvas-picker-save">${esc(t("canvas.save", {}, "Save"))}</button>
     </div>`;
 
     overlay.appendChild(dialog);
@@ -1243,7 +1272,7 @@ class CanvasApp {
     const nodes = Object.values(board.nodes);
     if (nodes.length === 0) return null;
 
-    const lines = [`画布: ${board.name} (${nodes.length} 节点)`];
+    const lines = [t("canvas.snapshotBoardLine", { boardName: board.name, count: nodes.length }, `Board: ${board.name} (${nodes.length} nodes)`)];
     for (const n of nodes) {
       const ref = n.data.ref ? ` [${n.data.ref.type}:${n.data.ref.id}]` : "";
       const status = n.data.status ? ` (${n.data.status})` : "";
@@ -1255,7 +1284,7 @@ class CanvasApp {
     }
     const edges = Object.values(board.edges);
     if (edges.length > 0) {
-      lines.push("连线:");
+      lines.push(t("canvas.snapshotEdges", {}, "Edges:"));
       for (const e of edges) {
         const from = board.nodes[e.from]?.data.title ?? e.from;
         const to = board.nodes[e.to]?.data.title ?? e.to;
@@ -1275,7 +1304,7 @@ class CanvasApp {
     window._belldandySwitchMode?.("chat");
     const promptEl = document.getElementById("prompt");
     if (promptEl) {
-      promptEl.value = `请分析以下画布内容，给出建议和洞察：\n\n${snapshot}`;
+      promptEl.value = t("canvas.analyzePrompt", { snapshot }, `Please analyze the following canvas content and provide suggestions and insights:\n\n${snapshot}`);
       promptEl.focus();
     }
   }
@@ -1327,7 +1356,7 @@ class CanvasApp {
       const node = this.manager.addNode("agent-output", `\u{1F527} ${toolName}`, {
         content: preview,
         tags: ["react", "running"],
-        color: "#f59e0b",
+        color: "var(--canvas-react-running-text)",
       });
       if (node) {
         node._react = true; // mark as temporary
@@ -1352,7 +1381,7 @@ class CanvasApp {
         const preview = output.length > 200 ? output.slice(0, 200) + "\u2026" : output;
         n.data.content = preview;
         n.data.tags = ["react", payload.success ? "done" : "error"];
-        n.data.color = payload.success ? "#10b981" : "#ef4444";
+        n.data.color = payload.success ? "var(--canvas-react-done-text)" : "var(--canvas-react-error-text)";
         this._rerender();
       }
     }
@@ -1362,10 +1391,10 @@ class CanvasApp {
   handleReactFinal(text) {
     if (!this.reactEnabled || !this.manager.board) return;
     const preview = text.length > 300 ? text.slice(0, 300) + "\u2026" : text;
-    const node = this.manager.addNode("agent-output", "\u{1F4AC} Agent \u603b\u7ed3", {
+    const node = this.manager.addNode("agent-output", t("canvas.reactFinalTitle", {}, "\u{1F4AC} Agent Summary"), {
       content: preview,
       tags: ["react", "final"],
-      color: "#6366f1",
+      color: "var(--canvas-react-final-text)",
     });
     if (node) {
       node._react = true;
@@ -1411,6 +1440,14 @@ class CanvasApp {
     if (this._contextMenuEl) {
       this._contextMenuEl.remove();
       this._contextMenuEl = null;
+    }
+  }
+
+  refreshLocale() {
+    this._updateBoardName();
+    const section = document.getElementById("canvasSection");
+    if (section?.querySelector(".canvas-board-list")) {
+      void this.showBoardList();
     }
   }
 }

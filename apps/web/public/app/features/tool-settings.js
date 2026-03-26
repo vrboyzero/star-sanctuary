@@ -6,6 +6,7 @@ export function createToolSettingsController({
   clientId,
   escapeHtml,
   showNotice,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
     toolSettingsConfirmModal,
@@ -27,6 +28,24 @@ export function createToolSettingsController({
   let toolSettingsLoadSeq = 0;
   let pendingToolSettingsConfirm = null;
   let toolSettingsConfirmTimer = null;
+  let saveButtonState = "default";
+
+  function updateSaveButton() {
+    if (!saveToolSettingsBtn) return;
+    const map = {
+      default: { key: "common.save", fallback: "Save" },
+      saving: { key: "toolSettings.saveSaving", fallback: "Saving..." },
+      saved: { key: "toolSettings.saveSaved", fallback: "Saved" },
+      failed: { key: "toolSettings.saveFailedShort", fallback: "Failed" },
+    };
+    const entry = map[saveButtonState] || map.default;
+    saveToolSettingsBtn.textContent = t(entry.key, {}, entry.fallback);
+  }
+
+  function renderEmpty(messageKey, fallback) {
+    if (!toolSettingsBody) return;
+    toolSettingsBody.innerHTML = `<div class="tool-settings-empty">${escapeHtml(t(messageKey, {}, fallback))}</div>`;
+  }
 
   if (openToolSettingsBtn) {
     openToolSettingsBtn.addEventListener("click", () => {
@@ -95,7 +114,11 @@ export function createToolSettingsController({
       conversationId,
       impact: payload.impact
         ? String(payload.impact)
-        : "这是全局工具设置变更，会影响当前 Gateway 的其他会话。",
+        : t(
+          "toolSettings.confirmImpactDefault",
+          {},
+          "This is a global tool settings change and will affect other sessions on the current Gateway.",
+        ),
       summary,
       expiresAt: Number(payload.expiresAt || 0),
     };
@@ -116,12 +139,18 @@ export function createToolSettingsController({
   function formatToolSettingsConfirmExpiry(expiresAt) {
     if (!Number.isFinite(expiresAt) || expiresAt <= 0) return "";
     const remainingMs = expiresAt - Date.now();
-    if (remainingMs <= 0) return "该确认请求已过期，请重新发起工具开关变更。";
+    if (remainingMs <= 0) return t("toolSettings.confirmExpired", {}, "This confirmation request has expired. Please trigger the tool switch change again.");
     const remainingSec = Math.ceil(remainingMs / 1000);
-    if (remainingSec < 60) return `请在 ${remainingSec} 秒内完成确认。`;
+    if (remainingSec < 60) {
+      return t("toolSettings.confirmInSeconds", { seconds: remainingSec }, `Please complete confirmation within ${remainingSec} seconds.`);
+    }
     const minutes = Math.floor(remainingSec / 60);
     const seconds = remainingSec % 60;
-    return `请在 ${minutes} 分 ${seconds.toString().padStart(2, "0")} 秒内完成确认。`;
+    return t(
+      "toolSettings.confirmInMinutes",
+      { minutes, seconds: seconds.toString().padStart(2, "0") },
+      `Please complete confirmation within ${minutes}m ${seconds.toString().padStart(2, "0")}s.`,
+    );
   }
 
   function renderToolSettingsConfirmModal() {
@@ -132,7 +161,7 @@ export function createToolSettingsController({
     if (toolSettingsConfirmSummaryEl) {
       const lines = pendingToolSettingsConfirm.summary.length > 0
         ? pendingToolSettingsConfirm.summary
-        : ["本次请求未提供可展示的变更摘要。"];
+        : [t("toolSettings.confirmNoSummary", {}, "No displayable change summary was provided for this request.")];
       toolSettingsConfirmSummaryEl.innerHTML = lines
         .map((line) => `<li>${escapeHtml(line)}</li>`)
         .join("");
@@ -174,8 +203,12 @@ export function createToolSettingsController({
     const approved = payload && payload.decision === "approved";
     clearToolSettingsConfirmModal();
     showNotice(
-      approved ? "工具设置已确认" : "工具设置已拒绝",
-      approved ? "全局工具开关变更已应用。" : "本次工具开关变更已拒绝。",
+      approved
+        ? t("toolSettings.noticeConfirmedTitle", {}, "Tool settings confirmed")
+        : t("toolSettings.noticeRejectedTitle", {}, "Tool settings rejected"),
+      approved
+        ? t("toolSettings.noticeConfirmedMessage", {}, "Global tool switch changes have been applied.")
+        : t("toolSettings.noticeRejectedMessage", {}, "This tool switch change was rejected."),
       approved ? "success" : "info",
       2600,
     );
@@ -184,7 +217,11 @@ export function createToolSettingsController({
   async function submitToolSettingsConfirm(decision) {
     if (!pendingToolSettingsConfirm) return;
     if (!isConnected()) {
-      showNotice("无法处理确认", "当前未连接到服务器。", "error");
+      showNotice(
+        t("toolSettings.noticeHandleErrorTitle", {}, "Unable to process confirmation"),
+        t("toolSettings.noticeNotConnected", {}, "Not connected to the server."),
+        "error",
+      );
       return;
     }
     setToolSettingsConfirmBusy(true);
@@ -201,7 +238,13 @@ export function createToolSettingsController({
     });
     if (!res || res.ok === false) {
       setToolSettingsConfirmBusy(false);
-      showNotice(decision === "approve" ? "确认失败" : "拒绝失败", res?.error?.message || "请求未完成。", "error");
+      showNotice(
+        decision === "approve"
+          ? t("toolSettings.approveFailedTitle", {}, "Approval failed")
+          : t("toolSettings.rejectFailedTitle", {}, "Rejection failed"),
+        res?.error?.message || t("toolSettings.requestIncomplete", {}, "Request was not completed."),
+        "error",
+      );
       if (res?.error?.code === "not_found") {
         clearToolSettingsConfirmModal();
       }
@@ -209,8 +252,12 @@ export function createToolSettingsController({
     }
     clearToolSettingsConfirmModal();
     showNotice(
-      decision === "approve" ? "工具设置已确认" : "工具设置已拒绝",
-      decision === "approve" ? "全局工具开关变更已应用。" : "本次工具开关变更已拒绝。",
+      decision === "approve"
+        ? t("toolSettings.noticeConfirmedTitle", {}, "Tool settings confirmed")
+        : t("toolSettings.noticeRejectedTitle", {}, "Tool settings rejected"),
+      decision === "approve"
+        ? t("toolSettings.noticeConfirmedMessage", {}, "Global tool switch changes have been applied.")
+        : t("toolSettings.noticeRejectedMessage", {}, "This tool switch change was rejected."),
       decision === "approve" ? "success" : "info",
       2600,
     );
@@ -219,10 +266,10 @@ export function createToolSettingsController({
   async function loadToolSettings() {
     const seq = ++toolSettingsLoadSeq;
     if (!isConnected()) {
-      toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未连接</div>';
+      renderEmpty("toolSettings.emptyDisconnected", "Disconnected");
       return;
     }
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">加载中...</div>';
+    renderEmpty("toolSettings.emptyLoading", "Loading...");
 
     const res = await sendReq({ type: "req", id: makeId(), method: "tools.list" });
     if (seq !== toolSettingsLoadSeq) return;
@@ -231,7 +278,7 @@ export function createToolSettingsController({
       renderToolSettingsTab();
       return;
     }
-    toolSettingsBody.innerHTML = '<div class="tool-settings-empty">加载失败</div>';
+    renderEmpty("toolSettings.emptyLoadFailed", "Load failed");
   }
 
   function renderToolSettingsTab() {
@@ -251,12 +298,12 @@ export function createToolSettingsController({
 
   function renderBuiltinTab(tools, disabledList) {
     if (!tools || tools.length === 0) {
-      toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未启用工具系统 (BELLDANDY_TOOLS_ENABLED=false)</div>';
+      renderEmpty("toolSettings.emptyUnavailable", "Tool system is disabled (BELLDANDY_TOOLS_ENABLED=false)");
       return;
     }
     const disabledSet = new Set(disabledList);
     const enabledCount = tools.length - disabledSet.size;
-    let html = `<div class="tool-section-header"><span>内置工具</span><span class="tool-section-count">${enabledCount}/${tools.length} 已启用</span></div>`;
+    let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionBuiltin", {}, "Built-in Tools"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: tools.length }, `${enabledCount}/${tools.length} enabled`))}</span></div>`;
     for (const name of tools.sort()) {
       const checked = !disabledSet.has(name);
       html += `<div class="tool-item${checked ? "" : " disabled"}">
@@ -274,12 +321,12 @@ export function createToolSettingsController({
   function renderMCPTab(mcpServers, disabledList) {
     const serverIds = Object.keys(mcpServers || {});
     if (serverIds.length === 0) {
-      toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未配置 MCP 服务器</div>';
+      renderEmpty("toolSettings.emptyNoMcp", "No MCP servers configured");
       return;
     }
     const disabledSet = new Set(disabledList);
     const enabledCount = serverIds.length - disabledSet.size;
-    let html = `<div class="tool-section-header"><span>MCP 服务器</span><span class="tool-section-count">${enabledCount}/${serverIds.length} 已启用</span></div>`;
+    let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionMcp", {}, "MCP Servers"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: serverIds.length }, `${enabledCount}/${serverIds.length} enabled`))}</span></div>`;
     for (const serverId of serverIds.sort()) {
       const server = mcpServers[serverId];
       const checked = !disabledSet.has(serverId);
@@ -296,7 +343,7 @@ export function createToolSettingsController({
           <span class="toggle-slider"></span>
         </label>
       </div>
-      <div class="mcp-group-tools">${toolList || "无工具"}</div>
+      <div class="mcp-group-tools">${toolList || escapeHtml(t("toolSettings.emptyNoTools", {}, "No tools"))}</div>
     </div>`;
     }
     toolSettingsBody.innerHTML = html;
@@ -305,12 +352,12 @@ export function createToolSettingsController({
 
   function renderPluginsTab(pluginList, disabledList) {
     if (!pluginList || pluginList.length === 0) {
-      toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载插件（将 .js/.mjs 文件放入 ~/.star_sanctuary/plugins/ 目录）</div>';
+      renderEmpty("toolSettings.emptyNoPlugins", "No plugins loaded (put .js/.mjs files into ~/.star_sanctuary/plugins/)");
       return;
     }
     const disabledSet = new Set(disabledList);
     const enabledCount = pluginList.length - disabledSet.size;
-    let html = `<div class="tool-section-header"><span>插件</span><span class="tool-section-count">${enabledCount}/${pluginList.length} 已启用</span></div>`;
+    let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionPlugins", {}, "Plugins"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: pluginList.length }, `${enabledCount}/${pluginList.length} enabled`))}</span></div>`;
     for (const name of pluginList.sort()) {
       const checked = !disabledSet.has(name);
       html += `<div class="tool-item${checked ? "" : " disabled"}">
@@ -327,15 +374,24 @@ export function createToolSettingsController({
 
   function renderSkillsTab(skillList, disabledList) {
     if (!skillList || skillList.length === 0) {
-      toolSettingsBody.innerHTML = '<div class="tool-settings-empty">未加载技能（将 SKILL.md 放入 ~/.star_sanctuary/skills/ 目录）</div>';
+      renderEmpty("toolSettings.emptyNoSkills", "No skills loaded (put SKILL.md into ~/.star_sanctuary/skills/)");
       return;
     }
     const disabledSet = new Set(disabledList);
     const enabledCount = skillList.length - disabledSet.size;
-    const sourceLabel = { bundled: "内置", user: "用户", plugin: "插件" };
-    const priorityLabel = { always: "始终注入", high: "高优先", normal: "普通", low: "低优先" };
+    const sourceLabel = {
+      bundled: t("toolSettings.sourceBundled", {}, "Bundled"),
+      user: t("toolSettings.sourceUser", {}, "User"),
+      plugin: t("toolSettings.sourcePlugin", {}, "Plugin"),
+    };
+    const priorityLabel = {
+      always: t("toolSettings.priorityAlways", {}, "Always Inject"),
+      high: t("toolSettings.priorityHigh", {}, "High"),
+      normal: t("toolSettings.priorityNormal", {}, "Normal"),
+      low: t("toolSettings.priorityLow", {}, "Low"),
+    };
 
-    let html = `<div class="tool-section-header"><span>技能</span><span class="tool-section-count">${enabledCount}/${skillList.length} 已启用</span></div>`;
+    let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionSkills", {}, "Skills"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: skillList.length }, `${enabledCount}/${skillList.length} enabled`))}</span></div>`;
     for (const skill of skillList.sort((a, b) => a.name.localeCompare(b.name))) {
       const checked = !disabledSet.has(skill.name);
       const src = sourceLabel[skill.source] || skill.source;
@@ -385,7 +441,8 @@ export function createToolSettingsController({
   async function saveToolSettings() {
     if (!isConnected() || !toolSettingsData) return;
     if (saveToolSettingsBtn) {
-      saveToolSettingsBtn.textContent = "保存中...";
+      saveButtonState = "saving";
+      updateSaveButton();
       saveToolSettingsBtn.disabled = true;
     }
 
@@ -398,11 +455,13 @@ export function createToolSettingsController({
 
     if (res && res.ok) {
       if (saveToolSettingsBtn) {
-        saveToolSettingsBtn.textContent = "已保存";
+        saveButtonState = "saved";
+        updateSaveButton();
       }
       setTimeout(() => {
         if (saveToolSettingsBtn) {
-          saveToolSettingsBtn.textContent = "保存";
+          saveButtonState = "default";
+          updateSaveButton();
           saveToolSettingsBtn.disabled = false;
         }
       }, 1500);
@@ -410,10 +469,11 @@ export function createToolSettingsController({
     }
 
     if (saveToolSettingsBtn) {
-      saveToolSettingsBtn.textContent = "失败";
+      saveButtonState = "failed";
+      updateSaveButton();
       saveToolSettingsBtn.disabled = false;
     }
-    alert(`保存失败: ${res?.error?.message || "未知错误"}`);
+    alert(t("toolSettings.saveFailedAlert", { message: res?.error?.message || t("toolSettings.unknownError", {}, "Unknown error") }, "Save failed: {message}"));
   }
 
   function handleToolsConfigUpdated(payload) {
@@ -431,6 +491,13 @@ export function createToolSettingsController({
   }
 
   return {
+    refreshLocale() {
+      updateSaveButton();
+      renderToolSettingsConfirmModal();
+      if (toolSettingsData) {
+        renderToolSettingsTab();
+      }
+    },
     toggle,
     handleConfirmRequired,
     handleConfirmResolved,

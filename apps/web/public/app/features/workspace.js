@@ -9,8 +9,7 @@ function createReq(sendReq, makeId, method, params) {
 
 function setSidebarActionButtonState(button, active) {
   if (!button) return;
-  button.style.background = active ? "rgba(255,255,255,0.1)" : "transparent";
-  button.style.opacity = active ? "1" : "0.7";
+  button.classList.toggle("is-active", Boolean(active));
 }
 
 export function createWorkspaceFeature({
@@ -25,6 +24,7 @@ export function createWorkspaceFeature({
   loadServerConfig,
   syncAttachmentLimitsFromConfig,
   persistWorkspaceRootsField,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
     sidebarEl,
@@ -49,6 +49,10 @@ export function createWorkspaceFeature({
   let currentEditReadOnly = false;
   let currentTreeMode = "root";
   const expandedFolders = new Set();
+  let lastRootTreePlaceholder = {
+    key: "common.loading",
+    fallback: "Loading...",
+  };
 
   if (sidebarEl) {
     sidebarEl.classList.add("collapsed");
@@ -93,6 +97,18 @@ export function createWorkspaceFeature({
   function refreshAfterConnectionReady() {
     if (sidebarExpanded) {
       void loadFileTree();
+    }
+  }
+
+  function renderTreePlaceholderHtml(key, fallback, style = "") {
+    const safeStyle = style ? ` style="${style}"` : "";
+    return `<div class="tree-loading"${safeStyle}>${escapeHtml(t(key, {}, fallback))}</div>`;
+  }
+
+  function setRootTreePlaceholder(key, fallback) {
+    lastRootTreePlaceholder = { key, fallback };
+    if (fileTreeEl) {
+      fileTreeEl.innerHTML = renderTreePlaceholderHtml(key, fallback);
     }
   }
 
@@ -229,7 +245,7 @@ export function createWorkspaceFeature({
   async function loadFileTree(folderPath = "") {
     if (!isConnected()) {
       if (fileTreeEl && !folderPath) {
-        fileTreeEl.innerHTML = '<div class="tree-loading">未连接</div>';
+        setRootTreePlaceholder("sidebar.disconnected", "Disconnected");
       }
       return [];
     }
@@ -240,7 +256,7 @@ export function createWorkspaceFeature({
 
     if (!res || !res.ok || !Array.isArray(res.payload?.items)) {
       if (fileTreeEl && !folderPath) {
-        fileTreeEl.innerHTML = '<div class="tree-loading">加载失败</div>';
+        setRootTreePlaceholder("sidebar.loadFailed", "Load failed");
       }
       return [];
     }
@@ -257,9 +273,10 @@ export function createWorkspaceFeature({
 
     fileTreeEl.textContent = "";
     if (!Array.isArray(items) || items.length === 0) {
-      fileTreeEl.innerHTML = '<div class="tree-loading">无文件</div>';
+      setRootTreePlaceholder("sidebar.noFiles", "No files");
       return;
     }
+    lastRootTreePlaceholder = null;
 
     const fragment = document.createDocumentFragment();
     for (const item of items) {
@@ -336,12 +353,12 @@ export function createWorkspaceFeature({
   }
 
   async function loadFolderChildren(folderPath, containerEl) {
-    containerEl.innerHTML = '<div class="tree-loading" style="padding: 4px 8px; font-size: 12px;">...</div>';
+    containerEl.innerHTML = renderTreePlaceholderHtml("sidebar.loading", "Loading...", "padding: 4px 8px; font-size: 12px;");
     const items = await loadFileTree(folderPath);
     containerEl.textContent = "";
 
     if (!items || items.length === 0) {
-      containerEl.innerHTML = '<div class="tree-loading" style="padding: 4px 8px; font-size: 12px; color: var(--text-muted);">空</div>';
+      containerEl.innerHTML = renderTreePlaceholderHtml("sidebar.empty", "Empty", "padding: 4px 8px; font-size: 12px; color: var(--text-muted);");
       return;
     }
 
@@ -493,6 +510,14 @@ export function createWorkspaceFeature({
     openFile,
     openSourcePath,
     readSourceFile,
+    refreshLocale() {
+      if (lastRootTreePlaceholder && fileTreeEl) {
+        fileTreeEl.innerHTML = renderTreePlaceholderHtml(
+          lastRootTreePlaceholder.key,
+          lastRootTreePlaceholder.fallback,
+        );
+      }
+    },
     refreshAfterConnectionReady,
     saveFile,
     switchTreeMode,
