@@ -270,6 +270,25 @@ git clone https://github.com/vrboyzero/star-sanctuary.git
 cd star-sanctuary
 ```
 
+### Configure Environment Files
+
+Before the first run, create a local config from the example:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+or:
+
+```bash
+cp .env.example .env
+```
+
+Notes:
+
+- `.env` and `.env.local` are local-only and must not be committed
+- prefer `.env.local` for small machine-specific overrides
+
 ### One-click Launch
 
 **Windows**

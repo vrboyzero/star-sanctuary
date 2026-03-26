@@ -28,11 +28,12 @@ yarn-error.log*
 pnpm-debug.log*
 
 # Environment & local config (contain secrets or machine-specific data)
-!.env
+.env
+.env.local
 .env.*
 !.env.example
-*.local
 !.env.local.example
+*.local
 # User data directory (Belldandy workspace)
 .belldandy/
 
