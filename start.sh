@@ -21,10 +21,25 @@ if ! command -v pnpm &> /dev/null; then
     corepack prepare pnpm@latest --activate
 fi
 
-# Install Dependencies if needed
-if [ ! -d "node_modules" ]; then
+# A copied or stale node_modules directory may exist without usable workspace binaries.
+NEED_INSTALL=0
+[ ! -d "node_modules" ] && NEED_INSTALL=1
+
+if [ "$NEED_INSTALL" -eq 0 ] && ! corepack pnpm exec tsc -v >/dev/null 2>&1; then
+    NEED_INSTALL=1
+fi
+
+if [ "$NEED_INSTALL" -eq 0 ] && ! corepack pnpm exec tsx --version >/dev/null 2>&1; then
+    NEED_INSTALL=1
+fi
+
+if [ "$NEED_INSTALL" -eq 1 ]; then
     echo "[INFO] Installing dependencies..."
     corepack pnpm install
+    if [ $? -ne 0 ]; then
+        echo "[ERROR] Dependency installation failed. Please check the error above."
+        exit 1
+    fi
 fi
 
 # 检查所有 workspace 包是否已编译（任何一个 dist 缺失都需要构建）
@@ -79,4 +94,3 @@ while true; do
         break
     fi
 done
-

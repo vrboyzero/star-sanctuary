@@ -1,9 +1,9 @@
-﻿@echo off
+@echo off
 setlocal
 
 echo [Star Sanctuary Launcher] Initialization...
 
-REM 检查 Node.js 是否安装
+REM Check whether Node.js is installed.
 node -v >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js not found. Please install Node.js v22 LTS from https://nodejs.org/
@@ -11,14 +11,14 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM 检查 Node.js 版本兼容性（使用 node 自身来检查，避免 batch 解析问题）
+REM Check Node.js version compatibility using Node itself to avoid batch parsing issues.
 node -e "const v=parseInt(process.version.slice(1));if(v<22){console.log('[ERROR] Node.js version too old: '+process.version);console.log('[ERROR] Star Sanctuary requires Node.js v22 or higher.');console.log('[ERROR] Please download v22 LTS from https://nodejs.org/');process.exit(1)}if(v>=24){console.log('[WARNING] ============================================================');console.log('[WARNING] Node.js '+process.version+' is an unstable/preview version.');console.log('[WARNING] Native modules like better-sqlite3 may fail to install.');console.log('[WARNING] Strongly recommended: use Node.js v22 LTS instead.');console.log('[WARNING] ============================================================')}"
 if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
 
-REM 检查 pnpm
+REM Check pnpm.
 call pnpm -v >nul 2>nul
 if %errorlevel% neq 0 (
     echo [INFO] pnpm not found. Enabling via corepack...
@@ -26,13 +26,28 @@ if %errorlevel% neq 0 (
     call corepack prepare pnpm@latest --activate
 )
 
-REM 安装依赖
-if not exist node_modules (
+REM A copied or stale node_modules directory may exist without usable workspace binaries.
+set "NEED_INSTALL=0"
+if not exist node_modules set "NEED_INSTALL=1"
+if "%NEED_INSTALL%"=="0" (
+    call corepack pnpm exec tsc -v >nul 2>nul
+    if %errorlevel% neq 0 set "NEED_INSTALL=1"
+)
+if "%NEED_INSTALL%"=="0" (
+    call corepack pnpm exec tsx --version >nul 2>nul
+    if %errorlevel% neq 0 set "NEED_INSTALL=1"
+)
+if "%NEED_INSTALL%"=="1" (
     echo [INFO] Installing dependencies...
     call corepack pnpm install
+    if %errorlevel% neq 0 (
+        echo [ERROR] Dependency installation failed. Please check the error above.
+        pause
+        exit /b 1
+    )
 )
 
-REM 检查所有 workspace 包是否已编译（任何一个 dist 缺失都需要构建）
+REM Check whether workspace packages are already built.
 if not exist "packages\belldandy-core\dist" goto :do_build
 if not exist "packages\belldandy-agent\dist" goto :do_build
 if not exist "packages\belldandy-channels\dist" goto :do_build
@@ -53,7 +68,7 @@ echo [INFO] Build complete.
 
 :skip_build
 
-REM Generate a one-time session token for WebChat access
+REM Generate a one-time session token for WebChat access.
 set "SETUP_TOKEN=setup-%RANDOM%-%RANDOM%-%RANDOM%"
 set "AUTO_OPEN_BROWSER=true"
 set "BELLDANDY_AUTH_MODE=token"
@@ -81,4 +96,3 @@ if %errorlevel% equ 100 (
 echo.
 echo [Star Sanctuary Launcher] Gateway exited (code %errorlevel%).
 pause
-
