@@ -32,6 +32,8 @@ export function createVoiceFeature({
   addAttachment,
   renderAttachmentsPreview,
   onSendMessage,
+  t = (_key, _params, fallback) => fallback ?? "",
+  getSpeechRecognitionLocale = () => "zh-CN",
 }) {
   let shortcutBinding = loadVoiceShortcutSetting();
   let shortcutCaptureActive = false;
@@ -133,7 +135,7 @@ export function createVoiceFeature({
   }
 
   function formatVoiceShortcut(shortcut) {
-    if (!shortcut) return "已禁用";
+    if (!shortcut) return t("voice.shortcutDisabled", {}, "Disabled");
     const parts = [];
     if (shortcut.ctrlKey) parts.push("Ctrl");
     if (shortcut.altKey) parts.push("Alt");
@@ -145,8 +147,8 @@ export function createVoiceFeature({
 
   function describeVoiceShortcutForTitle() {
     return shortcutBinding
-      ? `语音输入（点击或 ${formatVoiceShortcut(shortcutBinding)} 切换录音）`
-      : "语音输入（点击切换录音）";
+      ? t("voice.titleWithShortcut", { shortcut: formatVoiceShortcut(shortcutBinding) }, "Voice input (click or {shortcut} to toggle recording)")
+      : t("voice.titleWithoutShortcut", {}, "Voice input (click to toggle recording)");
   }
 
   function buildVoiceShortcutFromEvent(event) {
@@ -177,11 +179,18 @@ export function createVoiceFeature({
     }
     if (shortcutStatusEl) {
       if (shortcutCaptureActive) {
-        shortcutStatusEl.textContent = message || "按下新的快捷键。Esc 取消，Backspace/Delete 禁用。";
+        shortcutStatusEl.textContent = message || t("voice.shortcutCapture", {}, "Press a new shortcut. Esc cancels, Backspace/Delete disables it.");
       } else if (message) {
         shortcutStatusEl.textContent = message;
       } else {
-        shortcutStatusEl.textContent = `本地快捷键，当前：${formatVoiceShortcut(shortcutBinding)}。默认 ${formatVoiceShortcut(defaultShortcut)}，不会写入服务端配置。`;
+        shortcutStatusEl.textContent = t(
+          "voice.shortcutStatus",
+          {
+            current: formatVoiceShortcut(shortcutBinding),
+            default: formatVoiceShortcut(defaultShortcut),
+          },
+          "Local shortcut, current: {current}. Default {default}. This is not written to server config.",
+        );
       }
     }
   }
@@ -221,7 +230,9 @@ export function createVoiceFeature({
     if (shortcutInputEl) {
       shortcutInputEl.addEventListener("focus", () => {
         shortcutCaptureActive = true;
-        renderVoiceShortcutSetting("按下新的快捷键。Esc 取消，Backspace/Delete 禁用。");
+        renderVoiceShortcutSetting(
+          t("voice.shortcutCapture", {}, "Press a new shortcut. Esc cancels, Backspace/Delete disables it."),
+        );
       });
       shortcutInputEl.addEventListener("blur", () => {
         shortcutCaptureActive = false;
@@ -239,41 +250,47 @@ export function createVoiceFeature({
         if (event.key === "Escape") {
           shortcutCaptureActive = false;
           shortcutInputEl.blur();
-          renderVoiceShortcutSetting("已取消快捷键修改。");
+          renderVoiceShortcutSetting();
           return;
         }
         if (event.key === "Backspace" || event.key === "Delete") {
           persistVoiceShortcutSetting(null);
           shortcutCaptureActive = false;
           shortcutInputEl.blur();
-          renderVoiceShortcutSetting("语音快捷键已禁用。");
+          renderVoiceShortcutSetting();
           return;
         }
 
         const nextShortcut = buildVoiceShortcutFromEvent(event);
         if (!nextShortcut) {
-          renderVoiceShortcutSetting("请使用 Ctrl / Alt / Meta 组合键，或单独使用 F 键。");
+          renderVoiceShortcutSetting(
+            t("voice.shortcutCapture", {}, "Press a new shortcut. Esc cancels, Backspace/Delete disables it."),
+          );
           return;
         }
 
         persistVoiceShortcutSetting(nextShortcut);
         shortcutCaptureActive = false;
         shortcutInputEl.blur();
-        renderVoiceShortcutSetting(`快捷键已保存为 ${formatVoiceShortcut(nextShortcut)}。`);
+        renderVoiceShortcutSetting(
+          t("voice.shortcutSaved", { shortcut: formatVoiceShortcut(nextShortcut) }, "Shortcut saved as {shortcut}."),
+        );
       });
     }
 
     if (shortcutDefaultBtn) {
       shortcutDefaultBtn.addEventListener("click", () => {
         persistVoiceShortcutSetting(getDefaultVoiceShortcut());
-        renderVoiceShortcutSetting(`已恢复默认快捷键 ${formatVoiceShortcut(shortcutBinding)}。`);
+        renderVoiceShortcutSetting(
+          t("voice.shortcutRestored", { shortcut: formatVoiceShortcut(shortcutBinding) }, "Restored default shortcut {shortcut}."),
+        );
       });
     }
 
     if (shortcutClearBtn) {
       shortcutClearBtn.addEventListener("click", () => {
         persistVoiceShortcutSetting(null);
-        renderVoiceShortcutSetting("语音快捷键已禁用。");
+        renderVoiceShortcutSetting();
       });
     }
   }
@@ -407,7 +424,7 @@ export function createVoiceFeature({
         if (hasWebSpeech) {
           const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
           const recognition = new SpeechRecognition();
-          recognition.lang = "zh-CN";
+          recognition.lang = getSpeechRecognitionLocale();
           recognition.interimResults = false;
           recognition.maxAlternatives = 1;
 
@@ -439,7 +456,7 @@ export function createVoiceFeature({
         }
       } catch (err) {
         console.error("Failed to start recording:", err);
-        alert(`无法启动录音: ${err?.message || String(err)}`);
+        alert(t("voice.startFailed", { message: err?.message || String(err) }, "Failed to start recording: {message}"));
         isRecording = false;
         mediaRecorder = null;
         updateUI(false);
@@ -498,5 +515,9 @@ export function createVoiceFeature({
     bindSettingsUI,
     handleGlobalKeydown,
     onSettingsToggle,
+    refreshLocale() {
+      renderVoiceShortcutSetting();
+      voiceInputController.updateTitle();
+    },
   };
 }

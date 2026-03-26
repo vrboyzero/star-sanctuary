@@ -31,13 +31,17 @@ function getNextTheme(theme) {
   return theme === "light" ? "dark" : "light";
 }
 
-function updateToggleButton(toggleButtonEl, activeTheme) {
+function updateToggleButton(toggleButtonEl, activeTheme, translate) {
   if (!toggleButtonEl) return;
 
   const nextTheme = getNextTheme(activeTheme);
   toggleButtonEl.dataset.theme = activeTheme;
-  toggleButtonEl.textContent = nextTheme === "light" ? "Light" : "Dark";
-  toggleButtonEl.title = nextTheme === "light" ? "切换到亮色主题" : "切换到暗色主题";
+  toggleButtonEl.textContent = nextTheme === "light"
+    ? translate("theme.lightLabel", {}, "Light")
+    : translate("theme.darkLabel", {}, "Dark");
+  toggleButtonEl.title = nextTheme === "light"
+    ? translate("theme.toggleToLight", {}, "Switch to light theme")
+    : translate("theme.toggleToDark", {}, "Switch to dark theme");
   toggleButtonEl.setAttribute("aria-label", toggleButtonEl.title);
 }
 
@@ -55,6 +59,7 @@ export function createThemeController({
   storageKey = "ss-webchat-theme",
   defaultTheme = "dark",
   toggleButtonEl,
+  translate = (_key, _params, fallback) => fallback ?? "",
 } = {}) {
   const fallbackTheme = normalizeTheme(defaultTheme, "dark");
   let activeTheme = normalizeTheme(
@@ -63,7 +68,7 @@ export function createThemeController({
   );
 
   applyTheme(activeTheme);
-  updateToggleButton(toggleButtonEl, activeTheme);
+  updateToggleButton(toggleButtonEl, activeTheme, translate);
 
   function setTheme(nextTheme, options = {}) {
     const normalizedTheme = normalizeTheme(nextTheme, fallbackTheme);
@@ -72,7 +77,7 @@ export function createThemeController({
     const applyNextTheme = () => {
       activeTheme = normalizedTheme;
       applyTheme(activeTheme);
-      updateToggleButton(toggleButtonEl, activeTheme);
+      updateToggleButton(toggleButtonEl, activeTheme, translate);
       writeStoredTheme(storageKey, activeTheme);
     };
 
@@ -98,6 +103,7 @@ export function createThemeController({
   return {
     getAvailableThemes: () => [...VALID_THEMES],
     getTheme: () => activeTheme,
+    refreshLabels: () => updateToggleButton(toggleButtonEl, activeTheme, translate),
     setTheme,
     toggle,
   };

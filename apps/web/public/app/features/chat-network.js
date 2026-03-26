@@ -3,13 +3,13 @@ function buildWebSocketUrl() {
   return `${proto}//${location.host}`;
 }
 
-function ensureDisconnectHint(statusEl) {
+function ensureDisconnectHint(statusEl, message) {
   if (!statusEl?.parentElement) return;
   if (document.getElementById("status-hint")) return;
 
   const hint = document.createElement("div");
   hint.id = "status-hint";
-  hint.textContent = "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.";
+  hint.textContent = message;
   statusEl.parentElement.appendChild(hint);
 }
 
@@ -34,6 +34,7 @@ export function createChatNetworkFeature({
   debugLog,
   onHelloOk,
   onEvent,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
     statusEl,
@@ -56,9 +57,24 @@ export function createChatNetworkFeature({
   } = keys;
 
   const pendingReq = new Map();
+  let currentStatus = {
+    key: "status.disconnected",
+    params: {},
+    fallback: "disconnected",
+  };
+  let lastModelListState = null;
 
   function isConnected() {
     return Boolean(getSocket() && getReady());
+  }
+
+  function applyLocalizedStatus() {
+    setStatus(t(currentStatus.key, currentStatus.params, currentStatus.fallback));
+  }
+
+  function setLocalizedStatus(key, params = {}, fallback = key) {
+    currentStatus = { key, params, fallback };
+    applyLocalizedStatus();
   }
 
   function teardown() {
@@ -169,18 +185,33 @@ export function createChatNetworkFeature({
 
     if (!res || !res.ok || !Array.isArray(res.payload?.models)) return;
 
-    const models = res.payload.models;
+    const models = Array.isArray(res.payload.models) ? res.payload.models : [];
     const currentDefault = typeof res.payload.currentDefault === "string" && res.payload.currentDefault.trim()
       ? res.payload.currentDefault.trim()
       : "primary";
 
+    lastModelListState = { models, currentDefault };
+    renderModelOptions(models, currentDefault);
+  }
+
+  function renderModelOptions(models, currentDefault) {
+    if (!modelSelectEl) return;
+
+    const currentValue = modelSelectEl.value;
     const defaultModel = models.find((model) => model.id === currentDefault);
-    const defaultLabel = defaultModel?.displayName || defaultModel?.model || "默认模型";
+    const defaultLabel =
+      defaultModel?.displayName ||
+      defaultModel?.model ||
+      t("composer.defaultModel", {}, "Default Model");
 
     modelSelectEl.innerHTML = "";
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "";
-    defaultOpt.textContent = `默认模型 (${defaultLabel})`;
+    defaultOpt.textContent = t(
+      "composer.defaultModelWithName",
+      { name: defaultLabel },
+      `Default Model (${defaultLabel})`,
+    );
     modelSelectEl.appendChild(defaultOpt);
 
     for (const model of models) {
@@ -193,8 +224,9 @@ export function createChatNetworkFeature({
     }
 
     const saved = localStorage.getItem(modelIdKey);
-    if (saved && [...modelSelectEl.options].some((opt) => opt.value === saved)) {
-      modelSelectEl.value = saved;
+    const preferredValue = currentValue || saved || "";
+    if (preferredValue && [...modelSelectEl.options].some((opt) => opt.value === preferredValue)) {
+      modelSelectEl.value = preferredValue;
     } else {
       modelSelectEl.value = "";
     }
@@ -223,16 +255,23 @@ export function createChatNetworkFeature({
     if (sendBtn) {
       sendBtn.disabled = true;
     }
-    setStatus("connecting");
+    setLocalizedStatus("status.connecting", {}, "connecting");
 
     socket.addEventListener("open", () => {
-      setStatus("connected (awaiting challenge)");
+      setLocalizedStatus("status.awaitingChallenge", {}, "connected (awaiting challenge)");
     });
 
     socket.addEventListener("close", () => {
       const url = buildWebSocketUrl();
-      setStatus(`disconnected (retrying ${url} in 3s...)`);
-      ensureDisconnectHint(statusEl);
+      setLocalizedStatus("status.disconnectedRetrying", { url }, `disconnected (retrying ${url} in 3s...)`);
+      ensureDisconnectHint(
+        statusEl,
+        t(
+          "status.disconnectHint",
+          {},
+          "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.",
+        ),
+      );
       setReady(false);
       if (sendBtn) {
         sendBtn.disabled = true;
@@ -259,7 +298,7 @@ export function createChatNetworkFeature({
         if (sendBtn) {
           sendBtn.disabled = false;
         }
-        setStatus("ready");
+        setLocalizedStatus("status.ready", {}, "ready");
         onHelloOk?.(frame);
         return;
       }
@@ -284,6 +323,22 @@ export function createChatNetworkFeature({
     isConnected,
     loadAgentList,
     loadModelList,
+    refreshLocale() {
+      applyLocalizedStatus();
+      if (currentStatus.key === "status.disconnectedRetrying") {
+        ensureDisconnectHint(
+          statusEl,
+          t(
+            "status.disconnectHint",
+            {},
+            "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.",
+          ),
+        );
+      }
+      if (lastModelListState) {
+        renderModelOptions(lastModelListState.models, lastModelListState.currentDefault);
+      }
+    },
     sendReq,
     teardown,
   };

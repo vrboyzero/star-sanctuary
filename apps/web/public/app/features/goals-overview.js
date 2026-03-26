@@ -17,6 +17,7 @@ export function createGoalsOverviewFeature({
   renderCanvasGoalContext,
   onResumeGoal,
   onPauseGoal,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
     goalsSection,
@@ -30,7 +31,7 @@ export function createGoalsOverviewFeature({
       goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
     }
     if (goalsDetailEl) {
-      goalsDetailEl.innerHTML = '<div class="memory-viewer-empty">选择左侧长期任务查看详情。</div>';
+      goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("goals.detailSelect", {}, "Select a long task on the left to view details."))}</div>`;
     }
   }
 
@@ -42,10 +43,10 @@ export function createGoalsOverviewFeature({
     const customRootCount = goals.filter((goal) => goal?.pathSource === "user-configured").length;
 
     goalsSummaryEl.innerHTML = `
-      <div class="memory-stat-card"><span class="memory-stat-label">长期任务</span><strong class="memory-stat-value">${escapeHtml(String(goals.length))}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">执行中</span><strong class="memory-stat-value">${escapeHtml(String(executingCount))}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">已暂停</span><strong class="memory-stat-value">${escapeHtml(String(pausedCount))}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">自定义 Root</span><strong class="memory-stat-value">${escapeHtml(String(customRootCount))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("goals.statGoals", {}, "Long Tasks"))}</span><strong class="memory-stat-value">${escapeHtml(String(goals.length))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("goals.statExecuting", {}, "Executing"))}</span><strong class="memory-stat-value">${escapeHtml(String(executingCount))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("goals.statPaused", {}, "Paused"))}</span><strong class="memory-stat-value">${escapeHtml(String(pausedCount))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("goals.statCustomRoot", {}, "Custom Root"))}</span><strong class="memory-stat-value">${escapeHtml(String(customRootCount))}</strong></div>
     `;
   }
 
@@ -55,14 +56,14 @@ export function createGoalsOverviewFeature({
       goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
     }
     if (goalsDetailEl) {
-      goalsDetailEl.innerHTML = '<div class="memory-viewer-empty">新建一个长期任务后，这里会显示 NORTHSTAR.md、路径和执行状态。</div>';
+      goalsDetailEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("goals.emptyCreateFirst", {}, "After you create a long task, NORTHSTAR.md, paths, and execution status will appear here."))}</div>`;
     }
   }
 
   function renderGoalList(items) {
     if (!goalsListEl) return;
     if (!Array.isArray(items) || items.length === 0) {
-      goalsListEl.innerHTML = '<div class="memory-viewer-empty">当前还没有长期任务。</div>';
+      goalsListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("goals.emptyNoGoals", {}, "There are no long tasks yet."))}</div>`;
       return;
     }
 
@@ -84,14 +85,14 @@ export function createGoalsOverviewFeature({
             <span>${escapeHtml(goal.currentPhase || "-")}</span>
             <span>${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</span>
           </div>
-          <div class="memory-list-item-snippet">${escapeHtml(objective || "未填写 objective，可进入 NORTHSTAR.md 补充目标说明。")}</div>
+          <div class="memory-list-item-snippet">${escapeHtml(objective || t("goals.noObjective", {}, "No objective yet. Open NORTHSTAR.md to add the goal description."))}</div>
           <div class="goal-list-item-meta">
             <span>${escapeHtml(summarizeSourcePath(goal.goalRoot || "-"))}</span>
             <span>${escapeHtml(formatGoalPathSource(goal.pathSource))}</span>
           </div>
           <div class="goal-list-item-actions">
-            <button class="button goal-inline-action" data-goal-resume="${escapeHtml(goal.id)}">恢复</button>
-            <button class="button goal-inline-action goal-inline-action-secondary" data-goal-pause="${escapeHtml(goal.id)}">暂停</button>
+            <button class="button goal-inline-action" data-goal-resume="${escapeHtml(goal.id)}">${escapeHtml(t("goals.resume", {}, "Resume"))}</button>
+            <button class="button goal-inline-action goal-inline-action-secondary" data-goal-pause="${escapeHtml(goal.id)}">${escapeHtml(t("goals.pause", {}, "Pause"))}</button>
           </div>
         </div>
       `;
@@ -129,13 +130,13 @@ export function createGoalsOverviewFeature({
   async function loadGoals(forceReload = false, preferredGoalId) {
     if (!goalsSection) return;
     if (!isConnected()) {
-      renderGoalsLoading("未连接");
+      renderGoalsLoading(t("goals.loadingDisconnected", {}, "Disconnected"));
       return;
     }
 
     const goalsState = getGoalsState();
     if (forceReload || goalsState.items.length === 0) {
-      renderGoalsLoading("加载中...");
+      renderGoalsLoading(t("goals.loading", {}, "Loading..."));
     }
 
     const seq = goalsState.loadSeq + 1;
@@ -144,7 +145,7 @@ export function createGoalsOverviewFeature({
     if (seq !== goalsState.loadSeq) return;
 
     if (!res || !res.ok || !Array.isArray(res.payload?.goals)) {
-      renderGoalsEmpty("长期任务列表加载失败。");
+      renderGoalsEmpty(t("goals.listLoadFailed", {}, "Failed to load long task list."));
       return;
     }
 
@@ -154,7 +155,7 @@ export function createGoalsOverviewFeature({
 
     if (items.length === 0) {
       goalsState.selectedId = null;
-      renderGoalsEmpty("当前还没有长期任务。");
+      renderGoalsEmpty(t("goals.emptyNoGoals", {}, "There are no long tasks yet."));
       return;
     }
 

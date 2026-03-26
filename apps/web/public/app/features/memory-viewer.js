@@ -28,6 +28,7 @@ export function createMemoryViewerFeature({
   bindStatsAuditJumpLinks,
   bindMemoryPathLinks,
   bindTaskAuditJumpLinks,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
     memoryViewerSection,
@@ -77,8 +78,8 @@ export function createMemoryViewerFeature({
 
     if (!isConnected()) {
       renderMemoryViewerStats(null);
-      renderMemoryViewerListEmpty("未连接到服务器。");
-      renderMemoryViewerDetailEmpty("连接完成后可查看任务与记忆。");
+      renderMemoryViewerListEmpty(t("memory.disconnectedList", {}, "Not connected to the server."));
+      renderMemoryViewerDetailEmpty(t("memory.disconnectedDetail", {}, "Tasks and memories will be available after connection is ready."));
       return;
     }
 
@@ -144,8 +145,8 @@ export function createMemoryViewerFeature({
   }
 
   async function loadTaskViewer(forceSelectFirst = false) {
-    renderMemoryViewerListEmpty("Tasks 加载中…");
-    renderMemoryViewerDetailEmpty("正在加载 task 详情…");
+    renderMemoryViewerListEmpty(t("memory.tasksLoading", {}, "Loading tasks..."));
+    renderMemoryViewerDetailEmpty(t("memory.taskDetailLoading", {}, "Loading task details..."));
 
     const memoryViewerState = getMemoryViewerState();
     memoryViewerState.selectedTask = null;
@@ -164,8 +165,8 @@ export function createMemoryViewerFeature({
     const res = await sendReq({ type: "req", id: makeId(), method: "memory.task.list", params });
     if (!res || !res.ok) {
       memoryViewerState.selectedTask = null;
-      renderMemoryViewerListEmpty("Task 列表加载失败。");
-      renderMemoryViewerDetailEmpty(res?.error?.message || "无法读取 task 数据。");
+      renderMemoryViewerListEmpty(t("memory.taskListLoadFailed", {}, "Failed to load task list."));
+      renderMemoryViewerDetailEmpty(res?.error?.message || t("memory.taskReadFailed", {}, "Failed to read task data."));
       renderMemoryViewerStats(memoryViewerState.stats);
       return;
     }
@@ -178,7 +179,7 @@ export function createMemoryViewerFeature({
       memoryViewerState.selectedId = null;
       memoryViewerState.selectedTask = null;
       renderTaskList(items);
-      renderMemoryViewerDetailEmpty("没有匹配的 task。");
+      renderMemoryViewerDetailEmpty(t("memory.noMatchingTasks", {}, "No matching tasks."));
       renderMemoryViewerStats(memoryViewerState.stats);
       return;
     }
@@ -193,8 +194,8 @@ export function createMemoryViewerFeature({
   }
 
   async function loadMemoryChunkViewer(forceSelectFirst = false) {
-    renderMemoryViewerListEmpty("Memories 加载中…");
-    renderMemoryViewerDetailEmpty("正在加载 memory 详情…");
+    renderMemoryViewerListEmpty(t("memory.memoriesLoading", {}, "Loading memories..."));
+    renderMemoryViewerDetailEmpty(t("memory.memoryDetailLoading", {}, "Loading memory details..."));
 
     const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
     const filter = {};
@@ -216,8 +217,8 @@ export function createMemoryViewerFeature({
     const res = await sendReq({ type: "req", id: makeId(), method, params });
     const memoryViewerState = getMemoryViewerState();
     if (!res || !res.ok) {
-      renderMemoryViewerListEmpty("Memory 列表加载失败。");
-      renderMemoryViewerDetailEmpty(res?.error?.message || "无法读取 memory 数据。");
+      renderMemoryViewerListEmpty(t("memory.memoryListLoadFailed", {}, "Failed to load memory list."));
+      renderMemoryViewerDetailEmpty(res?.error?.message || t("memory.memoryReadFailed", {}, "Failed to read memory data."));
       return;
     }
 
@@ -228,7 +229,7 @@ export function createMemoryViewerFeature({
     if (!items.length) {
       memoryViewerState.selectedId = null;
       renderMemoryList(items);
-      renderMemoryViewerDetailEmpty("没有匹配的 memory。");
+      renderMemoryViewerDetailEmpty(t("memory.noMatchingMemories", {}, "No matching memories."));
       return;
     }
 
@@ -245,10 +246,10 @@ export function createMemoryViewerFeature({
     if (!memoryViewerStatsEl) return;
     if (!stats) {
       memoryViewerStatsEl.innerHTML = `
-        <div class="memory-stat-card"><span class="memory-stat-label">记忆文件</span><strong class="memory-stat-value">--</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">记忆块</span><strong class="memory-stat-value">--</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">向量索引</span><strong class="memory-stat-value">--</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">摘要完成</span><strong class="memory-stat-value">--</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statFiles", {}, "Memory Files"))}</span><strong class="memory-stat-value">--</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statChunks", {}, "Memory Chunks"))}</span><strong class="memory-stat-value">--</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statVectors", {}, "Vector Index"))}</span><strong class="memory-stat-value">--</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statSummaries", {}, "Summaries Ready"))}</span><strong class="memory-stat-value">--</strong></div>
       `;
       return;
     }
@@ -262,12 +263,12 @@ export function createMemoryViewerFeature({
       const distributionCard = renderMemoryCategoryDistribution(stats);
 
       memoryViewerStatsEl.innerHTML = `
-        <div class="memory-stat-card"><span class="memory-stat-label">当前结果</span><strong class="memory-stat-value">${formatCount(items.length)}</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">筛选分类</span><strong class="memory-stat-value">${escapeHtml(activeCategoryLabel)}</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">当前已分类</span><strong class="memory-stat-value">${formatCount(currentCategorized)}</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">当前未分类</span><strong class="memory-stat-value">${formatCount(currentUncategorized)}</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">全库已分类</span><strong class="memory-stat-value">${formatCount(stats.categorized)}</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">全库未分类</span><strong class="memory-stat-value">${formatCount(stats.uncategorized)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statCurrentResults", {}, "Current Results"))}</span><strong class="memory-stat-value">${formatCount(items.length)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statFilteredCategory", {}, "Filtered Category"))}</span><strong class="memory-stat-value">${escapeHtml(activeCategoryLabel)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statCurrentCategorized", {}, "Currently Categorized"))}</span><strong class="memory-stat-value">${formatCount(currentCategorized)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statCurrentUncategorized", {}, "Currently Uncategorized"))}</span><strong class="memory-stat-value">${formatCount(currentUncategorized)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statLibraryCategorized", {}, "Library Categorized"))}</span><strong class="memory-stat-value">${formatCount(stats.categorized)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statLibraryUncategorized", {}, "Library Uncategorized"))}</span><strong class="memory-stat-value">${formatCount(stats.uncategorized)}</strong></div>
         ${distributionCard}
       `;
       return;
@@ -281,11 +282,11 @@ export function createMemoryViewerFeature({
     const activeGoalLabel = activeGoalId ? getGoalDisplayName(activeGoalId) : "-";
 
     memoryViewerStatsEl.innerHTML = `
-      <div class="memory-stat-card"><span class="memory-stat-label">当前 Task 结果</span><strong class="memory-stat-value">${formatCount(Array.isArray(memoryViewerState.items) ? memoryViewerState.items.length : 0)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Method</span><strong class="memory-stat-value">${formatCount(usedMethods.length)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">当前已用 Skill</span><strong class="memory-stat-value">${formatCount(usedSkills.length)}</strong></div>
-      <div class="memory-stat-card"><span class="memory-stat-label">最近采用时间</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(formatDateTime(lastUsedAt))}</strong></div>
-      ${activeGoalId ? `<div class="memory-stat-card"><span class="memory-stat-label">Goal Filter</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(activeGoalLabel)}</strong><div class="memory-stat-caption">${escapeHtml(activeGoalId)}</div></div>` : ""}
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statCurrentTaskResults", {}, "Current Task Results"))}</span><strong class="memory-stat-value">${formatCount(Array.isArray(memoryViewerState.items) ? memoryViewerState.items.length : 0)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statUsedMethods", {}, "Methods Used"))}</span><strong class="memory-stat-value">${formatCount(usedMethods.length)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statUsedSkills", {}, "Skills Used"))}</span><strong class="memory-stat-value">${formatCount(usedSkills.length)}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statLastUsedAt", {}, "Last Used At"))}</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(formatDateTime(lastUsedAt))}</strong></div>
+      ${activeGoalId ? `<div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statGoalFilter", {}, "Goal Filter"))}</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(activeGoalLabel)}</strong><div class="memory-stat-caption">${escapeHtml(activeGoalId)}</div></div>` : ""}
       ${renderTaskUsageOverviewCard()}
     `;
     bindStatsAuditJumpLinks();
@@ -294,14 +295,14 @@ export function createMemoryViewerFeature({
   function renderTaskList(items) {
     if (!memoryViewerListEl) return;
     if (!items.length) {
-      renderMemoryViewerListEmpty("没有可展示的 task。");
+      renderMemoryViewerListEmpty(t("memory.emptyNoTasks", {}, "No tasks to display."));
       return;
     }
 
     const memoryViewerState = getMemoryViewerState();
     memoryViewerListEl.innerHTML = items.map((item) => {
       const title = item.title || item.objective || item.summary || item.conversationId || item.id;
-      const snippet = item.summary || item.outcome || item.objective || "暂无摘要";
+      const snippet = item.summary || item.outcome || item.objective || t("memory.emptyNoSummary", {}, "No summary");
       const isActive = item.id === memoryViewerState.selectedId;
       const goalId = getTaskGoalId(item);
       return `
@@ -332,14 +333,14 @@ export function createMemoryViewerFeature({
   function renderMemoryList(items) {
     if (!memoryViewerListEl) return;
     if (!items.length) {
-      renderMemoryViewerListEmpty("没有可展示的 memory。");
+      renderMemoryViewerListEmpty(t("memory.emptyNoMemories", {}, "No memories to display."));
       return;
     }
 
     const memoryViewerState = getMemoryViewerState();
     memoryViewerListEl.innerHTML = items.map((item) => {
       const title = summarizeSourcePath(item.sourcePath);
-      const summary = item.summary || item.snippet || "暂无摘要";
+      const summary = item.summary || item.snippet || t("memory.emptyNoSummary", {}, "No summary");
       const isActive = item.id === memoryViewerState.selectedId;
       const visibility = normalizeMemoryVisibility(item.visibility);
       const category = formatMemoryCategory(item.category);
@@ -379,14 +380,14 @@ export function createMemoryViewerFeature({
     return `
       <div class="memory-detail-card">
         <div class="memory-inline-item-head">
-          <span class="memory-detail-label">Candidate 详情面板</span>
+          <span class="memory-detail-label">${escapeHtml(t("memory.candidatePanelTitle", {}, "Candidate Detail Panel"))}</span>
           <div class="memory-detail-badges">
             <span class="memory-badge">${escapeHtml(candidate.type || "unknown")}</span>
             <span class="memory-badge">${escapeHtml(candidate.status || "unknown")}</span>
-            <button class="memory-usage-action-btn" data-close-candidate-panel="1">关闭</button>
+            <button class="memory-usage-action-btn" data-close-candidate-panel="1">${escapeHtml(t("memory.close", {}, "Close"))}</button>
           </div>
         </div>
-        <div class="memory-detail-text"><strong>${escapeHtml(candidate.title || candidate.id || "未命名候选")}</strong></div>
+        <div class="memory-detail-text"><strong>${escapeHtml(candidate.title || candidate.id || t("memory.candidateUntitled", {}, "Untitled Candidate"))}</strong></div>
         <div class="memory-detail-grid">
           <div class="memory-detail-card"><span class="memory-detail-label">Candidate ID</span><div class="memory-detail-text">${escapeHtml(candidate.id || "-")}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">Source Task</span><div class="memory-detail-text">${candidate.taskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(candidate.taskId)}">${escapeHtml(candidate.taskId)}</button>` : "-"}</div></div>
@@ -395,18 +396,18 @@ export function createMemoryViewerFeature({
         </div>
         ${candidate.summary ? `<div class="memory-detail-text">${escapeHtml(candidate.summary)}</div>` : ""}
         <div class="memory-detail-card">
-          <span class="memory-detail-label">来源快照</span>
+          <span class="memory-detail-label">${escapeHtml(t("memory.snapshotTitle", {}, "Source Snapshot"))}</span>
           <div class="memory-detail-grid">
             <div class="memory-detail-card"><span class="memory-detail-label">Conversation</span><div class="memory-detail-text">${escapeHtml(snapshot.conversationId || "-")}</div></div>
-            <div class="memory-detail-card"><span class="memory-detail-label">状态</span><div class="memory-detail-text">${escapeHtml(snapshot.status || "-")}</div></div>
+            <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.snapshotStatus", {}, "Status"))}</span><div class="memory-detail-text">${escapeHtml(snapshot.status || "-")}</div></div>
             <div class="memory-detail-card"><span class="memory-detail-label">Source</span><div class="memory-detail-text">${escapeHtml(snapshot.source || "-")}</div></div>
-            <div class="memory-detail-card"><span class="memory-detail-label">开始</span><div class="memory-detail-text">${escapeHtml(formatDateTime(snapshot.startedAt))}</div></div>
+            <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.snapshotStartedAt", {}, "Started At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(snapshot.startedAt))}</div></div>
           </div>
           ${snapshot.objective ? `<div class="memory-detail-text"><strong>Objective:</strong> ${escapeHtml(snapshot.objective)}</div>` : ""}
           ${snapshot.summary ? `<div class="memory-detail-text"><strong>Summary:</strong> ${escapeHtml(snapshot.summary)}</div>` : ""}
         </div>
         <div class="memory-detail-card">
-          <span class="memory-detail-label">来源记忆 (${memoryLinks.length})</span>
+          <span class="memory-detail-label">${escapeHtml(t("memory.linkedSourceMemories", {}, "Source Memories"))} (${memoryLinks.length})</span>
           ${memoryLinks.length ? `
             <div class="memory-inline-list">
               ${memoryLinks.map((link) => `
@@ -421,10 +422,10 @@ export function createMemoryViewerFeature({
                 </div>
               `).join("")}
             </div>
-          ` : `<div class="memory-detail-text">无来源记忆链接。</div>`}
+          ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noSourceMemoryLinks", {}, "No source memory links."))}</div>`}
         </div>
         <div class="memory-detail-card">
-          <span class="memory-detail-label">来源产物 (${artifactPaths.length})</span>
+          <span class="memory-detail-label">${escapeHtml(t("memory.sourceArtifacts", {}, "Source Artifacts"))} (${artifactPaths.length})</span>
           ${artifactPaths.length ? `
             <div class="memory-inline-list">
               ${artifactPaths.map((artifactPath) => `
@@ -433,7 +434,7 @@ export function createMemoryViewerFeature({
                 </div>
               `).join("")}
             </div>
-          ` : `<div class="memory-detail-text">无来源产物。</div>`}
+          ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noSourceArtifacts", {}, "No source artifacts."))}</div>`}
         </div>
         <div class="memory-detail-card">
           <span class="memory-detail-label">Tool Calls (${toolCalls.length})</span>
@@ -450,11 +451,11 @@ export function createMemoryViewerFeature({
                 </div>
               `).join("")}
             </div>
-          ` : `<div class="memory-detail-text">无工具调用记录。</div>`}
+          ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noToolCalls", {}, "No tool call records."))}</div>`}
         </div>
         <div class="memory-detail-card">
           <span class="memory-detail-label">Candidate Content</span>
-          <pre class="memory-detail-pre">${escapeHtml(candidate.content || "暂无内容")}</pre>
+          <pre class="memory-detail-pre">${escapeHtml(candidate.content || t("memory.noContent", {}, "No content"))}</pre>
         </div>
       </div>
     `;
@@ -463,7 +464,7 @@ export function createMemoryViewerFeature({
   function renderCandidateOnlyDetail(candidate) {
     if (!memoryViewerDetailEl) return;
     if (!candidate) {
-      renderMemoryViewerDetailEmpty("Candidate 不存在。");
+      renderMemoryViewerDetailEmpty(t("memory.candidateMissing", {}, "Candidate not found."));
       return;
     }
     memoryViewerDetailEl.innerHTML = `
@@ -478,7 +479,7 @@ export function createMemoryViewerFeature({
   function renderMemoryDetail(item) {
     if (!memoryViewerDetailEl) return;
     if (!item) {
-      renderMemoryViewerDetailEmpty("Memory 不存在。");
+      renderMemoryViewerDetailEmpty(t("memory.memoryMissing", {}, "Memory not found."));
       return;
     }
 
@@ -503,21 +504,21 @@ export function createMemoryViewerFeature({
         </div>
 
         <div class="memory-detail-grid">
-          <div class="memory-detail-card"><span class="memory-detail-label">Source Path</span><div class="memory-detail-text">${item.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(item.sourcePath)}" data-open-line="${typeof item.startLine === "number" ? item.startLine : ""}">${escapeHtml(item.sourcePath)}</button>` : "-"}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Lines</span><div class="memory-detail-text">${escapeHtml(formatLineRange(item.startLine, item.endLine))}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Visibility</span><div class="memory-detail-text">${escapeHtml(visibility)}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">分类</span><div class="memory-detail-text">${escapeHtml(category)}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Summary</span><div class="memory-detail-text">${escapeHtml(item.summary || "暂无摘要")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSourcePath", {}, "Source Path"))}</span><div class="memory-detail-text">${item.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(item.sourcePath)}" data-open-line="${typeof item.startLine === "number" ? item.startLine : ""}">${escapeHtml(item.sourcePath)}</button>` : "-"}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailLines", {}, "Lines"))}</span><div class="memory-detail-text">${escapeHtml(formatLineRange(item.startLine, item.endLine))}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailVisibility", {}, "Visibility"))}</span><div class="memory-detail-text">${escapeHtml(visibility)}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailCategory", {}, "Category"))}</span><div class="memory-detail-text">${escapeHtml(category)}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSummary", {}, "Summary"))}</span><div class="memory-detail-text">${escapeHtml(item.summary || t("memory.emptyNoSummary", {}, "No summary"))}</div></div>
         </div>
 
         <div class="memory-detail-card">
-          <span class="memory-detail-label">Snippet</span>
-          <div class="memory-detail-text">${escapeHtml(item.snippet || "暂无内容")}</div>
+          <span class="memory-detail-label">${escapeHtml(t("memory.detailSnippet", {}, "Snippet"))}</span>
+          <div class="memory-detail-text">${escapeHtml(item.snippet || t("memory.noContent", {}, "No content"))}</div>
         </div>
 
         <div class="memory-detail-card">
-          <span class="memory-detail-label">Content</span>
-          <pre class="memory-detail-pre">${escapeHtml(item.content || item.snippet || "暂无内容")}</pre>
+          <span class="memory-detail-label">${escapeHtml(t("memory.detailContent", {}, "Content"))}</span>
+          <pre class="memory-detail-pre">${escapeHtml(item.content || item.snippet || t("memory.noContent", {}, "No content"))}</pre>
         </div>
 
         ${item.metadata ? `
