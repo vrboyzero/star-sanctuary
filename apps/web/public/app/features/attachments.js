@@ -142,12 +142,7 @@ export function createAttachmentsFeature({
 
     const hint = document.createElement("div");
     hint.id = "attachmentHint";
-    hint.style.fontSize = "12px";
-    hint.style.lineHeight = "1.4";
-    hint.style.color = "#9ca3af";
-    hint.style.margin = "6px 2px 0";
-    hint.style.whiteSpace = "pre-wrap";
-    hint.style.wordBreak = "break-word";
+    hint.className = "attachment-hint";
     attachmentsPreviewEl.parentElement.insertBefore(hint, attachmentsPreviewEl.nextSibling);
     return hint;
   }
@@ -172,7 +167,7 @@ export function createAttachmentsFeature({
       : `附件上限：单文件 ${formatBytes(attachmentLimits.maxFileBytes)}，总计 ${formatBytes(attachmentLimits.maxTotalBytes)}。`;
 
     attachmentHintEl.textContent = extraMessage ? `${extraMessage}\n${summary}` : summary;
-    attachmentHintEl.style.color = extraMessage ? "#f59e0b" : "#9ca3af";
+    attachmentHintEl.classList.toggle("has-warning", Boolean(extraMessage));
   }
 
   async function compressImageToDataUrl(file, sourceType) {

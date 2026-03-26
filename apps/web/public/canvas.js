@@ -61,6 +61,7 @@ function renderNodeHTML(node, options = {}) {
   const typeCls = `node-${node.type}`;
   const isGoalActive = matchesGoalNode(node, options.activeGoalNodeId);
   const activeCls = isGoalActive ? " goal-active" : "";
+  const reactRunningCls = Array.isArray(d.tags) && d.tags.includes("running") ? " react-running" : "";
 
   let body = "";
   if (!d.collapsed && d.content) {
@@ -70,7 +71,7 @@ function renderNodeHTML(node, options = {}) {
 
   let tags = "";
   if (d.tags && d.tags.length) {
-    tags = `<div class="node-tags">${d.tags.map(t => `<span class="node-tag">${esc(t)}</span>`).join("")}</div>`;
+    tags = `<div class="node-tags">${d.tags.map(t => `<span class="node-tag" data-tag="${esc(t)}">${esc(t)}</span>`).join("")}</div>`;
   }
 
   let extra = "";
@@ -83,7 +84,7 @@ function renderNodeHTML(node, options = {}) {
   const activeBadge = isGoalActive ? `<span class="node-active-badge" title="当前 activeNode">ACTIVE</span>` : "";
   const refBadge = d.ref ? `<span class="node-ref-badge" title="${esc(d.ref.type)}: ${esc(d.ref.id)}">\u{1F517}</span>` : "";
 
-  return `<div class="canvas-node ${typeCls}${statusCls}${activeCls}" data-node-id="${node.id}" style="${d.color ? `border-left-color:${d.color}` : ""}">
+  return `<div class="canvas-node ${typeCls}${statusCls}${activeCls}${reactRunningCls}" data-node-id="${node.id}" style="${d.color ? `border-left-color:${d.color}` : ""}">
   <div class="node-header">
     <span class="node-type-icon">${icon}</span>
     ${statusDot}
@@ -1327,7 +1328,7 @@ class CanvasApp {
       const node = this.manager.addNode("agent-output", `\u{1F527} ${toolName}`, {
         content: preview,
         tags: ["react", "running"],
-        color: "#f59e0b",
+        color: "var(--canvas-react-running-text)",
       });
       if (node) {
         node._react = true; // mark as temporary
@@ -1352,7 +1353,7 @@ class CanvasApp {
         const preview = output.length > 200 ? output.slice(0, 200) + "\u2026" : output;
         n.data.content = preview;
         n.data.tags = ["react", payload.success ? "done" : "error"];
-        n.data.color = payload.success ? "#10b981" : "#ef4444";
+        n.data.color = payload.success ? "var(--canvas-react-done-text)" : "var(--canvas-react-error-text)";
         this._rerender();
       }
     }
@@ -1365,7 +1366,7 @@ class CanvasApp {
     const node = this.manager.addNode("agent-output", "\u{1F4AC} Agent \u603b\u7ed3", {
       content: preview,
       tags: ["react", "final"],
-      color: "#6366f1",
+      color: "var(--canvas-react-final-text)",
     });
     if (node) {
       node._react = true;

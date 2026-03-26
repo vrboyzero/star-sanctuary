@@ -9,8 +9,7 @@ function createReq(sendReq, makeId, method, params) {
 
 function setSidebarActionButtonState(button, active) {
   if (!button) return;
-  button.style.background = active ? "rgba(255,255,255,0.1)" : "transparent";
-  button.style.opacity = active ? "1" : "0.7";
+  button.classList.toggle("is-active", Boolean(active));
 }
 
 export function createWorkspaceFeature({

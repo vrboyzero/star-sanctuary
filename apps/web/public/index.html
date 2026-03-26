@@ -1,10 +1,27 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Star Sanctuary WebChat</title>
+  <script>
+    (() => {
+      const STORAGE_KEY = "ss-webchat-theme";
+      const FALLBACK_THEME = "dark";
+      const VALID_THEMES = new Set(["dark", "light"]);
+
+      try {
+        const storedTheme = window.localStorage.getItem(STORAGE_KEY);
+        const nextTheme = VALID_THEMES.has(storedTheme) ? storedTheme : FALLBACK_THEME;
+        document.documentElement.dataset.theme = nextTheme;
+        document.documentElement.style.colorScheme = nextTheme === "light" ? "light" : "dark";
+      } catch {
+        document.documentElement.dataset.theme = FALLBACK_THEME;
+        document.documentElement.style.colorScheme = FALLBACK_THEME;
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -12,6 +29,7 @@
     rel="stylesheet">
   <link rel="stylesheet" href="/styles.css?v=10.0" />
   <link rel="stylesheet" href="/canvas.css?v=1.0" />
+  <link rel="stylesheet" href="/theme.css?v=1.0" />
   <script src="/config.js?v=1.0"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 </head>
@@ -22,9 +40,7 @@
       <div style="display: flex; align-items: center; gap: 12px;">
         <img src="/logo06-256.png" alt="Star Sanctuary Logo" style="width: 52px; height: 52px; object-fit: contain;">
         <div class="title">Star Sanctuary WebChat</div>
-        <a id="officialHomeLink" href="#" target="_blank"
-          style="font-size: 15px; text-decoration: underline; color: #d4a017; transition: color 0.2s;"
-          onmouseover="this.style.color='#f0c040'" onmouseout="this.style.color='#d4a017'">官方主页</a>
+        <a id="officialHomeLink" href="#" target="_blank" class="theme-link theme-link-accent">官方主页</a>
       </div>
       <div style="display: flex; gap: 8px; align-items: center;">
         <div class="token-usage" id="tokenUsage" title="Token Usage">
@@ -49,6 +65,7 @@
         </div>
         <div class="status" id="status">disconnected</div>
         <button id="openToolSettings" class="settings-btn" title="调用设置">&#x1F527;</button>
+        <button id="themeToggleBtn" class="theme-toggle-btn" type="button" title="切换到亮色主题">Light</button>
         <button id="openSettings" class="settings-btn" title="Settings">&#x2699;&#xFE0F;</button>
       </div>
     </header>
@@ -108,22 +125,21 @@
       <aside class="sidebar" id="sidebar">
         <!-- 导航区域 -->
         <div style="padding: 12px 16px 0; display: flex; flex-direction: column; gap: 8px;">
-          <button id="switchRoot" class="sidebar-action-btn"
-            style="text-align: left; font-weight: 600; background: rgba(255,255,255,0.1); justify-content: flex-start;">📂
+          <button id="switchRoot" class="sidebar-action-btn is-active"
+            style="text-align: left; font-weight: 600; justify-content: flex-start;">📂
             智能体设置</button>
           <button id="switchFacet" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧩 模组编辑</button>
+            style="text-align: left; justify-content: flex-start;">🧩 模组编辑</button>
           <button id="switchMemory" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🧠 记忆查看</button>
+            style="text-align: left; justify-content: flex-start;">🧠 记忆查看</button>
           <button id="switchGoals" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎯 长期任务</button>
+            style="text-align: left; justify-content: flex-start;">🎯 长期任务</button>
           <button id="switchCanvas" class="sidebar-action-btn"
-            style="text-align: left; opacity: 0.7; justify-content: flex-start;">🎨 画布工作区</button>
+            style="text-align: left; justify-content: flex-start;">🎨 画布工作区</button>
         </div>
 
         <!-- 树头部 -->
-        <div class="sidebar-header"
-          style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.05);">
+        <div class="sidebar-header sidebar-header-divider">
           <span class="sidebar-title" id="treeTitle" style="font-size: 0.85em; opacity: 0.5;">文件列表</span>
           <div style="display: flex; gap: 4px; align-items: center;">
             <!-- 配置按钮移到这里 -->
@@ -353,9 +369,7 @@
       <div class="modal-header" style="display: flex; align-items: center;">
         <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
           <span>Settings</span>
-          <a id="recommendApiLink" href="#" target="_blank"
-            style="font-size: 14px; text-decoration: underline; color: #a3a3a3; transition: color 0.2s;"
-            onmouseover="this.style.color='#ffffff'" onmouseout="this.style.color='#a3a3a3'">推荐模型API</a>
+          <a id="recommendApiLink" href="#" target="_blank" class="theme-link theme-link-muted">推荐模型API</a>
         </div>
         <button id="closeSettings" class="settings-btn">✕</button>
       </div>
@@ -368,7 +382,7 @@
           </div>
           <div class="form-help">检查当前配置、依赖与运行状态，便于快速定位缺失项。</div>
         </div>
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <!-- Config Fields -->
         <div class="form-group">
@@ -403,7 +417,7 @@
           <input id="cfgHeartbeatActiveHours" class="input" placeholder="08:00-23:00" />
           <div class="form-help">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
         </div>
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgBrowserRelayEnabled">
@@ -433,7 +447,7 @@
           <div class="form-help">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgEmbeddingEnabled">
@@ -458,7 +472,7 @@
           <div class="form-help">向量模型名称，例如 `text-embedding-3-small` 或兼容模型名。</div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgToolsEnabled">
@@ -482,7 +496,7 @@
           <div class="form-help">仅在 confirm 模式下生效。留空时要求用户回复 `批准工具设置变更 &lt;requestId&gt;`；设置后改为输入你配置的确认口令。</div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label" for="cfgTtsEnabled">
@@ -520,7 +534,7 @@
           </div>
         </div>
 
-        <hr style="width: 100%; border: 0; border-top: 1px solid #eee;">
+        <hr class="theme-divider">
 
         <div class="form-group">
           <label class="form-label">FACET Anchor</label>
@@ -561,8 +575,8 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button id="restartBtn" class="button" style="color: #666;">Restart Server</button>
-        <button id="saveSettings" class="button" style="background: #333; color: white;">Save</button>
+        <button id="restartBtn" class="button button-muted">Restart Server</button>
+        <button id="saveSettings" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">Save</button>
       </div>
     </div>
   </div>
@@ -599,7 +613,7 @@
       </div>
       <div class="modal-footer">
         <button id="goalCreateCancel" class="button">取消</button>
-        <button id="goalCreateSubmit" class="button" style="background: var(--text-main); color: #000;">创建</button>
+        <button id="goalCreateSubmit" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">创建</button>
       </div>
     </div>
   </div>
@@ -651,7 +665,7 @@
       </div>
       <div class="modal-footer">
         <button id="goalCheckpointActionCancel" class="button">取消</button>
-        <button id="goalCheckpointActionSubmit" class="button" style="background: var(--text-main); color: #000;">提交</button>
+        <button id="goalCheckpointActionSubmit" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">提交</button>
       </div>
     </div>
   </div>
@@ -662,9 +676,7 @@
       <div class="modal-header" style="display: flex; align-items: center;">
         <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
           <span>调用设置</span>
-          <a id="workshopLink" href="#" target="_blank"
-            style="font-size: 15px; text-decoration: underline; color: #d4a017; transition: color 0.2s;"
-            onmouseover="this.style.color='#f0c040'" onmouseout="this.style.color='#d4a017'">工坊入口</a>
+          <a id="workshopLink" href="#" target="_blank" class="theme-link theme-link-accent">工坊入口</a>
         </div>
         <button id="closeToolSettings" class="settings-btn">✕</button>
       </div>
@@ -678,7 +690,7 @@
         <div class="tool-settings-empty">连接后可查看工具列表</div>
       </div>
       <div class="modal-footer">
-        <button id="saveToolSettings" class="button" style="background: var(--text-main); color: #000;">保存</button>
+        <button id="saveToolSettings" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">保存</button>
       </div>
     </div>
   </div>
@@ -701,7 +713,7 @@
       </div>
       <div class="modal-footer">
         <button id="toolSettingsConfirmReject" class="button">拒绝</button>
-        <button id="toolSettingsConfirmApprove" class="button" style="background: var(--text-main); color: #000;">确认</button>
+        <button id="toolSettingsConfirmApprove" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">确认</button>
       </div>
     </div>
   </div>

@@ -9,9 +9,6 @@ function ensureDisconnectHint(statusEl) {
 
   const hint = document.createElement("div");
   hint.id = "status-hint";
-  hint.style.color = "#ff6b6b";
-  hint.style.fontSize = "12px";
-  hint.style.marginTop = "4px";
   hint.textContent = "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.";
   statusEl.parentElement.appendChild(hint);
 }

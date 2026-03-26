@@ -21,6 +21,7 @@ import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-p
 import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
 import { initPromptController } from "./app/features/prompt.js";
 import { createSettingsController } from "./app/features/settings.js";
+import { createThemeController } from "./app/features/theme.js";
 import { createToolSettingsController } from "./app/features/tool-settings.js";
 import { createVoiceFeature } from "./app/features/voice.js";
 import { createWorkspaceFeature } from "./app/features/workspace.js";
@@ -39,6 +40,7 @@ const voiceDurationEl = document.getElementById("voiceDuration");
 const messagesEl = document.getElementById("messages");
 const modelSelectEl = document.getElementById("modelSelect");
 const agentSelectEl = document.getElementById("agentSelect");
+const themeToggleBtn = document.getElementById("themeToggleBtn");
 
 // 文件树和编辑器 DOM 元素
 const sidebarEl = document.getElementById("sidebar");
@@ -175,6 +177,12 @@ const webchatDebugEnabled = (() => {
 const promptController = initPromptController({
   promptEl,
   onSubmit: () => sendMessage(),
+});
+
+const themeController = createThemeController({
+  storageKey: "ss-webchat-theme",
+  defaultTheme: "dark",
+  toggleButtonEl: themeToggleBtn,
 });
 
 let attachmentsFeature = null;
@@ -1718,8 +1726,7 @@ function switchTreeMode(mode) {
 
 function setSidebarActionButtonState(button, active) {
   if (!button) return;
-  button.style.background = active ? "rgba(255,255,255,0.1)" : "transparent";
-  button.style.opacity = active ? "1" : "0.7";
+  button.classList.toggle("is-active", Boolean(active));
 }
 
 function updateSidebarModeButtons(treeModeOverride) {
