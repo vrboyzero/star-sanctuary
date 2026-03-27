@@ -12,7 +12,7 @@ export default defineCommand({
   },
   async run({ args }) {
     const ctx = createCLIContext({ json: args.json, stateDir: args["state-dir"] });
-    const envPath = resolveEnvLocalPath();
+    const envPath = resolveEnvLocalPath(ctx.envDir);
 
     // Ensure file exists
     if (!fs.existsSync(envPath)) {

@@ -1,6 +1,60 @@
 import fs from "node:fs";
 import { resolveEnvFilePaths } from "./runtime-paths.js";
 
+const DEFAULT_ENV_TEMPLATE = `# Star Sanctuary default bootstrap config
+# Auto-generated on first launch when no .env or .env.local exists yet.
+# Put secrets and personal overrides in .env.local via WebChat settings or bdd setup.
+
+# Runtime
+BELLDANDY_AGENT_PROVIDER=openai
+BELLDANDY_OPENAI_BASE_URL=https://api.openai.com/v1
+BELLDANDY_OPENAI_MODEL=gpt-4o-mini
+BELLDANDY_HOST=127.0.0.1
+BELLDANDY_PORT=28889
+BELLDANDY_AUTH_MODE=none
+BELLDANDY_UPDATE_CHECK=true
+
+# Tools / automation
+BELLDANDY_TOOLS_ENABLED=true
+BELLDANDY_DANGEROUS_TOOLS_ENABLED=false
+BELLDANDY_MCP_ENABLED=false
+BELLDANDY_BROWSER_RELAY_ENABLED=false
+BELLDANDY_CRON_ENABLED=true
+BELLDANDY_HEARTBEAT_ENABLED=true
+BELLDANDY_HEARTBEAT_INTERVAL=30m
+BELLDANDY_HEARTBEAT_ACTIVE_HOURS=08:00-23:00
+
+# Memory / token (balanced baseline)
+BELLDANDY_EMBEDDING_ENABLED=true
+BELLDANDY_CONTEXT_INJECTION=true
+BELLDANDY_CONTEXT_INJECTION_LIMIT=4
+BELLDANDY_AUTO_RECALL_ENABLED=true
+BELLDANDY_AUTO_RECALL_LIMIT=3
+BELLDANDY_AUTO_RECALL_MIN_SCORE=0.35
+BELLDANDY_MEMORY_SUMMARY_ENABLED=true
+BELLDANDY_MEMORY_EVOLUTION_ENABLED=true
+BELLDANDY_MEMORY_EVOLUTION_MIN_MESSAGES=8
+BELLDANDY_TASK_MEMORY_ENABLED=true
+BELLDANDY_TASK_SUMMARY_ENABLED=false
+BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED=true
+BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED=true
+BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED=false
+BELLDANDY_MEMORY_DEEP_RETRIEVAL=false
+BELLDANDY_RERANKER_MIN_SCORE=0.20
+BELLDANDY_RERANKER_LENGTH_NORM_ANCHOR=500
+BELLDANDY_MAX_INPUT_TOKENS=20000
+BELLDANDY_MAX_OUTPUT_TOKENS=6144
+BELLDANDY_COMPACTION_ENABLED=true
+BELLDANDY_COMPACTION_THRESHOLD=15000
+BELLDANDY_COMPACTION_KEEP_RECENT=10
+BELLDANDY_COMPACTION_TRIGGER_FRACTION=0.75
+BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD=2000
+BELLDANDY_TOOL_GROUPS=methodology,system
+BELLDANDY_ROOM_INJECT_THRESHOLD=6
+BELLDANDY_ROOM_MEMBERS_CACHE_TTL=600000
+BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=false
+`;
+
 function loadEnvFileInto(targetEnv: NodeJS.ProcessEnv, filePath: string): void {
   let raw: string;
   try {
@@ -54,4 +108,19 @@ export function resolveRuntimeEnvDir(params: {
   return readTrimmedEnv(params.baseEnv, "STAR_SANCTUARY_ENV_DIR")
     ?? readTrimmedEnv(params.baseEnv, "BELLDANDY_ENV_DIR")
     ?? params.fallbackEnvDir;
+}
+
+export function ensureDefaultEnvFile(envDir: string): {
+  created: boolean;
+  envPath: string;
+  envLocalPath: string;
+} {
+  const paths = resolveEnvFilePaths({ envDir });
+  if (fs.existsSync(paths.envPath)) {
+    return { created: false, envPath: paths.envPath, envLocalPath: paths.envLocalPath };
+  }
+
+  fs.mkdirSync(paths.envDir, { recursive: true });
+  fs.writeFileSync(paths.envPath, DEFAULT_ENV_TEMPLATE, "utf-8");
+  return { created: true, envPath: paths.envPath, envLocalPath: paths.envLocalPath };
 }

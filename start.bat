@@ -68,11 +68,8 @@ echo [INFO] Build complete.
 
 :skip_build
 
-REM Generate a one-time session token for WebChat access.
-set "SETUP_TOKEN=setup-%RANDOM%-%RANDOM%-%RANDOM%"
+REM Let the Gateway decide whether a temporary setup token is needed.
 set "AUTO_OPEN_BROWSER=true"
-set "BELLDANDY_AUTH_MODE=token"
-set "BELLDANDY_AUTH_TOKEN=%SETUP_TOKEN%"
 
 REM NOTE: We do NOT pre-load .env.local here.
 REM The Gateway reads .env / .env.local directly on startup and applies them

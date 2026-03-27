@@ -2,12 +2,14 @@
  * CLIContext — shared context for all CLI commands.
  * Provides stateDir resolution, output mode, and logging helpers.
  */
-import path from "node:path";
 import pc from "picocolors";
-import { resolveStateDir, loadEnvFileIfExists } from "./env-loader.js";
+import { resolveEnvFilePaths, resolvePreferredEnvDirInfo, type EnvDirSource } from "@star-sanctuary/distribution";
+import { resolveStateDir, loadProjectEnvFiles } from "./env-loader.js";
 
 export interface CLIContext {
   stateDir: string;
+  envDir: string;
+  envSource: EnvDirSource;
   json: boolean;
   verbose: boolean;
   log: (msg: string) => void;
@@ -23,16 +25,28 @@ export function createCLIContext(args: {
   stateDir?: string;
   verbose?: boolean;
 }): CLIContext {
-  // 加载 .env / .env.local，确保 BELLDANDY_STATE_DIR 等环境变量在 CLI 进程中生效。
-  // 与 gateway.ts 的加载逻辑保持一致，避免服务器与 CLI 读取不同的 stateDir。
-  loadEnvFileIfExists(path.join(process.cwd(), ".env.local"));
-  loadEnvFileIfExists(path.join(process.cwd(), ".env"));
+  const envSelection = resolvePreferredEnvDirInfo({
+    env: process.env,
+    cwd: process.cwd(),
+    stateDir: args.stateDir,
+  });
+  const envDir = envSelection.envDir;
+
+  // 先按统一 envDir 规则加载 .env / .env.local，再解析 stateDir。
+  // 这样 CLI 与 gateway.ts 在 legacy root env 和 stateDir env 两种模式下保持一致。
+  const envFiles = resolveEnvFilePaths({ envDir });
+  loadProjectEnvFiles({
+    envPath: envFiles.envPath,
+    envLocalPath: envFiles.envLocalPath,
+  });
 
   const stateDir = args.stateDir ?? resolveStateDir();
   const json = args.json ?? false;
 
   return {
     stateDir,
+    envDir,
+    envSource: envSelection.source,
     json,
     verbose: args.verbose ?? false,
     log: (msg) => {

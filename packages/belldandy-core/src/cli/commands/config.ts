@@ -11,5 +11,6 @@ export default defineCommand({
     set: () => import("./config/set.js").then((m) => m.default),
     edit: () => import("./config/edit.js").then((m) => m.default),
     path: () => import("./config/path.js").then((m) => m.default),
+    "migrate-to-state-dir": () => import("./config/migrate-to-state-dir.js").then((m) => m.default),
   },
 });

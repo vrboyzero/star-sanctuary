@@ -31,7 +31,7 @@ describe("MemoryIndexer", () => {
     await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it("replaces existing source chunks on reindex instead of mixing old and new chunks", async () => {
+  it("reindexes changed content even when mtime moves backward, without mixing old chunks", async () => {
     await fs.writeFile(
       filePath,
       [

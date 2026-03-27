@@ -272,22 +272,26 @@ cd star-sanctuary
 
 ### 配置环境文件
 
-首次运行前，先从示例文件复制一份本地配置：
+源码模式下，**新用户通常不需要手工复制 `.env.example`**。
 
-```powershell
-Copy-Item .env.example .env
-```
+当前默认行为：
 
-或：
+- 首次启动时，Gateway 会在当前实际 `envDir` 下自动生成一份默认 `.env`
+- 敏感配置与个性化覆盖继续写入 `.env.local`
+- `.env` / `.env.local` 只用于本机，不应提交到 Git
+
+`envDir` 的判定规则如下：
+
+1. 如果显式设置了 `STAR_SANCTUARY_ENV_DIR` 或 `BELLDANDY_ENV_DIR`，则使用该目录
+2. 否则，如果仓库根目录已存在 `.env` 或 `.env.local`，则继续兼容使用仓库根目录
+3. 否则，默认使用 `stateDir`（通常是 `~/.star_sanctuary`）
+
+如果你是老用户，并且仓库根目录仍保留旧配置，系统会继续兼容旧路径；准备切换到状态目录时，可使用：
 
 ```bash
-cp .env.example .env
+corepack pnpm bdd config migrate-to-state-dir --dry-run
+corepack pnpm bdd config migrate-to-state-dir
 ```
-
-说明：
-
-- `.env` / `.env.local` 只用于本机，不应提交到 Git
-- 如需覆盖少量本地变量，优先新建 `.env.local`
 
 ### 一键启动
 
@@ -309,7 +313,8 @@ cp .env.example .env
 - 检查 Node.js 与 pnpm
 - 缺依赖时自动执行 `corepack pnpm install`
 - 缺少 `dist/` 时自动执行 `corepack pnpm build`
-- 生成一次性 WebChat Token
+- 在当前实际 `envDir` 下自动补生成默认 `.env`（若缺失）
+- 在需要时生成一次性 WebChat Token
 - 启动 Gateway 并自动打开浏览器
 
 ### 手动启动
@@ -343,10 +348,17 @@ corepack pnpm bdd stop
 
 ### 首次配置
 
-如果还没有 `.env.local`，推荐先执行：
+如果还没有敏感配置，推荐先执行：
 
 ```bash
 corepack pnpm bdd setup
+```
+
+`bdd setup` 会把结果写入当前实际 `envDir/.env.local`。可通过以下命令确认当前路径：
+
+```bash
+corepack pnpm bdd config path
+corepack pnpm bdd doctor
 ```
 
 非交互模式示例：
@@ -386,9 +398,31 @@ corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
 
 ## 配置指南
 
-推荐在项目根目录创建 `.env.local`。仓库中的 `.env.example` 与 `.env.local.example` 提供了更完整的配置样例。
+当前配置目录默认不是固定写死在项目根目录，而是使用“当前实际 `envDir`”。
+
+默认规则：
+
+1. 显式 `BELLDANDY_ENV_DIR` / `STAR_SANCTUARY_ENV_DIR`
+2. 否则兼容已有的仓库根目录 `.env` / `.env.local`
+3. 否则回落到 `stateDir`
+
+推荐理解方式：
+
+- `.env`：系统自动补生成的基础默认值
+- `.env.local`：用户敏感配置与机器级覆盖项
+
+如果你想确认当前到底使用哪份配置：
+
+```bash
+corepack pnpm bdd config path
+corepack pnpm bdd doctor
+```
+
+如果 `bdd doctor` 提示 `Legacy root env mode`，说明你当前仍在使用仓库根目录旧配置。
 
 ### 最小可用配置
+
+以下内容建议写入当前实际 `envDir/.env.local`：
 
 ```env
 BELLDANDY_AGENT_PROVIDER=openai
@@ -398,6 +432,8 @@ BELLDANDY_OPENAI_MODEL=gpt-4o
 ```
 
 ### 常用基础配置
+
+以下内容可放在 `.env.local`，也可作为覆盖项写入当前实际 `envDir/.env`：
 
 ```env
 # 监听地址与端口
@@ -493,6 +529,25 @@ BELLDANDY_RELAY_PORT=28892
 
 - 先看“安全变量配置建议方案”，确定监听地址、鉴权、工具权限、文件边界和外网暴露面
 - 再看“记忆与token变量配置建议方案”，确定记忆召回、压缩和 token 成本策略
+
+### 老用户迁移到状态目录
+
+如果你之前一直在仓库根目录维护 `.env` / `.env.local`，当前版本会继续兼容旧路径。
+
+当你准备切换到状态目录时，推荐按以下顺序操作：
+
+```bash
+corepack pnpm bdd doctor
+corepack pnpm bdd config migrate-to-state-dir --dry-run
+corepack pnpm bdd config migrate-to-state-dir
+corepack pnpm bdd doctor
+```
+
+迁移命令会：
+
+- 把仓库根目录中的 `.env` / `.env.local` 迁移到 `stateDir`
+- 在目标目录已有冲突文件时中止，不自动覆盖
+- 将原文件备份为 `*.migrated-to-state-dir.<timestamp>.bak`
 
 ### 多渠道配置
 
@@ -701,6 +756,8 @@ BELLDANDY_RELAY_PORT=28892
 cp .env.example .env
 docker compose up -d belldandy-gateway
 ```
+
+这里的仓库根目录 `.env` 是 Docker / Compose 部署用的配置文件，用来给 `docker compose` 和容器启动注入环境变量；它和源码模式 / 桌面模式下自动补齐的运行时 `envDir/.env` 不是同一个概念。
 
 完整部署、镜像、持久化目录、Tailscale 侧车等说明见：
 
@@ -917,7 +974,8 @@ BELLDANDY_AUTH_TOKEN=your-secure-token
 
 - 对应功能是否已启用
 - Bearer Token 是否正确
-- 配置文件是否位于状态目录中
+- 当前实际 `envDir` 是否符合预期
+- 若处于 legacy root mode，是否仍在读取仓库根目录旧配置
 - Gateway 是否已重启
 
 ---

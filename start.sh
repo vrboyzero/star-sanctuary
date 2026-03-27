@@ -61,11 +61,8 @@ if [ "$NEED_BUILD" -eq 1 ]; then
     echo "[INFO] Build complete."
 fi
 
-# Generate Session Token
-export SETUP_TOKEN="setup-$(date +%s)-${RANDOM}"
+# Let the Gateway decide whether a temporary setup token is needed.
 export AUTO_OPEN_BROWSER="true"
-export BELLDANDY_AUTH_MODE="token"
-export BELLDANDY_AUTH_TOKEN="$SETUP_TOKEN"
 
 # NOTE: We do NOT manually open the browser here.
 # The Gateway handles AUTO_OPEN_BROWSER internally (same as start.bat).
