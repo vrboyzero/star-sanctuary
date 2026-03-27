@@ -62,45 +62,33 @@ export class MemoryIndexer {
             const stats = await fs.stat(filePath);
             const mtime = stats.mtime.toISOString();
             const ext = path.extname(filePath).toLowerCase();
-
-            // 检查增量：对比存储中的最后更新时间与文件修改时间
-            // 注意：这里我们简单地用 chunks 中最新的 updated_at（实际上是索引入库时间） vs 文件 mtime
-            // 为了更严谨，我们应该在 metadata 里存原始文件的 mtime
-            // 但这里我们先对比库里是否有记录。如果有，且记录的 file_mtime >= 当前文件 mtime，则跳过
-
             const fileMeta = this.store.getFileMetadata(filePath);
+            let loaded = null as { content: string; memoryType: "core" | "daily" | "session" | "other" } | null;
 
-            if (fileMeta && fileMeta.metadata?.file_mtime) {
-                if (new Date(fileMeta.metadata.file_mtime) >= stats.mtime) {
-                    // 没变，跳过
-                    return;
+            // 增量判定优先看 mtime；若 mtime 未前进或发生回拨，再回退到内容 hash 校验。
+            // 这样既保留了大多数场景下的轻量快速路径，也能兜住测试里这类“内容变了但 mtime 不可靠”的情况。
+            if (fileMeta?.metadata?.file_mtime) {
+                const previousMtime = new Date(String(fileMeta.metadata.file_mtime));
+                if (Number.isFinite(previousMtime.getTime()) && previousMtime < stats.mtime) {
+                    // 文件 mtime 确认变新，继续重建索引，不需要额外 hash 校验。
+                } else {
+                    loaded = await loadIndexableContent(filePath, ext);
+                    const nextHash = computeContentHash(loaded.content);
+                    if (nextHash === fileMeta.metadata?.file_hash) {
+                        return;
+                    }
                 }
             }
 
-            // 读取并分块
-            let content = "";
-            let memoryType: "core" | "daily" | "session" | "other" = "other";
-
-            if (ext === ".jsonl") {
-                content = await extractTextFromSession(filePath);
-                memoryType = "session";
-            } else {
-                content = await fs.readFile(filePath, "utf-8");
-
-                // Determine memory type
-                const fileName = path.basename(filePath);
-                const parentDir = path.basename(path.dirname(filePath));
-
-                if (fileName === "MEMORY.md" || fileName === "memory.md") {
-                    memoryType = "core";
-                } else if (parentDir === "memory" && /^\d{4}-\d{2}-\d{2}\.md$/.test(fileName)) {
-                    memoryType = "daily";
-                }
+            if (!loaded) {
+                loaded = await loadIndexableContent(filePath, ext);
             }
+            const { content, memoryType } = loaded;
 
             if (!content.trim()) return;
 
             const chunksStr = this.chunker.splitText(content);
+            const fileHash = computeContentHash(content);
 
             const baseId = crypto.createHash("md5").update(filePath).digest("hex");
 
@@ -126,6 +114,7 @@ export class MemoryIndexer {
                     visibility: this.store.getChunkVisibility(chunkId) ?? sourceVisibility,
                     metadata: {
                         file_mtime: mtime, // 存入文件的实际修改时间
+                        file_hash: fileHash,
                         chunk_index: i,
                         total_chunks: chunksStr.length
                     }
@@ -280,4 +269,33 @@ function normalizePathSegments(input: string): string[] {
         .split("/")
         .map((segment) => segment.trim().toLowerCase())
         .filter(Boolean);
+}
+
+async function loadIndexableContent(
+    filePath: string,
+    ext: string,
+): Promise<{ content: string; memoryType: "core" | "daily" | "session" | "other" }> {
+    if (ext === ".jsonl") {
+        return {
+            content: await extractTextFromSession(filePath),
+            memoryType: "session",
+        };
+    }
+
+    const content = await fs.readFile(filePath, "utf-8");
+    const fileName = path.basename(filePath);
+    const parentDir = path.basename(path.dirname(filePath));
+
+    let memoryType: "core" | "daily" | "session" | "other" = "other";
+    if (fileName === "MEMORY.md" || fileName === "memory.md") {
+        memoryType = "core";
+    } else if (parentDir === "memory" && /^\d{4}-\d{2}-\d{2}\.md$/.test(fileName)) {
+        memoryType = "daily";
+    }
+
+    return { content, memoryType };
+}
+
+function computeContentHash(content: string): string {
+    return crypto.createHash("sha256").update(content).digest("hex");
 }

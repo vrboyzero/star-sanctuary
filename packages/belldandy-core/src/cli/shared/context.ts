@@ -4,7 +4,7 @@
  */
 import path from "node:path";
 import pc from "picocolors";
-import { resolveStateDir, loadEnvFileIfExists } from "./env-loader.js";
+import { resolveStateDir, loadProjectEnvFiles } from "./env-loader.js";
 
 export interface CLIContext {
   stateDir: string;
@@ -25,8 +25,10 @@ export function createCLIContext(args: {
 }): CLIContext {
   // 加载 .env / .env.local，确保 BELLDANDY_STATE_DIR 等环境变量在 CLI 进程中生效。
   // 与 gateway.ts 的加载逻辑保持一致，避免服务器与 CLI 读取不同的 stateDir。
-  loadEnvFileIfExists(path.join(process.cwd(), ".env.local"));
-  loadEnvFileIfExists(path.join(process.cwd(), ".env"));
+  loadProjectEnvFiles({
+    envPath: path.join(process.cwd(), ".env"),
+    envLocalPath: path.join(process.cwd(), ".env.local"),
+  });
 
   const stateDir = args.stateDir ?? resolveStateDir();
   const json = args.json ?? false;

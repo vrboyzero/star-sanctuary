@@ -18,7 +18,7 @@ export interface EnvEntry {
  * - Skips blank lines and `#` comments
  * - Strips optional `export ` prefix
  * - Strips surrounding quotes (`"` or `'`)
- * - Does NOT override already-set env vars
+ * - Always uses the file value for the same key
  */
 export function loadEnvFileIfExists(filePath: string): void {
   let raw: string;
@@ -53,6 +53,19 @@ export function loadEnvFileIfExists(filePath: string): void {
 
     process.env[key] = value;
   }
+}
+
+/**
+ * Apply project env files in the standard priority order:
+ * `.env` first, then `.env.local`.
+ * Later files override earlier files and any pre-set shell values.
+ */
+export function loadProjectEnvFiles(paths: {
+  envPath: string;
+  envLocalPath: string;
+}): void {
+  loadEnvFileIfExists(paths.envPath);
+  loadEnvFileIfExists(paths.envLocalPath);
 }
 
 /**

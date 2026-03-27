@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
+import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
+import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
 
 import {
   OpenAIChatAgent,
@@ -241,8 +243,10 @@ let runtimePaths = resolveGatewayRuntimePaths({
 });
 let envFiles = resolveEnvFilePaths({ envDir: runtimePaths.envDir });
 
-loadEnvFileIfExists(envFiles.envLocalPath);
-loadEnvFileIfExists(envFiles.envPath);
+loadProjectEnvFiles({
+  envPath: envFiles.envPath,
+  envLocalPath: envFiles.envLocalPath,
+});
 
 runtimePaths = resolveGatewayRuntimePaths({
   env: process.env,
@@ -256,45 +260,24 @@ function readEnv(name: string): string | undefined {
   return v && v.trim() ? v.trim() : undefined;
 }
 
-function loadEnvFileIfExists(filePath: string) {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(filePath, "utf-8");
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return;
-    return;
-  }
-
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-
-    const normalized = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trim() : trimmed;
-    const eq = normalized.indexOf("=");
-    if (eq <= 0) continue;
-
-    const key = normalized.slice(0, eq).trim();
-    if (!key) continue;
-    if (process.env[key] && process.env[key]!.trim()) continue;
-
-    let value = normalized.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    process.env[key] = value;
-  }
-}
-
 // --- Configuration ---
 const port = Number(readEnv("BELLDANDY_PORT") ?? "28889");
 const host = readEnv("BELLDANDY_HOST") ?? "127.0.0.1"; // Security: Default to localhost
 const authMode = (readEnv("BELLDANDY_AUTH_MODE") ?? "none") as "none" | "token" | "password";
-const authToken = readEnv("BELLDANDY_AUTH_TOKEN");
+const autoOpenBrowser = readEnv("AUTO_OPEN_BROWSER") === "true";
+let authToken = readEnv("BELLDANDY_AUTH_TOKEN");
+const launcherSetupAuth = resolveLauncherSetupAuth({
+  authMode,
+  authToken,
+  autoOpenBrowser,
+  setupToken: readEnv("SETUP_TOKEN"),
+});
+authToken = launcherSetupAuth.authToken;
+const setupToken = launcherSetupAuth.setupToken;
+if (setupToken) {
+  process.env.SETUP_TOKEN = setupToken;
+  process.env.BELLDANDY_AUTH_TOKEN = setupToken;
+}
 const authPassword = readEnv("BELLDANDY_AUTH_PASSWORD");
 const communityApiEnabled = readEnv("BELLDANDY_COMMUNITY_API_ENABLED") === "true";
 const webRoot = runtimePaths.webRoot;
@@ -2327,12 +2310,13 @@ logger.info("gateway", `Memory DB: ${path.join(stateDir, "memory.sqlite")}`);
 logger.info("gateway", `Tools Enabled: ${toolsEnabled}`);
 
 // 8.5 Auto Open Browser (Magic Link)
-const setupToken = readEnv("SETUP_TOKEN");
-const autoOpenBrowser = readEnv("AUTO_OPEN_BROWSER") === "true";
-
 if (autoOpenBrowser) {
-  const openUrlHost = (server.host === "0.0.0.0" || server.host === "::") ? "localhost" : server.host;
-  const targetUrl = `http://${openUrlHost}:${server.port}/${setupToken ? `?token=${setupToken}` : ""}`;
+  const targetUrl = buildAutoOpenTargetUrl({
+    host: server.host,
+    port: server.port,
+    authMode,
+    setupToken,
+  });
 
   logger.info("launcher", `Opening browser at ${targetUrl}...`);
   // Dynamic import to avoid issues if 'open' is optional or ESM

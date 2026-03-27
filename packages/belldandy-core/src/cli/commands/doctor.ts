@@ -9,9 +9,8 @@ import path from "node:path";
 import pc from "picocolors";
 import { createCLIContext } from "../shared/context.js";
 import {
-  loadEnvFileIfExists,
+  loadProjectEnvFiles,
   resolveEnvLocalPath,
-  resolveStateDir,
 } from "../shared/env-loader.js";
 
 interface CheckResult {
@@ -78,8 +77,10 @@ function checkEnvLocal(): CheckResult {
 function checkRequiredEnv(): CheckResult[] {
   const results: CheckResult[] = [];
   const envPath = resolveEnvLocalPath();
-  loadEnvFileIfExists(envPath);
-  loadEnvFileIfExists(path.join(process.cwd(), ".env"));
+  loadProjectEnvFiles({
+    envPath: path.join(process.cwd(), ".env"),
+    envLocalPath: envPath,
+  });
 
   const provider = process.env.BELLDANDY_AGENT_PROVIDER ?? "mock";
   results.push({
