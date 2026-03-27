@@ -69,8 +69,8 @@ export AUTO_OPEN_BROWSER="true"
 # Opening it separately would cause two windows.
 
 # NOTE: We do NOT pre-load .env.local here.
-# The Gateway reads .env / .env.local directly on startup with correct quote-stripping,
-# which always takes precedence over shell env vars.
+# The Gateway reads .env / .env.local directly on startup with correct
+# quote-stripping, while explicit shell env vars still keep higher priority.
 
 while true; do
     echo ""

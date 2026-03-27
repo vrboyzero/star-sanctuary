@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
-import { ensureDefaultEnvFile } from "./env.js";
+import { ensureDefaultEnvFile, loadRuntimeEnvFiles } from "./env.js";
 
 const tempDirs = new Set<string>();
 
@@ -45,4 +45,38 @@ test("ensureDefaultEnvFile still creates .env when only .env.local exists", asyn
   expect(content).toContain("BELLDANDY_AUTH_MODE=none");
   const localContent = await fs.readFile(envLocalPath, "utf-8");
   expect(localContent).toBe("BELLDANDY_OPENAI_API_KEY=test-key\n");
+});
+
+test("loadRuntimeEnvFiles preserves explicit base env values over .env defaults", async () => {
+  const envDir = await createTempDir();
+  await fs.writeFile(
+    path.join(envDir, ".env"),
+    [
+      "BELLDANDY_HOST=127.0.0.1",
+      "BELLDANDY_AGENT_PROVIDER=openai",
+      "BELLDANDY_PORT=28889",
+    ].join("\n"),
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(envDir, ".env.local"),
+    [
+      "BELLDANDY_PORT=38889",
+      "BELLDANDY_AUTH_MODE=token",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const env = loadRuntimeEnvFiles(
+    {
+      BELLDANDY_HOST: "0.0.0.0",
+      BELLDANDY_AGENT_PROVIDER: "mock",
+    },
+    envDir,
+  );
+
+  expect(env.BELLDANDY_HOST).toBe("0.0.0.0");
+  expect(env.BELLDANDY_AGENT_PROVIDER).toBe("mock");
+  expect(env.BELLDANDY_PORT).toBe("38889");
+  expect(env.BELLDANDY_AUTH_MODE).toBe("token");
 });

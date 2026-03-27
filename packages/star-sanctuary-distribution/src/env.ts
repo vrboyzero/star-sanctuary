@@ -55,7 +55,11 @@ BELLDANDY_ROOM_MEMBERS_CACHE_TTL=600000
 BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=false
 `;
 
-function loadEnvFileInto(targetEnv: NodeJS.ProcessEnv, filePath: string): void {
+function loadEnvFileInto(
+  targetEnv: NodeJS.ProcessEnv,
+  filePath: string,
+  protectedKeys?: ReadonlySet<string>,
+): void {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf-8");
@@ -75,6 +79,7 @@ function loadEnvFileInto(targetEnv: NodeJS.ProcessEnv, filePath: string): void {
 
     const key = normalized.slice(0, eq).trim();
     if (!key) continue;
+    if (protectedKeys?.has(key)) continue;
 
     let value = normalized.slice(eq + 1).trim();
     if (
@@ -90,9 +95,10 @@ function loadEnvFileInto(targetEnv: NodeJS.ProcessEnv, filePath: string): void {
 
 export function loadRuntimeEnvFiles(baseEnv: NodeJS.ProcessEnv, envDir: string): NodeJS.ProcessEnv {
   const env = { ...baseEnv };
+  const protectedKeys = new Set(Object.keys(baseEnv));
   const envFiles = resolveEnvFilePaths({ envDir });
-  loadEnvFileInto(env, envFiles.envPath);
-  loadEnvFileInto(env, envFiles.envLocalPath);
+  loadEnvFileInto(env, envFiles.envPath, protectedKeys);
+  loadEnvFileInto(env, envFiles.envLocalPath, protectedKeys);
   return env;
 }
 

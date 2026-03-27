@@ -48,7 +48,7 @@ afterEach(async () => {
   tempDirs.clear();
 });
 
-test(".env overrides launcher preset auth mode and token", async () => {
+test("explicit process env wins over .env for the same keys", async () => {
   const snapshot = snapshotTrackedEnv();
   const { envPath, envLocalPath } = await createEnvDir();
 
@@ -67,20 +67,20 @@ test(".env overrides launcher preset auth mode and token", async () => {
 
     loadProjectEnvFiles({ envPath, envLocalPath });
 
-    expect(process.env.BELLDANDY_AUTH_MODE).toBe("none");
-    expect(process.env.BELLDANDY_AUTH_TOKEN).toBe("file-token");
+    expect(process.env.BELLDANDY_AUTH_MODE).toBe("token");
+    expect(process.env.BELLDANDY_AUTH_TOKEN).toBe("setup-token");
   } finally {
     restoreTrackedEnv(snapshot);
   }
 });
 
-test(".env.local overrides .env for the same auth keys", async () => {
+test(".env.local overrides .env for the same auth keys when shell env is absent", async () => {
   const snapshot = snapshotTrackedEnv();
   const { envPath, envLocalPath } = await createEnvDir();
 
   try {
-    process.env.BELLDANDY_AUTH_MODE = "token";
-    process.env.BELLDANDY_AUTH_TOKEN = "setup-token";
+    delete process.env.BELLDANDY_AUTH_MODE;
+    delete process.env.BELLDANDY_AUTH_TOKEN;
 
     await fs.writeFile(
       envPath,
@@ -113,8 +113,8 @@ test("loadEnvFileIfExists strips quotes and export prefix", async () => {
   const { envPath } = await createEnvDir();
 
   try {
-    process.env.BELLDANDY_AUTH_TOKEN = "setup-token";
-    process.env.BELLDANDY_PORT = "28889";
+    delete process.env.BELLDANDY_AUTH_TOKEN;
+    delete process.env.BELLDANDY_PORT;
 
     await fs.writeFile(
       envPath,

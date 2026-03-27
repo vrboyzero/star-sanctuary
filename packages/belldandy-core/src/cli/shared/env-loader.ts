@@ -15,14 +15,21 @@ export interface EnvEntry {
   value: string;
 }
 
+type LoadEnvFileOptions = {
+  targetEnv?: NodeJS.ProcessEnv;
+  protectedKeys?: ReadonlySet<string>;
+};
+
 /**
  * Load a `.env` / `.env.local` file into `process.env`.
  * - Skips blank lines and `#` comments
  * - Strips optional `export ` prefix
  * - Strips surrounding quotes (`"` or `'`)
- * - Always uses the file value for the same key
+ * - Preserves values that were already explicitly present before env-file loading
  */
-export function loadEnvFileIfExists(filePath: string): void {
+export function loadEnvFileIfExists(filePath: string, options: LoadEnvFileOptions = {}): void {
+  const targetEnv = options.targetEnv ?? process.env;
+  const protectedKeys = options.protectedKeys;
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf-8");
@@ -42,8 +49,7 @@ export function loadEnvFileIfExists(filePath: string): void {
 
     const key = normalized.slice(0, eq).trim();
     if (!key) continue;
-    // 始终以文件中的值为准（覆盖 shell/启动脚本传入的同名变量）
-    // 这样可以避免启动脚本（如 start.bat）把带引号的值 KEY="val" 直接存入进程环境后无法被纠正。
+    if (protectedKeys?.has(key)) continue;
 
     let value = normalized.slice(eq + 1).trim();
     if (
@@ -53,21 +59,22 @@ export function loadEnvFileIfExists(filePath: string): void {
       value = value.slice(1, -1);
     }
 
-    process.env[key] = value;
+    targetEnv[key] = value;
   }
 }
 
 /**
  * Apply project env files in the standard priority order:
  * `.env` first, then `.env.local`.
- * Later files override earlier files and any pre-set shell values.
+ * Later files override earlier files, while explicit shell / process env values win.
  */
 export function loadProjectEnvFiles(paths: {
   envPath: string;
   envLocalPath: string;
 }): void {
-  loadEnvFileIfExists(paths.envPath);
-  loadEnvFileIfExists(paths.envLocalPath);
+  const protectedKeys = new Set(Object.keys(process.env));
+  loadEnvFileIfExists(paths.envPath, { protectedKeys });
+  loadEnvFileIfExists(paths.envLocalPath, { protectedKeys });
 }
 
 /**
