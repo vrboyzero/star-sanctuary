@@ -596,6 +596,49 @@ body::before {
   stroke: var(--canvas-grid-stroke);
 }
 
+/* =====================================================================
+   亮色主题：bot 气泡内 Markdown 元素的对比度修复
+   问题：bot 气泡白色文字继承到代码块，而代码块背景在亮色主题为浅灰色，
+   导致白字配浅灰底，对比度极差。
+   解决：为这些元素叠加一层半透明深色背景，使白字清晰可读，且不会太重。
+   ===================================================================== */
+html[data-theme="light"] .msg.bot .code-block-wrapper {
+  /* 使用深色半透明叠加，覆盖原浅灰背景变量 */
+  background: rgba(0, 25, 52, 0.28);
+}
+
+html[data-theme="light"] .msg.bot .code-block-header {
+  background: rgba(0, 20, 45, 0.36);
+  border-bottom-color: rgba(255, 255, 255, 0.14);
+  /* 确保 header 内文字（语言标签、复制按钮）也清晰可见 */
+  color: rgba(255, 255, 255, 0.78);
+}
+
+html[data-theme="light"] .msg.bot .copy-code-btn {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+html[data-theme="light"] .msg.bot .copy-code-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* 裸 pre 块（无 code-block-wrapper 包裹时） */
+html[data-theme="light"] .msg.bot pre {
+  background: rgba(0, 25, 52, 0.30);
+}
+
+/* 内联行内代码 */
+html[data-theme="light"] .msg.bot code {
+  background: rgba(0, 20, 50, 0.22);
+}
+
+/* 引用块（blockquote） */
+html[data-theme="light"] .msg.bot blockquote {
+  background: rgba(0, 20, 50, 0.18);
+  border-left-color: rgba(255, 255, 255, 0.35);
+}
+
 @media (max-width: 768px) {
   .theme-toggle-btn {
     min-width: 60px;
