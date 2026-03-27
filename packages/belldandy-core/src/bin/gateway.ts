@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
+import { ensureDefaultEnvFile, resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
 import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
 import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
 
@@ -242,6 +242,7 @@ let runtimePaths = resolveGatewayRuntimePaths({
   gatewayModuleUrl: import.meta.url,
 });
 let envFiles = resolveEnvFilePaths({ envDir: runtimePaths.envDir });
+const ensuredDefaultEnv = ensureDefaultEnvFile(runtimePaths.envDir);
 
 loadProjectEnvFiles({
   envPath: envFiles.envPath,
@@ -326,6 +327,14 @@ const extraWorkspaceRoots = extraWorkspaceRootsRaw
 
 // Logger（尽早初始化，后续所有输出走统一日志）
 const logger = createLoggerFromEnv(stateDir);
+logger.info("gateway", `Environment Dir: ${runtimePaths.envDir}`);
+if (ensuredDefaultEnv.created) {
+  logger.info("gateway", `Generated default .env at ${ensuredDefaultEnv.envPath}`);
+}
+if (runtimePaths.envSource === "legacy_root") {
+  logger.warn("gateway", `Using legacy project-root env files from ${runtimePaths.envDir}; state-dir config at ${stateDir} is currently inactive`);
+  logger.warn("gateway", "Run 'bdd config migrate-to-state-dir' when you are ready to switch to state-dir config");
+}
 
 function normalizeStringArray(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) return undefined;

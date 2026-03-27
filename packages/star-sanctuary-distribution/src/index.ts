@@ -1,12 +1,23 @@
 export {
+  ensureDefaultEnvFile,
+  loadRuntimeEnvFiles,
+  readTrimmedEnv,
+  resolveRuntimeEnvDir,
+} from "./env.js";
+export {
   resolveEnvFilePaths,
+  resolvePreferredEnvDir,
+  resolvePreferredEnvDirInfo,
   resolveGatewayRuntimePaths,
   resolveWorkspaceTemplateDir,
   resolveRuntimeMode,
   resolveRuntimeDir,
   type RuntimeMode,
   type GatewayRuntimePaths,
+  type EnvDirSource,
   type ResolveGatewayRuntimePathsOptions,
+  type ResolvePreferredEnvDirResult,
+  type ResolvePreferredEnvDirOptions,
   type ResolveWorkspaceTemplateDirOptions,
 } from "./runtime-paths.js";
 export {

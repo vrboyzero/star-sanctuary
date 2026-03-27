@@ -11,7 +11,7 @@ export default defineCommand({
   },
   async run({ args }) {
     const ctx = createCLIContext({ json: args.json, stateDir: args["state-dir"] });
-    const entries = parseEnvFile(resolveEnvLocalPath());
+    const entries = parseEnvFile(resolveEnvLocalPath(ctx.envDir));
     const entry = entries.find((e) => e.key === args.key);
 
     if (!entry) {

@@ -11,10 +11,13 @@ export type GatewayRuntimePaths = {
   cwd: string;
   stateDir: string;
   envDir: string;
+  envSource: EnvDirSource;
   runtimeDir?: string;
   webRoot: string;
   bundledSkillsDir: string;
 };
+
+export type EnvDirSource = "explicit" | "legacy_root" | "state_dir";
 
 export type ResolveGatewayRuntimePathsOptions = {
   env?: NodeJS.ProcessEnv;
@@ -26,6 +29,19 @@ export type ResolveGatewayRuntimePathsOptions = {
   bundledSkillsDir?: string;
   gatewayModuleUrl?: string;
   mode?: RuntimeMode;
+};
+
+export type ResolvePreferredEnvDirOptions = {
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  stateDir?: string;
+  envDir?: string;
+  exists?: (filePath: string) => boolean;
+};
+
+export type ResolvePreferredEnvDirResult = {
+  envDir: string;
+  source: EnvDirSource;
 };
 
 export type ResolveWorkspaceTemplateDirOptions = {
@@ -63,6 +79,14 @@ function pickFirstExistingPath(candidates: string[], fallback: string): string {
   return fallback;
 }
 
+function fileExists(filePath: string): boolean {
+  try {
+    return fs.existsSync(filePath);
+  } catch {
+    return false;
+  }
+}
+
 function resolveFromModuleUrl(moduleUrl: string, relativePath: string): string {
   return path.resolve(path.dirname(fileURLToPath(moduleUrl)), relativePath);
 }
@@ -95,6 +119,42 @@ export function resolveEnvFilePaths(params?: { envDir?: string }): { envDir: str
   };
 }
 
+export function resolvePreferredEnvDir(
+  options: ResolvePreferredEnvDirOptions = {},
+): string {
+  return resolvePreferredEnvDirInfo(options).envDir;
+}
+
+export function resolvePreferredEnvDirInfo(
+  options: ResolvePreferredEnvDirOptions = {},
+): ResolvePreferredEnvDirResult {
+  const env = options.env ?? process.env;
+  const explicitEnvDir = options.envDir
+    ?? readTrimmedEnv(env, "STAR_SANCTUARY_ENV_DIR", "BELLDANDY_ENV_DIR");
+  if (explicitEnvDir) {
+    return {
+      envDir: path.resolve(explicitEnvDir),
+      source: "explicit",
+    };
+  }
+
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const exists = options.exists ?? fileExists;
+  const cwdEnvFiles = resolveEnvFilePaths({ envDir: cwd });
+  if (exists(cwdEnvFiles.envPath) || exists(cwdEnvFiles.envLocalPath)) {
+    return {
+      envDir: cwd,
+      source: "legacy_root",
+    };
+  }
+
+  const stateDir = path.resolve(options.stateDir ?? resolveStateDir(env));
+  return {
+    envDir: stateDir,
+    source: "state_dir",
+  };
+}
+
 export function resolveGatewayRuntimePaths(
   options: ResolveGatewayRuntimePathsOptions = {},
 ): GatewayRuntimePaths {
@@ -106,11 +166,13 @@ export function resolveGatewayRuntimePaths(
   );
   const mode = resolveRuntimeMode(env, runtimeDir, options.mode);
   const stateDir = options.stateDir ?? resolveStateDir(env);
-  const envDir = path.resolve(
-    options.envDir
-      ?? readTrimmedEnv(env, "STAR_SANCTUARY_ENV_DIR", "BELLDANDY_ENV_DIR")
-      ?? cwd,
-  );
+  const envSelection = resolvePreferredEnvDirInfo({
+    env,
+    cwd,
+    stateDir,
+    envDir: options.envDir,
+  });
+  const envDir = envSelection.envDir;
 
   const webRootFallback = runtimeDir
     ? pickFirstExistingPath(
@@ -155,6 +217,7 @@ export function resolveGatewayRuntimePaths(
     cwd,
     stateDir,
     envDir,
+    envSource: envSelection.source,
     runtimeDir,
     webRoot,
     bundledSkillsDir,

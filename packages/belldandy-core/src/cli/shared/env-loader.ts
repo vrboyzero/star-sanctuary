@@ -5,6 +5,8 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 
+import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
+
 export { resolveStateDir } from "../../security/store.js";
 
 /** A parsed key-value entry from an .env file. */
@@ -159,7 +161,12 @@ export function updateEnvValue(
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
-/** Resolve the .env.local path for a given state dir or cwd. */
-export function resolveEnvLocalPath(): string {
-  return nodePath.join(process.cwd(), ".env.local");
+/** Resolve the .env.local path for a given env dir or cwd. */
+export function resolveEnvLocalPath(envDir?: string): string {
+  return resolveEnvFilePaths({ envDir }).envLocalPath;
+}
+
+/** Resolve the .env path for a given env dir or cwd. */
+export function resolveEnvPath(envDir?: string): string {
+  return resolveEnvFilePaths({ envDir }).envPath;
 }

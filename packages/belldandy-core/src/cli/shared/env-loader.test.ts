@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
-import { loadEnvFileIfExists, loadProjectEnvFiles } from "./env-loader.js";
+import { loadEnvFileIfExists, loadProjectEnvFiles, resolveEnvLocalPath } from "./env-loader.js";
 
 const TRACKED_ENV_KEYS = [
   "BELLDANDY_AUTH_MODE",
@@ -132,4 +132,9 @@ test("loadEnvFileIfExists strips quotes and export prefix", async () => {
   } finally {
     restoreTrackedEnv(snapshot);
   }
+});
+
+test("resolveEnvLocalPath uses explicit env dir when provided", () => {
+  expect(resolveEnvLocalPath("E:/project/star-sanctuary/.star_sanctuary"))
+    .toBe(path.resolve("E:/project/star-sanctuary/.star_sanctuary", ".env.local"));
 });

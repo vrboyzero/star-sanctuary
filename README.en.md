@@ -272,22 +272,26 @@ cd star-sanctuary
 
 ### Configure Environment Files
 
-Before the first run, create a local config from the example:
+For source-mode installs, **new users usually do not need to copy `.env.example` manually**.
 
-```powershell
-Copy-Item .env.example .env
-```
+Current default behavior:
 
-or:
+- on first launch, the Gateway auto-generates a default `.env` in the current effective `envDir`
+- sensitive values and personal overrides continue to live in `.env.local`
+- `.env` and `.env.local` are local-only and must not be committed
+
+`envDir` is resolved in this order:
+
+1. explicit `STAR_SANCTUARY_ENV_DIR` or `BELLDANDY_ENV_DIR`
+2. otherwise, if the project root already contains `.env` or `.env.local`, keep using the project root for legacy compatibility
+3. otherwise, fall back to `stateDir` (usually `~/.star_sanctuary`)
+
+If you are an existing user with legacy project-root config and want to switch later, use:
 
 ```bash
-cp .env.example .env
+corepack pnpm bdd config migrate-to-state-dir --dry-run
+corepack pnpm bdd config migrate-to-state-dir
 ```
-
-Notes:
-
-- `.env` and `.env.local` are local-only and must not be committed
-- prefer `.env.local` for small machine-specific overrides
 
 ### One-click Launch
 
@@ -310,7 +314,8 @@ The launcher script will automatically:
 - check Node.js and pnpm
 - run `corepack pnpm install` if dependencies are missing
 - run `corepack pnpm build` if `dist/` is missing
-- generate a one-time WebChat token
+- auto-generate a default `.env` in the effective `envDir` when it is missing
+- generate a one-time WebChat token when needed
 - start the Gateway and open the browser
 
 ### Manual Start
@@ -344,10 +349,17 @@ corepack pnpm bdd stop
 
 ### First-time Setup
 
-If `.env.local` does not exist yet, start with:
+If sensitive config is not set yet, start with:
 
 ```bash
 corepack pnpm bdd setup
+```
+
+`bdd setup` writes into the current effective `envDir/.env.local`. You can confirm the active path with:
+
+```bash
+corepack pnpm bdd config path
+corepack pnpm bdd doctor
 ```
 
 Non-interactive example:
@@ -387,9 +399,31 @@ corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
 
 ## Configuration
 
-Create `.env.local` in the project root. See `.env.example` and `.env.local.example` for more complete examples.
+The configuration directory is no longer assumed to be the project root. The runtime now uses the current effective `envDir`.
+
+Resolution order:
+
+1. explicit `BELLDANDY_ENV_DIR` / `STAR_SANCTUARY_ENV_DIR`
+2. otherwise, existing project-root `.env` / `.env.local` for legacy compatibility
+3. otherwise, `stateDir`
+
+Recommended mental model:
+
+- `.env`: baseline defaults, auto-generated when missing
+- `.env.local`: user secrets and machine-specific overrides
+
+To check which config location is active:
+
+```bash
+corepack pnpm bdd config path
+corepack pnpm bdd doctor
+```
+
+If `bdd doctor` reports `Legacy root env mode`, you are still using legacy project-root config.
 
 ### Minimal Configuration
+
+These values are typically written into the current effective `envDir/.env.local`:
 
 ```env
 BELLDANDY_AGENT_PROVIDER=openai
@@ -399,6 +433,8 @@ BELLDANDY_OPENAI_MODEL=gpt-4o
 ```
 
 ### Common Base Configuration
+
+These values can live in `.env.local`, or in the current effective `envDir/.env` as overrides:
 
 ```env
 # Host and port
@@ -494,6 +530,25 @@ Recommended reading order:
 
 - Read `security-config-guide.en.md` first for host binding, auth, tool permissions, file boundaries, and external exposure
 - Then read `memory-token-config-guide.en.md` for memory retrieval, compaction, and token-cost tuning
+
+### Migrating Legacy Project-root Config to the State Directory
+
+If you have been maintaining `.env` / `.env.local` in the project root, the current version will keep using them for backward compatibility.
+
+When you are ready to switch to the state directory, use:
+
+```bash
+corepack pnpm bdd doctor
+corepack pnpm bdd config migrate-to-state-dir --dry-run
+corepack pnpm bdd config migrate-to-state-dir
+corepack pnpm bdd doctor
+```
+
+The migration command:
+
+- moves project-root `.env` / `.env.local` into `stateDir`
+- aborts on conflicting target files instead of overwriting them
+- keeps backups as `*.migrated-to-state-dir.<timestamp>.bak`
 
 ### Multi-channel Configuration
 
@@ -702,6 +757,8 @@ Shortest path:
 cp .env.example .env
 docker compose up -d belldandy-gateway
 ```
+
+The project-root `.env` here is the Docker / Compose deployment file used by `docker compose` and container startup. It is separate from the runtime `envDir/.env` that source-mode / desktop-mode launches auto-bootstrap.
 
 Full deployment, images, persistence paths, and Tailscale sidecar docs:
 
@@ -918,7 +975,8 @@ Check:
 
 - whether the feature is enabled
 - whether the Bearer Token is correct
-- whether the config file exists in the state directory
+- whether the current effective `envDir` is the one you expect
+- whether legacy project-root config is still active
 - whether the Gateway has been restarted
 
 ---

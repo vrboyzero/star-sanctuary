@@ -10,6 +10,7 @@ import pc from "picocolors";
 import { createCLIContext } from "../shared/context.js";
 import {
   loadProjectEnvFiles,
+  resolveEnvPath,
   resolveEnvLocalPath,
 } from "../shared/env-loader.js";
 
@@ -66,19 +67,19 @@ function checkStateDir(stateDir: string): CheckResult {
   }
 }
 
-function checkEnvLocal(): CheckResult {
-  const envPath = resolveEnvLocalPath();
+function checkEnvLocal(envDir: string): CheckResult {
+  const envPath = resolveEnvLocalPath(envDir);
   if (fs.existsSync(envPath)) {
     return { name: ".env.local", status: "pass", message: envPath };
   }
   return { name: ".env.local", status: "warn", message: "not found", fix: "Run 'bdd setup' to create initial configuration" };
 }
 
-function checkRequiredEnv(): CheckResult[] {
+function checkRequiredEnv(envDir: string): CheckResult[] {
   const results: CheckResult[] = [];
-  const envPath = resolveEnvLocalPath();
+  const envPath = resolveEnvLocalPath(envDir);
   loadProjectEnvFiles({
-    envPath: path.join(process.cwd(), ".env"),
+    envPath: resolveEnvPath(envDir),
     envLocalPath: envPath,
   });
 
@@ -261,8 +262,17 @@ export default defineCommand({
     results.push(checkNodeVersion());
     results.push(await checkPnpm());
     results.push(checkStateDir(stateDir));
-    results.push(checkEnvLocal());
-    results.push(...checkRequiredEnv());
+    results.push({ name: "Environment directory", status: "pass", message: ctx.envDir });
+    if (ctx.envSource === "legacy_root") {
+      results.push({
+        name: "Legacy root env mode",
+        status: "warn",
+        message: `Using project-root env files; state-dir config at ${ctx.stateDir} is currently inactive`,
+        fix: "Run 'bdd config migrate-to-state-dir' to switch to state-dir config",
+      });
+    }
+    results.push(checkEnvLocal(ctx.envDir));
+    results.push(...checkRequiredEnv(ctx.envDir));
     results.push(await checkPort(port));
     results.push(checkMemoryDb(stateDir));
     results.push(checkMcpConfig(stateDir));
