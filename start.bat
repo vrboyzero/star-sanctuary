@@ -72,8 +72,8 @@ REM Let the Gateway decide whether a temporary setup token is needed.
 set "AUTO_OPEN_BROWSER=true"
 
 REM NOTE: We do NOT pre-load .env.local here.
-REM The Gateway reads .env / .env.local directly on startup and applies them
-REM with correct quote-stripping, which always takes precedence over shell env vars.
+REM The Gateway reads .env / .env.local directly on startup with correct
+REM quote-stripping, while explicit shell env vars still keep higher priority.
 
 :main_loop
 echo.
