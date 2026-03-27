@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2026-03-27
+
+聚焦环境变量目录统一、默认 `.env` 自动补齐与 WebChat 连接状态修复，作为 `v0.2.1` 后的补丁版本发布。
+
+### Configuration / Runtime
+
+- Gateway 与 CLI 统一复用同一套 `envDir` / `.env` 加载逻辑，减少启动链路和命令行链路之间的行为漂移
+- 默认配置目录改为优先落在状态目录；当检测到 legacy 根目录 `.env` / `.env.local` 时继续兼容旧路径
+- 启动时若当前实际 `envDir/.env` 缺失，会自动补齐一份默认 `.env`，降低首次初始化和误删配置后的恢复成本
+- 新增 `bdd config migrate-to-state-dir` 手动迁移命令，并在 `doctor` / 启动日志中提示 legacy 根目录配置状态
+
+### Web / UX
+
+- 修复 WebChat 在状态目录配置场景下的连接状态问题，避免界面误判“未连接”
+- 微调 WebChat 明亮主题下的代码块背景表现，改善可读性
+
+### Documentation / Tooling
+
+- 更新中英文 README、使用手册与初始化配置实现计划，补齐默认 `.env` 自动生成、`envDir` 判定与迁移命令说明
+- 同步更新用户升级手册中的版本示例，统一到 `v0.2.2` 发布口径
+
 ## [0.2.1] - 2026-03-27
 
 聚焦 WebChat 体验增强、源码版启动修复与发布配置收口，作为 `v0.2.0` 后的补丁版本发布。
