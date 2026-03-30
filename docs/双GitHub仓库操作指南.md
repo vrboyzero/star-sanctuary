@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现了cron 功能支持一次性定时、固定间隔定时、每日固定时刻和每周固定时刻，适合巡检、扫描、提醒类任务"
+git commit -m "实现了webchat的页面自适应和间距调整，文档修改"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
