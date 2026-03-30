@@ -11,6 +11,31 @@ import crypto from "node:crypto";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "./types.js";
 
 const STORE_FILENAME = "cron-jobs.json";
+const MINUTE_MS = 60_000;
+const WEEKDAY_MAP: Record<string, number> = {
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+    Sun: 7,
+};
+
+type LocalDateParts = {
+    year: number;
+    month: number;
+    day: number;
+};
+
+type LocalDateTimeParts = LocalDateParts & {
+    hour: number;
+    minute: number;
+};
+
+type ZonedDateTimeParts = LocalDateTimeParts & {
+    weekday: number;
+};
 
 export class CronStore {
     private readonly filePath: string;
@@ -130,6 +155,110 @@ export class CronStore {
 
 // ── 调度计算 ──
 
+function parseTimeOfDay(time: string): { hour: number; minute: number } | null {
+    const match = /^(\d{2}):(\d{2})$/.exec(time.trim());
+    if (!match) return null;
+    const hour = Number.parseInt(match[1], 10);
+    const minute = Number.parseInt(match[2], 10);
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return null;
+    }
+    return { hour, minute };
+}
+
+function toLocalTupleMs(parts: LocalDateTimeParts): number {
+    return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute);
+}
+
+function addDaysToLocalDate(date: LocalDateParts, days: number): LocalDateParts {
+    const shifted = new Date(Date.UTC(date.year, date.month - 1, date.day + days));
+    return {
+        year: shifted.getUTCFullYear(),
+        month: shifted.getUTCMonth() + 1,
+        day: shifted.getUTCDate(),
+    };
+}
+
+function getZonedDateTimeParts(timestampMs: number, timeZone: string): ZonedDateTimeParts | null {
+    try {
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            weekday: "short",
+            hourCycle: "h23",
+        }).formatToParts(new Date(timestampMs));
+
+        const lookup: Record<string, string> = {};
+        for (const part of parts) {
+            if (part.type !== "literal") {
+                lookup[part.type] = part.value;
+            }
+        }
+
+        const weekday = WEEKDAY_MAP[lookup.weekday];
+        const year = Number.parseInt(lookup.year ?? "", 10);
+        const month = Number.parseInt(lookup.month ?? "", 10);
+        const day = Number.parseInt(lookup.day ?? "", 10);
+        const hour = Number.parseInt(lookup.hour ?? "", 10);
+        const minute = Number.parseInt(lookup.minute ?? "", 10);
+
+        if (!weekday || !Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)
+            || !Number.isFinite(hour) || !Number.isFinite(minute)) {
+            return null;
+        }
+
+        return {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            weekday,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function resolveZonedLocalTimeToUtcMs(target: LocalDateTimeParts, timeZone: string): number | undefined {
+    let guess = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute);
+
+    for (let i = 0; i < 6; i += 1) {
+        const actual = getZonedDateTimeParts(guess, timeZone);
+        if (!actual) return undefined;
+        const diffMinutes = Math.round((toLocalTupleMs(target) - toLocalTupleMs(actual)) / MINUTE_MS);
+        if (diffMinutes === 0) {
+            return guess;
+        }
+        guess += diffMinutes * MINUTE_MS;
+    }
+
+    const final = getZonedDateTimeParts(guess, timeZone);
+    if (!final) return undefined;
+    if (toLocalTupleMs(final) !== toLocalTupleMs(target)) {
+        return undefined;
+    }
+    return guess;
+}
+
+function normalizeWeekdays(weekdays: number[]): number[] | null {
+    if (!Array.isArray(weekdays) || weekdays.length === 0) {
+        return null;
+    }
+    const unique = new Set<number>();
+    for (const weekday of weekdays) {
+        if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7 || unique.has(weekday)) {
+            return null;
+        }
+        unique.add(weekday);
+    }
+    return Array.from(unique).sort((a, b) => a - b);
+}
+
 /** 计算下次执行时间 */
 export function computeNextRun(schedule: CronJob["schedule"], nowMs: number): number | undefined {
     if (schedule.kind === "at") {
@@ -140,12 +269,63 @@ export function computeNextRun(schedule: CronJob["schedule"], nowMs: number): nu
     }
 
     if (schedule.kind === "every") {
-        const everyMs = Math.max(60_000, Math.floor(schedule.everyMs)); // 最小 1 分钟
+        const everyMs = Math.max(MINUTE_MS, Math.floor(schedule.everyMs)); // 最小 1 分钟
         const anchor = Math.max(0, Math.floor(schedule.anchorMs ?? nowMs));
         if (nowMs < anchor) return anchor;
         const elapsed = nowMs - anchor;
         const steps = Math.ceil(elapsed / everyMs);
         return anchor + steps * everyMs;
+    }
+
+    if (schedule.kind === "dailyAt") {
+        const time = parseTimeOfDay(schedule.time);
+        if (!time) return undefined;
+        const nowLocal = getZonedDateTimeParts(nowMs, schedule.timezone);
+        if (!nowLocal) return undefined;
+
+        const todayTarget = resolveZonedLocalTimeToUtcMs({
+            year: nowLocal.year,
+            month: nowLocal.month,
+            day: nowLocal.day,
+            hour: time.hour,
+            minute: time.minute,
+        }, schedule.timezone);
+        if (todayTarget !== undefined && todayTarget > nowMs) {
+            return todayTarget;
+        }
+
+        const nextDate = addDaysToLocalDate(nowLocal, 1);
+        return resolveZonedLocalTimeToUtcMs({
+            ...nextDate,
+            hour: time.hour,
+            minute: time.minute,
+        }, schedule.timezone);
+    }
+
+    if (schedule.kind === "weeklyAt") {
+        const time = parseTimeOfDay(schedule.time);
+        const weekdays = normalizeWeekdays(schedule.weekdays);
+        if (!time || !weekdays) return undefined;
+        const nowLocal = getZonedDateTimeParts(nowMs, schedule.timezone);
+        if (!nowLocal) return undefined;
+
+        for (let dayOffset = 0; dayOffset < 14; dayOffset += 1) {
+            const weekday = ((nowLocal.weekday - 1 + dayOffset) % 7) + 1;
+            if (!weekdays.includes(weekday)) {
+                continue;
+            }
+            const targetDate = addDaysToLocalDate(nowLocal, dayOffset);
+            const targetMs = resolveZonedLocalTimeToUtcMs({
+                ...targetDate,
+                hour: time.hour,
+                minute: time.minute,
+            }, schedule.timezone);
+            if (targetMs !== undefined && targetMs > nowMs) {
+                return targetMs;
+            }
+        }
+
+        return undefined;
     }
 
     // 未来扩展 cron 表达式时在此添加

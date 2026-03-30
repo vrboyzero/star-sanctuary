@@ -33,6 +33,7 @@ export function createChatNetworkFeature({
   makeId,
   debugLog,
   onHelloOk,
+  onAgentListLoaded,
   onEvent,
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
@@ -63,6 +64,7 @@ export function createChatNetworkFeature({
     fallback: "disconnected",
   };
   let lastModelListState = null;
+  let lastAgentListState = null;
 
   function isConnected() {
     return Boolean(getSocket() && getReady());
@@ -153,8 +155,10 @@ export function createChatNetworkFeature({
     if (!res || !res.ok || !Array.isArray(res.payload?.agents)) return;
 
     const agents = res.payload.agents;
+    lastAgentListState = agents;
     if (agents.length <= 1) {
       agentSelectEl.classList.add("hidden");
+      onAgentListLoaded?.(agents, agentSelectEl.value || agents[0]?.id || "");
       return;
     }
 
@@ -172,6 +176,8 @@ export function createChatNetworkFeature({
     }
 
     agentSelectEl.classList.remove("hidden");
+    onAgentListLoaded?.(agents, agentSelectEl.value || agents[0]?.id || "");
+    return agents;
   }
 
   async function loadModelList() {
@@ -337,6 +343,9 @@ export function createChatNetworkFeature({
       }
       if (lastModelListState) {
         renderModelOptions(lastModelListState.models, lastModelListState.currentDefault);
+      }
+      if (lastAgentListState) {
+        onAgentListLoaded?.(lastAgentListState, agentSelectEl?.value || lastAgentListState[0]?.id || "");
       }
     },
     sendReq,

@@ -39,6 +39,7 @@ export function createWorkspaceFeature({
     openEnvEditorBtn,
     switchRootBtn,
     switchFacetBtn,
+    switchCronBtn,
     workspaceRootsEl,
   } = refs;
   const { workspaceRootsKey } = keys;
@@ -85,6 +86,11 @@ export function createWorkspaceFeature({
   if (switchFacetBtn) {
     switchFacetBtn.addEventListener("click", () => switchTreeMode("facets"));
   }
+  if (switchCronBtn) {
+    switchCronBtn.addEventListener("click", () => switchTreeMode("cron"));
+  }
+
+  updateSidebarTitle();
 
   function getTreeMode() {
     return currentTreeMode;
@@ -153,6 +159,7 @@ export function createWorkspaceFeature({
 
     currentTreeMode = mode;
     expandedFolders.clear();
+    updateSidebarTitle();
     switchMode("chat");
 
     if (!sidebarExpanded) {
@@ -250,8 +257,9 @@ export function createWorkspaceFeature({
       return [];
     }
 
+    const resolvedPath = currentTreeMode === "facets" && !folderPath ? "facets" : folderPath;
     const res = await createReq(sendReq, makeId, "workspace.list", {
-      path: currentTreeMode === "facets" && !folderPath ? "facets" : folderPath,
+      path: resolvedPath,
     });
 
     if (!res || !res.ok || !Array.isArray(res.payload?.items)) {
@@ -261,11 +269,28 @@ export function createWorkspaceFeature({
       return [];
     }
 
-    const items = res.payload.items;
+    let items = res.payload.items;
+    if (currentTreeMode === "cron" && !folderPath) {
+      const cronTargets = new Set(["HEARTBEAT.md", "cron-jobs.json"]);
+      items = items.filter((item) => item?.type === "file" && cronTargets.has(item.name));
+    }
     if (!folderPath) {
       renderFileTree(items);
     }
     return items;
+  }
+
+  function updateSidebarTitle() {
+    if (!sidebarTitleEl) return;
+    if (currentTreeMode === "facets") {
+      sidebarTitleEl.textContent = t("sidebar.facetFiles", {}, "模组文件");
+      return;
+    }
+    if (currentTreeMode === "cron") {
+      sidebarTitleEl.textContent = t("sidebar.cronFiles", {}, "定时任务文件");
+      return;
+    }
+    sidebarTitleEl.textContent = t("sidebar.fileList", {}, "文件列表");
   }
 
   function renderFileTree(items) {
@@ -511,6 +536,7 @@ export function createWorkspaceFeature({
     openSourcePath,
     readSourceFile,
     refreshLocale() {
+      updateSidebarTitle();
       if (lastRootTreePlaceholder && fileTreeEl) {
         fileTreeEl.innerHTML = renderTreePlaceholderHtml(
           lastRootTreePlaceholder.key,

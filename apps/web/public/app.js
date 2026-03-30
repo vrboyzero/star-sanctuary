@@ -62,9 +62,12 @@ const saveEditBtn = document.getElementById("saveEdit");
 const openEnvEditorBtn = document.getElementById("openEnvEditor");
 const switchRootBtn = document.getElementById("switchRoot");
 const switchFacetBtn = document.getElementById("switchFacet");
+const switchCronBtn = document.getElementById("switchCron");
 const switchMemoryBtn = document.getElementById("switchMemory");
 const switchGoalsBtn = document.getElementById("switchGoals");
 const switchCanvasBtn = document.getElementById("switchCanvas");
+const openChannelSettingsBtn = document.getElementById("openChannelSettings");
+const agentRightPanelEl = document.getElementById("agentRightPanel");
 const memoryViewerSection = document.getElementById("memoryViewerSection");
 const memoryViewerStatsEl = document.getElementById("memoryViewerStats");
 const memoryViewerListEl = document.getElementById("memoryViewerList");
@@ -252,6 +255,7 @@ localeController.subscribe(() => {
   toolSettingsController.refreshLocale?.();
   refreshGoalsLocale();
   refreshMemoryLocale();
+  renderAgentRightPanel();
   syncSaveWorkspaceRootsButton();
   renderTaskTokenHistory();
 });
@@ -261,6 +265,12 @@ let agentName = "Agent";
 let agentAvatar = "🤖";
 let userName = "User";
 let userAvatar = "👤";
+let defaultAgentName = "Agent";
+let defaultAgentAvatar = "🤖";
+const agentCatalog = new Map();
+let agentPanelUploadInput = null;
+let agentPanelUploadTargetAgentId = "";
+let agentPanelUploadBusyAgentId = "";
 
 const memoryViewerState = {
   tab: "tasks",
@@ -346,6 +356,7 @@ workspaceFeature = createWorkspaceFeature({
     openEnvEditorBtn,
     switchRootBtn,
     switchFacetBtn,
+    switchCronBtn,
     workspaceRootsEl,
   },
   keys: {
@@ -613,8 +624,14 @@ async function loadWorkspaceRootsFromServer() {
 
 function handleHelloOk(frame) {
   invalidateServerConfigCache();
-  if (frame.agentName) agentName = frame.agentName;
-  if (frame.agentAvatar) agentAvatar = frame.agentAvatar;
+  if (frame.agentName) {
+    agentName = frame.agentName;
+    defaultAgentName = frame.agentName;
+  }
+  if (frame.agentAvatar) {
+    agentAvatar = frame.agentAvatar;
+    defaultAgentAvatar = frame.agentAvatar;
+  }
   if (frame.userName) userName = frame.userName;
   if (frame.userAvatar) userAvatar = frame.userAvatar;
   chatUiFeature?.refreshAvatar("bot", agentAvatar);
@@ -712,6 +729,7 @@ chatNetworkFeature = createChatNetworkFeature({
   makeId,
   debugLog,
   onHelloOk: (frame) => handleHelloOk(frame),
+  onAgentListLoaded: (agents, selectedAgentId) => syncAgentCatalog(agents, selectedAgentId),
   onEvent: (event, payload) => handleEvent(event, payload),
   t: localeController.t,
 });
@@ -752,19 +770,11 @@ chatUiFeature = createChatUiFeature({
     name: userName,
     avatar: userAvatar,
   }),
+  getCurrentAgentId: () => getCurrentAgentSelection(),
   escapeHtml,
   showNotice,
   getAvatarUploadHeaders: () => getHttpAuthHeaders(),
-  onAvatarUploaded: ({ role, avatarPath }) => {
-    const bustedPath = `${avatarPath}${avatarPath.includes("?") ? "&" : "?"}v=${Date.now()}`;
-    if (role === "agent") {
-      agentAvatar = bustedPath;
-      chatUiFeature?.refreshAvatar("bot", agentAvatar);
-      return;
-    }
-    userAvatar = bustedPath;
-    chatUiFeature?.refreshAvatar("me", userAvatar);
-  },
+  onAvatarUploaded: ({ role, agentId, avatarPath }) => applyUploadedAvatarChange({ role, agentId, avatarPath }),
 });
 
 chatUiFeature.initCopyButtonDelegation();
@@ -925,9 +935,259 @@ function loadModelList() {
   return chatNetworkFeature?.loadModelList();
 }
 
+function getCurrentAgentSelection() {
+  const selected = agentSelectEl?.value?.trim();
+  return selected || "default";
+}
+
+function applyUploadedAvatarChange({ role, agentId, avatarPath }) {
+  const bustedPath = `${avatarPath}${avatarPath.includes("?") ? "&" : "?"}v=${Date.now()}`;
+  if (role === "agent") {
+    const targetAgentId = agentId && typeof agentId === "string" ? agentId : getCurrentAgentSelection();
+    updateAgentCatalogAvatar(targetAgentId, bustedPath);
+    if (targetAgentId === "default") {
+      defaultAgentAvatar = bustedPath;
+    }
+    syncSelectedAgentIdentity();
+    chatUiFeature?.refreshAvatar("bot", agentAvatar);
+    renderAgentRightPanel();
+    return;
+  }
+  userAvatar = bustedPath;
+  chatUiFeature?.refreshAvatar("me", userAvatar);
+}
+
+function ensureAgentPanelAvatarUploadInput() {
+  if (agentPanelUploadInput) return agentPanelUploadInput;
+
+  agentPanelUploadInput = document.createElement("input");
+  agentPanelUploadInput.type = "file";
+  agentPanelUploadInput.accept = "image/png,image/jpeg,image/gif,image/webp";
+  agentPanelUploadInput.className = "hidden";
+  agentPanelUploadInput.addEventListener("change", () => {
+    const selectedFile = agentPanelUploadInput?.files?.[0];
+    const targetAgentId = agentPanelUploadTargetAgentId;
+    agentPanelUploadTargetAgentId = "";
+    if (agentPanelUploadInput) {
+      agentPanelUploadInput.value = "";
+    }
+    if (!selectedFile || !targetAgentId) return;
+    void uploadAgentPanelAvatar(targetAgentId, selectedFile);
+  });
+  document.body.appendChild(agentPanelUploadInput);
+  return agentPanelUploadInput;
+}
+
+function openAgentPanelAvatarPicker(agentId) {
+  if (!agentId || agentPanelUploadBusyAgentId) return;
+  agentPanelUploadTargetAgentId = agentId;
+  ensureAgentPanelAvatarUploadInput().click();
+}
+
+async function uploadAgentPanelAvatar(agentId, file) {
+  if (!agentId || !file || agentPanelUploadBusyAgentId) return;
+
+  agentPanelUploadBusyAgentId = agentId;
+  renderAgentRightPanel();
+
+  try {
+    const formData = new FormData();
+    formData.append("role", "agent");
+    if (agentId !== "default") {
+      formData.append("agentId", agentId);
+    }
+    formData.append("file", file, file.name || "avatar.png");
+
+    const res = await fetch("/api/avatar/upload", {
+      method: "POST",
+      body: formData,
+      headers: getHttpAuthHeaders(),
+    });
+    const payload = await res.json().catch(() => null);
+    if (!res.ok || !payload?.ok) {
+      const message = payload?.error?.message || localeController.t("agentPanel.avatarUploadFailedMessage", {}, "头像上传失败。");
+      showNotice(
+        localeController.t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
+        message,
+        "error",
+        3800,
+      );
+      return;
+    }
+
+    const avatarPath = typeof payload.avatarPath === "string" ? payload.avatarPath : "";
+    if (!avatarPath) {
+      showNotice(
+        localeController.t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
+        localeController.t("agentPanel.avatarMissingPathMessage", {}, "服务端未返回头像路径。"),
+        "error",
+        3800,
+      );
+      return;
+    }
+
+    applyUploadedAvatarChange({ role: "agent", agentId, avatarPath });
+    const agentLabel = agentCatalog.get(agentId)?.displayName || agentCatalog.get(agentId)?.name || agentId;
+    showNotice(
+      localeController.t("agentPanel.avatarUpdatedTitle", {}, "头像已更新"),
+      localeController.t(
+        "agentPanel.avatarUpdatedMessage",
+        { agentName: agentLabel },
+        `${agentLabel} 的头像已写入对应的 IDENTITY.md。`,
+      ),
+      "success",
+      2200,
+    );
+  } catch (error) {
+    showNotice(
+      localeController.t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
+      error instanceof Error ? error.message : String(error),
+      "error",
+      3800,
+    );
+  } finally {
+    agentPanelUploadBusyAgentId = "";
+    renderAgentRightPanel();
+  }
+}
+
+function syncAgentCatalog(agents = [], selectedAgentId = "") {
+  agentCatalog.clear();
+  for (const agent of Array.isArray(agents) ? agents : []) {
+    if (!agent || typeof agent !== "object" || !agent.id) continue;
+    agentCatalog.set(agent.id, {
+      id: agent.id,
+      displayName: agent.displayName || agent.id,
+      name: agent.name || agent.displayName || agent.id,
+      avatar: agent.avatar || "",
+      model: agent.model || "",
+    });
+  }
+
+  if (agentSelectEl && selectedAgentId && agentSelectEl.value !== selectedAgentId) {
+    agentSelectEl.value = selectedAgentId;
+  }
+
+  syncSelectedAgentIdentity();
+  renderAgentRightPanel();
+}
+
+function syncSelectedAgentIdentity() {
+  const selectedAgent = agentCatalog.get(getCurrentAgentSelection());
+  if (!selectedAgent) return;
+  agentName = selectedAgent.name || selectedAgent.displayName || defaultAgentName;
+  agentAvatar = selectedAgent.avatar || agentCatalog.get("default")?.avatar || defaultAgentAvatar;
+  chatUiFeature?.refreshAvatar("bot", agentAvatar);
+}
+
+function updateAgentCatalogAvatar(agentId, avatarPath) {
+  const targetAgentId = agentId && agentId !== "default" ? agentId : "default";
+  const existing = agentCatalog.get(targetAgentId);
+  if (existing) {
+    existing.avatar = avatarPath;
+    agentCatalog.set(targetAgentId, existing);
+    if (targetAgentId === getCurrentAgentSelection()) {
+      agentAvatar = avatarPath;
+    }
+    return;
+  }
+
+  agentCatalog.set(targetAgentId, {
+    id: targetAgentId,
+    displayName: targetAgentId,
+    name: targetAgentId,
+    avatar: avatarPath,
+    model: "",
+  });
+  if (targetAgentId === getCurrentAgentSelection()) {
+    agentAvatar = avatarPath;
+  }
+}
+
+function renderAgentRightPanel() {
+  if (!agentRightPanelEl) return;
+
+  const agents = [...agentCatalog.values()];
+  agentRightPanelEl.textContent = "";
+  agentRightPanelEl.classList.toggle("hidden", agents.length <= 1);
+  if (agents.length <= 1) return;
+
+  const fragment = document.createDocumentFragment();
+  const activeAgentId = getCurrentAgentSelection();
+  const uploadBusy = Boolean(agentPanelUploadBusyAgentId);
+  for (const agent of agents) {
+    const card = document.createElement("div");
+    card.className = "agent-card";
+    if (agent.id === activeAgentId) {
+      card.classList.add("active");
+    }
+    card.setAttribute("data-agent-id", agent.id);
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "agent-card-main";
+    main.title = agent.displayName || agent.id;
+
+    const avatar = document.createElement("div");
+    avatar.className = "agent-card-avatar";
+    if (typeof agent.avatar === "string" && agent.avatar.trim()) {
+      avatar.style.backgroundImage = `url(${agent.avatar})`;
+      avatar.classList.add("agent-card-avatar-image");
+    } else {
+      const fallbackSeed = (agent.displayName || agent.name || agent.id || "?").trim();
+      avatar.textContent = fallbackSeed.slice(0, 1).toUpperCase();
+    }
+
+    const content = document.createElement("div");
+    content.className = "agent-card-content";
+
+    const name = document.createElement("div");
+    name.className = "agent-card-name";
+    name.textContent = agent.displayName || agent.id;
+
+    const meta = document.createElement("div");
+    meta.className = "agent-card-meta";
+    meta.textContent = agent.model || agent.id;
+
+    content.appendChild(name);
+    content.appendChild(meta);
+    main.appendChild(avatar);
+    main.appendChild(content);
+    main.addEventListener("click", () => {
+      if (!agentSelectEl) return;
+      agentSelectEl.value = agent.id;
+      agentSelectEl.dispatchEvent(new Event("change"));
+    });
+
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "agent-card-action";
+    action.textContent = agentPanelUploadBusyAgentId === agent.id
+      ? localeController.t("agentPanel.uploadingAvatar", {}, "上传中...")
+      : localeController.t("agentPanel.changeAvatarButton", {}, "更换头像");
+    action.title = localeController.t(
+      "agentPanel.changeAvatarTitle",
+      { agentName: agent.displayName || agent.id },
+      `为 ${agent.displayName || agent.id} 更换头像`,
+    );
+    action.disabled = uploadBusy;
+    action.addEventListener("click", () => {
+      openAgentPanelAvatarPicker(agent.id);
+    });
+
+    card.appendChild(main);
+    card.appendChild(action);
+    fragment.appendChild(card);
+  }
+
+  agentRightPanelEl.appendChild(fragment);
+}
+
 if (agentSelectEl) {
   agentSelectEl.addEventListener("change", () => {
     localStorage.setItem(AGENT_ID_KEY, agentSelectEl.value);
+    syncSelectedAgentIdentity();
+    renderAgentRightPanel();
 
     // 切换 Agent = 新建会话（隔离上下文）
     activeConversationId = null;
@@ -1346,6 +1606,20 @@ const cfgInjectSoul = document.getElementById("cfgInjectSoul");
 const cfgInjectMemory = document.getElementById("cfgInjectMemory");
 const cfgMaxSystemPromptChars = document.getElementById("cfgMaxSystemPromptChars");
 const cfgMaxHistory = document.getElementById("cfgMaxHistory");
+const channelsSettingsSection = document.getElementById("channelsSettingsSection");
+const openCommunityConfigBtn = document.getElementById("openCommunityConfig");
+const cfgCommunityApiEnabled = document.getElementById("cfgCommunityApiEnabled");
+const cfgCommunityApiToken = document.getElementById("cfgCommunityApiToken");
+const cfgFeishuAppId = document.getElementById("cfgFeishuAppId");
+const cfgFeishuAppSecret = document.getElementById("cfgFeishuAppSecret");
+const cfgFeishuAgentId = document.getElementById("cfgFeishuAgentId");
+const cfgQqAppId = document.getElementById("cfgQqAppId");
+const cfgQqAppSecret = document.getElementById("cfgQqAppSecret");
+const cfgQqAgentId = document.getElementById("cfgQqAgentId");
+const cfgQqSandbox = document.getElementById("cfgQqSandbox");
+const cfgDiscordEnabled = document.getElementById("cfgDiscordEnabled");
+const cfgDiscordBotToken = document.getElementById("cfgDiscordBotToken");
+const cfgDiscordDefaultChannelId = document.getElementById("cfgDiscordDefaultChannelId");
 const doctorStatusEl = document.getElementById("doctorStatus");
 const REDACTED_PLACEHOLDER = "[REDACTED]";
 
@@ -1394,6 +1668,20 @@ const settingsController = createSettingsController({
     cfgInjectMemory,
     cfgMaxSystemPromptChars,
     cfgMaxHistory,
+    channelsSettingsSection,
+    openCommunityConfigBtn,
+    cfgCommunityApiEnabled,
+    cfgCommunityApiToken,
+    cfgFeishuAppId,
+    cfgFeishuAppSecret,
+    cfgFeishuAgentId,
+    cfgQqAppId,
+    cfgQqAppSecret,
+    cfgQqAgentId,
+    cfgQqSandbox,
+    cfgDiscordEnabled,
+    cfgDiscordBotToken,
+    cfgDiscordDefaultChannelId,
   },
   isConnected: () => Boolean(ws && isReady),
   sendReq,
@@ -1403,6 +1691,10 @@ const settingsController = createSettingsController({
   invalidateServerConfigCache,
   syncAttachmentLimitsFromConfig,
   onToggle: (show) => voiceFeature.onSettingsToggle(show),
+  getConnectionAuthMode: () => authModeEl?.value || "none",
+  onOpenCommunityConfig: () => {
+    void openFile("community.json");
+  },
   redactedPlaceholder: REDACTED_PLACEHOLDER,
   t: localeController.t,
 });
@@ -1734,6 +2026,11 @@ if (switchGoalsBtn) {
     await loadGoals(false);
   });
 }
+if (openChannelSettingsBtn) {
+  openChannelSettingsBtn.addEventListener("click", () => {
+    void settingsController.openChannels();
+  });
+}
 
 // 画布工作区按钮
 if (switchCanvasBtn) {
@@ -1790,6 +2087,7 @@ function updateSidebarModeButtons(treeModeOverride) {
   const treeMode = treeModeOverride ?? workspaceFeature?.getTreeMode() ?? "root";
   setSidebarActionButtonState(switchRootBtn, treeMode === "root");
   setSidebarActionButtonState(switchFacetBtn, treeMode === "facets");
+  setSidebarActionButtonState(switchCronBtn, treeMode === "cron");
   setSidebarActionButtonState(switchMemoryBtn, memoryViewerSection && !memoryViewerSection.classList.contains("hidden"));
   setSidebarActionButtonState(switchGoalsBtn, goalsSection && !goalsSection.classList.contains("hidden"));
   const canvasSection = document.getElementById("canvasSection");

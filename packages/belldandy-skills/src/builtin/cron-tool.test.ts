@@ -96,4 +96,106 @@ describe("createCronTool", () => {
     expect(result.output).toContain("审批巡检");
     expect(result.output).toContain("approval scan / all goals / autoEscalate=true");
   });
+
+  it("creates dailyAt jobs", async () => {
+    const add = vi.fn(async (input) => ({
+      id: "job_daily_at",
+      name: input.name,
+      enabled: true,
+      schedule: input.schedule,
+      payload: input.payload,
+      state: {},
+    }));
+    const tool = createCronTool({
+      store: {
+        list: vi.fn(async () => []),
+        add,
+        remove: vi.fn(async () => false),
+      },
+    });
+
+    const result = await tool.execute({
+      action: "add",
+      name: "每日站会提醒",
+      payloadKind: "systemEvent",
+      text: "提醒今天的站会",
+      scheduleKind: "dailyAt",
+      time: "09:00",
+      timezone: "Asia/Shanghai",
+    }, context);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("每天 09:00 @ Asia/Shanghai");
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({
+      schedule: {
+        kind: "dailyAt",
+        time: "09:00",
+        timezone: "Asia/Shanghai",
+      },
+    }));
+  });
+
+  it("rejects invalid weekdays for weeklyAt jobs", async () => {
+    const tool = createCronTool({
+      store: {
+        list: vi.fn(async () => []),
+        add: vi.fn(),
+        remove: vi.fn(async () => false),
+      },
+    });
+
+    const result = await tool.execute({
+      action: "add",
+      name: "每周巡检",
+      payloadKind: "systemEvent",
+      text: "执行巡检",
+      scheduleKind: "weeklyAt",
+      time: "10:30",
+      timezone: "Asia/Shanghai",
+      weekdays: [1, 1, 3],
+    }, context);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("weekdays 不允许重复");
+  });
+
+  it("renders weeklyAt schedules in cron list output", async () => {
+    const tool = createCronTool({
+      store: {
+        list: vi.fn(async () => [{
+          id: "job_weekly_at",
+          name: "周历巡检",
+          enabled: true,
+          schedule: {
+            kind: "weeklyAt" as const,
+            weekdays: [1, 3, 5],
+            time: "10:30",
+            timezone: "Asia/Shanghai",
+          },
+          payload: {
+            kind: "systemEvent" as const,
+            text: "执行周历巡检",
+          },
+          state: {
+            nextRunAtMs: Date.parse("2026-04-01T02:30:00.000Z"),
+            lastRunAtMs: Date.parse("2026-03-30T02:30:00.000Z"),
+            lastStatus: "ok",
+          },
+        }]),
+        add: vi.fn(),
+        remove: vi.fn(async () => false),
+      },
+      scheduler: {
+        status: () => ({
+          running: true,
+          activeRuns: 0,
+        }),
+      },
+    });
+
+    const result = await tool.execute({ action: "list" }, context);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("每周 Mon/Wed/Fri 10:30 @ Asia/Shanghai");
+  });
 });

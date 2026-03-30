@@ -164,4 +164,97 @@ describe("startCronScheduler", () => {
     await vi.runOnlyPendingTimersAsync();
     scheduler.stop();
   });
+
+  it("executes dailyAt jobs and advances to the next day", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-03-30T09:01:00.000Z");
+    vi.setSystemTime(now);
+    const job: CronJob = {
+      id: "cron_daily_at",
+      name: "daily sync",
+      enabled: true,
+      createdAtMs: now.getTime() - 60_000,
+      updatedAtMs: now.getTime() - 60_000,
+      schedule: {
+        kind: "dailyAt",
+        time: "09:00",
+        timezone: "UTC",
+      },
+      payload: {
+        kind: "systemEvent",
+        text: "daily check",
+      },
+      state: {
+        nextRunAtMs: now.getTime() - 1,
+      },
+    };
+    const jobs = [job];
+    const store = {
+      list: vi.fn(async () => jobs),
+      saveJobs: vi.fn(async (nextJobs: CronJob[]) => {
+        jobs.splice(0, jobs.length, ...nextJobs);
+      }),
+    };
+    const sendMessage = vi.fn(async () => "done");
+
+    const scheduler = startCronScheduler({
+      store: store as never,
+      sendMessage,
+      log: () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    scheduler.stop();
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.nextRunAtMs).toBe(Date.parse("2026-03-31T09:00:00.000Z"));
+  });
+
+  it("executes weeklyAt jobs and advances to the next matching weekday", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-04-03T10:31:00.000Z"); // Friday
+    vi.setSystemTime(now);
+    const job: CronJob = {
+      id: "cron_weekly_at",
+      name: "weekly sync",
+      enabled: true,
+      createdAtMs: now.getTime() - 60_000,
+      updatedAtMs: now.getTime() - 60_000,
+      schedule: {
+        kind: "weeklyAt",
+        weekdays: [1, 3, 5],
+        time: "10:30",
+        timezone: "UTC",
+      },
+      payload: {
+        kind: "systemEvent",
+        text: "weekly check",
+      },
+      state: {
+        nextRunAtMs: now.getTime() - 1,
+      },
+    };
+    const jobs = [job];
+    const store = {
+      list: vi.fn(async () => jobs),
+      saveJobs: vi.fn(async (nextJobs: CronJob[]) => {
+        jobs.splice(0, jobs.length, ...nextJobs);
+      }),
+    };
+    const sendMessage = vi.fn(async () => "done");
+
+    const scheduler = startCronScheduler({
+      store: store as never,
+      sendMessage,
+      log: () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    scheduler.stop();
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.nextRunAtMs).toBe(Date.parse("2026-04-06T10:30:00.000Z"));
+  });
 });

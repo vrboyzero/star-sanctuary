@@ -164,6 +164,75 @@ test("/api/avatar/upload writes avatar file and updates USER.md in stateDir", as
   }
 });
 
+test("/api/avatar/upload writes avatar file into selected agent IDENTITY.md when agentId is provided", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    workspaceDir: "coder",
+  });
+
+  const agentDir = path.join(stateDir, "agents", "coder");
+  await fs.promises.mkdir(agentDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(agentDir, "IDENTITY.md"),
+    "- **名字：** 小码 (Coder)\n- **头像：** 👨‍💻\n",
+    "utf-8",
+  );
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+  });
+
+  const pngBuffer = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=",
+    "base64",
+  );
+
+  try {
+    const formData = new FormData();
+    formData.append("role", "agent");
+    formData.append("agentId", "coder");
+    formData.append("file", new Blob([pngBuffer], { type: "image/png" }), "coder-avatar.png");
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/avatar/upload`, {
+      method: "POST",
+      body: formData,
+    });
+    const payload = await res.json() as {
+      ok?: boolean;
+      role?: string;
+      agentId?: string;
+      avatarPath?: string;
+      mdPath?: string;
+    };
+
+    expect(res.status).toBe(200);
+    expect(payload.ok).toBe(true);
+    expect(payload.role).toBe("agent");
+    expect(payload.agentId).toBe("coder");
+    expect(payload.avatarPath).toMatch(/^\/avatar\/avatar-agent-\d+-[0-9a-f]{8}\.png$/);
+    expect(payload.mdPath).toBe(path.join(agentDir, "IDENTITY.md"));
+
+    const identityContent = await fs.promises.readFile(path.join(agentDir, "IDENTITY.md"), "utf-8");
+    expect(identityContent).toContain(`- **头像：** ${payload.avatarPath}`);
+  } finally {
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("models.list returns sanitized model list with current default model ref", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const registry = new AgentRegistry(() => new MockAgent());
@@ -232,6 +301,68 @@ test("models.list returns sanitized model list with current default model ref", 
     await closeP;
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => { });
+  }
+});
+
+test("agents.list exposes agent name and avatar from per-agent IDENTITY.md", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    workspaceDir: "coder",
+  });
+
+  const agentDir = path.join(stateDir, "agents", "coder");
+  await fs.promises.mkdir(agentDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(agentDir, "IDENTITY.md"),
+    "- **名字：** 小码 (Coder)\n- **头像：** /avatar/coder_avatar.png\n",
+    "utf-8",
+  );
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+    ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+    await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+
+    ws.send(JSON.stringify({ type: "req", id: "agents-list", method: "agents.list" }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "agents-list"));
+
+    const agentsRes = frames.find((f) => f.type === "res" && f.id === "agents-list");
+    expect(agentsRes.ok).toBe(true);
+    expect(agentsRes.payload?.agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "coder",
+        displayName: "Coder",
+        name: "小码 (Coder)",
+        avatar: "/avatar/coder_avatar.png",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -776,6 +907,136 @@ test("config.update persists tool control mode and redacts confirm password in c
     const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
     expect(envLocalContent).toContain('BELLDANDY_AGENT_TOOL_CONTROL_MODE="confirm"');
     expect(envLocalContent).toContain('BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD="星河123"');
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("config.update accepts channel settings and config.read redacts channel secrets", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
+  await fs.promises.writeFile(path.join(envDir, ".env"), 'BELLDANDY_AUTH_MODE="token"\n', "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-update-channels",
+      method: "config.update",
+      params: {
+        updates: {
+          BELLDANDY_COMMUNITY_API_ENABLED: "false",
+          BELLDANDY_COMMUNITY_API_TOKEN: "community-secret",
+          BELLDANDY_FEISHU_APP_ID: "cli_test_app",
+          BELLDANDY_FEISHU_APP_SECRET: "feishu-secret",
+          BELLDANDY_FEISHU_AGENT_ID: "coder",
+          BELLDANDY_QQ_APP_ID: "qq-app-id",
+          BELLDANDY_QQ_APP_SECRET: "qq-secret",
+          BELLDANDY_QQ_AGENT_ID: "researcher",
+          BELLDANDY_QQ_SANDBOX: "false",
+          BELLDANDY_DISCORD_ENABLED: "true",
+          BELLDANDY_DISCORD_BOT_TOKEN: "discord-secret",
+          BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID: "1234567890",
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-update-channels"));
+
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "config-update-channels");
+    expect(updateRes.ok).toBe(true);
+
+    ws.send(JSON.stringify({ type: "req", id: "config-read-channels", method: "config.read", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-read-channels"));
+
+    const readRes = frames.find((f) => f.type === "res" && f.id === "config-read-channels");
+    expect(readRes.ok).toBe(true);
+    expect(readRes.payload?.config?.BELLDANDY_FEISHU_APP_ID).toBe("cli_test_app");
+    expect(readRes.payload?.config?.BELLDANDY_FEISHU_AGENT_ID).toBe("coder");
+    expect(readRes.payload?.config?.BELLDANDY_QQ_APP_ID).toBe("qq-app-id");
+    expect(readRes.payload?.config?.BELLDANDY_QQ_SANDBOX).toBe("false");
+    expect(readRes.payload?.config?.BELLDANDY_DISCORD_ENABLED).toBe("true");
+    expect(readRes.payload?.config?.BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID).toBe("1234567890");
+    expect(readRes.payload?.config?.BELLDANDY_COMMUNITY_API_TOKEN).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_FEISHU_APP_SECRET).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_QQ_APP_SECRET).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_DISCORD_BOT_TOKEN).toBe("[REDACTED]");
+
+    const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
+    expect(envLocalContent).toContain('BELLDANDY_COMMUNITY_API_TOKEN="community-secret"');
+    expect(envLocalContent).toContain('BELLDANDY_FEISHU_APP_SECRET="feishu-secret"');
+    expect(envLocalContent).toContain('BELLDANDY_QQ_APP_SECRET="qq-secret"');
+    expect(envLocalContent).toContain('BELLDANDY_DISCORD_BOT_TOKEN="discord-secret"');
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("config.update rejects enabling community api when auth mode is none", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
+  await fs.promises.writeFile(path.join(envDir, ".env"), 'BELLDANDY_AUTH_MODE="none"\n', "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-update-community-auth-guard",
+      method: "config.update",
+      params: {
+        updates: {
+          BELLDANDY_COMMUNITY_API_ENABLED: "true",
+          BELLDANDY_COMMUNITY_API_TOKEN: "community-secret",
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-update-community-auth-guard"));
+
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "config-update-community-auth-guard");
+    expect(updateRes.ok).toBe(false);
+    expect(updateRes.error?.code).toBe("community_api_requires_auth");
+
+    const envLocalPath = path.join(envDir, ".env.local");
+    const envLocalStat = await fs.promises.stat(envLocalPath).catch(() => null);
+    if (envLocalStat?.isFile()) {
+      const envLocalContent = await fs.promises.readFile(envLocalPath, "utf-8");
+      expect(envLocalContent).not.toContain("BELLDANDY_COMMUNITY_API_ENABLED");
+    }
   } finally {
     ws.close();
     await closeP;

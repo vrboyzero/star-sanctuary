@@ -50,6 +50,7 @@ export function createMemoryViewerFeature({
   function syncMemoryViewerUi() {
     const memoryViewerState = getMemoryViewerState();
     const isTasks = memoryViewerState.tab === "tasks";
+    if (memoryViewerSection) memoryViewerSection.classList.toggle("tasks-mode", isTasks);
     if (memoryTabTasksBtn) memoryTabTasksBtn.classList.toggle("active", isTasks);
     if (memoryTabMemoriesBtn) memoryTabMemoriesBtn.classList.toggle("active", !isTasks);
     if (memoryTaskFiltersEl) memoryTaskFiltersEl.classList.toggle("hidden", !isTasks);

@@ -53,13 +53,15 @@ body::before {
 }
 
 .layout {
-  max-width: 1200px;
+  max-width: none;
+  width: calc(100vw - 40px);
   margin: 0 auto;
   padding: 20px;
-  min-height: 100vh;
+  height: 100vh;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
 }
 
 /* Main Content Area (Sidebar + Main) */
@@ -68,6 +70,7 @@ body::before {
   gap: 16px;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 /* Sidebar */
@@ -81,9 +84,10 @@ body::before {
   flex-direction: column;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  /* 修复高度问题：限制最大高度，与聊天区域对齐 */
-  max-height: calc(100vh - 280px);
-  align-self: flex-start;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  align-self: stretch;
 }
 
 .sidebar-header {
@@ -265,6 +269,128 @@ body::before {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.agent-list-panel {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  overflow-y: auto;
+}
+
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-card-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+  color: var(--text-main);
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  text-align: left;
+  appearance: none;
+}
+
+.agent-card-main:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+.agent-card.active .agent-card-main {
+  border-color: var(--primary);
+  background: var(--sidebar-active-bg);
+  box-shadow: 0 0 0 1px var(--sidebar-active-border) inset;
+}
+
+.agent-card-action {
+  width: 100%;
+  border: 1px dashed var(--glass-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.agent-card-action:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.agent-card-action:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.agent-card-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--text-main);
+  background: linear-gradient(135deg, rgba(94, 164, 255, 0.28), rgba(93, 214, 255, 0.14));
+  background-size: cover;
+  background-position: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.agent-card-avatar.agent-card-avatar-image {
+  color: transparent;
+}
+
+.agent-card-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agent-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Header */
@@ -514,6 +640,7 @@ body::before {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   padding: 16px 24px;
+  margin-top: 12px;
 }
 
 .row {
@@ -751,11 +878,11 @@ body::before {
 /* Chat Area */
 .chat {
   flex: 1;
+  min-height: 0;
+  height: 100%;
   background: var(--chat-bg);
   border-radius: var(--radius-lg);
   padding: 20px;
-  min-height: 400px;
-  max-height: 60vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1221,6 +1348,7 @@ body::before {
   gap: 8px;
   background: var(--composer-bg);
   padding: 12px;
+  margin-top: 12px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--glass-border);
   backdrop-filter: blur(10px);
@@ -1521,6 +1649,25 @@ body::before {
   gap: 8px;
 }
 
+.settings-subsection {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-subsection-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-subsection-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
 .form-label {
   font-size: 12px;
   text-transform: uppercase;
@@ -1741,13 +1888,19 @@ body::before {
 .memory-viewer {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .memory-viewer-shell {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--memory-shell-bg);
   border: 1px solid var(--memory-shell-border);
   border-radius: var(--radius-lg);
@@ -1779,6 +1932,14 @@ body::before {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
+  min-height: 0;
+}
+
+.memory-viewer.tasks-mode .memory-viewer-stats {
+  max-height: min(320px, 34vh);
+  overflow: auto;
+  align-content: start;
+  padding-right: 4px;
 }
 
 .memory-stat-card {
@@ -1998,16 +2159,23 @@ body::before {
 }
 
 .memory-viewer-body {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .memory-viewer-list,
 .memory-viewer-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
   background: var(--memory-card-bg);
   border: 1px solid var(--memory-card-border);
@@ -2020,6 +2188,7 @@ body::before {
 }
 
 .memory-list-item {
+  min-width: 0;
   padding: 14px 16px;
   border-bottom: 1px solid var(--memory-card-border);
   cursor: pointer;
@@ -2039,6 +2208,8 @@ body::before {
 .memory-list-item-title {
   font-weight: 600;
   line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .memory-list-item-meta {
@@ -2050,11 +2221,20 @@ body::before {
   gap: 8px;
 }
 
+.memory-list-item-meta span,
+.memory-list-item-meta .memory-badge {
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .memory-list-item-snippet {
   margin-top: 8px;
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.55;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .memory-detail-shell {
@@ -2118,6 +2298,7 @@ body::before {
 }
 
 .memory-detail-card {
+  min-width: 0;
   padding: 11px 13px;
   border-radius: 14px;
   background: var(--memory-card-bg);
@@ -2138,6 +2319,7 @@ body::before {
   line-height: 1.58;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .memory-detail-pre {
@@ -2240,6 +2422,7 @@ body::before {
 }
 
 .goal-summary-item {
+  min-width: 0;
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--goal-item-bg);
@@ -2260,6 +2443,7 @@ body::before {
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .goal-tracking-card {
@@ -2391,17 +2575,28 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .goal-capability-tool-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.goal-capability-tag-list .memory-badge {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .goal-capability-tool-list code {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
   padding: 5px 8px;
   border-radius: 8px;
   background: var(--memory-card-bg);
@@ -2409,7 +2604,9 @@ body::before {
   color: var(--text-main);
   font-size: 12px;
   line-height: 1.4;
-  word-break: break-all;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .goal-checkpoint-action-modal {
@@ -3029,13 +3226,19 @@ body::before {
 }
 
 /* Responsive: Hide sidebar on small screens */
+@media (max-width: 1200px) {
+  .agent-list-panel {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
   .sidebar {
     display: none;
   }
 
   .layout {
-    max-width: 100%;
+    width: calc(100vw - 24px);
   }
 }
 

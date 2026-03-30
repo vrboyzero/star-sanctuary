@@ -4,8 +4,10 @@
  * 支持两种调度类型：
  * - at：一次性定时（ISO 时间戳）
  * - every：周期性重复（间隔毫秒）
+ * - dailyAt：按时区的每日固定时刻
+ * - weeklyAt：按时区的每周固定 weekday + 时刻
  *
- * 未来可扩展 cron 表达式（方案 B）
+ * 未来可扩展 cron 表达式（方案 C）
  */
 
 // ── 调度类型 ──
@@ -26,7 +28,31 @@ export type CronScheduleEvery = {
     anchorMs?: number;
 };
 
-export type CronSchedule = CronScheduleAt | CronScheduleEvery;
+/** 日历调度：按指定时区每天 HH:mm 触发 */
+export type CronScheduleDailyAt = {
+    kind: "dailyAt";
+    /** HH:mm，24 小时制，必须补零 */
+    time: string;
+    /** IANA 时区名，例如 Asia/Shanghai */
+    timezone: string;
+};
+
+/** 日历调度：按指定时区的周几 + HH:mm 触发 */
+export type CronScheduleWeeklyAt = {
+    kind: "weeklyAt";
+    /** 1-7，1=Monday，7=Sunday */
+    weekdays: number[];
+    /** HH:mm，24 小时制，必须补零 */
+    time: string;
+    /** IANA 时区名，例如 Asia/Shanghai */
+    timezone: string;
+};
+
+export type CronSchedule =
+    | CronScheduleAt
+    | CronScheduleEvery
+    | CronScheduleDailyAt
+    | CronScheduleWeeklyAt;
 
 // ── Payload ──
 
