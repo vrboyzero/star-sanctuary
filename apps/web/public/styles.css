@@ -53,13 +53,15 @@ body::before {
 }
 
 .layout {
-  max-width: 1200px;
+  max-width: none;
+  width: calc(100vw - 40px);
   margin: 0 auto;
   padding: 20px;
-  min-height: 100vh;
+  height: 100vh;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
 }
 
 /* Main Content Area (Sidebar + Main) */
@@ -68,6 +70,7 @@ body::before {
   gap: 16px;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 /* Sidebar */
@@ -81,9 +84,10 @@ body::before {
   flex-direction: column;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  /* 修复高度问题：限制最大高度，与聊天区域对齐 */
-  max-height: calc(100vh - 280px);
-  align-self: flex-start;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  align-self: stretch;
 }
 
 .sidebar-header {
@@ -265,10 +269,12 @@ body::before {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .agent-list-panel {
-  width: 248px;
+  width: 200px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -279,7 +285,9 @@ body::before {
   border-radius: var(--radius-md);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  max-height: calc(100vh - 280px);
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
   overflow-y: auto;
 }
 
@@ -632,6 +640,7 @@ body::before {
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
   padding: 16px 24px;
+  margin-top: 12px;
 }
 
 .row {
@@ -869,11 +878,11 @@ body::before {
 /* Chat Area */
 .chat {
   flex: 1;
+  min-height: 0;
+  height: 100%;
   background: var(--chat-bg);
   border-radius: var(--radius-lg);
   padding: 20px;
-  min-height: 400px;
-  max-height: 60vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -1339,6 +1348,7 @@ body::before {
   gap: 8px;
   background: var(--composer-bg);
   padding: 12px;
+  margin-top: 12px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--glass-border);
   backdrop-filter: blur(10px);
@@ -1878,13 +1888,19 @@ body::before {
 .memory-viewer {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .memory-viewer-shell {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--memory-shell-bg);
   border: 1px solid var(--memory-shell-border);
   border-radius: var(--radius-lg);
@@ -1916,6 +1932,14 @@ body::before {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
+  min-height: 0;
+}
+
+.memory-viewer.tasks-mode .memory-viewer-stats {
+  max-height: min(320px, 34vh);
+  overflow: auto;
+  align-content: start;
+  padding-right: 4px;
 }
 
 .memory-stat-card {
@@ -2135,16 +2159,23 @@ body::before {
 }
 
 .memory-viewer-body {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .memory-viewer-list,
 .memory-viewer-detail {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: auto;
   background: var(--memory-card-bg);
   border: 1px solid var(--memory-card-border);
@@ -2157,6 +2188,7 @@ body::before {
 }
 
 .memory-list-item {
+  min-width: 0;
   padding: 14px 16px;
   border-bottom: 1px solid var(--memory-card-border);
   cursor: pointer;
@@ -2176,6 +2208,8 @@ body::before {
 .memory-list-item-title {
   font-weight: 600;
   line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .memory-list-item-meta {
@@ -2187,11 +2221,20 @@ body::before {
   gap: 8px;
 }
 
+.memory-list-item-meta span,
+.memory-list-item-meta .memory-badge {
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .memory-list-item-snippet {
   margin-top: 8px;
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.55;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .memory-detail-shell {
@@ -2255,6 +2298,7 @@ body::before {
 }
 
 .memory-detail-card {
+  min-width: 0;
   padding: 11px 13px;
   border-radius: 14px;
   background: var(--memory-card-bg);
@@ -2275,6 +2319,7 @@ body::before {
   line-height: 1.58;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .memory-detail-pre {
@@ -2377,6 +2422,7 @@ body::before {
 }
 
 .goal-summary-item {
+  min-width: 0;
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--goal-item-bg);
@@ -2397,6 +2443,7 @@ body::before {
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .goal-tracking-card {
@@ -2528,17 +2575,28 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .goal-capability-tool-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.goal-capability-tag-list .memory-badge {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .goal-capability-tool-list code {
-  display: inline-flex;
-  align-items: center;
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
   padding: 5px 8px;
   border-radius: 8px;
   background: var(--memory-card-bg);
@@ -2546,7 +2604,9 @@ body::before {
   color: var(--text-main);
   font-size: 12px;
   line-height: 1.4;
-  word-break: break-all;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .goal-checkpoint-action-modal {
@@ -3178,7 +3238,7 @@ body::before {
   }
 
   .layout {
-    max-width: 100%;
+    width: calc(100vw - 24px);
   }
 }
 
