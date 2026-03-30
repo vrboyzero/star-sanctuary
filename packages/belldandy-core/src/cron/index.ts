@@ -17,6 +17,8 @@ export type {
     CronSchedule,
     CronScheduleAt,
     CronScheduleEvery,
+    CronScheduleDailyAt,
+    CronScheduleWeeklyAt,
     CronPayload,
     CronSystemEventPayload,
     CronGoalApprovalScanPayload,

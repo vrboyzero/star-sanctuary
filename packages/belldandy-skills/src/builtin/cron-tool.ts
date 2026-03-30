@@ -40,7 +40,11 @@ interface CronJobView {
     id: string;
     name: string;
     enabled: boolean;
-    schedule: { kind: string; at?: string; everyMs?: number };
+    schedule:
+        | { kind: "at"; at: string }
+        | { kind: "every"; everyMs: number; anchorMs?: number }
+        | { kind: "dailyAt"; time: string; timezone: string }
+        | { kind: "weeklyAt"; weekdays: number[]; time: string; timezone: string };
     payload:
         | { kind: "systemEvent"; text: string }
         | { kind: "goalApprovalScan"; goalId?: string; goalIds?: string[]; allGoals?: boolean; autoEscalate?: boolean };
@@ -53,7 +57,11 @@ interface CronJobView {
 
 interface CronJobCreateInput {
     name: string;
-    schedule: { kind: "at"; at: string } | { kind: "every"; everyMs: number; anchorMs?: number };
+    schedule:
+        | { kind: "at"; at: string }
+        | { kind: "every"; everyMs: number; anchorMs?: number }
+        | { kind: "dailyAt"; time: string; timezone: string }
+        | { kind: "weeklyAt"; weekdays: number[]; time: string; timezone: string };
     payload:
         | { kind: "systemEvent"; text: string }
         | { kind: "goalApprovalScan"; goalId?: string; goalIds?: string[]; allGoals?: boolean; autoEscalate?: boolean };
@@ -96,9 +104,12 @@ payload 类型:
 - goalId: 指定单个 goal 扫描（payloadKind=goalApprovalScan 时可填）
 - allGoals: 扫描全部 goal（payloadKind=goalApprovalScan 时可填）
 - autoEscalate: 是否自动升级超时 stage（payloadKind=goalApprovalScan 时可填，默认 true）
-- scheduleKind: 调度类型 "at" 或 "every"（必填）
+- scheduleKind: 调度类型 "at" / "every" / "dailyAt" / "weeklyAt"（必填）
 - at: 一次性触发时间，ISO-8601 格式（scheduleKind="at" 时必填，如 "2026-02-10T09:00:00+08:00"）
 - everyMs: 重复间隔毫秒数（scheduleKind="every" 时必填，最小 60000 = 1分钟）
+- time: 固定时刻，HH:mm 格式（scheduleKind="dailyAt" / "weeklyAt" 时必填）
+- timezone: IANA 时区名，例如 Asia/Shanghai（scheduleKind="dailyAt" / "weeklyAt" 时必填）
+- weekdays: 每周几数组，使用 1-7，1=Monday，7=Sunday（scheduleKind="weeklyAt" 时必填）
 - deleteAfterRun: 执行后是否自动删除（仅 at 类型，默认 false）
 
 快捷间隔参考:
@@ -147,8 +158,8 @@ payload 类型:
                     },
                     scheduleKind: {
                         type: "string",
-                        description: "调度类型：at（一次性）或 every（重复）",
-                        enum: ["at", "every"],
+                        description: "调度类型：at（一次性）、every（重复）、dailyAt（每日固定时刻）、weeklyAt（每周固定时刻）",
+                        enum: ["at", "every", "dailyAt", "weeklyAt"],
                     },
                     at: {
                         type: "string",
@@ -157,6 +168,19 @@ payload 类型:
                     everyMs: {
                         type: "number",
                         description: "重复间隔毫秒数（scheduleKind=every 时必填，最小 60000）",
+                    },
+                    time: {
+                        type: "string",
+                        description: "固定触发时刻，HH:mm 格式（scheduleKind=dailyAt/weeklyAt 时必填）",
+                    },
+                    timezone: {
+                        type: "string",
+                        description: "IANA 时区名，例如 Asia/Shanghai（scheduleKind=dailyAt/weeklyAt 时必填）",
+                    },
+                    weekdays: {
+                        type: "array",
+                        description: "每周几数组，使用 1-7，1=Monday，7=Sunday（scheduleKind=weeklyAt 时必填）",
+                        items: { type: "number" },
                     },
                     deleteAfterRun: {
                         type: "boolean",
@@ -192,10 +216,7 @@ payload 类型:
                             return makeResult(true, "当前没有定时任务。");
                         }
                         const lines = jobs.map((j) => {
-                            const scheduleDesc =
-                                j.schedule.kind === "at"
-                                    ? `一次性 @ ${j.schedule.at ?? "?"}`
-                                    : `每 ${formatMs(j.schedule.everyMs ?? 0)} 重复`;
+                            const scheduleDesc = formatSchedule(j.schedule);
                             const payloadDesc = formatPayload(j.payload);
                             const statusDesc = j.enabled ? "✅ 启用" : "⏸️ 禁用";
                             const nextRun = j.state.nextRunAtMs
@@ -276,10 +297,63 @@ payload 类型:
                             );
                         }
 
+                        if (scheduleKind === "dailyAt") {
+                            const timeResult = readTimeAndTimezone(args);
+                            if (!timeResult.ok) {
+                                return makeResult(false, "", timeResult.error);
+                            }
+                            const payloadResult = buildPayload(args, payloadKind);
+                            if (!payloadResult.ok) {
+                                return makeResult(false, "", payloadResult.error);
+                            }
+                            const job = await store.add({
+                                name: jobName,
+                                schedule: {
+                                    kind: "dailyAt",
+                                    time: timeResult.time,
+                                    timezone: timeResult.timezone,
+                                },
+                                payload: payloadResult.payload,
+                            });
+                            return makeResult(
+                                true,
+                                `✅ 已创建日历任务 "${job.name}"\n   ID: ${job.id}\n   调度: 每天 ${timeResult.time} @ ${timeResult.timezone}\n   内容: ${formatPayload(job.payload)}`
+                            );
+                        }
+
+                        if (scheduleKind === "weeklyAt") {
+                            const timeResult = readTimeAndTimezone(args);
+                            if (!timeResult.ok) {
+                                return makeResult(false, "", timeResult.error);
+                            }
+                            const weekdaysResult = readWeekdays(args.weekdays);
+                            if (!weekdaysResult.ok) {
+                                return makeResult(false, "", weekdaysResult.error);
+                            }
+                            const payloadResult = buildPayload(args, payloadKind);
+                            if (!payloadResult.ok) {
+                                return makeResult(false, "", payloadResult.error);
+                            }
+                            const job = await store.add({
+                                name: jobName,
+                                schedule: {
+                                    kind: "weeklyAt",
+                                    weekdays: weekdaysResult.weekdays,
+                                    time: timeResult.time,
+                                    timezone: timeResult.timezone,
+                                },
+                                payload: payloadResult.payload,
+                            });
+                            return makeResult(
+                                true,
+                                `✅ 已创建周历任务 "${job.name}"\n   ID: ${job.id}\n   调度: 每周 ${formatWeekdays(weekdaysResult.weekdays)} ${timeResult.time} @ ${timeResult.timezone}\n   内容: ${formatPayload(job.payload)}`
+                            );
+                        }
+
                         return makeResult(
                             false,
                             "",
-                            "参数错误：scheduleKind 必须为 'at' 或 'every'"
+                            "参数错误：scheduleKind 必须为 'at'、'every'、'dailyAt' 或 'weeklyAt'"
                         );
                     }
 
@@ -341,6 +415,98 @@ function formatMs(ms: number): string {
 function truncate(text: string, maxLen: number): string {
     if (text.length <= maxLen) return text;
     return text.slice(0, maxLen - 3) + "...";
+}
+
+function parseTimeOfDay(raw: string): string | null {
+    const text = raw.trim();
+    const match = /^(\d{2}):(\d{2})$/.exec(text);
+    if (!match) return null;
+    const hour = Number.parseInt(match[1], 10);
+    const minute = Number.parseInt(match[2], 10);
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        return null;
+    }
+    return text;
+}
+
+function isValidTimeZone(timezone: string): boolean {
+    try {
+        new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(0));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function readTimeAndTimezone(
+    args: JsonObject,
+): { ok: true; time: string; timezone: string } | { ok: false; error: string } {
+    const timeRaw = typeof args.time === "string" ? args.time : "";
+    const timezoneRaw = typeof args.timezone === "string" ? args.timezone.trim() : "";
+    const time = parseTimeOfDay(timeRaw);
+    if (!time) {
+        return { ok: false, error: "参数错误：time 必须为 HH:mm 格式，例如 09:00" };
+    }
+    if (!timezoneRaw) {
+        return { ok: false, error: "参数错误：timezone 不能为空" };
+    }
+    if (!isValidTimeZone(timezoneRaw)) {
+        return { ok: false, error: `参数错误：无法识别时区 "${timezoneRaw}"` };
+    }
+    return { ok: true, time, timezone: timezoneRaw };
+}
+
+function readWeekdays(
+    input: unknown,
+): { ok: true; weekdays: number[] } | { ok: false; error: string } {
+    if (!Array.isArray(input) || input.length === 0) {
+        return { ok: false, error: "参数错误：weekdays 必须为非空数组，使用 1-7 表示周一到周日" };
+    }
+    const values: number[] = [];
+    const seen = new Set<number>();
+    for (const item of input) {
+        if (typeof item !== "number" || !Number.isInteger(item)) {
+            return { ok: false, error: "参数错误：weekdays 必须为整数数组，使用 1-7 表示周一到周日" };
+        }
+        if (item < 1 || item > 7) {
+            return { ok: false, error: "参数错误：weekdays 只允许 1-7，1=Monday，7=Sunday" };
+        }
+        if (seen.has(item)) {
+            return { ok: false, error: "参数错误：weekdays 不允许重复" };
+        }
+        seen.add(item);
+        values.push(item);
+    }
+    values.sort((a, b) => a - b);
+    return { ok: true, weekdays: values };
+}
+
+function formatWeekdays(weekdays: number[]): string {
+    const labels: Record<number, string> = {
+        1: "Mon",
+        2: "Tue",
+        3: "Wed",
+        4: "Thu",
+        5: "Fri",
+        6: "Sat",
+        7: "Sun",
+    };
+    return weekdays.map((weekday) => labels[weekday] ?? `#${weekday}`).join("/");
+}
+
+function formatSchedule(schedule: CronJobView["schedule"]): string {
+    switch (schedule.kind) {
+        case "at":
+            return `一次性 @ ${schedule.at}`;
+        case "every":
+            return `每 ${formatMs(schedule.everyMs)} 重复`;
+        case "dailyAt":
+            return `每天 ${schedule.time} @ ${schedule.timezone}`;
+        case "weeklyAt":
+            return `每周 ${formatWeekdays(schedule.weekdays)} ${schedule.time} @ ${schedule.timezone}`;
+        default:
+            return `未知调度 ${JSON.stringify(schedule)}`;
+    }
 }
 
 function buildPayload(
