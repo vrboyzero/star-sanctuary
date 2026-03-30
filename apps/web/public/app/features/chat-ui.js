@@ -23,6 +23,7 @@ export function createChatUiFeature({
   refs,
   getAgentProfile,
   getUserProfile,
+  getCurrentAgentId,
   escapeHtml,
   showNotice,
   getAvatarUploadHeaders,
@@ -206,6 +207,12 @@ export function createChatUiFeature({
     try {
       const formData = new FormData();
       formData.append("role", role);
+      if (role === "agent") {
+        const agentId = typeof getCurrentAgentId === "function" ? getCurrentAgentId() : "";
+        if (agentId && agentId !== "default") {
+          formData.append("agentId", agentId);
+        }
+      }
       formData.append("file", file, file.name || "avatar.png");
 
       const res = await fetch("/api/avatar/upload", {
@@ -229,13 +236,14 @@ export function createChatUiFeature({
 
       onAvatarUploaded?.({
         role,
+        agentId: role === "agent" && typeof getCurrentAgentId === "function" ? getCurrentAgentId() : undefined,
         avatarPath,
         mdPath: typeof payload.mdPath === "string" ? payload.mdPath : "",
       });
 
       showNotice?.(
         "头像已更新",
-        role === "agent" ? "Agent 头像已写入 IDENTITY.md。" : "用户头像已写入 USER.md。",
+        role === "agent" ? "Agent 头像已写入对应的 IDENTITY.md。" : "用户头像已写入 USER.md。",
         "success",
         2200,
       );

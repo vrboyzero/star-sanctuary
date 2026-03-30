@@ -149,6 +149,10 @@
             style="text-align: left; font-weight: 600; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">📂</span><span data-i18n="sidebar.rootSettings">智能体设置</span></button>
           <button id="switchFacet" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧩</span><span data-i18n="sidebar.facetEditor">模组编辑</span></button>
+          <button id="switchCron" class="sidebar-action-btn"
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">⏰</span><span data-i18n="sidebar.cronConfig">定时任务配置</span></button>
+          <button id="openChannelSettings" class="sidebar-action-btn"
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🌐</span><span data-i18n="sidebar.channelSettings">渠道配置</span></button>
           <button id="switchMemory" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧠</span><span data-i18n="sidebar.memoryViewer">记忆查看</span></button>
           <button id="switchGoals" class="sidebar-action-btn"
@@ -353,6 +357,8 @@
           </div>
         </section>
       </div>
+
+      <aside class="agent-list-panel hidden" id="agentRightPanel" aria-label="Agent List"></aside>
     </div>
 
     <!-- 聊天模式：输入框 -->
@@ -599,6 +605,86 @@
           <input id="cfgMaxHistory" class="input" placeholder="10" />
           <div class="form-help" data-i18n="settings.maxHistoryHelp">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
         </div>
+
+        <hr class="theme-divider">
+
+        <section id="channelsSettingsSection" class="settings-subsection">
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.channelsSectionTitle">渠道配置</div>
+              <div class="form-help" data-i18n="settings.channelsSectionHelp">用于维护社区 API、飞书、QQ 和 Discord 的环境变量配置。社区/官网相关的结构化配置仍需配合 community.json。</div>
+            </div>
+            <button id="openCommunityConfig" type="button" class="button button-muted" data-i18n="settings.openCommunityConfig">打开 community.json</button>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cfgCommunityApiEnabled">
+              <input id="cfgCommunityApiEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.communityApiEnabledLabel">Enable Community API</span>
+            </label>
+            <div class="form-help" data-i18n="settings.communityApiEnabledHelp">启用 /api/message 社区 API。开启前必须确保 Gateway 认证模式不是 none。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.communityApiTokenLabel">Community API Token</label>
+            <input id="cfgCommunityApiToken" class="input" type="password" data-i18n-placeholder="settings.communityApiTokenPlaceholder" placeholder="用于 Bearer 鉴权" />
+            <div class="form-help" data-i18n="settings.communityApiTokenHelp">社区 API 的 Bearer Token。保存时会继续使用脱敏逻辑。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.feishuAppIdLabel">Feishu App ID</label>
+            <input id="cfgFeishuAppId" class="input" placeholder="cli_xxxxxxxxxxxxxxxx" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.feishuAppSecretLabel">Feishu App Secret</label>
+            <input id="cfgFeishuAppSecret" class="input" type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.feishuAgentIdLabel">Feishu Agent ID</label>
+            <input id="cfgFeishuAgentId" class="input" placeholder="default" />
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.qqAppIdLabel">QQ App ID</label>
+            <input id="cfgQqAppId" class="input" placeholder="xxxxxxxx" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.qqAppSecretLabel">QQ App Secret</label>
+            <input id="cfgQqAppSecret" class="input" type="password" placeholder="xxxxxxxx" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.qqAgentIdLabel">QQ Agent ID</label>
+            <input id="cfgQqAgentId" class="input" placeholder="default" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgQqSandbox">
+              <input id="cfgQqSandbox" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.qqSandboxLabel">QQ Sandbox Mode</span>
+            </label>
+            <div class="form-help" data-i18n="settings.qqSandboxHelp">控制 QQ 机器人是否运行在沙箱环境。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" for="cfgDiscordEnabled">
+              <input id="cfgDiscordEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.discordEnabledLabel">Enable Discord</span>
+            </label>
+            <div class="form-help" data-i18n="settings.discordEnabledHelp">启用 Discord 渠道。保存后需重启 Gateway 生效。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.discordBotTokenLabel">Discord Bot Token</label>
+            <input id="cfgDiscordBotToken" class="input" type="password" placeholder="your-discord-bot-token" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.discordDefaultChannelIdLabel">Discord Default Channel ID</label>
+            <input id="cfgDiscordDefaultChannelId" class="input" placeholder="123456789012345678" />
+          </div>
+        </section>
       </div>
       <div class="modal-footer">
         <button id="restartBtn" class="button button-muted" data-i18n="settings.restartButton">重启服务</button>

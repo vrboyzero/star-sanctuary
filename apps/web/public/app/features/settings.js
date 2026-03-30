@@ -8,6 +8,8 @@ export function createSettingsController({
   invalidateServerConfigCache,
   syncAttachmentLimitsFromConfig,
   onToggle,
+  getConnectionAuthMode,
+  onOpenCommunityConfig,
   redactedPlaceholder = "[REDACTED]",
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
@@ -45,7 +47,22 @@ export function createSettingsController({
     cfgInjectMemory,
     cfgMaxSystemPromptChars,
     cfgMaxHistory,
+    channelsSettingsSection,
+    openCommunityConfigBtn,
+    cfgCommunityApiEnabled,
+    cfgCommunityApiToken,
+    cfgFeishuAppId,
+    cfgFeishuAppSecret,
+    cfgFeishuAgentId,
+    cfgQqAppId,
+    cfgQqAppSecret,
+    cfgQqAgentId,
+    cfgQqSandbox,
+    cfgDiscordEnabled,
+    cfgDiscordBotToken,
+    cfgDiscordDefaultChannelId,
   } = refs;
+  let lastLoadedConfig = null;
 
   if (openSettingsBtn) {
     openSettingsBtn.addEventListener("click", () => {
@@ -67,14 +84,22 @@ export function createSettingsController({
       void restartServer();
     });
   }
+  if (openCommunityConfigBtn) {
+    openCommunityConfigBtn.addEventListener("click", () => {
+      void openCommunityConfig();
+    });
+  }
 
-  async function toggle(show) {
+  async function toggle(show, options = {}) {
     if (!settingsModal) return;
     if (show) {
       settingsModal.classList.remove("hidden");
       onToggle?.(true);
       await loadConfig();
       await runDoctor();
+      if (options.section === "channels" && channelsSettingsSection) {
+        channelsSettingsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
       return;
     }
     onToggle?.(false);
@@ -85,6 +110,7 @@ export function createSettingsController({
     if (!isConnected()) return;
     const c = await loadServerConfig?.();
     if (!c) return;
+    lastLoadedConfig = c;
     syncAttachmentLimitsFromConfig(c);
     cfgApiKey.value = c["BELLDANDY_OPENAI_API_KEY"] || "";
     cfgBaseUrl.value = c["BELLDANDY_OPENAI_BASE_URL"] || "";
@@ -113,6 +139,18 @@ export function createSettingsController({
     cfgInjectMemory.checked = c["BELLDANDY_INJECT_MEMORY"] === "true";
     cfgMaxSystemPromptChars.value = c["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] || "";
     cfgMaxHistory.value = c["BELLDANDY_MAX_HISTORY"] || "";
+    if (cfgCommunityApiEnabled) cfgCommunityApiEnabled.checked = c["BELLDANDY_COMMUNITY_API_ENABLED"] === "true";
+    if (cfgCommunityApiToken) cfgCommunityApiToken.value = c["BELLDANDY_COMMUNITY_API_TOKEN"] || "";
+    if (cfgFeishuAppId) cfgFeishuAppId.value = c["BELLDANDY_FEISHU_APP_ID"] || "";
+    if (cfgFeishuAppSecret) cfgFeishuAppSecret.value = c["BELLDANDY_FEISHU_APP_SECRET"] || "";
+    if (cfgFeishuAgentId) cfgFeishuAgentId.value = c["BELLDANDY_FEISHU_AGENT_ID"] || "";
+    if (cfgQqAppId) cfgQqAppId.value = c["BELLDANDY_QQ_APP_ID"] || "";
+    if (cfgQqAppSecret) cfgQqAppSecret.value = c["BELLDANDY_QQ_APP_SECRET"] || "";
+    if (cfgQqAgentId) cfgQqAgentId.value = c["BELLDANDY_QQ_AGENT_ID"] || "";
+    if (cfgQqSandbox) cfgQqSandbox.checked = c["BELLDANDY_QQ_SANDBOX"] !== "false";
+    if (cfgDiscordEnabled) cfgDiscordEnabled.checked = c["BELLDANDY_DISCORD_ENABLED"] === "true";
+    if (cfgDiscordBotToken) cfgDiscordBotToken.value = c["BELLDANDY_DISCORD_BOT_TOKEN"] || "";
+    if (cfgDiscordDefaultChannelId) cfgDiscordDefaultChannelId.value = c["BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID"] || "";
   }
 
   function assignSecretUpdate(updates, key, inputEl) {
@@ -183,9 +221,39 @@ export function createSettingsController({
     updates["BELLDANDY_INJECT_MEMORY"] = cfgInjectMemory.checked ? "true" : "false";
     updates["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] = cfgMaxSystemPromptChars.value.trim();
     updates["BELLDANDY_MAX_HISTORY"] = cfgMaxHistory.value.trim();
+    if (cfgCommunityApiEnabled) updates["BELLDANDY_COMMUNITY_API_ENABLED"] = cfgCommunityApiEnabled.checked ? "true" : "false";
+    assignSecretUpdate(updates, "BELLDANDY_COMMUNITY_API_TOKEN", cfgCommunityApiToken);
+    if (cfgFeishuAppId) updates["BELLDANDY_FEISHU_APP_ID"] = cfgFeishuAppId.value.trim();
+    assignSecretUpdate(updates, "BELLDANDY_FEISHU_APP_SECRET", cfgFeishuAppSecret);
+    if (cfgFeishuAgentId) updates["BELLDANDY_FEISHU_AGENT_ID"] = cfgFeishuAgentId.value.trim();
+    if (cfgQqAppId) updates["BELLDANDY_QQ_APP_ID"] = cfgQqAppId.value.trim();
+    assignSecretUpdate(updates, "BELLDANDY_QQ_APP_SECRET", cfgQqAppSecret);
+    if (cfgQqAgentId) updates["BELLDANDY_QQ_AGENT_ID"] = cfgQqAgentId.value.trim();
+    if (cfgQqSandbox) updates["BELLDANDY_QQ_SANDBOX"] = cfgQqSandbox.checked ? "true" : "false";
+    if (cfgDiscordEnabled) updates["BELLDANDY_DISCORD_ENABLED"] = cfgDiscordEnabled.checked ? "true" : "false";
+    assignSecretUpdate(updates, "BELLDANDY_DISCORD_BOT_TOKEN", cfgDiscordBotToken);
+    if (cfgDiscordDefaultChannelId) updates["BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID"] = cfgDiscordDefaultChannelId.value.trim();
 
     if (mainApiKey && mainApiKey !== redactedPlaceholder) {
       updates["BELLDANDY_AGENT_PROVIDER"] = "openai";
+    }
+
+    const effectiveAuthMode = String(
+      lastLoadedConfig?.BELLDANDY_AUTH_MODE
+      ?? getConnectionAuthMode?.()
+      ?? "none",
+    ).trim().toLowerCase();
+    if (updates.BELLDANDY_COMMUNITY_API_ENABLED === "true" && effectiveAuthMode === "none") {
+      if (saveSettingsBtn) {
+        saveSettingsBtn.textContent = t("settings.failed", {}, "Failed");
+        saveSettingsBtn.disabled = false;
+      }
+      alert(t(
+        "settings.communityApiRequiresAuth",
+        {},
+        "Community API cannot be used with AUTH_MODE=none. Switch to token or password first.",
+      ));
+      return;
     }
 
     const res = await sendReq({
@@ -224,7 +292,16 @@ export function createSettingsController({
     setStatus(t("settings.restartingStatus", {}, "Restarting..."));
   }
 
+  async function openCommunityConfig() {
+    if (typeof onOpenCommunityConfig !== "function") return;
+    await toggle(false);
+    onOpenCommunityConfig();
+  }
+
   return {
     toggle,
+    openChannels() {
+      return toggle(true, { section: "channels" });
+    },
   };
 }

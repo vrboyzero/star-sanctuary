@@ -461,6 +461,26 @@ function replaceAvatarMarkdown(content: string, avatarPath: string): string {
   return `${content.trimEnd()}\n\n${avatarLine}\n`;
 }
 
+function resolveAgentIdentityDir(
+  rootDir: string,
+  agentRegistry: AgentRegistry | undefined,
+  agentId: string | undefined,
+): { dir: string; profileId: string } | null {
+  const resolvedAgentId = typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default";
+  if (resolvedAgentId === "default") {
+    return { dir: rootDir, profileId: "default" };
+  }
+
+  const profile = agentRegistry?.getProfile(resolvedAgentId);
+  if (!profile) return null;
+
+  const workspaceDir = profile.workspaceDir?.trim() || profile.id;
+  return {
+    dir: path.join(rootDir, "agents", workspaceDir),
+    profileId: profile.id,
+  };
+}
+
 function readHeaderValue(headers: http.IncomingHttpHeaders, name: string): string | undefined {
   const value = headers[name.toLowerCase()];
   if (Array.isArray(value)) {
@@ -692,6 +712,10 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
 
       const formData = await requestToFormData(req);
       const role = normalizeAvatarUploadRole(formData.get("role"));
+      const rawAgentId = formData.get("agentId");
+      const requestedAgentId = typeof rawAgentId === "string" && rawAgentId.trim()
+        ? rawAgentId.trim()
+        : undefined;
       if (!role) {
         return res.status(400).json({
           ok: false,
@@ -732,7 +756,17 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       const fileName = `avatar-${role}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}${ext}`;
       const avatarPath = `/avatar/${fileName}`;
       const targetFile = path.join(avatarDir, fileName);
-      const mdPath = path.join(stateDir, role === "user" ? "USER.md" : "IDENTITY.md");
+      let mdPath = path.join(stateDir, role === "user" ? "USER.md" : "IDENTITY.md");
+      if (role === "agent" && requestedAgentId) {
+        const identityTarget = resolveAgentIdentityDir(stateDir, opts.agentRegistry, requestedAgentId);
+        if (!identityTarget) {
+          return res.status(404).json({
+            ok: false,
+            error: { code: "invalid_agent", message: `Agent "${requestedAgentId}" does not exist.` },
+          });
+        }
+        mdPath = path.join(identityTarget.dir, "IDENTITY.md");
+      }
 
       let previousMarkdown = "";
       try {
@@ -765,6 +799,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       return res.status(200).json({
         ok: true,
         role,
+        agentId: role === "agent" ? requestedAgentId ?? "default" : undefined,
         avatarPath,
         mdPath,
       });
@@ -1269,6 +1304,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         stateDir: opts.stateDir ?? resolveStateDir(),
         additionalWorkspaceRoots: opts.additionalWorkspaceRoots ?? [],
         envDir: opts.envDir,
+        auth: opts.auth,
         agentFactory: opts.agentFactory ?? (() => new MockAgent()),
         agentRegistry: opts.agentRegistry,
         primaryModelConfig: opts.primaryModelConfig,
@@ -1392,6 +1428,7 @@ async function handleReq(
     stateDir: string;
     additionalWorkspaceRoots: string[];
     envDir?: string;
+    auth: GatewayServerOptions["auth"];
     log: GatewayLog;
     agentFactory: () => BelldandyAgent;
     agentRegistry?: AgentRegistry;
@@ -2149,12 +2186,43 @@ async function handleReq(
         "BELLDANDY_INJECT_AGENTS", "BELLDANDY_INJECT_SOUL", "BELLDANDY_INJECT_MEMORY",
         "BELLDANDY_MAX_SYSTEM_PROMPT_CHARS", "BELLDANDY_MAX_HISTORY",
         "BELLDANDY_TASK_DEDUP_GUARD_ENABLED", "BELLDANDY_TASK_DEDUP_WINDOW_MINUTES",
-        "BELLDANDY_TASK_DEDUP_MODE", "BELLDANDY_TASK_DEDUP_POLICY"
+        "BELLDANDY_TASK_DEDUP_MODE", "BELLDANDY_TASK_DEDUP_POLICY",
+        // Channels
+        "BELLDANDY_COMMUNITY_API_ENABLED", "BELLDANDY_COMMUNITY_API_TOKEN",
+        "BELLDANDY_FEISHU_APP_ID", "BELLDANDY_FEISHU_APP_SECRET", "BELLDANDY_FEISHU_AGENT_ID",
+        "BELLDANDY_QQ_APP_ID", "BELLDANDY_QQ_APP_SECRET", "BELLDANDY_QQ_AGENT_ID", "BELLDANDY_QQ_SANDBOX",
+        "BELLDANDY_DISCORD_ENABLED", "BELLDANDY_DISCORD_BOT_TOKEN", "BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID",
       ]);
       for (const key of Object.keys(updates)) {
         if (!SAFE_UPDATE_KEYS.has(key)) {
           return { type: "res", id: req.id, ok: false, error: { code: "forbidden", message: `不允许修改配置项: ${key}` } };
         }
+      }
+
+      const { envPath, envLocalPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
+      const currentConfig: Record<string, string> = {};
+      await readEnvFileIntoConfig(envPath, currentConfig);
+      await readEnvFileIntoConfig(envLocalPath, currentConfig);
+
+      const mergedConfig = {
+        ...currentConfig,
+        ...updates,
+      };
+      const effectiveAuthMode = String(
+        mergedConfig.BELLDANDY_AUTH_MODE
+        ?? (ctx.auth.mode === "token" ? "token" : ctx.auth.mode === "password" ? "password" : "none"),
+      ).trim().toLowerCase();
+      const communityApiEnabled = String(mergedConfig.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").trim().toLowerCase() === "true";
+      if (communityApiEnabled && effectiveAuthMode === "none") {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "community_api_requires_auth",
+            message: "BELLDANDY_COMMUNITY_API_ENABLED=true cannot be used with BELLDANDY_AUTH_MODE=none",
+          },
+        };
       }
 
       // Split updates
@@ -2169,7 +2237,6 @@ async function handleReq(
         }
       }
 
-      const { envPath, envLocalPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       const envOk = await updateEnvFile(envPath, envUpdates);
       const localOk = await updateEnvFile(envLocalPath, localUpdates);
 
@@ -2315,10 +2382,16 @@ async function handleReq(
 
     case "agents.list": {
       const profiles = ctx.agentRegistry?.list() ?? [];
-      const agents = profiles.map(p => ({
-        id: p.id,
-        displayName: p.displayName,
-        model: p.model,
+      const agents = await Promise.all(profiles.map(async (profile) => {
+        const identityTarget = resolveAgentIdentityDir(ctx.stateDir, ctx.agentRegistry, profile.id);
+        const identityInfo = identityTarget ? await extractIdentityInfo(identityTarget.dir) : {};
+        return {
+          id: profile.id,
+          displayName: profile.displayName,
+          name: identityInfo.agentName || profile.displayName,
+          avatar: identityInfo.agentAvatar || undefined,
+          model: profile.model,
+        };
       }));
       return { type: "res", id: req.id, ok: true, payload: { agents } };
     }

@@ -222,6 +222,8 @@ export type AgentsListResult = {
   agents: Array<{
     id: string;
     displayName: string;
+    name?: string;
+    avatar?: string;
     model: string; // 引用名，不暴露 apiKey
   }>;
 };
