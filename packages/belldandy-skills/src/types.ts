@@ -1,4 +1,5 @@
 import type { JsonObject } from "@belldandy/protocol";
+import type { ToolContract } from "./tool-contract.js";
 export type { JsonObject };
 
 /** 工具参数 schema（JSON Schema 子集，兼容 OpenAI function calling） */
@@ -99,23 +100,62 @@ export type SubAgentResult = {
   output: string;
   error?: string;
   sessionId?: string;
+  taskId?: string;
+  outputPath?: string;
 };
 
 export type SessionInfo = {
   id: string;
+  taskId?: string;
   parentId?: string;
   agentId?: string;
-  status: "pending" | "running" | "done" | "error" | "timeout";
+  status: "pending" | "running" | "done" | "error" | "timeout" | "stopped";
   createdAt: number;
   finishedAt?: number;
   summary?: string;
+  progressText?: string;
+  outputPath?: string;
+  notificationCount?: number;
 };
 
 export type SpawnSubAgentOptions = {
   instruction: string;
   agentId?: string;
+  profileId?: string;
+  background?: boolean;
+  timeoutMs?: number;
+  channel?: string;
   context?: JsonObject;
+  cwd?: string;
+  toolSet?: string[];
+  permissionMode?: string;
+  isolationMode?: string;
+  parentTaskId?: string;
   parentConversationId?: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
+  allowedToolFamilies?: string[];
+  maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
+  policySummary?: string;
+};
+
+export type ToolRuntimeLaunchSpec = {
+  profileId?: string;
+  channel?: string;
+  background?: boolean;
+  timeoutMs?: number;
+  cwd?: string;
+  toolSet?: string[];
+  permissionMode?: string;
+  isolationMode?: string;
+  parentTaskId?: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
+  allowedToolFamilies?: string[];
+  maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
+  policySummary?: string;
+};
+
+export type ToolExecutionRuntimeContext = {
+  launchSpec?: ToolRuntimeLaunchSpec;
 };
 
 export type AgentCapabilities = {
@@ -337,14 +377,74 @@ export type GoalCapabilityPlanMcpServerRecord = {
 
 export type GoalCapabilityPlanSubAgentRecord = {
   agentId: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
   objective: string;
   reason?: string;
+  deliverable?: string;
+  handoffToVerifier?: boolean;
+};
+
+export type GoalCapabilityPlanRolePolicyRecord = {
+  selectedRoles: Array<"default" | "coder" | "researcher" | "verifier">;
+  selectionReasons: string[];
+  verifierRole?: "verifier";
+  fanInStrategy: "main_agent_summary" | "verifier_handoff";
+};
+
+export type GoalCapabilityPlanCoordinationPlanRecord = {
+  summary: string;
+  plannedDelegationCount: number;
+  rolePolicy: GoalCapabilityPlanRolePolicyRecord;
+};
+
+export type GoalCapabilityPlanDelegationResultRecord = {
+  agentId: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
+  status: "success" | "failed" | "skipped";
+  summary: string;
+  error?: string;
+  sessionId?: string;
+  taskId?: string;
+  outputPath?: string;
+};
+
+export type GoalCapabilityPlanVerifierHandoffRecord = {
+  status: "not_required" | "pending" | "ready" | "running" | "completed" | "failed" | "skipped";
+  verifierRole?: "verifier";
+  verifierAgentId?: string;
+  verifierTaskId?: string;
+  verifierSessionId?: string;
+  summary: string;
+  sourceAgentIds: string[];
+  sourceTaskIds?: string[];
+  outputPath?: string;
+  notes?: string[];
+  error?: string;
+};
+
+export type GoalCapabilityPlanVerifierFindingRecord = {
+  severity: "low" | "medium" | "high";
+  summary: string;
+};
+
+export type GoalCapabilityPlanVerifierResultRecord = {
+  status: "pending" | "completed" | "failed";
+  summary: string;
+  findings: GoalCapabilityPlanVerifierFindingRecord[];
+  recommendation: "approve" | "revise" | "blocked" | "unknown";
+  evidenceTaskIds?: string[];
+  outputPath?: string;
+  generatedAt: string;
 };
 
 export type GoalCapabilityPlanOrchestrationRecord = {
   claimed?: boolean;
   delegated?: boolean;
   delegationCount?: number;
+  coordinationPlan?: GoalCapabilityPlanCoordinationPlanRecord;
+  delegationResults?: GoalCapabilityPlanDelegationResultRecord[];
+  verifierHandoff?: GoalCapabilityPlanVerifierHandoffRecord;
+  verifierResult?: GoalCapabilityPlanVerifierResultRecord;
   notes?: string[];
 };
 
@@ -1497,8 +1597,12 @@ export type ToolContext = {
   workspaceRoot: string;
   /** 额外允许的文件操作根目录（如其他盘符下的目录），路径必须落在 workspaceRoot 或其一内 */
   extraWorkspaceRoots?: string[];
+  /** 当前运行的默认工作目录（来自 launchSpec.cwd） */
+  defaultCwd?: string;
   /** 当前 Agent ID（用于 per-agent workspace 定位，如 switch_facet） */
   agentId?: string;
+  /** 当前运行的 launchSpec 摘要（用于工具级约束/展示） */
+  launchSpec?: ToolRuntimeLaunchSpec;
   /** 用户UUID（用于身份权力验证） */
   userUuid?: string;
   /** 消息发送者信息（用于身份上下文） */
@@ -1568,6 +1672,7 @@ export interface ConversationStoreInterface {
 /** 工具实现接口 */
 export interface Tool {
   definition: ToolDefinition;
+  contract?: ToolContract;
   execute(args: JsonObject, context: ToolContext): Promise<ToolCallResult>;
 }
 

@@ -11,4 +11,19 @@ describe("resolveMemoryIndexPaths", () => {
     expect(result.additionalRoots).toEqual([path.join(stateDir, "memory")]);
     expect(result.additionalFiles).toEqual([path.join(stateDir, "MEMORY.md")]);
   });
+
+  it("can opt into team shared memory indexing without leaving stateDir", () => {
+    const stateDir = "C:/Users/admin/.star_sanctuary";
+    const result = resolveMemoryIndexPaths(stateDir, { includeTeamSharedMemory: true });
+
+    expect(result.sessionsDir).toBe(path.join(stateDir, "sessions"));
+    expect(result.additionalRoots).toEqual([
+      path.join(stateDir, "memory"),
+      path.join(stateDir, "team-memory", "memory"),
+    ]);
+    expect(result.additionalFiles).toEqual([
+      path.join(stateDir, "MEMORY.md"),
+      path.join(stateDir, "team-memory", "MEMORY.md"),
+    ]);
+  });
 });

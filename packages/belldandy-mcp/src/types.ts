@@ -105,6 +105,88 @@ export type MCPServerStatus =
   | "error"         // 连接错误
   | "reconnecting"; // 重新连接中
 
+export type MCPServerFailureKind =
+  | "session_expired"
+  | "transport"
+  | "unknown";
+
+export type MCPServerFailureSource =
+  | "connect"
+  | "call_tool"
+  | "read_resource"
+  | "list_tools"
+  | "list_resources";
+
+export type MCPResultHandlingStrategy =
+  | "inline"
+  | "truncated"
+  | "persisted";
+
+export type MCPServerResultSource =
+  | "call_tool"
+  | "read_resource";
+
+export interface MCPServerLastResultDiagnostics {
+  at: Date;
+  source: MCPServerResultSource;
+  strategy: MCPResultHandlingStrategy;
+  estimatedChars: number;
+  truncatedItems: number;
+  persistedItems?: number;
+  persistedWebPath?: string;
+}
+
+export interface MCPServerRuntimeDiagnostics {
+  connectionAttempts: number;
+  reconnectAttempts: number;
+  lastConnectStartedAt?: Date;
+  lastDisconnectAt?: Date;
+  lastErrorAt?: Date;
+  lastErrorKind?: MCPServerFailureKind;
+  lastErrorMessage?: string;
+  lastErrorSource?: MCPServerFailureSource;
+  lastErrorRetryable?: boolean;
+  lastSessionExpiredAt?: Date;
+  lastRetryAt?: Date;
+  lastRetryDelayMs?: number;
+  lastRetryAttempt?: number;
+  lastRetryMax?: number;
+  lastRecoveryAt?: Date;
+  lastRecoverySucceeded?: boolean;
+  lastResult?: MCPServerLastResultDiagnostics;
+}
+
+export interface MCPResultDiagnostics {
+  strategy: MCPResultHandlingStrategy;
+  truncated: boolean;
+  estimatedChars: number;
+  truncatedItems: number;
+  persistedItems?: number;
+  persistedFilepath?: string;
+  persistedWebPath?: string;
+}
+
+export interface MCPToolContentItem {
+  type: "text" | "image" | "resource";
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  uri?: string;
+  truncated?: boolean;
+  originalLength?: number;
+  note?: string;
+}
+
+export interface MCPResourceContentItem {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
+  truncated?: boolean;
+  originalLength?: number;
+  note?: string;
+}
+
 /**
  * MCP 服务器运行时状态
  */
@@ -127,6 +209,8 @@ export interface MCPServerState {
     serverVersion?: string;
     protocolVersion?: string;
   };
+  /** 运行时诊断 */
+  diagnostics?: MCPServerRuntimeDiagnostics;
 }
 
 /**
@@ -183,17 +267,13 @@ export interface MCPToolCallResult {
   /** 是否成功 */
   success: boolean;
   /** 结果内容 */
-  content?: Array<{
-    type: "text" | "image" | "resource";
-    text?: string;
-    data?: string;
-    mimeType?: string;
-    uri?: string;
-  }>;
+  content?: MCPToolContentItem[];
   /** 错误信息 */
   error?: string;
   /** 是否为错误响应 */
   isError?: boolean;
+  /** 输出处理诊断 */
+  diagnostics?: MCPResultDiagnostics;
 }
 
 // ============================================================================
@@ -213,12 +293,9 @@ export interface MCPResourceReadRequest {
  */
 export interface MCPResourceReadResult {
   /** 资源内容 */
-  contents: Array<{
-    uri: string;
-    mimeType?: string;
-    text?: string;
-    blob?: string;
-  }>;
+  contents: MCPResourceContentItem[];
+  /** 输出处理诊断 */
+  diagnostics?: MCPResultDiagnostics;
 }
 
 // ============================================================================

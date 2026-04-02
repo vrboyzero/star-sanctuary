@@ -1,5 +1,63 @@
 export { startGatewayServer } from "./server.js";
 export type { GatewayServer, GatewayServerOptions } from "./server.js";
+export {
+  createEmptyInstalledExtensionLedger,
+  createEmptyKnownMarketplaceLedger,
+  getInstalledExtension,
+  getKnownMarketplace,
+  getExtensionMarketplaceStateDir,
+  getInstalledExtensionsLedgerPath,
+  getKnownMarketplacesLedgerPath,
+  listInstalledExtensions,
+  listKnownMarketplaces,
+  loadExtensionMarketplaceState,
+  loadInstalledExtensionLedger,
+  loadKnownMarketplaceLedger,
+  removeInstalledExtension,
+  removeKnownMarketplace,
+  saveInstalledExtensionLedger,
+  saveKnownMarketplaceLedger,
+  setInstalledExtensionEnabled,
+  upsertInstalledExtension,
+  upsertKnownMarketplace,
+} from "./extension-marketplace-state.js";
+export type {
+  ExtensionMarketplaceStateSnapshot,
+  InstalledExtensionLedger,
+  InstalledExtensionRecord,
+  InstalledExtensionStatus,
+  KnownMarketplaceLedger,
+  KnownMarketplaceRecord,
+} from "./extension-marketplace-state.js";
+export {
+  getExtensionMarketplaceMaterializedDir,
+  getExtensionMarketplaceSourceCacheDir,
+  getMaterializedExtensionPath,
+  getMarketplaceSourceCachePath,
+  materializeExtensionMarketplaceSource,
+  prepareExtensionMarketplaceSource,
+} from "./extension-marketplace-source.js";
+export type {
+  ExtensionMarketplaceFetchStatus,
+  ExtensionMarketplaceSourceState,
+  MaterializedExtensionMarketplaceSource,
+  MaterializeExtensionMarketplaceSourceOptions,
+  PrepareExtensionMarketplaceSourceOptions,
+  PrepareExtensionMarketplaceSourceResult,
+} from "./extension-marketplace-source.js";
+export {
+  disableMarketplaceExtension,
+  enableMarketplaceExtension,
+  installMarketplaceExtension,
+  uninstallMarketplaceExtension,
+  updateMarketplaceExtension,
+} from "./extension-marketplace-service.js";
+export type {
+  InstallMarketplaceExtensionInput,
+  InstallMarketplaceExtensionResult,
+  UninstallMarketplaceExtensionInput,
+  UpdateMarketplaceExtensionInput,
+} from "./extension-marketplace-service.js";
 export { GoalManager } from "./goals/manager.js";
 export { GOAL_UPDATE_AREA_SEMANTICS, GOAL_UPDATE_PROTOCOL, getGoalUpdateAreas } from "./goals/goal-events.js";
 export { parseGoalSessionKey, createGoalConversationId, createGoalNodeConversationId } from "./goals/session.js";

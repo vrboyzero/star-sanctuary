@@ -11,6 +11,7 @@ import {
   shutdownMCP,
   getMCPManager,
   type MCPManager,
+  type MCPServerRuntimeDiagnostics,
   type MCPToolInfo,
 } from "@belldandy/mcp";
 import type { ToolExecutor, Tool, ToolContext, ToolCallResult } from "@belldandy/skills";
@@ -235,11 +236,21 @@ export function getMCPDiagnostics(): {
   toolCount: number;
   serverCount: number;
   connectedCount: number;
+  summary: {
+    recentErrorServers: number;
+    recoveryAttemptedServers: number;
+    recoverySucceededServers: number;
+    persistedResultServers: number;
+    truncatedResultServers: number;
+  };
   servers: Array<{
     id: string;
     name: string;
     status: string;
+    error?: string;
     toolCount: number;
+    resourceCount: number;
+    diagnostics?: MCPServerRuntimeDiagnostics;
   }>;
 } | null {
   if (!state.manager) {
@@ -252,11 +263,23 @@ export function getMCPDiagnostics(): {
     toolCount: diag.toolCount,
     serverCount: diag.serverCount,
     connectedCount: diag.connectedCount,
-    servers: diag.servers.map((s: { id: string; name: string; status: string; toolCount: number; resourceCount: number }) => ({
+    summary: diag.summary,
+    servers: diag.servers.map((s: {
+      id: string;
+      name: string;
+      status: string;
+      error?: string;
+      toolCount: number;
+      resourceCount: number;
+      diagnostics?: MCPServerRuntimeDiagnostics;
+    }) => ({
       id: s.id,
       name: s.name,
       status: s.status,
+      error: s.error,
       toolCount: s.toolCount,
+      resourceCount: s.resourceCount,
+      diagnostics: s.diagnostics,
     })),
   };
 }
@@ -276,9 +299,18 @@ export function printMCPStatus(logger?: { info: (m: string, msg: string) => void
   log(`状态: ${diag.initialized ? "已初始化" : "未初始化"}`);
   log(`服务器: ${diag.connectedCount}/${diag.serverCount} 已连接`);
   log(`工具: ${diag.toolCount} 个可用`);
+  if (diag.summary.recoveryAttemptedServers > 0 || diag.summary.persistedResultServers > 0) {
+    log(`摘要: recovery=${diag.summary.recoverySucceededServers}/${diag.summary.recoveryAttemptedServers}, persisted=${diag.summary.persistedResultServers}, truncated=${diag.summary.truncatedResultServers}`);
+  }
   if (diag.servers.length > 0) {
     for (const server of diag.servers) {
-      log(`  - ${server.name} (${server.id}): ${server.status}, ${server.toolCount} 工具`);
+      const failureSuffix = server.diagnostics?.lastErrorMessage
+        ? `, lastError=${server.diagnostics.lastErrorKind ?? "unknown"}:${server.diagnostics.lastErrorMessage}`
+        : "";
+      const resultSuffix = server.diagnostics?.lastResult
+        ? `, lastResult=${server.diagnostics.lastResult.source}:${server.diagnostics.lastResult.strategy}`
+        : "";
+      log(`  - ${server.name} (${server.id}): ${server.status}, ${server.toolCount} 工具, ${server.resourceCount} 资源${failureSuffix}${resultSuffix}`);
     }
   }
 }

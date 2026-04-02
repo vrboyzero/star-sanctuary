@@ -616,7 +616,7 @@ describe("GoalManager", () => {
       methods: [{ file: "Refactor-Plan.md", title: "Refactor Plan", score: 20 }],
       skills: [{ name: "find-skills", score: 10 }],
       mcpServers: [{ serverId: "docs", status: "connected", toolCount: 4 }],
-      subAgents: [{ agentId: "coder", objective: "Implement changes" }],
+      subAgents: [{ agentId: "coder", role: "coder", objective: "Implement changes", deliverable: "code patch", handoffToVerifier: true }],
       gaps: ["Need more domain skills"],
     });
     expect(planned.status).toBe("planned");
@@ -652,11 +652,36 @@ describe("GoalManager", () => {
         claimed: true,
         delegated: false,
         delegationCount: 0,
+        coordinationPlan: {
+          summary: "按 1 路分工推进，并以 verifier_handoff 收口。",
+          plannedDelegationCount: 1,
+          rolePolicy: {
+            selectedRoles: ["coder"],
+            selectionReasons: ["测试：按 coder 主实现再收口。"],
+            verifierRole: "verifier",
+            fanInStrategy: "verifier_handoff",
+          },
+        },
+        delegationResults: [{
+          agentId: "coder",
+          role: "coder",
+          status: "skipped",
+          summary: "测试中未实际委托。",
+        }],
+        verifierHandoff: {
+          status: "pending",
+          verifierRole: "verifier",
+          summary: "等待主 Agent 汇总后交给 verifier。",
+          sourceAgentIds: ["coder"],
+          notes: ["测试记录"],
+        },
         notes: ["delegated coder"],
       },
     });
     expect(orchestrated.status).toBe("orchestrated");
     expect(orchestrated.orchestration?.delegated).toBe(false);
+    expect(orchestrated.orchestration?.coordinationPlan?.rolePolicy.fanInStrategy).toBe("verifier_handoff");
+    expect(orchestrated.orchestration?.verifierHandoff?.status).toBe("pending");
     expect(orchestrated.analysis.status).toBe("diverged");
     expect(orchestrated.analysis.deviations.some((item) => item.kind === "unplanned_but_used" && item.area === "method")).toBe(true);
     expect(orchestrated.analysis.deviations.some((item) => item.kind === "delegation_gap")).toBe(true);

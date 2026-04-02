@@ -4,6 +4,14 @@ import os from "node:os";
 import { ensureDefaultEnvFile, resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
 import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
 import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
+import {
+  createSubTaskAgentCapabilities,
+  createSubTaskRuntimeEventHandler,
+  createSubTaskWorktreeLifecycleHandler,
+  reconcileSubTaskWorktreeRuntimes,
+  SubTaskRuntimeStore,
+} from "../task-runtime.js";
+import { SubTaskWorktreeRuntime } from "../worktree-runtime.js";
 
 import {
   OpenAIChatAgent,
@@ -32,8 +40,11 @@ import {
 } from "@belldandy/agent";
 import {
   ToolExecutor,
+  ToolPoolAssembler,
   DEFAULT_POLICY,
   type ToolPolicy,
+  resolveSafeScopesForChannel,
+  type ToolContractAccessPolicy,
   TOOL_SETTINGS_CONTROL_NAME,
   createToolSettingsControlTool,
   type AgentToolControlMode,
@@ -125,11 +136,6 @@ import {
   sessionsHistoryTool,
   delegateTaskTool,
   delegateParallelTool,
-  SkillRegistry,
-  registerGlobalSkillRegistry,
-  createSkillsListTool,
-  createSkillsSearchTool,
-  createSkillGetTool,
   createCanvasTools,
   getUserUuidTool,
   getMessageSenderInfoTool,
@@ -163,6 +169,8 @@ import { GoalManager } from "../goals/manager.js";
 import { buildGoalCapabilityPlan } from "../goals/capability-planner.js";
 import { parseGoalSessionKey } from "../goals/session.js";
 import { buildContextInjectionPrelude } from "../context-injection.js";
+import { searchEnabledSkills } from "../extension-runtime.js";
+import { bridgeLegacyPluginHooks, initializeExtensionHost } from "../extension-host.js";
 import { truncateToolTranscriptContent } from "../tool-transcript.js";
 
 const GOAL_TOOL_NAMES = new Set([
@@ -220,7 +228,6 @@ import {
 import { createLoggerFromEnv } from "../logger/index.js";
 import { ToolsConfigManager } from "../tools-config.js";
 import { ToolControlConfirmationStore } from "../tool-control-confirmation-store.js";
-import { PluginRegistry } from "@belldandy/plugins";
 import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
@@ -643,22 +650,21 @@ if (toolsEnabled) {
   setBrowserLogger(logger.child("browser"));
 }
 
-const toolsToRegister = toolsEnabled
-  ? [
-    // ── core 组：文件、网络、记忆（始终加载） ──
-    fetchTool,
-    applyPatchTool,
-    fileReadTool,
-    fileWriteTool,
-    fileDeleteTool,
-    listFilesTool,
-    ...(dangerousToolsEnabled ? [runCommandTool] : []),
-    createMemorySearchTool(),
-    createMemoryGetTool(),
-    memoryReadTool,
-    memoryWriteTool,
-    memorySharePromoteTool,
-    taskSearchTool,
+const gatewayToolPoolAssembler = new ToolPoolAssembler([
+  {
+    tools: [
+      fetchTool,
+      applyPatchTool,
+      fileReadTool,
+      fileWriteTool,
+      fileDeleteTool,
+      listFilesTool,
+      createMemorySearchTool(),
+      createMemoryGetTool(),
+      memoryReadTool,
+      memoryWriteTool,
+      memorySharePromoteTool,
+      taskSearchTool,
       taskGetTool,
       taskRecentTool,
       taskPromoteMethodTool,
@@ -671,112 +677,137 @@ const toolsToRegister = toolsEnabled
       experienceUsageListTool,
       experienceUsageRecordTool,
       experienceUsageRevokeTool,
-    getUserUuidTool, // UUID获取工具（始终加载）
-    getMessageSenderInfoTool, // 发送者信息工具（始终加载）
-    getRoomMembersTool, // 房间成员工具（始终加载）
-    createLeaveRoomTool(undefined), // 离开社区房间工具（CommunityChannel 初始化后才可用）
-    createJoinRoomTool(undefined), // 加入社区房间工具（CommunityChannel 初始化后才可用）
-    officeWorkshopSearchTool,
-    officeWorkshopGetItemTool,
-    officeWorkshopDownloadTool,
-    officeWorkshopPublishTool,
-    officeWorkshopMineTool,
-    officeWorkshopUpdateTool,
-    officeWorkshopDeleteTool,
-    officeHomesteadGetTool,
-    officeHomesteadInventoryTool,
-    officeHomesteadClaimTool,
-    officeHomesteadPlaceTool,
-    officeHomesteadRecallTool,
-    officeHomesteadMountTool,
-    officeHomesteadUnmountTool,
-    officeHomesteadOpenBlindBoxTool,
-    timerTool, // 计时器工具（始终加载）
-    tokenCounterStartTool, // 任务级 token 计数器（始终加载）
-    tokenCounterStopTool,
-    goalInitTool,
-    goalGetTool,
-    goalListTool,
-    goalResumeTool,
-    goalPauseTool,
-    goalHandoffGenerateTool,
-    goalRetrospectGenerateTool,
-    goalExperienceSuggestTool,
-    goalMethodCandidatesGenerateTool,
-    goalSkillCandidatesGenerateTool,
-    goalFlowPatternsGenerateTool,
-    goalCrossGoalFlowPatternsTool,
-    goalReviewGovernanceSummaryTool,
-    goalApprovalScanTool,
-    goalSuggestionReviewListTool,
-    goalSuggestionReviewWorkflowSetTool,
-    goalSuggestionReviewDecideTool,
-    goalSuggestionReviewEscalateTool,
-    goalSuggestionReviewScanTool,
-    goalSuggestionPublishTool,
-    goalCheckpointListTool,
-    goalCheckpointRequestTool,
-    goalCheckpointApproveTool,
-    goalCheckpointRejectTool,
-    goalCheckpointExpireTool,
-    goalCheckpointReopenTool,
-    goalCheckpointEscalateTool,
-    goalCapabilityPlanTool,
-    goalOrchestrateTool,
-    taskGraphReadTool,
-    taskGraphCreateTool,
-    taskGraphUpdateTool,
-    taskGraphClaimTool,
-    taskGraphPendingReviewTool,
-    taskGraphValidatingTool,
-    taskGraphCompleteTool,
-    taskGraphBlockTool,
-    taskGraphFailTool,
-    taskGraphSkipTool,
-
-    // ── browser 组 ──
-    ...(hasToolGroup("browser") ? [
+      getUserUuidTool,
+      getMessageSenderInfoTool,
+      getRoomMembersTool,
+      createLeaveRoomTool(undefined),
+      createJoinRoomTool(undefined),
+      officeWorkshopSearchTool,
+      officeWorkshopGetItemTool,
+      officeWorkshopDownloadTool,
+      officeWorkshopPublishTool,
+      officeWorkshopMineTool,
+      officeWorkshopUpdateTool,
+      officeWorkshopDeleteTool,
+      officeHomesteadGetTool,
+      officeHomesteadInventoryTool,
+      officeHomesteadClaimTool,
+      officeHomesteadPlaceTool,
+      officeHomesteadRecallTool,
+      officeHomesteadMountTool,
+      officeHomesteadUnmountTool,
+      officeHomesteadOpenBlindBoxTool,
+      timerTool,
+      tokenCounterStartTool,
+      tokenCounterStopTool,
+      goalInitTool,
+      goalGetTool,
+      goalListTool,
+      goalResumeTool,
+      goalPauseTool,
+      goalHandoffGenerateTool,
+      goalRetrospectGenerateTool,
+      goalExperienceSuggestTool,
+      goalMethodCandidatesGenerateTool,
+      goalSkillCandidatesGenerateTool,
+      goalFlowPatternsGenerateTool,
+      goalCrossGoalFlowPatternsTool,
+      goalReviewGovernanceSummaryTool,
+      goalApprovalScanTool,
+      goalSuggestionReviewListTool,
+      goalSuggestionReviewWorkflowSetTool,
+      goalSuggestionReviewDecideTool,
+      goalSuggestionReviewEscalateTool,
+      goalSuggestionReviewScanTool,
+      goalSuggestionPublishTool,
+      goalCheckpointListTool,
+      goalCheckpointRequestTool,
+      goalCheckpointApproveTool,
+      goalCheckpointRejectTool,
+      goalCheckpointExpireTool,
+      goalCheckpointReopenTool,
+      goalCheckpointEscalateTool,
+      goalCapabilityPlanTool,
+      goalOrchestrateTool,
+      taskGraphReadTool,
+      taskGraphCreateTool,
+      taskGraphUpdateTool,
+      taskGraphClaimTool,
+      taskGraphPendingReviewTool,
+      taskGraphValidatingTool,
+      taskGraphCompleteTool,
+      taskGraphBlockTool,
+      taskGraphFailTool,
+      taskGraphSkipTool,
+      sessionsSpawnTool,
+      sessionsHistoryTool,
+      delegateTaskTool,
+      delegateParallelTool,
+    ],
+  },
+  {
+    tool: runCommandTool,
+  },
+  {
+    group: "browser",
+    tools: [
       browserOpenTool,
       browserNavigateTool,
       browserClickTool,
       browserTypeTool,
       browserScreenshotTool,
       browserGetContentTool,
-    ] : []),
-
-    // ── multimedia 组 ──
-    ...(hasToolGroup("multimedia") ? [
+    ],
+  },
+  {
+    group: "multimedia",
+    tools: [
       cameraSnapTool,
       imageGenerateTool,
       textToSpeechTool,
-    ] : []),
-
-    // ── methodology 组 ──
-    ...(hasToolGroup("methodology") ? [
+    ],
+  },
+  {
+    group: "methodology",
+    tools: [
       methodListTool,
       methodReadTool,
       methodCreateTool,
       methodSearchTool,
-    ] : []),
-
-    // ── system 组 ──
-    ...(hasToolGroup("system") ? [
+    ],
+  },
+  {
+    group: "system",
+    factory: async () => [
       logReadTool,
       logSearchTool,
-      createCronTool({ store: cronStore, scheduler: { status: () => cronSchedulerHandle?.status() ?? { running: false, activeRuns: 0 } } }),
+      createCronTool({
+        store: cronStore,
+        scheduler: {
+          status: () => cronSchedulerHandle?.status() ?? { running: false, activeRuns: 0 },
+        },
+      }),
       createServiceRestartTool((msg) => serverBroadcast?.(msg)),
       switchFacetTool,
-    ] : []),
+    ],
+  },
+  {
+    group: "canvas",
+    factory: async () => createCanvasTools((msg) => serverBroadcast?.(msg)),
+  },
+]);
 
-    // ── session 组（子 Agent 编排） ──
-    sessionsSpawnTool,
-    sessionsHistoryTool,
-    delegateTaskTool,
-    delegateParallelTool,
+const gatewayContractAccessPolicy: ToolContractAccessPolicy = {
+  channel: "gateway",
+  allowedSafeScopes: resolveSafeScopesForChannel("gateway"),
+  blockedToolNames: dangerousToolsEnabled ? [] : [runCommandTool.definition.name],
+};
 
-    // ── canvas 组（可视化工作区） ──
-    ...(hasToolGroup("canvas") ? createCanvasTools((msg) => serverBroadcast?.(msg)) : []),
-  ]
+const toolsToRegister = toolsEnabled
+  ? await gatewayToolPoolAssembler.assemble({
+    ...gatewayContractAccessPolicy,
+    enabledGroups: toolGroups,
+  })
   : [];
 
 let agentRegistry: AgentRegistry | undefined;
@@ -787,6 +818,7 @@ const toolExecutor = new ToolExecutor({
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
   alwaysEnabledTools: toolsEnabled ? [TOOL_SETTINGS_CONTROL_NAME] : [],
   policy: toolsPolicy,
+  contractAccessPolicy: gatewayContractAccessPolicy,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
   isToolAllowedForAgent: (toolName, agentId) => {
     const resolvedAgentId = typeof agentId === "string" && agentId.trim()
@@ -852,31 +884,35 @@ if (mcpEnabled && toolsEnabled) {
   logger.warn("mcp", "BELLDANDY_MCP_ENABLED=true 但 BELLDANDY_TOOLS_ENABLED=false，MCP 需要启用工具系统");
 }
 
-// 4.2 Load Plugins (~/.star_sanctuary/plugins/ by default)
-const pluginRegistry = new PluginRegistry();
-const pluginsDir = path.join(stateDir, "plugins");
+// 4.2 Prepare extension host runtime
+const activeMcpServers: string[] = [];
 try {
-  if (fs.existsSync(pluginsDir)) {
-    await pluginRegistry.loadPluginDirectory(pluginsDir);
-    const pluginTools = pluginRegistry.getAllTools();
-    if (pluginTools.length > 0) {
-      for (const tool of pluginTools) {
-        toolExecutor.registerTool(tool);
-      }
-      logger.info("plugins", `注册了 ${pluginTools.length} 个插件工具`);
-    }
-    // 注册插件工具映射到 toolsConfigManager
-    for (const [pluginId, toolNames] of pluginRegistry.getPluginToolMap()) {
-      toolsConfigManager.registerPluginTools(pluginId, toolNames);
-    }
-    const pluginIds = pluginRegistry.getPluginIds();
-    if (pluginIds.length > 0) {
-      logger.info("plugins", `已加载 ${pluginIds.length} 个插件: ${pluginIds.join(", ")}`);
+  const mcpModule = await import("../mcp/index.js");
+  const diag = mcpModule.getMCPDiagnostics();
+  if (diag) {
+    for (const server of diag.servers) {
+      if (server.status === "connected") activeMcpServers.push(server.name);
     }
   }
-} catch (err) {
-  logger.warn("plugins", `插件加载失败: ${String(err)}`);
-}
+} catch { /* MCP not available */ }
+
+const extensionHost = await initializeExtensionHost({
+  stateDir,
+  bundledSkillsDir: runtimePaths.bundledSkillsDir,
+  workspaceRoot: stateDir,
+  toolsEnabled,
+  toolExecutor,
+  toolsConfigManager,
+  logger,
+  activeMcpServers,
+});
+
+const {
+  pluginRegistry,
+  skillRegistry,
+  promptSkills,
+  searchableSkills,
+} = extensionHost;
 
 if (toolsEnabled) {
   toolExecutor.registerTool(createToolSettingsControlTool({
@@ -888,38 +924,6 @@ if (toolsEnabled) {
     confirmationStore: toolControlConfirmationStore,
   }));
   logger.info("tools", `registered ${TOOL_SETTINGS_CONTROL_NAME} (mode=${agentToolControlMode})`);
-}
-
-// 4.3 Init SkillRegistry
-const skillRegistry = new SkillRegistry();
-const bundledSkillsDir = runtimePaths.bundledSkillsDir;
-const userSkillsDir = path.join(stateDir, "skills");
-
-try {
-  const bundledCount = await skillRegistry.loadBundledSkills(bundledSkillsDir);
-  if (bundledCount > 0) logger.info("skills", `loaded ${bundledCount} bundled skills`);
-
-  const userCount = await skillRegistry.loadUserSkills(userSkillsDir);
-  if (userCount > 0) logger.info("skills", `loaded ${userCount} user skills`);
-
-  const pluginSkillDirs = pluginRegistry.getPluginSkillDirs();
-  if (pluginSkillDirs.size > 0) {
-    const pluginCount = await skillRegistry.loadPluginSkills(pluginSkillDirs);
-    if (pluginCount > 0) logger.info("skills", `loaded ${pluginCount} plugin skills`);
-  }
-
-  logger.info("skills", `total: ${skillRegistry.size} skills loaded`);
-  registerGlobalSkillRegistry(skillRegistry);
-} catch (err) {
-  logger.warn("skills", `技能加载失败: ${String(err)}`);
-}
-
-// Register skills_list / skills_search / skill_get tools
-if (toolsEnabled) {
-  toolExecutor.registerTool(createSkillsListTool(skillRegistry));
-  toolExecutor.registerTool(createSkillsSearchTool(skillRegistry));
-  toolExecutor.registerTool(createSkillGetTool(skillRegistry));
-  logger.info("skills", "registered skills_list + skills_search + skill_get tools");
 }
 
 // 4.4 Bridge plugin hooks → HookRegistry (deferred to after hookRegistry init, see section 7.5)
@@ -943,34 +947,9 @@ if (workspaceResult.created.length > 0) {
 const workspace = await loadWorkspaceFiles(stateDir);
 logger.info("workspace", `SOUL=${workspace.hasSoul}, IDENTITY=${workspace.hasIdentity}, USER=${workspace.hasUser}, BOOTSTRAP=${workspace.hasBootstrap}`);
 
-// 7. Skill eligibility check + Build dynamic system prompt
-// Collect MCP server names for eligibility check
-const activeMcpServers: string[] = [];
-try {
-  const mcpModule = await import("../mcp/index.js");
-  const diag = mcpModule.getMCPDiagnostics();
-  if (diag) {
-    for (const s of diag.servers) {
-      if (s.status === "connected") activeMcpServers.push(s.name);
-    }
-  }
-} catch { /* MCP not available */ }
-
-const registeredToolNames = toolExecutor.getDefinitions().map(d => d.function.name);
-await skillRegistry.refreshEligibility({
-  registeredTools: registeredToolNames,
-  activeMcpServers,
-  workspaceRoot: stateDir,
-});
-
-const promptSkills = skillRegistry.getPromptSkills().filter(s => !toolsConfigManager.isSkillDisabled(s.name));
-const searchableSkills = skillRegistry.getSearchableSkills().filter(s => !toolsConfigManager.isSkillDisabled(s.name));
+// 7. Build dynamic system prompt
 const skillInstructions = promptSkills.map(s => ({ name: s.name, instructions: s.instructions }));
 const hasSearchableSkills = searchableSkills.length > 0;
-
-if (promptSkills.length > 0 || searchableSkills.length > 0) {
-  logger.info("skills", `eligible: ${promptSkills.length} prompt-injected, ${searchableSkills.length} searchable`);
-}
 
 const dynamicSystemPrompt = buildSystemPrompt({
   workspace,
@@ -1071,52 +1050,11 @@ if (toolResultTranscriptCharLimit > 0) {
 }
 
 // 7.6 Bridge legacy plugin hooks → HookRegistry
-const legacyHooks = pluginRegistry.getAggregatedHooks();
-if (legacyHooks.beforeRun) {
-  hookRegistry.register({
-    source: "plugin-bridge",
-    hookName: "before_agent_start",
-    priority: 200,
-    handler: async (event, ctx) => {
-      await legacyHooks.beforeRun!(event as any, ctx as any);
-    },
-  });
-}
-if (legacyHooks.afterRun) {
-  hookRegistry.register({
-    source: "plugin-bridge",
-    hookName: "agent_end",
-    priority: 200,
-    handler: async (event, ctx) => {
-      await legacyHooks.afterRun!(event as any, ctx as any);
-    },
-  });
-}
-if (legacyHooks.beforeToolCall) {
-  hookRegistry.register({
-    source: "plugin-bridge",
-    hookName: "before_tool_call",
-    priority: 200,
-    handler: async (event, ctx) => {
-      const result = await legacyHooks.beforeToolCall!(event as any, ctx as any);
-      if (result === false) return { block: true, blockReason: "blocked by plugin hook" };
-      if (result && typeof result === "object") return { params: result as Record<string, unknown> };
-    },
-  });
-}
-if (legacyHooks.afterToolCall) {
-  hookRegistry.register({
-    source: "plugin-bridge",
-    hookName: "after_tool_call",
-    priority: 200,
-    handler: async (event, ctx) => {
-      await legacyHooks.afterToolCall!(event as any, ctx as any);
-    },
-  });
-}
-if (pluginRegistry.getPluginIds().length > 0) {
-  logger.info("plugins", "legacy hooks bridged to HookRegistry");
-}
+bridgeLegacyPluginHooks({
+  extensionHost,
+  hookRegistry,
+  logger,
+});
 
 const hookRunner: HookRunner = createHookRunner(hookRegistry, {
   logger: {
@@ -1453,13 +1391,49 @@ const conversationStore = new ConversationStore({
 toolExecutor.setConversationStore(conversationStore);
 
 // 7.6 Init Sub-Agent Orchestrator (wire agentCapabilities into ToolExecutor)
+let subTaskRuntimeStore: SubTaskRuntimeStore | undefined;
+let subTaskWorktreeRuntime: SubTaskWorktreeRuntime | undefined;
+let subAgentOrchestrator: SubAgentOrchestrator | undefined;
 if (agentRegistry && toolsEnabled) {
   const subAgentMaxConcurrent = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_CONCURRENT") || "3", 10);
   const subAgentTimeoutMs = parseInt(readEnv("BELLDANDY_SUB_AGENT_TIMEOUT_MS") || "120000", 10);
   const subAgentMaxDepth = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_DEPTH") || "2", 10);
   const subAgentMaxQueueSize = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_QUEUE_SIZE") || "10", 10);
+  subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir, {
+    info: (m, d) => logger.info("task-runtime", m, d),
+    warn: (m, d) => logger.warn("task-runtime", m, d),
+    error: (m, d) => logger.error("task-runtime", m, d),
+    debug: (m, d) => logger.debug("task-runtime", m, d),
+  });
+  await subTaskRuntimeStore.load();
+  subTaskWorktreeRuntime = new SubTaskWorktreeRuntime(stateDir, {
+    info: (m, d) => logger.info("task-worktree", m, d),
+    warn: (m, d) => logger.warn("task-worktree", m, d),
+    error: (m, d) => logger.error("task-worktree", m, d),
+    debug: (m, d) => logger.debug("task-worktree", m, d),
+  });
+  subTaskRuntimeStore.subscribe(createSubTaskWorktreeLifecycleHandler({
+    runtimeStore: subTaskRuntimeStore,
+    worktreeRuntime: subTaskWorktreeRuntime,
+    logger: {
+      info: (m, d) => logger.info("task-worktree", m, d),
+      warn: (m, d) => logger.warn("task-worktree", m, d),
+      error: (m, d) => logger.error("task-worktree", m, d),
+      debug: (m, d) => logger.debug("task-worktree", m, d),
+    },
+  }));
+  await reconcileSubTaskWorktreeRuntimes({
+    runtimeStore: subTaskRuntimeStore,
+    worktreeRuntime: subTaskWorktreeRuntime,
+    logger: {
+      info: (m, d) => logger.info("task-worktree", m, d),
+      warn: (m, d) => logger.warn("task-worktree", m, d),
+      error: (m, d) => logger.error("task-worktree", m, d),
+      debug: (m, d) => logger.debug("task-worktree", m, d),
+    },
+  });
 
-  const orchestrator = new SubAgentOrchestrator({
+  subAgentOrchestrator = new SubAgentOrchestrator({
     agentRegistry,
     conversationStore,
     maxConcurrent: subAgentMaxConcurrent,
@@ -1472,28 +1446,22 @@ if (agentRegistry && toolsEnabled) {
       error: (m, d) => logger.error("orchestrator", m, d),
       debug: (m, d) => logger.debug("orchestrator", m, d),
     },
+    onEvent: createSubTaskRuntimeEventHandler(subTaskRuntimeStore, {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    }),
   });
 
-  toolExecutor.setAgentCapabilities({
-    spawnSubAgent: (opts) => orchestrator.spawn({
-      parentConversationId: opts.parentConversationId ?? "system",
-      agentId: opts.agentId,
-      instruction: opts.instruction,
-      context: opts.context as Record<string, unknown> | undefined,
-    }),
-    spawnParallel: (tasks) => orchestrator.spawnParallel(
-      tasks.map((t) => ({
-        parentConversationId: t.parentConversationId ?? "system",
-        agentId: t.agentId,
-        instruction: t.instruction,
-        context: t.context as Record<string, unknown> | undefined,
-      })),
-    ),
-    listSessions: (parentConversationId?) =>
-      Promise.resolve(orchestrator.listSessions(parentConversationId)),
-  });
+  toolExecutor.setAgentCapabilities(createSubTaskAgentCapabilities({
+    orchestrator: subAgentOrchestrator,
+    runtimeStore: subTaskRuntimeStore,
+    worktreeRuntime: subTaskWorktreeRuntime,
+    logger: {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    },
+  }));
 
   logger.info("orchestrator", `Sub-agent orchestrator initialized (maxConcurrent=${subAgentMaxConcurrent}, queue=${subAgentMaxQueueSize}, timeout=${subAgentTimeoutMs}ms, maxDepth=${subAgentMaxDepth})`);
+  logger.info("task-runtime", "Sub-task runtime initialized for sub-agent orchestration.");
 }
 
 const ttsEnabledPath = path.join(stateDir, "TTS_ENABLED");
@@ -1504,7 +1472,10 @@ const isTtsEnabledFn = () => {
 };
 
 // 7.7 Init unified MemoryManager (indexes only state-dir memory sources)
-const memoryIndexPaths = resolveMemoryIndexPaths(stateDir);
+const teamSharedMemoryEnabled = readEnv("BELLDANDY_TEAM_SHARED_MEMORY_ENABLED") === "true";
+const memoryIndexPaths = resolveMemoryIndexPaths(stateDir, {
+  includeTeamSharedMemory: teamSharedMemoryEnabled,
+});
 const embeddingApiKey = readEnv("BELLDANDY_EMBEDDING_OPENAI_API_KEY") ?? openaiApiKey;
 const embeddingBaseUrl = readEnv("BELLDANDY_EMBEDDING_OPENAI_BASE_URL") ?? openaiBaseUrl;
 const embeddingModel = readEnv("BELLDANDY_EMBEDDING_MODEL");
@@ -1613,7 +1584,7 @@ unifiedMemoryManager.indexWorkspace().catch(err => {
 });
 logger.info(
   "memory",
-  `Unified MemoryManager initialized (stateDir memory sources: sessions + ${memoryIndexPaths.additionalRoots.length} additional roots, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
+  `Unified MemoryManager initialized (stateDir memory sources: sessions + ${memoryIndexPaths.additionalRoots.length} additional roots, teamShared=${teamSharedMemoryEnabled}, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
 );
 
 // ========== 后台任务调度：pause/resume + 空闲摘要 ==========
@@ -2079,8 +2050,10 @@ function searchCapabilitySkills(hints: string[]) {
   const scoreByName = new Map<string, number>();
   const skillByName = new Map<string, NonNullable<ReturnType<typeof skillRegistry.getSkill>>>();
   for (const hint of hints) {
-    for (const skill of skillRegistry.searchSkills(hint)) {
-      if (toolsConfigManager.isSkillDisabled(skill.name)) continue;
+    for (const skill of searchEnabledSkills({
+      skillRegistry,
+      toolsConfigManager,
+    }, hint)) {
       scoreByName.set(skill.name, (scoreByName.get(skill.name) ?? 0) + 10);
       if (!skillByName.has(skill.name)) {
         const resolved = skillRegistry.getSkill(skill.name);
@@ -2253,7 +2226,30 @@ const server = await startGatewayServer({
   getAgentToolControlConfirmPassword: () => agentToolControlConfirmPassword,
   pluginRegistry,
   skillRegistry,
+  extensionHost,
   goalManager,
+  subTaskRuntimeStore,
+  stopSubTask: async (taskId, reason) => {
+    if (!subTaskRuntimeStore) return undefined;
+    const current = await subTaskRuntimeStore.getTask(taskId);
+    if (!current) return undefined;
+    const normalizedReason = typeof reason === "string" && reason.trim()
+      ? reason.trim()
+      : "Task stopped by user.";
+
+    if (current.status === "pending" && !current.sessionId) {
+      return subTaskRuntimeStore.markStopped(taskId, { reason: normalizedReason });
+    }
+
+    const requested = await subTaskRuntimeStore.requestStop(taskId, normalizedReason);
+    if (current.sessionId && subAgentOrchestrator) {
+      const stopped = await subAgentOrchestrator.stopSession(current.sessionId, normalizedReason);
+      if (stopped) {
+        return subTaskRuntimeStore.getTask(taskId);
+      }
+    }
+    return requested;
+  },
   ttsEnabled: isTtsEnabledFn,
   ttsSynthesize: async (text: string) => {
     const result = await synthesizeSpeech({ text, stateDir });

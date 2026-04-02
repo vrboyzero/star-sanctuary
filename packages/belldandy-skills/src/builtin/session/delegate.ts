@@ -1,5 +1,7 @@
 import type { Tool, ToolCallResult } from "../../types.js";
 import crypto from "node:crypto";
+import { withToolContract } from "../../tool-contract.js";
+import { buildSubAgentLaunchSpec } from "../../subagent-launch.js";
 
 /**
  * delegate_task — 委托任务给指定子 Agent
@@ -7,7 +9,7 @@ import crypto from "node:crypto";
  * 比 sessions_spawn 更语义化：明确指定目标 Agent Profile，
  * 适用于多 Agent 协作场景（如 "让 coder 写代码"、"让 researcher 查资料"）。
  */
-export const delegateTaskTool: Tool = {
+export const delegateTaskTool: Tool = withToolContract({
     definition: {
         name: "delegate_task",
         description:
@@ -61,16 +63,22 @@ export const delegateTaskTool: Tool = {
         }
 
         try {
-            const result = await context.agentCapabilities.spawnSubAgent({
+            const launchSpec = buildSubAgentLaunchSpec(context, {
                 instruction,
                 agentId: args.agent_id as string | undefined,
                 context: args.context as Record<string, unknown> | undefined,
-                parentConversationId: context.conversationId,
+                channel: "subtask",
             });
+            const result = await context.agentCapabilities.spawnSubAgent(launchSpec);
 
-            const output = result.success
-                ? `[delegate_task] Agent "${args.agent_id ?? "default"}" completed successfully.\n\n${result.output}`
-                : `[delegate_task] Agent "${args.agent_id ?? "default"}" failed: ${result.error ?? "unknown error"}`;
+            const output = [
+                result.success
+                    ? `[delegate_task] Agent "${args.agent_id ?? "default"}" completed successfully.\n\n${result.output}`
+                    : `[delegate_task] Agent "${args.agent_id ?? "default"}" failed: ${result.error ?? "unknown error"}`,
+                result.taskId ? `Task ID: ${result.taskId}` : "",
+                result.sessionId ? `Session ID: ${result.sessionId}` : "",
+                result.outputPath ? `Output Path: ${result.outputPath}` : "",
+            ].filter(Boolean).join("\n");
 
             return {
                 id,
@@ -91,4 +99,18 @@ export const delegateTaskTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "session-orchestration",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: false,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Delegate a task to a specific sub-agent profile",
+    resultSchema: {
+        kind: "text",
+        description: "Delegated task status and synthesized sub-agent output text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

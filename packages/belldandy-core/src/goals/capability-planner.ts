@@ -1,10 +1,13 @@
 import type {
   GoalCapabilityExecutionMode,
+  GoalCapabilityPlanCoordinationPlan,
   GoalCapabilityPlanMethod,
   GoalCapabilityPlanMcpServer,
+  GoalCapabilityPlanRolePolicy,
   GoalCapabilityPlanSaveInput,
   GoalCapabilityPlanSkill,
   GoalCapabilityPlanSubAgent,
+  GoalCapabilityRiskLevel,
 } from "./types.js";
 
 export type CapabilityPlannerMethodCandidate = GoalCapabilityPlanMethod;
@@ -125,26 +128,122 @@ function buildSubAgents(text: string, availableAgentIds: string[], executionMode
   const resolveAgent = (preferred: string, fallback = "default") => (available.has(preferred) ? preferred : fallback);
   const plans: GoalCapabilityPlanSubAgent[] = [];
 
-  const pushUnique = (agentId: string, objective: string, reason: string) => {
+  const pushUnique = (
+    agentId: string,
+    role: GoalCapabilityPlanSubAgent["role"],
+    objective: string,
+    reason: string,
+    deliverable: string,
+  ) => {
     if (plans.some((item) => item.agentId === agentId && item.objective === objective)) return;
-    plans.push({ agentId, objective, reason });
+    plans.push({ agentId, role, objective, reason, deliverable });
   };
 
   if (/(实现|编码|开发|重构|修复|code|refactor|implement|build)/i.test(text)) {
-    pushUnique(resolveAgent("coder"), "负责主实现与代码改动", "节点文本包含实现/重构信号，适合由编码型子代理并行处理。");
+    pushUnique(
+      resolveAgent("coder"),
+      "coder",
+      "负责主实现与代码改动",
+      "节点文本包含实现/重构信号，适合由编码型子代理并行处理。",
+      "代码改动、实现说明与关键影响点",
+    );
   }
   if (/(调研|文档|方案|research|docs|api|网页|browser|外部)/i.test(text)) {
-    pushUnique(resolveAgent("researcher"), "负责补充资料、接口或外部上下文", "节点涉及资料检索/文档/外部系统，需要信息侧分工。");
+    pushUnique(
+      resolveAgent("researcher"),
+      "researcher",
+      "负责补充资料、接口或外部上下文",
+      "节点涉及资料检索/文档/外部系统，需要信息侧分工。",
+      "资料摘要、接口约束与外部上下文清单",
+    );
   }
   if (/(验证|测试|回归|qa|test|review|验收)/i.test(text)) {
-    pushUnique(resolveAgent("qa"), "负责验证、回归或验收检查", "节点文本包含验证/回归信号，适合独立验证子代理。");
+    pushUnique(
+      resolveAgent("qa"),
+      "verifier",
+      "负责验证、回归或验收检查",
+      "节点文本包含验证/回归信号，适合独立验证子代理。",
+      "验证结论、风险清单与验收建议",
+    );
   }
 
   if (plans.length === 0) {
-    pushUnique("default", "拆分并推进该节点的独立子任务", "节点被判定为 multi_agent，但未匹配到更具体的专用子代理。");
+    pushUnique(
+      "default",
+      "default",
+      "拆分并推进该节点的独立子任务",
+      "节点被判定为 multi_agent，但未匹配到更具体的专用子代理。",
+      "子任务执行摘要与产出清单",
+    );
   }
 
   return plans.slice(0, 3);
+}
+
+function buildRolePolicy(
+  text: string,
+  executionMode: GoalCapabilityExecutionMode,
+  riskLevel: GoalCapabilityRiskLevel,
+  subAgents: GoalCapabilityPlanSubAgent[],
+): GoalCapabilityPlanRolePolicy {
+  const selectedRoles: GoalCapabilityPlanRolePolicy["selectedRoles"] = [];
+  const pushRole = (role: GoalCapabilityPlanSubAgent["role"]) => {
+    if (!role || selectedRoles.includes(role)) return;
+    selectedRoles.push(role);
+  };
+
+  if (executionMode === "multi_agent" && subAgents.length > 0) {
+    for (const item of subAgents) {
+      pushRole(item.role ?? "default");
+    }
+  } else {
+    pushRole("default");
+  }
+
+  const verifierRole = selectedRoles.includes("verifier") || riskLevel !== "low" ? "verifier" : undefined;
+  return {
+    selectedRoles,
+    selectionReasons: uniqueStrings([
+      selectedRoles.includes("coder") ? "节点包含实现/重构信号，纳入 coder 负责主代码改动。" : undefined,
+      selectedRoles.includes("researcher") ? "节点包含文档/API/外部上下文信号，纳入 researcher 补资料与约束。" : undefined,
+      selectedRoles.includes("verifier") ? "节点包含验证/回归信号，纳入 verifier 做独立验收。" : undefined,
+      selectedRoles.length === 1 && selectedRoles[0] === "default"
+        ? "当前仅需要默认分工槽位，由主 Agent 或通用子代理承接。"
+        : undefined,
+      riskLevel === "medium" || riskLevel === "high"
+        ? `节点风险为 ${riskLevel}，结果收口默认要求 verifier handoff。`
+        : undefined,
+      /(合并|收口|汇总|验收|review|qa|test)/i.test(text)
+        ? "节点文本包含收口/验收信号，编排结果需要保留 verifier handoff 记录。"
+        : undefined,
+    ]),
+    verifierRole,
+    fanInStrategy: verifierRole ? "verifier_handoff" : "main_agent_summary",
+  };
+}
+
+function applyVerifierHandoff(
+  subAgents: GoalCapabilityPlanSubAgent[],
+  rolePolicy: GoalCapabilityPlanRolePolicy,
+): GoalCapabilityPlanSubAgent[] {
+  return subAgents.map((item) => ({
+    ...item,
+    handoffToVerifier: rolePolicy.verifierRole === "verifier" ? item.role !== "verifier" : undefined,
+  }));
+}
+
+function buildCoordinationPlan(
+  executionMode: GoalCapabilityExecutionMode,
+  subAgents: GoalCapabilityPlanSubAgent[],
+  rolePolicy: GoalCapabilityPlanRolePolicy,
+): GoalCapabilityPlanCoordinationPlan {
+  return {
+    summary: executionMode === "multi_agent"
+      ? `按 ${subAgents.length || 1} 路分工推进，并以 ${rolePolicy.fanInStrategy} 收口。`
+      : `由主 Agent 直接推进，并以 ${rolePolicy.fanInStrategy} 收口。`,
+    plannedDelegationCount: executionMode === "multi_agent" ? subAgents.length : 0,
+    rolePolicy,
+  };
 }
 
 export function buildGoalCapabilityPlan(input: CapabilityPlannerInput): GoalCapabilityPlanSaveInput {
@@ -162,7 +261,10 @@ export function buildGoalCapabilityPlan(input: CapabilityPlannerInput): GoalCapa
   const methods = (input.methods ?? []).slice(0, 3);
   const skills = (input.skills ?? []).slice(0, 4);
   const mcpServers = (input.mcpServers ?? []).slice(0, 3);
-  const subAgents = buildSubAgents(text, input.availableAgentIds ?? [], executionMode);
+  const draftSubAgents = buildSubAgents(text, input.availableAgentIds ?? [], executionMode);
+  const rolePolicy = buildRolePolicy(text, executionMode, risk.riskLevel, draftSubAgents);
+  const subAgents = applyVerifierHandoff(draftSubAgents, rolePolicy);
+  const coordinationPlan = buildCoordinationPlan(executionMode, subAgents, rolePolicy);
   const reasoning = uniqueStrings([
     executionMode === "multi_agent"
       ? "节点包含并行/拆分信号，优先采用 multi_agent 规划。"
@@ -216,6 +318,9 @@ export function buildGoalCapabilityPlan(input: CapabilityPlannerInput): GoalCapa
       skills: [],
       mcpServers: [],
       toolNames: [],
+    },
+    orchestration: {
+      coordinationPlan,
     },
   };
 }

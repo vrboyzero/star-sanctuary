@@ -29,9 +29,21 @@ describe("MCPManager", () => {
     vi.spyOn(MCPClient.prototype, "connect").mockImplementation(async function mockConnect(this: MCPClient) {
       connectCalls += 1;
       await new Promise((resolve) => setTimeout(resolve, 20));
-      (this as unknown as { status: string; tools: unknown[]; resources: unknown[] }).status = "connected";
+      (this as unknown as {
+        status: string;
+        tools: unknown[];
+        resources: unknown[];
+        diagnostics: { connectionAttempts: number; reconnectAttempts: number; lastErrorKind?: string };
+      }).status = "connected";
       (this as unknown as { tools: unknown[] }).tools = [];
       (this as unknown as { resources: unknown[] }).resources = [];
+      (this as unknown as {
+        diagnostics: { connectionAttempts: number; reconnectAttempts: number; lastErrorKind?: string };
+      }).diagnostics = {
+        connectionAttempts: 1,
+        reconnectAttempts: 0,
+        lastErrorKind: "transport",
+      };
     });
 
     await Promise.all([
@@ -41,6 +53,10 @@ describe("MCPManager", () => {
 
     expect(connectCalls).toBe(1);
     expect(manager.getServerState("server_a")?.status).toBe("connected");
+    expect(manager.getDiagnostics().servers[0]?.diagnostics).toEqual(expect.objectContaining({
+      connectionAttempts: 1,
+      lastErrorKind: "transport",
+    }));
   });
 
   it("removes failed clients from the manager after connect failure", async () => {
@@ -101,5 +117,72 @@ describe("MCPManager", () => {
 
     expect(removeListenerSpy).toHaveBeenCalledTimes(1);
     expect(manager.getServerState("server_disconnect")).toBeUndefined();
+  });
+
+  it("summarizes recovery and persisted-result diagnostics across servers", async () => {
+    const manager = new MCPManager();
+    (manager as unknown as { config: unknown }).config = {
+      version: 1,
+      servers: [
+        {
+          id: "server_summary",
+          name: "Server Summary",
+          enabled: true,
+          transport: {
+            type: "sse",
+            url: "http://127.0.0.1:8083/sse",
+          },
+        },
+      ],
+    };
+
+    vi.spyOn(MCPClient.prototype, "connect").mockImplementation(async function mockConnect(this: MCPClient) {
+      (this as unknown as { status: string; tools: unknown[]; resources: unknown[] }).status = "connected";
+      (this as unknown as { tools: unknown[] }).tools = [];
+      (this as unknown as { resources: unknown[] }).resources = [];
+      (this as unknown as {
+        diagnostics: {
+          connectionAttempts: number;
+          reconnectAttempts: number;
+          lastErrorAt?: Date;
+          lastRecoveryAt?: Date;
+          lastRecoverySucceeded?: boolean;
+          lastResult?: {
+            at: Date;
+            source: "call_tool";
+            strategy: "persisted";
+            estimatedChars: number;
+            truncatedItems: number;
+            persistedItems?: number;
+            persistedWebPath?: string;
+          };
+        };
+      }).diagnostics = {
+        connectionAttempts: 1,
+        reconnectAttempts: 1,
+        lastErrorAt: new Date("2026-04-02T10:00:00.000Z"),
+        lastRecoveryAt: new Date("2026-04-02T10:01:00.000Z"),
+        lastRecoverySucceeded: true,
+        lastResult: {
+          at: new Date("2026-04-02T10:02:00.000Z"),
+          source: "call_tool",
+          strategy: "persisted",
+          estimatedChars: 4096,
+          truncatedItems: 1,
+          persistedItems: 1,
+          persistedWebPath: "/generated/mcp-summary.txt",
+        },
+      };
+    });
+
+    await manager.connect("server_summary");
+
+    expect(manager.getDiagnostics().summary).toEqual({
+      recentErrorServers: 1,
+      recoveryAttemptedServers: 1,
+      recoverySucceededServers: 1,
+      persistedResultServers: 1,
+      truncatedResultServers: 1,
+    });
   });
 });

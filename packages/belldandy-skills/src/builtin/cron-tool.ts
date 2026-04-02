@@ -13,6 +13,7 @@
 
 import crypto from "node:crypto";
 import type { Tool, ToolContext, ToolCallResult, JsonObject } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
 // ── 依赖接口（避免直接导入 @belldandy/core，防止循环依赖） ──
 
@@ -82,7 +83,7 @@ export type CronToolDeps = {
 export function createCronTool(deps: CronToolDeps): Tool {
     const { store, scheduler } = deps;
 
-    return {
+    return withToolContract({
         definition: {
             name: "cron",
             description: `管理定时任务（计划任务/Cron Jobs）。可以创建、列出和删除定时任务。
@@ -398,7 +399,21 @@ payload 类型:
                 return makeResult(false, "", `执行失败: ${message}`);
             }
         },
-    };
+    }, {
+        family: "service-admin",
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        needsPermission: true,
+        riskLevel: "high",
+        channels: ["gateway", "web"],
+        safeScopes: ["local-safe", "web-safe"],
+        activityDescription: "Manage cron jobs and goal approval scan schedules",
+        resultSchema: {
+            kind: "text",
+            description: "Cron management result text.",
+        },
+        outputPersistencePolicy: "external-state",
+    });
 }
 
 // ── 辅助函数 ──

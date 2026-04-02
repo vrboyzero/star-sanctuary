@@ -1,7 +1,8 @@
 import type { Tool, ToolCallResult } from "../../types.js";
 import crypto from "node:crypto";
+import { withToolContract } from "../../tool-contract.js";
 
-export const sessionsHistoryTool: Tool = {
+export const sessionsHistoryTool: Tool = withToolContract({
     definition: {
         name: "sessions_history",
         description: "List all active or past sub-agent sessions and their statuses.",
@@ -31,7 +32,13 @@ export const sessionsHistoryTool: Tool = {
             const sessions = await context.agentCapabilities.listSessions(context.conversationId);
 
             const summary = sessions.map(s =>
-                `- [${s.status.toUpperCase()}] ID: ${s.id}${s.agentId ? ` (agent: ${s.agentId})` : ""} (Created: ${new Date(s.createdAt).toISOString()}) ${s.summary ? `\n  Summary: ${s.summary}` : ""}`
+                [
+                    `- [${s.status.toUpperCase()}] ID: ${s.id}${s.agentId ? ` (agent: ${s.agentId})` : ""} (Created: ${new Date(s.createdAt).toISOString()})`,
+                    s.taskId ? `  Task: ${s.taskId}` : "",
+                    s.summary ? `  Summary: ${s.summary}` : "",
+                    s.progressText ? `  Progress: ${s.progressText}` : "",
+                    s.outputPath ? `  Output: ${s.outputPath}` : "",
+                ].filter(Boolean).join("\n")
             ).join("\n");
 
             return {
@@ -53,4 +60,18 @@ export const sessionsHistoryTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "session-orchestration",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "List sub-agent session history and statuses",
+    resultSchema: {
+        kind: "text",
+        description: "Session history summary text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

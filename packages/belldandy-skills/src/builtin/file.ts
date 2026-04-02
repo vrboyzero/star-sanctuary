@@ -4,6 +4,8 @@ import * as path from "node:path";
 import type { Tool, ToolCallResult } from "../types.js";
 import { getGlobalMemoryManager } from "@belldandy/memory";
 import { parseSkillMd } from "../skill-loader.js";
+import { withToolContract } from "../tool-contract.js";
+import { resolveRuntimeFilesystemScope } from "../runtime-policy.js";
 
 /** 敏感文件模式（禁止读取） */
 const SENSITIVE_PATTERNS = [
@@ -191,7 +193,7 @@ function resolveAndValidatePath(
 
 // ============ file_read 工具 ============
 
-export const fileReadTool: Tool = {
+export const fileReadTool: Tool = withToolContract({
   definition: {
     name: "file_read",
     description: "读取工作区内文件内容。路径必须是相对于工作区根目录的相对路径，禁止读取敏感文件（如 .env、密钥等）。",
@@ -237,7 +239,8 @@ export const fileReadTool: Tool = {
     }
 
     // 路径验证（主工作区或 extraWorkspaceRoots）
-    const pathResult = resolveAndValidatePath(pathArg, context.workspaceRoot, context.extraWorkspaceRoots);
+    const scope = resolveRuntimeFilesystemScope(context);
+    const pathResult = resolveAndValidatePath(pathArg, scope.workspaceRoot, scope.extraWorkspaceRoots);
     if (!pathResult.ok) {
       return makeError(pathResult.error);
     }
@@ -320,11 +323,25 @@ export const fileReadTool: Tool = {
       return makeError(err instanceof Error ? err.message : String(err));
     }
   },
-};
+}, {
+  family: "workspace-read",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Read a file from the workspace or an allowed extra workspace root",
+  resultSchema: {
+    kind: "json",
+    description: "File metadata and content payload encoded as JSON text.",
+  },
+  outputPersistencePolicy: "conversation",
+});
 
 // ============ file_write 工具 ============
 
-export const fileWriteTool: Tool = {
+export const fileWriteTool: Tool = withToolContract({
   definition: {
     name: "file_write",
     description: "写入工作区内文件。路径必须是相对于工作区根目录的相对路径。如果配置了写入白名单，则只能写入白名单内的目录。",
@@ -409,7 +426,8 @@ export const fileWriteTool: Tool = {
     }
 
     // 路径验证（主工作区或 extraWorkspaceRoots）
-    const pathResult = resolveAndValidatePath(pathArg, context.workspaceRoot, context.extraWorkspaceRoots);
+    const scope = resolveRuntimeFilesystemScope(context);
+    const pathResult = resolveAndValidatePath(pathArg, scope.workspaceRoot, scope.extraWorkspaceRoots);
     if (!pathResult.ok) {
       return makeError(pathResult.error);
     }
@@ -597,11 +615,25 @@ export const fileWriteTool: Tool = {
       return makeError(err instanceof Error ? err.message : String(err));
     }
   },
-};
+}, {
+  family: "workspace-write",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: true,
+  riskLevel: "high",
+  channels: ["gateway", "web"],
+  safeScopes: ["privileged"],
+  activityDescription: "Write or edit a file inside the workspace",
+  resultSchema: {
+    kind: "json",
+    description: "Write outcome metadata encoded as JSON text.",
+  },
+  outputPersistencePolicy: "artifact",
+});
 
 // ============ file_delete 工具 ============
 
-export const fileDeleteTool: Tool = {
+export const fileDeleteTool: Tool = withToolContract({
   definition: {
     name: "file_delete",
     description: "删除工作区内的文件。path 可为相对路径（如 BOOTSTRAP.md）或工作区内的绝对路径；禁止删除敏感文件（如 .env）。",
@@ -638,7 +670,8 @@ export const fileDeleteTool: Tool = {
     }
 
     // 路径验证（主工作区或 extraWorkspaceRoots）
-    const pathResult = resolveAndValidatePath(pathArg, context.workspaceRoot, context.extraWorkspaceRoots);
+    const scope = resolveRuntimeFilesystemScope(context);
+    const pathResult = resolveAndValidatePath(pathArg, scope.workspaceRoot, scope.extraWorkspaceRoots);
     if (!pathResult.ok) {
       return makeError(pathResult.error);
     }
@@ -690,4 +723,18 @@ export const fileDeleteTool: Tool = {
       return makeError(err instanceof Error ? err.message : String(err));
     }
   },
-};
+}, {
+  family: "workspace-write",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: true,
+  riskLevel: "high",
+  channels: ["gateway", "web"],
+  safeScopes: ["privileged"],
+  activityDescription: "Delete a file from the workspace",
+  resultSchema: {
+    kind: "json",
+    description: "Delete outcome metadata encoded as JSON text.",
+  },
+  outputPersistencePolicy: "artifact",
+});

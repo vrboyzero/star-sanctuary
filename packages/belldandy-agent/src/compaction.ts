@@ -248,17 +248,18 @@ function buildFallbackArchival(rollingSummary: string): string {
 export async function compactIncremental(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
   state: CompactionState,
-  options?: CompactionOptions & { summarizer?: SummarizerFn },
+  options?: CompactionOptions & { summarizer?: SummarizerFn; force?: boolean },
 ): Promise<CompactionResult> {
   const threshold = options?.tokenThreshold ?? 12000;
   const keepRecent = options?.keepRecentCount ?? 10;
   const margin = options?.safetyMargin ?? SAFETY_MARGIN;
   const archivalThreshold = options?.archivalThreshold ?? 2000;
+  const force = options?.force === true;
 
   const originalTokens = estimateMessagesTokens(messages, margin);
 
   // 不需要压缩
-  if (originalTokens <= threshold || messages.length <= keepRecent) {
+  if ((!force && originalTokens <= threshold) || messages.length <= keepRecent) {
     return {
       messages,
       compacted: false,

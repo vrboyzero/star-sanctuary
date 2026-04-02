@@ -6,6 +6,7 @@
 
 import crypto from "node:crypto";
 import type { Tool, ToolContext, ToolCallResult, JsonObject } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
 /** 计时器状态 */
 type TimerState = {
@@ -24,7 +25,7 @@ function formatTime(ms: number): string {
 }
 
 /** timer 工具 - 统一入口 */
-export const timerTool: Tool = {
+export const timerTool: Tool = withToolContract({
   definition: {
     name: "timer",
     description: "计时器工具，支持开始、停止、中间计时、重置和列出所有计时器。最小精度 0.01 秒。",
@@ -255,4 +256,18 @@ export const timerTool: Tool = {
       };
     }
   },
-};
+}, {
+  family: "other",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Manage in-memory timers for task measurement",
+  resultSchema: {
+    kind: "text",
+    description: "Timer status and measurement text.",
+  },
+  outputPersistencePolicy: "conversation",
+});

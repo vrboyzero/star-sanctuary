@@ -51,6 +51,9 @@ export {
   type Conversation,
   type ConversationMessage,
   type ConversationStoreOptions,
+  type SessionDigestRecord,
+  type SessionDigestRefreshOptions,
+  type SessionDigestStatus,
 } from "./conversation.js";
 
 export type AgentContentPart =
@@ -235,6 +238,13 @@ export {
 } from "./agent-registry.js";
 
 // Sub-Agent Orchestrator（子 Agent 编排）
+export {
+  normalizeAgentLaunchSpec,
+  DEFAULT_AGENT_LAUNCH_TIMEOUT_MS,
+  type AgentLaunchSpec,
+  type AgentLaunchSpecInput,
+} from "./launch-spec.js";
+
 export {
   SubAgentOrchestrator,
   type SubAgentSession,

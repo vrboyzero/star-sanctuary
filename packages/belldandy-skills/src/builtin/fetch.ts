@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import dns from "node:dns/promises";
-import type { Tool, ToolContext, ToolCallResult } from "../types.js";;
+import type { Tool, ToolContext, ToolCallResult } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
-export const fetchTool: Tool = {
+export const fetchTool: Tool = withToolContract({
   definition: {
     name: "web_fetch",
     description: "获取指定 URL 的内容。仅支持 HTTP/HTTPS 协议，受域名白名单/黑名单限制，禁止访问内网地址。",
@@ -196,7 +197,21 @@ export const fetchTool: Tool = {
       return makeError(err instanceof Error ? err.message : String(err));
     }
   },
-};
+}, {
+  family: "network-read",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "medium",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Fetch content from an external HTTP or HTTPS URL",
+  resultSchema: {
+    kind: "json",
+    description: "HTTP response metadata and truncated body content encoded as JSON text.",
+  },
+  outputPersistencePolicy: "conversation",
+});
 
 /** 检查是否为私有/内网地址 */
 function isPrivateHost(hostname: string): boolean {

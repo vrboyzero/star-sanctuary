@@ -281,6 +281,147 @@ describe("ConversationStore", () => {
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
+    it("should build and persist session digest from compaction state", async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "belldandy-conversation-"));
+        const dataDir = path.join(tempDir, "sessions");
+        const store = new ConversationStore({
+            dataDir,
+            compaction: {
+                enabled: true,
+                tokenThreshold: 10,
+                keepRecentCount: 1,
+            },
+            summarizer: async () => "rolling-summary-v1",
+        });
+        const id = "conv-session-digest";
+
+        store.addMessage(id, "user", "A".repeat(80));
+        store.addMessage(id, "assistant", "B".repeat(80));
+        store.addMessage(id, "user", "C".repeat(80));
+
+        const refreshed = await store.refreshSessionDigest(id, { force: true, threshold: 2 });
+
+        expect(refreshed.updated).toBe(true);
+        expect(refreshed.compacted).toBe(true);
+        expect(refreshed.digest).toMatchObject({
+            conversationId: id,
+            status: "ready",
+            messageCount: 3,
+            digestedMessageCount: 2,
+            pendingMessageCount: 1,
+            threshold: 2,
+            rollingSummary: "rolling-summary-v1",
+            archivalSummary: "",
+        });
+        expect(refreshed.digest.lastDigestAt).toBeGreaterThan(0);
+
+        const reloaded = new ConversationStore({
+            dataDir,
+            compaction: {
+                enabled: true,
+                tokenThreshold: 10,
+                keepRecentCount: 1,
+            },
+        });
+        const digest = await reloaded.getSessionDigest(id);
+        expect(digest.threshold).toBe(2);
+        expect(digest.rollingSummary).toBe("rolling-summary-v1");
+        expect(digest.digestedMessageCount).toBe(2);
+
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("should mark session digest as updated when pending messages cross threshold", async () => {
+        const store = new ConversationStore({
+            compaction: {
+                enabled: true,
+                tokenThreshold: 10,
+                keepRecentCount: 1,
+            },
+            summarizer: async () => "rolling-summary-v1",
+        });
+        const id = "conv-session-digest-threshold";
+
+        store.addMessage(id, "user", "A".repeat(80));
+        store.addMessage(id, "assistant", "B".repeat(80));
+        store.addMessage(id, "user", "C".repeat(80));
+        await store.refreshSessionDigest(id, { force: true, threshold: 2 });
+
+        store.addMessage(id, "assistant", "D".repeat(80));
+        store.addMessage(id, "user", "E".repeat(80));
+
+        const digest = await store.getSessionDigest(id, { threshold: 2 });
+        expect(digest).toMatchObject({
+            conversationId: id,
+            status: "updated",
+            messageCount: 5,
+            digestedMessageCount: 2,
+            pendingMessageCount: 3,
+            threshold: 2,
+        });
+    });
+
+    it("should retain persisted digest threshold during automatic refresh", async () => {
+        const store = new ConversationStore({
+            compaction: {
+                enabled: true,
+                tokenThreshold: 10,
+                keepRecentCount: 1,
+            },
+            summarizer: async () => "rolling-summary-v1",
+        });
+        const id = "conv-session-digest-auto-threshold";
+
+        store.addMessage(id, "user", "A".repeat(80));
+        store.addMessage(id, "assistant", "B".repeat(80));
+        store.addMessage(id, "user", "C".repeat(80));
+        await store.refreshSessionDigest(id, { force: true, threshold: 2 });
+
+        store.addMessage(id, "assistant", "D".repeat(80));
+        store.addMessage(id, "user", "E".repeat(80));
+
+        const refreshed = await store.refreshSessionDigest(id);
+        expect(refreshed.updated).toBe(true);
+        expect(refreshed.digest.threshold).toBe(2);
+    });
+
+    it("should refresh session digest even when manual compaction is below token threshold", async () => {
+        const store = new ConversationStore({
+            compaction: {
+                enabled: true,
+                tokenThreshold: 10_000,
+                keepRecentCount: 1,
+            },
+            summarizer: async () => "rolling-summary-for-refresh",
+        });
+        const id = "conv-session-digest-force-refresh";
+
+        store.addMessage(id, "user", "第一轮简短消息");
+        store.addMessage(id, "assistant", "第一轮回复");
+        store.addMessage(id, "user", "第二轮简短消息");
+
+        const before = await store.getSessionDigest(id, { threshold: 2 });
+        expect(before).toMatchObject({
+            conversationId: id,
+            status: "updated",
+            rollingSummary: "",
+            digestedMessageCount: 0,
+            pendingMessageCount: 3,
+        });
+
+        const refreshed = await store.refreshSessionDigest(id, { force: true, threshold: 2 });
+        expect(refreshed.updated).toBe(true);
+        expect(refreshed.compacted).toBe(true);
+        expect(refreshed.digest).toMatchObject({
+            conversationId: id,
+            status: "ready",
+            rollingSummary: "rolling-summary-for-refresh",
+            digestedMessageCount: 2,
+            pendingMessageCount: 1,
+            threshold: 2,
+        });
+    });
+
     it("should persist compaction state before forceCompact resolves", async () => {
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "belldandy-conversation-"));
         const dataDir = path.join(tempDir, "sessions");
@@ -347,6 +488,47 @@ describe("ConversationStore", () => {
         const result = await reloaded.forceCompact(id);
 
         expect(result.compacted).toBe(true);
+        expect(asyncReadSpy.mock.calls.some(([filePath]) => String(filePath).endsWith(`${id}.compaction.json`))).toBe(true);
+        expect(readFileSyncSpy).not.toHaveBeenCalled();
+
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("should avoid sync file reads when cold-loading session digest state", async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "belldandy-conversation-"));
+        const dataDir = path.join(tempDir, "sessions");
+        const id = "conv-session-digest-async";
+
+        const store = new ConversationStore({
+            dataDir,
+            compaction: {
+                enabled: true,
+                tokenThreshold: 10,
+                keepRecentCount: 1,
+            },
+            summarizer: async () => "rolling-summary-v1",
+        });
+
+        store.addMessage(id, "user", "A".repeat(80));
+        store.addMessage(id, "assistant", "B".repeat(80));
+        store.addMessage(id, "user", "C".repeat(80));
+        await store.refreshSessionDigest(id, { force: true, threshold: 3 });
+
+        const reloaded = new ConversationStore({
+            dataDir,
+            compaction: {
+                enabled: true,
+                tokenThreshold: 10,
+                keepRecentCount: 1,
+            },
+        });
+        const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+        const asyncReadSpy = vi.spyOn(conversationAsyncFs, "readFile");
+
+        const digest = await reloaded.getSessionDigest(id);
+
+        expect(digest.threshold).toBe(3);
+        expect(asyncReadSpy.mock.calls.some(([filePath]) => String(filePath).endsWith(`${id}.digest.json`))).toBe(true);
         expect(asyncReadSpy.mock.calls.some(([filePath]) => String(filePath).endsWith(`${id}.compaction.json`))).toBe(true);
         expect(readFileSyncSpy).not.toHaveBeenCalled();
 

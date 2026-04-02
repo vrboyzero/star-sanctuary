@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { MCPClient, expandFilesystemServerArgs, parseExtraWorkspaceRoots } from "./client.js";
 
@@ -125,5 +128,186 @@ describe("MCPClient reconnect", () => {
 
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
     expect(connectSpy).toHaveBeenCalledTimes(1);
+    expect(client.getState().diagnostics).toEqual(expect.objectContaining({
+      reconnectAttempts: 1,
+      lastRetryDelayMs: 1000,
+      lastRetryAttempt: 1,
+      lastRetryMax: 3,
+    }));
+    expect(client.getState().diagnostics?.lastRetryAt).toBeInstanceOf(Date);
+  });
+
+  it("classifies session expiry failures in runtime diagnostics", () => {
+    const client = createClient();
+    const clientInternals = client as unknown as {
+      recordFailure: (
+        error: unknown,
+        options?: { source?: string; retryable?: boolean; updateCurrentError?: boolean },
+      ) => void;
+    };
+
+    clientInternals.recordFailure(new Error("Session not found"), {
+      source: "call_tool",
+      updateCurrentError: false,
+    });
+
+    expect(client.getState().diagnostics).toEqual(expect.objectContaining({
+      lastErrorKind: "session_expired",
+      lastErrorMessage: "Session not found",
+      lastErrorSource: "call_tool",
+      lastErrorRetryable: true,
+    }));
+    expect(client.getState().diagnostics?.lastErrorAt).toBeInstanceOf(Date);
+    expect(client.getState().diagnostics?.lastSessionExpiredAt).toBeInstanceOf(Date);
+  });
+});
+
+describe("MCPClient result normalization", () => {
+  let originalStateDir: string | undefined;
+
+  beforeEach(() => {
+    originalStateDir = process.env.BELLDANDY_STATE_DIR;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) {
+      delete process.env.BELLDANDY_STATE_DIR;
+    } else {
+      process.env.BELLDANDY_STATE_DIR = originalStateDir;
+    }
+    vi.restoreAllMocks();
+  });
+
+  function createConnectedClient() {
+    const client = new MCPClient({
+      id: "test-server",
+      name: "Test Server",
+      transport: {
+        type: "sse",
+        url: "http://127.0.0.1:3000/sse",
+      },
+    });
+    const internals = client as unknown as {
+      status: string;
+      client: {
+        callTool: (input: { name: string; arguments: Record<string, unknown> }) => Promise<unknown>;
+        readResource: (input: { uri: string }) => Promise<unknown>;
+      };
+    };
+    internals.status = "connected";
+    return { client, internals };
+  }
+
+  it("truncates oversized tool text results and reports diagnostics", async () => {
+    const { client, internals } = createConnectedClient();
+    internals.client = {
+      callTool: vi.fn().mockResolvedValue({
+        isError: false,
+        content: [{ type: "text", text: "x".repeat(13_000) }],
+      }),
+      readResource: vi.fn(),
+    };
+
+    const result = await client.callTool("demo", {});
+
+    expect(result.success).toBe(true);
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      strategy: "persisted",
+      truncated: false,
+      truncatedItems: 0,
+      persistedItems: 1,
+      persistedWebPath: expect.stringMatching(/^\/generated\/mcp-/),
+    }));
+    expect(result.content?.[0]).toEqual(expect.objectContaining({
+      type: "text",
+      truncated: false,
+      originalLength: 13_000,
+      note: expect.stringContaining("/generated/"),
+    }));
+    expect(result.content?.[0]?.text).toContain("/generated/");
+  });
+
+  it("omits oversized resource blobs from inline payload and reports diagnostics", async () => {
+    const { client, internals } = createConnectedClient();
+    internals.client = {
+      callTool: vi.fn(),
+      readResource: vi.fn().mockResolvedValue({
+        contents: [{ uri: "file:///tmp/demo.bin", mimeType: "application/octet-stream", blob: "a".repeat(5_000) }],
+      }),
+    };
+
+    const result = await client.readResource("file:///tmp/demo.bin");
+
+    expect(result.diagnostics).toEqual(expect.objectContaining({
+      strategy: "persisted",
+      truncated: false,
+      truncatedItems: 0,
+      persistedItems: 1,
+      persistedWebPath: expect.stringMatching(/^\/generated\/mcp-/),
+    }));
+    expect(result.contents[0]).toEqual(expect.objectContaining({
+      uri: "file:///tmp/demo.bin",
+      truncated: false,
+      originalLength: 5_000,
+      note: expect.stringContaining("/generated/"),
+    }));
+    expect(result.contents[0]?.blob).toBeUndefined();
+  });
+
+  it("persists oversized tool text results to generated output and reports persisted diagnostics", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-mcp-persist-"));
+    process.env.BELLDANDY_STATE_DIR = stateDir;
+    const { client, internals } = createConnectedClient();
+    internals.client = {
+      callTool: vi.fn().mockResolvedValue({
+        isError: false,
+        content: [{ type: "text", text: "y".repeat(13_500) }],
+      }),
+      readResource: vi.fn(),
+    };
+
+    try {
+      const result = await client.callTool("persist-demo", {});
+      expect(result.diagnostics).toEqual(expect.objectContaining({
+        strategy: "persisted",
+        persistedItems: 1,
+        persistedWebPath: expect.stringMatching(/^\/generated\/mcp-/),
+      }));
+      expect(result.content?.[0]).toEqual(expect.objectContaining({
+        type: "text",
+        truncated: false,
+        note: expect.stringContaining("/generated/"),
+      }));
+      const generatedDir = path.join(stateDir, "generated");
+      const files = await fs.readdir(generatedDir);
+      expect(files.some((file) => file.startsWith("mcp-test-server-tool-text-"))).toBe(true);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("reconnects once after session expiry during tool call", async () => {
+    const { client, internals } = createConnectedClient();
+    const expiredError = new Error("Session not found");
+    const callTool = vi.fn()
+      .mockRejectedValueOnce(expiredError)
+      .mockResolvedValueOnce({ isError: false, content: [{ type: "text", text: "ok" }] });
+    internals.client = {
+      callTool,
+      readResource: vi.fn(),
+    };
+    const reconnectSpy = vi.spyOn(client, "reconnect").mockImplementation(async () => {});
+
+    const result = await client.callTool("recover-demo", {});
+
+    expect(reconnectSpy).toHaveBeenCalledTimes(1);
+    expect(callTool).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(true);
+    expect(client.getState().diagnostics).toEqual(expect.objectContaining({
+      lastErrorKind: "session_expired",
+      lastErrorSource: "call_tool",
+      lastRecoverySucceeded: true,
+    }));
+    expect(client.getState().diagnostics?.lastRecoveryAt).toBeInstanceOf(Date);
   });
 });

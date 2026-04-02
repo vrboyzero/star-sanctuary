@@ -3,6 +3,7 @@ import { Tool, ToolContext, ToolCallResult } from "../../types.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import WebSocket from "ws";
+import { withToolContract } from "../../tool-contract.js";
 
 // Logger interface to avoid circular dependency
 interface Logger {
@@ -331,7 +332,7 @@ const failure = (id: string, name: string, error: unknown, start: number): ToolC
 
 // --- Tools ---
 
-export const browserOpenTool: Tool = {
+export const browserOpenTool: Tool = withToolContract({
     definition: {
         name: "browser_open",
         description: "Open a NEW browser tab and navigate to a URL. Use this to start a browsing session without affecting the current page.",
@@ -379,9 +380,23 @@ export const browserOpenTool: Tool = {
             return failure("unknown", "browser_open", err, start);
         }
     },
-};
+}, {
+    family: "browser",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["bridge-safe"],
+    activityDescription: "Open a new browser tab at the specified URL",
+    resultSchema: {
+        kind: "text",
+        description: "Browser navigation status text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const browserNavigateTool: Tool = {
+export const browserNavigateTool: Tool = withToolContract({
     definition: {
         name: "browser_navigate",
         description: "Navigate the active tab to a new URL.",
@@ -419,9 +434,23 @@ export const browserNavigateTool: Tool = {
             return failure("unknown", "browser_navigate", err, start);
         }
     },
-};
+}, {
+    family: "browser",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["bridge-safe"],
+    activityDescription: "Navigate the active browser page to a URL",
+    resultSchema: {
+        kind: "text",
+        description: "Browser navigation status text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const browserClickTool: Tool = {
+export const browserClickTool: Tool = withToolContract({
     definition: {
         name: "browser_click",
         description: "Click an element on the active page matched by a CSS selector OR a Snapshot ID.",
@@ -455,9 +484,23 @@ export const browserClickTool: Tool = {
             return failure("unknown", "browser_click", err, start);
         }
     },
-};
+}, {
+    family: "browser",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["bridge-safe"],
+    activityDescription: "Click an element on the active browser page",
+    resultSchema: {
+        kind: "text",
+        description: "Browser interaction status text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const browserTypeTool: Tool = {
+export const browserTypeTool: Tool = withToolContract({
     definition: {
         name: "browser_type",
         description: "Type text into an element on the active page matched by a CSS selector OR a Snapshot ID.",
@@ -493,10 +536,24 @@ export const browserTypeTool: Tool = {
             return failure("unknown", "browser_type", err, start);
         }
     },
-};
+}, {
+    family: "browser",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["bridge-safe"],
+    activityDescription: "Type text into an element on the active browser page",
+    resultSchema: {
+        kind: "text",
+        description: "Browser input status text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
 
-export const browserScreenshotTool: Tool = {
+export const browserScreenshotTool: Tool = withToolContract({
     definition: {
         name: "browser_screenshot",
         description: "Capture a screenshot of the active page.",
@@ -533,9 +590,23 @@ export const browserScreenshotTool: Tool = {
             return failure("unknown", "browser_screenshot", err, start);
         }
     },
-};
+}, {
+    family: "browser",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["bridge-safe"],
+    activityDescription: "Capture a screenshot from the active browser page",
+    resultSchema: {
+        kind: "text",
+        description: "Screenshot file path text.",
+    },
+    outputPersistencePolicy: "artifact",
+});
 
-export const browserGetContentTool: Tool = {
+export const browserGetContentTool: Tool = withToolContract({
     definition: {
         name: "browser_get_content",
         description: "Get the content of the active page in Markdown (default), Text, or HTML format. Use 'markdown' for reading articles.",
@@ -613,9 +684,23 @@ export const browserGetContentTool: Tool = {
             return failure("unknown", "browser_get_content", err, start);
         }
     },
-};
+}, {
+    family: "browser",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: true,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["bridge-safe"],
+    activityDescription: "Read content from the active browser page",
+    resultSchema: {
+        kind: "text",
+        description: "Page content in markdown, text, or HTML format.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const browserSnapshotTool: Tool = {
+export const browserSnapshotTool: Tool = withToolContract({
     definition: {
         name: "browser_snapshot",
         description: "Capture an interactive DOM snapshot of the active page. This returns a compressed text representation of the page, filtering out noise and assigning numeric IDs (e.g. [42]) to interactive elements.",
@@ -641,4 +726,18 @@ export const browserSnapshotTool: Tool = {
             return failure("unknown", "browser_snapshot", err, start);
         }
     },
-};
+}, {
+    family: "browser",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: true,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["bridge-safe"],
+    activityDescription: "Capture an interactive DOM snapshot of the active page",
+    resultSchema: {
+        kind: "text",
+        description: "Compressed DOM snapshot text with interactive element IDs.",
+    },
+    outputPersistencePolicy: "conversation",
+});

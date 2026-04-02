@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Tool, ToolContext, ToolCallResult, JsonObject } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
 const LOGS_DIR_NAME = "logs";
 
@@ -79,7 +80,7 @@ async function readAndFilterLogFile(
 
 // ============ log_read 工具 ============
 
-export const logReadTool: Tool = {
+export const logReadTool: Tool = withToolContract({
   definition: {
     name: "log_read",
     description:
@@ -179,11 +180,25 @@ export const logReadTool: Tool = {
       return makeError(`读取日志失败: ${msg}`);
     }
   },
-};
+}, {
+  family: "workspace-read",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Read gateway log files from the workspace logs directory",
+  resultSchema: {
+    kind: "text",
+    description: "Filtered log lines text.",
+  },
+  outputPersistencePolicy: "conversation",
+});
 
 // ============ log_search 工具 ============
 
-export const logSearchTool: Tool = {
+export const logSearchTool: Tool = withToolContract({
   definition: {
     name: "log_search",
     description: "在日志中搜索错误、警告或特定关键词，用于快速定位问题。",
@@ -300,4 +315,18 @@ export const logSearchTool: Tool = {
       return makeError(`搜索日志失败: ${msg}`);
     }
   },
-};
+}, {
+  family: "workspace-read",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Search gateway log files by keyword and date range",
+  resultSchema: {
+    kind: "text",
+    description: "Log search result text.",
+  },
+  outputPersistencePolicy: "conversation",
+});

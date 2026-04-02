@@ -17,6 +17,7 @@ import { getGlobalSkillRegistry } from "../skill-registry.js";
 import { publishSkillCandidate } from "../skill-publisher.js";
 import path from "node:path";
 import { resolveStateDir } from "@belldandy/protocol";
+import { withToolContract } from "../tool-contract.js";
 
 // Singleton instance (lazy init, fallback only)
 let memoryManager: MemoryManager | null = null;
@@ -44,7 +45,56 @@ function getMemoryManager(workspaceRoot: string): MemoryManager {
     return memoryManager;
 }
 
-export const memorySearchTool: Tool = {
+function withMemoryReadContract(
+    tool: Tool,
+    activityDescription: string,
+    description: string,
+): Tool {
+    return withToolContract(tool, {
+        family: "memory",
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        needsPermission: false,
+        riskLevel: "low",
+        channels: ["gateway", "web"],
+        safeScopes: ["local-safe", "web-safe"],
+        activityDescription,
+        resultSchema: {
+            kind: "text",
+            description,
+        },
+        outputPersistencePolicy: "conversation",
+    });
+}
+
+function withMemoryWriteContract(
+    tool: Tool,
+    activityDescription: string,
+    description: string,
+    options: {
+        riskLevel?: "medium" | "high";
+        needsPermission?: boolean;
+        outputPersistencePolicy?: "artifact" | "external-state";
+    } = {},
+): Tool {
+    return withToolContract(tool, {
+        family: "memory",
+        isReadOnly: false,
+        isConcurrencySafe: false,
+        needsPermission: options.needsPermission ?? true,
+        riskLevel: options.riskLevel ?? "medium",
+        channels: ["gateway", "web"],
+        safeScopes: ["local-safe", "web-safe", "privileged"],
+        activityDescription,
+        resultSchema: {
+            kind: "text",
+            description,
+        },
+        outputPersistencePolicy: options.outputPersistencePolicy ?? "external-state",
+    });
+}
+
+export const memorySearchTool: Tool = withToolContract({
     definition: {
         name: "memory_search",
         description: "Search the runtime memory index using hybrid retrieval (semantic vector search + keyword search). The index covers BELLDANDY_STATE_DIR sessions, memory files, and MEMORY.md. Supports optional metadata filtering by memory type, channel, topic, category, and date range. Use detail_level='summary' (default) for quick overview, or 'full' for complete content.",
@@ -155,9 +205,23 @@ export const memorySearchTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Search indexed runtime memory and conversation history",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted memory search results text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const memoryIndexTool: Tool = {
+export const memoryIndexTool: Tool = withMemoryWriteContract({
     definition: {
         name: "memory_index",
         description: "Trigger a re-index of the workspace files into the memory. Use this after significant file changes or manually.",
@@ -193,9 +257,11 @@ export const memoryIndexTool: Tool = {
             };
         }
     },
-};
+}, "Re-index workspace content into the memory system", "Memory indexing status text.", {
+    needsPermission: false,
+});
 
-export const memoryReadTool: Tool = {
+export const memoryReadTool: Tool = withToolContract({
     definition: {
         name: "memory_read",
         description: "Read a memory file such as MEMORY.md or memory/YYYY-MM-DD.md.",
@@ -252,9 +318,23 @@ export const memoryReadTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Read a structured memory file from the workspace memory area",
+    resultSchema: {
+        kind: "text",
+        description: "Memory file content text with line metadata.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const memoryWriteTool: Tool = {
+export const memoryWriteTool: Tool = withToolContract({
     definition: {
         name: "memory_write",
         description: "Write to a memory file. By default this appends to today's daily memory file.",
@@ -321,9 +401,23 @@ export const memoryWriteTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "memory",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Write to a memory file or append to today's memory log",
+    resultSchema: {
+        kind: "text",
+        description: "Memory write confirmation text.",
+    },
+    outputPersistencePolicy: "artifact",
+});
 
-export const memorySharePromoteTool: Tool = {
+export const memorySharePromoteTool: Tool = withToolContract({
     definition: {
         name: "memory_share_promote",
         description: "Explicitly promote a memory chunk or all chunks from a source path to shared visibility. Use this when a memory should be retrievable by other agents via scope=shared or scope=all.",
@@ -419,9 +513,23 @@ export const memorySharePromoteTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "memory",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Promote memory chunks to shared visibility",
+    resultSchema: {
+        kind: "text",
+        description: "Shared memory promotion result text.",
+    },
+    outputPersistencePolicy: "external-state",
+});
 
-export const taskSearchTool: Tool = {
+export const taskSearchTool: Tool = withToolContract({
     definition: {
         name: "task_search",
         description: "Search historical task summaries. Use this to find similar completed tasks, past failures, or reusable execution patterns.",
@@ -494,9 +602,23 @@ export const taskSearchTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Search historical task summaries and execution patterns",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted task search result text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const taskRecentTool: Tool = {
+export const taskRecentTool: Tool = withToolContract({
     definition: {
         name: "task_recent",
         description: "List recent task summaries. Useful for checking what Belldandy has just completed.",
@@ -545,9 +667,23 @@ export const taskRecentTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "List recent task summaries",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted recent task list text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const taskGetTool: Tool = {
+export const taskGetTool: Tool = withToolContract({
     definition: {
         name: "task_get",
         description: "Get the full detail of a task summary by task ID.",
@@ -588,9 +724,23 @@ export const taskGetTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Get the full detail for a historical task record",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted task detail text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
 
-export const taskPromoteMethodTool: Tool = {
+export const taskPromoteMethodTool: Tool = withMemoryWriteContract({
     definition: {
         name: "task_promote_method",
         description: "Generate a method candidate draft from a historical task. This only writes to the experience candidate layer and does not publish to methods/ yet.",
@@ -633,9 +783,11 @@ export const taskPromoteMethodTool: Tool = {
             };
         }
     },
-};
+}, "Promote a historical task into a method candidate", "Experience promotion result text.", {
+    needsPermission: false,
+});
 
-export const taskPromoteSkillDraftTool: Tool = {
+export const taskPromoteSkillDraftTool: Tool = withMemoryWriteContract({
     definition: {
         name: "task_promote_skill_draft",
         description: "Generate a skill draft candidate from a historical task. This only writes to the experience candidate layer and does not publish to user skills yet.",
@@ -678,9 +830,11 @@ export const taskPromoteSkillDraftTool: Tool = {
             };
         }
     },
-};
+}, "Promote a historical task into a skill draft candidate", "Experience promotion result text.", {
+    needsPermission: false,
+});
 
-export const experienceCandidateGetTool: Tool = {
+export const experienceCandidateGetTool: Tool = withMemoryReadContract({
     definition: {
         name: "experience_candidate_get",
         description: "Get the full audit detail of one experience candidate by candidate ID.",
@@ -721,9 +875,9 @@ export const experienceCandidateGetTool: Tool = {
             };
         }
     },
-};
+}, "Read one experience candidate in detail", "Experience candidate detail text.");
 
-export const experienceCandidateListTool: Tool = {
+export const experienceCandidateListTool: Tool = withMemoryReadContract({
     definition: {
         name: "experience_candidate_list",
         description: "List method/skill experience candidates waiting for review.",
@@ -776,9 +930,9 @@ export const experienceCandidateListTool: Tool = {
             };
         }
     },
-};
+}, "List experience candidates awaiting review", "Experience candidate list text.");
 
-export const experienceCandidateAcceptTool: Tool = {
+export const experienceCandidateAcceptTool: Tool = withMemoryWriteContract({
     definition: {
         name: "experience_candidate_accept",
         description: "Mark an experience candidate as accepted. Method candidates will be published to methods/; skill candidates will be published to user skills/ and become discoverable via skills_search.",
@@ -847,9 +1001,12 @@ export const experienceCandidateAcceptTool: Tool = {
             };
         }
     },
-};
+}, "Accept an experience candidate and optionally publish it", "Experience candidate acceptance result text.", {
+    riskLevel: "high",
+    outputPersistencePolicy: "artifact",
+});
 
-export const experienceCandidateRejectTool: Tool = {
+export const experienceCandidateRejectTool: Tool = withMemoryWriteContract({
     definition: {
         name: "experience_candidate_reject",
         description: "Mark an experience candidate as rejected.",
@@ -908,9 +1065,9 @@ export const experienceCandidateRejectTool: Tool = {
             };
         }
     },
-};
+}, "Reject an experience candidate", "Experience candidate rejection result text.");
 
-export const experienceUsageGetTool: Tool = {
+export const experienceUsageGetTool: Tool = withMemoryReadContract({
     definition: {
         name: "experience_usage_get",
         description: "Get one experience usage record by usage ID for audit tracing.",
@@ -951,9 +1108,9 @@ export const experienceUsageGetTool: Tool = {
             };
         }
     },
-};
+}, "Read one experience usage audit record", "Experience usage detail text.");
 
-export const experienceUsageListTool: Tool = {
+export const experienceUsageListTool: Tool = withMemoryReadContract({
     definition: {
         name: "experience_usage_list",
         description: "List experience usage records for audit tracing. You can filter by task, asset, or source candidate.",
@@ -1011,9 +1168,9 @@ export const experienceUsageListTool: Tool = {
             };
         }
     },
-};
+}, "List experience usage audit records", "Experience usage list text.");
 
-export const experienceUsageRecordTool: Tool = {
+export const experienceUsageRecordTool: Tool = withMemoryWriteContract({
     definition: {
         name: "experience_usage_record",
         description: "Record that the current task actually adopted a method or skill. Use this only after you truly decided to apply the method/skill, not merely after searching.",
@@ -1110,9 +1267,11 @@ export const experienceUsageRecordTool: Tool = {
             };
         }
     },
-};
+}, "Record that a task adopted a method or skill", "Experience usage record result text.", {
+    needsPermission: false,
+});
 
-export const experienceUsageRevokeTool: Tool = {
+export const experienceUsageRevokeTool: Tool = withMemoryWriteContract({
     definition: {
         name: "experience_usage_revoke",
         description: "Revoke a mistakenly recorded method/skill usage. By default this only operates on the current task in the current conversation.",
@@ -1225,7 +1384,9 @@ export const experienceUsageRevokeTool: Tool = {
             };
         }
     },
-};
+}, "Revoke a previously recorded experience usage", "Experience usage revoke result text.", {
+    needsPermission: false,
+});
 
 // ============================================================================
 // Legacy / Compatibility Exports
@@ -1244,7 +1405,7 @@ export function createMemorySearchTool(config?: MemorySearchToolConfig): Tool {
 }
 
 export function createMemoryGetTool(): Tool {
-    return {
+    return withToolContract({
         definition: {
             name: "memory_get",
             description: "[Deprecated] Retrieve raw memory/file content. Please use 'file_read' or 'memory_search' instead.",
@@ -1269,7 +1430,21 @@ export function createMemoryGetTool(): Tool {
                 durationMs: 0
             };
         }
-    };
+    }, {
+        family: "memory",
+        isReadOnly: true,
+        isConcurrencySafe: true,
+        needsPermission: false,
+        riskLevel: "low",
+        channels: ["gateway", "web"],
+        safeScopes: ["local-safe", "web-safe"],
+        activityDescription: "Return a deprecated memory retrieval notice",
+        resultSchema: {
+            kind: "text",
+            description: "Deprecated tool guidance text.",
+        },
+        outputPersistencePolicy: "conversation",
+    });
 }
 
 // ============================================================================

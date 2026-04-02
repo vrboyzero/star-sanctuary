@@ -2212,12 +2212,243 @@ describe("goal tools", () => {
   });
 
   it("goal_orchestrate should claim node and delegate sub agents", async () => {
-    const result = await goalOrchestrateTool.execute({ node_id: "node_root", auto_delegate: true }, goalContext);
+    const spawnParallel = vi.fn(async (tasks) => tasks.map(() => ({
+      success: true,
+      output: "delegated",
+      sessionId: "session_1",
+    })));
+    const context: ToolContext = {
+      ...goalContext,
+      defaultCwd: "E:/project/star-sanctuary/packages/belldandy-core",
+      launchSpec: {
+        cwd: "E:/project/star-sanctuary/packages/belldandy-core",
+        toolSet: ["file_read", "run_command"],
+        permissionMode: "confirm",
+        isolationMode: "workspace",
+        parentTaskId: "task_goal_parent",
+      },
+      agentCapabilities: {
+        ...goalContext.agentCapabilities,
+        spawnParallel,
+      },
+    };
+
+    const result = await goalOrchestrateTool.execute({ node_id: "node_root", auto_delegate: true }, context);
     expect(result.success).toBe(true);
     expect(result.output).toContain("节点已 claim 并进入执行态");
     expect(result.output).toContain("coder: success");
+    expect(result.output).toContain("Coordinator Plan:");
+    expect(result.output).toContain("Coordinator Results:");
     expect(result.output).toContain("Execution Mode: multi_agent");
     expect(result.output).toContain("Status: orchestrated");
+    expect(spawnParallel).toHaveBeenCalledWith([
+      expect.objectContaining({
+        parentConversationId: "goal:goal_alpha",
+        channel: "goal",
+        cwd: "E:/project/star-sanctuary/packages/belldandy-core",
+        toolSet: ["file_read", "run_command"],
+        permissionMode: "confirm",
+        isolationMode: "workspace",
+        parentTaskId: "task_goal_parent",
+      }),
+    ]);
+  });
+
+  it("goal_orchestrate should launch verifier runtime after source delegations are completed", async () => {
+    const spawnParallel = vi.fn(async (tasks) => tasks.map(() => ({
+      success: true,
+      output: "delegated",
+      sessionId: "session_src_1",
+      taskId: "task_src_1",
+      outputPath: "E:/project/star-sanctuary/.tmp/task_src_1/result.md",
+    })));
+    const spawnSubAgent = vi.fn(async () => ({
+      success: true,
+      output: "verifier completed",
+      sessionId: "session_verify_1",
+      taskId: "task_verify_1",
+      outputPath: "E:/project/star-sanctuary/.tmp/task_verify_1/result.md",
+    }));
+    const getCapabilityPlan = vi.fn(async () => ({
+      id: "plan_verify",
+      goalId: "goal_alpha",
+      nodeId: "node_root",
+      status: "planned" as const,
+      executionMode: "multi_agent" as const,
+      riskLevel: "medium" as const,
+      objective: "Implement and verify Root Node",
+      summary: "Need coder execution plus verifier fan-in",
+      queryHints: ["verify", "Root Node"],
+      reasoning: ["Need explicit verifier handoff after delegation"],
+      methods: [{ file: "Refactor-Plan.md", title: "Refactor Plan", score: 20 }],
+      skills: [{ name: "find-skills", score: 10 }],
+      mcpServers: [{ serverId: "docs", status: "connected" as const, toolCount: 3 }],
+      subAgents: [
+        { agentId: "coder", role: "coder" as const, objective: "Implement Root Node", handoffToVerifier: true },
+        { agentId: "qa", role: "verifier" as const, objective: "Verify Root Node" },
+      ],
+      gaps: [],
+      checkpoint: {
+        required: false,
+        reasons: [],
+        approvalMode: "none" as const,
+        requiredRequestFields: [],
+        requiredDecisionFields: [],
+        escalationMode: "none" as const,
+      },
+      actualUsage: { methods: [], skills: [], mcpServers: [], toolNames: [] },
+      analysis: {
+        status: "pending" as const,
+        summary: "尚未记录实际 usage，待执行后再比较计划与实际偏差。",
+        deviations: [],
+        recommendations: [],
+      },
+      generatedAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+    }));
+
+    const context: ToolContext = {
+      ...goalContext,
+      defaultCwd: "E:/project/star-sanctuary/packages/belldandy-core",
+      launchSpec: {
+        cwd: "E:/project/star-sanctuary/packages/belldandy-core",
+        toolSet: ["file_read", "run_command"],
+        permissionMode: "confirm",
+        isolationMode: "workspace",
+        parentTaskId: "task_goal_parent",
+      },
+      agentCapabilities: {
+        spawnParallel,
+        spawnSubAgent,
+      },
+      goalCapabilities: {
+        ...goalContext.goalCapabilities,
+        getCapabilityPlan,
+      },
+    };
+
+    const result = await goalOrchestrateTool.execute({ node_id: "node_root", auto_delegate: true }, context);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("coder: success");
+    expect(result.output).toContain("verifier: success");
+    expect(result.output).toContain("Verifier Handoff: completed");
+    expect(result.output).toContain("Verifier Result: completed");
+    expect(result.output).toContain("recommendation=unknown");
+    expect(spawnParallel).toHaveBeenCalledTimes(1);
+    expect(spawnParallel).toHaveBeenCalledWith([
+      expect.objectContaining({
+        agentId: "coder",
+        role: "coder",
+        allowedToolFamilies: ["workspace-read", "workspace-write", "patch", "command-exec", "memory", "goal-governance"],
+      }),
+    ]);
+    expect(spawnSubAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "qa",
+      role: "verifier",
+      allowedToolFamilies: ["workspace-read", "command-exec", "browser", "memory", "goal-governance"],
+    }));
+    expect(context.goalCapabilities?.saveCapabilityPlan).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
+      orchestration: expect.objectContaining({
+        verifierResult: expect.objectContaining({
+          status: "completed",
+          outputPath: "E:/project/star-sanctuary/.tmp/task_verify_1/result.md",
+        }),
+      }),
+    }));
+  });
+
+  it("goal_orchestrate should persist failed verifier result asset when verifier runtime fails", async () => {
+    const spawnParallel = vi.fn(async (tasks) => tasks.map(() => ({
+      success: true,
+      output: "delegated",
+      sessionId: "session_src_1",
+      taskId: "task_src_1",
+      outputPath: "E:/project/star-sanctuary/.tmp/task_src_1/result.md",
+    })));
+    const spawnSubAgent = vi.fn(async () => ({
+      success: false,
+      output: "Blocked\n- failed verification\n- warning: missing regression",
+      error: "verifier crashed",
+      sessionId: "session_verify_1",
+      taskId: "task_verify_1",
+      outputPath: "E:/project/star-sanctuary/.tmp/task_verify_1/result.md",
+    }));
+    const getCapabilityPlan = vi.fn(async () => ({
+      id: "plan_verify_fail",
+      goalId: "goal_alpha",
+      nodeId: "node_root",
+      status: "planned" as const,
+      executionMode: "multi_agent" as const,
+      riskLevel: "medium" as const,
+      objective: "Implement and verify Root Node",
+      summary: "Need coder execution plus verifier fan-in",
+      queryHints: ["verify", "Root Node"],
+      reasoning: ["Need explicit verifier handoff after delegation"],
+      methods: [{ file: "Refactor-Plan.md", title: "Refactor Plan", score: 20 }],
+      skills: [{ name: "find-skills", score: 10 }],
+      mcpServers: [{ serverId: "docs", status: "connected" as const, toolCount: 3 }],
+      subAgents: [
+        { agentId: "coder", role: "coder" as const, objective: "Implement Root Node", handoffToVerifier: true },
+        { agentId: "qa", role: "verifier" as const, objective: "Verify Root Node" },
+      ],
+      gaps: [],
+      checkpoint: {
+        required: false,
+        reasons: [],
+        approvalMode: "none" as const,
+        requiredRequestFields: [],
+        requiredDecisionFields: [],
+        escalationMode: "none" as const,
+      },
+      actualUsage: { methods: [], skills: [], mcpServers: [], toolNames: [] },
+      analysis: {
+        status: "pending" as const,
+        summary: "尚未记录实际 usage，待执行后再比较计划与实际偏差。",
+        deviations: [],
+        recommendations: [],
+      },
+      generatedAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+    }));
+
+    const context: ToolContext = {
+      ...goalContext,
+      defaultCwd: "E:/project/star-sanctuary/packages/belldandy-core",
+      launchSpec: {
+        cwd: "E:/project/star-sanctuary/packages/belldandy-core",
+        toolSet: ["file_read", "run_command"],
+        permissionMode: "confirm",
+        isolationMode: "workspace",
+        parentTaskId: "task_goal_parent",
+      },
+      agentCapabilities: {
+        spawnParallel,
+        spawnSubAgent,
+      },
+      goalCapabilities: {
+        ...goalContext.goalCapabilities,
+        getCapabilityPlan,
+      },
+    };
+
+    const result = await goalOrchestrateTool.execute({ node_id: "node_root", auto_delegate: true }, context);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("verifier: failed");
+    expect(result.output).toContain("Verifier Result: failed");
+    expect(result.output).toContain("recommendation=blocked");
+    expect(context.goalCapabilities?.saveCapabilityPlan).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
+      orchestration: expect.objectContaining({
+        verifierResult: expect.objectContaining({
+          status: "failed",
+          recommendation: "blocked",
+          findings: expect.arrayContaining([
+            expect.objectContaining({
+              severity: "high",
+            }),
+          ]),
+        }),
+      }),
+    }));
   });
 
   it("goal_orchestrate should auto request checkpoint for high-risk node and skip delegation", async () => {
@@ -2289,6 +2520,7 @@ describe("goal tools", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("已自动发起高风险 checkpoint");
     expect(result.output).toContain("已进入 checkpoint 审批阶段，暂不触发子代理委托");
+    expect(result.output).toContain("Verifier Handoff: pending");
     expect(requestCheckpoint).toHaveBeenCalledTimes(1);
     expect(requestCheckpoint).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
       reviewerRole: "producer",

@@ -4,6 +4,7 @@
  */
 import { defineCommand } from "citty";
 import { BELLDANDY_VERSION } from "../version.generated.js";
+import { getRootCLICommands } from "./builtin-command-registry.js";
 
 export const main = defineCommand({
   meta: {
@@ -16,16 +17,5 @@ export const main = defineCommand({
     "state-dir": { type: "string", description: "Override state directory" },
     verbose: { type: "boolean", description: "Verbose output" },
   },
-  subCommands: {
-    start: () => import("./commands/start.js").then((m) => m.default),
-    stop: () => import("./commands/stop.js").then((m) => m.default),
-    status: () => import("./commands/status.js").then((m) => m.default),
-    dev: () => import("./commands/dev.js").then((m) => m.default),
-    doctor: () => import("./commands/doctor.js").then((m) => m.default),
-    setup: () => import("./commands/setup.js").then((m) => m.default),
-    pairing: () => import("./commands/pairing.js").then((m) => m.default),
-    config: () => import("./commands/config.js").then((m) => m.default),
-    relay: () => import("./commands/relay.js").then((m) => m.default),
-    community: () => import("./commands/community.js").then((m) => m.default),
-  },
+  subCommands: getRootCLICommands(),
 });

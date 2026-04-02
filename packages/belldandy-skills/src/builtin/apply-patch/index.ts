@@ -4,6 +4,8 @@ import * as path from "node:path";
 import type { Tool, ToolCallResult, ToolContext } from "../../types.js";
 import { parsePatchText } from "./dsl.js";
 import { applyUpdateChunks } from "./match.js";
+import { withToolContract } from "../../tool-contract.js";
+import { resolveRuntimeFilesystemScope } from "../../runtime-policy.js";
 
 // ============ Helper Functions ============
 
@@ -97,7 +99,8 @@ function validateWritablePath(
     pathArg: string,
     context: ToolContext,
 ): { ok: true; absolute: string; relative: string } | { ok: false; error: string } {
-    const resolved = resolveAndValidatePath(pathArg, context.workspaceRoot, context.extraWorkspaceRoots);
+    const scope = resolveRuntimeFilesystemScope(context);
+    const resolved = resolveAndValidatePath(pathArg, scope.workspaceRoot, scope.extraWorkspaceRoots);
     if (!resolved.ok) return resolved;
 
     if (isSensitivePath(resolved.relative)) {
@@ -124,7 +127,7 @@ async function ensureDir(filePath: string) {
 
 // ============ apply_patch Tool ============
 
-export const applyPatchTool: Tool = {
+export const applyPatchTool: Tool = withToolContract({
     definition: {
         name: "apply_patch",
         description:
@@ -241,4 +244,18 @@ export const applyPatchTool: Tool = {
             return makeError(err instanceof Error ? err.message : String(err));
         }
     },
-};
+}, {
+    family: "patch",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "high",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Apply a structured patch to one or more workspace files",
+    resultSchema: {
+        kind: "json",
+        description: "Patch application summary encoded as JSON text.",
+    },
+    outputPersistencePolicy: "artifact",
+});

@@ -141,6 +141,20 @@ describe("run_command (Platform-aware Safelist)", () => {
             expect(result.error).toContain("Working directory escapes allowed roots");
         });
 
+        it("should enforce cwd isolation mode for command working directory boundaries", async () => {
+            const isolatedContext: ToolContext = {
+                ...mockContext,
+                defaultCwd: path.join(workspaceRoot, "apps"),
+                launchSpec: {
+                    isolationMode: "cwd",
+                },
+            };
+
+            const result = await runCommandTool.execute({ command: "pwd", cwd: "../outside" }, isolatedContext);
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("Working directory escapes allowed roots");
+        });
+
         it("should allow cwd inside extraWorkspaceRoots", async () => {
             const result = await runCommandTool.execute(
                 { command: "pwd", cwd: extraWorkspaceRoot },

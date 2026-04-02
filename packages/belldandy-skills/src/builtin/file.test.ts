@@ -132,6 +132,29 @@ describe("file tools", () => {
       expect(output.content).toBe("deep content");
     });
 
+    it("should enforce cwd isolation for relative file reads", async () => {
+      const isolatedRoot = path.join(tempDir, "isolated");
+      await fs.mkdir(isolatedRoot, { recursive: true });
+      await fs.writeFile(path.join(isolatedRoot, "inside.txt"), "inside", "utf-8");
+      await fs.writeFile(path.join(tempDir, "outside.txt"), "outside", "utf-8");
+
+      const isolatedContext: ToolContext = {
+        ...baseContext,
+        defaultCwd: isolatedRoot,
+        launchSpec: {
+          isolationMode: "cwd",
+        },
+      };
+
+      const insideResult = await fileReadTool.execute({ path: "inside.txt" }, isolatedContext);
+      expect(insideResult.success).toBe(true);
+      expect(JSON.parse(insideResult.output).content).toBe("inside");
+
+      const outsideResult = await fileReadTool.execute({ path: "../outside.txt" }, isolatedContext);
+      expect(outsideResult.success).toBe(false);
+      expect(outsideResult.error).toContain("越界");
+    });
+
     it("should link used memory for MEMORY.md and memory/* reads", async () => {
       await fs.writeFile(path.join(tempDir, "MEMORY.md"), "# Memory", "utf-8");
 
@@ -365,6 +388,28 @@ description: 通过额外根目录读取
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("禁止写入");
+    });
+
+    it("should write relative paths under cwd isolation root", async () => {
+      const isolatedRoot = path.join(tempDir, "isolated-write");
+      await fs.mkdir(isolatedRoot, { recursive: true });
+
+      const isolatedContext: ToolContext = {
+        ...baseContext,
+        defaultCwd: isolatedRoot,
+        launchSpec: {
+          isolationMode: "cwd",
+        },
+      };
+
+      const result = await fileWriteTool.execute(
+        { path: "nested/output.txt", content: "isolated" },
+        isolatedContext,
+      );
+
+      expect(result.success).toBe(true);
+      await expect(fs.readFile(path.join(isolatedRoot, "nested", "output.txt"), "utf-8")).resolves.toBe("isolated");
+      await expect(fs.access(path.join(tempDir, "nested", "output.txt"))).rejects.toThrow();
     });
   });
 

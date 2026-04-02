@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Tool, ToolContext, ToolCallResult } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
+import { resolveRuntimeFilesystemScope } from "../runtime-policy.js";
 
 /** 检查路径是否在黑名单中 */
 function isDeniedPath(relativePath: string, deniedPaths: string[]): string | null {
@@ -128,7 +130,7 @@ async function listDirectory(
     }
 }
 
-export const listFilesTool: Tool = {
+export const listFilesTool: Tool = withToolContract({
     definition: {
         name: "list_files",
         description:
@@ -175,7 +177,8 @@ export const listFilesTool: Tool = {
             : 3;
 
         // 路径验证（主工作区或 extraWorkspaceRoots 下的目录均可）
-        const pathResult = resolveAndValidatePath(pathArg, context.workspaceRoot, context.extraWorkspaceRoots);
+        const scope = resolveRuntimeFilesystemScope(context);
+        const pathResult = resolveAndValidatePath(pathArg, scope.workspaceRoot, scope.extraWorkspaceRoots);
         if (!pathResult.ok) {
             return makeError(pathResult.error);
         }
@@ -237,4 +240,18 @@ export const listFilesTool: Tool = {
             return makeError(err instanceof Error ? err.message : String(err));
         }
     },
-};
+}, {
+    family: "workspace-read",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "List files and directories inside the workspace",
+    resultSchema: {
+        kind: "json",
+        description: "Directory listing payload encoded as JSON text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

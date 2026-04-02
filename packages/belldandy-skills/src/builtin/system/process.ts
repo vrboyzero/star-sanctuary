@@ -2,10 +2,11 @@ import type { Tool, ToolCallResult } from "../../types.js";
 import { exec } from "node:child_process";
 import crypto from "node:crypto";
 import util from "node:util";
+import { withToolContract } from "../../tool-contract.js";
 
 const execAsync = util.promisify(exec);
 
-export const processManagerTool: Tool = {
+export const processManagerTool: Tool = withToolContract({
     definition: {
         name: "process_manager",
         description: "简单的进程管理工具（查看与终止）。支持 `list` (列出前20个消耗资源的进程) 和 `kill` (按 PID 终止)。",
@@ -94,4 +95,18 @@ export const processManagerTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "process-control",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "critical",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Inspect or terminate host processes",
+    resultSchema: {
+        kind: "text",
+        description: "Process list output or process termination result text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

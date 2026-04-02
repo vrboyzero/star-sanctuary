@@ -1,0 +1,126 @@
+import { resolveSafeScopesForChannel } from "@belldandy/skills";
+import { CommandRegistry } from "./command-registry.js";
+import type { CommandDescriptor } from "./command-types.js";
+
+const BUILTIN_CLI_COMMANDS: readonly CommandDescriptor[] = [
+  {
+    name: "start",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Start the Belldandy Gateway daemon",
+    handler: async () => (await import("./commands/start.js")).default,
+  },
+  {
+    name: "stop",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Stop the Belldandy Gateway daemon",
+    handler: async () => (await import("./commands/stop.js")).default,
+  },
+  {
+    name: "status",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["local-safe"],
+    description: "Show Gateway daemon status",
+    handler: async () => (await import("./commands/status.js")).default,
+  },
+  {
+    name: "dev",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Run Belldandy in development mode",
+    handler: async () => (await import("./commands/dev.js")).default,
+  },
+  {
+    name: "doctor",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["local-safe"],
+    description: "Run environment and configuration diagnostics",
+    handler: async () => (await import("./commands/doctor.js")).default,
+  },
+  {
+    name: "setup",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Bootstrap local Belldandy configuration",
+    handler: async () => (await import("./commands/setup.js")).default,
+  },
+  {
+    name: "pairing",
+    type: "group",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Manage pairing flows",
+    handler: async () => (await import("./commands/pairing.js")).default,
+  },
+  {
+    name: "config",
+    type: "group",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["local-safe"],
+    description: "Manage configuration (.env.local)",
+    handler: async () => (await import("./commands/config.js")).default,
+  },
+  {
+    name: "relay",
+    type: "group",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Manage relay services",
+    handler: async () => (await import("./commands/relay.js")).default,
+  },
+  {
+    name: "community",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["bridge-safe"],
+    description: "Community integration commands",
+    handler: async () => (await import("./commands/community.js")).default,
+  },
+  {
+    name: "marketplace",
+    type: "group",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Manage marketplace extension distribution state",
+    handler: async () => (await import("./commands/marketplace.js")).default,
+  },
+] as const;
+
+export const builtinCommandRegistry = new CommandRegistry(BUILTIN_CLI_COMMANDS);
+
+export function getRootCLICommands() {
+  return builtinCommandRegistry.toSubCommands({
+    channel: "cli",
+    visibility: "public",
+    safeScopes: resolveSafeScopesForChannel("cli"),
+  });
+}

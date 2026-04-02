@@ -2,6 +2,8 @@ export function createGoalsCapabilityPanelFeature({
   refs,
   escapeHtml,
   formatDateTime,
+  onOpenSourcePath,
+  onOpenSubtask,
 }) {
   const { goalsDetailEl } = refs;
 
@@ -26,6 +28,63 @@ export function createGoalsCapabilityPanelFeature({
     `;
   }
 
+  function renderCapabilityMetaList(items, emptyText) {
+    if (!Array.isArray(items) || !items.length) {
+      return `<div class="memory-viewer-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+      <div class="memory-list-item-meta">
+        ${items.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+      </div>
+    `;
+  }
+
+  function renderCoordinatorResultList(items, emptyText) {
+    if (!Array.isArray(items) || !items.length) {
+      return `<div class="memory-viewer-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+      <div class="goal-tracking-list">
+        ${items.map((item) => `
+          <div class="goal-tracking-item">
+            <div class="goal-tracking-item-head">
+              <span class="goal-tracking-item-title">${escapeHtml(item.agentId || "unknown")}${item.role ? ` · ${escapeHtml(item.role)}` : ""}</span>
+              <div class="goal-checkpoint-meta">
+                <span class="memory-badge ${item.status === "success" ? "memory-badge-shared" : item.status === "failed" ? "is-overdue" : ""}">${escapeHtml(item.status || "unknown")}</span>
+              </div>
+            </div>
+            ${item.summary ? `<div class="memory-list-item-snippet">${escapeHtml(item.summary)}</div>` : ""}
+            ${item.error ? `<div class="memory-list-item-snippet">${escapeHtml(item.error)}</div>` : ""}
+            <div class="memory-list-item-meta">
+              ${item.taskId ? `<span>task ${escapeHtml(item.taskId)}</span>` : ""}
+              ${item.sessionId ? `<span>session ${escapeHtml(item.sessionId)}</span>` : ""}
+              ${item.outputPath ? `<span>${escapeHtml(item.outputPath)}</span>` : ""}
+            </div>
+            <div class="memory-detail-badges">
+              ${item.taskId ? `<button class="button goal-inline-action-secondary" data-open-subtask-id="${escapeHtml(item.taskId)}">打开子任务</button>` : ""}
+              ${item.outputPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(item.outputPath)}">打开输出</button>` : ""}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderSimpleList(items, emptyText) {
+    if (!Array.isArray(items) || !items.length) {
+      return `<div class="memory-viewer-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+      <div class="goal-tracking-list">
+        ${items.map((item) => `
+          <div class="goal-tracking-item">
+            <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
   function renderGoalCapabilityPanelLoading() {
     const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
     if (!panel) return;
@@ -36,6 +95,24 @@ export function createGoalsCapabilityPanelFeature({
     const panel = goalsDetailEl?.querySelector("#goalCapabilityPanel");
     if (!panel) return;
     panel.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  }
+
+  function bindCapabilityPanelActions(panel) {
+    if (!panel) return;
+    panel.querySelectorAll("[data-open-source]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const sourcePath = node.getAttribute("data-open-source");
+        if (!sourcePath) return;
+        void onOpenSourcePath?.(sourcePath);
+      });
+    });
+    panel.querySelectorAll("[data-open-subtask-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-open-subtask-id");
+        if (!taskId) return;
+        void onOpenSubtask?.(taskId);
+      });
+    });
   }
 
   function renderGoalCapabilityPanel(goal, payload) {
@@ -67,6 +144,49 @@ export function createGoalsCapabilityPanelFeature({
     }
 
     const focusNodeTitle = focusPlan?.nodeId ? (nodeMap[focusPlan.nodeId] || focusPlan.nodeId) : "当前节点";
+    const orchestration = focusPlan?.orchestration || {};
+    const coordinationPlan = orchestration?.coordinationPlan || null;
+    const rolePolicy = coordinationPlan?.rolePolicy || null;
+    const delegationResults = Array.isArray(orchestration?.delegationResults) ? orchestration.delegationResults : [];
+    const verifierHandoff = orchestration?.verifierHandoff || null;
+    const verifierResult = orchestration?.verifierResult || null;
+    const coordinatorMeta = [
+      coordinationPlan?.summary ? `plan: ${coordinationPlan.summary}` : "",
+      typeof orchestration?.claimed === "boolean" ? `claimed:${orchestration.claimed ? "yes" : "no"}` : "",
+      typeof orchestration?.delegated === "boolean" ? `delegated:${orchestration.delegated ? "yes" : "no"}` : "",
+      Number.isFinite(orchestration?.delegationCount) ? `delegationCount:${orchestration.delegationCount}` : "",
+      Number.isFinite(coordinationPlan?.plannedDelegationCount) ? `planned:${coordinationPlan.plannedDelegationCount}` : "",
+    ].filter(Boolean);
+    const rolePolicyTags = rolePolicy ? [
+      ...(Array.isArray(rolePolicy.selectedRoles) ? rolePolicy.selectedRoles.map((item) => `role:${item}`) : []),
+      rolePolicy.verifierRole ? `verifier:${rolePolicy.verifierRole}` : "",
+      rolePolicy.fanInStrategy ? `fanIn:${rolePolicy.fanInStrategy}` : "",
+      ...(Array.isArray(rolePolicy.selectionReasons) ? rolePolicy.selectionReasons : []),
+    ].filter(Boolean) : [];
+    const fanInRows = verifierHandoff ? (
+      Array.isArray(verifierHandoff.sourceAgentIds) && verifierHandoff.sourceAgentIds.length
+        ? verifierHandoff.sourceAgentIds.map((agentId, index) => {
+          const matchedResult = delegationResults.find((item) => item.agentId === agentId);
+          const sourceTaskId = verifierHandoff.sourceTaskIds?.[index] || matchedResult?.taskId || "-";
+          const verifierTaskId = verifierHandoff.verifierTaskId || "-";
+          return `${agentId} -> ${sourceTaskId} -> ${verifierTaskId}`;
+        })
+        : [`main-agent -> - -> ${verifierHandoff.verifierTaskId || "-"}`]
+    ) : [];
+    const verifierMeta = [
+      verifierHandoff?.status ? `handoff:${verifierHandoff.status}` : "",
+      verifierHandoff?.verifierAgentId ? `agent:${verifierHandoff.verifierAgentId}` : "",
+      verifierHandoff?.verifierTaskId ? `task:${verifierHandoff.verifierTaskId}` : "",
+      verifierHandoff?.verifierSessionId ? `session:${verifierHandoff.verifierSessionId}` : "",
+      verifierResult?.status ? `result:${verifierResult.status}` : "",
+      verifierResult?.recommendation ? `recommendation:${verifierResult.recommendation}` : "",
+      verifierResult?.generatedAt ? `generated:${formatDateTime(verifierResult.generatedAt)}` : "",
+    ].filter(Boolean);
+    const verifierFindingRows = Array.isArray(verifierResult?.findings)
+      ? verifierResult.findings.map((item) => `[${item.severity || "low"}] ${item.summary || ""}`).filter(Boolean)
+      : [];
+    const orchestrationNotes = Array.isArray(orchestration?.notes) ? orchestration.notes : [];
+
     panel.innerHTML = `
       <div class="goal-capability-stats">
         <div class="goal-summary-item">
@@ -204,6 +324,59 @@ export function createGoalsCapabilityPanelFeature({
               )}
             </div>
           </div>
+
+          <div class="goal-capability-columns">
+            <div class="goal-capability-column">
+              <div class="goal-summary-label">Coordinator Plan / Policy</div>
+              ${renderCapabilityMetaList(
+                coordinatorMeta,
+                "当前 plan 还没有 coordinator 计划结果。",
+              )}
+              ${renderCapabilityTagList(
+                rolePolicyTags,
+                "当前没有额外 role policy / fan-in 策略说明。",
+              )}
+              ${renderSimpleList(
+                orchestrationNotes,
+                "当前没有额外 orchestration notes。",
+              )}
+            </div>
+            <div class="goal-capability-column">
+              <div class="goal-summary-label">Verifier Runtime / Result</div>
+              ${renderCapabilityMetaList(
+                verifierMeta,
+                "当前没有 verifier runtime / result 元数据。",
+              )}
+              ${verifierHandoff?.summary ? `<div class="memory-list-item-snippet">${escapeHtml(verifierHandoff.summary)}</div>` : ""}
+              ${verifierResult?.summary ? `<div class="memory-list-item-snippet">${escapeHtml(verifierResult.summary)}</div>` : ""}
+              <div class="memory-detail-badges">
+                ${verifierHandoff?.verifierTaskId ? `<button class="button goal-inline-action-secondary" data-open-subtask-id="${escapeHtml(verifierHandoff.verifierTaskId)}">打开 Verifier 子任务</button>` : ""}
+                ${verifierResult?.outputPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(verifierResult.outputPath)}">打开 Verifier 输出</button>` : verifierHandoff?.outputPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(verifierHandoff.outputPath)}">打开 Verifier 输出</button>` : ""}
+              </div>
+            </div>
+          </div>
+
+          <div class="goal-capability-columns">
+            <div class="goal-capability-column">
+              <div class="goal-summary-label">Coordinator Results</div>
+              ${renderCoordinatorResultList(
+                delegationResults,
+                "当前还没有 delegation results。",
+              )}
+            </div>
+            <div class="goal-capability-column">
+              <div class="goal-summary-label">Source -> Verifier Fan-In</div>
+              ${renderSimpleList(
+                fanInRows,
+                "当前没有 source -> verifier fan-in 关系。",
+              )}
+              <div class="goal-summary-label">Verifier Findings</div>
+              ${renderSimpleList(
+                verifierFindingRows,
+                "当前还没有结构化 verifier findings。",
+              )}
+            </div>
+          </div>
         </div>
       ` : ""}
 
@@ -242,6 +415,8 @@ export function createGoalsCapabilityPanelFeature({
         </div>
       </div>
     `;
+
+    bindCapabilityPanelActions(panel);
   }
 
   return {

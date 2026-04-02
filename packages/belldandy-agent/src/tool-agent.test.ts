@@ -403,6 +403,94 @@ describe("ToolEnabledAgent hook timeouts", () => {
     );
   });
 
+  it("passes launchSpec runtime context into tool definitions and execution", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(createJsonResponse({
+      choices: [{
+        message: {
+          content: "",
+          tool_calls: [{
+            id: "call-1",
+            type: "function",
+            function: {
+              name: "echo",
+              arguments: "{}",
+            },
+          }],
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    })).mockResolvedValueOnce(createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+    const getDefinitions = vi.fn(() => [{
+      type: "function" as const,
+      function: {
+        name: "echo",
+        description: "echo",
+        parameters: { type: "object", properties: {} },
+      },
+    }]);
+    const execute = vi.fn(async () => ({
+      id: "call-1",
+      name: "echo",
+      success: true,
+      output: "tool-output",
+      durationMs: 0,
+    }));
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      timeoutMs: 20,
+      toolExecutor: createToolExecutor({
+        getDefinitions,
+        execute,
+      }),
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-launch-spec",
+      text: "use tool",
+      meta: {
+        _agentLaunchSpec: {
+          cwd: "/tmp/worktree",
+          toolSet: ["echo"],
+          permissionMode: "confirm",
+        },
+      },
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(getDefinitions).toHaveBeenCalledWith(undefined, "conv-launch-spec", {
+      launchSpec: {
+        cwd: "/tmp/worktree",
+        toolSet: ["echo"],
+        permissionMode: "confirm",
+      },
+    });
+    expect(execute).toHaveBeenCalledWith(
+      expect.anything(),
+      "conv-launch-spec",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        launchSpec: {
+          cwd: "/tmp/worktree",
+          toolSet: ["echo"],
+          permissionMode: "confirm",
+        },
+      },
+    );
+  });
+
   it("serializes concurrent runs for the same conversation", async () => {
     let releaseFirstFetch!: () => void;
     const firstFetchPending = new Promise<void>((resolve) => {

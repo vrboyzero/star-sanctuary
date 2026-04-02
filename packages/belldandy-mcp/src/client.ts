@@ -10,15 +10,24 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import spawn from "cross-spawn";
+import fs from "node:fs/promises";
 import type { ChildProcess } from "node:child_process";
 import path from "node:path";
+import { resolveStateDir } from "@belldandy/protocol";
 
 import {
   type MCPServerConfig,
   type MCPServerState,
   type MCPServerStatus,
+  type MCPServerFailureKind,
+  type MCPServerFailureSource,
+  type MCPServerResultSource,
+  type MCPServerRuntimeDiagnostics,
   type MCPToolInfo,
   type MCPResourceInfo,
+  type MCPToolContentItem,
+  type MCPResourceContentItem,
+  type MCPResultDiagnostics,
   type MCPToolCallResult,
   type MCPResourceReadResult,
   type MCPEvent,
@@ -30,6 +39,10 @@ import { mcpLog, mcpWarn, mcpError } from "./logger-adapter.js";
 
 const FILESYSTEM_SERVER_PACKAGE = "@modelcontextprotocol/server-filesystem";
 const EXTRA_WORKSPACE_ROOTS_ENV_KEY = "BELLDANDY_EXTRA_WORKSPACE_ROOTS";
+const MAX_INLINE_TEXT_CHARS = 12_000;
+const MAX_INLINE_BINARY_CHARS = 4_096;
+const MCP_PERSIST_DIR = "generated";
+const MAX_SESSION_RECOVERY_ATTEMPTS = 1;
 
 function normalizeComparablePath(input: string): string {
   const resolved = path.resolve(input);
@@ -86,6 +99,80 @@ export function expandFilesystemServerArgs(
   return [...prefix, ...existingRoots, ...appendedRoots];
 }
 
+function buildTextTruncationNote(originalLength: number, keptLength: number): string {
+  return `[MCP output truncated: original ${originalLength} chars, showing first ${keptLength}. Narrow the query or use pagination/filtering if supported.]`;
+}
+
+function buildBinaryTruncationNote(originalLength: number): string {
+  return `[MCP binary payload omitted from inline result: original ${originalLength} chars of base64. Use a narrower query or resource-specific fetch path if supported.]`;
+}
+
+function buildPersistedOutputNote(input: {
+  originalLength: number;
+  webPath: string;
+  preview?: string;
+}): string {
+  const header = `[MCP output saved: original ${input.originalLength} chars. Read full output at ${input.webPath}]`;
+  if (!input.preview) {
+    return header;
+  }
+  return `${header}\n\nPreview:\n${input.preview}`;
+}
+
+function sanitizePersistSegment(input: string): string {
+  return input.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function extensionForMimeType(mimeType: string | undefined, fallback: string): string {
+  if (!mimeType) return fallback;
+  const normalized = mimeType.toLowerCase();
+  if (normalized.includes("json")) return "json";
+  if (normalized.includes("markdown")) return "md";
+  if (normalized.includes("plain")) return "txt";
+  if (normalized.includes("png")) return "png";
+  if (normalized.includes("jpeg")) return "jpg";
+  if (normalized.includes("gif")) return "gif";
+  if (normalized.includes("webp")) return "webp";
+  if (normalized.includes("pdf")) return "pdf";
+  if (normalized.includes("mpeg")) return "mp3";
+  if (normalized.includes("wav")) return "wav";
+  if (normalized.includes("octet-stream")) return "bin";
+  const subtype = normalized.split("/")[1]?.split(";")[0]?.trim();
+  return subtype ? sanitizePersistSegment(subtype) : fallback;
+}
+
+type MCPNormalizedToolCallContent = {
+  content: MCPToolContentItem[];
+  diagnostics: MCPResultDiagnostics;
+};
+
+type MCPNormalizedResourceReadContent = {
+  contents: MCPResourceContentItem[];
+  diagnostics: MCPResultDiagnostics;
+};
+
+type MCPNormalizedTextItem = {
+  text?: string;
+  truncated: boolean;
+  persisted: boolean;
+  persistedFilepath?: string;
+  persistedWebPath?: string;
+  originalLength?: number;
+  note?: string;
+  estimatedChars: number;
+};
+
+type MCPNormalizedBinaryItem = {
+  value?: string;
+  truncated: boolean;
+  persisted: boolean;
+  persistedFilepath?: string;
+  persistedWebPath?: string;
+  originalLength?: number;
+  note?: string;
+  estimatedChars: number;
+};
+
 // ============================================================================
 // MCP 客户端类
 // ============================================================================
@@ -141,6 +228,12 @@ export class MCPClient {
   /** 重连是否已被取消 */
   private reconnectCancelled = false;
 
+  /** 运行时诊断 */
+  private diagnostics: MCPServerRuntimeDiagnostics = {
+    connectionAttempts: 0,
+    reconnectAttempts: 0,
+  };
+
   constructor(config: MCPServerConfig) {
     this.config = config;
   }
@@ -175,6 +268,7 @@ export class MCPClient {
       tools: [...this.tools],
       resources: [...this.resources],
       metadata: this.metadata,
+      diagnostics: this.getDiagnosticsSnapshot(),
     };
   }
 
@@ -187,6 +281,8 @@ export class MCPClient {
       return;
     }
 
+    this.diagnostics.connectionAttempts += 1;
+    this.diagnostics.lastConnectStartedAt = new Date();
     this.setStatus("connecting");
     this.error = undefined;
 
@@ -228,6 +324,7 @@ export class MCPClient {
       mcpLog(`mcp:${this.config.id}`, `发现 ${this.tools.length} 个工具, ${this.resources.length} 个资源`);
     } catch (err) {
       this.error = err instanceof Error ? err.message : String(err);
+      this.recordFailure(err, { source: "connect" });
       this.setStatus("error");
       mcpError(`mcp:${this.config.id}`, `连接失败: ${this.error}`);
       
@@ -249,6 +346,7 @@ export class MCPClient {
     mcpLog(`mcp:${this.config.id}`, "正在断开连接...");
 
     this.cancelPendingReconnect();
+    this.diagnostics.lastDisconnectAt = new Date();
 
     await this.cleanup();
     this.setStatus("disconnected");
@@ -300,41 +398,27 @@ export class MCPClient {
 
     try {
       mcpLog(`mcp:${this.config.id}`, `调用工具: ${toolName}`);
-      
-      const result = await this.client.callTool({
-        name: toolName,
-        arguments: args,
-      });
+      const result = await this.executeWithSessionRecovery("call_tool", () =>
+        this.client!.callTool({
+          name: toolName,
+          arguments: args,
+        })
+      );
 
-      // 转换结果格式
-      const contentArray = Array.isArray(result.content) ? result.content : [];
-      const content = contentArray.map((item: { type: string; text?: string; data?: string; mimeType?: string; resource?: { uri?: string; text?: string; mimeType?: string } }) => {
-        if (item.type === "text") {
-          return { type: "text" as const, text: item.text };
-        } else if (item.type === "image") {
-          return {
-            type: "image" as const,
-            data: item.data,
-            mimeType: item.mimeType,
-          };
-        } else if (item.type === "resource") {
-          return {
-            type: "resource" as const,
-            uri: item.resource?.uri,
-            text: item.resource?.text,
-            mimeType: item.resource?.mimeType,
-          };
-        }
-        return { type: "text" as const, text: JSON.stringify(item) };
-      });
+      const normalized = await this.normalizeToolCallContent(
+        Array.isArray(result.content) ? result.content : [],
+      );
+      this.recordResultDiagnostics("call_tool", normalized.diagnostics);
 
       return {
         success: !result.isError,
-        content,
+        content: normalized.content,
         isError: Boolean(result.isError),
+        diagnostics: normalized.diagnostics,
       };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
+      this.recordFailure(err, { updateCurrentError: false, source: "call_tool" });
       mcpError(`mcp:${this.config.id}`, `工具调用失败: ${errorMessage}`);
       
       return {
@@ -357,17 +441,22 @@ export class MCPClient {
     }
 
     mcpLog(`mcp:${this.config.id}`, `读取资源: ${uri}`);
-    
-    const result = await this.client.readResource({ uri });
-    
-    return {
-      contents: result.contents.map((content) => ({
-        uri: content.uri,
-        mimeType: content.mimeType,
-        text: "text" in content ? content.text : undefined,
-        blob: "blob" in content ? content.blob : undefined,
-      })),
-    };
+
+    try {
+      const result = await this.executeWithSessionRecovery("read_resource", () =>
+        this.client!.readResource({ uri })
+      );
+      const normalized = await this.normalizeResourceReadContent(result.contents);
+      this.recordResultDiagnostics("read_resource", normalized.diagnostics);
+
+      return {
+        contents: normalized.contents,
+        diagnostics: normalized.diagnostics,
+      };
+    } catch (err) {
+      this.recordFailure(err, { updateCurrentError: false, source: "read_resource" });
+      throw err;
+    }
   }
 
   /**
@@ -481,6 +570,7 @@ export class MCPClient {
         serverId: this.config.id,
       }));
     } catch (err) {
+      this.recordFailure(err, { updateCurrentError: false, source: "list_tools" });
       mcpWarn(`mcp:${this.config.id}`, "无法列出工具", err);
       this.tools = [];
     }
@@ -496,6 +586,7 @@ export class MCPClient {
         serverId: this.config.id,
       }));
     } catch (err) {
+      this.recordFailure(err, { updateCurrentError: false, source: "list_resources" });
       mcpWarn(`mcp:${this.config.id}`, "无法列出资源", err);
       this.resources = [];
     }
@@ -561,12 +652,18 @@ export class MCPClient {
     while (!this.reconnectCancelled) {
       if (this.reconnectCount >= maxRetries) {
         mcpError(`mcp:${this.config.id}`, "已达到最大重试次数");
-        this.setStatus("error");
         this.error = "重连失败：已达到最大重试次数";
+        this.recordFailure(new Error(this.error), { source: "connect", retryable: false });
+        this.setStatus("error");
         return;
       }
 
       this.reconnectCount++;
+      this.diagnostics.reconnectAttempts += 1;
+      this.diagnostics.lastRetryAt = new Date();
+      this.diagnostics.lastRetryDelayMs = delay;
+      this.diagnostics.lastRetryAttempt = this.reconnectCount;
+      this.diagnostics.lastRetryMax = maxRetries;
       this.setStatus("reconnecting");
 
       mcpLog(
@@ -634,6 +731,442 @@ export class MCPClient {
     this.reconnectDelayAbortController = null;
   }
 
+  private classifyFailureKind(error: unknown): MCPServerFailureKind {
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    if (
+      normalized.includes("session expired")
+      || normalized.includes("session not found")
+      || normalized.includes("invalid session")
+    ) {
+      return "session_expired";
+    }
+    if (
+      normalized.includes("timeout")
+      || normalized.includes("econn")
+      || normalized.includes("network")
+      || normalized.includes("transport")
+      || normalized.includes("fetch failed")
+      || normalized.includes("socket")
+    ) {
+      return "transport";
+    }
+    return "unknown";
+  }
+
+  private recordFailure(
+    error: unknown,
+    options: {
+      source?: MCPServerFailureSource;
+      retryable?: boolean;
+      updateCurrentError?: boolean;
+    } = {},
+  ): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const kind = this.classifyFailureKind(error);
+    this.diagnostics.lastErrorAt = new Date();
+    this.diagnostics.lastErrorKind = kind;
+    this.diagnostics.lastErrorMessage = message;
+    this.diagnostics.lastErrorSource = options.source;
+    this.diagnostics.lastErrorRetryable = options.retryable ?? (kind === "session_expired" || kind === "transport");
+    if (kind === "session_expired") {
+      this.diagnostics.lastSessionExpiredAt = this.diagnostics.lastErrorAt;
+    }
+    if (options.updateCurrentError !== false) {
+      this.error = message;
+    }
+  }
+
+  private async executeWithSessionRecovery<T>(
+    source: MCPServerFailureSource,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= MAX_SESSION_RECOVERY_ATTEMPTS; attempt += 1) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        const kind = this.classifyFailureKind(error);
+        const isRecoverable = kind === "session_expired";
+        this.recordFailure(error, {
+          source,
+          retryable: isRecoverable,
+          updateCurrentError: false,
+        });
+        if (!isRecoverable || attempt >= MAX_SESSION_RECOVERY_ATTEMPTS) {
+          throw error;
+        }
+        this.diagnostics.lastRecoveryAt = new Date();
+        try {
+          await this.reconnect();
+          this.diagnostics.lastRecoverySucceeded = true;
+        } catch (reconnectError) {
+          this.diagnostics.lastRecoverySucceeded = false;
+          this.recordFailure(reconnectError, {
+            source: "connect",
+            retryable: false,
+          });
+          throw reconnectError;
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private createResultDiagnostics(input: {
+    estimatedChars: number;
+    truncatedItems: number;
+    persistedItems?: number;
+    persistedFilepath?: string;
+    persistedWebPath?: string;
+  }): MCPResultDiagnostics {
+    return {
+      strategy: input.persistedItems && input.persistedItems > 0
+        ? "persisted"
+        : input.truncatedItems > 0 ? "truncated" : "inline",
+      truncated: input.truncatedItems > 0,
+      estimatedChars: input.estimatedChars,
+      truncatedItems: input.truncatedItems,
+      persistedItems: input.persistedItems,
+      persistedFilepath: input.persistedFilepath,
+      persistedWebPath: input.persistedWebPath,
+    };
+  }
+
+  private recordResultDiagnostics(
+    source: MCPServerResultSource,
+    diagnostics: MCPResultDiagnostics,
+  ): void {
+    this.diagnostics.lastResult = {
+      at: new Date(),
+      source,
+      strategy: diagnostics.strategy,
+      estimatedChars: diagnostics.estimatedChars,
+      truncatedItems: diagnostics.truncatedItems,
+      persistedItems: diagnostics.persistedItems,
+      persistedWebPath: diagnostics.persistedWebPath,
+    };
+  }
+
+  private async normalizeToolCallContent(
+    contentArray: Array<{
+      type: string;
+      text?: string;
+      data?: string;
+      mimeType?: string;
+      resource?: { uri?: string; text?: string; mimeType?: string };
+    }>,
+  ): Promise<MCPNormalizedToolCallContent> {
+    let truncatedItems = 0;
+    let persistedItems = 0;
+    let estimatedChars = 0;
+    let persistedFilepath: string | undefined;
+    let persistedWebPath: string | undefined;
+    const content: MCPToolContentItem[] = [];
+    for (const item of contentArray) {
+      if (item.type === "text") {
+        const normalized = await this.normalizeLargeTextItem({
+          text: item.text,
+          persistId: `${this.config.id}-tool-text`,
+          mimeType: "text/plain",
+        });
+        if (normalized.persisted) {
+          persistedItems += 1;
+          persistedFilepath ??= normalized.persistedFilepath;
+          persistedWebPath ??= normalized.persistedWebPath;
+        }
+        if (normalized.truncated) truncatedItems += 1;
+        estimatedChars += normalized.estimatedChars;
+        content.push({
+          type: "text",
+          text: normalized.text,
+          truncated: normalized.truncated,
+          originalLength: normalized.originalLength,
+          note: normalized.note,
+        });
+        continue;
+      }
+      if (item.type === "image") {
+        const normalized = await this.normalizeLargeBinaryItem({
+          value: item.data,
+          persistId: `${this.config.id}-tool-image`,
+          mimeType: item.mimeType,
+        });
+        if (normalized.persisted) {
+          persistedItems += 1;
+          persistedFilepath ??= normalized.persistedFilepath;
+          persistedWebPath ??= normalized.persistedWebPath;
+        }
+        if (normalized.truncated) truncatedItems += 1;
+        estimatedChars += normalized.estimatedChars;
+        content.push({
+          type: "image",
+          data: normalized.value,
+          mimeType: item.mimeType,
+          truncated: normalized.truncated,
+          originalLength: normalized.originalLength,
+          note: normalized.note,
+        });
+        continue;
+      }
+      if (item.type === "resource") {
+        const normalized = await this.normalizeLargeTextItem({
+          text: item.resource?.text,
+          persistId: `${this.config.id}-tool-resource`,
+          mimeType: item.resource?.mimeType,
+        });
+        if (normalized.persisted) {
+          persistedItems += 1;
+          persistedFilepath ??= normalized.persistedFilepath;
+          persistedWebPath ??= normalized.persistedWebPath;
+        }
+        if (normalized.truncated) truncatedItems += 1;
+        estimatedChars += normalized.estimatedChars;
+        content.push({
+          type: "resource",
+          uri: item.resource?.uri,
+          text: normalized.text,
+          mimeType: item.resource?.mimeType,
+          truncated: normalized.truncated,
+          originalLength: normalized.originalLength,
+          note: normalized.note,
+        });
+        continue;
+      }
+      const fallback = await this.normalizeLargeTextItem({
+        text: JSON.stringify(item),
+        persistId: `${this.config.id}-tool-fallback`,
+        mimeType: "application/json",
+      });
+      if (fallback.persisted) {
+        persistedItems += 1;
+        persistedFilepath ??= fallback.persistedFilepath;
+        persistedWebPath ??= fallback.persistedWebPath;
+      }
+      if (fallback.truncated) truncatedItems += 1;
+      estimatedChars += fallback.estimatedChars;
+      content.push({
+        type: "text",
+        text: fallback.text,
+        truncated: fallback.truncated,
+        originalLength: fallback.originalLength,
+        note: fallback.note,
+      });
+    }
+
+    return {
+      content,
+      diagnostics: this.createResultDiagnostics({
+        estimatedChars,
+        truncatedItems,
+        persistedItems,
+        persistedFilepath,
+        persistedWebPath,
+      }),
+    };
+  }
+
+  private async normalizeResourceReadContent(
+    contents: Array<{
+      uri: string;
+      mimeType?: string;
+      text?: string;
+      blob?: string;
+    }>,
+  ): Promise<MCPNormalizedResourceReadContent> {
+    let truncatedItems = 0;
+    let persistedItems = 0;
+    let estimatedChars = 0;
+    let persistedFilepath: string | undefined;
+    let persistedWebPath: string | undefined;
+    const normalizedContents: MCPResourceContentItem[] = [];
+    for (const content of contents) {
+      const normalizedText = await this.normalizeLargeTextItem({
+        text: "text" in content ? content.text : undefined,
+        persistId: `${this.config.id}-resource-text`,
+        mimeType: content.mimeType,
+      });
+      const normalizedBlob = await this.normalizeLargeBinaryItem({
+        value: "blob" in content ? content.blob : undefined,
+        persistId: `${this.config.id}-resource-blob`,
+        mimeType: content.mimeType,
+      });
+      if (normalizedText.persisted) {
+        persistedItems += 1;
+        persistedFilepath ??= normalizedText.persistedFilepath;
+        persistedWebPath ??= normalizedText.persistedWebPath;
+      }
+      if (normalizedBlob.persisted) {
+        persistedItems += 1;
+        persistedFilepath ??= normalizedBlob.persistedFilepath;
+        persistedWebPath ??= normalizedBlob.persistedWebPath;
+      }
+      if (normalizedText.truncated || normalizedBlob.truncated) truncatedItems += 1;
+      estimatedChars += normalizedText.estimatedChars + normalizedBlob.estimatedChars;
+      const notes = [normalizedText.note, normalizedBlob.note].filter(Boolean);
+      normalizedContents.push({
+        uri: content.uri,
+        mimeType: content.mimeType,
+        text: normalizedText.text,
+        blob: normalizedBlob.value,
+        truncated: normalizedText.truncated || normalizedBlob.truncated,
+        originalLength: normalizedBlob.originalLength ?? normalizedText.originalLength,
+        note: notes.length > 0 ? notes.join(" ") : undefined,
+      });
+    }
+
+    return {
+      contents: normalizedContents,
+      diagnostics: this.createResultDiagnostics({
+        estimatedChars,
+        truncatedItems,
+        persistedItems,
+        persistedFilepath,
+        persistedWebPath,
+      }),
+    };
+  }
+
+  private async normalizeLargeTextItem(input: {
+    text: string | undefined;
+    persistId: string;
+    mimeType?: string;
+  }): Promise<MCPNormalizedTextItem> {
+    const text = input.text;
+    if (!text) {
+      return { text, truncated: false, persisted: false, estimatedChars: 0 };
+    }
+    if (text.length <= MAX_INLINE_TEXT_CHARS) {
+      return { text, truncated: false, persisted: false, originalLength: text.length, estimatedChars: text.length };
+    }
+    const persisted = await this.persistLargeText(text, input.persistId, input.mimeType);
+    if (persisted) {
+      const preview = text.slice(0, 2000);
+      const note = buildPersistedOutputNote({
+        originalLength: text.length,
+        webPath: persisted.webPath,
+        preview,
+      });
+      return {
+        text: note,
+        truncated: false,
+        persisted: true,
+        persistedFilepath: persisted.filepath,
+        persistedWebPath: persisted.webPath,
+        originalLength: text.length,
+        note,
+        estimatedChars: note.length,
+      };
+    }
+    const note = buildTextTruncationNote(text.length, MAX_INLINE_TEXT_CHARS);
+    const truncatedText = `${text.slice(0, MAX_INLINE_TEXT_CHARS)}\n\n${note}`;
+    return {
+      text: truncatedText,
+      truncated: true,
+      persisted: false,
+      originalLength: text.length,
+      note,
+      estimatedChars: truncatedText.length,
+    };
+  }
+
+  private async normalizeLargeBinaryItem(input: {
+    value: string | undefined;
+    persistId: string;
+    mimeType?: string;
+  }): Promise<MCPNormalizedBinaryItem> {
+    const value = input.value;
+    if (!value) {
+      return { value, truncated: false, persisted: false, estimatedChars: 0 };
+    }
+    if (value.length <= MAX_INLINE_BINARY_CHARS) {
+      return { value, truncated: false, persisted: false, originalLength: value.length, estimatedChars: value.length };
+    }
+    const persisted = await this.persistLargeBinary(value, input.persistId, input.mimeType);
+    if (persisted) {
+      const note = buildPersistedOutputNote({
+        originalLength: value.length,
+        webPath: persisted.webPath,
+      });
+      return {
+        value: undefined,
+        truncated: false,
+        persisted: true,
+        persistedFilepath: persisted.filepath,
+        persistedWebPath: persisted.webPath,
+        originalLength: value.length,
+        note,
+        estimatedChars: note.length,
+      };
+    }
+    return {
+      value: undefined,
+      truncated: true,
+      persisted: false,
+      originalLength: value.length,
+      note: buildBinaryTruncationNote(value.length),
+      estimatedChars: 0,
+    };
+  }
+
+  private async persistLargeText(
+    text: string,
+    persistId: string,
+    mimeType?: string,
+  ): Promise<{ filepath: string; webPath: string } | undefined> {
+    try {
+      const stateDir = resolveStateDir(process.env);
+      const generatedDir = path.join(stateDir, MCP_PERSIST_DIR);
+      await fs.mkdir(generatedDir, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const extension = extensionForMimeType(mimeType, "txt");
+      const filename = `mcp-${sanitizePersistSegment(persistId)}-${timestamp}.${extension}`;
+      const filepath = path.join(generatedDir, filename);
+      await fs.writeFile(filepath, text, "utf-8");
+      return {
+        filepath,
+        webPath: `/generated/${filename}`,
+      };
+    } catch (error) {
+      mcpWarn(`mcp:${this.config.id}`, "持久化 MCP 文本结果失败，回退为截断输出", error);
+      return undefined;
+    }
+  }
+
+  private async persistLargeBinary(
+    value: string,
+    persistId: string,
+    mimeType?: string,
+  ): Promise<{ filepath: string; webPath: string } | undefined> {
+    try {
+      const stateDir = resolveStateDir(process.env);
+      const generatedDir = path.join(stateDir, MCP_PERSIST_DIR);
+      await fs.mkdir(generatedDir, { recursive: true });
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const extension = extensionForMimeType(mimeType, "bin");
+      const filename = `mcp-${sanitizePersistSegment(persistId)}-${timestamp}.${extension}`;
+      const filepath = path.join(generatedDir, filename);
+      await fs.writeFile(filepath, Buffer.from(value, "base64"));
+      return {
+        filepath,
+        webPath: `/generated/${filename}`,
+      };
+    } catch (error) {
+      mcpWarn(`mcp:${this.config.id}`, "持久化 MCP 二进制结果失败，回退为截断输出", error);
+      return undefined;
+    }
+  }
+
+  private getDiagnosticsSnapshot(): MCPServerRuntimeDiagnostics {
+    return {
+      ...this.diagnostics,
+      lastResult: this.diagnostics.lastResult
+        ? { ...this.diagnostics.lastResult }
+        : undefined,
+    };
+  }
+
   /**
    * 设置状态并触发事件
    */
@@ -644,13 +1177,21 @@ export class MCPClient {
     if (oldStatus !== status) {
       switch (status) {
         case "connected":
-          this.emitEvent("server:connected", { metadata: this.metadata });
+          this.emitEvent("server:connected", {
+            metadata: this.metadata,
+            diagnostics: this.getDiagnosticsSnapshot(),
+          });
           break;
         case "disconnected":
-          this.emitEvent("server:disconnected", {});
+          this.emitEvent("server:disconnected", {
+            diagnostics: this.getDiagnosticsSnapshot(),
+          });
           break;
         case "error":
-          this.emitEvent("server:error", { error: this.error });
+          this.emitEvent("server:error", {
+            error: this.error,
+            diagnostics: this.getDiagnosticsSnapshot(),
+          });
           break;
       }
     }

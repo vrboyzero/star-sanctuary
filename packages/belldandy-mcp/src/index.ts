@@ -38,9 +38,15 @@ export type {
   
   // 运行时类型
   MCPServerStatus,
+  MCPServerFailureKind,
+  MCPServerFailureSource,
+  MCPServerRuntimeDiagnostics,
+  MCPResultDiagnostics,
   MCPServerState,
   MCPToolInfo,
   MCPResourceInfo,
+  MCPToolContentItem,
+  MCPResourceContentItem,
   
   // 调用类型
   MCPToolCallRequest,

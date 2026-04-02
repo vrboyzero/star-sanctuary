@@ -5,16 +5,22 @@ import { mkdirSync } from "node:fs";
 import type {
   GoalCapabilityPlan,
   GoalCapabilityPlanAnalysis,
+  GoalCapabilityPlanCoordinationPlan,
+  GoalCapabilityPlanDelegationResult,
   GoalCapabilityPlanDeviation,
   GoalCapabilityPlanMethod,
   GoalCapabilityPlanMcpServer,
   GoalCapabilityPlanOrchestration,
   GoalCapabilityPlanActualUsage,
   GoalCapabilityPlanCheckpointPolicy,
+  GoalCapabilityPlanRolePolicy,
   GoalCapabilityRiskLevel,
   GoalCapabilityPlanSkill,
   GoalCapabilityPlanState,
   GoalCapabilityPlanSubAgent,
+  GoalCapabilityPlanVerifierFinding,
+  GoalCapabilityPlanVerifierHandoff,
+  GoalCapabilityPlanVerifierResult,
   GoalCheckpointPolicy,
   GoalCheckpointHistoryEntry,
   GoalCheckpointItem,
@@ -367,10 +373,141 @@ function normalizeCapabilityPlanSubAgent(value: unknown): GoalCapabilityPlanSubA
   const agentId = normalizeString(source.agentId);
   const objective = normalizeString(source.objective);
   if (!agentId || !objective) return null;
+  const role = normalizeString(source.role);
   return {
     agentId,
+    role: role === "coder" || role === "researcher" || role === "verifier" ? role : role === "default" ? "default" : undefined,
     objective,
     reason: normalizeString(source.reason),
+    deliverable: normalizeString(source.deliverable),
+    handoffToVerifier: typeof source.handoffToVerifier === "boolean" ? source.handoffToVerifier : undefined,
+  };
+}
+
+function normalizeCapabilityPlanRolePolicy(value: unknown): GoalCapabilityPlanRolePolicy | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const selectedRoles = Array.isArray(source.selectedRoles)
+    ? source.selectedRoles
+      .map((item) => normalizeString(item))
+      .filter((item): item is GoalCapabilityPlanRolePolicy["selectedRoles"][number] => (
+        item === "default" || item === "coder" || item === "researcher" || item === "verifier"
+      ))
+    : [];
+  const selectionReasons = Array.isArray(source.selectionReasons)
+    ? source.selectionReasons.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+    : [];
+  const verifierRole = normalizeString(source.verifierRole);
+  const fanInStrategy = normalizeString(source.fanInStrategy);
+  return {
+    selectedRoles: selectedRoles.length > 0 ? selectedRoles : ["default"],
+    selectionReasons,
+    verifierRole: verifierRole === "verifier" ? verifierRole : undefined,
+    fanInStrategy: fanInStrategy === "verifier_handoff" ? "verifier_handoff" : "main_agent_summary",
+  };
+}
+
+function normalizeCapabilityPlanCoordinationPlan(value: unknown): GoalCapabilityPlanCoordinationPlan | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const summary = normalizeString(source.summary);
+  const rolePolicy = normalizeCapabilityPlanRolePolicy(source.rolePolicy);
+  if (!summary || !rolePolicy) return undefined;
+  return {
+    summary,
+    plannedDelegationCount: typeof source.plannedDelegationCount === "number" && Number.isFinite(source.plannedDelegationCount)
+      ? source.plannedDelegationCount
+      : 0,
+    rolePolicy,
+  };
+}
+
+function normalizeCapabilityPlanDelegationResult(value: unknown): GoalCapabilityPlanDelegationResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const agentId = normalizeString(source.agentId);
+  const status = normalizeString(source.status);
+  const summary = normalizeString(source.summary);
+  const role = normalizeString(source.role);
+  if (!agentId || !summary) return null;
+  return {
+    agentId,
+    role: role === "coder" || role === "researcher" || role === "verifier" ? role : role === "default" ? "default" : undefined,
+    status: status === "failed" || status === "skipped" ? status : "success",
+    summary,
+    error: normalizeString(source.error),
+    sessionId: normalizeString(source.sessionId),
+    taskId: normalizeString(source.taskId),
+    outputPath: normalizeString(source.outputPath),
+  };
+}
+
+function normalizeCapabilityPlanVerifierHandoff(value: unknown): GoalCapabilityPlanVerifierHandoff | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const status = normalizeString(source.status);
+  const summary = normalizeString(source.summary);
+  if (!summary) return undefined;
+  return {
+    status: status === "pending" || status === "ready" || status === "running" || status === "completed" || status === "failed" || status === "skipped"
+      ? status
+      : "not_required",
+    verifierRole: normalizeString(source.verifierRole) === "verifier" ? "verifier" : undefined,
+    verifierAgentId: normalizeString(source.verifierAgentId),
+    verifierTaskId: normalizeString(source.verifierTaskId),
+    verifierSessionId: normalizeString(source.verifierSessionId),
+    summary,
+    sourceAgentIds: Array.isArray(source.sourceAgentIds)
+      ? source.sourceAgentIds.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+      : [],
+    sourceTaskIds: Array.isArray(source.sourceTaskIds)
+      ? source.sourceTaskIds.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+      : undefined,
+    outputPath: normalizeString(source.outputPath),
+    notes: Array.isArray(source.notes)
+      ? source.notes.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+      : undefined,
+    error: normalizeString(source.error),
+  };
+}
+
+function normalizeCapabilityPlanVerifierFinding(value: unknown): GoalCapabilityPlanVerifierFinding | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const severity = normalizeString(source.severity);
+  const summary = normalizeString(source.summary);
+  if (!summary) return null;
+  return {
+    severity: severity === "high" || severity === "medium" ? severity : "low",
+    summary,
+  };
+}
+
+function normalizeCapabilityPlanVerifierResult(value: unknown): GoalCapabilityPlanVerifierResult | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const status = normalizeString(source.status);
+  const summary = normalizeString(source.summary);
+  const generatedAt = normalizeString(source.generatedAt);
+  if (!summary || !generatedAt) return undefined;
+  return {
+    status: status === "completed" || status === "failed" ? status : "pending",
+    summary,
+    findings: Array.isArray(source.findings)
+      ? source.findings
+        .map((item) => normalizeCapabilityPlanVerifierFinding(item))
+        .filter((item): item is GoalCapabilityPlanVerifierFinding => Boolean(item))
+      : [],
+    recommendation: (() => {
+      const recommendation = normalizeString(source.recommendation);
+      if (recommendation === "approve" || recommendation === "revise" || recommendation === "blocked") return recommendation;
+      return "unknown";
+    })(),
+    evidenceTaskIds: Array.isArray(source.evidenceTaskIds)
+      ? source.evidenceTaskIds.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+      : undefined,
+    outputPath: normalizeString(source.outputPath),
+    generatedAt,
   };
 }
 
@@ -388,6 +525,14 @@ function normalizeCapabilityPlanOrchestration(value: unknown): GoalCapabilityPla
     delegationCount: typeof source.delegationCount === "number" && Number.isFinite(source.delegationCount)
       ? source.delegationCount
       : undefined,
+    coordinationPlan: normalizeCapabilityPlanCoordinationPlan(source.coordinationPlan),
+    delegationResults: Array.isArray(source.delegationResults)
+      ? source.delegationResults
+        .map((item) => normalizeCapabilityPlanDelegationResult(item))
+        .filter((item): item is GoalCapabilityPlanDelegationResult => Boolean(item))
+      : undefined,
+    verifierHandoff: normalizeCapabilityPlanVerifierHandoff(source.verifierHandoff),
+    verifierResult: normalizeCapabilityPlanVerifierResult(source.verifierResult),
     notes: notes.length > 0 ? notes : undefined,
   };
 }

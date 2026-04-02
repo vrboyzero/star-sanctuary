@@ -14,6 +14,7 @@ import {
   formatRestartCooldownMessage,
   getRestartCommandCooldownSeconds,
 } from "./restart-cooldown.js";
+import { withToolContract } from "../tool-contract.js";
 
 /** 广播函数接口，由 gateway 注入 */
 export type BroadcastFn = (msg: unknown) => void;
@@ -25,7 +26,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
-  return {
+  return withToolContract({
     definition: {
       name: "service_restart",
       description:
@@ -96,6 +97,20 @@ export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
         durationMs: Date.now() - startMs,
       };
     },
-  };
+  }, {
+    family: "service-admin",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "critical",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Restart the gateway service through the launcher supervisor",
+    resultSchema: {
+      kind: "text",
+      description: "Service restart initiation status text.",
+    },
+    outputPersistencePolicy: "external-state",
+  });
 }
 

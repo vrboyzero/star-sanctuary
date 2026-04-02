@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Tool, ToolContext, ToolCallResult, JsonObject } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
 const DEFAULT_ANCHOR =
   "## **警告** FACET 模组 内容切换时，必须在这一行之后执行，不可覆盖替换这一行之前的内容。";
@@ -46,7 +47,7 @@ function resolveAgentPaths(stateDir: string, agentId?: string): { soulPath: stri
   };
 }
 
-export const switchFacetTool: Tool = {
+export const switchFacetTool: Tool = withToolContract({
   definition: {
     name: "switch_facet",
     description:
@@ -163,4 +164,18 @@ export const switchFacetTool: Tool = {
       durationMs: Date.now() - start,
     };
   },
-};
+}, {
+  family: "service-admin",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: true,
+  riskLevel: "high",
+  channels: ["gateway", "web"],
+  safeScopes: ["privileged"],
+  activityDescription: "Switch the active FACET module in SOUL.md",
+  resultSchema: {
+    kind: "text",
+    description: "Facet switch result text.",
+  },
+  outputPersistencePolicy: "external-state",
+});

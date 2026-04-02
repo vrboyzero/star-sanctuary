@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { getGlobalMemoryManager } from "@belldandy/memory";
 import type { Tool, ToolCallResult, JsonObject, ToolContext } from "../types.js";
 import type { SkillRegistry } from "../skill-registry.js";
+import { withToolContract } from "../tool-contract.js";
 
 function findSkillByName(registry: SkillRegistry, name: string) {
   const direct = registry.getSkill(name);
@@ -36,7 +37,7 @@ function tryRecordSkillUsage(skillName: string, context: ToolContext) {
  * 创建 skills_list 工具（需要 SkillRegistry 实例）
  */
 export function createSkillsListTool(registry: SkillRegistry): Tool {
-  return {
+  return withToolContract({
     definition: {
       name: "skills_list",
       description: "列出所有可用的技能（Skills）。技能是预定义的操作指南，教你如何使用工具完成特定任务。可按 filter 和 tag 过滤。",
@@ -110,14 +111,28 @@ export function createSkillsListTool(registry: SkillRegistry): Tool {
         durationMs: Date.now() - start,
       };
     },
-  };
+  }, {
+    family: "other",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "List installed skills and their eligibility state",
+    resultSchema: {
+      kind: "text",
+      description: "Skill listing text.",
+    },
+    outputPersistencePolicy: "conversation",
+  });
 }
 
 /**
  * 创建 skills_search 工具（需要 SkillRegistry 实例）
  */
 export function createSkillsSearchTool(registry: SkillRegistry): Tool {
-  return {
+  return withToolContract({
     definition: {
       name: "skills_search",
       description: "搜索技能库，按关键词匹配技能名称、描述、标签和指令内容。返回匹配技能的完整操作指南。",
@@ -186,11 +201,25 @@ export function createSkillsSearchTool(registry: SkillRegistry): Tool {
         durationMs: Date.now() - start,
       };
     },
-  };
+  }, {
+    family: "other",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Search installed skills by keyword",
+    resultSchema: {
+      kind: "text",
+      description: "Skill search result text.",
+    },
+    outputPersistencePolicy: "conversation",
+  });
 }
 
 export function createSkillGetTool(registry: SkillRegistry): Tool {
-  return {
+  return withToolContract({
     definition: {
       name: "skill_get",
       description: "按精确名称读取单个 skill 的完整操作指南。适合在已经决定采用某个 skill 后调用；当前对话存在 task 时会自动记录 usage。",
@@ -247,5 +276,19 @@ export function createSkillGetTool(registry: SkillRegistry): Tool {
         durationMs: Date.now() - start,
       };
     },
-  };
+  }, {
+    family: "other",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Read the full instructions for a specific skill",
+    resultSchema: {
+      kind: "text",
+      description: "Full skill instructions text.",
+    },
+    outputPersistencePolicy: "conversation",
+  });
 }

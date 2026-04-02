@@ -1,6 +1,12 @@
 import type { Tool } from "@belldandy/skills";
 import type { AgentHooks, AgentHookContext, BeforeRunEvent, AfterRunEvent, BeforeToolCallEvent, AfterToolCallEvent } from "@belldandy/agent";
-import type { BelldandyPlugin, PluginContext } from "./types.js";
+import type {
+    BelldandyPlugin,
+    PluginContext,
+    PluginLoadErrorRecord,
+    PluginRegistryDiagnostics,
+    PluginRuntimeDescriptor,
+} from "./types.js";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
@@ -11,8 +17,10 @@ export class PluginRegistry {
     private hooksList: AgentHooks[] = [];
     /** pluginId → 该插件注册的工具名列表 */
     private pluginToolMap: Map<string, string[]> = new Map();
-    /** pluginId → 该插件声明的 skill 目录 */
-    private pluginSkillDirs: Map<string, string> = new Map();
+    /** pluginId → 该插件声明的 skill 目录列表 */
+    private pluginSkillDirs: Map<string, string[]> = new Map();
+    /** 最近一次插件扫描/加载错误 */
+    private loadErrors: PluginLoadErrorRecord[] = [];
 
     /**
      * Load a plugin from a file path.
@@ -49,7 +57,11 @@ export class PluginRegistry {
                     this.hooksList.push(hooks);
                 },
                 registerSkillDir: (dir: string) => {
-                    this.pluginSkillDirs.set(plugin.id, dir);
+                    const existing = this.pluginSkillDirs.get(plugin.id) ?? [];
+                    if (!existing.includes(dir)) {
+                        existing.push(dir);
+                    }
+                    this.pluginSkillDirs.set(plugin.id, existing);
                 }
             };
 
@@ -58,6 +70,7 @@ export class PluginRegistry {
             this.pluginToolMap.set(plugin.id, pluginToolNames);
 
         } catch (err) {
+            this.recordLoadError("load_plugin", filePath, err);
             console.error(`Failed to load plugin from ${filePath}:`, err);
             throw err;
         }
@@ -71,10 +84,15 @@ export class PluginRegistry {
             const entries = await fs.readdir(dirPath, { withFileTypes: true });
             for (const entry of entries) {
                 if (entry.isFile() && (entry.name.endsWith(".js") || entry.name.endsWith(".mjs"))) {
-                    await this.loadPlugin(path.join(dirPath, entry.name));
+                    try {
+                        await this.loadPlugin(path.join(dirPath, entry.name));
+                    } catch {
+                        // 记录错误后继续扫描其它插件，避免单个坏插件阻断整批加载。
+                    }
                 }
             }
         } catch (err) {
+            this.recordLoadError("scan_directory", dirPath, err);
             console.error(`Failed to load plugins from directory ${dirPath}:`, err);
         }
     }
@@ -94,6 +112,46 @@ export class PluginRegistry {
     }
 
     /**
+     * Get plugin descriptors for diagnostics / inventory output
+     */
+    listPlugins(): PluginRuntimeDescriptor[] {
+        return Array.from(this.plugins.values())
+            .map((plugin) => ({
+                id: plugin.id,
+                name: plugin.name,
+                version: plugin.version,
+                description: plugin.description,
+                toolNames: [...(this.pluginToolMap.get(plugin.id) ?? [])],
+                skillDirs: [...(this.pluginSkillDirs.get(plugin.id) ?? [])],
+            }))
+            .sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    getDiagnostics(): PluginRegistryDiagnostics {
+        return {
+            pluginCount: this.plugins.size,
+            toolCount: this.tools.size,
+            hookCount: this.hooksList.length,
+            skillDirCount: this.pluginSkillDirs.size,
+            loadErrors: this.loadErrors.map((item) => ({ ...item })),
+        };
+    }
+
+    getLegacyHookAvailability(): {
+        beforeRun: boolean;
+        afterRun: boolean;
+        beforeToolCall: boolean;
+        afterToolCall: boolean;
+    } {
+        return {
+            beforeRun: this.hooksList.some((hooks) => typeof hooks.beforeRun === "function"),
+            afterRun: this.hooksList.some((hooks) => typeof hooks.afterRun === "function"),
+            beforeToolCall: this.hooksList.some((hooks) => typeof hooks.beforeToolCall === "function"),
+            afterToolCall: this.hooksList.some((hooks) => typeof hooks.afterToolCall === "function"),
+        };
+    }
+
+    /**
      * Get plugin → tool names mapping (for tools-config integration)
      */
     getPluginToolMap(): Map<string, string[]> {
@@ -103,7 +161,7 @@ export class PluginRegistry {
     /**
      * Get plugin → skill directory mapping (for SkillRegistry integration)
      */
-    getPluginSkillDirs(): Map<string, string> {
+    getPluginSkillDirs(): Map<string, string[]> {
         return this.pluginSkillDirs;
     }
 
@@ -145,5 +203,19 @@ export class PluginRegistry {
                 }
             }
         };
+    }
+
+    private recordLoadError(
+        phase: PluginLoadErrorRecord["phase"],
+        target: string,
+        error: unknown,
+    ): void {
+        const message = error instanceof Error ? error.message : String(error);
+        this.loadErrors.push({
+            at: new Date(),
+            phase,
+            target,
+            message,
+        });
     }
 }

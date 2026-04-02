@@ -1,4 +1,5 @@
 import type { Tool, ToolContext, ToolCallResult } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
 /**
  * get_message_sender_info - 获取当前消息发送者的身份信息
@@ -14,7 +15,7 @@ import type { Tool, ToolContext, ToolCallResult } from "../types.js";
  * - 信息来自底层协议层面（WebSocket/HTTP），无法通过文本伪造
  * - 环境感知：明确告知当前环境是否支持身份验证
  */
-export const getMessageSenderInfoTool: Tool = {
+export const getMessageSenderInfoTool: Tool = withToolContract({
   definition: {
     name: "get_message_sender_info",
     description: "获取当前消息发送者的身份信息，包括类型（user/agent）、UUID/ID、名称和身份标签（Agent）。用于身份权力验证（如SOUL.md中定义的主人UUID匹配、上级身份标签匹配）。",
@@ -78,4 +79,18 @@ export const getMessageSenderInfoTool: Tool = {
       durationMs: 0,
     };
   },
-};
+}, {
+  family: "other",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Read the current message sender identity context",
+  resultSchema: {
+    kind: "text",
+    description: "Sender identity JSON text.",
+  },
+  outputPersistencePolicy: "conversation",
+});

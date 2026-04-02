@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test, beforeAll, vi } from "vitest";
 import WebSocket from "ws";
 
-import { AgentRegistry, type BelldandyAgent, ConversationStore, MockAgent } from "@belldandy/agent";
+import { AgentRegistry, type BelldandyAgent, ConversationStore, MockAgent, normalizeAgentLaunchSpec } from "@belldandy/agent";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import {
   SkillRegistry,
@@ -13,10 +13,16 @@ import {
   createToolSettingsControlTool,
   type Tool,
   TOOL_SETTINGS_CONTROL_NAME,
+  withToolContract,
 } from "@belldandy/skills";
+import { PluginRegistry } from "@belldandy/plugins";
+import { upsertInstalledExtension, upsertKnownMarketplace } from "./extension-marketplace-state.js";
+import type { ExtensionHostState } from "./extension-host.js";
+import { buildExtensionRuntimeReport } from "./extension-runtime.js";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import { SubTaskRuntimeStore } from "./task-runtime.js";
 import { ToolsConfigManager } from "./tools-config.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
 import { IdempotencyManager } from "./webhook/index.js";
@@ -664,6 +670,482 @@ test("conversation.meta keeps time metadata on every message and marks only the 
   }
 });
 
+test("conversation.digest.get and conversation.digest.refresh expose session digest runtime", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-v1",
+  });
+  const conversationId = "conv-session-digest";
+
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    const getReqId = "conversation-digest-get";
+    ws.send(JSON.stringify({
+      type: "req",
+      id: getReqId,
+      method: "conversation.digest.get",
+      params: { conversationId, threshold: 2 },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === getReqId && f.ok === true));
+    const getRes = frames.find((f) => f.type === "res" && f.id === getReqId);
+    expect(getRes.payload.digest).toMatchObject({
+      conversationId,
+      status: "updated",
+      messageCount: 3,
+      digestedMessageCount: 0,
+      pendingMessageCount: 3,
+      threshold: 2,
+      rollingSummary: "",
+      archivalSummary: "",
+      lastDigestAt: 0,
+    });
+
+    const refreshReqId = "conversation-digest-refresh";
+    ws.send(JSON.stringify({
+      type: "req",
+      id: refreshReqId,
+      method: "conversation.digest.refresh",
+      params: { conversationId, threshold: 2 },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === refreshReqId && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "conversation.digest.updated" && f.payload?.conversationId === conversationId));
+    const refreshRes = frames.find((f) => f.type === "res" && f.id === refreshReqId);
+    const refreshEvent = frames.find((f) => f.type === "event" && f.event === "conversation.digest.updated" && f.payload?.conversationId === conversationId);
+    expect(refreshRes.payload).toMatchObject({
+      updated: true,
+      compacted: true,
+      digest: {
+        conversationId,
+        status: "ready",
+        messageCount: 3,
+        digestedMessageCount: 2,
+        pendingMessageCount: 1,
+        threshold: 2,
+        rollingSummary: "rolling-summary-v1",
+        archivalSummary: "",
+      },
+    });
+    expect(typeof refreshRes.payload.digest.lastDigestAt).toBe("number");
+    expect(refreshRes.payload.digest.lastDigestAt).toBeGreaterThan(0);
+    expect(refreshEvent.payload).toMatchObject({
+      source: "manual",
+      updated: true,
+      compacted: true,
+      digest: {
+        conversationId,
+        status: "ready",
+        threshold: 2,
+      },
+    });
+
+    frames.length = 0;
+    const sendReqId = "conversation-digest-auto";
+    ws.send(JSON.stringify({
+      type: "req",
+      id: sendReqId,
+      method: "message.send",
+      params: { text: "继续", conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === sendReqId && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.conversationId === conversationId));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "conversation.digest.updated" && f.payload?.conversationId === conversationId));
+
+    const autoDigestEvent = frames.find((f) => f.type === "event" && f.event === "conversation.digest.updated" && f.payload?.conversationId === conversationId);
+    expect(autoDigestEvent.payload).toMatchObject({
+      source: "message.send",
+      digest: {
+        conversationId,
+        threshold: 2,
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("conversation.memory.extraction.get and conversation.memory.extract expose durable extraction runtime", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-extraction-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-v2",
+  });
+  const conversationId = "conv-durable-extraction";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    evolutionEnabled: true,
+    evolutionModel: "test-evolution-model",
+    evolutionBaseUrl: "https://example.invalid/v1",
+    evolutionApiKey: "test-evolution-key",
+    evolutionMinMessages: 3,
+  });
+  (memoryManager as any).embeddingProvider = {
+    modelName: "test-durable-extraction",
+    embed: async () => [0.1],
+    embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+    embedQuery: async () => [0.1],
+  };
+  const extractionSpy = vi.spyOn(memoryManager as any, "callLLMForExtraction").mockResolvedValue([
+    {
+      type: "事实",
+      category: "fact",
+      content: "Week 8 durable extraction 已经进入独立运行时。",
+    },
+  ]);
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "durable-extraction-get-idle",
+      method: "conversation.memory.extraction.get",
+      params: { conversationId, threshold: 2 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-extraction-get-idle"));
+    const idleRes = frames.find((f) => f.type === "res" && f.id === "durable-extraction-get-idle");
+    expect(idleRes.ok).toBe(true);
+    expect(idleRes.payload.extraction).toMatchObject({
+      conversationId,
+      status: "idle",
+      runCount: 0,
+      pending: false,
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "durable-extraction-refresh",
+      method: "conversation.digest.refresh",
+      params: { conversationId, threshold: 2 },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-extraction-refresh" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "conversation.memory.extraction.updated" && f.payload?.conversationId === conversationId && f.payload?.extraction?.status === "completed"));
+
+    const completedEvent = frames.find((f) => f.type === "event" && f.event === "conversation.memory.extraction.updated" && f.payload?.conversationId === conversationId && f.payload?.extraction?.status === "completed");
+    expect(completedEvent.payload.extraction).toMatchObject({
+      conversationId,
+      status: "completed",
+      runCount: 1,
+      lastExtractedMemoryCount: 1,
+    });
+    expect(extractionSpy).toHaveBeenCalledTimes(1);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "durable-extraction-get-completed",
+      method: "conversation.memory.extraction.get",
+      params: { conversationId, threshold: 2 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-extraction-get-completed"));
+    const completedRes = frames.find((f) => f.type === "res" && f.id === "durable-extraction-get-completed");
+    expect(completedRes.ok).toBe(true);
+    expect(completedRes.payload.extraction).toMatchObject({
+      conversationId,
+      status: "completed",
+      runCount: 1,
+      lastExtractedMemoryCount: 1,
+      lastRunSource: "manual",
+    });
+    expect(completedRes.payload.extraction.lastExtractedDigestAt).toBeGreaterThan(0);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "durable-extraction-manual",
+      method: "conversation.memory.extract",
+      params: { conversationId, threshold: 2 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-extraction-manual"));
+    const manualRes = frames.find((f) => f.type === "res" && f.id === "durable-extraction-manual");
+    expect(manualRes.ok).toBe(true);
+    expect(manualRes.payload.extraction).toMatchObject({
+      conversationId,
+      status: "completed",
+      lastSkipReason: "up_to_date",
+      runCount: 1,
+    });
+    expect(extractionSpy).toHaveBeenCalledTimes(1);
+  } finally {
+    ws.close();
+    await closeP;
+    extractionSpy.mockRestore();
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("conversation.digest.refresh records usage accounting and enforces session digest budget", async () => {
+  await withEnv({
+    BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: "1",
+    BELLDANDY_MEMORY_SESSION_DIGEST_WINDOW_MS: "60000",
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS: undefined,
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS: undefined,
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-digest-budget-"));
+    const conversationStore = new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+      compaction: {
+        enabled: true,
+        tokenThreshold: 10,
+        keepRecentCount: 1,
+      },
+      summarizer: async () => "rolling-summary-budget",
+    });
+    const conversationId = "conv-digest-budget";
+    conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+    conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+    conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      conversationStore,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      frames.length = 0;
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "digest-budget-first",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2 },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-budget-first"));
+      const firstRes = frames.find((f) => f.type === "res" && f.id === "digest-budget-first");
+      expect(firstRes.ok).toBe(true);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "digest-budget-second",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2, force: true },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-budget-second"));
+      const secondRes = frames.find((f) => f.type === "res" && f.id === "digest-budget-second");
+      expect(secondRes.ok).toBe(false);
+      expect(secondRes.error).toMatchObject({
+        code: "session_digest_refresh_budget_exceeded",
+      });
+
+      const usageRaw = await fs.promises.readFile(path.join(stateDir, "memory-runtime", "usage-accounting.json"), "utf-8");
+      const usageState = JSON.parse(usageRaw) as { events?: Array<{ consumer?: string; outcome?: string; metadata?: Record<string, unknown> }> };
+      const digestEvents = (usageState.events ?? []).filter((item) => item.consumer === "session_digest_refresh");
+      expect(digestEvents).toHaveLength(2);
+      expect(digestEvents[0]).toMatchObject({
+        consumer: "session_digest_refresh",
+        outcome: "completed",
+      });
+      expect(digestEvents[1]).toMatchObject({
+        consumer: "session_digest_refresh",
+        outcome: "blocked",
+        metadata: {
+          reasonCode: "session_digest_refresh_budget_exceeded",
+        },
+      });
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("durable extraction request limiter records blocked request usage and keeps prior extraction state", async () => {
+  await withEnv({
+    BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: undefined,
+    BELLDANDY_MEMORY_SESSION_DIGEST_WINDOW_MS: undefined,
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS: "1",
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS: "60000",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-durable-budget-"));
+    const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-durable-budget-workspace-"));
+    const conversationStore = new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+      compaction: {
+        enabled: true,
+        tokenThreshold: 10,
+        keepRecentCount: 1,
+      },
+      summarizer: async () => "rolling-summary-durable-budget",
+    });
+    const conversationId = "conv-durable-budget";
+    conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+    conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+    conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+
+    const memoryManager = new MemoryManager({
+      workspaceRoot,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "test-evolution-model",
+      evolutionBaseUrl: "https://example.invalid/v1",
+      evolutionApiKey: "test-evolution-key",
+      evolutionMinMessages: 3,
+    });
+    (memoryManager as any).embeddingProvider = {
+      modelName: "test-durable-budget",
+      embed: async () => [0.1],
+      embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+      embedQuery: async () => [0.1],
+    };
+    const extractionSpy = vi.spyOn(memoryManager as any, "callLLMForExtraction").mockResolvedValue([
+      {
+        type: "事实",
+        category: "fact",
+        content: "Week 9 已经给 durable extraction 接入 budget guard。",
+      },
+    ]);
+    registerGlobalMemoryManager(memoryManager);
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      conversationStore,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      frames.length = 0;
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "durable-budget-first",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2 },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-budget-first" && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "conversation.memory.extraction.updated" && f.payload?.conversationId === conversationId && f.payload?.extraction?.status === "completed"));
+      expect(extractionSpy).toHaveBeenCalledTimes(1);
+
+      conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+      frames.length = 0;
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "durable-budget-second",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2 },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-budget-second" && f.ok === true));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      expect(extractionSpy).toHaveBeenCalledTimes(1);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "durable-budget-get",
+        method: "conversation.memory.extraction.get",
+        params: { conversationId, threshold: 2 },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-budget-get" && f.ok === true));
+      const getRes = frames.find((f) => f.type === "res" && f.id === "durable-budget-get");
+      expect(getRes.payload.extraction).toMatchObject({
+        conversationId,
+        status: "completed",
+        runCount: 1,
+      });
+
+      const usageRaw = await fs.promises.readFile(path.join(stateDir, "memory-runtime", "usage-accounting.json"), "utf-8");
+      const usageState = JSON.parse(usageRaw) as { events?: Array<{ consumer?: string; outcome?: string; metadata?: Record<string, unknown> }> };
+      const requestEvents = (usageState.events ?? []).filter((item) => item.consumer === "durable_extraction_request");
+      const runEvents = (usageState.events ?? []).filter((item) => item.consumer === "durable_extraction_run");
+
+      expect(requestEvents.map((item) => item.outcome)).toEqual(["queued", "blocked"]);
+      expect(requestEvents[1]?.metadata?.reasonCode).toBe("durable_extraction_request_rate_limited");
+      expect(runEvents.some((item) => item.outcome === "blocked")).toBe(false);
+    } finally {
+      ws.close();
+      await closeP;
+      extractionSpy.mockRestore();
+      await server.close();
+      memoryManager.close();
+      await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 test("message.send userUuid overrides handshake userUuid for agent input and token upload", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const seenUserUuids: Array<string | undefined> = [];
@@ -1074,7 +1556,881 @@ test("system.doctor reads memory db status without blocking sync fs path", async
         status: "pass",
         message: expect.stringContaining("Size: 2.0 KB"),
       }),
+      expect.objectContaining({
+        id: "mcp_runtime",
+        status: "pass",
+        message: "Disabled",
+      }),
     ]));
+    expect(response.payload?.mcpRuntime).toEqual({
+      enabled: false,
+      diagnostics: null,
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor includes MCP recovery and persisted-result summary when MCP diagnostics are available", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const previousMcpEnabled = process.env.BELLDANDY_MCP_ENABLED;
+  process.env.BELLDANDY_MCP_ENABLED = "true";
+
+  const mcpModule = await import("./mcp/index.js");
+  const getMCPDiagnosticsSpy = vi.spyOn(mcpModule, "getMCPDiagnostics").mockReturnValue({
+    initialized: true,
+    toolCount: 5,
+    serverCount: 2,
+    connectedCount: 1,
+    summary: {
+      recentErrorServers: 1,
+      recoveryAttemptedServers: 1,
+      recoverySucceededServers: 1,
+      persistedResultServers: 1,
+      truncatedResultServers: 1,
+    },
+    servers: [
+      {
+        id: "mcp_a",
+        name: "MCP A",
+        status: "connected",
+        toolCount: 5,
+        resourceCount: 2,
+        diagnostics: {
+          connectionAttempts: 1,
+          reconnectAttempts: 1,
+          lastRecoveryAt: new Date("2026-04-02T10:00:00.000Z"),
+          lastRecoverySucceeded: true,
+          lastResult: {
+            at: new Date("2026-04-02T10:01:00.000Z"),
+            source: "call_tool",
+            strategy: "persisted",
+            estimatedChars: 4096,
+            truncatedItems: 1,
+            persistedItems: 1,
+            persistedWebPath: "/generated/mcp-doctor.txt",
+          },
+        },
+      },
+      {
+        id: "mcp_b",
+        name: "MCP B",
+        status: "error",
+        error: "session expired",
+        toolCount: 0,
+        resourceCount: 0,
+        diagnostics: {
+          connectionAttempts: 2,
+          reconnectAttempts: 1,
+          lastErrorAt: new Date("2026-04-02T09:59:00.000Z"),
+          lastErrorKind: "session_expired",
+          lastErrorMessage: "session expired",
+        },
+      },
+    ],
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-mcp-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-mcp-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-mcp-runtime");
+
+    expect(getMCPDiagnosticsSpy).toHaveBeenCalled();
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "mcp_runtime",
+        status: "pass",
+        message: "1/2 connected, 5 tools, recovery 1/1, persisted refs 1",
+      }),
+    ]));
+    expect(response.payload?.mcpRuntime?.diagnostics?.summary).toEqual({
+      recentErrorServers: 1,
+      recoveryAttemptedServers: 1,
+      recoverySucceededServers: 1,
+      persistedResultServers: 1,
+      truncatedResultServers: 1,
+    });
+    expect(response.payload?.mcpRuntime?.diagnostics?.servers[0]?.diagnostics?.lastResult).toEqual(expect.objectContaining({
+      strategy: "persisted",
+      persistedWebPath: "/generated/mcp-doctor.txt",
+    }));
+  } finally {
+    getMCPDiagnosticsSpy.mockRestore();
+    if (previousMcpEnabled === undefined) {
+      delete process.env.BELLDANDY_MCP_ENABLED;
+    } else {
+      process.env.BELLDANDY_MCP_ENABLED = previousMcpEnabled;
+    }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes unified extension runtime diagnostics for plugins and skills", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  await toolsConfigManager.updateConfig({
+    plugins: ["demo-plugin"],
+    skills: ["disabled-skill"],
+  });
+
+  const pluginRegistry = new PluginRegistry();
+  ((pluginRegistry as any).plugins).set("demo-plugin", {
+    id: "demo-plugin",
+    name: "Demo Plugin",
+    version: "1.0.0",
+    description: "demo",
+    activate: async () => {},
+  });
+  ((pluginRegistry as any).pluginToolMap).set("demo-plugin", ["plugin_demo_tool"]);
+  ((pluginRegistry as any).loadErrors).push({
+    at: new Date("2026-04-02T12:00:00.000Z"),
+    phase: "load_plugin",
+    target: "broken-plugin.mjs",
+    message: "missing activate function",
+  });
+
+  const skillRegistry = new SkillRegistry();
+  ((skillRegistry as any).skills).set("bundled:available-skill", {
+    name: "available-skill",
+    description: "available skill",
+    instructions: "available",
+    source: { type: "bundled" },
+    priority: "normal",
+    tags: ["ops"],
+  });
+  ((skillRegistry as any).skills).set("bundled:disabled-skill", {
+    name: "disabled-skill",
+    description: "disabled skill",
+    instructions: "disabled",
+    source: { type: "bundled" },
+    priority: "high",
+    tags: ["blocked"],
+  });
+  ((skillRegistry as any).eligibilityCache).set("available-skill", { eligible: true, reasons: [] });
+  ((skillRegistry as any).eligibilityCache).set("disabled-skill", { eligible: true, reasons: [] });
+  const extensionHost: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle"> = {
+    extensionRuntime: buildExtensionRuntimeReport({
+      pluginRegistry,
+      skillRegistry,
+      toolsConfigManager,
+    }),
+    lifecycle: {
+      pluginToolsRegistered: 1,
+      skillManagementToolsRegistered: ["skills_list", "skills_search", "skill_get"],
+      bundledSkillsLoaded: 2,
+      userSkillsLoaded: 0,
+      pluginSkillsLoaded: 0,
+      installedMarketplaceExtensionsLoaded: 0,
+      installedMarketplacePluginsLoaded: 0,
+      installedMarketplaceSkillPacksLoaded: 0,
+      eligibilityRefreshed: true,
+      loadCompletedAt: new Date("2026-04-02T12:05:00.000Z"),
+      hookBridge: {
+        source: "plugin-bridge",
+        availableHookCount: 2,
+        bridgedHookCount: 2,
+        registrations: [
+          {
+            legacyHookName: "beforeRun",
+            hookName: "before_agent_start",
+            available: true,
+            bridged: true,
+          },
+          {
+            legacyHookName: "afterRun",
+            hookName: "agent_end",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "beforeToolCall",
+            hookName: "before_tool_call",
+            available: true,
+            bridged: true,
+          },
+          {
+            legacyHookName: "afterToolCall",
+            hookName: "after_tool_call",
+            available: false,
+            bridged: false,
+          },
+        ],
+        lastBridgedAt: new Date("2026-04-02T12:06:00.000Z"),
+      },
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    pluginRegistry,
+    extensionHost,
+    skillRegistry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-extension-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-extension-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-extension-runtime");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "extension_runtime",
+        status: "warn",
+        message: "plugins 1 (1 disabled, 1 load errors), skills 2 (1 disabled, 0 ineligible), legacy hooks 2/2 bridged",
+      }),
+    ]));
+    expect(response.payload?.extensionRuntime?.summary).toEqual({
+      pluginCount: 1,
+      disabledPluginCount: 1,
+      pluginToolCount: 1,
+      pluginLoadErrorCount: 1,
+      skillCount: 2,
+      disabledSkillCount: 1,
+      ineligibleSkillCount: 0,
+      promptSkillCount: 0,
+      searchableSkillCount: 1,
+    });
+    expect(response.payload?.extensionRuntime?.diagnostics?.pluginLoadErrors).toEqual([
+      expect.objectContaining({
+        phase: "load_plugin",
+        target: "broken-plugin.mjs",
+        message: "missing activate function",
+      }),
+    ]);
+    expect(response.payload?.extensionRuntime?.registry).toEqual({
+      pluginToolRegistrations: [
+        {
+          pluginId: "demo-plugin",
+          toolNames: ["plugin_demo_tool"],
+          disabled: true,
+        },
+      ],
+      skillManagementTools: [
+        { name: "skills_list", shouldRegister: true, reasonCode: "available" },
+        { name: "skills_search", shouldRegister: true, reasonCode: "available" },
+        { name: "skill_get", shouldRegister: true, reasonCode: "available" },
+      ],
+      promptSkillNames: [],
+      searchableSkillNames: ["available-skill"],
+    });
+    expect(response.payload?.extensionRuntime?.host?.lifecycle).toMatchObject({
+      pluginToolsRegistered: 1,
+      skillManagementToolsRegistered: ["skills_list", "skills_search", "skill_get"],
+      bundledSkillsLoaded: 2,
+      userSkillsLoaded: 0,
+      pluginSkillsLoaded: 0,
+      installedMarketplaceExtensionsLoaded: 0,
+      installedMarketplacePluginsLoaded: 0,
+      installedMarketplaceSkillPacksLoaded: 0,
+      eligibilityRefreshed: true,
+      loadCompletedAt: "2026-04-02T12:05:00.000Z",
+      hookBridge: {
+        source: "plugin-bridge",
+        availableHookCount: 2,
+        bridgedHookCount: 2,
+        lastBridgedAt: "2026-04-02T12:06:00.000Z",
+        registrations: extensionHost.lifecycle.hookBridge.registrations,
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor reports extension marketplace summary from installed ledgers", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  await toolsConfigManager.updateConfig({
+    plugins: ["demo-plugin"],
+    skills: ["disabled-skill"],
+  });
+  await upsertKnownMarketplace(stateDir, {
+    name: "official-market",
+    source: {
+      source: "github",
+      repo: "star-sanctuary/official-market",
+      ref: "main",
+    },
+    installLocation: path.join(stateDir, "extensions", "cache", "official-market"),
+    autoUpdate: true,
+    lastUpdated: "2026-04-02T12:30:00.000Z",
+  });
+  await upsertInstalledExtension(stateDir, {
+    name: "demo-plugin",
+    kind: "plugin",
+    marketplace: "official-market",
+    version: "1.2.3",
+    manifestPath: "belldandy-extension.json",
+    installPath: path.join(stateDir, "extensions", "installed", "official-market", "demo-plugin"),
+    status: "installed",
+    enabled: true,
+    lastUpdated: "2026-04-02T12:31:00.000Z",
+  });
+  await upsertInstalledExtension(stateDir, {
+    name: "ops-skills",
+    kind: "skill-pack",
+    marketplace: "official-market",
+    version: "0.4.0",
+    installPath: path.join(stateDir, "extensions", "installed", "official-market", "ops-skills"),
+    status: "broken",
+    enabled: false,
+  });
+  const pluginRegistry = new PluginRegistry();
+  ((pluginRegistry as any).plugins).set("demo-plugin", {
+    id: "demo-plugin",
+    name: "Demo Plugin",
+    activate: async () => {},
+  });
+  ((pluginRegistry as any).pluginToolMap).set("demo-plugin", ["plugin_demo_tool"]);
+  const skillRegistry = new SkillRegistry();
+  ((skillRegistry as any).skills).set("bundled:available-skill", {
+    name: "available-skill",
+    description: "available skill",
+    instructions: "available",
+    source: { type: "bundled" },
+    priority: "normal",
+    tags: ["ops"],
+  });
+  ((skillRegistry as any).skills).set("bundled:disabled-skill", {
+    name: "disabled-skill",
+    description: "disabled skill",
+    instructions: "disabled",
+    source: { type: "bundled" },
+    priority: "high",
+    tags: ["blocked"],
+  });
+  ((skillRegistry as any).eligibilityCache).set("available-skill", { eligible: true, reasons: [] });
+  ((skillRegistry as any).eligibilityCache).set("disabled-skill", { eligible: true, reasons: [] });
+  const extensionHost: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle"> = {
+    extensionRuntime: buildExtensionRuntimeReport({
+      pluginRegistry,
+      skillRegistry,
+      toolsConfigManager,
+    }),
+    lifecycle: {
+      pluginToolsRegistered: 1,
+      skillManagementToolsRegistered: ["skills_list", "skills_search", "skill_get"],
+      bundledSkillsLoaded: 2,
+      userSkillsLoaded: 0,
+      pluginSkillsLoaded: 0,
+      installedMarketplaceExtensionsLoaded: 1,
+      installedMarketplacePluginsLoaded: 1,
+      installedMarketplaceSkillPacksLoaded: 0,
+      eligibilityRefreshed: true,
+      loadCompletedAt: new Date("2026-04-02T12:35:00.000Z"),
+      hookBridge: {
+        source: "plugin-bridge",
+        availableHookCount: 0,
+        bridgedHookCount: 0,
+        registrations: [
+          {
+            legacyHookName: "beforeRun",
+            hookName: "before_agent_start",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "afterRun",
+            hookName: "agent_end",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "beforeToolCall",
+            hookName: "before_tool_call",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "afterToolCall",
+            hookName: "after_tool_call",
+            available: false,
+            bridged: false,
+          },
+        ],
+      },
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    pluginRegistry,
+    extensionHost,
+    skillRegistry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-extension-marketplace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-extension-marketplace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-extension-marketplace");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "extension_marketplace",
+        status: "warn",
+        message: "marketplaces 1 (1 auto-update), installed 2 (1 plugins, 1 skill-packs, 1 broken, 1 disabled)",
+      }),
+      expect.objectContaining({
+        id: "extension_governance",
+        status: "warn",
+        message: "ledger enabled 1/2, host loaded 1 (1 plugins, 0 skill-packs), runtime policy disabled 1 plugins / 1 skills",
+      }),
+    ]));
+    expect(response.payload?.extensionMarketplace?.summary).toEqual({
+      knownMarketplaceCount: 1,
+      autoUpdateMarketplaceCount: 1,
+      installedExtensionCount: 2,
+      installedPluginCount: 1,
+      installedSkillPackCount: 1,
+      pendingExtensionCount: 0,
+      brokenExtensionCount: 1,
+      disabledExtensionCount: 1,
+    });
+    expect(response.payload?.extensionMarketplace?.knownMarketplaces?.marketplaces?.["official-market"]).toMatchObject({
+      name: "official-market",
+      autoUpdate: true,
+    });
+    expect(response.payload?.extensionMarketplace?.installedExtensions?.extensions?.["demo-plugin@official-market"]).toMatchObject({
+      name: "demo-plugin",
+      marketplace: "official-market",
+      status: "installed",
+    });
+    expect(response.payload?.extensionGovernance?.summary).toEqual({
+      installedExtensionCount: 2,
+      installedEnabledExtensionCount: 1,
+      installedDisabledExtensionCount: 1,
+      installedBrokenExtensionCount: 1,
+      loadedMarketplaceExtensionCount: 1,
+      loadedMarketplacePluginCount: 1,
+      loadedMarketplaceSkillPackCount: 0,
+      runtimePolicyDisabledPluginCount: 1,
+      runtimePolicyDisabledSkillCount: 1,
+    });
+    expect(response.payload?.extensionGovernance?.layers).toMatchObject({
+      installedLedger: {
+        extensionIds: ["demo-plugin@official-market", "ops-skills@official-market"],
+        enabledExtensionIds: ["demo-plugin@official-market"],
+        disabledExtensionIds: ["ops-skills@official-market"],
+        brokenExtensionIds: ["ops-skills@official-market"],
+      },
+      hostLoad: {
+        lifecycleAvailable: true,
+        loadedMarketplaceExtensionCount: 1,
+        loadedMarketplacePluginCount: 1,
+        loadedMarketplaceSkillPackCount: 0,
+      },
+      runtimePolicy: {
+        disabledPluginIds: ["demo-plugin"],
+        disabledSkillNames: ["disabled-skill"],
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor reports durable extraction gating reasons and restricted memory surfaces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-doctor-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    evolutionEnabled: true,
+    evolutionModel: "test-evolution-model",
+    evolutionBaseUrl: "https://example.invalid/v1",
+    evolutionApiKey: "",
+    evolutionMinMessages: 4,
+  });
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-memory", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-memory"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-memory");
+    expect(response.ok).toBe(true);
+    expect(response.payload?.memoryRuntime?.mainThreadToolSurface?.mode).toBe("tool-executor");
+    expect(response.payload?.memoryRuntime?.durableExtraction?.permissionSurface?.mode).toBe("internal-restricted");
+    expect(response.payload?.memoryRuntime?.durableExtraction?.availability).toMatchObject({
+      available: false,
+      enabled: true,
+      reasonCodes: expect.arrayContaining(["api_key_missing"]),
+      model: "test-evolution-model",
+      hasBaseUrl: true,
+      hasApiKey: false,
+    });
+    expect(response.payload?.memoryRuntime?.durableExtraction?.guidance?.policyVersion).toBe("week9-v1");
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "durable_extraction_runtime",
+        status: "fail",
+      }),
+      expect.objectContaining({
+        id: "durable_extraction_policy",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes team shared memory readiness and deferred sync policy", async () => {
+  await withEnv({
+    BELLDANDY_TEAM_SHARED_MEMORY_ENABLED: "true",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    await fs.promises.mkdir(path.join(stateDir, "team-memory", "memory"), { recursive: true });
+    await fs.promises.writeFile(path.join(stateDir, "team-memory", "MEMORY.md"), "# Shared Memory\n", "utf-8");
+    await fs.promises.writeFile(path.join(stateDir, "team-memory", "memory", "2026-04-02.md"), "# 2026-04-02\n", "utf-8");
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      ws.send(JSON.stringify({ type: "req", id: "system-doctor-team-memory", method: "system.doctor", params: {} }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-team-memory"));
+      const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-team-memory");
+
+      expect(response.ok).toBe(true);
+      expect(response.payload?.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "team_shared_memory",
+          status: "pass",
+          message: "enabled at team-memory (2 files), secret guard ready, sync plan planned",
+        }),
+      ]));
+      expect(response.payload?.memoryRuntime?.sharedMemory).toMatchObject({
+        enabled: true,
+        available: true,
+        reasonCodes: [],
+        scope: {
+          relativeRoot: "team-memory",
+          fileCount: 2,
+          hasMainMemory: true,
+          dailyCount: 1,
+        },
+        secretGuard: {
+          enabled: true,
+          scanner: "curated-high-confidence",
+        },
+        syncPolicy: {
+          status: "planned",
+          deltaSync: {
+            enabled: true,
+            mode: "checksum-delta",
+          },
+          conflictPolicy: {
+            mode: "local-write-wins-per-entry",
+            maxConflictRetries: 2,
+          },
+          deletionPolicy: {
+            propagatesDeletes: false,
+          },
+          suppressionPolicy: {
+            enabled: true,
+          },
+        },
+      });
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("conversation.memory.extraction.get exposes runtime surfaces and rate-limit state", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-runtime-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-runtime",
+  });
+  const conversationId = "conv-memory-runtime";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    evolutionEnabled: true,
+    evolutionModel: "test-evolution-model",
+    evolutionBaseUrl: "https://example.invalid/v1",
+    evolutionApiKey: "test-evolution-key",
+    evolutionMinMessages: 3,
+  });
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "memory-runtime-get",
+      method: "conversation.memory.extraction.get",
+      params: { conversationId, threshold: 2 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-runtime-get"));
+    const response = frames.find((f) => f.type === "res" && f.id === "memory-runtime-get");
+    expect(response.ok).toBe(true);
+    expect(response.payload?.runtime?.mainThreadToolSurface?.mode).toBe("tool-executor");
+    expect(response.payload?.runtime?.durableExtraction?.permissionSurface?.mode).toBe("internal-restricted");
+    expect(response.payload?.runtime?.durableExtraction?.availability).toMatchObject({
+      available: true,
+      enabled: true,
+      model: "test-evolution-model",
+      hasBaseUrl: true,
+      hasApiKey: true,
+    });
+    expect(response.payload?.runtime?.durableExtraction?.guidance).toMatchObject({
+      policyVersion: "week9-v1",
+      acceptedCandidateTypes: ["user", "feedback", "project", "reference"],
+    });
+    expect(response.payload?.runtime?.durableExtraction?.rateLimit?.request?.status).toBe("unlimited");
+    expect(response.payload?.runtime?.durableExtraction?.rateLimit?.run?.status).toBe("unlimited");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor reports session digest rate-limit state after budget is exceeded", async () => {
+  await withEnv({
+    BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: "1",
+    BELLDANDY_MEMORY_SESSION_DIGEST_WINDOW_MS: "60000",
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS: undefined,
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS: undefined,
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const conversationStore = new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+      compaction: {
+        enabled: true,
+        tokenThreshold: 10,
+        keepRecentCount: 1,
+      },
+      summarizer: async () => "rolling-summary-rate-limit",
+    });
+    const conversationId = "conv-rate-limit-state";
+    conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+    conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+    conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      conversationStore,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "digest-rate-limit-first",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2 },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-rate-limit-first" && f.ok === true));
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "digest-rate-limit-second",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2, force: true },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-rate-limit-second"));
+
+      ws.send(JSON.stringify({ type: "req", id: "system-doctor-rate-limit", method: "system.doctor", params: {} }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-rate-limit"));
+      const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-rate-limit");
+      expect(response.ok).toBe(true);
+      expect(response.payload?.memoryRuntime?.sessionDigest?.rateLimit).toMatchObject({
+        status: "limited",
+        configured: true,
+        maxRuns: 1,
+      });
+      expect(response.payload?.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "session_digest_runtime",
+          status: "warn",
+        }),
+      ]));
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("system.doctor exposes recent query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "query-runtime-message-send",
+      method: "message.send",
+      params: { text: "追踪这一轮 runtime" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "query-runtime-message-send" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-query-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-query-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-query-runtime");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "query_runtime_trace",
+        status: "pass",
+      }),
+    ]));
+    expect(response.payload?.queryRuntime?.observerEnabled).toBe(true);
+    expect(response.payload?.queryRuntime?.totalObservedEvents).toBeGreaterThan(0);
+    expect(response.payload?.queryRuntime?.traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "query-runtime-message-send",
+        method: "message.send",
+        status: "completed",
+        latestStage: "completed",
+      }),
+    ]));
+
+    const trace = response.payload?.queryRuntime?.traces?.find((item: any) => item.traceId === "query-runtime-message-send");
+    const stages = trace?.stages ?? [];
+    expect(trace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "conversation_loaded",
+      "agent_running",
+      "assistant_persisted",
+      "completed",
+    ]));
+    expect(stages[stages.length - 1]?.stage).toBe("completed");
   } finally {
     ws.close();
     await closeP;
@@ -1093,6 +2449,7 @@ test("message.send hides tool control confirm password from agent input and appl
     dataDir: path.join(stateDir, "sessions"),
   });
   let toolExecutor!: ToolExecutor;
+  let server!: Awaited<ReturnType<typeof startGatewayServer>>;
   const seenInputs: Array<{ text: string; userInput?: string; history: Array<{ role: string; content: string }> }> = [];
 
   toolExecutor = new ToolExecutor({
@@ -1108,6 +2465,9 @@ test("message.send hides tool control confirm password from agent input and appl
     ],
     workspaceRoot: process.cwd(),
     alwaysEnabledTools: [TOOL_SETTINGS_CONTROL_NAME],
+    broadcast: (event, payload) => {
+      server?.broadcast({ type: "event", event, payload });
+    },
   });
 
   const conversationId = "conv-tool-confirm-password";
@@ -1164,7 +2524,7 @@ test("message.send hides tool control confirm password from agent input and appl
     },
   };
 
-  const server = await startGatewayServer({
+  server = await startGatewayServer({
     port: 0,
     auth: { mode: "none" },
     webRoot: resolveWebRoot(),
@@ -1355,6 +2715,23 @@ test("message.send emits webchat confirm event and tool_settings.confirm approve
     const resolvedEvent = frames.find((f) => f.type === "event" && f.event === "tool_settings.confirm.resolved");
     expect(resolvedEvent?.payload?.decision).toBe("approved");
 
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-tool-confirm-trace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-tool-confirm-trace"));
+    const doctorRes = frames.find((f) => f.type === "res" && f.id === "system-doctor-tool-confirm-trace");
+    const traces = doctorRes.payload?.queryRuntime?.traces ?? [];
+    const confirmTrace = traces.find((item: any) => item.traceId === "approve-webchat-confirm");
+    expect(confirmTrace).toMatchObject({
+      method: "tool_settings.confirm",
+      status: "completed",
+      conversationId: "conv-webchat-confirm",
+    });
+    expect(confirmTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "tool_settings_updated",
+      "tool_event_emitted",
+      "completed",
+    ]));
+
     const storedHistory = conversationStore.getHistory("conv-webchat-confirm");
     expect(storedHistory.some((item) => item.content.includes("批准工具设置变更"))).toBe(false);
     expect(storedHistory.some((item) => item.content.includes("请在页面确认窗口中处理"))).toBe(false);
@@ -1491,6 +2868,897 @@ test("tools.list hides tool_settings_control from builtin tools", async () => {
   }
 });
 
+test("tools.list returns contract summaries for contract-aware tools", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("alpha_builtin"),
+      createTestTool("beta_builtin"),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "tools-list-contracts", method: "tools.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-contracts"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-contracts");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.builtin).toEqual(["alpha_builtin", "beta_builtin"]);
+    expect(listRes.payload?.contracts?.alpha_builtin).toMatchObject({
+      family: "other",
+      riskLevel: "low",
+      channels: ["gateway"],
+      safeScopes: ["local-safe"],
+      needsPermission: false,
+      isReadOnly: true,
+      isConcurrencySafe: true,
+    });
+    expect(listRes.payload?.visibility?.alpha_builtin).toMatchObject({
+      available: true,
+      reasonCode: "available",
+    });
+    expect(listRes.payload?.toolControl).toMatchObject({
+      mode: "disabled",
+      requiresConfirmation: false,
+    });
+    expect(listRes.payload?.contracts?.beta_builtin).toBeUndefined();
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("tools.list exposes visibility reasons for selected agent and conversation", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  await toolsConfigManager.updateConfig({
+    mcp_servers: ["demo"],
+    plugins: ["demo-plugin"],
+    skills: ["disabled-skill"],
+  });
+  const confirmationStore = new ToolControlConfirmationStore();
+  confirmationStore.create({
+    requestId: "ABCDE",
+    conversationId: "conv-visibility",
+    changes: {
+      enableBuiltin: [],
+      disableBuiltin: ["alpha_builtin"],
+      enableMcpServers: [],
+      disableMcpServers: [],
+      enablePlugins: [],
+      disablePlugins: [],
+    },
+  });
+
+  const goalTool = withToolContract(createTestTool("goal_init"), {
+    family: "other",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway"],
+    safeScopes: ["local-safe"],
+    activityDescription: "goal tool",
+    resultSchema: {
+      kind: "text",
+      description: "test tool output",
+    },
+    outputPersistencePolicy: "conversation",
+  });
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("alpha_builtin"),
+      createContractedTestTool("beta_builtin"),
+      goalTool,
+      createTestTool("mcp_demo_ping"),
+    ],
+    workspaceRoot: process.cwd(),
+    contractAccessPolicy: {
+      channel: "gateway",
+      allowedSafeScopes: ["local-safe"],
+      blockedToolNames: ["beta_builtin"],
+    },
+    isToolAllowedForAgent: (toolName, agentId) => agentId !== "restricted" || toolName === "goal_init",
+    isToolAllowedInConversation: (toolName, conversationId) => toolName !== "goal_init" || conversationId.startsWith("goal:"),
+  });
+  const pluginRegistry = new PluginRegistry();
+  ((pluginRegistry as any).plugins).set("demo-plugin", {
+    id: "demo-plugin",
+    name: "Demo Plugin",
+    activate: async () => {},
+  });
+  ((pluginRegistry as any).pluginToolMap).set("demo-plugin", ["plugin_demo_tool"]);
+  const skillRegistry = new SkillRegistry();
+  ((skillRegistry as any).skills).set("bundled:available-skill", {
+    name: "available-skill",
+    description: "available skill",
+    instructions: "available",
+    source: { type: "bundled" },
+    priority: "normal",
+    tags: ["ops"],
+  });
+  ((skillRegistry as any).skills).set("bundled:disabled-skill", {
+    name: "disabled-skill",
+    description: "disabled skill",
+    instructions: "disabled",
+    source: { type: "bundled" },
+    priority: "high",
+    tags: ["blocked"],
+  });
+  ((skillRegistry as any).skills).set("bundled:ineligible-skill", {
+    name: "ineligible-skill",
+    description: "ineligible skill",
+    instructions: "ineligible",
+    source: { type: "bundled" },
+    priority: "low",
+    tags: ["needs-env"],
+  });
+  ((skillRegistry as any).eligibilityCache).set("available-skill", { eligible: true, reasons: [] });
+  ((skillRegistry as any).eligibilityCache).set("disabled-skill", { eligible: true, reasons: [] });
+  ((skillRegistry as any).eligibilityCache).set("ineligible-skill", { eligible: false, reasons: ["missing env: DEMO_TOKEN"] });
+  await upsertInstalledExtension(stateDir, {
+    name: "demo-plugin",
+    kind: "plugin",
+    marketplace: "official-market",
+    installPath: path.join(stateDir, "extensions", "installed", "official-market", "demo-plugin"),
+    status: "installed",
+    enabled: true,
+  });
+  await upsertInstalledExtension(stateDir, {
+    name: "ops-skills",
+    kind: "skill-pack",
+    marketplace: "official-market",
+    installPath: path.join(stateDir, "extensions", "installed", "official-market", "ops-skills"),
+    status: "pending",
+    enabled: false,
+  });
+  const extensionHost: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle"> = {
+    extensionRuntime: buildExtensionRuntimeReport({
+      pluginRegistry,
+      skillRegistry,
+      toolsConfigManager,
+    }),
+    lifecycle: {
+      pluginToolsRegistered: 1,
+      skillManagementToolsRegistered: ["skills_list", "skills_search", "skill_get"],
+      bundledSkillsLoaded: 3,
+      userSkillsLoaded: 0,
+      pluginSkillsLoaded: 0,
+      installedMarketplaceExtensionsLoaded: 1,
+      installedMarketplacePluginsLoaded: 1,
+      installedMarketplaceSkillPacksLoaded: 0,
+      eligibilityRefreshed: true,
+      loadCompletedAt: new Date("2026-04-02T13:10:00.000Z"),
+      hookBridge: {
+        source: "plugin-bridge",
+        availableHookCount: 0,
+        bridgedHookCount: 0,
+        registrations: [
+          {
+            legacyHookName: "beforeRun",
+            hookName: "before_agent_start",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "afterRun",
+            hookName: "agent_end",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "beforeToolCall",
+            hookName: "before_tool_call",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "afterToolCall",
+            hookName: "after_tool_call",
+            available: false,
+            bridged: false,
+          },
+        ],
+      },
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+    toolControlConfirmationStore: confirmationStore,
+    getAgentToolControlMode: () => "confirm",
+    getAgentToolControlConfirmPassword: () => "",
+    pluginRegistry,
+    extensionHost,
+    skillRegistry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-list-visibility",
+      method: "tools.list",
+      params: {
+        agentId: "restricted",
+        conversationId: "conv-visibility",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-visibility"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-visibility");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.visibilityContext).toEqual({
+      agentId: "restricted",
+      conversationId: "conv-visibility",
+    });
+    expect(listRes.payload?.visibility?.alpha_builtin).toMatchObject({
+      available: false,
+      reasonCode: "not-in-agent-whitelist",
+    });
+    expect(listRes.payload?.visibility?.beta_builtin).toMatchObject({
+      available: false,
+      reasonCode: "blocked-by-security-matrix",
+      contractReason: "blocked",
+    });
+    expect(listRes.payload?.visibility?.goal_init).toMatchObject({
+      available: false,
+      reasonCode: "conversation-restricted",
+    });
+    expect(listRes.payload?.mcpVisibility?.demo).toMatchObject({
+      available: false,
+      reasonCode: "disabled-by-settings",
+    });
+    expect(listRes.payload?.pluginVisibility?.["demo-plugin"]).toMatchObject({
+      available: false,
+      reasonCode: "disabled-by-settings",
+    });
+    expect(listRes.payload?.skillVisibility?.["available-skill"]).toMatchObject({
+      available: true,
+      reasonCode: "available",
+      eligible: true,
+    });
+    expect(listRes.payload?.skillVisibility?.["disabled-skill"]).toMatchObject({
+      available: false,
+      reasonCode: "disabled-by-settings",
+      eligible: true,
+    });
+    expect(listRes.payload?.skillVisibility?.["ineligible-skill"]).toMatchObject({
+      available: false,
+      reasonCode: "not-eligible",
+      eligible: false,
+      eligibilityReasons: ["missing env: DEMO_TOKEN"],
+    });
+    expect(listRes.payload?.extensions?.summary).toEqual({
+      pluginCount: 1,
+      disabledPluginCount: 1,
+      pluginToolCount: 1,
+      pluginLoadErrorCount: 0,
+      skillCount: 3,
+      disabledSkillCount: 1,
+      ineligibleSkillCount: 1,
+      promptSkillCount: 0,
+      searchableSkillCount: 1,
+    });
+    expect(listRes.payload?.extensions?.plugins).toEqual([
+      expect.objectContaining({
+        id: "demo-plugin",
+        disabled: true,
+        toolNames: ["plugin_demo_tool"],
+      }),
+    ]);
+    expect(listRes.payload?.extensions?.skills).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "available-skill",
+        source: "bundled",
+        disabled: false,
+        eligible: true,
+      }),
+      expect.objectContaining({
+        name: "disabled-skill",
+        disabled: true,
+        eligible: true,
+      }),
+      expect.objectContaining({
+        name: "ineligible-skill",
+        disabled: false,
+        eligible: false,
+        eligibilityReasons: ["missing env: DEMO_TOKEN"],
+      }),
+    ]));
+    expect(listRes.payload?.extensions?.registry).toEqual({
+      pluginToolRegistrations: [
+        {
+          pluginId: "demo-plugin",
+          toolNames: ["plugin_demo_tool"],
+          disabled: true,
+        },
+      ],
+      skillManagementTools: [
+        { name: "skills_list", shouldRegister: true, reasonCode: "available" },
+        { name: "skills_search", shouldRegister: true, reasonCode: "available" },
+        { name: "skill_get", shouldRegister: true, reasonCode: "available" },
+      ],
+      promptSkillNames: [],
+      searchableSkillNames: ["available-skill"],
+    });
+    expect(listRes.payload?.extensionGovernance?.summary).toEqual({
+      installedExtensionCount: 2,
+      installedEnabledExtensionCount: 1,
+      installedDisabledExtensionCount: 1,
+      installedBrokenExtensionCount: 0,
+      loadedMarketplaceExtensionCount: 1,
+      loadedMarketplacePluginCount: 1,
+      loadedMarketplaceSkillPackCount: 0,
+      runtimePolicyDisabledPluginCount: 1,
+      runtimePolicyDisabledSkillCount: 1,
+    });
+    expect(listRes.payload?.extensionGovernance?.layers).toMatchObject({
+      installedLedger: {
+        enabledExtensionIds: ["demo-plugin@official-market"],
+        disabledExtensionIds: ["ops-skills@official-market"],
+      },
+      hostLoad: {
+        lifecycleAvailable: true,
+        loadedMarketplaceExtensionCount: 1,
+      },
+      runtimePolicy: {
+        disabledPluginIds: ["demo-plugin"],
+        disabledSkillNames: ["disabled-skill"],
+      },
+    });
+    expect(listRes.payload?.skills).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "available-skill",
+        eligible: true,
+      }),
+      expect.objectContaining({
+        name: "disabled-skill",
+        eligible: true,
+      }),
+      expect.objectContaining({
+        name: "ineligible-skill",
+        eligible: false,
+        eligibilityReasons: ["missing env: DEMO_TOKEN"],
+      }),
+    ]));
+    expect(listRes.payload?.toolControl).toMatchObject({
+      mode: "confirm",
+      requiresConfirmation: true,
+      hasConfirmPassword: false,
+    });
+    expect(listRes.payload?.toolControl?.pendingRequest).toMatchObject({
+      requestId: "ABCDE",
+      conversationId: "conv-visibility",
+      summary: ["关闭 builtin: alpha_builtin"],
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("tools.list resolves launch runtime visibility from subtask taskId", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+  const repoRoot = path.join(stateDir, "demo-repo");
+  const requestedCwd = path.join(repoRoot, "src");
+  const worktreeRoot = path.join(stateDir, "virtual-worktree", "demo-repo");
+  const resolvedCwd = path.join(worktreeRoot, "src");
+
+  const task = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-runtime",
+      agentId: "coder",
+      instruction: "Inspect launch runtime visibility",
+      cwd: requestedCwd,
+      toolSet: ["goal_init", "write_tool"],
+      permissionMode: "plan",
+      isolationMode: "worktree",
+    },
+  });
+  await subTaskRuntimeStore.updateTaskLaunchSpec(task.id, {
+    launchSpec: normalizeAgentLaunchSpec({
+      parentConversationId: "conv-runtime",
+      agentId: "coder",
+      instruction: "Inspect launch runtime visibility",
+      cwd: resolvedCwd,
+      toolSet: ["goal_init", "write_tool"],
+      permissionMode: "plan",
+      isolationMode: "worktree",
+    }),
+    runtimeSummary: {
+      requestedCwd,
+      resolvedCwd,
+      worktreePath: worktreeRoot,
+      worktreeRepoRoot: repoRoot,
+      worktreeBranch: "belldandy-task_runtime",
+      worktreeStatus: "created",
+    },
+  });
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("goal_init"),
+      createContractedTestTool("alpha_builtin"),
+      createWriteContractedTestTool("write_tool"),
+      createContractedTestTool("plugin_demo_tool"),
+      createContractedTestTool("mcp_demo_ping"),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+  const pluginRegistry = new PluginRegistry();
+  ((pluginRegistry as any).plugins).set("demo-plugin", {
+    id: "demo-plugin",
+    name: "Demo Plugin",
+    activate: async () => {},
+  });
+  ((pluginRegistry as any).pluginToolMap).set("demo-plugin", ["plugin_demo_tool"]);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolExecutor,
+    toolsConfigManager: await (async () => {
+      const manager = new ToolsConfigManager(stateDir);
+      await manager.load();
+      return manager;
+    })(),
+    subTaskRuntimeStore,
+    pluginRegistry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-list-task-runtime",
+      method: "tools.list",
+      params: {
+        taskId: task.id,
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-task-runtime"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-task-runtime");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.visibilityContext).toMatchObject({
+      agentId: "coder",
+      conversationId: "conv-runtime",
+      taskId: task.id,
+      launchSpec: {
+        permissionMode: "plan",
+        isolationMode: "worktree",
+        cwd: requestedCwd,
+        resolvedCwd,
+        worktreePath: worktreeRoot,
+        worktreeStatus: "created",
+      },
+    });
+    expect(listRes.payload?.visibility?.goal_init).toMatchObject({
+      available: true,
+      reasonCode: "available",
+    });
+    expect(listRes.payload?.visibility?.alpha_builtin).toMatchObject({
+      available: false,
+      reasonCode: "excluded-by-launch-toolset",
+    });
+    expect(listRes.payload?.visibility?.write_tool).toMatchObject({
+      available: false,
+      reasonCode: "blocked-by-launch-permission-mode",
+    });
+    expect(listRes.payload?.mcpVisibility?.demo).toMatchObject({
+      available: false,
+      reasonCode: "excluded-by-launch-toolset",
+    });
+    expect(listRes.payload?.pluginVisibility?.["demo-plugin"]).toMatchObject({
+      available: false,
+      reasonCode: "excluded-by-launch-toolset",
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("subtask.list and subtask.get expose persisted task runtime records", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const targetTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-subtask",
+      agentId: "coder",
+      instruction: "Implement structured task runtime",
+      timeoutMs: 90_000,
+      channel: "goal",
+      toolSet: ["read", "edit"],
+    },
+  });
+  await subTaskRuntimeStore.markQueued(targetTask.id, 1);
+  await subTaskRuntimeStore.attachSession(targetTask.id, "sub_task_1");
+  await subTaskRuntimeStore.completeTask(targetTask.id, {
+    status: "done",
+    sessionId: "sub_task_1",
+    output: "structured runtime finished",
+  });
+
+  const otherTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-other",
+      agentId: "researcher",
+      instruction: "Should not appear in filtered results",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(otherTask.id, {
+    status: "error",
+    output: "",
+    error: "other task failed",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-list",
+      method: "subtask.list",
+      params: { conversationId: "conv-subtask" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-list"));
+
+    const listRes = frames.find((f) => f.type === "res" && f.id === "subtask-list");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.conversationId).toBe("conv-subtask");
+    expect(listRes.payload?.items).toEqual([
+      expect.objectContaining({
+        id: targetTask.id,
+        parentConversationId: "conv-subtask",
+        sessionId: "sub_task_1",
+        agentId: "coder",
+        status: "done",
+        outputPreview: "structured runtime finished",
+        launchSpec: expect.objectContaining({
+          profileId: "coder",
+          channel: "goal",
+          timeoutMs: 90_000,
+          toolSet: ["read", "edit"],
+        }),
+      }),
+    ]);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-get",
+      method: "subtask.get",
+      params: { taskId: targetTask.id },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-get"));
+
+    const getRes = frames.find((f) => f.type === "res" && f.id === "subtask-get");
+    expect(getRes.ok).toBe(true);
+    expect(getRes.payload?.item).toMatchObject({
+      id: targetTask.id,
+      sessionId: "sub_task_1",
+      status: "done",
+      outputPath: expect.any(String),
+      launchSpec: expect.objectContaining({
+        profileId: "coder",
+        channel: "goal",
+      }),
+    });
+    expect(getRes.payload?.outputContent).toBe("structured runtime finished");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("subtask.stop and subtask.archive manage task runtime visibility", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const runningTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-stop",
+      agentId: "coder",
+      instruction: "Need manual stop",
+      channel: "subtask",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(runningTask.id, "sub_stop_1");
+
+  const doneTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-stop",
+      agentId: "reviewer",
+      instruction: "Can be archived",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(doneTask.id, {
+    status: "done",
+    output: "finished already",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+    stopSubTask: async (taskId, reason) => subTaskRuntimeStore.markStopped(taskId, {
+      reason: reason ?? "Stopped from RPC.",
+      sessionId: "sub_stop_1",
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-stop",
+      method: "subtask.stop",
+      params: { taskId: runningTask.id, reason: "User requested stop" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-stop"));
+
+    const stopRes = frames.find((f) => f.type === "res" && f.id === "subtask-stop");
+    expect(stopRes.ok).toBe(true);
+    expect(stopRes.payload?.item).toMatchObject({
+      id: runningTask.id,
+      status: "stopped",
+      stopReason: "User requested stop",
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-archive",
+      method: "subtask.archive",
+      params: { taskId: doneTask.id, reason: "Clean up finished task" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-archive"));
+
+    const archiveRes = frames.find((f) => f.type === "res" && f.id === "subtask-archive");
+    expect(archiveRes.ok).toBe(true);
+    expect(archiveRes.payload?.item).toMatchObject({
+      id: doneTask.id,
+      archiveReason: "Clean up finished task",
+      archivedAt: expect.any(Number),
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-list-default",
+      method: "subtask.list",
+      params: { conversationId: "conv-stop" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-list-default"));
+
+    const defaultListRes = frames.find((f) => f.type === "res" && f.id === "subtask-list-default");
+    expect(defaultListRes.ok).toBe(true);
+    expect(defaultListRes.payload?.items).toEqual([
+      expect.objectContaining({
+        id: runningTask.id,
+        status: "stopped",
+      }),
+    ]);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-list-archived",
+      method: "subtask.list",
+      params: { conversationId: "conv-stop", includeArchived: true },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-list-archived"));
+
+    const archivedListRes = frames.find((f) => f.type === "res" && f.id === "subtask-list-archived");
+    expect(archivedListRes.ok).toBe(true);
+    expect(archivedListRes.payload?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: runningTask.id, status: "stopped" }),
+      expect.objectContaining({ id: doneTask.id, archivedAt: expect.any(Number) }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes recent subtask query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const runningTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-subtask-trace",
+      agentId: "coder",
+      instruction: "Need runtime trace",
+      channel: "subtask",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(runningTask.id, "sub_trace_1");
+
+  const doneTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-subtask-trace",
+      agentId: "reviewer",
+      instruction: "Archive me",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(doneTask.id, {
+    status: "done",
+    output: "archivable output",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+    stopSubTask: async (taskId, reason) => subTaskRuntimeStore.markStopped(taskId, {
+      reason: reason ?? "Stopped from trace test.",
+      sessionId: "sub_trace_1",
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-list",
+      method: "subtask.list",
+      params: { conversationId: "conv-subtask-trace", includeArchived: true },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-get",
+      method: "subtask.get",
+      params: { taskId: doneTask.id },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-stop",
+      method: "subtask.stop",
+      params: { taskId: runningTask.id, reason: "Stop for trace" },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-archive",
+      method: "subtask.archive",
+      params: { taskId: doneTask.id, reason: "Archive for trace" },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-get"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-stop"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-archive"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-subtask-trace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-subtask-trace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-subtask-trace");
+
+    expect(response.ok).toBe(true);
+    const traces = response.payload?.queryRuntime?.traces ?? [];
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "subtask-trace-list",
+        method: "subtask.list",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "subtask-trace-get",
+        method: "subtask.get",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "subtask-trace-stop",
+        method: "subtask.stop",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "subtask-trace-archive",
+        method: "subtask.archive",
+        status: "completed",
+      }),
+    ]));
+
+    const stopTrace = traces.find((item: any) => item.traceId === "subtask-trace-stop");
+    const archiveTrace = traces.find((item: any) => item.traceId === "subtask-trace-archive");
+    expect(stopTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "task_loaded",
+      "task_stopped",
+      "completed",
+    ]));
+    expect(archiveTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "task_loaded",
+      "task_archived",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("tools.update ignores tool_settings_control in disabled builtin list", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const toolsConfigManager = new ToolsConfigManager(stateDir);
@@ -1607,23 +3875,16 @@ test("message.send emits tools.config.updated when agent changes tool settings",
         output: result.output,
         error: result.error,
       };
-      if (result.success) {
-        const disabled = toolsConfigManager.getConfig().disabled;
-        gatewayServer.broadcast({
-          type: "event",
-          event: "tools.config.updated",
-          payload: {
-            source: "agent",
-            mode: "auto",
-            disabled: {
-              builtin: disabled.builtin,
-              mcp_servers: disabled.mcp_servers,
-              plugins: disabled.plugins,
-              skills: disabled.skills,
-            },
-          },
-        });
-      }
+      yield {
+        type: "usage" as const,
+        systemPromptTokens: 1,
+        contextTokens: 2,
+        inputTokens: 3,
+        outputTokens: 4,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        modelCalls: 1,
+      };
       yield { type: "final", text: "tool settings updated" };
       yield { type: "status", status: "done" as const };
     },
@@ -1679,6 +3940,23 @@ test("message.send emits tools.config.updated when agent changes tool settings",
         skills: [],
       },
     });
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-tool-side-effects", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-tool-side-effects"));
+    const doctorRes = frames.find((f) => f.type === "res" && f.id === "system-doctor-tool-side-effects");
+    const traces = doctorRes.payload?.queryRuntime?.traces ?? [];
+    const runtimeTrace = traces.find((item: any) => item.traceId === "message-send-tool-settings-update");
+    expect(runtimeTrace).toMatchObject({
+      method: "message.send",
+      status: "completed",
+      conversationId: "conv-tool-settings-update",
+    });
+    expect(runtimeTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "tool_result_emitted",
+      "tool_event_emitted",
+      "task_result_recorded",
+      "completed",
+    ]));
 
     ws.send(JSON.stringify({ type: "req", id: "tools-list-after-agent-update", method: "tools.list", params: {} }));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-after-agent-update"));
@@ -2207,6 +4485,244 @@ test("workspace methods keep list/read/write behavior after async fs refactor", 
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
 
+test("workspace.write blocks secret-like content under team shared memory paths", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "workspace-write-team-memory-secret",
+      method: "workspace.write",
+      params: {
+        path: "team-memory/MEMORY.md",
+        content: "共享记忆里不要存 token: ghp_123456789012345678901234567890123456",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-write-team-memory-secret"));
+    const response = frames.find((f) => f.type === "res" && f.id === "workspace-write-team-memory-secret");
+
+    expect(response.ok).toBe(false);
+    expect(response.error?.code).toBe("secret_detected");
+    expect(response.error?.message).toContain("GitHub PAT");
+    await expect(fs.promises.readFile(path.join(stateDir, "team-memory", "MEMORY.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes recent workspace query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.mkdir(path.join(stateDir, "docs"), { recursive: true });
+  await fs.promises.writeFile(path.join(stateDir, "docs", "note.md"), "# hello", "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "workspace-trace-list", method: "workspace.list", params: { path: "docs" } }));
+    ws.send(JSON.stringify({ type: "req", id: "workspace-trace-read", method: "workspace.read", params: { path: "docs/note.md" } }));
+    ws.send(JSON.stringify({ type: "req", id: "workspace-trace-write", method: "workspace.write", params: { path: "docs/generated.md", content: "generated" } }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-read"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-write"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-workspace-trace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-workspace-trace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-workspace-trace");
+
+    expect(response.ok).toBe(true);
+    const traces = response.payload?.queryRuntime?.traces ?? [];
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "workspace-trace-list",
+        method: "workspace.list",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "workspace-trace-read",
+        method: "workspace.read",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "workspace-trace-write",
+        method: "workspace.write",
+        status: "completed",
+      }),
+    ]));
+
+    const listTrace = traces.find((item: any) => item.traceId === "workspace-trace-list");
+    const readTrace = traces.find((item: any) => item.traceId === "workspace-trace-read");
+    const writeTrace = traces.find((item: any) => item.traceId === "workspace-trace-write");
+    expect(listTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_listed",
+      "completed",
+    ]));
+    expect(readTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_read",
+      "completed",
+    ]));
+    expect(writeTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_written",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes workspace.readSource and tools query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-tools-workspace-"));
+  await fs.promises.writeFile(path.join(workspaceRoot, "source.ts"), "export const value = 1;\n", "utf-8");
+
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  const confirmationStore = new ToolControlConfirmationStore();
+  let toolExecutor!: ToolExecutor;
+  toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("alpha_builtin"),
+      createContractedTestTool("beta_builtin"),
+      createToolSettingsControlTool({
+        toolsConfigManager,
+        getControlMode: () => "auto",
+        listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+        confirmationStore,
+      }),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    additionalWorkspaceRoots: [workspaceRoot],
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "workspace-trace-read-source",
+      method: "workspace.readSource",
+      params: { path: path.join(workspaceRoot, "source.ts") },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-trace-list",
+      method: "tools.list",
+      params: {},
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-trace-update",
+      method: "tools.update",
+      params: { disabled: { builtin: ["alpha_builtin"] } },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-read-source"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-trace-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-trace-update"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-tools-workspace-trace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-tools-workspace-trace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-tools-workspace-trace");
+
+    expect(response.ok).toBe(true);
+    const traces = response.payload?.queryRuntime?.traces ?? [];
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "workspace-trace-read-source",
+        method: "workspace.readSource",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "tools-trace-list",
+        method: "tools.list",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "tools-trace-update",
+        method: "tools.update",
+        status: "completed",
+      }),
+    ]));
+
+    const sourceTrace = traces.find((item: any) => item.traceId === "workspace-trace-read-source");
+    const toolsListTrace = traces.find((item: any) => item.traceId === "tools-trace-list");
+    const toolsUpdateTrace = traces.find((item: any) => item.traceId === "tools-trace-update");
+    expect(sourceTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_source_read",
+      "completed",
+    ]));
+    expect(toolsListTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "tool_inventory_loaded",
+      "tool_visibility_built",
+      "completed",
+    ]));
+    expect(toolsUpdateTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "tool_settings_updated",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("message.send rejects attachment larger than configured per-file limit", async () => {
   await withEnv({
     BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "8",
@@ -2691,6 +5207,188 @@ test("/api/webhook reuses in-flight response for concurrent idempotency key", as
   }
 });
 
+test("system.doctor exposes api.message and webhook query runtime lifecycle traces", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-trace-token",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const toolsConfigManager = new ToolsConfigManager(stateDir);
+    await toolsConfigManager.load();
+    const confirmationStore = new ToolControlConfirmationStore();
+    let toolExecutor!: ToolExecutor;
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        const request = {
+          id: `tool-call-${input.conversationId}`,
+          name: TOOL_SETTINGS_CONTROL_NAME,
+          arguments: {
+            action: "apply",
+            disableBuiltin: ["alpha_builtin"],
+          },
+        };
+        yield {
+          type: "tool_call" as const,
+          id: request.id,
+          name: request.name,
+          arguments: request.arguments,
+        };
+        const result = await toolExecutor.execute(
+          request,
+          input.conversationId,
+          input.agentId,
+          input.userUuid,
+          input.senderInfo,
+          input.roomContext,
+        );
+        yield {
+          type: "tool_result" as const,
+          id: result.id,
+          name: result.name,
+          success: result.success,
+          output: result.output,
+          error: result.error,
+        };
+        yield {
+          type: "usage" as const,
+          systemPromptTokens: 1,
+          contextTokens: 2,
+          inputTokens: 3,
+          outputTokens: 4,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          modelCalls: 1,
+        };
+        yield { type: "final", text: `http:${input.text}` };
+      },
+    };
+    toolExecutor = new ToolExecutor({
+      tools: [
+        createTestTool("alpha_builtin"),
+        createToolSettingsControlTool({
+          toolsConfigManager,
+          getControlMode: () => "auto",
+          listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+          confirmationStore,
+        }),
+      ],
+      workspaceRoot: process.cwd(),
+      alwaysEnabledTools: [TOOL_SETTINGS_CONTROL_NAME],
+    });
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      toolsConfigManager,
+      toolExecutor,
+      agentFactory: () => agent,
+      webhookConfig: {
+        version: 1,
+        webhooks: [
+          {
+            id: "audit",
+            enabled: true,
+            token: "webhook-trace-token",
+          },
+        ],
+      },
+      webhookIdempotency: new IdempotencyManager(60_000),
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      const communityRes = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-trace-token",
+        },
+        body: JSON.stringify({
+          text: "hello runtime api",
+          conversationId: "conv-http-trace",
+          from: "office.goddess.ai",
+        }),
+      });
+      expect(communityRes.status).toBe(200);
+
+      const webhookRes = await fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer webhook-trace-token",
+        },
+        body: JSON.stringify({
+          text: "hello runtime webhook",
+          conversationId: "conv-webhook-trace",
+        }),
+      });
+      expect(webhookRes.status).toBe(200);
+
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({ type: "req", id: "system-doctor-http-trace", method: "system.doctor", params: {} }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-http-trace"));
+      const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-http-trace");
+
+      expect(response.ok).toBe(true);
+      const traces = response.payload?.queryRuntime?.traces ?? [];
+      const apiTrace = traces.find((item: any) => item.method === "api.message" && item.conversationId === "conv-http-trace");
+      const webhookTrace = traces.find((item: any) => item.method === "webhook.receive" && item.conversationId === "conv-webhook-trace");
+
+      expect(apiTrace).toMatchObject({
+        method: "api.message",
+        status: "completed",
+        conversationId: "conv-http-trace",
+      });
+      expect(webhookTrace).toMatchObject({
+        method: "webhook.receive",
+        status: "completed",
+        conversationId: "conv-webhook-trace",
+      });
+
+      expect(apiTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+        "auth_checked",
+        "request_validated",
+        "agent_created",
+        "agent_running",
+        "tool_call_emitted",
+        "tool_result_emitted",
+        "tool_event_emitted",
+        "task_result_recorded",
+        "response_built",
+        "completed",
+      ]));
+      expect(webhookTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+        "webhook_rule_loaded",
+        "auth_checked",
+        "idempotency_checked",
+        "prompt_built",
+        "request_validated",
+        "agent_created",
+        "agent_running",
+        "tool_call_emitted",
+        "tool_result_emitted",
+        "tool_event_emitted",
+        "task_result_recorded",
+        "response_built",
+        "completed",
+      ]));
+      expect(toolsConfigManager.getConfig().disabled.builtin).toEqual(["alpha_builtin"]);
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 async function pairWebSocketClient(ws: WebSocket, frames: any[], stateDir: string): Promise<void> {
   await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
   ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
@@ -2727,6 +5425,42 @@ function createTestTool(name: string): Tool {
       };
     },
   };
+}
+
+function createContractedTestTool(name: string): Tool {
+  return withToolContract(createTestTool(name), {
+    family: "other",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway"],
+    safeScopes: ["local-safe"],
+    activityDescription: `contracted tool ${name}`,
+    resultSchema: {
+      kind: "text",
+      description: "test tool output",
+    },
+    outputPersistencePolicy: "conversation",
+  });
+}
+
+function createWriteContractedTestTool(name: string): Tool {
+  return withToolContract(createTestTool(name), {
+    family: "workspace-write",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "high",
+    channels: ["gateway"],
+    safeScopes: ["privileged"],
+    activityDescription: `write tool ${name}`,
+    resultSchema: {
+      kind: "text",
+      description: "test tool output",
+    },
+    outputPersistencePolicy: "artifact",
+  });
 }
 
 function toBase64(value: string): string {

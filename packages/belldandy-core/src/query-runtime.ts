@@ -1,0 +1,120 @@
+import crypto from "node:crypto";
+
+export type QueryRuntimeMethod =
+  | "message.send"
+  | "api.message"
+  | "webhook.receive"
+  | "tool_settings.confirm"
+  | "conversation.digest.get"
+  | "conversation.digest.refresh"
+  | "conversation.memory.extraction.get"
+  | "conversation.memory.extract"
+  | "workspace.list"
+  | "workspace.read"
+  | "workspace.readSource"
+  | "workspace.write"
+  | "tools.list"
+  | "tools.update"
+  | "subtask.list"
+  | "subtask.get"
+  | "subtask.stop"
+  | "subtask.archive";
+
+export type QueryRuntimeStage =
+  | "started"
+  | "auth_checked"
+  | "request_validated"
+  | "runtime_checked"
+  | "webhook_rule_loaded"
+  | "idempotency_checked"
+  | "agent_created"
+  | "conversation_loaded"
+  | "user_message_persisted"
+  | "digest_loaded"
+  | "digest_refreshed"
+  | "extraction_loaded"
+  | "extraction_requested"
+  | "workspace_target_resolved"
+  | "workspace_listed"
+  | "workspace_read"
+  | "workspace_source_read"
+  | "workspace_written"
+  | "tool_inventory_loaded"
+  | "tool_visibility_built"
+  | "tool_settings_updated"
+  | "tool_call_emitted"
+  | "tool_result_emitted"
+  | "tool_event_emitted"
+  | "task_result_recorded"
+  | "prompt_built"
+  | "response_built"
+  | "task_listed"
+  | "task_loaded"
+  | "task_output_loaded"
+  | "task_stopped"
+  | "task_archived"
+  | "runtime_report_built"
+  | "agent_running"
+  | "assistant_persisted"
+  | "completed"
+  | "failed";
+
+export type QueryRuntimeStageEvent<TMethod extends QueryRuntimeMethod = QueryRuntimeMethod> = {
+  traceId: string;
+  method: TMethod;
+  stage: QueryRuntimeStage;
+  timestamp: number;
+  conversationId?: string;
+  detail?: Record<string, unknown>;
+};
+
+export type QueryRuntimeObserver<TMethod extends QueryRuntimeMethod = QueryRuntimeMethod> = (
+  event: QueryRuntimeStageEvent<TMethod>,
+) => void;
+
+export class QueryRuntime<TMethod extends QueryRuntimeMethod> {
+  private readonly method: TMethod;
+  private readonly traceId: string;
+  private readonly observer?: QueryRuntimeObserver<TMethod>;
+
+  constructor(options: {
+    method: TMethod;
+    traceId?: string;
+    observer?: QueryRuntimeObserver<TMethod>;
+  }) {
+    this.method = options.method;
+    this.traceId = options.traceId ?? crypto.randomUUID();
+    this.observer = options.observer;
+  }
+
+  mark(
+    stage: QueryRuntimeStage,
+    options: {
+      conversationId?: string;
+      detail?: Record<string, unknown>;
+    } = {},
+  ): void {
+    this.observer?.({
+      traceId: this.traceId,
+      method: this.method,
+      stage,
+      timestamp: Date.now(),
+      conversationId: options.conversationId,
+      detail: options.detail,
+    });
+  }
+
+  async run<T>(executor: (runtime: QueryRuntime<TMethod>) => Promise<T>): Promise<T> {
+    this.mark("started");
+    try {
+      return await executor(this);
+    } catch (error) {
+      this.mark("failed", {
+        detail: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
+  }
+}

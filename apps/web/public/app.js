@@ -19,6 +19,8 @@ import { createGoalsOverviewFeature } from "./app/features/goals-overview.js";
 import { createGoalsReadonlyPanelsFeature } from "./app/features/goals-readonly-panels.js";
 import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-panel.js";
 import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
+import { createSessionDigestFeature } from "./app/features/session-digest.js";
+import { createSubtasksOverviewFeature } from "./app/features/subtasks-overview.js";
 import { createLocaleController } from "./app/features/locale.js";
 import { initPromptController } from "./app/features/prompt.js";
 import { createSettingsController } from "./app/features/settings.js";
@@ -65,6 +67,7 @@ const switchFacetBtn = document.getElementById("switchFacet");
 const switchCronBtn = document.getElementById("switchCron");
 const switchMemoryBtn = document.getElementById("switchMemory");
 const switchGoalsBtn = document.getElementById("switchGoals");
+const switchSubtasksBtn = document.getElementById("switchSubtasks");
 const switchCanvasBtn = document.getElementById("switchCanvas");
 const openChannelSettingsBtn = document.getElementById("openChannelSettings");
 const agentRightPanelEl = document.getElementById("agentRightPanel");
@@ -92,6 +95,12 @@ const goalsSummaryEl = document.getElementById("goalsSummary");
 const goalsListEl = document.getElementById("goalsList");
 const goalsDetailEl = document.getElementById("goalsDetail");
 const goalsRefreshBtn = document.getElementById("goalsRefresh");
+const subtasksSection = document.getElementById("subtasksSection");
+const subtasksSummaryEl = document.getElementById("subtasksSummary");
+const subtasksListEl = document.getElementById("subtasksList");
+const subtasksDetailEl = document.getElementById("subtasksDetail");
+const subtasksShowArchivedEl = document.getElementById("subtasksShowArchived");
+const subtasksRefreshBtn = document.getElementById("subtasksRefresh");
 const goalCreateBtn = document.getElementById("goalCreate");
 const goalCreateModal = document.getElementById("goalCreateModal");
 const goalCreateCloseBtn = document.getElementById("goalCreateClose");
@@ -119,6 +128,13 @@ const goalCheckpointActionCloseBtn = document.getElementById("goalCheckpointActi
 const goalCheckpointActionCancelBtn = document.getElementById("goalCheckpointActionCancel");
 const goalCheckpointActionSubmitBtn = document.getElementById("goalCheckpointActionSubmit");
 const taskTokenHistoryEl = document.getElementById("taskTokenHistory");
+const sessionDigestSummaryEl = document.getElementById("sessionDigestSummary");
+const sessionDigestRefreshBtn = document.getElementById("sessionDigestRefresh");
+const sessionDigestModalEl = document.getElementById("sessionDigestModal");
+const sessionDigestModalTitleEl = document.getElementById("sessionDigestModalTitle");
+const sessionDigestModalMetaEl = document.getElementById("sessionDigestModalMeta");
+const sessionDigestModalContentEl = document.getElementById("sessionDigestModalContent");
+const sessionDigestModalCloseBtn = document.getElementById("sessionDigestModalClose");
 const tokenUsageEl = document.getElementById("tokenUsage");
 const restartOverlayEl = document.getElementById("restartOverlay");
 const restartCountdownEl = document.getElementById("restartCountdown");
@@ -163,7 +179,7 @@ let configCacheData = null;
 let configCacheLoadedAt = 0;
 let configCachePromise = null;
 const taskTokenHistoryByConversation = new Map();
-const TASK_TOKEN_HISTORY_LIMIT = 2;
+const TASK_TOKEN_HISTORY_LIMIT = 1;
 let transientUrlToken = null;
 const clientId = resolveClientId();
 let queuedText = null;
@@ -211,6 +227,8 @@ let goalsOverviewFeature = null;
 let goalsReadonlyPanelsFeature = null;
 let goalsTrackingPanelFeature = null;
 let memoryViewerFeature = null;
+let sessionDigestFeature = null;
+let subtasksOverviewFeature = null;
 
 function debugLog(...args) {
   if (!webchatDebugEnabled) return;
@@ -255,6 +273,8 @@ localeController.subscribe(() => {
   toolSettingsController.refreshLocale?.();
   refreshGoalsLocale();
   refreshMemoryLocale();
+  sessionDigestFeature?.refreshLocale?.();
+  refreshSubtasksLocale();
   renderAgentRightPanel();
   syncSaveWorkspaceRootsButton();
   renderTaskTokenHistory();
@@ -302,6 +322,23 @@ const goalsState = {
   governanceCache: {},
   capabilityCache: {},
   capabilityPending: {},
+  liveUpdateDelayMs: 120,
+  liveUpdateTimers: {},
+  liveUpdatePending: {},
+};
+const subtasksState = {
+  items: [],
+  selectedId: null,
+  selectedItem: null,
+  selectedOutputContent: "",
+  conversationId: null,
+  includeArchived: false,
+  loadSeq: 0,
+  detailSeq: 0,
+  loading: false,
+  detailLoading: false,
+  pendingActionTaskId: null,
+  pendingActionKind: null,
   liveUpdateDelayMs: 120,
   liveUpdateTimers: {},
   liveUpdatePending: {},
@@ -435,6 +472,16 @@ if (memorySearchBtn) {
 }
 if (goalsRefreshBtn) {
   goalsRefreshBtn.addEventListener("click", () => loadGoals(true));
+}
+if (subtasksRefreshBtn) {
+  subtasksRefreshBtn.addEventListener("click", () => loadSubtasks(true));
+}
+if (subtasksShowArchivedEl) {
+  subtasksShowArchivedEl.checked = subtasksState.includeArchived === true;
+  subtasksShowArchivedEl.addEventListener("change", () => {
+    subtasksState.includeArchived = subtasksShowArchivedEl.checked === true;
+    void loadSubtasks(true);
+  });
 }
 if (goalCreateBtn) {
   goalCreateBtn.addEventListener("click", () => {
@@ -645,6 +692,9 @@ function handleHelloOk(frame) {
   renderTaskTokenHistory();
   if (activeConversationId) {
     void loadConversationMeta(activeConversationId);
+    void sessionDigestFeature?.loadSessionDigest(activeConversationId);
+  } else {
+    sessionDigestFeature?.clear?.();
   }
   flushQueuedText();
 
@@ -668,6 +718,9 @@ function handleHelloOk(frame) {
   }
   if (goalsSection && !goalsSection.classList.contains("hidden")) {
     loadGoals(true);
+  }
+  if (subtasksSection && !subtasksSection.classList.contains("hidden")) {
+    loadSubtasks(true);
   }
 
   if (!sessionStorage.getItem("booted")) {
@@ -806,6 +859,27 @@ goalsOverviewFeature = createGoalsOverviewFeature({
   t: localeController.t,
 });
 
+subtasksOverviewFeature = createSubtasksOverviewFeature({
+  refs: {
+    subtasksSection,
+    subtasksSummaryEl,
+    subtasksListEl,
+    subtasksDetailEl,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  isViewActive: () => Boolean(subtasksSection && !subtasksSection.classList.contains("hidden")),
+  sendReq,
+  makeId,
+  getSubtasksState: () => subtasksState,
+  getActiveConversationId: () => activeConversationId,
+  escapeHtml,
+  formatDateTime,
+  summarizeSourcePath,
+  onOpenSourcePath: (sourcePath) => openSourcePath(sourcePath),
+  showNotice,
+  t: localeController.t,
+});
+
 goalsDetailFeature = createGoalsDetailFeature({
   refs: {
     goalsDetailEl,
@@ -877,6 +951,8 @@ goalsCapabilityPanelFeature = createGoalsCapabilityPanelFeature({
   },
   escapeHtml,
   formatDateTime,
+  onOpenSourcePath: (sourcePath) => openSourcePath(sourcePath),
+  onOpenSubtask: (taskId) => openSubtaskById(taskId),
 });
 
 memoryViewerFeature = createMemoryViewerFeature({
@@ -924,6 +1000,26 @@ memoryViewerFeature = createMemoryViewerFeature({
   bindStatsAuditJumpLinks,
   bindMemoryPathLinks,
   bindTaskAuditJumpLinks,
+  t: localeController.t,
+});
+
+sessionDigestFeature = createSessionDigestFeature({
+  refs: {
+    sessionDigestSummaryEl,
+    sessionDigestRefreshBtn,
+    sessionDigestModalEl,
+    sessionDigestModalTitleEl,
+    sessionDigestModalMetaEl,
+    sessionDigestModalContentEl,
+    sessionDigestModalCloseBtn,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  getActiveConversationId: () => activeConversationId,
+  escapeHtml,
+  formatDateTime,
+  showNotice,
   t: localeController.t,
 });
 
@@ -1193,6 +1289,7 @@ if (agentSelectEl) {
     activeConversationId = null;
     renderCanvasGoalContext();
     chatEventsFeature?.resetStreamingState();
+    sessionDigestFeature?.clear?.();
     messagesEl.innerHTML = "";
     const displayName = agentSelectEl.options[agentSelectEl.selectedIndex]?.text || agentSelectEl.value;
     appendMessage("system", `已切换到 ${displayName}`);
@@ -1541,6 +1638,7 @@ async function sendMessage() {
     }
     renderCanvasGoalContext();
     void loadConversationMeta(activeConversationId, { renderMessages: false });
+    void sessionDigestFeature?.loadSessionDigest(activeConversationId);
   }
 }
 
@@ -1713,9 +1811,11 @@ chatEventsFeature = createChatEventsFeature({
   updateTokenUsage,
   showTaskTokenResult,
   queueGoalUpdateEvent,
+  onSubtaskUpdated: (payload) => subtasksOverviewFeature?.handleSubtaskUpdate(payload),
   onToolSettingsConfirmRequired: (payload) => toolSettingsController.handleConfirmRequired(payload),
   onToolSettingsConfirmResolved: (payload) => toolSettingsController.handleConfirmResolved(payload),
   onToolsConfigUpdated: (payload) => toolSettingsController.handleToolsConfigUpdated(payload),
+  onConversationDigestUpdated: (payload) => sessionDigestFeature?.handleDigestUpdated(payload),
   stripThinkBlocks,
   configureMarkedOnce,
   renderAssistantMessage: (bubble, rawText) => chatUiFeature?.renderAssistantMessage?.(bubble, rawText),
@@ -1842,6 +1942,7 @@ async function loadConversationMeta(conversationId, options = {}) {
   const renderMessages = options.renderMessages !== false;
   if (!conversationId || !ws || !isReady) {
     renderTaskTokenHistory();
+    sessionDigestFeature?.clear?.();
     return;
   }
   const res = await sendReq({
@@ -1869,13 +1970,14 @@ function renderTaskTokenHistory() {
   const items = activeConversationId
     ? (taskTokenHistoryByConversation.get(activeConversationId) || [])
     : [];
+  const latestItems = items.slice(0, 1);
 
-  if (!items.length) {
+  if (!latestItems.length) {
     taskTokenHistoryEl.innerHTML = `<div class="task-token-history-empty">${escapeHtml(localeController.t("panel.taskTokenEmpty", {}, "No task-level token records yet"))}</div>`;
     return;
   }
 
-  taskTokenHistoryEl.innerHTML = items.map((item) => `
+  taskTokenHistoryEl.innerHTML = latestItems.map((item) => `
     <div class="task-token-chip${item.auto ? " auto" : ""}">
       <div class="task-token-chip-top">
         <span class="task-token-chip-name">${escapeHtml(item.name)}</span>
@@ -2026,6 +2128,12 @@ if (switchGoalsBtn) {
     await loadGoals(false);
   });
 }
+if (switchSubtasksBtn) {
+  switchSubtasksBtn.addEventListener("click", async () => {
+    switchMode("subtasks");
+    await loadSubtasks(false);
+  });
+}
 if (openChannelSettingsBtn) {
   openChannelSettingsBtn.addEventListener("click", () => {
     void settingsController.openChannels();
@@ -2090,6 +2198,7 @@ function updateSidebarModeButtons(treeModeOverride) {
   setSidebarActionButtonState(switchCronBtn, treeMode === "cron");
   setSidebarActionButtonState(switchMemoryBtn, memoryViewerSection && !memoryViewerSection.classList.contains("hidden"));
   setSidebarActionButtonState(switchGoalsBtn, goalsSection && !goalsSection.classList.contains("hidden"));
+  setSidebarActionButtonState(switchSubtasksBtn, subtasksSection && !subtasksSection.classList.contains("hidden"));
   const canvasSection = document.getElementById("canvasSection");
   setSidebarActionButtonState(switchCanvasBtn, canvasSection && !canvasSection.classList.contains("hidden"));
 }
@@ -2130,6 +2239,7 @@ function switchMode(mode) {
     if (canvasSection) canvasSection.classList.add("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
     if (goalsSection) goalsSection.classList.add("hidden");
+    if (subtasksSection) subtasksSection.classList.add("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.remove("hidden");
   } else if (mode === "canvas") {
@@ -2138,6 +2248,7 @@ function switchMode(mode) {
     if (canvasSection) canvasSection.classList.remove("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
     if (goalsSection) goalsSection.classList.add("hidden");
+    if (subtasksSection) subtasksSection.classList.add("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   } else if (mode === "memory") {
@@ -2146,6 +2257,7 @@ function switchMode(mode) {
     if (canvasSection) canvasSection.classList.add("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.remove("hidden");
     if (goalsSection) goalsSection.classList.add("hidden");
+    if (subtasksSection) subtasksSection.classList.add("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   } else if (mode === "goals") {
@@ -2154,6 +2266,16 @@ function switchMode(mode) {
     if (canvasSection) canvasSection.classList.add("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
     if (goalsSection) goalsSection.classList.remove("hidden");
+    if (subtasksSection) subtasksSection.classList.add("hidden");
+    if (composerSection) composerSection.classList.add("hidden");
+    if (editorActions) editorActions.classList.add("hidden");
+  } else if (mode === "subtasks") {
+    if (chatSection) chatSection.classList.add("hidden");
+    if (editorSection) editorSection.classList.add("hidden");
+    if (canvasSection) canvasSection.classList.add("hidden");
+    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+    if (goalsSection) goalsSection.classList.add("hidden");
+    if (subtasksSection) subtasksSection.classList.remove("hidden");
     if (composerSection) composerSection.classList.add("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   } else {
@@ -2163,6 +2285,7 @@ function switchMode(mode) {
     if (canvasSection) canvasSection.classList.add("hidden");
     if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
     if (goalsSection) goalsSection.classList.add("hidden");
+    if (subtasksSection) subtasksSection.classList.add("hidden");
     if (composerSection) composerSection.classList.remove("hidden");
     if (editorActions) editorActions.classList.add("hidden");
   }
@@ -2657,6 +2780,11 @@ function refreshGoalsLocale() {
   }
 }
 
+function refreshSubtasksLocale() {
+  if (!subtasksSection) return;
+  subtasksOverviewFeature?.refreshLocale();
+}
+
 function bindGoalDetailActions(goal) {
   if (!goalsDetailEl || !goal) return;
   goalsDetailEl.querySelectorAll("[data-goal-resume-detail]").forEach((node) => {
@@ -3064,14 +3192,29 @@ function parseGoalCapabilityPlans(rawPlans) {
     .map((item, index) => {
       const data = item && typeof item === "object" ? item : {};
       const checkpoint = data.checkpoint && typeof data.checkpoint === "object" ? data.checkpoint : {};
-      const actualUsage = data.actualUsage && typeof data.actualUsage === "object" ? data.actualUsage : {};
-      const analysis = data.analysis && typeof data.analysis === "object" ? data.analysis : {};
-      const methods = Array.isArray(data.methods) ? data.methods : [];
-      const skills = Array.isArray(data.skills) ? data.skills : [];
-      const mcpServers = Array.isArray(data.mcpServers) ? data.mcpServers : [];
-      const subAgents = Array.isArray(data.subAgents) ? data.subAgents : [];
-      const deviations = Array.isArray(analysis.deviations) ? analysis.deviations : [];
-      return {
+        const actualUsage = data.actualUsage && typeof data.actualUsage === "object" ? data.actualUsage : {};
+        const analysis = data.analysis && typeof data.analysis === "object" ? data.analysis : {};
+        const orchestration = data.orchestration && typeof data.orchestration === "object" ? data.orchestration : {};
+        const coordinationPlan = orchestration.coordinationPlan && typeof orchestration.coordinationPlan === "object"
+          ? orchestration.coordinationPlan
+          : {};
+        const rolePolicy = coordinationPlan.rolePolicy && typeof coordinationPlan.rolePolicy === "object"
+          ? coordinationPlan.rolePolicy
+          : {};
+        const verifierHandoff = orchestration.verifierHandoff && typeof orchestration.verifierHandoff === "object"
+          ? orchestration.verifierHandoff
+          : {};
+        const verifierResult = orchestration.verifierResult && typeof orchestration.verifierResult === "object"
+          ? orchestration.verifierResult
+          : {};
+        const methods = Array.isArray(data.methods) ? data.methods : [];
+        const skills = Array.isArray(data.skills) ? data.skills : [];
+        const mcpServers = Array.isArray(data.mcpServers) ? data.mcpServers : [];
+        const subAgents = Array.isArray(data.subAgents) ? data.subAgents : [];
+        const deviations = Array.isArray(analysis.deviations) ? analysis.deviations : [];
+        const delegationResults = Array.isArray(orchestration.delegationResults) ? orchestration.delegationResults : [];
+        const verifierFindings = Array.isArray(verifierResult.findings) ? verifierResult.findings : [];
+        return {
         id: data.id ? String(data.id) : `plan-${index + 1}`,
         goalId: data.goalId ? String(data.goalId) : "",
         nodeId: data.nodeId ? String(data.nodeId) : "",
@@ -3110,13 +3253,16 @@ function parseGoalCapabilityPlans(rawPlans) {
             reason: entry.reason ? String(entry.reason) : "",
           } : null)
           .filter((entry) => entry && entry.serverId),
-        subAgents: subAgents
-          .map((entry) => entry && typeof entry === "object" ? {
-            agentId: entry.agentId ? String(entry.agentId) : "",
-            objective: entry.objective ? String(entry.objective) : "",
-            reason: entry.reason ? String(entry.reason) : "",
-          } : null)
-          .filter((entry) => entry && entry.agentId && entry.objective),
+          subAgents: subAgents
+            .map((entry) => entry && typeof entry === "object" ? {
+              agentId: entry.agentId ? String(entry.agentId) : "",
+              role: entry.role ? String(entry.role) : "",
+              objective: entry.objective ? String(entry.objective) : "",
+              reason: entry.reason ? String(entry.reason) : "",
+              deliverable: entry.deliverable ? String(entry.deliverable) : "",
+              handoffToVerifier: entry.handoffToVerifier === true,
+            } : null)
+            .filter((entry) => entry && entry.agentId && entry.objective),
         gaps: parseStringList(data.gaps),
         checkpoint: {
           required: checkpoint.required === true,
@@ -3154,11 +3300,68 @@ function parseGoalCapabilityPlans(rawPlans) {
           recommendations: parseStringList(analysis.recommendations),
           updatedAt: analysis.updatedAt ? String(analysis.updatedAt) : "",
         },
-        generatedAt: data.generatedAt ? String(data.generatedAt) : "",
-        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
-        orchestratedAt: data.orchestratedAt ? String(data.orchestratedAt) : "",
-      };
-    })
+          generatedAt: data.generatedAt ? String(data.generatedAt) : "",
+          updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+          orchestratedAt: data.orchestratedAt ? String(data.orchestratedAt) : "",
+          orchestration: {
+            claimed: orchestration.claimed === true,
+            delegated: orchestration.delegated === true,
+            delegationCount: Number.isFinite(orchestration.delegationCount) ? Number(orchestration.delegationCount) : 0,
+            coordinationPlan: coordinationPlan.summary ? {
+              summary: String(coordinationPlan.summary),
+              plannedDelegationCount: Number.isFinite(coordinationPlan.plannedDelegationCount)
+                ? Number(coordinationPlan.plannedDelegationCount)
+                : 0,
+              rolePolicy: {
+                selectedRoles: parseStringList(rolePolicy.selectedRoles),
+                selectionReasons: parseStringList(rolePolicy.selectionReasons),
+                verifierRole: rolePolicy.verifierRole ? String(rolePolicy.verifierRole) : "",
+                fanInStrategy: rolePolicy.fanInStrategy ? String(rolePolicy.fanInStrategy) : "",
+              },
+            } : null,
+            delegationResults: delegationResults
+              .map((entry) => entry && typeof entry === "object" ? {
+                agentId: entry.agentId ? String(entry.agentId) : "",
+                role: entry.role ? String(entry.role) : "",
+                status: entry.status ? String(entry.status) : "success",
+                summary: entry.summary ? String(entry.summary) : "",
+                error: entry.error ? String(entry.error) : "",
+                sessionId: entry.sessionId ? String(entry.sessionId) : "",
+                taskId: entry.taskId ? String(entry.taskId) : "",
+                outputPath: entry.outputPath ? String(entry.outputPath) : "",
+              } : null)
+              .filter((entry) => entry && entry.agentId && entry.summary),
+            verifierHandoff: verifierHandoff.summary ? {
+              status: verifierHandoff.status ? String(verifierHandoff.status) : "not_required",
+              verifierRole: verifierHandoff.verifierRole ? String(verifierHandoff.verifierRole) : "",
+              verifierAgentId: verifierHandoff.verifierAgentId ? String(verifierHandoff.verifierAgentId) : "",
+              verifierTaskId: verifierHandoff.verifierTaskId ? String(verifierHandoff.verifierTaskId) : "",
+              verifierSessionId: verifierHandoff.verifierSessionId ? String(verifierHandoff.verifierSessionId) : "",
+              summary: String(verifierHandoff.summary),
+              sourceAgentIds: parseStringList(verifierHandoff.sourceAgentIds),
+              sourceTaskIds: parseStringList(verifierHandoff.sourceTaskIds),
+              outputPath: verifierHandoff.outputPath ? String(verifierHandoff.outputPath) : "",
+              notes: parseStringList(verifierHandoff.notes),
+              error: verifierHandoff.error ? String(verifierHandoff.error) : "",
+            } : null,
+            verifierResult: verifierResult.summary ? {
+              status: verifierResult.status ? String(verifierResult.status) : "pending",
+              summary: String(verifierResult.summary),
+              recommendation: verifierResult.recommendation ? String(verifierResult.recommendation) : "unknown",
+              findings: verifierFindings
+                .map((entry) => entry && typeof entry === "object" ? {
+                  severity: entry.severity ? String(entry.severity) : "low",
+                  summary: entry.summary ? String(entry.summary) : "",
+                } : null)
+                .filter((entry) => entry && entry.summary),
+              evidenceTaskIds: parseStringList(verifierResult.evidenceTaskIds),
+              outputPath: verifierResult.outputPath ? String(verifierResult.outputPath) : "",
+              generatedAt: verifierResult.generatedAt ? String(verifierResult.generatedAt) : "",
+            } : null,
+            notes: parseStringList(orchestration.notes),
+          },
+        };
+      })
     .sort((a, b) => {
       const left = new Date(b.updatedAt || b.generatedAt || 0).getTime();
       const right = new Date(a.updatedAt || a.generatedAt || 0).getTime();
@@ -3701,6 +3904,41 @@ function renderGoalDetail(goal) {
 
 async function loadGoals(forceReload = false, preferredGoalId) {
   return goalsOverviewFeature?.loadGoals(forceReload, preferredGoalId);
+}
+
+async function loadSubtasks(forceSelectFirst = false) {
+  return subtasksOverviewFeature?.loadSubtasks(forceSelectFirst);
+}
+
+async function loadSubtaskDetail(taskId, options = {}) {
+  return subtasksOverviewFeature?.loadSubtaskDetail(taskId, options);
+}
+
+async function openSubtaskById(taskId) {
+  const normalizedTaskId = typeof taskId === "string" ? taskId.trim() : "";
+  if (!normalizedTaskId) return;
+
+  switchMode("subtasks");
+  subtasksState.selectedId = normalizedTaskId;
+  await loadSubtasks(false);
+
+  let existsInList = Array.isArray(subtasksState.items)
+    && subtasksState.items.some((item) => item?.id === normalizedTaskId);
+
+  if (!existsInList && subtasksState.includeArchived !== true) {
+    subtasksState.includeArchived = true;
+    if (subtasksShowArchivedEl) {
+      subtasksShowArchivedEl.checked = true;
+    }
+    await loadSubtasks(false);
+    existsInList = Array.isArray(subtasksState.items)
+      && subtasksState.items.some((item) => item?.id === normalizedTaskId);
+  }
+
+  if (!existsInList) {
+    subtasksState.selectedId = normalizedTaskId;
+  }
+  await loadSubtaskDetail(normalizedTaskId, { quiet: !existsInList });
 }
 
 async function submitGoalCreateForm() {
@@ -4726,6 +4964,7 @@ function openConversationSession(conversationId, hintText) {
     messagesEl.appendChild(hint);
   }
   void loadConversationMeta(conversationId);
+  void sessionDigestFeature?.loadSessionDigest(conversationId);
 }
 
 // Expose loadConversation for canvas.js (session node double-click → chat)
@@ -4821,6 +5060,10 @@ const toolSettingsController = createToolSettingsController({
   sendReq,
   makeId,
   clientId,
+  getSelectedAgentId: () => agentSelectEl?.value || localStorage.getItem(AGENT_ID_KEY) || "default",
+  getActiveConversationId: () => activeConversationId || "",
+  getSelectedSubtaskId: () => subtasksState.selectedId || "",
+  isSubtasksViewActive: () => Boolean(subtasksSection && !subtasksSection.classList.contains("hidden")),
   escapeHtml,
   showNotice,
   t: localeController.t,

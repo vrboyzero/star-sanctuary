@@ -323,14 +323,74 @@ export type GoalCapabilityPlanMcpServer = {
 
 export type GoalCapabilityPlanSubAgent = {
   agentId: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
   objective: string;
   reason?: string;
+  deliverable?: string;
+  handoffToVerifier?: boolean;
+};
+
+export type GoalCapabilityPlanRolePolicy = {
+  selectedRoles: Array<"default" | "coder" | "researcher" | "verifier">;
+  selectionReasons: string[];
+  verifierRole?: "verifier";
+  fanInStrategy: "main_agent_summary" | "verifier_handoff";
+};
+
+export type GoalCapabilityPlanCoordinationPlan = {
+  summary: string;
+  plannedDelegationCount: number;
+  rolePolicy: GoalCapabilityPlanRolePolicy;
+};
+
+export type GoalCapabilityPlanDelegationResult = {
+  agentId: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
+  status: "success" | "failed" | "skipped";
+  summary: string;
+  error?: string;
+  sessionId?: string;
+  taskId?: string;
+  outputPath?: string;
+};
+
+export type GoalCapabilityPlanVerifierHandoff = {
+  status: "not_required" | "pending" | "ready" | "running" | "completed" | "failed" | "skipped";
+  verifierRole?: "verifier";
+  verifierAgentId?: string;
+  verifierTaskId?: string;
+  verifierSessionId?: string;
+  summary: string;
+  sourceAgentIds: string[];
+  sourceTaskIds?: string[];
+  outputPath?: string;
+  notes?: string[];
+  error?: string;
+};
+
+export type GoalCapabilityPlanVerifierFinding = {
+  severity: "low" | "medium" | "high";
+  summary: string;
+};
+
+export type GoalCapabilityPlanVerifierResult = {
+  status: "pending" | "completed" | "failed";
+  summary: string;
+  findings: GoalCapabilityPlanVerifierFinding[];
+  recommendation: "approve" | "revise" | "blocked" | "unknown";
+  evidenceTaskIds?: string[];
+  outputPath?: string;
+  generatedAt: string;
 };
 
 export type GoalCapabilityPlanOrchestration = {
   claimed?: boolean;
   delegated?: boolean;
   delegationCount?: number;
+  coordinationPlan?: GoalCapabilityPlanCoordinationPlan;
+  delegationResults?: GoalCapabilityPlanDelegationResult[];
+  verifierHandoff?: GoalCapabilityPlanVerifierHandoff;
+  verifierResult?: GoalCapabilityPlanVerifierResult;
   notes?: string[];
 };
 

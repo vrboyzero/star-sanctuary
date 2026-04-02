@@ -21,3 +21,27 @@ export interface BelldandyPlugin {
      */
     activate(context: PluginContext): void | Promise<void>;
 }
+
+export interface PluginRuntimeDescriptor {
+    id: string;
+    name: string;
+    version?: string;
+    description?: string;
+    toolNames: string[];
+    skillDirs: string[];
+}
+
+export interface PluginLoadErrorRecord {
+    at: Date;
+    phase: "load_plugin" | "scan_directory";
+    target: string;
+    message: string;
+}
+
+export interface PluginRegistryDiagnostics {
+    pluginCount: number;
+    toolCount: number;
+    hookCount: number;
+    skillDirCount: number;
+    loadErrors: PluginLoadErrorRecord[];
+}

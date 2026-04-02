@@ -3,6 +3,7 @@ import type { Tool, ToolCallResult } from "../../types.js";
 import { BraveSearchProvider } from "./brave.js";
 import { SerpApiProvider } from "./serpapi.js";
 import type { SearchProvider } from "./types.js";
+import { withToolContract } from "../../tool-contract.js";
 
 // Factory to get configured provider
 function getProvider(): SearchProvider | null {
@@ -16,7 +17,7 @@ function getProvider(): SearchProvider | null {
     return null;
 }
 
-export const webSearchTool: Tool = {
+export const webSearchTool: Tool = withToolContract({
     definition: {
         name: "web_search",
         description: "联网搜索工具。当需要查询实时信息、新闻、文档或任何当前知识库之外的问题时使用。",
@@ -98,4 +99,18 @@ export const webSearchTool: Tool = {
             return makeError(msg);
         }
     },
-};
+}, {
+    family: "network-read",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["remote-safe"],
+    activityDescription: "Search the web using a configured search provider",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted web search result text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

@@ -1,4 +1,5 @@
 import type { Tool, ToolContext, ToolCallResult } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
 /**
  * get_room_members - 获取当前房间的成员列表
@@ -19,7 +20,7 @@ import type { Tool, ToolContext, ToolCallResult } from "../types.js";
  * - 成员列表会缓存在会话中，默认有效期5分钟
  * - 使用 forceRefresh 参数可强制刷新缓存
  */
-export const getRoomMembersTool: Tool = {
+export const getRoomMembersTool: Tool = withToolContract({
   definition: {
     name: "get_room_members",
     description: "获取当前房间的成员列表，包括所有用户（带UUID）和Agent（带身份标签）。用于身份权力验证和多人对话场景。仅在office.goddess.ai社区等多人聊天环境中可用。支持缓存机制，默认缓存5分钟。",
@@ -126,4 +127,18 @@ export const getRoomMembersTool: Tool = {
       durationMs: 0,
     };
   },
-};
+}, {
+  family: "other",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["web-safe"],
+  activityDescription: "Read member identities for the current multi-user room",
+  resultSchema: {
+    kind: "text",
+    description: "Room member JSON text.",
+  },
+  outputPersistencePolicy: "conversation",
+});

@@ -69,7 +69,7 @@ describe("capability-plan-utils", () => {
       methods: [{ file: "Deploy-Checklist.md", title: "Deploy Checklist", score: 30 }],
       skills: [{ name: "find-skills", score: 10 }],
       mcpServers: [{ serverId: "docs", status: "connected", toolCount: 3 }],
-      subAgents: [{ agentId: "coder", objective: "Implement Root Node" }],
+      subAgents: [{ agentId: "coder", role: "coder", objective: "Implement Root Node", deliverable: "code patch", handoffToVerifier: true }],
       gaps: [],
       checkpoint: {
         required: true,
@@ -105,6 +105,36 @@ describe("capability-plan-utils", () => {
         claimed: true,
         delegated: false,
         delegationCount: 0,
+        coordinationPlan: {
+          summary: "按 1 路分工推进，并以 verifier_handoff 收口。",
+          plannedDelegationCount: 1,
+          rolePolicy: {
+            selectedRoles: ["coder"],
+            selectionReasons: ["test"],
+            verifierRole: "verifier",
+            fanInStrategy: "verifier_handoff",
+          },
+        },
+        delegationResults: [{
+          agentId: "coder",
+          role: "coder",
+          status: "skipped",
+          summary: "checkpoint requested",
+        }],
+        verifierHandoff: {
+          status: "pending",
+          verifierRole: "verifier",
+          summary: "等待 checkpoint 通过后再进入 verifier 收口。",
+          sourceAgentIds: ["coder"],
+        },
+        verifierResult: {
+          status: "pending",
+          summary: "等待 checkpoint 通过后再进入 verifier 收口。",
+          findings: [],
+          recommendation: "unknown",
+          evidenceTaskIds: ["task_coder_1"],
+          generatedAt: "2026-03-20T12:00:01.000Z",
+        },
         notes: ["checkpoint requested"],
       },
       orchestratedAt: "2026-03-20T12:00:01.000Z",
@@ -130,6 +160,18 @@ describe("capability-plan-utils", () => {
         claimed: true,
         delegated: false,
         delegationCount: 0,
+        coordinationPlan: {
+          rolePolicy: {
+            fanInStrategy: "verifier_handoff",
+          },
+        },
+        verifierHandoff: {
+          status: "pending",
+        },
+        verifierResult: {
+          status: "pending",
+          recommendation: "unknown",
+        },
       },
       orchestratedAt: "2026-03-20T12:00:01.000Z",
     });

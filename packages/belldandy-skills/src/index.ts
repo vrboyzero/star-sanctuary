@@ -8,6 +8,12 @@ export type {
   ToolContext,
   ToolPolicy,
   ToolAuditLog,
+  SubAgentResult,
+  SessionInfo,
+  SpawnSubAgentOptions,
+  AgentCapabilities,
+  ToolRuntimeLaunchSpec,
+  ToolExecutionRuntimeContext,
 } from "./types.js";
 
 // Skill 系统
@@ -25,7 +31,46 @@ export { SkillRegistry, registerGlobalSkillRegistry, getGlobalSkillRegistry } fr
 export { publishSkillCandidate, getUserSkillsDir } from "./skill-publisher.js";
 
 export { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
-export type { ToolExecutorOptions } from "./executor.js";
+export type {
+  ToolAvailabilityReasonCode,
+  ToolAvailabilityState,
+  ToolExecutorOptions,
+} from "./executor.js";
+export {
+  getToolContract,
+  hasToolContract,
+  listToolContracts,
+  withToolContract,
+} from "./tool-contract.js";
+export { ToolPoolAssembler } from "./tool-pool-assembler.js";
+export type {
+  ToolContract,
+  ToolContractChannel,
+  ToolContractFamily,
+  ToolContractRiskLevel,
+  ToolContractSafeScope,
+  ToolOutputPersistencePolicy,
+  ToolResultSchema,
+  ToolWithContract,
+} from "./tool-contract.js";
+export type {
+  ToolPoolAssemblyContext,
+  ToolPoolEntry,
+} from "./tool-pool-assembler.js";
+export {
+  evaluateToolContractAccess,
+  matchesSecurityMatrixSubject,
+  resolveSafeScopesForChannel,
+} from "./security-matrix.js";
+export type {
+  SecurityMatrixChannel,
+  SecurityMatrixFilter,
+  SecurityMatrixSafeScope,
+  SecurityMatrixSubject,
+  ToolContractAccessDecision,
+  ToolContractAccessPolicy,
+  ToolContractDenialReason,
+} from "./security-matrix.js";
 
 // 内置工具
 export { fetchTool } from "./builtin/fetch.js";

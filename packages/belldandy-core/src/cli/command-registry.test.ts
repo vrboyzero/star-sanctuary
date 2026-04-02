@@ -1,0 +1,99 @@
+import { defineCommand } from "citty";
+import { describe, expect, it } from "vitest";
+import { CommandRegistry } from "./command-registry.js";
+import type { CommandDescriptor } from "./command-types.js";
+
+function createDescriptor(
+  overrides: Partial<CommandDescriptor> & Pick<CommandDescriptor, "name">,
+): CommandDescriptor {
+  return {
+    name: overrides.name,
+    type: overrides.type ?? "command",
+    source: overrides.source ?? "builtin",
+    visibility: overrides.visibility ?? "public",
+    channels: overrides.channels ?? ["cli"],
+    safeScopes: overrides.safeScopes ?? ["local-safe"],
+    featureFlag: overrides.featureFlag,
+    isSensitive: overrides.isSensitive,
+    description: overrides.description,
+    aliases: overrides.aliases,
+    handler: overrides.handler ?? (() =>
+      defineCommand({
+        meta: {
+          name: overrides.name,
+          description: `${overrides.name} command`,
+        },
+      })),
+  };
+}
+
+describe("CommandRegistry", () => {
+  it("filters commands by channel, visibility and feature flag", () => {
+    const registry = new CommandRegistry([
+      createDescriptor({ name: "status" }),
+      createDescriptor({ name: "web-sync", channels: ["web"] }),
+      createDescriptor({ name: "internal-audit", visibility: "internal" }),
+      createDescriptor({ name: "preview", featureFlag: "preview-mode" }),
+    ]);
+
+    const visibleCLICommands = registry.list({
+      channel: "cli",
+      visibility: "public",
+      enabledFeatureFlags: ["preview-mode"],
+    });
+
+    expect(visibleCLICommands.map((command) => command.name)).toEqual([
+      "status",
+      "preview",
+    ]);
+  });
+
+  it("excludes sensitive commands when requested", () => {
+    const registry = new CommandRegistry([
+      createDescriptor({ name: "status" }),
+      createDescriptor({ name: "token-dump", isSensitive: true }),
+    ]);
+
+    const commands = registry.list({
+      channel: "cli",
+      visibility: "public",
+      includeSensitive: false,
+    });
+
+    expect(commands.map((command) => command.name)).toEqual(["status"]);
+  });
+
+  it("creates citty subCommands from matching descriptors", async () => {
+    const registry = new CommandRegistry([
+      createDescriptor({
+        name: "doctor",
+        handler: async () => ({
+          default: defineCommand({
+            meta: {
+              name: "doctor",
+              description: "Run diagnostics",
+            },
+          }),
+        }),
+      }),
+      createDescriptor({
+        name: "web-sync",
+        channels: ["web"],
+      }),
+    ]);
+
+    const subCommands = registry.toSubCommands({
+      channel: "cli",
+      visibility: "public",
+    });
+    const doctorLoader = subCommands.doctor as () => Promise<ReturnType<typeof defineCommand>>;
+    const loadedDoctorCommand = await doctorLoader();
+    const meta = typeof loadedDoctorCommand.meta === "function"
+      ? await loadedDoctorCommand.meta()
+      : await loadedDoctorCommand.meta;
+
+    expect(Object.keys(subCommands)).toEqual(["doctor"]);
+    expect(meta?.name).toBe("doctor");
+    expect(meta?.description).toBe("Run diagnostics");
+  });
+});

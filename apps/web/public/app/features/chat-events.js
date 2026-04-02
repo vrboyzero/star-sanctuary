@@ -5,9 +5,11 @@ export function createChatEventsFeature({
   updateTokenUsage,
   showTaskTokenResult,
   queueGoalUpdateEvent,
+  onSubtaskUpdated,
   onToolSettingsConfirmRequired,
   onToolSettingsConfirmResolved,
   onToolsConfigUpdated,
+  onConversationDigestUpdated,
   stripThinkBlocks,
   configureMarkedOnce,
   renderAssistantMessage,
@@ -106,6 +108,11 @@ export function createChatEventsFeature({
       return true;
     }
 
+    if (event === "subtask.update") {
+      onSubtaskUpdated?.(payload);
+      return true;
+    }
+
     if (event === "tool_settings.confirm.required") {
       onToolSettingsConfirmRequired(payload);
       return true;
@@ -118,6 +125,11 @@ export function createChatEventsFeature({
 
     if (event === "tools.config.updated") {
       onToolsConfigUpdated(payload);
+      return true;
+    }
+
+    if (event === "conversation.digest.updated") {
+      onConversationDigestUpdated?.(payload);
       return true;
     }
 

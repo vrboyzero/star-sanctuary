@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Tool, ToolCallRequest, ToolContext, ToolCallResult } from "./types.js";
 import { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
+import { withToolContract } from "./tool-contract.js";
 
 // Mock 工具：echo
 const echoTool: Tool = {
@@ -26,6 +27,43 @@ const echoTool: Tool = {
   },
 };
 
+const echoToolWithContract: Tool = withToolContract({
+  definition: {
+    name: "echo_contract",
+    description: "带 contract 的 echo 工具",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "要返回的消息" },
+      },
+      required: ["message"],
+    },
+  },
+  async execute(args): Promise<ToolCallResult> {
+    return {
+      id: "",
+      name: "echo_contract",
+      success: true,
+      output: `Echo: ${args.message}`,
+      durationMs: 0,
+    };
+  },
+}, {
+  family: "other",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway"],
+  safeScopes: ["local-safe"],
+  activityDescription: "Echo the provided message",
+  resultSchema: {
+    kind: "text",
+    description: "Echo output text.",
+  },
+  outputPersistencePolicy: "conversation",
+});
+
 // Mock 工具：总是失败
 const failTool: Tool = {
   definition: {
@@ -37,6 +75,94 @@ const failTool: Tool = {
     throw new Error("故意失败");
   },
 };
+
+const runtimeAwareTool: Tool = withToolContract({
+  definition: {
+    name: "runtime_aware",
+    description: "回显运行时 launch context",
+    parameters: { type: "object", properties: {} },
+  },
+  async execute(_args, context): Promise<ToolCallResult> {
+    return {
+      id: "",
+      name: "runtime_aware",
+      success: true,
+      output: JSON.stringify({
+        defaultCwd: context.defaultCwd,
+        toolSet: context.launchSpec?.toolSet ?? [],
+        permissionMode: context.launchSpec?.permissionMode,
+      }),
+      durationMs: 0,
+    };
+  },
+}, {
+  family: "other",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway"],
+  safeScopes: ["local-safe"],
+  activityDescription: "Echo runtime launch context",
+  resultSchema: { kind: "text", description: "runtime launch context json" },
+  outputPersistencePolicy: "conversation",
+});
+
+const writeToolWithContract: Tool = withToolContract({
+  definition: {
+    name: "write_contract",
+    description: "带 workspace-write contract 的工具",
+    parameters: { type: "object", properties: {} },
+  },
+  async execute(): Promise<ToolCallResult> {
+    return {
+      id: "",
+      name: "write_contract",
+      success: true,
+      output: "written",
+      durationMs: 0,
+    };
+  },
+}, {
+  family: "workspace-write",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: true,
+  riskLevel: "medium",
+  channels: ["gateway"],
+  safeScopes: ["local-safe"],
+  activityDescription: "Write to workspace",
+  resultSchema: { kind: "text", description: "write result" },
+  outputPersistencePolicy: "artifact",
+});
+
+const execToolWithContract: Tool = withToolContract({
+  definition: {
+    name: "exec_contract",
+    description: "带 command-exec contract 的工具",
+    parameters: { type: "object", properties: {} },
+  },
+  async execute(): Promise<ToolCallResult> {
+    return {
+      id: "",
+      name: "exec_contract",
+      success: true,
+      output: "executed",
+      durationMs: 0,
+    };
+  },
+}, {
+  family: "command-exec",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: true,
+  riskLevel: "high",
+  channels: ["gateway"],
+  safeScopes: ["local-safe"],
+  activityDescription: "Execute command",
+  resultSchema: { kind: "text", description: "exec result" },
+  outputPersistencePolicy: "conversation",
+});
 
 describe("ToolExecutor", () => {
   it("should register and execute tools", async () => {
@@ -108,6 +234,37 @@ describe("ToolExecutor", () => {
     expect(definitions[0].function.name).toBe("echo");
   });
 
+  it("should expose registered tool contracts", () => {
+    const executor = new ToolExecutor({
+      tools: [echoToolWithContract, echoTool],
+      workspaceRoot: "/tmp/test",
+    });
+
+    const contracts = executor.getRegisteredToolContracts();
+
+    expect(contracts).toHaveLength(1);
+    expect(contracts[0]?.name).toBe("echo_contract");
+    expect(contracts[0]?.riskLevel).toBe("low");
+  });
+
+  it("should filter visible tool contracts with the same availability rules", () => {
+    const executor = new ToolExecutor({
+      tools: [echoToolWithContract, failTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedForAgent: (toolName, agentId) => {
+        if (agentId === "restricted") {
+          return toolName === "echo_contract";
+        }
+        return true;
+      },
+    });
+
+    const contracts = executor.getContracts("restricted");
+
+    expect(contracts).toHaveLength(1);
+    expect(contracts[0]?.name).toBe("echo_contract");
+  });
+
   it("should filter tool definitions by agent whitelist", () => {
     const executor = new ToolExecutor({
       tools: [echoTool, failTool],
@@ -124,6 +281,118 @@ describe("ToolExecutor", () => {
 
     expect(definitions).toHaveLength(1);
     expect(definitions[0].function.name).toBe("echo");
+  });
+
+  it("should enforce launchSpec toolSet and inject runtime launch context", async () => {
+    const executor = new ToolExecutor({
+      tools: [echoTool, failTool, runtimeAwareTool],
+      workspaceRoot: "/tmp/test",
+    });
+    const runtimeContext = {
+      launchSpec: {
+        cwd: "/tmp/test/subdir",
+        toolSet: ["runtime_aware"],
+        permissionMode: "confirm",
+      },
+    };
+
+    const definitions = executor.getDefinitions("default", "conv-1", runtimeContext);
+    expect(definitions.map((item) => item.function.name)).toEqual(["runtime_aware"]);
+    expect(executor.getToolAvailability("fail", "default", "conv-1", runtimeContext)?.reasonCode).toBe("excluded-by-launch-toolset");
+
+    const blocked = await executor.execute(
+      { id: "req-toolset-blocked", name: "echo", arguments: { message: "blocked" } },
+      "conv-1",
+      "default",
+      undefined,
+      undefined,
+      undefined,
+      runtimeContext,
+    );
+    expect(blocked.success).toBe(false);
+    expect(blocked.error).toContain("toolSet");
+
+    const result = await executor.execute(
+      { id: "req-toolset-allowed", name: "runtime_aware", arguments: {} },
+      "conv-1",
+      "default",
+      undefined,
+      undefined,
+      undefined,
+      runtimeContext,
+    );
+
+    expect(result.success).toBe(true);
+    expect(JSON.parse(result.output)).toEqual({
+      defaultCwd: "/tmp/test/subdir",
+      toolSet: ["runtime_aware"],
+      permissionMode: "confirm",
+    });
+  });
+
+  it("should enforce launchSpec permissionMode=plan as read-only only", () => {
+    const executor = new ToolExecutor({
+      tools: [echoToolWithContract, writeToolWithContract],
+      workspaceRoot: "/tmp/test",
+    });
+
+    const definitions = executor.getDefinitions("default", "conv-1", {
+      launchSpec: {
+        permissionMode: "plan",
+      },
+    });
+
+    expect(definitions.map((item) => item.function.name)).toEqual(["echo_contract"]);
+    expect(executor.getToolAvailability("write_contract", "default", "conv-1", {
+      launchSpec: { permissionMode: "plan" },
+    })?.reasonCode).toBe("blocked-by-launch-permission-mode");
+  });
+
+  it("should allow workspace writes but still block exec in permissionMode=acceptEdits", () => {
+    const executor = new ToolExecutor({
+      tools: [writeToolWithContract, execToolWithContract],
+      workspaceRoot: "/tmp/test",
+    });
+
+    const definitions = executor.getDefinitions("default", "conv-1", {
+      launchSpec: {
+        permissionMode: "acceptEdits",
+      },
+    });
+
+    expect(definitions.map((item) => item.function.name)).toEqual(["write_contract"]);
+    expect(executor.getToolAvailability("exec_contract", "default", "conv-1", {
+      launchSpec: { permissionMode: "acceptEdits" },
+    })?.reasonCode).toBe("blocked-by-launch-permission-mode");
+  });
+
+  it("should enforce launchSpec role policy by tool family and risk level", () => {
+    const executor = new ToolExecutor({
+      tools: [echoToolWithContract, writeToolWithContract, execToolWithContract],
+      workspaceRoot: "/tmp/test",
+    });
+
+    const runtimeContext = {
+      launchSpec: {
+        role: "researcher" as const,
+        allowedToolFamilies: ["other"],
+        maxToolRiskLevel: "medium" as const,
+        permissionMode: "confirm" as const,
+        policySummary: "researcher role: read/search only",
+      },
+    };
+
+    const definitions = executor.getDefinitions("researcher", "conv-1", runtimeContext);
+    expect(definitions.map((item) => item.function.name)).toEqual(["echo_contract"]);
+    expect(executor.getToolAvailability("write_contract", "researcher", "conv-1", runtimeContext)?.reasonCode).toBe("blocked-by-launch-role-policy");
+    expect(executor.getToolAvailability("exec_contract", "researcher", "conv-1", {
+      launchSpec: {
+        role: "verifier",
+        allowedToolFamilies: ["command-exec"],
+        maxToolRiskLevel: "medium",
+        permissionMode: "confirm",
+      },
+    })?.reasonCode).toBe("blocked-by-launch-role-policy");
   });
 
   it("should call audit logger", async () => {
@@ -199,7 +468,7 @@ describe("ToolExecutor", () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("不允许给 Agent \"researcher\" 使用");
+    expect(result.error).toContain("当前 Agent 白名单");
   });
 
   it("should keep default behavior when no whitelist is configured", () => {
@@ -249,7 +518,7 @@ describe("ToolExecutor", () => {
       "blocked-agent",
     );
     expect(result.success).toBe(false);
-    expect(result.error).toContain("不允许给 Agent \"blocked-agent\" 使用");
+    expect(result.error).toContain("当前 Agent 白名单");
   });
 
   it("should hide and block conversation-scoped tools outside allowed conversations", async () => {
@@ -291,6 +560,77 @@ describe("ToolExecutor", () => {
     );
     expect(blocked.success).toBe(false);
     expect(blocked.error).toContain("当前会话");
+  });
+
+  it("should enforce contract access policy for definitions and execution", async () => {
+    const executor = new ToolExecutor({
+      tools: [echoToolWithContract],
+      workspaceRoot: "/tmp/test",
+      contractAccessPolicy: {
+        channel: "gateway",
+        allowedSafeScopes: ["local-safe"],
+        blockedToolNames: ["echo_contract"],
+      },
+    });
+
+    expect(executor.getDefinitions()).toHaveLength(0);
+    expect(executor.getToolAvailability("echo_contract")).toMatchObject({
+      available: false,
+      reasonCode: "blocked-by-security-matrix",
+    });
+
+    const result = await executor.execute(
+      { id: "req-9", name: "echo_contract", arguments: { message: "denied" } },
+      "conv-1",
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("安全矩阵");
+  });
+
+  it("should expose availability reasons for registered tools", () => {
+    const goalTool = withToolContract({
+      definition: {
+        name: "goal_init",
+        description: "goal bootstrap tool",
+        parameters: { type: "object", properties: {} },
+      },
+      async execute(): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "goal_init",
+          success: true,
+          output: "ok",
+          durationMs: 0,
+        };
+      },
+    }, {
+      family: "other",
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      needsPermission: false,
+      riskLevel: "low",
+      channels: ["gateway"],
+      safeScopes: ["local-safe"],
+      activityDescription: "Goal tool",
+      resultSchema: { kind: "text", description: "plain text" },
+      outputPersistencePolicy: "conversation",
+    });
+
+    const executor = new ToolExecutor({
+      tools: [echoToolWithContract, goalTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedForAgent: (toolName, agentId) => agentId !== "restricted" || toolName === "goal_init",
+      isToolAllowedInConversation: (toolName, conversationId) => toolName !== "goal_init" || conversationId.startsWith("goal:"),
+    });
+
+    expect(executor.getToolAvailability("echo_contract", "restricted")?.reasonCode).toBe("not-in-agent-whitelist");
+    expect(executor.getToolAvailability("goal_init", "restricted", "conv-1")?.reasonCode).toBe("conversation-restricted");
+
+    const availabilities = executor.getRegisteredToolAvailabilities("restricted", "conv-1");
+    expect(availabilities).toHaveLength(2);
+    expect(availabilities.some((item) => item.reasonCode === "not-in-agent-whitelist")).toBe(true);
+    expect(availabilities.some((item) => item.reasonCode === "conversation-restricted")).toBe(true);
   });
 
   it("should support silent replacement for dynamic tools", () => {

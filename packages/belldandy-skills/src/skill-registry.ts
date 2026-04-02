@@ -54,14 +54,16 @@ export class SkillRegistry {
   }
 
   /** 加载插件附带的 skills */
-  async loadPluginSkills(dirs: Map<string, string>): Promise<number> {
+  async loadPluginSkills(dirs: Map<string, string[]>): Promise<number> {
     let count = 0;
-    for (const [pluginId, dir] of dirs) {
-      const loaded = await loadSkillsFromDir(dir, { type: "plugin", pluginId });
-      for (const skill of loaded) {
-        this.skills.set(makeKey(skill), skill);
+    for (const [pluginId, pluginDirs] of dirs) {
+      for (const dir of pluginDirs) {
+        const loaded = await loadSkillsFromDir(dir, { type: "plugin", pluginId });
+        for (const skill of loaded) {
+          this.skills.set(makeKey(skill), skill);
+        }
+        count += loaded.length;
       }
-      count += loaded.length;
     }
     return count;
   }

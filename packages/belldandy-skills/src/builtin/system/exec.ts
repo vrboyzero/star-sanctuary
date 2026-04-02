@@ -2,6 +2,8 @@ import type { Tool, ToolCallResult, ToolExecPolicy } from "../../types.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import path from "node:path";
+import { withToolContract } from "../../tool-contract.js";
+import { resolveRuntimeFilesystemScope } from "../../runtime-policy.js";
 
 // 安全策略配置
 const BLOCKLIST = new Set([
@@ -830,7 +832,7 @@ function splitCommandSegments(command: string): { ok: true; segments: string[] }
     return { ok: true, segments };
 }
 
-export const runCommandTool: Tool = {
+export const runCommandTool: Tool = withToolContract({
     definition: {
         name: "run_command",
         description: "在宿主机执行 Shell 命令。仅允许安全列表内的开发工具 (git, npm, ls, etc.)。**禁止** sudo, mkfs 等高危操作。",
@@ -908,15 +910,16 @@ export const runCommandTool: Tool = {
             }
         }
 
-        const cwdArg = typeof args.cwd === "string" ? args.cwd : undefined;
+        const scope = resolveRuntimeFilesystemScope(context);
+        const cwdArg = typeof args.cwd === "string" ? args.cwd : context.defaultCwd;
         const cwdResult = resolveWorkingDirectory(
             cwdArg,
-            context.workspaceRoot,
-            context.extraWorkspaceRoots,
+            scope.workspaceRoot,
+            scope.extraWorkspaceRoots,
         );
         if (!cwdResult.ok) {
             const reason = cwdResult.reason;
-            context.logger?.warn(`[Security Block] cwd=${cwdArg ?? context.workspaceRoot} -> ${reason}`);
+            context.logger?.warn(`[Security Block] cwd=${cwdArg ?? scope.workspaceRoot} -> ${reason}`);
             return makeResult(false, "", `Security Error: ${reason}`);
         }
         const cwd = cwdResult.cwd;
@@ -925,8 +928,8 @@ export const runCommandTool: Tool = {
             const pathValidation = validateCommandPathBoundaries(
                 segment,
                 cwd,
-                context.workspaceRoot,
-                context.extraWorkspaceRoots,
+                scope.workspaceRoot,
+                scope.extraWorkspaceRoots,
             );
             if (!pathValidation.valid) {
                 context.logger?.warn(`[Security Block] ${segment} -> ${pathValidation.reason}`);
@@ -976,4 +979,18 @@ export const runCommandTool: Tool = {
             });
         });
     },
-};
+}, {
+    family: "command-exec",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "critical",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Execute a shell command on the host inside allowed workspace boundaries",
+    resultSchema: {
+        kind: "text",
+        description: "Captured stdout with optional stderr metadata.",
+    },
+    outputPersistencePolicy: "conversation",
+});

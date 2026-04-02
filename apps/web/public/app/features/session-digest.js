@@ -1,0 +1,409 @@
+function formatDigestStatus(status, t) {
+  switch (status) {
+    case "ready":
+      return t("panel.sessionDigestStatusReady", {}, "ready");
+    case "updated":
+      return t("panel.sessionDigestStatusUpdated", {}, "updated");
+    default:
+      return t("panel.sessionDigestStatusIdle", {}, "idle");
+  }
+}
+
+function buildDigestBadgeItems(digest, state, t) {
+  const items = [
+    {
+      label: formatDigestStatus(digest?.status, t),
+      title: formatDigestStatus(digest?.status, t),
+      className: "",
+    },
+    {
+      label: t("panel.sessionDigestMessagesCompact", { count: String(digest?.messageCount || 0) }, `msg ${digest?.messageCount || 0}`),
+      title: t("panel.sessionDigestMessages", { count: String(digest?.messageCount || 0) }, `messages ${digest?.messageCount || 0}`),
+      className: "",
+    },
+    {
+      label: t(
+        "panel.sessionDigestPendingCompact",
+        {
+          count: String(digest?.pendingMessageCount || 0),
+          threshold: String(digest?.threshold || 0),
+        },
+        `pend ${digest?.pendingMessageCount || 0}/${digest?.threshold || 0}`,
+      ),
+      title: t(
+        "panel.sessionDigestPending",
+        {
+          count: String(digest?.pendingMessageCount || 0),
+          threshold: String(digest?.threshold || 0),
+        },
+        `pending ${digest?.pendingMessageCount || 0}/${digest?.threshold || 0}`,
+      ),
+      className: "",
+    },
+    {
+      label: t("panel.sessionDigestDigestedCompact", { count: String(digest?.digestedMessageCount || 0) }, `dig ${digest?.digestedMessageCount || 0}`),
+      title: t("panel.sessionDigestDigested", { count: String(digest?.digestedMessageCount || 0) }, `digested ${digest?.digestedMessageCount || 0}`),
+      className: "",
+    },
+  ];
+
+  if (state.lastCompacted) {
+    items.push({
+      label: t("panel.sessionDigestCompactedCompact", {}, "cmp"),
+      title: t("panel.sessionDigestCompacted", {}, "compacted"),
+      className: "memory-badge-shared",
+    });
+  }
+
+  if (state.lastUpdated) {
+    items.push({
+      label: t("panel.sessionDigestRefreshedCompact", {}, "ref"),
+      title: t("panel.sessionDigestRefreshed", {}, "refreshed"),
+      className: "memory-badge-private",
+    });
+  }
+
+  return items;
+}
+
+function buildDigestSummaryText(digest, t) {
+  const primary = typeof digest?.rollingSummary === "string" && digest.rollingSummary.trim()
+    ? digest.rollingSummary.trim()
+    : typeof digest?.archivalSummary === "string" && digest.archivalSummary.trim()
+      ? digest.archivalSummary.trim()
+      : "";
+  if (primary) {
+    return primary;
+  }
+  if (digest?.status === "updated") {
+    return t("panel.sessionDigestUpdatedHint", {}, "Pending messages have crossed the refresh threshold. Refresh is recommended.");
+  }
+  return t("panel.sessionDigestNoSummary", {}, "No digest summary yet.");
+}
+
+function formatDigestTimestamp(value, formatDateTime, t) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return t("panel.sessionDigestNever", {}, "Never");
+  }
+  return formatDateTime(value);
+}
+
+export function createSessionDigestFeature({
+  refs,
+  isConnected,
+  sendReq,
+  makeId,
+  getActiveConversationId,
+  escapeHtml,
+  formatDateTime,
+  showNotice,
+  t = (_key, _params, fallback) => fallback ?? "",
+}) {
+  const {
+    sessionDigestSummaryEl,
+    sessionDigestRefreshBtn,
+    sessionDigestModalEl,
+    sessionDigestModalTitleEl,
+    sessionDigestModalMetaEl,
+    sessionDigestModalContentEl,
+    sessionDigestModalCloseBtn,
+  } = refs;
+
+  const state = {
+    conversationId: null,
+    digest: null,
+    loading: false,
+    refreshing: false,
+    loadSeq: 0,
+    lastSource: "",
+    lastUpdated: false,
+    lastCompacted: false,
+    modalOpen: false,
+  };
+
+  function setRefreshButtonState() {
+    if (!sessionDigestRefreshBtn) return;
+    const conversationId = getActiveConversationId();
+    sessionDigestRefreshBtn.disabled = !isConnected() || !conversationId || state.loading || state.refreshing;
+    sessionDigestRefreshBtn.textContent = state.refreshing
+      ? t("panel.sessionDigestRefreshing", {}, "Refreshing...")
+      : t("panel.sessionDigestRefresh", {}, "Refresh Digest");
+  }
+
+  function canOpenModal() {
+    return Boolean(state.digest && getActiveConversationId() && isConnected());
+  }
+
+  function renderModal() {
+    if (!sessionDigestModalEl) return;
+
+    const shouldOpen = state.modalOpen && canOpenModal();
+    sessionDigestModalEl.classList.toggle("hidden", !shouldOpen);
+    if (!shouldOpen) return;
+
+    const digest = state.digest;
+    const summaryText = buildDigestSummaryText(digest, t);
+    const lastDigestAt = formatDigestTimestamp(digest?.lastDigestAt, formatDateTime, t);
+    const lastEventText = state.lastSource
+      ? t("panel.sessionDigestLastSource", { source: state.lastSource }, `Updated via ${state.lastSource}`)
+      : t("panel.sessionDigestLastSourceUnknown", {}, "Waiting for runtime updates");
+    const metaParts = [
+      formatDigestStatus(digest?.status, t),
+      t("panel.sessionDigestMessages", { count: String(digest?.messageCount || 0) }, `messages ${digest?.messageCount || 0}`),
+      t(
+        "panel.sessionDigestPending",
+        {
+          count: String(digest?.pendingMessageCount || 0),
+          threshold: String(digest?.threshold || 0),
+        },
+        `pending ${digest?.pendingMessageCount || 0}/${digest?.threshold || 0}`,
+      ),
+      t("panel.sessionDigestDigested", { count: String(digest?.digestedMessageCount || 0) }, `digested ${digest?.digestedMessageCount || 0}`),
+      t("panel.sessionDigestLastDigest", { time: lastDigestAt }, `Last digest ${lastDigestAt}`),
+      lastEventText,
+    ];
+
+    if (state.lastCompacted) {
+      metaParts.push(t("panel.sessionDigestCompacted", {}, "compacted"));
+    }
+    if (state.lastUpdated) {
+      metaParts.push(t("panel.sessionDigestRefreshed", {}, "refreshed"));
+    }
+
+    if (sessionDigestModalTitleEl) {
+      sessionDigestModalTitleEl.textContent = t("panel.sessionDigestFullTitle", {}, "Session Digest Full Text");
+    }
+    if (sessionDigestModalCloseBtn) {
+      const closeText = t("panel.sessionDigestClose", {}, "Close");
+      sessionDigestModalCloseBtn.title = closeText;
+      sessionDigestModalCloseBtn.setAttribute("aria-label", closeText);
+    }
+    if (sessionDigestModalMetaEl) {
+      sessionDigestModalMetaEl.textContent = metaParts.join(" · ");
+    }
+    if (sessionDigestModalContentEl) {
+      sessionDigestModalContentEl.textContent = summaryText;
+    }
+  }
+
+  function closeModal() {
+    state.modalOpen = false;
+    renderModal();
+  }
+
+  function openModal() {
+    if (!canOpenModal()) return;
+    state.modalOpen = true;
+    renderModal();
+  }
+
+  function renderEmpty(message) {
+    if (!sessionDigestSummaryEl) return;
+    closeModal();
+    sessionDigestSummaryEl.innerHTML = `<div class="task-token-history-empty">${escapeHtml(message)}</div>`;
+    setRefreshButtonState();
+  }
+
+  function renderDigest() {
+    if (!sessionDigestSummaryEl) return;
+
+    if (!isConnected()) {
+      renderEmpty(t("panel.sessionDigestDisconnected", {}, "Disconnected"));
+      return;
+    }
+
+    const conversationId = getActiveConversationId();
+    if (!conversationId) {
+      renderEmpty(t("panel.sessionDigestNoConversation", {}, "No active conversation yet."));
+      return;
+    }
+
+    if (state.loading && !state.digest) {
+      renderEmpty(t("panel.sessionDigestLoading", {}, "Loading session digest..."));
+      return;
+    }
+
+    if (!state.digest) {
+      renderEmpty(t("panel.sessionDigestEmpty", {}, "No session digest available yet."));
+      return;
+    }
+
+    const digest = state.digest;
+    const summaryText = buildDigestSummaryText(digest, t);
+    const lastDigestAt = formatDigestTimestamp(digest.lastDigestAt, formatDateTime, t);
+    const lastEventText = state.lastSource
+      ? t("panel.sessionDigestLastSource", { source: state.lastSource }, `Updated via ${state.lastSource}`)
+      : t("panel.sessionDigestLastSourceUnknown", {}, "Waiting for runtime updates");
+    const openFullTextTitle = t("panel.sessionDigestOpenFull", {}, "Click to view the full digest");
+    const badgeItems = buildDigestBadgeItems(digest, state, t);
+
+    sessionDigestSummaryEl.innerHTML = `
+      <div class="session-digest-card is-interactive" role="button" tabindex="0" title="${escapeHtml(openFullTextTitle)}" aria-label="${escapeHtml(openFullTextTitle)}">
+        <div class="session-digest-head">
+          <div class="session-digest-badges">
+            ${badgeItems.map((item) => `
+              <span class="memory-badge ${item.className}" title="${escapeHtml(item.title)}">${escapeHtml(item.label)}</span>
+            `).join("")}
+          </div>
+          <div class="session-digest-meta">
+            <span>${escapeHtml(t("panel.sessionDigestLastDigest", { time: lastDigestAt }, `Last digest ${lastDigestAt}`))}</span>
+            <span>${escapeHtml(lastEventText)}</span>
+          </div>
+        </div>
+        <div class="session-digest-summary-text">${escapeHtml(summaryText)}</div>
+      </div>
+    `;
+    setRefreshButtonState();
+    renderModal();
+  }
+
+  async function loadSessionDigest(conversationId = getActiveConversationId(), options = {}) {
+    const force = options.force === true;
+    const notify = options.notify === true;
+
+    state.conversationId = conversationId || null;
+    if (!isConnected()) {
+      state.loading = false;
+      state.refreshing = false;
+      state.digest = null;
+      renderDigest();
+      return null;
+    }
+
+    if (!conversationId) {
+      state.loading = false;
+      state.refreshing = false;
+      state.digest = null;
+      renderDigest();
+      return null;
+    }
+
+    const seq = state.loadSeq + 1;
+    state.loadSeq = seq;
+    state.loading = !force;
+    state.refreshing = force;
+    renderDigest();
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: force ? "conversation.digest.refresh" : "conversation.digest.get",
+      params: force ? { conversationId, force: true } : { conversationId },
+    });
+
+    if (seq !== state.loadSeq) return null;
+
+    state.loading = false;
+    state.refreshing = false;
+
+    if (!res || !res.ok) {
+      state.digest = null;
+      renderEmpty(res?.error?.message || t("panel.sessionDigestLoadFailed", {}, "Failed to load session digest."));
+      if (notify) {
+        showNotice?.(
+          t("panel.sessionDigestRefreshFailedTitle", {}, "Digest refresh failed"),
+          res?.error?.message || t("panel.sessionDigestRefreshFailed", {}, "Failed to refresh session digest."),
+          "error",
+        );
+      }
+      return null;
+    }
+
+    state.digest = force ? res.payload?.digest || null : res.payload?.digest || null;
+    state.lastSource = force ? "manual" : "load";
+    state.lastUpdated = force ? res.payload?.updated === true : false;
+    state.lastCompacted = force ? res.payload?.compacted === true : false;
+    renderDigest();
+
+    if (notify) {
+      showNotice?.(
+        t("panel.sessionDigestRefreshSuccessTitle", {}, "Digest refreshed"),
+        state.lastUpdated
+          ? t("panel.sessionDigestRefreshSuccess", {}, "Session digest has been refreshed.")
+          : t("panel.sessionDigestRefreshSkipped", {}, "Session digest is already up to date."),
+        "info",
+      );
+    }
+
+    return state.digest;
+  }
+
+  function handleDigestUpdated(payload) {
+    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
+    if (!conversationId || conversationId !== getActiveConversationId()) return;
+    state.conversationId = conversationId;
+    state.loading = false;
+    state.refreshing = false;
+    state.digest = payload?.digest && typeof payload.digest === "object" ? payload.digest : state.digest;
+    state.lastSource = typeof payload?.source === "string" ? payload.source : "";
+    state.lastUpdated = payload?.updated === true;
+    state.lastCompacted = payload?.compacted === true;
+    renderDigest();
+  }
+
+  function clear() {
+    state.conversationId = null;
+    state.digest = null;
+    state.loading = false;
+    state.refreshing = false;
+    state.lastSource = "";
+    state.lastUpdated = false;
+    state.lastCompacted = false;
+    state.modalOpen = false;
+    renderDigest();
+  }
+
+  if (sessionDigestRefreshBtn) {
+    sessionDigestRefreshBtn.addEventListener("click", () => {
+      const conversationId = getActiveConversationId();
+      if (!conversationId) return;
+      void loadSessionDigest(conversationId, { force: true, notify: true });
+    });
+  }
+
+  if (sessionDigestSummaryEl) {
+    sessionDigestSummaryEl.addEventListener("click", (event) => {
+      const trigger = event.target instanceof Element ? event.target.closest(".session-digest-card.is-interactive") : null;
+      if (!trigger) return;
+      openModal();
+    });
+    sessionDigestSummaryEl.addEventListener("keydown", (event) => {
+      const trigger = event.target instanceof Element ? event.target.closest(".session-digest-card.is-interactive") : null;
+      if (!trigger) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openModal();
+    });
+  }
+
+  if (sessionDigestModalCloseBtn) {
+    sessionDigestModalCloseBtn.addEventListener("click", () => {
+      closeModal();
+    });
+  }
+
+  if (sessionDigestModalEl) {
+    sessionDigestModalEl.addEventListener("click", (event) => {
+      if (event.target === sessionDigestModalEl) {
+        closeModal();
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !state.modalOpen) return;
+    closeModal();
+  });
+
+  renderDigest();
+
+  return {
+    loadSessionDigest,
+    handleDigestUpdated,
+    clear,
+    refreshLocale() {
+      renderDigest();
+      renderModal();
+    },
+  };
+}

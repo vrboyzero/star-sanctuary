@@ -16,6 +16,7 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { resolveStateDir } from "@belldandy/protocol";
+import { withToolContract } from "../tool-contract.js";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -87,6 +88,42 @@ function ok(name: string, output: string): ToolCallResult {
 
 function fail(name: string, output: string, error?: string): ToolCallResult {
   return { id: "", name, success: false, output, error: error ?? output, durationMs: 0 };
+}
+
+function withCanvasReadContract(tool: Tool, activityDescription: string): Tool {
+  return withToolContract(tool, {
+    family: "workspace-read",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription,
+    resultSchema: {
+      kind: "text",
+      description: "Canvas board read result text.",
+    },
+    outputPersistencePolicy: "conversation",
+  });
+}
+
+function withCanvasWriteContract(tool: Tool, activityDescription: string): Tool {
+  return withToolContract(tool, {
+    family: "workspace-write",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription,
+    resultSchema: {
+      kind: "text",
+      description: "Canvas board mutation result text.",
+    },
+    outputPersistencePolicy: "external-state",
+  });
 }
 
 async function ensureCanvasDir(): Promise<string> {
@@ -684,16 +721,16 @@ const canvasSnapshotTool: Tool = {
  */
 export function createCanvasTools(broadcast?: CanvasBroadcastFn): Tool[] {
   return [
-    canvasListTool,
-    createCanvasCreateTool(broadcast),
-    canvasReadTool,
-    createCanvasAddNodeTool(broadcast),
-    createCanvasUpdateNodeTool(broadcast),
-    createCanvasRemoveNodeTool(broadcast),
-    createCanvasConnectTool(broadcast),
-    createCanvasDisconnectTool(broadcast),
-    createCanvasAutoLayoutTool(broadcast),
-    canvasSnapshotTool,
+    withCanvasReadContract(canvasListTool, "List available canvas boards"),
+    withCanvasWriteContract(createCanvasCreateTool(broadcast), "Create a new canvas board"),
+    withCanvasReadContract(canvasReadTool, "Read a full canvas board JSON snapshot"),
+    withCanvasWriteContract(createCanvasAddNodeTool(broadcast), "Add a node to a canvas board"),
+    withCanvasWriteContract(createCanvasUpdateNodeTool(broadcast), "Update a node on a canvas board"),
+    withCanvasWriteContract(createCanvasRemoveNodeTool(broadcast), "Remove a node from a canvas board"),
+    withCanvasWriteContract(createCanvasConnectTool(broadcast), "Create an edge between canvas nodes"),
+    withCanvasWriteContract(createCanvasDisconnectTool(broadcast), "Remove an edge from a canvas board"),
+    withCanvasWriteContract(createCanvasAutoLayoutTool(broadcast), "Auto-layout nodes on a canvas board"),
+    withCanvasReadContract(canvasSnapshotTool, "Read a text snapshot of a canvas board"),
   ];
 }
 

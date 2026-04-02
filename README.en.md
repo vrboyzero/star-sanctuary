@@ -91,6 +91,31 @@ Related tutorial videos will be published on the author's Bilibili homepage:
 
 ---
 
+## At-a-Glance
+
+If you just need to know which entrypoint to use first, start with this table:
+
+| What you want to do | Primary entrypoint | Secondary entrypoint | Quick note |
+|---|---|---|---|
+| Chat with the Agent | WebChat | `/api/message` | For normal use, start in WebChat. |
+| Change model / API key / capability toggles | WebChat `⚙️ Settings` | `bdd config set` | Regular users should prefer Settings; use CLI for scripted changes. |
+| Pair a new device | Get pairing code in WebChat | `bdd pairing approve` | WebChat triggers the flow, CLI approves it. |
+| Review memories, task records, experience candidates | WebChat `🧠 Memory Viewer` | — | Best place for review and memory inspection. |
+| Manage long-term goals | WebChat `🎯 Goals` | — | Main entrypoint for long-running work. |
+| Break down tasks or inspect ReAct visually | WebChat `Canvas` | — | Best for visual planning and structured breakdown. |
+| Temporarily disable tools / MCP / plugins | WebChat `🛠️ Tool Settings` | `tools.list` | This is runtime policy, not uninstall. |
+| Check whether the system is healthy | `corepack pnpm bdd doctor` | `system.doctor` | `bdd doctor` is static health; `system.doctor` is runtime health. |
+| Install / update / uninstall extensions | `bdd marketplace ...` | — | Extension installation currently lives primarily in CLI; `directory` is the most solid source type. |
+| Integrate external systems | `/api/message` / `/api/webhook/:id` | `message.send` | Prefer HTTP / RPC for automation, webhooks, and integrations. |
+
+Fast rule of thumb:
+
+- For usage: start with `WebChat`
+- For config and operations: start with `CLI`
+- For integrations and troubleshooting: start with `RPC / HTTP + system.doctor`
+
+---
+
 ## Core Capabilities
 
 ### 1. Gateway + WebChat + CLI

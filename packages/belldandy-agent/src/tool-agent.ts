@@ -5,7 +5,7 @@
  */
 
 import type { JsonObject } from "@belldandy/protocol";
-import type { ToolExecutor, ToolCallRequest } from "@belldandy/skills";
+import type { ToolExecutionRuntimeContext, ToolExecutor, ToolCallRequest } from "@belldandy/skills";
 import type { AgentRunInput, AgentStreamItem, AgentUsage, BelldandyAgent, AgentHooks } from "./index.js";
 import type { HookRunner } from "./hook-runner.js";
 import type { HookAgentContext, HookToolContext, HookToolResultPersistContext } from "./hooks.js";
@@ -229,6 +229,17 @@ function estimateAssistantHistoryOverhead(message: Message): number {
     total += estimateTokens(sanitizeStringForTokenEstimate(message.reasoning_content.trim()));
   }
   return total;
+}
+
+function readToolExecutionRuntimeContext(meta?: JsonObject): ToolExecutionRuntimeContext | undefined {
+  if (!meta || typeof meta !== "object") return undefined;
+  const launchSpec = (meta as Record<string, unknown>)._agentLaunchSpec;
+  if (!launchSpec || typeof launchSpec !== "object" || Array.isArray(launchSpec)) {
+    return undefined;
+  }
+  return {
+    launchSpec: launchSpec as ToolExecutionRuntimeContext["launchSpec"],
+  };
 }
 
 function estimateContextTokensFromMessages(
@@ -492,7 +503,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
       input.roomContext,
     );
     const textAttachmentChars = readTextAttachmentChars(input.meta);
-    const tools = this.opts.toolExecutor.getDefinitions(input.agentId, input.conversationId);
+    const runtimeContext = readToolExecutionRuntimeContext(input.meta);
+    const tools = this.opts.toolExecutor.getDefinitions(input.agentId, input.conversationId, runtimeContext);
     let toolCallCount = 0;
     const generatedItems: AgentStreamItem[] = [];
     let runSuccess = true;
@@ -871,6 +883,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
             input.userUuid,
             input.senderInfo,
             input.roomContext,
+            runtimeContext,
           );
           const toolDurationMs = Date.now() - toolStartTime;
 

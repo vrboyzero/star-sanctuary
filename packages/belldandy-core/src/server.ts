@@ -9,8 +9,17 @@ import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
 
-import { getGlobalMemoryManager } from "@belldandy/memory";
-import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig, uploadTokenUsage } from "@belldandy/protocol";
+import {
+  createDurableExtractionSurface,
+  DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_CODE,
+  DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_MESSAGE,
+  DurableExtractionRuntime,
+  getGlobalMemoryManager,
+  guardTeamSharedMemoryWrite,
+  type DurableExtractionDigestSnapshot,
+  type DurableExtractionRecord,
+} from "@belldandy/memory";
+import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig } from "@belldandy/protocol";
 import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile } from "@belldandy/agent";
 import type {
   GatewayFrame,
@@ -28,7 +37,62 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
+import {
+  applyToolControlChanges,
+  buildToolControlDisabledPayload,
+  resolvePendingToolControlRequest,
+  resolveToolControlPolicySnapshot,
+  tryApproveToolControlPasswordInput,
+} from "./tool-control-policy.js";
+import {
+  MemoryRuntimeBudgetGuard,
+  MemoryRuntimeUsageAccounting,
+  SlidingWindowRateLimiter,
+  type MemoryBudgetDecision,
+  type RateLimitState,
+} from "./memory-runtime-budget.js";
+import {
+  buildMemoryRuntimeDoctorReport,
+  getDurableExtractionAvailability,
+} from "./memory-runtime-introspection.js";
+import { buildExtensionGovernanceReport } from "./extension-governance.js";
+import { loadExtensionMarketplaceState } from "./extension-marketplace-state.js";
+import { buildExtensionRuntimeReport } from "./extension-runtime.js";
+import type { ExtensionHostState } from "./extension-host.js";
+import { handleMessageSendWithQueryRuntime, MessageSendConfigurationError } from "./query-runtime-message-send.js";
+import {
+  handleConversationDigestGetWithQueryRuntime,
+  handleConversationDigestRefreshWithQueryRuntime,
+  handleConversationMemoryExtractionGetWithQueryRuntime,
+  handleConversationMemoryExtractWithQueryRuntime,
+} from "./query-runtime-memory.js";
+import {
+  handleSubTaskArchiveWithQueryRuntime,
+  handleSubTaskGetWithQueryRuntime,
+  handleSubTaskListWithQueryRuntime,
+  handleSubTaskStopWithQueryRuntime,
+} from "./query-runtime-subtask.js";
+import {
+  handleWorkspaceListWithQueryRuntime,
+  handleWorkspaceReadWithQueryRuntime,
+  handleWorkspaceReadSourceWithQueryRuntime,
+  handleWorkspaceWriteWithQueryRuntime,
+} from "./query-runtime-workspace.js";
+import {
+  handleToolSettingsConfirmWithQueryRuntime,
+  handleToolsListWithQueryRuntime,
+  handleToolsUpdateWithQueryRuntime,
+} from "./query-runtime-tools.js";
+import {
+  handleCommunityMessageWithQueryRuntime,
+  handleWebhookReceiveWithQueryRuntime,
+  type QueryRuntimeHttpJsonResponse,
+} from "./query-runtime-http.js";
+import { QueryRuntimeTraceStore } from "./query-runtime-trace.js";
+import { notifyConversationToolEvent } from "./query-runtime-side-effects.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
+import type { ToolExecutionRuntimeContext } from "@belldandy/skills";
 import {
   checkAndConsumeRestartCooldown,
   formatRestartCooldownMessage,
@@ -37,7 +101,6 @@ import {
 } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
-import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
 import type { GoalManager } from "./goals/manager.js";
 
@@ -83,12 +146,18 @@ export type GatewayServerOptions = {
   sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
   /** 插件注册表（用于获取已加载插件列表） */
   pluginRegistry?: PluginRegistry;
+  /** 扩展宿主快照（用于统一 extension runtime / lifecycle 诊断） */
+  extensionHost?: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle">;
   /** 可选：检查当前是否已配置好 AI 模型（用于 hello-ok 中告知前端是否需要引导配置）*/
   isConfigured?: () => boolean;
   /** 技能注册表（用于获取已加载技能列表） */
   skillRegistry?: SkillRegistry;
   /** 长期任务管理器 */
   goalManager?: GoalManager;
+  /** 子任务运行时存储 */
+  subTaskRuntimeStore?: SubTaskRuntimeStore;
+  /** 子任务停止控制 */
+  stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
   /** Webhook 配置 */
   webhookConfig?: WebhookConfig;
   /** Webhook 幂等性管理器 */
@@ -109,6 +178,55 @@ type GatewayLog = {
   error: (module: string, message: string, data?: unknown) => void;
 };
 
+type ToolVisibilityPayload = {
+  available: boolean;
+  reasonCode: string;
+  reasonMessage: string;
+  alwaysEnabled?: boolean;
+  contractReason?: string;
+};
+
+class MemoryBudgetExceededError extends Error {
+  readonly decision: MemoryBudgetDecision;
+
+  constructor(decision: MemoryBudgetDecision) {
+    super(decision.reasonMessage || "Memory runtime budget exceeded.");
+    this.name = "MemoryBudgetExceededError";
+    this.decision = decision;
+  }
+}
+
+function summarizeGroupedVisibility(entries: ToolVisibilityPayload[]): ToolVisibilityPayload {
+  if (entries.length === 0) {
+    return {
+      available: true,
+      reasonCode: "available",
+      reasonMessage: "",
+    };
+  }
+  if (entries.some((item) => item.available)) {
+    return {
+      available: true,
+      reasonCode: "available",
+      reasonMessage: "",
+    };
+  }
+  const first = entries[0];
+  const uniqueReasonCodes = [...new Set(entries.map((item) => item.reasonCode).filter(Boolean))];
+  if (uniqueReasonCodes.length === 1) {
+    return {
+      available: false,
+      reasonCode: first.reasonCode,
+      reasonMessage: first.reasonMessage,
+    };
+  }
+  return {
+    available: false,
+    reasonCode: "blocked-by-security-matrix",
+    reasonMessage: `All tools in this group are currently unavailable: ${uniqueReasonCodes.join(", ")}`,
+  };
+}
+
 const DEFAULT_METHODS = [
   "message.send",
   "tool_settings.confirm",
@@ -123,6 +241,14 @@ const DEFAULT_METHODS = [
   "workspace.write",
   "context.compact",
   "conversation.meta",
+  "conversation.digest.get",
+  "conversation.digest.refresh",
+  "conversation.memory.extract",
+  "conversation.memory.extraction.get",
+  "subtask.list",
+  "subtask.get",
+  "subtask.stop",
+  "subtask.archive",
   "tools.list",
   "tools.update",
   "agents.list",
@@ -184,7 +310,10 @@ const DEFAULT_EVENTS = [
   "agent.status",
   "token.usage",
   "token.counter.result",
+  "conversation.digest.updated",
+  "conversation.memory.extraction.updated",
   "goal.update",
+  "subtask.update",
   "pairing.required",
   "tools.config.updated",
   "tool_settings.confirm.required",
@@ -239,11 +368,50 @@ function parsePositiveIntEnv(varName: string, fallback: number): number {
   return parsed;
 }
 
+function parseOptionalPositiveIntEnv(varName: string): number | undefined {
+  const raw = process.env[varName];
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
 function readEnvTrimmed(varName: string): string | undefined {
   const raw = process.env[varName];
   if (!raw) return undefined;
   const trimmed = raw.trim();
   return trimmed || undefined;
+}
+
+function buildDurableExtractionUnavailableError(
+  durableExtractionRuntime?: DurableExtractionRuntime,
+): { code: string; message: string } {
+  const availability = getDurableExtractionAvailability(durableExtractionRuntime);
+  if (availability.available) {
+    return {
+      code: "not_available",
+      message: "Durable extraction runtime is not available.",
+    };
+  }
+  const code = availability.reasonCodes[0] ?? "not_available";
+  const detail = availability.reasonMessages.join(" ");
+  return {
+    code,
+    message: detail
+      ? `Durable extraction runtime is not available. ${detail}`
+      : "Durable extraction runtime is not available.",
+  };
+}
+
+function formatRateLimitState(rateLimit: RateLimitState): string {
+  if (!rateLimit.configured) {
+    return "unlimited";
+  }
+  const base = `${rateLimit.observedRuns}/${rateLimit.maxRuns} in ${rateLimit.windowMs}ms`;
+  if (rateLimit.status === "limited") {
+    return `${base}, retryAfter=${rateLimit.retryAfterMs ?? 0}ms`;
+  }
+  return base;
 }
 
 function getAttachmentLimits(): AttachmentLimits {
@@ -529,77 +697,6 @@ async function requestToFormData(req: http.IncomingMessage): Promise<FormData> {
   return request.formData();
 }
 
-type ToolControlChangesLike = {
-  enableBuiltin: string[];
-  disableBuiltin: string[];
-  enableMcpServers: string[];
-  disableMcpServers: string[];
-  enablePlugins: string[];
-  disablePlugins: string[];
-};
-
-function sortStringList(values: Iterable<string>): string[] {
-  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
-}
-
-function applyToolControlChangesLocally(
-  disabled: {
-    builtin: string[];
-    mcp_servers: string[];
-    plugins: string[];
-  },
-  changes: ToolControlChangesLike,
-): {
-  builtin: string[];
-  mcp_servers: string[];
-  plugins: string[];
-} {
-  const builtin = new Set(disabled.builtin);
-  const mcpServers = new Set(disabled.mcp_servers);
-  const plugins = new Set(disabled.plugins);
-
-  for (const name of changes.enableBuiltin) builtin.delete(name);
-  for (const name of changes.disableBuiltin) builtin.add(name);
-  builtin.delete(TOOL_SETTINGS_CONTROL_NAME);
-
-  for (const name of changes.enableMcpServers) mcpServers.delete(name);
-  for (const name of changes.disableMcpServers) mcpServers.add(name);
-
-  for (const name of changes.enablePlugins) plugins.delete(name);
-  for (const name of changes.disablePlugins) plugins.add(name);
-
-  return {
-    builtin: sortStringList(builtin),
-    mcp_servers: sortStringList(mcpServers),
-    plugins: sortStringList(plugins),
-  };
-}
-
-function summarizeToolControlChangesLocally(changes: ToolControlChangesLike): string[] {
-  const lines: string[] = [];
-  if (changes.enableBuiltin.length > 0) lines.push(`启用 builtin: ${changes.enableBuiltin.join(", ")}`);
-  if (changes.disableBuiltin.length > 0) lines.push(`关闭 builtin: ${changes.disableBuiltin.join(", ")}`);
-  if (changes.enableMcpServers.length > 0) lines.push(`启用 MCP: ${changes.enableMcpServers.join(", ")}`);
-  if (changes.disableMcpServers.length > 0) lines.push(`关闭 MCP: ${changes.disableMcpServers.join(", ")}`);
-  if (changes.enablePlugins.length > 0) lines.push(`启用插件: ${changes.enablePlugins.join(", ")}`);
-  if (changes.disablePlugins.length > 0) lines.push(`关闭插件: ${changes.disablePlugins.join(", ")}`);
-  return lines;
-}
-
-function buildToolControlDisabledPayloadLocally(disabled: {
-  builtin: string[];
-  mcp_servers: string[];
-  plugins: string[];
-  skills: string[];
-}) {
-  return {
-    builtin: sortStringList(disabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME)),
-    mcp_servers: sortStringList(disabled.mcp_servers),
-    plugins: sortStringList(disabled.plugins),
-    skills: sortStringList(disabled.skills),
-  };
-}
-
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
 }
@@ -839,122 +936,21 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     });
   } else {
     app.post("/api/message", async (req, res) => {
-      try {
-        if (!communityApiToken) {
-          log.error("api", "Community API enabled but no token configured");
-          return res.status(503).json({
-            ok: false,
-            error: { code: "API_MISCONFIGURED", message: "Community API token is not configured." },
-          });
-        }
-
-        const authorization = req.headers.authorization;
-        if (typeof authorization !== "string" || !authorization.startsWith("Bearer ")) {
-          res.setHeader("WWW-Authenticate", 'Bearer realm="belldandy-community"');
-          return res.status(401).json({
-            ok: false,
-            error: { code: "UNAUTHORIZED", message: "Missing or invalid bearer token." },
-          });
-        }
-
-        const token = authorization.slice("Bearer ".length).trim();
-        if (!token || token !== communityApiToken) {
-          res.setHeader("WWW-Authenticate", 'Bearer realm="belldandy-community"');
-          return res.status(401).json({
-            ok: false,
-            error: { code: "UNAUTHORIZED", message: "Missing or invalid bearer token." },
-          });
-        }
-
-        const { text, conversationId, from, senderInfo, roomContext, agentId } = req.body;
-
-        // Validate required fields
-        if (!text || typeof text !== "string") {
-          return res.status(400).json({
-            ok: false,
-            error: { code: "INVALID_REQUEST", message: "Missing or invalid 'text' field" },
-          });
-        }
-
-        if (!conversationId || typeof conversationId !== "string") {
-          return res.status(400).json({
-            ok: false,
-            error: { code: "INVALID_REQUEST", message: "Missing or invalid 'conversationId' field" },
-          });
-        }
-
-        // Get agent instance
-        const agent = agentId && opts.agentRegistry
-          ? opts.agentRegistry.create(agentId)
-          : opts.agentFactory?.();
-
-        if (!agent) {
-          return res.status(503).json({
-            ok: false,
-            error: { code: "AGENT_UNAVAILABLE", message: "No agent configured" },
-          });
-        }
-
-        // Process message through agent
-        log.info("api", `Processing community message: conversationId=${conversationId}, from=${from || "unknown"}`);
-
-        const stream = agent.run({
-          conversationId,
-          text,
-          userInput: text,
-          agentId,
-          roomContext,
-          senderInfo,
-        });
-
-        const runStartedAt = Date.now();
-        let finalText = "";
-        let latestUsage:
-          | {
-            inputTokens: number;
-            outputTokens: number;
-          }
-          | undefined;
-        for await (const item of stream) {
-          if (item.type === "final") {
-            finalText = item.text;
-          }
-          if (item.type === "usage") {
-            latestUsage = {
-              inputTokens: Number(item.inputTokens ?? 0),
-              outputTokens: Number(item.outputTokens ?? 0),
-            };
-          }
-        }
-        if (latestUsage) {
-          emitAutoRunTaskTokenResult(conversationStore, {
-            conversationId,
-            inputTokens: latestUsage.inputTokens,
-            outputTokens: latestUsage.outputTokens,
-            durationMs: Date.now() - runStartedAt,
-          });
-        }
-
-        // Return success response
-        res.json({
-          ok: true,
-          payload: {
-            conversationId,
-            response: finalText,
-          },
-        });
-
-        log.info("api", `Community message processed successfully: ${finalText.substring(0, 50)}...`);
-      } catch (error) {
-        log.error("api", "Failed to process community message", error);
-        res.status(500).json({
-          ok: false,
-          error: {
-            code: "INTERNAL_ERROR",
-            message: error instanceof Error ? error.message : "Unknown error",
-          },
-        });
-      }
+      const response = await handleCommunityMessageWithQueryRuntime({
+        requestId: `api.message:${crypto.randomUUID()}`,
+        authorization: req.headers.authorization,
+        communityApiToken,
+        body: req.body,
+        agentFactory: opts.agentFactory,
+        agentRegistry: opts.agentRegistry,
+        conversationStore,
+        log,
+        runtimeObserver: queryRuntimeTraceStore.createObserver<"api.message">(),
+        emitAutoRunTaskTokenResult: (store, payload) => {
+          emitAutoRunTaskTokenResult(store, payload);
+        },
+      });
+      sendHttpJson(res, response);
     });
   }
 
@@ -972,172 +968,24 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     });
   } else {
     app.post("/api/webhook/:id", async (req, res) => {
-      try {
-        const webhookId = req.params.id;
-        if (!webhookId || typeof webhookId !== "string") {
-          return res.status(400).json({
-            ok: false,
-            error: { code: "INVALID_REQUEST", message: "Missing webhook ID" },
-          });
-        }
-
-        // Find webhook rule
-        const rule = findWebhookRule(opts.webhookConfig!, webhookId);
-        if (!rule) {
-          return res.status(404).json({
-            ok: false,
-            error: { code: "WEBHOOK_NOT_FOUND", message: `Webhook "${webhookId}" not found` },
-          });
-        }
-
-        // Check if webhook is enabled
-        if (!rule.enabled) {
-          return res.status(403).json({
-            ok: false,
-            error: { code: "WEBHOOK_DISABLED", message: `Webhook "${webhookId}" is disabled` },
-          });
-        }
-
-        // Verify Bearer token
-        const authHeader = req.headers.authorization;
-        if (!verifyWebhookToken(rule, authHeader)) {
-          res.setHeader("WWW-Authenticate", 'Bearer realm="belldandy-webhook"');
-          return res.status(401).json({
-            ok: false,
-            error: { code: "UNAUTHORIZED", message: "Missing or invalid bearer token" },
-          });
-        }
-
-        // Check idempotency
-        const idempotencyKey = req.headers["x-idempotency-key"];
-        const idempotencyManager =
-          idempotencyKey && typeof idempotencyKey === "string" ? opts.webhookIdempotency : undefined;
-        let ownsIdempotencySlot = false;
-        if (idempotencyManager && typeof idempotencyKey === "string") {
-          const acquired = idempotencyManager.acquireRequest(webhookId, idempotencyKey);
-          if (acquired.status === "cached") {
-            log.info("webhook", `Duplicate request detected from cache: ${webhookId} / ${idempotencyKey}`);
-            return res.json({ ...acquired.response, duplicate: true });
-          }
-          if (acquired.status === "pending") {
-            log.info("webhook", `Duplicate request joined in-flight execution: ${webhookId} / ${idempotencyKey}`);
-            try {
-              const response = await acquired.promise;
-              return res.json({ ...response, duplicate: true });
-            } catch (err) {
-              return res.status(500).json({
-                ok: false,
-                error: {
-                  code: "INTERNAL_ERROR",
-                  message: err instanceof Error ? err.message : "Unknown error",
-                },
-              });
-            }
-          }
-          ownsIdempotencySlot = true;
-        }
-
-        // Parse request body
-        const params = req.body as WebhookRequestParams;
-        const requestedAgentId = params.agentId ?? rule.defaultAgentId;
-        const conversationId = params.conversationId ?? generateConversationId(rule);
-
-        // Generate prompt text
-        let promptText = params.text ?? "";
-        if (!promptText && params.payload) {
-          promptText = generatePromptFromPayload(rule, params.payload);
-        }
-
-        if (!promptText.trim()) {
-          return res.status(400).json({
-            ok: false,
-            error: { code: "INVALID_REQUEST", message: "Missing text or payload" },
-          });
-        }
-
-        // Get agent instance
-        const agent = requestedAgentId && opts.agentRegistry
-          ? opts.agentRegistry.create(requestedAgentId)
-          : opts.agentFactory?.();
-
-        if (!agent) {
-          return res.status(503).json({
-            ok: false,
-            error: { code: "AGENT_UNAVAILABLE", message: "No agent configured" },
-          });
-        }
-
-        // Process message through agent
-        log.info("webhook", `Processing webhook: id=${webhookId}, conversationId=${conversationId}, agentId=${requestedAgentId ?? "default"}`);
-
-        const stream = agent.run({
-          conversationId,
-          text: promptText,
-          userInput: promptText,
-          agentId: requestedAgentId,
-        });
-
-        const runStartedAt = Date.now();
-        let finalText = "";
-        let latestUsage:
-          | {
-            inputTokens: number;
-            outputTokens: number;
-          }
-          | undefined;
-        for await (const item of stream) {
-          if (item.type === "final") {
-            finalText = item.text;
-          }
-          if (item.type === "usage") {
-            latestUsage = {
-              inputTokens: Number(item.inputTokens ?? 0),
-              outputTokens: Number(item.outputTokens ?? 0),
-            };
-          }
-        }
-        if (latestUsage) {
-          emitAutoRunTaskTokenResult(conversationStore, {
-            conversationId,
-            inputTokens: latestUsage.inputTokens,
-            outputTokens: latestUsage.outputTokens,
-            durationMs: Date.now() - runStartedAt,
-          });
-        }
-
-        // Build response
-        const response = {
-          ok: true,
-          payload: {
-            webhookId,
-            conversationId,
-            response: finalText,
-          },
-        };
-
-        // Cache response for idempotency
-        if (idempotencyManager && typeof idempotencyKey === "string") {
-          idempotencyManager.completeRequest(webhookId, idempotencyKey, response);
-        }
-
-        // Return success response
-        res.json(response);
-
-        log.info("webhook", `Webhook processed successfully: ${finalText.substring(0, 50)}...`);
-      } catch (error) {
-        const idempotencyKey = req.headers["x-idempotency-key"];
-        if (idempotencyKey && typeof idempotencyKey === "string" && opts.webhookIdempotency) {
-          opts.webhookIdempotency.failRequest(req.params.id, idempotencyKey, error);
-        }
-        log.error("webhook", "Failed to process webhook", error);
-        res.status(500).json({
-          ok: false,
-          error: {
-            code: "INTERNAL_ERROR",
-            message: error instanceof Error ? error.message : "Unknown error",
-          },
-        });
-      }
+      const response = await handleWebhookReceiveWithQueryRuntime({
+        requestId: `webhook.receive:${crypto.randomUUID()}`,
+        webhookId: req.params.id,
+        authorization: req.headers.authorization,
+        idempotencyKey: typeof req.headers["x-idempotency-key"] === "string" ? req.headers["x-idempotency-key"] : undefined,
+        body: req.body as WebhookRequestParams,
+        agentFactory: opts.agentFactory,
+        agentRegistry: opts.agentRegistry,
+        webhookConfig: opts.webhookConfig,
+        webhookIdempotency: opts.webhookIdempotency,
+        conversationStore,
+        log,
+        runtimeObserver: queryRuntimeTraceStore.createObserver<"webhook.receive">(),
+        emitAutoRunTaskTokenResult: (store, payload) => {
+          emitAutoRunTaskTokenResult(store, payload);
+        },
+      });
+      sendHttpJson(res, response);
     });
   }
 
@@ -1193,6 +1041,16 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       }
     }
   };
+  const detachSubTaskBroadcast = opts.subTaskRuntimeStore?.subscribe((event) => {
+    broadcastEvent({
+      type: "event",
+      event: "subtask.update",
+      payload: {
+        kind: event.kind,
+        item: event.item,
+      },
+    });
+  });
 
   // 初始化会话存储
   const sessionsDir = path.join(stateDir, "sessions");
@@ -1205,9 +1063,236 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     ...opts.conversationStoreOptions,
     dataDir: sessionsDir,
   });
+  const memoryUsageAccounting = new MemoryRuntimeUsageAccounting({
+    stateDir,
+    logger: {
+      warn: (message, data) => log.warn("memory-usage", message, data),
+    },
+  });
+  await memoryUsageAccounting.load();
+  const memoryBudgetGuard = MemoryRuntimeBudgetGuard.fromEnv(memoryUsageAccounting);
+  const durableExtractionRequestRateLimiter = new SlidingWindowRateLimiter(
+    parseOptionalPositiveIntEnv("BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS"),
+    parseOptionalPositiveIntEnv("BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS") ?? 60 * 60 * 1_000,
+  );
+  const queryRuntimeTraceStore = new QueryRuntimeTraceStore();
+  (opts.toolExecutor as (ToolExecutor & {
+    setBroadcast?: (
+      broadcast?: (event: string, payload: Record<string, unknown>) => void,
+    ) => void;
+    setBroadcastObserver?: (
+      observer?: (event: string, payload: Record<string, unknown>, meta: {
+        conversationId: string;
+        agentId?: string;
+        toolName: string;
+      }) => void,
+    ) => void;
+  }) | undefined)?.setBroadcast?.((event: string, payload: Record<string, unknown>) => {
+    broadcastEvent({
+      type: "event",
+      event,
+      payload,
+    });
+  });
+  (opts.toolExecutor as (ToolExecutor & {
+    setBroadcastObserver?: (
+      observer?: (event: string, payload: Record<string, unknown>, meta: {
+        conversationId: string;
+        agentId?: string;
+        toolName: string;
+      }) => void,
+    ) => void;
+  }) | undefined)?.setBroadcastObserver?.((event: string, payload: Record<string, unknown>, meta: {
+    conversationId: string;
+    agentId?: string;
+    toolName: string;
+  }) => {
+    notifyConversationToolEvent(meta.conversationId, {
+      event,
+      toolName: meta.toolName,
+      agentId: meta.agentId,
+      source: payload.source,
+      mode: payload.mode,
+    });
+  });
+
+  const durableExtractionManager = getGlobalMemoryManager();
+  const durableExtractionRuntime = durableExtractionManager
+    ? new DurableExtractionRuntime({
+      stateDir,
+      extractor: createDurableExtractionSurface(durableExtractionManager),
+      getMessages: async (conversationId) => {
+        const conversation = conversationStore.get(conversationId);
+        return (conversation?.messages ?? []).map((item) => ({
+          role: item.role,
+          content: item.content,
+        }));
+      },
+      getDigest: async (conversationId) => {
+        const digest = await conversationStore.getSessionDigest(conversationId);
+        return toDurableExtractionDigestSnapshot(digest);
+      },
+      minPendingMessages: parseOptionalPositiveIntEnv("BELLDANDY_MEMORY_DURABLE_EXTRACTION_MIN_PENDING_MESSAGES"),
+      minMessageDelta: parseOptionalPositiveIntEnv("BELLDANDY_MEMORY_DURABLE_EXTRACTION_MIN_MESSAGE_DELTA"),
+      successCooldownMs: parseOptionalPositiveIntEnv("BELLDANDY_MEMORY_DURABLE_EXTRACTION_SUCCESS_COOLDOWN_MS"),
+      failureBackoffMs: parseOptionalPositiveIntEnv("BELLDANDY_MEMORY_DURABLE_EXTRACTION_FAILURE_BACKOFF_MS"),
+      failureBackoffMaxMs: parseOptionalPositiveIntEnv("BELLDANDY_MEMORY_DURABLE_EXTRACTION_FAILURE_BACKOFF_MAX_MS"),
+      canStartRun: async (event) => {
+        const decision = await memoryBudgetGuard.evaluateDurableExtractionRun();
+        if (!decision.allowed) {
+          const usageEvent = {
+            consumer: "durable_extraction_run",
+            outcome: "blocked",
+            timestamp: Date.now(),
+            conversationId: event.conversationId,
+            source: event.source,
+            metadata: {
+              extractionKey: event.extractionKey,
+              digestAt: event.digestAt,
+              messageCount: event.messageCount,
+              threshold: event.threshold,
+              digestStatus: event.digestStatus,
+              runCount: event.projectedRunCount,
+              reasonCode: decision.reasonCode,
+              reasonMessage: decision.reasonMessage,
+              retryAfterMs: decision.retryAfterMs,
+              observedRuns: decision.observedRuns,
+              maxRuns: decision.maxRuns,
+              windowMs: decision.windowMs,
+            },
+          } as const;
+          memoryBudgetGuard.noteEvent(usageEvent);
+          await memoryUsageAccounting.recordEvent(usageEvent);
+          return {
+            allowed: false,
+            reason: decision.reasonCode ?? "durable_extraction_run_budget_exceeded",
+            retryAfterMs: decision.retryAfterMs,
+          };
+        }
+        return { allowed: true };
+      },
+      onRunStarted: async (event) => {
+        const usageEvent = {
+          consumer: "durable_extraction_run",
+          outcome: "started",
+          timestamp: Date.now(),
+          conversationId: event.conversationId,
+          source: event.source,
+          metadata: {
+            extractionKey: event.extractionKey,
+            digestAt: event.digestAt,
+            messageCount: event.messageCount,
+            threshold: event.threshold,
+            digestStatus: event.digestStatus,
+            runCount: event.projectedRunCount,
+          },
+        } as const;
+        memoryBudgetGuard.noteEvent(usageEvent);
+        await memoryUsageAccounting.recordEvent(usageEvent);
+      },
+      onRunFinished: async (event) => {
+        const usageEvent = {
+          consumer: "durable_extraction_run",
+          outcome: event.failure ? "failed" : "completed",
+          timestamp: Date.now(),
+          conversationId: event.conversationId,
+          source: event.source,
+          quantity: event.extractedCount,
+          metadata: {
+            extractionKey: event.extractionKey,
+            digestAt: event.digestAt,
+            messageCount: event.messageCount,
+            threshold: event.threshold,
+            digestStatus: event.digestStatus,
+            runCount: event.runCount,
+            failure: event.failure,
+          },
+        } as const;
+        memoryBudgetGuard.noteEvent(usageEvent);
+        await memoryUsageAccounting.recordEvent(usageEvent);
+      },
+      logger: {
+        debug: (message, data) => log.debug("durable-extraction", message, data),
+        warn: (message, data) => log.warn("durable-extraction", message, data),
+        error: (message, data) => log.error("durable-extraction", message, data),
+      },
+    })
+    : undefined;
+  await durableExtractionRuntime?.load();
+
+  const requestDurableExtraction = async (input: {
+    conversationId: string;
+    source: string;
+    digest: DurableExtractionDigestSnapshot;
+  }): Promise<DurableExtractionRecord | undefined> => {
+    if (!durableExtractionRuntime?.isAvailable()) {
+      return undefined;
+    }
+    const decision = durableExtractionRequestRateLimiter.evaluate(
+      DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_CODE,
+      DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_MESSAGE,
+    );
+    if (!decision.allowed) {
+      const usageEvent = {
+        consumer: "durable_extraction_request",
+        outcome: "blocked",
+        timestamp: Date.now(),
+        conversationId: input.conversationId,
+        source: input.source,
+        metadata: {
+          digestAt: input.digest.lastDigestAt,
+          messageCount: input.digest.messageCount,
+          threshold: input.digest.threshold,
+          digestStatus: input.digest.status,
+          reasonCode: decision.reasonCode,
+          reasonMessage: decision.reasonMessage,
+          retryAfterMs: decision.retryAfterMs,
+          observedRuns: decision.observedRuns,
+          maxRuns: decision.maxRuns,
+          windowMs: decision.windowMs,
+        },
+      } as const;
+      memoryBudgetGuard.noteEvent(usageEvent);
+      await memoryUsageAccounting.recordEvent(usageEvent);
+      return durableExtractionRuntime.getRecord(input.conversationId);
+    }
+    const record = await durableExtractionRuntime.requestExtraction(input);
+    const requestEvent = {
+      consumer: "durable_extraction_request",
+      outcome: record.status === "queued" || record.pending ? "queued" : "skipped",
+      timestamp: Date.now(),
+      conversationId: input.conversationId,
+      source: input.source,
+      metadata: {
+        digestAt: input.digest.lastDigestAt,
+        messageCount: input.digest.messageCount,
+        threshold: input.digest.threshold,
+        digestStatus: input.digest.status,
+        status: record.status,
+        pending: record.pending,
+        lastSkipReason: record.lastSkipReason,
+      },
+    } as const;
+    memoryBudgetGuard.noteEvent(requestEvent);
+    await memoryUsageAccounting.recordEvent(requestEvent);
+    if (record.status === "queued" || record.pending) {
+      durableExtractionRequestRateLimiter.note();
+    }
+    return record;
+  };
 
   // MemoryManager is now created and registered globally by gateway.ts (unified instance)
   // No need to create a separate instance here.
+  const detachDurableExtractionBroadcast = durableExtractionRuntime?.subscribe((event) => {
+    broadcastEvent({
+      type: "event",
+      event: "conversation.memory.extraction.updated",
+      payload: {
+        conversationId: event.record.conversationId,
+        extraction: event.record,
+      },
+    });
+  });
 
   wss.on("connection", (ws, req) => {
     const ip = req.socket.remoteAddress;
@@ -1310,6 +1395,11 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         primaryModelConfig: opts.primaryModelConfig,
         modelFallbacks: opts.modelFallbacks,
         conversationStore,
+        durableExtractionRuntime,
+        requestDurableExtraction,
+        memoryUsageAccounting,
+        memoryBudgetGuard,
+        durableExtractionRequestRateLimiter,
         ttsEnabled: opts.ttsEnabled,
         ttsSynthesize: opts.ttsSynthesize,
         toolsConfigManager: opts.toolsConfigManager,
@@ -1319,10 +1409,14 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         getAgentToolControlConfirmPassword: opts.getAgentToolControlConfirmPassword,
         sttTranscribe: opts.sttTranscribe,
         pluginRegistry: opts.pluginRegistry,
+        extensionHost: opts.extensionHost,
         skillRegistry: opts.skillRegistry,
         goalManager: opts.goalManager,
+        subTaskRuntimeStore: opts.subTaskRuntimeStore,
+        stopSubTask: opts.stopSubTask,
         tokenUsageUploadConfig,
         broadcastEvent,
+        queryRuntimeTraceStore,
         log,
       });
       if (res) sendRes(ws, res);
@@ -1344,6 +1438,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     port,
     host,
     close: async () => {
+      detachSubTaskBroadcast?.();
+      detachDurableExtractionBroadcast?.();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     },
@@ -1419,6 +1515,117 @@ function emitAutoRunTaskTokenResult(
   });
 }
 
+async function refreshConversationDigestAndBroadcast(
+  conversationStore: ConversationStore,
+  payload: {
+    conversationId: string;
+    force?: boolean;
+    threshold?: number;
+    source: string;
+  },
+  broadcastEvent?: (frame: GatewayEventFrame) => void,
+  durableExtractionRuntime?: DurableExtractionRuntime,
+  requestDurableExtraction?: (input: {
+    conversationId: string;
+    source: string;
+    digest: DurableExtractionDigestSnapshot;
+  }) => Promise<DurableExtractionRecord | undefined>,
+  memoryUsageAccounting?: MemoryRuntimeUsageAccounting,
+  memoryBudgetGuard?: MemoryRuntimeBudgetGuard,
+): Promise<{
+  digest: Awaited<ReturnType<ConversationStore["refreshSessionDigest"]>>["digest"];
+  updated: boolean;
+  compacted: boolean;
+  originalTokens?: number;
+  compactedTokens?: number;
+  tier?: string;
+}> {
+  const decision = await memoryBudgetGuard?.evaluateSessionDigestRefresh();
+  if (decision && !decision.allowed) {
+    const usageEvent = {
+      consumer: "session_digest_refresh",
+      outcome: "blocked",
+      timestamp: Date.now(),
+      conversationId: payload.conversationId,
+      source: payload.source,
+      metadata: {
+        reasonCode: decision.reasonCode,
+        reasonMessage: decision.reasonMessage,
+        retryAfterMs: decision.retryAfterMs,
+        observedRuns: decision.observedRuns,
+        maxRuns: decision.maxRuns,
+        windowMs: decision.windowMs,
+      },
+    } as const;
+    memoryBudgetGuard?.noteEvent(usageEvent);
+    await memoryUsageAccounting?.recordEvent(usageEvent);
+    throw new MemoryBudgetExceededError(decision);
+  }
+
+  const result = await conversationStore.refreshSessionDigest(payload.conversationId, {
+    force: payload.force === true,
+    threshold: payload.threshold,
+  });
+  const usageEvent = {
+    consumer: "session_digest_refresh",
+    outcome: result.updated ? "completed" : "skipped",
+    timestamp: Date.now(),
+    conversationId: payload.conversationId,
+    source: payload.source,
+    metadata: {
+      threshold: payload.threshold,
+      force: payload.force === true,
+      compacted: result.compacted,
+      originalTokens: result.originalTokens,
+      compactedTokens: result.compactedTokens,
+      tier: result.tier,
+      digestStatus: result.digest.status,
+      digestLastDigestAt: result.digest.lastDigestAt,
+      messageCount: result.digest.messageCount,
+      pendingMessageCount: result.digest.pendingMessageCount,
+    },
+  } as const;
+  memoryBudgetGuard?.noteEvent(usageEvent);
+  await memoryUsageAccounting?.recordEvent(usageEvent);
+  broadcastEvent?.({
+    type: "event",
+    event: "conversation.digest.updated",
+    payload: {
+      conversationId: payload.conversationId,
+      source: payload.source,
+      updated: result.updated,
+      compacted: result.compacted,
+      originalTokens: result.originalTokens,
+      compactedTokens: result.compactedTokens,
+      tier: result.tier,
+      digest: result.digest,
+    },
+  });
+  if (result.updated && durableExtractionRuntime?.isAvailable()) {
+    void (requestDurableExtraction ?? durableExtractionRuntime.requestExtraction.bind(durableExtractionRuntime))({
+      conversationId: payload.conversationId,
+      source: payload.source,
+      digest: toDurableExtractionDigestSnapshot(result.digest),
+    }).catch(() => {
+      // keep digest refresh non-blocking even if extraction scheduling fails
+    });
+  }
+  return result;
+}
+
+function toDurableExtractionDigestSnapshot(
+  digest: Awaited<ReturnType<ConversationStore["getSessionDigest"]>>,
+): DurableExtractionDigestSnapshot {
+  return {
+    status: digest.status,
+    threshold: digest.threshold,
+    messageCount: digest.messageCount,
+    digestedMessageCount: digest.digestedMessageCount,
+    pendingMessageCount: digest.pendingMessageCount,
+    lastDigestAt: digest.lastDigestAt,
+  };
+}
+
 async function handleReq(
   ws: WebSocket,
   req: GatewayReqFrame,
@@ -1435,6 +1642,15 @@ async function handleReq(
     primaryModelConfig?: { baseUrl: string; apiKey: string; model: string };
     modelFallbacks?: ModelProfile[];
     conversationStore: ConversationStore;
+    durableExtractionRuntime?: DurableExtractionRuntime;
+    requestDurableExtraction?: (input: {
+      conversationId: string;
+      source: string;
+      digest: DurableExtractionDigestSnapshot;
+    }) => Promise<DurableExtractionRecord | undefined>;
+    memoryUsageAccounting: MemoryRuntimeUsageAccounting;
+    memoryBudgetGuard: MemoryRuntimeBudgetGuard;
+    durableExtractionRequestRateLimiter: SlidingWindowRateLimiter;
     ttsEnabled?: () => boolean;
     ttsSynthesize?: (text: string) => Promise<{ webPath: string; htmlAudio: string } | null>;
     toolsConfigManager?: ToolsConfigManager;
@@ -1444,10 +1660,14 @@ async function handleReq(
     getAgentToolControlConfirmPassword?: () => string | undefined;
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     pluginRegistry?: PluginRegistry;
+    extensionHost?: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle">;
     skillRegistry?: SkillRegistry;
     goalManager?: GoalManager;
+    subTaskRuntimeStore?: SubTaskRuntimeStore;
+    stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
     tokenUsageUploadConfig: TokenUsageUploadConfig;
     broadcastEvent?: (frame: GatewayEventFrame) => void;
+    queryRuntimeTraceStore: QueryRuntimeTraceStore;
   },
 ): Promise<GatewayResFrame | null> {
   const secureMethods = [
@@ -1465,6 +1685,14 @@ async function handleReq(
     "workspace.list",
     "context.compact",
     "conversation.meta",
+    "conversation.digest.get",
+    "conversation.digest.refresh",
+    "conversation.memory.extract",
+    "conversation.memory.extraction.get",
+    "subtask.list",
+    "subtask.get",
+    "subtask.stop",
+    "subtask.archive",
     "tools.update",
     "memory.search",
     "memory.get",
@@ -1571,21 +1799,54 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
       }
 
-      let agent: BelldandyAgent;
-      const requestedAgentId = parsed.value.agentId;
-      const requestedModelId = parsed.value.modelId;
-      const createOpts = requestedModelId ? { modelOverride: requestedModelId } : undefined;
       try {
-        // Prefer AgentRegistry when available and agentId is specified
-        if (ctx.agentRegistry && requestedAgentId) {
-          agent = ctx.agentRegistry.create(requestedAgentId, createOpts);
-        } else if (ctx.agentRegistry) {
-          agent = ctx.agentRegistry.create("default", createOpts);
-        } else {
-          agent = ctx.agentFactory();
-        }
-      } catch (err: any) {
-        if (err.message === "CONFIG_REQUIRED") {
+        return await handleMessageSendWithQueryRuntime({
+          request: {
+            ws,
+            requestId: req.id,
+            params: parsed.value,
+            clientId: ctx.clientId,
+            userUuid: ctx.userUuid,
+            stateDir: ctx.stateDir,
+          },
+          runtime: {
+            log: ctx.log,
+            agentFactory: ctx.agentFactory,
+            agentRegistry: ctx.agentRegistry,
+            conversationStore: ctx.conversationStore,
+            runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"message.send">(),
+          },
+          toolControl: {
+            confirmationStore: ctx.toolControlConfirmationStore,
+            getMode: ctx.getAgentToolControlMode,
+            getConfirmPassword: ctx.getAgentToolControlConfirmPassword,
+            tryApprovePasswordInput: tryApproveToolControlPasswordInput,
+          },
+          media: {
+            sttTranscribe: ctx.sttTranscribe,
+            ttsEnabled: ctx.ttsEnabled,
+            ttsSynthesize: ctx.ttsSynthesize,
+            getAttachmentPromptLimits,
+            truncateTextForPrompt,
+            formatLocalMessageTime,
+          },
+          io: {
+            broadcastEvent: ctx.broadcastEvent,
+            sendEvent,
+            toChatMessageMeta,
+          },
+          effects: {
+            tokenUsageUploadConfig: ctx.tokenUsageUploadConfig,
+            durableExtractionRuntime: ctx.durableExtractionRuntime,
+            requestDurableExtraction: ctx.requestDurableExtraction,
+            memoryUsageAccounting: ctx.memoryUsageAccounting,
+            memoryBudgetGuard: ctx.memoryBudgetGuard,
+            emitAutoRunTaskTokenResult,
+            refreshConversationDigestAndBroadcast,
+          },
+        });
+      } catch (error) {
+        if (error instanceof MessageSendConfigurationError) {
           return {
             type: "res",
             id: req.id,
@@ -1593,430 +1854,8 @@ async function handleReq(
             error: { code: "config_required", message: "API Key or configuration missing." },
           };
         }
-        throw err;
+        throw error;
       }
-
-      const conversationId = parsed.value.conversationId ?? crypto.randomUUID();
-      const effectiveUserUuid = parsed.value.userUuid ?? ctx.userUuid;
-      let userText = parsed.value.text;
-      const normalizedRoomContext = parsed.value.roomContext
-        ? { ...parsed.value.roomContext, clientId: ctx.clientId }
-        : parsed.value.from === "web"
-          ? { environment: "local" as const, clientId: ctx.clientId }
-          : undefined;
-      const confirmPassword = String(ctx.getAgentToolControlConfirmPassword?.() ?? "").trim();
-      if (
-        ctx.getAgentToolControlMode?.() === "confirm"
-        && confirmPassword
-        && ctx.toolControlConfirmationStore
-        && userText.trim() === confirmPassword
-      ) {
-        const pending = ctx.toolControlConfirmationStore.getLatestByConversation(conversationId);
-        if (pending) {
-          ctx.toolControlConfirmationStore.markPasswordApproved(pending.requestId);
-          userText = "【已提交工具开关确认口令】";
-        }
-      }
-      const { conversation: existingConv, history } = await ctx.conversationStore.getConversationHistoryCompacted(conversationId);
-
-      // Agent-会话绑定校验：防止不同 Agent 共享同一会话导致上下文污染
-      if (existingConv?.agentId && requestedAgentId && existingConv.agentId !== requestedAgentId) {
-        return {
-          type: "res", id: req.id, ok: false,
-          error: { code: "agent_mismatch", message: `会话已绑定 Agent "${existingConv.agentId}"，不能使用 "${requestedAgentId}"。请新建会话。` },
-        };
-      }
-
-      const userMessageTimestamp = Date.now();
-      const userMessage = ctx.conversationStore.addMessage(conversationId, "user", userText, {
-        agentId: requestedAgentId,
-        channel: "webchat",
-        timestampMs: userMessageTimestamp,
-        clientContext: parsed.value.clientContext,
-      });
-
-      ctx.log.debug("message", "Processing message.send", {
-        conversationId,
-        hasUserUuid: Boolean(effectiveUserUuid),
-        userUuidSource: parsed.value.userUuid ? "message.send" : (ctx.userUuid ? "connect" : "none"),
-        payloadKeys: Object.keys(parsed.value),
-      });
-      if ('attachments' in parsed.value) {
-        const atts = (parsed.value as any).attachments;
-        ctx.log.debug("message", "Attachments field detected", {
-          isArray: Array.isArray(atts),
-          count: Array.isArray(atts) ? atts.length : undefined,
-        });
-      } else {
-        ctx.log.debug("message", "No attachments field in payload");
-      }
-
-      // Handle Attachments
-      let promptText = userText;
-      const attachments = parsed.value.attachments;
-      const contentParts: Array<any> = []; // Changed from strictly typed imageParts to allow flexible content
-      const attachmentPromptLimits = getAttachmentPromptLimits();
-      let textAttachmentCount = 0;
-      let textAttachmentChars = 0;
-      let audioTranscriptChars = 0;
-
-      if (attachments && attachments.length > 0) {
-        ctx.log.debug("message", "Processing attachments", { count: attachments.length, conversationId });
-        const attachmentDir = path.join(ctx.stateDir, "storage", "attachments", conversationId);
-        await fs.promises.mkdir(attachmentDir, { recursive: true });
-
-        const attachmentPrompts: string[] = [];
-        for (const att of attachments) {
-          const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-          const savePath = path.join(attachmentDir, safeName);
-
-          try {
-            const buffer = Buffer.from(att.base64, "base64");
-            await fs.promises.writeFile(savePath, buffer);
-
-            if (att.type.startsWith("image/")) {
-              // Image logic: Add to contentParts for vision model
-              contentParts.push({
-                type: "image_url",
-                image_url: { url: `data:${att.type};base64,${att.base64}` },
-              });
-              // Also add a note in text
-              attachmentPrompts.push(`\n[用户上传了图片: ${att.name}]`);
-            } else if (att.type.startsWith("video/")) {
-              // Video logic: Add to contentParts (by local file path)
-              // Kimi API requires upload, so we pass the local path to the Agent
-              // The Agent implementation (e.g. OpenAIChatAgent) will handle the upload.
-              const absPath = path.resolve(savePath);
-              contentParts.push({
-                type: "video_url",
-                video_url: { url: `file://${absPath}` },
-              });
-              attachmentPrompts.push(`\n[用户上传了视频: ${att.name}] (System Note: Video content has been injected via multimodal channel. Please analyze it directly.)`);
-            } else if (att.type.startsWith("audio/")) {
-              // Audio logic: Transcribe via STT
-              if (ctx.sttTranscribe) {
-                ctx.log.debug("stt", "Transcribing audio attachment", { name: att.name });
-                try {
-                  const sttResult = await ctx.sttTranscribe({
-                    buffer,
-                    fileName: att.name,
-                    mime: att.type,
-                  });
-                  if (sttResult?.text) {
-                    ctx.log.debug("stt", "Audio transcribed", { name: att.name, textLength: sttResult.text.length });
-                    if (!promptText?.trim()) {
-                      // If user didn't type anything, treat audio as the main prompt
-                      const truncatedTranscript = truncateTextForPrompt(
-                        sttResult.text,
-                        attachmentPromptLimits.totalTextCharLimit,
-                        "\n...[Transcript truncated]",
-                      );
-                      promptText = truncatedTranscript.text;
-                      audioTranscriptChars += truncatedTranscript.text.length;
-                      if (truncatedTranscript.truncated) {
-                        ctx.log.debug("stt", "Primary audio transcript truncated by total prompt limit", {
-                          name: att.name,
-                          originalChars: sttResult.text.length,
-                          keptChars: truncatedTranscript.text.length,
-                          totalCharLimit: attachmentPromptLimits.totalTextCharLimit,
-                        });
-                      }
-                    } else {
-                      // Otherwise append as context
-                      const remainingChars = Math.max(
-                        0,
-                        attachmentPromptLimits.totalTextCharLimit - textAttachmentChars - audioTranscriptChars,
-                      );
-                      const transcriptCharLimit = Math.min(
-                        attachmentPromptLimits.audioTranscriptAppendCharLimit,
-                        remainingChars,
-                      );
-                      if (transcriptCharLimit <= 0) {
-                        attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录已完成，但因本次上下文预算已用尽未注入全文）]`);
-                      } else {
-                        const truncatedTranscript = truncateTextForPrompt(
-                          sttResult.text,
-                          transcriptCharLimit,
-                          "\n...[Transcript truncated]",
-                        );
-                        audioTranscriptChars += truncatedTranscript.text.length;
-                        if (truncatedTranscript.truncated) {
-                          ctx.log.debug("stt", "Audio transcript truncated for appended context", {
-                            name: att.name,
-                            originalChars: sttResult.text.length,
-                            keptChars: truncatedTranscript.text.length,
-                            appendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
-                            remainingChars,
-                          });
-                        }
-                        attachmentPrompts.push(`\n[语音转录: "${truncatedTranscript.text}"]`);
-                      }
-                    }
-                  } else {
-                    attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录失败）]`);
-                  }
-                } catch (err) {
-                  ctx.log.error("stt", `STT failed for ${att.name}`, err);
-                  attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（转录出错）]`);
-                }
-              } else {
-                attachmentPrompts.push(`\n[用户上传了音频: ${att.name}（STT未配置）]`);
-              }
-            } else {
-              // Text/File logic
-              const isText = att.type.startsWith("text/") ||
-                att.name.endsWith(".md") ||
-                att.name.endsWith(".json") ||
-                att.name.endsWith(".js") ||
-                att.name.endsWith(".ts") ||
-                att.name.endsWith(".txt") ||
-                att.name.endsWith(".log");
-
-              if (isText) {
-                const content = buffer.toString("utf-8");
-                const remainingChars = Math.max(
-                  0,
-                  attachmentPromptLimits.totalTextCharLimit - textAttachmentChars - audioTranscriptChars,
-                );
-                const fileCharLimit = Math.min(attachmentPromptLimits.textCharLimit, remainingChars);
-                if (fileCharLimit <= 0) {
-                  attachmentPrompts.push(`\n[用户上传了文本附件: ${att.name}（因本次上下文预算已用尽，未注入全文）]`);
-                  continue;
-                }
-                const truncated = truncateTextForPrompt(content, fileCharLimit, "\n...[Truncated]");
-                textAttachmentCount += 1;
-                textAttachmentChars += truncated.text.length;
-                if (truncated.truncated) {
-                  ctx.log.debug("message", "Text attachment truncated by char limit", {
-                    name: att.name,
-                    originalChars: content.length,
-                    keptChars: truncated.text.length,
-                    charLimit: attachmentPromptLimits.textCharLimit,
-                    totalCharLimit: attachmentPromptLimits.totalTextCharLimit,
-                    remainingChars,
-                  });
-                }
-                attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated.text}\n--- End of Attachment ---\n`);
-              } else {
-                attachmentPrompts.push(`\n[User uploaded a file: ${att.name} (type: ${att.type}), saved at: ${savePath}]`);
-              }
-            }
-          } catch (e) {
-            ctx.log.error("message", `Failed to save attachment ${att.name}`, e);
-            attachmentPrompts.push(`\n[Failed to upload file: ${att.name}]`);
-          }
-        }
-
-        if (attachmentPrompts.length > 0) {
-          promptText += "\n" + attachmentPrompts.join("\n");
-        }
-      }
-
-      void (async () => {
-        const runStartedAt = Date.now();
-        let latestUsage:
-          | {
-            inputTokens: number;
-            outputTokens: number;
-          }
-          | undefined;
-        let didEmitAutoRunTaskResult = false;
-        const maybeEmitAutoRunTaskResult = () => {
-          if (didEmitAutoRunTaskResult || !latestUsage) return;
-          emitAutoRunTaskTokenResult(ctx.conversationStore, {
-            conversationId,
-            inputTokens: latestUsage.inputTokens,
-            outputTokens: latestUsage.outputTokens,
-            durationMs: Date.now() - runStartedAt,
-          }, ws);
-          didEmitAutoRunTaskResult = true;
-        };
-        try {
-          let lastUploadedUsageTotal = 0;
-          const runInput: any = {
-            conversationId,
-            text: promptText,
-            userInput: userText,
-            history,
-            agentId: requestedAgentId,
-            userUuid: effectiveUserUuid, // 优先使用 message.send 的 userUuid
-            senderInfo: parsed.value.senderInfo, // 传递发送者信息
-            roomContext: normalizedRoomContext, // 传递房间上下文
-            meta: {
-              currentMessageTime: {
-                timestampMs: userMessage.timestamp,
-                displayTimeText: formatLocalMessageTime(userMessage.timestamp),
-                isLatest: true,
-                role: "user",
-                clientContext: parsed.value.clientContext,
-              },
-            },
-          };
-          if (textAttachmentCount > 0) {
-            runInput.meta = {
-              ...(runInput.meta ?? {}),
-              attachmentStats: {
-                textAttachmentCount,
-                textAttachmentChars,
-                audioTranscriptChars,
-                promptAugmentationChars: textAttachmentChars + audioTranscriptChars,
-                textAttachmentTruncatedCharLimit: attachmentPromptLimits.textCharLimit,
-                textAttachmentTotalCharLimit: attachmentPromptLimits.totalTextCharLimit,
-                audioTranscriptAppendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
-              },
-            };
-          } else if (audioTranscriptChars > 0) {
-            runInput.meta = {
-              ...(runInput.meta ?? {}),
-              attachmentStats: {
-                textAttachmentCount: 0,
-                textAttachmentChars: 0,
-                audioTranscriptChars,
-                promptAugmentationChars: audioTranscriptChars,
-                textAttachmentTruncatedCharLimit: attachmentPromptLimits.textCharLimit,
-                textAttachmentTotalCharLimit: attachmentPromptLimits.totalTextCharLimit,
-                audioTranscriptAppendCharLimit: attachmentPromptLimits.audioTranscriptAppendCharLimit,
-              },
-            };
-          }
-          if (contentParts.length > 0) {
-            // Construct multimodal content
-            runInput.content = [
-              { type: "text", text: promptText },
-              ...contentParts
-            ];
-          }
-
-          const isTts = ctx.ttsEnabled?.() ?? false;
-          let fullResponse = "";
-          let finalEventText = "";
-          let receivedFinal = false;
-
-          for await (const item of agent.run(runInput)) {
-            if (item.type === "status") {
-              sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: item.status } });
-            }
-            if (item.type === "tool_call") {
-              sendEvent(ws, { type: "event", event: "tool_call", payload: { conversationId, id: item.id, name: item.name, arguments: item.arguments } });
-            }
-            if (item.type === "tool_result") {
-              sendEvent(ws, { type: "event", event: "tool_result", payload: { conversationId, id: item.id, name: item.name, success: item.success, output: typeof item.output === "string" && item.output.length > 500 ? item.output.slice(0, 500) + "\u2026" : item.output } });
-            }
-            if (item.type === "delta") {
-              fullResponse += item.delta;
-              // TTS mode: suppress deltas (text + audio sent together after TTS completes)
-              if (!isTts) {
-                sendEvent(ws, { type: "event", event: "chat.delta", payload: { conversationId, delta: item.delta } });
-              }
-            }
-            if (item.type === "final") {
-              receivedFinal = true;
-              fullResponse = item.text;
-            }
-            if (item.type === "usage") {
-              latestUsage = {
-                inputTokens: Number(item.inputTokens ?? 0),
-                outputTokens: Number(item.outputTokens ?? 0),
-              };
-              sendEvent(ws, {
-                type: "event", event: "token.usage", payload: {
-                  conversationId,
-                  systemPromptTokens: item.systemPromptTokens,
-                  contextTokens: item.contextTokens,
-                  inputTokens: item.inputTokens,
-                  outputTokens: item.outputTokens,
-                  cacheCreationTokens: item.cacheCreationTokens,
-                  cacheReadTokens: item.cacheReadTokens,
-                  modelCalls: item.modelCalls,
-                }
-              });
-
-              if (ctx.tokenUsageUploadConfig.enabled && effectiveUserUuid) {
-                const usageTotal = Math.max(0, Number(item.inputTokens ?? 0) + Number(item.outputTokens ?? 0));
-                const deltaTokens = Math.max(0, usageTotal - lastUploadedUsageTotal);
-                if (usageTotal > lastUploadedUsageTotal) {
-                  lastUploadedUsageTotal = usageTotal;
-                }
-                if (deltaTokens > 0) {
-                  void uploadTokenUsage({
-                    config: ctx.tokenUsageUploadConfig,
-                    userUuid: effectiveUserUuid,
-                    conversationId,
-                    source: parsed.value.from ?? "webchat",
-                    deltaTokens,
-                    log: ctx.log,
-                  });
-                }
-              }
-            }
-          }
-
-          maybeEmitAutoRunTaskResult();
-
-          finalEventText = fullResponse;
-
-          // Server-side auto TTS: generate audio and send combined response
-          if (isTts && fullResponse && ctx.ttsSynthesize) {
-            sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "generating_audio" } });
-            const ttsResult = await ctx.ttsSynthesize(fullResponse);
-            if (ttsResult) {
-              finalEventText = ttsResult.htmlAudio + "\n\n" + fullResponse;
-            }
-          }
-
-          if (receivedFinal) {
-            // Strip <audio> tags and download links before persisting — leave no trace for LLM to copy
-            const sanitized = fullResponse
-              .replace(/<audio[^>]*>.*?<\/audio>/gi, "")
-              .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
-              .replace(/\n{3,}/g, "\n\n")
-              .trim();
-            let assistantTimestamp = Date.now();
-            if (sanitized || fullResponse) {
-              const assistantMessage = ctx.conversationStore.addMessage(conversationId, "assistant", sanitized || fullResponse, {
-                agentId: requestedAgentId,
-                timestampMs: assistantTimestamp,
-              });
-              assistantTimestamp = assistantMessage.timestamp;
-            }
-            sendEvent(ws, {
-              type: "event",
-              event: "chat.final",
-              payload: {
-                conversationId,
-                role: "assistant",
-                text: finalEventText || fullResponse,
-                messageMeta: toChatMessageMeta(assistantTimestamp, true),
-              },
-            });
-          }
-        } catch (err) {
-          maybeEmitAutoRunTaskResult();
-          ctx.log.error("agent", "Agent run failed", err);
-          const errorTimestamp = Date.now();
-          sendEvent(ws, { type: "event", event: "agent.status", payload: { conversationId, status: "error" } });
-          sendEvent(ws, {
-            type: "event",
-            event: "chat.final",
-            payload: {
-              conversationId,
-              role: "assistant",
-              text: `Error: ${String(err)}`,
-              messageMeta: toChatMessageMeta(errorTimestamp, true),
-            },
-          });
-        }
-      })();
-
-      return {
-        type: "res",
-        id: req.id,
-        ok: true,
-        payload: {
-          conversationId,
-          messageMeta: toChatMessageMeta(userMessage.timestamp, true),
-        },
-      };
     }
 
     case "tool_settings.confirm": {
@@ -2024,115 +1863,39 @@ async function handleReq(
       if (!parsed.ok) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
       }
-      if (ctx.getAgentToolControlMode?.() !== "confirm") {
-        return {
-          type: "res",
-          id: req.id,
-          ok: false,
-          error: { code: "invalid_state", message: "当前工具开关控制模式不是 confirm。" },
-        };
-      }
-      if (!ctx.toolControlConfirmationStore || !ctx.toolsConfigManager) {
-        return {
-          type: "res",
-          id: req.id,
-          ok: false,
-          error: { code: "unsupported", message: "当前服务未启用工具开关确认处理。" },
-        };
-      }
-
-      const pending = ctx.toolControlConfirmationStore.get(parsed.value.requestId);
-      if (!pending) {
-        return {
-          type: "res",
-          id: req.id,
-          ok: false,
-          error: { code: "not_found", message: `未找到待确认请求: ${parsed.value.requestId}` },
-        };
-      }
-      if (parsed.value.conversationId && parsed.value.conversationId !== pending.conversationId) {
-        return {
-          type: "res",
-          id: req.id,
-          ok: false,
-          error: { code: "conversation_mismatch", message: "待确认请求不属于当前会话。" },
-        };
-      }
-
-      const summary = summarizeToolControlChangesLocally(pending.changes);
-      const emitEvent = (frame: GatewayEventFrame) => {
-        if (ctx.broadcastEvent) {
-          ctx.broadcastEvent(frame);
-        } else {
-          sendEvent(ws, frame);
-        }
-      };
-
-      if (parsed.value.decision === "reject") {
-        ctx.toolControlConfirmationStore.delete(pending.requestId);
-        emitEvent({
-          type: "event",
-          event: "tool_settings.confirm.resolved",
-          payload: {
-            source: "webchat_ui",
-            conversationId: pending.conversationId,
-            requestId: pending.requestId,
-            decision: "rejected",
-            summary,
-            resolvedAt: Date.now(),
-            targetClientId: ctx.clientId,
-          },
-        });
-        return {
-          type: "res",
-          id: req.id,
-          ok: true,
-          payload: {
-            conversationId: pending.conversationId,
-            requestId: pending.requestId,
-            decision: "rejected",
-          },
-        };
-      }
-
-      const nextDisabled = applyToolControlChangesLocally(ctx.toolsConfigManager.getConfig().disabled, pending.changes);
-      await ctx.toolsConfigManager.updateConfig(nextDisabled);
-      const latestDisabled = ctx.toolsConfigManager.getConfig().disabled;
-      ctx.toolControlConfirmationStore.delete(pending.requestId);
-
-      emitEvent({
-        type: "event",
-        event: "tools.config.updated",
-        payload: {
-          source: "webchat_ui",
-          mode: "confirm",
-          disabled: buildToolControlDisabledPayloadLocally(latestDisabled),
+      return handleToolSettingsConfirmWithQueryRuntime({
+        requestId: req.id,
+        clientId: ctx.clientId,
+        toolsConfigManager: ctx.toolsConfigManager,
+        toolControlConfirmationStore: ctx.toolControlConfirmationStore,
+        getAgentToolControlMode: ctx.getAgentToolControlMode,
+        getAgentToolControlConfirmPassword: ctx.getAgentToolControlConfirmPassword,
+        resolvePendingToolControlRequest,
+        applyToolControlChanges: (disabled, changes) => ({
+          ...applyToolControlChanges(disabled as Parameters<typeof applyToolControlChanges>[0], changes as Parameters<typeof applyToolControlChanges>[1]),
+          skills: Array.isArray(disabled.skills) ? disabled.skills : [],
+        }),
+        buildToolControlDisabledPayload: (disabled) => buildToolControlDisabledPayload({
+          builtin: disabled.builtin,
+          mcp_servers: disabled.mcp_servers,
+          plugins: disabled.plugins,
+          skills: Array.isArray(disabled.skills) ? disabled.skills : [],
+        }),
+        resolveToolControlPolicySnapshot,
+        summarizeGroupedVisibility,
+        emitEvent: (frame) => {
+          if (ctx.broadcastEvent) {
+            ctx.broadcastEvent(frame);
+          } else {
+            sendEvent(ws, frame);
+          }
         },
-      });
-      emitEvent({
-        type: "event",
-        event: "tool_settings.confirm.resolved",
-        payload: {
-          source: "webchat_ui",
-          conversationId: pending.conversationId,
-          requestId: pending.requestId,
-          decision: "approved",
-          summary,
-          resolvedAt: Date.now(),
-          targetClientId: ctx.clientId,
-        },
-      });
-
-      return {
-        type: "res",
-        id: req.id,
-        ok: true,
-        payload: {
-          conversationId: pending.conversationId,
-          requestId: pending.requestId,
-          decision: "approved",
-        },
-      };
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "tools.list"
+          | "tools.update"
+          | "tool_settings.confirm"
+        >(),
+      }, parsed.value);
     }
 
     case "config.read": {
@@ -2278,65 +2041,67 @@ async function handleReq(
     }
 
     case "tools.list": {
-      if (!ctx.toolExecutor || !ctx.toolsConfigManager) {
-        return { type: "res", id: req.id, ok: true, payload: { builtin: [], mcp: {}, plugins: [], skills: [], disabled: { builtin: [], mcp_servers: [], plugins: [], skills: [] } } };
-      }
-      const allNames = ctx.toolExecutor.getRegisteredToolNames().filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME);
-      const config = ctx.toolsConfigManager.getConfig();
-      const visibleDisabled = {
-        ...config.disabled,
-        builtin: config.disabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME),
-      };
-
-      // 分类工具
-      const builtin: string[] = [];
-      const mcp: Record<string, { tools: string[] }> = {};
-
-      for (const name of allNames) {
-        if (name.startsWith("mcp_")) {
-          // 提取 serverId: mcp_{serverId}_{toolName}
-          const rest = name.slice(4);
-          const idx = rest.indexOf("_");
-          const serverId = idx > 0 ? rest.slice(0, idx) : rest;
-          if (!mcp[serverId]) mcp[serverId] = { tools: [] };
-          mcp[serverId].tools.push(name);
-        } else {
-          builtin.push(name);
-        }
-      }
-
-      // Skills 列表
-      const skills = (ctx.skillRegistry?.getEligibleSkills() ?? []).map(s => ({
-        name: s.name,
-        description: s.description,
-        source: s.source.type,
-        priority: s.priority,
-        tags: s.tags ?? [],
-      }));
-
-      return { type: "res", id: req.id, ok: true, payload: { builtin, mcp, plugins: ctx.pluginRegistry?.getPluginIds() ?? [], skills, disabled: visibleDisabled } };
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const requestedTaskId = typeof params.taskId === "string" && params.taskId.trim()
+        ? params.taskId.trim()
+        : undefined;
+      const visibilityAgentId = typeof params.agentId === "string" && params.agentId.trim()
+        ? params.agentId.trim()
+        : undefined;
+      const visibilityConversationId = typeof params.conversationId === "string" && params.conversationId.trim()
+        ? params.conversationId.trim()
+        : undefined;
+      return handleToolsListWithQueryRuntime({
+        requestId: req.id,
+        toolExecutor: ctx.toolExecutor,
+        toolsConfigManager: ctx.toolsConfigManager,
+        toolControlConfirmationStore: ctx.toolControlConfirmationStore,
+        getAgentToolControlMode: ctx.getAgentToolControlMode,
+        getAgentToolControlConfirmPassword: ctx.getAgentToolControlConfirmPassword,
+        pluginRegistry: ctx.pluginRegistry,
+        stateDir: ctx.stateDir,
+        extensionHost: ctx.extensionHost,
+        skillRegistry: ctx.skillRegistry,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        resolveToolControlPolicySnapshot,
+        summarizeGroupedVisibility,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "tools.list"
+          | "tools.update"
+          | "tool_settings.confirm"
+        >(),
+      }, {
+        taskId: requestedTaskId,
+        agentId: visibilityAgentId,
+        conversationId: visibilityConversationId,
+      });
     }
 
     case "tools.update": {
-      if (!ctx.toolsConfigManager) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Tools config not available" } };
-      }
       const params = req.params as unknown as { disabled?: { builtin?: string[]; mcp_servers?: string[]; plugins?: string[] } } | undefined;
       if (!params?.disabled) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "Missing disabled" } };
       }
-      try {
-        const sanitizedDisabled = {
-          ...params.disabled,
-          builtin: Array.isArray(params.disabled.builtin)
-            ? params.disabled.builtin.filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME)
-            : params.disabled.builtin,
-        };
-        await ctx.toolsConfigManager.updateConfig(sanitizedDisabled);
-        return { type: "res", id: req.id, ok: true };
-      } catch (e) {
-        return { type: "res", id: req.id, ok: false, error: { code: "save_failed", message: String(e) } };
-      }
+      return handleToolsUpdateWithQueryRuntime({
+        requestId: req.id,
+        toolExecutor: ctx.toolExecutor,
+        toolsConfigManager: ctx.toolsConfigManager,
+        toolControlConfirmationStore: ctx.toolControlConfirmationStore,
+        getAgentToolControlMode: ctx.getAgentToolControlMode,
+        getAgentToolControlConfirmPassword: ctx.getAgentToolControlConfirmPassword,
+        pluginRegistry: ctx.pluginRegistry,
+        skillRegistry: ctx.skillRegistry,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        resolveToolControlPolicySnapshot,
+        summarizeGroupedVisibility,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "tools.list"
+          | "tools.update"
+          | "tool_settings.confirm"
+        >(),
+      }, {
+        disabled: params.disabled,
+      });
     }
 
     case "system.restart": {
@@ -2356,6 +2121,9 @@ async function handleReq(
     }
 
     case "system.doctor": {
+      type MCPDoctorDiagnostics = NonNullable<Awaited<ReturnType<typeof import("./mcp/index.js")["getMCPDiagnostics"]>>> & {
+        loadError?: string;
+      };
       const checks: any[] = [
         { id: "node", name: "Node.js Environment", status: "pass", message: process.version },
         { id: "memory_db", name: "Vector Database", status: "pass", message: "OK" },
@@ -2377,7 +2145,218 @@ async function handleReq(
         checks.push({ id: "agent_config", name: "Agent Configuration", status: "fail", message: "Missing API Keys" });
       }
 
-      return { type: "res", id: req.id, ok: true, payload: { checks } };
+      const memoryRuntime = await buildMemoryRuntimeDoctorReport({
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        stateDir: ctx.stateDir,
+        teamSharedMemoryEnabled: process.env.BELLDANDY_TEAM_SHARED_MEMORY_ENABLED === "true",
+        sessionDigestRateLimit: ctx.memoryBudgetGuard.getSessionDigestRateLimitState(),
+        durableExtractionRequestRateLimit: ctx.durableExtractionRequestRateLimiter.getState(
+          DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_CODE,
+          DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_MESSAGE,
+        ),
+        durableExtractionRunRateLimit: ctx.memoryBudgetGuard.getDurableExtractionRunRateLimitState(),
+      });
+      const extensionRuntimeBase = ctx.extensionHost?.extensionRuntime ?? buildExtensionRuntimeReport({
+        pluginRegistry: ctx.pluginRegistry,
+        skillRegistry: ctx.skillRegistry,
+        toolsConfigManager: ctx.toolsConfigManager,
+      });
+      const extensionRuntime = ctx.extensionHost
+        ? {
+          ...extensionRuntimeBase,
+          host: {
+            lifecycle: ctx.extensionHost.lifecycle,
+          },
+        }
+        : extensionRuntimeBase;
+      const extensionMarketplace = await (async () => {
+        try {
+          return {
+            ...(await loadExtensionMarketplaceState(ctx.stateDir)),
+            loadError: undefined as string | undefined,
+          };
+        } catch (error) {
+          return {
+            knownMarketplaces: {
+              version: 1 as const,
+              marketplaces: {},
+              updatedAt: new Date(0).toISOString(),
+            },
+            installedExtensions: {
+              version: 1 as const,
+              extensions: {},
+              updatedAt: new Date(0).toISOString(),
+            },
+            summary: {
+              knownMarketplaceCount: 0,
+              autoUpdateMarketplaceCount: 0,
+              installedExtensionCount: 0,
+              installedPluginCount: 0,
+              installedSkillPackCount: 0,
+              pendingExtensionCount: 0,
+              brokenExtensionCount: 0,
+              disabledExtensionCount: 0,
+            },
+            loadError: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })();
+      const extensionGovernance = buildExtensionGovernanceReport({
+        extensionRuntime: extensionRuntimeBase,
+        extensionMarketplace: extensionMarketplace.loadError ? undefined : extensionMarketplace,
+        extensionHostLifecycle: ctx.extensionHost?.lifecycle,
+        loadError: extensionMarketplace.loadError,
+      });
+      const queryRuntime = ctx.queryRuntimeTraceStore.getSummary();
+      const mcpRuntime = await (async () => {
+        const enabled = (process.env.BELLDANDY_MCP_ENABLED ?? "false") === "true";
+        if (!enabled) {
+          return { enabled, diagnostics: null as MCPDoctorDiagnostics | null };
+        }
+        try {
+          const mcpModule = await import("./mcp/index.js");
+          return {
+            enabled,
+            diagnostics: mcpModule.getMCPDiagnostics() as MCPDoctorDiagnostics | null,
+          };
+        } catch (error) {
+          return {
+            enabled,
+            diagnostics: {
+              initialized: false,
+              toolCount: 0,
+              serverCount: 0,
+              connectedCount: 0,
+              summary: {
+                recentErrorServers: 0,
+                recoveryAttemptedServers: 0,
+                recoverySucceededServers: 0,
+                persistedResultServers: 0,
+                truncatedResultServers: 0,
+              },
+              servers: [],
+              loadError: error instanceof Error ? error.message : String(error),
+            } satisfies MCPDoctorDiagnostics,
+          };
+        }
+      })();
+
+      checks.push({
+        id: "session_digest_runtime",
+        name: "Session Digest Runtime",
+        status: memoryRuntime.sessionDigest.rateLimit.status === "limited" ? "warn" : "pass",
+        message: memoryRuntime.sessionDigest.rateLimit.status === "limited"
+          ? `Available, but rate limited: ${formatRateLimitState(memoryRuntime.sessionDigest.rateLimit)}`
+          : `Available (${formatRateLimitState(memoryRuntime.sessionDigest.rateLimit)})`,
+      });
+
+      const durableAvailability = memoryRuntime.durableExtraction.availability;
+      const durableRunRateLimit = memoryRuntime.durableExtraction.rateLimit.run;
+      checks.push({
+        id: "durable_extraction_runtime",
+        name: "Durable Extraction Runtime",
+        status: !durableAvailability.available
+          ? durableAvailability.enabled ? "fail" : "warn"
+          : durableRunRateLimit.status === "limited" ? "warn" : "pass",
+        message: !durableAvailability.available
+          ? durableAvailability.reasonMessages.join(" ") || "Unavailable"
+          : durableRunRateLimit.status === "limited"
+            ? `Available, but run rate limited: ${formatRateLimitState(durableRunRateLimit)}`
+            : `Available (${formatRateLimitState(durableRunRateLimit)})`,
+      });
+      if (memoryRuntime.durableExtraction.guidance) {
+        checks.push({
+          id: "durable_extraction_policy",
+          name: "Durable Extraction Policy",
+          status: "pass",
+          message: `${memoryRuntime.durableExtraction.guidance.policyVersion}: ${memoryRuntime.durableExtraction.guidance.summary}`,
+        });
+      }
+      checks.push({
+        id: "team_shared_memory",
+        name: "Team Shared Memory",
+        status: memoryRuntime.sharedMemory.enabled ? "pass" : "warn",
+        message: memoryRuntime.sharedMemory.enabled
+          ? `enabled at ${memoryRuntime.sharedMemory.scope.relativeRoot} (${memoryRuntime.sharedMemory.scope.fileCount} files), secret guard ready, sync plan ${memoryRuntime.sharedMemory.syncPolicy.status}`
+          : `disabled by default, path ${memoryRuntime.sharedMemory.scope.relativeRoot}, secret guard ready, sync plan ${memoryRuntime.sharedMemory.syncPolicy.status}`,
+      });
+      checks.push({
+        id: "query_runtime_trace",
+        name: "Query Runtime Trace",
+        status: "pass",
+        message: `Enabled (${queryRuntime.activeTraceCount} active traces, ${queryRuntime.traces.length} retained, ${queryRuntime.totalObservedEvents} observed events)`,
+      });
+      const hookBridgeSummary = ctx.extensionHost?.lifecycle.hookBridge;
+      const extensionHookMessage = hookBridgeSummary && hookBridgeSummary.availableHookCount > 0
+        ? `, legacy hooks ${hookBridgeSummary.bridgedHookCount}/${hookBridgeSummary.availableHookCount} bridged`
+        : "";
+      checks.push({
+        id: "extension_runtime",
+        name: "Extension Runtime",
+        status: extensionRuntime.summary.pluginLoadErrorCount > 0 ? "warn" : "pass",
+        message: `plugins ${extensionRuntime.summary.pluginCount} (${extensionRuntime.summary.disabledPluginCount} disabled, ${extensionRuntime.summary.pluginLoadErrorCount} load errors), skills ${extensionRuntime.summary.skillCount} (${extensionRuntime.summary.disabledSkillCount} disabled, ${extensionRuntime.summary.ineligibleSkillCount} ineligible)${extensionHookMessage}`,
+      });
+      checks.push({
+        id: "extension_marketplace",
+        name: "Extension Marketplace",
+        status: extensionMarketplace.loadError
+          ? "warn"
+          : extensionMarketplace.summary.brokenExtensionCount > 0
+            ? "warn"
+            : "pass",
+        message: extensionMarketplace.loadError
+          ? `Unavailable: ${extensionMarketplace.loadError}`
+          : `marketplaces ${extensionMarketplace.summary.knownMarketplaceCount} (${extensionMarketplace.summary.autoUpdateMarketplaceCount} auto-update), installed ${extensionMarketplace.summary.installedExtensionCount} (${extensionMarketplace.summary.installedPluginCount} plugins, ${extensionMarketplace.summary.installedSkillPackCount} skill-packs, ${extensionMarketplace.summary.brokenExtensionCount} broken, ${extensionMarketplace.summary.disabledExtensionCount} disabled)`,
+      });
+      checks.push({
+        id: "extension_governance",
+        name: "Extension Governance",
+        status: extensionGovernance.loadError
+          ? "warn"
+          : extensionGovernance.summary.installedBrokenExtensionCount > 0
+            ? "warn"
+            : extensionGovernance.layers.hostLoad.lifecycleAvailable
+              && extensionGovernance.summary.loadedMarketplaceExtensionCount
+                < extensionGovernance.summary.installedEnabledExtensionCount
+              ? "warn"
+              : "pass",
+        message: extensionGovernance.loadError
+          ? `Unavailable: ${extensionGovernance.loadError}`
+          : `ledger enabled ${extensionGovernance.summary.installedEnabledExtensionCount}/${extensionGovernance.summary.installedExtensionCount}, host loaded ${extensionGovernance.summary.loadedMarketplaceExtensionCount} (${extensionGovernance.summary.loadedMarketplacePluginCount} plugins, ${extensionGovernance.summary.loadedMarketplaceSkillPackCount} skill-packs), runtime policy disabled ${extensionGovernance.summary.runtimePolicyDisabledPluginCount} plugins / ${extensionGovernance.summary.runtimePolicyDisabledSkillCount} skills`,
+      });
+      const mcpDiag = mcpRuntime.diagnostics;
+      const mcpRecoverySummary = mcpDiag && mcpDiag.summary.recoveryAttemptedServers > 0
+        ? `, recovery ${mcpDiag.summary.recoverySucceededServers}/${mcpDiag.summary.recoveryAttemptedServers}`
+        : "";
+      const mcpPersistedSummary = mcpDiag && mcpDiag.summary.persistedResultServers > 0
+        ? `, persisted refs ${mcpDiag.summary.persistedResultServers}`
+        : "";
+      checks.push({
+        id: "mcp_runtime",
+        name: "MCP Runtime",
+        status: !mcpRuntime.enabled
+          ? "pass"
+          : mcpDiag?.loadError
+            ? "warn"
+            : mcpDiag && mcpDiag.connectedCount > 0
+              ? "pass"
+              : "warn",
+        message: !mcpRuntime.enabled
+          ? "Disabled"
+          : mcpDiag?.loadError
+            ? `Unavailable: ${mcpDiag.loadError}`
+            : mcpDiag
+              ? `${mcpDiag.connectedCount}/${mcpDiag.serverCount} connected, ${mcpDiag.toolCount} tools${mcpRecoverySummary}${mcpPersistedSummary}`
+              : "Unavailable",
+      });
+
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: { checks, memoryRuntime, extensionRuntime, extensionMarketplace, extensionGovernance, queryRuntime, mcpRuntime },
+      };
     }
 
     case "agents.list": {
@@ -3749,56 +3728,23 @@ async function handleReq(
 
     case "workspace.list": {
       const params = req.params as { path?: string } | undefined;
-      const relativePath = params?.path ?? "";
-
-      // 验证路径安全性
-      const targetDir = path.resolve(ctx.stateDir, relativePath);
-      if (!isUnderRoot(ctx.stateDir, targetDir)) {
-        return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
-      }
-
-      try {
-        const stat = await statIfExists(targetDir);
-        if (!stat?.isDirectory()) {
-          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "目录不存在" } };
-        }
-
-        // 允许的文件扩展名
-        const ALLOWED_EXTENSIONS = [".md", ".json", ".txt"];
-        // 忽略的目录和文件
-        const IGNORED_NAMES = ["generated", "memory.db", ".DS_Store", "node_modules"];
-
-        const entries = await fsp.readdir(targetDir, { withFileTypes: true });
-        const items: Array<{ name: string; type: "file" | "directory"; path: string }> = [];
-
-        for (const entry of entries) {
-          // 忽略隐藏文件（以.开头，但排除状态目录自身）
-          if (entry.name.startsWith(".") && relativePath !== "") continue;
-          // 忽略特定名称
-          if (IGNORED_NAMES.includes(entry.name)) continue;
-
-          const itemRelPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-
-          if (entry.isDirectory()) {
-            items.push({ name: entry.name, type: "directory", path: itemRelPath });
-          } else if (entry.isFile()) {
-            const ext = path.extname(entry.name).toLowerCase();
-            if (ALLOWED_EXTENSIONS.includes(ext)) {
-              items.push({ name: entry.name, type: "file", path: itemRelPath });
-            }
-          }
-        }
-
-        // 排序：文件夹在前，然后按名称排序
-        items.sort((a, b) => {
-          if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        return { type: "res", id: req.id, ok: true, payload: { items } };
-      } catch (err) {
-        return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(err) } };
-      }
+      return handleWorkspaceListWithQueryRuntime({
+        requestId: req.id,
+        stateDir: ctx.stateDir,
+        additionalWorkspaceRoots: ctx.additionalWorkspaceRoots,
+        statIfExists,
+        isUnderRoot,
+        writeTextFileAtomic,
+        guardTeamSharedMemoryWrite,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "workspace.list"
+          | "workspace.read"
+          | "workspace.readSource"
+          | "workspace.write"
+        >(),
+      }, {
+        path: params?.path,
+      });
     }
 
     case "workspace.read": {
@@ -3808,36 +3754,23 @@ async function handleReq(
       if (!relativePath || typeof relativePath !== "string") {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "path is required" } };
       }
-
-      // 验证路径安全性
-      const targetFile = path.resolve(ctx.stateDir, relativePath);
-      if (!isUnderRoot(ctx.stateDir, targetFile)) {
-        return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
-      }
-
-      // 检查文件扩展名
-      const ALLOWED_EXTENSIONS = [".md", ".json", ".txt"];
-      const ext = path.extname(targetFile).toLowerCase();
-      if (!ALLOWED_EXTENSIONS.includes(ext)) {
-        return { type: "res", id: req.id, ok: false, error: { code: "invalid_type", message: "不支持的文件类型" } };
-      }
-
-      // [SECURITY] 禁止访问内部状态文件
-      const SENSITIVE_FILES = ["allowlist.json", "pairing.json", "mcp.json", "feishu-state.json"];
-      if (SENSITIVE_FILES.includes(path.basename(relativePath).toLowerCase())) {
-        return { type: "res", id: req.id, ok: false, error: { code: "forbidden", message: "禁止访问内部状态文件" } };
-      }
-
-      try {
-        const stat = await statIfExists(targetFile);
-        if (!stat?.isFile()) {
-          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
-        }
-        const content = await fsp.readFile(targetFile, "utf-8");
-        return { type: "res", id: req.id, ok: true, payload: { content, path: relativePath } };
-      } catch (err) {
-        return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(err) } };
-      }
+      return handleWorkspaceReadWithQueryRuntime({
+        requestId: req.id,
+        stateDir: ctx.stateDir,
+        additionalWorkspaceRoots: ctx.additionalWorkspaceRoots,
+        statIfExists,
+        isUnderRoot,
+        writeTextFileAtomic,
+        guardTeamSharedMemoryWrite,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "workspace.list"
+          | "workspace.read"
+          | "workspace.readSource"
+          | "workspace.write"
+        >(),
+      }, {
+        path: relativePath,
+      });
     }
 
     case "workspace.readSource": {
@@ -3847,48 +3780,23 @@ async function handleReq(
       if (!requestedPath || typeof requestedPath !== "string") {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "path is required" } };
       }
-
-      const targetFile = path.isAbsolute(requestedPath)
-        ? path.resolve(requestedPath)
-        : path.resolve(ctx.stateDir, requestedPath);
-      const allowedRoots = [ctx.stateDir, ...ctx.additionalWorkspaceRoots];
-
-      if (!allowedRoots.some((root) => isUnderRoot(root, targetFile))) {
-        return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
-      }
-
-      const READABLE_TEXT_EXTENSIONS = [
-        ".md", ".txt", ".json", ".jsonl", ".log", ".csv",
-        ".js", ".jsx", ".ts", ".tsx", ".mts", ".cts",
-        ".css", ".scss", ".less", ".html", ".xml",
-        ".yml", ".yaml", ".toml", ".ini",
-        ".py", ".rb", ".go", ".rs", ".java", ".kt", ".cs",
-        ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
-      ];
-      const ext = path.extname(targetFile).toLowerCase();
-      if (!READABLE_TEXT_EXTENSIONS.includes(ext)) {
-        return { type: "res", id: req.id, ok: false, error: { code: "invalid_type", message: "不支持的源文件类型" } };
-      }
-
-      try {
-        const stat = await statIfExists(targetFile);
-        if (!stat?.isFile()) {
-          return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "文件不存在" } };
-        }
-        const content = await fsp.readFile(targetFile, "utf-8");
-        return {
-          type: "res",
-          id: req.id,
-          ok: true,
-          payload: {
-            content,
-            path: targetFile,
-            readOnly: true,
-          },
-        };
-      } catch (err) {
-        return { type: "res", id: req.id, ok: false, error: { code: "read_failed", message: String(err) } };
-      }
+      return handleWorkspaceReadSourceWithQueryRuntime({
+        requestId: req.id,
+        stateDir: ctx.stateDir,
+        additionalWorkspaceRoots: ctx.additionalWorkspaceRoots,
+        statIfExists,
+        isUnderRoot,
+        writeTextFileAtomic,
+        guardTeamSharedMemoryWrite,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "workspace.list"
+          | "workspace.read"
+          | "workspace.readSource"
+          | "workspace.write"
+        >(),
+      }, {
+        path: requestedPath,
+      });
     }
 
     case "workspace.write": {
@@ -3902,27 +3810,24 @@ async function handleReq(
       if (typeof content !== "string") {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "content is required" } };
       }
-
-      // 验证路径安全性
-      const targetFile = path.resolve(ctx.stateDir, relativePath);
-      if (!isUnderRoot(ctx.stateDir, targetFile)) {
-        return { type: "res", id: req.id, ok: false, error: { code: "invalid_path", message: "路径越界" } };
-      }
-
-      // 检查文件扩展名
-      const ALLOWED_EXTENSIONS = [".md", ".json", ".txt"];
-      const ext = path.extname(targetFile).toLowerCase();
-      if (!ALLOWED_EXTENSIONS.includes(ext)) {
-        return { type: "res", id: req.id, ok: false, error: { code: "invalid_type", message: "不支持的文件类型" } };
-      }
-
-      try {
-        await writeTextFileAtomic(targetFile, content, { ensureParent: true, mode: 0o700 });
-
-        return { type: "res", id: req.id, ok: true, payload: { path: relativePath } };
-      } catch (err) {
-        return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: String(err) } };
-      }
+      return handleWorkspaceWriteWithQueryRuntime({
+        requestId: req.id,
+        stateDir: ctx.stateDir,
+        additionalWorkspaceRoots: ctx.additionalWorkspaceRoots,
+        statIfExists,
+        isUnderRoot,
+        writeTextFileAtomic,
+        guardTeamSharedMemoryWrite,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "workspace.list"
+          | "workspace.read"
+          | "workspace.readSource"
+          | "workspace.write"
+        >(),
+      }, {
+        path: relativePath,
+        content,
+      });
     }
 
     case "context.compact": {
@@ -3973,6 +3878,253 @@ async function handleReq(
           taskTokenResults: ctx.conversationStore.getTaskTokenResults(conversationId, limit),
         },
       };
+    }
+
+    case "conversation.digest.get": {
+      const params = req.params as { conversationId?: string; threshold?: number } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const threshold = typeof params?.threshold === "number" && Number.isFinite(params.threshold)
+        ? Math.max(1, Math.floor(params.threshold))
+        : undefined;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      return handleConversationDigestGetWithQueryRuntime({
+        requestId: req.id,
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        requestDurableExtraction: ctx.requestDurableExtraction,
+        memoryUsageAccounting: ctx.memoryUsageAccounting,
+        memoryBudgetGuard: ctx.memoryBudgetGuard,
+        durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
+        broadcastEvent: ctx.broadcastEvent,
+        buildMemoryRuntimeDoctorReport,
+        buildDurableExtractionUnavailableError,
+        refreshConversationDigestAndBroadcast,
+        toDurableExtractionDigestSnapshot,
+        isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.digest.get"
+          | "conversation.digest.refresh"
+          | "conversation.memory.extraction.get"
+          | "conversation.memory.extract"
+        >(),
+      }, {
+        conversationId,
+        threshold,
+      });
+    }
+
+    case "conversation.digest.refresh": {
+      const params = req.params as { conversationId?: string; force?: boolean; threshold?: number } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const threshold = typeof params?.threshold === "number" && Number.isFinite(params.threshold)
+        ? Math.max(1, Math.floor(params.threshold))
+        : undefined;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      return handleConversationDigestRefreshWithQueryRuntime({
+        requestId: req.id,
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        requestDurableExtraction: ctx.requestDurableExtraction,
+        memoryUsageAccounting: ctx.memoryUsageAccounting,
+        memoryBudgetGuard: ctx.memoryBudgetGuard,
+        durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
+        broadcastEvent: ctx.broadcastEvent,
+        buildMemoryRuntimeDoctorReport,
+        buildDurableExtractionUnavailableError,
+        refreshConversationDigestAndBroadcast,
+        toDurableExtractionDigestSnapshot,
+        isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.digest.get"
+          | "conversation.digest.refresh"
+          | "conversation.memory.extraction.get"
+          | "conversation.memory.extract"
+        >(),
+      }, {
+        conversationId,
+        threshold,
+        force: params?.force === true,
+      });
+    }
+
+    case "conversation.memory.extraction.get": {
+      const params = req.params as { conversationId?: string; threshold?: number } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const threshold = typeof params?.threshold === "number" && Number.isFinite(params.threshold)
+        ? Math.max(1, Math.floor(params.threshold))
+        : undefined;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      return handleConversationMemoryExtractionGetWithQueryRuntime({
+        requestId: req.id,
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        stateDir: ctx.stateDir,
+        teamSharedMemoryEnabled: process.env.BELLDANDY_TEAM_SHARED_MEMORY_ENABLED === "true",
+        requestDurableExtraction: ctx.requestDurableExtraction,
+        memoryUsageAccounting: ctx.memoryUsageAccounting,
+        memoryBudgetGuard: ctx.memoryBudgetGuard,
+        durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
+        broadcastEvent: ctx.broadcastEvent,
+        buildMemoryRuntimeDoctorReport,
+        buildDurableExtractionUnavailableError,
+        refreshConversationDigestAndBroadcast,
+        toDurableExtractionDigestSnapshot,
+        isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.digest.get"
+          | "conversation.digest.refresh"
+          | "conversation.memory.extraction.get"
+          | "conversation.memory.extract"
+        >(),
+      }, {
+        conversationId,
+        threshold,
+      });
+    }
+
+    case "conversation.memory.extract": {
+      const params = req.params as { conversationId?: string; threshold?: number; refreshDigest?: boolean } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const threshold = typeof params?.threshold === "number" && Number.isFinite(params.threshold)
+        ? Math.max(1, Math.floor(params.threshold))
+        : undefined;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      return handleConversationMemoryExtractWithQueryRuntime({
+        requestId: req.id,
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        stateDir: ctx.stateDir,
+        teamSharedMemoryEnabled: process.env.BELLDANDY_TEAM_SHARED_MEMORY_ENABLED === "true",
+        requestDurableExtraction: ctx.requestDurableExtraction,
+        memoryUsageAccounting: ctx.memoryUsageAccounting,
+        memoryBudgetGuard: ctx.memoryBudgetGuard,
+        durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
+        broadcastEvent: ctx.broadcastEvent,
+        buildMemoryRuntimeDoctorReport,
+        buildDurableExtractionUnavailableError,
+        refreshConversationDigestAndBroadcast,
+        toDurableExtractionDigestSnapshot,
+        isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.digest.get"
+          | "conversation.digest.refresh"
+          | "conversation.memory.extraction.get"
+          | "conversation.memory.extract"
+        >(),
+      }, {
+        conversationId,
+        threshold,
+        refreshDigest: params?.refreshDigest === true,
+      });
+    }
+
+    case "subtask.list": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const conversationId = typeof params.conversationId === "string" && params.conversationId.trim()
+        ? params.conversationId.trim()
+        : undefined;
+      const includeArchived = params.includeArchived === true;
+      return handleSubTaskListWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        stopSubTask: ctx.stopSubTask,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "subtask.list"
+          | "subtask.get"
+          | "subtask.stop"
+          | "subtask.archive"
+        >(),
+      }, {
+        conversationId,
+        includeArchived,
+      });
+    }
+
+    case "subtask.get": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      if (!taskId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
+      }
+      return handleSubTaskGetWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        stopSubTask: ctx.stopSubTask,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "subtask.list"
+          | "subtask.get"
+          | "subtask.stop"
+          | "subtask.archive"
+        >(),
+      }, {
+        taskId,
+      });
+    }
+
+    case "subtask.stop": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      const reason = typeof params.reason === "string" && params.reason.trim()
+        ? params.reason.trim()
+        : undefined;
+      if (!taskId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
+      }
+      return handleSubTaskStopWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        stopSubTask: ctx.stopSubTask,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "subtask.list"
+          | "subtask.get"
+          | "subtask.stop"
+          | "subtask.archive"
+        >(),
+      }, {
+        taskId,
+        reason,
+      });
+    }
+
+    case "subtask.archive": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      const reason = typeof params.reason === "string" && params.reason.trim()
+        ? params.reason.trim()
+        : undefined;
+      if (!taskId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
+      }
+      return handleSubTaskArchiveWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        stopSubTask: ctx.stopSubTask,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "subtask.list"
+          | "subtask.get"
+          | "subtask.stop"
+          | "subtask.archive"
+        >(),
+      }, {
+        taskId,
+        reason,
+      });
     }
   }
 
@@ -4201,6 +4353,16 @@ function sendEvent(ws: WebSocket, frame: GatewayEventFrame) {
 function sendFrame(ws: WebSocket, frame: GatewayFrame) {
   if (ws.readyState !== 1) return;
   ws.send(JSON.stringify(frame));
+}
+
+function sendHttpJson(
+  res: express.Response,
+  response: QueryRuntimeHttpJsonResponse,
+) {
+  for (const [key, value] of Object.entries(response.headers ?? {})) {
+    res.setHeader(key, value);
+  }
+  return res.status(response.status).json(response.body);
 }
 
 function safeClose(ws: WebSocket, code: number, reason: string) {

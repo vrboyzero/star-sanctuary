@@ -1,0 +1,688 @@
+function formatSubtaskStatus(status) {
+  switch (status) {
+    case "running":
+      return "running";
+    case "done":
+      return "done";
+    case "error":
+      return "error";
+    case "timeout":
+      return "timeout";
+    case "stopped":
+      return "stopped";
+    default:
+      return "pending";
+  }
+}
+
+function getStatusToneClass(status) {
+  switch (status) {
+    case "running":
+      return "is-running";
+    case "done":
+      return "is-done";
+    case "error":
+      return "is-error";
+    case "timeout":
+      return "is-timeout";
+    case "stopped":
+      return "is-stopped";
+    default:
+      return "is-pending";
+  }
+}
+
+function renderDetailCard(label, value, escapeHtml) {
+  return `
+    <div class="memory-detail-card">
+      <span class="memory-detail-label">${escapeHtml(label)}</span>
+      <div class="memory-detail-text">${escapeHtml(value || "-")}</div>
+    </div>
+  `;
+}
+
+function formatLaunchTimeout(timeoutMs) {
+  const value = Number(timeoutMs);
+  if (!Number.isFinite(value) || value <= 0) return "-";
+  if (value % 1000 === 0) {
+    return `${Math.round(value / 1000)}s`;
+  }
+  return `${value}ms`;
+}
+
+function formatWorktreeRuntimeStatus(status, t) {
+  switch (status) {
+    case "created":
+      return t("subtasks.worktreeStatusCreated", {}, "created");
+    case "missing":
+      return t("subtasks.worktreeStatusMissing", {}, "missing");
+    case "removed":
+      return t("subtasks.worktreeStatusRemoved", {}, "removed");
+    case "remove_failed":
+      return t("subtasks.worktreeStatusRemoveFailed", {}, "remove_failed");
+    case "failed":
+      return t("subtasks.worktreeStatusFailed", {}, "failed");
+    case "not_requested":
+      return t("subtasks.worktreeStatusNotRequested", {}, "not_requested");
+    default:
+      return status || "-";
+  }
+}
+
+function describeWorktreeRuntimeStatus(status, t) {
+  switch (status) {
+    case "created":
+      return t("subtasks.worktreeStatusDescCreated", {}, "The isolated worktree is present and can still be inspected.");
+    case "missing":
+      return t("subtasks.worktreeStatusDescMissing", {}, "A persisted worktree record exists, but the directory is missing on disk.");
+    case "removed":
+      return t("subtasks.worktreeStatusDescRemoved", {}, "The worktree has been cleaned up and removed after archive or recovery cleanup.");
+    case "remove_failed":
+      return t("subtasks.worktreeStatusDescRemoveFailed", {}, "Cleanup was attempted, but removing the worktree failed. Check the worktree error for details.");
+    case "failed":
+      return t("subtasks.worktreeStatusDescFailed", {}, "The worktree runtime failed before or during preparation.");
+    case "not_requested":
+      return t("subtasks.worktreeStatusDescNotRequested", {}, "This subtask did not request worktree isolation.");
+    default:
+      return t("subtasks.worktreeStatusDescUnknown", {}, "No additional worktree runtime note is available.");
+  }
+}
+
+export function createSubtasksOverviewFeature({
+  refs,
+  isConnected,
+  isViewActive,
+  sendReq,
+  makeId,
+  getSubtasksState,
+  getActiveConversationId,
+  escapeHtml,
+  formatDateTime,
+  summarizeSourcePath,
+  onOpenSourcePath,
+  showNotice,
+  t = (_key, _params, fallback) => fallback ?? "",
+}) {
+  const {
+    subtasksSection,
+    subtasksSummaryEl,
+    subtasksListEl,
+    subtasksDetailEl,
+  } = refs;
+
+  function getEmptyStateMessage(subtasksState) {
+    if (subtasksState?.includeArchived === true) {
+      return t("subtasks.emptyNoTasks", {}, "No subtasks to display.");
+    }
+    return t("subtasks.emptyNoVisibleTasks", {}, "No subtasks to display. Archived tasks are hidden by default.");
+  }
+
+  function renderSubtasksSummary(items) {
+    if (!subtasksSummaryEl) return;
+    const safeItems = Array.isArray(items) ? items : [];
+    const runningCount = safeItems.filter((item) => item?.status === "running").length;
+    const doneCount = safeItems.filter((item) => item?.status === "done").length;
+    const failedCount = safeItems.filter((item) => item?.status === "error" || item?.status === "timeout" || item?.status === "stopped").length;
+
+    subtasksSummaryEl.innerHTML = `
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("subtasks.statTasks", {}, "Subtasks"))}</span><strong class="memory-stat-value">${escapeHtml(String(safeItems.length))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("subtasks.statRunning", {}, "Running"))}</span><strong class="memory-stat-value">${escapeHtml(String(runningCount))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("subtasks.statDone", {}, "Done"))}</span><strong class="memory-stat-value">${escapeHtml(String(doneCount))}</strong></div>
+      <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("subtasks.statFailed", {}, "Failed"))}</span><strong class="memory-stat-value">${escapeHtml(String(failedCount))}</strong></div>
+    `;
+  }
+
+  function renderSubtasksListEmpty(message) {
+    if (!subtasksListEl) return;
+    subtasksListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  }
+
+  function renderSubtasksDetailEmpty(message) {
+    if (!subtasksDetailEl) return;
+    subtasksDetailEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  }
+
+  function renderSubtasksLoading(message) {
+    renderSubtasksSummary([]);
+    renderSubtasksListEmpty(message);
+    renderSubtasksDetailEmpty(t("subtasks.detailSelect", {}, "Select a subtask on the left to view details."));
+  }
+
+  function renderSubtasksEmpty(message) {
+    renderSubtasksSummary([]);
+    renderSubtasksListEmpty(message);
+    renderSubtasksDetailEmpty(t("subtasks.detailSelect", {}, "Select a subtask on the left to view details."));
+  }
+
+  function bindListActions() {
+    if (!subtasksListEl) return;
+    subtasksListEl.querySelectorAll("[data-subtask-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-subtask-id");
+        if (!taskId) return;
+        const subtasksState = getSubtasksState();
+        subtasksState.selectedId = taskId;
+        renderSubtaskList(subtasksState.items);
+        void loadSubtaskDetail(taskId);
+      });
+    });
+  }
+
+  function bindDetailActions() {
+    if (!subtasksDetailEl) return;
+    subtasksDetailEl.querySelectorAll("[data-open-output-path]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const outputPath = node.getAttribute("data-open-output-path");
+        if (!outputPath) return;
+        void onOpenSourcePath(outputPath);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-stop]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-subtask-stop");
+        if (!taskId) return;
+        void performSubtaskAction("subtask.stop", taskId);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-archive]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-subtask-archive");
+        if (!taskId) return;
+        const confirmed = window.confirm(t("subtasks.archiveConfirm", {}, "Archive this subtask?"));
+        if (!confirmed) return;
+        void performSubtaskAction("subtask.archive", taskId);
+      });
+    });
+  }
+
+  function renderSubtaskList(items) {
+    if (!subtasksListEl) return;
+    const safeItems = Array.isArray(items) ? items : [];
+    if (!safeItems.length) {
+      renderSubtasksListEmpty(getEmptyStateMessage(getSubtasksState()));
+      return;
+    }
+
+    const subtasksState = getSubtasksState();
+    const activeConversationId = getActiveConversationId();
+    const isFilteredToConversation = Boolean(subtasksState.conversationId);
+
+    subtasksListEl.innerHTML = safeItems.map((item) => {
+      const isActive = item?.id === subtasksState.selectedId;
+      const isCurrentConversation = !isFilteredToConversation
+        && activeConversationId
+        && item?.parentConversationId === activeConversationId;
+      const progressText = item?.progress?.message || item?.summary || item?.instruction || "";
+      return `
+        <div class="memory-list-item subtask-list-item${isActive ? " active" : ""}" data-subtask-id="${escapeHtml(item.id || "")}">
+          <div class="subtask-list-item-head">
+            <div class="memory-list-item-title">${escapeHtml(item.id || "-")}</div>
+            <div class="memory-detail-badges">
+              ${isCurrentConversation ? `<span class="memory-badge memory-badge-shared">${escapeHtml(t("subtasks.currentConversation", {}, "current"))}</span>` : ""}
+              ${item?.archivedAt ? `<span class="memory-badge">${escapeHtml(t("subtasks.archivedBadge", {}, "archived"))}</span>` : ""}
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.status)}">${escapeHtml(formatSubtaskStatus(item?.status))}</span>
+            </div>
+          </div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(item?.agentId || "-")}</span>
+            ${item?.sessionId ? `<span>${escapeHtml(item.sessionId)}</span>` : ""}
+            <span>${escapeHtml(formatDateTime(item?.updatedAt || item?.createdAt))}</span>
+          </div>
+          <div class="memory-list-item-snippet">${escapeHtml(progressText || t("subtasks.noSummary", {}, "No summary yet."))}</div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(summarizeSourcePath(item?.parentConversationId || "-"))}</span>
+            ${item?.outputPath ? `<span>${escapeHtml(summarizeSourcePath(item.outputPath))}</span>` : ""}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    bindListActions();
+  }
+
+  function renderNotifications(items) {
+    const safeItems = Array.isArray(items) ? items : [];
+    if (!safeItems.length) {
+      return `<div class="memory-detail-text">${escapeHtml(t("subtasks.noNotifications", {}, "No notifications yet."))}</div>`;
+    }
+
+    return `
+      <div class="subtask-notification-list">
+        ${safeItems.map((item) => `
+          <div class="subtask-notification-item">
+            <div class="subtask-notification-head">
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.kind === "failed" ? "error" : item?.kind === "completed" ? "done" : item?.kind === "started" || item?.kind === "progress" ? "running" : "pending")}">${escapeHtml(item?.kind || "progress")}</span>
+              <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.createdAt))}</span>
+            </div>
+            <div class="memory-detail-text">${escapeHtml(item?.message || "-")}</div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderSubtaskDetail(item, outputContent = "") {
+    if (!subtasksDetailEl) return;
+    if (!item) {
+      renderSubtasksDetailEmpty(t("subtasks.detailSelect", {}, "Select a subtask on the left to view details."));
+      return;
+    }
+
+    const subtasksState = getSubtasksState();
+    const pendingActionKind = subtasksState.pendingActionTaskId === item.id ? subtasksState.pendingActionKind : null;
+    const canStop = item.status === "pending" || item.status === "running";
+    const canArchive = !item.archivedAt && (item.status === "done" || item.status === "error" || item.status === "timeout" || item.status === "stopped");
+    const outputText = typeof outputContent === "string" && outputContent.trim()
+      ? outputContent
+      : item?.outputPreview || "";
+    const worktreeStatus = item?.launchSpec?.worktreeStatus || "";
+    const worktreeStatusLabel = formatWorktreeRuntimeStatus(worktreeStatus, t);
+    const worktreeStatusDescription = describeWorktreeRuntimeStatus(worktreeStatus, t);
+
+    subtasksDetailEl.innerHTML = `
+      <div class="memory-detail-shell">
+        <div class="memory-detail-header">
+          <div>
+            <div class="memory-detail-title">${escapeHtml(item.id || "-")}</div>
+            <div class="memory-list-item-meta">
+              <span>${escapeHtml(item.agentId || "-")}</span>
+              ${item?.sessionId ? `<span>${escapeHtml(item.sessionId)}</span>` : ""}
+              <span>${escapeHtml(formatDateTime(item.updatedAt || item.createdAt))}</span>
+            </div>
+          </div>
+          <div class="memory-detail-badges">
+            <span class="memory-badge">${escapeHtml(item.kind || "sub_agent")}</span>
+            <span class="memory-badge subtask-status-badge ${getStatusToneClass(item.status)}">${escapeHtml(formatSubtaskStatus(item.status))}</span>
+            ${item.archivedAt ? `<span class="memory-badge">${escapeHtml(t("subtasks.archivedBadge", {}, "archived"))}</span>` : ""}
+          </div>
+        </div>
+
+        ${(canStop || canArchive) ? `
+          <div class="subtask-detail-actions">
+            ${canStop ? `<button class="button" data-subtask-stop="${escapeHtml(item.id)}" ${pendingActionKind ? "disabled" : ""}>${escapeHtml(pendingActionKind === "stop" ? t("subtasks.actionStopping", {}, "Stopping...") : t("subtasks.actionStop", {}, "Stop"))}</button>` : ""}
+            ${canArchive ? `<button class="button" data-subtask-archive="${escapeHtml(item.id)}" ${pendingActionKind ? "disabled" : ""}>${escapeHtml(pendingActionKind === "archive" ? t("subtasks.actionArchiving", {}, "Archiving...") : t("subtasks.actionArchive", {}, "Archive"))}</button>` : ""}
+          </div>
+        ` : ""}
+
+        <div class="memory-detail-grid">
+          ${renderDetailCard(t("subtasks.detailParentConversation", {}, "Parent Conversation"), item.parentConversationId, escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailSessionId", {}, "Session ID"), item.sessionId || "-", escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailAgentId", {}, "Agent"), item.agentId || "-", escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailLaunchProfile", {}, "Launch Profile"), item?.launchSpec?.profileId || "-", escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailLaunchChannel", {}, "Launch Channel"), item?.launchSpec?.channel || "-", escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailLaunchTimeout", {}, "Launch Timeout"), formatLaunchTimeout(item?.launchSpec?.timeoutMs), escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailLaunchBackground", {}, "Background"), item?.launchSpec?.background === true ? t("subtasks.boolYes", {}, "Yes") : item?.launchSpec?.background === false ? t("subtasks.boolNo", {}, "No") : "-", escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailCreatedAt", {}, "Created At"), formatDateTime(item.createdAt), escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailUpdatedAt", {}, "Updated At"), formatDateTime(item.updatedAt), escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailFinishedAt", {}, "Finished At"), formatDateTime(item.finishedAt), escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailArchivedAt", {}, "Archived At"), formatDateTime(item.archivedAt), escapeHtml)}
+        </div>
+
+        <div class="subtask-detail-sections">
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailInstruction", {}, "Instruction"))}</span>
+            <pre class="memory-detail-pre">${escapeHtml(item.instruction || "-")}</pre>
+          </section>
+
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailSummary", {}, "Summary"))}</span>
+            <div class="memory-detail-text">${escapeHtml(item.summary || t("subtasks.noSummary", {}, "No summary yet."))}</div>
+          </section>
+
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailProgress", {}, "Progress"))}</span>
+            <div class="memory-detail-text">${escapeHtml(item?.progress?.message || "-")}</div>
+          </section>
+
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailLaunchSpec", {}, "Launch Spec"))}</span>
+            <div class="memory-detail-grid">
+              ${renderDetailCard(t("subtasks.detailLaunchPermission", {}, "Permission Mode"), item?.launchSpec?.permissionMode || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchIsolation", {}, "Isolation"), item?.launchSpec?.isolationMode || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchRole", {}, "Launch Role"), item?.launchSpec?.role || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchRolePolicy", {}, "Role Policy"), item?.launchSpec?.policySummary || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchParentTask", {}, "Parent Task"), item?.launchSpec?.parentTaskId || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchCwd", {}, "Launch CWD"), item?.launchSpec?.cwd || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchResolvedCwd", {}, "Resolved CWD"), item?.launchSpec?.resolvedCwd || item?.launchSpec?.cwd || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchWorktreeStatus", {}, "Worktree Runtime"), worktreeStatusLabel, escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchWorktreePath", {}, "Worktree Path"), item?.launchSpec?.worktreePath || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchWorktreeRepo", {}, "Worktree Repo"), item?.launchSpec?.worktreeRepoRoot || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchWorktreeBranch", {}, "Worktree Branch"), item?.launchSpec?.worktreeBranch || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchToolSet", {}, "Tool Set"), Array.isArray(item?.launchSpec?.toolSet) && item.launchSpec.toolSet.length ? item.launchSpec.toolSet.join(", ") : "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchAllowedFamilies", {}, "Allowed Families"), Array.isArray(item?.launchSpec?.allowedToolFamilies) && item.launchSpec.allowedToolFamilies.length ? item.launchSpec.allowedToolFamilies.join(", ") : "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchMaxRisk", {}, "Max Risk"), item?.launchSpec?.maxToolRiskLevel || "-", escapeHtml)}
+              ${renderDetailCard(t("subtasks.detailLaunchContextKeys", {}, "Context Keys"), Array.isArray(item?.launchSpec?.contextKeys) && item.launchSpec.contextKeys.length ? item.launchSpec.contextKeys.join(", ") : "-", escapeHtml)}
+            </div>
+          </section>
+
+          ${worktreeStatus ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailLaunchWorktreeStatusNote", {}, "Worktree Status Note"))}</span>
+              <div class="memory-detail-text">${escapeHtml(worktreeStatusDescription)}</div>
+            </section>
+          ` : ""}
+
+          ${item?.launchSpec?.worktreeError ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailLaunchWorktreeError", {}, "Worktree Error"))}</span>
+              <pre class="memory-detail-pre">${escapeHtml(item.launchSpec.worktreeError)}</pre>
+            </section>
+          ` : ""}
+
+          ${item?.error ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailError", {}, "Error"))}</span>
+              <pre class="memory-detail-pre">${escapeHtml(item.error)}</pre>
+            </section>
+          ` : ""}
+
+          ${item?.archiveReason ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailArchiveReason", {}, "Archive Reason"))}</span>
+              <div class="memory-detail-text">${escapeHtml(item.archiveReason)}</div>
+            </section>
+          ` : ""}
+
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailNotifications", {}, "Notifications"))}</span>
+            ${renderNotifications(item.notifications)}
+          </section>
+
+          <section class="memory-detail-card">
+            <div class="subtask-output-header">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailOutput", {}, "Output"))}</span>
+              ${item?.outputPath ? `<button class="memory-path-link" data-open-output-path="${escapeHtml(item.outputPath)}">${escapeHtml(t("subtasks.openOutputPath", {}, "Open output path"))}</button>` : ""}
+            </div>
+            ${item?.outputPath ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailOutputPath", {}, "Output Path"))}</span><span>${escapeHtml(item.outputPath)}</span></div>` : ""}
+            ${outputText
+              ? `<pre class="memory-detail-pre">${escapeHtml(outputText)}</pre>`
+              : `<div class="memory-detail-text">${escapeHtml(t("subtasks.noOutput", {}, "No output yet."))}</div>`}
+          </section>
+        </div>
+      </div>
+    `;
+
+    bindDetailActions();
+  }
+
+  async function loadSubtaskDetail(taskId, options = {}) {
+    if (!taskId) return;
+    const subtasksState = getSubtasksState();
+    const seq = subtasksState.detailSeq + 1;
+    subtasksState.detailSeq = seq;
+    subtasksState.detailLoading = true;
+    renderSubtaskList(subtasksState.items);
+    if (!options.quiet) {
+      renderSubtasksDetailEmpty(t("subtasks.detailLoading", {}, "Loading subtask details..."));
+    }
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "subtask.get",
+      params: { taskId },
+    });
+
+    if (seq !== subtasksState.detailSeq) return;
+    subtasksState.detailLoading = false;
+
+    if (!res || !res.ok || !res.payload?.item) {
+      subtasksState.selectedItem = null;
+      subtasksState.selectedOutputContent = "";
+      renderSubtasksDetailEmpty(res?.error?.message || t("subtasks.detailLoadFailed", {}, "Failed to load subtask details."));
+      return;
+    }
+
+    const item = res.payload.item;
+    subtasksState.selectedId = item.id;
+    subtasksState.selectedItem = item;
+    subtasksState.selectedOutputContent = typeof res.payload.outputContent === "string" ? res.payload.outputContent : "";
+    subtasksState.items = subtasksState.items.map((current) => current?.id === item.id ? item : current);
+    renderSubtasksSummary(subtasksState.items);
+    renderSubtaskList(subtasksState.items);
+    renderSubtaskDetail(item, subtasksState.selectedOutputContent);
+  }
+
+  async function performSubtaskAction(method, taskId) {
+    const subtasksState = getSubtasksState();
+    const item = Array.isArray(subtasksState.items)
+      ? subtasksState.items.find((current) => current?.id === taskId) || subtasksState.selectedItem
+      : subtasksState.selectedItem;
+    if (!item) return;
+
+    subtasksState.pendingActionTaskId = taskId;
+    subtasksState.pendingActionKind = method === "subtask.stop" ? "stop" : "archive";
+    if (subtasksState.selectedItem?.id === taskId) {
+      renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+    } else {
+      renderSubtaskList(subtasksState.items);
+    }
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method,
+      params: { taskId },
+    });
+
+    subtasksState.pendingActionTaskId = null;
+    subtasksState.pendingActionKind = null;
+
+    if (!res || !res.ok || !res.payload?.item) {
+      if (subtasksState.selectedItem?.id === taskId) {
+        renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+      } else {
+        renderSubtaskList(subtasksState.items);
+      }
+      showNotice?.(
+        method === "subtask.stop"
+          ? t("subtasks.stopFailedTitle", {}, "Stop failed")
+          : t("subtasks.archiveFailedTitle", {}, "Archive failed"),
+        res?.error?.message || (method === "subtask.stop"
+          ? t("subtasks.stopFailed", {}, "Failed to stop subtask.")
+          : t("subtasks.archiveFailed", {}, "Failed to archive subtask.")),
+        "error",
+      );
+      return;
+    }
+
+    handleSubtaskUpdate({
+      kind: method === "subtask.stop" ? "stopped" : "archived",
+      item: res.payload.item,
+    });
+    showNotice?.(
+      method === "subtask.stop"
+        ? t("subtasks.stopSuccessTitle", {}, "Subtask stopped")
+        : t("subtasks.archiveSuccessTitle", {}, "Subtask archived"),
+      method === "subtask.stop"
+        ? t("subtasks.stopSuccess", {}, "The subtask has been stopped.")
+        : t("subtasks.archiveSuccess", {}, "The subtask has been archived."),
+      "info",
+    );
+  }
+
+  async function loadSubtasks(forceSelectFirst = false) {
+    if (!subtasksSection) return;
+    if (!isConnected()) {
+      const subtasksState = getSubtasksState();
+      subtasksState.loading = false;
+      subtasksState.detailLoading = false;
+      renderSubtasksLoading(t("subtasks.loadingDisconnected", {}, "Disconnected"));
+      return;
+    }
+
+    const subtasksState = getSubtasksState();
+    subtasksState.loading = true;
+    subtasksState.detailLoading = false;
+    const seq = subtasksState.loadSeq + 1;
+    subtasksState.loadSeq = seq;
+    renderSubtasksLoading(t("subtasks.loading", {}, "Loading..."));
+
+    const activeConversationId = getActiveConversationId();
+    const params = {
+      ...(activeConversationId ? { conversationId: activeConversationId } : {}),
+      includeArchived: subtasksState.includeArchived === true,
+    };
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "subtask.list",
+      params,
+    });
+
+    if (seq !== subtasksState.loadSeq) return;
+    subtasksState.loading = false;
+
+    if (!res || !res.ok || !Array.isArray(res.payload?.items)) {
+      subtasksState.items = [];
+      subtasksState.selectedId = null;
+      subtasksState.selectedItem = null;
+      subtasksState.selectedOutputContent = "";
+      renderSubtasksEmpty(res?.error?.message || t("subtasks.listLoadFailed", {}, "Failed to load subtask list."));
+      return;
+    }
+
+    const items = res.payload.items;
+    subtasksState.items = items;
+    subtasksState.conversationId = res.payload?.conversationId || null;
+    renderSubtasksSummary(items);
+
+    if (!items.length) {
+      subtasksState.selectedId = null;
+      subtasksState.selectedItem = null;
+      subtasksState.selectedOutputContent = "";
+      renderSubtasksEmpty(getEmptyStateMessage(subtasksState));
+      return;
+    }
+
+    const selectedExists = items.some((item) => item?.id === subtasksState.selectedId);
+    if (forceSelectFirst || !selectedExists) {
+      subtasksState.selectedId = items[0].id;
+    }
+
+    renderSubtaskList(items);
+    await loadSubtaskDetail(subtasksState.selectedId);
+  }
+
+  function refreshLocale() {
+    if (!subtasksSection) return;
+    const subtasksState = getSubtasksState();
+    if (!isConnected()) {
+      renderSubtasksLoading(t("subtasks.loadingDisconnected", {}, "Disconnected"));
+      return;
+    }
+    if (subtasksState.loading) {
+      renderSubtasksLoading(t("subtasks.loading", {}, "Loading..."));
+      return;
+    }
+    renderSubtasksSummary(subtasksState.items);
+    renderSubtaskList(subtasksState.items);
+    if (subtasksState.detailLoading) {
+      renderSubtasksDetailEmpty(t("subtasks.detailLoading", {}, "Loading subtask details..."));
+      return;
+    }
+    if (subtasksState.selectedItem && subtasksState.selectedItem.id === subtasksState.selectedId) {
+      renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+      return;
+    }
+    if (Array.isArray(subtasksState.items) && subtasksState.items.length === 0 && subtasksState.loadSeq > 0) {
+      renderSubtasksDetailEmpty(t("subtasks.detailSelect", {}, "Select a subtask on the left to view details."));
+      return;
+    }
+    renderSubtasksDetailEmpty(t("subtasks.detailSelect", {}, "Select a subtask on the left to view details."));
+  }
+
+  function flushSubtaskUpdate(taskId) {
+    const subtasksState = getSubtasksState();
+    const pending = subtasksState.liveUpdatePending?.[taskId];
+    if (!pending?.item) return;
+    delete subtasksState.liveUpdatePending[taskId];
+    if (subtasksState.liveUpdateTimers?.[taskId]) {
+      clearTimeout(subtasksState.liveUpdateTimers[taskId]);
+      delete subtasksState.liveUpdateTimers[taskId];
+    }
+
+    const item = pending.item;
+    const includeArchived = subtasksState.includeArchived === true;
+    const matchesConversation = !subtasksState.conversationId || item.parentConversationId === subtasksState.conversationId;
+    const nextItems = Array.isArray(subtasksState.items) ? [...subtasksState.items] : [];
+    const existingIndex = nextItems.findIndex((current) => current?.id === item.id);
+
+    if (!matchesConversation || (!includeArchived && item.archivedAt)) {
+      if (existingIndex >= 0) {
+        nextItems.splice(existingIndex, 1);
+      }
+      if (subtasksState.selectedId === item.id && item.archivedAt && !includeArchived) {
+        subtasksState.selectedItem = item;
+        subtasksState.selectedOutputContent = "";
+      }
+    } else if (existingIndex >= 0) {
+      nextItems.splice(existingIndex, 1, item);
+    } else {
+      nextItems.unshift(item);
+    }
+
+    subtasksState.items = nextItems.sort((a, b) => Number(b?.createdAt || 0) - Number(a?.createdAt || 0));
+    if (subtasksState.selectedId === item.id) {
+      subtasksState.selectedItem = item;
+    }
+
+    if (Array.isArray(subtasksState.items) && subtasksState.items.length === 0) {
+      subtasksState.selectedId = null;
+      subtasksState.selectedItem = null;
+      subtasksState.selectedOutputContent = "";
+      if (isViewActive?.()) {
+        renderSubtasksEmpty(getEmptyStateMessage(subtasksState));
+      }
+      return;
+    }
+
+    if (!subtasksState.selectedId && subtasksState.items[0]?.id) {
+      subtasksState.selectedId = subtasksState.items[0].id;
+    }
+
+    if (!isViewActive?.()) {
+      return;
+    }
+
+    renderSubtasksSummary(subtasksState.items);
+    renderSubtaskList(subtasksState.items);
+    if (subtasksState.selectedId === item.id) {
+      if (item.archivedAt && !includeArchived) {
+        renderSubtaskDetail(item, subtasksState.selectedOutputContent);
+      } else {
+        void loadSubtaskDetail(item.id, { quiet: true });
+      }
+    }
+  }
+
+  function handleSubtaskUpdate(payload) {
+    const item = payload && payload.item && typeof payload.item === "object" ? payload.item : null;
+    const taskId = typeof item?.id === "string" ? item.id : "";
+    if (!taskId) return;
+    const subtasksState = getSubtasksState();
+    if (!subtasksState.liveUpdatePending || typeof subtasksState.liveUpdatePending !== "object") {
+      subtasksState.liveUpdatePending = {};
+    }
+    if (!subtasksState.liveUpdateTimers || typeof subtasksState.liveUpdateTimers !== "object") {
+      subtasksState.liveUpdateTimers = {};
+    }
+    subtasksState.liveUpdatePending[taskId] = { item, kind: payload?.kind || "updated" };
+    if (subtasksState.liveUpdateTimers[taskId]) {
+      clearTimeout(subtasksState.liveUpdateTimers[taskId]);
+    }
+    subtasksState.liveUpdateTimers[taskId] = setTimeout(() => {
+      flushSubtaskUpdate(taskId);
+    }, subtasksState.liveUpdateDelayMs || 120);
+  }
+
+  return {
+    loadSubtasks,
+    loadSubtaskDetail,
+    refreshLocale,
+    handleSubtaskUpdate,
+    renderSubtasksSummary,
+    renderSubtaskList,
+    renderSubtaskDetail,
+  };
+}

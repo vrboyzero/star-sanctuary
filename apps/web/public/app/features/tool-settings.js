@@ -4,6 +4,10 @@ export function createToolSettingsController({
   sendReq,
   makeId,
   clientId,
+  getSelectedAgentId,
+  getActiveConversationId,
+  getSelectedSubtaskId,
+  isSubtasksViewActive,
   escapeHtml,
   showNotice,
   t = (_key, _params, fallback) => fallback ?? "",
@@ -45,6 +49,253 @@ export function createToolSettingsController({
   function renderEmpty(messageKey, fallback) {
     if (!toolSettingsBody) return;
     toolSettingsBody.innerHTML = `<div class="tool-settings-empty">${escapeHtml(t(messageKey, {}, fallback))}</div>`;
+  }
+
+  function normalizeBuiltinContract(contract) {
+    if (!contract || typeof contract !== "object") return null;
+    const safeScopes = Array.isArray(contract.safeScopes)
+      ? contract.safeScopes.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const channels = Array.isArray(contract.channels)
+      ? contract.channels.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    return {
+      family: contract.family ? String(contract.family) : "",
+      riskLevel: contract.riskLevel ? String(contract.riskLevel) : "",
+      channels,
+      safeScopes,
+      needsPermission: contract.needsPermission === true,
+      isReadOnly: contract.isReadOnly === true,
+      isConcurrencySafe: contract.isConcurrencySafe === true,
+      activityDescription: contract.activityDescription ? String(contract.activityDescription) : "",
+      outputPersistencePolicy: contract.outputPersistencePolicy ? String(contract.outputPersistencePolicy) : "",
+    };
+  }
+
+  function normalizeVisibility(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    return {
+      available: entry.available !== false,
+      reasonCode: entry.reasonCode ? String(entry.reasonCode) : "available",
+      reasonMessage: entry.reasonMessage ? String(entry.reasonMessage) : "",
+      alwaysEnabled: entry.alwaysEnabled === true,
+      contractReason: entry.contractReason ? String(entry.contractReason) : "",
+    };
+  }
+
+  function normalizeToolControlState(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    const pending = entry.pendingRequest && typeof entry.pendingRequest === "object"
+      ? {
+        requestId: entry.pendingRequest.requestId ? String(entry.pendingRequest.requestId) : "",
+        conversationId: entry.pendingRequest.conversationId ? String(entry.pendingRequest.conversationId) : "",
+        requestedByAgentId: entry.pendingRequest.requestedByAgentId ? String(entry.pendingRequest.requestedByAgentId) : "",
+        expiresAt: Number(entry.pendingRequest.expiresAt || 0),
+        summary: Array.isArray(entry.pendingRequest.summary)
+          ? entry.pendingRequest.summary.map((item) => String(item || "").trim()).filter(Boolean)
+          : [],
+        passwordApproved: entry.pendingRequest.passwordApproved === true,
+      }
+      : null;
+    return {
+      mode: entry.mode ? String(entry.mode) : "disabled",
+      requiresConfirmation: entry.requiresConfirmation === true,
+      hasConfirmPassword: entry.hasConfirmPassword === true,
+      pendingRequest: pending,
+    };
+  }
+
+  function formatContractFamilyLabel(family) {
+    const labels = {
+      "network-read": t("toolSettings.familyNetworkRead", {}, "Network Read"),
+      "workspace-read": t("toolSettings.familyWorkspaceRead", {}, "Workspace Read"),
+      "workspace-write": t("toolSettings.familyWorkspaceWrite", {}, "Workspace Write"),
+      patch: t("toolSettings.familyPatch", {}, "Patch"),
+      "command-exec": t("toolSettings.familyCommandExec", {}, "Command Exec"),
+      "process-control": t("toolSettings.familyProcessControl", {}, "Process Control"),
+      "session-orchestration": t("toolSettings.familySession", {}, "Session"),
+      memory: t("toolSettings.familyMemory", {}, "Memory"),
+      browser: t("toolSettings.familyBrowser", {}, "Browser"),
+      "service-admin": t("toolSettings.familyServiceAdmin", {}, "Service Admin"),
+      "goal-governance": t("toolSettings.familyGoal", {}, "Goal Governance"),
+      other: t("toolSettings.familyOther", {}, "Other"),
+    };
+    return labels[family] || family || t("toolSettings.familyUnknown", {}, "Unknown");
+  }
+
+  function formatContractRiskLabel(riskLevel) {
+    const labels = {
+      low: t("toolSettings.riskLow", {}, "Low Risk"),
+      medium: t("toolSettings.riskMedium", {}, "Medium Risk"),
+      high: t("toolSettings.riskHigh", {}, "High Risk"),
+      critical: t("toolSettings.riskCritical", {}, "Critical Risk"),
+    };
+    return labels[riskLevel] || riskLevel || t("toolSettings.riskUnknown", {}, "Unknown Risk");
+  }
+
+  function formatContractScopeLabel(scope) {
+    const labels = {
+      "local-safe": t("toolSettings.scopeLocalSafe", {}, "Local Safe"),
+      "web-safe": t("toolSettings.scopeWebSafe", {}, "Web Safe"),
+      "bridge-safe": t("toolSettings.scopeBridgeSafe", {}, "Bridge Safe"),
+      "remote-safe": t("toolSettings.scopeRemoteSafe", {}, "Remote Safe"),
+      privileged: t("toolSettings.scopePrivileged", {}, "Privileged"),
+    };
+    return labels[scope] || scope;
+  }
+
+  function formatContractChannelLabel(channel) {
+    const labels = {
+      gateway: t("toolSettings.channelGateway", {}, "Gateway"),
+      web: t("toolSettings.channelWeb", {}, "Web"),
+      cli: t("toolSettings.channelCli", {}, "CLI"),
+      "browser-extension": t("toolSettings.channelBrowserExtension", {}, "Browser Extension"),
+    };
+    return labels[channel] || channel;
+  }
+
+  function renderContractBadge(label, className = "") {
+    return `<span class="tool-contract-badge${className ? ` ${className}` : ""}">${escapeHtml(label)}</span>`;
+  }
+
+  function formatVisibilityLabel(reasonCode) {
+    const labels = {
+      available: t("toolSettings.visibilityAvailable", {}, "Visible in Current Context"),
+      "blocked-by-security-matrix": t("toolSettings.visibilityBlockedByMatrix", {}, "Blocked by Security Matrix"),
+      "unsupported-channel": t("toolSettings.visibilityUnsupportedChannel", {}, "Blocked by Channel"),
+      "outside-safe-scope": t("toolSettings.visibilityOutsideSafeScope", {}, "Blocked by Safe Scope"),
+      "missing-contract": t("toolSettings.visibilityMissingContract", {}, "Missing Contract"),
+      "disabled-by-settings": t("toolSettings.visibilityDisabledBySettings", {}, "Disabled by Settings"),
+      "not-in-agent-whitelist": t("toolSettings.visibilityAgentWhitelist", {}, "Blocked by Agent Whitelist"),
+      "conversation-restricted": t("toolSettings.visibilityConversationRestricted", {}, "Blocked by Conversation Scope"),
+      "excluded-by-launch-toolset": t("toolSettings.visibilityExcludedByLaunchToolset", {}, "Excluded by Launch Toolset"),
+      "blocked-by-launch-role-policy": t("toolSettings.visibilityBlockedByLaunchRolePolicy", {}, "Blocked by Launch Role Policy"),
+      "blocked-by-launch-permission-mode": t("toolSettings.visibilityBlockedByLaunchPermission", {}, "Blocked by Launch Permission Mode"),
+      "not-eligible": t("toolSettings.visibilityNotEligible", {}, "Not Eligible"),
+    };
+    return labels[reasonCode] || reasonCode || t("toolSettings.visibilityUnknown", {}, "Unknown Visibility");
+  }
+
+  function renderVisibilitySummary(visibility) {
+    if (!visibility) return "";
+    const badges = [
+      renderContractBadge(
+        formatVisibilityLabel(visibility.reasonCode),
+        visibility.available ? "visibility-available" : "visibility-blocked",
+      ),
+    ];
+    if (visibility.alwaysEnabled) {
+      badges.push(renderContractBadge(t("toolSettings.visibilityAlwaysEnabled", {}, "Always Enabled"), "visibility-always-enabled"));
+    }
+    return `
+      <div class="tool-visibility-badges">${badges.join("")}</div>
+      ${visibility.reasonMessage ? `<span class="tool-visibility-reason">${escapeHtml(visibility.reasonMessage)}</span>` : ""}
+    `;
+  }
+
+  function renderToolControlState(toolControl, visibilityContext) {
+    if (!toolControl) return "";
+    const contextParts = [
+      `${t("toolSettings.contextAgent", {}, "Agent")}: ${visibilityContext?.agentId || "default"}`,
+      `${t("toolSettings.contextConversation", {}, "Conversation")}: ${visibilityContext?.conversationId || t("toolSettings.contextConversationNone", {}, "None")}`,
+    ];
+    if (visibilityContext?.taskId) {
+      contextParts.push(`${t("toolSettings.contextTask", {}, "Subtask")}: ${visibilityContext.taskId}`);
+    }
+    const modeText = toolControl.mode === "confirm"
+      ? t("toolSettings.toolControlModeConfirm", {}, "Confirm")
+      : toolControl.mode === "auto"
+        ? t("toolSettings.toolControlModeAuto", {}, "Auto")
+        : t("toolSettings.toolControlModeDisabled", {}, "Disabled");
+    const details = [
+      `${t("toolSettings.toolControlModeLabel", {}, "Tool Control")}: ${modeText}`,
+      toolControl.requiresConfirmation
+        ? (
+          toolControl.hasConfirmPassword
+            ? t("toolSettings.toolControlConfirmPassword", {}, "Confirmation is enabled and currently uses a password/approval secret.")
+            : t("toolSettings.toolControlConfirmUi", {}, "Confirmation is enabled and current requests should be approved through the UI flow.")
+        )
+        : t("toolSettings.toolControlNoConfirm", {}, "Confirmation is not required for tool switch changes in the current mode."),
+    ];
+    if (toolControl.pendingRequest?.requestId) {
+      details.push(
+        t(
+          "toolSettings.toolControlPending",
+          { requestId: toolControl.pendingRequest.requestId },
+          `Pending confirmation request: ${toolControl.pendingRequest.requestId}`,
+        ),
+      );
+      for (const line of toolControl.pendingRequest.summary || []) {
+        details.push(line);
+      }
+    }
+    const launchSpec = visibilityContext?.launchSpec && typeof visibilityContext.launchSpec === "object"
+      ? visibilityContext.launchSpec
+      : null;
+    const runtimeLines = launchSpec
+      ? [
+        t("toolSettings.runtimeScoped", {}, "Visibility is currently evaluated using the selected subtask launch runtime."),
+        `${t("toolSettings.runtimeRole", {}, "Launch Role")}: ${launchSpec.role || "-"}`,
+        `${t("toolSettings.runtimeRolePolicy", {}, "Role Policy")}: ${launchSpec.policySummary || "-"}`,
+        `${t("toolSettings.runtimePermissionMode", {}, "Permission Mode")}: ${launchSpec.permissionMode || "-"}`,
+        `${t("toolSettings.runtimeIsolationMode", {}, "Isolation")}: ${launchSpec.isolationMode || "-"}`,
+        `${t("toolSettings.runtimeLaunchCwd", {}, "Launch CWD")}: ${launchSpec.cwd || "-"}`,
+        `${t("toolSettings.runtimeResolvedCwd", {}, "Resolved CWD")}: ${launchSpec.resolvedCwd || launchSpec.cwd || "-"}`,
+        `${t("toolSettings.runtimeWorktreeStatus", {}, "Worktree")}: ${launchSpec.worktreeStatus || "-"}`,
+        `${t("toolSettings.runtimeWorktreePath", {}, "Worktree Path")}: ${launchSpec.worktreePath || "-"}`,
+        `${t("toolSettings.runtimeToolSet", {}, "Tool Set")}: ${Array.isArray(launchSpec.toolSet) && launchSpec.toolSet.length ? launchSpec.toolSet.join(", ") : "-"}`,
+        `${t("toolSettings.runtimeAllowedFamilies", {}, "Allowed Families")}: ${Array.isArray(launchSpec.allowedToolFamilies) && launchSpec.allowedToolFamilies.length ? launchSpec.allowedToolFamilies.join(", ") : "-"}`,
+        `${t("toolSettings.runtimeMaxRisk", {}, "Max Risk")}: ${launchSpec.maxToolRiskLevel || "-"}`,
+      ]
+      : [];
+    return `
+      <div class="tool-settings-context">${escapeHtml(contextParts.join(" · "))}</div>
+      <div class="tool-settings-policy-note">${details.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>
+      ${runtimeLines.length > 0
+        ? `<div class="tool-settings-policy-note">${runtimeLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`
+        : ""}
+    `;
+  }
+
+  function renderBuiltinContractDetails(contract) {
+    if (!contract) return "";
+    const badges = [
+      renderContractBadge(formatContractFamilyLabel(contract.family), "family"),
+      renderContractBadge(formatContractRiskLabel(contract.riskLevel), `risk-${contract.riskLevel || "unknown"}`),
+      renderContractBadge(
+        contract.isReadOnly
+          ? t("toolSettings.modeReadOnly", {}, "Read-only")
+          : t("toolSettings.modeWritesState", {}, "Writes State"),
+        contract.isReadOnly ? "mode-read" : "mode-write",
+      ),
+      renderContractBadge(
+        contract.needsPermission
+          ? t("toolSettings.permissionRequired", {}, "Permission Required")
+          : t("toolSettings.permissionNotRequired", {}, "No Extra Permission"),
+        contract.needsPermission ? "permission-needed" : "permission-free",
+      ),
+      renderContractBadge(
+        contract.outputPersistencePolicy
+          ? `${t("toolSettings.outputLabel", {}, "Output")}: ${contract.outputPersistencePolicy}`
+          : t("toolSettings.outputLabel", {}, "Output"),
+      ),
+    ];
+    const scopeText = contract.safeScopes.length > 0
+      ? contract.safeScopes.map(formatContractScopeLabel).join(", ")
+      : t("toolSettings.scopeUnknown", {}, "Unknown");
+    const channelText = contract.channels.length > 0
+      ? contract.channels.map(formatContractChannelLabel).join(", ")
+      : t("toolSettings.channelUnknown", {}, "Unknown");
+    const concurrencyText = contract.isConcurrencySafe
+      ? t("toolSettings.concurrentSafe", {}, "Concurrency Safe")
+      : t("toolSettings.concurrentSerialized", {}, "Serialized Access");
+    return `
+      ${contract.activityDescription ? `<span class="tool-contract-desc">${escapeHtml(contract.activityDescription)}</span>` : ""}
+      <div class="tool-contract-badges">${badges.join("")}</div>
+      <span class="tool-contract-meta">${escapeHtml(
+        `${t("toolSettings.scopeLabel", {}, "Scopes")}: ${scopeText} · ${t("toolSettings.channelLabel", {}, "Channels")}: ${channelText} · ${concurrencyText}`,
+      )}</span>
+    `;
   }
 
   if (openToolSettingsBtn) {
@@ -271,7 +522,20 @@ export function createToolSettingsController({
     }
     renderEmpty("toolSettings.emptyLoading", "Loading...");
 
-    const res = await sendReq({ type: "req", id: makeId(), method: "tools.list" });
+    const agentId = typeof getSelectedAgentId === "function" ? String(getSelectedAgentId() || "").trim() : "";
+    const conversationId = typeof getActiveConversationId === "function" ? String(getActiveConversationId() || "").trim() : "";
+    const taskId = typeof getSelectedSubtaskId === "function" && isSubtasksViewActive?.()
+      ? String(getSelectedSubtaskId() || "").trim()
+      : "";
+    const params = {};
+    if (taskId) {
+      params.taskId = taskId;
+    } else {
+      if (agentId) params.agentId = agentId;
+      if (conversationId) params.conversationId = conversationId;
+    }
+
+    const res = await sendReq({ type: "req", id: makeId(), method: "tools.list", params });
     if (seq !== toolSettingsLoadSeq) return;
     if (res && res.ok && res.payload) {
       toolSettingsData = res.payload;
@@ -283,20 +547,40 @@ export function createToolSettingsController({
 
   function renderToolSettingsTab() {
     if (!toolSettingsData) return;
-    const { builtin, mcp, plugins, skills, disabled } = toolSettingsData;
+    const {
+      builtin,
+      mcp,
+      plugins,
+      skills,
+      disabled,
+      contracts,
+      visibility,
+      mcpVisibility,
+      pluginVisibility,
+      skillVisibility,
+      visibilityContext,
+      toolControl,
+    } = toolSettingsData;
 
     if (toolSettingsActiveTab === "builtin") {
-      renderBuiltinTab(builtin, disabled.builtin || []);
+      renderBuiltinTab(
+        builtin,
+        disabled.builtin || [],
+        contracts || {},
+        visibility || {},
+        visibilityContext || {},
+        normalizeToolControlState(toolControl),
+      );
     } else if (toolSettingsActiveTab === "mcp") {
-      renderMCPTab(mcp, disabled.mcp_servers || []);
+      renderMCPTab(mcp, disabled.mcp_servers || [], mcpVisibility || {}, visibilityContext || {}, normalizeToolControlState(toolControl));
     } else if (toolSettingsActiveTab === "skills") {
-      renderSkillsTab(skills || [], disabled.skills || []);
+      renderSkillsTab(skills || [], disabled.skills || [], skillVisibility || {}, visibilityContext || {}, normalizeToolControlState(toolControl));
     } else {
-      renderPluginsTab(plugins, disabled.plugins || []);
+      renderPluginsTab(plugins, disabled.plugins || [], pluginVisibility || {}, visibilityContext || {}, normalizeToolControlState(toolControl));
     }
   }
 
-  function renderBuiltinTab(tools, disabledList) {
+  function renderBuiltinTab(tools, disabledList, contractsByName, visibilityByName, visibilityContext, toolControl) {
     if (!tools || tools.length === 0) {
       renderEmpty("toolSettings.emptyUnavailable", "Tool system is disabled (BELLDANDY_TOOLS_ENABLED=false)");
       return;
@@ -304,10 +588,17 @@ export function createToolSettingsController({
     const disabledSet = new Set(disabledList);
     const enabledCount = tools.length - disabledSet.size;
     let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionBuiltin", {}, "Built-in Tools"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: tools.length }, `${enabledCount}/${tools.length} enabled`))}</span></div>`;
-    for (const name of tools.sort()) {
+    html += renderToolControlState(toolControl, visibilityContext);
+    for (const name of [...tools].sort((a, b) => String(a).localeCompare(String(b)))) {
       const checked = !disabledSet.has(name);
-      html += `<div class="tool-item${checked ? "" : " disabled"}">
-      <span class="tool-item-name">${escapeHtml(name)}</span>
+      const contract = normalizeBuiltinContract(contractsByName ? contractsByName[name] : null);
+      const visibility = normalizeVisibility(visibilityByName ? visibilityByName[name] : null);
+      html += `<div class="tool-item${checked ? "" : " disabled"}${visibility && !visibility.available ? " unavailable" : ""}">
+      <div class="tool-item-info">
+        <span class="tool-item-name">${escapeHtml(name)}</span>
+        ${renderBuiltinContractDetails(contract)}
+        ${renderVisibilitySummary(visibility)}
+      </div>
       <label class="toggle-switch">
         <input type="checkbox" data-category="builtin" data-name="${escapeHtml(name)}" ${checked ? "checked" : ""}>
         <span class="toggle-slider"></span>
@@ -318,7 +609,7 @@ export function createToolSettingsController({
     bindToggleEvents();
   }
 
-  function renderMCPTab(mcpServers, disabledList) {
+  function renderMCPTab(mcpServers, disabledList, visibilityByServer, visibilityContext, toolControl) {
     const serverIds = Object.keys(mcpServers || {});
     if (serverIds.length === 0) {
       renderEmpty("toolSettings.emptyNoMcp", "No MCP servers configured");
@@ -327,15 +618,17 @@ export function createToolSettingsController({
     const disabledSet = new Set(disabledList);
     const enabledCount = serverIds.length - disabledSet.size;
     let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionMcp", {}, "MCP Servers"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: serverIds.length }, `${enabledCount}/${serverIds.length} enabled`))}</span></div>`;
+    html += renderToolControlState(toolControl, visibilityContext);
     for (const serverId of serverIds.sort()) {
       const server = mcpServers[serverId];
       const checked = !disabledSet.has(serverId);
+      const visibility = normalizeVisibility(visibilityByServer ? visibilityByServer[serverId] : null);
       const toolList = (server.tools || []).map((toolName) => {
         const short = toolName.replace(`mcp_${serverId}_`, "");
         return escapeHtml(short);
       }).join(", ");
 
-      html += `<div class="mcp-group">
+      html += `<div class="mcp-group${visibility && !visibility.available ? " unavailable" : ""}">
       <div class="mcp-group-header">
         <span class="mcp-group-name">${escapeHtml(serverId)}</span>
         <label class="toggle-switch">
@@ -344,13 +637,14 @@ export function createToolSettingsController({
         </label>
       </div>
       <div class="mcp-group-tools">${toolList || escapeHtml(t("toolSettings.emptyNoTools", {}, "No tools"))}</div>
+      ${renderVisibilitySummary(visibility)}
     </div>`;
     }
     toolSettingsBody.innerHTML = html;
     bindToggleEvents();
   }
 
-  function renderPluginsTab(pluginList, disabledList) {
+  function renderPluginsTab(pluginList, disabledList, visibilityByPlugin, visibilityContext, toolControl) {
     if (!pluginList || pluginList.length === 0) {
       renderEmpty("toolSettings.emptyNoPlugins", "No plugins loaded (put .js/.mjs files into ~/.star_sanctuary/plugins/)");
       return;
@@ -358,10 +652,15 @@ export function createToolSettingsController({
     const disabledSet = new Set(disabledList);
     const enabledCount = pluginList.length - disabledSet.size;
     let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionPlugins", {}, "Plugins"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: pluginList.length }, `${enabledCount}/${pluginList.length} enabled`))}</span></div>`;
+    html += renderToolControlState(toolControl, visibilityContext);
     for (const name of pluginList.sort()) {
       const checked = !disabledSet.has(name);
-      html += `<div class="tool-item${checked ? "" : " disabled"}">
-      <span class="tool-item-name">${escapeHtml(name)}</span>
+      const visibility = normalizeVisibility(visibilityByPlugin ? visibilityByPlugin[name] : null);
+      html += `<div class="tool-item${checked ? "" : " disabled"}${visibility && !visibility.available ? " unavailable" : ""}">
+      <div class="tool-item-info">
+        <span class="tool-item-name">${escapeHtml(name)}</span>
+        ${renderVisibilitySummary(visibility)}
+      </div>
       <label class="toggle-switch">
         <input type="checkbox" data-category="plugins" data-name="${escapeHtml(name)}" ${checked ? "checked" : ""}>
         <span class="toggle-slider"></span>
@@ -372,7 +671,7 @@ export function createToolSettingsController({
     bindToggleEvents();
   }
 
-  function renderSkillsTab(skillList, disabledList) {
+  function renderSkillsTab(skillList, disabledList, visibilityBySkill, visibilityContext, toolControl) {
     if (!skillList || skillList.length === 0) {
       renderEmpty("toolSettings.emptyNoSkills", "No skills loaded (put SKILL.md into ~/.star_sanctuary/skills/)");
       return;
@@ -392,17 +691,20 @@ export function createToolSettingsController({
     };
 
     let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionSkills", {}, "Skills"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.enabledCount", { enabled: enabledCount, total: skillList.length }, `${enabledCount}/${skillList.length} enabled`))}</span></div>`;
+    html += renderToolControlState(toolControl, visibilityContext);
     for (const skill of skillList.sort((a, b) => a.name.localeCompare(b.name))) {
       const checked = !disabledSet.has(skill.name);
+      const visibility = normalizeVisibility(visibilityBySkill ? visibilityBySkill[skill.name] : null);
       const src = sourceLabel[skill.source] || skill.source;
       const pri = priorityLabel[skill.priority] || skill.priority;
       const tags = (skill.tags || []).map((tag) => `<span class="skill-tag">${escapeHtml(tag)}</span>`).join("");
-      html += `<div class="tool-item${checked ? "" : " disabled"}">
+      html += `<div class="tool-item${checked ? "" : " disabled"}${visibility && !visibility.available ? " unavailable" : ""}">
       <div class="skill-item-info">
         <span class="tool-item-name">${escapeHtml(skill.name)}</span>
         <span class="skill-meta">${src} · ${pri}</span>
         ${skill.description ? `<span class="skill-desc">${escapeHtml(skill.description)}</span>` : ""}
         ${tags ? `<div class="skill-tags">${tags}</div>` : ""}
+        ${renderVisibilitySummary(visibility)}
       </div>
       <label class="toggle-switch">
         <input type="checkbox" data-category="skills" data-name="${escapeHtml(skill.name)}" ${checked ? "checked" : ""}>

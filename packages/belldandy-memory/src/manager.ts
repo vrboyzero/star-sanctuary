@@ -33,6 +33,7 @@ import type {
     TaskExperienceDetail,
 } from "./experience-types.js";
 import { appendToTodayMemory } from "./memory-files.js";
+import type { DurableExtractionSkipReasonCode } from "./durable-extraction-policy.js";
 import { resolveStateDir, resolveWorkspaceStateDir } from "@belldandy/protocol";
 import path from "node:path";
 import fs from "node:fs/promises";
@@ -60,6 +61,172 @@ export function registerGlobalMemoryManager(manager: MemoryManager): void {
  */
 export function getGlobalMemoryManager(): MemoryManager | null {
     return globalMemoryManager;
+}
+
+export type ExtractConversationMemoriesOptions = {
+    markKey?: string;
+    sourceConversationId?: string;
+    sourceLabel?: string;
+};
+
+export type ConversationMemoryExtractionSupportReasonCode =
+    | "manager_unavailable"
+    | "gate_disabled"
+    | "model_missing"
+    | "base_url_missing"
+    | "api_key_missing";
+
+export type ConversationMemoryExtractionSupportReason = {
+    code: ConversationMemoryExtractionSupportReasonCode;
+    message: string;
+};
+
+export type ConversationMemoryExtractionSupport = {
+    enabled: boolean;
+    available: boolean;
+    minMessages: number;
+    model?: string;
+    hasBaseUrl: boolean;
+    hasApiKey: boolean;
+    reasons: ConversationMemoryExtractionSupportReason[];
+};
+
+export type DurableMemoryCandidateType =
+    | "user"
+    | "feedback"
+    | "project"
+    | "reference";
+
+export type DurableMemoryRejectionReasonCode =
+    | "code_pattern"
+    | "file_path"
+    | "git_history"
+    | "debug_recipe"
+    | "policy_rule";
+
+export type DurableMemoryGuidance = {
+    policyVersion: string;
+    acceptedCandidateTypes: DurableMemoryCandidateType[];
+    rejectedContentTypes: Array<{
+        code: DurableMemoryRejectionReasonCode;
+        message: string;
+    }>;
+    summary: string;
+};
+
+export type ExtractConversationMemoriesResult = {
+    count: number;
+    acceptedCandidateTypes: DurableMemoryCandidateType[];
+    rejectedCount: number;
+    rejectedReasons: DurableMemoryRejectionReasonCode[];
+    summary: string;
+    skipReason?: DurableExtractionSkipReasonCode | string;
+};
+
+type ExtractedConversationMemory = {
+    type: string;
+    content: string;
+    category: string;
+    candidateType?: DurableMemoryCandidateType;
+    reason?: string;
+};
+
+const DURABLE_MEMORY_GUIDANCE: DurableMemoryGuidance = {
+    policyVersion: "week9-v1",
+    acceptedCandidateTypes: ["user", "feedback", "project", "reference"],
+    rejectedContentTypes: [
+        { code: "code_pattern", message: "Reject code patterns, architecture snippets, or implementation-shaped content." },
+        { code: "file_path", message: "Reject file paths, function names, line references, and project structure details." },
+        { code: "git_history", message: "Reject git history, recent diffs, commit references, and transient change logs." },
+        { code: "debug_recipe", message: "Reject debugging recipes, shell command playbooks, and short-lived fix procedures." },
+        { code: "policy_rule", message: "Reject stable rules already covered by AGENTS.md, CLAUDE.md, README, or other project policy docs." },
+    ],
+    summary: "Durable extraction should keep only long-lived user/context/project/reference facts and avoid code details, paths, git churn, debugging recipes, and policy docs.",
+};
+
+const DURABLE_MEMORY_CATEGORY_TO_CANDIDATE: Record<string, DurableMemoryCandidateType> = {
+    preference: "user",
+    experience: "feedback",
+    fact: "project",
+    decision: "project",
+    entity: "reference",
+};
+
+function normalizeDurableMemoryCandidateType(value: unknown): DurableMemoryCandidateType | undefined {
+    switch (value) {
+        case "user":
+        case "feedback":
+        case "project":
+        case "reference":
+            return value;
+        default:
+            return undefined;
+    }
+}
+
+function inferDurableMemoryCandidateType(item: { category?: string; content: string }): DurableMemoryCandidateType {
+    const normalizedCategory = typeof item.category === "string" ? item.category.trim().toLowerCase() : "";
+    const fromCategory = DURABLE_MEMORY_CATEGORY_TO_CANDIDATE[normalizedCategory];
+    if (fromCategory) {
+        return fromCategory;
+    }
+    const content = item.content.trim();
+    if (/(反馈|建议|希望|不喜欢|prefer|feedback)/i.test(content)) {
+        return "feedback";
+    }
+    if (/(用户|习惯|偏好|工作方式|长期)/i.test(content)) {
+        return "user";
+    }
+    if (/(项目|约束|决策|阶段|里程碑|依赖|环境)/i.test(content)) {
+        return "project";
+    }
+    return "reference";
+}
+
+function detectDurableMemoryRejection(content: string): { code: DurableMemoryRejectionReasonCode; message: string } | undefined {
+    if (/[A-Za-z]:\\|(?:^|[\s(])(?:\.{0,2}[\\/])?[\w.-]+(?:[\\/][\w.-]+)+|\b[\w./\\-]+\.(?:ts|tsx|js|jsx|py|go|java|cs|json|md|yaml|yml|sh|ps1|sql)(?::\d+)?\b/.test(content)) {
+        return { code: "file_path", message: "Looks like a file path, source location, or project structure detail." };
+    }
+    if (/\bgit\s+(?:commit|rebase|cherry-pick|merge|reset|checkout|stash|pull|push|log|diff|status)\b/i.test(content)
+        || /\bcommit\b.{0,20}\b[0-9a-f]{7,40}\b/i.test(content)
+        || /\bPR\s*#\d+\b/i.test(content)) {
+        return { code: "git_history", message: "Looks like git history or recent change tracking." };
+    }
+    if (/\b(?:AGENTS\.md|CLAUDE\.md|README|项目规范|规范文件|coding standard|project policy)\b/i.test(content)) {
+        return { code: "policy_rule", message: "Looks like a stable project rule already represented in policy docs." };
+    }
+    if ((/\b(?:debug|调试|排查|修复|fix|workaround|命令|command)\b/i.test(content))
+        && (/[`]/.test(content) || /\b(?:pnpm|npm|yarn|node|python|git|cargo|go|curl|powershell)\b/i.test(content))) {
+        return { code: "debug_recipe", message: "Looks like a debugging or command recipe rather than durable context." };
+    }
+    if (/[`]/.test(content)
+        || /\b(?:const|let|var|function|class|interface|type|return|import|export)\b/.test(content)
+        || /=>/.test(content)
+        || /[{}[\]]/.test(content)) {
+        return { code: "code_pattern", message: "Looks like code or implementation detail rather than durable memory." };
+    }
+    return undefined;
+}
+
+function buildDurableExtractionSummary(input: {
+    acceptedCount: number;
+    acceptedCandidateTypes: DurableMemoryCandidateType[];
+    rejected: Array<{ code: DurableMemoryRejectionReasonCode }>;
+}): string {
+    const acceptedTypes = [...new Set(input.acceptedCandidateTypes)];
+    const rejectedReasons = [...new Set(input.rejected.map((item) => item.code))];
+    const parts: string[] = [];
+    parts.push(`accepted=${input.acceptedCount}`);
+    if (acceptedTypes.length > 0) {
+        parts.push(`candidateTypes=${acceptedTypes.join(",")}`);
+    }
+    if (input.rejected.length > 0) {
+        parts.push(`rejected=${input.rejected.length}`);
+    }
+    if (rejectedReasons.length > 0) {
+        parts.push(`rejectedReasons=${rejectedReasons.join(",")}`);
+    }
+    return parts.join("; ");
 }
 
 
@@ -1169,13 +1336,43 @@ export class MemoryManager {
     async extractMemoriesFromConversation(
         sessionKey: string,
         messages: Array<{ role: string; content: string }>,
-    ): Promise<number> {
-        if (!this.evolutionEnabled) return 0;
-        if (messages.length < this.evolutionMinMessages) return 0;
+        options: ExtractConversationMemoriesOptions = {},
+    ): Promise<ExtractConversationMemoriesResult> {
+        const dedupeKey = options.markKey?.trim() || sessionKey;
+        const sourceConversationId = options.sourceConversationId?.trim() || sessionKey;
+        const sourceLabel = options.sourceLabel?.trim() || dedupeKey;
+
+        if (!this.evolutionEnabled) {
+            return {
+                count: 0,
+                acceptedCandidateTypes: [],
+                rejectedCount: 0,
+                rejectedReasons: [],
+                summary: "Durable extraction disabled by configuration.",
+                skipReason: "extractor_disabled",
+            };
+        }
+        if (messages.length < this.evolutionMinMessages) {
+            return {
+                count: 0,
+                acceptedCandidateTypes: [],
+                rejectedCount: 0,
+                rejectedReasons: [],
+                summary: `Skipped because messages (${messages.length}) are below minMessages (${this.evolutionMinMessages}).`,
+                skipReason: "messages_below_min",
+            };
+        }
 
         // 防重复：检查是否已提取过
-        if (this.store.isSessionMemoryExtracted(sessionKey)) {
-            return 0;
+        if (this.store.isSessionMemoryExtracted(dedupeKey)) {
+            return {
+                count: 0,
+                acceptedCandidateTypes: [],
+                rejectedCount: 0,
+                rejectedReasons: [],
+                summary: "Skipped because the same durable extraction key was already processed.",
+                skipReason: "dedupe_key_already_processed",
+            };
         }
 
         // 构建对话文本
@@ -1190,17 +1387,39 @@ export class MemoryManager {
             : conversationText;
 
         try {
+            await this.waitIfPaused();
+
             // 调用 LLM 提取记忆
             const extracted = await this.callLLMForExtraction(truncated);
             if (!extracted || extracted.length === 0) {
                 // 无值得记住的内容，仍标记为已处理
-                this.store.markSessionMemoryExtracted(sessionKey);
-                return 0;
+                this.store.markSessionMemoryExtracted(dedupeKey);
+                return {
+                    count: 0,
+                    acceptedCandidateTypes: [],
+                    rejectedCount: 0,
+                    rejectedReasons: [],
+                    summary: "No durable memory candidate was produced by the extractor.",
+                    skipReason: "extractor_empty",
+                };
+            }
+
+            const filtered = this.applyDurableMemoryPolicy(extracted);
+            if (filtered.accepted.length === 0) {
+                this.store.markSessionMemoryExtracted(dedupeKey);
+                return {
+                    count: 0,
+                    acceptedCandidateTypes: [],
+                    rejectedCount: filtered.rejected.length,
+                    rejectedReasons: [...new Set(filtered.rejected.map((item) => item.code))],
+                    summary: filtered.summary || "All durable memory candidates were rejected by policy.",
+                    skipReason: "policy_filtered",
+                };
             }
 
             // 去重：检查每条记忆是否已存在相似内容
-            const newMemories: Array<{ type: string; content: string; category: string }> = [];
-            for (const item of extracted) {
+            const newMemories: Array<ExtractedConversationMemory> = [];
+            for (const item of filtered.accepted) {
                 const similar = await this.search(item.content, { limit: 1 });
                 if (similar.length > 0 && similar[0].score > 0.85) {
                     continue; // 已有相似记忆，跳过
@@ -1209,26 +1428,49 @@ export class MemoryManager {
             }
 
             if (newMemories.length === 0) {
-                this.store.markSessionMemoryExtracted(sessionKey);
-                return 0;
+                this.store.markSessionMemoryExtracted(dedupeKey);
+                return {
+                    count: 0,
+                    acceptedCandidateTypes: [],
+                    rejectedCount: filtered.rejected.length,
+                    rejectedReasons: [...new Set(filtered.rejected.map((item) => item.code))],
+                    summary: "All durable memory candidates were skipped because similar memories already exist.",
+                    skipReason: "dedupe_skipped",
+                };
             }
 
             // 写入每日记忆文件
             const lines = newMemories.map(m =>
-                `- [${m.type}][${m.category}] ${m.content} (来源: ${sessionKey})`
+                `- [${m.type}][${m.category}] ${m.content} (来源: ${sourceLabel})`
             );
             const content = lines.join("\n");
             const filePath = await appendToTodayMemory(this.stateDir, content);
-            await this.linkTaskMemoriesFromSource(sessionKey, filePath, "generated");
+            await this.linkTaskMemoriesFromSource(sourceConversationId, filePath, "generated");
 
             // 标记已提取
-            this.store.markSessionMemoryExtracted(sessionKey);
+            this.store.markSessionMemoryExtracted(dedupeKey);
 
-            console.log(`[MemoryManager] Extracted ${newMemories.length} memories from session ${sessionKey}`);
-            return newMemories.length;
+            console.log(`[MemoryManager] Extracted ${newMemories.length} memories from session ${sourceLabel}`);
+            return {
+                count: newMemories.length,
+                acceptedCandidateTypes: [...new Set(newMemories.map((item) => item.candidateType).filter((item): item is DurableMemoryCandidateType => Boolean(item)))],
+                rejectedCount: filtered.rejected.length,
+                rejectedReasons: [...new Set(filtered.rejected.map((item) => item.code))],
+                summary: buildDurableExtractionSummary({
+                    acceptedCount: newMemories.length,
+                    acceptedCandidateTypes: newMemories.map((item) => item.candidateType).filter((item): item is DurableMemoryCandidateType => Boolean(item)),
+                    rejected: filtered.rejected,
+                }),
+            };
         } catch (err) {
-            console.error(`[MemoryManager] Memory extraction failed for session ${sessionKey}:`, err);
-            return 0;
+            console.error(`[MemoryManager] Memory extraction failed for session ${sourceLabel}:`, err);
+            return {
+                count: 0,
+                acceptedCandidateTypes: [],
+                rejectedCount: 0,
+                rejectedReasons: [],
+                summary: `Durable extraction failed: ${err instanceof Error ? err.message : String(err)}`,
+            };
         }
     }
 
@@ -1237,12 +1479,107 @@ export class MemoryManager {
         return this.store.isSessionMemoryExtracted(sessionKey);
     }
 
+    isConversationMemoryExtractionEnabled(): boolean {
+        return this.evolutionEnabled;
+    }
+
+    getConversationMemoryExtractionSupport(): ConversationMemoryExtractionSupport {
+        const model = this.evolutionModel.trim();
+        const hasBaseUrl = this.evolutionBaseUrl.trim().length > 0;
+        const hasApiKey = this.evolutionApiKey.trim().length > 0;
+        const reasons: ConversationMemoryExtractionSupportReason[] = [];
+
+        if (!this.evolutionEnabled) {
+            reasons.push({
+                code: "gate_disabled",
+                message: "Durable extraction is disabled because BELLDANDY_MEMORY_EVOLUTION_ENABLED is not enabled.",
+            });
+        }
+        if (this.evolutionEnabled && !model) {
+            reasons.push({
+                code: "model_missing",
+                message: "Durable extraction model is not configured.",
+            });
+        }
+        if (this.evolutionEnabled && !hasBaseUrl) {
+            reasons.push({
+                code: "base_url_missing",
+                message: "Durable extraction base URL is not configured.",
+            });
+        }
+        if (this.evolutionEnabled && !hasApiKey) {
+            reasons.push({
+                code: "api_key_missing",
+                message: "Durable extraction API key is not configured.",
+            });
+        }
+
+        return {
+            enabled: this.evolutionEnabled,
+            available: this.evolutionEnabled && reasons.length === 0,
+            minMessages: this.evolutionMinMessages,
+            model: model || undefined,
+            hasBaseUrl,
+            hasApiKey,
+            reasons,
+        };
+    }
+
+    getDurableMemoryGuidance(): DurableMemoryGuidance {
+        return {
+            policyVersion: DURABLE_MEMORY_GUIDANCE.policyVersion,
+            acceptedCandidateTypes: [...DURABLE_MEMORY_GUIDANCE.acceptedCandidateTypes],
+            rejectedContentTypes: DURABLE_MEMORY_GUIDANCE.rejectedContentTypes.map((item) => ({ ...item })),
+            summary: DURABLE_MEMORY_GUIDANCE.summary,
+        };
+    }
+
+    private applyDurableMemoryPolicy(items: ExtractedConversationMemory[]): {
+        accepted: ExtractedConversationMemory[];
+        rejected: Array<{ code: DurableMemoryRejectionReasonCode; content: string }>;
+        summary: string;
+    } {
+        const accepted: ExtractedConversationMemory[] = [];
+        const rejected: Array<{ code: DurableMemoryRejectionReasonCode; content: string }> = [];
+
+        for (const item of items) {
+            const normalizedContent = item.content.trim();
+            if (!normalizedContent) {
+                continue;
+            }
+            const rejection = detectDurableMemoryRejection(normalizedContent);
+            if (rejection) {
+                rejected.push({
+                    code: rejection.code,
+                    content: normalizedContent,
+                });
+                continue;
+            }
+            accepted.push({
+                ...item,
+                content: normalizedContent,
+                candidateType: normalizeDurableMemoryCandidateType(item.candidateType)
+                    ?? inferDurableMemoryCandidateType(item),
+            });
+        }
+
+        return {
+            accepted,
+            rejected,
+            summary: buildDurableExtractionSummary({
+                acceptedCount: accepted.length,
+                acceptedCandidateTypes: accepted.map((item) => item.candidateType).filter((item): item is DurableMemoryCandidateType => Boolean(item)),
+                rejected,
+            }),
+        };
+    }
+
     /**
      * 调用 LLM 从对话中提取记忆
      */
     private async callLLMForExtraction(
         conversationText: string,
-    ): Promise<Array<{ type: string; content: string; category: string }> | null> {
+    ): Promise<ExtractedConversationMemory[] | null> {
         const response = await fetch(buildOpenAIChatCompletionsUrl(this.evolutionBaseUrl), {
             method: "POST",
             headers: {
@@ -1254,7 +1591,13 @@ export class MemoryManager {
                 messages: [
                     {
                         role: "system",
-                        content: `分析以下对话，提取值得长期记住的信息。分为以下类别：
+                        content: `分析以下对话，提取值得长期记住的信息。优先归入以下 durable candidate type：
+- user：用户偏好、习惯、长期工作方式、稳定背景信息
+- feedback：用户对结果质量、交互方式、输出风格的持续反馈
+- project：项目背景、阶段性决定、长期约束、外部依赖入口
+- reference：值得长期记住的人名、组织名、系统入口、外部资源引用
+
+同时给每条记忆保留一个已有 memory category，分为以下类别：
 - 【偏好/preference】：用户表达的喜好、习惯、工作方式、技术栈偏好等
 - 【经验/experience】：解决问题的有效方法、踩过的坑、有用的工具/命令等
 - 【事实/fact】：用户提到的客观事实、背景信息、项目状态等
@@ -1262,9 +1605,16 @@ export class MemoryManager {
 - 【实体/entity】：用户提到的重要人名、项目名、组织名等
 
 仅提取有长期价值的信息，忽略临时性的对话内容。
+不要记下面这些内容：
+- 代码模式、架构片段、函数实现、文件路径、项目目录结构
+- git 历史、最近变更、commit/PR 记录
+- debugging / fix recipe、命令执行步骤、一次性排障过程
+- 已在 AGENTS.md / CLAUDE.md / README / 项目规范中稳定存在的规则
+
 每条记忆用一句话概括。
-返回 JSON 数组，格式：[{"type":"偏好","category":"preference","content":"..."}]
+返回 JSON 数组，格式：[{"type":"偏好","category":"preference","candidateType":"user","content":"...","reason":"..."}]
 category 必须是以下之一：preference / experience / fact / decision / entity
+candidateType 必须是以下之一：user / feedback / project / reference
 如果没有值得记住的内容，返回空数组 []。
 只输出 JSON，不要其他内容。`
                     },
@@ -1300,6 +1650,8 @@ category 必须是以下之一：preference / experience / fact / decision / ent
                 type: item.type as string,
                 content: item.content as string,
                 category: (typeof item.category === "string" ? item.category : "other") as string,
+                candidateType: normalizeDurableMemoryCandidateType(item.candidateType),
+                reason: typeof item.reason === "string" ? item.reason : undefined,
             }));
         } catch {
             console.warn("[MemoryManager] Failed to parse extraction result:", raw.slice(0, 200));

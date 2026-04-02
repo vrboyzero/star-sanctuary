@@ -1,7 +1,9 @@
 import type { Tool, ToolCallResult } from "../../types.js";
 import crypto from "node:crypto";
+import { withToolContract } from "../../tool-contract.js";
+import { buildSubAgentLaunchSpec } from "../../subagent-launch.js";
 
-export const sessionsSpawnTool: Tool = {
+export const sessionsSpawnTool: Tool = withToolContract({
     definition: {
         name: "sessions_spawn",
         description: "Spawn a sub-agent to handle a complex task independently. The sub-agent runs in a separate context but shares the workspace.",
@@ -41,18 +43,27 @@ export const sessionsSpawnTool: Tool = {
         }
 
         try {
-            const result = await context.agentCapabilities.spawnSubAgent({
+            const launchSpec = buildSubAgentLaunchSpec(context, {
                 instruction: args.instruction as string,
                 agentId: args.agent_id as string | undefined,
                 context: args.context as Record<string, unknown> | undefined,
-                parentConversationId: context.conversationId,
+                channel: "subtask",
             });
+            const result = await context.agentCapabilities.spawnSubAgent(launchSpec);
+            const taskDetails = [
+                result.taskId ? `Task ID: ${result.taskId}` : "",
+                result.sessionId ? `Session ID: ${result.sessionId}` : "",
+                result.outputPath ? `Output Path: ${result.outputPath}` : "",
+            ].filter(Boolean).join("\n");
 
             return {
                 id,
                 name,
                 success: result.success,
-                output: result.output || (result.success ? "Sub-agent finished successfully." : "Sub-agent failed."),
+                output: [
+                    result.output || (result.success ? "Sub-agent finished successfully." : "Sub-agent failed."),
+                    taskDetails,
+                ].filter(Boolean).join("\n\n"),
                 error: result.error,
                 durationMs: Date.now() - start,
             };
@@ -68,4 +79,18 @@ export const sessionsSpawnTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "session-orchestration",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: false,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Spawn a sub-agent session to work on an independent task",
+    resultSchema: {
+        kind: "text",
+        description: "Sub-agent completion summary text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

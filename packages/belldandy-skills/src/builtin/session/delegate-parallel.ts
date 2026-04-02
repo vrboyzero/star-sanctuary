@@ -1,5 +1,7 @@
 import type { Tool, ToolCallResult } from "../../types.js";
 import crypto from "node:crypto";
+import { withToolContract } from "../../tool-contract.js";
+import { buildSubAgentLaunchSpec } from "../../subagent-launch.js";
 
 /**
  * delegate_parallel — 并行委托多个任务给子 Agent
@@ -7,7 +9,7 @@ import crypto from "node:crypto";
  * 接受 tasks 数组，每个 task 独立运行在子 Agent 中，全部完成后返回聚合结果。
  * 利用 Orchestrator 的排队机制，超出并发上限的任务会自动排队。
  */
-export const delegateParallelTool: Tool = {
+export const delegateParallelTool: Tool = withToolContract({
     definition: {
         name: "delegate_parallel",
         description:
@@ -61,12 +63,12 @@ export const delegateParallelTool: Tool = {
             if (!instruction) {
                 throw new Error(`Task[${i}]: instruction is required and cannot be empty.`);
             }
-            return {
+            return buildSubAgentLaunchSpec(context, {
                 instruction,
                 agentId: typeof t.agent_id === "string" ? t.agent_id : undefined,
                 context: (typeof t.context === "object" && t.context !== null ? t.context : undefined) as Record<string, unknown> | undefined,
-                parentConversationId: context.conversationId,
-            };
+                channel: "subtask",
+            });
         });
 
         try {
@@ -76,7 +78,12 @@ export const delegateParallelTool: Tool = {
                 const taskLabel = normalized[i].agentId ?? "default";
                 const status = r.success ? "OK" : "FAILED";
                 const body = r.success ? r.output : (r.error ?? "unknown error");
-                return `[Task ${i + 1} / ${taskLabel}] ${status}\n${body}`;
+                const meta = [
+                    r.taskId ? `Task ID: ${r.taskId}` : "",
+                    r.sessionId ? `Session ID: ${r.sessionId}` : "",
+                    r.outputPath ? `Output Path: ${r.outputPath}` : "",
+                ].filter(Boolean).join("\n");
+                return `[Task ${i + 1} / ${taskLabel}] ${status}\n${body}${meta ? `\n${meta}` : ""}`;
             });
 
             const allSuccess = results.every((r) => r.success);
@@ -99,4 +106,18 @@ export const delegateParallelTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "session-orchestration",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: false,
+    riskLevel: "medium",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Delegate multiple tasks to sub-agents in parallel",
+    resultSchema: {
+        kind: "text",
+        description: "Aggregated parallel delegation status and outputs.",
+    },
+    outputPersistencePolicy: "conversation",
+});

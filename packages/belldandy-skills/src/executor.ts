@@ -1,6 +1,33 @@
 import crypto from "node:crypto";
 import type { JsonObject } from "@belldandy/protocol";
-import type { Tool, ToolCallRequest, ToolCallResult, ToolContext, ToolPolicy, ToolAuditLog, AgentCapabilities, GoalCapabilities, ConversationStoreInterface, ITokenCounterService } from "./types.js";
+import type {
+  Tool,
+  ToolCallRequest,
+  ToolCallResult,
+  ToolContext,
+  ToolPolicy,
+  ToolAuditLog,
+  AgentCapabilities,
+  GoalCapabilities,
+  ConversationStoreInterface,
+  ITokenCounterService,
+  ToolExecutionRuntimeContext,
+  ToolRuntimeLaunchSpec,
+} from "./types.js";
+import { getToolContract, type ToolContract } from "./tool-contract.js";
+import {
+  evaluateLaunchPermissionMode,
+  evaluateLaunchRolePolicy,
+  normalizeLaunchAllowedToolFamilies,
+  normalizeLaunchMaxToolRiskLevel,
+  normalizeLaunchRole,
+} from "./runtime-policy.js";
+import {
+  evaluateToolContractAccess,
+  type ToolContractDenialReason,
+  type ToolContractAccessDecision,
+  type ToolContractAccessPolicy,
+} from "./security-matrix.js";
 
 /** 默认策略（最小权限） */
 export const DEFAULT_POLICY: ToolPolicy = {
@@ -48,11 +75,75 @@ export type ToolExecutorOptions = {
   conversationStore?: ConversationStoreInterface;
   /** 可选：事件广播回调（用于工具主动推送事件到前端） */
   broadcast?: (event: string, payload: Record<string, unknown>) => void;
+  /** 可选：仅用于运行时观测的工具广播观察器 */
+  broadcastObserver?: (event: string, payload: Record<string, unknown>, meta: {
+    conversationId: string;
+    agentId?: string;
+    toolName: string;
+  }) => void;
+  /** 可选：统一 contract 安全矩阵策略 */
+  contractAccessPolicy?: ToolContractAccessPolicy;
 };
 
 type RegisterToolOptions = {
   silentReplace?: boolean;
 };
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value
+    .map((item) => normalizeOptionalString(item))
+    .filter((item): item is string => Boolean(item));
+  return items.length > 0 ? [...new Set(items)] : undefined;
+}
+
+function normalizeRuntimeLaunchSpec(value: ToolRuntimeLaunchSpec | undefined): ToolRuntimeLaunchSpec | undefined {
+  if (!value) return undefined;
+  const normalized: ToolRuntimeLaunchSpec = {
+    profileId: normalizeOptionalString(value.profileId),
+    channel: normalizeOptionalString(value.channel),
+    background: typeof value.background === "boolean" ? value.background : undefined,
+    timeoutMs: Number.isFinite(Number(value.timeoutMs)) && Number(value.timeoutMs) > 0 ? Number(value.timeoutMs) : undefined,
+    cwd: normalizeOptionalString(value.cwd),
+    toolSet: normalizeStringList(value.toolSet),
+    permissionMode: normalizeOptionalString(value.permissionMode),
+    isolationMode: normalizeOptionalString(value.isolationMode),
+    parentTaskId: normalizeOptionalString(value.parentTaskId),
+    role: normalizeLaunchRole(value.role),
+    allowedToolFamilies: normalizeLaunchAllowedToolFamilies(value.allowedToolFamilies),
+    maxToolRiskLevel: normalizeLaunchMaxToolRiskLevel(value.maxToolRiskLevel),
+    policySummary: normalizeOptionalString(value.policySummary),
+  };
+  return Object.values(normalized).some((item) => item !== undefined) ? normalized : undefined;
+}
+
+export type ToolAvailabilityReasonCode =
+  | "available"
+  | "blocked-by-security-matrix"
+  | "unsupported-channel"
+  | "outside-safe-scope"
+  | "missing-contract"
+  | "disabled-by-settings"
+  | "not-in-agent-whitelist"
+  | "conversation-restricted"
+  | "excluded-by-launch-toolset"
+  | "blocked-by-launch-role-policy"
+  | "blocked-by-launch-permission-mode";
+
+export interface ToolAvailabilityState {
+  name: string;
+  available: boolean;
+  alwaysEnabled: boolean;
+  reasonCode: ToolAvailabilityReasonCode;
+  reasonMessage: string;
+  contractReason?: ToolContractDenialReason;
+}
 
 export class ToolExecutor {
   private readonly tools: Map<string, Tool>;
@@ -67,9 +158,15 @@ export class ToolExecutor {
   private readonly isToolDisabled?: (toolName: string) => boolean;
   private readonly isToolAllowedForAgent?: (toolName: string, agentId?: string) => boolean;
   private readonly isToolAllowedInConversation?: (toolName: string, conversationId: string, agentId?: string) => boolean;
+  private readonly contractAccessPolicy?: ToolContractAccessPolicy;
   private conversationStore?: ConversationStoreInterface; // 移除 readonly，允许后期绑定
   private readonly tokenCounters = new Map<string, ITokenCounterService>(); // 每个 conversation 的 token 计数器
-  private readonly broadcast?: (event: string, payload: Record<string, unknown>) => void;
+  private broadcast?: (event: string, payload: Record<string, unknown>) => void;
+  private broadcastObserver?: (event: string, payload: Record<string, unknown>, meta: {
+    conversationId: string;
+    agentId?: string;
+    toolName: string;
+  }) => void;
 
   constructor(options: ToolExecutorOptions) {
     this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
@@ -84,8 +181,10 @@ export class ToolExecutor {
     this.isToolDisabled = options.isToolDisabled;
     this.isToolAllowedForAgent = options.isToolAllowedForAgent;
     this.isToolAllowedInConversation = options.isToolAllowedInConversation;
+    this.contractAccessPolicy = options.contractAccessPolicy;
     this.conversationStore = options.conversationStore;
     this.broadcast = options.broadcast;
+    this.broadcastObserver = options.broadcastObserver;
   }
 
   /**
@@ -104,6 +203,22 @@ export class ToolExecutor {
    */
   setConversationStore(store: ConversationStoreInterface): void {
     this.conversationStore = store;
+  }
+
+  setBroadcast(
+    broadcast?: (event: string, payload: Record<string, unknown>) => void,
+  ): void {
+    this.broadcast = broadcast;
+  }
+
+  setBroadcastObserver(
+    observer?: (event: string, payload: Record<string, unknown>, meta: {
+      conversationId: string;
+      agentId?: string;
+      toolName: string;
+    }) => void,
+  ): void {
+    this.broadcastObserver = observer;
   }
 
   /**
@@ -128,9 +243,12 @@ export class ToolExecutor {
   }
 
   /** 获取所有工具定义（用于发送给模型），已过滤禁用工具和 Agent 白名单 */
-  getDefinitions(agentId?: string, conversationId?: string): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
-    const all = Array.from(this.tools.values());
-    const active = all.filter((tool) => this.isToolAvailable(tool.definition.name, agentId, conversationId));
+  getDefinitions(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
+    const active = this.getAvailableTools(agentId, conversationId, runtimeContext);
     return active.map(t => ({
       type: "function" as const,
       function: {
@@ -144,6 +262,47 @@ export class ToolExecutor {
   /** 获取所有已注册工具名（不经过 disabled 过滤，用于调用设置列表） */
   getRegisteredToolNames(): string[] {
     return Array.from(this.tools.keys());
+  }
+
+  /** 获取单个工具在当前上下文下的可见性结果 */
+  getToolAvailability(
+    toolName: string,
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): ToolAvailabilityState | undefined {
+    const tool = this.tools.get(toolName);
+    if (!tool) {
+      return undefined;
+    }
+    return this.evaluateToolAvailability(tool, agentId, conversationId, runtimeContext);
+  }
+
+  /** 获取所有已注册工具在当前上下文下的可见性结果 */
+  getRegisteredToolAvailabilities(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): ToolAvailabilityState[] {
+    return Array.from(this.tools.values()).map((tool) =>
+      this.evaluateToolAvailability(tool, agentId, conversationId, runtimeContext),
+    );
+  }
+
+  /** 获取当前运行时可见的工具契约元数据 */
+  getContracts(agentId?: string, conversationId?: string, runtimeContext?: ToolExecutionRuntimeContext): ToolContract[] {
+    return this.getAvailableTools(agentId, conversationId, runtimeContext).flatMap((tool) => {
+      const contract = getToolContract(tool);
+      return contract ? [contract] : [];
+    });
+  }
+
+  /** 获取所有已注册工具的契约元数据（不过滤 disabled / allowlist） */
+  getRegisteredToolContracts(): ToolContract[] {
+    return Array.from(this.tools.values()).flatMap((tool) => {
+      const contract = getToolContract(tool);
+      return contract ? [contract] : [];
+    });
   }
 
   /** 检查工具是否存在 */
@@ -177,8 +336,10 @@ export class ToolExecutor {
     userUuid?: string,
     senderInfo?: any,
     roomContext?: any,
+    runtimeContext?: ToolExecutionRuntimeContext,
   ): Promise<ToolCallResult> {
     const start = Date.now();
+    const launchSpec = normalizeRuntimeLaunchSpec(runtimeContext?.launchSpec);
 
     const tool = this.tools.get(request.name);
 
@@ -196,13 +357,14 @@ export class ToolExecutor {
     }
 
     // 防御性检查：拒绝已禁用或不在 Agent 白名单中的工具调用
-    if (!this.isToolAvailable(request.name, agentId, conversationId)) {
+    const availability = this.evaluateToolAvailability(tool, agentId, conversationId, runtimeContext);
+    if (!availability.allowed) {
       const result: ToolCallResult = {
         id: request.id,
         name: request.name,
         success: false,
         output: "",
-        error: this.buildToolUnavailableMessage(request.name, agentId, conversationId),
+        error: availability.reasonMessage,
         durationMs: Date.now() - start,
       };
       this.audit(result, conversationId, request.arguments);
@@ -213,13 +375,25 @@ export class ToolExecutor {
       conversationId,
       workspaceRoot: this.workspaceRoot,
       extraWorkspaceRoots: this.extraWorkspaceRoots.length > 0 ? this.extraWorkspaceRoots : undefined,
+      defaultCwd: launchSpec?.cwd,
       agentId,
+      launchSpec,
       userUuid, // 传递UUID
       senderInfo, // 传递发送者信息
       roomContext, // 传递房间上下文
       conversationStore: this.conversationStore, // 传递会话存储（用于缓存）
       tokenCounter: this.tokenCounters.get(conversationId), // 传递 token 计数器（任务级统计）
-      broadcast: this.broadcast, // 传递事件广播回调（扩展 B）
+      broadcast: this.broadcast
+        ? (event, payload) => {
+          const broadcast = this.broadcast;
+          this.broadcastObserver?.(event, payload, {
+            conversationId,
+            agentId,
+            toolName: request.name,
+          });
+          broadcast?.(event, payload);
+        }
+        : undefined, // 传递事件广播回调（扩展 B）
       policy: this.policy,
       agentCapabilities: this.agentCapabilities,
       goalCapabilities: this.goalCapabilities,
@@ -261,8 +435,9 @@ export class ToolExecutor {
     userUuid?: string,
     senderInfo?: any,
     roomContext?: any,
+    runtimeContext?: ToolExecutionRuntimeContext,
   ): Promise<ToolCallResult[]> {
-    return Promise.all(requests.map(req => this.execute(req, conversationId, agentId, userUuid, senderInfo, roomContext)));
+    return Promise.all(requests.map(req => this.execute(req, conversationId, agentId, userUuid, senderInfo, roomContext, runtimeContext)));
   }
 
   private audit(result: ToolCallResult, conversationId: string, args: JsonObject): void {
@@ -285,35 +460,182 @@ export class ToolExecutor {
     });
   }
 
-  private isToolAvailable(toolName: string, agentId?: string, conversationId?: string): boolean {
-    if (!this.alwaysEnabledTools.has(toolName) && this.isToolDisabled?.(toolName)) {
-      return false;
+  private evaluateToolAvailability(
+    tool: Tool,
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ):
+    | ({ allowed: true } & ToolAvailabilityState)
+    | ({ allowed: false } & ToolAvailabilityState & { reason: "contract" | "runtime" | "disabled" | "agent" | "conversation"; contractDecision?: ToolContractAccessDecision }) {
+    const toolName = tool.definition.name;
+    const alwaysEnabled = this.alwaysEnabledTools.has(toolName);
+    const launchSpec = normalizeRuntimeLaunchSpec(runtimeContext?.launchSpec);
+
+    if (this.contractAccessPolicy) {
+      const contractDecision = evaluateToolContractAccess(tool, this.contractAccessPolicy);
+      if (!contractDecision.allowed) {
+        return {
+          ...this.buildAvailabilityState(toolName, alwaysEnabled, false, contractDecision.reason),
+          allowed: false,
+          reason: "contract",
+          contractDecision,
+        };
+      }
+    }
+
+    if (launchSpec?.toolSet && !launchSpec.toolSet.includes(toolName)) {
+      return {
+        ...this.buildAvailabilityState(toolName, alwaysEnabled, false, "excluded-by-launch-toolset"),
+        allowed: false,
+        reason: "runtime",
+      };
+    }
+
+    const rolePolicyDecision = evaluateLaunchRolePolicy(tool, launchSpec);
+    if (!rolePolicyDecision.allowed) {
+      return {
+        name: toolName,
+        available: false,
+        alwaysEnabled,
+        reasonCode: "blocked-by-launch-role-policy",
+        reasonMessage: rolePolicyDecision.reasonMessage,
+        allowed: false,
+        reason: "runtime",
+      };
+    }
+
+    const permissionDecision = evaluateLaunchPermissionMode(tool, launchSpec);
+    if (!permissionDecision.allowed) {
+      return {
+        name: toolName,
+        available: false,
+        alwaysEnabled,
+        reasonCode: "blocked-by-launch-permission-mode",
+        reasonMessage: permissionDecision.reasonMessage,
+        allowed: false,
+        reason: "runtime",
+      };
+    }
+
+    if (!alwaysEnabled && this.isToolDisabled?.(toolName)) {
+      return {
+        ...this.buildAvailabilityState(toolName, alwaysEnabled, false, "disabled-by-settings"),
+        allowed: false,
+        reason: "disabled",
+      };
     }
 
     if (this.isToolAllowedForAgent && !this.isToolAllowedForAgent(toolName, agentId)) {
-      return false;
+      return {
+        ...this.buildAvailabilityState(toolName, alwaysEnabled, false, "not-in-agent-whitelist"),
+        allowed: false,
+        reason: "agent",
+      };
     }
 
     if (conversationId && this.isToolAllowedInConversation && !this.isToolAllowedInConversation(toolName, conversationId, agentId)) {
-      return false;
+      return {
+        ...this.buildAvailabilityState(toolName, alwaysEnabled, false, "conversation-restricted"),
+        allowed: false,
+        reason: "conversation",
+      };
     }
 
-    return true;
+    return {
+      ...this.buildAvailabilityState(toolName, alwaysEnabled, true, "available"),
+      allowed: true,
+    };
   }
 
-  private buildToolUnavailableMessage(toolName: string, agentId?: string, conversationId?: string): string {
-    if (!this.alwaysEnabledTools.has(toolName) && this.isToolDisabled?.(toolName)) {
-      return `工具 ${toolName} 已被禁用`;
-    }
+  private getAvailableTools(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): Tool[] {
+    return Array.from(this.tools.values()).filter((tool) =>
+      this.evaluateToolAvailability(tool, agentId, conversationId, runtimeContext).allowed,
+    );
+  }
 
-    if (conversationId && this.isToolAllowedInConversation && !this.isToolAllowedInConversation(toolName, conversationId, agentId)) {
-      return `工具 ${toolName} 不允许在当前会话中使用`;
-    }
+  private buildAvailabilityState(
+    toolName: string,
+    alwaysEnabled: boolean,
+    available: boolean,
+    reason: ToolAvailabilityReasonCode | ToolContractDenialReason | undefined,
+  ): ToolAvailabilityState {
+    const normalizedReason = this.normalizeAvailabilityReasonCode(reason);
+    return {
+      name: toolName,
+      available,
+      alwaysEnabled,
+      reasonCode: normalizedReason,
+      reasonMessage: this.describeAvailabilityReason(toolName, normalizedReason),
+      contractReason: this.isContractDenialReason(reason) ? reason : undefined,
+    };
+  }
 
-    const targetAgentId = typeof agentId === "string" && agentId.trim()
-      ? agentId.trim()
-      : "default";
-    return `工具 ${toolName} 不允许给 Agent "${targetAgentId}" 使用`;
+  private normalizeAvailabilityReasonCode(
+    reason: ToolAvailabilityReasonCode | ToolContractDenialReason | undefined,
+  ): ToolAvailabilityReasonCode {
+    switch (reason) {
+      case "available":
+      case "disabled-by-settings":
+      case "not-in-agent-whitelist":
+      case "conversation-restricted":
+      case "excluded-by-launch-toolset":
+      case "blocked-by-launch-role-policy":
+      case "blocked-by-launch-permission-mode":
+        return reason;
+      case "channel":
+        return "unsupported-channel";
+      case "safe-scope":
+        return "outside-safe-scope";
+      case "missing-contract":
+        return "missing-contract";
+      case "blocked":
+        return "blocked-by-security-matrix";
+      default:
+        return "blocked-by-security-matrix";
+    }
+  }
+
+  private isContractDenialReason(
+    reason: ToolAvailabilityReasonCode | ToolContractDenialReason | undefined,
+  ): reason is ToolContractDenialReason {
+    return reason === "blocked" || reason === "channel" || reason === "safe-scope" || reason === "missing-contract";
+  }
+
+  private describeAvailabilityReason(
+    toolName: string,
+    reasonCode: ToolAvailabilityReasonCode,
+  ): string {
+    switch (reasonCode) {
+      case "available":
+        return `工具 ${toolName} 当前可用`;
+      case "blocked-by-security-matrix":
+        return `工具 ${toolName} 当前被安全矩阵阻止`;
+      case "unsupported-channel":
+        return `工具 ${toolName} 不允许在当前端使用`;
+      case "outside-safe-scope":
+        return `工具 ${toolName} 超出当前安全域`;
+      case "missing-contract":
+        return `工具 ${toolName} 缺少 contract，当前安全矩阵不允许使用`;
+      case "disabled-by-settings":
+        return `工具 ${toolName} 已被禁用`;
+      case "not-in-agent-whitelist":
+        return `工具 ${toolName} 不在当前 Agent 白名单内`;
+      case "conversation-restricted":
+        return `工具 ${toolName} 不允许在当前会话中使用`;
+      case "excluded-by-launch-toolset":
+        return `工具 ${toolName} 不在当前 launchSpec 的 toolSet 内`;
+      case "blocked-by-launch-role-policy":
+        return `工具 ${toolName} 被当前 launchSpec 的 role policy 阻止`;
+      case "blocked-by-launch-permission-mode":
+        return `工具 ${toolName} 被当前 launchSpec 的 permissionMode 阻止`;
+      default:
+        return `工具 ${toolName} 当前不可用`;
+    }
   }
 }
 

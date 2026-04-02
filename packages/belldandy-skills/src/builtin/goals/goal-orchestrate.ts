@@ -1,6 +1,19 @@
-import type { AgentCapabilities, GoalCapabilityPlanRecord, JsonObject, Tool, ToolContext } from "../../types.js";
+import type {
+  AgentCapabilities,
+  GoalCapabilityPlanCoordinationPlanRecord,
+  GoalCapabilityPlanDelegationResultRecord,
+  GoalCapabilityPlanRecord,
+  GoalCapabilityPlanRolePolicyRecord,
+  GoalCapabilityPlanVerifierFindingRecord,
+  GoalCapabilityPlanVerifierHandoffRecord,
+  GoalCapabilityPlanVerifierResultRecord,
+  JsonObject,
+  Tool,
+  ToolContext,
+} from "../../types.js";
 import { fail, formatCapabilityPlan, formatTaskNode, inferGoalId, ok } from "./shared.js";
 import { buildCapabilityPlanSaveInput, collectCapabilityPlanActualUsage } from "./capability-plan-utils.js";
+import { buildSubAgentLaunchSpec } from "../../subagent-launch.js";
 
 function parseStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -18,9 +31,13 @@ function buildCheckpointSlaAt(hours: number | undefined): string | undefined {
 function buildDelegationInstruction(plan: GoalCapabilityPlanRecord, nodeTitle: string, subAgent: GoalCapabilityPlanRecord["subAgents"][number]): string {
   const lines = [
     `长期任务节点: ${nodeTitle} (${plan.nodeId})`,
+    `角色: ${subAgent.role ?? "default"}`,
     `分工目标: ${subAgent.objective}`,
     `执行摘要: ${plan.summary}`,
   ];
+  if (subAgent.deliverable) {
+    lines.push(`交付物: ${subAgent.deliverable}`);
+  }
   if (plan.methods.length > 0) {
     lines.push(`参考 Methods: ${plan.methods.map((item) => item.file).join(", ")}`);
   }
@@ -33,44 +50,129 @@ function buildDelegationInstruction(plan: GoalCapabilityPlanRecord, nodeTitle: s
   if (subAgent.reason) {
     lines.push(`分工原因: ${subAgent.reason}`);
   }
+  if (subAgent.handoffToVerifier) {
+    lines.push("完成后请保留可供 verifier 收口的摘要、验证信息与风险点。");
+  }
   if (plan.gaps.length > 0) {
     lines.push(`已知能力缺口: ${plan.gaps.join(" | ")}`);
   }
   return lines.join("\n");
 }
 
+function inferRolePolicy(plan: GoalCapabilityPlanRecord): GoalCapabilityPlanRolePolicyRecord {
+  const selectedRoles: GoalCapabilityPlanRolePolicyRecord["selectedRoles"] = [];
+  for (const item of plan.subAgents) {
+    const role = item.role ?? "default";
+    if (!selectedRoles.includes(role)) {
+      selectedRoles.push(role);
+    }
+  }
+  if (selectedRoles.length === 0) {
+    selectedRoles.push("default");
+  }
+  const verifierRole = selectedRoles.includes("verifier") || plan.riskLevel !== "low" ? "verifier" : undefined;
+  return {
+    selectedRoles,
+    selectionReasons: ["由现有 capability plan 的 subAgents 自动推断 coordinator role policy。"],
+    verifierRole,
+    fanInStrategy: verifierRole ? "verifier_handoff" : "main_agent_summary",
+  };
+}
+
+function getCoordinationPlan(plan: GoalCapabilityPlanRecord): GoalCapabilityPlanCoordinationPlanRecord {
+  if (plan.orchestration?.coordinationPlan) {
+    return plan.orchestration.coordinationPlan;
+  }
+  const rolePolicy = inferRolePolicy(plan);
+  return {
+    summary: plan.executionMode === "multi_agent"
+      ? `按 ${plan.subAgents.length || 1} 路分工推进，并以 ${rolePolicy.fanInStrategy} 收口。`
+      : `由主 Agent 直接推进，并以 ${rolePolicy.fanInStrategy} 收口。`,
+    plannedDelegationCount: plan.executionMode === "multi_agent" ? plan.subAgents.length : 0,
+    rolePolicy,
+  };
+}
+
+function getExecutionSubAgents(plan: GoalCapabilityPlanRecord): GoalCapabilityPlanRecord["subAgents"] {
+  return plan.subAgents.filter((item) => item.role !== "verifier");
+}
+
+function getVerifierSubAgent(plan: GoalCapabilityPlanRecord): GoalCapabilityPlanRecord["subAgents"][number] | undefined {
+  return plan.subAgents.find((item) => item.role === "verifier");
+}
+
+function createSkippedDelegationResults(
+  plan: GoalCapabilityPlanRecord,
+  summary: string,
+): GoalCapabilityPlanDelegationResultRecord[] {
+  return getExecutionSubAgents(plan).map((item) => ({
+    agentId: item.agentId,
+    role: item.role,
+    status: "skipped",
+    summary,
+  }));
+}
+
 async function delegatePlanSubAgents(
   agentCapabilities: AgentCapabilities | undefined,
-  conversationId: string,
+  context: ToolContext,
   plan: GoalCapabilityPlanRecord,
+  coordinationPlan: GoalCapabilityPlanCoordinationPlanRecord,
   nodeTitle: string,
-): Promise<{ delegated: boolean; outputs: string[]; delegationCount: number }> {
+): Promise<{
+  delegated: boolean;
+  outputs: string[];
+  delegationCount: number;
+  results: GoalCapabilityPlanDelegationResultRecord[];
+}> {
+  const executionSubAgents = getExecutionSubAgents(plan);
   if (!agentCapabilities) {
-    return { delegated: false, outputs: ["未提供 agentCapabilities，跳过子代理委托。"], delegationCount: 0 };
+    const summary = "未提供 agentCapabilities，跳过子代理委托。";
+    return {
+      delegated: false,
+      outputs: [summary],
+      delegationCount: 0,
+      results: createSkippedDelegationResults(plan, summary),
+    };
   }
-  if (plan.subAgents.length === 0) {
-    return { delegated: false, outputs: ["plan 中未定义子代理分工。"], delegationCount: 0 };
+  if (executionSubAgents.length === 0) {
+    return { delegated: false, outputs: ["plan 中未定义子代理分工。"], delegationCount: 0, results: [] };
   }
 
   if (agentCapabilities.spawnParallel) {
     const results = await agentCapabilities.spawnParallel(
-      plan.subAgents.map((item) => ({
-        agentId: item.agentId === "default" ? undefined : item.agentId,
+      executionSubAgents.map((item) => buildSubAgentLaunchSpec(context, {
         instruction: buildDelegationInstruction(plan, nodeTitle, item),
+        agentId: item.agentId === "default" ? undefined : item.agentId,
         context: {
           goalId: plan.goalId,
           nodeId: plan.nodeId,
           planId: plan.id,
           objective: item.objective,
         },
-        parentConversationId: conversationId,
+        channel: "goal",
+        role: item.role,
+        policySummary: `${coordinationPlan.summary} [role=${item.role ?? "default"}]`,
       })),
     );
     return {
       delegated: true,
       delegationCount: results.length,
+      results: results.map((result, index) => {
+        const subAgent = executionSubAgents[index];
+        return {
+          agentId: subAgent?.agentId ?? "unknown",
+          role: subAgent?.role,
+          status: result.success ? "success" : "failed",
+          summary: result.success ? "子代理已成功接手该分工。" : `子代理启动失败: ${result.error ?? "unknown error"}`,
+          error: result.success ? undefined : result.error ?? "unknown error",
+          sessionId: result.sessionId,
+          taskId: result.taskId,
+          outputPath: result.outputPath,
+        };
+      }),
       outputs: results.map((result, index) => {
-        const subAgent = plan.subAgents[index];
+        const subAgent = executionSubAgents[index];
         return result.success
           ? `- ${subAgent.agentId}: success`
           : `- ${subAgent.agentId}: failed (${result.error ?? "unknown error"})`;
@@ -81,25 +183,373 @@ async function delegatePlanSubAgents(
   if (agentCapabilities.spawnSubAgent) {
     const outputs: string[] = [];
     let delegationCount = 0;
-    for (const item of plan.subAgents) {
-      const result = await agentCapabilities.spawnSubAgent({
-        agentId: item.agentId === "default" ? undefined : item.agentId,
+    const results: GoalCapabilityPlanDelegationResultRecord[] = [];
+    for (const item of executionSubAgents) {
+      const launchSpec = buildSubAgentLaunchSpec(context, {
         instruction: buildDelegationInstruction(plan, nodeTitle, item),
+        agentId: item.agentId === "default" ? undefined : item.agentId,
         context: {
           goalId: plan.goalId,
           nodeId: plan.nodeId,
           planId: plan.id,
           objective: item.objective,
         },
-        parentConversationId: conversationId,
+        channel: "goal",
+        role: item.role,
+        policySummary: `${coordinationPlan.summary} [role=${item.role ?? "default"}]`,
       });
+      const result = await agentCapabilities.spawnSubAgent(launchSpec);
       delegationCount += 1;
+      results.push({
+        agentId: item.agentId,
+        role: item.role,
+        status: result.success ? "success" : "failed",
+        summary: result.success ? "子代理已成功接手该分工。" : `子代理启动失败: ${result.error ?? "unknown error"}`,
+        error: result.success ? undefined : result.error ?? "unknown error",
+        sessionId: result.sessionId,
+        taskId: result.taskId,
+        outputPath: result.outputPath,
+      });
       outputs.push(result.success ? `- ${item.agentId}: success` : `- ${item.agentId}: failed (${result.error ?? "unknown error"})`);
     }
-    return { delegated: true, outputs, delegationCount };
+    return { delegated: true, outputs, delegationCount, results };
   }
 
-  return { delegated: false, outputs: ["当前运行时不支持子代理编排。"], delegationCount: 0 };
+  const summary = "当前运行时不支持子代理编排。";
+  return {
+    delegated: false,
+    outputs: [summary],
+    delegationCount: 0,
+    results: createSkippedDelegationResults(plan, summary),
+  };
+}
+
+function buildVerifierHandoff(
+  plan: GoalCapabilityPlanRecord,
+  coordinationPlan: GoalCapabilityPlanCoordinationPlanRecord,
+  delegationResults: GoalCapabilityPlanDelegationResultRecord[],
+  checkpointRequested: boolean,
+): GoalCapabilityPlanVerifierHandoffRecord {
+  const sourceAgentIds = getExecutionSubAgents(plan)
+    .filter((item) => item.handoffToVerifier)
+    .map((item) => item.agentId);
+  if (coordinationPlan.rolePolicy.fanInStrategy !== "verifier_handoff") {
+    return {
+      status: "not_required",
+      summary: "当前协调计划不要求 verifier 收口。",
+      sourceAgentIds,
+    };
+  }
+
+  const sourceResults = delegationResults.filter((item) => sourceAgentIds.includes(item.agentId));
+  const completedSources = sourceResults
+    .filter((item) => item.status === "success")
+    .map((item) => item.agentId);
+  const failedSources = sourceResults
+    .filter((item) => item.status === "failed")
+    .map((item) => item.agentId);
+  const pendingSources = sourceAgentIds.filter((item) => !completedSources.includes(item));
+  const sourceTaskIds = sourceResults
+    .map((item) => item.taskId)
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  const notes: string[] = [];
+
+  if (checkpointRequested) {
+    notes.push("checkpoint 尚未通过，handoff 暂不进入执行。");
+  }
+  if (failedSources.length > 0) {
+    notes.push(`存在失败分工: ${failedSources.join(", ")}`);
+  }
+
+  if (checkpointRequested) {
+    return {
+      status: "pending",
+      verifierRole: coordinationPlan.rolePolicy.verifierRole,
+      summary: sourceAgentIds.length > 0
+        ? `等待 checkpoint 通过后再移交 verifier；来源分工=${sourceAgentIds.join(", ")}。`
+        : "等待 checkpoint 通过后再进入 verifier 收口。",
+      sourceAgentIds,
+      sourceTaskIds: sourceTaskIds.length > 0 ? sourceTaskIds : undefined,
+      notes,
+    };
+  }
+  if (sourceAgentIds.length === 0) {
+    return {
+      status: "pending",
+      verifierRole: coordinationPlan.rolePolicy.verifierRole,
+      summary: "当前还没有可供 verifier 收口的子代理来源，需等待主 Agent 或后续分工产出 handoff。",
+      sourceAgentIds,
+      sourceTaskIds: sourceTaskIds.length > 0 ? sourceTaskIds : undefined,
+      notes: notes.length > 0 ? notes : undefined,
+    };
+  }
+  if (pendingSources.length === 0 && failedSources.length === 0) {
+    return {
+      status: "ready",
+      verifierRole: coordinationPlan.rolePolicy.verifierRole,
+      summary: `来源分工结果已齐备，可移交 verifier 收口；来源=${sourceAgentIds.join(", ")}。`,
+      sourceAgentIds,
+      sourceTaskIds: sourceTaskIds.length > 0 ? sourceTaskIds : undefined,
+      notes: notes.length > 0 ? notes : undefined,
+    };
+  }
+  return {
+    status: "pending",
+    verifierRole: coordinationPlan.rolePolicy.verifierRole,
+    summary: `已记录 verifier handoff，待补齐来源结果；待补齐=${pendingSources.join(", ") || failedSources.join(", ")}。`,
+    sourceAgentIds,
+    sourceTaskIds: sourceTaskIds.length > 0 ? sourceTaskIds : undefined,
+    notes: notes.length > 0 ? notes : undefined,
+  };
+}
+
+function buildVerifierInstruction(
+  plan: GoalCapabilityPlanRecord,
+  nodeTitle: string,
+  handoff: GoalCapabilityPlanVerifierHandoffRecord,
+  delegationResults: GoalCapabilityPlanDelegationResultRecord[],
+): string {
+  const sourceLines = delegationResults
+    .filter((item) => handoff.sourceAgentIds.includes(item.agentId))
+    .map((item) => [
+      `- ${item.agentId}${item.role ? ` [${item.role}]` : ""}`,
+      item.summary,
+      item.taskId ? `task=${item.taskId}` : undefined,
+      item.outputPath ? `output=${item.outputPath}` : undefined,
+    ].filter(Boolean).join(" | "));
+  const lines = [
+    `长期任务节点: ${nodeTitle} (${plan.nodeId})`,
+    "角色: verifier",
+    `收口摘要: ${handoff.summary}`,
+    "请基于以下来源分工结果做验证、风险检查与验收结论。",
+    `Sources:\n${sourceLines.length > 0 ? sourceLines.join("\n") : "- (none)"}`,
+  ];
+  if (plan.methods.length > 0) {
+    lines.push(`参考 Methods: ${plan.methods.map((item) => item.file).join(", ")}`);
+  }
+  if (plan.skills.length > 0) {
+    lines.push(`参考 Skills: ${plan.skills.map((item) => item.name).join(", ")}`);
+  }
+  if (plan.checkpoint.required) {
+    lines.push(`Checkpoint Policy: ${plan.checkpoint.approvalMode} | ${plan.checkpoint.reasons.join(" | ") || "(none)"}`);
+  }
+  return lines.join("\n");
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function extractVerifierSummary(output: string | undefined, fallback: string): string {
+  const lines = String(output ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines[0] ?? fallback;
+}
+
+function inferVerifierFindingSeverity(line: string): GoalCapabilityPlanVerifierFindingRecord["severity"] {
+  const normalized = line.toLowerCase();
+  if (
+    /blocked|blocker|reject|rejected|fail|failure|error|critical/.test(normalized)
+    || /阻塞|拒绝|失败|错误|严重/.test(line)
+  ) {
+    return "high";
+  }
+  if (
+    /warn|warning|risk|issue|problem|todo|fix|revise/.test(normalized)
+    || /风险|问题|告警|警告|待办|修复|修正|调整/.test(line)
+  ) {
+    return "medium";
+  }
+  return "low";
+}
+
+function extractVerifierFindings(output: string | undefined): GoalCapabilityPlanVerifierFindingRecord[] {
+  const lines = uniqueStrings(
+    String(output ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => {
+        if (!line) return false;
+        if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) return true;
+        return /risk|issue|problem|warn|warning|todo|fix|failed|failure|error|blocked|blocker/i.test(line)
+          || /风险|问题|告警|警告|待办|修复|失败|错误|阻塞/.test(line);
+      }),
+  ).slice(0, 8);
+  return lines.map((summary) => ({
+    severity: inferVerifierFindingSeverity(summary),
+    summary,
+  }));
+}
+
+function inferVerifierRecommendation(
+  output: string | undefined,
+  status: GoalCapabilityPlanVerifierResultRecord["status"],
+): GoalCapabilityPlanVerifierResultRecord["recommendation"] {
+  if (status === "failed") return "blocked";
+  const normalized = String(output ?? "").toLowerCase();
+  if (
+    /blocked|blocker|reject|rejected|fail|failure|error|critical/.test(normalized)
+    || /阻塞|拒绝|失败|错误|严重/.test(String(output ?? ""))
+  ) {
+    return "blocked";
+  }
+  if (
+    /revise|fix|todo|warn|warning|issue|problem|risk|needs?\s+change/.test(normalized)
+    || /修复|修正|调整|待办|告警|警告|风险|问题|需改/.test(String(output ?? ""))
+  ) {
+    return "revise";
+  }
+  if (
+    /approve|approved|pass|passed|success|verified|looks good/.test(normalized)
+    || /通过|批准|成功|已验证|验收通过/.test(String(output ?? ""))
+  ) {
+    return "approve";
+  }
+  return "unknown";
+}
+
+function buildVerifierResultFromHandoff(
+  handoff: GoalCapabilityPlanVerifierHandoffRecord,
+): GoalCapabilityPlanVerifierResultRecord | undefined {
+  if (handoff.status === "not_required" || handoff.status === "skipped") return undefined;
+  return {
+    status: handoff.status === "failed" ? "failed" : "pending",
+    summary: handoff.summary,
+    findings: Array.isArray(handoff.notes)
+      ? handoff.notes.slice(0, 5).map((summary) => ({ severity: "medium", summary }))
+      : [],
+    recommendation: handoff.status === "failed" ? "blocked" : "unknown",
+    evidenceTaskIds: handoff.sourceTaskIds && handoff.sourceTaskIds.length > 0 ? handoff.sourceTaskIds : undefined,
+    outputPath: handoff.outputPath,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function buildVerifierResultAsset(
+  handoff: GoalCapabilityPlanVerifierHandoffRecord,
+  result: {
+    output?: string;
+    error?: string;
+    taskId?: string;
+    outputPath?: string;
+  } | undefined,
+  status: GoalCapabilityPlanVerifierResultRecord["status"],
+): GoalCapabilityPlanVerifierResultRecord {
+  const rawOutput = result?.output || result?.error || handoff.error || handoff.summary;
+  const findings = extractVerifierFindings(rawOutput);
+  if (findings.length === 0 && status === "failed") {
+    findings.push({
+      severity: "high",
+      summary: result?.error || handoff.error || handoff.summary,
+    });
+  }
+  return {
+    status,
+    summary: extractVerifierSummary(rawOutput, handoff.summary),
+    findings,
+    recommendation: inferVerifierRecommendation(rawOutput, status),
+    evidenceTaskIds: uniqueStrings([...(handoff.sourceTaskIds ?? []), result?.taskId]),
+    outputPath: result?.outputPath ?? handoff.outputPath,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function launchVerifierHandoff(
+  agentCapabilities: AgentCapabilities | undefined,
+  context: ToolContext,
+  plan: GoalCapabilityPlanRecord,
+  coordinationPlan: GoalCapabilityPlanCoordinationPlanRecord,
+  handoff: GoalCapabilityPlanVerifierHandoffRecord,
+  delegationResults: GoalCapabilityPlanDelegationResultRecord[],
+  nodeTitle: string,
+): Promise<{
+  handoff: GoalCapabilityPlanVerifierHandoffRecord;
+  outputs: string[];
+  verifierResult?: GoalCapabilityPlanVerifierResultRecord;
+}> {
+  if (handoff.status !== "ready") {
+    return {
+      handoff,
+      outputs: [],
+      verifierResult: buildVerifierResultFromHandoff(handoff),
+    };
+  }
+  if (!agentCapabilities?.spawnSubAgent) {
+    const failedHandoff: GoalCapabilityPlanVerifierHandoffRecord = {
+      ...handoff,
+      status: "failed",
+      error: "当前运行时不支持 verifier 子任务。",
+      notes: [...(handoff.notes ?? []), "未提供 spawnSubAgent，无法启动 verifier runtime。"],
+    };
+    return {
+      handoff: failedHandoff,
+      outputs: ["verifier runtime 启动失败：当前运行时不支持 verifier 子任务。"],
+      verifierResult: buildVerifierResultAsset(failedHandoff, {
+        error: "当前运行时不支持 verifier 子任务。",
+      }, "failed"),
+    };
+  }
+
+  const verifierSubAgent = getVerifierSubAgent(plan);
+  const launchSpec = buildSubAgentLaunchSpec(context, {
+    instruction: buildVerifierInstruction(plan, nodeTitle, handoff, delegationResults),
+    agentId: verifierSubAgent?.agentId && verifierSubAgent.agentId !== "default" ? verifierSubAgent.agentId : undefined,
+    context: {
+      goalId: plan.goalId,
+      nodeId: plan.nodeId,
+      planId: plan.id,
+      handoff: "verifier",
+      sourceTaskIds: handoff.sourceTaskIds ?? [],
+    },
+    channel: "goal",
+    role: "verifier",
+    policySummary: `${coordinationPlan.summary} [role=verifier]`,
+  });
+  const runningHandoff: GoalCapabilityPlanVerifierHandoffRecord = {
+    ...handoff,
+    status: "running",
+    verifierAgentId: launchSpec.agentId ?? verifierSubAgent?.agentId ?? "default",
+  };
+  const result = await agentCapabilities.spawnSubAgent(launchSpec);
+  if (result.success) {
+    const completedHandoff: GoalCapabilityPlanVerifierHandoffRecord = {
+      ...runningHandoff,
+      status: "completed",
+      summary: "verifier runtime 已完成收口，请查看输出中的验证结论。",
+      verifierTaskId: result.taskId,
+      verifierSessionId: result.sessionId,
+      outputPath: result.outputPath,
+    };
+    return {
+      handoff: completedHandoff,
+      outputs: [`- verifier: success${result.taskId ? ` (task=${result.taskId})` : ""}`],
+      verifierResult: buildVerifierResultAsset(completedHandoff, result, "completed"),
+    };
+  }
+  const failedHandoff: GoalCapabilityPlanVerifierHandoffRecord = {
+    ...runningHandoff,
+    status: "failed",
+    summary: `verifier runtime 启动失败: ${result.error ?? "unknown error"}`,
+    verifierTaskId: result.taskId,
+    verifierSessionId: result.sessionId,
+    outputPath: result.outputPath,
+    error: result.error ?? "unknown error",
+  };
+  return {
+    handoff: failedHandoff,
+    outputs: [`- verifier: failed (${result.error ?? "unknown error"})`],
+    verifierResult: buildVerifierResultAsset(failedHandoff, result, "failed"),
+  };
 }
 
 async function ensureRiskCheckpoint(
@@ -233,18 +683,43 @@ export const goalOrchestrateTool: Tool = {
         };
       }
 
+      const coordinationPlan = getCoordinationPlan(plan);
       const autoDelegate = args.auto_delegate === true;
       const delegation = autoDelegate && plan.executionMode === "multi_agent" && !checkpointOutcome.requested
-        ? await delegatePlanSubAgents(context.agentCapabilities, context.conversationId, plan, latestNode.title)
+        ? await delegatePlanSubAgents(context.agentCapabilities, context, plan, coordinationPlan, latestNode.title)
         : {
           delegated: false,
           outputs: checkpointOutcome.requested
             ? ["已进入 checkpoint 审批阶段，暂不触发子代理委托。"]
             : [autoDelegate ? "当前 plan 未进入 multi_agent 或无子代理分工，跳过委托。" : "未启用 auto_delegate，跳过子代理委托。"],
           delegationCount: 0,
+          results: autoDelegate
+            ? createSkippedDelegationResults(
+              plan,
+              checkpointOutcome.requested ? "已进入 checkpoint 审批阶段，暂不触发子代理委托。" : "当前 plan 未进入 multi_agent 或无子代理分工，跳过委托。",
+            )
+            : createSkippedDelegationResults(plan, "未启用 auto_delegate，跳过子代理委托。"),
         };
 
       const actualUsage = collectCapabilityPlanActualUsage(context);
+      const handoffDraft = buildVerifierHandoff(plan, coordinationPlan, delegation.results, checkpointOutcome.requested);
+      const verifierRuntime = autoDelegate
+        ? await launchVerifierHandoff(
+          context.agentCapabilities,
+          context,
+          plan,
+          coordinationPlan,
+          handoffDraft,
+          delegation.results,
+          latestNode.title,
+        )
+        : {
+          handoff: handoffDraft,
+          outputs: [],
+          verifierResult: buildVerifierResultFromHandoff(handoffDraft),
+        };
+      const verifierHandoff = verifierRuntime.handoff;
+      const verifierResult = verifierRuntime.verifierResult;
 
       if (context.goalCapabilities.saveCapabilityPlan) {
         plan = await context.goalCapabilities.saveCapabilityPlan(goalId, nodeId, {
@@ -258,7 +733,11 @@ export const goalOrchestrateTool: Tool = {
             claimed,
             delegated: delegation.delegated,
             delegationCount: delegation.delegationCount,
-            notes: [...checkpointOutcome.notes, ...delegation.outputs],
+            coordinationPlan,
+            delegationResults: delegation.results,
+            verifierHandoff,
+            verifierResult,
+            notes: [...checkpointOutcome.notes, ...delegation.outputs, ...verifierRuntime.outputs],
           },
         });
       }
@@ -267,6 +746,7 @@ export const goalOrchestrateTool: Tool = {
         claimed ? "节点已 claim 并进入执行态。" : `节点保持当前状态: ${latestNode.status}`,
         ...checkpointOutcome.notes,
         ...delegation.outputs,
+        ...verifierRuntime.outputs,
         "",
         formatCapabilityPlan(plan),
         "",

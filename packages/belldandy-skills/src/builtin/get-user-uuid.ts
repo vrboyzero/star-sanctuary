@@ -1,4 +1,5 @@
 import type { Tool, ToolContext, ToolCallResult } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
 /**
  * get_user_uuid - 获取当前环境中的用户UUID
@@ -9,7 +10,7 @@ import type { Tool, ToolContext, ToolCallResult } from "../types.js";
  * - 防冒充：UUID来自底层协议层面（WebSocket握手），无法通过文本伪造
  * - 环境感知：明确告知Agent当前环境是否支持UUID验证
  */
-export const getUserUuidTool: Tool = {
+export const getUserUuidTool: Tool = withToolContract({
   definition: {
     name: "get_user_uuid",
     description: "获取当前环境中的用户UUID。用于身份权力验证（如SOUL.md中定义的主人UUID匹配）。如果环境不支持UUID或用户未提供UUID，返回null。",
@@ -48,4 +49,18 @@ export const getUserUuidTool: Tool = {
       durationMs: 0,
     };
   },
-};
+}, {
+  family: "other",
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Read the current user's UUID from runtime context",
+  resultSchema: {
+    kind: "text",
+    description: "User UUID JSON text.",
+  },
+  outputPersistencePolicy: "conversation",
+});

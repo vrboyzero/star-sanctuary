@@ -132,10 +132,23 @@
         </div>
         <button id="connect" class="button panel-connect-btn" data-i18n="common.connect">Connect</button>
       </div>
-      <div class="task-token-history-bar">
-        <div class="task-token-history-label" data-i18n="panel.recentTaskToken">最近任务 Token</div>
-        <div class="task-token-history" id="taskTokenHistory">
-          <div class="task-token-history-empty" data-i18n="panel.taskTokenEmpty">暂无任务级 Token 记录</div>
+      <div class="panel-status-row">
+        <div class="panel-status-col panel-status-col-token">
+          <div class="task-token-history-bar">
+            <div class="task-token-history-label" data-i18n="panel.recentTaskToken">最近任务 Token</div>
+            <div class="task-token-history" id="taskTokenHistory">
+              <div class="task-token-history-empty" data-i18n="panel.taskTokenEmpty">暂无任务级 Token 记录</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-status-col panel-status-col-digest">
+          <div class="session-digest-bar">
+            <div class="task-token-history-label" data-i18n="panel.sessionDigestLabel">Session Digest</div>
+            <div class="session-digest-summary" id="sessionDigestSummary">
+              <div class="task-token-history-empty" data-i18n="panel.sessionDigestNoConversation">暂无活跃会话</div>
+            </div>
+            <button id="sessionDigestRefresh" class="button session-digest-refresh-btn" data-i18n="panel.sessionDigestRefresh">刷新摘要</button>
+          </div>
         </div>
       </div>
     </section>
@@ -144,7 +157,7 @@
       <!-- 左侧边栏：智能体设置 -->
       <aside class="sidebar" id="sidebar">
         <!-- 导航区域 -->
-        <div style="padding: 12px 16px 0; display: flex; flex-direction: column; gap: 8px;">
+        <div class="sidebar-nav">
           <button id="switchRoot" class="sidebar-action-btn is-active"
             style="text-align: left; font-weight: 600; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">📂</span><span data-i18n="sidebar.rootSettings">智能体设置</span></button>
           <button id="switchFacet" class="sidebar-action-btn"
@@ -157,6 +170,8 @@
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧠</span><span data-i18n="sidebar.memoryViewer">记忆查看</span></button>
           <button id="switchGoals" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🎯</span><span data-i18n="sidebar.longTasks">长期任务</span></button>
+          <button id="switchSubtasks" class="sidebar-action-btn"
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🪄</span><span data-i18n="sidebar.subtasks">子任务面板</span></button>
           <button id="switchCanvas" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🎨</span><span data-i18n="sidebar.canvasWorkspace">画布工作区</span></button>
         </div>
@@ -352,6 +367,43 @@
               </aside>
               <section class="memory-viewer-detail" id="goalsDetail">
                 <div class="memory-viewer-empty" data-i18n="goals.detailSelect">选择左侧长期任务查看详情。</div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="memory-viewer hidden" id="subtasksSection">
+          <div class="memory-viewer-shell subtasks-viewer-shell">
+            <div class="memory-viewer-header">
+              <div>
+                <div class="memory-viewer-kicker" data-i18n="subtasks.kicker">Subtasks</div>
+                <div class="memory-viewer-title" data-i18n="subtasks.title">Task Runtime Panel</div>
+              </div>
+              <div class="subtasks-header-actions">
+                <label class="subtasks-filter-toggle" for="subtasksShowArchived">
+                  <span data-i18n="subtasks.showArchived">显示已归档</span>
+                  <span class="toggle-switch">
+                    <input id="subtasksShowArchived" type="checkbox">
+                    <span class="toggle-slider"></span>
+                  </span>
+                </label>
+                <button id="subtasksRefresh" class="button" data-i18n="common.refresh">刷新</button>
+              </div>
+            </div>
+
+            <div class="memory-viewer-stats" id="subtasksSummary">
+              <div class="memory-stat-card">
+                <span class="memory-stat-label" data-i18n="subtasks.statTasks">子任务</span>
+                <strong class="memory-stat-value">--</strong>
+              </div>
+            </div>
+
+            <div class="memory-viewer-body">
+              <aside class="memory-viewer-list" id="subtasksList">
+                <div class="memory-viewer-empty" data-i18n="subtasks.waiting">等待加载…</div>
+              </aside>
+              <section class="memory-viewer-detail" id="subtasksDetail">
+                <div class="memory-viewer-empty" data-i18n="subtasks.detailSelect">选择左侧子任务查看详情。</div>
               </section>
             </div>
           </div>
@@ -726,6 +778,19 @@
       <div class="modal-footer">
         <button id="goalCreateCancel" class="button">取消</button>
         <button id="goalCreateSubmit" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="sessionDigestModal" class="modal-overlay hidden">
+    <div class="modal session-digest-modal">
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <span id="sessionDigestModalTitle">Session Digest</span>
+        <button id="sessionDigestModalClose" class="settings-btn" title="关闭">✕</button>
+      </div>
+      <div class="modal-body session-digest-modal-body">
+        <div id="sessionDigestModalMeta" class="session-digest-modal-meta"></div>
+        <div id="sessionDigestModalContent" class="session-digest-modal-content"></div>
       </div>
     </div>
   </div>

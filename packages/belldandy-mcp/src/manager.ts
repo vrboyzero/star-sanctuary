@@ -524,12 +524,21 @@ export class MCPManager implements IMCPManager {
     connectedCount: number;
     toolCount: number;
     resourceCount: number;
+    summary: {
+      recentErrorServers: number;
+      recoveryAttemptedServers: number;
+      recoverySucceededServers: number;
+      persistedResultServers: number;
+      truncatedResultServers: number;
+    };
     servers: Array<{
       id: string;
       name: string;
       status: string;
+      error?: string;
       toolCount: number;
       resourceCount: number;
+      diagnostics?: MCPServerState["diagnostics"];
     }>;
   } {
     const servers = Array.from(this.clients.entries()).map(([id, client]) => {
@@ -538,10 +547,20 @@ export class MCPManager implements IMCPManager {
         id,
         name: client.serverName,
         status: state.status,
+        error: state.error,
         toolCount: state.tools.length,
         resourceCount: state.resources.length,
+        diagnostics: state.diagnostics,
       };
     });
+
+    const summary = {
+      recentErrorServers: servers.filter((server) => Boolean(server.diagnostics?.lastErrorAt)).length,
+      recoveryAttemptedServers: servers.filter((server) => Boolean(server.diagnostics?.lastRecoveryAt)).length,
+      recoverySucceededServers: servers.filter((server) => server.diagnostics?.lastRecoverySucceeded === true).length,
+      persistedResultServers: servers.filter((server) => server.diagnostics?.lastResult?.strategy === "persisted").length,
+      truncatedResultServers: servers.filter((server) => server.diagnostics?.lastResult?.truncatedItems && server.diagnostics.lastResult.truncatedItems > 0).length,
+    };
 
     return {
       initialized: this.initialized,
@@ -549,6 +568,7 @@ export class MCPManager implements IMCPManager {
       connectedCount: servers.filter((s) => s.status === "connected").length,
       toolCount: this.toolBridge.getToolCount(),
       resourceCount: this.getAllResources().length,
+      summary,
       servers,
     };
   }
@@ -560,9 +580,21 @@ export class MCPManager implements IMCPManager {
     const diag = this.getDiagnostics();
 
     mcpLog("MCPManager", `诊断: 初始化=${diag.initialized}, 服务器=${diag.serverCount}, 已连接=${diag.connectedCount}, 工具=${diag.toolCount}, 资源=${diag.resourceCount}`);
+    if (diag.summary.recoveryAttemptedServers > 0 || diag.summary.persistedResultServers > 0) {
+      mcpLog(
+        "MCPManager",
+        `  摘要: recovery=${diag.summary.recoverySucceededServers}/${diag.summary.recoveryAttemptedServers}, persistedResults=${diag.summary.persistedResultServers}, truncatedResults=${diag.summary.truncatedResultServers}`,
+      );
+    }
     if (diag.servers.length > 0) {
       for (const server of diag.servers) {
-        mcpLog("MCPManager", `  - ${server.name} (${server.id}): ${server.status}, ${server.toolCount} 工具, ${server.resourceCount} 资源`);
+        const failureSuffix = server.diagnostics?.lastErrorMessage
+          ? `, lastError=${server.diagnostics.lastErrorKind ?? "unknown"}:${server.diagnostics.lastErrorMessage}`
+          : "";
+        const resultSuffix = server.diagnostics?.lastResult
+          ? `, lastResult=${server.diagnostics.lastResult.source}:${server.diagnostics.lastResult.strategy}`
+          : "";
+        mcpLog("MCPManager", `  - ${server.name} (${server.id}): ${server.status}, ${server.toolCount} 工具, ${server.resourceCount} 资源${failureSuffix}${resultSuffix}`);
       }
     }
   }

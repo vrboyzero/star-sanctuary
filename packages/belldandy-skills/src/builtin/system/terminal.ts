@@ -1,8 +1,9 @@
 import type { Tool, ToolCallResult } from "../../types.js";
 import { PtyManager } from "./pty.js";
 import crypto from "node:crypto";
+import { withToolContract } from "../../tool-contract.js";
 
-export const terminalTool: Tool = {
+export const terminalTool: Tool = withToolContract({
     definition: {
         name: "terminal",
         description: "管理交互式终端会话 (PTY)。支持持久化 Shell、交互式命令 (vim, git commit)、TUI 应用。比 `run_command` 更强大，但需要手动管理会话 (start/write/read/kill)。",
@@ -148,4 +149,18 @@ export const terminalTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "command-exec",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "critical",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Manage persistent interactive terminal sessions",
+    resultSchema: {
+        kind: "text",
+        description: "Terminal session status or captured terminal output text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

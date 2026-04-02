@@ -103,10 +103,34 @@ export type ConversationStoreOptions = {
 
 type ConversationHistoryView = Array<{ role: "user" | "assistant"; content: string }>;
 
+export type SessionDigestStatus = "idle" | "ready" | "updated";
+
+export type SessionDigestRecord = {
+    conversationId: string;
+    status: SessionDigestStatus;
+    messageCount: number;
+    digestedMessageCount: number;
+    pendingMessageCount: number;
+    threshold: number;
+    rollingSummary: string;
+    archivalSummary: string;
+    lastDigestAt: number;
+};
+
+export type SessionDigestRefreshOptions = {
+    force?: boolean;
+    threshold?: number;
+};
+
 type ConversationMetaSnapshot = Partial<Pick<
     Conversation,
     "agentId" | "channel" | "activeCounters" | "taskTokenRecords" | "createdAt" | "updatedAt"
 >>;
+
+type SessionDigestState = {
+    threshold: number;
+    lastDigestAt: number;
+};
 
 export const conversationAsyncFs = {
     readFile(filePath: string, encoding: BufferEncoding): Promise<string> {
@@ -129,6 +153,7 @@ export const conversationAsyncFs = {
 const INVALID_CONVERSATION_FILENAME_CHARS = /[<>:"/\\|?*\u0000-\u001F%]/g;
 const TRAILING_CONVERSATION_FILENAME_CHARS = /[. ]+$/;
 const RESERVED_WINDOWS_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const DEFAULT_SESSION_DIGEST_THRESHOLD = 6;
 
 /**
  * 会话存储
@@ -137,8 +162,10 @@ const RESERVED_WINDOWS_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 export class ConversationStore {
     private conversations = new Map<string, Conversation>();
     private compactionStates = new Map<string, CompactionState>();
+    private sessionDigestStates = new Map<string, SessionDigestState>();
     private appendWriteChains = new Map<string, Promise<void>>();
     private compactionStateWriteChains = new Map<string, Promise<void>>();
+    private sessionDigestStateWriteChains = new Map<string, Promise<void>>();
     private readonly maxHistory: number;
     private readonly ttlSeconds: number;
     private readonly dataDir?: string;
@@ -649,6 +676,8 @@ export class ConversationStore {
      */
     clear(id: string): void {
         this.conversations.delete(id);
+        this.compactionStates.delete(id);
+        this.sessionDigestStates.delete(id);
         // 可选：是否删除文件？通常保留作为历史记录
         // if (this.dataDir) {
         //     const filePath = path.join(this.dataDir, `${id}.jsonl`);
@@ -748,10 +777,16 @@ export class ConversationStore {
      */
     async forceCompact(
         id: string,
+        overrideOpts?: Pick<CompactionOptions, "keepRecentCount">,
     ): Promise<{ history: Array<{ role: "user" | "assistant"; content: string }>; compacted: boolean; originalTokens?: number; compactedTokens?: number; tier?: string }> {
         const conversation = await this.getAsync(id);
         const history = this.buildHistoryView(conversation);
-        const opts = this.compactionOpts;
+        const opts = this.compactionOpts
+            ? {
+                ...this.compactionOpts,
+                ...overrideOpts,
+            }
+            : undefined;
 
         // 无压缩配置或历史太短，无法压缩
         if (!opts || history.length <= 2) {
@@ -770,6 +805,7 @@ export class ConversationStore {
         const result = await compactIncremental(history, state, {
             ...opts,
             summarizer: this.summarizer,
+            force: true,
         });
 
         if (result.compacted) {
@@ -791,6 +827,77 @@ export class ConversationStore {
             originalTokens: result.originalTokens,
             compactedTokens: result.compactedTokens,
             tier: result.tier,
+        };
+    }
+
+    async getSessionDigest(
+        id: string,
+        options: Pick<SessionDigestRefreshOptions, "threshold"> = {},
+    ): Promise<SessionDigestRecord> {
+        const conversation = await this.getAsync(id);
+        const history = this.buildHistoryView(conversation);
+        const compactionState = await this.getCompactionStateAsync(id);
+        const digestState = await this.getSessionDigestStateAsync(id, options.threshold);
+        return this.buildSessionDigestRecord(id, history, compactionState, digestState);
+    }
+
+    async refreshSessionDigest(
+        id: string,
+        options: SessionDigestRefreshOptions = {},
+    ): Promise<{
+        digest: SessionDigestRecord;
+        updated: boolean;
+        compacted: boolean;
+        originalTokens?: number;
+        compactedTokens?: number;
+        tier?: string;
+    }> {
+        const previousState = await this.getSessionDigestStateAsync(id);
+        const threshold = typeof options.threshold === "number" && Number.isFinite(options.threshold)
+            ? this.resolveSessionDigestThreshold(options.threshold)
+            : this.resolveSessionDigestThreshold(previousState.threshold);
+        const current = await this.getSessionDigest(id, { threshold });
+        const shouldRefresh = options.force === true || this.shouldRefreshSessionDigest(current);
+
+        let compacted = false;
+        let originalTokens: number | undefined;
+        let compactedTokens: number | undefined;
+        let tier: string | undefined;
+
+        if (shouldRefresh) {
+            const forceKeepRecentCount = Math.min(
+                this.compactionOpts?.keepRecentCount ?? threshold,
+                Math.max(0, threshold - 1),
+            );
+            const result = await this.forceCompact(id, {
+                keepRecentCount: forceKeepRecentCount,
+            });
+            compacted = result.compacted;
+            originalTokens = result.originalTokens;
+            compactedTokens = result.compactedTokens;
+            tier = result.tier;
+        }
+
+        const compactionState = await this.getCompactionStateAsync(id);
+        const nextDigestState: SessionDigestState = {
+            threshold,
+            lastDigestAt: compactionState.lastCompactedAt,
+        };
+        const stateChanged =
+            previousState.threshold !== nextDigestState.threshold
+            || previousState.lastDigestAt !== nextDigestState.lastDigestAt;
+
+        if (stateChanged) {
+            await this.persistSessionDigestState(id, nextDigestState);
+        }
+
+        return {
+            digest: await this.getSessionDigest(id, { threshold }),
+            updated: shouldRefresh && (compacted || stateChanged),
+            compacted,
+            originalTokens,
+            compactedTokens,
+            tier,
         };
     }
 
@@ -871,6 +978,138 @@ export class ConversationStore {
             }
         });
         return next;
+    }
+
+    private getSessionDigestStateFilePath(id: string): string | undefined {
+        return this.getConversationFilePath(id, ".digest.json");
+    }
+
+    private resolveSessionDigestThreshold(threshold?: number): number {
+        if (typeof threshold === "number" && Number.isFinite(threshold)) {
+            return Math.max(1, Math.floor(threshold));
+        }
+        return DEFAULT_SESSION_DIGEST_THRESHOLD;
+    }
+
+    private async getSessionDigestStateAsync(id: string, threshold?: number): Promise<SessionDigestState> {
+        const cached = this.sessionDigestStates.get(id);
+        if (cached) {
+            if (typeof threshold === "number") {
+                return {
+                    ...cached,
+                    threshold: this.resolveSessionDigestThreshold(threshold),
+                };
+            }
+            return cached;
+        }
+
+        for (const filePath of this.getConversationFilePathCandidates(id, ".digest.json")) {
+            try {
+                const raw = await conversationAsyncFs.readFile(filePath, "utf-8");
+                const parsed = JSON.parse(raw) as Partial<SessionDigestState>;
+                const state: SessionDigestState = {
+                    threshold: this.resolveSessionDigestThreshold(parsed.threshold),
+                    lastDigestAt: typeof parsed.lastDigestAt === "number" ? parsed.lastDigestAt : 0,
+                };
+                this.sessionDigestStates.set(id, state);
+                if (typeof threshold === "number") {
+                    return {
+                        ...state,
+                        threshold: this.resolveSessionDigestThreshold(threshold),
+                    };
+                }
+                return state;
+            } catch (err) {
+                const fsErr = err as NodeJS.ErrnoException;
+                if (fsErr.code !== "ENOENT") {
+                    // 文件损坏或读取失败时，退回默认状态
+                }
+            }
+        }
+
+        const empty: SessionDigestState = {
+            threshold: this.resolveSessionDigestThreshold(threshold),
+            lastDigestAt: 0,
+        };
+        this.sessionDigestStates.set(id, empty);
+        return empty;
+    }
+
+    private async persistSessionDigestState(id: string, state: SessionDigestState): Promise<void> {
+        this.sessionDigestStates.set(id, state);
+
+        const filePath = this.getSessionDigestStateFilePath(id);
+        if (!filePath) return;
+
+        const data = JSON.stringify(state, null, 2);
+        const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+
+        await this.enqueueSessionDigestStateWrite(id, async () => {
+            try {
+                await conversationAsyncFs.writeFile(tempPath, data, "utf-8");
+                await conversationAsyncFs.rename(tempPath, filePath);
+            } catch (err) {
+                try {
+                    await conversationAsyncFs.unlink(tempPath);
+                } catch (cleanupErr) {
+                    const fsErr = cleanupErr as NodeJS.ErrnoException;
+                    if (fsErr.code !== "ENOENT") {
+                        // ignore temp cleanup failure
+                    }
+                }
+                console.error(`Failed to save session digest state for ${id}:`, err);
+            }
+        });
+    }
+
+    private enqueueSessionDigestStateWrite(id: string, task: () => Promise<void>): Promise<void> {
+        const previous = this.sessionDigestStateWriteChains.get(id) ?? Promise.resolve();
+        const next = previous
+            .catch(() => undefined)
+            .then(task);
+
+        this.sessionDigestStateWriteChains.set(id, next);
+        void next.finally(() => {
+            if (this.sessionDigestStateWriteChains.get(id) === next) {
+                this.sessionDigestStateWriteChains.delete(id);
+            }
+        });
+        return next;
+    }
+
+    private buildSessionDigestRecord(
+        id: string,
+        history: ConversationHistoryView,
+        compactionState: CompactionState,
+        digestState: SessionDigestState,
+    ): SessionDigestRecord {
+        const messageCount = history.length;
+        const digestedMessageCount = Math.max(0, Math.min(messageCount, compactionState.compactedMessageCount));
+        const pendingMessageCount = Math.max(0, messageCount - digestedMessageCount);
+        const threshold = this.resolveSessionDigestThreshold(digestState.threshold);
+        const hasDigestContent =
+            compactionState.lastCompactedAt > 0
+            || compactionState.compactedMessageCount > 0
+            || Boolean(compactionState.rollingSummary)
+            || Boolean(compactionState.archivalSummary);
+        const refreshRecommended = pendingMessageCount >= threshold || (!hasDigestContent && messageCount >= threshold);
+
+        return {
+            conversationId: id,
+            status: refreshRecommended ? "updated" : hasDigestContent ? "ready" : "idle",
+            messageCount,
+            digestedMessageCount,
+            pendingMessageCount,
+            threshold,
+            rollingSummary: compactionState.rollingSummary,
+            archivalSummary: compactionState.archivalSummary,
+            lastDigestAt: Math.max(compactionState.lastCompactedAt, digestState.lastDigestAt),
+        };
+    }
+
+    private shouldRefreshSessionDigest(digest: SessionDigestRecord): boolean {
+        return digest.pendingMessageCount >= digest.threshold
+            || (digest.lastDigestAt <= 0 && digest.messageCount >= digest.threshold);
     }
 
     /**

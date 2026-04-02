@@ -2,8 +2,9 @@ import type { Tool, ToolCallResult } from "../../types.js";
 import { PythonRunner } from "./python.js";
 import { NodeRunner } from "./js.js";
 import crypto from "node:crypto";
+import { withToolContract } from "../../tool-contract.js";
 
-export const codeInterpreterTool: Tool = {
+export const codeInterpreterTool: Tool = withToolContract({
     definition: {
         name: "code_interpreter",
         description: "Execute Python or Node.js code in a temporary environment. Useful for calculations, data analysis, or generating text output via scripts. NOT a REPL (stateless per call, unless you write to files).",
@@ -64,4 +65,18 @@ export const codeInterpreterTool: Tool = {
             };
         }
     },
-};
+}, {
+    family: "command-exec",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "high",
+    channels: ["gateway", "web"],
+    safeScopes: ["privileged"],
+    activityDescription: "Execute Python or JavaScript code in a temporary interpreter",
+    resultSchema: {
+        kind: "text",
+        description: "Interpreter stdout and stderr text.",
+    },
+    outputPersistencePolicy: "conversation",
+});

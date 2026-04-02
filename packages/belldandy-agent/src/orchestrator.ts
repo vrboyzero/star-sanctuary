@@ -13,10 +13,16 @@ import { randomUUID } from "node:crypto";
 import type { AgentRegistry } from "./agent-registry.js";
 import type { ConversationStore } from "./conversation.js";
 import type { AgentStreamItem, BelldandyAgent } from "./index.js";
+import {
+  DEFAULT_AGENT_LAUNCH_TIMEOUT_MS,
+  normalizeAgentLaunchSpec,
+  type AgentLaunchSpec,
+  type AgentLaunchSpecInput,
+} from "./launch-spec.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
-export type SubAgentSessionStatus = "pending" | "running" | "done" | "error" | "timeout";
+export type SubAgentSessionStatus = "pending" | "running" | "done" | "error" | "timeout" | "stopped";
 
 export type SubAgentSession = {
   id: string;
@@ -24,6 +30,7 @@ export type SubAgentSession = {
   agentId: string;
   status: SubAgentSessionStatus;
   instruction: string;
+  launchSpec: AgentLaunchSpec;
   createdAt: number;
   finishedAt?: number;
   result?: string;
@@ -36,12 +43,24 @@ export type SubAgentEvent =
   | { type: "thought_delta"; sessionId: string; delta: string }
   | { type: "completed"; sessionId: string; success: boolean; output: string; error?: string };
 
-export type SpawnOptions = {
+type SpawnCallbacks = {
+  shouldAbortBeforeStart?: () => boolean | Promise<boolean>;
+  onQueued?: (position: number) => void;
+  onSessionCreated?: (sessionId: string, agentId: string) => void;
+};
+
+type SpawnOptionsLegacy = {
   parentConversationId: string;
   agentId?: string;
   instruction: string;
   context?: Record<string, unknown>;
 };
+
+type SpawnOptionsWithSpec = {
+  launchSpec: AgentLaunchSpecInput;
+};
+
+export type SpawnOptions = (SpawnOptionsLegacy | SpawnOptionsWithSpec) & SpawnCallbacks;
 
 export type SpawnResult = {
   success: boolean;
@@ -82,13 +101,26 @@ export type OrchestratorHookRunner = {
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUE_SIZE = 10;
-const DEFAULT_SESSION_TIMEOUT_MS = 120_000;
+const DEFAULT_SESSION_TIMEOUT_MS = DEFAULT_AGENT_LAUNCH_TIMEOUT_MS;
 const DEFAULT_MAX_DEPTH = 2;
+
+function toLaunchSpecInput(opts: SpawnOptions): AgentLaunchSpecInput {
+  if ("launchSpec" in opts) {
+    return opts.launchSpec;
+  }
+  return {
+    instruction: opts.instruction,
+    parentConversationId: opts.parentConversationId,
+    agentId: opts.agentId,
+    context: opts.context,
+  };
+}
 
 // ─── SubAgentOrchestrator ────────────────────────────────────────────────
 
 export class SubAgentOrchestrator {
   private sessions = new Map<string, SubAgentSession>();
+  private sessionStopHandlers = new Map<string, (reason?: string) => Promise<SpawnResult>>();
   private runningCount = 0;
   private pendingQueue: Array<{
     opts: SpawnOptions;
@@ -133,10 +165,17 @@ export class SubAgentOrchestrator {
    * If concurrency limit is reached, the request is queued (up to maxQueueSize).
    */
   async spawn(opts: SpawnOptions): Promise<SpawnResult> {
-    const agentId = opts.agentId ?? "default";
+    const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(opts), {
+      timeoutMs: this.sessionTimeoutMs,
+    });
+    const normalizedOpts: SpawnOptions = {
+      ...opts,
+      launchSpec,
+    };
+    const agentId = launchSpec.agentId;
 
     // ── Depth check ──
-    const depth = (opts.context?._orchestratorDepth as number) ?? 0;
+    const depth = (launchSpec.context?._orchestratorDepth as number) ?? 0;
     if (depth >= this.maxDepth) {
       return {
         success: false,
@@ -161,7 +200,12 @@ export class SubAgentOrchestrator {
 
       return new Promise<SpawnResult>((resolve, reject) => {
         const position = this.pendingQueue.length + 1;
-        this.pendingQueue.push({ opts, resolve, reject, enqueuedAt: Date.now() });
+        this.pendingQueue.push({ opts: normalizedOpts, resolve, reject, enqueuedAt: Date.now() });
+        try {
+          normalizedOpts.onQueued?.(position);
+        } catch (err) {
+          this.logger?.warn(`Sub-agent queue callback error: ${err}`);
+        }
 
         this.emitEvent({
           type: "queued",
@@ -171,15 +215,31 @@ export class SubAgentOrchestrator {
       });
     }
 
-    return this.executeSpawn(opts);
+    return this.executeSpawn(normalizedOpts);
   }
 
   /**
    * Internal: actually execute a spawn (assumes concurrency slot is available).
    */
   private async executeSpawn(opts: SpawnOptions): Promise<SpawnResult> {
-    const agentId = opts.agentId ?? "default";
+    const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(opts), {
+      timeoutMs: this.sessionTimeoutMs,
+    });
+    const agentId = launchSpec.agentId;
     const sessionId = `sub_${randomUUID().slice(0, 8)}`;
+
+    const shouldAbort = opts.shouldAbortBeforeStart
+      ? await opts.shouldAbortBeforeStart()
+      : false;
+    if (shouldAbort) {
+      this.logger?.info(`Sub-agent skipped before start due to pending stop request: ${agentId}`);
+      return {
+        success: false,
+        output: "",
+        error: "Sub-agent stopped before execution.",
+        sessionId,
+      };
+    }
 
     // ── Resolve agent ──
     let agent: BelldandyAgent;
@@ -197,25 +257,41 @@ export class SubAgentOrchestrator {
     // ── Create session ──
     const session: SubAgentSession = {
       id: sessionId,
-      parentConversationId: opts.parentConversationId,
+      parentConversationId: launchSpec.parentConversationId,
       agentId,
       status: "running",
-      instruction: opts.instruction,
+      instruction: launchSpec.instruction,
+      launchSpec,
       createdAt: Date.now(),
     };
     this.sessions.set(sessionId, session);
     this.runningCount++;
+    try {
+      opts.onSessionCreated?.(sessionId, agentId);
+    } catch (err) {
+      this.logger?.warn(`Sub-agent session callback error: ${err}`);
+    }
 
     this.logger?.info(`Sub-agent spawned: ${sessionId} (agent=${agentId})`, {
-      parentConversationId: opts.parentConversationId,
-      instruction: opts.instruction.slice(0, 200),
+      parentConversationId: launchSpec.parentConversationId,
+      instruction: launchSpec.instruction.slice(0, 200),
+      launchSpec: {
+        profileId: launchSpec.profileId,
+        channel: launchSpec.channel,
+        background: launchSpec.background,
+        timeoutMs: launchSpec.timeoutMs,
+        role: launchSpec.role,
+        allowedToolFamilies: launchSpec.allowedToolFamilies,
+        maxToolRiskLevel: launchSpec.maxToolRiskLevel,
+        policySummary: launchSpec.policySummary,
+      },
     });
 
     this.emitEvent({
       type: "started",
       sessionId,
       agentId,
-      instruction: opts.instruction,
+      instruction: launchSpec.instruction,
     });
 
     // ── Hook: session_start ──
@@ -240,10 +316,13 @@ export class SubAgentOrchestrator {
   private drainQueue(): void {
     while (this.pendingQueue.length > 0 && this.runningCount < this.maxConcurrent) {
       const next = this.pendingQueue.shift()!;
+      const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(next.opts), {
+        timeoutMs: this.sessionTimeoutMs,
+      });
 
       // Check if the queued request has been waiting too long
       const waitMs = Date.now() - next.enqueuedAt;
-      if (waitMs > this.sessionTimeoutMs) {
+      if (waitMs > launchSpec.timeoutMs) {
         next.resolve({
           success: false,
           output: "",
@@ -306,6 +385,13 @@ export class SubAgentOrchestrator {
     return this.sessions.get(sessionId);
   }
 
+  async stopSession(sessionId: string, reason = "Sub-agent stopped by user."): Promise<boolean> {
+    const stopHandler = this.sessionStopHandlers.get(sessionId);
+    if (!stopHandler) return false;
+    await stopHandler(reason);
+    return true;
+  }
+
   /**
    * Clean up completed sessions older than maxAgeMs.
    * Returns the number of sessions cleaned.
@@ -337,9 +423,10 @@ export class SubAgentOrchestrator {
     opts: SpawnOptions,
   ): Promise<SpawnResult> {
     const conversationId = session.id; // sub-agent uses its own session ID as conversationId
+    const timeoutMs = session.launchSpec.timeoutMs;
 
     // Prepare history in conversation store
-    this.conversationStore.addMessage(conversationId, "user", opts.instruction, {
+    this.conversationStore.addMessage(conversationId, "user", session.launchSpec.instruction, {
       agentId: session.agentId,
     });
 
@@ -348,17 +435,23 @@ export class SubAgentOrchestrator {
     return new Promise<SpawnResult>((resolve) => {
       let settled = false;
       let timedOut = false;
+      const finish = (result: SpawnResult): boolean => {
+        if (settled) return false;
+        settled = true;
+        this.sessionStopHandlers.delete(session.id);
+        resolve(result);
+        return true;
+      };
 
       const stream = this.createAgentStream(agent, opts, conversationId, history);
       const iterator = stream[Symbol.asyncIterator]();
 
       const timer = setTimeout(() => {
         if (settled) return;
-        settled = true;
         timedOut = true;
         session.status = "timeout";
         session.finishedAt = Date.now();
-        session.error = `Sub-agent timed out after ${this.sessionTimeoutMs}ms`;
+        session.error = `Sub-agent timed out after ${timeoutMs}ms`;
 
         this.logger?.warn(`Sub-agent timeout: ${session.id}`);
         this.emitEvent({
@@ -377,24 +470,63 @@ export class SubAgentOrchestrator {
 
         void this.closeIterator(iterator, session.id);
 
-        resolve({
+        finish({
           success: false,
           output: "",
           error: session.error,
           sessionId: session.id,
         });
-      }, this.sessionTimeoutMs);
+      }, timeoutMs);
+
+      this.sessionStopHandlers.set(session.id, async (reason = "Sub-agent stopped by user.") => {
+        if (settled) {
+          return {
+            success: false,
+            output: "",
+            error: session.error ?? reason,
+            sessionId: session.id,
+          };
+        }
+        clearTimeout(timer);
+        session.status = "stopped";
+        session.finishedAt = Date.now();
+        session.error = reason;
+
+        this.logger?.info(`Sub-agent stopped: ${session.id}`, {
+          agentId: session.agentId,
+          reason,
+          durationMs: session.finishedAt - session.createdAt,
+        });
+        this.emitEvent({
+          type: "completed",
+          sessionId: session.id,
+          success: false,
+          output: "",
+          error: reason,
+        });
+        this.hookRunner?.runSessionEnd(
+          { sessionId: session.id, messageCount: 0, durationMs: session.finishedAt - session.createdAt },
+          { agentId: session.agentId, sessionId: session.id },
+        ).catch((err) => this.logger?.warn(`session_end hook error: ${err}`));
+
+        await this.closeIterator(iterator, session.id);
+        const result = {
+          success: false,
+          output: "",
+          error: reason,
+          sessionId: session.id,
+        };
+        finish(result);
+        return result;
+      });
 
       this.consumeStream(iterator, session, conversationId, () => timedOut)
         .then((result) => {
-          if (settled) return;
-          settled = true;
           clearTimeout(timer);
-          resolve(result);
+          finish(result);
         })
         .catch((err) => {
           if (settled) return;
-          settled = true;
           clearTimeout(timer);
 
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -417,7 +549,7 @@ export class SubAgentOrchestrator {
             { agentId: session.agentId, sessionId: session.id },
           ).catch((e) => this.logger?.warn(`session_end hook error: ${e}`));
 
-          resolve({
+          finish({
             success: false,
             output: "",
             error: errorMsg,
@@ -433,15 +565,33 @@ export class SubAgentOrchestrator {
     conversationId: string,
     history: Array<{ role: "user" | "assistant"; content: string }>,
   ): AsyncIterable<AgentStreamItem> {
-    const depth = ((opts.context?._orchestratorDepth as number) ?? 0) + 1;
+    const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(opts), {
+      timeoutMs: this.sessionTimeoutMs,
+    });
+    const depth = ((launchSpec.context?._orchestratorDepth as number) ?? 0) + 1;
     return agent.run({
       conversationId,
-      text: opts.instruction,
+      text: launchSpec.instruction,
       history,
       meta: {
-        ...opts.context,
+        ...launchSpec.context,
         _orchestratorDepth: depth,
-        _parentConversationId: opts.parentConversationId,
+        _parentConversationId: launchSpec.parentConversationId,
+        _agentLaunchSpec: {
+          profileId: launchSpec.profileId,
+          channel: launchSpec.channel,
+          background: launchSpec.background,
+          timeoutMs: launchSpec.timeoutMs,
+          role: launchSpec.role,
+          cwd: launchSpec.cwd,
+          toolSet: launchSpec.toolSet,
+          allowedToolFamilies: launchSpec.allowedToolFamilies,
+          maxToolRiskLevel: launchSpec.maxToolRiskLevel,
+          policySummary: launchSpec.policySummary,
+          permissionMode: launchSpec.permissionMode,
+          isolationMode: launchSpec.isolationMode,
+          parentTaskId: launchSpec.parentTaskId,
+        },
       },
     });
   }
@@ -497,11 +647,13 @@ export class SubAgentOrchestrator {
       }
     }
 
-    if (isTimedOut() || session.status === "timeout") {
+    if (isTimedOut() || session.status === "timeout" || session.status === "stopped") {
       return {
         success: false,
         output: "",
-        error: session.error ?? `Sub-agent timed out after ${this.sessionTimeoutMs}ms`,
+        error: session.error ?? (session.status === "stopped"
+          ? "Sub-agent stopped by user."
+          : `Sub-agent timed out after ${session.launchSpec.timeoutMs}ms`),
         sessionId: session.id,
       };
     }

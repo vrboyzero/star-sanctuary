@@ -1,6 +1,7 @@
 import type { Tool, ToolContext } from "../types.js";
+import { withToolContract } from "../tool-contract.js";
 
-export const tokenCounterStartTool: Tool = {
+export const tokenCounterStartTool: Tool = withToolContract({
   definition: {
     name: "token_counter_start",
     description:
@@ -51,9 +52,23 @@ export const tokenCounterStartTool: Tool = {
       };
     }
   },
-};
+}, {
+  family: "other",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Start a named token usage counter",
+  resultSchema: {
+    kind: "text",
+    description: "Token counter start confirmation text.",
+  },
+  outputPersistencePolicy: "conversation",
+});
 
-export const tokenCounterStopTool: Tool = {
+export const tokenCounterStopTool: Tool = withToolContract({
   definition: {
     name: "token_counter_stop",
     description:
@@ -110,4 +125,18 @@ export const tokenCounterStopTool: Tool = {
       };
     }
   },
-};
+}, {
+  family: "other",
+  isReadOnly: false,
+  isConcurrencySafe: false,
+  needsPermission: false,
+  riskLevel: "low",
+  channels: ["gateway", "web"],
+  safeScopes: ["local-safe", "web-safe"],
+  activityDescription: "Stop a named token usage counter and return its totals",
+  resultSchema: {
+    kind: "text",
+    description: "Token counter summary JSON text.",
+  },
+  outputPersistencePolicy: "conversation",
+});

@@ -215,6 +215,156 @@ export type SystemDoctorResult = {
     status: "pass" | "fail" | "warn";
     message?: string;
   }>;
+  memoryRuntime?: {
+    sharedMemory?: {
+      enabled: boolean;
+      available: boolean;
+      reasonCodes: string[];
+      reasonMessages: string[];
+      scope: {
+        relativeRoot: string;
+        rootPath: string;
+        mainMemoryPath: string;
+        dailyMemoryDirPath: string;
+        fileCount: number;
+        hasMainMemory: boolean;
+        dailyCount: number;
+      };
+      secretGuard: {
+        enabled: boolean;
+        scanner: string;
+        ruleCount: number;
+        summary: string;
+      };
+      syncPolicy: {
+        status: string;
+        scope: string;
+        deltaSync: {
+          enabled: boolean;
+          mode: string;
+          summary: string;
+        };
+        conflictPolicy: {
+          mode: string;
+          maxConflictRetries: number;
+          summary: string;
+        };
+        deletionPolicy: {
+          propagatesDeletes: boolean;
+          summary: string;
+        };
+        suppressionPolicy: {
+          enabled: boolean;
+          summary: string;
+        };
+      };
+    };
+    mainThreadToolSurface?: {
+      id: string;
+      runtime: string;
+      mode: string;
+      summary: string;
+      allowedCapabilities: string[];
+      blockedCapabilities: string[];
+    };
+    sessionDigest?: {
+      availability: {
+        enabled: boolean;
+        available: boolean;
+        reasonCodes: string[];
+        reasonMessages: string[];
+      };
+      permissionSurface: {
+        id: string;
+        runtime: string;
+        mode: string;
+        summary: string;
+        allowedCapabilities: string[];
+        blockedCapabilities: string[];
+      };
+      rateLimit: {
+        status: "unlimited" | "ok" | "limited";
+        configured: boolean;
+        observedRuns: number;
+        maxRuns?: number;
+        windowMs?: number;
+        retryAfterMs?: number;
+        reasonCode?: string;
+        reasonMessage?: string;
+      };
+    };
+    durableExtraction?: {
+      availability: {
+        enabled: boolean;
+        available: boolean;
+        reasonCodes: string[];
+        reasonMessages: string[];
+        model?: string;
+        minMessages?: number;
+        hasBaseUrl?: boolean;
+        hasApiKey?: boolean;
+      };
+      guidance?: {
+        policyVersion: string;
+        acceptedCandidateTypes: string[];
+        rejectedContentTypes: Array<{
+          code: string;
+          message: string;
+        }>;
+        summary: string;
+      };
+      permissionSurface: {
+        id: string;
+        runtime: string;
+        mode: string;
+        summary: string;
+        allowedCapabilities: string[];
+        blockedCapabilities: string[];
+      };
+      rateLimit: {
+        request: {
+          status: "unlimited" | "ok" | "limited";
+          configured: boolean;
+          observedRuns: number;
+          maxRuns?: number;
+          windowMs?: number;
+          retryAfterMs?: number;
+          reasonCode?: string;
+          reasonMessage?: string;
+        };
+        run: {
+          status: "unlimited" | "ok" | "limited";
+          configured: boolean;
+          observedRuns: number;
+          maxRuns?: number;
+          windowMs?: number;
+          retryAfterMs?: number;
+          reasonCode?: string;
+          reasonMessage?: string;
+        };
+      };
+    };
+  };
+  queryRuntime?: {
+    observerEnabled: boolean;
+    totalObservedEvents: number;
+    activeTraceCount: number;
+    traces: Array<{
+      traceId: string;
+      method: string;
+      status: "running" | "completed" | "failed";
+      conversationId?: string;
+      startedAt: number;
+      updatedAt: number;
+      latestStage: string;
+      stageCount: number;
+      stages: Array<{
+        stage: string;
+        timestamp: number;
+        detail?: Record<string, unknown>;
+      }>;
+    }>;
+  };
 };
 
 // Result payload for agents.list (Response payload)

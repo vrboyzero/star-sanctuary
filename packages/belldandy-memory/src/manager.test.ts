@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -270,6 +270,121 @@ describe("MemoryManager guardrails", () => {
       toolNames: ["memory_search", "experience_usage_stats"],
       artifactPaths: ["reports/memory-usage.md"],
     });
+  });
+
+  it("returns durable memory guidance with accepted and rejected policy summary", () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "test-evolution-model",
+      evolutionBaseUrl: "https://example.invalid/v1",
+      evolutionApiKey: "test-evolution-key",
+    });
+
+    const guidance = manager.getDurableMemoryGuidance();
+
+    expect(guidance).toMatchObject({
+      policyVersion: "week9-v1",
+      acceptedCandidateTypes: ["user", "feedback", "project", "reference"],
+    });
+    expect(guidance.rejectedContentTypes.map((item) => item.code)).toEqual(expect.arrayContaining([
+      "code_pattern",
+      "file_path",
+      "git_history",
+      "debug_recipe",
+      "policy_rule",
+    ]));
+  });
+
+  it("filters code-like and path-like extraction candidates before writing durable memory", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "test-evolution-model",
+      evolutionBaseUrl: "https://example.invalid/v1",
+      evolutionApiKey: "test-evolution-key",
+      evolutionMinMessages: 2,
+    });
+
+    const extractionSpy = vi.spyOn(manager as any, "callLLMForExtraction").mockResolvedValue([
+      {
+        type: "事实",
+        category: "fact",
+        candidateType: "project",
+        content: "当前项目的主目标是在本周收口 memory runtime 的 doctor 与 budget。",
+      },
+      {
+        type: "经验",
+        category: "experience",
+        candidateType: "feedback",
+        content: "执行 `pnpm test` 后如果失败就继续重跑。",
+      },
+      {
+        type: "事实",
+        category: "fact",
+        candidateType: "project",
+        content: "packages/belldandy-core/src/server.ts 需要继续拆分。",
+      },
+    ]);
+
+    const result = await manager.extractMemoriesFromConversation("conv-memory-policy", [
+      { role: "user", content: "请沉淀这轮对话里长期有效的信息。" },
+      { role: "assistant", content: "本周要把 memory runtime 的 doctor 与 budget 收口。" },
+    ]);
+
+    expect(result).toMatchObject({
+      count: 1,
+      acceptedCandidateTypes: ["project"],
+      rejectedCount: 2,
+    });
+    expect(result.rejectedReasons).toEqual(expect.arrayContaining(["code_pattern", "file_path"]));
+    expect(result.summary).toContain("accepted=1");
+    expect(result.summary).toContain("rejected=2");
+
+    extractionSpy.mockRestore();
+  });
+
+  it("returns policy_filtered skip reason when all durable candidates are rejected by policy", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "test-evolution-model",
+      evolutionBaseUrl: "https://example.invalid/v1",
+      evolutionApiKey: "test-evolution-key",
+      evolutionMinMessages: 2,
+    });
+
+    const extractionSpy = vi.spyOn(manager as any, "callLLMForExtraction").mockResolvedValue([
+      {
+        type: "经验",
+        category: "experience",
+        candidateType: "feedback",
+        content: "执行 `pnpm test` 失败后继续重跑。",
+      },
+      {
+        type: "事实",
+        category: "fact",
+        candidateType: "project",
+        content: "packages/belldandy-core/src/server.ts 仍需继续拆分。",
+      },
+    ]);
+
+    const result = await manager.extractMemoriesFromConversation("conv-memory-policy-filtered", [
+      { role: "user", content: "请只保留长期有效的事实。" },
+      { role: "assistant", content: "短期命令和文件路径不应该进入 durable memory。" },
+    ]);
+
+    expect(result).toMatchObject({
+      count: 0,
+      rejectedCount: 2,
+      skipReason: "policy_filtered",
+    });
+    expect(result.rejectedReasons).toEqual(expect.arrayContaining(["code_pattern", "file_path"]));
+
+    extractionSpy.mockRestore();
   });
 });
 

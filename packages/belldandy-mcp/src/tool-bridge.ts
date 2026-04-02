@@ -275,12 +275,21 @@ export class MCPToolBridge {
     return result.content.map((item) => {
       switch (item.type) {
         case "text":
-          return { type: "text", content: item.text };
+          return {
+            type: "text",
+            content: item.text,
+            truncated: item.truncated,
+            originalLength: item.originalLength,
+            note: item.note,
+          };
         case "image":
           return {
             type: "image",
             data: item.data,
             mimeType: item.mimeType,
+            truncated: item.truncated,
+            originalLength: item.originalLength,
+            note: item.note,
           };
         case "resource":
           return {
@@ -288,6 +297,9 @@ export class MCPToolBridge {
             uri: item.uri,
             text: item.text,
             mimeType: item.mimeType,
+            truncated: item.truncated,
+            originalLength: item.originalLength,
+            note: item.note,
           };
         default:
           return item;
