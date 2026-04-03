@@ -28,6 +28,9 @@ export type QueryRuntimeMemoryContext = {
   durableExtractionRequestRateLimiter: SlidingWindowRateLimiter;
   broadcastEvent?: (frame: any) => void;
   runtimeObserver?: QueryRuntimeObserver<
+    | "conversation.restore"
+    | "conversation.transcript.export"
+    | "conversation.timeline.get"
     | "conversation.digest.get"
     | "conversation.digest.refresh"
     | "conversation.memory.extraction.get"
@@ -35,6 +38,7 @@ export type QueryRuntimeMemoryContext = {
   >;
   buildMemoryRuntimeDoctorReport: (input: {
     conversationStore?: ConversationStore;
+    compactionRuntimeReport?: MemoryRuntimeDoctorReport["compactionRuntime"];
     durableExtractionRuntime?: DurableExtractionRuntime;
     stateDir?: string;
     teamSharedMemoryEnabled?: boolean;
@@ -107,6 +111,129 @@ export async function handleConversationDigestGetWithQueryRuntime(
       ok: true,
       payload: {
         digest,
+      },
+    };
+  });
+}
+
+export async function handleConversationRestoreWithQueryRuntime(
+  ctx: QueryRuntimeMemoryContext,
+  params: { conversationId: string },
+): Promise<GatewayResFrame> {
+  const runtime = new QueryRuntime({
+    method: "conversation.restore" as const,
+    traceId: ctx.requestId,
+    observer: ctx.runtimeObserver,
+  });
+
+  return runtime.run(async (queryRuntime) => {
+    queryRuntime.mark("request_validated", {
+      conversationId: params.conversationId,
+    });
+
+    const restore = await ctx.conversationStore.buildConversationRestoreView(params.conversationId);
+    queryRuntime.mark("restore_built", {
+      conversationId: params.conversationId,
+      detail: {
+        source: restore.diagnostics.source,
+        rawMessageCount: restore.rawMessages.length,
+        compactedCount: restore.compactedView.length,
+        canonicalCount: restore.canonicalExtractionView.length,
+        relinkApplied: restore.diagnostics.relinkApplied,
+      },
+    });
+    queryRuntime.mark("completed", { conversationId: params.conversationId });
+
+    return {
+      type: "res",
+      id: ctx.requestId,
+      ok: true,
+      payload: {
+        restore,
+      },
+    };
+  });
+}
+
+export async function handleConversationTranscriptExportWithQueryRuntime(
+  ctx: QueryRuntimeMemoryContext,
+  params: { conversationId: string; mode?: "internal" | "shareable" | "metadata_only" },
+): Promise<GatewayResFrame> {
+  const runtime = new QueryRuntime({
+    method: "conversation.transcript.export" as const,
+    traceId: ctx.requestId,
+    observer: ctx.runtimeObserver,
+  });
+
+  return runtime.run(async (queryRuntime) => {
+    queryRuntime.mark("request_validated", {
+      conversationId: params.conversationId,
+      detail: {
+        mode: params.mode ?? "internal",
+      },
+    });
+
+    const transcriptExport = await ctx.conversationStore.buildConversationTranscriptExport(params.conversationId, {
+      mode: params.mode,
+    });
+    queryRuntime.mark("transcript_export_built", {
+      conversationId: params.conversationId,
+      detail: {
+        mode: transcriptExport.manifest.redactionMode,
+        eventCount: transcriptExport.summary.eventCount,
+        restoreSource: transcriptExport.summary.restore.source,
+      },
+    });
+    queryRuntime.mark("completed", { conversationId: params.conversationId });
+
+    return {
+      type: "res",
+      id: ctx.requestId,
+      ok: true,
+      payload: {
+        export: transcriptExport,
+      },
+    };
+  });
+}
+
+export async function handleConversationTimelineGetWithQueryRuntime(
+  ctx: QueryRuntimeMemoryContext,
+  params: { conversationId: string; previewChars?: number },
+): Promise<GatewayResFrame> {
+  const runtime = new QueryRuntime({
+    method: "conversation.timeline.get" as const,
+    traceId: ctx.requestId,
+    observer: ctx.runtimeObserver,
+  });
+
+  return runtime.run(async (queryRuntime) => {
+    queryRuntime.mark("request_validated", {
+      conversationId: params.conversationId,
+      detail: {
+        previewChars: params.previewChars,
+      },
+    });
+
+    const timeline = await ctx.conversationStore.buildConversationTimeline(params.conversationId, {
+      previewChars: params.previewChars,
+    });
+    queryRuntime.mark("timeline_built", {
+      conversationId: params.conversationId,
+      detail: {
+        itemCount: timeline.summary.itemCount,
+        warningCount: timeline.warnings.length,
+        restoreSource: timeline.summary.restore.source,
+      },
+    });
+    queryRuntime.mark("completed", { conversationId: params.conversationId });
+
+    return {
+      type: "res",
+      id: ctx.requestId,
+      ok: true,
+      payload: {
+        timeline,
       },
     };
   });

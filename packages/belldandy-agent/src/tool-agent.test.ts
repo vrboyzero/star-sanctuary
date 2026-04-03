@@ -8,6 +8,7 @@ import {
   sanitizeAssistantToolCallHistoryContent,
   sanitizeResponsesToolDefinitions,
 } from "./tool-agent.js";
+import { CompactionRuntimeTracker } from "./compaction-runtime.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -184,6 +185,233 @@ describe("tool transcript compaction", () => {
       role: "tool",
       tool_call_id: "call-1",
       content: "trimmed-output",
+    });
+  });
+});
+
+describe("compaction observability hooks", () => {
+  it("emits loop compaction hook events with enriched observability fields", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+    const runBeforeCompaction = vi.fn(async () => {});
+    const runAfterCompaction = vi.fn(async () => {});
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      maxInputTokens: 120,
+      toolExecutor: createToolExecutor(),
+      compaction: {
+        enabled: true,
+        keepRecentCount: 1,
+        tokenThreshold: 100,
+        triggerFraction: 0.5,
+      },
+      summarizer: async () => "loop-summary",
+      summarizerModelName: "compact-model",
+      hookRunner: {
+        runBeforeAgentStart: async () => undefined,
+        runAgentEnd: async () => {},
+        runBeforeToolCall: async () => undefined,
+        runAfterToolCall: async () => {},
+        runToolResultPersist: () => undefined,
+        runBeforeCompaction,
+        runAfterCompaction,
+      } as any,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-loop-compaction-hooks",
+      text: "继续",
+      history: [
+        { role: "user", content: "A".repeat(240) },
+        { role: "assistant", content: "B".repeat(240) },
+        { role: "user", content: "C".repeat(240) },
+        { role: "assistant", content: "D".repeat(240) },
+      ],
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "loop",
+        compactionMode: "loop",
+        summarizerModel: "compact-model",
+      }),
+      expect.objectContaining({
+        sessionKey: "conv-loop-compaction-hooks",
+      }),
+    );
+    expect(runAfterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "loop",
+        compactionMode: "loop",
+        fallbackUsed: false,
+        summarizerModel: "compact-model",
+        savedTokenCount: expect.any(Number),
+      }),
+      expect.objectContaining({
+        sessionKey: "conv-loop-compaction-hooks",
+      }),
+    );
+  });
+
+  it("emits microcompact hook events with reclaimed output metrics", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "file_read",
+                arguments: "{\"path\":\"src/app.ts\"}",
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "done",
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }));
+    const runBeforeCompaction = vi.fn(async () => {});
+    const runAfterCompaction = vi.fn(async () => {});
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      toolExecutor: createToolExecutor({
+        getDefinitions: () => [{
+          type: "function" as const,
+          function: {
+            name: "file_read",
+            description: "read file",
+            parameters: { type: "object", properties: { path: { type: "string" } } },
+          },
+        }],
+        execute: vi.fn(async () => ({
+          id: "call-1",
+          name: "file_read",
+          success: true,
+          output: "X".repeat(1200),
+          durationMs: 0,
+        })),
+      }),
+      microcompact: {
+        keepRecentToolMessages: 0,
+      },
+      hookRunner: {
+        runBeforeAgentStart: async () => undefined,
+        runAgentEnd: async () => {},
+        runBeforeToolCall: async () => undefined,
+        runAfterToolCall: async () => {},
+        runToolResultPersist: () => undefined,
+        runBeforeCompaction,
+        runAfterCompaction,
+      } as any,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-microcompact-hooks",
+      text: "读取并继续",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "microcompact",
+        compactionMode: "microcompact",
+      }),
+      expect.objectContaining({
+        sessionKey: "conv-microcompact-hooks",
+      }),
+    );
+    expect(runAfterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "microcompact",
+        compactionMode: "microcompact",
+        fallbackUsed: false,
+        reclaimedChars: expect.any(Number),
+        savedTokenCount: expect.any(Number),
+      }),
+      expect.objectContaining({
+        sessionKey: "conv-microcompact-hooks",
+      }),
+    );
+  });
+
+  it("skips loop compaction when the shared circuit breaker is open", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+    const tracker = new CompactionRuntimeTracker({
+      maxConsecutiveCompactionFailures: 1,
+    });
+    const summarizer = vi.fn(async () => {
+      throw new Error("loop compaction failed");
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      maxInputTokens: 120,
+      toolExecutor: createToolExecutor(),
+      compaction: {
+        enabled: true,
+        keepRecentCount: 1,
+        tokenThreshold: 100,
+        triggerFraction: 0.5,
+      },
+      summarizer,
+      compactionRuntimeTracker: tracker,
+    });
+    const runInput = {
+      conversationId: "conv-loop-compaction-circuit",
+      text: "继续",
+      history: [
+        { role: "user" as const, content: "A".repeat(240) },
+        { role: "assistant" as const, content: "B".repeat(240) },
+        { role: "user" as const, content: "C".repeat(240) },
+        { role: "assistant" as const, content: "D".repeat(240) },
+      ],
+    };
+
+    const firstItems = await collectItems(agent.run(runInput));
+    const secondItems = await collectItems(agent.run({
+      ...runInput,
+      conversationId: "conv-loop-compaction-circuit-2",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(firstItems).toContainEqual({ type: "final", text: "done" });
+    expect(secondItems).toContainEqual({ type: "final", text: "done" });
+    expect(summarizer).toHaveBeenCalledTimes(1);
+    expect(tracker.getReport()).toMatchObject({
+      totals: {
+        failures: 1,
+        skippedByCircuitBreaker: 1,
+      },
     });
   });
 });

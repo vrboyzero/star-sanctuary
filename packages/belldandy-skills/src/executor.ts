@@ -13,6 +13,7 @@ import type {
   ITokenCounterService,
   ToolExecutionRuntimeContext,
   ToolRuntimeLaunchSpec,
+  ToolCatalogEntry,
 } from "./types.js";
 import { getToolContract, type ToolContract } from "./tool-contract.js";
 import {
@@ -83,6 +84,8 @@ export type ToolExecutorOptions = {
   }) => void;
   /** 可选：统一 contract 安全矩阵策略 */
   contractAccessPolicy?: ToolContractAccessPolicy;
+  /** 可选：按会话延迟加载的工具名 */
+  deferredToolNames?: string[];
 };
 
 type RegisterToolOptions = {
@@ -161,6 +164,8 @@ export class ToolExecutor {
   private readonly contractAccessPolicy?: ToolContractAccessPolicy;
   private conversationStore?: ConversationStoreInterface; // 移除 readonly，允许后期绑定
   private readonly tokenCounters = new Map<string, ITokenCounterService>(); // 每个 conversation 的 token 计数器
+  private readonly deferredToolNames: Set<string>;
+  private readonly loadedDeferredToolNames = new Map<string, Set<string>>();
   private broadcast?: (event: string, payload: Record<string, unknown>) => void;
   private broadcastObserver?: (event: string, payload: Record<string, unknown>, meta: {
     conversationId: string;
@@ -182,6 +187,7 @@ export class ToolExecutor {
     this.isToolAllowedForAgent = options.isToolAllowedForAgent;
     this.isToolAllowedInConversation = options.isToolAllowedInConversation;
     this.contractAccessPolicy = options.contractAccessPolicy;
+    this.deferredToolNames = new Set(options.deferredToolNames ?? []);
     this.conversationStore = options.conversationStore;
     this.broadcast = options.broadcast;
     this.broadcastObserver = options.broadcastObserver;
@@ -248,7 +254,7 @@ export class ToolExecutor {
     conversationId?: string,
     runtimeContext?: ToolExecutionRuntimeContext,
   ): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
-    const active = this.getAvailableTools(agentId, conversationId, runtimeContext);
+    const active = this.getExposedTools(agentId, conversationId, runtimeContext);
     return active.map(t => ({
       type: "function" as const,
       function: {
@@ -262,6 +268,65 @@ export class ToolExecutor {
   /** 获取所有已注册工具名（不经过 disabled 过滤，用于调用设置列表） */
   getRegisteredToolNames(): string[] {
     return Array.from(this.tools.keys());
+  }
+
+  getCatalogEntries(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): ToolCatalogEntry[] {
+    const loaded = conversationId ? this.getLoadedDeferredToolNames(conversationId) : new Set<string>();
+    return this.getAvailableTools(agentId, conversationId, runtimeContext).map((tool) => {
+      const deferred = this.isDeferredTool(tool.definition.name);
+      return {
+        name: tool.definition.name,
+        description: tool.definition.description,
+        shortDescription: tool.definition.shortDescription?.trim() || tool.definition.description,
+        keywords: tool.definition.keywords ?? [],
+        tags: tool.definition.tags ?? [],
+        loadingMode: deferred ? "deferred" : "core",
+        loaded: deferred ? loaded.has(tool.definition.name) : true,
+      };
+    });
+  }
+
+  getLoadedDeferredToolNames(conversationId: string): Set<string> {
+    const persisted = this.conversationStore?.getLoadedToolNames?.(conversationId) ?? [];
+    const cached = this.loadedDeferredToolNames.get(conversationId);
+    if (cached && persisted.length === 0) {
+      return new Set(cached);
+    }
+    const merged = new Set<string>([
+      ...persisted,
+      ...(cached ? Array.from(cached) : []),
+    ]);
+    this.loadedDeferredToolNames.set(conversationId, merged);
+    return new Set(merged);
+  }
+
+  async loadDeferredTools(conversationId: string, toolNames: string[]): Promise<string[]> {
+    const next = this.getLoadedDeferredToolNames(conversationId);
+    const loadedNow: string[] = [];
+
+    for (const rawName of toolNames) {
+      const name = rawName.trim();
+      if (!name || !this.isDeferredTool(name) || !this.tools.has(name)) {
+        continue;
+      }
+      if (!next.has(name)) {
+        next.add(name);
+      }
+      loadedNow.push(name);
+    }
+
+    this.loadedDeferredToolNames.set(conversationId, next);
+    await this.conversationStore?.setLoadedToolNames?.(conversationId, Array.from(next).sort());
+    return loadedNow;
+  }
+
+  async clearLoadedDeferredTools(conversationId: string): Promise<void> {
+    this.loadedDeferredToolNames.delete(conversationId);
+    await this.conversationStore?.setLoadedToolNames?.(conversationId, []);
   }
 
   /** 获取单个工具在当前上下文下的可见性结果 */
@@ -556,6 +621,36 @@ export class ToolExecutor {
     return Array.from(this.tools.values()).filter((tool) =>
       this.evaluateToolAvailability(tool, agentId, conversationId, runtimeContext).allowed,
     );
+  }
+
+  private getExposedTools(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): Tool[] {
+    const available = this.getAvailableTools(agentId, conversationId, runtimeContext);
+    if (!conversationId) {
+      return available;
+    }
+
+    const loaded = this.getLoadedDeferredToolNames(conversationId);
+    return available.filter((tool) => {
+      if (!this.isDeferredTool(tool.definition.name)) {
+        return true;
+      }
+      return loaded.has(tool.definition.name);
+    });
+  }
+
+  private isDeferredTool(toolName: string): boolean {
+    const tool = this.tools.get(toolName);
+    if (tool?.definition.loadingMode === "deferred") {
+      return true;
+    }
+    if (tool?.definition.loadingMode === "core") {
+      return false;
+    }
+    return this.deferredToolNames.has(toolName);
   }
 
   private buildAvailabilityState(

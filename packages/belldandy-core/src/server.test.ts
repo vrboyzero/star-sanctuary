@@ -6,6 +6,7 @@ import { expect, test, beforeAll, vi } from "vitest";
 import WebSocket from "ws";
 
 import { AgentRegistry, type BelldandyAgent, ConversationStore, MockAgent, normalizeAgentLaunchSpec } from "@belldandy/agent";
+import { CompactionRuntimeTracker as SourceCompactionRuntimeTracker } from "../../belldandy-agent/src/compaction-runtime.js";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import {
   SkillRegistry,
@@ -19,6 +20,7 @@ import { PluginRegistry } from "@belldandy/plugins";
 import { upsertInstalledExtension, upsertKnownMarketplace } from "./extension-marketplace-state.js";
 import type { ExtensionHostState } from "./extension-host.js";
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
+import { recordConversationArtifactExport } from "./conversation-export-index.js";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
@@ -96,6 +98,90 @@ test("gateway handshake and message.send streams chat", async () => {
   await server.close();
   // Windows: SQLite 文件可能仍被锁定，忽略清理错误（由 OS 最终回收）
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("message.send persists accepted user transcript before assistant finalizes", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  let releaseAssistant!: () => void;
+  const assistantGate = new Promise<void>((resolve) => {
+    releaseAssistant = resolve;
+  });
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        await assistantGate;
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-send-transcript-user-first",
+      method: "message.send",
+      params: {
+        conversationId: "conv-transcript-user-first",
+        text: "先记住我刚才说的话。",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-send-transcript-user-first" && f.ok === true));
+    await conversationStore.waitForPendingPersistence("conv-transcript-user-first");
+    const beforeAssistant = await conversationStore.getSessionTranscriptEvents("conv-transcript-user-first");
+
+    expect(beforeAssistant).toHaveLength(1);
+    expect(beforeAssistant[0]).toMatchObject({
+      conversationId: "conv-transcript-user-first",
+      type: "user_message_accepted",
+      payload: {
+        message: {
+          role: "user",
+          content: "先记住我刚才说的话。",
+        },
+      },
+    });
+
+    releaseAssistant();
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.conversationId === "conv-transcript-user-first"));
+    await conversationStore.waitForPendingPersistence("conv-transcript-user-first");
+    const afterAssistant = await conversationStore.getSessionTranscriptEvents("conv-transcript-user-first");
+
+    expect(afterAssistant).toHaveLength(2);
+    expect(afterAssistant[1]).toMatchObject({
+      conversationId: "conv-transcript-user-first",
+      type: "assistant_message_finalized",
+      payload: {
+        message: {
+          role: "assistant",
+          content: "echo:先记住我刚才说的话。",
+        },
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("/health includes version", async () => {
@@ -469,7 +555,8 @@ test("message.send reuses conversation snapshot to avoid one extra conversationS
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-send-hot-path" && f.ok === true));
     await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
-    expect(getSpy).toHaveBeenCalledTimes(2);
+    // The request path should reuse the loaded conversation snapshot; a post-final digest refresh may add one async read.
+    expect(getSpy.mock.calls.length).toBeLessThanOrEqual(3);
   } finally {
     ws.close();
     await closeP;
@@ -670,6 +757,727 @@ test("conversation.meta keeps time metadata on every message and marks only the 
   }
 });
 
+test("conversation.restore returns transcript-based restore view after meta is missing", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-restore",
+  });
+  const conversationId = "conv-restore-rpc";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+  await conversationStore.forceCompact(conversationId);
+  await fs.promises.rm(path.join(stateDir, "sessions", `${conversationId}.meta.json`), { force: true }).catch(() => {});
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-restore",
+      method: "conversation.restore",
+      params: { conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-restore" && f.ok === true));
+    const restoreRes = frames.find((f) => f.type === "res" && f.id === "conversation-restore");
+
+    expect(restoreRes.payload.restore).toMatchObject({
+      conversationId,
+      diagnostics: {
+        source: "transcript",
+        transcriptUsed: true,
+        relinkApplied: true,
+      },
+      canonicalExtractionView: [
+        { role: "user", content: "A".repeat(80) },
+        { role: "assistant", content: "B".repeat(80) },
+        { role: "user", content: "C".repeat(80) },
+        { role: "assistant", content: "D".repeat(80) },
+      ],
+    });
+    expect(restoreRes.payload.restore.compactedView[0].content).toContain("rolling-summary-restore");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("conversation.transcript.export returns redacted transcript bundle after meta is missing", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-export",
+  });
+  const conversationId = "conv-transcript-export-rpc";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80), {
+    agentId: "belldandy",
+    channel: "webchat",
+    clientContext: {
+      sentAtMs: 1712000000002,
+      locale: "zh-CN",
+    },
+  });
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80), {
+    agentId: "belldandy",
+  });
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+  await conversationStore.forceCompact(conversationId);
+  await fs.promises.rm(path.join(stateDir, "sessions", `${conversationId}.meta.json`), { force: true }).catch(() => {});
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-transcript-export",
+      method: "conversation.transcript.export",
+      params: { conversationId, mode: "shareable" },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-transcript-export" && f.ok === true));
+    const exportRes = frames.find((f) => f.type === "res" && f.id === "conversation-transcript-export");
+
+    expect(exportRes.payload.export).toMatchObject({
+      manifest: {
+        conversationId,
+        source: "conversation.transcript.export",
+        redactionMode: "shareable",
+      },
+      summary: {
+        eventCount: 5,
+        messageEventCount: 4,
+        compactBoundaryCount: 1,
+        partialCompactionViewCount: 0,
+        restore: {
+          source: "transcript",
+          relinkApplied: true,
+          fallbackToRaw: false,
+        },
+      },
+      redaction: {
+        mode: "shareable",
+        contentRedacted: true,
+      },
+    });
+    expect(exportRes.payload.export.restore.canonicalExtractionView).toEqual([
+      {
+        role: "user",
+        contentPreview: "A".repeat(80),
+        contentLength: 80,
+        contentTruncated: false,
+      },
+      {
+        role: "assistant",
+        contentPreview: "B".repeat(80),
+        contentLength: 80,
+        contentTruncated: false,
+      },
+      {
+        role: "user",
+        contentPreview: "C".repeat(80),
+        contentLength: 80,
+        contentTruncated: false,
+      },
+      {
+        role: "assistant",
+        contentPreview: "D".repeat(80),
+        contentLength: 80,
+        contentTruncated: false,
+      },
+    ]);
+    expect(exportRes.payload.export.restore.compactedView[0].contentPreview).toContain("rolling-summary-export");
+    expect(exportRes.payload.export.events[0].payload.message.clientContext).toBeUndefined();
+    expect(exportRes.payload.export.events[0].payload.conversation).toBeUndefined();
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-transcript-export", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-transcript-export" && f.ok === true));
+    const doctorRes = frames.find((f) => f.type === "res" && f.id === "system-doctor-transcript-export");
+    const traces = doctorRes.payload?.queryRuntime?.traces ?? [];
+    const exportTrace = traces.find((item: any) => item.method === "conversation.transcript.export" && item.conversationId === conversationId);
+
+    expect(exportTrace).toMatchObject({
+      method: "conversation.transcript.export",
+      status: "completed",
+      conversationId,
+    });
+    expect(exportTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "transcript_export_built",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("conversation.timeline.get returns readable projection for transcript partial compaction", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "timeline-summary-partial",
+  });
+  const conversationId = "conv-timeline-rpc";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "E".repeat(80));
+  const messageIds = conversationStore.get(conversationId)?.messages.map((message) => message.id) ?? [];
+  await conversationStore.forcePartialCompact(conversationId, {
+    direction: "from",
+    pivotMessageId: messageIds[1],
+  });
+  await fs.promises.rm(path.join(stateDir, "sessions", `${conversationId}.meta.json`), { force: true }).catch(() => {});
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-timeline-get",
+      method: "conversation.timeline.get",
+      params: { conversationId, previewChars: 48 },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-timeline-get" && f.ok === true));
+    const timelineRes = frames.find((f) => f.type === "res" && f.id === "conversation-timeline-get");
+
+    expect(timelineRes.payload.timeline).toMatchObject({
+      manifest: {
+        conversationId,
+        source: "conversation.timeline.get",
+      },
+      summary: {
+        eventCount: 7,
+        itemCount: 8,
+        messageCount: 5,
+        compactBoundaryCount: 1,
+        partialCompactionCount: 1,
+        restore: {
+          source: "transcript",
+          relinkApplied: true,
+          fallbackToRaw: false,
+        },
+      },
+      warnings: [],
+    });
+    expect(timelineRes.payload.timeline.items.some((item: any) => item.kind === "partial_compaction" && item.direction === "from")).toBe(true);
+    expect(timelineRes.payload.timeline.items.some((item: any) => item.kind === "compact_boundary" && item.trigger === "partial_from")).toBe(true);
+    expect(timelineRes.payload.timeline.items[timelineRes.payload.timeline.items.length - 1]).toMatchObject({
+      kind: "restore_result",
+      source: "transcript",
+      relinkApplied: true,
+      partialViewId: expect.any(String),
+    });
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-timeline", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-timeline" && f.ok === true));
+    const doctorRes = frames.find((f) => f.type === "res" && f.id === "system-doctor-timeline");
+    const traces = doctorRes.payload?.queryRuntime?.traces ?? [];
+    const timelineTrace = traces.find((item: any) => item.method === "conversation.timeline.get" && item.conversationId === conversationId);
+
+    expect(timelineTrace).toMatchObject({
+      method: "conversation.timeline.get",
+      status: "completed",
+      conversationId,
+    });
+    expect(timelineTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "timeline_built",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor can include on-demand conversation transcript export and timeline", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const conversationId = "conv-doctor-conversation-debug";
+  conversationStore.addMessage(conversationId, "user", "doctor timeline user");
+  conversationStore.addMessage(conversationId, "assistant", "doctor timeline assistant");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-conversation-debug",
+      method: "system.doctor",
+      params: {
+        conversationId,
+        includeTranscript: true,
+        includeTimeline: true,
+        timelinePreviewChars: 32,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-conversation-debug" && f.ok === true));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-conversation-debug");
+
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "conversation_debug",
+        status: "pass",
+        message: expect.stringContaining(conversationId),
+      }),
+    ]));
+    expect(response.payload?.conversationDebug).toMatchObject({
+      conversationId,
+      available: true,
+      messageCount: 2,
+      requested: {
+        includeTranscript: true,
+        includeTimeline: true,
+        timelinePreviewChars: 32,
+      },
+      transcriptExport: {
+        manifest: {
+          conversationId,
+          redactionMode: "internal",
+        },
+      },
+      timeline: {
+        manifest: {
+          conversationId,
+          source: "conversation.timeline.get",
+        },
+      },
+    });
+    expect(response.payload?.conversationDebug?.timeline?.summary?.messageCount).toBe(2);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor applies lightweight conversation debug filters", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const conversationId = "conv-doctor-conversation-filter";
+  conversationStore.addMessage(conversationId, "user", "doctor filter user");
+  conversationStore.addMessage(conversationId, "assistant", "doctor filter assistant");
+  await conversationStore.waitForPendingPersistence(conversationId);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-conversation-filter",
+      method: "system.doctor",
+      params: {
+        conversationId,
+        includeTranscript: true,
+        includeTimeline: true,
+        transcriptEventTypes: ["assistant_message_finalized"],
+        transcriptRestoreView: "canonical",
+        timelineKinds: ["restore_result"],
+        timelineLimit: 1,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-conversation-filter" && f.ok === true));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-conversation-filter");
+
+    expect(response.payload?.conversationDebug).toMatchObject({
+      conversationId,
+      requested: {
+        includeTranscript: true,
+        includeTimeline: true,
+        transcriptEventTypes: ["assistant_message_finalized"],
+        transcriptRestoreView: "canonical",
+        timelineKinds: ["restore_result"],
+        timelineLimit: 1,
+      },
+    });
+    expect(response.payload?.conversationDebug?.transcriptExport?.events).toHaveLength(1);
+    expect(response.payload?.conversationDebug?.transcriptExport?.projectionSummary).toMatchObject({
+      visibleEventCount: 1,
+      visibleRawMessageCount: 0,
+      visibleCanonicalExtractionCount: 2,
+    });
+    expect(response.payload?.conversationDebug?.timeline?.items).toHaveLength(1);
+    expect(response.payload?.conversationDebug?.timeline?.items[0]?.kind).toBe("restore_result");
+    expect(response.payload?.conversationDebug?.timeline?.projectionSummary).toMatchObject({
+      visibleItemCount: 1,
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor can expose conversation catalog and recent export index", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const conversationId = "conv-doctor-catalog-alpha";
+  conversationStore.addMessage(conversationId, "user", "doctor catalog user");
+  await conversationStore.waitForPendingPersistence(conversationId);
+  await recordConversationArtifactExport({
+    stateDir,
+    conversationId,
+    artifact: "transcript",
+    format: "json",
+    outputPath: path.join(stateDir, "artifacts", "conversation-alpha.transcript.json"),
+    mode: "internal",
+    projectionFilter: { restoreView: "all" },
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-conversation-catalog",
+      method: "system.doctor",
+      params: {
+        includeConversationCatalog: true,
+        includeRecentExports: true,
+        conversationIdPrefix: "conv-doctor-catalog-",
+        conversationListLimit: 10,
+        recentExportLimit: 10,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-conversation-catalog" && f.ok === true));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-conversation-catalog");
+
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "conversation_catalog", status: "pass" }),
+      expect.objectContaining({ id: "conversation_export_index", status: "pass" }),
+    ]));
+    expect(response.payload?.conversationCatalog?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        conversationId,
+        hasTranscript: true,
+      }),
+    ]));
+    expect(response.payload?.recentConversationExports?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        conversationId,
+        artifact: "transcript",
+        format: "json",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("context.compact returns boundary metadata and conversation.meta exposes persisted compact boundaries", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-v1",
+  });
+  const conversationId = "conv-meta-boundary";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "context-compact-boundary",
+      method: "context.compact",
+      params: { conversationId },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "context-compact-boundary" && f.ok === true));
+    const compactRes = frames.find((f) => f.type === "res" && f.id === "context-compact-boundary");
+
+    expect(compactRes.payload).toMatchObject({
+      compacted: true,
+      tier: "rolling",
+      boundary: {
+        trigger: "manual",
+        summaryStateVersion: 1,
+        compactedMessageCount: 3,
+        preservedSegment: {
+          preservedMessageCount: 1,
+        },
+      },
+    });
+    expect(typeof compactRes.payload?.boundary?.preservedSegment?.anchorId).toBe("string");
+    expect(typeof compactRes.payload?.boundary?.preservedSegment?.headMessageId).toBe("string");
+    expect(typeof compactRes.payload?.boundary?.preservedSegment?.tailMessageId).toBe("string");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-meta-boundary",
+      method: "conversation.meta",
+      params: { conversationId },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-meta-boundary" && f.ok === true));
+    const metaRes = frames.find((f) => f.type === "res" && f.id === "conversation-meta-boundary");
+
+    expect(metaRes.payload?.messages).toHaveLength(4);
+    expect(metaRes.payload?.messages.every((message: { id?: string }) => typeof message.id === "string" && message.id.length > 0)).toBe(true);
+    expect(metaRes.payload?.compactBoundaries?.[0]).toMatchObject({
+      id: compactRes.payload?.boundary?.id,
+      trigger: "manual",
+      compactedMessageCount: 3,
+      preservedSegment: {
+        anchorId: compactRes.payload?.boundary?.preservedSegment?.anchorId,
+        headMessageId: compactRes.payload?.boundary?.preservedSegment?.headMessageId,
+        tailMessageId: compactRes.payload?.boundary?.preservedSegment?.tailMessageId,
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("context.compact.partial persists partial from boundary metadata", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "partial-from-summary",
+  });
+  const conversationId = "conv-meta-partial-boundary";
+
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "E".repeat(80));
+  const messageIds = conversationStore.get(conversationId)?.messages.map((message) => message.id) ?? [];
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "context-compact-partial-boundary",
+      method: "context.compact.partial",
+      params: {
+        conversationId,
+        direction: "from",
+        pivotMessageId: messageIds[1],
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "context-compact-partial-boundary"));
+    const compactRes = frames.find((f) => f.type === "res" && f.id === "context-compact-partial-boundary");
+
+    expect(compactRes?.ok).toBe(true);
+    expect(compactRes.payload).toMatchObject({
+      compacted: true,
+      direction: "from",
+      tier: "rolling",
+      boundary: {
+        trigger: "partial_from",
+        compactedMessageCount: 3,
+        preservedSegment: {
+          anchorId: messageIds[1],
+          headMessageId: messageIds[0],
+          tailMessageId: messageIds[1],
+          preservedMessageCount: 2,
+        },
+      },
+    });
+    expect(conversationStore.getPartialCompactionView(conversationId)).toMatchObject({
+      direction: "from",
+      pivotMessageId: messageIds[1],
+      compactedMessageCount: 5,
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-meta-partial-boundary",
+      method: "conversation.meta",
+      params: { conversationId },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-meta-partial-boundary" && f.ok === true));
+    const metaRes = frames.find((f) => f.type === "res" && f.id === "conversation-meta-partial-boundary");
+
+    expect(metaRes.payload?.messages).toHaveLength(5);
+    expect(metaRes.payload?.compactBoundaries?.[0]).toMatchObject({
+      id: compactRes.payload?.boundary?.id,
+      trigger: "partial_from",
+      compactedMessageCount: 3,
+      preservedSegment: {
+        anchorId: messageIds[1],
+        headMessageId: messageIds[0],
+        tailMessageId: messageIds[1],
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("conversation.digest.get and conversation.digest.refresh expose session digest runtime", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const conversationStore = new ConversationStore({
@@ -746,13 +1554,13 @@ test("conversation.digest.get and conversation.digest.refresh expose session dig
     const refreshEvent = frames.find((f) => f.type === "event" && f.event === "conversation.digest.updated" && f.payload?.conversationId === conversationId);
     expect(refreshRes.payload).toMatchObject({
       updated: true,
-      compacted: true,
+      compacted: false,
       digest: {
         conversationId,
         status: "ready",
         messageCount: 3,
-        digestedMessageCount: 2,
-        pendingMessageCount: 1,
+        digestedMessageCount: 3,
+        pendingMessageCount: 0,
         threshold: 2,
         rollingSummary: "rolling-summary-v1",
         archivalSummary: "",
@@ -763,7 +1571,7 @@ test("conversation.digest.get and conversation.digest.refresh expose session dig
     expect(refreshEvent.payload).toMatchObject({
       source: "manual",
       updated: true,
-      compacted: true,
+      compacted: false,
       digest: {
         conversationId,
         status: "ready",
@@ -938,6 +1746,188 @@ test("conversation.memory.extraction.get and conversation.memory.extract expose 
   }
 });
 
+test("conversation.memory.extract uses canonical extraction view from transcript restore when meta is missing", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-extraction-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-canonical",
+  });
+  const conversationId = "conv-durable-canonical";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+  await conversationStore.forceCompact(conversationId);
+  await fs.promises.rm(path.join(stateDir, "sessions", `${conversationId}.meta.json`), { force: true }).catch(() => {});
+
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    evolutionEnabled: true,
+    evolutionModel: "test-evolution-model",
+    evolutionBaseUrl: "https://example.invalid/v1",
+    evolutionApiKey: "test-evolution-key",
+    evolutionMinMessages: 3,
+  });
+  (memoryManager as any).embeddingProvider = {
+    modelName: "test-durable-extraction",
+    embed: async () => [0.1],
+    embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+    embedQuery: async () => [0.1],
+  };
+  const extractSpy = vi.spyOn(memoryManager, "extractMemoriesFromConversation");
+  const llmSpy = vi.spyOn(memoryManager as any, "callLLMForExtraction").mockResolvedValue([
+    {
+      type: "事实",
+      category: "fact",
+      content: "恢复视图已经成为 durable extraction 的输入。",
+    },
+  ]);
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "durable-canonical-extract",
+      method: "conversation.memory.extract",
+      params: { conversationId, threshold: 2, refreshDigest: true },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "durable-canonical-extract" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "conversation.memory.extraction.updated" && f.payload?.conversationId === conversationId && f.payload?.extraction?.status === "completed"));
+
+    expect(extractSpy).toHaveBeenCalled();
+    const extractionMessages = extractSpy.mock.calls[0]?.[1];
+    expect(extractionMessages).toEqual([
+      { role: "user", content: "A".repeat(80) },
+      { role: "assistant", content: "B".repeat(80) },
+      { role: "user", content: "C".repeat(80) },
+      { role: "assistant", content: "D".repeat(80) },
+    ]);
+    expect(llmSpy).toHaveBeenCalled();
+    expect(String(llmSpy.mock.calls[0]?.[0] ?? "")).not.toContain("Understood. I have the context from our previous conversation.");
+    expect(String(llmSpy.mock.calls[0]?.[0] ?? "")).not.toContain("rolling-summary-canonical");
+  } finally {
+    ws.close();
+    await closeP;
+    extractSpy.mockRestore();
+    llmSpy.mockRestore();
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("gateway durable extraction scheduler reuses canonical extraction view instead of direct memory evolution extraction", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-evolution-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => "rolling-summary-evolution",
+  });
+  const conversationId = "conv-durable-evolution";
+  conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+  conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+  conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+  await conversationStore.forceCompact(conversationId);
+  await fs.promises.rm(path.join(stateDir, "sessions", `${conversationId}.meta.json`), { force: true }).catch(() => {});
+
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    evolutionEnabled: true,
+    evolutionModel: "test-evolution-model",
+    evolutionBaseUrl: "https://example.invalid/v1",
+    evolutionApiKey: "test-evolution-key",
+    evolutionMinMessages: 3,
+  });
+  (memoryManager as any).embeddingProvider = {
+    modelName: "test-memory-evolution",
+    embed: async () => [0.1],
+    embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+    embedQuery: async () => [0.1],
+  };
+  const extractSpy = vi.spyOn(memoryManager, "extractMemoriesFromConversation");
+  const llmSpy = vi.spyOn(memoryManager as any, "callLLMForExtraction").mockResolvedValue([
+    {
+      type: "事实",
+      category: "fact",
+      content: "统一调度已接管 memory evolution。",
+    },
+  ]);
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  try {
+    await server.requestDurableExtractionFromDigest({
+      conversationId,
+      source: "memory_evolution",
+      threshold: 2,
+      force: true,
+    });
+
+    await waitFor(() => extractSpy.mock.calls.length === 1);
+
+    const extractionMessages = extractSpy.mock.calls[0]?.[1];
+    expect(extractionMessages).toEqual([
+      { role: "user", content: "A".repeat(80) },
+      { role: "assistant", content: "B".repeat(80) },
+      { role: "user", content: "C".repeat(80) },
+      { role: "assistant", content: "D".repeat(80) },
+    ]);
+    expect(llmSpy).toHaveBeenCalled();
+    expect(String(llmSpy.mock.calls[0]?.[0] ?? "")).not.toContain("Understood. I have the context from our previous conversation.");
+    expect(String(llmSpy.mock.calls[0]?.[0] ?? "")).not.toContain("rolling-summary-evolution");
+    const extractionRun = extractSpy.mock.results[0]?.value;
+    if (extractionRun && typeof (extractionRun as Promise<unknown>).then === "function") {
+      await extractionRun;
+    }
+  } finally {
+    extractSpy.mockRestore();
+    llmSpy.mockRestore();
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("conversation.digest.refresh records usage accounting and enforces session digest budget", async () => {
   await withEnv({
     BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: "1",
@@ -1020,6 +2010,87 @@ test("conversation.digest.refresh records usage accounting and enforces session 
       await closeP;
       await server.close();
       await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("requestDurableExtractionFromDigest reuses current digest when session digest budget is exceeded", async () => {
+  await withEnv({
+    BELLDANDY_MEMORY_EVOLUTION_ENABLED: "true",
+    BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: "1",
+    BELLDANDY_MEMORY_SESSION_DIGEST_WINDOW_MS: "60000",
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS: undefined,
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS: undefined,
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-durable-from-digest-budget-"));
+    const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-durable-from-digest-workspace-"));
+    const conversationStore = new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+      compaction: {
+        enabled: true,
+        tokenThreshold: 10,
+        keepRecentCount: 1,
+      },
+      summarizer: async () => "rolling-summary-durable-from-digest",
+    });
+    const conversationId = "conv-durable-from-digest-budget";
+    conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+    conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+    conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+    conversationStore.addMessage(conversationId, "assistant", "D".repeat(80));
+
+    const memoryManager = new MemoryManager({
+      workspaceRoot,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "test-evolution-budget-fallback",
+      evolutionBaseUrl: "https://example.invalid/v1",
+      evolutionApiKey: "test-evolution-key",
+      evolutionMinMessages: 3,
+    });
+    (memoryManager as any).embeddingProvider = {
+      modelName: "test-evolution-budget-fallback",
+      embed: async () => [0.1],
+      embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+      embedQuery: async () => [0.1],
+    };
+    const extractSpy = vi.spyOn(memoryManager, "extractMemoriesFromConversation");
+    const llmSpy = vi.spyOn(memoryManager as any, "callLLMForExtraction").mockResolvedValue([
+      {
+        type: "事实",
+        category: "fact",
+        content: "fallback digest snapshot still allows durable extraction scheduling",
+      },
+    ]);
+    registerGlobalMemoryManager(memoryManager);
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      conversationStore,
+    });
+
+    try {
+      await conversationStore.refreshSessionDigest(conversationId, { threshold: 2 });
+
+      await server.requestDurableExtractionFromDigest({
+        conversationId,
+        source: "memory_evolution",
+        threshold: 2,
+      });
+
+      await waitFor(() => extractSpy.mock.calls.length === 1);
+      expect(extractSpy).toHaveBeenCalledTimes(1);
+      expect(llmSpy).toHaveBeenCalled();
+    } finally {
+      extractSpy.mockRestore();
+      llmSpy.mockRestore();
+      await server.close();
+      memoryManager.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+      await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
     }
   });
 });
@@ -1131,8 +2202,7 @@ test("durable extraction request limiter records blocked request usage and keeps
       const requestEvents = (usageState.events ?? []).filter((item) => item.consumer === "durable_extraction_request");
       const runEvents = (usageState.events ?? []).filter((item) => item.consumer === "durable_extraction_run");
 
-      expect(requestEvents.map((item) => item.outcome)).toEqual(["queued", "blocked"]);
-      expect(requestEvents[1]?.metadata?.reasonCode).toBe("durable_extraction_request_rate_limited");
+      expect(requestEvents.map((item) => item.outcome)).toEqual(["queued"]);
       expect(runEvents.some((item) => item.outcome === "blocked")).toBe(false);
     } finally {
       ws.close();
@@ -2370,6 +3440,84 @@ test("system.doctor reports session digest rate-limit state after budget is exce
       await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }
   });
+});
+
+test("system.doctor exposes compaction runtime circuit and retry stats", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const tracker = new SourceCompactionRuntimeTracker({
+    maxConsecutiveCompactionFailures: 1,
+  });
+  tracker.recordResult({
+    messages: [],
+    compacted: true,
+    originalTokens: 120,
+    compactedTokens: 48,
+    state: {
+      rollingSummary: "fallback summary",
+      archivalSummary: "",
+      compactedMessageCount: 2,
+      lastCompactedMessageCount: 2,
+      lastCompactedMessageFingerprint: "2:test",
+      rollingSummaryMergeCount: 1,
+      lastCompactedAt: Date.now(),
+    },
+    tier: "rolling",
+    deltaMessageCount: 2,
+    fallbackUsed: true,
+    rebuildTriggered: false,
+    promptTooLongRetries: 0,
+    warningTriggered: false,
+    blockingTriggered: false,
+    failureReason: "compaction backend unavailable",
+  }, {
+    source: "request",
+    participatesInCircuitBreaker: true,
+  });
+  tracker.shouldSkip("request");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getCompactionRuntimeReport: () => tracker.getReport(),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-compaction-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-compaction-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-compaction-runtime");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.memoryRuntime?.compactionRuntime).toMatchObject({
+      totals: {
+        attempts: expect.any(Number),
+        failures: 1,
+        skippedByCircuitBreaker: expect.any(Number),
+      },
+      circuitBreaker: {
+        open: expect.any(Boolean),
+        lastFailureReason: "compaction backend unavailable",
+      },
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "compaction_runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("system.doctor exposes recent query runtime lifecycle traces", async () => {

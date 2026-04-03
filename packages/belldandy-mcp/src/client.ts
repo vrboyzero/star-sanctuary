@@ -570,9 +570,14 @@ export class MCPClient {
         serverId: this.config.id,
       }));
     } catch (err) {
-      this.recordFailure(err, { updateCurrentError: false, source: "list_tools" });
-      mcpWarn(`mcp:${this.config.id}`, "无法列出工具", err);
-      this.tools = [];
+      if (this.isJsonRpcMethodNotFound(err)) {
+        mcpLog(`mcp:${this.config.id}`, "服务器未实现 tools/list，按无工具处理");
+        this.tools = [];
+      } else {
+        this.recordFailure(err, { updateCurrentError: false, source: "list_tools" });
+        mcpWarn(`mcp:${this.config.id}`, "无法列出工具", err);
+        this.tools = [];
+      }
     }
 
     // 发现资源
@@ -586,9 +591,14 @@ export class MCPClient {
         serverId: this.config.id,
       }));
     } catch (err) {
-      this.recordFailure(err, { updateCurrentError: false, source: "list_resources" });
-      mcpWarn(`mcp:${this.config.id}`, "无法列出资源", err);
-      this.resources = [];
+      if (this.isJsonRpcMethodNotFound(err)) {
+        mcpLog(`mcp:${this.config.id}`, "服务器未实现 resources/list，按无资源处理");
+        this.resources = [];
+      } else {
+        this.recordFailure(err, { updateCurrentError: false, source: "list_resources" });
+        mcpWarn(`mcp:${this.config.id}`, "无法列出资源", err);
+        this.resources = [];
+      }
     }
   }
 
@@ -752,6 +762,19 @@ export class MCPClient {
       return "transport";
     }
     return "unknown";
+  }
+
+  private isJsonRpcMethodNotFound(error: unknown): boolean {
+    if (!error) return false;
+    const maybeCode = typeof error === "object" && error !== null && "code" in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+    if (maybeCode === -32601 || maybeCode === "-32601") {
+      return true;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    return normalized.includes("-32601") || normalized.includes("method not found");
   }
 
   private recordFailure(

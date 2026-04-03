@@ -1,4 +1,4 @@
-import type { ConversationStore } from "@belldandy/agent";
+import type { CompactionRuntimeReport, ConversationStore } from "@belldandy/agent";
 import {
   buildTeamSharedMemoryReadinessReport,
   type TeamSharedMemoryReadinessReport,
@@ -33,6 +33,7 @@ export type MemoryRuntimeAvailability = {
 
 export type MemoryRuntimeDoctorReport = {
   sharedMemory: TeamSharedMemoryReadinessReport;
+  compactionRuntime?: CompactionRuntimeReport;
   sessionDigest: {
     availability: MemoryRuntimeAvailability;
     permissionSurface: MemoryRuntimePermissionSurface;
@@ -132,6 +133,7 @@ export function getDurableExtractionAvailability(
 
 export async function buildMemoryRuntimeDoctorReport(input: {
   conversationStore?: ConversationStore;
+  compactionRuntimeReport?: CompactionRuntimeReport;
   durableExtractionRuntime?: DurableExtractionRuntime;
   stateDir?: string;
   teamSharedMemoryEnabled?: boolean;
@@ -139,6 +141,15 @@ export async function buildMemoryRuntimeDoctorReport(input: {
   durableExtractionRequestRateLimit: Promise<RateLimitState> | RateLimitState;
   durableExtractionRunRateLimit: Promise<RateLimitState> | RateLimitState;
 }): Promise<MemoryRuntimeDoctorReport> {
+  const compactionRuntime = input.compactionRuntimeReport ?? (
+    input.conversationStore && typeof (input.conversationStore as {
+    getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
+  }).getCompactionRuntimeReport === "function"
+    ? (input.conversationStore as {
+      getCompactionRuntimeReport: () => CompactionRuntimeReport | undefined;
+    }).getCompactionRuntimeReport()
+    : undefined
+  );
   const [
     sessionDigestRateLimit,
     durableExtractionRequestRateLimit,
@@ -200,6 +211,7 @@ export async function buildMemoryRuntimeDoctorReport(input: {
 
   return {
     sharedMemory,
+    compactionRuntime,
     sessionDigest: {
       availability: getSessionDigestAvailability(input.conversationStore),
       permissionSurface: buildSessionDigestPermissionSurface(),

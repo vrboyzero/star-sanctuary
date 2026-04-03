@@ -1977,6 +1977,47 @@ corepack pnpm bdd doctor --check-model
 - `bdd doctor`：看“配置有没有问题”
 - `system.doctor`：看“现在这次运行到底发生了什么”
 
+#### 8.3.2 会话调试与导出（P4 新增）
+
+如果你要排查“某个具体会话为什么恢复成这样”、“压缩后到底保留了什么”、“最近导出过哪些 transcript / timeline”，当前可以直接使用 `bdd conversation` 这组命令：
+
+```bash
+# 列出当前可导出的会话
+corepack pnpm bdd conversation list
+
+# 按 conversationId 前缀筛选
+corepack pnpm bdd conversation list --conversation-id-prefix conv- --limit 20
+
+# 导出单会话 transcript bundle
+corepack pnpm bdd conversation export --conversation-id <id> --output-dir ./artifacts
+
+# 导出轻量 timeline
+corepack pnpm bdd conversation timeline --conversation-id <id> --output-dir ./artifacts
+
+# 查看最近真正落盘的导出记录
+corepack pnpm bdd conversation exports --limit 20
+```
+
+当前这组命令适合做三件事：
+
+- 看“有哪些会话可以导出”
+- 看“最近导出了什么、导到哪里”
+- 看“某个会话的 transcript / restore / timeline 调试投影”
+
+补充说明：
+
+- `conversation export` 支持 `internal / shareable / metadata_only` 三档导出模式
+- `conversation timeline` 支持轻量 kind 过滤与文本/JSON 输出
+- 最近导出索引只记录“真正写到文件”的导出，不记录 stdout 直接打印的内容
+
+如果你走 RPC / WebSocket 集成，`system.doctor` 现在也支持按需挂载：
+
+- `conversationDebug`
+- `conversationCatalog`
+- `recentConversationExports`
+
+因此，`bdd doctor` 负责“系统体检”，`bdd conversation ...` 负责“具体会话复盘”，两者最好分开理解。
+
 ### 8.4 配置管理（Config）
 
 无需手动编辑 `.env.local`，通过 CLI 直接读写当前实际 `envDir` 下的配置：
@@ -2670,6 +2711,11 @@ Star Sanctuary 的工具系统默认处于 **Safe Mode**，并可通过策略文
 # 推荐直接指向仓库内置的三挡示例之一
 BELLDANDY_TOOLS_POLICY_FILE=E:\project\star-sanctuary\config\tools-policy.balanced.json
 
+# 工具分组加载（建议按需，不要长期 all）
+# 当前运行时会默认先注入 core tools + tool_search；
+# 已启用分组中的非核心工具会先以目录形式出现，Agent 需要通过 tool_search 选择后，完整 schema 才会在后续轮次进入上下文
+# BELLDANDY_TOOL_GROUPS=browser,methodology,system
+
 # 额外允许的工作区根目录（多项目协作）
 BELLDANDY_EXTRA_WORKSPACE_ROOTS=E:\projects,D:\workspace
 ```
@@ -2861,6 +2907,22 @@ BELLDANDY_COMPACTION_KEEP_RECENT=10
 # 当滚动摘要超过此值时，触发归档压缩（进一步浓缩）
 # BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD=2000
 
+# 预警阈值（默认约为 compaction threshold 的 70%）
+# 进入预警区后，doctor / runtime 观测会提示当前会话正在逼近压缩或阻断线
+# BELLDANDY_COMPACTION_WARNING_THRESHOLD=
+
+# 阻断阈值（默认约为 compaction threshold 的 90%）
+# 用于高风险超长上下文保护，避免请求在明显不可恢复状态下继续硬冲
+# BELLDANDY_COMPACTION_BLOCKING_THRESHOLD=
+
+# 连续 compaction 失败熔断阈值（默认 3）
+# 达到后会暂时熔断自动压缩，防止每轮都重复触发失败摘要请求
+# BELLDANDY_COMPACTION_MAX_CONSECUTIVE_FAILURES=3
+
+# Prompt-too-long 重试次数（默认 2）
+# 当摘要请求自身因为输入过长失败时，允许 runtime 做有限次裁剪重试
+# BELLDANDY_COMPACTION_MAX_PTL_RETRIES=2
+
 # 摘要专用模型（可选，不设则复用主模型）
 # 建议使用便宜/快速的模型以降低成本
 # BELLDANDY_COMPACTION_MODEL=gpt-4o-mini
@@ -2880,6 +2942,7 @@ BELLDANDY_COMPACTION_KEEP_RECENT=10
 | 日常对话 | 默认配置即可，无需修改 |
 | 长时间自动化任务 | `THRESHOLD=20000`，`KEEP_RECENT=10`，配置专用摘要模型 |
 | 使用中转代理（输入受限） | `THRESHOLD=8000`，`KEEP_RECENT=6`，`MAX_INPUT_TOKENS=20000` |
+| 想减少失败重试和超长上下文抖动 | 补 `WARNING_THRESHOLD / BLOCKING_THRESHOLD / MAX_CONSECUTIVE_FAILURES / MAX_PTL_RETRIES` |
 | 主模型是 Anthropic，想用 OpenAI 做摘要 | 设置 `COMPACTION_MODEL`、`COMPACTION_BASE_URL`、`COMPACTION_API_KEY` 三项 |
 | 不想使用压缩 | `BELLDANDY_COMPACTION_ENABLED=false` |
 
@@ -2904,6 +2967,17 @@ BELLDANDY_COMPACTION_KEEP_RECENT=10
 - 对话已经很长，但还没触发自动压缩阈值，想主动释放上下文空间
 - 即将开始一个需要大量上下文的复杂任务，先压缩腾出空间
 - Agent 在执行工具链时上下文接近上限，手动干预
+
+#### 13.3.1 新版压缩运行时补充说明
+
+当前版本的压缩链已经不只是“超过阈值就写一段摘要”，还增加了几层治理：
+
+- `Session Digest` 与 `Durable Extraction` 已与 compaction 解耦，摘要刷新不再只依赖 `/compact`
+- 长工具链会优先走 `microcompact` 轻压缩，先清旧工具噪音，再决定是否做语义摘要
+- `system.doctor` 里可以看到 compaction runtime 的命中率、回退、节省量、失败数和熔断状态
+- 压缩边界（compact boundary）与 partial compact 已支持持久化，用于后续 transcript restore / debug
+
+如果你只是普通使用者，通常不需要手动调这些变量；只有在你确实遇到“长会话频繁压缩失败”或“代理输入窗口很小”时，再考虑补 `WARNING / BLOCKING / 熔断 / PTL retry` 这组高级变量。
 
 ### 13.4 服务重启 (Service Restart)
 
@@ -3618,6 +3692,7 @@ eligibility:
 | 用画布拆任务、看 ReAct 过程 | 左侧 `画布工作区` | — | 适合做可视化整理和任务拆解。 |
 | 临时禁用某些工具 / MCP / 插件 | 顶部 `🛠️ 工具设置` | — | 这是运行时临时禁用，不等于卸载。 |
 | 看系统是否大体正常 | `corepack pnpm bdd doctor` | `system.doctor` | 普通检查优先 `bdd doctor`。 |
+| 复盘某个会话 / 导出 transcript | `corepack pnpm bdd conversation ...` | `system.doctor conversationDebug` | 适合看会话恢复、压缩边界、timeline 和最近导出记录。 |
 | 安装 / 更新 / 卸载扩展 | `bdd marketplace ...` | — | 当前扩展安装主入口仍是 CLI。 |
 | 使用 MCP 能力 | 聊天中直接让 Agent 调用 | 工具设置查看可见性 | MCP 已能在对话里直接使用。 |
 
@@ -3640,6 +3715,7 @@ eligibility:
 | 运行时体检 | `system.doctor` | `bdd doctor` + `system.doctor` | `bdd doctor` 看静态配置；`system.doctor` 看运行时状态。 |
 | 会话摘要 | `conversation.digest.get` / `conversation.digest.refresh` | `memoryRuntime.sessionDigest` | `Session Digest` 是当前会话小抄，已接入 budget / rate-limit。 |
 | 长期记忆提取 | `conversation.memory.extraction.get` / `conversation.memory.extract` | `memoryRuntime.durableExtraction` | 已有 availability / rate-limit / guidance / skip reason。 |
+| 会话导出 / 时间轴复盘 | `bdd conversation export/timeline/list/exports` | `system.doctor -> conversationDebug / conversationCatalog / recentConversationExports` | 用于 transcript export、timeline projection、最近导出索引与会话目录排障。 |
 | 工作区文件链路 | `workspace.list/read/readSource/write` | `queryRuntime` + 写入结果 | `workspace.write` 已接入 team-memory secret guard。 |
 | 子任务治理 | `subtask.list/get/stop/archive` | `queryRuntime` | 适合多 Agent / 后台执行链路排障。 |
 | 工具治理 | `tools.list` / `tool_settings.confirm` | `tools.list` + `extensionGovernance` | 已形成 builtin / MCP / plugin / skill 的统一解释口径。 |

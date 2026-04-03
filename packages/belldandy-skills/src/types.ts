@@ -20,6 +20,20 @@ export type ToolDefinition = {
   name: string;
   description: string;
   parameters: ToolParameterSchema;
+  loadingMode?: "core" | "deferred";
+  shortDescription?: string;
+  keywords?: string[];
+  tags?: string[];
+};
+
+export type ToolCatalogEntry = {
+  name: string;
+  description: string;
+  shortDescription: string;
+  keywords: string[];
+  tags: string[];
+  loadingMode: "core" | "deferred";
+  loaded: boolean;
 };
 
 /** 工具调用请求 */
@@ -1632,6 +1646,13 @@ export interface ConversationStoreInterface {
   getHistory(
     conversationId: string,
   ): Array<{ role: "user" | "assistant"; content: string }>;
+  getLoadedToolNames?(
+    conversationId: string,
+  ): string[];
+  setLoadedToolNames?(
+    conversationId: string,
+    toolNames: string[],
+  ): void | Promise<void>;
   setRoomMembersCache(
     conversationId: string,
     members: Array<{ type: "user" | "agent"; id: string; name?: string; identity?: string }>,

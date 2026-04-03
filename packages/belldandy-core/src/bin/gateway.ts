@@ -37,6 +37,7 @@ import {
   HookRegistry,
   createHookRunner,
   type HookRunner,
+  CompactionRuntimeTracker,
 } from "@belldandy/agent";
 import {
   ToolExecutor,
@@ -45,6 +46,8 @@ import {
   type ToolPolicy,
   resolveSafeScopesForChannel,
   type ToolContractAccessPolicy,
+  createToolSearchTool,
+  TOOL_SEARCH_NAME,
   TOOL_SETTINGS_CONTROL_NAME,
   createToolSettingsControlTool,
   type AgentToolControlMode,
@@ -493,8 +496,19 @@ const maxOutputTokens = maxOutputTokensRaw ? parseInt(maxOutputTokensRaw, 10) ||
 
 // Compaction 配置
 const compactionEnabled = readEnv("BELLDANDY_COMPACTION_ENABLED") !== "false";
+const compactionTokenThreshold = parseInt(readEnv("BELLDANDY_COMPACTION_THRESHOLD") || "12000", 10);
 const compactionTriggerFraction = parseFloat(readEnv("BELLDANDY_COMPACTION_TRIGGER_FRACTION") || "0.75") || 0.75;
 const compactionArchivalThreshold = parseInt(readEnv("BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD") || "2000", 10);
+const compactionWarningThreshold = parseInt(
+  readEnv("BELLDANDY_COMPACTION_WARNING_THRESHOLD") || String(Math.max(1024, Math.floor(compactionTokenThreshold * 0.7))),
+  10,
+);
+const compactionBlockingThreshold = parseInt(
+  readEnv("BELLDANDY_COMPACTION_BLOCKING_THRESHOLD") || String(Math.max(compactionWarningThreshold + 1, Math.floor(compactionTokenThreshold * 0.9))),
+  10,
+);
+const compactionMaxConsecutiveFailures = parseInt(readEnv("BELLDANDY_COMPACTION_MAX_CONSECUTIVE_FAILURES") || "3", 10);
+const compactionMaxPromptTooLongRetries = parseInt(readEnv("BELLDANDY_COMPACTION_MAX_PTL_RETRIES") || "2", 10);
 const compactionModel = readEnv("BELLDANDY_COMPACTION_MODEL");
 const compactionBaseUrl = readEnv("BELLDANDY_COMPACTION_BASE_URL");
 const compactionApiKey = readEnv("BELLDANDY_COMPACTION_API_KEY");
@@ -810,15 +824,29 @@ const toolsToRegister = toolsEnabled
   })
   : [];
 
+const CORE_TOOL_NAMES = new Set<string>([
+  TOOL_SETTINGS_CONTROL_NAME,
+  TOOL_SEARCH_NAME,
+  applyPatchTool.definition.name,
+  fileReadTool.definition.name,
+  listFilesTool.definition.name,
+  runCommandTool.definition.name,
+]);
+
+const deferredToolNames = toolsToRegister
+  .map((tool) => tool.definition.name)
+  .filter((name) => !CORE_TOOL_NAMES.has(name));
+
 let agentRegistry: AgentRegistry | undefined;
 
 const toolExecutor = new ToolExecutor({
   tools: toolsToRegister,
   workspaceRoot: stateDir, // Use the resolved state directory as the workspace root for file operations
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
-  alwaysEnabledTools: toolsEnabled ? [TOOL_SETTINGS_CONTROL_NAME] : [],
+  alwaysEnabledTools: toolsEnabled ? [TOOL_SETTINGS_CONTROL_NAME, TOOL_SEARCH_NAME] : [],
   policy: toolsPolicy,
   contractAccessPolicy: gatewayContractAccessPolicy,
+  deferredToolNames,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
   isToolAllowedForAgent: (toolName, agentId) => {
     const resolvedAgentId = typeof agentId === "string" && agentId.trim()
@@ -855,6 +883,15 @@ const toolExecutor = new ToolExecutor({
     debug: (m) => logger.debug("tools", m),
   },
 });
+
+if (toolsEnabled) {
+  toolExecutor.registerTool(createToolSearchTool({
+    getCatalogEntries: (conversationId?: string, agentId?: string) =>
+      toolExecutor.getCatalogEntries(agentId, conversationId),
+    loadDeferredTools: (conversationId: string, toolNames: string[]) =>
+      toolExecutor.loadDeferredTools(conversationId, toolNames),
+  }), { silentReplace: true });
+}
 
 // 4. Log enabled tools
 if (toolsEnabled) {
@@ -1256,6 +1293,8 @@ Keep responses concise and natural for spoken delivery.`;
         ...(profileMaxOutputTokens > 0 && { maxOutputTokens: profileMaxOutputTokens }),
         compaction: compactionOpts,
         summarizer: compactionSummarizer,
+        summarizerModelName: compactionModel || openaiModel,
+        compactionRuntimeTracker,
         conversationStore: conversationStore, // 扩展 A：传入 conversationStore 支持跨 run 持久化
       });
     }
@@ -1353,6 +1392,10 @@ if (compactionEnabled) {
           };
         },
       });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`Compaction summarizer failed (HTTP ${response.status}): ${errorText.slice(0, 500)}`);
+      }
       const json = await response.json() as any;
       if (openaiWireApi === "responses") {
         if (typeof json.output_text === "string") return json.output_text;
@@ -1373,18 +1416,41 @@ if (compactionEnabled) {
 }
 
 const compactionOpts = {
-  tokenThreshold: parseInt(readEnv("BELLDANDY_COMPACTION_THRESHOLD") || "12000", 10),
+  tokenThreshold: compactionTokenThreshold,
+  warningThreshold: compactionWarningThreshold,
+  blockingThreshold: compactionBlockingThreshold,
   keepRecentCount: parseInt(readEnv("BELLDANDY_COMPACTION_KEEP_RECENT") || "10", 10),
   triggerFraction: compactionTriggerFraction,
   archivalThreshold: compactionArchivalThreshold,
+  maxConsecutiveCompactionFailures: compactionMaxConsecutiveFailures,
+  maxPromptTooLongRetries: compactionMaxPromptTooLongRetries,
   enabled: compactionEnabled,
 };
+const compactionRuntimeTracker = new CompactionRuntimeTracker(compactionOpts);
 
 const conversationStore = new ConversationStore({
   dataDir: sessionsDir,
   maxHistory: parseInt(readEnv("BELLDANDY_MAX_HISTORY") || "50", 10),
   compaction: compactionOpts,
   summarizer: compactionSummarizer,
+  summarizerModelName: compactionModel || openaiModel,
+  compactionRuntimeTracker,
+  onBeforeCompaction: async (event, ctx) => {
+    logger.debug("compaction", "before compaction", {
+      ...event,
+      conversationId: ctx.sessionKey,
+      agentId: ctx.agentId,
+    });
+    await hookRunner.runBeforeCompaction(event, ctx);
+  },
+  onAfterCompaction: async (event, ctx) => {
+    logger.info("compaction", "after compaction", {
+      ...event,
+      conversationId: ctx.sessionKey,
+      agentId: ctx.agentId,
+    });
+    await hookRunner.runAfterCompaction(event, ctx);
+  },
 });
 
 // Wire conversationStore into ToolExecutor (for caching support)
@@ -1520,6 +1586,14 @@ const taskSummaryMinTokenTotal = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_TOKE
 const experienceAutoPromotionEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED") ?? "true") !== "false";
 const experienceAutoMethodEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED") ?? "true") !== "false";
 const experienceAutoSkillEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED") ?? "true") !== "false";
+let requestMemoryEvolutionExtraction:
+  | ((input: {
+    conversationId: string;
+    source: string;
+    threshold?: number;
+    force?: boolean;
+  }) => Promise<void>)
+  | undefined;
 
 // P1-4: Task-aware Embedding 前缀（用于 Jina/BGE 等支持 task 参数的模型）
 const embeddingQueryPrefix = readEnv("BELLDANDY_EMBEDDING_QUERY_PREFIX") || undefined;
@@ -1886,23 +1960,24 @@ if (evolutionEnabled) {
       const sessionKey = ctx.sessionKey;
       if (!sessionKey) return;
       if (!event.success) return; // 失败的会话不提取
+      const scheduleExtraction = requestMemoryEvolutionExtraction;
+      if (!scheduleExtraction) {
+        logger.warn("memory-evolution", `Skipped scheduling durable extraction for session ${sessionKey}: scheduler unavailable`);
+        return;
+      }
 
-      const mm = getGlobalMemoryManager();
-      if (!mm) return;
-
-      // 从 event.messages 获取消息（agent_end 事件携带的消息列表）
-      const messages = (event.messages as Array<{ role: string; content: string }>)
-        ?.filter(m => m && typeof m.role === "string" && typeof m.content === "string") ?? [];
-
-      // 延迟 5s 执行提取，避免与 Agent 主请求的尾部流量冲突
+      // 延迟 5s 仅保留为节流窗口，真正的提取调度统一交给 server/runtime。
       setTimeout(() => {
-        mm.extractMemoriesFromConversation(sessionKey, messages).catch(err => {
-          logger.error("memory-evolution", `Memory extraction failed for session ${sessionKey}: ${err instanceof Error ? err.message : String(err)}`);
+        scheduleExtraction({
+          conversationId: sessionKey,
+          source: "memory_evolution",
+        }).catch(err => {
+          logger.error("memory-evolution", `Durable extraction scheduling failed for session ${sessionKey}: ${err instanceof Error ? err.message : String(err)}`);
         });
       }, 5000);
     },
   });
-  logger.info("memory-evolution", "Registered agent_end hook for memory evolution");
+  logger.info("memory-evolution", "Registered agent_end hook for unified durable extraction scheduling");
 }
 
 // ========== 扩展 C：自动任务边界检测 ==========
@@ -2217,6 +2292,7 @@ const server = await startGatewayServer({
   primaryModelConfig,
   modelFallbacks,
   conversationStore: conversationStore, // Pass shared instance
+  getCompactionRuntimeReport: () => compactionRuntimeTracker.getReport(),
   onActivity,
   logger,
   toolsConfigManager,
@@ -2270,6 +2346,7 @@ const server = await startGatewayServer({
   webhookConfig,
   webhookIdempotency,
 });
+requestMemoryEvolutionExtraction = server.requestDurableExtractionFromDigest;
 
 goalManager.setEventSink((payload) => {
   server.broadcast({

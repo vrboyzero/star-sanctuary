@@ -84,6 +84,16 @@ const BUILTIN_CLI_COMMANDS: readonly CommandDescriptor[] = [
     handler: async () => (await import("./commands/config.js")).default,
   },
   {
+    name: "conversation",
+    type: "group",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["local-safe"],
+    description: "Inspect persisted conversation transcript and timeline",
+    handler: async () => (await import("./commands/conversation.js")).default,
+  },
+  {
     name: "relay",
     type: "group",
     source: "builtin",

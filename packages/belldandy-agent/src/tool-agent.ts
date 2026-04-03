@@ -8,7 +8,7 @@ import type { JsonObject } from "@belldandy/protocol";
 import type { ToolExecutionRuntimeContext, ToolExecutor, ToolCallRequest } from "@belldandy/skills";
 import type { AgentRunInput, AgentStreamItem, AgentUsage, BelldandyAgent, AgentHooks } from "./index.js";
 import type { HookRunner } from "./hook-runner.js";
-import type { HookAgentContext, HookToolContext, HookToolResultPersistContext } from "./hooks.js";
+import type { AfterCompactionEvent, BeforeCompactionEvent, HookAgentContext, HookToolContext, HookToolResultPersistContext } from "./hooks.js";
 import { FailoverClient, type ModelProfile, type FailoverLogger } from "./failover-client.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
 import {
@@ -17,7 +17,9 @@ import {
   type AnthropicUsage,
 } from "./anthropic.js";
 import type { OpenAIWireApi } from "./openai.js";
-import { estimateTokens, needsInLoopCompaction, compactIncremental, createEmptyCompactionState, type CompactionState, type CompactionOptions, type SummarizerFn } from "./compaction.js";
+import { estimateTokens, estimateMessagesTokens, needsInLoopCompaction, compactIncremental, createEmptyCompactionState, type CompactionState, type CompactionOptions, type SummarizerFn } from "./compaction.js";
+import type { CompactionRuntimeTracker } from "./compaction-runtime.js";
+import { microcompactMessages, type MicrocompactOptions } from "./microcompact.js";
 import { TokenCounterService } from "./token-counter.js";
 import type { ConversationStore, ActiveCounterSnapshot } from "./conversation.js";
 
@@ -77,8 +79,14 @@ export type ToolEnabledAgentOptions = {
   bootstrapProfileCooldowns?: Record<string, number>;
   /** ReAct 循环内压缩配置（可选） */
   compaction?: CompactionOptions;
+  /** 工具结果轻压缩配置（可选） */
+  microcompact?: MicrocompactOptions;
   /** 模型摘要函数（用于循环内压缩） */
   summarizer?: SummarizerFn;
+  /** 摘要模型名称（用于观测与 hook 事件） */
+  summarizerModelName?: string;
+  /** 压缩预算治理 / 熔断共享状态 */
+  compactionRuntimeTracker?: CompactionRuntimeTracker;
   /** 会话存储（用于跨 run 持久化 token 计数器状态） */
   conversationStore?: ConversationStore;
 };
@@ -281,6 +289,56 @@ function stringifyTranscriptContent(value: unknown): string {
   }
 }
 
+function compactToolDigestText(value: unknown, limit: number = 180): string {
+  const text = stringifyTranscriptContent(value)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function inferToolDigestTarget(args: JsonObject): string | undefined {
+  const candidateKeys = ["path", "file", "filename", "url", "query", "command", "cwd", "sessionId"];
+  for (const key of candidateKeys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) {
+      return compactToolDigestText(value.trim(), 120);
+    }
+  }
+  return undefined;
+}
+
+function buildToolDigestRecord(input: {
+  toolName: string;
+  args: JsonObject;
+  success: boolean;
+  output?: string;
+  error?: string;
+  toolCallId?: string;
+}) {
+  const target = inferToolDigestTarget(input.args);
+  const keyResult = input.success ? compactToolDigestText(input.output) : undefined;
+  const errorSummary = input.success ? undefined : compactToolDigestText(input.error);
+  const parts = [
+    `${input.toolName} ${input.success ? "succeeded" : "failed"}`,
+  ];
+  if (target) parts.push(`target=${target}`);
+  if (keyResult) parts.push(`result=${keyResult}`);
+  if (errorSummary) parts.push(`error=${errorSummary}`);
+
+  return {
+    toolName: input.toolName,
+    success: input.success,
+    target,
+    keyResult,
+    errorSummary,
+    summary: parts.join(" | "),
+    toolCallId: input.toolCallId,
+  };
+}
+
 export function buildToolTranscriptMessageForHistory(input: {
   toolCallId: string;
   toolName?: string;
@@ -395,6 +453,51 @@ export class ToolEnabledAgent implements BelldandyAgent {
     }
   }
 
+  private buildCompactionHookContext(conversationId?: string, agentId?: string): HookAgentContext {
+    return {
+      agentId,
+      sessionKey: conversationId,
+    };
+  }
+
+  private async emitBeforeCompaction(
+    event: BeforeCompactionEvent,
+    conversationId?: string,
+    agentId?: string,
+  ): Promise<void> {
+    if (!this.opts.hookRunner || typeof this.opts.hookRunner.runBeforeCompaction !== "function") return;
+    try {
+      await this.withStageTimeout(
+        "before_compaction",
+        this.opts.hookRunner.runBeforeCompaction(
+          event,
+          this.buildCompactionHookContext(conversationId, agentId),
+        ),
+      );
+    } catch (err) {
+      this.opts.logger?.error("agent", `钩子 before_compaction 执行失败: ${err}`, undefined);
+    }
+  }
+
+  private async emitAfterCompaction(
+    event: AfterCompactionEvent,
+    conversationId?: string,
+    agentId?: string,
+  ): Promise<void> {
+    if (!this.opts.hookRunner || typeof this.opts.hookRunner.runAfterCompaction !== "function") return;
+    try {
+      await this.withStageTimeout(
+        "after_compaction",
+        this.opts.hookRunner.runAfterCompaction(
+          event,
+          this.buildCompactionHookContext(conversationId, agentId),
+        ),
+      );
+    } catch (err) {
+      this.opts.logger?.error("agent", `钩子 after_compaction 执行失败: ${err}`, undefined);
+    }
+  }
+
   private async acquireConversationRunSlot(conversationId?: string): Promise<() => void> {
     if (!conversationId) {
       return () => {};
@@ -504,7 +607,6 @@ export class ToolEnabledAgent implements BelldandyAgent {
     );
     const textAttachmentChars = readTextAttachmentChars(input.meta);
     const runtimeContext = readToolExecutionRuntimeContext(input.meta);
-    const tools = this.opts.toolExecutor.getDefinitions(input.agentId, input.conversationId, runtimeContext);
     let toolCallCount = 0;
     const generatedItems: AgentStreamItem[] = [];
     let runSuccess = true;
@@ -561,6 +663,42 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
       try {
       while (true) {
+        const microcompactCandidate = messages.some((message) => message.role === "tool");
+        const microcompactOriginalTokens = microcompactCandidate ? estimateMessagesTotal(messages) : 0;
+        if (microcompactCandidate) {
+          await this.emitBeforeCompaction({
+            messageCount: messages.length,
+            tokenCount: microcompactOriginalTokens,
+            source: "microcompact",
+            compactionMode: "microcompact",
+          }, input.conversationId, resolvedAgentId);
+        }
+        const microcompactResult = microcompactMessages(messages, this.opts.microcompact);
+        if (microcompactResult.mutated) {
+          const microcompactCompactedTokens = estimateMessagesTotal(messages);
+          logDebug("[microcompact] compacted stale tool messages", microcompactResult);
+          this.opts.logger?.info?.("agent", "[microcompact] compacted stale tool messages", {
+            ...microcompactResult,
+            originalTokens: microcompactOriginalTokens,
+            compactedTokens: microcompactCompactedTokens,
+            savedTokenCount: Math.max(0, microcompactOriginalTokens - microcompactCompactedTokens),
+          });
+          await this.emitAfterCompaction({
+            messageCount: messages.length,
+            tokenCount: microcompactCompactedTokens,
+            compactedCount: microcompactResult.compactedCount,
+            source: "microcompact",
+            compactionMode: "microcompact",
+            originalTokenCount: microcompactOriginalTokens,
+            deltaMessageCount: microcompactResult.compactedCount,
+            fallbackUsed: false,
+            summarizerModel: undefined,
+            savedTokenCount: Math.max(0, microcompactOriginalTokens - microcompactCompactedTokens),
+            reclaimedChars: microcompactResult.reclaimedChars,
+            rebuildTriggered: false,
+          }, input.conversationId, resolvedAgentId);
+        }
+
         // ReAct 循环内压缩检查：当上下文接近上限时，压缩历史消息
         const maxInput = this.opts.maxInputTokens;
         if (maxInput && maxInput > 0 && this.opts.compaction?.enabled !== false) {
@@ -568,13 +706,15 @@ export class ToolEnabledAgent implements BelldandyAgent {
           const currentTokens = estimateMessagesTotal(messages);
           if (needsInLoopCompaction(currentTokens, maxInput, triggerFraction)) {
             try {
-              loopCompactionState = await this.compactInLoop(messages, loopCompactionState);
+              loopCompactionState = await this.compactInLoop(messages, loopCompactionState, input.conversationId, resolvedAgentId);
             } catch (err) {
               logError(`[compaction] in-loop compaction failed: ${err}`);
               // 压缩失败不阻塞，继续执行（trimMessagesToFit 会兜底）
             }
           }
         }
+
+        const tools = this.opts.toolExecutor.getDefinitions(input.agentId, input.conversationId, runtimeContext);
 
         // 调用模型
         const response = await this.callModel(
@@ -715,6 +855,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
                   },
                   isSynthetic: true,
                 }));
+                this.opts.conversationStore?.recordToolDigest(input.conversationId, buildToolDigestRecord({
+                  toolName: request.name,
+                  args: request.arguments,
+                  success: false,
+                  error: blockedError,
+                  toolCallId: tc.id,
+                }));
                 continue;
               }
               if (hookRes?.skipExecution) {
@@ -745,6 +892,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
                     toolCallId: tc.id,
                   },
                   isSynthetic: true,
+                }));
+                this.opts.conversationStore?.recordToolDigest(input.conversationId, buildToolDigestRecord({
+                  toolName: request.name,
+                  args: request.arguments,
+                  success: true,
+                  output: syntheticResult,
+                  toolCallId: tc.id,
                 }));
                 continue;
               }
@@ -781,6 +935,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
                   toolCallId: tc.id,
                 },
                 isSynthetic: true,
+              }));
+              this.opts.conversationStore?.recordToolDigest(input.conversationId, buildToolDigestRecord({
+                toolName: request.name,
+                args: request.arguments,
+                success: false,
+                error: hookError,
+                toolCallId: tc.id,
               }));
               continue;
             }
@@ -827,6 +988,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
                   },
                   isSynthetic: true,
                 }));
+                this.opts.conversationStore?.recordToolDigest(input.conversationId, buildToolDigestRecord({
+                  toolName: request.name,
+                  args: request.arguments,
+                  success: false,
+                  error: blockedError,
+                  toolCallId: tc.id,
+                }));
                 continue;
               }
               if (hookRes && typeof hookRes === "object") {
@@ -862,6 +1030,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
                   toolCallId: tc.id,
                 },
                 isSynthetic: true,
+              }));
+              this.opts.conversationStore?.recordToolDigest(input.conversationId, buildToolDigestRecord({
+                toolName: request.name,
+                args: request.arguments,
+                success: false,
+                error: hookError,
+                toolCallId: tc.id,
               }));
               continue;
             }
@@ -949,6 +1124,14 @@ export class ToolEnabledAgent implements BelldandyAgent {
               toolName: result.name,
               toolCallId: tc.id,
             },
+          }));
+          this.opts.conversationStore?.recordToolDigest(input.conversationId, buildToolDigestRecord({
+            toolName: result.name,
+            args: request.arguments,
+            success: result.success,
+            output: result.output,
+            error: result.error,
+            toolCallId: tc.id,
           }));
         }
 
@@ -1175,7 +1358,12 @@ export class ToolEnabledAgent implements BelldandyAgent {
    * ReAct 循环内压缩：将 messages 数组中的旧历史消息压缩为摘要。
    * 直接修改 messages 数组（in-place），返回更新后的 CompactionState。
    */
-  private async compactInLoop(messages: Message[], state: CompactionState): Promise<CompactionState> {
+  private async compactInLoop(
+    messages: Message[],
+    state: CompactionState,
+    conversationId?: string,
+    agentId?: string,
+  ): Promise<CompactionState> {
     // 提取可压缩的 user/assistant 消息（跳过 system 和 tool 消息）
     const systemMsg = messages[0]?.role === "system" ? messages[0] : null;
     const systemIdx = systemMsg ? 1 : 0;
@@ -1202,9 +1390,31 @@ export class ToolEnabledAgent implements BelldandyAgent {
     // 如果历史消息不够多，不压缩
     if (historyMessages.length <= keepRecent) return state;
 
+    const skipDecision = this.opts.compactionRuntimeTracker?.shouldSkip("loop");
+    if (skipDecision?.skipped) {
+      this.opts.logger?.info?.("agent", "[compaction] in-loop compaction skipped by circuit breaker", {
+        remainingSkips: skipDecision.remainingSkips,
+      });
+      return state;
+    }
+
+    const originalTokens = estimateMessagesTokens(historyMessages);
+    await this.emitBeforeCompaction({
+      messageCount: historyMessages.length,
+      tokenCount: originalTokens,
+      source: "loop",
+      compactionMode: "loop",
+      deltaMessageCount: Math.max(0, historyMessages.length - keepRecent),
+      summarizerModel: this.opts.summarizerModelName,
+    }, conversationId, agentId);
+
     const result = await compactIncremental(historyMessages, state, {
       ...this.opts.compaction,
       summarizer: this.opts.summarizer,
+    });
+    this.opts.compactionRuntimeTracker?.recordResult(result, {
+      source: "loop",
+      participatesInCircuitBreaker: true,
     });
 
     if (!result.compacted) return state;
@@ -1249,7 +1459,33 @@ export class ToolEnabledAgent implements BelldandyAgent {
       originalTokens: result.originalTokens,
       compactedTokens: result.compactedTokens,
       tier: result.tier,
+      deltaMessageCount: result.deltaMessageCount,
+      fallbackUsed: result.fallbackUsed,
+      rebuildTriggered: result.rebuildTriggered,
     });
+    this.opts.logger?.info?.("agent", "[compaction] in-loop compaction completed", {
+      originalTokens: result.originalTokens,
+      compactedTokens: result.compactedTokens,
+      savedTokenCount: Math.max(0, result.originalTokens - result.compactedTokens),
+      tier: result.tier,
+      deltaMessageCount: result.deltaMessageCount,
+      fallbackUsed: result.fallbackUsed,
+      rebuildTriggered: result.rebuildTriggered,
+    });
+    await this.emitAfterCompaction({
+      messageCount: result.messages.length,
+      tokenCount: result.compactedTokens,
+      compactedCount: historyMessages.length - result.messages.length,
+      tier: result.tier,
+      source: "loop",
+      compactionMode: "loop",
+      originalTokenCount: originalTokens,
+      deltaMessageCount: result.deltaMessageCount,
+      fallbackUsed: result.fallbackUsed,
+      summarizerModel: this.opts.summarizerModelName,
+      savedTokenCount: Math.max(0, result.originalTokens - result.compactedTokens),
+      rebuildTriggered: result.rebuildTriggered,
+    }, conversationId, agentId);
 
     return result.state;
   }

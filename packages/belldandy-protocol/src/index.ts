@@ -173,6 +173,7 @@ export type ChatFinalEvent = {
 };
 
 export type ConversationMetaMessage = {
+  id?: string;
   role: "user" | "assistant";
   content: string;
   timestampMs: number;
@@ -215,6 +216,38 @@ export type SystemDoctorResult = {
     status: "pass" | "fail" | "warn";
     message?: string;
   }>;
+  conversationDebug?: {
+    conversationId: string;
+    available: boolean;
+    messageCount: number;
+    updatedAt?: number;
+    requested: {
+      includeTranscript: boolean;
+      includeTimeline: boolean;
+      transcriptEventTypes?: string[];
+      transcriptEventLimit?: number;
+      transcriptRestoreView?: string;
+      timelineKinds?: string[];
+      timelineLimit?: number;
+      timelinePreviewChars?: number;
+    };
+    transcriptExport?: Record<string, unknown>;
+    timeline?: Record<string, unknown>;
+  };
+  conversationCatalog?: {
+    items: Array<Record<string, unknown>>;
+    filter: {
+      conversationIdPrefix?: string;
+      limit?: number;
+    };
+  };
+  recentConversationExports?: {
+    items: Array<Record<string, unknown>>;
+    filter: {
+      conversationIdPrefix?: string;
+      limit?: number;
+    };
+  };
   memoryRuntime?: {
     sharedMemory?: {
       enabled: boolean;

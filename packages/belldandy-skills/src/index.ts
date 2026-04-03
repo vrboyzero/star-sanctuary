@@ -8,6 +8,7 @@ export type {
   ToolContext,
   ToolPolicy,
   ToolAuditLog,
+  ToolCatalogEntry,
   SubAgentResult,
   SessionInfo,
   SpawnSubAgentOptions,
@@ -78,6 +79,7 @@ export { fileReadTool, fileWriteTool, fileDeleteTool } from "./builtin/file.js";
 export { listFilesTool } from "./builtin/list-files.js";
 export { applyPatchTool } from "./builtin/apply-patch/index.js";
 export { webSearchTool } from "./builtin/web-search/index.js";
+export { createToolSearchTool, TOOL_SEARCH_NAME } from "./builtin/tool-search.js";
 export { runCommandTool, processManagerTool, terminalTool } from "./builtin/system/index.js";
 export { codeInterpreterTool } from "./builtin/code-interpreter/index.js";
 export { imageGenerateTool, textToSpeechTool, cameraSnapTool, synthesizeSpeech, transcribeSpeech } from "./builtin/multimedia/index.js";

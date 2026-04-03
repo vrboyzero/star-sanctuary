@@ -15,6 +15,10 @@
 export type CompactionOptions = {
   /** 触发压缩的 token 阈值（默认 12000） */
   tokenThreshold?: number;
+  /** compaction prompt 进入预算告警的 token 阈值 */
+  warningThreshold?: number;
+  /** compaction prompt 进入预算阻断并直接 fallback 的 token 阈值 */
+  blockingThreshold?: number;
   /** 压缩后保留的最近消息条数（默认 10） */
   keepRecentCount?: number;
   /** 安全余量系数（默认 1.2，即估算值 * 1.2） */
@@ -23,6 +27,12 @@ export type CompactionOptions = {
   triggerFraction?: number;
   /** Rolling Summary 超过此 token 数时触发归档压缩（默认 2000） */
   archivalThreshold?: number;
+  /** Rolling Summary 合并轮次超过此阈值时触发归档压缩（默认 6） */
+  archivalMergeThreshold?: number;
+  /** 连续 compaction 模型失败达到此阈值后，后续若干轮自动 compaction 熔断 */
+  maxConsecutiveCompactionFailures?: number;
+  /** prompt-too-long 时最多自救重试次数 */
+  maxPromptTooLongRetries?: number;
   /** 是否启用压缩（默认 true） */
   enabled?: boolean;
 };
@@ -37,6 +47,12 @@ export type CompactionState = {
   archivalSummary: string;
   /** 已被压缩的消息总数 */
   compactedMessageCount: number;
+  /** 最近一次稳定压缩边界（用于真增量压缩） */
+  lastCompactedMessageCount: number;
+  /** 最近一次稳定压缩边界的指纹，用于检测 rewind / resume / edit */
+  lastCompactedMessageFingerprint: string;
+  /** Rolling Summary 已累计的增量合并轮次 */
+  rollingSummaryMergeCount: number;
   /** 上次压缩时间戳 */
   lastCompactedAt: number;
 };
@@ -54,6 +70,20 @@ export type CompactionResult = {
   state: CompactionState;
   /** 本次压缩的层级（未压缩时为 undefined） */
   tier?: "rolling" | "archival";
+  /** 本轮实际增量处理的消息数 */
+  deltaMessageCount: number;
+  /** 是否走了 fallback 摘要路径 */
+  fallbackUsed: boolean;
+  /** 是否因边界失效触发了安全重建 */
+  rebuildTriggered: boolean;
+  /** prompt-too-long 自救重试次数 */
+  promptTooLongRetries: number;
+  /** 是否触发了预算告警 */
+  warningTriggered: boolean;
+  /** 是否触发了预算阻断并回退 fallback */
+  blockingTriggered: boolean;
+  /** 模型摘要失败原因（仅模型路径失败时存在） */
+  failureReason?: string;
 };
 
 /**
@@ -64,6 +94,8 @@ export type SummarizerFn = (prompt: string) => Promise<string>;
 // ─── Token 估算 ─────────────────────────────────────────────────────────
 
 const SAFETY_MARGIN = 1.2;
+const ARCHIVAL_MERGE_THRESHOLD = 6;
+const MAX_PROMPT_TOO_LONG_RETRIES = 2;
 
 /**
  * 简单 token 估算：
@@ -96,7 +128,39 @@ export function createEmptyCompactionState(): CompactionState {
     rollingSummary: "",
     archivalSummary: "",
     compactedMessageCount: 0,
+    lastCompactedMessageCount: 0,
+    lastCompactedMessageFingerprint: "",
+    rollingSummaryMergeCount: 0,
     lastCompactedAt: 0,
+  };
+}
+
+export function normalizeCompactionState(input?: Partial<CompactionState> | null): CompactionState {
+  const empty = createEmptyCompactionState();
+  const compactedMessageCount = typeof input?.compactedMessageCount === "number" && Number.isFinite(input.compactedMessageCount)
+    ? Math.max(0, Math.floor(input.compactedMessageCount))
+    : 0;
+  const lastCompactedMessageCount = typeof input?.lastCompactedMessageCount === "number" && Number.isFinite(input.lastCompactedMessageCount)
+    ? Math.max(0, Math.floor(input.lastCompactedMessageCount))
+    : compactedMessageCount;
+
+  return {
+    rollingSummary: typeof input?.rollingSummary === "string" ? input.rollingSummary : empty.rollingSummary,
+    archivalSummary: typeof input?.archivalSummary === "string" ? input.archivalSummary : empty.archivalSummary,
+    compactedMessageCount,
+    lastCompactedMessageCount,
+    lastCompactedMessageFingerprint:
+      typeof input?.lastCompactedMessageFingerprint === "string"
+        ? input.lastCompactedMessageFingerprint
+        : empty.lastCompactedMessageFingerprint,
+    rollingSummaryMergeCount:
+      typeof input?.rollingSummaryMergeCount === "number" && Number.isFinite(input.rollingSummaryMergeCount)
+        ? Math.max(0, Math.floor(input.rollingSummaryMergeCount))
+        : empty.rollingSummaryMergeCount,
+    lastCompactedAt:
+      typeof input?.lastCompactedAt === "number" && Number.isFinite(input.lastCompactedAt)
+        ? Math.max(0, input.lastCompactedAt)
+        : empty.lastCompactedAt,
   };
 }
 
@@ -139,7 +203,8 @@ function buildRollingSummaryPrompt(
 
   if (existingSummary) {
     return [
-      "You are a conversation summarizer. Your task is to update an existing summary with new conversation content.",
+      "You are maintaining a task continuity summary for an engineering assistant conversation.",
+      "Update the existing summary with the new conversation content.",
       "",
       "## Existing Summary",
       existingSummary,
@@ -148,54 +213,87 @@ function buildRollingSummaryPrompt(
       msgText,
       "",
       "## Instructions",
-      "Extend the existing summary by incorporating the new conversation content. Preserve:",
-      "- Key decisions and their reasoning",
-      "- Action results (tool calls, file operations, etc.)",
-      "- User preferences and requirements",
-      "- Important context that would be needed to continue the conversation",
-      "- Error states and their resolutions",
+      "Rewrite the summary so it stays useful for continuing the same engineering task.",
+      "Prefer concrete outcomes over topic descriptions.",
+      "Do not write vague lines such as 'the user asked about X' unless you also record the conclusion or current state.",
+      "When relevant, mention concrete file paths, functions, tools, outputs, errors, and fixes.",
+      "Preserve the latest completed step and the most likely next step.",
+      "Use concise markdown with these sections when they have useful content:",
+      "- Current Goal",
+      "- Key Decisions",
+      "- Key Files / Functions / Changes",
+      "- Errors and Fixes",
+      "- Pending Work",
+      "- Current Work",
+      "- Next Step",
+      "- User Constraints / Preferences",
       "",
-      "Keep the summary concise (under 800 tokens). Use bullet points for clarity.",
-      "Output ONLY the updated summary, no preamble.",
+      "Keep the summary concise (under 900 tokens).",
+      "Output ONLY the updated markdown summary, no preamble.",
     ].join("\n");
   }
 
   return [
-    "You are a conversation summarizer. Create a concise summary of the following conversation.",
+    "You are creating a task continuity summary for an engineering assistant conversation.",
     "",
     "## Conversation",
     msgText,
     "",
     "## Instructions",
-    "Summarize the conversation, preserving:",
-    "- Key decisions and their reasoning",
-    "- Action results (tool calls, file operations, etc.)",
-    "- User preferences and requirements",
-    "- Important context that would be needed to continue the conversation",
-    "- Error states and their resolutions",
+    "Create a concise summary that will help continue the same task later.",
+    "Prefer concrete outcomes over topic descriptions.",
+    "Do not write vague lines such as 'the user asked about X' unless you also record the conclusion or current state.",
+    "When relevant, mention concrete file paths, functions, tools, outputs, errors, and fixes.",
+    "Use concise markdown with these sections when they have useful content:",
+    "- Current Goal",
+    "- Key Decisions",
+    "- Key Files / Functions / Changes",
+    "- Errors and Fixes",
+    "- Pending Work",
+    "- Current Work",
+    "- Next Step",
+    "- User Constraints / Preferences",
     "",
-    "Keep the summary concise (under 800 tokens). Use bullet points for clarity.",
-    "Output ONLY the summary, no preamble.",
+    "Keep the summary concise (under 900 tokens).",
+    "Output ONLY the markdown summary, no preamble.",
   ].join("\n");
 }
 
-function buildArchivalPrompt(rollingSummary: string): string {
-  return [
-    "You are a conversation summarizer. Compress the following detailed summary into an ultra-concise archival summary.",
+function buildArchivalPrompt(existingArchivalSummary: string, rollingSummary: string): string {
+  const parts = [
+    "You are compressing conversation memory into an ultra-concise archival summary for future task continuation.",
+  ];
+
+  if (existingArchivalSummary) {
+    parts.push(
+      "",
+      "## Existing Archival Summary",
+      existingArchivalSummary,
+    );
+  }
+
+  parts.push(
     "",
-    "## Detailed Summary",
+    "## Rolling Summary To Archive",
     rollingSummary,
     "",
     "## Instructions",
-    "Create an ultra-concise archival summary (under 400 tokens) that preserves ONLY:",
-    "- Final conclusions and decisions (not the deliberation process)",
-    "- Established user preferences",
-    "- Critical context needed for future interactions",
-    "- Key outcomes of completed tasks",
+    "Create an ultra-concise archival summary (under 400 tokens) that keeps only durable information.",
+    "Prefer concrete outcomes over topic descriptions.",
+    "Drop routine tool logs, intermediate reasoning, repeated discussion, and temporary noise.",
+    "Use concise markdown with these sections when they have useful content:",
+    "- Stable Goal",
+    "- Final Decisions",
+    "- Durable Files / Modules",
+    "- Resolved Failures",
+    "- Outstanding Follow-up",
+    "- Last Known Working State",
     "",
-    "Drop all intermediate steps, failed attempts, and verbose details.",
-    "Output ONLY the archival summary, no preamble.",
-  ].join("\n");
+    "Merge with any existing archival memory.",
+    "Output ONLY the archival markdown summary, no preamble.",
+  );
+
+  return parts.join("\n");
 }
 
 // ─── 降级摘要 ────────────────────────────────────────────────────────────
@@ -229,10 +327,226 @@ function buildFallbackSummary(
   return lines.join("\n");
 }
 
-function buildFallbackArchival(rollingSummary: string): string {
-  // 简单截断到 1000 字符
-  if (rollingSummary.length <= 1000) return rollingSummary;
-  return rollingSummary.slice(0, 1000) + "\n... [archival truncated]";
+function buildFallbackArchival(existingArchivalSummary: string, rollingSummary: string): string {
+  const merged = [existingArchivalSummary, rollingSummary].filter(Boolean).join("\n\n---\n\n");
+  if (merged.length <= 1000) return merged;
+  return merged.slice(0, 1000) + "\n... [archival truncated]";
+}
+
+function mergeSummaryWithFallback(
+  existingSummary: string,
+  messages: Array<{ role: string; content: string }>,
+): string {
+  const fallback = buildFallbackSummary(messages);
+  if (!fallback) return existingSummary;
+  return existingSummary
+    ? `${existingSummary}\n\n---\n\n${fallback}`
+    : fallback;
+}
+
+function isPromptTooLongError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return [
+    "prompt too long",
+    "context length",
+    "maximum context length",
+    "context window",
+    "too many tokens",
+    "token limit",
+    "input is too long",
+    "input too long",
+    "context_length_exceeded",
+    "prompt is too long",
+    "request too large",
+    "413",
+  ].some((needle) => normalized.includes(needle));
+}
+
+type SummarizationAttemptResult = {
+  summary: string;
+  fallbackUsed: boolean;
+  warningTriggered: boolean;
+  blockingTriggered: boolean;
+  promptTooLongRetries: number;
+  failureReason?: string;
+};
+
+async function summarizeRollingWithBudget(
+  existingSummary: string,
+  newMessages: Array<{ role: string; content: string }>,
+  options: {
+    summarizer?: SummarizerFn;
+    warningThreshold?: number;
+    blockingThreshold?: number;
+    maxPromptTooLongRetries: number;
+  },
+): Promise<SummarizationAttemptResult> {
+  let warningTriggered = false;
+  let blockingTriggered = false;
+  let promptTooLongRetries = 0;
+  let failureReason: string | undefined;
+
+  if (!options.summarizer) {
+    return {
+      summary: mergeSummaryWithFallback(existingSummary, newMessages),
+      fallbackUsed: true,
+      warningTriggered,
+      blockingTriggered,
+      promptTooLongRetries,
+    };
+  }
+
+  let attemptSummary = existingSummary;
+  let remainingMessages = [...newMessages];
+  while (true) {
+    const prompt = buildRollingSummaryPrompt(attemptSummary, remainingMessages);
+    const promptTokens = estimateTokens(prompt);
+    if (options.warningThreshold && promptTokens >= options.warningThreshold) {
+      warningTriggered = true;
+    }
+    if (options.blockingThreshold && promptTokens >= options.blockingThreshold) {
+      blockingTriggered = true;
+      return {
+        summary: mergeSummaryWithFallback(attemptSummary, remainingMessages),
+        fallbackUsed: true,
+        warningTriggered,
+        blockingTriggered,
+        promptTooLongRetries,
+      };
+    }
+
+    try {
+      return {
+        summary: await options.summarizer(prompt),
+        fallbackUsed: false,
+        warningTriggered,
+        blockingTriggered,
+        promptTooLongRetries,
+      };
+    } catch (error) {
+      if (
+        isPromptTooLongError(error)
+        && promptTooLongRetries < options.maxPromptTooLongRetries
+        && remainingMessages.length > 1
+      ) {
+        promptTooLongRetries += 1;
+        const dropCount = Math.max(1, Math.floor(remainingMessages.length / 2));
+        const droppedMessages = remainingMessages.slice(0, dropCount);
+        remainingMessages = remainingMessages.slice(dropCount);
+        attemptSummary = mergeSummaryWithFallback(attemptSummary, droppedMessages);
+        continue;
+      }
+      failureReason = error instanceof Error ? error.message : String(error);
+      return {
+        summary: mergeSummaryWithFallback(attemptSummary, remainingMessages),
+        fallbackUsed: true,
+        warningTriggered,
+        blockingTriggered,
+        promptTooLongRetries,
+        failureReason,
+      };
+    }
+  }
+}
+
+async function summarizeArchivalWithBudget(
+  existingArchivalSummary: string,
+  rollingSummary: string,
+  options: {
+    summarizer?: SummarizerFn;
+    warningThreshold?: number;
+    blockingThreshold?: number;
+    maxPromptTooLongRetries: number;
+  },
+): Promise<SummarizationAttemptResult> {
+  let warningTriggered = false;
+  let blockingTriggered = false;
+  let promptTooLongRetries = 0;
+  let failureReason: string | undefined;
+
+  if (!options.summarizer) {
+    return {
+      summary: buildFallbackArchival(existingArchivalSummary, rollingSummary),
+      fallbackUsed: true,
+      warningTriggered,
+      blockingTriggered,
+      promptTooLongRetries,
+    };
+  }
+
+  let attemptArchivalSummary = existingArchivalSummary;
+  let attemptRollingSummary = rollingSummary;
+  while (true) {
+    const prompt = buildArchivalPrompt(attemptArchivalSummary, attemptRollingSummary);
+    const promptTokens = estimateTokens(prompt);
+    if (options.warningThreshold && promptTokens >= options.warningThreshold) {
+      warningTriggered = true;
+    }
+    if (options.blockingThreshold && promptTokens >= options.blockingThreshold) {
+      blockingTriggered = true;
+      return {
+        summary: buildFallbackArchival(attemptArchivalSummary, attemptRollingSummary),
+        fallbackUsed: true,
+        warningTriggered,
+        blockingTriggered,
+        promptTooLongRetries,
+      };
+    }
+
+    try {
+      return {
+        summary: await options.summarizer(prompt),
+        fallbackUsed: false,
+        warningTriggered,
+        blockingTriggered,
+        promptTooLongRetries,
+      };
+    } catch (error) {
+      if (
+        isPromptTooLongError(error)
+        && promptTooLongRetries < options.maxPromptTooLongRetries
+        && attemptRollingSummary.length > 256
+      ) {
+        promptTooLongRetries += 1;
+        const splitIndex = Math.max(1, Math.floor(attemptRollingSummary.length / 2));
+        const droppedPrefix = attemptRollingSummary.slice(0, splitIndex);
+        attemptRollingSummary = attemptRollingSummary.slice(splitIndex);
+        attemptArchivalSummary = buildFallbackArchival(attemptArchivalSummary, droppedPrefix);
+        continue;
+      }
+      failureReason = error instanceof Error ? error.message : String(error);
+      return {
+        summary: buildFallbackArchival(attemptArchivalSummary, attemptRollingSummary),
+        fallbackUsed: true,
+        warningTriggered,
+        blockingTriggered,
+        promptTooLongRetries,
+        failureReason,
+      };
+    }
+  }
+}
+
+function hashStringFNV1a(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function createMessagesFingerprint(
+  messages: Array<{ role: string; content: string }>,
+): string {
+  if (messages.length === 0) return "";
+  let combined = "";
+  for (const message of messages) {
+    combined += `${message.role}\u241f${message.content}\u241e`;
+  }
+  return `${messages.length}:${hashStringFNV1a(combined)}`;
 }
 
 // ─── 核心压缩逻辑 ────────────────────────────────────────────────────────
@@ -250,10 +564,15 @@ export async function compactIncremental(
   state: CompactionState,
   options?: CompactionOptions & { summarizer?: SummarizerFn; force?: boolean },
 ): Promise<CompactionResult> {
+  const normalizedState = normalizeCompactionState(state);
   const threshold = options?.tokenThreshold ?? 12000;
   const keepRecent = options?.keepRecentCount ?? 10;
   const margin = options?.safetyMargin ?? SAFETY_MARGIN;
   const archivalThreshold = options?.archivalThreshold ?? 2000;
+  const archivalMergeThreshold = options?.archivalMergeThreshold ?? ARCHIVAL_MERGE_THRESHOLD;
+  const warningThreshold = options?.warningThreshold;
+  const blockingThreshold = options?.blockingThreshold;
+  const maxPromptTooLongRetries = options?.maxPromptTooLongRetries ?? MAX_PROMPT_TOO_LONG_RETRIES;
   const force = options?.force === true;
 
   const originalTokens = estimateMessagesTokens(messages, margin);
@@ -265,7 +584,13 @@ export async function compactIncremental(
       compacted: false,
       originalTokens,
       compactedTokens: originalTokens,
-      state,
+      state: normalizedState,
+      deltaMessageCount: 0,
+      fallbackUsed: false,
+      rebuildTriggered: false,
+      promptTooLongRetries: 0,
+      warningTriggered: false,
+      blockingTriggered: false,
     };
   }
 
@@ -273,56 +598,105 @@ export async function compactIncremental(
   const splitIndex = messages.length - keepRecent;
   const overflowMessages = messages.slice(0, splitIndex);
   const recentMessages = messages.slice(splitIndex);
+  const overflowFingerprint = createMessagesFingerprint(overflowMessages);
+  const previousBoundary = Math.min(splitIndex, Math.max(
+    normalizedState.lastCompactedMessageCount,
+    normalizedState.compactedMessageCount,
+  ));
+  const hasExistingSummaryState = Boolean(
+    normalizedState.rollingSummary
+    || normalizedState.archivalSummary
+    || normalizedState.compactedMessageCount > 0
+    || normalizedState.lastCompactedMessageCount > 0,
+  );
+  const previousBoundaryFingerprint = previousBoundary > 0
+    ? createMessagesFingerprint(messages.slice(0, previousBoundary))
+    : "";
+  const boundaryInvalid =
+    hasExistingSummaryState
+    && (
+      previousBoundary !== Math.max(normalizedState.lastCompactedMessageCount, normalizedState.compactedMessageCount)
+      || (previousBoundary > 0 && !normalizedState.lastCompactedMessageFingerprint)
+      || (previousBoundary > 0 && normalizedState.lastCompactedMessageFingerprint !== previousBoundaryFingerprint)
+    );
+  const rebuildState = boundaryInvalid ? createEmptyCompactionState() : normalizedState;
+  const incrementalStart = boundaryInvalid ? 0 : previousBoundary;
+  const newOverflowMessages = overflowMessages.slice(incrementalStart);
 
-  // 预压缩工具结果等长内容
-  const compressed = precompressMessages(overflowMessages);
-
-  // ── Tier 2: 更新 Rolling Summary ──
-  let newRollingSummary: string;
-  if (options?.summarizer) {
-    try {
-      const prompt = buildRollingSummaryPrompt(state.rollingSummary, compressed);
-      newRollingSummary = await options.summarizer(prompt);
-    } catch {
-      // 模型不可用，降级为文本截断
-      const fallback = buildFallbackSummary(compressed);
-      newRollingSummary = state.rollingSummary
-        ? `${state.rollingSummary}\n\n---\n\n${fallback}`
-        : fallback;
-    }
-  } else {
-    const fallback = buildFallbackSummary(compressed);
-    newRollingSummary = state.rollingSummary
-      ? `${state.rollingSummary}\n\n---\n\n${fallback}`
-      : fallback;
+  if (newOverflowMessages.length === 0 && hasExistingSummaryState && !boundaryInvalid) {
+    const compactedMessages = buildCompactedMessages(normalizedState, recentMessages);
+    return {
+      messages: compactedMessages,
+      compacted: false,
+      originalTokens,
+      compactedTokens: estimateMessagesTokens(compactedMessages, margin),
+      state: normalizedState,
+      deltaMessageCount: 0,
+      fallbackUsed: false,
+      rebuildTriggered: false,
+      promptTooLongRetries: 0,
+      warningTriggered: false,
+      blockingTriggered: false,
+    };
   }
 
+  // 预压缩工具结果等长内容
+  const compressed = precompressMessages(newOverflowMessages);
+  let fallbackUsed = false;
+  let warningTriggered = false;
+  let blockingTriggered = false;
+  let promptTooLongRetries = 0;
+  let failureReason: string | undefined;
+
+  // ── Tier 2: 更新 Rolling Summary ──
+  const rollingSummaryResult = await summarizeRollingWithBudget(rebuildState.rollingSummary, compressed, {
+    summarizer: options?.summarizer,
+    warningThreshold,
+    blockingThreshold,
+    maxPromptTooLongRetries,
+  });
+  let newRollingSummary = rollingSummaryResult.summary;
+  fallbackUsed = rollingSummaryResult.fallbackUsed;
+  warningTriggered = rollingSummaryResult.warningTriggered;
+  blockingTriggered = rollingSummaryResult.blockingTriggered;
+  promptTooLongRetries = rollingSummaryResult.promptTooLongRetries;
+  failureReason = rollingSummaryResult.failureReason;
+
   // ── Tier 1: 检查是否需要归档压缩 ──
-  let newArchivalSummary = state.archivalSummary;
+  let newArchivalSummary = rebuildState.archivalSummary;
   let tier: "rolling" | "archival" = "rolling";
+  let rollingSummaryMergeCount = newRollingSummary
+    ? Math.max(1, rebuildState.rollingSummaryMergeCount + 1)
+    : 0;
   const rollingSummaryTokens = estimateTokens(newRollingSummary);
 
-  if (rollingSummaryTokens > archivalThreshold) {
+  if (newRollingSummary && (rollingSummaryTokens > archivalThreshold || rollingSummaryMergeCount >= archivalMergeThreshold)) {
     tier = "archival";
-    if (options?.summarizer) {
-      try {
-        const archivalPrompt = buildArchivalPrompt(newRollingSummary);
-        newArchivalSummary = await options.summarizer(archivalPrompt);
-      } catch {
-        newArchivalSummary = buildFallbackArchival(newRollingSummary);
-      }
-    } else {
-      newArchivalSummary = buildFallbackArchival(newRollingSummary);
-    }
+    const archivalSummaryResult = await summarizeArchivalWithBudget(rebuildState.archivalSummary, newRollingSummary, {
+      summarizer: options?.summarizer,
+      warningThreshold,
+      blockingThreshold,
+      maxPromptTooLongRetries,
+    });
+    newArchivalSummary = archivalSummaryResult.summary;
+    fallbackUsed = fallbackUsed || archivalSummaryResult.fallbackUsed;
+    warningTriggered = warningTriggered || archivalSummaryResult.warningTriggered;
+    blockingTriggered = blockingTriggered || archivalSummaryResult.blockingTriggered;
+    promptTooLongRetries += archivalSummaryResult.promptTooLongRetries;
+    failureReason = archivalSummaryResult.failureReason ?? failureReason;
     // 归档后清空 Rolling Summary
     newRollingSummary = "";
+    rollingSummaryMergeCount = 0;
   }
 
   // 构建新状态
   const newState: CompactionState = {
     rollingSummary: newRollingSummary,
     archivalSummary: newArchivalSummary,
-    compactedMessageCount: state.compactedMessageCount + overflowMessages.length,
+    compactedMessageCount: splitIndex,
+    lastCompactedMessageCount: splitIndex,
+    lastCompactedMessageFingerprint: overflowFingerprint,
+    rollingSummaryMergeCount,
     lastCompactedAt: Date.now(),
   };
 
@@ -337,6 +711,13 @@ export async function compactIncremental(
     compactedTokens,
     state: newState,
     tier,
+    deltaMessageCount: newOverflowMessages.length,
+    fallbackUsed,
+    rebuildTriggered: boundaryInvalid,
+    promptTooLongRetries,
+    warningTriggered,
+    blockingTriggered,
+    failureReason,
   };
 }
 

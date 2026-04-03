@@ -2,6 +2,7 @@ import type { JsonObject } from "@belldandy/protocol";
 
 export { OpenAIChatAgent, type OpenAIChatAgentOptions } from "./openai.js";
 export { ToolEnabledAgent, type ToolEnabledAgentOptions } from "./tool-agent.js";
+export { microcompactMessages, type MicrocompactMessage, type MicrocompactOptions, type MicrocompactResult } from "./microcompact.js";
 
 // Failover（模型容灾）
 export {
@@ -51,10 +52,56 @@ export {
   type Conversation,
   type ConversationMessage,
   type ConversationStoreOptions,
+  type CompactBoundaryRecord,
+  type ForcePartialCompactOptions,
+  type PartialCompactDirection,
+  type PartialCompactionViewRecord,
   type SessionDigestRecord,
   type SessionDigestRefreshOptions,
   type SessionDigestStatus,
+  type SessionMemoryRecord,
+  type PersistedConversationSummary,
+  type ToolDigestRecord,
 } from "./conversation.js";
+export {
+  type SessionTranscriptCompactBoundaryEvent,
+  type SessionTranscriptCompactBoundaryPayload,
+  type SessionTranscriptEvent,
+  type SessionTranscriptEventType,
+  type SessionTranscriptMessageEvent,
+  type SessionTranscriptMessagePayload,
+  type SessionTranscriptPartialCompactionViewEvent,
+  type SessionTranscriptPartialCompactionViewPayload,
+} from "./session-transcript.js";
+export {
+  type TranscriptRelinkArtifacts,
+  type TranscriptRelinkBoundary,
+  type TranscriptRelinkInput,
+  type TranscriptRelinkPartialCompactionView,
+  type TranscriptRelinkResult,
+} from "./session-transcript-relink.js";
+export {
+  type SessionRestoreDiagnostics,
+  type SessionRestoreHistoryMessage,
+  type SessionRestoreView,
+} from "./session-restore.js";
+export {
+  SESSION_TRANSCRIPT_EXPORT_SCHEMA_VERSION,
+  buildSessionTranscriptExportBundle,
+  type SessionTranscriptExportBundle,
+  type SessionTranscriptExportRedactionMode,
+} from "./session-transcript-export.js";
+export {
+  SESSION_TIMELINE_SCHEMA_VERSION,
+  buildSessionTimelineProjection,
+  type SessionTimelineCompactBoundaryItem,
+  type SessionTimelineItem,
+  type SessionTimelineMessageItem,
+  type SessionTimelinePartialCompactionItem,
+  type SessionTimelineProjection,
+  type SessionTimelineRestoreResultItem,
+  type SessionTimelineWarningCode,
+} from "./session-timeline.js";
 
 export type AgentContentPart =
   | { type: "text"; text: string }
@@ -271,3 +318,9 @@ export {
   type CompactionState,
   type SummarizerFn,
 } from "./compaction.js";
+export {
+  CompactionRuntimeTracker,
+  type CompactionRuntimeReport,
+  type CompactionRuntimeSource,
+  type CompactionRuntimeSkipDecision,
+} from "./compaction-runtime.js";

@@ -202,6 +202,7 @@ export async function handleMessageSendWithQueryRuntime(
       timestampMs: userMessageTimestamp,
       clientContext: request.params.clientContext,
     });
+    await runtimeDeps.conversationStore.waitForPendingPersistence(conversationId);
 
     queryRuntime.mark("user_message_persisted", {
       conversationId,
@@ -1036,6 +1037,7 @@ async function finalizeMessageSendSuccess(input: {
       },
     );
     assistantTimestamp = assistantMessage.timestamp;
+    await ctx.runtime.conversationStore.waitForPendingPersistence(input.conversationId);
   }
 
   applyMessageSendCompletionPolicy({

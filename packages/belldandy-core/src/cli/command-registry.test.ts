@@ -2,6 +2,7 @@ import { defineCommand } from "citty";
 import { describe, expect, it } from "vitest";
 import { CommandRegistry } from "./command-registry.js";
 import type { CommandDescriptor } from "./command-types.js";
+import { getRootCLICommands } from "./builtin-command-registry.js";
 
 function createDescriptor(
   overrides: Partial<CommandDescriptor> & Pick<CommandDescriptor, "name">,
@@ -95,5 +96,17 @@ describe("CommandRegistry", () => {
     expect(Object.keys(subCommands)).toEqual(["doctor"]);
     expect(meta?.name).toBe("doctor");
     expect(meta?.description).toBe("Run diagnostics");
+  });
+
+  it("exposes builtin conversation command group", async () => {
+    const subCommands = getRootCLICommands();
+    const conversationLoader = subCommands.conversation as () => Promise<ReturnType<typeof defineCommand>>;
+    const loadedConversationCommand = await conversationLoader();
+    const meta = typeof loadedConversationCommand.meta === "function"
+      ? await loadedConversationCommand.meta()
+      : await loadedConversationCommand.meta;
+
+    expect(Object.keys(subCommands)).toContain("conversation");
+    expect(meta?.name).toBe("conversation");
   });
 });

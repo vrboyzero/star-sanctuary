@@ -311,3 +311,70 @@ describe("MCPClient result normalization", () => {
     expect(client.getState().diagnostics?.lastRecoveryAt).toBeInstanceOf(Date);
   });
 });
+
+describe("MCPClient capability discovery", () => {
+  function createDiscoveryClient() {
+    const client = new MCPClient({
+      id: "test-server",
+      name: "Test Server",
+      transport: {
+        type: "sse",
+        url: "http://127.0.0.1:3000/sse",
+      },
+    });
+    const internals = client as unknown as {
+      client: {
+        listTools: () => Promise<{ tools?: Array<Record<string, unknown>> }>;
+        listResources: () => Promise<{ resources?: Array<Record<string, unknown>> }>;
+      };
+    };
+    return { client, internals };
+  }
+
+  it("ignores -32601 for resources/list during capability discovery", async () => {
+    const { client, internals } = createDiscoveryClient();
+    const methodNotFound = Object.assign(new Error("JSON-RPC error -32601: Method not found"), { code: -32601 });
+    internals.client = {
+      listTools: vi.fn().mockResolvedValue({
+        tools: [{
+          name: "demo_tool",
+          description: "demo",
+          inputSchema: { type: "object" },
+        }],
+      }),
+      listResources: vi.fn().mockRejectedValue(methodNotFound),
+    };
+
+    await (client as unknown as { discoverCapabilities: () => Promise<void> }).discoverCapabilities();
+
+    const state = client.getState();
+    expect(state.tools).toHaveLength(1);
+    expect(state.resources).toHaveLength(0);
+    expect(state.diagnostics?.lastErrorMessage).toBeUndefined();
+    expect(state.diagnostics?.lastErrorSource).toBeUndefined();
+  });
+
+  it("ignores -32601 for tools/list during capability discovery and still discovers resources", async () => {
+    const { client, internals } = createDiscoveryClient();
+    const methodNotFound = Object.assign(new Error("JSON-RPC error -32601: Method not found"), { code: -32601 });
+    internals.client = {
+      listTools: vi.fn().mockRejectedValue(methodNotFound),
+      listResources: vi.fn().mockResolvedValue({
+        resources: [{
+          uri: "file:///tmp/demo.txt",
+          name: "demo-resource",
+          description: "demo resource",
+          mimeType: "text/plain",
+        }],
+      }),
+    };
+
+    await (client as unknown as { discoverCapabilities: () => Promise<void> }).discoverCapabilities();
+
+    const state = client.getState();
+    expect(state.tools).toHaveLength(0);
+    expect(state.resources).toHaveLength(1);
+    expect(state.diagnostics?.lastErrorMessage).toBeUndefined();
+    expect(state.diagnostics?.lastErrorSource).toBeUndefined();
+  });
+});

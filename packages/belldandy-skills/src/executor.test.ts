@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { Tool, ToolCallRequest, ToolContext, ToolCallResult } from "./types.js";
 import { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
 import { withToolContract } from "./tool-contract.js";
+import { createToolSearchTool } from "./builtin/tool-search.js";
 
 // Mock 工具：echo
 const echoTool: Tool = {
@@ -661,6 +662,114 @@ describe("ToolExecutor", () => {
 
     expect(warns).toHaveLength(0);
     expect(executor.hasTool("echo")).toBe(true);
+  });
+
+  it("should hide deferred tools from schema injection until they are loaded", async () => {
+    const deferredTool: Tool = {
+      definition: {
+        name: "write_notes",
+        description: "Write notes into a scratch file",
+        parameters: {
+          type: "object",
+          properties: {
+            content: { type: "string", description: "content" },
+          },
+          required: ["content"],
+        },
+      },
+      async execute(args): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "write_notes",
+          success: true,
+          output: String(args.content ?? ""),
+          durationMs: 0,
+        };
+      },
+    };
+
+    const loadedState = new Map<string, string[]>();
+    const executor = new ToolExecutor({
+      tools: [echoTool, deferredTool],
+      workspaceRoot: "/tmp/test",
+      deferredToolNames: ["write_notes"],
+      conversationStore: {
+        getHistory: () => [],
+        getLoadedToolNames: (conversationId) => loadedState.get(conversationId) ?? [],
+        setLoadedToolNames: (conversationId, toolNames) => {
+          loadedState.set(conversationId, toolNames);
+        },
+        setRoomMembersCache: () => {},
+        getRoomMembersCache: () => undefined,
+        clearRoomMembersCache: () => {},
+        recordTaskTokenResult: () => {},
+        getTaskTokenResults: () => [],
+      },
+    });
+
+    expect(executor.getDefinitions("default", "conv-1").map((item) => item.function.name)).toEqual(["echo"]);
+    expect(executor.getCatalogEntries("default", "conv-1").find((item) => item.name === "write_notes")).toMatchObject({
+      loadingMode: "deferred",
+      loaded: false,
+    });
+
+    await executor.loadDeferredTools("conv-1", ["write_notes"]);
+
+    expect(executor.getDefinitions("default", "conv-1").map((item) => item.function.name)).toEqual(["echo", "write_notes"]);
+  });
+
+  it("tool_search should search deferred tools and load selected schemas for the next turn", async () => {
+    const deferredTool: Tool = {
+      definition: {
+        name: "web_search_deep",
+        description: "Search deep web knowledge",
+        shortDescription: "Search the web deeply",
+        keywords: ["search", "web", "research"],
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "query" },
+          },
+          required: ["query"],
+        },
+      },
+      async execute(args): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "web_search_deep",
+          success: true,
+          output: String(args.query ?? ""),
+          durationMs: 0,
+        };
+      },
+    };
+
+    const executor = new ToolExecutor({
+      tools: [echoTool, deferredTool],
+      workspaceRoot: "/tmp/test",
+      deferredToolNames: ["web_search_deep"],
+    });
+    executor.registerTool(createToolSearchTool({
+      getCatalogEntries: (conversationId?: string, agentId?: string) => executor.getCatalogEntries(agentId, conversationId),
+      loadDeferredTools: (conversationId: string, toolNames: string[]) => executor.loadDeferredTools(conversationId, toolNames),
+    }));
+
+    const searchResult = await executor.execute(
+      {
+        id: "req-search",
+        name: "tool_search",
+        arguments: {
+          query: "research web",
+          select: ["web_search_deep"],
+        },
+      },
+      "conv-1",
+    );
+
+    expect(searchResult.success).toBe(true);
+    expect(searchResult.output).toContain("Loaded tools for next turn");
+    expect(searchResult.output).toContain("web_search_deep");
+    expect(executor.getDefinitions("default", "conv-1").map((item) => item.function.name)).toContain("web_search_deep");
   });
 });
 

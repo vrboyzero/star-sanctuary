@@ -20,7 +20,7 @@ import {
   type DurableExtractionRecord,
 } from "@belldandy/memory";
 import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig } from "@belldandy/protocol";
-import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile } from "@belldandy/agent";
+import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile, type CompactionRuntimeReport, type SessionTimelineProjection, type SessionTranscriptExportBundle } from "@belldandy/agent";
 import type {
   GatewayFrame,
   GatewayReqFrame,
@@ -62,11 +62,24 @@ import { buildExtensionRuntimeReport } from "./extension-runtime.js";
 import type { ExtensionHostState } from "./extension-host.js";
 import { handleMessageSendWithQueryRuntime, MessageSendConfigurationError } from "./query-runtime-message-send.js";
 import {
+  handleConversationRestoreWithQueryRuntime,
+  handleConversationTranscriptExportWithQueryRuntime,
+  handleConversationTimelineGetWithQueryRuntime,
   handleConversationDigestGetWithQueryRuntime,
   handleConversationDigestRefreshWithQueryRuntime,
   handleConversationMemoryExtractionGetWithQueryRuntime,
   handleConversationMemoryExtractWithQueryRuntime,
 } from "./query-runtime-memory.js";
+import {
+  applyTimelineProjectionFilter,
+  applyTranscriptExportProjection,
+  normalizeConversationIdPrefix,
+  normalizeTimelineKinds,
+  normalizeTranscriptEventTypes,
+  normalizeTranscriptRestoreView,
+  parsePositiveInteger,
+} from "./conversation-debug-projection.js";
+import { listRecentConversationExports } from "./conversation-export-index.js";
 import {
   handleSubTaskArchiveWithQueryRuntime,
   handleSubTaskGetWithQueryRuntime,
@@ -125,6 +138,7 @@ export type GatewayServerOptions = {
   modelFallbacks?: ModelProfile[];
   conversationStoreOptions?: { maxHistory?: number; ttlSeconds?: number };
   conversationStore?: ConversationStore; // [NEW] Allow passing shared instance
+  getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
   onActivity?: () => void;
   /** 可选：统一 Logger，未提供时使用 console */
   logger?: BelldandyLogger;
@@ -169,6 +183,12 @@ export type GatewayServer = {
   host: string;
   close: () => Promise<void>;
   broadcast: (frame: GatewayEventFrame) => void;
+  requestDurableExtractionFromDigest: (input: {
+    conversationId: string;
+    source: string;
+    threshold?: number;
+    force?: boolean;
+  }) => Promise<void>;
 };
 
 type GatewayLog = {
@@ -240,7 +260,11 @@ const DEFAULT_METHODS = [
   "workspace.readSource",
   "workspace.write",
   "context.compact",
+  "context.compact.partial",
   "conversation.meta",
+  "conversation.restore",
+  "conversation.transcript.export",
+  "conversation.timeline.get",
   "conversation.digest.get",
   "conversation.digest.refresh",
   "conversation.memory.extract",
@@ -463,6 +487,22 @@ async function statIfExists(targetPath: string): Promise<fs.Stats | null> {
     }
     throw error;
   }
+}
+
+function hasTranscriptExportArtifacts(bundle: SessionTranscriptExportBundle | undefined): boolean {
+  if (!bundle) {
+    return false;
+  }
+  return bundle.summary.eventCount > 0 || bundle.restore.rawMessages.length > 0;
+}
+
+function hasTimelineArtifacts(timeline: SessionTimelineProjection | undefined): boolean {
+  if (!timeline) {
+    return false;
+  }
+  return timeline.summary.eventCount > 0
+    || timeline.summary.messageCount > 0
+    || timeline.items.some((item) => item.kind !== "restore_result");
 }
 
 function mergeEnvContentIntoConfig(raw: string, config: Record<string, string>): void {
@@ -725,6 +765,7 @@ function toChatMessageMeta(timestampMs: number, isLatest = false): ChatMessageMe
 
 function normalizeConversationMessage(message: ConversationMessage, isLatest: boolean): ConversationMetaMessage {
   return {
+    id: message.id,
     role: message.role,
     content: message.content,
     timestampMs: message.timestamp,
@@ -1122,11 +1163,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       stateDir,
       extractor: createDurableExtractionSurface(durableExtractionManager),
       getMessages: async (conversationId) => {
-        const conversation = conversationStore.get(conversationId);
-        return (conversation?.messages ?? []).map((item) => ({
-          role: item.role,
-          content: item.content,
-        }));
+        return conversationStore.getCanonicalExtractionView(conversationId);
       },
       getDigest: async (conversationId) => {
         const digest = await conversationStore.getSessionDigest(conversationId);
@@ -1416,6 +1453,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         stopSubTask: opts.stopSubTask,
         tokenUsageUploadConfig,
         broadcastEvent,
+        getCompactionRuntimeReport: opts.getCompactionRuntimeReport,
         queryRuntimeTraceStore,
         log,
       });
@@ -1433,6 +1471,51 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   const address = server.address();
   const port =
     typeof address === "object" && address && "port" in address ? Number(address.port) : opts.port;
+  const requestDurableExtractionFromDigest = async (input: {
+    conversationId: string;
+    source: string;
+    threshold?: number;
+    force?: boolean;
+  }): Promise<void> => {
+    if (!durableExtractionRuntime?.isAvailable()) {
+      return;
+    }
+    try {
+      await refreshConversationDigestAndBroadcast(
+        conversationStore,
+        {
+          conversationId: input.conversationId,
+          source: input.source,
+          threshold: input.threshold,
+          force: input.force === true,
+        },
+        undefined,
+        durableExtractionRuntime,
+        requestDurableExtraction,
+        memoryUsageAccounting,
+        memoryBudgetGuard,
+        false,
+      );
+    } catch (error) {
+      if (!(error instanceof MemoryBudgetExceededError)) {
+        throw error;
+      }
+      log.warn("memory-evolution", "Session digest refresh budget exceeded during durable extraction scheduling; reusing current digest snapshot", {
+        conversationId: input.conversationId,
+        source: input.source,
+        retryAfterMs: error.decision.retryAfterMs,
+        observedRuns: error.decision.observedRuns,
+        maxRuns: error.decision.maxRuns,
+        windowMs: error.decision.windowMs,
+      });
+    }
+    const digest = await conversationStore.getSessionDigest(input.conversationId, { threshold: input.threshold });
+    await (requestDurableExtraction ?? durableExtractionRuntime.requestExtraction.bind(durableExtractionRuntime))({
+      conversationId: input.conversationId,
+      source: input.source,
+      digest: toDurableExtractionDigestSnapshot(digest),
+    });
+  };
 
   return {
     port,
@@ -1444,6 +1527,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     },
     broadcast: broadcastEvent,
+    requestDurableExtractionFromDigest,
   };
 }
 
@@ -1532,6 +1616,7 @@ async function refreshConversationDigestAndBroadcast(
   }) => Promise<DurableExtractionRecord | undefined>,
   memoryUsageAccounting?: MemoryRuntimeUsageAccounting,
   memoryBudgetGuard?: MemoryRuntimeBudgetGuard,
+  scheduleDurableExtraction = true,
 ): Promise<{
   digest: Awaited<ReturnType<ConversationStore["refreshSessionDigest"]>>["digest"];
   updated: boolean;
@@ -1601,7 +1686,7 @@ async function refreshConversationDigestAndBroadcast(
       digest: result.digest,
     },
   });
-  if (result.updated && durableExtractionRuntime?.isAvailable()) {
+  if (scheduleDurableExtraction && result.updated && durableExtractionRuntime?.isAvailable()) {
     void (requestDurableExtraction ?? durableExtractionRuntime.requestExtraction.bind(durableExtractionRuntime))({
       conversationId: payload.conversationId,
       source: payload.source,
@@ -1667,6 +1752,7 @@ async function handleReq(
     stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
     tokenUsageUploadConfig: TokenUsageUploadConfig;
     broadcastEvent?: (frame: GatewayEventFrame) => void;
+    getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
     queryRuntimeTraceStore: QueryRuntimeTraceStore;
   },
 ): Promise<GatewayResFrame | null> {
@@ -1684,7 +1770,11 @@ async function handleReq(
     "workspace.readSource",
     "workspace.list",
     "context.compact",
+    "context.compact.partial",
     "conversation.meta",
+    "conversation.restore",
+    "conversation.transcript.export",
+    "conversation.timeline.get",
     "conversation.digest.get",
     "conversation.digest.refresh",
     "conversation.memory.extract",
@@ -2121,6 +2211,31 @@ async function handleReq(
     }
 
     case "system.doctor": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const conversationId = typeof params.conversationId === "string" ? params.conversationId.trim() : "";
+      const includeTranscript = params.includeTranscript === true;
+      const includeTimeline = params.includeTimeline === true;
+      const timelinePreviewChars = typeof params.timelinePreviewChars === "number" && Number.isFinite(params.timelinePreviewChars)
+        ? Math.max(24, Math.floor(params.timelinePreviewChars))
+        : undefined;
+      const transcriptEventTypes = normalizeTranscriptEventTypes(Array.isArray(params.transcriptEventTypes)
+        ? params.transcriptEventTypes.filter((value): value is string => typeof value === "string")
+        : undefined);
+      const transcriptEventLimit = parsePositiveInteger(typeof params.transcriptEventLimit === "number" ? params.transcriptEventLimit : undefined);
+      const transcriptRestoreView = normalizeTranscriptRestoreView(typeof params.transcriptRestoreView === "string"
+        ? params.transcriptRestoreView.trim()
+        : undefined);
+      const timelineKinds = normalizeTimelineKinds(Array.isArray(params.timelineKinds)
+        ? params.timelineKinds.filter((value): value is string => typeof value === "string")
+        : undefined);
+      const timelineLimit = parsePositiveInteger(typeof params.timelineLimit === "number" ? params.timelineLimit : undefined);
+      const includeConversationCatalog = params.includeConversationCatalog === true;
+      const includeRecentExports = params.includeRecentExports === true;
+      const conversationIdPrefix = normalizeConversationIdPrefix(typeof params.conversationIdPrefix === "string"
+        ? params.conversationIdPrefix
+        : undefined);
+      const conversationListLimit = parsePositiveInteger(typeof params.conversationListLimit === "number" ? params.conversationListLimit : undefined);
+      const recentExportLimit = parsePositiveInteger(typeof params.recentExportLimit === "number" ? params.recentExportLimit : undefined);
       type MCPDoctorDiagnostics = NonNullable<Awaited<ReturnType<typeof import("./mcp/index.js")["getMCPDiagnostics"]>>> & {
         loadError?: string;
       };
@@ -2147,6 +2262,7 @@ async function handleReq(
 
       const memoryRuntime = await buildMemoryRuntimeDoctorReport({
         conversationStore: ctx.conversationStore,
+        compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
         durableExtractionRuntime: ctx.durableExtractionRuntime,
         stateDir: ctx.stateDir,
         teamSharedMemoryEnabled: process.env.BELLDANDY_TEAM_SHARED_MEMORY_ENABLED === "true",
@@ -2250,6 +2366,19 @@ async function handleReq(
           ? `Available, but rate limited: ${formatRateLimitState(memoryRuntime.sessionDigest.rateLimit)}`
           : `Available (${formatRateLimitState(memoryRuntime.sessionDigest.rateLimit)})`,
       });
+      const compactionRuntime = memoryRuntime.compactionRuntime;
+      if (compactionRuntime) {
+        checks.push({
+          id: "compaction_runtime",
+          name: "Compaction Runtime",
+          status: compactionRuntime.circuitBreaker.open || compactionRuntime.totals.failures > 0
+            ? "warn"
+            : "pass",
+          message: compactionRuntime.circuitBreaker.open
+            ? `Circuit open (${compactionRuntime.circuitBreaker.remainingSkips} skips remaining), failures=${compactionRuntime.totals.failures}, PTL retries=${compactionRuntime.totals.promptTooLongRetries}`
+            : `attempts=${compactionRuntime.totals.attempts}, warnings=${compactionRuntime.totals.warningHits}, blocking=${compactionRuntime.totals.blockingHits}, PTL retries=${compactionRuntime.totals.promptTooLongRetries}`,
+        });
+      }
 
       const durableAvailability = memoryRuntime.durableExtraction.availability;
       const durableRunRateLimit = memoryRuntime.durableExtraction.rateLimit.run;
@@ -2351,11 +2480,161 @@ async function handleReq(
               : "Unavailable",
       });
 
+      let conversationDebug: {
+        conversationId: string;
+        available: boolean;
+        messageCount: number;
+        updatedAt?: number;
+        requested: {
+          includeTranscript: boolean;
+          includeTimeline: boolean;
+          timelinePreviewChars?: number;
+        };
+        transcriptExport?: SessionTranscriptExportBundle;
+        timeline?: SessionTimelineProjection;
+      } | undefined;
+      let conversationCatalog:
+        | {
+          items: Awaited<ReturnType<ConversationStore["listPersistedConversations"]>>;
+          filter: {
+            conversationIdPrefix?: string;
+            limit?: number;
+          };
+        }
+        | undefined;
+      let recentConversationExports:
+        | {
+          items: Awaited<ReturnType<typeof listRecentConversationExports>>;
+          filter: {
+            conversationIdPrefix?: string;
+            limit?: number;
+          };
+        }
+        | undefined;
+
+      if (conversationId) {
+        const conversationSnapshot = ctx.conversationStore.get(conversationId);
+        const transcriptExportRaw = includeTranscript
+          ? await ctx.conversationStore.buildConversationTranscriptExport(conversationId, { mode: "internal" })
+          : undefined;
+        const timelineRaw = includeTimeline
+          ? await ctx.conversationStore.buildConversationTimeline(conversationId, { previewChars: timelinePreviewChars })
+          : undefined;
+        const transcriptExport = transcriptExportRaw
+          ? applyTranscriptExportProjection(transcriptExportRaw, {
+            eventTypes: transcriptEventTypes,
+            eventLimit: transcriptEventLimit,
+            restoreView: transcriptRestoreView,
+          })
+          : undefined;
+        const timeline = timelineRaw
+          ? applyTimelineProjectionFilter(timelineRaw, {
+            kinds: timelineKinds,
+            limit: timelineLimit,
+          })
+          : undefined;
+        const available = Boolean(conversationSnapshot)
+          || hasTranscriptExportArtifacts(transcriptExport)
+          || hasTimelineArtifacts(timeline);
+        const messageCount = conversationSnapshot?.messages.length ?? transcriptExport?.restore.rawMessages.length ?? 0;
+        const details: string[] = [];
+        if (messageCount > 0) {
+          details.push(`${messageCount} messages`);
+        }
+        if (includeTranscript && transcriptExport) {
+          details.push(`transcript ${transcriptExport.summary.eventCount} events`);
+        }
+        if (includeTimeline && timeline) {
+          details.push(`timeline ${timeline.summary.itemCount} items`);
+        }
+        if (details.length === 0) {
+          details.push("metadata only");
+        }
+
+        checks.push({
+          id: "conversation_debug",
+          name: "Conversation Debug",
+          status: available ? "pass" : "warn",
+          message: available
+            ? `${conversationId} available (${details.join(", ")})`
+            : `${conversationId} not found or transcript data is empty`,
+        });
+
+        conversationDebug = {
+          conversationId,
+          available,
+          messageCount,
+          updatedAt: conversationSnapshot?.updatedAt,
+          requested: {
+            includeTranscript,
+            includeTimeline,
+            ...(transcriptEventTypes ? { transcriptEventTypes } : {}),
+            ...(typeof transcriptEventLimit === "number" ? { transcriptEventLimit } : {}),
+            ...(transcriptRestoreView ? { transcriptRestoreView } : {}),
+            ...(timelineKinds ? { timelineKinds } : {}),
+            ...(typeof timelineLimit === "number" ? { timelineLimit } : {}),
+            ...(includeTimeline ? { timelinePreviewChars: timelinePreviewChars ?? 120 } : {}),
+          },
+          ...(includeTranscript ? { transcriptExport } : {}),
+          ...(includeTimeline ? { timeline } : {}),
+        };
+      }
+      if (includeConversationCatalog) {
+        const items = await ctx.conversationStore.listPersistedConversations({
+          conversationIdPrefix,
+          limit: conversationListLimit,
+        });
+        checks.push({
+          id: "conversation_catalog",
+          name: "Conversation Catalog",
+          status: "pass",
+          message: `${items.length} exportable conversations${conversationIdPrefix ? ` for prefix ${conversationIdPrefix}` : ""}`,
+        });
+        conversationCatalog = {
+          items,
+          filter: {
+            ...(conversationIdPrefix ? { conversationIdPrefix } : {}),
+            ...(typeof conversationListLimit === "number" ? { limit: conversationListLimit } : {}),
+          },
+        };
+      }
+      if (includeRecentExports) {
+        const items = await listRecentConversationExports({
+          stateDir: ctx.stateDir,
+          conversationIdPrefix,
+          limit: recentExportLimit,
+        });
+        checks.push({
+          id: "conversation_export_index",
+          name: "Conversation Export Index",
+          status: "pass",
+          message: `${items.length} recent export records${conversationIdPrefix ? ` for prefix ${conversationIdPrefix}` : ""}`,
+        });
+        recentConversationExports = {
+          items,
+          filter: {
+            ...(conversationIdPrefix ? { conversationIdPrefix } : {}),
+            ...(typeof recentExportLimit === "number" ? { limit: recentExportLimit } : {}),
+          },
+        };
+      }
+
       return {
         type: "res",
         id: req.id,
         ok: true,
-        payload: { checks, memoryRuntime, extensionRuntime, extensionMarketplace, extensionGovernance, queryRuntime, mcpRuntime },
+        payload: {
+          checks,
+          memoryRuntime,
+          extensionRuntime,
+          extensionMarketplace,
+          extensionGovernance,
+          queryRuntime,
+          mcpRuntime,
+          ...(conversationDebug ? { conversationDebug } : {}),
+          ...(conversationCatalog ? { conversationCatalog } : {}),
+          ...(recentConversationExports ? { recentConversationExports } : {}),
+        },
       };
     }
 
@@ -3849,6 +4128,50 @@ async function handleReq(
             originalTokens: result.originalTokens,
             compactedTokens: result.compactedTokens,
             tier: result.tier,
+            boundary: result.boundary,
+          },
+        };
+      } catch (err) {
+        return { type: "res", id: req.id, ok: false, error: { code: "compact_failed", message: String(err) } };
+      }
+    }
+
+    case "context.compact.partial": {
+      const params = req.params as {
+        conversationId?: string;
+        direction?: string;
+        pivotMessageId?: string;
+        pivotIndex?: number;
+      } | undefined;
+      const conversationId = params?.conversationId;
+      const direction = params?.direction;
+
+      if (!conversationId || typeof conversationId !== "string") {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+      if (direction !== "up_to" && direction !== "from") {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "direction must be 'up_to' or 'from'" } };
+      }
+
+      try {
+        const result = await ctx.conversationStore.forcePartialCompact(conversationId, {
+          direction,
+          pivotMessageId: typeof params?.pivotMessageId === "string" ? params.pivotMessageId : undefined,
+          pivotIndex: typeof params?.pivotIndex === "number" && Number.isFinite(params.pivotIndex)
+            ? params.pivotIndex
+            : undefined,
+        });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            compacted: result.compacted,
+            direction: result.direction,
+            originalTokens: result.originalTokens,
+            compactedTokens: result.compactedTokens,
+            tier: result.tier,
+            boundary: result.boundary,
           },
         };
       } catch (err) {
@@ -3876,8 +4199,107 @@ async function handleReq(
           conversationId,
           messages: buildConversationMetaMessages(conversation),
           taskTokenResults: ctx.conversationStore.getTaskTokenResults(conversationId, limit),
+          compactBoundaries: ctx.conversationStore.getCompactBoundaries(conversationId, limit),
         },
       };
+    }
+
+    case "conversation.transcript.export": {
+      const params = req.params as {
+        conversationId?: string;
+        mode?: "internal" | "shareable" | "metadata_only";
+      } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const mode = params?.mode;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      if (mode !== undefined && mode !== "internal" && mode !== "shareable" && mode !== "metadata_only") {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "mode must be internal, shareable, or metadata_only" } };
+      }
+
+      return handleConversationTranscriptExportWithQueryRuntime({
+        requestId: req.id,
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        stateDir: ctx.stateDir,
+        teamSharedMemoryEnabled: process.env.BELLDANDY_TEAM_SHARED_MEMORY_ENABLED === "true",
+        requestDurableExtraction: ctx.requestDurableExtraction,
+        memoryUsageAccounting: ctx.memoryUsageAccounting,
+        memoryBudgetGuard: ctx.memoryBudgetGuard,
+        durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
+        broadcastEvent: ctx.broadcastEvent,
+        buildMemoryRuntimeDoctorReport: (input) => buildMemoryRuntimeDoctorReport({
+          ...input,
+          compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
+        }),
+        buildDurableExtractionUnavailableError,
+        refreshConversationDigestAndBroadcast,
+        toDurableExtractionDigestSnapshot,
+        isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.restore"
+          | "conversation.transcript.export"
+          | "conversation.timeline.get"
+          | "conversation.digest.get"
+          | "conversation.digest.refresh"
+          | "conversation.memory.extraction.get"
+          | "conversation.memory.extract"
+        >(),
+      }, {
+        conversationId,
+        mode,
+      });
+    }
+
+    case "conversation.timeline.get": {
+      const params = req.params as {
+        conversationId?: string;
+        previewChars?: number;
+      } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const previewChars = typeof params?.previewChars === "number" && Number.isFinite(params.previewChars)
+        ? Math.max(24, Math.floor(params.previewChars))
+        : undefined;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      return handleConversationTimelineGetWithQueryRuntime({
+        requestId: req.id,
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        stateDir: ctx.stateDir,
+        teamSharedMemoryEnabled: process.env.BELLDANDY_TEAM_SHARED_MEMORY_ENABLED === "true",
+        requestDurableExtraction: ctx.requestDurableExtraction,
+        memoryUsageAccounting: ctx.memoryUsageAccounting,
+        memoryBudgetGuard: ctx.memoryBudgetGuard,
+        durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
+        broadcastEvent: ctx.broadcastEvent,
+        buildMemoryRuntimeDoctorReport: (input) => buildMemoryRuntimeDoctorReport({
+          ...input,
+          compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
+        }),
+        buildDurableExtractionUnavailableError,
+        refreshConversationDigestAndBroadcast,
+        toDurableExtractionDigestSnapshot,
+        isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.restore"
+          | "conversation.transcript.export"
+          | "conversation.timeline.get"
+          | "conversation.digest.get"
+          | "conversation.digest.refresh"
+          | "conversation.memory.extraction.get"
+          | "conversation.memory.extract"
+        >(),
+      }, {
+        conversationId,
+        previewChars,
+      });
     }
 
     case "conversation.digest.get": {
@@ -3900,12 +4322,18 @@ async function handleReq(
         memoryBudgetGuard: ctx.memoryBudgetGuard,
         durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
         broadcastEvent: ctx.broadcastEvent,
-        buildMemoryRuntimeDoctorReport,
+        buildMemoryRuntimeDoctorReport: (input) => buildMemoryRuntimeDoctorReport({
+          ...input,
+          compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
+        }),
         buildDurableExtractionUnavailableError,
         refreshConversationDigestAndBroadcast,
         toDurableExtractionDigestSnapshot,
         isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.restore"
+          | "conversation.transcript.export"
+          | "conversation.timeline.get"
           | "conversation.digest.get"
           | "conversation.digest.refresh"
           | "conversation.memory.extraction.get"
@@ -3937,12 +4365,18 @@ async function handleReq(
         memoryBudgetGuard: ctx.memoryBudgetGuard,
         durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
         broadcastEvent: ctx.broadcastEvent,
-        buildMemoryRuntimeDoctorReport,
+        buildMemoryRuntimeDoctorReport: (input) => buildMemoryRuntimeDoctorReport({
+          ...input,
+          compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
+        }),
         buildDurableExtractionUnavailableError,
         refreshConversationDigestAndBroadcast,
         toDurableExtractionDigestSnapshot,
         isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.restore"
+          | "conversation.transcript.export"
+          | "conversation.timeline.get"
           | "conversation.digest.get"
           | "conversation.digest.refresh"
           | "conversation.memory.extraction.get"
@@ -3977,12 +4411,18 @@ async function handleReq(
         memoryBudgetGuard: ctx.memoryBudgetGuard,
         durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
         broadcastEvent: ctx.broadcastEvent,
-        buildMemoryRuntimeDoctorReport,
+        buildMemoryRuntimeDoctorReport: (input) => buildMemoryRuntimeDoctorReport({
+          ...input,
+          compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
+        }),
         buildDurableExtractionUnavailableError,
         refreshConversationDigestAndBroadcast,
         toDurableExtractionDigestSnapshot,
         isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.restore"
+          | "conversation.transcript.export"
+          | "conversation.timeline.get"
           | "conversation.digest.get"
           | "conversation.digest.refresh"
           | "conversation.memory.extraction.get"
@@ -4016,12 +4456,18 @@ async function handleReq(
         memoryBudgetGuard: ctx.memoryBudgetGuard,
         durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
         broadcastEvent: ctx.broadcastEvent,
-        buildMemoryRuntimeDoctorReport,
+        buildMemoryRuntimeDoctorReport: (input) => buildMemoryRuntimeDoctorReport({
+          ...input,
+          compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
+        }),
         buildDurableExtractionUnavailableError,
         refreshConversationDigestAndBroadcast,
         toDurableExtractionDigestSnapshot,
         isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.restore"
+          | "conversation.transcript.export"
+          | "conversation.timeline.get"
           | "conversation.digest.get"
           | "conversation.digest.refresh"
           | "conversation.memory.extraction.get"
@@ -4031,6 +4477,47 @@ async function handleReq(
         conversationId,
         threshold,
         refreshDigest: params?.refreshDigest === true,
+      });
+    }
+
+    case "conversation.restore": {
+      const params = req.params as { conversationId?: string } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+
+      return handleConversationRestoreWithQueryRuntime({
+        requestId: req.id,
+        conversationStore: ctx.conversationStore,
+        durableExtractionRuntime: ctx.durableExtractionRuntime,
+        stateDir: ctx.stateDir,
+        teamSharedMemoryEnabled: process.env.BELLDANDY_TEAM_SHARED_MEMORY_ENABLED === "true",
+        requestDurableExtraction: ctx.requestDurableExtraction,
+        memoryUsageAccounting: ctx.memoryUsageAccounting,
+        memoryBudgetGuard: ctx.memoryBudgetGuard,
+        durableExtractionRequestRateLimiter: ctx.durableExtractionRequestRateLimiter,
+        broadcastEvent: ctx.broadcastEvent,
+        buildMemoryRuntimeDoctorReport: (input) => buildMemoryRuntimeDoctorReport({
+          ...input,
+          compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
+        }),
+        buildDurableExtractionUnavailableError,
+        refreshConversationDigestAndBroadcast,
+        toDurableExtractionDigestSnapshot,
+        isMemoryBudgetExceededError: (error): error is MemoryBudgetExceededError => error instanceof MemoryBudgetExceededError,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "conversation.restore"
+          | "conversation.transcript.export"
+          | "conversation.timeline.get"
+          | "conversation.digest.get"
+          | "conversation.digest.refresh"
+          | "conversation.memory.extraction.get"
+          | "conversation.memory.extract"
+        >(),
+      }, {
+        conversationId,
       });
     }
 

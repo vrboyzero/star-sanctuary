@@ -160,6 +160,15 @@ export interface AgentEndEvent {
   durationMs?: number;
 }
 
+export type CompactionMode =
+  | "request"
+  | "loop"
+  | "manual"
+  | "partial_up_to"
+  | "partial_from"
+  | "session_memory"
+  | "microcompact";
+
 /**
  * before_compaction 钩子事件
  *
@@ -172,8 +181,14 @@ export interface BeforeCompactionEvent {
   tokenCount?: number;
   /** 压缩层级：rolling（滚动摘要）或 archival（归档压缩） */
   tier?: "rolling" | "archival";
-  /** 触发来源：request（请求前）或 loop（ReAct 循环内） */
-  source?: "request" | "loop";
+  /** 触发来源 */
+  source?: CompactionMode;
+  /** 压缩模式 */
+  compactionMode?: CompactionMode;
+  /** 本轮预计处理的增量消息数 */
+  deltaMessageCount?: number;
+  /** 使用的摘要模型（如有） */
+  summarizerModel?: string;
 }
 
 /**
@@ -191,9 +206,23 @@ export interface AfterCompactionEvent {
   /** 压缩层级 */
   tier?: "rolling" | "archival";
   /** 触发来源 */
-  source?: "request" | "loop";
+  source?: CompactionMode;
+  /** 压缩模式 */
+  compactionMode?: CompactionMode;
   /** 压缩前 token 数量 */
   originalTokenCount?: number;
+  /** 本轮实际处理的增量消息数 */
+  deltaMessageCount?: number;
+  /** 是否走了 fallback 摘要路径 */
+  fallbackUsed?: boolean;
+  /** 使用的摘要模型（如有） */
+  summarizerModel?: string;
+  /** 本轮节省的 token 数 */
+  savedTokenCount?: number;
+  /** 本轮回收的字符数（适用于 microcompact） */
+  reclaimedChars?: number;
+  /** 是否因边界失效触发了安全重建 */
+  rebuildTriggered?: boolean;
 }
 
 // ----- 消息钩子事件 -----
