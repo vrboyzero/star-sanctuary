@@ -107,8 +107,8 @@ export function createCanvasContextFeature({
 
     const actions = [];
     if (goalId) {
-      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-detail="${escapeHtml(goalId)}">${escapeHtml(t("canvasContext.openGoalDetail", {}, "Open Long Task Details"))}</button>`);
-      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-tasks="${escapeHtml(goalId)}">${escapeHtml(t("canvasContext.viewGoalTasks", {}, "View Goal Tasks"))}</button>`);
+      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-detail="${escapeHtml(goalId)}">${escapeHtml(t("canvasContext.openGoalDetail", {}, "打开长期任务详情"))}</button>`);
+      actions.push(`<button class="canvas-tb-btn" data-canvas-open-goal-tasks="${escapeHtml(goalId)}">${escapeHtml(t("canvasContext.viewGoalTasks", {}, "查看长期任务任务记录"))}</button>`);
     }
     if (conversation?.conversationId) {
       actions.push(`
@@ -116,34 +116,34 @@ export function createCanvasContextFeature({
           class="canvas-tb-btn"
           data-canvas-open-conversation="${escapeHtml(conversation.conversationId)}"
           data-canvas-conversation-label="${escapeHtml(nodeId
-            ? t("canvasContext.returnNodeChannelLabel", { goalName: goalName || goalId, nodeId }, `Back to node channel: ${goalName || goalId} / ${nodeId}`)
-            : t("canvasContext.returnGoalChannelLabel", { goalName: goalName || goalId }, `Back to long task channel: ${goalName || goalId}`))}"
+            ? t("canvasContext.returnNodeChannelLabel", { goalName: goalName || goalId, nodeId }, `返回节点通道：${goalName || goalId} / ${nodeId}`)
+            : t("canvasContext.returnGoalChannelLabel", { goalName: goalName || goalId }, `返回长期任务通道：${goalName || goalId}`))}"
         >
           ${escapeHtml(nodeId
-            ? t("canvasContext.returnNodeChannelButton", {}, "Back to Current Node Channel")
-            : t("canvasContext.returnGoalChannelButton", {}, "Back to Current Goal Channel"))}
+            ? t("canvasContext.returnNodeChannelButton", {}, "返回当前节点通道")
+            : t("canvasContext.returnGoalChannelButton", {}, "返回当前长期任务通道"))}
         </button>
       `);
     }
     if (goal?.runtimeRoot) {
-      actions.push(`<button class="canvas-tb-btn" data-canvas-open-capability-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">${escapeHtml(t("canvasContext.openCapabilityPlan", {}, "Open capabilityPlan"))}</button>`);
+      actions.push(`<button class="canvas-tb-btn" data-canvas-open-capability-source="${escapeHtml(goalRuntimeFilePath(goal, "capability-plans.json"))}">${escapeHtml(t("canvasContext.openCapabilityPlan", {}, "打开 capability-plans.json"))}</button>`);
     }
 
     const capabilityMeta = capabilityPlan ? `
       <span class="canvas-context-item canvas-context-item-capability">
-        <span class="canvas-context-label">Plan</span>
+        <span class="canvas-context-label">计划</span>
         <span class="canvas-context-value">${escapeHtml(capabilityPlan.nodeId || capabilityPlan.id)}</span>
       </span>
       <span class="canvas-context-item canvas-context-item-capability">
-        <span class="canvas-context-label">Mode</span>
+        <span class="canvas-context-label">模式</span>
         <span class="canvas-context-value">${escapeHtml(capabilityPlan.executionMode || "-")}</span>
       </span>
       <span class="canvas-context-item canvas-context-item-capability">
-        <span class="canvas-context-label">Risk</span>
+        <span class="canvas-context-label">风险</span>
         <span class="canvas-context-value">${escapeHtml(capabilityPlan.riskLevel || "-")}</span>
       </span>
       <span class="canvas-context-item canvas-context-item-capability">
-        <span class="canvas-context-label">Align</span>
+        <span class="canvas-context-label">对齐</span>
         <span class="canvas-context-value">${escapeHtml(capabilityPlan.analysis?.status || "-")}</span>
       </span>
       <span class="canvas-context-note canvas-context-note-capability">${escapeHtml(capabilityPlan.summary || capabilityPlan.analysis?.summary || t("canvasContext.capabilityPlanHint", {}, "A capabilityPlan is available for the current node."))}</span>

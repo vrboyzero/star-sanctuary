@@ -6,6 +6,29 @@ export function createGoalsGovernancePanelFeature({
 }) {
   const { goalsDetailEl } = refs;
 
+  function formatGovernanceStatus(status) {
+    const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+    if (!normalized) return "未知";
+    if (normalized === "pending" || normalized === "required" || normalized === "waiting_user") return "待处理";
+    if (normalized === "approved" || normalized === "accepted") return "已通过";
+    if (normalized === "rejected") return "已拒绝";
+    if (normalized === "expired") return "已过期";
+    if (normalized === "overdue") return "已逾期";
+    if (normalized === "escalated") return "已升级";
+    if (normalized === "sent") return "已发送";
+    if (normalized === "failed" || normalized === "error") return "失败";
+    return status;
+  }
+
+  function formatGovernanceTargetType(targetType) {
+    const normalized = typeof targetType === "string" ? targetType.trim().toLowerCase() : "";
+    if (!normalized) return "未知对象";
+    if (normalized === "checkpoint") return "Checkpoint";
+    if (normalized === "suggestion_review") return "建议评审";
+    if (normalized === "template") return "模板";
+    return targetType;
+  }
+
   function renderGoalReviewGovernancePanelLoading() {
     const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
     if (!panel) return;
@@ -22,41 +45,41 @@ export function createGoalsGovernancePanelFeature({
     const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
     if (!panel || !goal) return;
     if (!data) {
-      panel.innerHTML = '<div class="memory-viewer-empty">当前还没有 review governance 汇总。</div>';
+      panel.innerHTML = '<div class="memory-viewer-empty">当前还没有评审治理汇总。</div>';
       return;
     }
     panel.innerHTML = `
       <div class="goal-summary-header">
         <div>
-          <div class="goal-summary-title">Review Governance / Unified Approval</div>
-          <div class="goal-summary-text">在现有 goal detail 内汇总 reviewer/template、suggestion review、checkpoint workflow 与 reminder 状态。</div>
+          <div class="goal-summary-title">评审治理 / 统一审批</div>
+          <div class="goal-summary-text">在当前长期任务详情中汇总评审人、模板、建议评审、checkpoint 工作流与提醒状态。</div>
         </div>
         <div class="goal-detail-actions">
-          <button class="button" data-goal-approval-scan="${escapeHtml(goal.id)}">执行 Approval Scan</button>
-          <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationsPath || goalRuntimeFilePath(goal, "review-notifications.json"))}">打开 Notifications</button>
-          <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationDispatchesPath || goalRuntimeFilePath(goal, "review-notification-dispatches.json"))}">打开 Dispatch Outbox</button>
-          ${data.governanceConfigPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.governanceConfigPath)}">打开 Governance Config</button>` : ""}
+          <button class="button" data-goal-approval-scan="${escapeHtml(goal.id)}">执行审批扫描</button>
+          <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationsPath || goalRuntimeFilePath(goal, "review-notifications.json"))}">打开通知记录</button>
+          <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.notificationDispatchesPath || goalRuntimeFilePath(goal, "review-notification-dispatches.json"))}">打开分发队列</button>
+          ${data.governanceConfigPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(data.governanceConfigPath)}">打开治理配置</button>` : ""}
         </div>
       </div>
       <div class="goal-summary-grid">
-        <div class="goal-summary-item"><span class="goal-summary-label">Review Pending</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowPendingCount))}</strong></div>
-        <div class="goal-summary-item"><span class="goal-summary-label">Review Overdue</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowOverdueCount))}</strong></div>
-        <div class="goal-summary-item"><span class="goal-summary-label">Checkpoint Pending</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowPendingCount))}</strong></div>
-        <div class="goal-summary-item"><span class="goal-summary-label">Checkpoint Overdue</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowOverdueCount))}</strong></div>
-        <div class="goal-summary-item"><span class="goal-summary-label">Reviewers</span><strong class="goal-summary-value">${escapeHtml(String(data.reviewers.length))}</strong></div>
-        <div class="goal-summary-item"><span class="goal-summary-label">Templates</span><strong class="goal-summary-value">${escapeHtml(String(data.templates.length))}</strong></div>
-        <div class="goal-summary-item"><span class="goal-summary-label">Dispatches</span><strong class="goal-summary-value">${escapeHtml(String(data.notificationDispatchCounts?.total || data.notificationDispatches.length || 0))}</strong></div>
+        <div class="goal-summary-item"><span class="goal-summary-label">待评审</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowPendingCount))}</strong></div>
+        <div class="goal-summary-item"><span class="goal-summary-label">评审逾期</span><strong class="goal-summary-value">${escapeHtml(String(data.workflowOverdueCount))}</strong></div>
+        <div class="goal-summary-item"><span class="goal-summary-label">待处理 Checkpoint</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowPendingCount))}</strong></div>
+        <div class="goal-summary-item"><span class="goal-summary-label">Checkpoint 逾期</span><strong class="goal-summary-value">${escapeHtml(String(data.checkpointWorkflowOverdueCount))}</strong></div>
+        <div class="goal-summary-item"><span class="goal-summary-label">评审人</span><strong class="goal-summary-value">${escapeHtml(String(data.reviewers.length))}</strong></div>
+        <div class="goal-summary-item"><span class="goal-summary-label">模板</span><strong class="goal-summary-value">${escapeHtml(String(data.templates.length))}</strong></div>
+        <div class="goal-summary-item"><span class="goal-summary-label">分发记录</span><strong class="goal-summary-value">${escapeHtml(String(data.notificationDispatchCounts?.total || data.notificationDispatches.length || 0))}</strong></div>
       </div>
       <div class="goal-tracking-columns">
         <div class="goal-tracking-column">
-          <div class="goal-summary-title">Actionable Suggestion Reviews</div>
+          <div class="goal-summary-title">待处理建议评审</div>
           ${data.actionableReviews.length ? `
             <div class="goal-tracking-list">
               ${data.actionableReviews.map((item) => `
                 <div class="goal-tracking-item">
                   <div class="goal-tracking-item-head">
                     <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
-                    <span class="memory-badge">${escapeHtml(item.status)}</span>
+                    <span class="memory-badge">${escapeHtml(formatGovernanceStatus(item.status))}</span>
                   </div>
                   <div class="memory-list-item-meta">
                     <span>${escapeHtml(item.id)}</span>
@@ -71,8 +94,8 @@ export function createGoalsGovernancePanelFeature({
                 </div>
               `).join("")}
             </div>
-          ` : '<div class="memory-viewer-empty">当前没有待处理 suggestion review。</div>'}
-          <div class="goal-summary-title">Templates</div>
+          ` : '<div class="memory-viewer-empty">当前没有待处理的建议评审。</div>'}
+          <div class="goal-summary-title">模板</div>
           ${data.templates.length ? `
             <div class="goal-tracking-list">
               ${data.templates.map((item) => `
@@ -88,17 +111,17 @@ export function createGoalsGovernancePanelFeature({
                 </div>
               `).join("")}
             </div>
-          ` : '<div class="memory-viewer-empty">当前 organization governance 尚未配置模板。</div>'}
+          ` : '<div class="memory-viewer-empty">当前组织治理还没有配置模板。</div>'}
         </div>
         <div class="goal-tracking-column">
-          <div class="goal-summary-title">Actionable Checkpoints</div>
+          <div class="goal-summary-title">待处理 Checkpoint</div>
           ${data.actionableCheckpoints.length ? `
             <div class="goal-tracking-list">
               ${data.actionableCheckpoints.map((item) => `
                 <div class="goal-tracking-item">
                   <div class="goal-tracking-item-head">
                     <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
-                    <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(item.status)}</span>
+                    <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(formatGovernanceStatus(item.status))}</span>
                   </div>
                   <div class="memory-list-item-meta">
                     <span>${escapeHtml(item.id)}</span>
@@ -114,15 +137,15 @@ export function createGoalsGovernancePanelFeature({
                 </div>
               `).join("")}
             </div>
-          ` : '<div class="memory-viewer-empty">当前没有待处理 checkpoint workflow。</div>'}
-          <div class="goal-summary-title">Recent Notifications</div>
+          ` : '<div class="memory-viewer-empty">当前没有待处理的 checkpoint 工作流。</div>'}
+          <div class="goal-summary-title">最近通知</div>
           ${data.notifications.length ? `
             <div class="goal-tracking-list">
               ${data.notifications.slice().reverse().slice(0, 6).map((item) => `
                 <div class="goal-tracking-item">
                   <div class="goal-tracking-item-head">
-                    <span class="goal-tracking-item-title">${escapeHtml(item.kind)}</span>
-                    <span class="memory-badge">${escapeHtml(item.targetType)}</span>
+                    <span class="goal-tracking-item-title">${escapeHtml(item.kind || "通知")}</span>
+                    <span class="memory-badge">${escapeHtml(formatGovernanceTargetType(item.targetType))}</span>
                   </div>
                   <div class="memory-list-item-snippet">${escapeHtml(item.message || "")}</div>
                   <div class="memory-list-item-meta">
@@ -133,19 +156,19 @@ export function createGoalsGovernancePanelFeature({
                 </div>
               `).join("")}
             </div>
-          ` : '<div class="memory-viewer-empty">当前还没有 reminder / escalation 通知。</div>'}
-          <div class="goal-summary-title">Dispatch Channels / Outbox</div>
+          ` : '<div class="memory-viewer-empty">当前还没有提醒或升级通知。</div>'}
+          <div class="goal-summary-title">分发渠道 / 队列</div>
           ${data.notificationDispatches.length ? `
             <div class="memory-list-item-meta" style="margin-bottom:10px;">
-              <span>by channel: ${escapeHtml(Object.entries(data.notificationDispatchCounts?.byChannel || {}).map(([key, value]) => `${key}=${value}`).join(" | ") || "(none)")}</span>
-              <span>by status: ${escapeHtml(Object.entries(data.notificationDispatchCounts?.byStatus || {}).map(([key, value]) => `${key}=${value}`).join(" | ") || "(none)")}</span>
+              <span>按渠道：${escapeHtml(Object.entries(data.notificationDispatchCounts?.byChannel || {}).map(([key, value]) => `${key}=${value}`).join(" | ") || "无")}</span>
+              <span>按状态：${escapeHtml(Object.entries(data.notificationDispatchCounts?.byStatus || {}).map(([key, value]) => `${formatGovernanceStatus(key)}=${value}`).join(" | ") || "无")}</span>
             </div>
             <div class="goal-tracking-list">
               ${data.notificationDispatches.slice().reverse().slice(0, 8).map((item) => `
                 <div class="goal-tracking-item">
                   <div class="goal-tracking-item-head">
                     <span class="goal-tracking-item-title">${escapeHtml(item.channel)}</span>
-                    <span class="memory-badge">${escapeHtml(item.status)}</span>
+                    <span class="memory-badge">${escapeHtml(formatGovernanceStatus(item.status))}</span>
                   </div>
                   <div class="memory-list-item-snippet">${escapeHtml(item.message || "")}</div>
                   <div class="memory-list-item-meta">
@@ -157,7 +180,7 @@ export function createGoalsGovernancePanelFeature({
                 </div>
               `).join("")}
             </div>
-          ` : '<div class="memory-viewer-empty">当前还没有 materialized dispatch / outbox 记录。</div>'}
+          ` : '<div class="memory-viewer-empty">当前还没有实际分发或队列记录。</div>'}
         </div>
       </div>
     `;

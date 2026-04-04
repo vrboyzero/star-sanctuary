@@ -175,7 +175,7 @@ export function createChatNetworkFeature({
       agentSelectEl.value = saved;
     }
 
-    agentSelectEl.classList.remove("hidden");
+    // agentSelect dropdown stays hidden — right-side Agent panel is used instead
     onAgentListLoaded?.(agents, agentSelectEl.value || agents[0]?.id || "");
     return agents;
   }

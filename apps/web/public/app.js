@@ -2545,7 +2545,7 @@ function getGoalCheckpointActionConfig(action) {
       modalTitle: "批准 Checkpoint",
       successTitle: "已批准 checkpoint",
       submitLabel: "批准",
-      defaultSummary: "Approved",
+      defaultSummary: "已批准",
       actorLabel: "审批人",
       noteLabel: "审批说明",
       notePlaceholder: "可选，例如：验证通过，可进入下一节点",
@@ -2558,7 +2558,7 @@ function getGoalCheckpointActionConfig(action) {
       modalTitle: "拒绝 Checkpoint",
       successTitle: "已拒绝 checkpoint",
       submitLabel: "拒绝",
-      defaultSummary: "Rejected",
+      defaultSummary: "已拒绝",
       actorLabel: "审批人",
       noteLabel: "拒绝原因",
       notePlaceholder: "必填，例如：需要补充修改后再提交",
@@ -2571,7 +2571,7 @@ function getGoalCheckpointActionConfig(action) {
       modalTitle: "标记 Checkpoint 过期",
       successTitle: "已标记 checkpoint 过期",
       submitLabel: "标记过期",
-      defaultSummary: "Expired",
+      defaultSummary: "已过期",
       actorLabel: "操作人",
       noteLabel: "过期原因",
       notePlaceholder: "必填，例如：审批超时，需要重新发起",
@@ -2584,7 +2584,7 @@ function getGoalCheckpointActionConfig(action) {
       modalTitle: "重新打开 Checkpoint",
       successTitle: "已重新打开 checkpoint",
       submitLabel: "重新打开",
-      defaultSummary: "Reopened",
+      defaultSummary: "已重新打开",
       actorLabel: "重新发起人",
       noteLabel: "重新打开说明",
       notePlaceholder: "必填，例如：已完成补充修改，重新发起审批",
@@ -2626,12 +2626,12 @@ function resetGoalCheckpointActionForm() {
   if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.value = "";
   if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.value = "";
   if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.value = "";
-  if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = "Approver";
+  if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = "审批人";
   if (goalCheckpointActionActorEl) goalCheckpointActionActorEl.value = "";
   if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.value = "";
   if (goalCheckpointActionSummaryEl) {
     goalCheckpointActionSummaryEl.value = "";
-    goalCheckpointActionSummaryEl.placeholder = "例如：Approved / Rejected / Expired / Reopened";
+    goalCheckpointActionSummaryEl.placeholder = "例如：已批准 / 已拒绝 / 已过期 / 已重新打开";
   }
   if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = "说明";
   if (goalCheckpointActionNoteHelpEl) {
@@ -4357,10 +4357,10 @@ function renderTaskDetail(task) {
         <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.statLastUsedAt", {}, "Last Used At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(lastUsageAt))}</div></div>
       </div>
 
-      ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">Objective</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
-      ${task.summary ? `<div class="memory-detail-card"><span class="memory-detail-label">Summary</span><div class="memory-detail-text">${escapeHtml(task.summary)}</div></div>` : ""}
-      ${task.outcome ? `<div class="memory-detail-card"><span class="memory-detail-label">Outcome</span><div class="memory-detail-text">${escapeHtml(task.outcome)}</div></div>` : ""}
-      ${task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">Reflection</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
+      ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">目标说明</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
+      ${task.summary ? `<div class="memory-detail-card"><span class="memory-detail-label">摘要</span><div class="memory-detail-text">${escapeHtml(task.summary)}</div></div>` : ""}
+      ${task.outcome ? `<div class="memory-detail-card"><span class="memory-detail-label">结果</span><div class="memory-detail-text">${escapeHtml(task.outcome)}</div></div>` : ""}
+      ${task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">复盘</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
 
       <div class="memory-detail-card">
         <span class="memory-detail-label">${escapeHtml(localeController.t("memory.methodUsageTitle", {}, "Method Usage"))} (${usedMethods.length})</span>
@@ -4373,14 +4373,14 @@ function renderTaskDetail(task) {
       </div>
 
       <div class="memory-detail-card">
-        <span class="memory-detail-label">Tool Calls (${toolCalls.length})</span>
+        <span class="memory-detail-label">工具调用（${toolCalls.length}）</span>
         ${toolCalls.length ? `
           <div class="memory-inline-list">
             ${toolCalls.map((call) => `
               <div class="memory-inline-item">
                 <div class="memory-inline-item-head">
                   <span class="memory-badge">${escapeHtml(call.toolName || "unknown")}</span>
-                  <span class="memory-badge">${call.success ? "success" : "failed"}</span>
+                  <span class="memory-badge">${call.success ? "成功" : "失败"}</span>
                   <span class="memory-badge">${escapeHtml(formatDuration(call.durationMs))}</span>
                 </div>
                 ${call.note ? `<div class="memory-detail-text">${escapeHtml(call.note)}</div>` : ""}
@@ -4399,7 +4399,7 @@ function renderTaskDetail(task) {
                 <div class="memory-inline-item-head">
                   <span class="memory-badge">${escapeHtml(link.relation || "used")}</span>
                   ${link.memoryType ? `<span class="memory-badge">${escapeHtml(link.memoryType)}</span>` : ""}
-                  <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "open memory")}</button>
+                  <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "打开记忆")}</button>
                 </div>
                 ${link.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(link.sourcePath)}">${escapeHtml(link.sourcePath)}</button>` : ""}
                 ${link.snippet ? `<div class="memory-detail-text">${escapeHtml(link.snippet)}</div>` : ""}

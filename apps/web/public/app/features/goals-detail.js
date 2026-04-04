@@ -174,7 +174,7 @@ export function createGoalsDetailFeature({
         </div>
 
         <div class="memory-detail-grid">
-          <div class="memory-detail-card"><span class="memory-detail-label">Goal ID</span><div class="memory-detail-text">${escapeHtml(goal.id)}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">长期任务 ID</span><div class="memory-detail-text">${escapeHtml(goal.id)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailUpdatedAt", {}, "Updated At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.updatedAt || goal.createdAt))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailCreatedAt", {}, "Created At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(goal.createdAt))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("goals.detailPathSource", {}, "Path Source"))}</span><div class="memory-detail-text">${escapeHtml(formatGoalPathSource(goal.pathSource))}</div></div>
@@ -206,9 +206,9 @@ export function createGoalsDetailFeature({
         </div>
 
         <div class="memory-detail-grid">
-          <div class="memory-detail-card"><span class="memory-detail-label">Goal Root</span><div class="memory-detail-pre">${escapeHtml(goal.goalRoot || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Doc Root</span><div class="memory-detail-pre">${escapeHtml(goal.docRoot || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Runtime Root</span><div class="memory-detail-pre">${escapeHtml(goal.runtimeRoot || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">任务根目录</span><div class="memory-detail-pre">${escapeHtml(goal.goalRoot || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">文档根目录</span><div class="memory-detail-pre">${escapeHtml(goal.docRoot || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">运行态根目录</span><div class="memory-detail-pre">${escapeHtml(goal.runtimeRoot || "-")}</div></div>
         </div>
 
         <div class="goal-detail-actions">

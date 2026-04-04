@@ -9,6 +9,32 @@ export function createGoalsReadonlyPanelsFeature({
 }) {
   const { goalsDetailEl } = refs;
 
+  function formatProgressEvent(value) {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (!normalized) return "-";
+    if (normalized === "timeline") return "时间线";
+    if (normalized === "checkpoint_approved") return "Checkpoint 已批准";
+    if (normalized === "checkpoint_rejected") return "Checkpoint 已拒绝";
+    if (normalized === "checkpoint_expired") return "Checkpoint 已过期";
+    if (normalized === "checkpoint_reopened") return "Checkpoint 已重新打开";
+    if (normalized === "node_started") return "节点开始";
+    if (normalized === "node_completed") return "节点完成";
+    if (normalized === "node_blocked") return "节点阻塞";
+    return value;
+  }
+
+  function formatProgressStatus(value) {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (!normalized) return "";
+    if (normalized === "running" || normalized === "in_progress") return "运行中";
+    if (normalized === "completed" || normalized === "done") return "已完成";
+    if (normalized === "blocked") return "阻塞";
+    if (normalized === "approved") return "已批准";
+    if (normalized === "rejected") return "已拒绝";
+    if (normalized === "expired") return "已过期";
+    return value;
+  }
+
   function renderGoalCanvasPanelLoading() {
     const panel = goalsDetailEl?.querySelector("#goalCanvasPanel");
     if (!panel) return;
@@ -25,7 +51,7 @@ export function createGoalsReadonlyPanelsFeature({
     const hasMismatch = Boolean(runtimeBoardId && registryBoardId && runtimeBoardId !== registryBoardId);
     const linkedAt = payload?.linkedAt || payload?.updatedAt || "";
     const boardRefPath = goalRuntimeFilePath(goal, "board-ref.json");
-    const source = runtimeBoardId ? "runtime board-ref" : registryBoardId ? "goal registry" : "-";
+    const source = runtimeBoardId ? "运行态 board-ref" : registryBoardId ? "任务注册表" : "-";
 
     let statusLabel = t("goals.canvasStatusUnbound", {}, "Unbound");
     let statusClass = "memory-badge";
@@ -109,13 +135,13 @@ export function createGoalsReadonlyPanelsFeature({
         ${recentEntries.map((entry) => `
           <div class="goal-progress-item">
             <div class="goal-progress-item-head">
-              <span class="goal-tracking-item-title">${escapeHtml(entry.title || entry.event || "timeline")}</span>
-              <span class="memory-badge">${escapeHtml(entry.event || "-")}</span>
+              <span class="goal-tracking-item-title">${escapeHtml(entry.title || formatProgressEvent(entry.event) || "时间线")}</span>
+              <span class="memory-badge">${escapeHtml(formatProgressEvent(entry.event))}</span>
             </div>
             <div class="memory-list-item-meta">
               <span>${escapeHtml(formatDateTime(entry.at))}</span>
               ${entry.nodeId ? `<span>${escapeHtml(entry.nodeId)}</span>` : ""}
-              ${entry.status ? `<span>${escapeHtml(entry.status)}</span>` : ""}
+              ${entry.status ? `<span>${escapeHtml(formatProgressStatus(entry.status))}</span>` : ""}
               ${entry.checkpointId ? `<span>${escapeHtml(entry.checkpointId)}</span>` : ""}
             </div>
             ${entry.summary ? `<div class="memory-list-item-snippet">${escapeHtml(entry.summary)}</div>` : ""}
@@ -164,8 +190,8 @@ export function createGoalsReadonlyPanelsFeature({
     panel.innerHTML = `
       <div class="goal-summary-header">
         <div>
-          <div class="goal-summary-title">Handoff / 恢复交接</div>
-          <div class="goal-summary-text">从 handoff.md 读取当前 goal 的恢复建议、阻塞点与最近交接摘要。</div>
+          <div class="goal-summary-title">交接摘要 / 恢复交接</div>
+          <div class="goal-summary-text">从 handoff.md 读取当前长期任务的恢复建议、阻塞点与最近交接摘要。</div>
         </div>
         <span class="memory-badge memory-badge-shared">已生成</span>
       </div>
@@ -183,7 +209,7 @@ export function createGoalsReadonlyPanelsFeature({
           <strong class="goal-summary-value">${escapeHtml(handoff.resumeNode || "-")}</strong>
         </div>
         <div class="goal-summary-item">
-          <span class="goal-summary-label">Open Checkpoint</span>
+          <span class="goal-summary-label">待处理 Checkpoint</span>
           <strong class="goal-summary-value">${escapeHtml(String(handoff.openCheckpoints.length))}</strong>
         </div>
         <div class="goal-summary-item">
@@ -191,7 +217,7 @@ export function createGoalsReadonlyPanelsFeature({
           <strong class="goal-summary-value">${escapeHtml(String(handoff.blockers.length))}</strong>
         </div>
         <div class="goal-summary-item">
-          <span class="goal-summary-label">上次 Run</span>
+          <span class="goal-summary-label">上次运行</span>
           <strong class="goal-summary-value">${escapeHtml(handoff.lastRun || "-")}</strong>
         </div>
       </div>
@@ -202,16 +228,16 @@ export function createGoalsReadonlyPanelsFeature({
           <div class="memory-list-item-snippet">${escapeHtml(handoff.summary || "暂无摘要")}</div>
           <div class="goal-summary-title">下一步建议</div>
           <div class="memory-list-item-snippet">${escapeHtml(handoff.nextAction || "暂无建议")}</div>
-          <div class="goal-summary-title">Tracking Snapshot</div>
+          <div class="goal-summary-title">跟踪快照</div>
           <div class="memory-list-item-meta">
-            <span>nodes ${escapeHtml(String(handoff.tracking.totalNodes || "0"))}</span>
-            <span>done ${escapeHtml(String(handoff.tracking.completedNodes || "0"))}</span>
-            <span>running ${escapeHtml(String(handoff.tracking.inProgressNodes || "0"))}</span>
-            <span>blocked ${escapeHtml(String(handoff.tracking.blockedNodes || "0"))}</span>
-            <span>checkpoint ${escapeHtml(String(handoff.tracking.openCheckpoints || "0"))}</span>
+            <span>节点 ${escapeHtml(String(handoff.tracking.totalNodes || "0"))}</span>
+            <span>完成 ${escapeHtml(String(handoff.tracking.completedNodes || "0"))}</span>
+            <span>进行中 ${escapeHtml(String(handoff.tracking.inProgressNodes || "0"))}</span>
+            <span>阻塞 ${escapeHtml(String(handoff.tracking.blockedNodes || "0"))}</span>
+            <span>Checkpoint ${escapeHtml(String(handoff.tracking.openCheckpoints || "0"))}</span>
           </div>
           ${handoff.focusPlan ? `
-            <div class="goal-summary-title">Focus Capability</div>
+            <div class="goal-summary-title">当前关注能力</div>
             <div class="memory-list-item-snippet">${escapeHtml(handoff.focusPlan)}</div>
             ${handoff.focusSummary ? `<div class="memory-list-item-snippet">${escapeHtml(handoff.focusSummary)}</div>` : ""}
           ` : ""}
@@ -233,7 +259,7 @@ export function createGoalsReadonlyPanelsFeature({
             </div>
           ` : '<div class="memory-viewer-empty">当前 handoff 中没有阻塞或待审批项。</div>'}
 
-          <div class="goal-summary-title">最近 Timeline</div>
+          <div class="goal-summary-title">最近时间线</div>
           ${handoff.recentTimeline.length ? `
             <div class="goal-tracking-list">
               ${handoff.recentTimeline.map((item) => `
@@ -247,8 +273,8 @@ export function createGoalsReadonlyPanelsFeature({
       </div>
 
       <div class="goal-detail-actions">
-        <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">刷新 handoff</button>
-        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff</button>
+        <button class="button" data-goal-generate-handoff="${escapeHtml(goal.id)}">刷新交接摘要</button>
+        <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(goal.handoffPath)}">打开 handoff.md</button>
       </div>
     `;
     onBindHandoffPanelActions?.(goal);

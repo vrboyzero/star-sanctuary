@@ -74,7 +74,7 @@
           <span class="token-sep">|</span>
           <span class="token-label">ALL</span><span class="token-val token-val-all" id="tuAll">--</span>
         </div>
-        <div class="task-token-usage" id="taskTokenUsage" title="Task Token Usage" style="display: none;">
+        <div class="task-token-usage" id="taskTokenUsage" title="任务 Token 用量" style="display: none;">
           <span class="token-label">TASK</span><span class="token-val" id="taskName">--</span>
           <span class="token-sep">|</span>
           <span class="token-label">IN</span><span class="token-val" id="taskIn">--</span>
@@ -130,7 +130,7 @@
             <button id="saveUuid" class="button uuid-save-btn" data-i18n="common.save">保存</button>
           </div>
         </div>
-        <button id="connect" class="button panel-connect-btn" data-i18n="common.connect">Connect</button>
+        <button id="connect" class="button panel-connect-btn" data-i18n="common.connect">连接</button>
       </div>
       <div class="panel-status-row">
         <div class="panel-status-col panel-status-col-token">
@@ -143,7 +143,7 @@
         </div>
         <div class="panel-status-col panel-status-col-digest">
           <div class="session-digest-bar">
-            <div class="task-token-history-label" data-i18n="panel.sessionDigestLabel">Session Digest</div>
+            <div class="task-token-history-label" data-i18n="panel.sessionDigestLabel">会话摘要</div>
             <div class="session-digest-summary" id="sessionDigestSummary">
               <div class="task-token-history-empty" data-i18n="panel.sessionDigestNoConversation">暂无活跃会话</div>
             </div>
@@ -259,8 +259,8 @@
           <div class="memory-viewer-shell">
             <div class="memory-viewer-header">
               <div>
-                <div class="memory-viewer-kicker" data-i18n="memory.kicker">Memory Viewer</div>
-                <div class="memory-viewer-title" data-i18n="memory.title">Belldandy Memory Viewer</div>
+                <div class="memory-viewer-kicker" data-i18n="memory.kicker">记忆查看</div>
+                <div class="memory-viewer-title" data-i18n="memory.title">贝露丹蒂记忆查看器</div>
               </div>
               <button id="memoryViewerRefresh" class="button" data-i18n="common.refresh">刷新</button>
             </div>
@@ -274,35 +274,35 @@
 
             <div class="memory-viewer-toolbar">
               <div class="memory-viewer-tabs">
-                <button id="memoryTabTasks" class="memory-tab-btn active" data-i18n="memory.tabs.tasks">Tasks</button>
-                <button id="memoryTabMemories" class="memory-tab-btn" data-i18n="memory.tabs.memories">Memories</button>
+                <button id="memoryTabTasks" class="memory-tab-btn active" data-i18n="memory.tabs.tasks">任务记录</button>
+                <button id="memoryTabMemories" class="memory-tab-btn" data-i18n="memory.tabs.memories">记忆</button>
               </div>
               <div class="memory-viewer-filters">
                 <input id="memorySearchInput" class="input input-sm memory-search-input" data-i18n-placeholder="memory.searchPlaceholder" placeholder="搜索 task 标题、总结或 memory 内容" />
                 <div id="memoryTaskFilters" class="memory-filter-group">
                   <select id="memoryTaskStatusFilter" class="select select-sm">
                     <option value="" data-i18n="memory.filters.statusAll">全部状态</option>
-                    <option value="running">running</option>
-                    <option value="success">success</option>
-                    <option value="failed">failed</option>
-                    <option value="partial">partial</option>
+                    <option value="running">运行中</option>
+                    <option value="success">成功</option>
+                    <option value="failed">失败</option>
+                    <option value="partial">部分完成</option>
                   </select>
                   <select id="memoryTaskSourceFilter" class="select select-sm">
                     <option value="" data-i18n="memory.filters.sourceAll">全部来源</option>
-                    <option value="chat">chat</option>
-                    <option value="sub_agent">sub_agent</option>
-                    <option value="cron">cron</option>
-                    <option value="heartbeat">heartbeat</option>
-                    <option value="manual">manual</option>
+                    <option value="chat">聊天</option>
+                    <option value="sub_agent">子 Agent</option>
+                    <option value="cron">定时任务</option>
+                    <option value="heartbeat">心跳</option>
+                    <option value="manual">手动</option>
                   </select>
                 </div>
                 <div id="memoryChunkFilters" class="memory-filter-group hidden">
                   <select id="memoryChunkTypeFilter" class="select select-sm">
                     <option value="" data-i18n="memory.filters.chunkTypeAll">全部记忆类型</option>
-                    <option value="core">core</option>
-                    <option value="daily">daily</option>
-                    <option value="session">session</option>
-                    <option value="other">other</option>
+                    <option value="core">核心</option>
+                    <option value="daily">每日</option>
+                    <option value="session">会话</option>
+                    <option value="other">其他</option>
                   </select>
                   <select id="memoryChunkVisibilityFilter" class="select select-sm">
                     <option value="" data-i18n="memory.filters.visibilityDefault">默认范围</option>
@@ -326,7 +326,7 @@
             </div>
 
             <div id="memoryTaskGoalFilterBar" class="memory-context-bar hidden">
-              <span id="memoryTaskGoalFilterLabel" class="memory-context-text" data-i18n="memory.goalFilterDefault">当前仅查看某个长期任务的 tasks</span>
+              <span id="memoryTaskGoalFilterLabel" class="memory-context-text" data-i18n="memory.goalFilterDefault">当前仅查看某个长期任务的任务记录</span>
               <button id="memoryTaskGoalFilterClear" class="button" data-i18n="memory.clearFilter">清除过滤</button>
             </div>
 
@@ -345,8 +345,8 @@
           <div class="memory-viewer-shell goals-viewer-shell">
             <div class="memory-viewer-header">
               <div>
-                <div class="memory-viewer-kicker" data-i18n="goals.kicker">Long Tasks</div>
-                <div class="memory-viewer-title" data-i18n="goals.title">Goal Channel</div>
+                <div class="memory-viewer-kicker" data-i18n="goals.kicker">长期任务</div>
+                <div class="memory-viewer-title" data-i18n="goals.title">长期任务通道</div>
               </div>
               <div class="goals-viewer-actions">
                 <button id="goalsRefresh" class="button" data-i18n="common.refresh">刷新</button>
@@ -376,8 +376,8 @@
           <div class="memory-viewer-shell subtasks-viewer-shell">
             <div class="memory-viewer-header">
               <div>
-                <div class="memory-viewer-kicker" data-i18n="subtasks.kicker">Subtasks</div>
-                <div class="memory-viewer-title" data-i18n="subtasks.title">Task Runtime Panel</div>
+                <div class="memory-viewer-kicker" data-i18n="subtasks.kicker">子任务</div>
+                <div class="memory-viewer-title" data-i18n="subtasks.title">子任务运行面板</div>
               </div>
               <div class="subtasks-header-actions">
                 <label class="subtasks-filter-toggle" for="subtasksShowArchived">
@@ -565,7 +565,7 @@
         <div class="form-group">
           <label class="form-label" for="cfgToolsEnabled">
             <input id="cfgToolsEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.toolsEnabledLabel">Enable Tool Calls</span>
+            <span data-i18n="settings.toolsEnabledLabel">启用工具调用</span>
           </label>
           <div class="form-help" data-i18n="settings.toolsEnabledHelp">工具系统总开关。关闭后模型将无法调用文件、浏览器、命令等工具。</div>
         </div>
@@ -579,7 +579,7 @@
           <div class="form-help" data-i18n="settings.agentToolControlHelp">控制 Agent 是否可修改已注册工具的全局调用开关：disabled=禁止，confirm=文本确认，auto=直接执行。</div>
         </div>
         <div class="form-group">
-          <label class="form-label" data-i18n="settings.agentToolControlPasswordLabel">Agent Tool Confirm Password</label>
+          <label class="form-label" data-i18n="settings.agentToolControlPasswordLabel">Agent 工具确认口令</label>
           <input id="cfgAgentToolControlConfirmPassword" class="input" type="password" data-i18n-placeholder="settings.agentToolControlPasswordPlaceholder" placeholder="留空则使用 requestId 确认口令" />
           <div class="form-help" data-i18n="settings.agentToolControlPasswordHelp">仅在 confirm 模式下生效。留空时要求用户回复 `批准工具设置变更 &lt;requestId&gt;`；设置后改为输入你配置的确认口令。</div>
         </div>
@@ -762,19 +762,19 @@
           <div class="form-help">必填。建议直接写项目或阶段目标，而不是临时动作。</div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="goalCreateObjective">Objective</label>
+          <label class="form-label" for="goalCreateObjective">目标说明</label>
           <textarea id="goalCreateObjective" class="input" rows="4" placeholder="描述这个长期任务要达成的最终结果、边界与预期交付物"></textarea>
           <div class="form-help">可选。这里的内容会直接写入初始 `00-goal.md` / `NORTHSTAR.md`。</div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="goalCreateRoot">自定义 Goal Root</label>
+          <label class="form-label" for="goalCreateRoot">自定义任务根目录</label>
           <input id="goalCreateRoot" class="input" placeholder="留空则使用 ~/.star_sanctuary/goals/" />
           <div class="form-help">可选。用于把某个长期任务的运行态和文档落到项目目录、D 盘或 E 盘路径。</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="goalCreateAutoResume">
             <input id="goalCreateAutoResume" type="checkbox" style="margin-right: 8px;" checked />
-            创建后立即进入独立 goal channel
+            创建后立即进入独立长期任务通道
           </label>
           <div class="form-help">建议保持开启。这样创建完成后会立刻切到该长期任务的专用执行通道。</div>
         </div>
@@ -789,7 +789,7 @@
   <div id="sessionDigestModal" class="modal-overlay hidden">
     <div class="modal session-digest-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
-        <span id="sessionDigestModalTitle">Session Digest</span>
+        <span id="sessionDigestModalTitle">会话摘要</span>
         <button id="sessionDigestModalClose" class="settings-btn" title="关闭">✕</button>
       </div>
       <div class="modal-body session-digest-modal-body">
@@ -812,19 +812,19 @@
         <div id="goalCheckpointActionContext" class="goal-checkpoint-action-context"></div>
         <div class="goal-checkpoint-action-form-grid">
           <div class="form-group">
-            <label class="form-label" for="goalCheckpointActionReviewer">Reviewer</label>
+            <label class="form-label" for="goalCheckpointActionReviewer">评审人</label>
             <input id="goalCheckpointActionReviewer" class="input" placeholder="例如：producer / qa / @reviewer" />
           </div>
           <div class="form-group">
-            <label class="form-label" for="goalCheckpointActionReviewerRole">Reviewer Role</label>
+            <label class="form-label" for="goalCheckpointActionReviewerRole">评审角色</label>
             <input id="goalCheckpointActionReviewerRole" class="input" placeholder="例如：产品验收 / 技术审阅" />
           </div>
           <div class="form-group">
-            <label class="form-label" for="goalCheckpointActionRequestedBy">Requested By</label>
+            <label class="form-label" for="goalCheckpointActionRequestedBy">发起人</label>
             <input id="goalCheckpointActionRequestedBy" class="input" placeholder="例如：main-agent / user / worker-1" />
           </div>
           <div class="form-group">
-            <label id="goalCheckpointActionActorLabel" class="form-label" for="goalCheckpointActionActor">Approver</label>
+            <label id="goalCheckpointActionActorLabel" class="form-label" for="goalCheckpointActionActor">审批人</label>
             <input id="goalCheckpointActionActor" class="input" placeholder="例如：designer / reviewer / producer" />
           </div>
           <div class="form-group">
@@ -834,8 +834,8 @@
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="goalCheckpointActionSummary">Summary</label>
-          <input id="goalCheckpointActionSummary" class="input" placeholder="例如：Approved / Rejected / Expired / Reopened" />
+          <label class="form-label" for="goalCheckpointActionSummary">摘要</label>
+          <input id="goalCheckpointActionSummary" class="input" placeholder="例如：已批准 / 已拒绝 / 已过期 / 已重新打开" />
           <div class="form-help">会写入 `checkpoints.json` 与 `progress.md`，建议保持简短明确。</div>
         </div>
         <div class="form-group">

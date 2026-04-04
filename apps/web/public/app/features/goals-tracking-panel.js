@@ -6,6 +6,39 @@ export function createGoalsTrackingPanelFeature({
 }) {
   const { goalsDetailEl } = refs;
 
+  function formatNodeStatus(status) {
+    const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+    if (!normalized) return "未知";
+    if (normalized === "completed" || normalized === "done") return "已完成";
+    if (normalized === "running" || normalized === "executing" || normalized === "in_progress") return "运行中";
+    if (normalized === "blocked") return "阻塞";
+    if (normalized === "ready") return "就绪";
+    if (normalized === "pending") return "待处理";
+    return status;
+  }
+
+  function formatCheckpointStatus(status) {
+    const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+    if (!normalized) return "未知";
+    if (normalized === "waiting_user" || normalized === "required") return "待处理";
+    if (normalized === "approved") return "已批准";
+    if (normalized === "rejected") return "已拒绝";
+    if (normalized === "expired") return "已过期";
+    if (normalized === "reopened") return "已重新打开";
+    return status;
+  }
+
+  function formatCheckpointHistoryAction(action) {
+    const normalized = typeof action === "string" ? action.trim().toLowerCase() : "";
+    if (!normalized) return "记录";
+    if (normalized === "approve" || normalized === "approved") return "批准";
+    if (normalized === "reject" || normalized === "rejected") return "拒绝";
+    if (normalized === "expire" || normalized === "expired") return "标记过期";
+    if (normalized === "reopen" || normalized === "reopened") return "重新打开";
+    if (normalized === "request" || normalized === "requested") return "发起";
+    return action;
+  }
+
   function renderGoalTrackingPanelLoading() {
     const panel = goalsDetailEl?.querySelector("#goalTrackingPanel");
     if (!panel) return;
@@ -74,7 +107,7 @@ export function createGoalsTrackingPanelFeature({
                 <div class="goal-tracking-item">
                   <div class="goal-tracking-item-head">
                     <span class="goal-tracking-item-title">${escapeHtml(node.title)}</span>
-                    <span class="memory-badge ${node.status === "completed" ? "memory-badge-shared" : ""}">${escapeHtml(node.status)}</span>
+                    <span class="memory-badge ${node.status === "completed" ? "memory-badge-shared" : ""}">${escapeHtml(formatNodeStatus(node.status))}</span>
                   </div>
                   <div class="memory-list-item-meta">
                     <span>${escapeHtml(node.id)}</span>
@@ -94,7 +127,7 @@ export function createGoalsTrackingPanelFeature({
                 <div class="goal-tracking-item">
                   <div class="goal-tracking-item-head">
                     <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
-                    <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(item.status)}</span>
+                    <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(formatCheckpointStatus(item.status))}</span>
                   </div>
                   <div class="memory-list-item-snippet">${escapeHtml(item.summary || item.note || "暂无摘要")}</div>
                   <div class="memory-list-item-meta">
@@ -103,7 +136,7 @@ export function createGoalsTrackingPanelFeature({
                     <span>${escapeHtml(formatDateTime(item.updatedAt))}</span>
                   </div>
                   <div class="goal-checkpoint-meta">
-                    ${item.reviewer ? `<span class="memory-badge">Reviewer ${escapeHtml(item.reviewer)}</span>` : ""}
+                    ${item.reviewer ? `<span class="memory-badge">评审人 ${escapeHtml(item.reviewer)}</span>` : ""}
                     ${item.reviewerRole ? `<span class="memory-badge">${escapeHtml(item.reviewerRole)}</span>` : ""}
                     ${item.requestedBy ? `<span class="memory-badge">发起 ${escapeHtml(item.requestedBy)}</span>` : ""}
                     ${item.decidedBy ? `<span class="memory-badge">审批 ${escapeHtml(item.decidedBy)}</span>` : ""}
@@ -123,7 +156,7 @@ export function createGoalsTrackingPanelFeature({
                     <div class="goal-checkpoint-history">
                       ${item.history.slice().reverse().slice(0, 4).map((history) => `
                         <div class="goal-checkpoint-history-item">
-                          <span class="memory-badge">${escapeHtml(history.action)}</span>
+                          <span class="memory-badge">${escapeHtml(formatCheckpointHistoryAction(history.action))}</span>
                           <span>${escapeHtml(formatDateTime(history.at))}</span>
                           ${history.actor ? `<span>${escapeHtml(history.actor)}</span>` : ""}
                           ${history.note ? `<span>${escapeHtml(history.note)}</span>` : ""}

@@ -2791,10 +2791,19 @@ body::before {
   gap: 10px;
 }
 
+.goal-tracking-item-head > .memory-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .goal-tracking-item-title {
+  flex: 1;
+  min-width: 0;
   color: var(--text-main);
   font-weight: 600;
   line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .goal-checkpoint-actions {

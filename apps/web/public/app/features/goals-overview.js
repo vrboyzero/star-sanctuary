@@ -78,7 +78,7 @@ export function createGoalsOverviewFeature({
         <div class="memory-list-item goal-list-item${isActive ? " active" : ""}" data-goal-id="${escapeHtml(goal.id)}">
           <div class="goal-list-item-head">
             <div class="memory-list-item-title">${escapeHtml(goal.title || goal.id)}</div>
-            ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">current</span>' : ""}
+            ${isCurrentConversation ? '<span class="memory-badge memory-badge-shared">当前</span>' : ""}
           </div>
           <div class="memory-list-item-meta">
             <span>${escapeHtml(formatGoalStatus(goal.status))}</span>

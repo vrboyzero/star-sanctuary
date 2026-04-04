@@ -1,17 +1,17 @@
 function formatSubtaskStatus(status) {
   switch (status) {
     case "running":
-      return "running";
+      return "运行中";
     case "done":
-      return "done";
+      return "已完成";
     case "error":
-      return "error";
+      return "失败";
     case "timeout":
-      return "timeout";
+      return "超时";
     case "stopped":
-      return "stopped";
+      return "已停止";
     default:
-      return "pending";
+      return "等待中";
   }
 }
 
@@ -251,7 +251,7 @@ export function createSubtasksOverviewFeature({
         ${safeItems.map((item) => `
           <div class="subtask-notification-item">
             <div class="subtask-notification-head">
-              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.kind === "failed" ? "error" : item?.kind === "completed" ? "done" : item?.kind === "started" || item?.kind === "progress" ? "running" : "pending")}">${escapeHtml(item?.kind || "progress")}</span>
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.kind === "failed" ? "error" : item?.kind === "completed" ? "done" : item?.kind === "started" || item?.kind === "progress" ? "running" : "pending")}">${escapeHtml(item?.kind === "failed" ? "失败" : item?.kind === "completed" ? "完成" : item?.kind === "started" ? "开始" : item?.kind === "progress" ? "进展" : item?.kind || "进展")}</span>
               <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.createdAt))}</span>
             </div>
             <div class="memory-detail-text">${escapeHtml(item?.message || "-")}</div>

@@ -47,6 +47,49 @@ export function createMemoryViewerFeature({
     memoryChunkCategoryFilterEl,
   } = refs;
 
+  function formatTaskStatusLabel(status) {
+    const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+    if (!normalized) return "未知";
+    if (normalized === "running" || normalized === "executing" || normalized === "in_progress") return "运行中";
+    if (normalized === "success" || normalized === "completed" || normalized === "done") return "成功";
+    if (normalized === "failed" || normalized === "error") return "失败";
+    if (normalized === "partial") return "部分完成";
+    if (normalized === "pending") return "待处理";
+    return status;
+  }
+
+  function formatTaskSourceLabel(source) {
+    const normalized = typeof source === "string" ? source.trim().toLowerCase() : "";
+    if (!normalized) return "未知来源";
+    if (normalized === "chat") return "聊天";
+    if (normalized === "sub_agent") return "子 Agent";
+    if (normalized === "cron") return "定时任务";
+    if (normalized === "heartbeat") return "心跳";
+    if (normalized === "manual") return "手动";
+    return source;
+  }
+
+  function formatMemoryTypeLabel(memoryType) {
+    const normalized = typeof memoryType === "string" ? memoryType.trim().toLowerCase() : "";
+    if (!normalized) return "其他";
+    if (normalized === "core") return "核心";
+    if (normalized === "daily") return "每日";
+    if (normalized === "session") return "会话";
+    if (normalized === "other") return "其他";
+    return memoryType;
+  }
+
+  function formatMemorySourceTypeLabel(sourceType) {
+    const normalized = typeof sourceType === "string" ? sourceType.trim().toLowerCase() : "";
+    if (!normalized) return "未知来源";
+    if (normalized === "task") return "任务";
+    if (normalized === "conversation") return "会话";
+    if (normalized === "file") return "文件";
+    if (normalized === "experience") return "经验";
+    if (normalized === "manual") return "手动";
+    return sourceType;
+  }
+
   function syncMemoryViewerUi() {
     const memoryViewerState = getMemoryViewerState();
     const isTasks = memoryViewerState.tab === "tasks";
@@ -310,8 +353,8 @@ export function createMemoryViewerFeature({
         <div class="memory-list-item ${isActive ? "active" : ""}" data-task-id="${escapeHtml(item.id)}">
           <div class="memory-list-item-title">${escapeHtml(title)}</div>
           <div class="memory-list-item-meta">
-            <span>${escapeHtml(item.status || "unknown")}</span>
-            <span>${escapeHtml(item.source || "unknown")}</span>
+            <span>${escapeHtml(formatTaskStatusLabel(item.status))}</span>
+            <span>${escapeHtml(formatTaskSourceLabel(item.source))}</span>
             ${goalId ? `<span class="memory-badge memory-badge-shared">${escapeHtml(getGoalDisplayName(goalId))}</span>` : ""}
             <span>${escapeHtml(formatDateTime(item.finishedAt || item.startedAt || item.createdAt))}</span>
           </div>
@@ -349,8 +392,8 @@ export function createMemoryViewerFeature({
         <div class="memory-list-item ${isActive ? "active" : ""}" data-memory-id="${escapeHtml(item.id)}">
           <div class="memory-list-item-title">${escapeHtml(title)}</div>
           <div class="memory-list-item-meta">
-            <span>${escapeHtml(item.memoryType || "other")}</span>
-            <span>${escapeHtml(item.sourceType || "unknown")}</span>
+            <span>${escapeHtml(formatMemoryTypeLabel(item.memoryType))}</span>
+            <span>${escapeHtml(formatMemorySourceTypeLabel(item.sourceType))}</span>
             <span class="memory-badge ${getVisibilityBadgeClass(visibility)}">${escapeHtml(visibility)}</span>
             <span class="memory-badge">${escapeHtml(category)}</span>
             <span>score ${formatScore(item.score)}</span>
@@ -383,29 +426,29 @@ export function createMemoryViewerFeature({
         <div class="memory-inline-item-head">
           <span class="memory-detail-label">${escapeHtml(t("memory.candidatePanelTitle", {}, "Candidate Detail Panel"))}</span>
           <div class="memory-detail-badges">
-            <span class="memory-badge">${escapeHtml(candidate.type || "unknown")}</span>
-            <span class="memory-badge">${escapeHtml(candidate.status || "unknown")}</span>
+            <span class="memory-badge">${escapeHtml(candidate.type || "未知类型")}</span>
+            <span class="memory-badge">${escapeHtml(formatTaskStatusLabel(candidate.status))}</span>
             <button class="memory-usage-action-btn" data-close-candidate-panel="1">${escapeHtml(t("memory.close", {}, "Close"))}</button>
           </div>
         </div>
         <div class="memory-detail-text"><strong>${escapeHtml(candidate.title || candidate.id || t("memory.candidateUntitled", {}, "Untitled Candidate"))}</strong></div>
         <div class="memory-detail-grid">
-          <div class="memory-detail-card"><span class="memory-detail-label">Candidate ID</span><div class="memory-detail-text">${escapeHtml(candidate.id || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Source Task</span><div class="memory-detail-text">${candidate.taskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(candidate.taskId)}">${escapeHtml(candidate.taskId)}</button>` : "-"}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Slug</span><div class="memory-detail-text">${escapeHtml(candidate.slug || "-")}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">Published Path</span><div class="memory-detail-text">${candidate.publishedPath ? `<button class="memory-path-link" data-open-source="${escapeHtml(candidate.publishedPath)}">${escapeHtml(candidate.publishedPath)}</button>` : "-"}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">候选 ID</span><div class="memory-detail-text">${escapeHtml(candidate.id || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">来源任务</span><div class="memory-detail-text">${candidate.taskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(candidate.taskId)}">${escapeHtml(candidate.taskId)}</button>` : "-"}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">标识</span><div class="memory-detail-text">${escapeHtml(candidate.slug || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">发布路径</span><div class="memory-detail-text">${candidate.publishedPath ? `<button class="memory-path-link" data-open-source="${escapeHtml(candidate.publishedPath)}">${escapeHtml(candidate.publishedPath)}</button>` : "-"}</div></div>
         </div>
         ${candidate.summary ? `<div class="memory-detail-text">${escapeHtml(candidate.summary)}</div>` : ""}
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.snapshotTitle", {}, "Source Snapshot"))}</span>
           <div class="memory-detail-grid">
-            <div class="memory-detail-card"><span class="memory-detail-label">Conversation</span><div class="memory-detail-text">${escapeHtml(snapshot.conversationId || "-")}</div></div>
-            <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.snapshotStatus", {}, "Status"))}</span><div class="memory-detail-text">${escapeHtml(snapshot.status || "-")}</div></div>
-            <div class="memory-detail-card"><span class="memory-detail-label">Source</span><div class="memory-detail-text">${escapeHtml(snapshot.source || "-")}</div></div>
+            <div class="memory-detail-card"><span class="memory-detail-label">会话</span><div class="memory-detail-text">${escapeHtml(snapshot.conversationId || "-")}</div></div>
+            <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.snapshotStatus", {}, "Status"))}</span><div class="memory-detail-text">${escapeHtml(formatTaskStatusLabel(snapshot.status) || "-")}</div></div>
+            <div class="memory-detail-card"><span class="memory-detail-label">来源</span><div class="memory-detail-text">${escapeHtml(formatTaskSourceLabel(snapshot.source) || "-")}</div></div>
             <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.snapshotStartedAt", {}, "Started At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(snapshot.startedAt))}</div></div>
           </div>
-          ${snapshot.objective ? `<div class="memory-detail-text"><strong>Objective:</strong> ${escapeHtml(snapshot.objective)}</div>` : ""}
-          ${snapshot.summary ? `<div class="memory-detail-text"><strong>Summary:</strong> ${escapeHtml(snapshot.summary)}</div>` : ""}
+          ${snapshot.objective ? `<div class="memory-detail-text"><strong>目标说明：</strong>${escapeHtml(snapshot.objective)}</div>` : ""}
+          ${snapshot.summary ? `<div class="memory-detail-text"><strong>摘要：</strong>${escapeHtml(snapshot.summary)}</div>` : ""}
         </div>
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.linkedSourceMemories", {}, "Source Memories"))} (${memoryLinks.length})</span>
@@ -414,9 +457,9 @@ export function createMemoryViewerFeature({
               ${memoryLinks.map((link) => `
                 <div class="memory-inline-item">
                   <div class="memory-inline-item-head">
-                    <span class="memory-badge">${escapeHtml(link.relation || "used")}</span>
-                    ${link.memoryType ? `<span class="memory-badge">${escapeHtml(link.memoryType)}</span>` : ""}
-                    <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "open memory")}</button>
+                    <span class="memory-badge">${escapeHtml(link.relation || "已使用")}</span>
+                    ${link.memoryType ? `<span class="memory-badge">${escapeHtml(formatMemoryTypeLabel(link.memoryType))}</span>` : ""}
+                    <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "打开记忆")}</button>
                   </div>
                   ${link.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(link.sourcePath)}">${escapeHtml(link.sourcePath)}</button>` : ""}
                   ${link.snippet ? `<div class="memory-detail-text">${escapeHtml(link.snippet)}</div>` : ""}
@@ -438,14 +481,14 @@ export function createMemoryViewerFeature({
           ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noSourceArtifacts", {}, "No source artifacts."))}</div>`}
         </div>
         <div class="memory-detail-card">
-          <span class="memory-detail-label">Tool Calls (${toolCalls.length})</span>
+          <span class="memory-detail-label">工具调用（${toolCalls.length}）</span>
           ${toolCalls.length ? `
             <div class="memory-inline-list">
               ${toolCalls.map((call) => `
                 <div class="memory-inline-item">
                   <div class="memory-inline-item-head">
-                    <span class="memory-badge">${escapeHtml(call.toolName || "unknown")}</span>
-                    <span class="memory-badge">${call.success ? "success" : "failed"}</span>
+                    <span class="memory-badge">${escapeHtml(call.toolName || "未知工具")}</span>
+                    <span class="memory-badge">${call.success ? "成功" : "失败"}</span>
                     <span class="memory-badge">${escapeHtml(formatDuration(call.durationMs))}</span>
                   </div>
                   ${call.note ? `<div class="memory-detail-text">${escapeHtml(call.note)}</div>` : ""}
@@ -455,7 +498,7 @@ export function createMemoryViewerFeature({
           ` : `<div class="memory-detail-text">${escapeHtml(t("memory.noToolCalls", {}, "No tool call records."))}</div>`}
         </div>
         <div class="memory-detail-card">
-          <span class="memory-detail-label">Candidate Content</span>
+          <span class="memory-detail-label">候选内容</span>
           <pre class="memory-detail-pre">${escapeHtml(candidate.content || t("memory.noContent", {}, "No content"))}</pre>
         </div>
       </div>
@@ -496,11 +539,11 @@ export function createMemoryViewerFeature({
             </div>
           </div>
           <div class="memory-detail-badges">
-            <span class="memory-badge">${escapeHtml(item.memoryType || "other")}</span>
-            <span class="memory-badge">${escapeHtml(item.sourceType || "unknown")}</span>
+            <span class="memory-badge">${escapeHtml(formatMemoryTypeLabel(item.memoryType))}</span>
+            <span class="memory-badge">${escapeHtml(formatMemorySourceTypeLabel(item.sourceType))}</span>
             <span class="memory-badge ${getVisibilityBadgeClass(visibility)}">${escapeHtml(visibility)}</span>
             <span class="memory-badge">${escapeHtml(category)}</span>
-            <span class="memory-badge">score ${formatScore(item.score)}</span>
+            <span class="memory-badge">分数 ${formatScore(item.score)}</span>
           </div>
         </div>
 
@@ -524,7 +567,7 @@ export function createMemoryViewerFeature({
 
         ${item.metadata ? `
           <div class="memory-detail-card">
-            <span class="memory-detail-label">Metadata</span>
+            <span class="memory-detail-label">元数据</span>
             <pre class="memory-detail-pre">${escapeHtml(JSON.stringify(item.metadata, null, 2))}</pre>
           </div>
         ` : ""}
