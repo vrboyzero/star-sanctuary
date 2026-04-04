@@ -8,6 +8,8 @@
  * - Anthropic 响应解析
  */
 
+import type { ProviderNativeSystemBlock } from "./system-prompt.js";
+
 // ─── Types ───────────────────────────────────────────────────────────────
 
 /** Anthropic content block */
@@ -38,12 +40,14 @@ export type AnthropicTool = {
 export type AnthropicRequestPayload = {
   model: string;
   max_tokens: number;
-  system?: Array<{ type: "text"; text: string; cache_control?: CacheControl }>;
+  system?: AnthropicSystemTextBlock[];
   messages: AnthropicMessage[];
   tools?: AnthropicTool[];
   tool_choice?: { type: "auto" } | { type: "any" } | { type: "tool"; name: string };
   stream?: boolean;
 };
+
+export type AnthropicSystemTextBlock = { type: "text"; text: string; cache_control?: CacheControl };
 
 /** Anthropic usage info from response */
 export type AnthropicUsage = {
@@ -97,16 +101,26 @@ type OpenAIToolDef = {
  */
 export function convertMessagesToAnthropic(
   messages: OpenAIMessage[],
-  options?: { cacheSystemPrompt?: boolean },
+  options?: { cacheSystemPrompt?: boolean; providerNativeSystemBlocks?: ProviderNativeSystemBlock[] },
 ): {
   system: AnthropicRequestPayload["system"];
   messages: AnthropicMessage[];
 } {
-  const systemBlocks: Array<{ type: "text"; text: string; cache_control?: CacheControl }> = [];
+  const providerNativeSystemBlocks = options?.providerNativeSystemBlocks
+    ? convertProviderNativeSystemBlocksToAnthropic(options.providerNativeSystemBlocks, {
+      cacheSystemPrompt: options.cacheSystemPrompt,
+    })
+    : undefined;
+  const systemBlocks: AnthropicSystemTextBlock[] = providerNativeSystemBlocks
+    ? [...providerNativeSystemBlocks]
+    : [];
   const anthropicMessages: AnthropicMessage[] = [];
 
   for (const msg of messages) {
     if (msg.role === "system") {
+      if (providerNativeSystemBlocks) {
+        continue;
+      }
       systemBlocks.push({ type: "text" as const, text: msg.content });
       continue;
     }
@@ -199,7 +213,7 @@ export function convertMessagesToAnthropic(
   }
 
   // 注入 system prompt 缓存标记
-  if (options?.cacheSystemPrompt && systemBlocks.length > 0) {
+  if (!providerNativeSystemBlocks && options?.cacheSystemPrompt && systemBlocks.length > 0) {
     systemBlocks[systemBlocks.length - 1].cache_control = { type: "ephemeral" };
   }
 
@@ -210,6 +224,27 @@ export function convertMessagesToAnthropic(
     system: systemBlocks.length > 0 ? systemBlocks : undefined,
     messages: merged,
   };
+}
+
+export function convertProviderNativeSystemBlocksToAnthropic(
+  blocks: ProviderNativeSystemBlock[],
+  options?: { cacheSystemPrompt?: boolean },
+): AnthropicSystemTextBlock[] {
+  return blocks
+    .map((block) => {
+      const text = block.text.trim();
+      if (!text) {
+        return undefined;
+      }
+      return {
+        type: "text" as const,
+        text,
+        ...(options?.cacheSystemPrompt && block.cacheControlEligible
+          ? { cache_control: { type: "ephemeral" as const } }
+          : {}),
+      };
+    })
+    .filter(Boolean) as AnthropicSystemTextBlock[];
 }
 
 /**
@@ -308,12 +343,22 @@ export function buildAnthropicRequest(params: {
   maxTokens?: number;
   stream?: boolean;
   enableCaching?: boolean;
+  providerNativeSystemBlocks?: ProviderNativeSystemBlock[];
 }): { url: string; init: RequestInit } {
-  const { profile, messages, tools, maxTokens = 4096, stream = false, enableCaching = true } = params;
+  const {
+    profile,
+    messages,
+    tools,
+    maxTokens = 4096,
+    stream = false,
+    enableCaching = true,
+    providerNativeSystemBlocks,
+  } = params;
 
   // 转换消息
   const { system, messages: anthropicMessages } = convertMessagesToAnthropic(messages, {
     cacheSystemPrompt: enableCaching,
+    providerNativeSystemBlocks,
   });
 
   // 构建 payload

@@ -8,7 +8,7 @@ const CONVERSATION_EXPORT_INDEX_FILENAME = "conversation-export-index.json";
 const CONVERSATION_EXPORT_INDEX_VERSION = 1 as const;
 const MAX_RECENT_EXPORT_RECORDS = 200;
 
-export type ConversationExportArtifact = "transcript" | "timeline";
+export type ConversationExportArtifact = "transcript" | "timeline" | "prompt_snapshot";
 export type ConversationExportFormat = "json" | "text";
 
 export type ConversationExportIndexRecord = {

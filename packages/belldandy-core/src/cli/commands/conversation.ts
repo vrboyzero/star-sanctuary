@@ -6,6 +6,7 @@ export default defineCommand({
     list: () => import("./conversation/list.js").then((m) => m.default),
     export: () => import("./conversation/export.js").then((m) => m.default),
     timeline: () => import("./conversation/timeline.js").then((m) => m.default),
+    "prompt-snapshot": () => import("./conversation/prompt-snapshot.js").then((m) => m.default),
     exports: () => import("./conversation/exports.js").then((m) => m.default),
   },
 });

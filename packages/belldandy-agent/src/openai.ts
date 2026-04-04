@@ -3,6 +3,13 @@ import type { JsonObject } from "@belldandy/protocol";
 import type { AgentRunInput, AgentStreamItem, BelldandyAgent } from "./index.js";
 import { FailoverClient, type ModelProfile, type FailoverLogger } from "./failover-client.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
+import {
+  createAgentPromptSnapshot,
+  readPromptSnapshotDeltas,
+  readPromptSnapshotRunId,
+  type AgentPromptSnapshot,
+} from "./prompt-snapshot.js";
+import { buildProviderNativeSystemBlocks, type SystemPromptSection } from "./system-prompt.js";
 
 export type OpenAIWireApi = "chat_completions" | "responses";
 
@@ -33,6 +40,10 @@ export type OpenAIChatAgentOptions = {
   proxyUrl?: string;
   /** 启动阶段预置冷却（毫秒） */
   bootstrapProfileCooldowns?: Record<string, number>;
+  /** 记录本次 run 实际发给模型的 prompt snapshot */
+  onPromptSnapshot?: (snapshot: AgentPromptSnapshot) => void;
+  /** 当前 system prompt 的结构化 sections，供 snapshot / inspect 复用 */
+  systemPromptSections?: SystemPromptSection[];
 };
 
 type ApiProtocol = "openai" | "anthropic";
@@ -170,6 +181,21 @@ export class OpenAIChatAgent implements BelldandyAgent {
       }
 
       const messages = buildMessages(this.opts.systemPrompt, content, input.history);
+      const promptDeltas = readPromptSnapshotDeltas(input.meta);
+      const providerNativeSystemBlocks = buildProviderNativeSystemBlocks({
+        sections: this.opts.systemPromptSections,
+        deltas: promptDeltas,
+        fallbackText: this.opts.systemPrompt,
+      });
+      this.opts.onPromptSnapshot?.(createAgentPromptSnapshot({
+        agentId: input.agentId,
+        conversationId: input.conversationId,
+        runId: readPromptSnapshotRunId(input.meta),
+        messages,
+        deltas: promptDeltas,
+        providerNativeSystemBlocks,
+        inputMeta: input.meta,
+      }));
       const textAttachmentChars = readTextAttachmentChars(input.meta);
       const minimumAdaptiveTimeoutMs = resolveMinimumAdaptiveTimeoutMs(messages, textAttachmentChars);
       const requestTimeoutMs = minimumAdaptiveTimeoutMs

@@ -27,6 +27,25 @@ export type WorkspaceFileName =
     | typeof HEARTBEAT_FILENAME
     | typeof MEMORY_FILENAME;
 
+export type WorkspaceDocumentRole = "system" | "user-prelude" | "attachment";
+
+export type WorkspaceDocumentFrontmatter = {
+    summary?: string;
+    readWhen?: string[];
+    layer?: string;
+    priority?: number;
+    cache?: string;
+    role?: WorkspaceDocumentRole | string;
+    raw: Record<string, string | number | string[]>;
+};
+
+export type WorkspaceDocument = {
+    raw: string;
+    body: string;
+    hasFrontmatter: boolean;
+    frontmatter?: WorkspaceDocumentFrontmatter;
+};
+
 /**
  * Workspace 文件结构
  */
@@ -34,6 +53,7 @@ export type WorkspaceFile = {
     name: WorkspaceFileName;
     path: string;
     content?: string;
+    document?: WorkspaceDocument;
     missing: boolean;
 };
 
@@ -69,6 +89,147 @@ async function loadTemplate(name: string): Promise<string> {
             `Missing workspace template: ${name} (${templatePath}). Ensure templates are packaged.`
         );
     }
+}
+
+function normalizeFrontmatterScalar(value: string): string | number {
+    const trimmed = value.trim();
+    const unquoted = (
+        (trimmed.startsWith("\"") && trimmed.endsWith("\""))
+        || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+    )
+        ? trimmed.slice(1, -1)
+        : trimmed;
+
+    if (/^-?\d+$/.test(unquoted)) {
+        const parsed = Number.parseInt(unquoted, 10);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+
+    return unquoted;
+}
+
+function toStringArray(value: string | number | string[] | undefined): string[] | undefined {
+    if (Array.isArray(value)) {
+        const normalized = value
+            .map((item) => String(item).trim())
+            .filter(Boolean);
+        return normalized.length > 0 ? normalized : undefined;
+    }
+    if (value === undefined) return undefined;
+    const normalized = String(value).trim();
+    return normalized ? [normalized] : undefined;
+}
+
+function parseWorkspaceDocumentFrontmatter(lines: string[]): WorkspaceDocumentFrontmatter | undefined {
+    const raw: Record<string, string | number | string[]> = {};
+    let index = 0;
+
+    while (index < lines.length) {
+        const line = lines[index] ?? "";
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) {
+            index += 1;
+            continue;
+        }
+
+        const match = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+        if (!match) {
+            return undefined;
+        }
+
+        const key = match[1];
+        const rest = match[2]?.trim() ?? "";
+        if (rest.length > 0) {
+            raw[key] = normalizeFrontmatterScalar(rest);
+            index += 1;
+            continue;
+        }
+
+        const items: string[] = [];
+        index += 1;
+        while (index < lines.length) {
+            const nextLine = lines[index] ?? "";
+            const listMatch = /^\s*-\s*(.+?)\s*$/.exec(nextLine);
+            if (!listMatch) break;
+            const normalized = String(normalizeFrontmatterScalar(listMatch[1]));
+            if (normalized.trim()) {
+                items.push(normalized.trim());
+            }
+            index += 1;
+        }
+
+        raw[key] = items;
+    }
+
+    return {
+        raw,
+        summary: typeof raw.summary === "string" ? raw.summary : undefined,
+        readWhen: toStringArray(raw.read_when),
+        layer: typeof raw.layer === "string" ? raw.layer : undefined,
+        priority: typeof raw.priority === "number" ? raw.priority : undefined,
+        cache: typeof raw.cache === "string" ? raw.cache : undefined,
+        role: typeof raw.role === "string" ? raw.role : undefined,
+    };
+}
+
+export function parseWorkspaceDocument(content: string): WorkspaceDocument {
+    if (!content.startsWith("---")) {
+        return {
+            raw: content,
+            body: content,
+            hasFrontmatter: false,
+        };
+    }
+
+    const lines = content.split(/\r?\n/);
+    if (lines[0]?.trim() !== "---") {
+        return {
+            raw: content,
+            body: content,
+            hasFrontmatter: false,
+        };
+    }
+
+    let closingIndex = -1;
+    for (let index = 1; index < lines.length; index += 1) {
+        if (lines[index]?.trim() === "---") {
+            closingIndex = index;
+            break;
+        }
+    }
+
+    if (closingIndex < 0) {
+        return {
+            raw: content,
+            body: content,
+            hasFrontmatter: false,
+        };
+    }
+
+    const frontmatter = parseWorkspaceDocumentFrontmatter(lines.slice(1, closingIndex));
+    if (!frontmatter) {
+        return {
+            raw: content,
+            body: content,
+            hasFrontmatter: false,
+        };
+    }
+
+    return {
+        raw: content,
+        body: lines.slice(closingIndex + 1).join("\n"),
+        hasFrontmatter: true,
+        frontmatter,
+    };
+}
+
+export function getWorkspaceDocumentBody(file: Pick<WorkspaceFile, "content" | "document">): string | undefined {
+    if (file.document) {
+        return file.document.body;
+    }
+    return file.content;
 }
 
 /**
@@ -237,10 +398,12 @@ export async function loadWorkspaceFiles(dir: string): Promise<WorkspaceLoadResu
         const filePath = path.join(dir, name);
         try {
             const content = await fs.readFile(filePath, "utf-8");
+            const document = parseWorkspaceDocument(content);
             files.push({
                 name,
                 path: filePath,
                 content,
+                document,
                 missing: false,
             });
         } catch {
@@ -339,7 +502,13 @@ export async function loadAgentWorkspaceFiles(
         for (const filePath of [agentFilePath, rootFilePath]) {
             try {
                 const content = await fs.readFile(filePath, "utf-8");
-                files.push({ name, path: filePath, content, missing: false });
+                files.push({
+                    name,
+                    path: filePath,
+                    content,
+                    document: parseWorkspaceDocument(content),
+                    missing: false,
+                });
                 resolved = true;
                 break;
             } catch {

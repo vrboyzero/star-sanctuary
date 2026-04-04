@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ConversationStore, type PersistedConversationSummary, type SessionTimelineProjection, type SessionTranscriptExportBundle } from "@belldandy/agent";
+import { loadConversationPromptSnapshotArtifact, renderConversationPromptSnapshotText, type ConversationPromptSnapshotArtifact } from "../../../conversation-prompt-snapshot.js";
 import { resolveConversationArtifactOutputPath } from "../../../conversation-debug-projection.js";
 import { listRecentConversationExports, recordConversationArtifactExport, type ConversationExportIndexRecord } from "../../../conversation-export-index.js";
 
@@ -31,7 +32,7 @@ export async function resolveConversationCLIOutputPath(input: {
   output?: string;
   outputDir?: string;
   conversationId: string;
-  artifact: "transcript" | "timeline";
+  artifact: "transcript" | "timeline" | "prompt_snapshot";
   variant?: string;
   extension: "json" | "txt";
 }): Promise<string | undefined> {
@@ -53,13 +54,27 @@ export async function listConversationCLIExportables(input: {
 export async function recordConversationCLIExport(input: {
   stateDir: string;
   conversationId: string;
-  artifact: "transcript" | "timeline";
+  artifact: "transcript" | "timeline" | "prompt_snapshot";
   format: "json" | "text";
   outputPath: string;
   mode?: string;
   projectionFilter?: Record<string, unknown>;
 }): Promise<void> {
   await recordConversationArtifactExport(input);
+}
+
+export async function loadConversationPromptSnapshotForCLI(input: {
+  stateDir: string;
+  conversationId: string;
+  runId?: string;
+}): Promise<ConversationPromptSnapshotArtifact | undefined> {
+  return loadConversationPromptSnapshotArtifact(input);
+}
+
+export function renderConversationPromptSnapshotArtifactText(
+  artifact: ConversationPromptSnapshotArtifact,
+): string {
+  return renderConversationPromptSnapshotText(artifact);
 }
 
 export async function listConversationCLIRecentExports(input: {

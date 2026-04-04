@@ -94,5 +94,11 @@ describe("buildContextInjectionPrelude", () => {
     expect(result?.prependContext).toContain(recentDistinct);
     expect(result?.prependContext).toContain(autoRecallDistinct);
     expect(result?.prependContext).not.toContain(duplicateFromHistory);
+    expect(result?.deltas?.map((delta) => delta.id)).toEqual(expect.arrayContaining([
+      "current-turn",
+      "recent-memory",
+      "auto-recall",
+    ]));
+    expect(result?.deltas?.every((delta) => delta.deltaType === "user-prelude")).toBe(true);
   });
 });

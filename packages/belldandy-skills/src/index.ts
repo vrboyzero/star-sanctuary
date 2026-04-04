@@ -43,6 +43,11 @@ export {
   listToolContracts,
   withToolContract,
 } from "./tool-contract.js";
+export {
+  buildToolBehaviorContractSummary,
+  getToolBehaviorContract,
+  listToolBehaviorContracts,
+} from "./tool-behavior-contract.js";
 export { ToolPoolAssembler } from "./tool-pool-assembler.js";
 export type {
   ToolContract,
@@ -54,6 +59,7 @@ export type {
   ToolResultSchema,
   ToolWithContract,
 } from "./tool-contract.js";
+export type { ToolBehaviorContract } from "./tool-behavior-contract.js";
 export type {
   ToolPoolAssemblyContext,
   ToolPoolEntry,

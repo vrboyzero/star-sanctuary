@@ -13,6 +13,10 @@ import {
   resolveEnvPath,
   resolveEnvLocalPath,
 } from "../shared/env-loader.js";
+import {
+  buildToolBehaviorObservability,
+  readConfiguredPromptExperimentToolContracts,
+} from "../../tool-behavior-observability.js";
 
 interface CheckResult {
   name: string;
@@ -281,6 +285,10 @@ export default defineCommand({
       results.push(await checkModelConnectivity());
     }
 
+    const toolBehaviorObservability = buildToolBehaviorObservability({
+      disabledContractNamesConfigured: readConfiguredPromptExperimentToolContracts(),
+    });
+
     // Output
     if (ctx.json) {
       const summary = {
@@ -288,7 +296,7 @@ export default defineCommand({
         warn: results.filter((r) => r.status === "warn").length,
         fail: results.filter((r) => r.status === "fail").length,
       };
-      ctx.output({ checks: results, summary });
+      ctx.output({ checks: results, summary, toolBehaviorObservability });
       return;
     }
 
@@ -303,6 +311,14 @@ export default defineCommand({
         ctx.log(`    \u2192 ${r.fix}`);
       }
     }
+
+    ctx.log("");
+    ctx.log("Tool Behavior Observability");
+    ctx.log(`  included contracts: ${toolBehaviorObservability.counts.includedContractCount}`);
+    ctx.log(`  included: ${toolBehaviorObservability.included.join(", ") || "(none)"}`);
+    ctx.log(
+      `  disabled by experiment: ${toolBehaviorObservability.experiment?.disabledContractNamesConfigured.join(", ") || "(none)"}`,
+    );
 
     const fails = results.filter((r) => r.status === "fail").length;
     const warns = results.filter((r) => r.status === "warn").length;

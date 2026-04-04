@@ -1,0 +1,895 @@
+import fs from "node:fs/promises";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+
+import { expect, test } from "vitest";
+import WebSocket from "ws";
+
+import {
+  loadConversationPromptSnapshotArtifact,
+  getConversationPromptSnapshotArtifactPath,
+  persistConversationPromptSnapshot,
+} from "./conversation-prompt-snapshot.js";
+import { approvePairingCode } from "./security/store.js";
+
+function resolveWebRoot() {
+  return path.join(process.cwd(), "apps", "web", "public");
+}
+
+test("gateway persists prompt snapshot across restart and reloads it via inspect and rpc", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-e2e-"));
+  const conversationId = "conv-prompt-snapshot-e2e";
+  const promptMarker = "PROMPT_SNAPSHOT_E2E_MARKER";
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker,
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const firstSendReqId = "message-send-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: firstSendReqId,
+      method: "message.send",
+      params: {
+        conversationId,
+        text: "snapshot persistence",
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const secondSendReqId = "message-send-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: secondSendReqId,
+      method: "message.send",
+      params: {
+        conversationId,
+        text: "snapshot persistence",
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === secondSendReqId && frame.ok === true));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "event" && frame.event === "chat.final" && frame.payload?.conversationId === conversationId));
+
+    const sendRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === secondSendReqId && frame.ok === true);
+    const runId = typeof sendRes?.payload?.runId === "string" ? sendRes.payload.runId : "";
+    expect(runId).toBeTruthy();
+
+    const artifactPath = getConversationPromptSnapshotArtifactPath({
+      stateDir,
+      conversationId,
+      runId,
+    });
+    await waitFor(async () => {
+      try {
+        await fs.access(artifactPath);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    const persisted = await loadConversationPromptSnapshotArtifact({
+      stateDir,
+      conversationId,
+      runId,
+    });
+    expect(persisted).toBeDefined();
+    expect(persisted?.manifest).toMatchObject({
+      conversationId,
+      runId,
+      source: "runtime.prompt_snapshot",
+    });
+    expect(persisted?.snapshot.systemPrompt).toContain(promptMarker);
+    expect(persisted?.snapshot.messages[0]).toMatchObject({
+      role: "system",
+      content: expect.stringContaining(promptMarker),
+    });
+
+    await wsHandle.close();
+    wsHandle = undefined;
+    await stopGatewayProcess(gateway);
+    gateway = undefined;
+
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker,
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const inspectReqId = "agents-prompt-inspect-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const inspectAfterPairingReqId = "agents-prompt-inspect-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectAfterPairingReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId);
+    expect(inspectRes?.payload).toMatchObject({
+      scope: "run",
+      conversationId,
+      runId,
+      text: expect.stringContaining(promptMarker),
+      metadata: {
+        tokenBreakdown: {
+          systemPromptEstimatedTokens: expect.any(Number),
+          deltaEstimatedTokens: expect.any(Number),
+          providerNativeSystemBlockEstimatedTokens: expect.any(Number),
+        },
+        snapshotScope: "run",
+        providerNativeSystemBlockCount: expect.any(Number),
+        promptTokenBreakdown: {
+          systemPromptEstimatedTokens: expect.any(Number),
+          deltaEstimatedTokens: expect.any(Number),
+          providerNativeSystemBlockEstimatedTokens: expect.any(Number),
+        },
+      },
+    });
+    expect(inspectRes?.payload?.sections?.[0]).toMatchObject({
+      estimatedChars: expect.any(Number),
+      estimatedTokens: expect.any(Number),
+    });
+    expect(inspectRes?.payload?.providerNativeSystemBlocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        blockType: "static-persona",
+        cacheControlEligible: true,
+        estimatedChars: expect.any(Number),
+        estimatedTokens: expect.any(Number),
+      }),
+      expect.objectContaining({
+        blockType: "static-capability",
+        cacheControlEligible: true,
+        estimatedChars: expect.any(Number),
+        estimatedTokens: expect.any(Number),
+      }),
+    ]));
+    expect(Array.isArray(inspectRes?.payload?.messages)).toBe(true);
+    expect(inspectRes?.payload?.messages[0]).toMatchObject({
+      role: "system",
+      content: expect.stringContaining(promptMarker),
+    });
+
+    const rpcReqId = "conversation-prompt-snapshot-get";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: rpcReqId,
+      method: "conversation.prompt_snapshot.get",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === rpcReqId && frame.ok === true));
+
+    const rpcRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === rpcReqId);
+    expect(rpcRes?.payload?.snapshot).toMatchObject({
+      manifest: {
+        conversationId,
+        runId,
+        source: "runtime.prompt_snapshot",
+      },
+      summary: {
+        providerNativeSystemBlockCount: expect.any(Number),
+        systemPromptEstimatedTokens: expect.any(Number),
+        deltaEstimatedTokens: expect.any(Number),
+        providerNativeSystemBlockEstimatedTokens: expect.any(Number),
+      },
+      snapshot: {
+        systemPrompt: expect.stringContaining(promptMarker),
+        providerNativeSystemBlocks: expect.arrayContaining([
+          expect.objectContaining({
+            blockType: "static-persona",
+            cacheControlEligible: true,
+            estimatedTokens: expect.any(Number),
+          }),
+          expect.objectContaining({
+            blockType: "static-capability",
+            cacheControlEligible: true,
+            estimatedTokens: expect.any(Number),
+          }),
+        ]),
+      },
+    });
+
+    const doctorReqId = "system-doctor-prompt-observability";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: doctorReqId,
+      method: "system.doctor",
+      params: {
+        promptConversationId: conversationId,
+        promptRunId: runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === doctorReqId && frame.ok === true));
+
+    const doctorRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === doctorReqId);
+    expect(doctorRes?.payload?.promptObservability).toMatchObject({
+      requested: {
+        conversationId,
+        runId,
+      },
+      summary: {
+        scope: "run",
+        conversationId,
+        runId,
+        counts: {
+          sectionCount: expect.any(Number),
+          deltaCount: expect.any(Number),
+          providerNativeSystemBlockCount: expect.any(Number),
+        },
+        tokenBreakdown: {
+          systemPromptEstimatedTokens: expect.any(Number),
+          deltaEstimatedTokens: expect.any(Number),
+          providerNativeSystemBlockEstimatedTokens: expect.any(Number),
+        },
+      },
+    });
+    expect(doctorRes?.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "prompt_observability",
+        status: "pass",
+      }),
+    ]));
+
+    expect(fakeOpenAI.requests).toHaveLength(1);
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+test("gateway applies prompt section disable experiments to agent inspect", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-experiment-e2e-"));
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker: "PROMPT_EXPERIMENT_E2E_MARKER",
+      extraEnv: {
+        BELLDANDY_PROMPT_EXPERIMENT_DISABLE_SECTIONS: "methodology",
+      },
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const inspectReqId = "agents-prompt-inspect-experiment-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        agentId: "default",
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const inspectAfterPairingReqId = "agents-prompt-inspect-experiment-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectAfterPairingReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        agentId: "default",
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId);
+    expect(inspectRes?.payload?.sections?.map((section: any) => section.id)).not.toContain("methodology");
+    expect(inspectRes?.payload?.droppedSections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "methodology",
+        estimatedChars: expect.any(Number),
+        estimatedTokens: expect.any(Number),
+      }),
+    ]));
+    expect(inspectRes?.payload?.metadata?.promptExperiments).toMatchObject({
+      disabledSectionIdsConfigured: ["methodology"],
+      disabledSectionIdsApplied: ["methodology"],
+    });
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+test("gateway applies prompt section priority override experiments to agent inspect", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-priority-experiment-e2e-"));
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker: "PROMPT_PRIORITY_EXPERIMENT_E2E_MARKER",
+      extraEnv: {
+        BELLDANDY_PROMPT_EXPERIMENT_SECTION_PRIORITY_OVERRIDES: "methodology:5,extra:150",
+      },
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const inspectReqId = "agents-prompt-inspect-priority-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        agentId: "default",
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const inspectAfterPairingReqId = "agents-prompt-inspect-priority-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectAfterPairingReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        agentId: "default",
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId);
+    const sectionIds = inspectRes?.payload?.sections?.map((section: any) => section.id) ?? [];
+    expect(sectionIds.indexOf("methodology")).toBeGreaterThanOrEqual(0);
+    expect(sectionIds.indexOf("context")).toBeGreaterThanOrEqual(0);
+    expect(sectionIds.indexOf("extra")).toBeGreaterThanOrEqual(0);
+    expect(sectionIds.indexOf("methodology")).toBeLessThan(sectionIds.indexOf("context"));
+    expect(sectionIds.indexOf("context")).toBeLessThan(sectionIds.indexOf("extra"));
+    expect(inspectRes?.payload?.metadata?.promptExperiments).toMatchObject({
+      sectionPriorityOverridesConfigured: {
+        methodology: 5,
+        extra: 150,
+      },
+      sectionPriorityOverridesApplied: {
+        methodology: 5,
+        extra: 150,
+      },
+    });
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+test("gateway applies prompt tool contract experiments to tool visibility and model definitions", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-tool-contract-experiment-e2e-"));
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker: "PROMPT_TOOL_CONTRACT_EXPERIMENT_E2E_MARKER",
+      extraEnv: {
+        BELLDANDY_TOOLS_ENABLED: "true",
+        BELLDANDY_DANGEROUS_TOOLS_ENABLED: "true",
+        BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS: "apply_patch",
+      },
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const sendBeforePairingReqId = "message-send-tool-contract-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: sendBeforePairingReqId,
+      method: "message.send",
+      params: {
+        conversationId: "conv-tool-contract-experiment",
+        text: "tool contract experiment",
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const toolsListAfterPairingReqId = "tools-list-tool-contract-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: toolsListAfterPairingReqId,
+      method: "tools.list",
+      params: {},
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === toolsListAfterPairingReqId && frame.ok === true));
+
+    const toolsListRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === toolsListAfterPairingReqId);
+    expect(toolsListRes?.payload?.builtin).toEqual(expect.arrayContaining(["apply_patch"]));
+    expect(toolsListRes?.payload?.visibility?.apply_patch).toMatchObject({
+      available: false,
+      reasonCode: "blocked-by-security-matrix",
+      contractReason: "blocked",
+    });
+
+    const sendReqId = "message-send-tool-contract-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: sendReqId,
+      method: "message.send",
+      params: {
+        conversationId: "conv-tool-contract-experiment",
+        text: "tool contract experiment",
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === sendReqId && frame.ok === true));
+    await waitFor(() => fakeOpenAI.requests.length > 0);
+
+    const requestTools = fakeOpenAI.requests[0]?.body?.tools;
+    expect(Array.isArray(requestTools)).toBe(true);
+    expect((requestTools as Array<any>).map((tool) => tool?.function?.name)).not.toContain("apply_patch");
+
+    const inspectReqId = "agents-prompt-inspect-tool-contract-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        agentId: "default",
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectReqId);
+    expect(inspectRes?.payload?.sections?.map((section: any) => section.id)).toContain("tool-behavior-contracts");
+    expect(inspectRes?.payload?.metadata?.promptExperiments).toMatchObject({
+      disabledToolContractNamesConfigured: ["apply_patch"],
+      disabledToolContractNamesApplied: ["apply_patch"],
+    });
+    expect(inspectRes?.payload?.metadata?.toolContractsIncluded).toEqual(expect.arrayContaining([
+      "run_command",
+      "delegate_task",
+      "file_write",
+      "file_delete",
+      "delegate_parallel",
+    ]));
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability).toMatchObject({
+      counts: {
+        includedContractCount: expect.any(Number),
+      },
+      included: expect.arrayContaining([
+        "run_command",
+        "delegate_task",
+        "file_write",
+        "file_delete",
+        "delegate_parallel",
+      ]),
+      experiment: {
+        disabledContractNamesConfigured: ["apply_patch"],
+        disabledContractNamesApplied: ["apply_patch"],
+      },
+    });
+    expect(inspectRes?.payload?.metadata?.toolContractsIncluded).not.toContain("apply_patch");
+    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## run_command");
+    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## delegate_task");
+    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## file_write");
+    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## file_delete");
+    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## delegate_parallel");
+    expect(inspectRes?.payload?.metadata?.toolContractSummary).not.toContain("## apply_patch");
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+test("gateway prefers structured deltas over legacy marker splitting for old snapshots", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-legacy-fallback-e2e-"));
+  const conversationId = "conv-prompt-legacy-fallback";
+  const runId = "run-legacy-fallback";
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: {
+        agentId: "default",
+        conversationId,
+        runId,
+        createdAt: 1712000001000,
+        systemPrompt: "PROMPT_LEGACY_FALLBACK_E2E_MARKER\nRuntime identity: user=test-user",
+        messages: [
+          { role: "system", content: "PROMPT_LEGACY_FALLBACK_E2E_MARKER\nRuntime identity: user=test-user" },
+          { role: "user", content: "hello" },
+        ],
+        deltas: [
+          {
+            id: "runtime-identity-context",
+            deltaType: "runtime-identity",
+            role: "system",
+            source: "legacy-structured-delta",
+            text: "Runtime identity: user=test-user",
+          },
+        ],
+      },
+    });
+
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker: "PROMPT_LEGACY_FALLBACK_E2E_MARKER",
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const inspectReqId = "agents-prompt-inspect-legacy-fallback-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const inspectAfterPairingReqId = "agents-prompt-inspect-legacy-fallback-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectAfterPairingReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId);
+    expect(inspectRes?.payload?.sections?.map((section: any) => section.id)).toContain("runtime-system-prompt");
+    expect(inspectRes?.payload?.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime-system-prompt",
+        text: "PROMPT_LEGACY_FALLBACK_E2E_MARKER",
+      }),
+    ]));
+    expect(inspectRes?.payload?.deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime-identity-context",
+        source: "legacy-structured-delta",
+      }),
+    ]));
+    expect(inspectRes?.payload?.deltas).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: "gateway-fallback",
+      }),
+    ]));
+    expect(inspectRes?.payload?.providerNativeSystemBlocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        blockType: "dynamic-runtime",
+        sourceDeltaIds: ["runtime-identity-context"],
+      }),
+    ]));
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+type FakeOpenAIHandle = {
+  baseUrl: string;
+  requests: Array<{ url: string; body: Record<string, unknown> }>;
+  close: () => Promise<void>;
+};
+
+async function startFakeOpenAIServer(): Promise<FakeOpenAIHandle> {
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const server = http.createServer(async (req, res) => {
+    if (req.method !== "POST" || !req.url || !req.url.endsWith("/chat/completions")) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+
+    const raw = await readRequestBody(req);
+    const body = JSON.parse(raw || "{}") as Record<string, unknown>;
+    requests.push({
+      url: req.url,
+      body,
+    });
+
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({
+      id: "chatcmpl-test",
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: "gpt-test",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "stubbed response",
+          },
+          finish_reason: "stop",
+        },
+      ],
+      usage: {
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        total_tokens: 2,
+      },
+    }));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to bind fake OpenAI server");
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    requests,
+    close: async () => {
+      if (!server.listening) return;
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
+
+type GatewayProcessHandle = {
+  child: ChildProcess;
+  port: number;
+  output: string[];
+};
+
+async function startGatewayProcess(input: {
+  stateDir: string;
+  openaiBaseUrl: string;
+  promptMarker: string;
+  extraEnv?: Record<string, string>;
+}): Promise<GatewayProcessHandle> {
+  const output: string[] = [];
+  const port = await getAvailablePort();
+  const child = spawn(process.execPath, ["--import", "tsx", "packages/belldandy-core/src/bin/gateway.ts"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      BELLDANDY_STATE_DIR: input.stateDir,
+      BELLDANDY_ENV_DIR: input.stateDir,
+      BELLDANDY_PORT: String(port),
+      BELLDANDY_HOST: "127.0.0.1",
+      BELLDANDY_AUTH_MODE: "none",
+      BELLDANDY_AGENT_PROVIDER: "openai",
+      BELLDANDY_OPENAI_API_KEY: "test-openai-key",
+      BELLDANDY_OPENAI_BASE_URL: input.openaiBaseUrl,
+      BELLDANDY_OPENAI_MODEL: "gpt-test",
+      BELLDANDY_OPENAI_STREAM: "false",
+      BELLDANDY_OPENAI_SYSTEM_PROMPT: input.promptMarker,
+      BELLDANDY_PRIMARY_WARMUP_ENABLED: "false",
+      BELLDANDY_HEARTBEAT_ENABLED: "false",
+      BELLDANDY_CRON_ENABLED: "false",
+      AUTO_OPEN_BROWSER: "false",
+      OPENAI_API_KEY: "test-openai-key",
+      STAR_SANCTUARY_WEB_ROOT: resolveWebRoot(),
+      ...input.extraEnv,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  child.stdout?.setEncoding("utf-8");
+  child.stderr?.setEncoding("utf-8");
+
+  const consumeOutput = (chunk: string | Buffer) => {
+    const text = chunk.toString();
+    output.push(text);
+  };
+  child.stdout?.on("data", consumeOutput);
+  child.stderr?.on("data", consumeOutput);
+
+  await waitFor(async () => {
+    if (child.exitCode !== null) {
+      throw new Error(`Gateway exited before startup (code=${String(child.exitCode)})\n${output.join("")}`);
+    }
+    const joined = output.join("");
+    const match = new RegExp(`Belldandy Gateway running: http://127\\.0\\.0\\.1:${port}`).exec(joined);
+    if (!match) {
+      return undefined;
+    }
+    return true;
+  }, 30000);
+
+  return {
+    child,
+    port,
+    output,
+  };
+}
+
+async function stopGatewayProcess(handle: GatewayProcessHandle): Promise<void> {
+  const child = handle.child;
+  if (child.exitCode !== null || child.killed) {
+    return;
+  }
+
+  child.kill();
+
+  const exited = await Promise.race([
+    once(child, "exit").then(() => true),
+    sleep(3000).then(() => false),
+  ]);
+  if (exited) {
+    return;
+  }
+
+  if (typeof child.pid === "number" && process.platform === "win32") {
+    const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      stdio: "ignore",
+    });
+    await once(killer, "exit").catch(() => {});
+    await once(child, "exit").catch(() => {});
+    return;
+  }
+
+  child.kill("SIGKILL");
+  await once(child, "exit").catch(() => {});
+}
+
+type GatewayWebSocketHandle = {
+  ws: WebSocket;
+  frames: any[];
+  close: () => Promise<void>;
+};
+
+async function connectGatewayWebSocket(port: number): Promise<GatewayWebSocketHandle> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closePromise = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => {
+    frames.push(JSON.parse(data.toString("utf-8")));
+  });
+
+  await waitFor(() => frames.some((frame) => frame.type === "connect.challenge"));
+  ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+  await waitFor(() => frames.some((frame) => frame.type === "hello-ok"));
+
+  return {
+    ws,
+    frames,
+    close: async () => {
+      if (ws.readyState === WebSocket.CLOSED) return;
+      ws.close();
+      await closePromise;
+    },
+  };
+}
+
+async function approveLatestPairingCode(frames: any[], stateDir: string): Promise<void> {
+  await waitFor(() => frames.some((frame) => frame.type === "event" && frame.event === "pairing.required"));
+  const pairingEvents = frames.filter((frame) => frame.type === "event" && frame.event === "pairing.required");
+  const latest = pairingEvents[pairingEvents.length - 1];
+  const code = latest?.payload?.code ? String(latest.payload.code) : "";
+  expect(code.length).toBeGreaterThan(0);
+  const approved = await approvePairingCode({ code, stateDir });
+  expect(approved.ok).toBe(true);
+}
+
+async function readRequestBody(req: http.IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+async function waitFor<T>(predicate: () => T | Promise<T>, timeoutMs = 5000): Promise<Exclude<T, false | undefined | null>> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = await predicate();
+    if (result) {
+      return result as Exclude<T, false | undefined | null>;
+    }
+    await sleep(20);
+  }
+  throw new Error(`timeout after ${timeoutMs}ms`);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getAvailablePort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    throw new Error("Failed to reserve an ephemeral port");
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  return address.port;
+}

@@ -241,6 +241,10 @@ export function createHookRunner(registry: HookRegistry, options: HookRunnerOpti
           acc?.prependContext && next.prependContext
             ? `${acc.prependContext}\n\n${next.prependContext}`
             : (next.prependContext ?? acc?.prependContext),
+        deltas:
+          acc?.deltas && next.deltas
+            ? [...acc.deltas, ...next.deltas]
+            : (next.deltas ?? acc?.deltas),
       }),
     );
   }

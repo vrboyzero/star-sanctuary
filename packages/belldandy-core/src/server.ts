@@ -20,7 +20,7 @@ import {
   type DurableExtractionRecord,
 } from "@belldandy/memory";
 import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig } from "@belldandy/protocol";
-import { MockAgent, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile, type CompactionRuntimeReport, type SessionTimelineProjection, type SessionTranscriptExportBundle } from "@belldandy/agent";
+import { MockAgent, type AgentPromptDelta, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile, type CompactionRuntimeReport, type ProviderNativeSystemBlock, type SessionTimelineProjection, type SessionTranscriptExportBundle, type SystemPromptSection } from "@belldandy/agent";
 import type {
   GatewayFrame,
   GatewayReqFrame,
@@ -37,6 +37,11 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import { buildPromptObservabilitySummary } from "./prompt-observability.js";
+import {
+  buildToolBehaviorObservability,
+  readConfiguredPromptExperimentToolContracts,
+} from "./tool-behavior-observability.js";
 import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
 import {
   applyToolControlChanges,
@@ -70,6 +75,7 @@ import {
   handleConversationMemoryExtractionGetWithQueryRuntime,
   handleConversationMemoryExtractWithQueryRuntime,
 } from "./query-runtime-memory.js";
+import { handleConversationPromptSnapshotGetWithQueryRuntime } from "./query-runtime-prompt-snapshot.js";
 import {
   applyTimelineProjectionFilter,
   applyTranscriptExportProjection,
@@ -80,6 +86,7 @@ import {
   parsePositiveInteger,
 } from "./conversation-debug-projection.js";
 import { listRecentConversationExports } from "./conversation-export-index.js";
+import type { ConversationPromptSnapshotArtifact } from "./conversation-prompt-snapshot.js";
 import {
   handleSubTaskArchiveWithQueryRuntime,
   handleSubTaskGetWithQueryRuntime,
@@ -166,6 +173,35 @@ export type GatewayServerOptions = {
   isConfigured?: () => boolean;
   /** 技能注册表（用于获取已加载技能列表） */
   skillRegistry?: SkillRegistry;
+  /** Prompt dump / inspect 能力 */
+  inspectAgentPrompt?: (input: {
+    agentId?: string;
+    conversationId?: string;
+    runId?: string;
+  }) => Promise<{
+    scope?: "agent" | "run";
+    agentId: string;
+    displayName?: string;
+    model?: string;
+    conversationId?: string;
+    runId?: string;
+    createdAt?: number;
+    text: string;
+    truncated: boolean;
+    maxChars?: number;
+    totalChars: number;
+    finalChars: number;
+    sections: Array<SystemPromptSection & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
+    droppedSections: Array<SystemPromptSection & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
+    deltas?: Array<AgentPromptDelta & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
+    providerNativeSystemBlocks?: Array<ProviderNativeSystemBlock & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
+    messages?: Array<Record<string, unknown>>;
+    metadata?: Record<string, unknown>;
+  }>;
+  getConversationPromptSnapshot?: (input: {
+    conversationId: string;
+    runId?: string;
+  }) => Promise<ConversationPromptSnapshotArtifact | undefined>;
   /** 长期任务管理器 */
   goalManager?: GoalManager;
   /** 子任务运行时存储 */
@@ -265,6 +301,7 @@ const DEFAULT_METHODS = [
   "conversation.restore",
   "conversation.transcript.export",
   "conversation.timeline.get",
+  "conversation.prompt_snapshot.get",
   "conversation.digest.get",
   "conversation.digest.refresh",
   "conversation.memory.extract",
@@ -275,6 +312,7 @@ const DEFAULT_METHODS = [
   "subtask.archive",
   "tools.list",
   "tools.update",
+  "agents.prompt.inspect",
   "agents.list",
   "memory.search",
   "memory.get",
@@ -1429,6 +1467,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         auth: opts.auth,
         agentFactory: opts.agentFactory ?? (() => new MockAgent()),
         agentRegistry: opts.agentRegistry,
+        inspectAgentPrompt: opts.inspectAgentPrompt,
+        getConversationPromptSnapshot: opts.getConversationPromptSnapshot,
         primaryModelConfig: opts.primaryModelConfig,
         modelFallbacks: opts.modelFallbacks,
         conversationStore,
@@ -1724,6 +1764,8 @@ async function handleReq(
     log: GatewayLog;
     agentFactory: () => BelldandyAgent;
     agentRegistry?: AgentRegistry;
+    inspectAgentPrompt?: GatewayServerOptions["inspectAgentPrompt"];
+    getConversationPromptSnapshot?: GatewayServerOptions["getConversationPromptSnapshot"];
     primaryModelConfig?: { baseUrl: string; apiKey: string; model: string };
     modelFallbacks?: ModelProfile[];
     conversationStore: ConversationStore;
@@ -1775,6 +1817,7 @@ async function handleReq(
     "conversation.restore",
     "conversation.transcript.export",
     "conversation.timeline.get",
+    "conversation.prompt_snapshot.get",
     "conversation.digest.get",
     "conversation.digest.refresh",
     "conversation.memory.extract",
@@ -1783,6 +1826,7 @@ async function handleReq(
     "subtask.get",
     "subtask.stop",
     "subtask.archive",
+    "agents.prompt.inspect",
     "tools.update",
     "memory.search",
     "memory.get",
@@ -2511,6 +2555,40 @@ async function handleReq(
           };
         }
         | undefined;
+      let promptObservability:
+        | {
+          requested: {
+            agentId?: string;
+            conversationId?: string;
+            runId?: string;
+          };
+          summary: ReturnType<typeof buildPromptObservabilitySummary>;
+        }
+        | undefined;
+      let toolBehaviorObservability:
+        | {
+          requested: {
+            agentId?: string;
+            conversationId?: string;
+            taskId?: string;
+          };
+          visibilityContext: {
+            agentId: string;
+            conversationId: string | null;
+            taskId?: string;
+            launchSpec?: ToolExecutionRuntimeContext["launchSpec"];
+          };
+          counts: {
+            visibleToolContractCount: number;
+            includedContractCount: number;
+            behaviorContractCount: number;
+          };
+          included: string[];
+          contracts: ReturnType<typeof buildToolBehaviorObservability>["contracts"];
+          summary?: string;
+          experiment?: ReturnType<typeof buildToolBehaviorObservability>["experiment"];
+        }
+        | undefined;
 
       if (conversationId) {
         const conversationSnapshot = ctx.conversationStore.get(conversationId);
@@ -2619,6 +2697,110 @@ async function handleReq(
         };
       }
 
+      if (ctx.inspectAgentPrompt) {
+        const promptAgentId = typeof params.promptAgentId === "string" && params.promptAgentId.trim()
+          ? params.promptAgentId.trim()
+          : undefined;
+        const promptConversationId = typeof params.promptConversationId === "string" && params.promptConversationId.trim()
+          ? params.promptConversationId.trim()
+          : undefined;
+        const promptRunId = typeof params.promptRunId === "string" && params.promptRunId.trim()
+          ? params.promptRunId.trim()
+          : undefined;
+        try {
+          const inspection = await ctx.inspectAgentPrompt({
+            agentId: promptAgentId,
+            conversationId: promptConversationId,
+            runId: promptRunId,
+          });
+          const summary = buildPromptObservabilitySummary(inspection);
+          checks.push({
+            id: "prompt_observability",
+            name: "Prompt Observability",
+            status: "pass",
+            message: `${summary.agentId} ${summary.scope ?? "agent"} prompt tokens=${summary.tokenBreakdown.systemPromptEstimatedTokens}, sections=${summary.counts.sectionCount}, deltas=${summary.counts.deltaCount}, blocks=${summary.counts.providerNativeSystemBlockCount}`,
+          });
+          promptObservability = {
+            requested: {
+              ...(promptAgentId ? { agentId: promptAgentId } : {}),
+              ...(promptConversationId ? { conversationId: promptConversationId } : {}),
+              ...(promptRunId ? { runId: promptRunId } : {}),
+            },
+            summary,
+          };
+        } catch (error) {
+          checks.push({
+            id: "prompt_observability",
+            name: "Prompt Observability",
+            status: "warn",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      if (ctx.toolExecutor) {
+        const toolAgentId = typeof params.toolAgentId === "string" && params.toolAgentId.trim()
+          ? params.toolAgentId.trim()
+          : undefined;
+        const toolConversationId = typeof params.toolConversationId === "string" && params.toolConversationId.trim()
+          ? params.toolConversationId.trim()
+          : undefined;
+        const toolTaskId = typeof params.toolTaskId === "string" && params.toolTaskId.trim()
+          ? params.toolTaskId.trim()
+          : undefined;
+        const visibilityTask = toolTaskId && ctx.subTaskRuntimeStore
+          ? await ctx.subTaskRuntimeStore.getTask(toolTaskId)
+          : undefined;
+        const visibilityAgentId = toolAgentId || visibilityTask?.agentId;
+        const visibilityConversationId = toolConversationId || visibilityTask?.parentConversationId;
+        const runtimeContext: ToolExecutionRuntimeContext | undefined = visibilityTask
+          ? { launchSpec: visibilityTask.launchSpec }
+          : undefined;
+        const visibleContracts = ctx.toolExecutor.getContracts(
+          visibilityAgentId,
+          visibilityConversationId,
+          runtimeContext,
+        ).filter((contract) => contract.name !== TOOL_SETTINGS_CONTROL_NAME);
+        const observability = buildToolBehaviorObservability({
+          contracts: visibleContracts,
+          disabledContractNamesConfigured: readConfiguredPromptExperimentToolContracts(),
+        });
+        checks.push({
+          id: "tool_behavior_observability",
+          name: "Tool Behavior Observability",
+          status: observability.included.length > 0 ? "pass" : "warn",
+          message: observability.included.length > 0
+            ? `${observability.included.length} behavior contract(s) visible for ${visibilityAgentId ?? "default"}`
+            : `No behavior contracts visible for ${visibilityAgentId ?? "default"}`,
+        });
+        toolBehaviorObservability = {
+          requested: {
+            ...(toolAgentId ? { agentId: toolAgentId } : {}),
+            ...(toolConversationId ? { conversationId: toolConversationId } : {}),
+            ...(toolTaskId ? { taskId: toolTaskId } : {}),
+          },
+          visibilityContext: {
+            agentId: visibilityAgentId ?? "default",
+            conversationId: visibilityConversationId ?? null,
+            ...(visibilityTask
+              ? {
+                taskId: visibilityTask.id,
+                launchSpec: visibilityTask.launchSpec,
+              }
+              : {}),
+          },
+          counts: {
+            visibleToolContractCount: visibleContracts.length,
+            includedContractCount: observability.counts.includedContractCount,
+            behaviorContractCount: observability.counts.includedContractCount,
+          },
+          included: observability.included,
+          contracts: observability.contracts,
+          ...(observability.summary ? { summary: observability.summary } : {}),
+          ...(observability.experiment ? { experiment: observability.experiment } : {}),
+        };
+      }
+
       return {
         type: "res",
         id: req.id,
@@ -2631,6 +2813,8 @@ async function handleReq(
           extensionGovernance,
           queryRuntime,
           mcpRuntime,
+          ...(promptObservability ? { promptObservability } : {}),
+          ...(toolBehaviorObservability ? { toolBehaviorObservability } : {}),
           ...(conversationDebug ? { conversationDebug } : {}),
           ...(conversationCatalog ? { conversationCatalog } : {}),
           ...(recentConversationExports ? { recentConversationExports } : {}),
@@ -2652,6 +2836,46 @@ async function handleReq(
         };
       }));
       return { type: "res", id: req.id, ok: true, payload: { agents } };
+    }
+
+    case "agents.prompt.inspect": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const agentId = typeof params.agentId === "string" && params.agentId.trim()
+        ? params.agentId.trim()
+        : undefined;
+      const conversationId = typeof params.conversationId === "string" && params.conversationId.trim()
+        ? params.conversationId.trim()
+        : undefined;
+      const runId = typeof params.runId === "string" && params.runId.trim()
+        ? params.runId.trim()
+        : undefined;
+      if (!ctx.inspectAgentPrompt) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "not_available", message: "Prompt inspection is not available." },
+        };
+      }
+      try {
+        const inspection = await ctx.inspectAgentPrompt({ agentId, conversationId, runId });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: inspection,
+        };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "prompt_inspect_failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
     }
 
     case "goal.create": {
@@ -4299,6 +4523,33 @@ async function handleReq(
       }, {
         conversationId,
         previewChars,
+      });
+    }
+
+    case "conversation.prompt_snapshot.get": {
+      const params = req.params as {
+        conversationId?: string;
+        runId?: string;
+      } | undefined;
+      const conversationId = typeof params?.conversationId === "string" ? params.conversationId.trim() : "";
+      const runId = typeof params?.runId === "string" && params.runId.trim()
+        ? params.runId.trim()
+        : undefined;
+
+      if (!conversationId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "conversationId is required" } };
+      }
+      if (!ctx.getConversationPromptSnapshot) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Prompt snapshot artifacts are not available." } };
+      }
+
+      return handleConversationPromptSnapshotGetWithQueryRuntime({
+        requestId: req.id,
+        loadPromptSnapshot: ctx.getConversationPromptSnapshot,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"conversation.prompt_snapshot.get">(),
+      }, {
+        conversationId,
+        runId,
       });
     }
 

@@ -20,8 +20,20 @@ import type { OpenAIWireApi } from "./openai.js";
 import { estimateTokens, estimateMessagesTokens, needsInLoopCompaction, compactIncremental, createEmptyCompactionState, type CompactionState, type CompactionOptions, type SummarizerFn } from "./compaction.js";
 import type { CompactionRuntimeTracker } from "./compaction-runtime.js";
 import { microcompactMessages, type MicrocompactOptions } from "./microcompact.js";
+import {
+  buildProviderNativeSystemBlocks,
+  type ProviderNativeSystemBlock,
+  type SystemPromptSection,
+} from "./system-prompt.js";
 import { TokenCounterService } from "./token-counter.js";
 import type { ConversationStore, ActiveCounterSnapshot } from "./conversation.js";
+import {
+  createAgentPromptSnapshot,
+  readPromptSnapshotDeltas,
+  readPromptSnapshotRunId,
+  type AgentPromptDelta,
+  type AgentPromptSnapshot,
+} from "./prompt-snapshot.js";
 
 type ApiProtocol = "openai" | "anthropic";
 const MIN_MULTIMODAL_REQUEST_TIMEOUT_MS = 300_000;
@@ -42,6 +54,7 @@ export type ToolEnabledAgentOptions = {
   timeoutMs?: number;
   maxToolCalls?: number;
   systemPrompt?: string;
+  systemPromptSections?: SystemPromptSection[];
   /** 简化版钩子接口（向后兼容） */
   hooks?: AgentHooks;
   /** 新版钩子运行器（推荐使用） */
@@ -89,6 +102,8 @@ export type ToolEnabledAgentOptions = {
   compactionRuntimeTracker?: CompactionRuntimeTracker;
   /** 会话存储（用于跨 run 持久化 token 计数器状态） */
   conversationStore?: ConversationStore;
+  /** 记录本次 run 实际发给模型的 prompt snapshot */
+  onPromptSnapshot?: (snapshot: AgentPromptSnapshot) => void;
 };
 
 type Message =
@@ -527,6 +542,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
   async *run(input: AgentRunInput): AsyncIterable<AgentStreamItem> {
     const startTime = Date.now();
     const resolvedAgentId = input.agentId ?? "tool-agent";
+    let runSystemPrompt = this.opts.systemPrompt;
+    let hookSystemPromptUsed = false;
+    let prependContext: string | undefined;
+    let hookPromptDeltas: AgentPromptDelta[] | undefined;
     const legacyHookCtx = { agentId: resolvedAgentId, conversationId: input.conversationId };
 
     // 新版钩子上下文
@@ -553,10 +572,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
           if (hookRes) {
             // 注入系统提示词前置上下文
             if (hookRes.prependContext) {
+              prependContext = hookRes.prependContext;
               input = applyPrependContextToInput(input, hookRes.prependContext);
             }
-            // systemPrompt 由 hook 返回时，覆盖原有
-            // 这里暂不处理 systemPrompt，保留给调用方在 opts 中设置
+            if (hookRes.deltas && hookRes.deltas.length > 0) {
+              hookPromptDeltas = hookRes.deltas.map((delta) => ({ ...delta }));
+            }
+            if (typeof hookRes.systemPrompt === "string") {
+              hookSystemPromptUsed = true;
+              runSystemPrompt = hookRes.systemPrompt;
+            }
           }
         } catch (err) {
           yield { type: "status", status: "error" };
@@ -597,14 +622,65 @@ export class ToolEnabledAgent implements BelldandyAgent {
       }
     }
 
+    const runtimeIdentityDelta = buildRuntimeIdentityPromptDelta({
+      userUuid: input.userUuid,
+      senderInfo: input.senderInfo,
+      roomContext: input.roomContext,
+    });
+    const metaPromptDeltas = readPromptSnapshotDeltas(input.meta);
+    const providerNativeSystemBlocks = buildProviderNativeSystemBlocks({
+      sections: hookSystemPromptUsed ? undefined : this.opts.systemPromptSections,
+      deltas: collectRunPromptDeltas({
+        hookPromptDeltas,
+        runtimeIdentityDelta,
+        metaPromptDeltas,
+      }),
+      fallbackText: runSystemPrompt,
+    });
     const messages: Message[] = buildInitialMessages(
-      this.opts.systemPrompt,
+      runSystemPrompt,
       content,
       input.history,
-      input.userUuid,
-      input.senderInfo,
-      input.roomContext,
+      runtimeIdentityDelta?.text,
     );
+    let promptSnapshotCaptured = false;
+    const capturePromptSnapshot = (messagesForSnapshot: Message[]) => {
+      if (promptSnapshotCaptured || !this.opts.onPromptSnapshot) {
+        return;
+      }
+      promptSnapshotCaptured = true;
+      const snapshotDeltas: AgentPromptDelta[] = [];
+      if (hookPromptDeltas && hookPromptDeltas.length > 0) {
+        snapshotDeltas.push(...hookPromptDeltas.map((delta) => ({ ...delta })));
+      } else if (prependContext) {
+        snapshotDeltas.push({
+          id: "prepend-context",
+          deltaType: "user-prelude",
+          role: "user-prelude",
+          source: "hook-runner",
+          text: prependContext.trim(),
+        });
+      }
+      if (runtimeIdentityDelta) {
+        snapshotDeltas.push({ ...runtimeIdentityDelta });
+      }
+      if (metaPromptDeltas && metaPromptDeltas.length > 0) {
+        snapshotDeltas.push(...metaPromptDeltas.map((delta) => ({ ...delta })));
+      }
+      this.opts.onPromptSnapshot(
+        createAgentPromptSnapshot({
+          agentId: resolvedAgentId,
+          conversationId: input.conversationId,
+          runId: readPromptSnapshotRunId(input.meta),
+          messages: messagesForSnapshot,
+          deltas: snapshotDeltas,
+          providerNativeSystemBlocks,
+          inputMeta: input.meta,
+          hookSystemPromptUsed,
+          prependContext,
+        }),
+      );
+    };
     const textAttachmentChars = readTextAttachmentChars(input.meta);
     const runtimeContext = readToolExecutionRuntimeContext(input.meta);
     let toolCallCount = 0;
@@ -721,6 +797,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
           messages,
           tools.length > 0 ? tools : undefined,
           textAttachmentChars,
+          !promptSnapshotCaptured ? capturePromptSnapshot : undefined,
+          providerNativeSystemBlocks,
         );
 
         // 记录并累加 usage 信息
@@ -1193,6 +1271,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
     messages: Message[],
     tools?: { type: "function"; function: { name: string; description: string; parameters: object } }[],
     textAttachmentChars?: number,
+    onBeforeRequest?: (messages: Message[]) => void,
+    providerNativeSystemBlocks?: ProviderNativeSystemBlock[],
   ): Promise<{ ok: true; content: string; toolCalls?: OpenAIToolCall[]; reasoning_content?: string; usage?: AnthropicUsage } | { ok: false; error: string }> {
     let effectiveTimeoutMs = this.opts.timeoutMs;
     try {
@@ -1201,6 +1281,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       if (maxInput && maxInput > 0) {
         trimMessagesToFit(messages, tools, maxInput);
       }
+      onBeforeRequest?.(messages);
 
       // 用于记录实际使用的协议（由 buildRequest 内部决定）
       let usedProtocol: ApiProtocol = "openai" as ApiProtocol;
@@ -1231,6 +1312,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
               maxTokens: this.opts.maxOutputTokens ?? 4096,
               stream: false,
               enableCaching: true,
+              providerNativeSystemBlocks,
             });
           }
 
@@ -1500,112 +1582,127 @@ function estimateMessagesTotal(messages: Message[]): number {
   });
 }
 
+function buildRuntimeIdentityPromptDelta(input: {
+  userUuid?: string;
+  senderInfo?: any;
+  roomContext?: any;
+}): AgentPromptDelta | undefined {
+  const contextLines: string[] = ["## Identity Context (Runtime)"];
+
+  if (input.userUuid) {
+    contextLines.push("- **UUID Support**: ENABLED");
+    contextLines.push(`- **Current User UUID**: ${input.userUuid}`);
+    contextLines.push("- You can use the `get_user_uuid` tool to retrieve this UUID at any time.");
+  }
+
+  if (input.senderInfo) {
+    contextLines.push("");
+    contextLines.push("### Current Message Sender");
+    contextLines.push(`- **Type**: ${input.senderInfo.type}`);
+    contextLines.push(`- **ID**: ${input.senderInfo.id}`);
+    if (input.senderInfo.name) {
+      contextLines.push(`- **Name**: ${input.senderInfo.name}`);
+    }
+    if (input.senderInfo.type === "agent" && input.senderInfo.identity) {
+      contextLines.push(`- **Identity**: ${input.senderInfo.identity}`);
+    }
+    contextLines.push("- You can use the `get_message_sender_info` tool to retrieve sender information at any time.");
+  }
+
+  if (input.roomContext) {
+    contextLines.push("");
+    contextLines.push("### Room Context");
+    contextLines.push(`- **Environment**: ${input.roomContext.environment === "community" ? "office.goddess.ai Community" : "Local WebChat"}`);
+    if (input.roomContext.roomId) {
+      contextLines.push(`- **Room ID**: ${input.roomContext.roomId}`);
+    }
+    if (input.roomContext.members && input.roomContext.members.length > 0) {
+      const users = input.roomContext.members.filter((member: any) => member.type === "user");
+      const agents = input.roomContext.members.filter((member: any) => member.type === "agent");
+      contextLines.push(`- **Members**: ${input.roomContext.members.length} total (${users.length} users, ${agents.length} agents)`);
+
+      const smartInjectThreshold = parseInt(process.env.BELLDANDY_ROOM_INJECT_THRESHOLD || "10", 10);
+      if (input.roomContext.members.length <= smartInjectThreshold) {
+        if (users.length > 0) {
+          contextLines.push("  - Users:");
+          users.forEach((user: any) => {
+            contextLines.push(`    - ${user.name || "Unknown"} (UUID: ${user.id})`);
+          });
+        }
+
+        if (agents.length > 0) {
+          contextLines.push("  - Agents:");
+          agents.forEach((agent: any) => {
+            contextLines.push(`    - ${agent.name || "Unknown"} (Identity: ${agent.identity || "Unknown"})`);
+          });
+        }
+      } else {
+        contextLines.push("- Use the `get_room_members` tool to retrieve the full member list with details.");
+      }
+    }
+  }
+
+  if (input.userUuid || input.senderInfo || input.roomContext) {
+    contextLines.push("");
+    contextLines.push("### Identity-Based Authority Rules");
+    if (input.roomContext && input.roomContext.environment === "community") {
+      contextLines.push("- **Status**: ACTIVE (office.goddess.ai Community environment)");
+      contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
+      contextLines.push("- You should verify sender identity before executing sensitive commands.");
+    } else if (input.userUuid) {
+      contextLines.push("- **Status**: ACTIVE (UUID provided)");
+      contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
+    } else {
+      contextLines.push("- **Status**: PARTIAL (sender info available but not in community environment)");
+    }
+  } else {
+    return undefined;
+  }
+
+  return {
+    id: "runtime-identity-context",
+    deltaType: "runtime-identity",
+    role: "system",
+    source: "tool-agent",
+    text: contextLines.join("\n").trim(),
+  };
+}
+
+function collectRunPromptDeltas(input: {
+  hookPromptDeltas?: AgentPromptDelta[];
+  runtimeIdentityDelta?: AgentPromptDelta;
+  metaPromptDeltas?: AgentPromptDelta[];
+}): AgentPromptDelta[] {
+  const deltas: AgentPromptDelta[] = [];
+
+  if (input.hookPromptDeltas && input.hookPromptDeltas.length > 0) {
+    deltas.push(...input.hookPromptDeltas.map((delta) => ({ ...delta })));
+  }
+  if (input.runtimeIdentityDelta) {
+    deltas.push({ ...input.runtimeIdentityDelta });
+  }
+  if (input.metaPromptDeltas && input.metaPromptDeltas.length > 0) {
+    deltas.push(...input.metaPromptDeltas.map((delta) => ({ ...delta })));
+  }
+
+  return deltas;
+}
+
 function buildInitialMessages(
   systemPrompt: string | undefined,
   userContent: string | Array<any>,
   history?: Array<{ role: "user" | "assistant"; content: string | Array<any> }>,
-  userUuid?: string, // 添加UUID参数
-  senderInfo?: any, // 添加发送者信息
-  roomContext?: any, // 添加房间上下文
+  runtimeIdentityText?: string,
 ): Message[] {
   const messages: Message[] = [];
 
   // Layer 1: System
   let finalSystemPrompt = systemPrompt?.trim() || "";
 
-  // 动态注入身份上下文信息
-  const contextLines: string[] = [];
-
-  // 1. UUID环境信息
-  if (userUuid) {
-    contextLines.push("");
-    contextLines.push("## Identity Context (Runtime)");
-    contextLines.push("- **UUID Support**: ENABLED");
-    contextLines.push(`- **Current User UUID**: ${userUuid}`);
-    contextLines.push("- You can use the `get_user_uuid` tool to retrieve this UUID at any time.");
-  }
-
-  // 2. 发送者信息
-  if (senderInfo) {
-    if (contextLines.length === 0) {
-      contextLines.push("");
-      contextLines.push("## Identity Context (Runtime)");
-    }
-    contextLines.push("");
-    contextLines.push("### Current Message Sender");
-    contextLines.push(`- **Type**: ${senderInfo.type}`);
-    contextLines.push(`- **ID**: ${senderInfo.id}`);
-    if (senderInfo.name) {
-      contextLines.push(`- **Name**: ${senderInfo.name}`);
-    }
-    if (senderInfo.type === "agent" && senderInfo.identity) {
-      contextLines.push(`- **Identity**: ${senderInfo.identity}`);
-    }
-    contextLines.push("- You can use the `get_message_sender_info` tool to retrieve sender information at any time.");
-  }
-
-  // 3. 房间上下文信息
-  if (roomContext) {
-    if (contextLines.length === 0) {
-      contextLines.push("");
-      contextLines.push("## Identity Context (Runtime)");
-    }
-    contextLines.push("");
-    contextLines.push("### Room Context");
-    contextLines.push(`- **Environment**: ${roomContext.environment === "community" ? "office.goddess.ai Community" : "Local WebChat"}`);
-    if (roomContext.roomId) {
-      contextLines.push(`- **Room ID**: ${roomContext.roomId}`);
-    }
-    if (roomContext.members && roomContext.members.length > 0) {
-      const users = roomContext.members.filter((m: any) => m.type === "user");
-      const agents = roomContext.members.filter((m: any) => m.type === "agent");
-
-      contextLines.push(`- **Members**: ${roomContext.members.length} total (${users.length} users, ${agents.length} agents)`);
-
-      // 智能注入：≤阈值注入完整列表，>阈值只注入统计
-      // 支持环境变量配置：BELLDANDY_ROOM_INJECT_THRESHOLD（默认10）
-      const SMART_INJECT_THRESHOLD = parseInt(process.env.BELLDANDY_ROOM_INJECT_THRESHOLD || "10", 10);
-      if (roomContext.members.length <= SMART_INJECT_THRESHOLD) {
-        // 小型房间：注入完整成员列表
-        if (users.length > 0) {
-          contextLines.push(`  - Users:`);
-          users.forEach((u: any) => {
-            contextLines.push(`    - ${u.name || "Unknown"} (UUID: ${u.id})`);
-          });
-        }
-
-        if (agents.length > 0) {
-          contextLines.push(`  - Agents:`);
-          agents.forEach((a: any) => {
-            contextLines.push(`    - ${a.name || "Unknown"} (Identity: ${a.identity || "Unknown"})`);
-          });
-        }
-      } else {
-        // 大型房间：只注入统计，提示使用工具查询
-        contextLines.push("- Use the `get_room_members` tool to retrieve the full member list with details.");
-      }
-    }
-  }
-
-  // 4. 身份权力规则激活状态
-  if (userUuid || senderInfo || roomContext) {
-    contextLines.push("");
-    contextLines.push("### Identity-Based Authority Rules");
-    if (roomContext && roomContext.environment === "community") {
-      contextLines.push("- **Status**: ACTIVE (office.goddess.ai Community environment)");
-      contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
-      contextLines.push("- You should verify sender identity before executing sensitive commands.");
-    } else if (userUuid) {
-      contextLines.push("- **Status**: ACTIVE (UUID provided)");
-      contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
-    } else {
-      contextLines.push("- **Status**: PARTIAL (sender info available but not in community environment)");
-    }
-  }
-
-  if (contextLines.length > 0) {
-    contextLines.push("");
-    finalSystemPrompt += contextLines.join("\n");
+  if (runtimeIdentityText?.trim()) {
+    finalSystemPrompt = finalSystemPrompt
+      ? `${finalSystemPrompt}\n${runtimeIdentityText.trim()}`
+      : runtimeIdentityText.trim();
   }
 
   if (finalSystemPrompt) {

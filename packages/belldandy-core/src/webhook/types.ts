@@ -48,6 +48,7 @@ export interface WebhookResponse {
   payload?: {
     webhookId: string;
     conversationId: string;
+    runId?: string;
     response: string;
   };
   error?: {

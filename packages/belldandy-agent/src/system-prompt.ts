@@ -1,5 +1,15 @@
-import type { WorkspaceFile, WorkspaceLoadResult } from "./workspace.js";
-import { SOUL_FILENAME, IDENTITY_FILENAME, USER_FILENAME, BOOTSTRAP_FILENAME, AGENTS_FILENAME, TOOLS_FILENAME, MEMORY_FILENAME } from "./workspace.js";
+import type { AgentPromptDelta } from "./prompt-snapshot.js";
+import type { WorkspaceDocumentFrontmatter, WorkspaceFile, WorkspaceLoadResult } from "./workspace.js";
+import {
+    SOUL_FILENAME,
+    IDENTITY_FILENAME,
+    USER_FILENAME,
+    BOOTSTRAP_FILENAME,
+    AGENTS_FILENAME,
+    TOOLS_FILENAME,
+    MEMORY_FILENAME,
+    getWorkspaceDocumentBody,
+} from "./workspace.js";
 
 /**
  * System Prompt 构建参数
@@ -29,7 +39,252 @@ export type SystemPromptParams = {
     supportsUuid?: boolean;
     /** 用户UUID（如果有） */
     userUuid?: string;
+    /** 可选：覆盖指定 section 的 priority，影响排序与截断顺序 */
+    sectionPriorityOverrides?: Record<string, number>;
 };
+
+export type SystemPromptSectionSource =
+    | "core"
+    | "workspace"
+    | "memory"
+    | "skills"
+    | "bootstrap"
+    | "context"
+    | "extra"
+    | "methodology"
+    | "workspace-dir"
+    | "runtime"
+    | "profile"
+    | "meta";
+
+export type SystemPromptSection = {
+    id: string;
+    label: string;
+    source: SystemPromptSectionSource;
+    priority: number;
+    text: string;
+    sourceFile?: string;
+    summary?: string;
+    readWhen?: string[];
+    layer?: string;
+    cacheHint?: string;
+    role?: string;
+};
+
+export type SystemPromptBuildResult = {
+    text: string;
+    sections: SystemPromptSection[];
+    droppedSections: SystemPromptSection[];
+    truncated: boolean;
+    maxChars?: number;
+    totalChars: number;
+    finalChars: number;
+};
+
+export type ProviderNativeSystemBlockType =
+    | "static-persona"
+    | "static-capability"
+    | "dynamic-runtime";
+
+export type ProviderNativeSystemBlock = {
+    id: string;
+    blockType: ProviderNativeSystemBlockType;
+    text: string;
+    sourceSectionIds: string[];
+    sourceDeltaIds: string[];
+    cacheControlEligible: boolean;
+};
+
+function createSection(input: Omit<SystemPromptSection, "priority"> & { priority: number }): SystemPromptSection {
+    return {
+        id: input.id,
+        label: input.label,
+        source: input.source,
+        priority: input.priority,
+        text: input.text,
+        sourceFile: input.sourceFile,
+        summary: input.summary,
+        readWhen: input.readWhen,
+        layer: input.layer,
+        cacheHint: input.cacheHint,
+        role: input.role,
+    };
+}
+
+function getSectionMetadataFromWorkspaceFile(file: WorkspaceFile | undefined): Partial<SystemPromptSection> {
+    const frontmatter: WorkspaceDocumentFrontmatter | undefined = file?.document?.frontmatter;
+    return {
+        sourceFile: file?.path,
+        summary: frontmatter?.summary,
+        readWhen: frontmatter?.readWhen,
+        layer: frontmatter?.layer,
+        cacheHint: frontmatter?.cache,
+        role: frontmatter?.role,
+    };
+}
+
+function applySectionPriorityOverrides(
+    sections: SystemPromptSection[],
+    overrides?: Record<string, number>,
+): SystemPromptSection[] {
+    if (!overrides || Object.keys(overrides).length === 0) {
+        return [...sections];
+    }
+
+    return sections.map((section) => ({
+        ...section,
+        priority: Object.prototype.hasOwnProperty.call(overrides, section.id)
+            ? overrides[section.id]!
+            : section.priority,
+    }));
+}
+
+function sortSectionsByPriority(
+    sections: SystemPromptSection[],
+): SystemPromptSection[] {
+    return sections
+        .map((section, index) => ({ section, index }))
+        .sort((left, right) => {
+            const priorityDiff = left.section.priority - right.section.priority;
+            if (priorityDiff !== 0) {
+                return priorityDiff;
+            }
+            return left.index - right.index;
+        })
+        .map((entry) => entry.section);
+}
+
+function getWorkspacePromptBody(file: WorkspaceFile | undefined): string | undefined {
+    const body = file ? getWorkspaceDocumentBody(file) : undefined;
+    const normalized = body?.trim();
+    return normalized ? normalized : undefined;
+}
+
+function classifyProviderNativeSystemSection(section: SystemPromptSection): ProviderNativeSystemBlockType {
+    switch (section.id) {
+        case "core":
+        case "workspace-agents":
+        case "workspace-soul":
+        case "workspace-user":
+        case "workspace-identity":
+        case "workspace-memory":
+        case "workspace-bootstrap":
+            return "static-persona";
+        default:
+            break;
+    }
+
+    switch (section.source) {
+        case "runtime":
+        case "profile":
+        case "meta":
+            return "dynamic-runtime";
+        default:
+            return "static-capability";
+    }
+}
+
+function buildProviderNativeSystemBlock(input: {
+    id: string;
+    blockType: ProviderNativeSystemBlockType;
+    texts: string[];
+    sourceSectionIds?: string[];
+    sourceDeltaIds?: string[];
+}): ProviderNativeSystemBlock | undefined {
+    const text = input.texts
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    if (!text) {
+        return undefined;
+    }
+
+    return {
+        id: input.id,
+        blockType: input.blockType,
+        text,
+        sourceSectionIds: input.sourceSectionIds ?? [],
+        sourceDeltaIds: input.sourceDeltaIds ?? [],
+        cacheControlEligible: input.blockType !== "dynamic-runtime",
+    };
+}
+
+export function renderSystemPromptSections(sections: SystemPromptSection[]): string {
+    return sections.map((section) => section.text).join("\n").trim();
+}
+
+export function buildProviderNativeSystemBlocks(input: {
+    sections?: SystemPromptSection[];
+    deltas?: AgentPromptDelta[];
+    fallbackText?: string;
+}): ProviderNativeSystemBlock[] {
+    const sections = input.sections ?? [];
+    const systemDeltas = (input.deltas ?? [])
+        .filter((delta) => delta.role === "system" && delta.text.trim());
+
+    if (sections.length === 0) {
+        const blocks: ProviderNativeSystemBlock[] = [];
+        const fallbackBlock = buildProviderNativeSystemBlock({
+            id: "provider-native-static-capability",
+            blockType: "static-capability",
+            texts: input.fallbackText ? [input.fallbackText] : [],
+        });
+        if (fallbackBlock) {
+            blocks.push(fallbackBlock);
+        }
+        const runtimeBlock = buildProviderNativeSystemBlock({
+            id: "provider-native-dynamic-runtime",
+            blockType: "dynamic-runtime",
+            texts: systemDeltas.map((delta) => delta.text),
+            sourceDeltaIds: systemDeltas.map((delta) => delta.id),
+        });
+        if (runtimeBlock) {
+            blocks.push(runtimeBlock);
+        }
+        return blocks;
+    }
+
+    const personaSections = sections.filter((section) => classifyProviderNativeSystemSection(section) === "static-persona");
+    const capabilitySections = sections.filter((section) => classifyProviderNativeSystemSection(section) === "static-capability");
+    const runtimeSections = sections.filter((section) => classifyProviderNativeSystemSection(section) === "dynamic-runtime");
+
+    const blocks = [
+        buildProviderNativeSystemBlock({
+            id: "provider-native-static-persona",
+            blockType: "static-persona",
+            texts: personaSections.map((section) => section.text),
+            sourceSectionIds: personaSections.map((section) => section.id),
+        }),
+        buildProviderNativeSystemBlock({
+            id: "provider-native-static-capability",
+            blockType: "static-capability",
+            texts: capabilitySections.map((section) => section.text),
+            sourceSectionIds: capabilitySections.map((section) => section.id),
+        }),
+        buildProviderNativeSystemBlock({
+            id: "provider-native-dynamic-runtime",
+            blockType: "dynamic-runtime",
+            texts: [
+                ...runtimeSections.map((section) => section.text),
+                ...systemDeltas.map((delta) => delta.text),
+            ],
+            sourceSectionIds: runtimeSections.map((section) => section.id),
+            sourceDeltaIds: systemDeltas.map((delta) => delta.id),
+        }),
+    ].filter(Boolean) as ProviderNativeSystemBlock[];
+
+    if (blocks.length > 0) {
+        return blocks;
+    }
+
+    const fallbackBlock = buildProviderNativeSystemBlock({
+        id: "provider-native-static-capability",
+        blockType: "static-capability",
+        texts: input.fallbackText ? [input.fallbackText] : [],
+    });
+    return fallbackBlock ? [fallbackBlock] : [];
+}
 
 /**
  * 构建完整的 System Prompt
@@ -50,7 +305,7 @@ export type SystemPromptParams = {
  * 11. 额外 system prompt
  * 12. Methodology 系统协议
  */
-export function buildSystemPrompt(params: SystemPromptParams): string {
+export function buildSystemPromptResult(params: SystemPromptParams): SystemPromptBuildResult {
     const maxChars = params.maxChars && params.maxChars > 0 ? params.maxChars : 0;
 
     const workspace = params.workspace;
@@ -64,6 +319,13 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     const userFile = files.find(f => f.name === USER_FILENAME && !f.missing);
     const bootstrapFile = files.find(f => f.name === BOOTSTRAP_FILENAME && !f.missing);
     const memoryFile = files.find(f => f.name === MEMORY_FILENAME && !f.missing);
+    const agentsContent = getWorkspacePromptBody(agentsFile);
+    const soulContent = getWorkspacePromptBody(soulFile);
+    const toolsContent = getWorkspacePromptBody(toolsFile);
+    const identityContent = getWorkspacePromptBody(identityFile);
+    const userContent = getWorkspacePromptBody(userFile);
+    const bootstrapContent = getWorkspacePromptBody(bootstrapFile);
+    const memoryContent = getWorkspacePromptBody(memoryFile);
 
     const shouldInjectAgents = params.injectAgents ?? true;
     const shouldInjectSoul = params.injectSoul ?? true;
@@ -71,18 +333,24 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
 
     // 按优先级构建段落列表（高优先级在前）
     // 截断时从末尾开始丢弃
-    const sections: { label: string; text: string }[] = [];
+    const sections: SystemPromptSection[] = [];
 
     // P0: 核心身份声明（始终保留）
-    sections.push({
+    sections.push(createSection({
+        id: "core",
         label: "core",
+        source: "core",
+        priority: 0,
         text: "You are Belldandy, a personal AI assistant running locally on your user's device.\n",
-    });
+    }));
 
     // P1: AGENTS.md（工作空间指南）
-    if (shouldInjectAgents && agentsFile?.content) {
-        sections.push({
+    if (shouldInjectAgents && agentsContent) {
+        sections.push(createSection({
+            id: "workspace-agents",
             label: "AGENTS.md",
+            source: "workspace",
+            priority: 10,
             text: [
                 "# Workspace Guide",
                 "",
@@ -90,18 +358,22 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
                 "",
                 "---",
                 "",
-                agentsFile.content.trim(),
+                agentsContent,
                 "",
                 "---",
                 "",
             ].join("\n"),
-        });
+            ...getSectionMetadataFromWorkspaceFile(agentsFile),
+        }));
     }
 
     // P2: SOUL.md（人格准则）
-    if (shouldInjectSoul && soulFile?.content) {
-        sections.push({
+    if (shouldInjectSoul && soulContent) {
+        sections.push(createSection({
+            id: "workspace-soul",
             label: "SOUL.md",
+            source: "workspace",
+            priority: 20,
             text: [
                 "# Persona & Guidelines",
                 "",
@@ -110,63 +382,79 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
                 "",
                 "---",
                 "",
-                soulFile.content.trim(),
+                soulContent,
                 "",
                 "---",
                 "",
             ].join("\n"),
-        });
+            ...getSectionMetadataFromWorkspaceFile(soulFile),
+        }));
     }
 
     // P3: USER.md
-    if (userFile?.content) {
-        sections.push({
+    if (userContent) {
+        sections.push(createSection({
+            id: "workspace-user",
             label: "USER.md",
+            source: "workspace",
+            priority: 30,
             text: [
                 "# Your User",
                 "",
                 "The following describes the person you are helping:",
                 "",
-                userFile.content.trim(),
+                userContent,
                 "",
             ].join("\n"),
-        });
+            ...getSectionMetadataFromWorkspaceFile(userFile),
+        }));
     }
 
     // P4: IDENTITY.md
-    if (identityFile?.content) {
-        sections.push({
+    if (identityContent) {
+        sections.push(createSection({
+            id: "workspace-identity",
             label: "IDENTITY.md",
+            source: "workspace",
+            priority: 40,
             text: [
                 "# Your Identity",
                 "",
                 "The following describes who you are:",
                 "",
-                identityFile.content.trim(),
+                identityContent,
                 "",
             ].join("\n"),
-        });
+            ...getSectionMetadataFromWorkspaceFile(identityFile),
+        }));
     }
 
     // P5: TOOLS.md
-    if (toolsFile?.content) {
-        sections.push({
+    if (toolsContent) {
+        sections.push(createSection({
+            id: "workspace-tools",
             label: "TOOLS.md",
+            source: "workspace",
+            priority: 50,
             text: [
                 "# Tools & Local Setup",
                 "",
                 "The following contains local tool configuration and environment-specific notes:",
                 "",
-                toolsFile.content.trim(),
+                toolsContent,
                 "",
             ].join("\n"),
-        });
+            ...getSectionMetadataFromWorkspaceFile(toolsFile),
+        }));
     }
 
     // P6: MEMORY.md
-    if (shouldInjectMemory && memoryFile?.content) {
-        sections.push({
+    if (shouldInjectMemory && memoryContent) {
+        sections.push(createSection({
+            id: "workspace-memory",
             label: "MEMORY.md",
+            source: "memory",
+            priority: 60,
             text: [
                 "# Core Memory & Notes",
                 "",
@@ -174,12 +462,13 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
                 "",
                 "---",
                 "",
-                memoryFile.content.trim(),
+                memoryContent,
                 "",
                 "---",
                 "",
             ].join("\n"),
-        });
+            ...getSectionMetadataFromWorkspaceFile(memoryFile),
+        }));
     }
 
     // P7: Skills（技能指令注入）
@@ -210,11 +499,20 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
         }
 
         if (injectedFull || params.hasSearchableSkills) {
-            sections.push({ label: "skills", text: skillLines.join("\n") });
+            sections.push(createSection({
+                id: "skills",
+                label: "skills",
+                source: "skills",
+                priority: 70,
+                text: skillLines.join("\n"),
+            }));
         }
     } else if (params.hasSearchableSkills) {
-        sections.push({
+        sections.push(createSection({
+            id: "skills",
             label: "skills",
+            source: "skills",
+            priority: 70,
             text: [
                 "# Skills",
                 "",
@@ -222,24 +520,28 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
                 "注意：仅搜索不算已使用；skill_get 会在当前 task 存在时自动记录 skill usage。若通过其他入口实际采用了 method 或 skill，再调用 experience_usage_record 补记。若误记了 usage，可用 experience_usage_revoke 撤销当前 task 的记录。",
                 "",
             ].join("\n"),
-        });
+        }));
     }
 
     // P8: BOOTSTRAP.md（首次引导，仅首次存在）
-    if (bootstrapFile?.content) {
-        sections.push({
+    if (bootstrapContent) {
+        sections.push(createSection({
+            id: "workspace-bootstrap",
             label: "BOOTSTRAP.md",
+            source: "bootstrap",
+            priority: 80,
             text: [
                 "# Bootstrap Instructions",
                 "",
                 "This is your first time waking up. Follow these instructions to get to know your user:",
                 "",
-                bootstrapFile.content.trim(),
+                bootstrapContent,
                 "",
                 "IMPORTANT: After completing the bootstrap conversation, use file_write to update IDENTITY.md and USER.md with what you learned, then delete BOOTSTRAP.md.",
                 "",
             ].join("\n"),
-        });
+            ...getSectionMetadataFromWorkspaceFile(bootstrapFile),
+        }));
     }
 
     // P9: 时间信息与UUID环境信息
@@ -271,21 +573,33 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
         }
 
         timeLines.push("");
-        sections.push({ label: "context", text: timeLines.join("\n") });
+        sections.push(createSection({
+            id: "context",
+            label: "context",
+            source: "context",
+            priority: 90,
+            text: timeLines.join("\n"),
+        }));
     }
 
     // P10: 额外 system prompt
     const extra = params.extraSystemPrompt?.trim();
     if (extra) {
-        sections.push({
+        sections.push(createSection({
+            id: "extra",
             label: "extra",
+            source: "extra",
+            priority: 100,
             text: ["# Additional Instructions", "", extra, ""].join("\n"),
-        });
+        }));
     }
 
     // P11: Methodology 系统协议
-    sections.push({
+    sections.push(createSection({
+        id: "methodology",
         label: "methodology",
+        source: "methodology",
+        priority: 110,
         text: [
             "# Methodology System (Auto-Injected)",
             "",
@@ -310,35 +624,64 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
             "**Goal**: Do not rely on ephemeral context alone. Crystallize your experience into persistent Methods.",
             "",
         ].join("\n"),
-    });
+    }));
 
     // P12: Workspace 目录路径
     if (workspace) {
-        sections.push({
+        sections.push(createSection({
+            id: "workspace-dir",
             label: "workspace-dir",
+            source: "workspace-dir",
+            priority: 120,
             text: `Workspace directory: ${workspace.dir}\n`,
-        });
+        }));
     }
+
+    const orderedSections = sortSectionsByPriority(
+        applySectionPriorityOverrides(sections, params.sectionPriorityOverrides),
+    );
 
     // 截断逻辑：从末尾开始丢弃低优先级段落
+    const droppedSections: SystemPromptSection[] = [];
+    const keptSections = [...orderedSections];
     if (maxChars) {
-        let total = sections.reduce((sum, s) => sum + s.text.length, 0);
-        const dropped: string[] = [];
+        let total = keptSections.reduce((sum, s) => sum + s.text.length, 0);
         // 从最低优先级（末尾）开始丢弃，但始终保留 P0（core）
-        while (total > maxChars && sections.length > 1) {
-            const removed = sections.pop()!;
+        while (total > maxChars && keptSections.length > 1) {
+            const removed = keptSections.pop()!;
             total -= removed.text.length;
-            dropped.push(removed.label);
+            droppedSections.unshift(removed);
         }
-        if (dropped.length > 0) {
-            sections.push({
+        if (droppedSections.length > 0) {
+            keptSections.push(createSection({
+                id: "truncation-notice",
                 label: "truncation-notice",
-                text: `\n[System prompt truncated: dropped ${dropped.join(", ")} to fit ${maxChars} char limit]\n`,
-            });
+                source: "meta",
+                priority: 999,
+                text: `\n[System prompt truncated: dropped ${droppedSections.map((section) => section.label).join(", ")} to fit ${maxChars} char limit]\n`,
+            }));
         }
     }
 
-    return sections.map(s => s.text).join("\n").trim();
+    const totalChars = orderedSections.reduce((sum, section) => sum + section.text.length, 0);
+    const text = renderSystemPromptSections(keptSections);
+    return {
+        text,
+        sections: keptSections,
+        droppedSections,
+        truncated: droppedSections.length > 0,
+        maxChars: maxChars || undefined,
+        totalChars,
+        finalChars: text.length,
+    };
+}
+
+export function buildSystemPromptSections(params: SystemPromptParams): SystemPromptSection[] {
+    return buildSystemPromptResult(params).sections;
+}
+
+export function buildSystemPrompt(params: SystemPromptParams): string {
+    return buildSystemPromptResult(params).text;
 }
 
 /**
@@ -348,7 +691,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
 export function buildWorkspaceContext(workspace: WorkspaceLoadResult): string {
     const lines: string[] = [];
 
-    const files = workspace.files.filter(f => !f.missing && f.content);
+    const files = workspace.files.filter((file) => !file.missing && getWorkspacePromptBody(file));
 
     if (files.length === 0) {
         return "";
@@ -360,7 +703,7 @@ export function buildWorkspaceContext(workspace: WorkspaceLoadResult): string {
     for (const file of files) {
         lines.push(`## ${file.name}`);
         lines.push("");
-        lines.push(file.content!.trim());
+        lines.push(getWorkspacePromptBody(file)!);
         lines.push("");
     }
 

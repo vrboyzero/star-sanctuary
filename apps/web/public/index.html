@@ -461,8 +461,12 @@
         <!-- Doctor Status -->
         <div class="form-group">
           <label class="form-label" data-i18n="settings.systemDoctor">系统检查</label>
-          <div id="doctorStatus" style="display: flex; flex-wrap: wrap; gap: 8px;">
-            <span class="badge" data-i18n="settings.doctorChecking">检查中...</span>
+          <div>
+            <button id="doctorToggleBtn" class="button badge" type="button" style="margin-bottom: 8px;">
+              <span data-i18n="settings.doctorChecking">检查中...</span>
+            </button>
+            <div id="doctorStatus" class="hidden" style="display: flex; flex-wrap: wrap; gap: 8px;">
+            </div>
           </div>
           <div class="form-help" data-i18n="settings.doctorHelp">检查当前配置、依赖与运行状态，便于快速定位缺失项。</div>
         </div>

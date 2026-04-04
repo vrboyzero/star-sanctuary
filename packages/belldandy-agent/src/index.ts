@@ -35,17 +35,41 @@ export {
   AGENTS_FILENAME,
   TOOLS_FILENAME,
   HEARTBEAT_FILENAME,
+  MEMORY_FILENAME,
+  parseWorkspaceDocument,
+  getWorkspaceDocumentBody,
   type WorkspaceFile,
   type WorkspaceFileName,
   type WorkspaceLoadResult,
+  type WorkspaceDocumentRole,
+  type WorkspaceDocumentFrontmatter,
+  type WorkspaceDocument,
   type IdentityInfo,
 } from "./workspace.js";
 
 export {
   buildSystemPrompt,
+  buildProviderNativeSystemBlocks,
+  buildSystemPromptResult,
+  buildSystemPromptSections,
+  renderSystemPromptSections,
   buildWorkspaceContext,
+  type ProviderNativeSystemBlock,
+  type ProviderNativeSystemBlockType,
   type SystemPromptParams,
+  type SystemPromptSection,
+  type SystemPromptSectionSource,
+  type SystemPromptBuildResult,
 } from "./system-prompt.js";
+
+export {
+  type AgentPromptDelta,
+  type AgentPromptDeltaRole,
+  type AgentPromptDeltaType,
+  type AgentPromptSnapshot,
+  type AgentPromptSnapshotContentPart,
+  type AgentPromptSnapshotMessage,
+} from "./prompt-snapshot.js";
 
 export {
   ConversationStore,

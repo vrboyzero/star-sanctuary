@@ -9,6 +9,10 @@ import { buildExtensionGovernanceReport } from "./extension-governance.js";
 import { loadExtensionMarketplaceState } from "./extension-marketplace-state.js";
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
 import type { ExtensionHostState } from "./extension-host.js";
+import {
+  buildToolBehaviorObservability,
+  readConfiguredPromptExperimentToolContracts,
+} from "./tool-behavior-observability.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import type { SubTaskRuntimeStore } from "./task-runtime.js";
 import type { ToolsConfigManager } from "./tools-config.js";
@@ -200,6 +204,15 @@ export async function handleToolsListWithQueryRuntime(
         },
       ] as const);
     const contracts = Object.fromEntries(contractEntries);
+    const disabledToolContractNamesConfigured = readConfiguredPromptExperimentToolContracts();
+    const toolBehaviorObservability = buildToolBehaviorObservability({
+      contracts: ctx.toolExecutor.getContracts(
+        visibilityAgentId,
+        visibilityConversationId,
+        runtimeContext,
+      ),
+      disabledContractNamesConfigured: disabledToolContractNamesConfigured,
+    });
 
     const visibilityEntries = ctx.toolExecutor.getRegisteredToolAvailabilities(
       visibilityAgentId,
@@ -221,12 +234,13 @@ export async function handleToolsListWithQueryRuntime(
 
     queryRuntime.mark("tool_inventory_loaded", {
       conversationId: visibilityConversationId,
-      detail: {
-        toolCount: allNames.length,
-        contractCount: contractEntries.length,
-        taskBound: Boolean(visibilityTask),
-      },
-    });
+        detail: {
+          toolCount: allNames.length,
+          contractCount: contractEntries.length,
+          behaviorContractCount: toolBehaviorObservability.counts.includedContractCount,
+          taskBound: Boolean(visibilityTask),
+        },
+      });
 
     const config = ctx.toolsConfigManager.getConfig();
     const visibleDisabled = {
@@ -362,6 +376,10 @@ export async function handleToolsListWithQueryRuntime(
         plugins: pluginIds,
         skills,
         contracts,
+        toolBehaviorObservability,
+        toolBehaviorContracts: toolBehaviorObservability.contracts,
+        toolContractsIncluded: toolBehaviorObservability.included,
+        ...(toolBehaviorObservability.summary ? { toolContractSummary: toolBehaviorObservability.summary } : {}),
         visibility,
         mcpVisibility,
         pluginVisibility,

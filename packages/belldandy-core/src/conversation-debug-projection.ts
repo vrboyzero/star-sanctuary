@@ -210,7 +210,7 @@ export async function resolveConversationArtifactOutputPath(input: {
   output?: string;
   outputDir?: string;
   conversationId: string;
-  artifact: "transcript" | "timeline";
+  artifact: "transcript" | "timeline" | "prompt_snapshot";
   variant?: string;
   extension: "json" | "txt";
 }): Promise<string | undefined> {

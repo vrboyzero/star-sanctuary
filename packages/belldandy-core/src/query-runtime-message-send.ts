@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { WebSocket } from "ws";
-import type { AgentRegistry, BelldandyAgent, ConversationStore } from "@belldandy/agent";
+import type { AgentPromptDelta, AgentRegistry, BelldandyAgent, ConversationStore } from "@belldandy/agent";
 import type { DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
 import { uploadTokenUsage, type ChatMessageMeta, type GatewayEventFrame, type GatewayResFrame, type MessageSendParams, type TokenUsageUploadConfig } from "@belldandy/protocol";
 import type { MemoryRuntimeBudgetGuard, MemoryRuntimeUsageAccounting } from "./memory-runtime-budget.js";
@@ -24,6 +24,23 @@ type AttachmentPromptLimits = {
   totalTextCharLimit: number;
   audioTranscriptAppendCharLimit: number;
 };
+
+function createPromptDelta(input: {
+  id: string;
+  deltaType: AgentPromptDelta["deltaType"];
+  role: AgentPromptDelta["role"];
+  text: string;
+  metadata?: Record<string, unknown>;
+}): AgentPromptDelta {
+  return {
+    id: input.id,
+    deltaType: input.deltaType,
+    role: input.role,
+    source: "message.send",
+    text: input.text.trim(),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+  };
+}
 
 type ToolControlPasswordApproval = {
   sanitizedText: string;
@@ -126,6 +143,7 @@ export async function handleMessageSendWithQueryRuntime(
     const requestedModelId = request.params.modelId;
     const createOpts = requestedModelId ? { modelOverride: requestedModelId } : undefined;
     const conversationId = request.params.conversationId ?? crypto.randomUUID();
+    const runId = crypto.randomUUID();
     const effectiveUserUuid = request.params.userUuid ?? request.userUuid;
 
     queryRuntime.mark("request_validated", {
@@ -133,6 +151,7 @@ export async function handleMessageSendWithQueryRuntime(
       detail: {
         requestedAgentId: requestedAgentId ?? "default",
         requestedModelId: requestedModelId ?? "default",
+        runId,
         hasAttachments: Array.isArray(request.params.attachments) && request.params.attachments.length > 0,
       },
     });
@@ -149,6 +168,7 @@ export async function handleMessageSendWithQueryRuntime(
       detail: {
         requestedAgentId: requestedAgentId ?? "default",
         requestedModelId: requestedModelId ?? "default",
+        runId,
       },
     });
 
@@ -245,12 +265,14 @@ export async function handleMessageSendWithQueryRuntime(
       conversationId,
       requestedAgentId,
       effectiveUserUuid,
+      runId,
       userMessageTimestamp: userMessage.timestamp,
       userText,
       history,
       normalizedRoomContext,
       promptText: preparedPrompt.promptText,
       contentParts: preparedPrompt.contentParts,
+      promptDeltas: preparedPrompt.promptDeltas,
       textAttachmentCount: preparedPrompt.textAttachmentCount,
       textAttachmentChars: preparedPrompt.textAttachmentChars,
       audioTranscriptChars: preparedPrompt.audioTranscriptChars,
@@ -266,6 +288,7 @@ export async function handleMessageSendWithQueryRuntime(
       ok: true,
       payload: {
         conversationId,
+        runId,
         messageMeta: io.toChatMessageMeta(userMessage.timestamp, true),
       },
     };
@@ -308,12 +331,14 @@ type MessageSendBackgroundInput = {
   conversationId: string;
   requestedAgentId?: string;
   effectiveUserUuid?: string;
+  runId: string;
   userMessageTimestamp: number;
   userText: string;
   history: Array<unknown>;
   normalizedRoomContext?: Record<string, unknown>;
   promptText: string;
   contentParts: Array<Record<string, unknown>>;
+  promptDeltas: AgentPromptDelta[];
   textAttachmentCount: number;
   textAttachmentChars: number;
   audioTranscriptChars: number;
@@ -332,6 +357,7 @@ type MessageSendRunResult = Awaited<ReturnType<typeof runAgentWithLifecycle>>;
 
 type MessageSendCompletionPolicy = {
   conversationId: string;
+  runId: string;
   finalText: string;
   finalTimestampMs: number;
   statusBeforeFinal?: string;
@@ -373,6 +399,7 @@ async function preparePromptWithAttachments(input: {
   textAttachmentChars: number;
   audioTranscriptChars: number;
   attachmentPromptLimits: AttachmentPromptLimits;
+  promptDeltas: AgentPromptDelta[];
 }> {
   let promptText = input.promptText;
   const contentParts: Array<Record<string, unknown>> = [];
@@ -380,6 +407,7 @@ async function preparePromptWithAttachments(input: {
   let textAttachmentCount = 0;
   let textAttachmentChars = 0;
   let audioTranscriptChars = 0;
+  const promptDeltas: AgentPromptDelta[] = [];
 
   if (!input.attachments || input.attachments.length === 0) {
     return {
@@ -389,6 +417,7 @@ async function preparePromptWithAttachments(input: {
       textAttachmentChars,
       audioTranscriptChars,
       attachmentPromptLimits,
+      promptDeltas,
     };
   }
 
@@ -401,7 +430,7 @@ async function preparePromptWithAttachments(input: {
   await fs.mkdir(attachmentDir, { recursive: true });
 
   const attachmentPrompts: string[] = [];
-  for (const att of input.attachments) {
+  for (const [index, att] of input.attachments.entries()) {
     const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const savePath = path.join(attachmentDir, safeName);
 
@@ -415,6 +444,13 @@ async function preparePromptWithAttachments(input: {
           image_url: { url: `data:${att.type};base64,${att.base64}` },
         });
         attachmentPrompts.push(`\n[用户上传了图片: ${att.name}]`);
+        promptDeltas.push(createPromptDelta({
+          id: `attachment-image-${index + 1}`,
+          deltaType: "attachment",
+          role: "attachment",
+          text: `[用户上传了图片: ${att.name}]`,
+          metadata: { name: att.name, mime: att.type, kind: "image" },
+        }));
         continue;
       }
 
@@ -425,6 +461,13 @@ async function preparePromptWithAttachments(input: {
           video_url: { url: `file://${absPath}` },
         });
         attachmentPrompts.push(`\n[用户上传了视频: ${att.name}] (System Note: Video content has been injected via multimodal channel. Please analyze it directly.)`);
+        promptDeltas.push(createPromptDelta({
+          id: `attachment-video-${index + 1}`,
+          deltaType: "attachment",
+          role: "attachment",
+          text: `[用户上传了视频: ${att.name}] (System Note: Video content has been injected via multimodal channel. Please analyze it directly.)`,
+          metadata: { name: att.name, mime: att.type, kind: "video" },
+        }));
         continue;
       }
 
@@ -443,6 +486,7 @@ async function preparePromptWithAttachments(input: {
         promptText = audioResult.promptText;
         audioTranscriptChars = audioResult.audioTranscriptChars;
         attachmentPrompts.push(...audioResult.prompts);
+        promptDeltas.push(...audioResult.promptDeltas);
         continue;
       }
 
@@ -479,13 +523,39 @@ async function preparePromptWithAttachments(input: {
           });
         }
         attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated.text}\n--- End of Attachment ---\n`);
+        promptDeltas.push(createPromptDelta({
+          id: `attachment-text-${index + 1}`,
+          deltaType: "attachment",
+          role: "attachment",
+          text: `--- Attachment: ${att.name} ---\n${truncated.text}\n--- End of Attachment ---`,
+          metadata: {
+            name: att.name,
+            mime: att.type,
+            kind: "text",
+            truncated: truncated.truncated,
+          },
+        }));
         continue;
       }
 
       attachmentPrompts.push(`\n[User uploaded a file: ${att.name} (type: ${att.type}), saved at: ${savePath}]`);
+      promptDeltas.push(createPromptDelta({
+        id: `attachment-file-${index + 1}`,
+        deltaType: "attachment",
+        role: "attachment",
+        text: `[User uploaded a file: ${att.name} (type: ${att.type}), saved at: ${savePath}]`,
+        metadata: { name: att.name, mime: att.type, kind: "file" },
+      }));
     } catch (error) {
       input.log.error("message", `Failed to save attachment ${att.name}`, error);
       attachmentPrompts.push(`\n[Failed to upload file: ${att.name}]`);
+      promptDeltas.push(createPromptDelta({
+        id: `attachment-error-${index + 1}`,
+        deltaType: "attachment",
+        role: "attachment",
+        text: `[Failed to upload file: ${att.name}]`,
+        metadata: { name: att.name, mime: att.type, kind: "error" },
+      }));
     }
   }
 
@@ -500,6 +570,7 @@ async function preparePromptWithAttachments(input: {
     textAttachmentChars,
     audioTranscriptChars,
     attachmentPromptLimits,
+    promptDeltas,
   };
 }
 
@@ -517,14 +588,23 @@ async function buildAudioAttachmentPrompt(input: {
   promptText: string;
   audioTranscriptChars: number;
   prompts: string[];
+  promptDeltas: AgentPromptDelta[];
 }> {
   const prompts: string[] = [];
+  const promptDeltas: AgentPromptDelta[] = [];
   let promptText = input.promptText;
   let audioTranscriptChars = input.audioTranscriptChars;
 
   if (!input.sttTranscribe) {
     prompts.push(`\n[用户上传了音频: ${input.attachment.name}（STT未配置）]`);
-    return { promptText, audioTranscriptChars, prompts };
+    promptDeltas.push(createPromptDelta({
+      id: `audio-transcript-${input.attachment.name}-unconfigured`,
+      deltaType: "audio-transcript",
+      role: "attachment",
+      text: `[用户上传了音频: ${input.attachment.name}（STT未配置）]`,
+      metadata: { name: input.attachment.name, mime: input.attachment.type, status: "stt-unconfigured" },
+    }));
+    return { promptText, audioTranscriptChars, prompts, promptDeltas };
   }
 
   input.log.debug("stt", "Transcribing audio attachment", { name: input.attachment.name });
@@ -536,7 +616,14 @@ async function buildAudioAttachmentPrompt(input: {
     });
     if (!sttResult?.text) {
       prompts.push(`\n[用户上传了音频: ${input.attachment.name}（转录失败）]`);
-      return { promptText, audioTranscriptChars, prompts };
+      promptDeltas.push(createPromptDelta({
+        id: `audio-transcript-${input.attachment.name}-failed`,
+        deltaType: "audio-transcript",
+        role: "attachment",
+        text: `[用户上传了音频: ${input.attachment.name}（转录失败）]`,
+        metadata: { name: input.attachment.name, mime: input.attachment.type, status: "empty" },
+      }));
+      return { promptText, audioTranscriptChars, prompts, promptDeltas };
     }
 
     input.log.debug("stt", "Audio transcribed", {
@@ -560,7 +647,7 @@ async function buildAudioAttachmentPrompt(input: {
           totalCharLimit: input.limits.totalTextCharLimit,
         });
       }
-      return { promptText, audioTranscriptChars, prompts };
+      return { promptText, audioTranscriptChars, prompts, promptDeltas };
     }
 
     const remainingChars = Math.max(
@@ -570,7 +657,14 @@ async function buildAudioAttachmentPrompt(input: {
     const transcriptCharLimit = Math.min(input.limits.audioTranscriptAppendCharLimit, remainingChars);
     if (transcriptCharLimit <= 0) {
       prompts.push(`\n[用户上传了音频: ${input.attachment.name}（转录已完成，但因本次上下文预算已用尽未注入全文）]`);
-      return { promptText, audioTranscriptChars, prompts };
+      promptDeltas.push(createPromptDelta({
+        id: `audio-transcript-${input.attachment.name}-skipped`,
+        deltaType: "audio-transcript",
+        role: "attachment",
+        text: `[用户上传了音频: ${input.attachment.name}（转录已完成，但因本次上下文预算已用尽未注入全文）]`,
+        metadata: { name: input.attachment.name, mime: input.attachment.type, status: "budget-exhausted" },
+      }));
+      return { promptText, audioTranscriptChars, prompts, promptDeltas };
     }
 
     const truncatedTranscript = input.truncateTextForPrompt(
@@ -588,12 +682,31 @@ async function buildAudioAttachmentPrompt(input: {
         remainingChars,
       });
     }
-    prompts.push(`\n[语音转录: "${truncatedTranscript.text}"]`);
-    return { promptText, audioTranscriptChars, prompts };
+    const transcriptText = `[语音转录: "${truncatedTranscript.text}"]`;
+    prompts.push(`\n${transcriptText}`);
+    promptDeltas.push(createPromptDelta({
+      id: `audio-transcript-${input.attachment.name}`,
+      deltaType: "audio-transcript",
+      role: "attachment",
+      text: transcriptText,
+      metadata: {
+        name: input.attachment.name,
+        mime: input.attachment.type,
+        truncated: truncatedTranscript.truncated,
+      },
+    }));
+    return { promptText, audioTranscriptChars, prompts, promptDeltas };
   } catch (error) {
     input.log.error("stt", `STT failed for ${input.attachment.name}`, error);
     prompts.push(`\n[用户上传了音频: ${input.attachment.name}（转录出错）]`);
-    return { promptText, audioTranscriptChars, prompts };
+    promptDeltas.push(createPromptDelta({
+      id: `audio-transcript-${input.attachment.name}-error`,
+      deltaType: "audio-transcript",
+      role: "attachment",
+      text: `[用户上传了音频: ${input.attachment.name}（转录出错）]`,
+      metadata: { name: input.attachment.name, mime: input.attachment.type, status: "error" },
+    }));
+    return { promptText, audioTranscriptChars, prompts, promptDeltas };
   }
 }
 
@@ -611,6 +724,7 @@ function buildMessageSendAgentRunInput(
     senderInfo: input.senderInfo,
     roomContext: input.normalizedRoomContext,
     meta: {
+      runId: input.runId,
       currentMessageTime: {
         timestampMs: input.userMessageTimestamp,
         displayTimeText: media.formatLocalMessageTime(input.userMessageTimestamp),
@@ -626,6 +740,15 @@ function buildMessageSendAgentRunInput(
     runInput.meta = {
       ...(runInput.meta ?? {}),
       attachmentStats,
+    };
+  }
+  if (input.promptDeltas.length > 0) {
+    runInput.meta = {
+      ...(runInput.meta ?? {}),
+      promptDeltas: input.promptDeltas.map((delta) => ({
+        ...delta,
+        ...(delta.metadata ? { metadata: { ...delta.metadata } } : {}),
+      })),
     };
   }
 
@@ -733,6 +856,7 @@ function emitMessageSendTaskResult(input: {
 function handleMessageSendUsageEvent(input: {
   ctx: MessageSendQueryRuntimeContext;
   conversationId: string;
+  runId: string;
   effectiveUserUuid?: string;
   from?: string;
   state: MessageSendBackgroundRunState;
@@ -757,6 +881,7 @@ function handleMessageSendUsageEvent(input: {
     event: "token.usage",
     payload: {
       conversationId: input.conversationId,
+      runId: input.runId,
       systemPromptTokens: input.item.systemPromptTokens,
       contextTokens: input.item.contextTokens,
       inputTokens: input.item.inputTokens,
@@ -792,6 +917,7 @@ function createMessageSendStreamAdapter(input: {
   ctx: MessageSendQueryRuntimeContext;
   queryRuntime: QueryRuntime<"message.send">;
   conversationId: string;
+  runId: string;
   effectiveUserUuid?: string;
   from?: string;
   isTts: boolean;
@@ -821,6 +947,7 @@ function createMessageSendStreamAdapter(input: {
           event: "agent.status",
           payload: {
             conversationId: input.conversationId,
+            runId: input.runId,
             status: item.status,
           },
         });
@@ -837,6 +964,7 @@ function createMessageSendStreamAdapter(input: {
           event: "tool_call",
           payload: {
             conversationId: input.conversationId,
+            runId: input.runId,
             id: item.id,
             name: item.name,
             arguments: item.arguments,
@@ -857,6 +985,7 @@ function createMessageSendStreamAdapter(input: {
           event: "tool_result",
           payload: {
             conversationId: input.conversationId,
+            runId: input.runId,
             id: item.id,
             name: item.name,
             success: item.success,
@@ -871,6 +1000,7 @@ function createMessageSendStreamAdapter(input: {
             event: "chat.delta",
             payload: {
               conversationId: input.conversationId,
+              runId: input.runId,
               delta: item.delta,
             },
           });
@@ -880,6 +1010,7 @@ function createMessageSendStreamAdapter(input: {
         handleMessageSendUsageEvent({
           ctx: input.ctx,
           conversationId: input.conversationId,
+          runId: input.runId,
           effectiveUserUuid: input.effectiveUserUuid,
           from: input.from,
           state: input.state,
@@ -926,6 +1057,7 @@ function sanitizeMessageSendAssistantText(text: string): string {
 function emitMessageSendFinalFrame(input: {
   ctx: MessageSendQueryRuntimeContext;
   conversationId: string;
+  runId: string;
   text: string;
   timestampMs: number;
 }): void {
@@ -934,6 +1066,7 @@ function emitMessageSendFinalFrame(input: {
     event: "chat.final",
     payload: {
       conversationId: input.conversationId,
+      runId: input.runId,
       role: "assistant",
       text: input.text,
       messageMeta: input.ctx.io.toChatMessageMeta(input.timestampMs, true),
@@ -954,6 +1087,7 @@ function applyMessageSendCompletionPolicy(input: {
       event: "agent.status",
       payload: {
         conversationId: policy.conversationId,
+        runId: policy.runId,
         status: policy.statusBeforeFinal,
       },
     });
@@ -974,6 +1108,7 @@ function applyMessageSendCompletionPolicy(input: {
   emitMessageSendFinalFrame({
     ctx,
     conversationId: policy.conversationId,
+    runId: policy.runId,
     text: policy.finalText,
     timestampMs: policy.finalTimestampMs,
   });
@@ -990,6 +1125,7 @@ async function finalizeMessageSendSuccess(input: {
   ctx: MessageSendQueryRuntimeContext;
   queryRuntime: QueryRuntime<"message.send">;
   conversationId: string;
+  runId: string;
   requestedAgentId?: string;
   runResult: MessageSendRunResult;
   state: MessageSendBackgroundRunState;
@@ -1003,6 +1139,7 @@ async function finalizeMessageSendSuccess(input: {
       event: "agent.status",
       payload: {
         conversationId: input.conversationId,
+        runId: input.runId,
         status: "generating_audio",
       },
     });
@@ -1045,6 +1182,7 @@ async function finalizeMessageSendSuccess(input: {
     queryRuntime,
     policy: {
       conversationId: input.conversationId,
+      runId: input.runId,
       finalText: finalEventText || runResult.fullText,
       finalTimestampMs: assistantTimestamp,
       terminalStage: "completed",
@@ -1066,6 +1204,7 @@ function finalizeMessageSendFailure(input: {
   ctx: MessageSendQueryRuntimeContext;
   queryRuntime: QueryRuntime<"message.send">;
   conversationId: string;
+  runId: string;
   error: unknown;
 }): void {
   input.ctx.runtime.log.error("agent", "Agent run failed", input.error);
@@ -1076,6 +1215,7 @@ function finalizeMessageSendFailure(input: {
     queryRuntime: input.queryRuntime,
     policy: {
       conversationId: input.conversationId,
+      runId: input.runId,
       finalText: `Error: ${String(input.error)}`,
       finalTimestampMs: errorTimestamp,
       statusBeforeFinal: "error",
@@ -1107,6 +1247,7 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
       ctx,
       queryRuntime,
       conversationId: input.conversationId,
+      runId: input.runId,
       effectiveUserUuid: input.effectiveUserUuid,
       from: input.from,
       isTts,
@@ -1150,6 +1291,7 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
       ctx,
       queryRuntime,
       conversationId: input.conversationId,
+      runId: input.runId,
       requestedAgentId: input.requestedAgentId,
       runResult,
       state,
@@ -1159,6 +1301,7 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
       ctx,
       queryRuntime,
       conversationId: input.conversationId,
+      runId: input.runId,
       error,
     });
   }

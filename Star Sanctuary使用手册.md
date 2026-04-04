@@ -2772,6 +2772,191 @@ BELLDANDY_BROWSER_DENIED_DOMAINS=mail.google.com,drive.google.com,onedrive.live.
 2. 再看运行时工具设置有没有把它禁掉
 3. 最后再看 `system.doctor` 中的 `extensionGovernance` 是卡在安装层、宿主加载层，还是 runtime policy 层
 
+### 13.1.2 Prompt 装配实验与附加 System Prompt
+
+这组变量用于调整 Agent 最终看到的 system prompt 结构。它们都不是“必填基础配置”，更适合在你明确要做 prompt 实验、诊断或局部定制时使用。
+
+如果你只是想稳定使用当前主线能力，当前推荐值是全部保持空值：
+
+```env
+BELLDANDY_PROMPT_EXPERIMENT_DISABLE_SECTIONS=
+BELLDANDY_PROMPT_EXPERIMENT_SECTION_PRIORITY_OVERRIDES=
+BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS=
+BELLDANDY_OPENAI_SYSTEM_PROMPT=
+```
+
+为什么默认推荐留空：
+
+- 这能保持当前仓库已经验证过的默认 prompt 结构
+- 不会意外改变 section 排序、截断顺序或模型看到的工具行为指引
+- 适合作为“稳定基线”，之后若要做 A/B 对比，也更容易回滚
+
+#### `BELLDANDY_PROMPT_EXPERIMENT_DISABLE_SECTIONS`
+
+作用：
+
+- 按 `section.id` 禁用某些 system prompt 段落
+
+填写格式：
+
+- 多个值用英文逗号分隔
+- 不要加引号
+- 留空表示不禁用任何 section
+
+示例：
+
+```env
+BELLDANDY_PROMPT_EXPERIMENT_DISABLE_SECTIONS=methodology,context
+```
+
+当前常见可用的 section id 包括：
+
+- `core`
+- `workspace-agents`
+- `workspace-soul`
+- `workspace-user`
+- `workspace-identity`
+- `workspace-tools`
+- `workspace-memory`
+- `skills`
+- `workspace-bootstrap`
+- `context`
+- `extra`
+- `methodology`
+- `workspace-dir`
+- 运行时附加段：
+  - `tool-behavior-contracts`
+  - `tts-mode`
+  - `profile-override`
+
+建议：
+
+- 非实验场景下保持空值
+- 不建议禁用 `core`
+- 若你只是想临时观察某段对 prompt 体积或行为的影响，再短期开这个开关
+
+#### `BELLDANDY_PROMPT_EXPERIMENT_SECTION_PRIORITY_OVERRIDES`
+
+作用：
+
+- 覆盖指定 section 的优先级
+- 数字越小越靠前，越不容易在 `BELLDANDY_MAX_SYSTEM_PROMPT_CHARS` 截断时被丢掉
+
+填写格式：
+
+- `sectionId:priority`
+- 多个条目用英文逗号分隔
+- priority 使用整数
+
+示例：
+
+```env
+BELLDANDY_PROMPT_EXPERIMENT_SECTION_PRIORITY_OVERRIDES=methodology:5,extra:150
+```
+
+含义：
+
+- `methodology:5`
+  - 把 `methodology` 提到更靠前的位置
+- `extra:150`
+  - 把 `extra` 放得更靠后，更容易在截断时被丢掉
+
+建议：
+
+- 默认保持空值
+- 如果你没有在做 prompt 截断优化或优先级实验，不建议常开
+
+#### `BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS`
+
+作用：
+
+- 禁用给模型看的 tool behavior contract
+
+注意：
+
+- 它影响的是“模型看到的工具行为提示”，不是底层安全策略本身
+- 关闭后会同时影响：
+  - 模型请求中的可见 tool definitions
+  - prompt 中注入的 contract 摘要
+  - `inspect` / `tools.list` / `doctor` 中的 contract observability
+
+填写格式：
+
+- 按工具名填写
+- 多个工具用英文逗号分隔
+- 留空表示不禁用任何 tool contract
+
+当前已覆盖的 contract 名包括：
+
+- `run_command`
+- `apply_patch`
+- `delegate_task`
+- `file_write`
+- `file_delete`
+- `delegate_parallel`
+
+示例：
+
+```env
+BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS=apply_patch,run_command
+```
+
+建议：
+
+- 当前默认保持空值
+- 只有在你明确要做“关闭某个 contract 观察行为变化”的实验时再填写
+
+#### `BELLDANDY_OPENAI_SYSTEM_PROMPT`
+
+作用：
+
+- 在现有 workspace/system prompt 之后，额外追加一段 deployment 级 system prompt
+
+适合填写的内容：
+
+- 简短、稳定、不会频繁变化的附加规则
+- 例如部署环境要求、回复语言约束、额外格式偏好
+
+示例：
+
+```env
+BELLDANDY_OPENAI_SYSTEM_PROMPT=请默认使用简体中文回复，除非用户明确要求其他语言。
+```
+
+再比如：
+
+```env
+BELLDANDY_OPENAI_SYSTEM_PROMPT=输出优先给可执行结果，避免长篇方法论解释。
+```
+
+不建议这样使用：
+
+- 把整份 `AGENTS.md` / `SOUL.md` 再复制进去
+- 写很长、很多层的规则
+- 填与现有 prompt 明显冲突的要求
+
+当前推荐：
+
+- 保持空值
+
+原因：
+
+- 当前仓库默认 prompt 体系已经比较完整
+- 再追加一层容易重复、增 token、制造规则冲突
+
+#### 推荐使用方式
+
+1. 日常稳定使用：
+   - 这 4 个变量全部留空
+2. 想做 prompt 结构实验：
+   - 优先只改一个变量
+   - 改完后用 `agents.prompt.inspect`、`bdd conversation prompt-snapshot`、`bdd doctor` 对比效果
+3. 想做部署级补充规则：
+   - 优先只填 `BELLDANDY_OPENAI_SYSTEM_PROMPT`
+   - 保持 1 到 3 句，避免写成长文
+4. 想回滚：
+   - 直接把值清空即可
+
 ### 13.2 模型容灾配置 (Model Failover)
 
 当主模型因限流 (429)、余额不足 (402)、服务器故障 (5xx) 或超时等问题不可用时，Star Sanctuary 可以 **自动切换到备用模型**，保证不中断服务。

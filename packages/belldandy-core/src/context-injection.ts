@@ -1,4 +1,4 @@
-import type { BeforeAgentStartEvent, BeforeAgentStartResult, HookAgentContext } from "@belldandy/agent";
+import type { AgentPromptDelta, BeforeAgentStartEvent, BeforeAgentStartResult, HookAgentContext } from "@belldandy/agent";
 import type { MemoryCategory } from "@belldandy/memory";
 
 import { createContextInjectionDeduper } from "./context-injection-dedupe.js";
@@ -90,6 +90,21 @@ function extractCurrentMessageBlock(meta: unknown, userInput?: string): string |
   return `<current-turn hint="以下是当前这轮用户输入的时间锚点。若你需要判断时间先后、最近记忆与当前输入的关系，优先参考这一条。">\n${tagged}\n</current-turn>`;
 }
 
+function createContextPreludeDelta(input: {
+  id: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}): AgentPromptDelta {
+  return {
+    id: input.id,
+    deltaType: "user-prelude",
+    role: "user-prelude",
+    source: "context-injection",
+    text: input.text,
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+  };
+}
+
 export type ContextInjectionMemoryProvider = {
   getContextInjectionMemories(input: {
     limit: number;
@@ -129,9 +144,15 @@ export async function buildContextInjectionPrelude(
   const implicitFilter = { agentId: ctx.agentId ?? null };
   const deduper = createContextInjectionDeduper(event.messages);
   const blocks: string[] = [];
+  const deltas: AgentPromptDelta[] = [];
   const currentTurnBlock = extractCurrentMessageBlock(event.meta, event.userInput);
   if (currentTurnBlock) {
     blocks.push(currentTurnBlock);
+    deltas.push(createContextPreludeDelta({
+      id: "current-turn",
+      text: currentTurnBlock,
+      metadata: { blockTag: "current-turn" },
+    }));
   }
 
   if (config.contextInjectionEnabled) {
@@ -164,10 +185,14 @@ export async function buildContextInjectionPrelude(
         });
         return tagged ? [tagged] : [];
       });
-      if (lines.length > 0) {
-        blocks.push(
-          `<recent-memory hint="以下是按重要性筛选后的近期记忆。优先把它们当作背景约束或已知事实，不要把它们直接当作待重新执行的任务。">\n${lines.join("\n")}\n</recent-memory>`,
-        );
+        if (lines.length > 0) {
+        const block = `<recent-memory hint="以下是按重要性筛选后的近期记忆。优先把它们当作背景约束或已知事实，不要把它们直接当作待重新执行的任务。">\n${lines.join("\n")}\n</recent-memory>`;
+        blocks.push(block);
+        deltas.push(createContextPreludeDelta({
+          id: "recent-memory",
+          text: block,
+          metadata: { blockTag: "recent-memory", lineCount: lines.length },
+        }));
       }
     }
 
@@ -209,9 +234,13 @@ export async function buildContextInjectionPrelude(
           return tagged ? [tagged] : [];
         });
         if (taskLines.length > 0) {
-          blocks.push(
-            `<recent-tasks hint="以下是最近已完成或部分完成的任务摘要。若当前目标与其相同，优先复用结果，不要重复执行已成功完成的工具动作，除非用户明确要求重试。">\n${taskLines.join("\n")}\n</recent-tasks>`,
-          );
+          const block = `<recent-tasks hint="以下是最近已完成或部分完成的任务摘要。若当前目标与其相同，优先复用结果，不要重复执行已成功完成的工具动作，除非用户明确要求重试。">\n${taskLines.join("\n")}\n</recent-tasks>`;
+          blocks.push(block);
+          deltas.push(createContextPreludeDelta({
+            id: "recent-tasks",
+            text: block,
+            metadata: { blockTag: "recent-tasks", lineCount: taskLines.length },
+          }));
         }
       }
     }
@@ -255,15 +284,19 @@ export async function buildContextInjectionPrelude(
           return tagged ? [tagged] : [];
         });
         if (lines.length > 0) {
-          blocks.push(
-            `<auto-recall hint="以下是与用户当前输入语义相关的历史记忆，仅供参考。无需再次调用 memory_search 除非需要更深入搜索。">\n${lines.join("\n")}\n</auto-recall>`,
-          );
+          const block = `<auto-recall hint="以下是与用户当前输入语义相关的历史记忆，仅供参考。无需再次调用 memory_search 除非需要更深入搜索。">\n${lines.join("\n")}\n</auto-recall>`;
+          blocks.push(block);
+          deltas.push(createContextPreludeDelta({
+            id: "auto-recall",
+            text: block,
+            metadata: { blockTag: "auto-recall", lineCount: lines.length },
+          }));
         }
       }
     }
   }
 
   return blocks.length > 0
-    ? { prependContext: blocks.join("\n\n") }
+    ? { prependContext: blocks.join("\n\n"), deltas }
     : undefined;
 }

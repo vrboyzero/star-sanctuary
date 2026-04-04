@@ -160,26 +160,41 @@ export function createSettingsController({
     updates[key] = value;
   }
 
+  const doctorToggleBtn = document.getElementById("doctorToggleBtn");
+  if (doctorToggleBtn) {
+    doctorToggleBtn.addEventListener("click", () => {
+      if (doctorStatusEl) doctorStatusEl.classList.toggle("hidden");
+    });
+  }
+
   async function runDoctor() {
-    if (!doctorStatusEl) return;
+    if (!doctorStatusEl || !doctorToggleBtn) return;
+    doctorToggleBtn.className = "button button-muted badge";
+    doctorToggleBtn.innerHTML = `<span data-i18n="settings.doctorChecking">${t("settings.doctorChecking", {}, "检查中...")}</span>`;
+    doctorStatusEl.innerHTML = "";
+    
     if (!isConnected()) {
-      doctorStatusEl.innerHTML = `<span class="badge fail">${t("settings.doctorDisconnected", {}, "Disconnected")}</span>`;
+      doctorToggleBtn.className = "button badge fail";
+      doctorToggleBtn.innerHTML = `<span data-i18n="settings.doctorDisconnected">${t("settings.doctorDisconnected", {}, "Disconnected")}</span>`;
       return;
     }
-    doctorStatusEl.innerHTML = `<span class="badge">${t("settings.doctorChecking", {}, "Checking...")}</span>`;
 
     const res = await sendReq({ type: "req", id: makeId(), method: "system.doctor" });
     if (res && res.ok && res.payload && res.payload.checks) {
-      doctorStatusEl.innerHTML = "";
+      let allPass = true;
       res.payload.checks.forEach((check) => {
+        if (check.status !== "pass") allPass = false;
         const badge = document.createElement("span");
         badge.className = `badge ${check.status}`;
         badge.textContent = `${check.name}: ${check.message || check.status}`;
         doctorStatusEl.appendChild(badge);
       });
+      doctorToggleBtn.className = `button badge ${allPass ? 'pass' : 'fail'}`;
+      doctorToggleBtn.textContent = allPass ? t("settings.doctorAllPassed", {}, "所有检查通过") : t("settings.doctorHasIssues", {}, "存在未通过的检查");
       return;
     }
-    doctorStatusEl.innerHTML = `<span class="badge fail">${t("settings.doctorCheckFailed", {}, "Check Failed")}</span>`;
+    doctorToggleBtn.className = "button badge fail";
+    doctorToggleBtn.innerHTML = `<span data-i18n="settings.doctorCheckFailed">${t("settings.doctorCheckFailed", {}, "Check Failed")}</span>`;
   }
 
   async function saveConfig() {

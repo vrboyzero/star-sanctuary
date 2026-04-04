@@ -458,6 +458,313 @@ test("agents.list exposes agent name and avatar from per-agent IDENTITY.md", asy
   }
 });
 
+test("agents.prompt.inspect returns prompt text and section metadata", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  const inspectAgentPrompt = vi.fn(async ({ agentId, conversationId, runId }: {
+    agentId?: string;
+    conversationId?: string;
+    runId?: string;
+  }) => ({
+    scope: "run" as const,
+    agentId: agentId ?? "default",
+    conversationId,
+    runId,
+    createdAt: 123,
+    displayName: "Belldandy",
+    model: "primary",
+    text: "system prompt body",
+    truncated: false,
+    totalChars: 18,
+    finalChars: 18,
+    sections: [
+      {
+        id: "core",
+        label: "core",
+        source: "core" as const,
+        priority: 0,
+        text: "system prompt body",
+        charLength: 18,
+        estimatedChars: 18,
+        estimatedTokens: 5,
+      },
+    ],
+    droppedSections: [],
+    messages: [
+      {
+        role: "system",
+        content: "system prompt body",
+      },
+    ],
+    metadata: {
+      includesHookSystemPrompt: true,
+    },
+  }));
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    inspectAgentPrompt,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+    ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+    await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "agents-prompt-inspect",
+      method: "agents.prompt.inspect",
+      params: { agentId: "default", conversationId: "conv-1", runId: "run-1" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "agents-prompt-inspect"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "agents-prompt-inspect");
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      scope: "run",
+      agentId: "default",
+      conversationId: "conv-1",
+      runId: "run-1",
+      text: "system prompt body",
+      truncated: false,
+      sections: [
+        expect.objectContaining({
+          id: "core",
+          source: "core",
+          charLength: 18,
+          estimatedChars: 18,
+          estimatedTokens: 5,
+        }),
+      ],
+      droppedSections: [],
+      messages: [
+        expect.objectContaining({
+          role: "system",
+          content: "system prompt body",
+        }),
+      ],
+      metadata: {
+        includesHookSystemPrompt: true,
+      },
+    });
+    expect(inspectAgentPrompt).toHaveBeenCalledWith({
+      agentId: "default",
+      conversationId: "conv-1",
+      runId: "run-1",
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("conversation.prompt_snapshot.get returns persisted snapshot artifact", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getConversationPromptSnapshot: async ({ conversationId, runId }) => ({
+      schemaVersion: 1,
+      manifest: {
+        conversationId,
+        runId: runId ?? "run-1",
+        agentId: "default",
+        createdAt: 123,
+        persistedAt: 456,
+        source: "runtime.prompt_snapshot",
+      },
+      summary: {
+        messageCount: 2,
+        systemPromptChars: 18,
+        includesHookSystemPrompt: true,
+        hasPrependContext: false,
+        deltaCount: 0,
+        deltaChars: 0,
+        systemPromptEstimatedTokens: 5,
+        deltaEstimatedTokens: 0,
+        providerNativeSystemBlockCount: 0,
+        providerNativeSystemBlockChars: 0,
+        providerNativeSystemBlockEstimatedTokens: 0,
+        tokenBreakdown: {
+          systemPromptEstimatedChars: 18,
+          systemPromptEstimatedTokens: 5,
+          sectionEstimatedChars: 0,
+          sectionEstimatedTokens: 0,
+          droppedSectionEstimatedChars: 0,
+          droppedSectionEstimatedTokens: 0,
+          deltaEstimatedChars: 0,
+          deltaEstimatedTokens: 0,
+          providerNativeSystemBlockEstimatedChars: 0,
+          providerNativeSystemBlockEstimatedTokens: 0,
+        },
+      },
+      snapshot: {
+        systemPrompt: "system prompt body",
+        messages: [
+          { role: "system", content: "system prompt body" },
+          { role: "user", content: "hello" },
+        ],
+        hookSystemPromptUsed: true,
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-prompt-snapshot-get",
+      method: "conversation.prompt_snapshot.get",
+      params: { conversationId: "conv-1", runId: "run-1" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-prompt-snapshot-get"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "conversation-prompt-snapshot-get");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.snapshot).toMatchObject({
+      manifest: {
+        conversationId: "conv-1",
+        runId: "run-1",
+        agentId: "default",
+      },
+      summary: {
+        messageCount: 2,
+        includesHookSystemPrompt: true,
+      },
+      snapshot: {
+        systemPrompt: "system prompt body",
+      },
+    });
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-prompt-snapshot", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-prompt-snapshot" && f.ok === true));
+
+    const doctorRes = frames.find((f) => f.type === "res" && f.id === "system-doctor-prompt-snapshot");
+    const traces = doctorRes.payload?.queryRuntime?.traces ?? [];
+    const trace = traces.find((item: any) => item.method === "conversation.prompt_snapshot.get" && item.conversationId === "conv-1");
+
+    expect(trace).toMatchObject({
+      method: "conversation.prompt_snapshot.get",
+      status: "completed",
+      conversationId: "conv-1",
+    });
+    expect(trace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "prompt_snapshot_loaded",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes tool behavior observability summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("run_command"),
+      createContractedTestTool("apply_patch"),
+      createContractedTestTool("delegate_task"),
+      createTestTool("beta_builtin"),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-tool-behavior",
+      method: "system.doctor",
+      params: {
+        toolAgentId: "default",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-tool-behavior" && f.ok === true));
+
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-tool-behavior");
+    expect(response.payload?.toolBehaviorObservability).toMatchObject({
+      requested: {
+        agentId: "default",
+      },
+      visibilityContext: {
+        agentId: "default",
+        conversationId: null,
+      },
+      counts: {
+        visibleToolContractCount: 3,
+        includedContractCount: 3,
+        behaviorContractCount: 3,
+      },
+      included: ["run_command", "apply_patch", "delegate_task"],
+    });
+    expect(response.payload?.toolBehaviorObservability?.contracts?.run_command).toMatchObject({
+      useWhen: expect.any(Array),
+      fallbackStrategy: expect.any(Array),
+    });
+    expect(response.payload?.toolBehaviorObservability?.summary).toContain("## run_command");
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "tool_behavior_observability",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("message.send forwards modelId to AgentRegistry.create as modelOverride", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const capturedOverrides: Array<string | undefined> = [];
@@ -4077,6 +4384,74 @@ test("tools.list returns contract summaries for contract-aware tools", async () 
   }
 });
 
+test("tools.list exposes tool behavior contract observability for visible tools", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("run_command"),
+      createContractedTestTool("apply_patch"),
+      createContractedTestTool("delegate_task"),
+      createTestTool("beta_builtin"),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "tools-list-behavior-contracts", method: "tools.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-behavior-contracts"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-behavior-contracts");
+
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.toolBehaviorObservability).toMatchObject({
+      counts: {
+        includedContractCount: 3,
+      },
+      included: [
+        "run_command",
+        "apply_patch",
+        "delegate_task",
+      ],
+    });
+    expect(listRes.payload?.toolContractsIncluded).toEqual([
+      "run_command",
+      "apply_patch",
+      "delegate_task",
+    ]);
+    expect(listRes.payload?.toolBehaviorContracts?.run_command).toMatchObject({
+      useWhen: expect.any(Array),
+      preflightChecks: expect.any(Array),
+    });
+    expect(listRes.payload?.toolContractSummary).toContain("## run_command");
+    expect(listRes.payload?.toolContractSummary).toContain("## apply_patch");
+    expect(listRes.payload?.toolContractSummary).toContain("## delegate_task");
+    expect(listRes.payload?.toolBehaviorContracts?.beta_builtin).toBeUndefined();
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("tools.list exposes visibility reasons for selected agent and conversation", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const toolsConfigManager = new ToolsConfigManager(stateDir);
@@ -6077,6 +6452,12 @@ test("message.send caps total injected text attachment chars across files", asyn
         textAttachmentTruncatedCharLimit: 50,
         textAttachmentTotalCharLimit: 70,
       });
+      expect(seenInputs[0].meta?.promptDeltas).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          deltaType: "attachment",
+          role: "attachment",
+        }),
+      ]));
       expect(String(seenInputs[0].text)).toContain("A".repeat(35));
       expect(String(seenInputs[0].text)).toContain("B".repeat(5));
       expect(String(seenInputs[0].text)).not.toContain("B".repeat(6));
@@ -6148,6 +6529,12 @@ test("message.send caps appended audio transcript chars when user text already e
         textAttachmentTotalCharLimit: 30,
         audioTranscriptAppendCharLimit: 20,
       });
+      expect(seenInputs[0].meta?.promptDeltas).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          deltaType: "audio-transcript",
+          role: "attachment",
+        }),
+      ]));
       expect(String(seenInputs[0].text)).toContain('语音转录: "ABCDE');
       expect(String(seenInputs[0].text)).toContain("ABCDEFGHIJABCDEFGHIJ");
       expect(String(seenInputs[0].text)).not.toContain("ABCDEFGHIJABCDEFGHIJABCDEFGHIJ");

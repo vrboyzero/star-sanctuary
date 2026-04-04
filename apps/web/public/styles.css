@@ -86,6 +86,7 @@ body::before {
   -webkit-backdrop-filter: blur(12px);
   min-height: 0;
   height: 100%;
+  box-sizing: border-box;
   overflow: hidden;
   align-self: stretch;
 }
@@ -300,6 +301,7 @@ body::before {
   -webkit-backdrop-filter: blur(12px);
   min-height: 0;
   height: 100%;
+  box-sizing: border-box;
   align-self: stretch;
   overflow-y: auto;
 }
@@ -380,6 +382,11 @@ body::before {
 
 .agent-card-avatar.agent-card-avatar-image {
   color: transparent;
+}
+
+.agent-card-avatar:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(90, 154, 126, 0.2);
 }
 
 .agent-card-content {
@@ -1258,8 +1265,8 @@ body::before {
 
 /* 头像 */
 .msg-avatar {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   background: var(--glass-surface);
   border: 1px solid var(--glass-border);
@@ -3561,47 +3568,6 @@ body::before {
   align-items: center;
   justify-content: space-between;
   padding: 8px 0;
-  margin-bottom: 4px;
-}
-
-.mcp-group-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--primary);
-}
-
-.mcp-group-tools {
-  padding-left: 16px;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.8;
-}
-
-/* Skill Item */
-.skill-item-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-}
-
-.skill-meta {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-
-.skill-desc {
-  font-size: 12px;
-  color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.skill-tags {
-  display: flex;
-  gap: 4px;
   flex-wrap: wrap;
   margin-top: 2px;
 }

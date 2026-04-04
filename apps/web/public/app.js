@@ -1225,7 +1225,21 @@ function renderAgentRightPanel() {
     main.title = agent.displayName || agent.id;
 
     const avatar = document.createElement("div");
-    avatar.className = "agent-card-avatar";
+    avatar.className = "agent-card-avatar avatar-clickable";
+    avatar.title = localeController.t(
+      "agentPanel.changeAvatarTitle",
+      { agentName: agent.displayName || agent.id },
+      `为 ${agent.displayName || agent.id} 更换头像`,
+    );
+    if (uploadBusy && agentPanelUploadBusyAgentId === agent.id) {
+      avatar.style.opacity = "0.5";
+      avatar.title = localeController.t("agentPanel.uploadingAvatar", {}, "上传中...");
+    }
+    avatar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openAgentPanelAvatarPicker(agent.id);
+    });
+
     if (typeof agent.avatar === "string" && agent.avatar.trim()) {
       avatar.style.backgroundImage = `url(${agent.avatar})`;
       avatar.classList.add("agent-card-avatar-image");
@@ -1255,24 +1269,7 @@ function renderAgentRightPanel() {
       agentSelectEl.dispatchEvent(new Event("change"));
     });
 
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = "agent-card-action";
-    action.textContent = agentPanelUploadBusyAgentId === agent.id
-      ? localeController.t("agentPanel.uploadingAvatar", {}, "上传中...")
-      : localeController.t("agentPanel.changeAvatarButton", {}, "更换头像");
-    action.title = localeController.t(
-      "agentPanel.changeAvatarTitle",
-      { agentName: agent.displayName || agent.id },
-      `为 ${agent.displayName || agent.id} 更换头像`,
-    );
-    action.disabled = uploadBusy;
-    action.addEventListener("click", () => {
-      openAgentPanelAvatarPicker(agent.id);
-    });
-
     card.appendChild(main);
-    card.appendChild(action);
     fragment.appendChild(card);
   }
 

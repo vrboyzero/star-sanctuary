@@ -6,6 +6,7 @@
  */
 
 import type { JsonObject } from "@belldandy/protocol";
+import type { AgentPromptDelta } from "./prompt-snapshot.js";
 import type { AgentRunInput, AgentStreamItem } from "./index.js";
 
 // ============================================================================
@@ -142,6 +143,8 @@ export interface BeforeAgentStartResult {
   systemPrompt?: string;
   /** 前置上下文（会拼接到消息前） */
   prependContext?: string;
+  /** 结构化 prompt delta（双写阶段可选） */
+  deltas?: AgentPromptDelta[];
 }
 
 /**

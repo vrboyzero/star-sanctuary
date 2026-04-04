@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import type { AgentRegistry, BelldandyAgent, ConversationStore } from "@belldandy/agent";
 import type { MessageSendParams } from "@belldandy/protocol";
 import { runAgentToCompletionWithLifecycle } from "./query-runtime-agent-run.js";
@@ -200,6 +202,7 @@ export async function handleCommunityMessageWithQueryRuntime(
 
       ctx.log.info("api", `Processing community message: conversationId=${conversationId}, from=${from || "unknown"}`);
 
+      const runId = crypto.randomUUID();
       queryRuntime.mark("agent_running", { conversationId });
       const runResult = await runAgentToCompletionWithLifecycle(agent, {
         conversationId,
@@ -210,6 +213,9 @@ export async function handleCommunityMessageWithQueryRuntime(
           agentId,
           roomContext,
           senderInfo,
+          meta: {
+            runId,
+          },
         },
         onToolEvent: (detail) => {
           queryRuntime.mark("tool_event_emitted", {
@@ -275,6 +281,7 @@ export async function handleCommunityMessageWithQueryRuntime(
           ok: true,
           payload: {
             conversationId,
+            runId,
             response: runResult.finalText,
           },
         },
@@ -548,6 +555,7 @@ export async function handleWebhookReceiveWithQueryRuntime(
 
       ctx.log.info("webhook", `Processing webhook: id=${webhookId}, conversationId=${conversationId}, agentId=${requestedAgentId ?? "default"}`);
 
+      const runId = crypto.randomUUID();
       queryRuntime.mark("agent_running", {
         conversationId,
         detail: {
@@ -561,6 +569,9 @@ export async function handleWebhookReceiveWithQueryRuntime(
           text: promptText,
           userInput: promptText,
           agentId: requestedAgentId,
+          meta: {
+            runId,
+          },
         },
         onToolEvent: (detail) => {
           queryRuntime.mark("tool_event_emitted", {
@@ -616,6 +627,7 @@ export async function handleWebhookReceiveWithQueryRuntime(
         payload: {
           webhookId,
           conversationId,
+          runId,
           response: runResult.finalText,
         },
       };

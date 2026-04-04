@@ -21,7 +21,9 @@ import {
   loadWorkspaceFiles,
   ensureAgentWorkspace,
   loadAgentWorkspaceFiles,
-  buildSystemPrompt,
+  buildProviderNativeSystemBlocks,
+  buildSystemPromptResult,
+  renderSystemPromptSections,
   ConversationStore,
   loadModelFallbacks,
   type ModelProfile,
@@ -34,6 +36,12 @@ import {
   buildDefaultProfile,
   resolveModelConfig,
   type AgentProfile,
+  type AgentPromptDelta,
+  type AgentPromptSnapshot,
+  type AgentPromptSnapshotMessage,
+  type ProviderNativeSystemBlock,
+  type SystemPromptBuildResult,
+  type SystemPromptSection,
   HookRegistry,
   createHookRunner,
   type HookRunner,
@@ -235,6 +243,18 @@ import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
 import { resolveMemoryIndexPaths } from "../memory-index-paths.js";
+import { loadConversationPromptSnapshotArtifact, persistConversationPromptSnapshot } from "../conversation-prompt-snapshot.js";
+import { PromptSnapshotStore } from "../prompt-snapshot-store.js";
+import {
+  applyPromptExperimentsToSections,
+  buildPromptTokenBreakdown,
+  parsePromptExperimentConfig,
+  withDeltaPromptMetrics,
+  withProviderNativeSystemBlockPromptMetrics,
+  withSectionPromptMetrics,
+  type PromptTextMetrics,
+} from "../prompt-observability.js";
+import { buildToolBehaviorObservability } from "../tool-behavior-observability.js";
 import {
   buildToolActionKey,
   buildWarnOnlyDuplicateNotice,
@@ -472,6 +492,11 @@ const injectSoul = (readEnv("BELLDANDY_INJECT_SOUL") ?? "true") !== "false";
 const injectMemory = (readEnv("BELLDANDY_INJECT_MEMORY") ?? "true") !== "false";
 const maxSystemPromptCharsRaw = readEnv("BELLDANDY_MAX_SYSTEM_PROMPT_CHARS");
 const maxSystemPromptChars = maxSystemPromptCharsRaw ? parseInt(maxSystemPromptCharsRaw, 10) || 0 : 0;
+const promptExperimentConfig = parsePromptExperimentConfig({
+  disabledSectionIdsRaw: readEnv("BELLDANDY_PROMPT_EXPERIMENT_DISABLE_SECTIONS"),
+  sectionPriorityOverridesRaw: readEnv("BELLDANDY_PROMPT_EXPERIMENT_SECTION_PRIORITY_OVERRIDES"),
+  disabledToolContractNamesRaw: readEnv("BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS"),
+});
 
 
 const toolsEnabled = (readEnv("BELLDANDY_TOOLS_ENABLED") ?? "false") === "true";
@@ -824,6 +849,14 @@ const toolsToRegister = toolsEnabled
   })
   : [];
 
+const gatewayExecutorContractAccessPolicy: ToolContractAccessPolicy = {
+  ...gatewayContractAccessPolicy,
+  blockedToolNames: [
+    ...(gatewayContractAccessPolicy.blockedToolNames ? Array.from(gatewayContractAccessPolicy.blockedToolNames) : []),
+    ...(promptExperimentConfig?.disabledToolContractNames ?? []),
+  ],
+};
+
 const CORE_TOOL_NAMES = new Set<string>([
   TOOL_SETTINGS_CONTROL_NAME,
   TOOL_SEARCH_NAME,
@@ -845,7 +878,7 @@ const toolExecutor = new ToolExecutor({
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
   alwaysEnabledTools: toolsEnabled ? [TOOL_SETTINGS_CONTROL_NAME, TOOL_SEARCH_NAME] : [],
   policy: toolsPolicy,
-  contractAccessPolicy: gatewayContractAccessPolicy,
+  contractAccessPolicy: gatewayExecutorContractAccessPolicy,
   deferredToolNames,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
   isToolAllowedForAgent: (toolName, agentId) => {
@@ -988,7 +1021,7 @@ logger.info("workspace", `SOUL=${workspace.hasSoul}, IDENTITY=${workspace.hasIde
 const skillInstructions = promptSkills.map(s => ({ name: s.name, instructions: s.instructions }));
 const hasSearchableSkills = searchableSkills.length > 0;
 
-const dynamicSystemPrompt = buildSystemPrompt({
+const dynamicSystemPromptBuild = buildSystemPromptResult({
   workspace,
   extraSystemPrompt: openaiSystemPrompt,
   userTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -999,7 +1032,9 @@ const dynamicSystemPrompt = buildSystemPrompt({
   maxChars: maxSystemPromptChars,
   skillInstructions,
   hasSearchableSkills,
+  sectionPriorityOverrides: promptExperimentConfig?.sectionPriorityOverrides,
 });
+const dynamicSystemPrompt = dynamicSystemPromptBuild.text;
 logger.info("system-prompt", `length=${dynamicSystemPrompt.length} chars${maxSystemPromptChars ? `, limit=${maxSystemPromptChars}` : ""}`);
 
 // 7.5 Hook System: HookRegistry + Context Injection
@@ -1169,10 +1204,453 @@ async function runPrimaryWarmupProbe(): Promise<void> {
 void runPrimaryWarmupProbe();
 
 // 8.1 Pre-load per-agent workspaces (async, before sync factory)
-const agentWorkspaceCache = new Map<string, { systemPrompt: string }>();
+const agentWorkspaceCache = new Map<string, { build: SystemPromptBuildResult }>();
+const promptSnapshotStore = new PromptSnapshotStore({
+  maxSnapshots: Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_MAX_RUNS") || "48", 10) || 48),
+});
+
+function persistPromptSnapshot(snapshot: AgentPromptSnapshot): void {
+  promptSnapshotStore.save(snapshot);
+  void persistConversationPromptSnapshot({
+    stateDir,
+    snapshot,
+  }).catch((error) => {
+    logger.warn("prompt-snapshot", `Failed to persist prompt snapshot for conversation "${snapshot.conversationId}"`, error);
+  });
+}
+
+function createGatewaySystemPromptSection(input: {
+  id: string;
+  label: string;
+  source: "runtime" | "profile";
+  priority: number;
+  text: string;
+}): SystemPromptSection {
+  return {
+    id: input.id,
+    label: input.label,
+    source: input.source,
+    priority: input.priority,
+    text: input.text,
+  };
+}
+
+function splitLegacyRuntimeIdentityContext(systemPrompt: string): {
+  primaryText: string;
+  runtimeContextText?: string;
+} {
+  const marker = "\n## Identity Context (Runtime)";
+  const markerIndex = systemPrompt.indexOf(marker);
+  if (markerIndex < 0) {
+    return {
+      primaryText: systemPrompt.trim(),
+    };
+  }
+  return {
+    primaryText: systemPrompt.slice(0, markerIndex).trim(),
+    runtimeContextText: systemPrompt.slice(markerIndex).trim(),
+  };
+}
+
+function stripStructuredRuntimeIdentityFromSystemPrompt(input: {
+  systemPrompt: string;
+  deltas?: AgentPromptDelta[];
+}): {
+  primaryText: string;
+  runtimeContextText?: string;
+} | undefined {
+  const runtimeIdentityTexts = (input.deltas ?? [])
+    .filter((delta) => delta.deltaType === "runtime-identity" && delta.role === "system")
+    .map((delta) => delta.text.trim())
+    .filter(Boolean);
+
+  if (runtimeIdentityTexts.length === 0) {
+    return undefined;
+  }
+
+  let remaining = input.systemPrompt.trim();
+  const extractedRuntimeTexts: string[] = [];
+  for (const runtimeText of [...runtimeIdentityTexts].reverse()) {
+    if (remaining === runtimeText) {
+      extractedRuntimeTexts.unshift(runtimeText);
+      remaining = "";
+      continue;
+    }
+
+    const suffix = `\n${runtimeText}`;
+    if (!remaining.endsWith(suffix)) {
+      return undefined;
+    }
+
+    extractedRuntimeTexts.unshift(runtimeText);
+    remaining = remaining.slice(0, remaining.length - suffix.length).trimEnd();
+  }
+
+  return {
+    primaryText: remaining.trim(),
+    runtimeContextText: extractedRuntimeTexts.join("\n").trim() || undefined,
+  };
+}
+
+function cloneProviderNativeSystemBlocks(
+  blocks?: ProviderNativeSystemBlock[],
+): ProviderNativeSystemBlock[] {
+  if (!blocks || blocks.length === 0) {
+    return [];
+  }
+  return blocks.map((block) => ({
+    ...block,
+    sourceSectionIds: [...block.sourceSectionIds],
+    sourceDeltaIds: [...block.sourceDeltaIds],
+  }));
+}
+
+function renderProviderNativeSystemBlocksText(
+  blocks: ProviderNativeSystemBlock[],
+  blockType?: ProviderNativeSystemBlock["blockType"],
+): string {
+  const texts = blocks
+    .filter((block) => !blockType || block.blockType === blockType)
+    .map((block) => block.text.trim())
+    .filter(Boolean);
+  return texts.join("\n").trim();
+}
+
+function buildEffectiveAgentPromptInspection(profile: AgentProfile): {
+  scope?: "agent" | "run";
+  agentId: string;
+  displayName: string;
+  model: string;
+  conversationId?: string;
+  runId?: string;
+  createdAt?: number;
+  text: string;
+  truncated: boolean;
+  maxChars?: number;
+  totalChars: number;
+  finalChars: number;
+  sections: Array<SystemPromptSection & PromptTextMetrics>;
+  droppedSections: Array<SystemPromptSection & PromptTextMetrics>;
+  deltas: Array<AgentPromptDelta & PromptTextMetrics>;
+  providerNativeSystemBlocks: Array<ProviderNativeSystemBlock & PromptTextMetrics>;
+  messages?: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+} {
+  const baseBuild = agentWorkspaceCache.get(profile.id)?.build ?? dynamicSystemPromptBuild;
+  const visibleToolContracts = toolExecutor.getContracts(profile.id);
+  const registeredToolContractNames = new Set(toolExecutor.getRegisteredToolContracts().map((contract) => contract.name));
+  const toolBehaviorContracts = buildToolBehaviorObservability({
+    contracts: visibleToolContracts,
+    disabledContractNamesConfigured: promptExperimentConfig?.disabledToolContractNames,
+    disabledContractNamesApplied: (promptExperimentConfig?.disabledToolContractNames ?? [])
+      .filter((name) => registeredToolContractNames.has(name)),
+  });
+  const sections = [...baseBuild.sections];
+
+  const ttsEnv = process.env.BELLDANDY_TTS_ENABLED;
+  const isTtsEnabled = ttsEnv === "false"
+    ? false
+    : ttsEnv === "true" || fs.existsSync(path.join(stateDir, "TTS_ENABLED"));
+  if (isTtsEnabled) {
+    sections.push(createGatewaySystemPromptSection({
+      id: "tts-mode",
+      label: "tts-mode",
+      source: "runtime",
+      priority: 130,
+      text: `## [SYSTEM MODE: VOICE/TTS ENABLED]
+The user has enabled text-to-speech. Audio will be generated automatically by the system.
+You do NOT need to call any TTS tool — just respond with text as usual.
+Do NOT include any <audio> HTML tags or [Download] links in your response.
+Keep responses concise and natural for spoken delivery.`,
+    }));
+  }
+
+  if (profile.systemPromptOverride) {
+    sections.push(createGatewaySystemPromptSection({
+      id: "profile-override",
+      label: "profile-override",
+      source: "profile",
+      priority: 140,
+      text: profile.systemPromptOverride.trim(),
+    }));
+  }
+
+  if (toolBehaviorContracts.summary) {
+    sections.push(createGatewaySystemPromptSection({
+      id: "tool-behavior-contracts",
+      label: "tool-behavior-contracts",
+      source: "runtime",
+      priority: 105,
+      text: toolBehaviorContracts.summary,
+    }));
+  }
+
+  const promptExperimentResult = applyPromptExperimentsToSections(sections, promptExperimentConfig);
+  const text = renderSystemPromptSections(promptExperimentResult.sections);
+  const providerNativeSystemBlocks = buildPromptInspectionProviderNativeSystemBlocks({
+    sections: promptExperimentResult.sections,
+    fallbackText: text,
+  });
+  const tokenBreakdown = buildPromptTokenBreakdown({
+    systemPromptText: text,
+    sections: promptExperimentResult.sections,
+    droppedSections: [...baseBuild.droppedSections, ...promptExperimentResult.droppedSections],
+    providerNativeSystemBlocks,
+  });
+  return {
+    scope: "agent",
+    agentId: profile.id,
+    displayName: profile.displayName,
+    model: profile.model,
+    text,
+    truncated: baseBuild.truncated,
+    maxChars: baseBuild.maxChars,
+    totalChars: text.length,
+    finalChars: text.length,
+    sections: promptExperimentResult.sections.map(withSectionPromptMetrics),
+    droppedSections: [...baseBuild.droppedSections, ...promptExperimentResult.droppedSections].map(withSectionPromptMetrics),
+    deltas: [],
+    providerNativeSystemBlocks,
+    metadata: {
+      workspaceDir: profile.workspaceDir ?? profile.id,
+      includesTtsMode: isTtsEnabled,
+      hasProfileOverride: Boolean(profile.systemPromptOverride),
+      baseFinalChars: baseBuild.finalChars,
+      baseSectionCount: baseBuild.sections.length,
+      finalSectionCount: promptExperimentResult.sections.length,
+      deltaCount: 0,
+      deltaChars: 0,
+      includesHookSystemPrompt: false,
+      providerNativeSystemBlockCount: providerNativeSystemBlocks.length,
+      providerNativeSystemBlockChars: tokenBreakdown.providerNativeSystemBlockEstimatedChars,
+      providerNativeSystemBlockTypes: [...new Set(providerNativeSystemBlocks.map((block) => block.blockType))],
+      providerNativeCacheEligibleBlockIds: providerNativeSystemBlocks
+        .filter((block) => block.cacheControlEligible)
+        .map((block) => block.id),
+      tokenBreakdown,
+      toolBehaviorObservability: {
+        counts: toolBehaviorContracts.counts,
+        included: toolBehaviorContracts.included,
+        ...(toolBehaviorContracts.summary ? { summary: toolBehaviorContracts.summary } : {}),
+        ...(toolBehaviorContracts.experiment ? { experiment: toolBehaviorContracts.experiment } : {}),
+      },
+      toolContractsIncluded: toolBehaviorContracts.included,
+      toolContractSummary: toolBehaviorContracts.summary || undefined,
+      promptTokenBreakdown: tokenBreakdown,
+      promptExperiments: {
+        disabledSectionIdsConfigured: promptExperimentConfig?.disabledSectionIds ?? [],
+        disabledSectionIdsApplied: promptExperimentResult.disabledSectionIdsApplied,
+        sectionPriorityOverridesConfigured: promptExperimentConfig?.sectionPriorityOverrides ?? {},
+        sectionPriorityOverridesApplied: promptExperimentResult.sectionPriorityOverridesApplied,
+        disabledToolContractNamesConfigured: promptExperimentConfig?.disabledToolContractNames ?? [],
+        disabledToolContractNamesApplied: (promptExperimentConfig?.disabledToolContractNames ?? [])
+          .filter((name) => registeredToolContractNames.has(name)),
+      },
+    },
+  };
+}
+
+function normalizePromptSnapshotMessages(messages: AgentPromptSnapshotMessage[]): Array<Record<string, unknown>> {
+  return messages.map((message) => ({
+    role: message.role,
+    content: Array.isArray(message.content)
+      ? message.content.map((part) => ({ ...part }))
+      : message.content,
+    ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+  }));
+}
+
+function buildPromptInspectionProviderNativeSystemBlocks(input: {
+  sections?: SystemPromptSection[];
+  deltas?: AgentPromptDelta[];
+  snapshot?: AgentPromptSnapshot;
+  fallbackText?: string;
+}): Array<ProviderNativeSystemBlock & PromptTextMetrics> {
+  const snapshotBlocks = cloneProviderNativeSystemBlocks(input.snapshot?.providerNativeSystemBlocks);
+  const resolvedBlocks = snapshotBlocks && snapshotBlocks.length > 0
+    ? snapshotBlocks
+    : buildProviderNativeSystemBlocks({
+      sections: input.sections,
+      deltas: input.deltas,
+      fallbackText: input.fallbackText,
+    });
+  return resolvedBlocks.map(withProviderNativeSystemBlockPromptMetrics);
+}
+
+function buildRunPromptInspection(snapshot: AgentPromptSnapshot, profile?: AgentProfile): {
+  scope: "run";
+  agentId: string;
+  displayName?: string;
+  model?: string;
+  conversationId: string;
+  runId?: string;
+  createdAt: number;
+  text: string;
+  truncated: boolean;
+  maxChars?: number;
+  totalChars: number;
+  finalChars: number;
+  sections: Array<SystemPromptSection & PromptTextMetrics>;
+  droppedSections: Array<SystemPromptSection & PromptTextMetrics>;
+  deltas: Array<AgentPromptDelta & PromptTextMetrics>;
+  providerNativeSystemBlocks: Array<ProviderNativeSystemBlock & PromptTextMetrics>;
+  messages: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+} {
+  const baseInspection = profile ? buildEffectiveAgentPromptInspection(profile) : undefined;
+  const snapshotProviderNativeBlocks = cloneProviderNativeSystemBlocks(snapshot.providerNativeSystemBlocks);
+  const structuredSplitPrompt = snapshotProviderNativeBlocks.length === 0
+    ? stripStructuredRuntimeIdentityFromSystemPrompt({
+      systemPrompt: snapshot.systemPrompt,
+      deltas: snapshot.deltas,
+    })
+    : undefined;
+  const legacySplitPrompt = snapshotProviderNativeBlocks.length === 0 && !structuredSplitPrompt && (!snapshot.deltas || snapshot.deltas.length === 0)
+    ? splitLegacyRuntimeIdentityContext(snapshot.systemPrompt)
+    : undefined;
+  const dynamicRuntimeTextFromBlocks = renderProviderNativeSystemBlocksText(
+    snapshotProviderNativeBlocks,
+    "dynamic-runtime",
+  ) || undefined;
+  const staticPromptText = snapshotProviderNativeBlocks.length > 0
+    ? renderProviderNativeSystemBlocksText(
+      snapshotProviderNativeBlocks.filter((block) => block.blockType !== "dynamic-runtime"),
+    )
+    : (structuredSplitPrompt?.primaryText || legacySplitPrompt?.primaryText || snapshot.systemPrompt).trim();
+  const sections: SystemPromptSection[] = [];
+  const deltaRecords: AgentPromptDelta[] = [];
+  let droppedSections: Array<SystemPromptSection & PromptTextMetrics> = [];
+  let truncated = false;
+  let maxChars: number | undefined;
+
+  if (snapshot.hookSystemPromptUsed) {
+    sections.push(createGatewaySystemPromptSection({
+      id: "hook-system-prompt",
+      label: "hook-system-prompt",
+      source: "runtime",
+      priority: 145,
+      text: staticPromptText || snapshot.systemPrompt,
+    }));
+  } else if (
+    baseInspection
+    && snapshotProviderNativeBlocks.length > 0
+    && renderProviderNativeSystemBlocksText(
+      snapshotProviderNativeBlocks.filter((block) => block.blockType !== "dynamic-runtime"),
+    ) === baseInspection.text
+  ) {
+    sections.push(...baseInspection.sections);
+    droppedSections = baseInspection.droppedSections;
+    truncated = baseInspection.truncated;
+    maxChars = baseInspection.maxChars;
+  } else if (baseInspection && (structuredSplitPrompt?.primaryText || legacySplitPrompt?.primaryText) === baseInspection.text) {
+    sections.push(...baseInspection.sections);
+    droppedSections = baseInspection.droppedSections;
+    truncated = baseInspection.truncated;
+    maxChars = baseInspection.maxChars;
+  } else if (staticPromptText || snapshot.systemPrompt) {
+    sections.push(createGatewaySystemPromptSection({
+      id: "runtime-system-prompt",
+      label: "runtime-system-prompt",
+      source: "runtime",
+      priority: 145,
+      text: staticPromptText || snapshot.systemPrompt,
+    }));
+  }
+
+  if (dynamicRuntimeTextFromBlocks && !snapshot.deltas?.some((delta) => delta.deltaType === "runtime-identity")) {
+    deltaRecords.push({
+      id: "provider-native-dynamic-runtime",
+      deltaType: "runtime-identity",
+      role: "system",
+      source: "gateway-provider-native-fallback",
+      text: dynamicRuntimeTextFromBlocks,
+    });
+  } else if (legacySplitPrompt?.runtimeContextText && !snapshot.deltas?.some((delta) => delta.deltaType === "runtime-identity")) {
+    deltaRecords.push({
+      id: "runtime-identity-context",
+      deltaType: "runtime-identity",
+      role: "system",
+      source: "gateway-fallback",
+      text: legacySplitPrompt.runtimeContextText,
+    });
+  }
+
+  if (snapshot.prependContext && !snapshot.deltas?.some((delta) => delta.deltaType === "user-prelude")) {
+    deltaRecords.push({
+      id: "prepend-context",
+      deltaType: "user-prelude",
+      role: "user-prelude",
+      source: "gateway-fallback",
+      text: snapshot.prependContext,
+    });
+  }
+
+  if (snapshot.deltas && snapshot.deltas.length > 0) {
+    for (const delta of snapshot.deltas) {
+      deltaRecords.push({ ...delta });
+    }
+  }
+
+  const deltas = deltaRecords.map(withDeltaPromptMetrics);
+  const providerNativeSystemBlocks = buildPromptInspectionProviderNativeSystemBlocks({
+    sections: snapshot.hookSystemPromptUsed ? undefined : sections,
+    deltas: deltaRecords,
+    snapshot,
+    fallbackText: snapshot.systemPrompt,
+  });
+  const measuredSections = sections.map(withSectionPromptMetrics);
+  const tokenBreakdown = buildPromptTokenBreakdown({
+    systemPromptText: snapshot.systemPrompt,
+    sections,
+    droppedSections,
+    deltas,
+    providerNativeSystemBlocks,
+  });
+
+  return {
+    scope: "run",
+    agentId: snapshot.agentId ?? profile?.id ?? "default",
+    displayName: profile?.displayName,
+    model: profile?.model,
+    conversationId: snapshot.conversationId,
+    runId: snapshot.runId,
+    createdAt: snapshot.createdAt,
+    text: snapshot.systemPrompt,
+    truncated,
+    maxChars,
+    totalChars: snapshot.systemPrompt.length,
+    finalChars: snapshot.systemPrompt.length,
+    sections: measuredSections,
+    droppedSections,
+    deltas,
+    providerNativeSystemBlocks,
+    messages: normalizePromptSnapshotMessages(snapshot.messages),
+    metadata: {
+      ...(baseInspection?.metadata ?? {}),
+      snapshotScope: "run",
+      snapshotCreatedAt: snapshot.createdAt,
+      includesHookSystemPrompt: snapshot.hookSystemPromptUsed === true,
+      hasPrependContext: Boolean(snapshot.prependContext),
+      prependContextChars: snapshot.prependContext?.length ?? 0,
+      includesRuntimeIdentityContext: deltas.some((delta) => delta.deltaType === "runtime-identity"),
+      deltaCount: deltas.length,
+      deltaChars: tokenBreakdown.deltaEstimatedChars,
+      deltaTypes: [...new Set(deltas.map((delta) => delta.deltaType))],
+      providerNativeSystemBlockCount: providerNativeSystemBlocks.length,
+      providerNativeSystemBlockChars: tokenBreakdown.providerNativeSystemBlockEstimatedChars,
+      providerNativeSystemBlockTypes: [...new Set(providerNativeSystemBlocks.map((block) => block.blockType))],
+      providerNativeCacheEligibleBlockIds: providerNativeSystemBlocks
+        .filter((block) => block.cacheControlEligible)
+        .map((block) => block.id),
+      tokenBreakdown,
+      promptTokenBreakdown: tokenBreakdown,
+      inputMeta: snapshot.inputMeta ? { ...snapshot.inputMeta } : undefined,
+    },
+  };
+}
 
 // Default agent uses the root workspace (already loaded above)
-agentWorkspaceCache.set("default", { systemPrompt: dynamicSystemPrompt });
+agentWorkspaceCache.set("default", { build: dynamicSystemPromptBuild });
 
 // Non-default agents: ensure workspace dir + load + build system prompt
 for (const profile of agentProfiles) {
@@ -1181,7 +1659,7 @@ for (const profile of agentProfiles) {
   try {
     await ensureAgentWorkspace({ rootDir: stateDir, agentId: wsDir });
     const agentWs = await loadAgentWorkspaceFiles(stateDir, wsDir);
-    const agentPrompt = buildSystemPrompt({
+    const agentPromptBuild = buildSystemPromptResult({
       workspace: agentWs,
       extraSystemPrompt: openaiSystemPrompt,
       userTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -1192,13 +1670,14 @@ for (const profile of agentProfiles) {
       maxChars: maxSystemPromptChars,
       skillInstructions,
       hasSearchableSkills,
+      sectionPriorityOverrides: promptExperimentConfig?.sectionPriorityOverrides,
     });
-    agentWorkspaceCache.set(profile.id, { systemPrompt: agentPrompt });
-    logger.info("agent-workspace", `Loaded workspace for agent "${profile.id}" (dir: agents/${wsDir}/), prompt=${agentPrompt.length} chars`);
+    agentWorkspaceCache.set(profile.id, { build: agentPromptBuild });
+    logger.info("agent-workspace", `Loaded workspace for agent "${profile.id}" (dir: agents/${wsDir}/), prompt=${agentPromptBuild.text.length} chars`);
   } catch (err) {
     // Fallback to default workspace if agent workspace fails
     logger.warn("agent-workspace", `Failed to load workspace for agent "${profile.id}", falling back to default: ${err instanceof Error ? err.message : String(err)}`);
-    agentWorkspaceCache.set(profile.id, { systemPrompt: dynamicSystemPrompt });
+    agentWorkspaceCache.set(profile.id, { build: dynamicSystemPromptBuild });
   }
 }
 
@@ -1215,28 +1694,8 @@ agentRegistry = agentProvider === "openai"
       throw new Error("CONFIG_REQUIRED");
     }
 
-    // Dynamic TTS Check: env explicit "false" wins; otherwise env "true" or signal file
-    const ttsEnv = process.env.BELLDANDY_TTS_ENABLED;
-    const isTtsEnabled = ttsEnv === "false"
-      ? false
-      : ttsEnv === "true" || fs.existsSync(path.join(stateDir, "TTS_ENABLED"));
-
-    // Use per-agent system prompt (pre-loaded), fallback to default
-    let currentSystemPrompt = agentWorkspaceCache.get(profile.id)?.systemPrompt ?? dynamicSystemPrompt;
-    if (isTtsEnabled) {
-      currentSystemPrompt += `
-
-## [SYSTEM MODE: VOICE/TTS ENABLED]
-The user has enabled text-to-speech. Audio will be generated automatically by the system.
-You do NOT need to call any TTS tool — just respond with text as usual.
-Do NOT include any <audio> HTML tags or [Download] links in your response.
-Keep responses concise and natural for spoken delivery.`;
-    }
-
-    // Per-profile system prompt override
-    if (profile.systemPromptOverride) {
-      currentSystemPrompt += "\n\n" + profile.systemPromptOverride;
-    }
+    const promptInspection = buildEffectiveAgentPromptInspection(profile);
+    const currentSystemPrompt = promptInspection.text;
 
     // Determine tools enabled: profile override > env
     const profileToolsEnabled = profile.toolsEnabled ?? toolsEnabled;
@@ -1275,9 +1734,13 @@ Keep responses concise and natural for spoken delivery.`;
         apiKey: resolved.apiKey,
         model: resolved.model,
         systemPrompt: currentSystemPrompt,
+        systemPromptSections: promptInspection.sections,
         toolExecutor: toolExecutor,
         logger,
         hookRunner,
+        onPromptSnapshot: (snapshot) => {
+          persistPromptSnapshot(snapshot);
+        },
         ...(resolvedRequestTimeoutMs !== undefined && { timeoutMs: resolvedRequestTimeoutMs }),
         maxRetries: resolvedMaxRetries,
         retryBackoffMs: resolvedRetryBackoffMs,
@@ -1304,6 +1767,10 @@ Keep responses concise and natural for spoken delivery.`;
       model: resolved.model,
       stream: openaiStream,
       systemPrompt: currentSystemPrompt,
+      systemPromptSections: promptInspection.sections,
+      onPromptSnapshot: (snapshot) => {
+        persistPromptSnapshot(snapshot);
+      },
       fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
       failoverLogger: logger,
       videoUploadConfig,
@@ -2302,6 +2769,66 @@ const server = await startGatewayServer({
   getAgentToolControlConfirmPassword: () => agentToolControlConfirmPassword,
   pluginRegistry,
   skillRegistry,
+  inspectAgentPrompt: async ({ agentId, conversationId, runId }) => {
+    const resolvedConversationId = typeof conversationId === "string" && conversationId.trim()
+      ? conversationId.trim()
+      : undefined;
+    const resolvedRunId = typeof runId === "string" && runId.trim()
+      ? runId.trim()
+      : undefined;
+    const resolvedAgentId = typeof agentId === "string" && agentId.trim()
+      ? agentId.trim()
+      : undefined;
+
+    if (resolvedConversationId || resolvedRunId) {
+      let snapshot = promptSnapshotStore.get({
+        conversationId: resolvedConversationId,
+        runId: resolvedRunId,
+        agentId: resolvedAgentId,
+      });
+      if (!snapshot && resolvedConversationId) {
+        const persisted = await loadConversationPromptSnapshotArtifact({
+          stateDir,
+          conversationId: resolvedConversationId,
+          runId: resolvedRunId,
+        });
+        if (persisted) {
+          snapshot = {
+            agentId: persisted.manifest.agentId,
+            conversationId: persisted.manifest.conversationId,
+            runId: persisted.manifest.runId,
+            createdAt: persisted.manifest.createdAt,
+            systemPrompt: persisted.snapshot.systemPrompt,
+            messages: persisted.snapshot.messages,
+            deltas: persisted.snapshot.deltas,
+            providerNativeSystemBlocks: persisted.snapshot.providerNativeSystemBlocks,
+            inputMeta: persisted.snapshot.inputMeta,
+            hookSystemPromptUsed: persisted.snapshot.hookSystemPromptUsed,
+            prependContext: persisted.snapshot.prependContext,
+          };
+        }
+      }
+      if (!snapshot) {
+        throw new Error(
+          `Prompt snapshot not found for conversationId="${resolvedConversationId ?? ""}" runId="${resolvedRunId ?? ""}"`,
+        );
+      }
+      const snapshotProfile = agentRegistry?.getProfile(snapshot.agentId ?? resolvedAgentId ?? "default");
+      return buildRunPromptInspection(snapshot, snapshotProfile);
+    }
+
+    const fallbackAgentId = resolvedAgentId ?? "default";
+    const profile = agentRegistry?.getProfile(fallbackAgentId);
+    if (!profile) {
+      throw new Error(`AgentProfile not found: "${fallbackAgentId}"`);
+    }
+    return buildEffectiveAgentPromptInspection(profile);
+  },
+  getConversationPromptSnapshot: async ({ conversationId, runId }) => loadConversationPromptSnapshotArtifact({
+    stateDir,
+    conversationId,
+    runId,
+  }),
   extensionHost,
   goalManager,
   subTaskRuntimeStore,

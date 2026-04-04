@@ -136,6 +136,190 @@ describe("applyPrependContextToInput", () => {
   });
 });
 
+describe("before_agent_start system prompt overrides", () => {
+  it("uses hook-provided systemPrompt for the current run", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      systemPrompt: "base-system-prompt",
+      toolExecutor: createToolExecutor(),
+      hookRunner: {
+        runBeforeAgentStart: async () => ({
+          systemPrompt: "hook-system-prompt",
+        }),
+        runAgentEnd: async () => {},
+        runBeforeToolCall: async () => undefined,
+        runAfterToolCall: async () => {},
+        runToolResultPersist: () => undefined,
+      } as any,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-hook-system-prompt",
+      text: "hello",
+    }));
+
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const payload = JSON.parse(String(requestInit?.body ?? "{}"));
+    expect(payload.messages[0]).toEqual({
+      role: "system",
+      content: "hook-system-prompt",
+    });
+  });
+
+  it("captures a per-run prompt snapshot with hook systemPrompt and prependContext", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    const snapshots: any[] = [];
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      systemPrompt: "base-system-prompt",
+      toolExecutor: createToolExecutor(),
+      onPromptSnapshot: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+      hookRunner: {
+        runBeforeAgentStart: async () => ({
+          systemPrompt: "hook-system-prompt",
+          prependContext: "<recent-memory>ctx</recent-memory>",
+        }),
+        runAgentEnd: async () => {},
+        runBeforeToolCall: async () => undefined,
+        runAfterToolCall: async () => {},
+        runToolResultPersist: () => undefined,
+      } as any,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-hook-prompt-snapshot",
+      text: "hello",
+      meta: {
+        runId: "run-snapshot-1",
+      },
+    }));
+
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      agentId: "tool-agent",
+      conversationId: "conv-hook-prompt-snapshot",
+      runId: "run-snapshot-1",
+      systemPrompt: "hook-system-prompt",
+      hookSystemPromptUsed: true,
+      prependContext: "<recent-memory>ctx</recent-memory>",
+      deltas: [
+        {
+          id: "prepend-context",
+          deltaType: "user-prelude",
+          role: "user-prelude",
+          text: "<recent-memory>ctx</recent-memory>",
+        },
+      ],
+      messages: [
+        {
+          role: "system",
+          content: "hook-system-prompt",
+        },
+        {
+          role: "user",
+          content: "<recent-memory>ctx</recent-memory>\n\nhello",
+        },
+      ],
+    });
+  });
+
+  it("captures runtime identity and prompt meta deltas in prompt snapshots", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    const snapshots: any[] = [];
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      systemPrompt: "base-system-prompt",
+      toolExecutor: createToolExecutor(),
+      onPromptSnapshot: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-runtime-deltas",
+      text: "hello",
+      userUuid: "user-123",
+      meta: {
+        runId: "run-runtime-deltas",
+        promptDeltas: [
+          {
+            id: "attachment-1",
+            deltaType: "attachment",
+            role: "attachment",
+            text: "[Attachment: notes.md]",
+          },
+        ],
+      },
+    }));
+
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].systemPrompt).toContain("## Identity Context (Runtime)");
+    expect(snapshots[0].deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime-identity-context",
+        deltaType: "runtime-identity",
+        role: "system",
+      }),
+      expect.objectContaining({
+        id: "attachment-1",
+        deltaType: "attachment",
+        role: "attachment",
+        text: "[Attachment: notes.md]",
+      }),
+    ]));
+    expect(snapshots[0].providerNativeSystemBlocks).toEqual([
+      expect.objectContaining({
+        blockType: "static-capability",
+        sourceSectionIds: [],
+        sourceDeltaIds: [],
+        cacheControlEligible: true,
+      }),
+      expect.objectContaining({
+        blockType: "dynamic-runtime",
+        sourceDeltaIds: ["runtime-identity-context"],
+        cacheControlEligible: false,
+      }),
+    ]);
+  });
+});
+
 describe("tool transcript compaction", () => {
   it("removes tool call protocol blocks from assistant history content", () => {
     const input = [
