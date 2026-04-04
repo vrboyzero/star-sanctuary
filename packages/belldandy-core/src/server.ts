@@ -37,7 +37,11 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
-import { buildPromptObservabilitySummary } from "./prompt-observability.js";
+import {
+  buildPromptObservabilitySummary,
+  formatPromptObservabilityHeadline,
+  toPromptObservabilityView,
+} from "./prompt-observability.js";
 import {
   buildToolBehaviorObservability,
   readConfiguredPromptExperimentToolContracts,
@@ -2714,11 +2718,16 @@ async function handleReq(
             runId: promptRunId,
           });
           const summary = buildPromptObservabilitySummary(inspection);
+          const summaryView = toPromptObservabilityView(summary, {
+            truncated: inspection.truncated,
+            includesHookSystemPrompt: inspection.metadata?.includesHookSystemPrompt === true,
+            hasPrependContext: inspection.metadata?.hasPrependContext === true,
+          });
           checks.push({
             id: "prompt_observability",
             name: "Prompt Observability",
             status: "pass",
-            message: `${summary.agentId} ${summary.scope ?? "agent"} prompt tokens=${summary.tokenBreakdown.systemPromptEstimatedTokens}, sections=${summary.counts.sectionCount}, deltas=${summary.counts.deltaCount}, blocks=${summary.counts.providerNativeSystemBlockCount}`,
+            message: formatPromptObservabilityHeadline(summaryView),
           });
           promptObservability = {
             requested: {

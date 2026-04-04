@@ -104,6 +104,8 @@ export type ToolEnabledAgentOptions = {
   conversationStore?: ConversationStore;
   /** 记录本次 run 实际发给模型的 prompt snapshot */
   onPromptSnapshot?: (snapshot: AgentPromptSnapshot) => void;
+  /** 预置到 prompt snapshot 的 system prompt 观测元数据 */
+  systemPromptMetadata?: JsonObject;
 };
 
 type Message =
@@ -675,7 +677,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           messages: messagesForSnapshot,
           deltas: snapshotDeltas,
           providerNativeSystemBlocks,
-          inputMeta: input.meta,
+          inputMeta: mergePromptSnapshotInputMeta(this.opts.systemPromptMetadata, input.meta),
           hookSystemPromptUsed,
           prependContext,
         }),
@@ -1571,6 +1573,19 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
     return result.state;
   }
+}
+
+function mergePromptSnapshotInputMeta(
+  systemPromptMetadata?: JsonObject,
+  runMeta?: JsonObject,
+): JsonObject | undefined {
+  if (!systemPromptMetadata && !runMeta) {
+    return undefined;
+  }
+  return {
+    ...(systemPromptMetadata ? { ...systemPromptMetadata } : {}),
+    ...(runMeta ? { ...runMeta } : {}),
+  };
 }
 
 /** 估算 messages 数组的总 token 数（用于循环内压缩判断） */

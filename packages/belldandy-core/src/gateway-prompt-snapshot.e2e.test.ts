@@ -145,11 +145,6 @@ test("gateway persists prompt snapshot across restart and reloads it via inspect
         },
         snapshotScope: "run",
         providerNativeSystemBlockCount: expect.any(Number),
-        promptTokenBreakdown: {
-          systemPromptEstimatedTokens: expect.any(Number),
-          deltaEstimatedTokens: expect.any(Number),
-          providerNativeSystemBlockEstimatedTokens: expect.any(Number),
-        },
       },
     });
     expect(inspectRes?.payload?.sections?.[0]).toMatchObject({
@@ -486,13 +481,6 @@ test("gateway applies prompt tool contract experiments to tool visibility and mo
       disabledToolContractNamesConfigured: ["apply_patch"],
       disabledToolContractNamesApplied: ["apply_patch"],
     });
-    expect(inspectRes?.payload?.metadata?.toolContractsIncluded).toEqual(expect.arrayContaining([
-      "run_command",
-      "delegate_task",
-      "file_write",
-      "file_delete",
-      "delegate_parallel",
-    ]));
     expect(inspectRes?.payload?.metadata?.toolBehaviorObservability).toMatchObject({
       counts: {
         includedContractCount: expect.any(Number),
@@ -509,13 +497,241 @@ test("gateway applies prompt tool contract experiments to tool visibility and mo
         disabledContractNamesApplied: ["apply_patch"],
       },
     });
-    expect(inspectRes?.payload?.metadata?.toolContractsIncluded).not.toContain("apply_patch");
-    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## run_command");
-    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## delegate_task");
-    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## file_write");
-    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## file_delete");
-    expect(inspectRes?.payload?.metadata?.toolContractSummary).toContain("## delegate_parallel");
-    expect(inspectRes?.payload?.metadata?.toolContractSummary).not.toContain("## apply_patch");
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.included).toEqual(expect.arrayContaining([
+      "run_command",
+      "delegate_task",
+      "file_write",
+      "file_delete",
+      "delegate_parallel",
+    ]));
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.included).not.toContain("apply_patch");
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.summary).toContain("## run_command");
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.summary).toContain("## delegate_task");
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.summary).toContain("## file_write");
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.summary).toContain("## file_delete");
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.summary).toContain("## delegate_parallel");
+    expect(inspectRes?.payload?.metadata?.toolBehaviorObservability?.summary).not.toContain("## apply_patch");
+    expect(inspectRes?.payload?.metadata?.toolContractsIncluded).toBeUndefined();
+    expect(inspectRes?.payload?.metadata?.toolContractSummary).toBeUndefined();
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+test("gateway does not force legacy marker fallback for unstructured snapshots without the legacy marker", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-no-legacy-marker-e2e-"));
+  const conversationId = "conv-prompt-no-legacy-marker";
+  const runId = "run-no-legacy-marker";
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: {
+        agentId: "default",
+        conversationId,
+        runId,
+        createdAt: 1712000002000,
+        systemPrompt: "PROMPT_NO_LEGACY_MARKER_E2E_MARKER\nRuntime identity: user=test-user",
+        messages: [
+          { role: "system", content: "PROMPT_NO_LEGACY_MARKER_E2E_MARKER\nRuntime identity: user=test-user" },
+          { role: "user", content: "hello" },
+        ],
+      },
+    });
+
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker: "PROMPT_NO_LEGACY_MARKER_E2E_MARKER",
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const inspectReqId = "agents-prompt-inspect-no-legacy-marker-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const inspectAfterPairingReqId = "agents-prompt-inspect-no-legacy-marker-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectAfterPairingReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId);
+    expect(inspectRes?.payload?.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime-system-prompt",
+        text: "PROMPT_NO_LEGACY_MARKER_E2E_MARKER\nRuntime identity: user=test-user",
+      }),
+    ]));
+    expect(inspectRes?.payload?.deltas ?? []).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: "snapshot-normalize",
+      }),
+    ]));
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+test("gateway normalizes legacy persisted snapshots before run inspection", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-legacy-normalize-e2e-"));
+  const conversationId = "conv-prompt-legacy-normalize";
+  const runId = "run-legacy-normalize";
+  const artifactPath = getConversationPromptSnapshotArtifactPath({
+    stateDir,
+    conversationId,
+    runId,
+  });
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    await fs.mkdir(path.dirname(artifactPath), { recursive: true });
+    await fs.writeFile(artifactPath, JSON.stringify({
+      schemaVersion: 1,
+      manifest: {
+        conversationId,
+        runId,
+        agentId: "default",
+        createdAt: 1712000002500,
+        persistedAt: 1712000002501,
+        source: "runtime.prompt_snapshot",
+      },
+      summary: {
+        messageCount: 2,
+        systemPromptChars: 81,
+        includesHookSystemPrompt: false,
+        hasPrependContext: true,
+        deltaCount: 0,
+        deltaChars: 0,
+        systemPromptEstimatedTokens: 0,
+        deltaEstimatedTokens: 0,
+        providerNativeSystemBlockCount: 0,
+        providerNativeSystemBlockChars: 0,
+        providerNativeSystemBlockEstimatedTokens: 0,
+      },
+      snapshot: {
+        systemPrompt: "PROMPT_LEGACY_NORMALIZE_E2E_MARKER\n## Identity Context (Runtime)\n- Current User UUID: test-user",
+        messages: [
+          {
+            role: "system",
+            content: "PROMPT_LEGACY_NORMALIZE_E2E_MARKER\n## Identity Context (Runtime)\n- Current User UUID: test-user",
+          },
+          { role: "user", content: "hello" },
+        ],
+        hookSystemPromptUsed: false,
+        prependContext: "<recent-memory>ctx</recent-memory>",
+      },
+    }, null, 2), "utf-8");
+
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker: "PROMPT_LEGACY_NORMALIZE_E2E_MARKER",
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const inspectReqId = "agents-prompt-inspect-legacy-normalize-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const inspectAfterPairingReqId = "agents-prompt-inspect-legacy-normalize-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectAfterPairingReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectAfterPairingReqId);
+    expect(inspectRes?.payload?.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime-system-prompt",
+        text: "PROMPT_LEGACY_NORMALIZE_E2E_MARKER",
+      }),
+    ]));
+    expect(inspectRes?.payload?.deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime-identity-context",
+        deltaType: "runtime-identity",
+        source: "snapshot-normalize",
+      }),
+      expect.objectContaining({
+        id: "prepend-context",
+        deltaType: "user-prelude",
+        source: "snapshot-normalize",
+      }),
+    ]));
+
+    const rpcReqId = "conversation-prompt-snapshot-legacy-normalize-get";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: rpcReqId,
+      method: "conversation.prompt_snapshot.get",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === rpcReqId && frame.ok === true));
+
+    const rpcRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === rpcReqId);
+    expect(rpcRes?.payload?.snapshot?.summary).toMatchObject({
+      deltaCount: 2,
+      hasPrependContext: true,
+    });
+    expect(rpcRes?.payload?.snapshot?.snapshot?.deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime-identity-context",
+      }),
+      expect.objectContaining({
+        id: "prepend-context",
+      }),
+    ]));
   } finally {
     if (wsHandle) {
       await wsHandle.close().catch(() => {});
@@ -608,7 +824,7 @@ test("gateway prefers structured deltas over legacy marker splitting for old sna
     ]));
     expect(inspectRes?.payload?.deltas).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
-        source: "gateway-fallback",
+        source: "snapshot-normalize",
       }),
     ]));
     expect(inspectRes?.payload?.providerNativeSystemBlocks).toEqual(expect.arrayContaining([

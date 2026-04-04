@@ -44,6 +44,8 @@ export type OpenAIChatAgentOptions = {
   onPromptSnapshot?: (snapshot: AgentPromptSnapshot) => void;
   /** 当前 system prompt 的结构化 sections，供 snapshot / inspect 复用 */
   systemPromptSections?: SystemPromptSection[];
+  /** 预置到 prompt snapshot 的 system prompt 观测元数据 */
+  systemPromptMetadata?: JsonObject;
 };
 
 type ApiProtocol = "openai" | "anthropic";
@@ -194,7 +196,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
         messages,
         deltas: promptDeltas,
         providerNativeSystemBlocks,
-        inputMeta: input.meta,
+        inputMeta: mergePromptSnapshotInputMeta(this.opts.systemPromptMetadata, input.meta),
       }));
       const textAttachmentChars = readTextAttachmentChars(input.meta);
       const minimumAdaptiveTimeoutMs = resolveMinimumAdaptiveTimeoutMs(messages, textAttachmentChars);
@@ -369,6 +371,19 @@ export class OpenAIChatAgent implements BelldandyAgent {
     const choices = (json.choices as unknown) as Array<any> | undefined;
     return choices?.[0]?.message?.content ?? "";
   }
+}
+
+function mergePromptSnapshotInputMeta(
+  systemPromptMetadata?: JsonObject,
+  runMeta?: JsonObject,
+): JsonObject | undefined {
+  if (!systemPromptMetadata && !runMeta) {
+    return undefined;
+  }
+  return {
+    ...(systemPromptMetadata ? { ...systemPromptMetadata } : {}),
+    ...(runMeta ? { ...runMeta } : {}),
+  };
 }
 
 

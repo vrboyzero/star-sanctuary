@@ -1,3 +1,5 @@
+import { renderDoctorObservabilityCards } from "./doctor-observability.js";
+
 export function createSettingsController({
   refs,
   isConnected,
@@ -189,6 +191,7 @@ export function createSettingsController({
         badge.textContent = `${check.name}: ${check.message || check.status}`;
         doctorStatusEl.appendChild(badge);
       });
+      renderDoctorObservabilityCards(doctorStatusEl, res.payload, t);
       doctorToggleBtn.className = `button badge ${allPass ? 'pass' : 'fail'}`;
       doctorToggleBtn.textContent = allPass ? t("settings.doctorAllPassed", {}, "所有检查通过") : t("settings.doctorHasIssues", {}, "存在未通过的检查");
       return;

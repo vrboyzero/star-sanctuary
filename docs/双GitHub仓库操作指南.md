@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "完成了第一轮提示词机制的优化，内容详见CC提示词清单说明.md"
+git commit -m "完成提示词机制的优化收口，内容详见CC提示词清单说明.md"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

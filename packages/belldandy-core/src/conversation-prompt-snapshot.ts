@@ -11,10 +11,15 @@ import type {
 import type { JsonObject } from "@belldandy/protocol";
 import {
   buildPromptTokenBreakdown,
+  readPromptTokenBreakdownFromMetadata,
+  readPromptTruncationReasonFromMetadata,
+  renderPromptObservabilityText,
+  type PromptTruncationReason,
   type PromptTokenBreakdown,
   withDeltaPromptMetrics,
   withProviderNativeSystemBlockPromptMetrics,
 } from "./prompt-observability.js";
+import { normalizeLegacyPromptSnapshot } from "./prompt-snapshot-legacy-normalize.js";
 
 const CONVERSATION_DEBUG_DIRNAME = "diagnostics";
 const PROMPT_SNAPSHOT_DIRNAME = "prompt-snapshots";
@@ -43,6 +48,7 @@ export type ConversationPromptSnapshotArtifact = {
     providerNativeSystemBlockChars: number;
     providerNativeSystemBlockEstimatedTokens: number;
     tokenBreakdown: PromptTokenBreakdown;
+    truncationReason?: PromptTruncationReason;
   };
   snapshot: {
     systemPrompt: string;
@@ -67,6 +73,9 @@ export function buildConversationPromptSnapshotArtifact(input: {
     deltas: input.snapshot.deltas,
     providerNativeSystemBlocks: input.snapshot.providerNativeSystemBlocks,
   });
+  const truncationReason = readPromptTruncationReasonFromMetadata(
+    input.snapshot.inputMeta as Record<string, unknown> | undefined,
+  );
 
   return {
     schemaVersion: CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION,
@@ -91,6 +100,7 @@ export function buildConversationPromptSnapshotArtifact(input: {
       providerNativeSystemBlockChars: input.snapshot.providerNativeSystemBlocks?.reduce((sum, block) => sum + block.text.length, 0) ?? 0,
       providerNativeSystemBlockEstimatedTokens: promptTokenBreakdown.providerNativeSystemBlockEstimatedTokens,
       tokenBreakdown: promptTokenBreakdown,
+      ...(truncationReason ? { truncationReason } : {}),
     },
     snapshot: {
       systemPrompt: input.snapshot.systemPrompt,
@@ -206,9 +216,87 @@ export async function loadConversationPromptSnapshotArtifact(input: {
   return latestArtifact;
 }
 
+export function normalizeConversationPromptSnapshotArtifact(
+  artifact: ConversationPromptSnapshotArtifact,
+): ConversationPromptSnapshotArtifact {
+  const normalizedSnapshot = normalizeLegacyPromptSnapshot({
+    agentId: artifact.manifest.agentId,
+    conversationId: artifact.manifest.conversationId,
+    runId: artifact.manifest.runId,
+    createdAt: artifact.manifest.createdAt,
+    systemPrompt: artifact.snapshot.systemPrompt,
+    messages: artifact.snapshot.messages,
+    ...(artifact.snapshot.deltas ? { deltas: artifact.snapshot.deltas } : {}),
+    ...(artifact.snapshot.providerNativeSystemBlocks
+      ? { providerNativeSystemBlocks: artifact.snapshot.providerNativeSystemBlocks }
+      : {}),
+    ...(artifact.snapshot.inputMeta ? { inputMeta: artifact.snapshot.inputMeta } : {}),
+    hookSystemPromptUsed: artifact.snapshot.hookSystemPromptUsed,
+    prependContext: artifact.snapshot.prependContext,
+  });
+  const rebuiltArtifact = buildConversationPromptSnapshotArtifact({
+    snapshot: normalizedSnapshot,
+    persistedAt: artifact.manifest.persistedAt,
+  });
+  const summaryRecord = isRecord(artifact.summary)
+    ? artifact.summary
+    : undefined;
+  const inputMeta = isRecord(normalizedSnapshot.inputMeta)
+    ? normalizedSnapshot.inputMeta as Record<string, unknown>
+    : undefined;
+  const tokenBreakdown = readPromptTokenBreakdownFromMetadata(
+    summaryRecord ? { tokenBreakdown: summaryRecord.tokenBreakdown } : undefined,
+  ) ?? readPromptTokenBreakdownFromMetadata(
+    inputMeta
+      ? { tokenBreakdown: inputMeta.tokenBreakdown ?? inputMeta.promptTokenBreakdown }
+      : undefined,
+  ) ?? rebuiltArtifact.summary.tokenBreakdown;
+  const truncationReason = readPromptTruncationReasonFromMetadata(
+    summaryRecord ? { truncationReason: summaryRecord.truncationReason } : undefined,
+  ) ?? readPromptTruncationReasonFromMetadata(inputMeta)
+    ?? rebuiltArtifact.summary.truncationReason;
+
+  return {
+    schemaVersion: artifact.schemaVersion,
+    manifest: { ...artifact.manifest },
+    summary: {
+      ...rebuiltArtifact.summary,
+      tokenBreakdown,
+      systemPromptEstimatedTokens: tokenBreakdown.systemPromptEstimatedTokens,
+      deltaEstimatedTokens: tokenBreakdown.deltaEstimatedTokens,
+      providerNativeSystemBlockEstimatedTokens: tokenBreakdown.providerNativeSystemBlockEstimatedTokens,
+      ...(truncationReason ? { truncationReason } : {}),
+    },
+    snapshot: rebuiltArtifact.snapshot,
+  };
+}
+
 export function renderConversationPromptSnapshotText(
   artifact: ConversationPromptSnapshotArtifact,
 ): string {
+  const promptObservabilityText = renderPromptObservabilityText({
+    scope: "run",
+    agentId: artifact.manifest.agentId ?? "unknown",
+    conversationId: artifact.manifest.conversationId,
+    ...(artifact.manifest.runId ? { runId: artifact.manifest.runId } : {}),
+    createdAt: artifact.manifest.createdAt,
+    counts: {
+      deltaCount: artifact.summary.deltaCount,
+      providerNativeSystemBlockCount: artifact.summary.providerNativeSystemBlockCount,
+    },
+    promptSizes: {
+      totalChars: artifact.summary.systemPromptChars,
+      finalChars: artifact.summary.systemPromptChars,
+    },
+    tokenBreakdown: artifact.summary.tokenBreakdown,
+    flags: {
+      includesHookSystemPrompt: artifact.summary.includesHookSystemPrompt,
+      hasPrependContext: artifact.summary.hasPrependContext,
+    },
+    ...(artifact.summary.truncationReason
+      ? { truncationReason: artifact.summary.truncationReason }
+      : {}),
+  });
   const lines: string[] = [
     "Conversation Prompt Snapshot",
     `conversationId: ${artifact.manifest.conversationId}`,
@@ -217,20 +305,8 @@ export function renderConversationPromptSnapshotText(
     `createdAt: ${new Date(artifact.manifest.createdAt).toISOString()}`,
     `persistedAt: ${new Date(artifact.manifest.persistedAt).toISOString()}`,
     "",
-    "Summary",
     `messages: ${artifact.summary.messageCount}`,
-    `systemPromptChars: ${artifact.summary.systemPromptChars}`,
-    `hookSystemPrompt: ${artifact.summary.includesHookSystemPrompt ? "yes" : "no"}`,
-    `prependContext: ${artifact.summary.hasPrependContext ? "yes" : "no"}`,
-    `deltas: ${artifact.summary.deltaCount}`,
-    `deltaChars: ${artifact.summary.deltaChars}`,
-    `providerNativeSystemBlocks: ${artifact.summary.providerNativeSystemBlockCount}`,
-    `providerNativeSystemBlockChars: ${artifact.summary.providerNativeSystemBlockChars}`,
-    "",
-    "Token Breakdown",
-    `deltaEstimatedTokens: ${artifact.summary.deltaEstimatedTokens}`,
-    `providerNativeSystemBlockEstimatedTokens: ${artifact.summary.providerNativeSystemBlockEstimatedTokens}`,
-    `systemPromptEstimatedTokens: ${artifact.summary.systemPromptEstimatedTokens}`,
+    promptObservabilityText,
     "",
     "System Prompt",
     artifact.snapshot.systemPrompt || "(empty)",
@@ -305,7 +381,7 @@ async function readPromptSnapshotArtifactFile(targetPath: string): Promise<Conve
     if (!parsed.manifest || typeof parsed.manifest.conversationId !== "string") {
       return undefined;
     }
-    return parsed;
+    return normalizeConversationPromptSnapshotArtifact(parsed);
   } catch (error) {
     const fsError = error as NodeJS.ErrnoException;
     if (fsError.code === "ENOENT") {
@@ -322,4 +398,8 @@ function sanitizeFileSegment(value: string): string {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
   return sanitized.slice(0, 120) || "conversation";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

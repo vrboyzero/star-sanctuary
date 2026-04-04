@@ -4431,19 +4431,17 @@ test("tools.list exposes tool behavior contract observability for visible tools"
         "delegate_task",
       ],
     });
-    expect(listRes.payload?.toolContractsIncluded).toEqual([
-      "run_command",
-      "apply_patch",
-      "delegate_task",
-    ]);
-    expect(listRes.payload?.toolBehaviorContracts?.run_command).toMatchObject({
+    expect(listRes.payload?.toolBehaviorObservability?.contracts?.run_command).toMatchObject({
       useWhen: expect.any(Array),
       preflightChecks: expect.any(Array),
     });
-    expect(listRes.payload?.toolContractSummary).toContain("## run_command");
-    expect(listRes.payload?.toolContractSummary).toContain("## apply_patch");
-    expect(listRes.payload?.toolContractSummary).toContain("## delegate_task");
-    expect(listRes.payload?.toolBehaviorContracts?.beta_builtin).toBeUndefined();
+    expect(listRes.payload?.toolBehaviorObservability?.summary).toContain("## run_command");
+    expect(listRes.payload?.toolBehaviorObservability?.summary).toContain("## apply_patch");
+    expect(listRes.payload?.toolBehaviorObservability?.summary).toContain("## delegate_task");
+    expect(listRes.payload?.toolBehaviorObservability?.contracts?.beta_builtin).toBeUndefined();
+    expect(listRes.payload?.toolContractsIncluded).toBeUndefined();
+    expect(listRes.payload?.toolBehaviorContracts).toBeUndefined();
+    expect(listRes.payload?.toolContractSummary).toBeUndefined();
   } finally {
     ws.close();
     await closeP;

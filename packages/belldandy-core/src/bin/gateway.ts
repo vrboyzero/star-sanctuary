@@ -175,7 +175,7 @@ import {
 import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, type MemoryCategory } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
-import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type TokenUsageUploadConfig } from "@belldandy/protocol";
+import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type JsonObject, type TokenUsageUploadConfig } from "@belldandy/protocol";
 import { GoalManager } from "../goals/manager.js";
 import { buildGoalCapabilityPlan } from "../goals/capability-planner.js";
 import { parseGoalSessionKey } from "../goals/session.js";
@@ -1235,23 +1235,6 @@ function createGatewaySystemPromptSection(input: {
   };
 }
 
-function splitLegacyRuntimeIdentityContext(systemPrompt: string): {
-  primaryText: string;
-  runtimeContextText?: string;
-} {
-  const marker = "\n## Identity Context (Runtime)";
-  const markerIndex = systemPrompt.indexOf(marker);
-  if (markerIndex < 0) {
-    return {
-      primaryText: systemPrompt.trim(),
-    };
-  }
-  return {
-    primaryText: systemPrompt.slice(0, markerIndex).trim(),
-    runtimeContextText: systemPrompt.slice(markerIndex).trim(),
-  };
-}
-
 function stripStructuredRuntimeIdentityFromSystemPrompt(input: {
   systemPrompt: string;
   deltas?: AgentPromptDelta[];
@@ -1428,15 +1411,13 @@ Keep responses concise and natural for spoken delivery.`,
         .filter((block) => block.cacheControlEligible)
         .map((block) => block.id),
       tokenBreakdown,
+      ...(baseBuild.truncationReason ? { truncationReason: { ...baseBuild.truncationReason } } : {}),
       toolBehaviorObservability: {
         counts: toolBehaviorContracts.counts,
         included: toolBehaviorContracts.included,
         ...(toolBehaviorContracts.summary ? { summary: toolBehaviorContracts.summary } : {}),
         ...(toolBehaviorContracts.experiment ? { experiment: toolBehaviorContracts.experiment } : {}),
       },
-      toolContractsIncluded: toolBehaviorContracts.included,
-      toolContractSummary: toolBehaviorContracts.summary || undefined,
-      promptTokenBreakdown: tokenBreakdown,
       promptExperiments: {
         disabledSectionIdsConfigured: promptExperimentConfig?.disabledSectionIds ?? [],
         disabledSectionIdsApplied: promptExperimentResult.disabledSectionIdsApplied,
@@ -1505,18 +1486,11 @@ function buildRunPromptInspection(snapshot: AgentPromptSnapshot, profile?: Agent
       deltas: snapshot.deltas,
     })
     : undefined;
-  const legacySplitPrompt = snapshotProviderNativeBlocks.length === 0 && !structuredSplitPrompt && (!snapshot.deltas || snapshot.deltas.length === 0)
-    ? splitLegacyRuntimeIdentityContext(snapshot.systemPrompt)
-    : undefined;
-  const dynamicRuntimeTextFromBlocks = renderProviderNativeSystemBlocksText(
-    snapshotProviderNativeBlocks,
-    "dynamic-runtime",
-  ) || undefined;
   const staticPromptText = snapshotProviderNativeBlocks.length > 0
     ? renderProviderNativeSystemBlocksText(
       snapshotProviderNativeBlocks.filter((block) => block.blockType !== "dynamic-runtime"),
     )
-    : (structuredSplitPrompt?.primaryText || legacySplitPrompt?.primaryText || snapshot.systemPrompt).trim();
+    : (structuredSplitPrompt?.primaryText || snapshot.systemPrompt).trim();
   const sections: SystemPromptSection[] = [];
   const deltaRecords: AgentPromptDelta[] = [];
   let droppedSections: Array<SystemPromptSection & PromptTextMetrics> = [];
@@ -1542,7 +1516,7 @@ function buildRunPromptInspection(snapshot: AgentPromptSnapshot, profile?: Agent
     droppedSections = baseInspection.droppedSections;
     truncated = baseInspection.truncated;
     maxChars = baseInspection.maxChars;
-  } else if (baseInspection && (structuredSplitPrompt?.primaryText || legacySplitPrompt?.primaryText) === baseInspection.text) {
+  } else if (baseInspection && structuredSplitPrompt?.primaryText === baseInspection.text) {
     sections.push(...baseInspection.sections);
     droppedSections = baseInspection.droppedSections;
     truncated = baseInspection.truncated;
@@ -1555,34 +1529,6 @@ function buildRunPromptInspection(snapshot: AgentPromptSnapshot, profile?: Agent
       priority: 145,
       text: staticPromptText || snapshot.systemPrompt,
     }));
-  }
-
-  if (dynamicRuntimeTextFromBlocks && !snapshot.deltas?.some((delta) => delta.deltaType === "runtime-identity")) {
-    deltaRecords.push({
-      id: "provider-native-dynamic-runtime",
-      deltaType: "runtime-identity",
-      role: "system",
-      source: "gateway-provider-native-fallback",
-      text: dynamicRuntimeTextFromBlocks,
-    });
-  } else if (legacySplitPrompt?.runtimeContextText && !snapshot.deltas?.some((delta) => delta.deltaType === "runtime-identity")) {
-    deltaRecords.push({
-      id: "runtime-identity-context",
-      deltaType: "runtime-identity",
-      role: "system",
-      source: "gateway-fallback",
-      text: legacySplitPrompt.runtimeContextText,
-    });
-  }
-
-  if (snapshot.prependContext && !snapshot.deltas?.some((delta) => delta.deltaType === "user-prelude")) {
-    deltaRecords.push({
-      id: "prepend-context",
-      deltaType: "user-prelude",
-      role: "user-prelude",
-      source: "gateway-fallback",
-      text: snapshot.prependContext,
-    });
   }
 
   if (snapshot.deltas && snapshot.deltas.length > 0) {
@@ -1643,7 +1589,6 @@ function buildRunPromptInspection(snapshot: AgentPromptSnapshot, profile?: Agent
         .filter((block) => block.cacheControlEligible)
         .map((block) => block.id),
       tokenBreakdown,
-      promptTokenBreakdown: tokenBreakdown,
       inputMeta: snapshot.inputMeta ? { ...snapshot.inputMeta } : undefined,
     },
   };
@@ -1735,6 +1680,7 @@ agentRegistry = agentProvider === "openai"
         model: resolved.model,
         systemPrompt: currentSystemPrompt,
         systemPromptSections: promptInspection.sections,
+        systemPromptMetadata: promptInspection.metadata as JsonObject,
         toolExecutor: toolExecutor,
         logger,
         hookRunner,
@@ -1768,6 +1714,7 @@ agentRegistry = agentProvider === "openai"
       stream: openaiStream,
       systemPrompt: currentSystemPrompt,
       systemPromptSections: promptInspection.sections,
+      systemPromptMetadata: promptInspection.metadata as JsonObject,
       onPromptSnapshot: (snapshot) => {
         persistPromptSnapshot(snapshot);
       },

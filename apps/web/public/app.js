@@ -12,6 +12,7 @@ import { createChatEventsFeature } from "./app/features/chat-events.js";
 import { createChatNetworkFeature } from "./app/features/chat-network.js";
 import { createChatUiFeature } from "./app/features/chat-ui.js";
 import { createCanvasContextFeature } from "./app/features/canvas-context.js";
+import { buildDoctorChatSummary } from "./app/features/doctor-observability.js";
 import { createGoalsDetailFeature } from "./app/features/goals-detail.js";
 import { createGoalsGovernancePanelFeature } from "./app/features/goals-governance-panel.js";
 import { createGoalsCapabilityPanelFeature } from "./app/features/goals-capability-panel.js";
@@ -1506,12 +1507,17 @@ async function sendMessage() {
       type: "req",
       id: makeId(),
       method: "system.doctor",
+      params: {
+        ...(activeConversationId ? { promptConversationId: activeConversationId, toolConversationId: activeConversationId } : {}),
+        ...(agentSelectEl?.value ? { promptAgentId: agentSelectEl.value, toolAgentId: agentSelectEl.value } : {}),
+      },
     });
     if (res && res.ok && res.payload && res.payload.checks) {
       const lines = res.payload.checks.map(c => {
         const icon = c.status === "pass" ? "✅" : c.status === "warn" ? "⚠️" : "❌";
         return `${icon} ${c.name}: ${c.message}`;
       });
+      lines.push(...buildDoctorChatSummary(res.payload, localeController.t));
       statusEl.textContent = lines.join("\n");
     } else {
       statusEl.textContent = "健康检查失败：" + (res?.error?.message || "未知错误");

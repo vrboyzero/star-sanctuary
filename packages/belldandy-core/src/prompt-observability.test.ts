@@ -4,8 +4,11 @@ import {
   applyPromptExperimentsToSections,
   buildPromptObservabilitySummary,
   buildPromptTokenBreakdown,
+  formatPromptObservabilityHeadline,
   measurePromptText,
   parsePromptExperimentConfig,
+  renderPromptObservabilityText,
+  toPromptObservabilityView,
   withDeltaPromptMetrics,
   withProviderNativeSystemBlockPromptMetrics,
   withSectionPromptMetrics,
@@ -148,6 +151,8 @@ describe("prompt observability", () => {
       droppedSections: [{ id: "methodology", text: "abcd" }],
       deltas: [{ id: "delta-1", text: "中文测试" }],
       providerNativeSystemBlocks: [{ id: "block-1", text: "abcd", cacheControlEligible: true }],
+      truncated: true,
+      maxChars: 8,
       metadata: {
         promptExperiments: {
           disabledSectionIdsApplied: ["methodology"],
@@ -173,6 +178,12 @@ describe("prompt observability", () => {
         droppedSectionEstimatedTokens: 1,
         deltaEstimatedTokens: 2,
         providerNativeSystemBlockEstimatedTokens: 1,
+      },
+      truncationReason: {
+        code: "max_chars_limit",
+        maxChars: 8,
+        droppedSectionCount: 1,
+        droppedSectionIds: ["methodology"],
       },
       experiments: {
         disabledSectionIdsApplied: ["methodology"],
@@ -206,5 +217,97 @@ describe("prompt observability", () => {
       systemPromptEstimatedTokens: 3,
       sectionEstimatedTokens: 3,
     });
+  });
+
+  it("ignores legacy promptTokenBreakdown aliases outside snapshot artifact normalization", () => {
+    const runSummary = buildPromptObservabilitySummary({
+      agentId: "default",
+      text: "hello world",
+      totalChars: 11,
+      finalChars: 11,
+      metadata: {
+        snapshotScope: "run",
+        promptTokenBreakdown: {
+          systemPromptEstimatedChars: 11,
+          systemPromptEstimatedTokens: 3,
+          sectionEstimatedChars: 11,
+          sectionEstimatedTokens: 3,
+          droppedSectionEstimatedChars: 0,
+          droppedSectionEstimatedTokens: 0,
+          deltaEstimatedChars: 0,
+          deltaEstimatedTokens: 0,
+          providerNativeSystemBlockEstimatedChars: 0,
+          providerNativeSystemBlockEstimatedTokens: 0,
+        },
+      },
+    });
+
+    expect(runSummary.tokenBreakdown).toMatchObject({
+      systemPromptEstimatedTokens: 3,
+      sectionEstimatedTokens: 0,
+    });
+
+    const agentSummary = buildPromptObservabilitySummary({
+      agentId: "default",
+      text: "hello world",
+      totalChars: 11,
+      finalChars: 11,
+      metadata: {
+        promptTokenBreakdown: {
+          systemPromptEstimatedChars: 11,
+          systemPromptEstimatedTokens: 99,
+          sectionEstimatedChars: 11,
+          sectionEstimatedTokens: 99,
+          droppedSectionEstimatedChars: 0,
+          droppedSectionEstimatedTokens: 0,
+          deltaEstimatedChars: 0,
+          deltaEstimatedTokens: 0,
+          providerNativeSystemBlockEstimatedChars: 0,
+          providerNativeSystemBlockEstimatedTokens: 0,
+        },
+      },
+    });
+
+    expect(agentSummary.tokenBreakdown).toMatchObject({
+      systemPromptEstimatedTokens: 3,
+      sectionEstimatedTokens: 0,
+    });
+  });
+
+  it("renders canonical prompt observability text and headline", () => {
+    const summary = buildPromptObservabilitySummary({
+      scope: "run",
+      agentId: "default",
+      conversationId: "conv-1",
+      runId: "run-1",
+      createdAt: 123,
+      text: "hello world",
+      totalChars: 11,
+      finalChars: 11,
+      sections: [{ id: "core", text: "hello world" }],
+      droppedSections: [{ id: "methodology", text: "abcd" }],
+      deltas: [{ id: "delta-1", text: "中文测试" }],
+      providerNativeSystemBlocks: [{ id: "block-1", text: "abcd" }],
+      truncated: true,
+      maxChars: 8,
+    });
+
+    const view = toPromptObservabilityView(summary, {
+      truncated: false,
+      includesHookSystemPrompt: true,
+      hasPrependContext: false,
+    });
+
+    expect(formatPromptObservabilityHeadline(view)).toContain("agent=default");
+    expect(formatPromptObservabilityHeadline(view)).toContain("sections=1");
+    expect(formatPromptObservabilityHeadline(view)).toContain("blockTokens=1");
+    expect(formatPromptObservabilityHeadline(view)).toContain("truncation=max_chars_limit");
+
+    expect(renderPromptObservabilityText(view)).toContain("Prompt Observability");
+    expect(renderPromptObservabilityText(view)).toContain("sectionCount: 1");
+    expect(renderPromptObservabilityText(view)).toContain("droppedSectionCount: 1");
+    expect(renderPromptObservabilityText(view)).toContain("systemPromptEstimatedTokens: 3");
+    expect(renderPromptObservabilityText(view)).toContain("includesHookSystemPrompt: yes");
+    expect(renderPromptObservabilityText(view)).toContain("truncationReasonCode: max_chars_limit");
   });
 });

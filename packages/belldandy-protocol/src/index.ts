@@ -398,6 +398,83 @@ export type SystemDoctorResult = {
       }>;
     }>;
   };
+  promptObservability?: {
+    requested: {
+      agentId?: string;
+      conversationId?: string;
+      runId?: string;
+    };
+    summary: {
+      scope?: "agent" | "run";
+      agentId: string;
+      displayName?: string;
+      model?: string;
+      conversationId?: string;
+      runId?: string;
+      createdAt?: number;
+      counts: {
+        sectionCount: number;
+        droppedSectionCount: number;
+        deltaCount: number;
+        providerNativeSystemBlockCount: number;
+      };
+      promptSizes: {
+        totalChars: number;
+        finalChars: number;
+      };
+      tokenBreakdown: {
+        systemPromptEstimatedChars: number;
+        systemPromptEstimatedTokens: number;
+        sectionEstimatedChars: number;
+        sectionEstimatedTokens: number;
+        droppedSectionEstimatedChars: number;
+        droppedSectionEstimatedTokens: number;
+        deltaEstimatedChars: number;
+        deltaEstimatedTokens: number;
+        providerNativeSystemBlockEstimatedChars: number;
+        providerNativeSystemBlockEstimatedTokens: number;
+      };
+      truncationReason?: {
+        code: string;
+        maxChars?: number;
+        droppedSectionCount?: number;
+        droppedSectionIds?: string[];
+        droppedSectionLabels?: string[];
+        message?: string;
+      };
+      experiments?: Record<string, unknown>;
+    };
+  };
+  toolBehaviorObservability?: {
+    requested: {
+      agentId?: string;
+      conversationId?: string;
+      taskId?: string;
+    };
+    visibilityContext: {
+      agentId: string;
+      conversationId: string | null;
+      taskId?: string;
+      launchSpec?: Record<string, unknown>;
+    };
+    counts: {
+      visibleToolContractCount: number;
+      includedContractCount: number;
+      behaviorContractCount: number;
+    };
+    included: string[];
+    contracts: Record<string, {
+      useWhen: string[];
+      avoidWhen: string[];
+      preflightChecks: string[];
+      fallbackStrategy: string[];
+    }>;
+    summary?: string;
+    experiment?: {
+      disabledContractNamesConfigured: string[];
+      disabledContractNamesApplied: string[];
+    };
+  };
 };
 
 // Result payload for agents.list (Response payload)

@@ -10,7 +10,12 @@ import exportsCommand from "./conversation/exports.js";
 import listCommand from "./conversation/list.js";
 import promptSnapshotCommand from "./conversation/prompt-snapshot.js";
 import timelineCommand from "./conversation/timeline.js";
-import { persistConversationPromptSnapshot } from "../../conversation-prompt-snapshot.js";
+import {
+  getConversationPromptSnapshotArtifactPath,
+  loadConversationPromptSnapshotArtifact,
+  persistConversationPromptSnapshot,
+  renderConversationPromptSnapshotText,
+} from "../../conversation-prompt-snapshot.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -243,6 +248,16 @@ test("bdd conversation prompt-snapshot exports persisted prompt snapshot and rec
           cacheControlEligible: false,
         },
       ],
+      inputMeta: {
+        truncationReason: {
+          code: "max_chars_limit",
+          maxChars: 1200,
+          droppedSectionCount: 2,
+          droppedSectionIds: ["methodology", "workspace-dir"],
+          droppedSectionLabels: ["methodology", "workspace-dir"],
+          message: "Dropped methodology, workspace-dir to fit 1200 char limit.",
+        },
+      },
     },
   });
 
@@ -346,6 +361,16 @@ test("bdd conversation prompt-snapshot text output includes token breakdown", as
           cacheControlEligible: true,
         },
       ],
+      inputMeta: {
+        truncationReason: {
+          code: "max_chars_limit",
+          maxChars: 1200,
+          droppedSectionCount: 2,
+          droppedSectionIds: ["methodology", "workspace-dir"],
+          droppedSectionLabels: ["methodology", "workspace-dir"],
+          message: "Dropped methodology, workspace-dir to fit 1200 char limit.",
+        },
+      },
     },
   });
 
@@ -359,10 +384,125 @@ test("bdd conversation prompt-snapshot text output includes token breakdown", as
     } as never);
 
     const output = String(logSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n"));
+    expect(output).toContain("Prompt Observability");
     expect(output).toContain("systemPromptEstimatedTokens:");
     expect(output).toContain("deltaEstimatedTokens:");
     expect(output).toContain("providerNativeSystemBlockEstimatedTokens:");
+    expect(output).toContain("includesHookSystemPrompt: yes");
+    expect(output).toContain("providerNativeSystemBlockCount: 1");
+    expect(output).toContain("truncationReasonCode: max_chars_limit");
+    expect(output).toContain("truncationDroppedSectionIds: methodology, workspace-dir");
     expect(output).toContain("estimatedTokens=");
+  } finally {
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("bdd conversation prompt-snapshot load normalizes legacy inputMeta fields without rewriting history files", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-conversation-"));
+  const conversationId = "conv-prompt-snapshot-legacy-normalize";
+  const runId = "run-legacy-normalize-1";
+  const artifactPath = getConversationPromptSnapshotArtifactPath({
+    stateDir,
+    conversationId,
+    runId,
+  });
+  const promptTokenBreakdown = {
+    systemPromptEstimatedChars: 18,
+    systemPromptEstimatedTokens: 5,
+    sectionEstimatedChars: 18,
+    sectionEstimatedTokens: 5,
+    droppedSectionEstimatedChars: 32,
+    droppedSectionEstimatedTokens: 8,
+    deltaEstimatedChars: 42,
+    deltaEstimatedTokens: 11,
+    providerNativeSystemBlockEstimatedChars: 0,
+    providerNativeSystemBlockEstimatedTokens: 0,
+  };
+  const truncationReason = {
+    code: "max_chars_limit",
+    maxChars: 1200,
+    droppedSectionCount: 1,
+    droppedSectionIds: ["methodology"],
+    droppedSectionLabels: ["methodology"],
+    message: "Dropped methodology to fit 1200 char limit.",
+  };
+
+  try {
+    await fs.promises.mkdir(path.dirname(artifactPath), { recursive: true });
+    await fs.promises.writeFile(artifactPath, JSON.stringify({
+      schemaVersion: 1,
+      manifest: {
+        conversationId,
+        runId,
+        agentId: "default",
+        createdAt: 1712000003000,
+        persistedAt: 1712000003001,
+        source: "runtime.prompt_snapshot",
+      },
+      summary: {
+        messageCount: 2,
+        systemPromptChars: 79,
+        includesHookSystemPrompt: false,
+        hasPrependContext: true,
+        deltaCount: 0,
+        deltaChars: 0,
+        systemPromptEstimatedTokens: 5,
+        deltaEstimatedTokens: 11,
+        providerNativeSystemBlockCount: 0,
+        providerNativeSystemBlockChars: 0,
+        providerNativeSystemBlockEstimatedTokens: 0,
+      },
+      snapshot: {
+        systemPrompt: "legacy system prompt\n## Identity Context (Runtime)\n- Current User UUID: test-user",
+        messages: [
+          { role: "system", content: "legacy system prompt\n## Identity Context (Runtime)\n- Current User UUID: test-user" },
+          { role: "user", content: "hello" },
+        ],
+        inputMeta: {
+          promptTokenBreakdown,
+          truncationReason,
+        },
+        hookSystemPromptUsed: false,
+        prependContext: "<recent-memory>ctx</recent-memory>",
+      },
+    }, null, 2), "utf-8");
+
+    const loaded = await loadConversationPromptSnapshotArtifact({
+      stateDir,
+      conversationId,
+      runId,
+    });
+    expect(loaded).toBeDefined();
+    expect(loaded?.summary.tokenBreakdown).toEqual(promptTokenBreakdown);
+    expect(loaded?.summary.truncationReason).toEqual(truncationReason);
+    expect(loaded?.summary.deltaCount).toBe(2);
+    expect(loaded?.snapshot.deltas).toEqual([
+      expect.objectContaining({
+        id: "runtime-identity-context",
+        deltaType: "runtime-identity",
+        source: "snapshot-normalize",
+      }),
+      expect.objectContaining({
+        id: "prepend-context",
+        deltaType: "user-prelude",
+        source: "snapshot-normalize",
+      }),
+    ]);
+    expect(loaded?.snapshot.inputMeta).toMatchObject({
+      promptTokenBreakdown,
+      truncationReason,
+    });
+
+    const rendered = renderConversationPromptSnapshotText(loaded!);
+    expect(rendered).toContain("systemPromptEstimatedTokens: 5");
+    expect(rendered).toContain("deltaEstimatedTokens: 11");
+    expect(rendered).toContain("truncationReasonCode: max_chars_limit");
+    expect(rendered).toContain("truncationDroppedSectionIds: methodology");
+
+    const rawWritten = JSON.parse(await fs.promises.readFile(artifactPath, "utf-8"));
+    expect(rawWritten.summary.tokenBreakdown).toBeUndefined();
+    expect(rawWritten.summary.truncationReason).toBeUndefined();
   } finally {
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }

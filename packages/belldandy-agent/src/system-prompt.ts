@@ -76,6 +76,14 @@ export type SystemPromptBuildResult = {
     sections: SystemPromptSection[];
     droppedSections: SystemPromptSection[];
     truncated: boolean;
+    truncationReason?: {
+        code: "max_chars_limit";
+        maxChars: number;
+        droppedSectionCount: number;
+        droppedSectionIds: string[];
+        droppedSectionLabels: string[];
+        message: string;
+    };
     maxChars?: number;
     totalChars: number;
     finalChars: number;
@@ -644,6 +652,7 @@ export function buildSystemPromptResult(params: SystemPromptParams): SystemPromp
     // 截断逻辑：从末尾开始丢弃低优先级段落
     const droppedSections: SystemPromptSection[] = [];
     const keptSections = [...orderedSections];
+    let truncationReason: SystemPromptBuildResult["truncationReason"];
     if (maxChars) {
         let total = keptSections.reduce((sum, s) => sum + s.text.length, 0);
         // 从最低优先级（末尾）开始丢弃，但始终保留 P0（core）
@@ -653,6 +662,14 @@ export function buildSystemPromptResult(params: SystemPromptParams): SystemPromp
             droppedSections.unshift(removed);
         }
         if (droppedSections.length > 0) {
+            truncationReason = {
+                code: "max_chars_limit",
+                maxChars,
+                droppedSectionCount: droppedSections.length,
+                droppedSectionIds: droppedSections.map((section) => section.id),
+                droppedSectionLabels: droppedSections.map((section) => section.label),
+                message: `Dropped ${droppedSections.map((section) => section.label).join(", ")} to fit ${maxChars} char limit.`,
+            };
             keptSections.push(createSection({
                 id: "truncation-notice",
                 label: "truncation-notice",
@@ -670,6 +687,7 @@ export function buildSystemPromptResult(params: SystemPromptParams): SystemPromp
         sections: keptSections,
         droppedSections,
         truncated: droppedSections.length > 0,
+        ...(truncationReason ? { truncationReason } : {}),
         maxChars: maxChars || undefined,
         totalChars,
         finalChars: text.length,

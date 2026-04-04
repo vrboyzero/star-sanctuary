@@ -39,6 +39,8 @@ export type PromptInspectionLike = {
   runId?: string;
   createdAt?: number;
   text: string;
+  truncated?: boolean;
+  maxChars?: number;
   totalChars: number;
   finalChars: number;
   sections?: Array<{ id: string; text: string }>;
@@ -46,6 +48,15 @@ export type PromptInspectionLike = {
   deltas?: Array<{ id: string; deltaType?: string; text: string }>;
   providerNativeSystemBlocks?: Array<{ id: string; blockType?: string; text: string; cacheControlEligible?: boolean }>;
   metadata?: Record<string, unknown>;
+};
+
+export type PromptTruncationReason = {
+  code: string;
+  maxChars?: number;
+  droppedSectionCount?: number;
+  droppedSectionIds?: string[];
+  droppedSectionLabels?: string[];
+  message?: string;
 };
 
 export type PromptObservabilitySummary = {
@@ -67,7 +78,27 @@ export type PromptObservabilitySummary = {
     finalChars: number;
   };
   tokenBreakdown: PromptTokenBreakdown;
+  truncationReason?: PromptTruncationReason;
   experiments?: Record<string, unknown>;
+};
+
+export type PromptObservabilityView = {
+  scope?: "agent" | "run";
+  agentId?: string;
+  displayName?: string;
+  model?: string;
+  conversationId?: string;
+  runId?: string;
+  createdAt?: number;
+  counts?: Partial<PromptObservabilitySummary["counts"]>;
+  promptSizes?: Partial<PromptObservabilitySummary["promptSizes"]>;
+  tokenBreakdown?: Partial<PromptTokenBreakdown>;
+  truncationReason?: PromptTruncationReason;
+  flags?: {
+    truncated?: boolean;
+    includesHookSystemPrompt?: boolean;
+    hasPrependContext?: boolean;
+  };
 };
 
 export function measurePromptText(text: string): PromptTextMetrics {
@@ -140,6 +171,8 @@ export function buildPromptObservabilitySummary(
     deltas: inspection.deltas,
     providerNativeSystemBlocks: inspection.providerNativeSystemBlocks,
   });
+  const truncationReason = readPromptTruncationReasonFromMetadata(metadata)
+    ?? buildPromptTruncationReasonFromInspection(inspection);
 
   return {
     scope: inspection.scope,
@@ -160,10 +193,180 @@ export function buildPromptObservabilitySummary(
       finalChars: inspection.finalChars,
     },
     tokenBreakdown,
+    ...(truncationReason ? { truncationReason } : {}),
     ...(metadata?.promptExperiments && isRecord(metadata.promptExperiments)
       ? { experiments: metadata.promptExperiments }
       : {}),
   };
+}
+
+export function toPromptObservabilityView(
+  summary: PromptObservabilitySummary,
+  options?: {
+    truncated?: boolean;
+    includesHookSystemPrompt?: boolean;
+    hasPrependContext?: boolean;
+  },
+): PromptObservabilityView {
+  return {
+    scope: summary.scope,
+    agentId: summary.agentId,
+    ...(summary.displayName ? { displayName: summary.displayName } : {}),
+    ...(summary.model ? { model: summary.model } : {}),
+    ...(summary.conversationId ? { conversationId: summary.conversationId } : {}),
+    ...(summary.runId ? { runId: summary.runId } : {}),
+    ...(typeof summary.createdAt === "number" ? { createdAt: summary.createdAt } : {}),
+    counts: { ...summary.counts },
+    promptSizes: { ...summary.promptSizes },
+    tokenBreakdown: { ...summary.tokenBreakdown },
+    ...(summary.truncationReason ? { truncationReason: { ...summary.truncationReason } } : {}),
+    ...(options
+      ? {
+        flags: {
+          ...(typeof options.truncated === "boolean" ? { truncated: options.truncated } : {}),
+          ...(typeof options.includesHookSystemPrompt === "boolean"
+            ? { includesHookSystemPrompt: options.includesHookSystemPrompt }
+            : {}),
+          ...(typeof options.hasPrependContext === "boolean"
+            ? { hasPrependContext: options.hasPrependContext }
+            : {}),
+        },
+      }
+      : {}),
+  };
+}
+
+export function formatPromptObservabilityHeadline(
+  view: PromptObservabilityView,
+): string {
+  const parts: string[] = [];
+  if (view.agentId) {
+    parts.push(`agent=${view.agentId}`);
+  }
+  if (view.scope) {
+    parts.push(`scope=${view.scope}`);
+  }
+  if (typeof view.promptSizes?.finalChars === "number") {
+    parts.push(`finalChars=${view.promptSizes.finalChars}`);
+  }
+  if (typeof view.counts?.sectionCount === "number") {
+    parts.push(`sections=${view.counts.sectionCount}`);
+  }
+  if (typeof view.counts?.droppedSectionCount === "number") {
+    parts.push(`droppedSections=${view.counts.droppedSectionCount}`);
+  }
+  if (typeof view.counts?.deltaCount === "number") {
+    parts.push(`deltas=${view.counts.deltaCount}`);
+  }
+  if (typeof view.counts?.providerNativeSystemBlockCount === "number") {
+    parts.push(`blocks=${view.counts.providerNativeSystemBlockCount}`);
+  }
+  if (typeof view.tokenBreakdown?.systemPromptEstimatedTokens === "number") {
+    parts.push(`systemTokens=${view.tokenBreakdown.systemPromptEstimatedTokens}`);
+  }
+  if (typeof view.tokenBreakdown?.deltaEstimatedTokens === "number") {
+    parts.push(`deltaTokens=${view.tokenBreakdown.deltaEstimatedTokens}`);
+  }
+  if (typeof view.tokenBreakdown?.providerNativeSystemBlockEstimatedTokens === "number") {
+    parts.push(`blockTokens=${view.tokenBreakdown.providerNativeSystemBlockEstimatedTokens}`);
+  }
+  if (view.truncationReason?.code) {
+    parts.push(`truncation=${view.truncationReason.code}`);
+  }
+  return parts.join(", ");
+}
+
+export function renderPromptObservabilityText(
+  view: PromptObservabilityView,
+  options?: {
+    heading?: string;
+    indent?: string;
+  },
+): string {
+  const heading = options?.heading ?? "Prompt Observability";
+  const indent = options?.indent ?? "";
+  const lines: string[] = [heading];
+
+  appendPromptObservabilityLine(lines, indent, "scope", view.scope);
+  appendPromptObservabilityLine(lines, indent, "agentId", view.agentId);
+  appendPromptObservabilityLine(lines, indent, "displayName", view.displayName);
+  appendPromptObservabilityLine(lines, indent, "model", view.model);
+  appendPromptObservabilityLine(lines, indent, "conversationId", view.conversationId);
+  appendPromptObservabilityLine(lines, indent, "runId", view.runId);
+  appendPromptObservabilityLine(lines, indent, "createdAt", typeof view.createdAt === "number" ? new Date(view.createdAt).toISOString() : undefined);
+  appendPromptObservabilityLine(lines, indent, "truncated", formatOptionalBoolean(view.flags?.truncated));
+  appendPromptObservabilityLine(lines, indent, "includesHookSystemPrompt", formatOptionalBoolean(view.flags?.includesHookSystemPrompt));
+  appendPromptObservabilityLine(lines, indent, "hasPrependContext", formatOptionalBoolean(view.flags?.hasPrependContext));
+  appendPromptObservabilityLine(lines, indent, "sectionCount", view.counts?.sectionCount);
+  appendPromptObservabilityLine(lines, indent, "droppedSectionCount", view.counts?.droppedSectionCount);
+  appendPromptObservabilityLine(lines, indent, "deltaCount", view.counts?.deltaCount);
+  appendPromptObservabilityLine(lines, indent, "providerNativeSystemBlockCount", view.counts?.providerNativeSystemBlockCount);
+  appendPromptObservabilityLine(lines, indent, "totalChars", view.promptSizes?.totalChars);
+  appendPromptObservabilityLine(lines, indent, "finalChars", view.promptSizes?.finalChars);
+  appendPromptObservabilityLine(lines, indent, "systemPromptEstimatedChars", view.tokenBreakdown?.systemPromptEstimatedChars);
+  appendPromptObservabilityLine(lines, indent, "systemPromptEstimatedTokens", view.tokenBreakdown?.systemPromptEstimatedTokens);
+  appendPromptObservabilityLine(lines, indent, "sectionEstimatedChars", view.tokenBreakdown?.sectionEstimatedChars);
+  appendPromptObservabilityLine(lines, indent, "sectionEstimatedTokens", view.tokenBreakdown?.sectionEstimatedTokens);
+  appendPromptObservabilityLine(lines, indent, "droppedSectionEstimatedChars", view.tokenBreakdown?.droppedSectionEstimatedChars);
+  appendPromptObservabilityLine(lines, indent, "droppedSectionEstimatedTokens", view.tokenBreakdown?.droppedSectionEstimatedTokens);
+  appendPromptObservabilityLine(lines, indent, "deltaEstimatedChars", view.tokenBreakdown?.deltaEstimatedChars);
+  appendPromptObservabilityLine(lines, indent, "deltaEstimatedTokens", view.tokenBreakdown?.deltaEstimatedTokens);
+  appendPromptObservabilityLine(lines, indent, "providerNativeSystemBlockEstimatedChars", view.tokenBreakdown?.providerNativeSystemBlockEstimatedChars);
+  appendPromptObservabilityLine(lines, indent, "providerNativeSystemBlockEstimatedTokens", view.tokenBreakdown?.providerNativeSystemBlockEstimatedTokens);
+  appendPromptObservabilityLine(lines, indent, "truncationReasonCode", view.truncationReason?.code);
+  appendPromptObservabilityLine(lines, indent, "truncationReasonMessage", view.truncationReason?.message);
+  appendPromptObservabilityLine(lines, indent, "truncationMaxChars", view.truncationReason?.maxChars);
+  appendPromptObservabilityLine(lines, indent, "truncationDroppedSectionCount", view.truncationReason?.droppedSectionCount);
+  appendPromptObservabilityLine(
+    lines,
+    indent,
+    "truncationDroppedSectionIds",
+    view.truncationReason?.droppedSectionIds?.join(", "),
+  );
+  appendPromptObservabilityLine(
+    lines,
+    indent,
+    "truncationDroppedSectionLabels",
+    view.truncationReason?.droppedSectionLabels?.join(", "),
+  );
+
+  return lines.join("\n");
+}
+
+export function readPromptTruncationReasonFromMetadata(
+  metadata?: Record<string, unknown>,
+): PromptTruncationReason | undefined {
+  const rawValue = metadata?.truncationReason;
+  if (!isRecord(rawValue)) {
+    return undefined;
+  }
+
+  const value = rawValue as Record<string, unknown>;
+  const code = typeof value.code === "string" && value.code.trim()
+    ? value.code.trim()
+    : undefined;
+  if (!code) {
+    return undefined;
+  }
+
+  const droppedSectionIds = normalizeStringArray(value.droppedSectionIds);
+  const droppedSectionLabels = normalizeStringArray(value.droppedSectionLabels);
+  const result: PromptTruncationReason = {
+    code,
+    ...(typeof value.maxChars === "number" && Number.isFinite(value.maxChars) && value.maxChars > 0
+      ? { maxChars: Math.trunc(value.maxChars) }
+      : {}),
+    ...(typeof value.droppedSectionCount === "number" && Number.isFinite(value.droppedSectionCount) && value.droppedSectionCount >= 0
+      ? { droppedSectionCount: Math.trunc(value.droppedSectionCount) }
+      : {}),
+    ...(droppedSectionIds.length > 0 ? { droppedSectionIds } : {}),
+    ...(droppedSectionLabels.length > 0 ? { droppedSectionLabels } : {}),
+    ...(typeof value.message === "string" && value.message.trim()
+      ? { message: value.message.trim() }
+      : {}),
+  };
+
+  return result;
 }
 
 export function parsePromptExperimentConfig(input: {
@@ -246,6 +449,51 @@ function sumTextTokens(items?: Array<{ text: string }>): number {
   return items?.reduce((sum, item) => sum + estimateTokens(item.text), 0) ?? 0;
 }
 
+function appendPromptObservabilityLine(
+  lines: string[],
+  indent: string,
+  key: string,
+  value: string | number | undefined,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  lines.push(`${indent}${key}: ${value}`);
+}
+
+function formatOptionalBoolean(value: boolean | undefined): string | undefined {
+  if (typeof value !== "boolean") {
+    return undefined;
+  }
+  return value ? "yes" : "no";
+}
+
+function buildPromptTruncationReasonFromInspection(
+  inspection: PromptInspectionLike,
+): PromptTruncationReason | undefined {
+  if (inspection.truncated !== true || !inspection.maxChars || !inspection.droppedSections || inspection.droppedSections.length === 0) {
+    return undefined;
+  }
+  const droppedSectionIds = inspection.droppedSections.map((section) => section.id);
+  return {
+    code: "max_chars_limit",
+    maxChars: inspection.maxChars,
+    droppedSectionCount: inspection.droppedSections.length,
+    droppedSectionIds,
+    droppedSectionLabels: [...droppedSectionIds],
+    message: `Dropped ${droppedSectionIds.join(", ")} to fit ${inspection.maxChars} char limit.`,
+  };
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => entry.trim());
+}
+
 function normalizeCsv(raw?: string): string[] {
   if (!raw) {
     return [];
@@ -313,10 +561,10 @@ function sortSectionsByPriority(
     .map((entry) => entry.section);
 }
 
-function readPromptTokenBreakdownFromMetadata(
+export function readPromptTokenBreakdownFromMetadata(
   metadata?: Record<string, unknown>,
 ): PromptTokenBreakdown | undefined {
-  const rawValue = metadata?.tokenBreakdown ?? metadata?.promptTokenBreakdown;
+  const rawValue = metadata?.tokenBreakdown;
   if (!isRecord(rawValue)) {
     return undefined;
   }

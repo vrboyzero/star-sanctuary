@@ -114,6 +114,12 @@ describe("system prompt sections", () => {
 
     expect(result.truncated).toBe(true);
     expect(result.droppedSections.length).toBeGreaterThan(0);
+    expect(result.truncationReason).toMatchObject({
+      code: "max_chars_limit",
+      maxChars: 100,
+      droppedSectionCount: result.droppedSections.length,
+      droppedSectionIds: result.droppedSections.map((section) => section.id),
+    });
     expect(result.sections[result.sections.length - 1]?.id).toBe("truncation-notice");
     expect(result.text).toContain("System prompt truncated");
   });
