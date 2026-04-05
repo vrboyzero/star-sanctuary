@@ -19,6 +19,7 @@ export type QueryRuntimeMethod =
   | "workspace.write"
   | "tools.list"
   | "tools.update"
+  | "agent.contracts.get"
   | "subtask.list"
   | "subtask.get"
   | "subtask.stop"

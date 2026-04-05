@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "调整了长期任务中任务节点的已完成按钮显示问题，隐藏了信息输入框中的Agent选择菜单"
+git commit -m "实现多Agent的并行调用，已实现Agent的并发执行等功能（P1、P2），正实现多Agent的诊断、治理、产品化等功能（P3）"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

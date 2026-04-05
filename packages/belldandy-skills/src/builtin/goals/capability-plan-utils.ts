@@ -30,7 +30,11 @@ function parseMcpServerId(toolName: string | undefined): string | undefined {
 
 export function collectCapabilityPlanActualUsage(context: ToolContext): GoalCapabilityPlanActualUsageRecord | undefined {
   try {
-    const manager = getGlobalMemoryManager();
+    const manager = getGlobalMemoryManager({
+      agentId: context.agentId,
+      conversationId: context.conversationId,
+      workspaceRoot: context.workspaceRoot,
+    });
     const task = manager?.getTaskByConversation(context.conversationId);
     if (!manager || !task) return undefined;
     const usages = manager.listExperienceUsages(200, { taskId: task.id });

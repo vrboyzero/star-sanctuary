@@ -1,6 +1,6 @@
 
 import Database from "better-sqlite3";
-import type { MemoryCategory, MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter, MemoryVisibility } from "./types.js";
+import type { MemoryCategory, MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter, MemorySharedPromotionStatus, MemoryVisibility } from "./types.js";
 import type { TaskMemoryRelation, TaskRecord, TaskSearchFilter, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
 import type {
   ExperienceAssetType,
@@ -581,6 +581,18 @@ export class MemoryStore {
     return rows.map((row) => rowToSearchResult(row, 1));
   }
 
+  countChunks(filter?: MemorySearchFilter): number {
+    this.ensureOpen();
+    const { clause: filterClause, params: filterParams } = this.buildFilterClause(filter);
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM chunks c
+      WHERE 1 = 1${filterClause}
+    `);
+    const row = stmt.get(...filterParams) as { count: number } | undefined;
+    return typeof row?.count === "number" && Number.isFinite(row.count) ? row.count : 0;
+  }
+
   getChunk(chunkId: string): MemorySearchResult | null {
     this.ensureOpen();
     const stmt = this.db.prepare(`
@@ -760,19 +772,20 @@ export class MemoryStore {
     stmt.run(taskId, chunkId, relation, new Date().toISOString());
   }
 
-  listTaskMemoryLinks(taskId: string): Array<{ chunkId: string; relation: TaskMemoryRelation; sourcePath?: string; memoryType?: string; snippet?: string }> {
+  listTaskMemoryLinks(taskId: string): Array<{ chunkId: string; relation: TaskMemoryRelation; sourcePath?: string; memoryType?: string; visibility?: MemoryVisibility; snippet?: string }> {
     this.ensureOpen();
     const stmt = this.db.prepare(`
-      SELECT l.chunk_id, l.relation, c.source_path, c.memory_type, c.content
+      SELECT l.chunk_id, l.relation, c.source_path, c.memory_type, c.visibility, c.content
       FROM task_memory_links l
       LEFT JOIN chunks c ON c.id = l.chunk_id
       WHERE l.task_id = ?
     `);
-    return (stmt.all(taskId) as Array<{ chunk_id: string; relation: string; source_path?: string | null; memory_type?: string | null; content?: string | null }>).map((row) => ({
+    return (stmt.all(taskId) as Array<{ chunk_id: string; relation: string; source_path?: string | null; memory_type?: string | null; visibility?: string | null; content?: string | null }>).map((row) => ({
       chunkId: row.chunk_id,
       relation: row.relation as TaskMemoryRelation,
       sourcePath: row.source_path ?? undefined,
       memoryType: row.memory_type ?? undefined,
+      visibility: row.visibility === "shared" ? "shared" : row.visibility === "private" ? "private" : undefined,
       snippet: row.content ? truncateContent(row.content, 120) : undefined,
     }));
   }
@@ -1245,6 +1258,48 @@ export class MemoryStore {
       } else {
         conditions.push(`c.category = ?`);
         params.push(filter.category);
+      }
+    }
+
+    if (filter.sharedPromotionStatus) {
+      const statuses = normalizeSharedPromotionStatusFilter(filter.sharedPromotionStatus);
+      if (statuses.length === 1 && statuses[0] === "none") {
+        conditions.push(`(
+          json_extract(c.metadata, '$.sharedPromotion.status') IS NULL
+          OR TRIM(COALESCE(json_extract(c.metadata, '$.sharedPromotion.status'), '')) = ''
+        )`);
+      } else if (statuses.length > 0) {
+        const includesNone = statuses.includes("none");
+        const concreteStatuses = statuses
+          .filter((item): item is Exclude<MemorySharedPromotionStatus, "none"> => item !== "none")
+          .flatMap((item) => item === "approved" ? ["approved", "active"] : [item]);
+        const uniqueStatuses = [...new Set(concreteStatuses)];
+        const statusConditions: string[] = [];
+        if (uniqueStatuses.length > 0) {
+          const placeholders = uniqueStatuses.map(() => "?").join(", ");
+          statusConditions.push(`LOWER(COALESCE(json_extract(c.metadata, '$.sharedPromotion.status'), '')) IN (${placeholders})`);
+          params.push(...uniqueStatuses);
+        }
+        if (includesNone) {
+          statusConditions.push(`(
+            json_extract(c.metadata, '$.sharedPromotion.status') IS NULL
+            OR TRIM(COALESCE(json_extract(c.metadata, '$.sharedPromotion.status'), '')) = ''
+          )`);
+        }
+        if (statusConditions.length > 0) {
+          conditions.push(`(${statusConditions.join(" OR ")})`);
+        }
+      }
+    }
+
+    if (typeof filter.sharedPromotionClaimed === "boolean") {
+      if (filter.sharedPromotionClaimed) {
+        conditions.push(`TRIM(COALESCE(json_extract(c.metadata, '$.sharedPromotion.claimedByAgentId'), '')) <> ''`);
+      } else {
+        conditions.push(`(
+          json_extract(c.metadata, '$.sharedPromotion.claimedByAgentId') IS NULL
+          OR TRIM(COALESCE(json_extract(c.metadata, '$.sharedPromotion.claimedByAgentId'), '')) = ''
+        )`);
       }
     }
 
@@ -2011,6 +2066,28 @@ function normalizeCategory(value: unknown): MemoryCategory | undefined {
     default:
       return undefined;
   }
+}
+
+function normalizeSharedPromotionStatusFilter(
+  value: MemorySharedPromotionStatus | MemorySharedPromotionStatus[],
+): MemorySharedPromotionStatus[] {
+  const values = Array.isArray(value) ? value : [value];
+  const normalized: MemorySharedPromotionStatus[] = [];
+  for (const item of values) {
+    switch (item) {
+      case "pending":
+      case "approved":
+      case "rejected":
+      case "revoked":
+      case "active":
+      case "none":
+        normalized.push(item);
+        break;
+      default:
+        break;
+    }
+  }
+  return normalized;
 }
 
 function normalizeVisibility(value: unknown): MemoryVisibility | null {

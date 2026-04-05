@@ -7,6 +7,7 @@ import { LocalEmbeddingProvider } from "./embeddings/local-provider.js";
 import type { EmbeddingProvider } from "./embeddings/index.js";
 import type {
     MemoryCategory,
+    MemoryChunk,
     MemoryImportance,
     MemoryIndexStatus,
     MemorySearchFilter,
@@ -45,22 +46,111 @@ import { createHash, randomUUID } from "node:crypto";
 // ============================================================================
 
 let globalMemoryManager: MemoryManager | null = null;
+const scopedGlobalMemoryManagersByAgent = new Map<string, MemoryManager>();
+const scopedGlobalMemoryManagersByWorkspace = new Map<string, MemoryManager>();
+
+export type GlobalMemoryManagerRegistrationOptions = {
+    agentId?: string;
+    workspaceRoot?: string;
+    isDefault?: boolean;
+};
+
+export type GlobalMemoryManagerScope = {
+    agentId?: string;
+    conversationId?: string;
+    workspaceRoot?: string;
+};
+
+function normalizeGlobalMemoryAgentId(agentId?: string): string | undefined {
+    if (typeof agentId !== "string") return undefined;
+    const trimmed = agentId.trim();
+    return trimmed ? trimmed : undefined;
+}
+
+function normalizeGlobalMemoryWorkspaceRoot(workspaceRoot?: string): string | undefined {
+    if (typeof workspaceRoot !== "string") return undefined;
+    const trimmed = workspaceRoot.trim();
+    return trimmed ? path.resolve(trimmed) : undefined;
+}
+
+function parseResidentAgentIdFromConversationId(conversationId?: string): string | undefined {
+    if (typeof conversationId !== "string") return undefined;
+    const trimmed = conversationId.trim();
+    if (!trimmed) return undefined;
+    const match = /^agent:([^:]+):/.exec(trimmed);
+    return match?.[1];
+}
 
 /**
  * Register a MemoryManager instance as the global shared instance.
  * Called by Gateway during startup.
  */
-export function registerGlobalMemoryManager(manager: MemoryManager): void {
-    globalMemoryManager = manager;
-    console.log("[MemoryManager] Registered as global instance");
+export function registerGlobalMemoryManager(
+    manager: MemoryManager,
+    options: GlobalMemoryManagerRegistrationOptions = {},
+): void {
+    registerGlobalMemoryManagerInternal(manager, options);
 }
 
 /**
  * Get the globally registered MemoryManager instance.
  * Returns null if no instance has been registered.
  */
-export function getGlobalMemoryManager(): MemoryManager | null {
+export function getGlobalMemoryManager(scope?: GlobalMemoryManagerScope): MemoryManager | null {
+    const agentId = normalizeGlobalMemoryAgentId(scope?.agentId)
+        ?? parseResidentAgentIdFromConversationId(scope?.conversationId);
+    if (agentId) {
+        const scoped = scopedGlobalMemoryManagersByAgent.get(agentId);
+        if (scoped) return scoped;
+    }
+
+    const workspaceRoot = normalizeGlobalMemoryWorkspaceRoot(scope?.workspaceRoot);
+    if (workspaceRoot) {
+        const scoped = scopedGlobalMemoryManagersByWorkspace.get(workspaceRoot);
+        if (scoped) return scoped;
+    }
+
     return globalMemoryManager;
+}
+
+export function listGlobalMemoryManagers(): MemoryManager[] {
+    const ordered = [
+        globalMemoryManager,
+        ...scopedGlobalMemoryManagersByAgent.values(),
+        ...scopedGlobalMemoryManagersByWorkspace.values(),
+    ].filter((item): item is MemoryManager => Boolean(item));
+    return [...new Set(ordered)];
+}
+
+function registerGlobalMemoryManagerInternal(
+    manager: MemoryManager,
+    options: GlobalMemoryManagerRegistrationOptions = {},
+): void {
+    const normalizedAgentId = normalizeGlobalMemoryAgentId(options.agentId);
+    const normalizedWorkspaceRoot = normalizeGlobalMemoryWorkspaceRoot(options.workspaceRoot);
+    const hasScopedRegistration = Boolean(normalizedAgentId || normalizedWorkspaceRoot);
+
+    if (!hasScopedRegistration) {
+        scopedGlobalMemoryManagersByAgent.clear();
+        scopedGlobalMemoryManagersByWorkspace.clear();
+    }
+
+    if (options.isDefault === true || !hasScopedRegistration || !globalMemoryManager) {
+        globalMemoryManager = manager;
+    }
+    if (normalizedAgentId) {
+        scopedGlobalMemoryManagersByAgent.set(normalizedAgentId, manager);
+    }
+    if (normalizedWorkspaceRoot) {
+        scopedGlobalMemoryManagersByWorkspace.set(normalizedWorkspaceRoot, manager);
+    }
+
+    const scopeLabels = [
+        normalizedAgentId ? `agent=${normalizedAgentId}` : undefined,
+        normalizedWorkspaceRoot ? `workspace=${normalizedWorkspaceRoot}` : undefined,
+        options.isDefault === true ? "default=true" : undefined,
+    ].filter(Boolean);
+    console.log(`[MemoryManager] Registered as global instance${scopeLabels.length > 0 ? ` (${scopeLabels.join(", ")})` : ""}`);
 }
 
 export type ExtractConversationMemoriesOptions = {
@@ -540,6 +630,10 @@ export class MemoryManager {
         return this.store.getRecentChunks(limit, filter, includeContent);
     }
 
+    countChunks(filter?: MemorySearchFilter): number {
+        return this.store.countChunks(filter);
+    }
+
     getContextInjectionMemories(options: {
         limit?: number;
         agentId?: string | null;
@@ -668,6 +762,21 @@ export class MemoryManager {
 
     getMemory(chunkId: string): MemorySearchResult | null {
         return this.store.getChunk(chunkId);
+    }
+
+    getMemoriesBySource(sourcePath: string, limit = 100): MemorySearchResult[] {
+        for (const candidatePath of this.resolveSourcePathCandidates(sourcePath)) {
+            const chunks = this.store.getChunksBySource(candidatePath, limit);
+            if (chunks.length > 0) {
+                return chunks;
+            }
+        }
+        return [];
+    }
+
+    upsertMemoryChunk(chunk: MemoryChunk): MemorySearchResult | null {
+        this.store.upsertChunk(chunk);
+        return this.store.getChunk(chunk.id);
     }
 
     promoteMemoryChunk(chunkId: string): MemorySearchResult | null {

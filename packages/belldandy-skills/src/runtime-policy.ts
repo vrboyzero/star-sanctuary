@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { Tool, ToolContext, ToolRuntimeLaunchSpec } from "./types.js";
 import { getToolContract, type ToolContractFamily, type ToolContractRiskLevel } from "./tool-contract.js";
+import { getToolContractV2 } from "./tool-contract-v2.js";
+import { buildLaunchPermissionDeniedReason, buildLaunchRolePolicyDeniedReason, renderToolContractV2Summary } from "./tool-contract-render.js";
 
 export type LaunchPermissionMode =
   | "default"
@@ -119,10 +121,16 @@ export function evaluateLaunchPermissionMode(
 
   const contract = getToolContract(tool);
   if (!contract) {
+    const contractV2 = getToolContractV2(tool);
     return {
       allowed: false,
       mode,
-      reasonMessage: `工具 ${tool.definition.name} 缺少 contract，当前 permissionMode=${mode} 不允许放行。`,
+      reasonMessage: buildLaunchPermissionDeniedReason({
+        toolName: tool.definition.name,
+        mode,
+        summary: contractV2 ? renderToolContractV2Summary(contractV2) : "缺少治理契约。",
+        permissionRequired: true,
+      }),
     };
   }
 
@@ -133,7 +141,32 @@ export function evaluateLaunchPermissionMode(
     return {
       allowed: false,
       mode,
-      reasonMessage: `工具 ${tool.definition.name} 在 permissionMode=plan 下不可用；plan 模式仅允许只读工具。`,
+      reasonMessage: buildLaunchPermissionDeniedReason({
+        toolName: tool.definition.name,
+        mode,
+        summary: renderToolContractV2Summary(getToolContractV2(tool) ?? {
+          name: tool.definition.name,
+          needsPermission: contract.needsPermission,
+          isReadOnly: contract.isReadOnly,
+          isConcurrencySafe: contract.isConcurrencySafe,
+          recommendedWhen: [],
+          avoidWhen: [],
+          confirmWhen: [],
+          preflightChecks: [],
+          fallbackStrategy: [],
+          expectedOutput: [],
+          sideEffectSummary: [],
+          hasGovernanceContract: true,
+          hasBehaviorContract: false,
+          family: contract.family,
+          riskLevel: contract.riskLevel,
+          activityDescription: contract.activityDescription,
+          outputPersistencePolicy: contract.outputPersistencePolicy,
+          channels: contract.channels,
+          safeScopes: contract.safeScopes,
+        }),
+        permissionRequired: contract.needsPermission,
+      }),
     };
   }
 
@@ -144,7 +177,12 @@ export function evaluateLaunchPermissionMode(
     return {
       allowed: false,
       mode,
-      reasonMessage: `工具 ${tool.definition.name} 在 permissionMode=acceptEdits 下仍需额外权限；当前仅放行写文件/补丁类修改。`,
+      reasonMessage: buildLaunchPermissionDeniedReason({
+        toolName: tool.definition.name,
+        mode,
+        summary: getToolContractV2(tool) ? renderToolContractV2Summary(getToolContractV2(tool)!) : undefined,
+        permissionRequired: true,
+      }),
     };
   }
 
@@ -155,7 +193,12 @@ export function evaluateLaunchPermissionMode(
   return {
     allowed: false,
     mode,
-    reasonMessage: `工具 ${tool.definition.name} 需要额外权限；当前 permissionMode=${mode} 未放行该工具。`,
+    reasonMessage: buildLaunchPermissionDeniedReason({
+      toolName: tool.definition.name,
+      mode,
+      summary: getToolContractV2(tool) ? renderToolContractV2Summary(getToolContractV2(tool)!) : undefined,
+      permissionRequired: true,
+    }),
   };
 }
 
@@ -172,23 +215,40 @@ export function evaluateLaunchRolePolicy(
 
   const contract = getToolContract(tool);
   if (!contract) {
+    const contractV2 = getToolContractV2(tool);
     return {
       allowed: false,
-      reasonMessage: `工具 ${tool.definition.name} 缺少 contract，当前 role policy 无法确认是否允许。`,
+      reasonMessage: buildLaunchRolePolicyDeniedReason({
+        toolName: tool.definition.name,
+        role,
+        summary: contractV2 ? renderToolContractV2Summary(contractV2) : "缺少治理契约。",
+      }),
     };
   }
 
   if (allowedToolFamilies && !allowedToolFamilies.includes(contract.family)) {
     return {
       allowed: false,
-      reasonMessage: `工具 ${tool.definition.name} 不在当前 role=${role ?? "default"} 的允许家族内；family=${contract.family}。`,
+      reasonMessage: buildLaunchRolePolicyDeniedReason({
+        toolName: tool.definition.name,
+        role,
+        family: contract.family,
+        summary: getToolContractV2(tool) ? renderToolContractV2Summary(getToolContractV2(tool)!) : undefined,
+      }),
     };
   }
 
   if (maxToolRiskLevel && compareRiskLevels(contract.riskLevel, maxToolRiskLevel) > 0) {
     return {
       allowed: false,
-      reasonMessage: `工具 ${tool.definition.name} 风险等级为 ${contract.riskLevel}，超出当前 role=${role ?? "default"} 的上限 ${maxToolRiskLevel}。`,
+      reasonMessage: buildLaunchRolePolicyDeniedReason({
+        toolName: tool.definition.name,
+        role,
+        family: contract.family,
+        riskLevel: contract.riskLevel,
+        maxToolRiskLevel,
+        summary: getToolContractV2(tool) ? renderToolContractV2Summary(getToolContractV2(tool)!) : undefined,
+      }),
     };
   }
 

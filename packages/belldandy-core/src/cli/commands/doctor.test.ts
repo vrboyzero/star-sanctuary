@@ -44,6 +44,30 @@ test("bdd doctor json output includes tool behavior observability", async () => 
       useWhen: expect.any(Array),
       preflightChecks: expect.any(Array),
     });
+    expect(parsed.toolContractV2Observability).toMatchObject({
+      summary: {
+        totalCount: expect.any(Number),
+        highRiskCount: expect.any(Number),
+        confirmRequiredCount: expect.any(Number),
+      },
+    });
+    expect(parsed.toolContractV2Observability.summary.totalCount).toBeGreaterThanOrEqual(6);
+    expect(parsed.toolContractV2Observability.summary.highRiskCount).toBeGreaterThanOrEqual(4);
+    expect(parsed.toolContractV2Observability.summary.confirmRequiredCount).toBeGreaterThanOrEqual(4);
+    expect(parsed.residentAgents).toMatchObject({
+      summary: {
+        totalCount: 1,
+        memoryModeCounts: {
+          hybrid: 1,
+        },
+      },
+      agents: [
+        expect.objectContaining({
+          id: "default",
+          memoryMode: "hybrid",
+        }),
+      ],
+    });
   } finally {
     if (previous === undefined) {
       delete process.env.BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS;

@@ -7,6 +7,12 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import pc from "picocolors";
+import {
+  buildDefaultProfile,
+  isResidentAgentProfile,
+  loadAgentProfiles,
+  resolveAgentProfileMetadata,
+} from "@belldandy/agent";
 import { createCLIContext } from "../shared/context.js";
 import {
   loadProjectEnvFiles,
@@ -17,6 +23,12 @@ import {
   buildToolBehaviorObservability,
   readConfiguredPromptExperimentToolContracts,
 } from "../../tool-behavior-observability.js";
+import {
+  buildToolContractV2Summary,
+  listToolContractsV2,
+} from "@belldandy/skills";
+import { buildResidentAgentDoctorReport } from "../../resident-agent-observability.js";
+import { resolveResidentMemoryPolicy } from "../../resident-memory-policy.js";
 
 interface CheckResult {
   name: string;
@@ -288,6 +300,35 @@ export default defineCommand({
     const toolBehaviorObservability = buildToolBehaviorObservability({
       disabledContractNamesConfigured: readConfiguredPromptExperimentToolContracts(),
     });
+    const toolContractV2Observability = {
+      summary: buildToolContractV2Summary(listToolContractsV2()),
+    };
+    const configuredProfiles = await loadAgentProfiles(path.join(stateDir, "agents.json"));
+    const residentProfiles = [
+      buildDefaultProfile(),
+      ...configuredProfiles.filter((profile) => profile.id !== "default" && isResidentAgentProfile(profile)),
+    ];
+    const residentAgents = buildResidentAgentDoctorReport({
+      agents: residentProfiles.map((profile) => {
+        const metadata = resolveAgentProfileMetadata(profile);
+        return {
+          id: profile.id,
+          displayName: profile.displayName,
+          model: profile.model,
+          kind: "resident" as const,
+          workspaceBinding: metadata.workspaceBinding,
+          sessionNamespace: metadata.sessionNamespace,
+          memoryMode: metadata.memoryMode,
+          status: "configured",
+          memoryPolicy: resolveResidentMemoryPolicy(stateDir, profile),
+        };
+      }),
+    });
+    results.push({
+      name: "Resident agents",
+      status: residentAgents.summary.totalCount > 0 ? "pass" : "warn",
+      message: residentAgents.summary.headline,
+    });
 
     // Output
     if (ctx.json) {
@@ -296,7 +337,7 @@ export default defineCommand({
         warn: results.filter((r) => r.status === "warn").length,
         fail: results.filter((r) => r.status === "fail").length,
       };
-      ctx.output({ checks: results, summary, toolBehaviorObservability });
+      ctx.output({ checks: results, summary, toolBehaviorObservability, toolContractV2Observability, residentAgents });
       return;
     }
 
@@ -319,6 +360,12 @@ export default defineCommand({
     ctx.log(
       `  disabled by experiment: ${toolBehaviorObservability.experiment?.disabledContractNamesConfigured.join(", ") || "(none)"}`,
     );
+    ctx.log("");
+    ctx.log("Tool Contract V2");
+    ctx.log(`  total governed tools: ${toolContractV2Observability.summary.totalCount}`);
+    ctx.log(`  high risk tools: ${toolContractV2Observability.summary.highRiskCount}`);
+    ctx.log(`  confirm required tools: ${toolContractV2Observability.summary.confirmRequiredCount}`);
+    ctx.log(`  missing V2 tools: ${toolContractV2Observability.summary.missingV2Tools.join(", ") || "(none)"}`);
 
     const fails = results.filter((r) => r.status === "fail").length;
     const warns = results.filter((r) => r.status === "warn").length;

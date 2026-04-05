@@ -12,6 +12,7 @@ export type MemoryImportance = "high" | "medium" | "low";
 
 /** 检索范围（P3-2） */
 export type MemorySearchScope = "private" | "shared" | "all";
+export type MemorySharedPromotionStatus = "pending" | "approved" | "rejected" | "revoked" | "active" | "none";
 
 /** 检索触发模式：显式工具检索 vs 隐式自动召回 */
 export type MemoryRetrievalMode = "explicit" | "implicit";
@@ -44,6 +45,8 @@ export interface MemorySearchFilter {
   uncategorized?: boolean; // 仅查询未分类/非法分类数据
   scope?: MemorySearchScope; // 显式检索范围；不传时保持历史行为
   agentId?: string | null;  // Agent ID 过滤（null 表示查询全局记忆）
+  sharedPromotionStatus?: MemorySharedPromotionStatus | MemorySharedPromotionStatus[];
+  sharedPromotionClaimed?: boolean;
 }
 
 /** 检索选项（传给 MemoryManager.search） */

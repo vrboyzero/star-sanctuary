@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Tool, ToolCallResult } from "../types.js";
+import type { Tool, ToolCallResult, ToolContext } from "../types.js";
 import { getGlobalMemoryManager } from "@belldandy/memory";
 import { parseSkillMd } from "../skill-loader.js";
 import { withToolContract } from "../tool-contract.js";
@@ -125,10 +125,19 @@ function detectSkillUsageName(relativePath: string, absolutePath: string, conten
   }
 }
 
-function tryRecordExperienceUsageFromFileRead(relativePath: string, absolutePath: string, content: string, conversationId: string) {
+function tryRecordExperienceUsageFromFileRead(
+  relativePath: string,
+  absolutePath: string,
+  content: string,
+  context: Pick<ToolContext, "conversationId" | "workspaceRoot"> & { agentId?: string },
+) {
   try {
-    const manager = getGlobalMemoryManager();
-    const task = manager?.getTaskByConversation(conversationId);
+    const manager = getGlobalMemoryManager({
+      agentId: context.agentId,
+      conversationId: context.conversationId,
+      workspaceRoot: context.workspaceRoot,
+    });
+    const task = manager?.getTaskByConversation(context.conversationId);
     if (!manager || !task) return;
 
     const methodFile = detectMethodUsagePath(relativePath, absolutePath);
@@ -286,13 +295,17 @@ export const fileReadTool: Tool = withToolContract({
 
         const truncated = stat.size > maxBytes;
 
-        const manager = getGlobalMemoryManager();
+        const manager = getGlobalMemoryManager({
+          agentId: context.agentId,
+          conversationId: context.conversationId,
+          workspaceRoot: context.workspaceRoot,
+        });
         const underMainRoot = isUnderRoot(absolute, context.workspaceRoot);
         if (manager) {
           if (underMainRoot.ok && isMemoryLinkWhitelistPath(relative)) {
             await manager.linkTaskMemoriesFromSource(context.conversationId, relative, "used");
           }
-          tryRecordExperienceUsageFromFileRead(relative, absolute, content, context.conversationId);
+          tryRecordExperienceUsageFromFileRead(relative, absolute, content, context);
         }
 
         return {

@@ -1,3 +1,4 @@
+import type { MemoryVisibility } from "./types.js";
 import type { TaskMemoryRelation, TaskRecord, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
 
 export type ExperienceCandidateType = "method" | "skill";
@@ -10,6 +11,7 @@ export interface ExperienceTaskMemoryLink {
   relation: TaskMemoryRelation;
   sourcePath?: string;
   memoryType?: string;
+  visibility?: MemoryVisibility;
   snippet?: string;
 }
 

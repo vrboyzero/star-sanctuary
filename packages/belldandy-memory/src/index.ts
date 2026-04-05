@@ -11,8 +11,11 @@ export {
   type DurableMemoryGuidance,
   type DurableMemoryRejectionReasonCode,
   type ExtractConversationMemoriesResult,
+  type GlobalMemoryManagerRegistrationOptions,
+  type GlobalMemoryManagerScope,
   registerGlobalMemoryManager,
   getGlobalMemoryManager,
+  listGlobalMemoryManagers,
 } from "./manager.js";
 export {
   DurableExtractionRuntime,

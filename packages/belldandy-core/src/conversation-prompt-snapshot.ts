@@ -274,6 +274,8 @@ export function normalizeConversationPromptSnapshotArtifact(
 export function renderConversationPromptSnapshotText(
   artifact: ConversationPromptSnapshotArtifact,
 ): string {
+  const residentProfile = readPromptSnapshotResidentObject(artifact.snapshot.inputMeta, "residentProfile");
+  const memoryPolicy = readPromptSnapshotResidentObject(artifact.snapshot.inputMeta, "memoryPolicy");
   const promptObservabilityText = renderPromptObservabilityText({
     scope: "run",
     agentId: artifact.manifest.agentId ?? "unknown",
@@ -358,7 +360,29 @@ export function renderConversationPromptSnapshotText(
     lines.push(JSON.stringify(artifact.snapshot.inputMeta, null, 2));
   }
 
+  if (residentProfile || memoryPolicy) {
+    lines.push("");
+    lines.push("Resident Metadata");
+    if (residentProfile) {
+      lines.push(`residentProfile: ${JSON.stringify(residentProfile, null, 2)}`);
+    }
+    if (memoryPolicy) {
+      lines.push(`memoryPolicy: ${JSON.stringify(memoryPolicy, null, 2)}`);
+    }
+  }
+
   return lines.join("\n");
+}
+
+function readPromptSnapshotResidentObject(
+  inputMeta: JsonObject | undefined,
+  key: "residentProfile" | "memoryPolicy",
+): Record<string, unknown> | undefined {
+  const candidate = inputMeta?.[key];
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return undefined;
+  }
+  return { ...(candidate as Record<string, unknown>) };
 }
 
 async function atomicWriteJson(targetPath: string, value: unknown): Promise<void> {

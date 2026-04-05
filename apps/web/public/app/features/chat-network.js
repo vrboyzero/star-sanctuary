@@ -146,11 +146,19 @@ export function createChatNetworkFeature({
   async function loadAgentList() {
     if (!isConnected() || !agentSelectEl) return;
 
-    const res = await sendReq({
+    let res = await sendReq({
       type: "req",
       id: makeId(),
-      method: "agents.list",
+      method: "agents.roster.get",
     });
+
+    if (!res || !res.ok || !Array.isArray(res.payload?.agents)) {
+      res = await sendReq({
+        type: "req",
+        id: makeId(),
+        method: "agents.list",
+      });
+    }
 
     if (!res || !res.ok || !Array.isArray(res.payload?.agents)) return;
 

@@ -16,6 +16,10 @@ export function createChatEventsFeature({
   updateMessageMeta,
   forceScrollToBottom,
   getCanvasApp,
+  getActiveConversationId,
+  onAgentStatusEvent,
+  onConversationDelta,
+  onConversationFinal,
   escapeHtml,
 }) {
   let botMessageEl = null;
@@ -64,6 +68,19 @@ export function createChatEventsFeature({
     });
   }
 
+  function isActiveConversationPayload(payload) {
+    const activeConversationId = typeof getActiveConversationId === "function"
+      ? getActiveConversationId()
+      : "";
+    const payloadConversationId = payload && typeof payload.conversationId === "string"
+      ? payload.conversationId
+      : "";
+    if (!activeConversationId || !payloadConversationId) {
+      return true;
+    }
+    return payloadConversationId === activeConversationId;
+  }
+
   function handleEvent(event, payload) {
     if (event === "pairing.required") {
       const code = payload && payload.code ? String(payload.code) : "";
@@ -86,10 +103,13 @@ export function createChatEventsFeature({
     }
 
     if (event === "agent.status") {
+      onAgentStatusEvent?.(payload);
       if (payload && payload.status === "restarting" && payload.countdown !== undefined) {
         showRestartCountdown(payload.countdown, payload.reason || "");
       }
-      setTokenUsageRunning(payload?.status === "running");
+      if (isActiveConversationPayload(payload)) {
+        setTokenUsageRunning(payload?.status === "running");
+      }
       return true;
     }
 
@@ -136,6 +156,10 @@ export function createChatEventsFeature({
     if (event === "chat.delta") {
       const delta = payload && payload.delta ? String(payload.delta) : "";
       if (!delta) return true;
+      onConversationDelta?.(payload);
+      if (!isActiveConversationPayload(payload)) {
+        return true;
+      }
       renderStreamingMarkdown(botRawHtmlBuffer + delta);
       forceScrollToBottom();
       return true;
@@ -143,6 +167,10 @@ export function createChatEventsFeature({
 
     if (event === "chat.final") {
       const text = payload && payload.text ? String(payload.text) : "";
+      onConversationFinal?.(payload);
+      if (!isActiveConversationPayload(payload)) {
+        return true;
+      }
       const target = renderStreamingMarkdown(text);
       const meta = payload?.messageMeta && typeof payload.messageMeta === "object"
         ? payload.messageMeta
@@ -177,11 +205,17 @@ export function createChatEventsFeature({
     }
 
     if (event === "tool_call") {
+      if (!isActiveConversationPayload(payload)) {
+        return true;
+      }
       getCanvasApp()?.handleReactEvent("tool_call", payload);
       return true;
     }
 
     if (event === "tool_result") {
+      if (!isActiveConversationPayload(payload)) {
+        return true;
+      }
       getCanvasApp()?.handleReactEvent("tool_result", payload);
       return true;
     }

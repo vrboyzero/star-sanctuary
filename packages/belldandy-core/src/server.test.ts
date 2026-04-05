@@ -7,7 +7,7 @@ import WebSocket from "ws";
 
 import { AgentRegistry, type BelldandyAgent, ConversationStore, MockAgent, normalizeAgentLaunchSpec } from "@belldandy/agent";
 import { CompactionRuntimeTracker as SourceCompactionRuntimeTracker } from "../../belldandy-agent/src/compaction-runtime.js";
-import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
+import { MemoryManager, getGlobalMemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import {
   SkillRegistry,
   ToolExecutor,
@@ -21,6 +21,8 @@ import { upsertInstalledExtension, upsertKnownMarketplace } from "./extension-ma
 import type { ExtensionHostState } from "./extension-host.js";
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
 import { recordConversationArtifactExport } from "./conversation-export-index.js";
+import { createScopedMemoryManagers } from "./resident-memory-managers.js";
+import { resolveResidentSharedStateDir } from "./resident-memory-policy.js";
 import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
@@ -454,6 +456,447 @@ test("agents.list exposes agent name and avatar from per-agent IDENTITY.md", asy
     ws.close();
     await closeP;
     await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("agents.roster.get exposes resident runtime status and main conversation ids", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    memoryMode: "isolated",
+    sessionNamespace: "coder-main",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
+  registry.register({
+    id: "verifier",
+    displayName: "Verifier",
+    model: "primary",
+    kind: "worker",
+    workspaceDir: "verifier",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+    ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+    await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+
+    ws.send(JSON.stringify({ type: "req", id: "agents-roster", method: "agents.roster.get" }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "agents-roster"));
+
+    const rosterRes = frames.find((f) => f.type === "res" && f.id === "agents-roster");
+    expect(rosterRes.ok).toBe(true);
+    expect(rosterRes.payload?.agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "default",
+        kind: "resident",
+        workspaceBinding: "current",
+        sessionNamespace: "default",
+        memoryMode: "hybrid",
+        status: "idle",
+        mainConversationId: "agent:default:main",
+        lastConversationId: "agent:default:main",
+      }),
+      expect.objectContaining({
+        id: "coder",
+        kind: "resident",
+        workspaceBinding: "current",
+        sessionNamespace: "coder-main",
+        memoryMode: "isolated",
+        status: "idle",
+        mainConversationId: "agent:coder:main",
+        lastConversationId: "agent:coder:main",
+      }),
+    ]));
+    expect(rosterRes.payload?.agents.some((item: { id?: string }) => item.id === "verifier")).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("message.send without conversationId reuses resident agent main conversation", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    memoryMode: "isolated",
+    sessionNamespace: "coder-main",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resident-main-1",
+      method: "message.send",
+      params: {
+        text: "你好 coder",
+        agentId: "coder",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resident-main-1" && f.ok === true));
+    const firstRes = frames.find((f) => f.type === "res" && f.id === "resident-main-1");
+    expect(firstRes.payload?.conversationId).toBe("agent:coder:main");
+
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.conversationId === "agent:coder:main"));
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resident-main-2",
+      method: "message.send",
+      params: {
+        text: "第二轮 coder",
+        agentId: "coder",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resident-main-2" && f.ok === true));
+    const secondRes = frames.find((f) => f.type === "res" && f.id === "resident-main-2");
+    expect(secondRes.payload?.conversationId).toBe("agent:coder:main");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resident-main-default",
+      method: "message.send",
+      params: {
+        text: "你好 default",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resident-main-default" && f.ok === true));
+    const defaultRes = frames.find((f) => f.type === "res" && f.id === "resident-main-default");
+    expect(defaultRes.payload?.conversationId).toBe("agent:default:main");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resident agent main conversation persists inside agent workspace sessions", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    memoryMode: "isolated",
+    sessionNamespace: "coder-main",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resident-storage-coder",
+      method: "message.send",
+      params: {
+        text: "写到 coder 私有 sessions",
+        agentId: "coder",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resident-storage-coder" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.conversationId === "agent:coder:main"));
+
+    const conversationId = "agent:coder:main";
+    const safeConversationId = toSafeConversationFileIdForTest(conversationId);
+    const residentFilePath = path.join(stateDir, "agents", "coder", "sessions", `${safeConversationId}.jsonl`);
+    const globalFilePath = path.join(stateDir, "sessions", `${safeConversationId}.jsonl`);
+
+    await waitFor(() => fs.existsSync(residentFilePath));
+    expect(fs.existsSync(residentFilePath)).toBe(true);
+    expect(fs.existsSync(globalFilePath)).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resident agent session migrates legacy global session files into agent workspace sessions", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    memoryMode: "isolated",
+    sessionNamespace: "coder-main",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
+
+  const conversationId = "agent:coder:main";
+  const safeConversationId = toSafeConversationFileIdForTest(conversationId);
+  const legacyStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  legacyStore.addMessage(conversationId, "user", "legacy coder history", {
+    agentId: "coder",
+    channel: "webchat",
+  });
+  await legacyStore.waitForPendingPersistence(conversationId);
+
+  const globalFilePath = path.join(stateDir, "sessions", `${safeConversationId}.jsonl`);
+  expect(fs.existsSync(globalFilePath)).toBe(true);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resident-session-ensure-migration",
+      method: "agent.session.ensure",
+      params: {
+        agentId: "coder",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resident-session-ensure-migration" && f.ok === true));
+    const ensureRes = frames.find((f) => f.type === "res" && f.id === "resident-session-ensure-migration");
+    expect(ensureRes.payload).toMatchObject({
+      agentId: "coder",
+      kind: "resident",
+      workspaceBinding: "current",
+      sessionNamespace: "coder-main",
+      memoryMode: "isolated",
+      conversationId,
+      exists: true,
+    });
+
+    const residentFilePath = path.join(stateDir, "agents", "coder", "sessions", `${safeConversationId}.jsonl`);
+    await waitFor(() => fs.existsSync(residentFilePath));
+    expect(fs.existsSync(residentFilePath)).toBe(true);
+    expect(fs.existsSync(globalFilePath)).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resident agent memory managers use isolated sqlite files", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    workspaceDir: "coder",
+  });
+
+  try {
+    createScopedMemoryManagers({
+      stateDir,
+      agentRegistry: registry,
+      modelsDir: path.join(stateDir, "models"),
+      conversationStore: new ConversationStore({
+        dataDir: path.join(stateDir, "sessions"),
+      }),
+      indexerOptions: {
+        ignorePatterns: ["node_modules", ".git"],
+        extensions: [".md", ".txt", ".jsonl"],
+        watch: false,
+      },
+    });
+
+    const defaultManager = getGlobalMemoryManager();
+    const coderManager = getGlobalMemoryManager({ agentId: "coder" });
+    const sharedManager = getGlobalMemoryManager({ workspaceRoot: resolveResidentSharedStateDir(stateDir) });
+
+    expect(defaultManager).toBeTruthy();
+    expect(coderManager).toBeTruthy();
+    expect(sharedManager).toBeTruthy();
+    expect(coderManager).not.toBe(defaultManager);
+    expect(sharedManager).not.toBe(defaultManager);
+    expect(sharedManager).not.toBe(coderManager);
+
+    const defaultDbPath = path.join(stateDir, "memory.sqlite");
+    const coderDbPath = path.join(stateDir, "agents", "coder", "memory.sqlite");
+    await waitFor(() => fs.existsSync(defaultDbPath) && fs.existsSync(coderDbPath));
+    expect(fs.existsSync(defaultDbPath)).toBe(true);
+    expect(fs.existsSync(coderDbPath)).toBe(true);
+  } finally {
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("resident agent durable memories write into agent workspace memory directory", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    workspaceDir: "coder",
+  });
+
+  try {
+    createScopedMemoryManagers({
+      stateDir,
+      agentRegistry: registry,
+      modelsDir: path.join(stateDir, "models"),
+      conversationStore: new ConversationStore({
+        dataDir: path.join(stateDir, "sessions"),
+      }),
+      indexerOptions: {
+        ignorePatterns: ["node_modules", ".git"],
+        extensions: [".md", ".txt", ".jsonl"],
+        watch: false,
+      },
+    });
+
+    const coderManager = getGlobalMemoryManager({ agentId: "coder" }) as any;
+    expect(coderManager).toBeTruthy();
+
+    coderManager.evolutionEnabled = true;
+    coderManager.evolutionMinMessages = 1;
+    coderManager.callLLMForExtraction = vi.fn(async () => [
+      {
+        type: "fact",
+        content: "Coder prefers precise patches",
+        category: "preference",
+      },
+    ]);
+
+    const result = await coderManager.extractMemoriesFromConversation("agent:coder:main", [
+      { role: "user", content: "记住 coder 的长期偏好。" },
+      { role: "assistant", content: "好的，我来提取长期记忆。" },
+    ], {
+      sourceConversationId: "agent:coder:main",
+    });
+
+    expect(result.count).toBe(1);
+    const today = formatLocalDateForTest(new Date());
+    const coderMemoryFile = path.join(stateDir, "agents", "coder", "memory", `${today}.md`);
+    const rootMemoryFile = path.join(stateDir, "memory", `${today}.md`);
+
+    await waitFor(() => fs.existsSync(coderMemoryFile));
+    expect(fs.existsSync(coderMemoryFile)).toBe(true);
+    expect(fs.existsSync(rootMemoryFile)).toBe(false);
+    const content = await fs.promises.readFile(coderMemoryFile, "utf-8");
+    expect(content).toContain("Coder prefers precise patches");
+  } finally {
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
@@ -4439,9 +4882,76 @@ test("tools.list exposes tool behavior contract observability for visible tools"
     expect(listRes.payload?.toolBehaviorObservability?.summary).toContain("## apply_patch");
     expect(listRes.payload?.toolBehaviorObservability?.summary).toContain("## delegate_task");
     expect(listRes.payload?.toolBehaviorObservability?.contracts?.beta_builtin).toBeUndefined();
+    expect(listRes.payload?.toolContractV2Observability).toMatchObject({
+      counts: {
+        totalCount: 3,
+        missingV2Count: 1,
+      },
+    });
+    expect(listRes.payload?.toolContractV2Observability?.contracts?.run_command).toMatchObject({
+      family: "other",
+      recommendedWhen: expect.any(Array),
+      confirmWhen: expect.any(Array),
+    });
     expect(listRes.payload?.toolContractsIncluded).toBeUndefined();
     expect(listRes.payload?.toolBehaviorContracts).toBeUndefined();
     expect(listRes.payload?.toolContractSummary).toBeUndefined();
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("agent.contracts.get exposes tool contract v2 summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("run_command"),
+      createContractedTestTool("apply_patch"),
+      createTestTool("beta_builtin"),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "agent-contracts-get", method: "agent.contracts.get", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "agent-contracts-get"));
+    const res = frames.find((f) => f.type === "res" && f.id === "agent-contracts-get");
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.summary).toMatchObject({
+      totalCount: 2,
+      missingV2Count: 1,
+      governedTools: ["apply_patch", "run_command"],
+      missingV2Tools: ["beta_builtin"],
+    });
+    expect(res.payload?.contracts?.run_command).toMatchObject({
+      recommendedWhen: expect.any(Array),
+      preflightChecks: expect.any(Array),
+      hasGovernanceContract: true,
+      hasBehaviorContract: true,
+    });
   } finally {
     ws.close();
     await closeP;
@@ -5524,6 +6034,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     memoryType: "other",
     content: "viewer topic marker: topic filtered memory for rpc viewer.",
     topic: "viewer-audit",
+    visibility: "shared",
   });
   registerGlobalMemoryManager(memoryManager);
 
@@ -5542,7 +6053,7 @@ test("memory viewer rpc returns task and memory data", async () => {
   });
   expect(startedTaskId).toBeTruthy();
   if (recentChunk?.id) {
-    memoryManager.linkTaskMemories("conv-memory-viewer", [recentChunk.id], "used");
+    memoryManager.linkTaskMemories("conv-memory-viewer", [recentChunk.id, "chunk-topic-viewer"], "used");
   }
   memoryManager.recordTaskToolCall("conv-memory-viewer", {
     toolName: "memory_search",
@@ -5655,6 +6166,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(statsRes.payload.status.uncategorized).toBeGreaterThan(0);
     expect(statsRes.payload.status.categoryBuckets.decision).toBeGreaterThan(0);
     expect(statsRes.payload.recentTasks).toBeUndefined();
+    expect(statsRes.payload.queryView.scope).toBe("private");
     expect(statsWithRecentRes.ok).toBe(true);
     expect(Array.isArray(statsWithRecentRes.payload.recentTasks)).toBe(true);
     expect(statsWithRecentRes.payload.recentTasks.length).toBeGreaterThan(0);
@@ -5669,6 +6181,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(memoryRecentRes.ok).toBe(true);
     expect(memoryRecentRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentRes.payload.items[0].content).toBeUndefined();
+    expect(memoryRecentRes.payload.items[0].sourceView.scope).toBeTruthy();
     expect(memoryRecentUncategorizedRes.ok).toBe(true);
     expect(memoryRecentUncategorizedRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentUncategorizedRes.payload.items[0].category).toBeUndefined();
@@ -5680,23 +6193,31 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(memorySearchTopicRes.payload.items.length).toBeGreaterThan(0);
     expect(memorySearchTopicRes.payload.items.every((item: any) => item.sourcePath === "memory/topic-viewer.md")).toBe(true);
     expect(memorySearchTopicRes.payload.items[0].content).toBeUndefined();
+    expect(memorySearchTopicRes.payload.items[0].sourceView.scope).toBe("shared");
     expect(memoryRecentCategoryRes.ok).toBe(true);
     expect(memoryRecentCategoryRes.payload.items.length).toBeGreaterThan(0);
     expect(memoryRecentCategoryRes.payload.items[0].category).toBe("decision");
     expect(memoryRecentCategoryRes.payload.items[0].content).toBeUndefined();
+    expect(memoryRecentCategoryRes.payload.items[0].sourceView.scope).toBe("private");
     expect(usageListRes.ok).toBe(true);
     expect(usageListRes.payload.items.length).toBe(2);
+    const methodUsageItem = usageListRes.payload.items.find((item: any) => item.sourceCandidateId === methodCandidate!.candidate.id);
+    expect(methodUsageItem?.sourceView.scope).toBe("hybrid");
     expect(usageStatsRes.ok).toBe(true);
     expect(usageStatsRes.payload.items[0].assetKey).toBe(path.basename(acceptedMethodCandidate!.publishedPath!));
     expect(usageStatsRes.payload.items[0].usageCount).toBeGreaterThan(0);
     expect(usageStatsRes.payload.items[0].sourceCandidateId).toBe(methodCandidate!.candidate.id);
     expect(usageStatsRes.payload.items[0].sourceCandidatePublishedPath).toBe(acceptedMethodCandidate!.publishedPath);
+    expect(usageStatsRes.payload.items[0].sourceView.scope).toBe("hybrid");
     expect(usageGetRes.ok).toBe(true);
     expect(usageGetRes.payload.usage.id).toBe("usage-viewer-method");
     expect(usageGetRes.payload.usage.sourceCandidateId).toBe(methodCandidate!.candidate.id);
+    expect(usageGetRes.payload.usage.sourceView.scope).toBe("hybrid");
     expect(candidateGetRes.ok).toBe(true);
     expect(candidateGetRes.payload.candidate.id).toBe(methodCandidate!.candidate.id);
     expect(candidateGetRes.payload.candidate.publishedPath).toBe(acceptedMethodCandidate!.publishedPath);
+    expect(candidateGetRes.payload.candidate.sourceView.scope).toBe("hybrid");
+    expect(candidateGetRes.payload.candidate.sourceTaskSnapshot.memoryLinks.some((item: any) => item.sourceView.scope === "shared")).toBe(true);
 
     const usageIdToRevoke = usageListRes.payload.items[0].id;
     ws.send(JSON.stringify({ type: "req", id: "usage-revoke", method: "experience.usage.revoke", params: { usageId: usageIdToRevoke } }));
@@ -5730,6 +6251,7 @@ test("memory viewer rpc returns task and memory data", async () => {
 
     expect(taskGetRes.ok).toBe(true);
     expect(taskGetRes.payload.task.memoryLinks.length).toBeGreaterThan(0);
+    expect(taskGetRes.payload.task.memoryLinks.some((item: any) => item.sourceView.scope === "shared")).toBe(true);
     expect(taskGetRes.payload.task.usedMethods.length + taskGetRes.payload.task.usedSkills.length).toBe(1);
     if (revokedAssetType === "method") {
       expect(taskGetRes.payload.task.usedMethods.length).toBe(0);
@@ -5745,6 +6267,7 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(memoryGetRes.ok).toBe(true);
     expect(memoryGetRes.payload.item.category).toBe("decision");
     expect(memoryGetRes.payload.item.content).toContain("phase4decision");
+    expect(memoryGetRes.payload.item.sourceView.scope).toBe("private");
     expect(sourceReadRes.ok).toBe(true);
     expect(sourceReadRes.payload.readOnly).toBe(true);
     expect(sourceReadRes.payload.content).toContain("Memory viewer test content");
@@ -6382,7 +6905,12 @@ test("message.send accepts multiple attachments within configured limits", async
       const conversationId = String(res?.payload?.conversationId ?? "");
       expect(conversationId.length).toBeGreaterThan(0);
 
-      const attachmentDir = path.join(stateDir, "storage", "attachments", conversationId);
+      const attachmentDir = path.join(
+        stateDir,
+        "storage",
+        "attachments",
+        encodeURIComponent(conversationId).replace(/\./g, "%2E"),
+      );
       const fileA = await fs.promises.readFile(path.join(attachmentDir, "a.txt"), "utf-8");
       const fileB = await fs.promises.readFile(path.join(attachmentDir, "b.txt"), "utf-8");
       expect(fileA).toBe("hello-a");
@@ -6936,6 +7464,34 @@ async function pairWebSocketClient(ws: WebSocket, frames: any[], stateDir: strin
   expect(code.length).toBeGreaterThan(0);
   const approved = await approvePairingCode({ code, stateDir });
   expect(approved.ok).toBe(true);
+}
+
+function toSafeConversationFileIdForTest(id: string): string {
+  const encodeChar = (char: string): string => {
+    const codePoint = char.codePointAt(0);
+    if (typeof codePoint !== "number") return "_";
+    return `%${codePoint.toString(16).toUpperCase().padStart(2, "0")}`;
+  };
+
+  let safeId = id.replace(/[<>:"/\\|?*\u0000-\u001F%]/g, encodeChar);
+  safeId = safeId.replace(/[. ]+$/g, (match) => Array.from(match).map(encodeChar).join(""));
+  if (!safeId) {
+    safeId = "_";
+  }
+
+  const windowsBasename = safeId.split(".")[0] ?? safeId;
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(windowsBasename)) {
+    safeId = `_${safeId}`;
+  }
+
+  return safeId;
+}
+
+function formatLocalDateForTest(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function createTestTool(name: string): Tool {

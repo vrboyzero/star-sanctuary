@@ -159,6 +159,215 @@ function buildToolBehaviorCard(payload, t) {
   };
 }
 
+function buildToolContractV2Card(payload, t) {
+  const observability = payload?.toolContractV2Observability;
+  if (!observability?.summary) {
+    return undefined;
+  }
+
+  const summary = observability.summary;
+  const badges = [
+    tr(
+      t,
+      "settings.doctorToolContractV2Total",
+      { count: formatNumber(summary.totalCount) },
+      `${formatNumber(summary.totalCount)} 条 V2 契约`,
+    ),
+    tr(
+      t,
+      "settings.doctorToolContractV2HighRisk",
+      { count: formatNumber(summary.highRiskCount) },
+      `${formatNumber(summary.highRiskCount)} 条高风险`,
+    ),
+    tr(
+      t,
+      "settings.doctorToolContractV2Confirm",
+      { count: formatNumber(summary.confirmRequiredCount) },
+      `${formatNumber(summary.confirmRequiredCount)} 条需确认`,
+    ),
+  ];
+
+  const notes = [];
+  notes.push(tr(
+    t,
+    "settings.doctorToolContractV2Help",
+    {},
+    "这组摘要把治理契约和行为契约统一成一份可执行、可解释的工具规则视图。",
+  ));
+  notes.push(
+    summary.missingV2Tools?.length
+      ? tr(
+        t,
+        "settings.doctorToolContractV2Missing",
+        { names: summary.missingV2Tools.join(", ") },
+        `尚未补齐 V2 契约：${summary.missingV2Tools.join(", ")}`,
+      )
+      : tr(
+        t,
+        "settings.doctorToolContractV2Complete",
+        {},
+        "当前可见工具都已有 V2 契约摘要。",
+      ),
+  );
+
+  return {
+    title: tr(t, "settings.doctorToolContractV2Title", {}, "Tool Contract V2"),
+    badges,
+    notes,
+    status: summary.missingV2Count > 0 ? "warn" : "pass",
+  };
+}
+
+function buildResidentAgentsCard(payload, t) {
+  const resident = payload?.residentAgents;
+  if (!resident?.summary) {
+    return undefined;
+  }
+
+  const summary = resident.summary;
+  const badges = [
+    tr(
+      t,
+      "settings.doctorResidentAgentsTotal",
+      { count: formatNumber(summary.totalCount) },
+      `${formatNumber(summary.totalCount)} 个 resident`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsActive",
+      { count: formatNumber(summary.activeCount) },
+      `${formatNumber(summary.activeCount)} 个活跃中`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsModes",
+      {
+        isolated: formatNumber(summary.memoryModeCounts?.isolated),
+        shared: formatNumber(summary.memoryModeCounts?.shared),
+        hybrid: formatNumber(summary.memoryModeCounts?.hybrid),
+      },
+      `isolated ${formatNumber(summary.memoryModeCounts?.isolated)} / shared ${formatNumber(summary.memoryModeCounts?.shared)} / hybrid ${formatNumber(summary.memoryModeCounts?.hybrid)}`,
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorResidentAgentsHeadline",
+      { headline: summary.headline },
+      summary.headline,
+    ),
+  ];
+
+  const agents = Array.isArray(resident.agents) ? resident.agents : [];
+  for (const agent of agents.slice(0, 6)) {
+    notes.push(
+      `${agent.displayName || agent.id}: ${agent.memoryMode}, write=${agent.memoryPolicy?.writeTarget || "-"}, read=${Array.isArray(agent.memoryPolicy?.readTargets) ? agent.memoryPolicy.readTargets.join("+") : "-"}, session=${agent.sessionNamespace || "-"}${agent.status ? `, status=${agent.status}` : ""}`,
+    );
+  }
+
+  return {
+    title: tr(t, "settings.doctorResidentAgentsTitle", {}, "Resident Agents"),
+    badges,
+    notes,
+    status: summary.totalCount > 0 ? "pass" : "warn",
+  };
+}
+
+function buildSharedGovernanceCard(payload, t) {
+  const sharedMemory = payload?.memoryRuntime?.sharedMemory;
+  const residentSummary = payload?.residentAgents?.summary;
+  if (!sharedMemory && !residentSummary) {
+    return undefined;
+  }
+
+  const enabled = sharedMemory?.enabled === true;
+  const available = sharedMemory?.available === true;
+  const badges = [
+    tr(
+      t,
+      "settings.doctorSharedGovernanceReaders",
+      { count: formatNumber(residentSummary?.sharedReadEnabledCount) },
+      `${formatNumber(residentSummary?.sharedReadEnabledCount)} 个 shared reader`,
+    ),
+    tr(
+      t,
+      "settings.doctorSharedGovernanceWriters",
+      { count: formatNumber(residentSummary?.writeTargetCounts?.shared) },
+      `${formatNumber(residentSummary?.writeTargetCounts?.shared)} 个 shared writer`,
+    ),
+    tr(
+      t,
+      "settings.doctorSharedGovernanceGuard",
+      { status: sharedMemory?.secretGuard?.enabled === true ? "on" : "off" },
+      `secret guard ${sharedMemory?.secretGuard?.enabled === true ? "on" : "off"}`,
+    ),
+    tr(
+      t,
+      "settings.doctorSharedGovernancePending",
+      { count: formatNumber(residentSummary?.sharedGovernanceCounts?.pendingCount) },
+      `${formatNumber(residentSummary?.sharedGovernanceCounts?.pendingCount)} pending approval(s)`,
+    ),
+    tr(
+      t,
+      "settings.doctorSharedGovernanceClaimed",
+      { count: formatNumber(residentSummary?.sharedGovernanceCounts?.claimedCount) },
+      `${formatNumber(residentSummary?.sharedGovernanceCounts?.claimedCount)} claimed pending item(s)`,
+    ),
+  ];
+
+  const notes = [];
+  notes.push(tr(
+    t,
+    "settings.doctorSharedGovernanceAvailability",
+    { status: enabled ? (available ? "available" : "blocked") : "disabled" },
+    enabled ? (available ? "shared layer 可用" : "shared layer 已启用但当前不可用") : "shared layer 未启用",
+  ));
+  if (sharedMemory?.secretGuard?.summary) {
+    notes.push(tr(
+      t,
+      "settings.doctorSharedGovernanceGuardNote",
+      { summary: sharedMemory.secretGuard.summary },
+      `secret guard: ${sharedMemory.secretGuard.summary}`,
+    ));
+  }
+  if (sharedMemory?.syncPolicy?.conflictPolicy?.summary) {
+    notes.push(tr(
+      t,
+      "settings.doctorSharedGovernanceConflict",
+      { summary: sharedMemory.syncPolicy.conflictPolicy.summary },
+      `conflict policy: ${sharedMemory.syncPolicy.conflictPolicy.summary}`,
+    ));
+  }
+  if (Array.isArray(sharedMemory?.reasonMessages) && sharedMemory.reasonMessages.length > 0 && !available) {
+    notes.push(tr(
+      t,
+      "settings.doctorSharedGovernanceBlockedReasons",
+      { reasons: sharedMemory.reasonMessages.join(" | ") },
+      `blocked reasons: ${sharedMemory.reasonMessages.join(" | ")}`,
+    ));
+  }
+  const residentAgents = Array.isArray(payload?.residentAgents?.agents) ? payload.residentAgents.agents : [];
+  for (const agent of residentAgents.slice(0, 6)) {
+    const pendingCount = Number(agent?.sharedGovernance?.pendingCount) || 0;
+    const claimedCount = Number(agent?.sharedGovernance?.claimedCount) || 0;
+    const approvedCount = Number(agent?.sharedGovernance?.approvedCount) || 0;
+    const rejectedCount = Number(agent?.sharedGovernance?.rejectedCount) || 0;
+    const revokedCount = Number(agent?.sharedGovernance?.revokedCount) || 0;
+    if (pendingCount + claimedCount + approvedCount + rejectedCount + revokedCount <= 0) continue;
+    notes.push(
+      `${agent.displayName || agent.id}: pending=${pendingCount}, claimed=${claimedCount}, approved=${approvedCount}, rejected=${rejectedCount}, revoked=${revokedCount}`,
+    );
+  }
+
+  return {
+    title: tr(t, "settings.doctorSharedGovernanceTitle", {}, "Shared Governance"),
+    badges,
+    notes,
+    status: available ? "pass" : enabled ? "warn" : "warn",
+  };
+}
+
 function createDoctorCard(card) {
   const panel = document.createElement("div");
   panel.style.width = "100%";
@@ -209,6 +418,9 @@ export function renderDoctorObservabilityCards(container, payload, t) {
   const cards = [
     buildPromptObservabilityCard(payload, t),
     buildToolBehaviorCard(payload, t),
+    buildToolContractV2Card(payload, t),
+    buildResidentAgentsCard(payload, t),
+    buildSharedGovernanceCard(payload, t),
   ].filter(Boolean);
 
   for (const card of cards) {
@@ -232,6 +444,30 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${toolCard.title}:`);
     lines.push(...toolCard.badges.map((badge) => `- ${badge}`));
     lines.push(...toolCard.notes.map((note) => `- ${note}`));
+  }
+
+  const toolContractV2Card = buildToolContractV2Card(payload, t);
+  if (toolContractV2Card) {
+    lines.push(``);
+    lines.push(`${toolContractV2Card.title}:`);
+    lines.push(...toolContractV2Card.badges.map((badge) => `- ${badge}`));
+    lines.push(...toolContractV2Card.notes.map((note) => `- ${note}`));
+  }
+
+  const residentAgentsCard = buildResidentAgentsCard(payload, t);
+  if (residentAgentsCard) {
+    lines.push(``);
+    lines.push(`${residentAgentsCard.title}:`);
+    lines.push(...residentAgentsCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...residentAgentsCard.notes.map((note) => `- ${note}`));
+  }
+
+  const sharedGovernanceCard = buildSharedGovernanceCard(payload, t);
+  if (sharedGovernanceCard) {
+    lines.push(``);
+    lines.push(`${sharedGovernanceCard.title}:`);
+    lines.push(...sharedGovernanceCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...sharedGovernanceCard.notes.map((note) => `- ${note}`));
   }
 
   return lines;

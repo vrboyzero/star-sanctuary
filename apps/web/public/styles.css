@@ -2481,6 +2481,12 @@ body::before {
   color: var(--primary);
 }
 
+.memory-badge-hybrid {
+  background: linear-gradient(135deg, var(--memory-badge-bg) 0%, var(--memory-badge-bg) 48%, var(--memory-badge-shared-bg) 52%, var(--memory-badge-shared-bg) 100%);
+  border-color: var(--memory-badge-shared-border);
+  color: var(--primary);
+}
+
 .memory-detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

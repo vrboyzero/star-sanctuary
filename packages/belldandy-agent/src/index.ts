@@ -295,10 +295,21 @@ export {
 // Agent Profile（多 Agent 预备）
 export {
   buildDefaultProfile,
+  isResidentAgentProfile,
   loadAgentProfiles,
+  resolveAgentMemoryMode,
   resolveModelConfig,
+  resolveAgentProfileKind,
+  resolveAgentProfileMetadata,
+  resolveAgentSessionNamespace,
+  resolveAgentWorkspaceBinding,
+  resolveAgentWorkspaceDir,
   type AgentProfile,
   type AgentConfigFile,
+  type AgentMemoryMode,
+  type AgentProfileKind,
+  type AgentWorkspaceBinding,
+  type ResolvedAgentProfileMetadata,
 } from "./agent-profile.js";
 
 // Agent Registry（多 Agent 注册表）

@@ -2451,7 +2451,10 @@ export class GoalManager {
     review: GoalSuggestionReviewItem,
     record: GoalSuggestionPublishRecord,
   ): Promise<ExperienceCandidate | null> {
-    const manager = getGlobalMemoryManager() as {
+    const manager = getGlobalMemoryManager({
+      conversationId: goal.activeConversationId,
+      workspaceRoot: this.stateDir,
+    }) as {
       upsertExperienceCandidate?: (candidate: ExperienceCandidate) => ExperienceCandidate;
       store?: {
         findExperienceCandidateByTaskAndType?: (taskId: string, type: ExperienceCandidate["type"]) => ExperienceCandidate | null;

@@ -23,7 +23,11 @@ function findSkillByName(registry: SkillRegistry, name: string) {
 
 function tryRecordSkillUsage(skillName: string, context: ToolContext) {
   try {
-    const manager = getGlobalMemoryManager();
+    const manager = getGlobalMemoryManager({
+      agentId: context.agentId,
+      conversationId: context.conversationId,
+      workspaceRoot: context.workspaceRoot,
+    });
     const task = manager?.getTaskByConversation(context.conversationId);
     if (manager && task) {
       manager.recordSkillUsage(task.id, skillName, { usedVia: "tool" });

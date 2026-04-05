@@ -2077,6 +2077,131 @@ describe("GoalManager", () => {
     memoryManager.close();
   });
 
+  it("routes published suggestion experience candidates to the scoped memory manager for an agent workspace", async () => {
+    if (!process.env.OPENAI_API_KEY) {
+      process.env.OPENAI_API_KEY = "test-placeholder-key";
+    }
+    const rootStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-root-"));
+    const defaultMemoryWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-memory-default-"));
+    const defaultMemoryManager = new MemoryManager({
+      workspaceRoot: defaultMemoryWorkspace,
+      stateDir: rootStateDir,
+      taskMemoryEnabled: false,
+      experienceAutoPromotionEnabled: false,
+      experienceAutoMethodEnabled: false,
+      experienceAutoSkillEnabled: false,
+    });
+    registerGlobalMemoryManager(defaultMemoryManager);
+    registerGlobalMemoryManager(defaultMemoryManager, {
+      agentId: "default",
+      workspaceRoot: rootStateDir,
+      isDefault: true,
+    });
+
+    const coderStateDir = path.join(rootStateDir, "agents", "coder");
+    await fs.mkdir(coderStateDir, { recursive: true });
+    const coderMemoryWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-memory-coder-"));
+    const coderMemoryManager = new MemoryManager({
+      workspaceRoot: coderMemoryWorkspace,
+      stateDir: coderStateDir,
+      taskMemoryEnabled: false,
+      experienceAutoPromotionEnabled: false,
+      experienceAutoMethodEnabled: false,
+      experienceAutoSkillEnabled: false,
+    });
+    registerGlobalMemoryManager(coderMemoryManager, {
+      agentId: "coder",
+      workspaceRoot: coderStateDir,
+    });
+
+    const manager = new GoalManager(coderStateDir);
+    const goal = await manager.createGoal({
+      title: "Scoped Suggestion Publish Goal",
+      objective: "Publish suggestions into the agent-scoped memory manager",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_scoped_publish",
+      title: "Scoped Publish Node",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["Published candidate is stored in the agent-scoped memory manager"],
+    });
+    await manager.claimTaskNode(goal.id, "node_scoped_publish", {
+      runId: "run_scoped_publish_1",
+      summary: "Started scoped publish node",
+    });
+    await manager.requestCheckpoint(goal.id, "node_scoped_publish", {
+      title: "Scoped publish checkpoint",
+      summary: "Ready for approval",
+      reviewer: "producer",
+      requestedBy: "coder",
+      runId: "run_scoped_publish_1",
+    });
+    await manager.approveCheckpoint(goal.id, "node_scoped_publish", {
+      summary: "Approved",
+      note: "Proceed",
+      decidedBy: "producer",
+      runId: "run_scoped_publish_1",
+    });
+    await manager.completeTaskNode(goal.id, "node_scoped_publish", {
+      summary: "Scoped publish node completed",
+      artifacts: ["artifacts/scoped-publish.md"],
+      runId: "run_scoped_publish_1",
+    });
+    await manager.saveCapabilityPlan(goal.id, "node_scoped_publish", {
+      executionMode: "single_agent",
+      riskLevel: "medium",
+      objective: "Generate a scoped method suggestion",
+      summary: "Route publication into the coder memory manager",
+      methods: [{ file: "Scoped-Publish-Checklist.md" }],
+      actualUsage: {
+        methods: ["Scoped-Publish-Checklist.md"],
+        skills: [],
+        mcpServers: [],
+        toolNames: ["file_read"],
+      },
+      status: "orchestrated",
+      orchestratedAt: "2026-03-20T17:30:00.000Z",
+    });
+
+    await manager.generateMethodCandidates(goal.id);
+    const reviews = await manager.listSuggestionReviews(goal.id);
+    const methodReview = reviews.items.find((item) => item.suggestionType === "method_candidate");
+    expect(methodReview).toBeTruthy();
+
+    await manager.decideSuggestionReview(goal.id, {
+      reviewId: methodReview?.id,
+      decision: "accepted",
+      reviewer: "producer",
+      decidedBy: "producer",
+      note: "Publish into scoped manager",
+    });
+
+    const published = await manager.publishSuggestion(goal.id, {
+      reviewId: methodReview?.id,
+      reviewer: "producer",
+      decidedBy: "producer",
+    });
+
+    const taskId = `goal_suggestion:${goal.id}:method_candidate:${methodReview?.suggestionId}`;
+    const scopedExperience = coderMemoryManager.listExperienceCandidates(10, {
+      taskId,
+      type: "method",
+    })[0];
+    const defaultExperience = defaultMemoryManager.listExperienceCandidates(10, {
+      taskId,
+      type: "method",
+    })[0];
+
+    expect(scopedExperience?.status).toBe("accepted");
+    expect(scopedExperience?.publishedPath).toBe(published.record.publishedPath);
+    expect(defaultExperience).toBeUndefined();
+
+    coderMemoryManager.close();
+    defaultMemoryManager.close();
+  });
+
   it("aggregates repeated flow patterns across goals", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
     const manager = new GoalManager(stateDir);

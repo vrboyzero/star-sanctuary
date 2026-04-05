@@ -1,6 +1,9 @@
 import type { ToolExecutionRuntimeContext } from "@belldandy/skills";
 import { TOOL_SETTINGS_CONTROL_NAME } from "@belldandy/skills";
 import type { ToolExecutor, SkillRegistry } from "@belldandy/skills";
+import {
+  listToolContractsV2,
+} from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { GatewayEventFrame, GatewayResFrame } from "@belldandy/protocol";
 
@@ -14,6 +17,7 @@ import {
   readConfiguredPromptExperimentToolContracts,
 } from "./tool-behavior-observability.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import { buildToolContractV2Observability } from "./tool-contract-v2-observability.js";
 import type { SubTaskRuntimeStore } from "./task-runtime.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 
@@ -204,6 +208,21 @@ export async function handleToolsListWithQueryRuntime(
         },
       ] as const);
     const contracts = Object.fromEntries(contractEntries);
+    const contractV2Entries = listToolContractsV2(
+      ctx.toolExecutor.getContracts(
+        visibilityAgentId,
+        visibilityConversationId,
+        runtimeContext,
+      ).filter((contract) => contract.name !== TOOL_SETTINGS_CONTROL_NAME),
+    );
+    const contractV2Observability = buildToolContractV2Observability({
+      contracts: contractV2Entries,
+      registeredToolNames: allNames,
+    });
+    const toolContractV2Observability = {
+      counts: contractV2Observability.summary,
+      contracts: contractV2Observability.contracts,
+    };
     const disabledToolContractNamesConfigured = readConfiguredPromptExperimentToolContracts();
     const toolBehaviorObservability = buildToolBehaviorObservability({
       contracts: ctx.toolExecutor.getContracts(
@@ -237,6 +256,7 @@ export async function handleToolsListWithQueryRuntime(
         detail: {
           toolCount: allNames.length,
           contractCount: contractEntries.length,
+          contractV2Count: contractV2Entries.length,
           behaviorContractCount: toolBehaviorObservability.counts.includedContractCount,
           taskBound: Boolean(visibilityTask),
         },
@@ -376,6 +396,7 @@ export async function handleToolsListWithQueryRuntime(
         plugins: pluginIds,
         skills,
         contracts,
+        toolContractV2Observability,
         toolBehaviorObservability,
         visibility,
         mcpVisibility,

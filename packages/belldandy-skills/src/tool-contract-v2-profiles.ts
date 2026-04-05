@@ -1,0 +1,713 @@
+import type { ToolContract } from "./tool-contract.js";
+import type { ToolContractV2 } from "./tool-contract-v2.js";
+
+type ToolContractV2Profile = Partial<Pick<
+  ToolContractV2,
+  | "family"
+  | "riskLevel"
+  | "needsPermission"
+  | "isReadOnly"
+  | "isConcurrencySafe"
+  | "activityDescription"
+  | "outputPersistencePolicy"
+  | "channels"
+  | "safeScopes"
+  | "recommendedWhen"
+  | "avoidWhen"
+  | "confirmWhen"
+  | "preflightChecks"
+  | "fallbackStrategy"
+  | "expectedOutput"
+  | "sideEffectSummary"
+  | "userVisibleRiskNote"
+>>;
+
+function createBrowserInteractiveProfile(input: {
+  activityDescription: string;
+  expectedOutput: readonly string[];
+  confirmWhen: readonly string[];
+  preflightChecks: readonly string[];
+  sideEffectSummary: readonly string[];
+  fallbackStrategy: readonly string[];
+  userVisibleRiskNote: string;
+  outputPersistencePolicy?: ToolContract["outputPersistencePolicy"];
+}): ToolContractV2Profile {
+  return {
+    family: "browser",
+    riskLevel: "medium",
+    needsPermission: true,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: input.activityDescription,
+    outputPersistencePolicy: input.outputPersistencePolicy ?? "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["bridge-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need browser state, DOM context, or authenticated page interaction that plain HTTP fetch cannot provide",
+      "Need to drive a concrete UI step inside the active browser session instead of manipulating workspace files",
+    ],
+    avoidWhen: [
+      "The same result can be obtained from web_fetch, browser_get_content, or browser_snapshot without mutating page state",
+      "The interaction target is still ambiguous and you have not captured enough page context to act precisely",
+    ],
+    confirmWhen: [...input.confirmWhen],
+    preflightChecks: [...input.preflightChecks],
+    fallbackStrategy: [...input.fallbackStrategy],
+    expectedOutput: [...input.expectedOutput],
+    sideEffectSummary: [...input.sideEffectSummary],
+    userVisibleRiskNote: input.userVisibleRiskNote,
+  };
+}
+
+function createBrowserReadProfile(input: {
+  activityDescription: string;
+  expectedOutput: readonly string[];
+  preflightChecks: readonly string[];
+  fallbackStrategy: readonly string[];
+  sideEffectSummary: readonly string[];
+  userVisibleRiskNote: string;
+  outputPersistencePolicy?: ToolContract["outputPersistencePolicy"];
+}): ToolContractV2Profile {
+  return {
+    family: "browser",
+    riskLevel: "low",
+    needsPermission: true,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: input.activityDescription,
+    outputPersistencePolicy: input.outputPersistencePolicy ?? "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["bridge-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need browser-rendered page content, DOM structure, or interactive element references from the active session",
+      "Need to inspect what the live page shows after navigation, login, or client-side rendering",
+    ],
+    avoidWhen: [
+      "The page content can be retrieved more cheaply with web_fetch or file_read without browser state",
+      "You only need to mutate the page and have not first captured enough content or snapshot context to act safely",
+    ],
+    confirmWhen: [
+      "The active page contains sensitive authenticated data or user-generated content that should not be copied broadly",
+    ],
+    preflightChecks: [...input.preflightChecks],
+    fallbackStrategy: [...input.fallbackStrategy],
+    expectedOutput: [...input.expectedOutput],
+    sideEffectSummary: [...input.sideEffectSummary],
+    userVisibleRiskNote: input.userVisibleRiskNote,
+  };
+}
+
+const TOOL_CONTRACT_V2_PROFILES: Record<string, ToolContractV2Profile> = {
+  run_command: {
+    family: "command-exec",
+    riskLevel: "critical",
+    needsPermission: true,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: "Execute a shell command on the host inside allowed workspace boundaries",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["privileged"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need a short non-interactive shell command to inspect repo state, build output, or process diagnostics",
+      "Need host toolchain behavior that cannot be expressed through dedicated workspace or patch tools",
+    ],
+    avoidWhen: [
+      "The task requires an interactive terminal session, TUI program, or long-lived manual process",
+      "A file, patch, or catalog tool can provide the same result more safely and with less blast radius",
+    ],
+    confirmWhen: [
+      "The command writes files outside the obvious target path, mutates environment variables, or launches long-lived processes",
+      "The command uses shell control operators, redirection, or broad globs that materially expand the execution scope",
+    ],
+    preflightChecks: [
+      "State the intended cwd, expected side effects, and whether stdout/stderr are the only outputs you need",
+      "Check safelist, blocklist, and whether the command may touch network, external services, or privileged paths",
+    ],
+    fallbackStrategy: [
+      "Prefer workspace and patch tools when you only need repository state or a deterministic file edit",
+      "Switch to terminal session tooling only when the workflow truly requires an interactive shell",
+    ],
+    expectedOutput: [
+      "Primary stdout text, with stderr or validation failures surfaced as tool error metadata when relevant",
+      "Blocked executions should explain the policy reason instead of partially running the command",
+    ],
+    sideEffectSummary: [
+      "May create or modify files, spawn subprocesses, and mutate external state depending on the command body",
+      "Command validation reduces blast radius but does not make a destructive command inherently safe",
+    ],
+    userVisibleRiskNote: "宿主机命令执行工具。执行前应确认 cwd、命令文本、影响范围，以及失败后的回滚路径。",
+  },
+  apply_patch: {
+    family: "patch",
+    riskLevel: "high",
+    needsPermission: true,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: "Apply a structured patch to one or more workspace files",
+    outputPersistencePolicy: "artifact",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["privileged"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need a reviewable multi-file code change with explicit add, update, move, or delete hunks",
+      "Need to keep diffs minimal while preserving exact edit intent and current file context",
+    ],
+    avoidWhen: [
+      "You have not re-read the current file content or localized the required edit yet",
+      "The change is generated output or bulk formatting that should come from a formatter or build step",
+    ],
+    confirmWhen: [
+      "The patch deletes, moves, or rewrites multiple files, especially user-authored files",
+      "The patch would introduce substantial new logic into a file that already exceeds 3000 lines",
+    ],
+    preflightChecks: [
+      "Re-read the target content and verify the patch hunk context matches the current file state",
+      "If the target file already exceeds 3000 lines, move new feature logic into a new file and keep the original file to minimal wiring",
+      "On complex webchat surfaces, prefer refining existing modules instead of adding non-essential new UI elements",
+    ],
+    fallbackStrategy: [
+      "Use file_write only for brand-new generated output or when full-file replacement is genuinely clearer",
+      "If the patch scope is broad, split it into smaller patches and verify after each step",
+    ],
+    expectedOutput: [
+      "JSON text with patch summary buckets such as added, modified, and deleted files",
+      "Patch parse or apply failures should be returned as explicit tool errors",
+    ],
+    sideEffectSummary: [
+      "Can create, update, move, or delete multiple workspace files in one call",
+      "A small patch is review-friendly, but a broad patch can still hide large behavioral changes",
+    ],
+    userVisibleRiskNote: "首选代码修改工具，但并不天然安全。涉及删除、移动、多文件改动或超大文件时要主动收紧范围。",
+  },
+  delegate_task: {
+    family: "session-orchestration",
+    riskLevel: "medium",
+    needsPermission: false,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: "Delegate a task to a specific sub-agent profile",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need a bounded subtask with a clear owner, expected output, and non-overlapping write scope",
+      "Need to offload a sidecar investigation or implementation slice while keeping the main thread moving",
+    ],
+    avoidWhen: [
+      "The immediate next local step is blocked on this result and local execution is faster",
+      "The task boundary, write scope, or success criteria are still ambiguous",
+    ],
+    confirmWhen: [
+      "The delegated task may edit the same files as the main thread or another sub-agent",
+      "The delegated instruction is broad enough that duplicated work or failure would be expensive",
+    ],
+    preflightChecks: [
+      "Specify ownership, expected artifact, relevant paths, and what the sub-agent must not touch",
+      "Check whether the delegated task is genuinely parallelizable or whether local execution is simpler",
+    ],
+    fallbackStrategy: [
+      "Keep the work local when coordination overhead exceeds the expected latency win",
+      "Defer delegation until you can state the deliverable and boundaries in one or two concrete sentences",
+    ],
+    expectedOutput: [
+      "Status text plus optional task ID, session ID, output path, and sub-agent result",
+      "Failures should still include sub-agent error context for triage",
+    ],
+    sideEffectSummary: [
+      "Creates a subtask or sub-agent execution that may independently read, write, and call tools",
+      "Can increase coordination cost and merge pressure even when the delegated work succeeds",
+    ],
+    userVisibleRiskNote: "委托本身风险中等，但会把复杂度转移到协作边界。下发前要写清 ownership、交付物和禁区。",
+  },
+  delegate_parallel: {
+    family: "session-orchestration",
+    riskLevel: "medium",
+    needsPermission: false,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: "Delegate multiple tasks to sub-agents in parallel",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need several independent subtasks to run concurrently with clear ownership boundaries",
+      "Need aggregate results from multiple specialized agents without serial handoff latency",
+    ],
+    avoidWhen: [
+      "The tasks depend on each other, share the same write scope, or need tight serial coordination",
+      "The delegation plan is still vague enough that parallel execution would mostly create merge noise",
+    ],
+    confirmWhen: [
+      "Two or more delegated tasks may touch the same files, external systems, or approval-requiring tools",
+      "The plan depends on waiting for one result before another task can be meaningfully interpreted",
+    ],
+    preflightChecks: [
+      "Split the work into independent tasks with distinct outputs, paths, and ownership boundaries",
+      "Define how you will integrate results and which task, if any, is allowed to block the main thread",
+    ],
+    fallbackStrategy: [
+      "Use delegate_task for a single bounded subtask",
+      "Keep the work local when parallel coordination overhead outweighs the expected speedup",
+    ],
+    expectedOutput: [
+      "Aggregated status text summarizing succeeded and failed tasks plus per-task outputs",
+      "Each child result may include task IDs, session IDs, and output paths when available",
+    ],
+    sideEffectSummary: [
+      "Creates multiple subtasks that may execute and mutate workspace state concurrently",
+      "Parallel success can still produce overlapping edits, duplicate side effects, or costly integration work",
+    ],
+    userVisibleRiskNote: "并行委托的主要风险不是单个任务失败，而是边界不清导致的并发写冲突和集成成本。",
+  },
+  file_write: {
+    family: "workspace-write",
+    riskLevel: "high",
+    needsPermission: true,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: "Write or edit a file inside the workspace",
+    outputPersistencePolicy: "artifact",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["privileged"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need to create a new module or write a file artifact after the exact target path and mode are known",
+      "Need append, replace, insert, or base64 write modes that apply_patch does not express cleanly",
+    ],
+    avoidWhen: [
+      "A localized code change can be expressed as a smaller and more reviewable apply_patch diff",
+      "The target path, encoding, overwrite scope, or file ownership is still ambiguous",
+    ],
+    confirmWhen: [
+      "The write targets dotfiles, binary/base64 content, broad overwrite, or other privileged paths",
+      "The write would expand a file that already exceeds 3000 lines instead of externalizing new logic",
+    ],
+    preflightChecks: [
+      "Confirm path, mode, encoding, allowed path policy, and whether createDirs is intended",
+      "If the target file already exceeds 3000 lines, place new feature logic in a new file and leave only minimal wiring behind",
+      "For webchat, prefer folding non-critical changes into existing modules rather than adding new UI surfaces",
+    ],
+    fallbackStrategy: [
+      "Prefer apply_patch for reviewable code edits and smaller diffs",
+      "Read the target file or create a new sibling module before overwriting a large existing file",
+    ],
+    expectedOutput: [
+      "JSON text including path, bytesWritten, mode, encoding, and totalSize",
+      "Replace or insert modes may fail with explicit validation errors for missing files or invalid ranges",
+    ],
+    sideEffectSummary: [
+      "Creates or mutates workspace files and may set executable bits on shell scripts",
+      "Overwrite or base64 writes can destroy recoverable context if the target was user-authored",
+    ],
+    userVisibleRiskNote: "文件写入是高风险工具。写入前应确认路径、模式、编码、文件归属，以及是否在放大超大文件。",
+  },
+  file_delete: {
+    family: "workspace-write",
+    riskLevel: "high",
+    needsPermission: true,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    activityDescription: "Delete a file from the workspace",
+    outputPersistencePolicy: "artifact",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["privileged"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need to remove a known workspace file that is truly obsolete, generated, or explicitly replaced",
+      "Need to clean up an explicit file path after migration, extraction, or file split work is complete",
+    ],
+    avoidWhen: [
+      "The file may still be referenced, or a move, archive, or edit would preserve more context",
+      "The delete target was inferred from a broad pattern rather than explicitly identified",
+    ],
+    confirmWhen: [
+      "The file is user-authored, not obviously generated, or referenced by code you have not checked",
+      "The delete affects a migration path, shared docs, or anything without a clear recovery path",
+    ],
+    preflightChecks: [
+      "Confirm exact path, workspace scope, and whether the file is generated, temporary, or source-controlled",
+      "Search references before deleting a file that might still be imported, linked, or documented",
+    ],
+    fallbackStrategy: [
+      "Prefer apply_patch or file_write when archiving, replacing, or deprecating the file is safer than deletion",
+      "If intent is uncertain, keep the file and record the debt instead of deleting on speculation",
+    ],
+    expectedOutput: [
+      "JSON text with path and deleted status on success",
+      "Missing file, permission, or policy violations should be returned as explicit errors",
+    ],
+    sideEffectSummary: [
+      "Removes a workspace file and may break imports, docs, or scripts that still reference it",
+      "Deletion is the least reversible workspace mutation unless version control or backups exist",
+    ],
+    userVisibleRiskNote: "删除是最难回滚的工作区变更之一。除非路径、引用和恢复路径都清楚，否则不要轻易执行。",
+  },
+  file_read: {
+    family: "workspace-read",
+    riskLevel: "low",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "Read a file from the workspace or an allowed extra workspace root",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need the exact current contents of a known file before editing, reviewing, or answering from repository context",
+      "Need a bounded workspace read with explicit path control instead of executing shell commands",
+    ],
+    avoidWhen: [
+      "You do not yet know the target path and should search or list first",
+      "The request is really about editing or generating content rather than reading the current file state",
+    ],
+    confirmWhen: [
+      "The file may contain secrets, credentials, or personal data even if the path itself is not blocked",
+    ],
+    preflightChecks: [
+      "Confirm the path, expected encoding, and whether partial reads or maxBytes truncation could hide relevant context",
+      "Prefer reading a focused file over dumping many large files into the context window",
+    ],
+    fallbackStrategy: [
+      "Use list_files or search tooling first when the target file is not yet localized",
+      "Use browser or network tools only when the source of truth is not in the workspace",
+    ],
+    expectedOutput: [
+      "JSON text including path, size, bytesRead, truncation flag, encoding, and content",
+      "Missing file, denied path, or sensitive-path access should return explicit read errors",
+    ],
+    sideEffectSummary: [
+      "Does not mutate the workspace, but may expose sensitive or high-volume content into the model context",
+      "Large reads can still create context pollution if the path or size bounds are not chosen carefully",
+    ],
+    userVisibleRiskNote: "只读工具，但仍要控制路径和体量，避免把无关大文件或潜在敏感内容拉进上下文。",
+  },
+  list_files: {
+    family: "workspace-read",
+    riskLevel: "low",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "List files from the workspace or an allowed extra workspace root",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need to discover project structure, candidate files, or directory boundaries before reading or editing",
+      "Need a bounded directory inventory without executing shell commands",
+    ],
+    avoidWhen: [
+      "You already know the exact file path and should read it directly",
+      "Recursive listing would produce a large noisy tree when a narrower path or depth would suffice",
+    ],
+    confirmWhen: [
+      "The requested path is broad enough that recursive listing could dump a large unrelated tree into context",
+    ],
+    preflightChecks: [
+      "Set the narrowest possible path and recursion depth before listing",
+      "If the workspace contains generated or vendor trees, avoid broad recursive scans unless they are directly relevant",
+    ],
+    fallbackStrategy: [
+      "Use file_read once you have the exact target file",
+      "Use search tooling when you need semantic matches instead of raw directory enumeration",
+    ],
+    expectedOutput: [
+      "JSON text with normalized path, totalEntries, recursion flags, and typed directory/file entries",
+      "Denied paths or non-directory targets should return explicit errors",
+    ],
+    sideEffectSummary: [
+      "Read-only directory enumeration, but can still flood context with irrelevant file inventories if scoped poorly",
+    ],
+    userVisibleRiskNote: "目录枚举本身风险低，真正的问题是范围过大造成上下文噪声和判断漂移。",
+  },
+  web_fetch: {
+    family: "network-read",
+    riskLevel: "medium",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "Fetch content from an external HTTP or HTTPS URL",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need a direct HTTP/HTTPS fetch for public web content or API responses without opening a browser session",
+      "Need response headers, status codes, or truncated body content as structured JSON output",
+    ],
+    avoidWhen: [
+      "The target requires authenticated browser state, client-side rendering, or page interaction",
+      "The request touches unstable or untrusted network targets when local or workspace sources are sufficient",
+    ],
+    confirmWhen: [
+      "The URL target is unfamiliar enough that domain allowlist, denylist, or SSRF constraints need re-checking",
+      "A POST request would send user-provided payload to an external service",
+    ],
+    preflightChecks: [
+      "Confirm protocol, host, HTTP method, payload intent, and whether redirects or private addresses are blocked as expected",
+      "Bound the expected response size and remember that truncation may hide important tail content",
+    ],
+    fallbackStrategy: [
+      "Use browser tools when the target requires rendered DOM or authenticated session state",
+      "Use workspace or memory tools when the source of truth is already local",
+    ],
+    expectedOutput: [
+      "JSON text including HTTP status, headers, response body, truncation flag, and byte count",
+      "Timeout, SSRF guard, and domain-policy failures should surface as explicit fetch errors",
+    ],
+    sideEffectSummary: [
+      "Does not mutate the workspace, but does send outbound network traffic and may disclose request headers or POST payloads to external services",
+    ],
+    userVisibleRiskNote: "网络读取工具。虽然是只读，但会产生真实外联流量，POST 请求和不熟悉域名要特别谨慎。",
+  },
+  memory_search: {
+    family: "memory",
+    riskLevel: "low",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "Search indexed runtime memory and conversation history",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need semantic or keyword lookup across indexed memory, session history, MEMORY.md, or memory files",
+      "Need a compact recall step before deciding whether to open a specific memory file or workspace source",
+    ],
+    avoidWhen: [
+      "You already know the exact memory file path and should use memory_read directly",
+      "The source of truth is a current workspace file rather than indexed memory content",
+    ],
+    confirmWhen: [
+      "The query is broad enough that recalled content may pull unrelated historical or personal context into the conversation",
+    ],
+    preflightChecks: [
+      "Set detail_level intentionally so summary mode does not hide needed evidence and full mode does not explode context size",
+      "Use filters such as memory_type, channel, topic, or date range when the memory corpus is broad",
+    ],
+    fallbackStrategy: [
+      "Use memory_read once search has localized the relevant memory file or source path",
+      "Use file_read when the needed content lives in the workspace rather than the indexed memory surface",
+    ],
+    expectedOutput: [
+      "Formatted text results with source path, score, and either summary or full content snippets",
+      "No-match cases should return an explicit no-results message instead of empty text",
+    ],
+    sideEffectSummary: [
+      "Read-only retrieval from indexed memory, but recalled content can expand model context with historical facts or prior conversations",
+      "Search also links retrieved memories to current task usage, affecting observability rather than mutating memory content",
+    ],
+    userVisibleRiskNote: "记忆检索本身只读，但广义查询容易把不相关的历史内容拉进当前上下文，过滤条件要尽量具体。",
+  },
+  memory_read: {
+    family: "memory",
+    riskLevel: "low",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "Read a structured memory file from the workspace memory area",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need the exact contents of MEMORY.md or a specific daily memory file after you already know the target path",
+      "Need line-bounded reading of a memory file for verification or follow-up summarization",
+    ],
+    avoidWhen: [
+      "You do not yet know which memory file is relevant and should search first",
+      "The needed source is a normal workspace file rather than the memory area",
+    ],
+    confirmWhen: [
+      "The target memory file may contain sensitive personal context, shared memory, or prior task details that are not all relevant now",
+    ],
+    preflightChecks: [
+      "Confirm the memory file path and whether line-bounded reading is enough instead of dumping the whole file",
+      "Prefer the narrowest read slice that still preserves the evidence you need",
+    ],
+    fallbackStrategy: [
+      "Use memory_search to localize candidate files before reading one directly",
+      "Use file_read when the path is outside the structured memory area",
+    ],
+    expectedOutput: [
+      "Text output that includes normalized path, total line count, and the selected memory file content",
+    ],
+    sideEffectSummary: [
+      "Does not mutate memory files, but may expose historical notes or personal data into current context",
+      "Successful reads also mark the source memory as used for task-level observability",
+    ],
+    userVisibleRiskNote: "记忆文件读取是只读操作，但仍可能把高敏感历史上下文拉进当前任务，需要控制路径和范围。",
+  },
+  memory_get: {
+    family: "memory",
+    riskLevel: "low",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "Return a deprecated memory retrieval notice",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Only for legacy flows that still call memory_get and need explicit migration guidance",
+    ],
+    avoidWhen: [
+      "Any real memory read or search request. Prefer memory_read, memory_search, or file_read instead",
+    ],
+    confirmWhen: [],
+    preflightChecks: [
+      "If you intended to read memory content, switch to memory_read or memory_search before executing",
+    ],
+    fallbackStrategy: [
+      "Use memory_search to find relevant memory content",
+      "Use memory_read or file_read to open a known target file directly",
+    ],
+    expectedOutput: [
+      "Deprecated guidance text that tells the caller which replacement tool to use",
+    ],
+    sideEffectSummary: [
+      "No state mutation and no memory content read; this tool only returns migration guidance",
+    ],
+    userVisibleRiskNote: "兼容性工具。它不会返回真实记忆内容，只会提示迁移到新工具。",
+  },
+  browser_open: createBrowserInteractiveProfile({
+    activityDescription: "Open a new browser tab at the specified URL",
+    expectedOutput: [
+      "Browser status text confirming that a new tab was opened and bound to the requested URL",
+    ],
+    confirmWhen: [
+      "Opening the target URL may switch context to a sensitive authenticated site or user session",
+    ],
+    preflightChecks: [
+      "Validate the target URL and confirm that a new tab is preferable to reusing the current page",
+      "Check whether the task really needs live browser state or can use web_fetch instead",
+    ],
+    fallbackStrategy: [
+      "Use web_fetch for static HTTP reads when a live browser session is unnecessary",
+      "Use browser_navigate when you intentionally want to reuse the current active tab",
+    ],
+    sideEffectSummary: [
+      "Creates a new live browser tab and changes the active browsing surface for subsequent browser tools",
+    ],
+    userVisibleRiskNote: "打开新标签页会改变后续浏览器工具的工作上下文，尤其要注意账号态页面和敏感站点。",
+  }),
+  browser_navigate: createBrowserInteractiveProfile({
+    activityDescription: "Navigate the active browser page to a URL",
+    expectedOutput: [
+      "Browser status text confirming navigation of the active page",
+    ],
+    confirmWhen: [
+      "Navigation would discard the current page context before you have captured needed content or snapshot state",
+    ],
+    preflightChecks: [
+      "Confirm the active tab is the one you intend to reuse before navigating",
+      "Capture content or snapshot state first if the current page may be hard to recover",
+    ],
+    fallbackStrategy: [
+      "Use browser_open if you need to preserve the current page and browse in a new tab",
+      "Use web_fetch if you only need the target page content without browser state",
+    ],
+    sideEffectSummary: [
+      "Replaces the active page and can discard current DOM context, form state, or navigation history relevance",
+    ],
+    userVisibleRiskNote: "复用当前标签导航前，先确认不会丢失你后面还要依赖的页面上下文。",
+  }),
+  browser_click: createBrowserInteractiveProfile({
+    activityDescription: "Click an element on the active browser page",
+    expectedOutput: [
+      "Browser status text naming the selector or snapshot-derived target that was clicked",
+    ],
+    confirmWhen: [
+      "The click may submit a form, trigger irreversible UI actions, or navigate away from the current page",
+    ],
+    preflightChecks: [
+      "Use browser_snapshot or page content to verify the target element before clicking",
+      "Check whether the click has side effects such as submit, purchase, delete, or modal dismissal behavior",
+    ],
+    fallbackStrategy: [
+      "Use browser_snapshot or browser_get_content first when the target element is not fully identified",
+      "Prefer non-mutating read tools when the task only requires inspection",
+    ],
+    sideEffectSummary: [
+      "May trigger navigation, submissions, state changes, or other irreversible actions in the live browser session",
+    ],
+    userVisibleRiskNote: "浏览器点击是典型高不确定性交互。未确认目标和副作用前，不要直接点。",
+  }),
+  browser_type: createBrowserInteractiveProfile({
+    activityDescription: "Type text into an element on the active browser page",
+    expectedOutput: [
+      "Browser status text describing where the text was typed",
+    ],
+    confirmWhen: [
+      "Typing may overwrite existing input, submit secrets, or trigger live validation or autosave behavior",
+    ],
+    preflightChecks: [
+      "Verify the target field and current page state before typing",
+      "Check whether the text contains secrets or user-specific data that should not be sent to the page",
+    ],
+    fallbackStrategy: [
+      "Use browser_snapshot first when the correct target element is still ambiguous",
+      "Avoid typing if a read-only inspection is sufficient",
+    ],
+    sideEffectSummary: [
+      "Mutates form state on the live page and may trigger autosave, validation, or downstream browser actions",
+    ],
+    userVisibleRiskNote: "输入文本可能触发表单状态变化、自动保存或泄露敏感内容，目标元素必须先确认。",
+  }),
+  browser_screenshot: createBrowserInteractiveProfile({
+    activityDescription: "Capture a screenshot from the active browser page",
+    outputPersistencePolicy: "artifact",
+    expectedOutput: [
+      "Screenshot file path text pointing to the stored PNG artifact",
+    ],
+    confirmWhen: [
+      "The page contains sensitive account, personal, or internal data that should not be persisted as an artifact",
+    ],
+    preflightChecks: [
+      "Confirm the page is displaying the intended state before capturing the screenshot",
+      "Check whether saving a local image artifact is acceptable for this task",
+    ],
+    fallbackStrategy: [
+      "Use browser_snapshot or browser_get_content when text structure is sufficient and an image artifact is unnecessary",
+    ],
+    sideEffectSummary: [
+      "Writes a screenshot artifact to the workspace screenshots directory and persists whatever is visible on the page",
+    ],
+    userVisibleRiskNote: "截图会把当前可见内容落盘成工件，涉及隐私、账号态或内部信息时要先确认。",
+  }),
+  browser_get_content: createBrowserReadProfile({
+    activityDescription: "Read content from the active browser page",
+    expectedOutput: [
+      "Text output in markdown, plain text, or HTML form, truncated when content exceeds the configured limit",
+    ],
+    preflightChecks: [
+      "Choose markdown, text, or HTML based on whether you need readability, raw content, or exact source structure",
+      "Wait for the page to finish meaningful rendering before capturing content",
+    ],
+    fallbackStrategy: [
+      "Use browser_snapshot when you need interactive element IDs and DOM affordance instead of page prose",
+      "Use web_fetch when browser state and client-side rendering are unnecessary",
+    ],
+    sideEffectSummary: [
+      "Read-only page capture, but may pull large amounts of rendered or authenticated content into the conversation context",
+    ],
+    userVisibleRiskNote: "页面正文抓取是只读操作，但要留意账号态页面和超长内容带来的信息泄露与上下文污染。",
+  }),
+  browser_snapshot: createBrowserReadProfile({
+    activityDescription: "Capture an interactive DOM snapshot of the active page",
+    expectedOutput: [
+      "Compressed DOM snapshot text with stable numeric IDs for interactive elements",
+    ],
+    preflightChecks: [
+      "Refresh snapshot state after navigation or major DOM changes before using element IDs for clicks or typing",
+      "Use snapshot when you need action targets, not full article text",
+    ],
+    fallbackStrategy: [
+      "Use browser_get_content when you need readable article text or raw HTML instead of interaction IDs",
+      "Use browser_screenshot only when visual appearance matters more than DOM/actionability",
+    ],
+    sideEffectSummary: [
+      "Read-only DOM capture, but stale snapshots can mislead later browser_click or browser_type actions if the page changed",
+    ],
+    userVisibleRiskNote: "快照本身只读，但后续若拿旧快照的元素 ID 去操作页面，风险会迅速上升。",
+  }),
+};
+
+export function getToolContractV2Profile(name: string): ToolContractV2Profile | undefined {
+  return TOOL_CONTRACT_V2_PROFILES[name];
+}

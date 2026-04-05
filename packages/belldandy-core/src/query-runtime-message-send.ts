@@ -11,6 +11,7 @@ import { runAgentWithLifecycle } from "./query-runtime-agent-run.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import type { TranscribeOptions, TranscribeResult } from "@belldandy/skills";
+import type { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
 
 type QueryRuntimeLogger = {
   debug: (module: string, message: string, data?: unknown) => void;
@@ -42,6 +43,12 @@ function createPromptDelta(input: {
   };
 }
 
+function toSafeAttachmentConversationDirName(conversationId: string): string {
+  const trimmed = typeof conversationId === "string" ? conversationId.trim() : "";
+  if (!trimmed) return "_";
+  return encodeURIComponent(trimmed).replace(/\./g, "%2E");
+}
+
 type ToolControlPasswordApproval = {
   sanitizedText: string;
 };
@@ -61,6 +68,7 @@ export type MessageSendQueryRuntimeContext = {
     agentRegistry?: AgentRegistry;
     conversationStore: ConversationStore;
     runtimeObserver?: QueryRuntimeObserver<"message.send">;
+    residentAgentRuntime?: ResidentAgentRuntimeRegistry;
   };
   toolControl: {
     confirmationStore?: ToolControlConfirmationStore;
@@ -358,6 +366,7 @@ type MessageSendRunResult = Awaited<ReturnType<typeof runAgentWithLifecycle>>;
 type MessageSendCompletionPolicy = {
   conversationId: string;
   runId: string;
+  agentId: string;
   finalText: string;
   finalTimestampMs: number;
   statusBeforeFinal?: string;
@@ -426,7 +435,12 @@ async function preparePromptWithAttachments(input: {
     conversationId: input.conversationId,
   });
 
-  const attachmentDir = path.join(input.stateDir, "storage", "attachments", input.conversationId);
+  const attachmentDir = path.join(
+    input.stateDir,
+    "storage",
+    "attachments",
+    toSafeAttachmentConversationDirName(input.conversationId),
+  );
   await fs.mkdir(attachmentDir, { recursive: true });
 
   const attachmentPrompts: string[] = [];
@@ -918,6 +932,7 @@ function createMessageSendStreamAdapter(input: {
   queryRuntime: QueryRuntime<"message.send">;
   conversationId: string;
   runId: string;
+  agentId: string;
   effectiveUserUuid?: string;
   from?: string;
   isTts: boolean;
@@ -946,6 +961,7 @@ function createMessageSendStreamAdapter(input: {
           type: "event",
           event: "agent.status",
           payload: {
+            agentId: input.agentId,
             conversationId: input.conversationId,
             runId: input.runId,
             status: item.status,
@@ -1058,6 +1074,7 @@ function emitMessageSendFinalFrame(input: {
   ctx: MessageSendQueryRuntimeContext;
   conversationId: string;
   runId: string;
+  agentId: string;
   text: string;
   timestampMs: number;
 }): void {
@@ -1065,6 +1082,7 @@ function emitMessageSendFinalFrame(input: {
     type: "event",
     event: "chat.final",
     payload: {
+      agentId: input.agentId,
       conversationId: input.conversationId,
       runId: input.runId,
       role: "assistant",
@@ -1086,6 +1104,7 @@ function applyMessageSendCompletionPolicy(input: {
       type: "event",
       event: "agent.status",
       payload: {
+        agentId: policy.agentId,
         conversationId: policy.conversationId,
         runId: policy.runId,
         status: policy.statusBeforeFinal,
@@ -1107,11 +1126,12 @@ function applyMessageSendCompletionPolicy(input: {
 
   emitMessageSendFinalFrame({
     ctx,
-    conversationId: policy.conversationId,
-    runId: policy.runId,
-    text: policy.finalText,
-    timestampMs: policy.finalTimestampMs,
-  });
+      conversationId: policy.conversationId,
+      runId: policy.runId,
+      agentId: policy.agentId,
+      text: policy.finalText,
+      timestampMs: policy.finalTimestampMs,
+    });
 
   scheduleMessageSendDigestRefresh({
     ctx,
@@ -1190,6 +1210,8 @@ async function finalizeMessageSendSuccess(input: {
         receivedFinal: input.state.run.hasReceivedFinal(),
         response: "assistant_finalized",
       },
+      statusBeforeFinal: "done",
+      agentId: input.requestedAgentId ?? "default",
       assistantPersistedDetail: {
         assistantTimestampMs: assistantTimestamp,
         receivedFinal: input.state.run.hasReceivedFinal(),
@@ -1205,6 +1227,7 @@ function finalizeMessageSendFailure(input: {
   queryRuntime: QueryRuntime<"message.send">;
   conversationId: string;
   runId: string;
+  requestedAgentId?: string;
   error: unknown;
 }): void {
   input.ctx.runtime.log.error("agent", "Agent run failed", input.error);
@@ -1216,6 +1239,7 @@ function finalizeMessageSendFailure(input: {
     policy: {
       conversationId: input.conversationId,
       runId: input.runId,
+      agentId: input.requestedAgentId ?? "default",
       finalText: `Error: ${String(input.error)}`,
       finalTimestampMs: errorTimestamp,
       statusBeforeFinal: "error",
@@ -1240,6 +1264,8 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
         historyLength: input.history.length,
       },
     });
+    ctx.runtime.residentAgentRuntime?.markStatus(input.requestedAgentId ?? "default", "running");
+    ctx.runtime.residentAgentRuntime?.touchConversation(input.requestedAgentId ?? "default", input.conversationId);
 
     const runInput = buildMessageSendAgentRunInput(input, ctx.media);
     const isTts = ctx.media.ttsEnabled?.() ?? false;
@@ -1248,6 +1274,7 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
       queryRuntime,
       conversationId: input.conversationId,
       runId: input.runId,
+      agentId: input.requestedAgentId ?? "default",
       effectiveUserUuid: input.effectiveUserUuid,
       from: input.from,
       isTts,
@@ -1296,12 +1323,15 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
       runResult,
       state,
     });
+    ctx.runtime.residentAgentRuntime?.markStatus(input.requestedAgentId ?? "default", "idle");
   } catch (error) {
+    ctx.runtime.residentAgentRuntime?.markStatus(input.requestedAgentId ?? "default", "error");
     finalizeMessageSendFailure({
       ctx,
       queryRuntime,
       conversationId: input.conversationId,
       runId: input.runId,
+      requestedAgentId: input.requestedAgentId,
       error,
     });
   }

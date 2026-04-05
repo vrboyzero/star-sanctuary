@@ -20,7 +20,7 @@ import {
   type DurableExtractionRecord,
 } from "@belldandy/memory";
 import { DEFAULT_STATE_DIR_DISPLAY, type TokenUsageUploadConfig } from "@belldandy/protocol";
-import { MockAgent, type AgentPromptDelta, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, type Conversation, type ConversationMessage, type ModelProfile, type CompactionRuntimeReport, type ProviderNativeSystemBlock, type SessionTimelineProjection, type SessionTranscriptExportBundle, type SystemPromptSection } from "@belldandy/agent";
+import { MockAgent, type AgentPromptDelta, type BelldandyAgent, ConversationStore, type AgentRegistry, extractIdentityInfo, isResidentAgentProfile, resolveAgentWorkspaceDir, type Conversation, type ConversationMessage, type ModelProfile, type CompactionRuntimeReport, type ProviderNativeSystemBlock, type SessionTimelineProjection, type SessionTranscriptExportBundle, type SystemPromptSection } from "@belldandy/agent";
 import type {
   GatewayFrame,
   GatewayReqFrame,
@@ -46,6 +46,7 @@ import {
   buildToolBehaviorObservability,
   readConfiguredPromptExperimentToolContracts,
 } from "./tool-behavior-observability.js";
+import { buildToolContractV2Observability } from "./tool-contract-v2-observability.js";
 import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
 import {
   applyToolControlChanges,
@@ -108,18 +109,43 @@ import {
   handleToolsListWithQueryRuntime,
   handleToolsUpdateWithQueryRuntime,
 } from "./query-runtime-tools.js";
+import { handleAgentContractsGetWithQueryRuntime } from "./query-runtime-agent-contracts.js";
+import { buildAgentRoster } from "./query-runtime-agent-roster.js";
+import { ensureResidentAgentSession } from "./query-runtime-agent-sessions.js";
+import { buildResidentAgentDoctorReport } from "./resident-agent-observability.js";
+import {
+  attachResidentExperienceCandidateSourceView,
+  attachResidentExperienceUsageSourceView,
+  attachResidentMemorySourceView,
+  attachResidentMemorySourceViews,
+  attachResidentTaskExperienceSourceView,
+  buildResidentMemoryQueryView,
+} from "./resident-memory-result-view.js";
+import {
+  claimResidentSharedMemoryPromotion,
+  getResidentMemory,
+  listRecentResidentMemory,
+  mergeResidentMemoryStatus,
+  promoteResidentMemoryToShared,
+  reviewResidentSharedMemoryPromotion,
+  resolveResidentSharedMemoryManager,
+  searchResidentMemory,
+} from "./resident-shared-memory.js";
 import {
   handleCommunityMessageWithQueryRuntime,
   handleWebhookReceiveWithQueryRuntime,
   type QueryRuntimeHttpJsonResponse,
 } from "./query-runtime-http.js";
 import { QueryRuntimeTraceStore } from "./query-runtime-trace.js";
+import { ResidentConversationStore } from "./resident-conversation-store.js";
+import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
 import { notifyConversationToolEvent } from "./query-runtime-side-effects.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
 import type { ToolExecutionRuntimeContext } from "@belldandy/skills";
 import {
   checkAndConsumeRestartCooldown,
   formatRestartCooldownMessage,
+  listToolContractsV2,
   publishSkillCandidate,
   TOOL_SETTINGS_CONTROL_NAME,
 } from "@belldandy/skills";
@@ -127,6 +153,7 @@ import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
 import type { GoalManager } from "./goals/manager.js";
+import { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
 
 export type GatewayServerOptions = {
   port: number;
@@ -216,6 +243,8 @@ export type GatewayServerOptions = {
   webhookConfig?: WebhookConfig;
   /** Webhook 幂等性管理器 */
   webhookIdempotency?: IdempotencyManager;
+  /** Resident MemoryManager 组装记录 */
+  residentMemoryManagers?: ScopedMemoryManagerRecord[];
 };
 
 export type GatewayServer = {
@@ -316,12 +345,18 @@ const DEFAULT_METHODS = [
   "subtask.archive",
   "tools.list",
   "tools.update",
+  "agent.contracts.get",
   "agents.prompt.inspect",
   "agents.list",
+  "agents.roster.get",
+  "agent.session.ensure",
   "memory.search",
   "memory.get",
   "memory.recent",
   "memory.stats",
+  "memory.share.promote",
+  "memory.share.claim",
+  "memory.share.review",
   "memory.task.list",
   "memory.task.get",
   "experience.candidate.get",
@@ -724,11 +759,45 @@ function resolveAgentIdentityDir(
   const profile = agentRegistry?.getProfile(resolvedAgentId);
   if (!profile) return null;
 
-  const workspaceDir = profile.workspaceDir?.trim() || profile.id;
+  const workspaceDir = resolveAgentWorkspaceDir(profile);
   return {
     dir: path.join(rootDir, "agents", workspaceDir),
     profileId: profile.id,
   };
+}
+
+function extractScopedMemoryAgentId(params: Record<string, unknown>): string | undefined {
+  if (typeof params.agentId === "string" && params.agentId.trim()) {
+    return params.agentId.trim();
+  }
+  if (typeof params.conversationId === "string" && params.conversationId.trim()) {
+    return undefined;
+  }
+  const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+  if (filter && typeof filter.agentId === "string" && filter.agentId.trim()) {
+    return filter.agentId.trim();
+  }
+  return undefined;
+}
+
+function resolveScopedMemoryManager(params: Record<string, unknown> = {}) {
+  const conversationId = typeof params.conversationId === "string" && params.conversationId.trim()
+    ? params.conversationId.trim()
+    : undefined;
+  const agentId = extractScopedMemoryAgentId(params);
+  return getGlobalMemoryManager({
+    agentId,
+    conversationId,
+  });
+}
+
+function resolveScopedResidentMemoryPolicy(
+  params: Record<string, unknown> = {},
+  records: ScopedMemoryManagerRecord[] = [],
+) {
+  const agentId = extractScopedMemoryAgentId(params) ?? "default";
+  return records.find((item) => item.agentId === agentId)?.policy
+    ?? records.find((item) => item.agentId === "default")?.policy;
 }
 
 function readHeaderValue(headers: http.IncomingHttpHeaders, name: string): string | undefined {
@@ -1142,10 +1211,14 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   await fsp.mkdir(sessionsDir, { recursive: true });
   await fsp.mkdir(avatarDir, { recursive: true });
 
-  const conversationStore = opts.conversationStore ?? new ConversationStore({
+  const conversationStore = opts.conversationStore ?? new ResidentConversationStore({
     ...opts.conversationStoreOptions,
-    dataDir: sessionsDir,
+    stateDir,
+    agentRegistry: opts.agentRegistry,
   });
+  const residentAgentRuntime = new ResidentAgentRuntimeRegistry(
+    opts.agentRegistry?.list().filter((profile) => isResidentAgentProfile(profile)).map((profile) => profile.id) ?? ["default"],
+  );
   const memoryUsageAccounting = new MemoryRuntimeUsageAccounting({
     stateDir,
     logger: {
@@ -1203,7 +1276,26 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   const durableExtractionRuntime = durableExtractionManager
     ? new DurableExtractionRuntime({
       stateDir,
-      extractor: createDurableExtractionSurface(durableExtractionManager),
+      extractor: createDurableExtractionSurface({
+        get isPaused() {
+          return durableExtractionManager.isPaused;
+        },
+        extractMemoriesFromConversation(sessionKey, messages, options) {
+          const scopedManager = getGlobalMemoryManager({
+            conversationId: options?.sourceConversationId ?? sessionKey,
+          }) ?? durableExtractionManager;
+          return scopedManager.extractMemoriesFromConversation(sessionKey, messages, options);
+        },
+        isConversationMemoryExtractionEnabled() {
+          return durableExtractionManager.isConversationMemoryExtractionEnabled();
+        },
+        getConversationMemoryExtractionSupport() {
+          return durableExtractionManager.getConversationMemoryExtractionSupport();
+        },
+        getDurableMemoryGuidance() {
+          return durableExtractionManager.getDurableMemoryGuidance();
+        },
+      }),
       getMessages: async (conversationId) => {
         return conversationStore.getCanonicalExtractionView(conversationId);
       },
@@ -1499,6 +1591,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         broadcastEvent,
         getCompactionRuntimeReport: opts.getCompactionRuntimeReport,
         queryRuntimeTraceStore,
+        residentAgentRuntime,
+        residentMemoryManagers: opts.residentMemoryManagers,
         log,
       });
       if (res) sendRes(ws, res);
@@ -1800,6 +1894,8 @@ async function handleReq(
     broadcastEvent?: (frame: GatewayEventFrame) => void;
     getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
     queryRuntimeTraceStore: QueryRuntimeTraceStore;
+    residentAgentRuntime: ResidentAgentRuntimeRegistry;
+    residentMemoryManagers?: ScopedMemoryManagerRecord[];
   },
 ): Promise<GatewayResFrame | null> {
   const secureMethods = [
@@ -1830,37 +1926,41 @@ async function handleReq(
     "subtask.get",
     "subtask.stop",
     "subtask.archive",
+    "agent.contracts.get",
     "agents.prompt.inspect",
     "tools.update",
     "memory.search",
     "memory.get",
     "memory.recent",
-      "memory.stats",
-      "memory.task.list",
-      "memory.task.get",
-      "experience.candidate.get",
-      "experience.candidate.list",
-      "experience.candidate.accept",
-      "experience.candidate.reject",
-      "experience.usage.get",
-      "experience.usage.list",
-      "experience.usage.stats",
-      "experience.usage.revoke",
-      "goal.create",
-      "goal.list",
-      "goal.get",
-      "goal.resume",
-      "goal.pause",
-      "goal.handoff.generate",
-      "goal.retrospect.generate",
-      "goal.experience.suggest",
-      "goal.method_candidates.generate",
-      "goal.skill_candidates.generate",
-      "goal.flow_patterns.generate",
-      "goal.flow_patterns.cross_goal",
-      "goal.review_governance.summary",
-      "goal.approval.scan",
-      "goal.suggestion_review.list",
+    "memory.stats",
+    "memory.share.promote",
+    "memory.share.claim",
+    "memory.share.review",
+    "memory.task.list",
+    "memory.task.get",
+    "experience.candidate.get",
+    "experience.candidate.list",
+    "experience.candidate.accept",
+    "experience.candidate.reject",
+    "experience.usage.get",
+    "experience.usage.list",
+    "experience.usage.stats",
+    "experience.usage.revoke",
+    "goal.create",
+    "goal.list",
+    "goal.get",
+    "goal.resume",
+    "goal.pause",
+    "goal.handoff.generate",
+    "goal.retrospect.generate",
+    "goal.experience.suggest",
+    "goal.method_candidates.generate",
+    "goal.skill_candidates.generate",
+    "goal.flow_patterns.generate",
+    "goal.flow_patterns.cross_goal",
+    "goal.review_governance.summary",
+    "goal.approval.scan",
+    "goal.suggestion_review.list",
       "goal.suggestion_review.workflow.set",
       "goal.suggestion_review.decide",
       "goal.suggestion_review.escalate",
@@ -1936,13 +2036,31 @@ async function handleReq(
       if (!parsed.ok) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
       }
+      const resolvedAgentId = typeof parsed.value.agentId === "string" && parsed.value.agentId.trim()
+        ? parsed.value.agentId.trim()
+        : "default";
+      const resolvedConversationId = parsed.value.conversationId?.trim()
+        ? parsed.value.conversationId.trim()
+        : ensureResidentAgentSession({
+          agentId: resolvedAgentId,
+          agentRegistry: ctx.agentRegistry,
+          residentAgentRuntime: ctx.residentAgentRuntime,
+          conversationStore: ctx.conversationStore,
+        }).conversationId;
+      ctx.residentAgentRuntime.touchConversation(resolvedAgentId, resolvedConversationId, {
+        main: resolvedConversationId === ctx.residentAgentRuntime.get(resolvedAgentId).mainConversationId,
+      });
 
       try {
         return await handleMessageSendWithQueryRuntime({
           request: {
             ws,
             requestId: req.id,
-            params: parsed.value,
+            params: {
+              ...parsed.value,
+              agentId: resolvedAgentId,
+              conversationId: resolvedConversationId,
+            },
             clientId: ctx.clientId,
             userUuid: ctx.userUuid,
             stateDir: ctx.stateDir,
@@ -1953,6 +2071,7 @@ async function handleReq(
             agentRegistry: ctx.agentRegistry,
             conversationStore: ctx.conversationStore,
             runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"message.send">(),
+            residentAgentRuntime: ctx.residentAgentRuntime,
           },
           toolControl: {
             confirmationStore: ctx.toolControlConfirmationStore,
@@ -2239,6 +2358,30 @@ async function handleReq(
         >(),
       }, {
         disabled: params.disabled,
+      });
+    }
+
+    case "agent.contracts.get": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const requestedTaskId = typeof params.taskId === "string" && params.taskId.trim()
+        ? params.taskId.trim()
+        : undefined;
+      const visibilityAgentId = typeof params.agentId === "string" && params.agentId.trim()
+        ? params.agentId.trim()
+        : undefined;
+      const visibilityConversationId = typeof params.conversationId === "string" && params.conversationId.trim()
+        ? params.conversationId.trim()
+        : undefined;
+      return handleAgentContractsGetWithQueryRuntime({
+        requestId: req.id,
+        toolExecutor: ctx.toolExecutor,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "agent.contracts.get"
+        >(),
+      }, {
+        taskId: requestedTaskId,
+        agentId: visibilityAgentId,
+        conversationId: visibilityConversationId,
       });
     }
 
@@ -2593,6 +2736,24 @@ async function handleReq(
           experiment?: ReturnType<typeof buildToolBehaviorObservability>["experiment"];
         }
         | undefined;
+      let toolContractV2Observability:
+        | {
+          requested: {
+            agentId?: string;
+            conversationId?: string;
+            taskId?: string;
+          };
+          visibilityContext: {
+            agentId: string;
+            conversationId: string | null;
+            taskId?: string;
+            launchSpec?: ToolExecutionRuntimeContext["launchSpec"];
+          };
+          summary: ReturnType<typeof buildToolContractV2Observability>["summary"];
+          contracts: ReturnType<typeof buildToolContractV2Observability>["contracts"];
+        }
+        | undefined;
+      let residentAgents: ReturnType<typeof buildResidentAgentDoctorReport> | undefined;
 
       if (conversationId) {
         const conversationSnapshot = ctx.conversationStore.get(conversationId);
@@ -2747,6 +2908,49 @@ async function handleReq(
         }
       }
 
+      if (ctx.agentRegistry && (ctx.residentMemoryManagers?.length ?? 0) > 0) {
+        const roster = await buildAgentRoster({
+          stateDir: ctx.stateDir,
+          agentRegistry: ctx.agentRegistry,
+          residentAgentRuntime: ctx.residentAgentRuntime,
+        });
+        const memoryPolicyByAgentId = new Map(
+          (ctx.residentMemoryManagers ?? []).map((record) => [record.agentId, record.policy] as const),
+        );
+        const sharedGovernanceByAgentId = new Map(
+          (ctx.residentMemoryManagers ?? []).map((record) => [record.agentId, buildSharedGovernanceCounts(record.manager, record.policy)] as const),
+        );
+        residentAgents = buildResidentAgentDoctorReport({
+          agents: roster
+            .map((agent) => {
+              const policy = memoryPolicyByAgentId.get(agent.id);
+              if (!policy) return undefined;
+              return {
+                id: agent.id,
+                displayName: agent.displayName,
+                model: agent.model,
+                kind: "resident" as const,
+                workspaceBinding: agent.workspaceBinding,
+                sessionNamespace: agent.sessionNamespace,
+                memoryMode: agent.memoryMode,
+                status: agent.status,
+                mainConversationId: agent.mainConversationId,
+                lastConversationId: agent.lastConversationId,
+                lastActiveAt: agent.lastActiveAt,
+                memoryPolicy: policy,
+                sharedGovernance: sharedGovernanceByAgentId.get(agent.id),
+              };
+            })
+            .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+        });
+        checks.push({
+          id: "resident_agents",
+          name: "Resident Agents",
+          status: residentAgents.summary.totalCount > 0 ? "pass" : "warn",
+          message: residentAgents.summary.headline,
+        });
+      }
+
       if (ctx.toolExecutor) {
         const toolAgentId = typeof params.toolAgentId === "string" && params.toolAgentId.trim()
           ? params.toolAgentId.trim()
@@ -2774,6 +2978,12 @@ async function handleReq(
           contracts: visibleContracts,
           disabledContractNamesConfigured: readConfiguredPromptExperimentToolContracts(),
         });
+        const visibleContractV2 = listToolContractsV2(visibleContracts);
+        const contractV2Observability = buildToolContractV2Observability({
+          contracts: visibleContractV2,
+          registeredToolNames: ctx.toolExecutor.getRegisteredToolNames().filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME),
+        });
+        const contractV2Summary = contractV2Observability.summary;
         checks.push({
           id: "tool_behavior_observability",
           name: "Tool Behavior Observability",
@@ -2808,6 +3018,25 @@ async function handleReq(
           ...(observability.summary ? { summary: observability.summary } : {}),
           ...(observability.experiment ? { experiment: observability.experiment } : {}),
         };
+        toolContractV2Observability = {
+          requested: {
+            ...(toolAgentId ? { agentId: toolAgentId } : {}),
+            ...(toolConversationId ? { conversationId: toolConversationId } : {}),
+            ...(toolTaskId ? { taskId: toolTaskId } : {}),
+          },
+          visibilityContext: {
+            agentId: visibilityAgentId ?? "default",
+            conversationId: visibilityConversationId ?? null,
+            ...(visibilityTask
+              ? {
+                taskId: visibilityTask.id,
+                launchSpec: visibilityTask.launchSpec,
+              }
+              : {}),
+          },
+          summary: contractV2Summary,
+          contracts: contractV2Observability.contracts,
+        };
       }
 
       return {
@@ -2824,6 +3053,8 @@ async function handleReq(
           mcpRuntime,
           ...(promptObservability ? { promptObservability } : {}),
           ...(toolBehaviorObservability ? { toolBehaviorObservability } : {}),
+          ...(toolContractV2Observability ? { toolContractV2Observability } : {}),
+          ...(residentAgents ? { residentAgents } : {}),
           ...(conversationDebug ? { conversationDebug } : {}),
           ...(conversationCatalog ? { conversationCatalog } : {}),
           ...(recentConversationExports ? { recentConversationExports } : {}),
@@ -2832,19 +3063,51 @@ async function handleReq(
     }
 
     case "agents.list": {
-      const profiles = ctx.agentRegistry?.list() ?? [];
-      const agents = await Promise.all(profiles.map(async (profile) => {
-        const identityTarget = resolveAgentIdentityDir(ctx.stateDir, ctx.agentRegistry, profile.id);
-        const identityInfo = identityTarget ? await extractIdentityInfo(identityTarget.dir) : {};
-        return {
-          id: profile.id,
-          displayName: profile.displayName,
-          name: identityInfo.agentName || profile.displayName,
-          avatar: identityInfo.agentAvatar || undefined,
-          model: profile.model,
-        };
+      const roster = await buildAgentRoster({
+        stateDir: ctx.stateDir,
+        agentRegistry: ctx.agentRegistry,
+        residentAgentRuntime: ctx.residentAgentRuntime,
+      });
+      const agents = roster.map((agent) => ({
+        id: agent.id,
+        displayName: agent.displayName,
+        name: agent.name,
+        avatar: agent.avatar,
+        model: agent.model,
       }));
       return { type: "res", id: req.id, ok: true, payload: { agents } };
+    }
+
+    case "agents.roster.get": {
+      const agents = await buildAgentRoster({
+        stateDir: ctx.stateDir,
+        agentRegistry: ctx.agentRegistry,
+        residentAgentRuntime: ctx.residentAgentRuntime,
+      });
+      return { type: "res", id: req.id, ok: true, payload: { agents } };
+    }
+
+    case "agent.session.ensure": {
+      const params = req.params as { agentId?: string } | undefined;
+      try {
+        const payload = ensureResidentAgentSession({
+          agentId: params?.agentId,
+          agentRegistry: ctx.agentRegistry,
+          residentAgentRuntime: ctx.residentAgentRuntime,
+          conversationStore: ctx.conversationStore,
+        });
+        return { type: "res", id: req.id, ok: true, payload };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "invalid_agent",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
     }
 
     case "agents.prompt.inspect": {
@@ -3923,12 +4186,14 @@ async function handleReq(
     }
 
     case "memory.search": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const query = typeof params.query === "string" ? params.query.trim() : "";
       if (!query) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "query is required" } };
@@ -3937,87 +4202,306 @@ async function handleReq(
       const limit = clampListLimit(params.limit, 20);
       const includeContent = params.includeContent !== false;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = await manager.search(query, { limit, filter: filter as any, includeContent });
+      const items = await searchResidentMemory({
+        manager,
+        sharedManager,
+        residentPolicy,
+        query,
+        limit,
+        filter: filter as any,
+        includeContent,
+      });
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          items: toMemoryListPayloadItems(items, includeContent),
+          items: toMemoryListPayloadItems(items, includeContent, residentPolicy),
           query,
           limit,
+          queryView: buildResidentMemoryQueryView(residentPolicy),
         },
       };
     }
 
     case "memory.get": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const chunkId = typeof params.chunkId === "string" ? params.chunkId.trim() : "";
       if (!chunkId) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "chunkId is required" } };
       }
 
-      const item = manager.getMemory(chunkId);
+      const item = getResidentMemory({
+        manager,
+        sharedManager,
+        residentPolicy,
+        chunkId,
+      });
       if (!item) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Memory not found." } };
       }
 
-      return { type: "res", id: req.id, ok: true, payload: { item } };
-    }
-
-    case "memory.recent": {
-      const manager = getGlobalMemoryManager();
-      if (!manager) {
-        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
-      }
-
-      const params = isObjectRecord(req.params) ? req.params : {};
-      const limit = clampListLimit(params.limit, 20);
-      const includeContent = params.includeContent !== false;
-      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = manager.getRecent(limit, filter as any, includeContent);
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          items: toMemoryListPayloadItems(items, includeContent),
+          item: attachResidentMemorySourceView(item, residentPolicy),
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        },
+      };
+    }
+
+    case "memory.recent": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const limit = clampListLimit(params.limit, 20);
+      const includeContent = params.includeContent !== false;
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = listRecentResidentMemory({
+        manager,
+        sharedManager,
+        residentPolicy,
+        limit,
+        filter: filter as any,
+        includeContent,
+      });
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: toMemoryListPayloadItems(items, includeContent, residentPolicy),
           limit,
+          queryView: buildResidentMemoryQueryView(residentPolicy),
         },
       };
     }
 
     case "memory.stats": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const includeRecentTasks = params.includeRecentTasks === true;
+      const sharedStatus = residentPolicy?.includeSharedMemoryReads === true && sharedManager && sharedManager !== manager
+        ? sharedManager.getStatus()
+        : null;
+      const sharedGovernance = buildSharedGovernanceCounts(manager, residentPolicy);
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          status: manager.getStatus(),
+          status: mergeResidentMemoryStatus(manager.getStatus(), sharedStatus),
+          sharedGovernance: {
+            ...sharedGovernance,
+            trackedCount:
+              sharedGovernance.pendingCount
+              + sharedGovernance.approvedCount
+              + sharedGovernance.rejectedCount
+              + sharedGovernance.revokedCount,
+          },
+          queryView: buildResidentMemoryQueryView(residentPolicy),
           ...(includeRecentTasks ? { recentTasks: manager.getRecentTasks(5) } : {}),
         },
       };
     }
 
-    case "memory.task.list": {
-      const manager = getGlobalMemoryManager();
+    case "memory.share.promote": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
+      const agentId = extractScopedMemoryAgentId(params) ?? residentPolicy?.agentId ?? "default";
+      const chunkId = typeof params.chunkId === "string" ? params.chunkId.trim() : "";
+      const sourcePath = typeof params.sourcePath === "string" ? params.sourcePath.trim() : "";
+      const reason = typeof params.reason === "string" ? params.reason.trim() : "";
+      if (!chunkId && !sourcePath) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "chunkId or sourcePath is required." } };
+      }
+
+      try {
+        const result = promoteResidentMemoryToShared({
+          manager,
+          sharedManager,
+          residentPolicy,
+          agentId,
+          chunkId: chunkId || undefined,
+          sourcePath: sourcePath || undefined,
+          reason,
+        });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            promoted: true,
+            promotedCount: result.promotedCount,
+            mode: result.mode,
+            reason: result.reason,
+            item: result.item ? attachResidentMemorySourceView(result.item, residentPolicy) : null,
+            items: result.items.map((item) => attachResidentMemorySourceView(item, residentPolicy)),
+            queryView: buildResidentMemoryQueryView(residentPolicy),
+          },
+        };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "memory_share_promote_failed",
+            message: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    }
+
+    case "memory.share.review": {
       const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const chunkId = typeof params.chunkId === "string" ? params.chunkId.trim() : "";
+      const sourcePath = typeof params.sourcePath === "string" ? params.sourcePath.trim() : "";
+      const decision = typeof params.decision === "string" ? params.decision.trim() : "";
+      const note = typeof params.note === "string" ? params.note.trim() : "";
+      const agentId = extractScopedMemoryAgentId(params) ?? residentPolicy?.agentId ?? "default";
+      if (!chunkId && !sourcePath) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "chunkId or sourcePath is required." } };
+      }
+      if (!["approved", "rejected", "revoked"].includes(decision)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "decision must be approved, rejected, or revoked." } };
+      }
+
+      try {
+        const result = reviewResidentSharedMemoryPromotion({
+          manager,
+          sharedManager,
+          agentId,
+          chunkId: chunkId || undefined,
+          sourcePath: sourcePath || undefined,
+          decision: decision as "approved" | "rejected" | "revoked",
+          note: note || undefined,
+        });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            decision: result.decision,
+            reviewedCount: result.reviewedCount,
+            mode: result.mode,
+            privateItem: result.privateItem ? attachResidentMemorySourceView(result.privateItem, residentPolicy) : null,
+            sharedItem: result.sharedItem ? attachResidentMemorySourceView(result.sharedItem, residentPolicy) : null,
+            privateItems: result.privateItems?.map((item) => attachResidentMemorySourceView(item, residentPolicy)) ?? [],
+            sharedItems: result.sharedItems?.map((item) => attachResidentMemorySourceView(item, residentPolicy)) ?? [],
+            queryView: buildResidentMemoryQueryView(residentPolicy),
+          },
+        };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "memory_share_review_failed",
+            message: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    }
+
+    case "memory.share.claim": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
+      const chunkId = typeof params.chunkId === "string" ? params.chunkId.trim() : "";
+      const sourcePath = typeof params.sourcePath === "string" ? params.sourcePath.trim() : "";
+      const action = typeof params.action === "string" ? params.action.trim() : "";
+      const agentId = extractScopedMemoryAgentId(params) ?? residentPolicy?.agentId ?? "default";
+      if (!chunkId && !sourcePath) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "chunkId or sourcePath is required." } };
+      }
+      if (!["claim", "release"].includes(action)) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "action must be claim or release." } };
+      }
+
+      try {
+        const result = claimResidentSharedMemoryPromotion({
+          manager,
+          sharedManager,
+          agentId,
+          action: action as "claim" | "release",
+          chunkId: chunkId || undefined,
+          sourcePath: sourcePath || undefined,
+        });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            action: result.action,
+            claimedCount: result.claimedCount,
+            mode: result.mode,
+            privateItem: result.privateItem ? attachResidentMemorySourceView(result.privateItem, residentPolicy) : null,
+            sharedItem: result.sharedItem ? attachResidentMemorySourceView(result.sharedItem, residentPolicy) : null,
+            privateItems: result.privateItems.map((item) => attachResidentMemorySourceView(item, residentPolicy)),
+            sharedItems: result.sharedItems.map((item) => attachResidentMemorySourceView(item, residentPolicy)),
+            queryView: buildResidentMemoryQueryView(residentPolicy),
+          },
+        };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "memory_share_claim_failed",
+            message: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    }
+
+    case "memory.task.list": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      if (!manager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
+      }
+
       const query = typeof params.query === "string" ? params.query.trim() : "";
       const limit = clampListLimit(params.limit, 20);
       const summaryOnly = params.summaryOnly === true;
@@ -4039,12 +4523,13 @@ async function handleReq(
     }
 
     case "memory.task.get": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
       if (!taskId) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
@@ -4055,16 +4540,25 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Task not found." } };
       }
 
-      return { type: "res", id: req.id, ok: true, payload: { task } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          task: toTaskExperiencePayloadItem(manager, task, residentPolicy),
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        },
+      };
     }
 
     case "experience.candidate.get": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const candidateId = typeof params.candidateId === "string" ? params.candidateId.trim() : "";
       if (!candidateId) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "candidateId is required" } };
@@ -4075,29 +4569,47 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience candidate not found." } };
       }
 
-      return { type: "res", id: req.id, ok: true, payload: { candidate } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          candidate: toExperienceCandidatePayloadItem(candidate, residentPolicy),
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        },
+      };
     }
 
     case "experience.candidate.list": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const limit = clampListLimit(params.limit, 50);
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = manager.listExperienceCandidates(limit, filter as any);
-      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: items.map((item) => toExperienceCandidatePayloadItem(item, residentPolicy)),
+          limit,
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        },
+      };
     }
 
     case "experience.candidate.accept": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const candidateId = typeof params.candidateId === "string" ? params.candidateId.trim() : "";
       if (!candidateId) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "candidateId is required" } };
@@ -4130,12 +4642,12 @@ async function handleReq(
     }
 
     case "experience.candidate.reject": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const candidateId = typeof params.candidateId === "string" ? params.candidateId.trim() : "";
       if (!candidateId) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "candidateId is required" } };
@@ -4162,12 +4674,13 @@ async function handleReq(
     }
 
     case "experience.usage.get": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const usageId = typeof params.usageId === "string" ? params.usageId.trim() : "";
       if (!usageId) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "usageId is required" } };
@@ -4178,42 +4691,70 @@ async function handleReq(
         return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience usage not found." } };
       }
 
-      return { type: "res", id: req.id, ok: true, payload: { usage } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          usage: toExperienceUsagePayloadItem(manager, usage, residentPolicy),
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        },
+      };
     }
 
     case "experience.usage.list": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const limit = clampListLimit(params.limit, 50);
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = manager.listExperienceUsages(limit, filter as any);
-      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: items.map((item) => toExperienceUsagePayloadItem(manager, item, residentPolicy)),
+          limit,
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        },
+      };
     }
 
     case "experience.usage.stats": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const limit = clampListLimit(params.limit, 50);
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = manager.listExperienceUsageStats(limit, filter as any);
-      return { type: "res", id: req.id, ok: true, payload: { items, limit } };
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: items.map((item) => toExperienceUsagePayloadItem(manager, item, residentPolicy)),
+          limit,
+          queryView: buildResidentMemoryQueryView(residentPolicy),
+        },
+      };
     }
 
     case "experience.usage.revoke": {
-      const manager = getGlobalMemoryManager();
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
       }
 
-      const params = isObjectRecord(req.params) ? req.params : {};
       const usageId = typeof params.usageId === "string" ? params.usageId.trim() : "";
       const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
       const assetType = typeof params.assetType === "string" ? params.assetType.trim() : "";
@@ -5035,11 +5576,91 @@ function clampListLimit(value: unknown, fallback: number, max = 100): number {
   return Math.min(parsed, max);
 }
 
-function toMemoryListPayloadItems(items: Array<any>, includeContent: boolean): Array<Record<string, unknown>> {
-  if (includeContent) {
-    return items as Array<Record<string, unknown>>;
+function buildSharedGovernanceCounts(
+  manager: ReturnType<typeof resolveScopedMemoryManager>,
+  residentPolicy?: ScopedMemoryManagerRecord["policy"],
+): {
+  pendingCount: number;
+  claimedCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  revokedCount: number;
+  noneCount: number;
+} {
+  if (!manager) {
+    return {
+      pendingCount: 0,
+      claimedCount: 0,
+      approvedCount: 0,
+      rejectedCount: 0,
+      revokedCount: 0,
+      noneCount: 0,
+    };
   }
-  return items.map(({ content, ...rest }) => rest);
+
+  if (residentPolicy?.writeTarget === "shared") {
+    return {
+      pendingCount: 0,
+      claimedCount: 0,
+      approvedCount: 0,
+      rejectedCount: 0,
+      revokedCount: 0,
+      noneCount: 0,
+    };
+  }
+
+  return {
+    pendingCount: manager.countChunks({ sharedPromotionStatus: "pending" }),
+    claimedCount: manager.countChunks({ sharedPromotionStatus: "pending", sharedPromotionClaimed: true }),
+    approvedCount: manager.countChunks({ sharedPromotionStatus: "approved" }),
+    rejectedCount: manager.countChunks({ sharedPromotionStatus: "rejected" }),
+    revokedCount: manager.countChunks({ sharedPromotionStatus: "revoked" }),
+    noneCount: manager.countChunks({ sharedPromotionStatus: "none" }),
+  };
+}
+
+function toMemoryListPayloadItems(
+  items: Array<any>,
+  includeContent: boolean,
+  residentPolicy?: ScopedMemoryManagerRecord["policy"],
+): Array<Record<string, unknown>> {
+  const withSourceView = attachResidentMemorySourceViews(items, residentPolicy);
+  if (includeContent) {
+    return withSourceView as Array<Record<string, unknown>>;
+  }
+  return withSourceView.map((item) => {
+    const { content, ...rest } = item;
+    return rest;
+  });
+}
+
+function toExperienceCandidatePayloadItem(
+  item: any,
+  residentPolicy?: ScopedMemoryManagerRecord["policy"],
+): Record<string, unknown> {
+  return attachResidentExperienceCandidateSourceView(item, residentPolicy) as unknown as Record<string, unknown>;
+}
+
+function toExperienceUsagePayloadItem(
+  manager: ReturnType<typeof resolveScopedMemoryManager>,
+  item: any,
+  residentPolicy?: ScopedMemoryManagerRecord["policy"],
+): Record<string, unknown> {
+  const sourceCandidate = item?.sourceCandidateId && manager
+    ? manager.getExperienceCandidate(String(item.sourceCandidateId))
+    : null;
+  return attachResidentExperienceUsageSourceView(item, sourceCandidate, residentPolicy) as unknown as Record<string, unknown>;
+}
+
+function toTaskExperiencePayloadItem(
+  manager: ReturnType<typeof resolveScopedMemoryManager>,
+  item: any,
+  residentPolicy?: ScopedMemoryManagerRecord["policy"],
+): Record<string, unknown> {
+  return attachResidentTaskExperienceSourceView(item, {
+    policy: residentPolicy,
+    resolveCandidate: (candidateId) => manager?.getExperienceCandidate(candidateId) ?? null,
+  }) as unknown as Record<string, unknown>;
 }
 
 function toTaskListPayloadItems(items: Array<any>, summaryOnly: boolean): Array<Record<string, unknown>> {

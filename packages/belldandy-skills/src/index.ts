@@ -48,6 +48,17 @@ export {
   getToolBehaviorContract,
   listToolBehaviorContracts,
 } from "./tool-behavior-contract.js";
+export {
+  buildToolContractV2Summary,
+  getToolContractV2,
+  listToolContractsV2,
+} from "./tool-contract-v2.js";
+export {
+  buildLaunchPermissionDeniedReason,
+  buildLaunchRolePolicyDeniedReason,
+  buildToolContractV2PromptSummary,
+  renderToolContractV2Summary,
+} from "./tool-contract-render.js";
 export { ToolPoolAssembler } from "./tool-pool-assembler.js";
 export type {
   ToolContract,
@@ -60,6 +71,10 @@ export type {
   ToolWithContract,
 } from "./tool-contract.js";
 export type { ToolBehaviorContract } from "./tool-behavior-contract.js";
+export type {
+  ToolContractV2,
+  ToolContractV2Summary,
+} from "./tool-contract-v2.js";
 export type {
   ToolPoolAssemblyContext,
   ToolPoolEntry,

@@ -260,7 +260,7 @@
             <div class="memory-viewer-header">
               <div>
                 <div class="memory-viewer-kicker" data-i18n="memory.kicker">记忆查看</div>
-                <div class="memory-viewer-title" data-i18n="memory.title">贝露丹蒂记忆查看器</div>
+                <div id="memoryViewerTitle" class="memory-viewer-title" data-i18n="memory.title">记忆查看</div>
               </div>
               <button id="memoryViewerRefresh" class="button" data-i18n="common.refresh">刷新</button>
             </div>
@@ -305,14 +305,22 @@
                     <option value="other">其他</option>
                   </select>
                   <select id="memoryChunkVisibilityFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.filters.visibilityDefault">默认范围</option>
-                    <option value="private" data-i18n="memory.filters.visibilityPrivate">私有层+系统层</option>
-                    <option value="shared" data-i18n="memory.filters.visibilityShared">共享层+系统层</option>
-                    <option value="all" data-i18n="memory.filters.visibilityAll">全部层</option>
+                      <option value="" data-i18n="memory.filters.visibilityDefault">默认范围</option>
+                      <option value="private" data-i18n="memory.filters.visibilityPrivate">私有层+系统层</option>
+                      <option value="shared" data-i18n="memory.filters.visibilityShared">共享层+系统层</option>
+                      <option value="all" data-i18n="memory.filters.visibilityAll">全部层</option>
+                    </select>
+                  <select id="memoryChunkGovernanceFilter" class="select select-sm">
+                    <option value="" data-i18n="memory.filters.governanceAll">全部治理状态</option>
+                    <option value="pending" data-i18n="memory.filters.governancePending">待审批</option>
+                    <option value="approved" data-i18n="memory.filters.governanceApproved">已批准</option>
+                    <option value="rejected" data-i18n="memory.filters.governanceRejected">已驳回</option>
+                    <option value="revoked" data-i18n="memory.filters.governanceRevoked">已撤销</option>
+                    <option value="none" data-i18n="memory.filters.governanceNone">未进入审批</option>
                   </select>
                   <select id="memoryChunkCategoryFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.filters.categoryAll">全部分类</option>
-                    <option value="uncategorized" data-i18n="memory.filters.categoryUncategorized">未分类</option>
+                      <option value="" data-i18n="memory.filters.categoryAll">全部分类</option>
+                      <option value="uncategorized" data-i18n="memory.filters.categoryUncategorized">未分类</option>
                     <option value="preference" data-i18n="memory.filters.categoryPreference">偏好</option>
                     <option value="experience" data-i18n="memory.filters.categoryExperience">经验</option>
                     <option value="fact" data-i18n="memory.filters.categoryFact">事实</option>

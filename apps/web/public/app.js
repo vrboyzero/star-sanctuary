@@ -8,6 +8,7 @@ import {
   restoreWorkspaceRootsField,
 } from "./app/features/persistence.js";
 import { createAttachmentsFeature } from "./app/features/attachments.js";
+import { createAgentSessionCacheFeature } from "./app/features/agent-session-cache.js";
 import { createChatEventsFeature } from "./app/features/chat-events.js";
 import { createChatNetworkFeature } from "./app/features/chat-network.js";
 import { createChatUiFeature } from "./app/features/chat-ui.js";
@@ -20,6 +21,11 @@ import { createGoalsOverviewFeature } from "./app/features/goals-overview.js";
 import { createGoalsReadonlyPanelsFeature } from "./app/features/goals-readonly-panels.js";
 import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-panel.js";
 import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
+import {
+  formatResidentSourceScopeLabel,
+  formatResidentSourceSummary,
+  getResidentSourceBadgeClass,
+} from "./app/features/memory-source-view.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
 import { createSubtasksOverviewFeature } from "./app/features/subtasks-overview.js";
 import { createLocaleController } from "./app/features/locale.js";
@@ -73,6 +79,7 @@ const switchCanvasBtn = document.getElementById("switchCanvas");
 const openChannelSettingsBtn = document.getElementById("openChannelSettings");
 const agentRightPanelEl = document.getElementById("agentRightPanel");
 const memoryViewerSection = document.getElementById("memoryViewerSection");
+const memoryViewerTitleEl = document.getElementById("memoryViewerTitle");
 const memoryViewerStatsEl = document.getElementById("memoryViewerStats");
 const memoryViewerListEl = document.getElementById("memoryViewerList");
 const memoryViewerDetailEl = document.getElementById("memoryViewerDetail");
@@ -90,6 +97,7 @@ const memoryTaskGoalFilterLabelEl = document.getElementById("memoryTaskGoalFilte
 const memoryTaskGoalFilterClearBtn = document.getElementById("memoryTaskGoalFilterClear");
 const memoryChunkTypeFilterEl = document.getElementById("memoryChunkTypeFilter");
 const memoryChunkVisibilityFilterEl = document.getElementById("memoryChunkVisibilityFilter");
+const memoryChunkGovernanceFilterEl = document.getElementById("memoryChunkGovernanceFilter");
 const memoryChunkCategoryFilterEl = document.getElementById("memoryChunkCategoryFilter");
 const goalsSection = document.getElementById("goalsSection");
 const goalsSummaryEl = document.getElementById("goalsSummary");
@@ -175,6 +183,7 @@ const DEFAULT_VOICE_SHORTCUT = Object.freeze({
 let ws = null;
 let isReady = false;
 let activeConversationId = null;
+const residentAgentRosterEnabled = window.BELLDANDY_WEB_CONFIG?.residentAgentRosterEnabled !== false;
 const CONFIG_CACHE_TTL_MS = 2000;
 let configCacheData = null;
 let configCacheLoadedAt = 0;
@@ -216,6 +225,7 @@ const themeController = createThemeController({
 });
 
 let attachmentsFeature = null;
+const agentSessionCacheFeature = createAgentSessionCacheFeature();
 let workspaceFeature = null;
 let chatEventsFeature = null;
 let chatNetworkFeature = null;
@@ -230,6 +240,7 @@ let goalsTrackingPanelFeature = null;
 let memoryViewerFeature = null;
 let sessionDigestFeature = null;
 let subtasksOverviewFeature = null;
+let residentAgentActivationSeq = 0;
 
 function debugLog(...args) {
   if (!webchatDebugEnabled) return;
@@ -274,6 +285,7 @@ localeController.subscribe(() => {
   toolSettingsController.refreshLocale?.();
   refreshGoalsLocale();
   refreshMemoryLocale();
+  memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
   sessionDigestFeature?.refreshLocale?.();
   refreshSubtasksLocale();
   renderAgentRightPanel();
@@ -308,6 +320,11 @@ const memoryViewerState = {
     skills: [],
   },
   usageOverviewSeq: 0,
+  memoryQueryView: null,
+  experienceQueryView: null,
+  sharedGovernance: null,
+  requestToken: 0,
+  activeAgentId: "default",
 };
 const goalsState = {
   items: [],
@@ -591,6 +608,11 @@ if (memoryChunkVisibilityFilterEl) {
     if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
   });
 }
+if (memoryChunkGovernanceFilterEl) {
+  memoryChunkGovernanceFilterEl.addEventListener("change", () => {
+    if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
+  });
+}
 if (memoryChunkCategoryFilterEl) {
   memoryChunkCategoryFilterEl.addEventListener("change", () => {
     if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
@@ -711,7 +733,13 @@ function handleHelloOk(frame) {
 
   workspaceFeature?.refreshAfterConnectionReady();
   loadWorkspaceRootsFromServer();
-  void loadAgentList();
+  void loadAgentList().then((agents) => {
+    if (!residentAgentRosterEnabled) return;
+    const selectedAgentId = agentSelectEl?.value || agents?.[0]?.id || "default";
+    if (selectedAgentId) {
+      void activateResidentAgentConversation(selectedAgentId, { forceEnsure: true, switchToChat: false });
+    }
+  });
   void loadModelList();
 
   if (memoryViewerSection && !memoryViewerSection.classList.contains("hidden")) {
@@ -959,6 +987,7 @@ goalsCapabilityPanelFeature = createGoalsCapabilityPanelFeature({
 memoryViewerFeature = createMemoryViewerFeature({
   refs: {
     memoryViewerSection,
+    memoryViewerTitleEl,
     memoryViewerStatsEl,
     memoryViewerListEl,
     memoryViewerDetailEl,
@@ -971,12 +1000,15 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryTaskSourceFilterEl,
     memoryChunkTypeFilterEl,
     memoryChunkVisibilityFilterEl,
+    memoryChunkGovernanceFilterEl,
     memoryChunkCategoryFilterEl,
   },
   isConnected: () => Boolean(ws && isReady),
   sendReq,
   makeId,
   getMemoryViewerState: () => memoryViewerState,
+  getSelectedAgentId: () => getCurrentAgentSelection(),
+  getSelectedAgentLabel: () => getCurrentAgentLabel(),
   syncMemoryTaskGoalFilterUi,
   renderMemoryViewerListEmpty,
   renderMemoryViewerDetailEmpty,
@@ -1001,6 +1033,7 @@ memoryViewerFeature = createMemoryViewerFeature({
   bindStatsAuditJumpLinks,
   bindMemoryPathLinks,
   bindTaskAuditJumpLinks,
+  showNotice,
   t: localeController.t,
 });
 
@@ -1035,6 +1068,154 @@ function loadModelList() {
 function getCurrentAgentSelection() {
   const selected = agentSelectEl?.value?.trim();
   return selected || "default";
+}
+
+function getCurrentAgentLabel() {
+  const selectedAgentId = getCurrentAgentSelection();
+  const selectedAgent = agentCatalog.get(selectedAgentId);
+  if (selectedAgent?.displayName || selectedAgent?.name) {
+    return selectedAgent.displayName || selectedAgent.name;
+  }
+  const selectedIndex = typeof agentSelectEl?.selectedIndex === "number" ? agentSelectEl.selectedIndex : -1;
+  if (selectedIndex >= 0) {
+    const optionLabel = agentSelectEl?.options?.[selectedIndex]?.text;
+    if (typeof optionLabel === "string" && optionLabel.trim()) {
+      return optionLabel.trim();
+    }
+  }
+  return "";
+}
+
+function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
+  memoryViewerState.requestToken = Number(memoryViewerState.requestToken || 0) + 1;
+  memoryViewerState.activeAgentId = String(agentId || "default").trim() || "default";
+  memoryViewerState.stats = null;
+  memoryViewerState.items = [];
+  memoryViewerState.selectedId = null;
+  memoryViewerState.selectedTask = null;
+  memoryViewerState.selectedCandidate = null;
+  memoryViewerState.pendingUsageRevokeId = null;
+  memoryViewerState.usageOverview = {
+    loading: false,
+    methods: [],
+    skills: [],
+  };
+  memoryViewerState.usageOverviewSeq = Number(memoryViewerState.usageOverviewSeq || 0) + 1;
+  memoryViewerState.memoryQueryView = null;
+  memoryViewerState.experienceQueryView = null;
+  memoryViewerState.sharedGovernance = null;
+}
+
+async function refreshMemoryViewerForAgentSwitch(agentId = getCurrentAgentSelection()) {
+  resetMemoryViewerStateForAgent(agentId);
+  memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
+
+  if (!memoryViewerSection || memoryViewerSection.classList.contains("hidden")) {
+    return;
+  }
+
+  if (!ws || !isReady) {
+    refreshMemoryLocale();
+    return;
+  }
+
+  renderMemoryViewerStats(null);
+  if (memoryViewerState.tab === "tasks") {
+    renderMemoryViewerListEmpty(localeController.t("memory.tasksLoading", {}, "Loading tasks..."));
+    renderMemoryViewerDetailEmpty(localeController.t("memory.taskDetailLoading", {}, "Loading task details..."));
+  } else {
+    renderMemoryViewerListEmpty(localeController.t("memory.memoriesLoading", {}, "Loading memories..."));
+    renderMemoryViewerDetailEmpty(localeController.t("memory.memoryDetailLoading", {}, "Loading memory details..."));
+  }
+
+  await loadMemoryViewer(true);
+}
+
+function syncAgentRuntimeEntry(agentId, patch = {}) {
+  if (!agentId) return null;
+  const existing = agentCatalog.get(agentId);
+  if (!existing) return null;
+  const next = {
+    ...existing,
+    ...patch,
+  };
+  agentCatalog.set(agentId, next);
+  return next;
+}
+
+async function ensureResidentAgentSession(agentId) {
+  if (!residentAgentRosterEnabled || !agentId) return null;
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "agent.session.ensure",
+    params: { agentId },
+  });
+  if (!res || !res.ok || !res.payload?.conversationId) {
+    return null;
+  }
+
+  const mainConversationId = typeof res.payload.mainConversationId === "string" && res.payload.mainConversationId.trim()
+    ? res.payload.mainConversationId.trim()
+    : String(res.payload.conversationId);
+  const lastConversationId = typeof res.payload.lastConversationId === "string" && res.payload.lastConversationId.trim()
+    ? res.payload.lastConversationId.trim()
+    : String(res.payload.conversationId);
+  agentSessionCacheFeature.bindAgentConversation(agentId, mainConversationId, { main: true });
+  agentSessionCacheFeature.bindAgentConversation(agentId, lastConversationId);
+  syncAgentRuntimeEntry(agentId, {
+    status: typeof res.payload.status === "string" ? res.payload.status : "idle",
+    mainConversationId,
+    lastConversationId,
+    lastActiveAt: typeof res.payload.lastActiveAt === "number" ? res.payload.lastActiveAt : undefined,
+  });
+  return res.payload;
+}
+
+async function activateResidentAgentConversation(agentId, options = {}) {
+  if (!agentId) return;
+  const activationSeq = ++residentAgentActivationSeq;
+  const forceEnsure = options.forceEnsure === true;
+  const switchToChat = options.switchToChat !== false;
+  let conversationId = agentSessionCacheFeature.getAgentConversation(agentId)
+    || agentCatalog.get(agentId)?.lastConversationId
+    || agentCatalog.get(agentId)?.mainConversationId
+    || "";
+
+  if (!conversationId || forceEnsure) {
+    const ensured = await ensureResidentAgentSession(agentId);
+    if (activationSeq !== residentAgentActivationSeq) return;
+    conversationId = typeof ensured?.conversationId === "string" ? ensured.conversationId : conversationId;
+  }
+
+  if (!conversationId) {
+    activeConversationId = null;
+    renderCanvasGoalContext();
+    chatEventsFeature?.resetStreamingState();
+    sessionDigestFeature?.clear?.();
+    renderConversationMessages([]);
+    return;
+  }
+
+  agentSessionCacheFeature.bindAgentConversation(agentId, conversationId, {
+    main: conversationId === agentCatalog.get(agentId)?.mainConversationId,
+  });
+  activeConversationId = conversationId;
+  renderCanvasGoalContext();
+  if (switchToChat) {
+    switchMode("chat");
+  }
+  chatEventsFeature?.resetStreamingState();
+
+  const cachedMessages = agentSessionCacheFeature.getConversationMessages(conversationId);
+  if (cachedMessages.length > 0) {
+    renderConversationMessages(cachedMessages);
+  } else {
+    renderConversationMessages([]);
+  }
+
+  void loadConversationMeta(conversationId);
+  void sessionDigestFeature?.loadSessionDigest(conversationId);
 }
 
 function applyUploadedAvatarChange({ role, agentId, avatarPath }) {
@@ -1152,12 +1333,24 @@ function syncAgentCatalog(agents = [], selectedAgentId = "") {
   agentCatalog.clear();
   for (const agent of Array.isArray(agents) ? agents : []) {
     if (!agent || typeof agent !== "object" || !agent.id) continue;
+    const mainConversationId = typeof agent.mainConversationId === "string" ? agent.mainConversationId : "";
+    const lastConversationId = typeof agent.lastConversationId === "string" ? agent.lastConversationId : "";
+    if (mainConversationId) {
+      agentSessionCacheFeature.bindAgentConversation(agent.id, mainConversationId, { main: true });
+    }
+    if (lastConversationId) {
+      agentSessionCacheFeature.bindAgentConversation(agent.id, lastConversationId);
+    }
     agentCatalog.set(agent.id, {
       id: agent.id,
       displayName: agent.displayName || agent.id,
       name: agent.name || agent.displayName || agent.id,
       avatar: agent.avatar || "",
       model: agent.model || "",
+      status: typeof agent.status === "string" ? agent.status : "idle",
+      mainConversationId,
+      lastConversationId,
+      lastActiveAt: typeof agent.lastActiveAt === "number" ? agent.lastActiveAt : undefined,
     });
   }
 
@@ -1167,6 +1360,7 @@ function syncAgentCatalog(agents = [], selectedAgentId = "") {
 
   syncSelectedAgentIdentity();
   renderAgentRightPanel();
+  memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
 }
 
 function syncSelectedAgentIdentity() {
@@ -1175,6 +1369,7 @@ function syncSelectedAgentIdentity() {
   agentName = selectedAgent.name || selectedAgent.displayName || defaultAgentName;
   agentAvatar = selectedAgent.avatar || agentCatalog.get("default")?.avatar || defaultAgentAvatar;
   chatUiFeature?.refreshAvatar("bot", agentAvatar);
+  memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
 }
 
 function updateAgentCatalogAvatar(agentId, avatarPath) {
@@ -1258,7 +1453,10 @@ function renderAgentRightPanel() {
 
     const meta = document.createElement("div");
     meta.className = "agent-card-meta";
-    meta.textContent = agent.model || agent.id;
+    const statusText = typeof agent.status === "string" && agent.status && agent.status !== "idle"
+      ? ` · ${agent.status}`
+      : "";
+    meta.textContent = `${agent.model || agent.id}${statusText}`;
 
     content.appendChild(name);
     content.appendChild(meta);
@@ -1278,10 +1476,17 @@ function renderAgentRightPanel() {
 }
 
 if (agentSelectEl) {
-  agentSelectEl.addEventListener("change", () => {
-    localStorage.setItem(AGENT_ID_KEY, agentSelectEl.value);
+  agentSelectEl.addEventListener("change", async () => {
+    const selectedAgentId = agentSelectEl.value || "default";
+    localStorage.setItem(AGENT_ID_KEY, selectedAgentId);
     syncSelectedAgentIdentity();
     renderAgentRightPanel();
+    void refreshMemoryViewerForAgentSwitch(selectedAgentId);
+
+    if (residentAgentRosterEnabled) {
+      await activateResidentAgentConversation(selectedAgentId, { forceEnsure: true });
+      return;
+    }
 
     // 切换 Agent = 新建会话（隔离上下文）
     activeConversationId = null;
@@ -1598,6 +1803,19 @@ async function sendMessage() {
     isLatest: true,
   };
   appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""), optimisticUserMeta);
+  if (residentAgentRosterEnabled && activeConversationId) {
+    agentSessionCacheFeature.bindAgentConversation(getCurrentAgentSelection(), activeConversationId, {
+      main: activeConversationId === agentCatalog.get(getCurrentAgentSelection())?.mainConversationId,
+    });
+    agentSessionCacheFeature.appendUserMessage(
+      activeConversationId,
+      displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""),
+      {
+        timestampMs: optimisticUserMeta.timestampMs,
+        agentId: getCurrentAgentSelection(),
+      },
+    );
+  }
   const botMsgEl = chatEventsFeature?.beginStreamingReply({
     timestampMs: Date.now(),
     isLatest: false,
@@ -1632,6 +1850,16 @@ async function sendMessage() {
 
   if (payload && payload.ok && payload.payload && payload.payload.conversationId) {
     activeConversationId = String(payload.payload.conversationId);
+    if (residentAgentRosterEnabled) {
+      const currentAgentId = getCurrentAgentSelection();
+      agentSessionCacheFeature.bindAgentConversation(currentAgentId, activeConversationId, {
+        main: activeConversationId === agentCatalog.get(currentAgentId)?.mainConversationId,
+      });
+      syncAgentRuntimeEntry(currentAgentId, {
+        lastConversationId: activeConversationId,
+      });
+      renderAgentRightPanel();
+    }
     if (payload.payload.messageMeta) {
       const wrappers = messagesEl?.querySelectorAll(".msg-wrapper.me .msg[data-latest='true']") || [];
       const latestUserBubble = wrappers.length ? wrappers[wrappers.length - 1] : null;
@@ -1825,6 +2053,38 @@ chatEventsFeature = createChatEventsFeature({
   updateMessageMeta: (bubble, meta) => chatUiFeature?.updateMessageMeta?.(bubble, meta),
   forceScrollToBottom,
   getCanvasApp: () => window._canvasApp,
+  getActiveConversationId: () => activeConversationId,
+  onAgentStatusEvent: (payload) => {
+    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
+    const agentId = typeof payload?.agentId === "string"
+      ? payload.agentId
+      : [...agentCatalog.values()].find((agent) => agentSessionCacheFeature.getAgentConversation(agent.id) === conversationId)?.id;
+    if (!agentId) return;
+    const nextStatus = payload?.status === "running"
+      ? "running"
+      : payload?.status === "error"
+        ? "error"
+        : "idle";
+    syncAgentRuntimeEntry(agentId, { status: nextStatus });
+    renderAgentRightPanel();
+  },
+  onConversationDelta: (payload) => {
+    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
+    const delta = typeof payload?.delta === "string" ? payload.delta : "";
+    if (!conversationId || !delta) return;
+    agentSessionCacheFeature.appendAssistantDelta(conversationId, delta, {
+      timestampMs: Date.now(),
+    });
+  },
+  onConversationFinal: (payload) => {
+    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
+    if (!conversationId) return;
+    agentSessionCacheFeature.finalizeAssistantMessage(conversationId, payload?.text || "", {
+      timestampMs: typeof payload?.messageMeta?.timestampMs === "number" ? payload.messageMeta.timestampMs : Date.now(),
+      displayTimeText: typeof payload?.messageMeta?.displayTimeText === "string" ? payload.messageMeta.displayTimeText : "",
+      agentId: typeof payload?.agentId === "string" ? payload.agentId : undefined,
+    });
+  },
   escapeHtml,
 });
 
@@ -1960,7 +2220,10 @@ async function loadConversationMeta(conversationId, options = {}) {
     } else {
       renderTaskTokenHistory();
     }
-    if (renderMessages && Array.isArray(res.payload.messages)) {
+    if (Array.isArray(res.payload.messages)) {
+      agentSessionCacheFeature.setConversationMessages(conversationId, res.payload.messages);
+    }
+    if (renderMessages && Array.isArray(res.payload.messages) && conversationId === activeConversationId) {
       renderConversationMessages(res.payload.messages);
     }
     return;
@@ -4145,7 +4408,7 @@ async function loadTaskViewer(forceSelectFirst = false) {
   return memoryViewerFeature?.loadTaskViewer(forceSelectFirst);
 }
 
-async function loadTaskDetail(taskId) {
+async function loadTaskDetail(taskId, requestContext = null) {
   if (!taskId) {
     memoryViewerState.selectedTask = null;
     memoryViewerState.selectedCandidate = null;
@@ -4156,8 +4419,16 @@ async function loadTaskDetail(taskId) {
   }
 
   renderMemoryViewerDetailEmpty(localeController.t("memory.taskDetailLoadingShort", {}, "Loading task details…"));
+  const requestToken = Number(requestContext?.requestToken ?? memoryViewerState.requestToken ?? 0);
+  const requestAgentId = String(requestContext?.agentId || memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
   const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId } });
+  const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId, agentId: requestAgentId } });
+  if (
+    Number(memoryViewerState.requestToken || 0) !== requestToken
+    || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
+  ) {
+    return;
+  }
   if (!res || !res.ok) {
     memoryViewerState.selectedTask = null;
     memoryViewerState.selectedCandidate = null;
@@ -4168,6 +4439,7 @@ async function loadTaskDetail(taskId) {
   }
 
   memoryViewerState.selectedTask = res.payload?.task ?? null;
+  memoryViewerState.experienceQueryView = res.payload?.queryView ?? memoryViewerState.experienceQueryView ?? null;
   if (
     memoryViewerState.selectedCandidate?.taskId &&
     memoryViewerState.selectedTask?.id &&
@@ -4185,21 +4457,30 @@ async function loadMemoryChunkViewer(forceSelectFirst = false) {
   return memoryViewerFeature?.loadMemoryChunkViewer(forceSelectFirst);
 }
 
-async function loadMemoryDetail(chunkId) {
+async function loadMemoryDetail(chunkId, requestContext = null) {
   if (!chunkId) {
     renderMemoryViewerDetailEmpty(localeController.t("memory.selectMemory", {}, "Please select a memory."));
     return;
   }
 
   renderMemoryViewerDetailEmpty(localeController.t("memory.memoryDetailLoadingShort", {}, "Loading memory details…"));
+  const requestToken = Number(requestContext?.requestToken ?? memoryViewerState.requestToken ?? 0);
+  const requestAgentId = String(requestContext?.agentId || memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
   const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "memory.get", params: { chunkId } });
+  const res = await sendReq({ type: "req", id, method: "memory.get", params: { chunkId, agentId: requestAgentId } });
+  if (
+    Number(memoryViewerState.requestToken || 0) !== requestToken
+    || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
+  ) {
+    return;
+  }
   if (!res || !res.ok) {
     renderMemoryViewerDetailEmpty(res?.error?.message || localeController.t("memory.memoryDetailLoadFailed", {}, "Failed to load memory details."));
     return;
   }
 
   renderMemoryList(memoryViewerState.items);
+  memoryViewerState.memoryQueryView = res.payload?.queryView ?? memoryViewerState.memoryQueryView ?? null;
   renderMemoryDetail(res.payload?.item);
 }
 
@@ -4244,13 +4525,22 @@ async function openMemoryFromAudit(chunkId) {
 
 async function loadCandidateDetail(candidateId) {
   if (!candidateId || !ws || !isReady) return;
+  const requestToken = Number(memoryViewerState.requestToken || 0);
+  const requestAgentId = String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
   const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "experience.candidate.get", params: { candidateId } });
+  const res = await sendReq({ type: "req", id, method: "experience.candidate.get", params: { candidateId, agentId: requestAgentId } });
+  if (
+    Number(memoryViewerState.requestToken || 0) !== requestToken
+    || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
+  ) {
+    return;
+  }
   if (!res || !res.ok) {
     showNotice("候选详情加载失败", res?.error?.message || "无法读取 candidate。", "error");
     return;
   }
   memoryViewerState.selectedCandidate = res.payload?.candidate ?? null;
+  memoryViewerState.experienceQueryView = res.payload?.queryView ?? memoryViewerState.experienceQueryView ?? null;
   if (memoryViewerState.tab === "tasks" && memoryViewerState.selectedTask) {
     renderTaskDetail(memoryViewerState.selectedTask);
   } else {
@@ -4399,6 +4689,7 @@ function renderTaskDetail(task) {
                 <div class="memory-inline-item-head">
                   <span class="memory-badge">${escapeHtml(link.relation || "used")}</span>
                   ${link.memoryType ? `<span class="memory-badge">${escapeHtml(link.memoryType)}</span>` : ""}
+                  ${link.sourceView ? `<span class="memory-badge ${getResidentSourceBadgeClass(link.sourceView)}">${escapeHtml(formatResidentSourceScopeLabel(link.sourceView))}</span>` : ""}
                   <button class="memory-path-link" data-open-memory-id="${escapeHtml(link.chunkId || "")}">${escapeHtml(link.chunkId || "打开记忆")}</button>
                 </div>
                 ${link.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(link.sourcePath)}">${escapeHtml(link.sourcePath)}</button>` : ""}
@@ -4580,7 +4871,7 @@ async function revokeTaskUsage(usageId, taskId, assetKey = "") {
       type: "req",
       id,
       method: "experience.usage.revoke",
-      params: { usageId },
+      params: { usageId, agentId: getCurrentAgentSelection() },
     });
 
     if (!res || !res.ok || !res.payload?.revoked) {
@@ -4749,6 +5040,7 @@ function renderTaskUsageOverviewLane(title, items, tone) {
         ${safeItems.map((item) => {
           const usageCount = Number(item?.usageCount) || 0;
           const percent = maxCount > 0 ? (usageCount / maxCount) * 100 : 0;
+          const sourceView = item?.sourceView || null;
           return `
             <div class="memory-usage-overview-row">
               <div class="memory-usage-overview-row-main">
@@ -4756,9 +5048,11 @@ function renderTaskUsageOverviewLane(title, items, tone) {
                 <div class="memory-usage-overview-meta">
                   ${item?.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
                   ${item?.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
+                  ${sourceView ? `<span>${escapeHtml(formatResidentSourceScopeLabel(sourceView))}</span>` : ""}
                   <span>${escapeHtml(localeController.t("memory.usageOverviewRecentAt", {}, "Recent"))} ${escapeHtml(formatDateTime(item?.lastUsedAt))}</span>
                 </div>
                 <div class="memory-detail-badges">
+                  ${sourceView ? `<span class="memory-badge ${getResidentSourceBadgeClass(sourceView)}">${escapeHtml(formatResidentSourceScopeLabel(sourceView))}</span>` : ""}
                   ${item?.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">${escapeHtml(localeController.t("memory.openCandidate", {}, "Candidate"))}</button>` : ""}
                   ${item?.lastUsedTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">${escapeHtml(localeController.t("memory.openRecentTask", {}, "Recent Task"))}</button>` : ""}
                   ${item?.sourceCandidatePublishedPath ? `<button class="memory-usage-action-btn" data-open-source="${escapeHtml(item.sourceCandidatePublishedPath)}">${escapeHtml(localeController.t("memory.openArtifact", {}, "Open Artifact"))}</button>` : ""}
@@ -4784,7 +5078,9 @@ function renderTaskUsageItems(items, assetType) {
 
   return `
     <div class="memory-usage-list">
-      ${safeItems.map((item) => `
+      ${safeItems.map((item) => {
+        const sourceView = item?.sourceView || null;
+        return `
         <div class="memory-usage-item">
           <div class="memory-usage-item-head">
             <div class="memory-usage-item-key">${escapeHtml(item.assetKey || "-")}</div>
@@ -4792,6 +5088,7 @@ function renderTaskUsageItems(items, assetType) {
             <div class="memory-detail-badges">
               ${item.sourceCandidateStatus ? `<span class="memory-badge">${escapeHtml(item.sourceCandidateStatus)}</span>` : ""}
               ${item.sourceCandidateId ? `<span class="memory-badge">candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
+              ${sourceView ? `<span class="memory-badge ${getResidentSourceBadgeClass(sourceView)}">${escapeHtml(formatResidentSourceScopeLabel(sourceView))}</span>` : ""}
             </div>
             <div class="memory-detail-badges">
               <span class="memory-badge">${escapeHtml(formatUsageVia(item.usedVia))}</span>
@@ -4818,11 +5115,13 @@ function renderTaskUsageItems(items, assetType) {
             <span>${escapeHtml(localeController.t("memory.usageRecentGlobal", {}, "Global recent"))} ${escapeHtml(formatDateTime(item.lastUsedAt || item.createdAt))}</span>
             ${item.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
             ${item.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
+            ${sourceView ? `<span>${escapeHtml(formatResidentSourceSummary(sourceView))}</span>` : ""}
             ${item.sourceCandidateTaskId ? `<span>${escapeHtml(localeController.t("memory.usageSourceTask", {}, "Source Task"))} ${escapeHtml(item.sourceCandidateTaskId)}</span>` : ""}
             ${item.lastUsedTaskId ? `<span>${escapeHtml(localeController.t("memory.usageRecentTask", {}, "Recent Task"))} ${escapeHtml(item.lastUsedTaskId)}</span>` : ""}
           </div>
         </div>
-      `).join("")}
+      `;
+      }).join("")}
     </div>
   `;
 }

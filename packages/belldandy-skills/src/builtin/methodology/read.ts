@@ -50,7 +50,11 @@ export const methodReadTool: Tool = {
         try {
             const content = await fs.readFile(filePath, "utf-8");
             try {
-                const manager = getGlobalMemoryManager();
+                const manager = getGlobalMemoryManager({
+                    agentId: context.agentId,
+                    conversationId: context.conversationId,
+                    workspaceRoot: context.workspaceRoot,
+                });
                 const task = manager?.getTaskByConversation(context.conversationId);
                 if (manager && task) {
                     manager.recordMethodUsage(task.id, filename, { usedVia: "tool" });

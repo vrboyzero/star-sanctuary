@@ -24,7 +24,7 @@ let memoryManager: MemoryManager | null = null;
 
 function getMemoryManager(workspaceRoot: string): MemoryManager {
     // [FIX] 优先使用 Gateway 注册的全局实例，以便访问 sessions 向量索引
-    const global = getGlobalMemoryManager();
+    const global = getGlobalMemoryManager({ workspaceRoot });
     if (global) {
         return global;
     }

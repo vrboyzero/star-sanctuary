@@ -4,6 +4,7 @@ import os from "node:os";
 import { ensureDefaultEnvFile, resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
 import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
 import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
+import { ResidentConversationStore } from "../resident-conversation-store.js";
 import {
   createSubTaskAgentCapabilities,
   createSubTaskRuntimeEventHandler,
@@ -35,6 +36,7 @@ import {
   loadAgentProfiles,
   buildDefaultProfile,
   resolveModelConfig,
+  resolveAgentProfileMetadata,
   type AgentProfile,
   type AgentPromptDelta,
   type AgentPromptSnapshot,
@@ -172,7 +174,7 @@ import {
   tokenCounterStartTool,
   tokenCounterStopTool,
 } from "@belldandy/skills";
-import { MemoryManager, registerGlobalMemoryManager, listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, type MemoryCategory } from "@belldandy/memory";
+import { listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, listGlobalMemoryManagers, type MemoryCategory } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
 import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
 import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type JsonObject, type TokenUsageUploadConfig } from "@belldandy/protocol";
@@ -242,8 +244,9 @@ import { ToolControlConfirmationStore } from "../tool-control-confirmation-store
 import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
-import { resolveMemoryIndexPaths } from "../memory-index-paths.js";
+import { createScopedMemoryManagers } from "../resident-memory-managers.js";
 import { loadConversationPromptSnapshotArtifact, persistConversationPromptSnapshot } from "../conversation-prompt-snapshot.js";
+import { resolveResidentMemoryPolicy } from "../resident-memory-policy.js";
 import { PromptSnapshotStore } from "../prompt-snapshot-store.js";
 import {
   applyPromptExperimentsToSections,
@@ -1065,7 +1068,10 @@ if (contextInjectionEnabled || autoRecallEnabled) {
     hookName: "before_agent_start",
     priority: 100,
     handler: async (event, _ctx) => {
-      const mm = getGlobalMemoryManager();
+      const mm = getGlobalMemoryManager({
+        agentId: _ctx.agentId,
+        conversationId: _ctx.sessionKey,
+      });
       if (!mm) return undefined;
       try {
         return await buildContextInjectionPrelude(mm, event, _ctx, {
@@ -1299,6 +1305,19 @@ function renderProviderNativeSystemBlocksText(
   return texts.join("\n").trim();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readResidentPromptMetadata(
+  metadata: Record<string, unknown> | undefined,
+): { residentProfile?: Record<string, unknown>; memoryPolicy?: Record<string, unknown> } {
+  return {
+    ...(isRecord(metadata?.residentProfile) ? { residentProfile: { ...metadata.residentProfile } } : {}),
+    ...(isRecord(metadata?.memoryPolicy) ? { memoryPolicy: { ...metadata.memoryPolicy } } : {}),
+  };
+}
+
 function buildEffectiveAgentPromptInspection(profile: AgentProfile): {
   scope?: "agent" | "run";
   agentId: string;
@@ -1380,6 +1399,8 @@ Keep responses concise and natural for spoken delivery.`,
     droppedSections: [...baseBuild.droppedSections, ...promptExperimentResult.droppedSections],
     providerNativeSystemBlocks,
   });
+  const resolvedProfileMetadata = resolveAgentProfileMetadata(profile);
+  const memoryPolicy = resolveResidentMemoryPolicy(stateDir, profile);
   return {
     scope: "agent",
     agentId: profile.id,
@@ -1395,7 +1416,24 @@ Keep responses concise and natural for spoken delivery.`,
     deltas: [],
     providerNativeSystemBlocks,
     metadata: {
-      workspaceDir: profile.workspaceDir ?? profile.id,
+      workspaceDir: resolvedProfileMetadata.workspaceDir,
+      residentProfile: {
+        kind: resolvedProfileMetadata.kind,
+        workspaceBinding: resolvedProfileMetadata.workspaceBinding,
+        workspaceDir: resolvedProfileMetadata.workspaceDir,
+        sessionNamespace: resolvedProfileMetadata.sessionNamespace,
+        memoryMode: resolvedProfileMetadata.memoryMode,
+      },
+      memoryPolicy: {
+        memoryMode: memoryPolicy.memoryMode,
+        managerStateDir: memoryPolicy.managerStateDir,
+        privateStateDir: memoryPolicy.privateStateDir,
+        sharedStateDir: memoryPolicy.sharedStateDir,
+        includeSharedMemoryReads: memoryPolicy.includeSharedMemoryReads,
+        readTargets: [...memoryPolicy.readTargets],
+        writeTarget: memoryPolicy.writeTarget,
+        summary: memoryPolicy.summary,
+      },
       includesTtsMode: isTtsEnabled,
       hasProfileOverride: Boolean(profile.systemPromptOverride),
       baseFinalChars: baseBuild.finalChars,
@@ -1552,6 +1590,7 @@ function buildRunPromptInspection(snapshot: AgentPromptSnapshot, profile?: Agent
     deltas,
     providerNativeSystemBlocks,
   });
+  const residentPromptMetadata = readResidentPromptMetadata(isRecord(snapshot.inputMeta) ? snapshot.inputMeta : undefined);
 
   return {
     scope: "run",
@@ -1573,6 +1612,7 @@ function buildRunPromptInspection(snapshot: AgentPromptSnapshot, profile?: Agent
     messages: normalizePromptSnapshotMessages(snapshot.messages),
     metadata: {
       ...(baseInspection?.metadata ?? {}),
+      ...residentPromptMetadata,
       snapshotScope: "run",
       snapshotCreatedAt: snapshot.createdAt,
       includesHookSystemPrompt: snapshot.hookSystemPromptUsed === true,
@@ -1842,8 +1882,9 @@ const compactionOpts = {
 };
 const compactionRuntimeTracker = new CompactionRuntimeTracker(compactionOpts);
 
-const conversationStore = new ConversationStore({
-  dataDir: sessionsDir,
+const conversationStore = new ResidentConversationStore({
+  stateDir,
+  agentRegistry,
   maxHistory: parseInt(readEnv("BELLDANDY_MAX_HISTORY") || "50", 10),
   compaction: compactionOpts,
   summarizer: compactionSummarizer,
@@ -1951,11 +1992,8 @@ const isTtsEnabledFn = () => {
   return ttsEnv === "true" || fs.existsSync(ttsEnabledPath);
 };
 
-// 7.7 Init unified MemoryManager (indexes only state-dir memory sources)
+// 7.7 Init scoped MemoryManagers (default + resident agent workspaces)
 const teamSharedMemoryEnabled = readEnv("BELLDANDY_TEAM_SHARED_MEMORY_ENABLED") === "true";
-const memoryIndexPaths = resolveMemoryIndexPaths(stateDir, {
-  includeTeamSharedMemory: teamSharedMemoryEnabled,
-});
 const embeddingApiKey = readEnv("BELLDANDY_EMBEDDING_OPENAI_API_KEY") ?? openaiApiKey;
 const embeddingBaseUrl = readEnv("BELLDANDY_EMBEDDING_OPENAI_BASE_URL") ?? openaiBaseUrl;
 const embeddingModel = readEnv("BELLDANDY_EMBEDDING_MODEL");
@@ -2017,13 +2055,11 @@ const embeddingPassagePrefix = readEnv("BELLDANDY_EMBEDDING_PASSAGE_PREFIX") || 
 const rerankerMinScore = Number(readEnv("BELLDANDY_RERANKER_MIN_SCORE")) || undefined;
 const rerankerLengthNormAnchor = Number(readEnv("BELLDANDY_RERANKER_LENGTH_NORM_ANCHOR")) || undefined;
 
-const unifiedMemoryManager = new MemoryManager({
-  workspaceRoot: memoryIndexPaths.sessionsDir,
-  additionalRoots: memoryIndexPaths.additionalRoots,
-  additionalFiles: memoryIndexPaths.additionalFiles,
-  storePath: path.join(stateDir, "memory.sqlite"),
-  modelsDir: path.join(stateDir, "models"),
+const scopedMemoryManagers = createScopedMemoryManagers({
   stateDir,
+  agentRegistry,
+  modelsDir: path.join(stateDir, "models"),
+  includeTeamSharedMemory: teamSharedMemoryEnabled,
   openaiApiKey: embeddingApiKey,
   openaiBaseUrl: embeddingBaseUrl,
   openaiModel: embeddingModel,
@@ -2064,15 +2100,15 @@ const unifiedMemoryManager = new MemoryManager({
     watch: true,
   },
 });
-registerGlobalMemoryManager(unifiedMemoryManager);
-
 // Start async indexing (non-blocking)
-unifiedMemoryManager.indexWorkspace().catch(err => {
-  logger.error("memory", `Failed to start unified memory indexing: ${err instanceof Error ? err.message : String(err)}`);
-});
+for (const record of [...new Map(scopedMemoryManagers.records.map((item) => [item.stateDir, item])).values()]) {
+  record.manager.indexWorkspace().catch(err => {
+    logger.error("memory", `Failed to start scoped memory indexing for ${record.agentId}: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
 logger.info(
   "memory",
-  `Unified MemoryManager initialized (stateDir memory sources: sessions + ${memoryIndexPaths.additionalRoots.length} additional roots, teamShared=${teamSharedMemoryEnabled}, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
+  `Scoped MemoryManagers initialized (bindings=${scopedMemoryManagers.records.length}, unique=${new Set(scopedMemoryManagers.records.map((item) => item.stateDir)).size}, teamShared=${teamSharedMemoryEnabled}, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
 );
 
 // ========== 后台任务调度：pause/resume + 空闲摘要 ==========
@@ -2089,11 +2125,12 @@ hookRegistry.register({
   priority: 50, // 高优先级，尽早暂停
   handler: async () => {
     activeAgentCount++;
-    const mm = getGlobalMemoryManager();
-    if (mm && !mm.isPaused) {
-      mm.pause();
-      logger.debug("memory-throttle", "Paused background LLM tasks (agent active)");
+    for (const mm of listGlobalMemoryManagers()) {
+      if (!mm.isPaused) {
+        mm.pause();
+      }
     }
+    logger.debug("memory-throttle", "Paused background LLM tasks (agent active)");
   },
 });
 
@@ -2105,12 +2142,14 @@ hookRegistry.register({
   handler: async () => {
     activeAgentCount = Math.max(0, activeAgentCount - 1);
     if (activeAgentCount === 0) {
-      const mm = getGlobalMemoryManager();
-      if (mm) {
+      const managers = listGlobalMemoryManagers();
+      if (managers.length > 0) {
         // 延迟 3s 恢复，给 evolution 提取留出窗口
         setTimeout(() => {
           if (activeAgentCount === 0) {
-            mm.resume();
+            for (const mm of managers) {
+              mm.resume();
+            }
             logger.debug("memory-throttle", "Resumed background LLM tasks (agent idle)");
           }
         }, 3000);
@@ -2123,15 +2162,15 @@ hookRegistry.register({
 if (summaryEnabled) {
   idleSummaryTimer = setInterval(() => {
     if (activeAgentCount > 0) return;
-    const mm = getGlobalMemoryManager();
-    if (!mm) return;
-    mm.runIdleSummaries().then(count => {
-      if (count > 0) {
-        logger.info("memory-summary", `Idle summary run: generated ${count} summaries`);
-      }
-    }).catch(err => {
-      logger.error("memory-summary", `Idle summary failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    for (const mm of listGlobalMemoryManagers()) {
+      mm.runIdleSummaries().then(count => {
+        if (count > 0) {
+          logger.info("memory-summary", `Idle summary run: generated ${count} summaries`);
+        }
+      }).catch(err => {
+        logger.error("memory-summary", `Idle summary failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
   }, IDLE_SUMMARY_INTERVAL_MS);
   // 不阻止进程退出
   if (idleSummaryTimer.unref) idleSummaryTimer.unref();
@@ -2227,7 +2266,10 @@ if (taskMemoryEnabled) {
       const sessionKey = ctx.sessionKey;
       if (!sessionKey) return;
 
-      const mm = getGlobalMemoryManager();
+      const mm = getGlobalMemoryManager({
+        agentId: ctx.agentId,
+        conversationId: sessionKey,
+      });
       if (!mm) return;
 
       const meta = event.meta && typeof event.meta === "object"
@@ -2257,7 +2299,10 @@ if (taskMemoryEnabled) {
       hookName: "before_tool_call",
       priority: 40,
       handler: async (event, ctx) => {
-        const mm = getGlobalMemoryManager();
+        const mm = getGlobalMemoryManager({
+          agentId: ctx.agentId,
+          conversationId: ctx.sessionKey,
+        });
         if (!mm) return;
 
         if (shouldBypassToolDedup(event.params ?? {})) {
@@ -2314,7 +2359,10 @@ if (taskMemoryEnabled) {
       const sessionKey = ctx.sessionKey;
       if (!sessionKey) return;
 
-      const mm = getGlobalMemoryManager();
+      const mm = getGlobalMemoryManager({
+        agentId: ctx.agentId,
+        conversationId: sessionKey,
+      });
       if (!mm) return;
 
       const artifactPaths = extractTaskArtifactPaths(
@@ -2342,7 +2390,10 @@ if (taskMemoryEnabled) {
       const sessionKey = ctx.sessionKey;
       if (!sessionKey) return;
 
-      const mm = getGlobalMemoryManager();
+      const mm = getGlobalMemoryManager({
+        agentId: ctx.agentId,
+        conversationId: sessionKey,
+      });
       if (!mm) return;
 
       mm.completeTaskCapture({
@@ -2705,6 +2756,7 @@ const server = await startGatewayServer({
   agentRegistry: agentRegistry,
   primaryModelConfig,
   modelFallbacks,
+  residentMemoryManagers: scopedMemoryManagers.records,
   conversationStore: conversationStore, // Pass shared instance
   getCompactionRuntimeReport: () => compactionRuntimeTracker.getReport(),
   onActivity,
@@ -2862,7 +2914,7 @@ if (server.host === "0.0.0.0" || server.host === "::") {
   logger.info("gateway", "To allow remote access, set BELLDANDY_HOST=0.0.0.0 in .env");
 }
 logger.info("gateway", `State Dir: ${stateDir}`);
-logger.info("gateway", `Memory DB: ${path.join(stateDir, "memory.sqlite")}`);
+logger.info("gateway", `Memory DBs: unique=${new Set(scopedMemoryManagers.records.map((item) => path.join(item.stateDir, "memory.sqlite"))).size}, bindings=${scopedMemoryManagers.records.length}`);
 logger.info("gateway", `Tools Enabled: ${toolsEnabled}`);
 
 // 8.5 Auto Open Browser (Magic Link)

@@ -475,6 +475,45 @@ export type SystemDoctorResult = {
       disabledContractNamesApplied: string[];
     };
   };
+  toolContractV2Observability?: {
+    requested: {
+      agentId?: string;
+      conversationId?: string;
+      taskId?: string;
+    };
+    visibilityContext: {
+      agentId: string;
+      conversationId: string | null;
+      taskId?: string;
+      launchSpec?: Record<string, unknown>;
+    };
+    summary: {
+      totalCount: number;
+      missingV2Count: number;
+      highRiskCount: number;
+      confirmRequiredCount: number;
+      governedTools: string[];
+      missingV2Tools: string[];
+    };
+    contracts: Record<string, {
+      family?: string;
+      riskLevel?: string;
+      needsPermission: boolean;
+      isReadOnly: boolean;
+      isConcurrencySafe: boolean;
+      activityDescription?: string;
+      recommendedWhen: string[];
+      avoidWhen: string[];
+      confirmWhen: string[];
+      preflightChecks: string[];
+      fallbackStrategy: string[];
+      expectedOutput: string[];
+      sideEffectSummary: string[];
+      userVisibleRiskNote?: string;
+      hasGovernanceContract: boolean;
+      hasBehaviorContract: boolean;
+    }>;
+  };
 };
 
 // Result payload for agents.list (Response payload)

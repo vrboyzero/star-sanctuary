@@ -11,6 +11,14 @@ import type { ModelProfile } from "./failover-client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
+const AGENT_PROFILE_KINDS = ["resident", "worker"] as const;
+const AGENT_WORKSPACE_BINDINGS = ["current", "custom"] as const;
+const AGENT_MEMORY_MODES = ["shared", "isolated", "hybrid"] as const;
+
+export type AgentProfileKind = typeof AGENT_PROFILE_KINDS[number];
+export type AgentWorkspaceBinding = typeof AGENT_WORKSPACE_BINDINGS[number];
+export type AgentMemoryMode = typeof AGENT_MEMORY_MODES[number];
+
 /**
  * Agent Profile：描述一个可配置的 Agent 人格/能力集
  */
@@ -29,8 +37,16 @@ export type AgentProfile = {
   systemPromptOverride?: string;
   /** @deprecated 使用 workspaceDir 替代。指向不同的 SOUL 文件（如 "SOUL-coder.md"） */
   soulFile?: string;
+  /** Agent 类型。resident 会进入 Resident roster；worker 供后续委派/子代理语义使用 */
+  kind?: AgentProfileKind;
+  /** 工作区绑定模式。current 表示跟随当前项目；custom 为后续异项目绑定预留 */
+  workspaceBinding?: AgentWorkspaceBinding;
   /** Agent 专属 workspace 目录名（位于 ~/.star_sanctuary/agents/{workspaceDir}/），默认等于 id */
   workspaceDir?: string;
+  /** 会话命名空间。默认等于 agent id 的安全 token */
+  sessionNamespace?: string;
+  /** 记忆模式。默认 hybrid */
+  memoryMode?: AgentMemoryMode;
   /** 是否启用工具（覆盖环境变量 BELLDANDY_TOOLS_ENABLED） */
   toolsEnabled?: boolean;
   /** 可用工具白名单（仅这些工具对该 Agent 可用） */
@@ -48,7 +64,32 @@ export type AgentConfigFile = {
   agents: AgentProfile[];
 };
 
+export type ResolvedAgentProfileMetadata = {
+  kind: AgentProfileKind;
+  workspaceBinding: AgentWorkspaceBinding;
+  workspaceDir: string;
+  sessionNamespace: string;
+  memoryMode: AgentMemoryMode;
+};
+
 // ─── Functions ───────────────────────────────────────────────────────────
+
+function normalizeEnumValue<T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+): T[number] | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return (allowed as readonly string[]).includes(normalized) ? normalized as T[number] : undefined;
+}
+
+function normalizeSessionNamespace(value: string, fallback: string): string {
+  return value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || fallback;
+}
 
 /**
  * 构建隐式的 "default" profile（始终存在，映射到环境变量配置）
@@ -58,6 +99,53 @@ export function buildDefaultProfile(): AgentProfile {
     id: "default",
     displayName: "Belldandy",
     model: "primary",
+    kind: "resident",
+    workspaceBinding: "current",
+    memoryMode: "hybrid",
+  };
+}
+
+export function resolveAgentProfileKind(profile: Pick<AgentProfile, "kind">): AgentProfileKind {
+  return profile.kind === "worker" ? "worker" : "resident";
+}
+
+export function isResidentAgentProfile(profile: Pick<AgentProfile, "kind">): boolean {
+  return resolveAgentProfileKind(profile) === "resident";
+}
+
+export function resolveAgentWorkspaceBinding(profile: Pick<AgentProfile, "workspaceBinding">): AgentWorkspaceBinding {
+  return profile.workspaceBinding === "custom" ? "custom" : "current";
+}
+
+export function resolveAgentWorkspaceDir(profile: Pick<AgentProfile, "id" | "workspaceDir">): string {
+  if (typeof profile.workspaceDir === "string" && profile.workspaceDir.trim()) {
+    return profile.workspaceDir.trim();
+  }
+  return profile.id.trim() || "default";
+}
+
+export function resolveAgentSessionNamespace(profile: Pick<AgentProfile, "id" | "sessionNamespace">): string {
+  const raw = typeof profile.sessionNamespace === "string" && profile.sessionNamespace.trim()
+    ? profile.sessionNamespace.trim()
+    : profile.id;
+  return normalizeSessionNamespace(raw, "default");
+}
+
+export function resolveAgentMemoryMode(profile: Pick<AgentProfile, "memoryMode">): AgentMemoryMode {
+  return profile.memoryMode === "shared" || profile.memoryMode === "isolated" || profile.memoryMode === "hybrid"
+    ? profile.memoryMode
+    : "hybrid";
+}
+
+export function resolveAgentProfileMetadata(
+  profile: Pick<AgentProfile, "id" | "kind" | "workspaceBinding" | "workspaceDir" | "sessionNamespace" | "memoryMode">,
+): ResolvedAgentProfileMetadata {
+  return {
+    kind: resolveAgentProfileKind(profile),
+    workspaceBinding: resolveAgentWorkspaceBinding(profile),
+    workspaceDir: resolveAgentWorkspaceDir(profile),
+    sessionNamespace: resolveAgentSessionNamespace(profile),
+    memoryMode: resolveAgentMemoryMode(profile),
   };
 }
 
@@ -91,7 +179,11 @@ export async function loadAgentProfiles(filePath: string): Promise<AgentProfile[
         model: obj.model.trim(),
         systemPromptOverride: typeof obj.systemPromptOverride === "string" ? obj.systemPromptOverride : undefined,
         soulFile: typeof obj.soulFile === "string" ? obj.soulFile : undefined,
+        kind: normalizeEnumValue(obj.kind, AGENT_PROFILE_KINDS),
+        workspaceBinding: normalizeEnumValue(obj.workspaceBinding, AGENT_WORKSPACE_BINDINGS),
         workspaceDir: typeof obj.workspaceDir === "string" && obj.workspaceDir.trim() ? obj.workspaceDir.trim() : undefined,
+        sessionNamespace: typeof obj.sessionNamespace === "string" && obj.sessionNamespace.trim() ? obj.sessionNamespace.trim() : undefined,
+        memoryMode: normalizeEnumValue(obj.memoryMode, AGENT_MEMORY_MODES),
         toolsEnabled: typeof obj.toolsEnabled === "boolean" ? obj.toolsEnabled : undefined,
         toolWhitelist: Array.isArray(obj.toolWhitelist) ? obj.toolWhitelist.filter((s): s is string => typeof s === "string") : undefined,
         maxInputTokens: typeof obj.maxInputTokens === "number" && obj.maxInputTokens > 0 ? obj.maxInputTokens : undefined,
