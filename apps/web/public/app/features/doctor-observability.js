@@ -248,6 +248,28 @@ function buildResidentAgentsCard(payload, t) {
       },
       `isolated ${formatNumber(summary.memoryModeCounts?.isolated)} / shared ${formatNumber(summary.memoryModeCounts?.shared)} / hybrid ${formatNumber(summary.memoryModeCounts?.hybrid)}`,
     ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsRuntime",
+      {
+        running: formatNumber(summary.runningCount),
+        background: formatNumber(summary.backgroundCount),
+        idle: formatNumber(summary.idleCount),
+        error: formatNumber(summary.errorCount),
+      },
+      `running ${formatNumber(summary.runningCount)} / background ${formatNumber(summary.backgroundCount)} / idle ${formatNumber(summary.idleCount)} / error ${formatNumber(summary.errorCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsDigest",
+      {
+        ready: formatNumber(summary.digestReadyCount),
+        updated: formatNumber(summary.digestUpdatedCount),
+        idle: formatNumber(summary.digestIdleCount),
+        missing: formatNumber(summary.digestMissingCount),
+      },
+      `digest ready ${formatNumber(summary.digestReadyCount)} / updated ${formatNumber(summary.digestUpdatedCount)} / idle ${formatNumber(summary.digestIdleCount)} / missing ${formatNumber(summary.digestMissingCount)}`,
+    ),
   ];
 
   const notes = [
@@ -261,8 +283,17 @@ function buildResidentAgentsCard(payload, t) {
 
   const agents = Array.isArray(resident.agents) ? resident.agents : [];
   for (const agent of agents.slice(0, 6)) {
+    const digest = agent?.conversationDigest;
+    const digestLabel = digest
+      ? `, digest=${digest.status}${Number(digest.pendingMessageCount) > 0 ? `/${formatNumber(digest.pendingMessageCount)}` : ""}`
+      : "";
+    const pendingCount = Number(agent?.sharedGovernance?.pendingCount) || 0;
+    const claimedCount = Number(agent?.sharedGovernance?.claimedCount) || 0;
+    const reviewLabel = pendingCount > 0 || claimedCount > 0
+      ? `, review=p${pendingCount}/c${claimedCount}`
+      : "";
     notes.push(
-      `${agent.displayName || agent.id}: ${agent.memoryMode}, write=${agent.memoryPolicy?.writeTarget || "-"}, read=${Array.isArray(agent.memoryPolicy?.readTargets) ? agent.memoryPolicy.readTargets.join("+") : "-"}, session=${agent.sessionNamespace || "-"}${agent.status ? `, status=${agent.status}` : ""}`,
+      `${agent.displayName || agent.id}: ${agent.memoryMode}, write=${agent.memoryPolicy?.writeTarget || "-"}, read=${Array.isArray(agent.memoryPolicy?.readTargets) ? agent.memoryPolicy.readTargets.join("+") : "-"}, session=${agent.sessionNamespace || "-"}${agent.status ? `, status=${agent.status}` : ""}${digestLabel}${reviewLabel}`,
     );
   }
 

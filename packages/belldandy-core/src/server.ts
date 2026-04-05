@@ -112,7 +112,7 @@ import {
 import { handleAgentContractsGetWithQueryRuntime } from "./query-runtime-agent-contracts.js";
 import { buildAgentRoster } from "./query-runtime-agent-roster.js";
 import { ensureResidentAgentSession } from "./query-runtime-agent-sessions.js";
-import { buildResidentAgentDoctorReport } from "./resident-agent-observability.js";
+import { buildResidentAgentObservabilitySnapshot } from "./resident-agent-observability.js";
 import {
   attachResidentExperienceCandidateSourceView,
   attachResidentExperienceUsageSourceView,
@@ -124,7 +124,9 @@ import {
 import {
   claimResidentSharedMemoryPromotion,
   getResidentMemory,
+  listResidentSharedReviewQueue,
   listRecentResidentMemory,
+  normalizeResidentSharedPromotionStatus,
   mergeResidentMemoryStatus,
   promoteResidentMemoryToShared,
   reviewResidentSharedMemoryPromotion,
@@ -354,6 +356,7 @@ const DEFAULT_METHODS = [
   "memory.get",
   "memory.recent",
   "memory.stats",
+  "memory.share.queue",
   "memory.share.promote",
   "memory.share.claim",
   "memory.share.review",
@@ -780,6 +783,20 @@ function extractScopedMemoryAgentId(params: Record<string, unknown>): string | u
   return undefined;
 }
 
+function extractTargetMemoryAgentId(params: Record<string, unknown>): string | undefined {
+  if (typeof params.targetAgentId === "string" && params.targetAgentId.trim()) {
+    return params.targetAgentId.trim();
+  }
+  return extractScopedMemoryAgentId(params);
+}
+
+function extractReviewerMemoryAgentId(params: Record<string, unknown>): string | undefined {
+  if (typeof params.reviewerAgentId === "string" && params.reviewerAgentId.trim()) {
+    return params.reviewerAgentId.trim();
+  }
+  return extractScopedMemoryAgentId(params);
+}
+
 function resolveScopedMemoryManager(params: Record<string, unknown> = {}) {
   const conversationId = typeof params.conversationId === "string" && params.conversationId.trim()
     ? params.conversationId.trim()
@@ -798,6 +815,17 @@ function resolveScopedResidentMemoryPolicy(
   const agentId = extractScopedMemoryAgentId(params) ?? "default";
   return records.find((item) => item.agentId === agentId)?.policy
     ?? records.find((item) => item.agentId === "default")?.policy;
+}
+
+function resolveResidentMemoryManagerRecord(
+  agentId: string | undefined,
+  records: ScopedMemoryManagerRecord[] = [],
+): ScopedMemoryManagerRecord | undefined {
+  const normalizedAgentId = typeof agentId === "string" && agentId.trim()
+    ? agentId.trim()
+    : "default";
+  return records.find((item) => item.agentId === normalizedAgentId)
+    ?? records.find((item) => item.agentId === "default");
 }
 
 function readHeaderValue(headers: http.IncomingHttpHeaders, name: string): string | undefined {
@@ -2753,7 +2781,7 @@ async function handleReq(
           contracts: ReturnType<typeof buildToolContractV2Observability>["contracts"];
         }
         | undefined;
-      let residentAgents: ReturnType<typeof buildResidentAgentDoctorReport> | undefined;
+      let residentAgents: Awaited<ReturnType<typeof buildResidentAgentObservabilitySnapshot>> | undefined;
 
       if (conversationId) {
         const conversationSnapshot = ctx.conversationStore.get(conversationId);
@@ -2914,34 +2942,10 @@ async function handleReq(
           agentRegistry: ctx.agentRegistry,
           residentAgentRuntime: ctx.residentAgentRuntime,
         });
-        const memoryPolicyByAgentId = new Map(
-          (ctx.residentMemoryManagers ?? []).map((record) => [record.agentId, record.policy] as const),
-        );
-        const sharedGovernanceByAgentId = new Map(
-          (ctx.residentMemoryManagers ?? []).map((record) => [record.agentId, buildSharedGovernanceCounts(record.manager, record.policy)] as const),
-        );
-        residentAgents = buildResidentAgentDoctorReport({
-          agents: roster
-            .map((agent) => {
-              const policy = memoryPolicyByAgentId.get(agent.id);
-              if (!policy) return undefined;
-              return {
-                id: agent.id,
-                displayName: agent.displayName,
-                model: agent.model,
-                kind: "resident" as const,
-                workspaceBinding: agent.workspaceBinding,
-                sessionNamespace: agent.sessionNamespace,
-                memoryMode: agent.memoryMode,
-                status: agent.status,
-                mainConversationId: agent.mainConversationId,
-                lastConversationId: agent.lastConversationId,
-                lastActiveAt: agent.lastActiveAt,
-                memoryPolicy: policy,
-                sharedGovernance: sharedGovernanceByAgentId.get(agent.id),
-              };
-            })
-            .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+        residentAgents = await buildResidentAgentObservabilitySnapshot({
+          agents: roster,
+          residentMemoryManagers: ctx.residentMemoryManagers,
+          conversationStore: ctx.conversationStore,
         });
         checks.push({
           id: "resident_agents",
@@ -3079,11 +3083,20 @@ async function handleReq(
     }
 
     case "agents.roster.get": {
-      const agents = await buildAgentRoster({
+      const roster = await buildAgentRoster({
         stateDir: ctx.stateDir,
         agentRegistry: ctx.agentRegistry,
         residentAgentRuntime: ctx.residentAgentRuntime,
       });
+      if ((ctx.residentMemoryManagers?.length ?? 0) > 0) {
+        const observability = await buildResidentAgentObservabilitySnapshot({
+          agents: roster,
+          residentMemoryManagers: ctx.residentMemoryManagers,
+          conversationStore: ctx.conversationStore,
+        });
+        return { type: "res", id: req.id, ok: true, payload: { agents: observability.agents } };
+      }
+      const agents = roster;
       return { type: "res", id: req.id, ok: true, payload: { agents } };
     }
 
@@ -4325,6 +4338,57 @@ async function handleReq(
       };
     }
 
+    case "memory.share.queue": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = clampListLimit(params.limit, 50, 200);
+      const query = typeof params.query === "string" ? params.query.trim() : "";
+      const filter = isObjectRecord(params.filter) ? params.filter : {};
+      const reviewerAgentId = extractReviewerMemoryAgentId(params) ?? "default";
+      if ((ctx.residentMemoryManagers?.length ?? 0) <= 0) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Resident memory managers are not available." } };
+      }
+
+      const queue = listResidentSharedReviewQueue({
+        records: ctx.residentMemoryManagers ?? [],
+        agentRegistry: ctx.agentRegistry,
+        reviewerAgentId,
+        limit,
+        query,
+        filter: {
+          sharedPromotionStatus: Array.isArray(filter.sharedPromotionStatus)
+            ? filter.sharedPromotionStatus
+              .map((item) => normalizeResidentSharedPromotionStatus(item))
+              .filter((item): item is NonNullable<typeof item> => Boolean(item))
+            : normalizeResidentSharedPromotionStatus(filter.sharedPromotionStatus),
+          targetAgentId: typeof filter.targetAgentId === "string" ? filter.targetAgentId.trim() : undefined,
+          claimedByAgentId: typeof filter.claimedByAgentId === "string" ? filter.claimedByAgentId.trim() : undefined,
+          actionableOnly: filter.actionableOnly === true,
+        },
+      });
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          reviewerAgentId,
+          limit,
+          items: queue.items.map((item) => {
+            const targetPolicy = resolveResidentMemoryManagerRecord(item.targetAgentId, ctx.residentMemoryManagers)?.policy;
+            return {
+              ...attachResidentMemorySourceView(item, targetPolicy),
+              targetAgentId: item.targetAgentId,
+              targetDisplayName: item.targetDisplayName,
+              targetMemoryMode: item.targetMemoryMode,
+              reviewStatus: item.reviewStatus,
+              actionableByReviewer: item.actionableByReviewer,
+              blockedByOtherReviewer: item.blockedByOtherReviewer,
+            };
+          }),
+          summary: queue.summary,
+        },
+      };
+    }
+
     case "memory.share.promote": {
       const params = isObjectRecord(req.params) ? req.params : {};
       const manager = resolveScopedMemoryManager(params);
@@ -4381,8 +4445,10 @@ async function handleReq(
 
     case "memory.share.review": {
       const params = isObjectRecord(req.params) ? req.params : {};
-      const manager = resolveScopedMemoryManager(params);
-      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const targetAgentId = extractTargetMemoryAgentId(params) ?? "default";
+      const targetRecord = resolveResidentMemoryManagerRecord(targetAgentId, ctx.residentMemoryManagers);
+      const manager = targetRecord?.manager ?? resolveScopedMemoryManager({ agentId: targetAgentId });
+      const residentPolicy = targetRecord?.policy ?? resolveScopedResidentMemoryPolicy({ agentId: targetAgentId }, ctx.residentMemoryManagers);
       const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
@@ -4392,19 +4458,19 @@ async function handleReq(
       const sourcePath = typeof params.sourcePath === "string" ? params.sourcePath.trim() : "";
       const decision = typeof params.decision === "string" ? params.decision.trim() : "";
       const note = typeof params.note === "string" ? params.note.trim() : "";
-      const agentId = extractScopedMemoryAgentId(params) ?? residentPolicy?.agentId ?? "default";
       if (!chunkId && !sourcePath) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "chunkId or sourcePath is required." } };
       }
       if (!["approved", "rejected", "revoked"].includes(decision)) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "decision must be approved, rejected, or revoked." } };
       }
+      const reviewerAgentId = extractReviewerMemoryAgentId(params) ?? targetAgentId;
 
       try {
         const result = reviewResidentSharedMemoryPromotion({
           manager,
           sharedManager,
-          agentId,
+          agentId: reviewerAgentId,
           chunkId: chunkId || undefined,
           sourcePath: sourcePath || undefined,
           decision: decision as "approved" | "rejected" | "revoked",
@@ -4415,6 +4481,8 @@ async function handleReq(
           id: req.id,
           ok: true,
           payload: {
+            targetAgentId,
+            reviewerAgentId,
             decision: result.decision,
             reviewedCount: result.reviewedCount,
             mode: result.mode,
@@ -4440,8 +4508,10 @@ async function handleReq(
 
     case "memory.share.claim": {
       const params = isObjectRecord(req.params) ? req.params : {};
-      const manager = resolveScopedMemoryManager(params);
-      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      const targetAgentId = extractTargetMemoryAgentId(params) ?? "default";
+      const targetRecord = resolveResidentMemoryManagerRecord(targetAgentId, ctx.residentMemoryManagers);
+      const manager = targetRecord?.manager ?? resolveScopedMemoryManager({ agentId: targetAgentId });
+      const residentPolicy = targetRecord?.policy ?? resolveScopedResidentMemoryPolicy({ agentId: targetAgentId }, ctx.residentMemoryManagers);
       const sharedManager = resolveResidentSharedMemoryManager(residentPolicy);
       if (!manager) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Memory manager is not available." } };
@@ -4450,19 +4520,19 @@ async function handleReq(
       const chunkId = typeof params.chunkId === "string" ? params.chunkId.trim() : "";
       const sourcePath = typeof params.sourcePath === "string" ? params.sourcePath.trim() : "";
       const action = typeof params.action === "string" ? params.action.trim() : "";
-      const agentId = extractScopedMemoryAgentId(params) ?? residentPolicy?.agentId ?? "default";
       if (!chunkId && !sourcePath) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "chunkId or sourcePath is required." } };
       }
       if (!["claim", "release"].includes(action)) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "action must be claim or release." } };
       }
+      const reviewerAgentId = extractReviewerMemoryAgentId(params) ?? targetAgentId;
 
       try {
         const result = claimResidentSharedMemoryPromotion({
           manager,
           sharedManager,
-          agentId,
+          agentId: reviewerAgentId,
           action: action as "claim" | "release",
           chunkId: chunkId || undefined,
           sourcePath: sourcePath || undefined,
@@ -4472,6 +4542,8 @@ async function handleReq(
           id: req.id,
           ok: true,
           payload: {
+            targetAgentId,
+            reviewerAgentId,
             action: result.action,
             claimedCount: result.claimedCount,
             mode: result.mode,

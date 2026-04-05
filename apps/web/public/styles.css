@@ -413,6 +413,14 @@ body::before {
   white-space: nowrap;
 }
 
+.agent-card-summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Header */
 .header {
   display: flex;

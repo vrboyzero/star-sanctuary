@@ -485,6 +485,17 @@ test("agents.roster.get exposes resident runtime status and main conversation id
     kind: "worker",
     workspaceDir: "verifier",
   });
+  const residentMemoryManagers = createScopedMemoryManagers({
+    stateDir,
+    agentRegistry: registry,
+    modelsDir: path.join(stateDir, "models"),
+    conversationStore: new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+    }),
+    indexerOptions: {
+      watch: false,
+    },
+  }).records;
 
   const server = await startGatewayServer({
     port: 0,
@@ -492,6 +503,7 @@ test("agents.roster.get exposes resident runtime status and main conversation id
     webRoot: resolveWebRoot(),
     stateDir,
     agentRegistry: registry,
+    residentMemoryManagers,
   });
 
   const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
@@ -519,6 +531,18 @@ test("agents.roster.get exposes resident runtime status and main conversation id
         status: "idle",
         mainConversationId: "agent:default:main",
         lastConversationId: "agent:default:main",
+        memoryPolicy: expect.objectContaining({
+          writeTarget: "private",
+          readTargets: ["private", "shared"],
+        }),
+        conversationDigest: expect.objectContaining({
+          status: "idle",
+        }),
+        observabilityBadges: expect.arrayContaining([
+          "mode:hybrid",
+          "write:private",
+          "digest:idle",
+        ]),
       }),
       expect.objectContaining({
         id: "coder",
@@ -529,9 +553,387 @@ test("agents.roster.get exposes resident runtime status and main conversation id
         status: "idle",
         mainConversationId: "agent:coder:main",
         lastConversationId: "agent:coder:main",
+        memoryPolicy: expect.objectContaining({
+          writeTarget: "private",
+          readTargets: ["private"],
+        }),
+        conversationDigest: expect.objectContaining({
+          status: "idle",
+        }),
       }),
     ]));
     expect(rosterRes.payload?.agents.some((item: { id?: string }) => item.id === "verifier")).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("memory.share.queue supports centralized claim and review across resident agents", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-shared-review-queue-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+    memoryMode: "hybrid",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    workspaceDir: "coder",
+    sessionNamespace: "coder-main",
+    memoryMode: "isolated",
+  });
+
+  const residentMemoryManagers = createScopedMemoryManagers({
+    stateDir,
+    agentRegistry: registry,
+    modelsDir: path.join(stateDir, "models"),
+    conversationStore: new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+    }),
+    indexerOptions: {
+      watch: false,
+    },
+  }).records;
+  const defaultRecord = residentMemoryManagers.find((record) => record.agentId === "default");
+  expect(defaultRecord).toBeTruthy();
+  if (!defaultRecord) {
+    throw new Error("default resident memory manager is required");
+  }
+  defaultRecord.manager.upsertMemoryChunk({
+    id: "shared-review-chunk",
+    sourcePath: "memory/shared-review.md",
+    sourceType: "manual",
+    memoryType: "other",
+    content: "shared review queue smoke",
+    visibility: "private",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    residentMemoryManagers,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-promote",
+      method: "memory.share.promote",
+      params: {
+        agentId: "default",
+        chunkId: "shared-review-chunk",
+        reason: "queue smoke",
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-promote"));
+
+    const promoteRes = frames.find((frame) => frame.type === "res" && frame.id === "share-promote");
+    expect(promoteRes.ok).toBe(true);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-queue-pending",
+      method: "memory.share.queue",
+      params: {
+        reviewerAgentId: "coder",
+        filter: { sharedPromotionStatus: "pending" },
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-queue-pending"));
+
+    const queueRes = frames.find((frame) => frame.type === "res" && frame.id === "share-queue-pending");
+    expect(queueRes.ok).toBe(true);
+    expect(queueRes.payload?.summary).toMatchObject({
+      pendingCount: 1,
+      reviewerAgentId: "coder",
+      reviewerActionableCount: 1,
+    });
+    expect(queueRes.payload?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "shared-review-chunk",
+        targetAgentId: "default",
+        reviewStatus: "pending",
+        actionableByReviewer: true,
+      }),
+    ]));
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-claim",
+      method: "memory.share.claim",
+      params: {
+        reviewerAgentId: "coder",
+        targetAgentId: "default",
+        chunkId: "shared-review-chunk",
+        action: "claim",
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-claim"));
+    const claimRes = frames.find((frame) => frame.type === "res" && frame.id === "share-claim");
+    expect(claimRes.ok).toBe(true);
+    expect(claimRes.payload).toMatchObject({
+      reviewerAgentId: "coder",
+      targetAgentId: "default",
+      claimedCount: 1,
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-queue-claimed",
+      method: "memory.share.queue",
+      params: {
+        reviewerAgentId: "coder",
+        filter: { sharedPromotionStatus: "pending" },
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-queue-claimed"));
+    const claimedQueueRes = frames.find((frame) => frame.type === "res" && frame.id === "share-queue-claimed");
+    expect(claimedQueueRes.ok).toBe(true);
+    expect(claimedQueueRes.payload?.summary).toMatchObject({
+      pendingCount: 1,
+      claimedCount: 1,
+      reviewerClaimedCount: 1,
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-approve",
+      method: "memory.share.review",
+      params: {
+        reviewerAgentId: "coder",
+        targetAgentId: "default",
+        chunkId: "shared-review-chunk",
+        decision: "approved",
+        note: "queue approved",
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-approve"));
+    const approveRes = frames.find((frame) => frame.type === "res" && frame.id === "share-approve");
+    expect(approveRes.ok).toBe(true);
+    expect(approveRes.payload).toMatchObject({
+      reviewerAgentId: "coder",
+      targetAgentId: "default",
+      reviewedCount: 1,
+      decision: "approved",
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-queue-approved",
+      method: "memory.share.queue",
+      params: {
+        reviewerAgentId: "coder",
+        filter: { sharedPromotionStatus: "approved" },
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-queue-approved"));
+    const approvedQueueRes = frames.find((frame) => frame.type === "res" && frame.id === "share-queue-approved");
+    expect(approvedQueueRes.ok).toBe(true);
+    expect(approvedQueueRes.payload?.summary).toMatchObject({
+      approvedCount: 1,
+    });
+    expect(approvedQueueRes.payload?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "shared-review-chunk",
+        targetAgentId: "default",
+        reviewStatus: "approved",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("memory.share.queue treats timed-out claims as overdue and actionable again", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-shared-review-timeout-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+    memoryMode: "hybrid",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    workspaceDir: "coder",
+    sessionNamespace: "coder-main",
+    memoryMode: "isolated",
+  });
+  registry.register({
+    id: "reviewer",
+    displayName: "Reviewer",
+    model: "primary",
+    workspaceDir: "reviewer",
+    sessionNamespace: "reviewer-main",
+    memoryMode: "isolated",
+  });
+
+  const residentMemoryManagers = createScopedMemoryManagers({
+    stateDir,
+    agentRegistry: registry,
+    modelsDir: path.join(stateDir, "models"),
+    conversationStore: new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+    }),
+    indexerOptions: {
+      watch: false,
+    },
+  }).records;
+  const defaultRecord = residentMemoryManagers.find((record) => record.agentId === "default");
+  expect(defaultRecord).toBeTruthy();
+  if (!defaultRecord) {
+    throw new Error("default resident memory manager is required");
+  }
+
+  defaultRecord.manager.upsertMemoryChunk({
+    id: "shared-review-timeout-chunk",
+    sourcePath: "memory/shared-review-timeout.md",
+    sourceType: "manual",
+    memoryType: "other",
+    content: "shared review timeout smoke",
+    visibility: "private",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    residentMemoryManagers,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-timeout-promote",
+      method: "memory.share.promote",
+      params: {
+        agentId: "default",
+        chunkId: "shared-review-timeout-chunk",
+        reason: "timeout smoke",
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-timeout-promote"));
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-timeout-claim",
+      method: "memory.share.claim",
+      params: {
+        reviewerAgentId: "coder",
+        targetAgentId: "default",
+        chunkId: "shared-review-timeout-chunk",
+        action: "claim",
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-timeout-claim"));
+    const claimRes = frames.find((frame) => frame.type === "res" && frame.id === "share-timeout-claim");
+    expect(claimRes?.ok).toBe(true);
+
+    const claimedItem = defaultRecord.manager.getMemory("shared-review-timeout-chunk");
+    expect(claimedItem?.metadata?.sharedPromotion?.claimedByAgentId).toBe("coder");
+    expect(claimedItem?.metadata?.sharedPromotion?.claimedAt).toEqual(expect.any(String));
+    const claimedSourceType = claimedItem?.sourceType;
+    defaultRecord.manager.upsertMemoryChunk({
+      id: claimedItem?.id ?? "shared-review-timeout-chunk",
+      sourcePath: claimedItem?.sourcePath ?? "memory/shared-review-timeout.md",
+      sourceType: claimedSourceType === "session" || claimedSourceType === "manual" ? claimedSourceType : "manual",
+      memoryType: claimedItem?.memoryType ?? "other",
+      content: claimedItem?.content ?? claimedItem?.snippet ?? "shared review timeout smoke",
+      startLine: claimedItem?.startLine,
+      endLine: claimedItem?.endLine,
+      category: claimedItem?.category,
+      visibility: claimedItem?.visibility ?? "private",
+      metadata: {
+        ...(claimedItem?.metadata ?? {}),
+        sharedPromotion: {
+          ...(claimedItem?.metadata?.sharedPromotion ?? {}),
+          claimedAt: new Date(Date.now() - (2 * 60 * 60 * 1000)).toISOString(),
+        },
+      },
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-timeout-queue",
+      method: "memory.share.queue",
+      params: {
+        reviewerAgentId: "reviewer",
+        filter: { sharedPromotionStatus: "pending" },
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-timeout-queue"));
+    const queueRes = frames.find((frame) => frame.type === "res" && frame.id === "share-timeout-queue");
+    expect(queueRes?.ok).toBe(true);
+    expect(queueRes?.payload?.summary).toMatchObject({
+      pendingCount: 1,
+      claimedCount: 0,
+      overdueCount: 1,
+      blockedCount: 0,
+      reviewerActionableCount: 1,
+    });
+    expect(queueRes?.payload?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "shared-review-timeout-chunk",
+        claimOwner: "coder",
+        claimTimedOut: true,
+        actionableByReviewer: true,
+        blockedByOtherReviewer: false,
+      }),
+    ]));
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "share-timeout-review",
+      method: "memory.share.review",
+      params: {
+        reviewerAgentId: "reviewer",
+        targetAgentId: "default",
+        chunkId: "shared-review-timeout-chunk",
+        decision: "rejected",
+        note: "timeout reviewer takeover",
+      },
+    }));
+    await waitFor(() => frames.some((frame) => frame.type === "res" && frame.id === "share-timeout-review"));
+    const reviewRes = frames.find((frame) => frame.type === "res" && frame.id === "share-timeout-review");
+    expect(reviewRes?.ok).toBe(true);
+    expect(reviewRes?.payload).toMatchObject({
+      reviewerAgentId: "reviewer",
+      targetAgentId: "default",
+      reviewedCount: 1,
+      decision: "rejected",
+    });
   } finally {
     ws.close();
     await closeP;

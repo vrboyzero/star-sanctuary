@@ -53,7 +53,15 @@ describe("doctor observability formatting", () => {
         summary: {
           totalCount: 2,
           activeCount: 1,
-          headline: "2 resident agent(s), active=1, isolated=1, shared=0, hybrid=1",
+          runningCount: 1,
+          idleCount: 1,
+          backgroundCount: 0,
+          errorCount: 0,
+          digestReadyCount: 1,
+          digestUpdatedCount: 1,
+          digestIdleCount: 0,
+          digestMissingCount: 0,
+          headline: "2 resident agent(s), active=1, isolated=1, shared=0, hybrid=1, running=1, background=0, idle=1, digest-ready=1, digest-updated=1",
           sharedReadEnabledCount: 1,
           memoryModeCounts: {
             isolated: 1,
@@ -79,6 +87,10 @@ describe("doctor observability formatting", () => {
             memoryMode: "hybrid",
             sessionNamespace: "default",
             status: "running",
+            conversationDigest: {
+              status: "updated",
+              pendingMessageCount: 3,
+            },
             memoryPolicy: {
               writeTarget: "private",
               readTargets: ["private", "shared"],
@@ -97,6 +109,10 @@ describe("doctor observability formatting", () => {
             memoryMode: "isolated",
             sessionNamespace: "coder-main",
             status: "idle",
+            conversationDigest: {
+              status: "ready",
+              pendingMessageCount: 0,
+            },
             memoryPolicy: {
               writeTarget: "private",
               readTargets: ["private"],
@@ -133,7 +149,10 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("尚未补齐 V2 契约：beta_builtin");
     expect(lines.join("\n")).toContain("Resident Agents");
     expect(lines.join("\n")).toContain("2 个 resident");
+    expect(lines.join("\n")).toContain("running 1 / background 0 / idle 1 / error 0");
+    expect(lines.join("\n")).toContain("digest ready 1 / updated 1 / idle 0 / missing 0");
     expect(lines.join("\n")).toContain("Belldandy: hybrid");
+    expect(lines.join("\n")).toContain("digest=updated/3");
     expect(lines.join("\n")).toContain("Shared Governance");
     expect(lines.join("\n")).toContain("1 个 shared reader");
     expect(lines.join("\n")).toContain("1 pending approval(s)");

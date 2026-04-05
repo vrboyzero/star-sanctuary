@@ -86,6 +86,7 @@ const memoryViewerDetailEl = document.getElementById("memoryViewerDetail");
 const memoryViewerRefreshBtn = document.getElementById("memoryViewerRefresh");
 const memoryTabTasksBtn = document.getElementById("memoryTabTasks");
 const memoryTabMemoriesBtn = document.getElementById("memoryTabMemories");
+const memoryTabSharedReviewBtn = document.getElementById("memoryTabSharedReview");
 const memorySearchInputEl = document.getElementById("memorySearchInput");
 const memorySearchBtn = document.getElementById("memorySearchBtn");
 const memoryTaskFiltersEl = document.getElementById("memoryTaskFilters");
@@ -323,6 +324,7 @@ const memoryViewerState = {
   memoryQueryView: null,
   experienceQueryView: null,
   sharedGovernance: null,
+  sharedReviewSummary: null,
   requestToken: 0,
   activeAgentId: "default",
 };
@@ -484,6 +486,9 @@ if (memoryTabTasksBtn) {
 }
 if (memoryTabMemoriesBtn) {
   memoryTabMemoriesBtn.addEventListener("click", () => switchMemoryViewerTab("memories"));
+}
+if (memoryTabSharedReviewBtn) {
+  memoryTabSharedReviewBtn.addEventListener("click", () => switchMemoryViewerTab("sharedReview"));
 }
 if (memorySearchBtn) {
   memorySearchBtn.addEventListener("click", () => loadMemoryViewer(true));
@@ -993,6 +998,7 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryViewerDetailEl,
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
+    memoryTabSharedReviewBtn,
     memoryTaskFiltersEl,
     memoryChunkFiltersEl,
     memorySearchInputEl,
@@ -1103,6 +1109,7 @@ function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
   memoryViewerState.usageOverviewSeq = Number(memoryViewerState.usageOverviewSeq || 0) + 1;
   memoryViewerState.memoryQueryView = null;
   memoryViewerState.experienceQueryView = null;
+  memoryViewerState.sharedReviewSummary = null;
   memoryViewerState.sharedGovernance = null;
 }
 
@@ -1351,6 +1358,22 @@ function syncAgentCatalog(agents = [], selectedAgentId = "") {
       mainConversationId,
       lastConversationId,
       lastActiveAt: typeof agent.lastActiveAt === "number" ? agent.lastActiveAt : undefined,
+      memoryMode: typeof agent.memoryMode === "string" ? agent.memoryMode : "",
+      workspaceBinding: typeof agent.workspaceBinding === "string" ? agent.workspaceBinding : "",
+      sessionNamespace: typeof agent.sessionNamespace === "string" ? agent.sessionNamespace : "",
+      conversationDigest: agent.conversationDigest && typeof agent.conversationDigest === "object"
+        ? {
+          status: typeof agent.conversationDigest.status === "string" ? agent.conversationDigest.status : "",
+          pendingMessageCount: Number(agent.conversationDigest.pendingMessageCount) || 0,
+        }
+        : null,
+      sharedGovernance: agent.sharedGovernance && typeof agent.sharedGovernance === "object"
+        ? {
+          pendingCount: Number(agent.sharedGovernance.pendingCount) || 0,
+          claimedCount: Number(agent.sharedGovernance.claimedCount) || 0,
+        }
+        : null,
+      observabilityHeadline: typeof agent.observabilityHeadline === "string" ? agent.observabilityHeadline : "",
     });
   }
 
@@ -1396,6 +1419,60 @@ function updateAgentCatalogAvatar(agentId, avatarPath) {
   }
 }
 
+function formatAgentPanelDigestStatus(digest) {
+  const status = typeof digest?.status === "string" ? digest.status : "";
+  switch (status) {
+    case "ready":
+      return localeController.t("agentPanel.digestReady", {}, "digest ready");
+    case "updated":
+      return localeController.t("agentPanel.digestUpdated", {}, "digest update");
+    case "idle":
+      return localeController.t("agentPanel.digestIdle", {}, "digest idle");
+    default:
+      return "";
+  }
+}
+
+function buildAgentPanelSummary(agent) {
+  const pieces = [];
+  if (agent.memoryMode) {
+    const memoryModeText = agent.memoryMode === "isolated"
+      ? localeController.t("agentPanel.memoryModeIsolated", {}, "isolated")
+      : agent.memoryMode === "shared"
+      ? localeController.t("agentPanel.memoryModeShared", {}, "shared")
+      : localeController.t("agentPanel.memoryModeHybrid", {}, "hybrid");
+    pieces.push(memoryModeText);
+  }
+
+  if (agent.workspaceBinding === "custom") {
+    pieces.push(localeController.t("agentPanel.workspaceCustom", {}, "custom workspace"));
+  }
+
+  const digestLabel = formatAgentPanelDigestStatus(agent.conversationDigest);
+  if (digestLabel) {
+    const pendingCount = Number(agent.conversationDigest?.pendingMessageCount) || 0;
+    pieces.push(
+      pendingCount > 0
+        ? localeController.t("agentPanel.digestPending", { label: digestLabel, count: pendingCount }, `${digestLabel}/${pendingCount}`)
+        : digestLabel,
+    );
+  }
+
+  const pendingCount = Number(agent.sharedGovernance?.pendingCount) || 0;
+  const claimedCount = Number(agent.sharedGovernance?.claimedCount) || 0;
+  if (pendingCount > 0 || claimedCount > 0) {
+    pieces.push(
+      localeController.t(
+        "agentPanel.reviewQueue",
+        { pending: pendingCount, claimed: claimedCount },
+        `review ${pendingCount}/${claimedCount}`,
+      ),
+    );
+  }
+
+  return pieces.join(" · ");
+}
+
 function renderAgentRightPanel() {
   if (!agentRightPanelEl) return;
 
@@ -1418,7 +1495,7 @@ function renderAgentRightPanel() {
     const main = document.createElement("button");
     main.type = "button";
     main.className = "agent-card-main";
-    main.title = agent.displayName || agent.id;
+    main.title = agent.observabilityHeadline || agent.displayName || agent.id;
 
     const avatar = document.createElement("div");
     avatar.className = "agent-card-avatar avatar-clickable";
@@ -1460,6 +1537,13 @@ function renderAgentRightPanel() {
 
     content.appendChild(name);
     content.appendChild(meta);
+    const summary = buildAgentPanelSummary(agent);
+    if (summary) {
+      const summaryEl = document.createElement("div");
+      summaryEl.className = "agent-card-summary";
+      summaryEl.textContent = summary;
+      content.appendChild(summaryEl);
+    }
     main.appendChild(avatar);
     main.appendChild(content);
     main.addEventListener("click", () => {
@@ -4457,7 +4541,7 @@ async function loadMemoryChunkViewer(forceSelectFirst = false) {
   return memoryViewerFeature?.loadMemoryChunkViewer(forceSelectFirst);
 }
 
-async function loadMemoryDetail(chunkId, requestContext = null) {
+async function loadMemoryDetail(chunkId, requestContext = null, options = {}) {
   if (!chunkId) {
     renderMemoryViewerDetailEmpty(localeController.t("memory.selectMemory", {}, "Please select a memory."));
     return;
@@ -4465,7 +4549,13 @@ async function loadMemoryDetail(chunkId, requestContext = null) {
 
   renderMemoryViewerDetailEmpty(localeController.t("memory.memoryDetailLoadingShort", {}, "Loading memory details…"));
   const requestToken = Number(requestContext?.requestToken ?? memoryViewerState.requestToken ?? 0);
-  const requestAgentId = String(requestContext?.agentId || memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
+  const requestAgentId = String(
+    options?.targetAgentId
+    || resolveMemoryDetailTargetAgentId(chunkId)
+    || requestContext?.agentId
+    || memoryViewerState.activeAgentId
+    || getCurrentAgentSelection(),
+  ).trim() || "default";
   const id = makeId();
   const res = await sendReq({ type: "req", id, method: "memory.get", params: { chunkId, agentId: requestAgentId } });
   if (
@@ -4479,9 +4569,30 @@ async function loadMemoryDetail(chunkId, requestContext = null) {
     return;
   }
 
-  renderMemoryList(memoryViewerState.items);
+  if (memoryViewerState.tab === "sharedReview") {
+    renderSharedReviewList(memoryViewerState.items);
+  } else {
+    renderMemoryList(memoryViewerState.items);
+  }
   memoryViewerState.memoryQueryView = res.payload?.queryView ?? memoryViewerState.memoryQueryView ?? null;
-  renderMemoryDetail(res.payload?.item);
+  const queueItem = memoryViewerState.tab === "sharedReview" && Array.isArray(memoryViewerState.items)
+    ? memoryViewerState.items.find((item) => item?.id === chunkId)
+    : null;
+  renderMemoryDetail(queueItem && res.payload?.item
+    ? {
+      ...res.payload.item,
+      targetAgentId: queueItem.targetAgentId,
+      targetDisplayName: queueItem.targetDisplayName,
+      targetMemoryMode: queueItem.targetMemoryMode,
+      reviewStatus: queueItem.reviewStatus,
+      claimOwner: queueItem.claimOwner,
+      claimAgeMs: queueItem.claimAgeMs,
+      claimExpiresAt: queueItem.claimExpiresAt,
+      claimTimedOut: queueItem.claimTimedOut,
+      actionableByReviewer: queueItem.actionableByReviewer,
+      blockedByOtherReviewer: queueItem.blockedByOtherReviewer,
+    }
+    : res.payload?.item);
 }
 
 async function openTaskFromAudit(taskId) {
@@ -4560,6 +4671,20 @@ function renderMemoryList(items) {
   return memoryViewerFeature?.renderMemoryList(items);
 }
 
+function renderSharedReviewList(items) {
+  return memoryViewerFeature?.renderSharedReviewList(items);
+}
+
+function resolveMemoryDetailTargetAgentId(chunkId) {
+  if (!chunkId || memoryViewerState.tab !== "sharedReview") return undefined;
+  const selected = Array.isArray(memoryViewerState.items)
+    ? memoryViewerState.items.find((item) => item?.id === chunkId)
+    : null;
+  return typeof selected?.targetAgentId === "string" && selected.targetAgentId.trim()
+    ? selected.targetAgentId.trim()
+    : undefined;
+}
+
 function refreshMemoryLocale() {
   if (!memoryViewerSection) return;
   if (!ws || !isReady) {
@@ -4582,7 +4707,11 @@ function refreshMemoryLocale() {
     renderMemoryViewerDetailEmpty(localeController.t("memory.selectTask", {}, "Please select a task."));
     return;
   }
-  renderMemoryList(memoryViewerState.items);
+  if (memoryViewerState.tab === "sharedReview") {
+    renderSharedReviewList(memoryViewerState.items);
+  } else {
+    renderMemoryList(memoryViewerState.items);
+  }
   if (memoryViewerState.selectedId) {
     void loadMemoryDetail(memoryViewerState.selectedId);
     return;

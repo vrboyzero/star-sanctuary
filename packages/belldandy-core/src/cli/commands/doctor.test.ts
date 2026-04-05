@@ -57,6 +57,9 @@ test("bdd doctor json output includes tool behavior observability", async () => 
     expect(parsed.residentAgents).toMatchObject({
       summary: {
         totalCount: 1,
+        idleCount: 1,
+        runningCount: 0,
+        digestMissingCount: 0,
         memoryModeCounts: {
           hybrid: 1,
         },
@@ -65,6 +68,7 @@ test("bdd doctor json output includes tool behavior observability", async () => 
         expect.objectContaining({
           id: "default",
           memoryMode: "hybrid",
+          observabilityHeadline: expect.stringContaining("write=private"),
         }),
       ],
     });

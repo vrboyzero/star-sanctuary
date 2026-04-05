@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import type { AgentRegistry } from "@belldandy/agent";
 import type {
   MemoryChunk,
   MemoryIndexStatus,
@@ -10,6 +11,7 @@ import type {
 import { getGlobalMemoryManager, scanTeamSharedMemorySecrets } from "@belldandy/memory";
 
 import type { ResolvedResidentMemoryPolicy } from "./resident-memory-policy.js";
+import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
 
 export type ResidentSharedPromotionStatus = "pending" | "approved" | "rejected" | "revoked" | "active";
 
@@ -69,6 +71,54 @@ export type ResidentMemoryShareClaimResult = {
   sharedItems: MemorySearchResult[];
 };
 
+export type ResidentSharedReviewQueueItem = MemorySearchResult & {
+  targetAgentId: string;
+  targetDisplayName: string;
+  targetMemoryMode: string;
+  reviewStatus: ResidentSharedPromotionStatus;
+  claimOwner?: string;
+  claimAgeMs?: number;
+  claimExpiresAt?: string;
+  claimTimedOut: boolean;
+  actionableByReviewer: boolean;
+  blockedByOtherReviewer: boolean;
+};
+
+export type ResidentSharedReviewQueueSummary = {
+  totalCount: number;
+  pendingCount: number;
+  claimedCount: number;
+  unclaimedCount: number;
+  overdueCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  revokedCount: number;
+  claimTimeoutMs: number;
+  reviewerAgentId?: string;
+  reviewerClaimedCount: number;
+  reviewerActionableCount: number;
+  blockedCount: number;
+  byAgent: Array<{
+    agentId: string;
+    displayName: string;
+    totalCount: number;
+    pendingCount: number;
+    claimedCount: number;
+    approvedCount: number;
+    rejectedCount: number;
+    revokedCount: number;
+  }>;
+  byReviewer: Array<{
+    agentId: string;
+    count: number;
+  }>;
+};
+
+export type ResidentSharedReviewQueueResult = {
+  items: ResidentSharedReviewQueueItem[];
+  summary: ResidentSharedReviewQueueSummary;
+};
+
 function cloneFilterWithScope(
   filter: MemorySearchFilter | undefined,
   scope: "private" | "shared",
@@ -96,6 +146,10 @@ function byUpdatedAtDesc(a: MemorySearchResult, b: MemorySearchResult): number {
   return right - left;
 }
 
+function byCountDesc<T extends { count: number }>(a: T, b: T): number {
+  return b.count - a.count;
+}
+
 function mergeCategoryBuckets(
   left: MemoryIndexStatus["categoryBuckets"],
   right: MemoryIndexStatus["categoryBuckets"],
@@ -119,6 +173,80 @@ function mergeCategoryBuckets(
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+const DEFAULT_SHARED_REVIEW_CLAIM_TIMEOUT_MS = 60 * 60 * 1000;
+
+function resolveSharedReviewClaimTimeoutMs(): number {
+  const parsed = Number(process.env.BELLDANDY_SHARED_REVIEW_CLAIM_TIMEOUT_MS);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SHARED_REVIEW_CLAIM_TIMEOUT_MS;
+  }
+  return Math.max(60_000, Math.floor(parsed));
+}
+
+type ResidentPromotionClaimState = {
+  claimOwner: string;
+  claimAgeMs?: number;
+  claimExpiresAt?: string;
+  claimTimedOut: boolean;
+  blocksOtherReviewers: boolean;
+};
+
+function resolvePromotionClaimState(
+  promotion: ResidentSharedPromotionMetadata,
+  nowMs = Date.now(),
+  claimTimeoutMs = resolveSharedReviewClaimTimeoutMs(),
+): ResidentPromotionClaimState {
+  const claimOwner = typeof promotion.claimedByAgentId === "string" ? promotion.claimedByAgentId.trim() : "";
+  const claimedAtRaw = typeof promotion.claimedAt === "string" ? promotion.claimedAt.trim() : "";
+  const claimedAtMs = claimedAtRaw ? Date.parse(claimedAtRaw) : Number.NaN;
+  const claimAgeMs = claimOwner && Number.isFinite(claimedAtMs)
+    ? Math.max(0, nowMs - claimedAtMs)
+    : undefined;
+  const claimTimedOut = Boolean(claimOwner) && typeof claimAgeMs === "number" && claimAgeMs >= claimTimeoutMs;
+  const claimExpiresAt = claimOwner && Number.isFinite(claimedAtMs)
+    ? new Date(claimedAtMs + claimTimeoutMs).toISOString()
+    : undefined;
+  return {
+    claimOwner,
+    claimAgeMs,
+    claimExpiresAt,
+    claimTimedOut,
+    blocksOtherReviewers: Boolean(claimOwner) && !claimTimedOut,
+  };
+}
+
+function normalizeQueueStatuses(
+  value: unknown,
+): ResidentSharedPromotionStatus[] {
+  const source = Array.isArray(value) ? value : [value];
+  const statuses = source
+    .map((item) => normalizeResidentSharedPromotionStatus(item))
+    .filter((item): item is ResidentSharedPromotionStatus => Boolean(item));
+  return statuses.length > 0 ? [...new Set(statuses)] : ["pending"];
+}
+
+function matchesQueueQuery(item: MemorySearchResult, promotion: ResidentSharedPromotionMetadata, query: string): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return true;
+  const haystack = [
+    item.id,
+    item.sourcePath,
+    item.summary,
+    item.snippet,
+    item.content,
+    promotion.reason,
+    promotion.sourceAgentId,
+    promotion.requestedByAgentId,
+    promotion.claimedByAgentId,
+    promotion.reviewerAgentId,
+    promotion.decisionNote,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n")
+    .toLowerCase();
+  return haystack.includes(normalized);
 }
 
 export function normalizeResidentSharedPromotionStatus(value: unknown): ResidentSharedPromotionStatus | undefined {
@@ -447,7 +575,8 @@ function assertClaimTransition(
   if (promotion.status !== "pending") {
     throw new Error(`Only pending shared promotions can be ${action === "claim" ? "claimed" : "released"}. Current status: ${promotion.status}.`);
   }
-  const claimedByAgentId = typeof promotion.claimedByAgentId === "string" ? promotion.claimedByAgentId.trim() : "";
+  const claimState = resolvePromotionClaimState(promotion);
+  const claimedByAgentId = claimState.blocksOtherReviewers ? claimState.claimOwner : "";
   if (action === "claim") {
     if (claimedByAgentId && claimedByAgentId !== agentId) {
       throw new Error(`Shared promotion is already claimed by ${claimedByAgentId}.`);
@@ -466,7 +595,8 @@ function assertClaimOwnershipForReview(
   promotion: ResidentSharedPromotionMetadata,
   reviewerAgentId: string,
 ): void {
-  const claimedByAgentId = typeof promotion.claimedByAgentId === "string" ? promotion.claimedByAgentId.trim() : "";
+  const claimState = resolvePromotionClaimState(promotion);
+  const claimedByAgentId = claimState.blocksOtherReviewers ? claimState.claimOwner : "";
   if (promotion.status !== "pending" || !claimedByAgentId) {
     return;
   }
@@ -602,6 +732,167 @@ export function mergeResidentMemoryStatus(
       .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
       .sort()
       .at(-1),
+  };
+}
+
+export function listResidentSharedReviewQueue(input: {
+  records: ScopedMemoryManagerRecord[];
+  agentRegistry?: AgentRegistry;
+  reviewerAgentId?: string;
+  limit: number;
+  query?: string;
+  includeContent?: boolean;
+  filter?: {
+    sharedPromotionStatus?: ResidentSharedPromotionStatus | ResidentSharedPromotionStatus[];
+    targetAgentId?: string;
+    claimedByAgentId?: string;
+    actionableOnly?: boolean;
+  };
+}): ResidentSharedReviewQueueResult {
+  const limit = Math.max(1, Math.min(input.limit, 200));
+  const query = typeof input.query === "string" ? input.query.trim() : "";
+  const statuses = normalizeQueueStatuses(input.filter?.sharedPromotionStatus);
+  const targetAgentFilter = typeof input.filter?.targetAgentId === "string" ? input.filter.targetAgentId.trim() : "";
+  const claimedByFilter = typeof input.filter?.claimedByAgentId === "string" ? input.filter.claimedByAgentId.trim() : "";
+  const reviewerAgentId = typeof input.reviewerAgentId === "string" ? input.reviewerAgentId.trim() : "";
+  const actionableOnly = input.filter?.actionableOnly === true;
+  const includeContent = input.includeContent === true;
+  const perAgentLimit = Math.max(limit, 50);
+  const claimTimeoutMs = resolveSharedReviewClaimTimeoutMs();
+  const nowMs = Date.now();
+  const items: ResidentSharedReviewQueueItem[] = [];
+
+  for (const record of input.records) {
+    if (record.policy.writeTarget === "shared") continue;
+    if (targetAgentFilter && record.agentId !== targetAgentFilter) continue;
+
+    const displayName = input.agentRegistry?.getProfile(record.agentId)?.displayName ?? record.agentId;
+    const candidates = record.manager.getRecent(perAgentLimit, {
+      scope: "private",
+      sharedPromotionStatus: statuses,
+    }, includeContent);
+
+    for (const item of candidates) {
+      const promotion = getResidentSharedPromotionMetadata(item);
+      if (!promotion) continue;
+      if (!statuses.includes(promotion.status)) continue;
+      if (!matchesQueueQuery(item, promotion, query)) continue;
+      if (claimedByFilter && promotion.claimedByAgentId !== claimedByFilter) continue;
+
+      const claimState = resolvePromotionClaimState(promotion, nowMs, claimTimeoutMs);
+      const actionableByReviewer = promotion.status === "pending" && (!claimState.blocksOtherReviewers || claimState.claimOwner === reviewerAgentId);
+      const blockedByOtherReviewer = promotion.status === "pending" && claimState.blocksOtherReviewers && claimState.claimOwner !== reviewerAgentId;
+      if (actionableOnly && !actionableByReviewer) continue;
+
+      items.push({
+        ...item,
+        targetAgentId: record.agentId,
+        targetDisplayName: displayName,
+        targetMemoryMode: record.memoryMode,
+        reviewStatus: promotion.status,
+        claimOwner: claimState.claimOwner || undefined,
+        claimAgeMs: claimState.claimAgeMs,
+        claimExpiresAt: claimState.claimExpiresAt,
+        claimTimedOut: claimState.claimTimedOut,
+        actionableByReviewer,
+        blockedByOtherReviewer,
+      });
+    }
+  }
+
+  items.sort(byUpdatedAtDesc);
+  const limited = items.slice(0, limit);
+  const byAgentMap = new Map<string, ResidentSharedReviewQueueSummary["byAgent"][number]>();
+  const byReviewerMap = new Map<string, number>();
+  const summary: ResidentSharedReviewQueueSummary = {
+    totalCount: 0,
+    pendingCount: 0,
+    claimedCount: 0,
+    unclaimedCount: 0,
+    overdueCount: 0,
+    approvedCount: 0,
+    rejectedCount: 0,
+    revokedCount: 0,
+    claimTimeoutMs,
+    reviewerAgentId: reviewerAgentId || undefined,
+    reviewerClaimedCount: 0,
+    reviewerActionableCount: 0,
+    blockedCount: 0,
+    byAgent: [],
+    byReviewer: [],
+  };
+
+  for (const item of limited) {
+    const promotion = getResidentSharedPromotionMetadata(item);
+    if (!promotion) continue;
+    const claimState = resolvePromotionClaimState(promotion, nowMs, claimTimeoutMs);
+    summary.totalCount += 1;
+    if (promotion.status === "pending") {
+      summary.pendingCount += 1;
+      if (claimState.claimTimedOut) {
+        summary.overdueCount += 1;
+      }
+      if (claimState.blocksOtherReviewers) {
+        summary.claimedCount += 1;
+      } else {
+        summary.unclaimedCount += 1;
+      }
+    } else if (promotion.status === "approved" || promotion.status === "active") {
+      summary.approvedCount += 1;
+    } else if (promotion.status === "rejected") {
+      summary.rejectedCount += 1;
+    } else if (promotion.status === "revoked") {
+      summary.revokedCount += 1;
+    }
+
+    if (item.actionableByReviewer) {
+      summary.reviewerActionableCount += 1;
+    }
+    if (item.blockedByOtherReviewer) {
+      summary.blockedCount += 1;
+    }
+    if (reviewerAgentId && claimState.claimOwner === reviewerAgentId && claimState.blocksOtherReviewers) {
+      summary.reviewerClaimedCount += 1;
+    }
+
+    const agentBucket = byAgentMap.get(item.targetAgentId) ?? {
+      agentId: item.targetAgentId,
+      displayName: item.targetDisplayName,
+      totalCount: 0,
+      pendingCount: 0,
+      claimedCount: 0,
+      approvedCount: 0,
+      rejectedCount: 0,
+      revokedCount: 0,
+    };
+    agentBucket.totalCount += 1;
+    if (promotion.status === "pending") {
+      agentBucket.pendingCount += 1;
+      if (claimState.blocksOtherReviewers) {
+        agentBucket.claimedCount += 1;
+      }
+    } else if (promotion.status === "approved" || promotion.status === "active") {
+      agentBucket.approvedCount += 1;
+    } else if (promotion.status === "rejected") {
+      agentBucket.rejectedCount += 1;
+    } else if (promotion.status === "revoked") {
+      agentBucket.revokedCount += 1;
+    }
+    byAgentMap.set(item.targetAgentId, agentBucket);
+
+    if (claimState.claimOwner && claimState.blocksOtherReviewers) {
+      byReviewerMap.set(claimState.claimOwner, (byReviewerMap.get(claimState.claimOwner) ?? 0) + 1);
+    }
+  }
+
+  summary.byAgent = [...byAgentMap.values()].sort((a, b) => b.totalCount - a.totalCount);
+  summary.byReviewer = [...byReviewerMap.entries()]
+    .map(([agentId, count]) => ({ agentId, count }))
+    .sort(byCountDesc);
+
+  return {
+    items: limited,
+    summary,
   };
 }
 

@@ -27,7 +27,7 @@ import {
   buildToolContractV2Summary,
   listToolContractsV2,
 } from "@belldandy/skills";
-import { buildResidentAgentDoctorReport } from "../../resident-agent-observability.js";
+import { buildResidentAgentObservabilitySnapshot } from "../../resident-agent-observability.js";
 import { resolveResidentMemoryPolicy } from "../../resident-memory-policy.js";
 
 interface CheckResult {
@@ -308,7 +308,7 @@ export default defineCommand({
       buildDefaultProfile(),
       ...configuredProfiles.filter((profile) => profile.id !== "default" && isResidentAgentProfile(profile)),
     ];
-    const residentAgents = buildResidentAgentDoctorReport({
+    const residentAgents = await buildResidentAgentObservabilitySnapshot({
       agents: residentProfiles.map((profile) => {
         const metadata = resolveAgentProfileMetadata(profile);
         return {
@@ -360,6 +360,18 @@ export default defineCommand({
     ctx.log(
       `  disabled by experiment: ${toolBehaviorObservability.experiment?.disabledContractNamesConfigured.join(", ") || "(none)"}`,
     );
+    ctx.log("");
+    ctx.log("Resident Agents");
+    ctx.log(`  total: ${residentAgents.summary.totalCount}`);
+    ctx.log(
+      `  runtime: running ${residentAgents.summary.runningCount}, background ${residentAgents.summary.backgroundCount}, idle ${residentAgents.summary.idleCount}, error ${residentAgents.summary.errorCount}`,
+    );
+    ctx.log(
+      `  digest: ready ${residentAgents.summary.digestReadyCount}, updated ${residentAgents.summary.digestUpdatedCount}, idle ${residentAgents.summary.digestIdleCount}, missing ${residentAgents.summary.digestMissingCount}`,
+    );
+    for (const agent of residentAgents.agents.slice(0, 3)) {
+      ctx.log(`  - ${agent.displayName}: ${agent.observabilityHeadline ?? agent.memoryMode}`);
+    }
     ctx.log("");
     ctx.log("Tool Contract V2");
     ctx.log(`  total governed tools: ${toolContractV2Observability.summary.totalCount}`);

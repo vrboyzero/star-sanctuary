@@ -124,6 +124,10 @@ test("system.doctor exposes resident memory policy summary", async () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.residentAgents?.summary).toMatchObject({
       totalCount: 2,
+      runningCount: 0,
+      idleCount: 2,
+      digestIdleCount: 2,
+      digestMissingCount: 0,
       memoryModeCounts: {
         shared: 1,
         hybrid: 1,
@@ -136,6 +140,15 @@ test("system.doctor exposes resident memory policy summary", async () => {
     expect(res.payload?.residentAgents?.agents).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "default",
+        conversationDigest: expect.objectContaining({
+          status: "idle",
+        }),
+        observabilityBadges: expect.arrayContaining([
+          "mode:hybrid",
+          "write:private",
+          "digest:idle",
+          "review:1",
+        ]),
         sharedGovernance: expect.objectContaining({
           pendingCount: 1,
         }),
@@ -144,6 +157,9 @@ test("system.doctor exposes resident memory policy summary", async () => {
         id: "coder",
         sessionNamespace: "coder-main",
         memoryMode: "shared",
+        conversationDigest: expect.objectContaining({
+          status: "idle",
+        }),
         memoryPolicy: expect.objectContaining({
           writeTarget: "shared",
           readTargets: ["shared"],

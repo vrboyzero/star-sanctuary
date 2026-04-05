@@ -50,6 +50,7 @@ export function createMemoryViewerFeature({
     memoryViewerDetailEl,
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
+    memoryTabSharedReviewBtn,
     memoryTaskFiltersEl,
     memoryChunkFiltersEl,
     memorySearchInputEl,
@@ -175,6 +176,13 @@ export function createMemoryViewerFeature({
     if (typeof promotion.claimedAt === "string" && promotion.claimedAt.trim()) {
       parts.push(`claimedAt=${promotion.claimedAt.trim()}`);
     }
+    const claimState = getMemoryShareClaimState(item);
+    if (claimState.claimTimedOut) {
+      parts.push("claim=timed_out");
+    }
+    if (claimState.claimExpiresAt) {
+      parts.push(`claimExpiresAt=${claimState.claimExpiresAt}`);
+    }
     if (typeof promotion.decisionNote === "string" && promotion.decisionNote.trim()) {
       parts.push(`note=${promotion.decisionNote.trim()}`);
     }
@@ -190,8 +198,39 @@ export function createMemoryViewerFeature({
   }
 
   function getMemoryShareClaimOwner(item) {
+    if (typeof item?.claimOwner === "string" && item.claimOwner.trim()) {
+      return item.claimOwner.trim();
+    }
     const promotion = getMemorySharePromotionMetadata(item);
     return typeof promotion?.claimedByAgentId === "string" ? promotion.claimedByAgentId.trim() : "";
+  }
+
+  function getMemoryShareClaimState(item) {
+    const promotion = getMemorySharePromotionMetadata(item);
+    return {
+      claimOwner: getMemoryShareClaimOwner(item),
+      claimedAt: typeof promotion?.claimedAt === "string" && promotion.claimedAt.trim()
+        ? promotion.claimedAt.trim()
+        : "",
+      claimAgeMs: Number.isFinite(Number(item?.claimAgeMs)) ? Number(item.claimAgeMs) : null,
+      claimExpiresAt: typeof item?.claimExpiresAt === "string" && item.claimExpiresAt.trim()
+        ? item.claimExpiresAt.trim()
+        : "",
+      claimTimedOut: item?.claimTimedOut === true,
+      actionableByReviewer: item?.actionableByReviewer === true,
+      blockedByOtherReviewer: item?.blockedByOtherReviewer === true,
+    };
+  }
+
+  function getMemoryShareTargetAgentId(item) {
+    const promotion = getMemorySharePromotionMetadata(item);
+    if (typeof item?.targetAgentId === "string" && item.targetAgentId.trim()) {
+      return item.targetAgentId.trim();
+    }
+    if (typeof promotion?.sourceAgentId === "string" && promotion.sourceAgentId.trim()) {
+      return promotion.sourceAgentId.trim();
+    }
+    return getActiveAgentId();
   }
 
   function normalizeResidentQueryMode(queryView) {
@@ -255,6 +294,13 @@ export function createMemoryViewerFeature({
     const agentName = typeof getSelectedAgentLabel === "function"
       ? String(getSelectedAgentLabel() || "").trim()
       : "";
+    const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.tab === "sharedReview") {
+      memoryViewerTitleEl.textContent = agentName
+        ? t("memory.sharedReviewTitleWithAgent", { agentName }, `${agentName} Shared Review Inbox`)
+        : t("memory.sharedReviewTitle", {}, "Shared Review Inbox");
+      return;
+    }
     memoryViewerTitleEl.textContent = agentName
       ? t("memory.titleWithAgent", { agentName }, `${agentName} Memory Viewer`)
       : t("memory.title", {}, "Memory Viewer");
@@ -307,9 +353,12 @@ export function createMemoryViewerFeature({
     syncMemoryViewerHeaderTitle();
     const memoryViewerState = getMemoryViewerState();
     const isTasks = memoryViewerState.tab === "tasks";
+    const isMemories = memoryViewerState.tab === "memories";
+    const isSharedReview = memoryViewerState.tab === "sharedReview";
     if (memoryViewerSection) memoryViewerSection.classList.toggle("tasks-mode", isTasks);
     if (memoryTabTasksBtn) memoryTabTasksBtn.classList.toggle("active", isTasks);
-    if (memoryTabMemoriesBtn) memoryTabMemoriesBtn.classList.toggle("active", !isTasks);
+    if (memoryTabMemoriesBtn) memoryTabMemoriesBtn.classList.toggle("active", isMemories);
+    if (memoryTabSharedReviewBtn) memoryTabSharedReviewBtn.classList.toggle("active", isSharedReview);
     if (memoryTaskFiltersEl) memoryTaskFiltersEl.classList.toggle("hidden", !isTasks);
     if (memoryChunkFiltersEl) memoryChunkFiltersEl.classList.toggle("hidden", isTasks);
     syncMemoryTaskGoalFilterUi();
@@ -323,8 +372,12 @@ export function createMemoryViewerFeature({
     memoryViewerState.selectedId = null;
     memoryViewerState.selectedTask = null;
     memoryViewerState.selectedCandidate = null;
+    memoryViewerState.sharedReviewSummary = null;
     if (tab !== "tasks") {
       memoryViewerState.goalIdFilter = null;
+    }
+    if (tab === "sharedReview" && memoryChunkGovernanceFilterEl && !memoryChunkGovernanceFilterEl.value) {
+      memoryChunkGovernanceFilterEl.value = "pending";
     }
     syncMemoryViewerUi();
     void loadMemoryViewer(true);
@@ -350,6 +403,10 @@ export function createMemoryViewerFeature({
       ]);
       if (!isMemoryViewerRequestCurrent(requestContext)) return;
       await loadTaskViewer(forceSelectFirst, requestContext);
+    } else if (memoryViewerState.tab === "sharedReview") {
+      memoryViewerState.selectedTask = null;
+      memoryViewerState.selectedCandidate = null;
+      await loadSharedReviewQueue(forceSelectFirst, requestContext);
     } else {
       memoryViewerState.selectedTask = null;
       memoryViewerState.selectedCandidate = null;
@@ -442,18 +499,22 @@ export function createMemoryViewerFeature({
       "",
     );
     if (note === null) return;
+    const reviewerAgentId = getActiveAgentId();
+    const targetAgentId = getMemoryShareTargetAgentId(item);
 
     const res = await sendReq({
       type: "req",
       id: makeId(),
       method: "memory.share.review",
-      params: buildScopedParams({
+      params: {
         ...(scope === "source"
           ? { sourcePath: getMemoryShareScopeSourcePath(item) }
           : { chunkId: item.id }),
+        targetAgentId,
+        reviewerAgentId,
         decision,
         note: String(note || "").trim(),
-      }),
+      },
     });
     if (!res || !res.ok) {
       showNotice?.(
@@ -488,16 +549,20 @@ export function createMemoryViewerFeature({
 
   async function claimSelectedMemoryShare(item, action, scope = "chunk") {
     if (!item?.id) return;
+    const reviewerAgentId = getActiveAgentId();
+    const targetAgentId = getMemoryShareTargetAgentId(item);
     const res = await sendReq({
       type: "req",
       id: makeId(),
       method: "memory.share.claim",
-      params: buildScopedParams({
+      params: {
         action,
         ...(scope === "source"
           ? { sourcePath: getMemoryShareScopeSourcePath(item) }
           : { chunkId: item.id }),
-      }),
+        targetAgentId,
+        reviewerAgentId,
+      },
     });
     if (!res || !res.ok) {
       showNotice?.(
@@ -712,9 +777,67 @@ export function createMemoryViewerFeature({
     await loadMemoryDetail(memoryViewerState.selectedId, requestContext);
   }
 
+  async function loadSharedReviewQueue(forceSelectFirst = false, existingContext = null) {
+    const requestContext = createMemoryViewerRequestContext(existingContext);
+    renderMemoryViewerListEmpty(t("memory.sharedReviewLoading", {}, "Loading shared review inbox..."));
+    renderMemoryViewerDetailEmpty(t("memory.sharedReviewDetailLoading", {}, "Loading shared review details..."));
+
+    const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
+    const filter = {};
+    if (memoryChunkGovernanceFilterEl?.value) filter.sharedPromotionStatus = memoryChunkGovernanceFilterEl.value;
+    if (!filter.sharedPromotionStatus) filter.sharedPromotionStatus = "pending";
+    const params = { limit: 50, reviewerAgentId: requestContext.agentId };
+    if (Object.keys(filter).length > 0) params.filter = filter;
+    if (query) params.query = query;
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "memory.share.queue",
+      params,
+    });
+    const memoryViewerState = getMemoryViewerState();
+    if (!isMemoryViewerRequestCurrent(requestContext)) return;
+    if (!res || !res.ok) {
+      memoryViewerState.sharedReviewSummary = null;
+      memoryViewerState.items = [];
+      renderMemoryViewerStats(null);
+      renderMemoryViewerListEmpty(t("memory.sharedReviewLoadFailed", {}, "Failed to load shared review inbox."));
+      renderMemoryViewerDetailEmpty(res?.error?.message || t("memory.sharedReviewDetailLoadFailed", {}, "Failed to read shared review data."));
+      return;
+    }
+
+    const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
+    memoryViewerState.items = items;
+    memoryViewerState.sharedReviewSummary = res.payload?.summary ?? null;
+    renderMemoryViewerStats(memoryViewerState.stats);
+
+    if (!items.length) {
+      memoryViewerState.selectedId = null;
+      renderSharedReviewList(items);
+      renderMemoryViewerDetailEmpty(t("memory.sharedReviewEmpty", {}, "There are no shared review items right now."));
+      return;
+    }
+
+    const selectedExists = items.some((item) => item.id === memoryViewerState.selectedId);
+    if (forceSelectFirst || !selectedExists) {
+      memoryViewerState.selectedId = items[0].id;
+    }
+
+    renderSharedReviewList(items);
+    const selected = items.find((item) => item.id === memoryViewerState.selectedId);
+    await loadMemoryDetail(memoryViewerState.selectedId, requestContext, {
+      targetAgentId: selected?.targetAgentId,
+    });
+  }
+
   function renderMemoryViewerStats(stats) {
     if (!memoryViewerStatsEl) return;
     if (!stats) {
+      const memoryViewerState = getMemoryViewerState();
+      if (memoryViewerState.tab === "sharedReview" && memoryViewerState.sharedReviewSummary) {
+        stats = {};
+      } else {
       memoryViewerStatsEl.innerHTML = `
         <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statFiles", {}, "Memory Files"))}</span><strong class="memory-stat-value">--</strong></div>
         <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statChunks", {}, "Memory Chunks"))}</span><strong class="memory-stat-value">--</strong></div>
@@ -722,9 +845,34 @@ export function createMemoryViewerFeature({
         <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statSummaries", {}, "Summaries Ready"))}</span><strong class="memory-stat-value">--</strong></div>
       `;
       return;
+      }
     }
 
     const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.tab === "sharedReview") {
+      const summary = memoryViewerState.sharedReviewSummary || {};
+      const byAgent = Array.isArray(summary.byAgent) ? summary.byAgent.slice(0, 3) : [];
+      const byReviewer = Array.isArray(summary.byReviewer) ? summary.byReviewer.slice(0, 3) : [];
+      const agentSummary = byAgent.length
+        ? byAgent.map((item) => `${item.displayName || item.agentId} ${formatCount(item.totalCount)}`).join(" · ")
+        : t("memory.sharedReviewAgentSummaryEmpty", {}, "No resident backlog.");
+      const reviewerSummary = byReviewer.length
+        ? byReviewer.map((item) => `${item.agentId} ${formatCount(item.count)}`).join(" · ")
+        : t("memory.sharedReviewReviewerSummaryEmpty", {}, "No claimed owner.");
+      memoryViewerStatsEl.innerHTML = `
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewActingAs", {}, "Acting Reviewer"))}</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(summary.reviewerAgentId || getActiveAgentId())}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statSharedPendingQueue", {}, "Pending Shared Queue"))}</span><strong class="memory-stat-value">${formatCount(summary.pendingCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewActionableCount", {}, "Actionable Now"))}</span><strong class="memory-stat-value">${formatCount(summary.reviewerActionableCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewMyClaims", {}, "My Claims"))}</span><strong class="memory-stat-value">${formatCount(summary.reviewerClaimedCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewOverdueCount", {}, "Timed-out Claims"))}</span><strong class="memory-stat-value">${formatCount(summary.overdueCount)}</strong><div class="memory-stat-caption">${escapeHtml(t("memory.sharedReviewOverdueHint", { duration: formatDuration(summary.claimTimeoutMs) }, `Timeout after ${formatDuration(summary.claimTimeoutMs)}`))}</div></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewBlockedCount", {}, "Blocked by Others"))}</span><strong class="memory-stat-value">${formatCount(summary.blockedCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewAgentBacklog", {}, "Backlog by Agent"))}</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(agentSummary)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewReviewerBacklog", {}, "Backlog by Reviewer"))}</span><strong class="memory-stat-value memory-stat-value-compact">${escapeHtml(reviewerSummary)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.sharedReviewCompletedCount", {}, "Reviewed History"))}</span><strong class="memory-stat-value">${formatCount((Number(summary.approvedCount) || 0) + (Number(summary.rejectedCount) || 0) + (Number(summary.revokedCount) || 0))}</strong></div>
+      `;
+      return;
+    }
+
     if (memoryViewerState.tab === "memories") {
       const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
       const currentCategorized = items.filter((item) => Boolean(item?.category)).length;
@@ -850,6 +998,75 @@ export function createMemoryViewerFeature({
         memoryViewerState.selectedId = chunkId;
         renderMemoryList(memoryViewerState.items);
         await loadMemoryDetail(chunkId);
+      });
+    });
+  }
+
+  function renderSharedReviewList(items) {
+    if (!memoryViewerListEl) return;
+    if (!items.length) {
+      renderMemoryViewerListEmpty(t("memory.sharedReviewEmpty", {}, "There are no shared review items right now."));
+      return;
+    }
+
+    const memoryViewerState = getMemoryViewerState();
+    memoryViewerListEl.innerHTML = items.map((item) => {
+      const title = summarizeSourcePath(item.sourcePath);
+      const summary = item.summary || item.snippet || t("memory.emptyNoSummary", {}, "No summary");
+      const isActive = item.id === memoryViewerState.selectedId;
+      const visibility = normalizeMemoryVisibility(item.visibility);
+      const category = formatMemoryCategory(item.category);
+      const sourceView = item.sourceView || { scope: visibility };
+      const promotion = getMemorySharePromotionMetadata(item);
+      const claimState = getMemoryShareClaimState(item);
+      const claimOwner = claimState.claimOwner;
+      const targetLabel = item.targetDisplayName || item.targetAgentId || promotion?.sourceAgentId || "-";
+      const statusLabel = formatMemorySharePromotionStatusLabel(item.reviewStatus || normalizeMemorySharePromotionStatus(item));
+      const requestedAt = promotion?.requestedAt || item.updatedAt || "";
+      const currentAgentId = getActiveAgentId();
+      const claimBadge = claimState.claimTimedOut
+        ? `<span class="memory-badge memory-badge-shared">${escapeHtml(t("memory.sharedReviewOverdueBadge", {}, "Claim Timed Out"))}</span>`
+        : claimOwner
+          ? `<span class="memory-badge ${claimOwner === currentAgentId ? "memory-badge-shared" : "memory-badge-hybrid"}">${escapeHtml(`${t("memory.detailSharedClaim", {}, "Review Claim")}: ${claimOwner}`)}</span>`
+          : "";
+      const queueStateBadge = claimState.blockedByOtherReviewer
+        ? `<span class="memory-badge memory-badge-hybrid">${escapeHtml(t("memory.sharedReviewBlockedBadge", {}, "Blocked"))}</span>`
+        : claimState.actionableByReviewer
+          ? `<span class="memory-badge memory-badge-private">${escapeHtml(t("memory.sharedReviewActionableBadge", {}, "Actionable"))}</span>`
+          : "";
+      const claimDeadline = claimState.claimExpiresAt
+        ? `<span>${escapeHtml(
+          claimState.claimTimedOut
+            ? t("memory.sharedReviewExpiredAt", { time: formatDateTime(claimState.claimExpiresAt) }, `Expired ${formatDateTime(claimState.claimExpiresAt)}`)
+            : t("memory.sharedReviewExpiresAt", { time: formatDateTime(claimState.claimExpiresAt) }, `Expires ${formatDateTime(claimState.claimExpiresAt)}`),
+        )}</span>`
+        : "";
+      return `
+        <div class="memory-list-item ${isActive ? "active" : ""}" data-shared-review-memory-id="${escapeHtml(item.id)}" data-shared-review-target-agent-id="${escapeHtml(item.targetAgentId || "")}">
+          <div class="memory-list-item-title">${escapeHtml(title)}</div>
+          <div class="memory-list-item-meta">
+            <span class="memory-badge">${escapeHtml(targetLabel)}</span>
+            <span class="memory-badge">${escapeHtml(statusLabel)}</span>
+            ${claimBadge}
+            ${queueStateBadge}
+            ${renderSourceViewBadge(sourceView)}
+            <span class="memory-badge">${escapeHtml(category)}</span>
+            ${claimDeadline}
+            <span>${escapeHtml(formatDateTime(requestedAt))}</span>
+          </div>
+          <div class="memory-list-item-snippet">${escapeHtml(summary)}</div>
+        </div>
+      `;
+    }).join("");
+
+    memoryViewerListEl.querySelectorAll("[data-shared-review-memory-id]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const chunkId = node.getAttribute("data-shared-review-memory-id");
+        const targetAgentId = node.getAttribute("data-shared-review-target-agent-id");
+        if (!chunkId) return;
+        memoryViewerState.selectedId = chunkId;
+        renderSharedReviewList(memoryViewerState.items);
+        await loadMemoryDetail(chunkId, null, { targetAgentId });
       });
     });
   }
@@ -989,7 +1206,15 @@ export function createMemoryViewerFeature({
     const sourceAuditSummary = formatResidentSourceAuditSummary(sourceView);
     const shareScopeSourcePath = getMemoryShareScopeSourcePath(item);
     const shareActionScope = shareScopeSourcePath ? "source" : "chunk";
-    const claimOwner = getMemoryShareClaimOwner(item);
+    const claimState = getMemoryShareClaimState(item);
+    const claimOwner = claimState.claimOwner;
+    const claimTimedOut = claimState.claimTimedOut;
+    const targetAgentId = getMemoryShareTargetAgentId(item);
+    const targetDisplayName = item.targetDisplayName || targetAgentId;
+    const activeAgentId = getActiveAgentId();
+    const canClaimNow = !claimOwner || claimTimedOut;
+    const canReviewNow = shareActionMode === "pending"
+      && (claimState.actionableByReviewer || !claimOwner || claimOwner === activeAgentId || claimTimedOut);
     const shareActionButtons = [];
     if (shareActionMode === "request" && sourceView.scope !== "shared") {
       shareActionButtons.push(
@@ -997,10 +1222,17 @@ export function createMemoryViewerFeature({
       );
     }
     if (shareActionMode === "pending") {
-      if (claimOwner === getActiveAgentId()) {
+      if (claimOwner === activeAgentId && !claimTimedOut) {
         shareActionButtons.push(
           `<button class="memory-usage-action-btn" data-memory-share-claim="release" data-memory-share-claim-scope="${escapeHtml(shareActionScope)}">${escapeHtml(t("memory.shareReleaseAction", {}, "Release"))}</button>`,
         );
+      }
+      if (canClaimNow) {
+        shareActionButtons.push(
+          `<button class="memory-usage-action-btn" data-memory-share-claim="claim" data-memory-share-claim-scope="${escapeHtml(shareActionScope)}">${escapeHtml(t("memory.shareClaimAction", {}, "Claim"))}</button>`,
+        );
+      }
+      if (canReviewNow) {
         shareActionButtons.push(
           `<button class="memory-usage-action-btn" data-memory-share-decision="approved">${escapeHtml(t("memory.shareReviewApproveAction", {}, "Approve"))}</button>`,
         );
@@ -1015,10 +1247,6 @@ export function createMemoryViewerFeature({
             `<button class="memory-usage-action-btn" data-memory-share-decision="rejected" data-memory-share-decision-scope="source">${escapeHtml(t("memory.shareReviewRejectBatchAction", {}, "Reject Source Group"))}</button>`,
           );
         }
-      } else if (!claimOwner) {
-        shareActionButtons.push(
-          `<button class="memory-usage-action-btn" data-memory-share-claim="claim" data-memory-share-claim-scope="${escapeHtml(shareActionScope)}">${escapeHtml(t("memory.shareClaimAction", {}, "Claim"))}</button>`,
-        );
       }
     }
     if (shareActionMode === "approved") {
@@ -1026,6 +1254,24 @@ export function createMemoryViewerFeature({
         `<button class="memory-usage-action-btn" data-memory-share-decision="revoked">${escapeHtml(t("memory.shareReviewRevokeAction", {}, "Revoke Shared"))}</button>`,
       );
     }
+    const claimStatusText = claimOwner
+      ? claimTimedOut
+        ? t(
+          "memory.detailSharedClaimTimedOut",
+          { owner: claimOwner, time: formatDateTime(claimState.claimExpiresAt) },
+          `${claimOwner} (timed out ${formatDateTime(claimState.claimExpiresAt)})`,
+        )
+        : t("memory.detailSharedClaimActive", { owner: claimOwner }, `${claimOwner} (active)`)
+      : t("memory.detailSharedClaimNone", {}, "Unclaimed");
+    const reviewerStateText = claimState.blockedByOtherReviewer
+      ? t("memory.detailSharedReviewerBlocked", { owner: claimOwner }, `Blocked by ${claimOwner} until release or timeout.`)
+      : claimTimedOut
+        ? t("memory.detailSharedReviewerTimedOut", {}, "Previous claim timed out. You can claim again or review directly.")
+        : claimOwner === activeAgentId
+          ? t("memory.detailSharedReviewerMine", {}, "Currently claimed by you. You can review or release it.")
+          : canReviewNow
+            ? t("memory.detailSharedReviewerActionable", {}, "This review item is actionable for the current reviewer.")
+            : t("memory.detailSharedReviewerIdle", {}, "This review item is waiting for a reviewer.");
     memoryViewerDetailEl.innerHTML = `
       <div class="memory-detail-shell">
         <div class="memory-detail-header">
@@ -1050,13 +1296,15 @@ export function createMemoryViewerFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSourcePath", {}, "Source Path"))}</span><div class="memory-detail-text">${item.sourcePath ? `<button class="memory-path-link" data-open-source="${escapeHtml(item.sourcePath)}" data-open-line="${typeof item.startLine === "number" ? item.startLine : ""}">${escapeHtml(item.sourcePath)}</button>` : "-"}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailLines", {}, "Lines"))}</span><div class="memory-detail-text">${escapeHtml(formatLineRange(item.startLine, item.endLine))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailVisibility", {}, "Visibility"))}</span><div class="memory-detail-text">${escapeHtml(visibility)}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.sharedReviewTargetAgent", {}, "Target Agent"))}</span><div class="memory-detail-text">${escapeHtml(targetDisplayName)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">来源视角</span><div class="memory-detail-text">${escapeHtml(formatResidentSourceSummary(sourceView))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">来源解释</span><div class="memory-detail-text">${escapeHtml(sourceExplanation)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">冲突说明</span><div class="memory-detail-text">${escapeHtml(sourceConflictSummary)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">来源审计</span><div class="memory-detail-text">${escapeHtml(sourceAuditSummary)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSharedStatus", {}, "Shared Status"))}</span><div class="memory-detail-text">${escapeHtml(shareStatus)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSharedGovernance", {}, "Shared Governance"))}</span><div class="memory-detail-text">${escapeHtml(governanceSummary)}</div></div>
-          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSharedClaim", {}, "Shared Claim"))}</span><div class="memory-detail-text">${escapeHtml(claimOwner || t("memory.detailSharedClaimNone", {}, "Unclaimed"))}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSharedClaim", {}, "Shared Claim"))}</span><div class="memory-detail-text">${escapeHtml(claimStatusText)}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSharedReviewerState", {}, "Reviewer State"))}</span><div class="memory-detail-text">${escapeHtml(reviewerStateText)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailCategory", {}, "Category"))}</span><div class="memory-detail-text">${escapeHtml(category)}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.detailSummary", {}, "Summary"))}</span><div class="memory-detail-text">${escapeHtml(item.summary || t("memory.emptyNoSummary", {}, "No summary"))}</div></div>
         </div>
@@ -1087,11 +1335,13 @@ export function createMemoryViewerFeature({
     loadMemoryChunkViewer,
     loadMemoryViewer,
     loadMemoryViewerStats,
+    loadSharedReviewQueue,
     loadTaskUsageOverview,
     loadTaskViewer,
     renderCandidateDetailPanel,
     renderCandidateOnlyDetail,
     renderMemoryList,
+    renderSharedReviewList,
     renderMemoryDetail,
     renderMemoryViewerStats,
     renderTaskList,
