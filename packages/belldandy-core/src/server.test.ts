@@ -1917,6 +1917,13 @@ test("system.doctor exposes tool behavior observability summary", async () => {
         status: "pass",
       }),
     ]));
+    expect(response.payload?.toolContractV2Observability).toMatchObject({
+      summary: {
+        totalCount: 3,
+        missingV2Count: 0,
+        governedTools: expect.arrayContaining(["run_command", "apply_patch", "delegate_task"]),
+      },
+    });
   } finally {
     ws.close();
     await closeP;
@@ -6659,6 +6666,70 @@ test("system.doctor exposes delegation observability summary", async () => {
         expectedDeliverableSummary: "Ship a patch",
       }),
     ]));
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "delegation_protocol",
+        name: "Delegation Protocol",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor keeps delegation protocol green when only legacy completed subtasks exist", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const legacyTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-doctor-legacy",
+      agentId: "reviewer",
+      instruction: "Legacy completed task",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(legacyTask.id, {
+    status: "done",
+    output: "legacy done",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-delegation-legacy-only",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-delegation-legacy-only"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-delegation-legacy-only");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.delegationObservability?.summary).toMatchObject({
+      totalCount: 1,
+      protocolBackedCount: 0,
+      activeCount: 0,
+      completedCount: 1,
+    });
     expect(res.payload?.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "delegation_protocol",

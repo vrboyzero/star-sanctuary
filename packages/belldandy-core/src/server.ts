@@ -3036,10 +3036,11 @@ async function handleReq(
       if (ctx.subTaskRuntimeStore) {
         const subtaskItems = await ctx.subTaskRuntimeStore.listTasks(undefined, { includeArchived: true });
         delegationObservability = buildDelegationObservabilitySnapshot(subtaskItems);
+        const delegationHasProtocolGap = delegationObservability.summary.activeCount > delegationObservability.summary.protocolBackedCount;
         checks.push({
           id: "delegation_protocol",
           name: "Delegation Protocol",
-          status: delegationObservability.summary.protocolBackedCount > 0 ? "pass" : "warn",
+          status: delegationHasProtocolGap ? "warn" : "pass",
           message: delegationObservability.summary.headline,
         });
       }
@@ -3082,10 +3083,11 @@ async function handleReq(
           contracts: visibleContracts,
           disabledContractNamesConfigured: readConfiguredPromptExperimentToolContracts(),
         });
+        const visibleToolNamesForV2 = visibleContracts.map((contract) => contract.name);
         const visibleContractV2 = listToolContractsV2(visibleContracts);
         const contractV2Observability = buildToolContractV2Observability({
           contracts: visibleContractV2,
-          registeredToolNames: ctx.toolExecutor.getRegisteredToolNames().filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME),
+          registeredToolNames: visibleToolNamesForV2,
         });
         const contractV2Summary = contractV2Observability.summary;
         checks.push({

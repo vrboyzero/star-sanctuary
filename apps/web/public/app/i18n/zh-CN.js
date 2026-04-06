@@ -130,6 +130,7 @@ export const zhCN = {
     summaryUsageLabel: "经验",
     summaryUsageValue: "m{methods}/s{skills} · {asset}",
     summaryUsageEmpty: "暂无近期复用",
+    showDetail: "详情 ▸",
   },
   toolSettings: {
     title: "调用设置",
@@ -730,6 +731,7 @@ export const zhCN = {
     doctorHelp: "检查当前配置、依赖与运行状态，便于快速定位缺失项。",
     doctorAllPassed: "所有检查通过",
     doctorHasIssues: "存在未通过的检查",
+    doctorHasWarnings: "存在需关注项",
     doctorPromptTitle: "Prompt 摘要",
     doctorPromptScopeAgent: "当前 Agent（{agentId}）的装配基线",
     doctorPromptScopeRun: "当前会话 {conversationId} 最近一次实际发送的 prompt",

@@ -4,8 +4,10 @@ import {
   buildSharedReviewBatchActionState,
   buildSharedReviewQueueParams,
   collectActionableSharedReviewIds,
+  createDefaultMemoryViewerAgentViewState,
   extractCandidateContextTargets,
   extractTaskContextTargets,
+  normalizeMemoryViewerAgentViewState,
 } from "./memory-viewer.js";
 
 describe("memory viewer shared review filters", () => {
@@ -174,6 +176,62 @@ describe("memory viewer shared review filters", () => {
       firstArtifactPath: "artifacts/out.md",
       artifactCount: 2,
       publishedPath: "methods/demo.md",
+    });
+  });
+
+  it("creates a clean default memory viewer view state for a resident agent", () => {
+    expect(createDefaultMemoryViewerAgentViewState("memories")).toEqual({
+      tab: "memories",
+      searchQuery: "",
+      taskStatus: "",
+      taskSource: "",
+      memoryType: "",
+      memoryVisibility: "",
+      memoryGovernance: "",
+      sharedReviewGovernance: "pending",
+      memoryCategory: "",
+      sharedReviewFilters: {
+        focus: "",
+        targetAgentId: "",
+        claimedByAgentId: "",
+      },
+      goalIdFilter: null,
+    });
+  });
+
+  it("normalizes persisted memory viewer agent view state before restoring filters", () => {
+    expect(normalizeMemoryViewerAgentViewState({
+      tab: " sharedReview ",
+      searchQuery: " note ",
+      taskStatus: " done ",
+      taskSource: " cron ",
+      memoryType: " decision ",
+      memoryVisibility: " shared ",
+      memoryGovernance: " pending ",
+      sharedReviewGovernance: " approved ",
+      memoryCategory: " architecture ",
+      sharedReviewFilters: {
+        focus: "mine",
+        targetAgentId: " default ",
+        claimedByAgentId: " reviewer ",
+      },
+      goalIdFilter: " goal_demo ",
+    }, "tasks")).toEqual({
+      tab: "sharedReview",
+      searchQuery: "note",
+      taskStatus: "done",
+      taskSource: "cron",
+      memoryType: "decision",
+      memoryVisibility: "shared",
+      memoryGovernance: "pending",
+      sharedReviewGovernance: "approved",
+      memoryCategory: "architecture",
+      sharedReviewFilters: {
+        focus: "mine",
+        targetAgentId: "default",
+        claimedByAgentId: "reviewer",
+      },
+      goalIdFilter: "goal_demo",
     });
   });
 });

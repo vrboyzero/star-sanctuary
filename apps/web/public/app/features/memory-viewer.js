@@ -156,6 +156,70 @@ function collectUniqueNonEmptyStrings(values) {
   )];
 }
 
+function normalizeMemoryViewerTab(value, fallback = "tasks") {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (normalized === "tasks" || normalized === "memories" || normalized === "sharedReview") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeMemoryViewerTextFilter(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeMemoryViewerGoalId(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || null;
+}
+
+export function createDefaultMemoryViewerAgentViewState(tab = "tasks") {
+  return {
+    tab: normalizeMemoryViewerTab(tab),
+    searchQuery: "",
+    taskStatus: "",
+    taskSource: "",
+    memoryType: "",
+    memoryVisibility: "",
+    memoryGovernance: "",
+    sharedReviewGovernance: "pending",
+    memoryCategory: "",
+    sharedReviewFilters: {
+      focus: "",
+      targetAgentId: "",
+      claimedByAgentId: "",
+    },
+    goalIdFilter: null,
+  };
+}
+
+export function normalizeMemoryViewerAgentViewState(value, fallbackTab = "tasks") {
+  const fallback = createDefaultMemoryViewerAgentViewState(fallbackTab);
+  if (!value || typeof value !== "object") {
+    return fallback;
+  }
+  const sharedReviewFilters = value.sharedReviewFilters && typeof value.sharedReviewFilters === "object"
+    ? value.sharedReviewFilters
+    : {};
+  return {
+    tab: normalizeMemoryViewerTab(value.tab, fallback.tab),
+    searchQuery: normalizeMemoryViewerTextFilter(value.searchQuery),
+    taskStatus: normalizeMemoryViewerTextFilter(value.taskStatus),
+    taskSource: normalizeMemoryViewerTextFilter(value.taskSource),
+    memoryType: normalizeMemoryViewerTextFilter(value.memoryType),
+    memoryVisibility: normalizeMemoryViewerTextFilter(value.memoryVisibility),
+    memoryGovernance: normalizeMemoryViewerTextFilter(value.memoryGovernance),
+    sharedReviewGovernance: normalizeMemoryViewerTextFilter(value.sharedReviewGovernance) || fallback.sharedReviewGovernance,
+    memoryCategory: normalizeMemoryViewerTextFilter(value.memoryCategory),
+    sharedReviewFilters: {
+      focus: normalizeSharedReviewFocus(sharedReviewFilters.focus),
+      targetAgentId: normalizeMemoryViewerTextFilter(sharedReviewFilters.targetAgentId),
+      claimedByAgentId: normalizeMemoryViewerTextFilter(sharedReviewFilters.claimedByAgentId),
+    },
+    goalIdFilter: normalizeMemoryViewerGoalId(value.goalIdFilter),
+  };
+}
+
 export function extractTaskContextTargets(task) {
   const memoryIds = collectUniqueNonEmptyStrings(
     (Array.isArray(task?.memoryLinks) ? task.memoryLinks : []).map((item) => item?.chunkId),
@@ -256,6 +320,67 @@ export function createMemoryViewerFeature({
   function getActiveAgentId() {
     const agentId = typeof getSelectedAgentId === "function" ? String(getSelectedAgentId() || "").trim() : "";
     return agentId || "default";
+  }
+
+  function ensureAgentViewStates() {
+    const memoryViewerState = getMemoryViewerState();
+    if (!memoryViewerState.agentViewStates || typeof memoryViewerState.agentViewStates !== "object") {
+      memoryViewerState.agentViewStates = {};
+    }
+    return memoryViewerState.agentViewStates;
+  }
+
+  function captureAgentViewState(agentId = getMemoryViewerState().activeAgentId || getActiveAgentId()) {
+    const normalizedAgentId = typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default";
+    const memoryViewerState = getMemoryViewerState();
+    const existingView = normalizeMemoryViewerAgentViewState(
+      ensureAgentViewStates()[normalizedAgentId],
+      memoryViewerState.tab,
+    );
+    const nextView = {
+      ...existingView,
+      tab: memoryViewerState.tab,
+      searchQuery: memorySearchInputEl?.value,
+      taskStatus: memoryTaskStatusFilterEl?.value,
+      taskSource: memoryTaskSourceFilterEl?.value,
+      memoryType: memoryChunkTypeFilterEl?.value,
+      memoryVisibility: memoryChunkVisibilityFilterEl?.value,
+      memoryCategory: memoryChunkCategoryFilterEl?.value,
+      sharedReviewFilters: getSharedReviewFilters(),
+      goalIdFilter: memoryViewerState.goalIdFilter,
+    };
+    if (memoryViewerState.tab === "sharedReview") {
+      nextView.sharedReviewGovernance = memoryChunkGovernanceFilterEl?.value;
+    } else {
+      nextView.memoryGovernance = memoryChunkGovernanceFilterEl?.value;
+    }
+    ensureAgentViewStates()[normalizedAgentId] = normalizeMemoryViewerAgentViewState(nextView, memoryViewerState.tab);
+  }
+
+  function applyAgentViewState(agentId = getActiveAgentId(), fallbackTab = getMemoryViewerState().tab) {
+    const normalizedAgentId = typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default";
+    const memoryViewerState = getMemoryViewerState();
+    const nextView = normalizeMemoryViewerAgentViewState(
+      ensureAgentViewStates()[normalizedAgentId],
+      fallbackTab,
+    );
+
+    memoryViewerState.tab = nextView.tab;
+    memoryViewerState.goalIdFilter = nextView.goalIdFilter;
+    memoryViewerState.sharedReviewFilters = { ...nextView.sharedReviewFilters };
+
+    if (memorySearchInputEl) memorySearchInputEl.value = nextView.searchQuery;
+    if (memoryTaskStatusFilterEl) memoryTaskStatusFilterEl.value = nextView.taskStatus;
+    if (memoryTaskSourceFilterEl) memoryTaskSourceFilterEl.value = nextView.taskSource;
+    if (memoryChunkTypeFilterEl) memoryChunkTypeFilterEl.value = nextView.memoryType;
+    if (memoryChunkVisibilityFilterEl) memoryChunkVisibilityFilterEl.value = nextView.memoryVisibility;
+    if (memoryChunkGovernanceFilterEl) {
+      memoryChunkGovernanceFilterEl.value = nextView.tab === "sharedReview"
+        ? (nextView.sharedReviewGovernance || "pending")
+        : nextView.memoryGovernance;
+    }
+    if (memoryChunkCategoryFilterEl) memoryChunkCategoryFilterEl.value = nextView.memoryCategory;
+    syncSharedReviewFilterUi();
   }
 
   function buildScopedParams(params = {}, agentId = getActiveAgentId()) {
@@ -795,6 +920,14 @@ export function createMemoryViewerFeature({
   function switchMemoryViewerTab(tab) {
     const memoryViewerState = getMemoryViewerState();
     if (memoryViewerState.tab === tab) return;
+    captureAgentViewState();
+    const normalizedAgentId = String(memoryViewerState.activeAgentId || getActiveAgentId()).trim() || "default";
+    const nextView = normalizeMemoryViewerAgentViewState(
+      ensureAgentViewStates()[normalizedAgentId],
+      tab,
+    );
+    nextView.tab = tab;
+    ensureAgentViewStates()[normalizedAgentId] = nextView;
     memoryViewerState.tab = tab;
     memoryViewerState.items = [];
     memoryViewerState.selectedId = null;
@@ -806,8 +939,10 @@ export function createMemoryViewerFeature({
     if (tab !== "tasks") {
       memoryViewerState.goalIdFilter = null;
     }
-    if (tab === "sharedReview" && memoryChunkGovernanceFilterEl && !memoryChunkGovernanceFilterEl.value) {
-      memoryChunkGovernanceFilterEl.value = "pending";
+    if (memoryChunkGovernanceFilterEl) {
+      memoryChunkGovernanceFilterEl.value = tab === "sharedReview"
+        ? (nextView.sharedReviewGovernance || "pending")
+        : nextView.memoryGovernance;
     }
     syncMemoryViewerUi();
     void loadMemoryViewer(true);
@@ -1162,6 +1297,7 @@ export function createMemoryViewerFeature({
     } else if (memoryChunkGovernanceFilterEl && !memoryChunkGovernanceFilterEl.value) {
       memoryChunkGovernanceFilterEl.value = "pending";
     }
+    captureAgentViewState();
     syncMemoryViewerUi();
     await loadSharedReviewQueue(false);
     if (memoryViewerState.selectedId && Array.isArray(memoryViewerState.items) && memoryViewerState.items.some((entry) => entry?.id === memoryViewerState.selectedId)) {
@@ -1950,6 +2086,8 @@ export function createMemoryViewerFeature({
   }
 
   return {
+    applyAgentViewState,
+    captureAgentViewState,
     loadMemoryChunkViewer,
     loadMemoryViewer,
     loadMemoryViewerStats,

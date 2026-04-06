@@ -130,6 +130,7 @@ export const enUS = {
     summaryUsageLabel: "Usage",
     summaryUsageValue: "m{methods}/s{skills} · {asset}",
     summaryUsageEmpty: "No recent reuse",
+    showDetail: "Details ▸",
   },
   toolSettings: {
     title: "Tool Settings",
@@ -658,6 +659,7 @@ export const enUS = {
     doctorHelp: "Checks current configuration, dependencies, and runtime status to help locate missing pieces quickly.",
     doctorAllPassed: "All checks passed",
     doctorHasIssues: "Issues detected",
+    doctorHasWarnings: "Warnings detected",
     doctorPromptTitle: "Prompt Summary",
     doctorPromptScopeAgent: "Current agent ({agentId}) assembly baseline",
     doctorPromptScopeRun: "Most recent sent prompt for conversation {conversationId}",

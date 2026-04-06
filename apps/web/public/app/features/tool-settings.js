@@ -642,16 +642,16 @@ export function createToolSettingsController({
         return escapeHtml(short);
       }).join(", ");
 
-      html += `<div class="mcp-group${visibility && !visibility.available ? " unavailable" : ""}">
-      <div class="mcp-group-header">
-        <span class="mcp-group-name">${escapeHtml(serverId)}</span>
-        <label class="toggle-switch">
-          <input type="checkbox" data-category="mcp_servers" data-name="${escapeHtml(serverId)}" ${checked ? "checked" : ""}>
-          <span class="toggle-slider"></span>
-        </label>
+      html += `<div class="tool-item${checked ? "" : " disabled"}${visibility && !visibility.available ? " unavailable" : ""}">
+      <div class="skill-item-info">
+        <span class="tool-item-name">${escapeHtml(serverId)}</span>
+        ${toolList ? `<span class="skill-desc">${toolList}</span>` : `<span class="skill-meta">${escapeHtml(t("toolSettings.emptyNoTools", {}, "No tools"))}</span>`}
+        ${renderVisibilitySummary(visibility)}
       </div>
-      <div class="mcp-group-tools">${toolList || escapeHtml(t("toolSettings.emptyNoTools", {}, "No tools"))}</div>
-      ${renderVisibilitySummary(visibility)}
+      <label class="toggle-switch">
+        <input type="checkbox" data-category="mcp_servers" data-name="${escapeHtml(serverId)}" ${checked ? "checked" : ""}>
+        <span class="toggle-slider"></span>
+      </label>
     </div>`;
     }
     toolSettingsBody.innerHTML = html;
@@ -671,7 +671,7 @@ export function createToolSettingsController({
       const checked = !disabledSet.has(name);
       const visibility = normalizeVisibility(visibilityByPlugin ? visibilityByPlugin[name] : null);
       html += `<div class="tool-item${checked ? "" : " disabled"}${visibility && !visibility.available ? " unavailable" : ""}">
-      <div class="tool-item-info">
+      <div class="skill-item-info">
         <span class="tool-item-name">${escapeHtml(name)}</span>
         ${renderVisibilitySummary(visibility)}
       </div>

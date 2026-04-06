@@ -6,8 +6,15 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import doctorCommand from "./doctor.js";
 
+const execFileSyncMock = vi.fn();
+
+vi.mock("node:child_process", () => ({
+  execFileSync: execFileSyncMock,
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
+  execFileSyncMock.mockReset();
 });
 
 test("bdd doctor json output includes tool behavior observability", async () => {
@@ -78,6 +85,39 @@ test("bdd doctor json output includes tool behavior observability", async () => 
     } else {
       process.env.BELLDANDY_PROMPT_EXPERIMENT_DISABLE_TOOL_CONTRACTS = previous;
     }
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("bdd doctor accepts pnpm resolved via corepack", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-doctor-corepack-"));
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  execFileSyncMock.mockImplementation((file: string, args: string[]) => {
+    if ((file === "pnpm.cmd" || file === "pnpm") && Array.isArray(args) && args.join(" ") === "--version") {
+      throw new Error("pnpm not found");
+    }
+    if ((file === "corepack.cmd" || file === "corepack") && Array.isArray(args) && args.join(" ") === "pnpm --version") {
+      return "10.11.1\n";
+    }
+    throw new Error(`unexpected command: ${file} ${Array.isArray(args) ? args.join(" ") : ""}`);
+  });
+
+  try {
+    await doctorCommand.run?.({
+      args: {
+        json: true,
+        "state-dir": stateDir,
+      },
+    } as never);
+
+    const output = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
+    const parsed = JSON.parse(output);
+    const pnpmCheck = parsed.checks.find((item: { name: string }) => item.name === "pnpm");
+    expect(pnpmCheck).toMatchObject({
+      status: "pass",
+      message: "v10.11.1 (via corepack)",
+    });
+  } finally {
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });

@@ -183,17 +183,30 @@ export function createSettingsController({
 
     const res = await sendReq({ type: "req", id: makeId(), method: "system.doctor" });
     if (res && res.ok && res.payload && res.payload.checks) {
-      let allPass = true;
+      let hasFail = false;
+      let hasWarn = false;
       res.payload.checks.forEach((check) => {
-        if (check.status !== "pass") allPass = false;
+        if (check.status === "fail") {
+          hasFail = true;
+        } else if (check.status === "warn") {
+          hasWarn = true;
+        }
         const badge = document.createElement("span");
         badge.className = `badge ${check.status}`;
         badge.textContent = `${check.name}: ${check.message || check.status}`;
         doctorStatusEl.appendChild(badge);
       });
       renderDoctorObservabilityCards(doctorStatusEl, res.payload, t);
-      doctorToggleBtn.className = `button badge ${allPass ? 'pass' : 'fail'}`;
-      doctorToggleBtn.textContent = allPass ? t("settings.doctorAllPassed", {}, "所有检查通过") : t("settings.doctorHasIssues", {}, "存在未通过的检查");
+      if (hasFail) {
+        doctorToggleBtn.className = "button badge fail";
+        doctorToggleBtn.textContent = t("settings.doctorHasIssues", {}, "存在未通过的检查");
+      } else if (hasWarn) {
+        doctorToggleBtn.className = "button badge warn";
+        doctorToggleBtn.textContent = t("settings.doctorHasWarnings", {}, "存在需关注项");
+      } else {
+        doctorToggleBtn.className = "button badge pass";
+        doctorToggleBtn.textContent = t("settings.doctorAllPassed", {}, "所有检查通过");
+      }
       return;
     }
     doctorToggleBtn.className = "button badge fail";

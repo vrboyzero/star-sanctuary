@@ -192,6 +192,9 @@ html[data-theme="dark"] {
   --badge-pass-border: rgba(52, 211, 153, 0.28);
   --badge-pass-bg: rgba(52, 211, 153, 0.12);
   --badge-pass-text: #6ee7b7;
+  --badge-warn-border: rgba(196, 160, 255, 0.28);
+  --badge-warn-bg: rgba(196, 160, 255, 0.12);
+  --badge-warn-text: #dcc8ff;
   --badge-fail-border: rgba(255, 107, 107, 0.28);
   --badge-fail-bg: rgba(255, 107, 107, 0.12);
   --badge-fail-text: #fca5a5;
@@ -429,6 +432,9 @@ html[data-theme="light"] {
   --badge-pass-border: rgba(15, 159, 110, 0.22);
   --badge-pass-bg: rgba(15, 159, 110, 0.1);
   --badge-pass-text: #0f9f6e;
+  --badge-warn-border: rgba(140, 115, 85, 0.22);
+  --badge-warn-bg: rgba(140, 115, 85, 0.1);
+  --badge-warn-text: #8c7355;
   --badge-fail-border: rgba(217, 72, 95, 0.22);
   --badge-fail-bg: rgba(217, 72, 95, 0.1);
   --badge-fail-text: #d9485f;

@@ -19,6 +19,22 @@ function normalizeTokenValue(value) {
   return value;
 }
 
+export function resolvePreferredAgentSelection(agents, currentValue = "", savedValue = "") {
+  const items = Array.isArray(agents) ? agents : [];
+  const hasAgent = (candidate) => {
+    const normalized = typeof candidate === "string" ? candidate.trim() : "";
+    return Boolean(normalized) && items.some((agent) => agent?.id === normalized);
+  };
+
+  if (hasAgent(currentValue)) {
+    return currentValue.trim();
+  }
+  if (hasAgent(savedValue)) {
+    return savedValue.trim();
+  }
+  return typeof items[0]?.id === "string" ? items[0].id : "";
+}
+
 export function createChatNetworkFeature({
   refs,
   keys,
@@ -145,6 +161,7 @@ export function createChatNetworkFeature({
 
   async function loadAgentList() {
     if (!isConnected() || !agentSelectEl) return;
+    const currentSelectedAgentId = typeof agentSelectEl.value === "string" ? agentSelectEl.value.trim() : "";
 
     let res = await sendReq({
       type: "req",
@@ -166,7 +183,16 @@ export function createChatNetworkFeature({
     lastAgentListState = agents;
     if (agents.length <= 1) {
       agentSelectEl.classList.add("hidden");
-      onAgentListLoaded?.(agents, agentSelectEl.value || agents[0]?.id || "");
+      const selectedAgentId = resolvePreferredAgentSelection(
+        agents,
+        currentSelectedAgentId,
+        localStorage.getItem(agentIdKey) || "",
+      );
+      if (selectedAgentId) {
+        agentSelectEl.value = selectedAgentId;
+        localStorage.setItem(agentIdKey, selectedAgentId);
+      }
+      onAgentListLoaded?.(agents, selectedAgentId || agentSelectEl.value || agents[0]?.id || "");
       return;
     }
 
@@ -178,13 +204,18 @@ export function createChatNetworkFeature({
       agentSelectEl.appendChild(opt);
     }
 
-    const saved = localStorage.getItem(agentIdKey);
-    if (saved && agents.some((agent) => agent.id === saved)) {
-      agentSelectEl.value = saved;
+    const selectedAgentId = resolvePreferredAgentSelection(
+      agents,
+      currentSelectedAgentId,
+      localStorage.getItem(agentIdKey) || "",
+    );
+    if (selectedAgentId) {
+      agentSelectEl.value = selectedAgentId;
+      localStorage.setItem(agentIdKey, selectedAgentId);
     }
 
     // agentSelect dropdown stays hidden — right-side Agent panel is used instead
-    onAgentListLoaded?.(agents, agentSelectEl.value || agents[0]?.id || "");
+    onAgentListLoaded?.(agents, selectedAgentId || agentSelectEl.value || agents[0]?.id || "");
     return agents;
   }
 

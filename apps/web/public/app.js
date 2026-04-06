@@ -345,6 +345,7 @@ const memoryViewerState = {
   sharedReviewBatchBusy: false,
   requestToken: 0,
   activeAgentId: "default",
+  agentViewStates: {},
 };
 const goalsState = {
   items: [],
@@ -1168,8 +1169,12 @@ function getCurrentAgentLabel() {
 }
 
 function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
+  const previousAgentId = String(memoryViewerState.activeAgentId || "default").trim() || "default";
+  const fallbackTab = memoryViewerState.tab;
+  memoryViewerFeature?.captureAgentViewState?.(previousAgentId);
   memoryViewerState.requestToken = Number(memoryViewerState.requestToken || 0) + 1;
   memoryViewerState.activeAgentId = String(agentId || "default").trim() || "default";
+  memoryViewerFeature?.applyAgentViewState?.(memoryViewerState.activeAgentId, fallbackTab);
   memoryViewerState.stats = null;
   memoryViewerState.items = [];
   memoryViewerState.selectedId = null;
@@ -1587,6 +1592,73 @@ async function openAgentObservabilityAction(agentId, action = {}) {
   }
 }
 
+function openAgentObservabilityModal(agent, observability) {
+  const modalOverlay = document.getElementById("agentObservabilityModal");
+  const modalTitle = document.getElementById("agentObservabilityModalTitle");
+  const modalBody = document.getElementById("agentObservabilityModalBody");
+  const modalClose = document.getElementById("agentObservabilityModalClose");
+  if (!modalOverlay || !modalBody) return;
+
+  if (modalTitle) {
+    modalTitle.textContent = agent.displayName || agent.id || "Agent";
+  }
+
+  modalBody.textContent = "";
+
+  if (Array.isArray(observability.badges) && observability.badges.length > 0) {
+    const badgesEl = document.createElement("div");
+    badgesEl.className = "agent-observability-modal-badges";
+    for (const text of observability.badges) {
+      if (!text) continue;
+      const badge = document.createElement("span");
+      badge.className = "agent-observability-modal-badge";
+      badge.textContent = text;
+      badgesEl.appendChild(badge);
+    }
+    modalBody.appendChild(badgesEl);
+  }
+
+  if (Array.isArray(observability.rows) && observability.rows.length > 0) {
+    const rowsEl = document.createElement("div");
+    rowsEl.className = "agent-observability-modal-rows";
+    for (const row of observability.rows) {
+      const rowBtn = document.createElement("button");
+      rowBtn.type = "button";
+      rowBtn.className = "agent-observability-modal-row";
+      rowBtn.title = row.value || row.label || "";
+      rowBtn.addEventListener("click", () => {
+        modalOverlay.classList.add("hidden");
+        void openAgentObservabilityAction(agent.id, row.action);
+      });
+
+      const labelEl = document.createElement("span");
+      labelEl.className = "agent-observability-modal-label";
+      labelEl.textContent = row.label || "";
+      rowBtn.appendChild(labelEl);
+
+      const valueEl = document.createElement("span");
+      valueEl.className = "agent-observability-modal-value";
+      valueEl.textContent = row.value || "";
+      rowBtn.appendChild(valueEl);
+
+      rowsEl.appendChild(rowBtn);
+    }
+    modalBody.appendChild(rowsEl);
+  }
+
+  modalOverlay.classList.remove("hidden");
+
+  const closeHandler = () => {
+    modalOverlay.classList.add("hidden");
+  };
+  if (modalClose) {
+    modalClose.onclick = closeHandler;
+  }
+  modalOverlay.addEventListener("click", (e) => {
+    if (e.target === modalOverlay) closeHandler();
+  }, { once: true });
+}
+
 function renderAgentRightPanel() {
   if (!agentRightPanelEl) return;
 
@@ -1661,47 +1733,20 @@ function renderAgentRightPanel() {
 
     card.appendChild(main);
     const observability = buildResidentPanelSummary(agent, localeController.t);
-    if (Array.isArray(observability?.rows) && observability.rows.length > 0) {
+    if (Array.isArray(observability?.badges) && observability.badges.length > 0 ||
+        Array.isArray(observability?.rows) && observability.rows.length > 0) {
       const summaryWrap = document.createElement("div");
       summaryWrap.className = "agent-card-observability";
-      if (Array.isArray(observability.badges) && observability.badges.length > 0) {
-        const badgesEl = document.createElement("div");
-        badgesEl.className = "agent-card-observability-badges";
-        for (const text of observability.badges) {
-          if (!text) continue;
-          const badgeEl = document.createElement("span");
-          badgeEl.className = "agent-card-observability-badge";
-          badgeEl.textContent = text;
-          badgesEl.appendChild(badgeEl);
-        }
-        summaryWrap.appendChild(badgesEl);
-      }
 
-      const rowsEl = document.createElement("div");
-      rowsEl.className = "agent-card-observability-rows";
-      for (const row of observability.rows) {
-        const rowBtn = document.createElement("button");
-        rowBtn.type = "button";
-        rowBtn.className = "agent-card-observability-row";
-        rowBtn.title = row.value || row.label || "";
-        rowBtn.addEventListener("click", (event) => {
-          event.stopPropagation();
-          void openAgentObservabilityAction(agent.id, row.action);
-        });
-
-        const labelEl = document.createElement("span");
-        labelEl.className = "agent-card-observability-label";
-        labelEl.textContent = row.label || "";
-        rowBtn.appendChild(labelEl);
-
-        const valueEl = document.createElement("span");
-        valueEl.className = "agent-card-observability-value";
-        valueEl.textContent = row.value || "";
-        rowBtn.appendChild(valueEl);
-
-        rowsEl.appendChild(rowBtn);
-      }
-      summaryWrap.appendChild(rowsEl);
+      const detailBtn = document.createElement("button");
+      detailBtn.type = "button";
+      detailBtn.className = "agent-card-detail-btn";
+      detailBtn.textContent = localeController.t("agentPanel.showDetail", {}, "详情 ▸");
+      detailBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openAgentObservabilityModal(agent, observability);
+      });
+      summaryWrap.appendChild(detailBtn);
       card.appendChild(summaryWrap);
     }
     fragment.appendChild(card);

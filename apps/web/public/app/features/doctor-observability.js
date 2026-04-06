@@ -527,7 +527,7 @@ function buildDelegationCard(payload, t) {
     title: tr(t, "settings.doctorDelegationTitle", {}, "Delegation Protocol"),
     badges,
     notes,
-    status: summary.protocolBackedCount > 0 ? "pass" : "warn",
+    status: summary.activeCount > summary.protocolBackedCount ? "warn" : "pass",
   };
 }
 

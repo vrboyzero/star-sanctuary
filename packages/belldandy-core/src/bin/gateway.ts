@@ -4,6 +4,7 @@ import os from "node:os";
 import { ensureDefaultEnvFile, resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
 import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
 import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
+import { deliverAutoMessageToResidentChannel } from "../auto-chat-delivery.js";
 import { ResidentConversationStore } from "../resident-conversation-store.js";
 import {
   createSubTaskAgentCapabilities,
@@ -3199,14 +3200,11 @@ if (heartbeatEnabled && createAgent) {
 
     // Helper to deliver message to user via Feishu and WebChat
     const deliverToUser = async (message: string): Promise<void> => {
-      // 1. Broadcast to local WebChat (for local testing)
-      server.broadcast({
-        type: "event",
-        event: "chat.final",
-        payload: {
-          conversationId: "heartbeat-broadcast",
-          text: `❤️ [Heartbeat] ${message}`,
-        },
+      deliverAutoMessageToResidentChannel({
+        conversationStore,
+        broadcast: (frame) => server.broadcast(frame),
+        agentId: "default",
+        text: `❤️ [Heartbeat] ${message}`,
       });
 
       // 2. Deliver to Feishu (if configured)
@@ -3270,14 +3268,11 @@ if (cronEnabled) {
   }
 
   const cronDeliverToUser = async (message: string): Promise<void> => {
-    // 1. Broadcast 到 WebChat
-    server.broadcast({
-      type: "event",
-      event: "chat.final",
-      payload: {
-        conversationId: "cron-broadcast",
-        text: message,
-      },
+    deliverAutoMessageToResidentChannel({
+      conversationStore,
+      broadcast: (frame) => server.broadcast(frame),
+      agentId: "default",
+      text: message,
     });
 
     // 2. 推送到飞书（如果配置了）

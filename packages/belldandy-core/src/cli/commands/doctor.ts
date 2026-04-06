@@ -43,6 +43,40 @@ const REQUIRED_NODE_MAJOR = 22;
 const REQUIRED_NODE_MINOR = 12;
 const DEFAULT_PORT = 28889;
 
+function resolveExecutableOnPath(candidates: string[]): string | null {
+  const rawPath = process.env.PATH ?? "";
+  if (!rawPath.trim()) return null;
+
+  const pathEntries = rawPath.split(path.delimiter).filter(Boolean);
+  const executableNames = process.platform === "win32"
+    ? candidates.flatMap((candidate) => {
+      const ext = path.extname(candidate).toLowerCase();
+      if (ext) {
+        return [candidate];
+      }
+      const pathext = (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean);
+      return [...new Set([candidate, ...pathext.map((suffix) => `${candidate}${suffix}`)])];
+    })
+    : candidates;
+
+  for (const dir of pathEntries) {
+    for (const executableName of executableNames) {
+      const targetPath = path.join(dir, executableName);
+      try {
+        if (fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
+          return targetPath;
+        }
+      } catch {
+        // ignore invalid PATH entries
+      }
+    }
+  }
+  return null;
+}
+
 function resolveOpenAIWireApi(): OpenAIWireApi {
   const raw = (process.env.BELLDANDY_OPENAI_WIRE_API ?? "chat_completions").trim().toLowerCase();
   return raw === "responses" ? "responses" : "chat_completions";
@@ -63,12 +97,41 @@ function checkNodeVersion(): CheckResult {
 
 async function checkPnpm(): Promise<CheckResult> {
   try {
-    const { execSync } = await import("node:child_process");
-    const version = execSync("pnpm --version", { encoding: "utf-8", timeout: 5000 }).trim();
-    return { name: "pnpm", status: "pass", message: `v${version}` };
+    const { execFileSync } = await import("node:child_process");
+    const commandCandidates = [
+      {
+        file: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+        args: ["--version"],
+        via: "",
+      },
+      {
+        file: process.platform === "win32" ? "corepack.cmd" : "corepack",
+        args: ["pnpm", "--version"],
+        via: " (via corepack)",
+      },
+    ];
+    for (const candidate of commandCandidates) {
+      try {
+        const version = execFileSync(candidate.file, candidate.args, { encoding: "utf-8", timeout: 5000 }).trim();
+        if (version) {
+          return { name: "pnpm", status: "pass", message: `v${version}${candidate.via}` };
+        }
+      } catch {
+        // try next candidate
+      }
+    }
   } catch {
-    return { name: "pnpm", status: "warn", message: "not found", fix: "Install pnpm: corepack enable && corepack prepare pnpm@latest --activate" };
+    // fall through to warning below
   }
+  const corepackPath = resolveExecutableOnPath(["corepack", "corepack.cmd"]);
+  if (corepackPath) {
+    return {
+      name: "pnpm",
+      status: "pass",
+      message: `available via corepack (${corepackPath})`,
+    };
+  }
+  return { name: "pnpm", status: "warn", message: "not found", fix: "Install pnpm: corepack enable && corepack prepare pnpm@latest --activate" };
 }
 
 function checkStateDir(stateDir: string): CheckResult {
