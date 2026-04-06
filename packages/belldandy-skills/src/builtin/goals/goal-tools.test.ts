@@ -2284,8 +2284,29 @@ describe("goal tools", () => {
       skills: [{ name: "find-skills", score: 10 }],
       mcpServers: [{ serverId: "docs", status: "connected" as const, toolCount: 3 }],
       subAgents: [
-        { agentId: "coder", role: "coder" as const, objective: "Implement Root Node", handoffToVerifier: true },
-        { agentId: "qa", role: "verifier" as const, objective: "Verify Root Node" },
+        {
+          agentId: "coder",
+          role: "coder" as const,
+          objective: "Implement Root Node",
+          handoffToVerifier: true,
+          catalogDefault: {
+            permissionMode: "confirm" as const,
+            allowedToolFamilies: ["workspace-read", "workspace-write", "patch"],
+            maxToolRiskLevel: "high" as const,
+            handoffStyle: "summary" as const,
+          },
+        },
+        {
+          agentId: "qa",
+          role: "verifier" as const,
+          objective: "Verify Root Node",
+          catalogDefault: {
+            permissionMode: "confirm" as const,
+            allowedToolFamilies: ["workspace-read", "command-exec", "browser"],
+            maxToolRiskLevel: "high" as const,
+            handoffStyle: "structured" as const,
+          },
+        },
       ],
       gaps: [],
       checkpoint: {
@@ -2340,15 +2361,23 @@ describe("goal tools", () => {
         agentId: "coder",
         role: "coder",
         allowedToolFamilies: ["workspace-read", "workspace-write", "patch", "command-exec", "memory", "goal-governance"],
+        policySummary: expect.stringContaining("permission=confirm"),
       }),
     ]);
     expect(spawnSubAgent).toHaveBeenCalledWith(expect.objectContaining({
       agentId: "qa",
       role: "verifier",
-      allowedToolFamilies: ["workspace-read", "command-exec", "browser", "memory", "goal-governance"],
+      policySummary: expect.stringContaining("handoff=structured"),
+      permissionMode: "confirm",
     }));
     expect(context.goalCapabilities?.saveCapabilityPlan).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
       orchestration: expect.objectContaining({
+        notes: expect.arrayContaining([
+          expect.stringContaining("catalog default -> coder"),
+          expect.stringContaining("catalog default -> qa"),
+          expect.stringContaining("suggested launch -> coder"),
+          expect.stringContaining("suggested launch -> qa"),
+        ]),
         verifierResult: expect.objectContaining({
           status: "completed",
           outputPath: "E:/project/star-sanctuary/.tmp/task_verify_1/result.md",
@@ -2477,7 +2506,17 @@ describe("goal tools", () => {
       methods: [{ file: "Deploy-Checklist.md", title: "Deploy Checklist", score: 30 }],
       skills: [{ name: "find-skills", score: 10 }],
       mcpServers: [{ serverId: "docs", status: "connected" as const, toolCount: 3 }],
-      subAgents: [{ agentId: "coder", objective: "Implement Root Node" }],
+      subAgents: [{
+        agentId: "coder",
+        role: "coder" as const,
+        objective: "Implement Root Node",
+        catalogDefault: {
+          permissionMode: "confirm" as const,
+          allowedToolFamilies: ["workspace-read", "workspace-write", "patch"],
+          maxToolRiskLevel: "high" as const,
+          handoffStyle: "summary" as const,
+        },
+      }],
       gaps: [],
       checkpoint: {
         required: true,
@@ -2525,8 +2564,9 @@ describe("goal tools", () => {
     expect(requestCheckpoint).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
       reviewerRole: "producer",
       requestedBy: "main-agent",
-      note: "先审批影响范围、回滚方案与验证方式。",
+      note: expect.stringContaining("先审批影响范围、回滚方案与验证方式。"),
     }));
+    expect(requestCheckpoint.mock.calls[0]?.[2]?.note).toContain("catalog default");
     expect(updateTaskNode).toHaveBeenCalledWith("goal_alpha", "node_root", expect.objectContaining({
       checkpointRequired: true,
       checkpointStatus: "required",

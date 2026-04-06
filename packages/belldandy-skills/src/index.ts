@@ -16,6 +16,16 @@ export type {
   ToolRuntimeLaunchSpec,
   ToolExecutionRuntimeContext,
 } from "./types.js";
+export {
+  buildDelegationProtocol,
+} from "./delegation-protocol.js";
+export type {
+  DelegationAggregationMode,
+  DelegationDeliverableFormat,
+  DelegationIntentKind,
+  DelegationProtocol,
+  DelegationSource,
+} from "./delegation-protocol.js";
 
 // Skill 系统
 export type {

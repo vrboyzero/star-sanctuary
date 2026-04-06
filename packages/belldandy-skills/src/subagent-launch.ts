@@ -1,5 +1,6 @@
 import type { JsonObject } from "@belldandy/protocol";
 import type { ToolContractFamily, ToolContractRiskLevel } from "./tool-contract.js";
+import { buildDelegationProtocol, type DelegationAggregationMode, type DelegationSource } from "./delegation-protocol.js";
 import type { SpawnSubAgentOptions, ToolContext } from "./types.js";
 
 type BuildSubAgentLaunchSpecOptions = {
@@ -17,6 +18,13 @@ type BuildSubAgentLaunchSpecOptions = {
   parentTaskId?: string;
   role?: "default" | "coder" | "researcher" | "verifier";
   policySummary?: string;
+  delegationSource?: DelegationSource;
+  expectedDeliverableSummary?: string;
+  aggregationMode?: DelegationAggregationMode;
+  goalId?: string;
+  nodeId?: string;
+  planId?: string;
+  sourceAgentIds?: string[];
 };
 
 function cloneJsonObject(value: JsonObject | undefined): JsonObject | undefined {
@@ -26,6 +34,15 @@ function cloneJsonObject(value: JsonObject | undefined): JsonObject | undefined 
 
 function cloneStringArray(value: string[] | undefined): string[] | undefined {
   return value ? [...value] : undefined;
+}
+
+function isGenericRoleProfileId(
+  value: string | undefined,
+  role: BuildSubAgentLaunchSpecOptions["role"],
+): boolean {
+  if (!value || !role) return false;
+  const normalized = value.trim();
+  return normalized === role;
 }
 
 const ROLE_TOOL_FAMILIES: Partial<Record<
@@ -61,10 +78,15 @@ export function buildSubAgentLaunchSpec(
 ): SpawnSubAgentOptions {
   const inherited = context.launchSpec;
   const role = options.role;
+  const requestedProfileId = options.profileId ?? options.agentId;
+  const preferCatalogDefaults = Boolean(requestedProfileId && !isGenericRoleProfileId(requestedProfileId, role));
   const inheritedAllowedToolFamilies = Array.isArray(inherited?.allowedToolFamilies) && inherited.allowedToolFamilies.length > 0
-    ? inherited.allowedToolFamilies
+    ? inherited.allowedToolFamilies as ToolContractFamily[]
     : undefined;
   const roleAllowedToolFamilies = role ? ROLE_TOOL_FAMILIES[role] : undefined;
+  const fallbackPermissionMode = inherited?.permissionMode ?? (!preferCatalogDefaults && role ? ROLE_PERMISSION_MODE[role] : undefined);
+  const fallbackAllowedToolFamilies = inheritedAllowedToolFamilies ?? (!preferCatalogDefaults ? roleAllowedToolFamilies : undefined);
+  const fallbackMaxRiskLevel = inherited?.maxToolRiskLevel ?? (!preferCatalogDefaults && role ? ROLE_MAX_RISK_LEVEL[role] : undefined);
   return {
     instruction: options.instruction,
     agentId: options.agentId,
@@ -75,13 +97,28 @@ export function buildSubAgentLaunchSpec(
     context: cloneJsonObject(options.context),
     cwd: options.cwd ?? context.defaultCwd ?? inherited?.cwd,
     toolSet: cloneStringArray(options.toolSet ?? inherited?.toolSet),
-    permissionMode: options.permissionMode ?? inherited?.permissionMode ?? (role ? ROLE_PERMISSION_MODE[role] : undefined),
+    permissionMode: options.permissionMode ?? fallbackPermissionMode,
     isolationMode: options.isolationMode ?? inherited?.isolationMode,
     parentTaskId: options.parentTaskId ?? inherited?.parentTaskId,
     parentConversationId: context.conversationId,
     role,
-    allowedToolFamilies: cloneStringArray(roleAllowedToolFamilies ?? inheritedAllowedToolFamilies),
-    maxToolRiskLevel: inherited?.maxToolRiskLevel ?? (role ? ROLE_MAX_RISK_LEVEL[role] : undefined),
+    allowedToolFamilies: cloneStringArray(fallbackAllowedToolFamilies),
+    maxToolRiskLevel: fallbackMaxRiskLevel,
     policySummary: options.policySummary ?? inherited?.policySummary,
+    delegationProtocol: buildDelegationProtocol({
+      source: options.delegationSource ?? "session_spawn",
+      instruction: options.instruction,
+      role,
+      context: options.context,
+      expectedDeliverableSummary: options.expectedDeliverableSummary,
+      aggregationMode: options.aggregationMode,
+      goalId: options.goalId,
+      nodeId: options.nodeId,
+      planId: options.planId,
+      sourceAgentIds: options.sourceAgentIds,
+      permissionMode: options.permissionMode ?? fallbackPermissionMode,
+      allowedToolFamilies: fallbackAllowedToolFamilies,
+      maxToolRiskLevel: fallbackMaxRiskLevel,
+    }),
   };
 }

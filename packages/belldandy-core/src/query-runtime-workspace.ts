@@ -5,6 +5,7 @@ import fsp from "node:fs/promises";
 import type { GatewayResFrame } from "@belldandy/protocol";
 
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
+import { matchResidentProtectedStatePath } from "./resident-state-binding.js";
 
 type WorkspaceQueryRuntimeMethod =
   | "workspace.list"
@@ -376,6 +377,22 @@ export async function handleWorkspaceWriteWithQueryRuntime(
     }
 
     try {
+      if (WORKSPACE_SENSITIVE_FILES.includes(path.basename(params.path).toLowerCase())) {
+        queryRuntime.mark("completed", {
+          detail: {
+            relativePath: params.path,
+            code: "forbidden",
+            reason: "internal_state_file",
+          },
+        });
+        return {
+          type: "res",
+          id: ctx.requestId,
+          ok: false,
+          error: { code: "forbidden", message: "禁止修改内部状态文件" },
+        };
+      }
+
       const teamSharedMemoryGuard = ctx.guardTeamSharedMemoryWrite?.({
         stateDir: ctx.stateDir,
         relativePath: params.path,
@@ -395,6 +412,26 @@ export async function handleWorkspaceWriteWithQueryRuntime(
           error: {
             code: teamSharedMemoryGuard.code ?? "forbidden",
             message: teamSharedMemoryGuard.message ?? "共享记忆写入被安全策略阻止",
+          },
+        };
+      }
+
+      const protectedResidentStatePath = matchResidentProtectedStatePath(params.path);
+      if (protectedResidentStatePath) {
+        queryRuntime.mark("completed", {
+          detail: {
+            relativePath: params.path,
+            code: "protected_state_scope",
+            residentStateScope: protectedResidentStatePath.summary,
+          },
+        });
+        return {
+          type: "res",
+          id: ctx.requestId,
+          ok: false,
+          error: {
+            code: "protected_state_scope",
+            message: `禁止通过 workspace.write 直接修改 ${protectedResidentStatePath.summary}。请改用 resident memory / shared review / 会话等专用出口。`,
           },
         };
       }

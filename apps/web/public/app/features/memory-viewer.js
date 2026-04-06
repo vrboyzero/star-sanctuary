@@ -7,6 +7,191 @@ import {
   getResidentSourceBadgeClass,
 } from "./memory-source-view.js";
 
+function normalizeSharedReviewFocus(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "actionable" || normalized === "mine") {
+    return normalized;
+  }
+  return "";
+}
+
+export function buildSharedReviewQueueParams({
+  reviewerAgentId,
+  limit = 50,
+  query = "",
+  governanceStatus = "pending",
+  sharedReviewFilters = {},
+} = {}) {
+  const activeReviewerAgentId = typeof reviewerAgentId === "string" && reviewerAgentId.trim()
+    ? reviewerAgentId.trim()
+    : "default";
+  const focus = normalizeSharedReviewFocus(sharedReviewFilters?.focus);
+  const targetAgentId = typeof sharedReviewFilters?.targetAgentId === "string"
+    ? sharedReviewFilters.targetAgentId.trim()
+    : "";
+  const claimedByAgentId = typeof sharedReviewFilters?.claimedByAgentId === "string"
+    ? sharedReviewFilters.claimedByAgentId.trim()
+    : "";
+  const normalizedQuery = typeof query === "string" ? query.trim() : "";
+  const filter = {};
+  filter.sharedPromotionStatus = governanceStatus || "pending";
+  if (focus === "actionable") {
+    filter.actionableOnly = true;
+  } else if (focus === "mine") {
+    filter.claimedByAgentId = activeReviewerAgentId;
+  } else if (claimedByAgentId) {
+    filter.claimedByAgentId = claimedByAgentId;
+  }
+  if (targetAgentId) {
+    filter.targetAgentId = targetAgentId;
+  }
+
+  const params = {
+    limit,
+    reviewerAgentId: activeReviewerAgentId,
+  };
+  if (Object.keys(filter).length > 0) {
+    params.filter = filter;
+  }
+  if (normalizedQuery) {
+    params.query = normalizedQuery;
+  }
+  return params;
+}
+
+function normalizeSharedReviewBatchStatus(item) {
+  const reviewStatus = typeof item?.reviewStatus === "string" ? item.reviewStatus.trim().toLowerCase() : "";
+  if (reviewStatus === "pending" || reviewStatus === "approved" || reviewStatus === "active" || reviewStatus === "rejected" || reviewStatus === "revoked") {
+    return reviewStatus;
+  }
+  const metadataStatus = typeof item?.metadata?.sharedPromotion?.status === "string"
+    ? item.metadata.sharedPromotion.status.trim().toLowerCase()
+    : "";
+  if (metadataStatus === "pending" || metadataStatus === "approved" || metadataStatus === "active" || metadataStatus === "rejected" || metadataStatus === "revoked") {
+    return metadataStatus;
+  }
+  return "";
+}
+
+function getSharedReviewBatchClaimOwner(item) {
+  if (typeof item?.claimOwner === "string" && item.claimOwner.trim()) {
+    return item.claimOwner.trim();
+  }
+  const metadataOwner = item?.metadata?.sharedPromotion?.claimedByAgentId;
+  return typeof metadataOwner === "string" ? metadataOwner.trim() : "";
+}
+
+export function buildSharedReviewBatchActionState(items, selectedIds, activeAgentId) {
+  const itemMap = new Map((Array.isArray(items) ? items : []).map((item) => [String(item?.id || "").trim(), item]));
+  const selectedItems = [];
+  for (const rawId of Array.isArray(selectedIds) ? selectedIds : []) {
+    const id = typeof rawId === "string" ? rawId.trim() : "";
+    if (!id) continue;
+    const item = itemMap.get(id);
+    if (item) {
+      selectedItems.push(item);
+    }
+  }
+
+  const actions = {
+    claim: [],
+    release: [],
+    approved: [],
+    rejected: [],
+    revoked: [],
+  };
+
+  for (const item of selectedItems) {
+    const status = normalizeSharedReviewBatchStatus(item);
+    const claimOwner = getSharedReviewBatchClaimOwner(item);
+    const claimTimedOut = item?.claimTimedOut === true;
+    const actionableByReviewer = item?.actionableByReviewer === true;
+    const canClaimNow = status === "pending" && (!claimOwner || claimTimedOut);
+    const canReleaseNow = status === "pending" && claimOwner === activeAgentId && !claimTimedOut;
+    const canReviewNow = status === "pending" && (actionableByReviewer || !claimOwner || claimOwner === activeAgentId || claimTimedOut);
+    const canRevokeNow = status === "approved" || status === "active";
+
+    if (canClaimNow) actions.claim.push(item);
+    if (canReleaseNow) actions.release.push(item);
+    if (canReviewNow) {
+      actions.approved.push(item);
+      actions.rejected.push(item);
+    }
+    if (canRevokeNow) actions.revoked.push(item);
+  }
+
+  return {
+    totalVisible: itemMap.size,
+    selectedItems,
+    selectedCount: selectedItems.length,
+    actions,
+  };
+}
+
+export function collectActionableSharedReviewIds(items, activeAgentId) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const batchState = buildSharedReviewBatchActionState(
+    normalizedItems,
+    normalizedItems.map((item) => String(item?.id || "").trim()).filter(Boolean),
+    activeAgentId,
+  );
+  const selectedIds = new Set();
+  for (const item of [
+    ...batchState.actions.claim,
+    ...batchState.actions.release,
+    ...batchState.actions.approved,
+    ...batchState.actions.revoked,
+  ]) {
+    const id = String(item?.id || "").trim();
+    if (id) selectedIds.add(id);
+  }
+  return [...selectedIds];
+}
+
+function collectUniqueNonEmptyStrings(values) {
+  return [...new Set(
+    (Array.isArray(values) ? values : [])
+      .map((value) => typeof value === "string" ? value.trim() : "")
+      .filter(Boolean),
+  )];
+}
+
+export function extractTaskContextTargets(task) {
+  const memoryIds = collectUniqueNonEmptyStrings(
+    (Array.isArray(task?.memoryLinks) ? task.memoryLinks : []).map((item) => item?.chunkId),
+  );
+  const artifactPaths = collectUniqueNonEmptyStrings(task?.artifactPaths);
+  const candidateIds = collectUniqueNonEmptyStrings([
+    ...(Array.isArray(task?.usedMethods) ? task.usedMethods : []).map((item) => item?.sourceCandidateId),
+    ...(Array.isArray(task?.usedSkills) ? task.usedSkills : []).map((item) => item?.sourceCandidateId),
+  ]);
+  return {
+    firstMemoryId: memoryIds[0] || "",
+    memoryCount: memoryIds.length,
+    firstArtifactPath: artifactPaths[0] || "",
+    artifactCount: artifactPaths.length,
+    firstCandidateId: candidateIds[0] || "",
+    candidateCount: candidateIds.length,
+  };
+}
+
+export function extractCandidateContextTargets(candidate) {
+  const snapshot = candidate?.sourceTaskSnapshot || {};
+  const memoryIds = collectUniqueNonEmptyStrings(
+    (Array.isArray(snapshot.memoryLinks) ? snapshot.memoryLinks : []).map((item) => item?.chunkId),
+  );
+  const artifactPaths = collectUniqueNonEmptyStrings(snapshot.artifactPaths);
+  return {
+    sourceTaskId: typeof candidate?.taskId === "string" ? candidate.taskId.trim() : "",
+    sourceConversationId: typeof snapshot?.conversationId === "string" ? snapshot.conversationId.trim() : "",
+    firstMemoryId: memoryIds[0] || "",
+    memoryCount: memoryIds.length,
+    firstArtifactPath: artifactPaths[0] || "",
+    artifactCount: artifactPaths.length,
+    publishedPath: typeof candidate?.publishedPath === "string" ? candidate.publishedPath.trim() : "",
+  };
+}
+
 export function createMemoryViewerFeature({
   refs,
   isConnected,
@@ -15,6 +200,7 @@ export function createMemoryViewerFeature({
   getMemoryViewerState,
   getSelectedAgentId,
   getSelectedAgentLabel,
+  getAvailableAgents,
   syncMemoryTaskGoalFilterUi,
   renderMemoryViewerListEmpty,
   renderMemoryViewerDetailEmpty,
@@ -51,6 +237,7 @@ export function createMemoryViewerFeature({
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
+    memorySharedReviewBatchBarEl,
     memoryTaskFiltersEl,
     memoryChunkFiltersEl,
     memorySearchInputEl,
@@ -60,6 +247,10 @@ export function createMemoryViewerFeature({
     memoryChunkVisibilityFilterEl,
     memoryChunkGovernanceFilterEl,
     memoryChunkCategoryFilterEl,
+    memorySharedReviewFiltersEl,
+    memorySharedReviewFocusFilterEl,
+    memorySharedReviewTargetFilterEl,
+    memorySharedReviewClaimedByFilterEl,
   } = refs;
 
   function getActiveAgentId() {
@@ -72,6 +263,227 @@ export function createMemoryViewerFeature({
       ...params,
       agentId,
     };
+  }
+
+  function getSharedReviewFilters() {
+    const memoryViewerState = getMemoryViewerState();
+    const existing = memoryViewerState.sharedReviewFilters;
+    if (existing && typeof existing === "object") {
+      return {
+        focus: normalizeSharedReviewFocus(existing.focus),
+        targetAgentId: typeof existing.targetAgentId === "string" ? existing.targetAgentId.trim() : "",
+        claimedByAgentId: typeof existing.claimedByAgentId === "string" ? existing.claimedByAgentId.trim() : "",
+      };
+    }
+    const fallback = { focus: "", targetAgentId: "", claimedByAgentId: "" };
+    memoryViewerState.sharedReviewFilters = fallback;
+    return fallback;
+  }
+
+  function getSharedReviewAgentOptions() {
+    const stateFilters = getSharedReviewFilters();
+    const map = new Map();
+    const availableAgents = typeof getAvailableAgents === "function" ? getAvailableAgents() : [];
+    for (const agent of Array.isArray(availableAgents) ? availableAgents : []) {
+      if (!agent || typeof agent !== "object") continue;
+      const id = typeof agent.id === "string" ? agent.id.trim() : "";
+      if (!id) continue;
+      const label = typeof agent.displayName === "string" && agent.displayName.trim()
+        ? agent.displayName.trim()
+        : typeof agent.name === "string" && agent.name.trim()
+          ? agent.name.trim()
+          : id;
+      map.set(id, label);
+    }
+
+    for (const id of [getActiveAgentId(), stateFilters.targetAgentId, stateFilters.claimedByAgentId]) {
+      if (typeof id === "string" && id.trim() && !map.has(id.trim())) {
+        map.set(id.trim(), id.trim());
+      }
+    }
+
+    return [...map.entries()]
+      .map(([id, label]) => ({ id, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, "zh-CN"));
+  }
+
+  function buildSelectOptionsHtml(options, fallbackLabel) {
+    return options.map((option) => {
+      const value = typeof option?.value === "string" ? option.value : "";
+      const label = typeof option?.label === "string" && option.label.trim() ? option.label.trim() : fallbackLabel;
+      return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+    }).join("");
+  }
+
+  function getSelectedSharedReviewIds() {
+    const memoryViewerState = getMemoryViewerState();
+    return Array.isArray(memoryViewerState.selectedSharedReviewIds)
+      ? memoryViewerState.selectedSharedReviewIds.filter((item) => typeof item === "string" && item.trim())
+      : [];
+  }
+
+  function setSelectedSharedReviewIds(nextIds) {
+    const memoryViewerState = getMemoryViewerState();
+    const deduped = [];
+    const seen = new Set();
+    for (const id of Array.isArray(nextIds) ? nextIds : []) {
+      const normalized = typeof id === "string" ? id.trim() : "";
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      deduped.push(normalized);
+    }
+    memoryViewerState.selectedSharedReviewIds = deduped;
+  }
+
+  function syncSelectedSharedReviewIds(items = []) {
+    const validIds = new Set((Array.isArray(items) ? items : []).map((item) => String(item?.id || "").trim()).filter(Boolean));
+    setSelectedSharedReviewIds(getSelectedSharedReviewIds().filter((id) => validIds.has(id)));
+  }
+
+  function toggleSharedReviewSelection(chunkId, checked) {
+    const targetId = typeof chunkId === "string" ? chunkId.trim() : "";
+    if (!targetId) return;
+    const selectedIds = new Set(getSelectedSharedReviewIds());
+    if (checked) {
+      selectedIds.add(targetId);
+    } else {
+      selectedIds.delete(targetId);
+    }
+    setSelectedSharedReviewIds([...selectedIds]);
+  }
+
+  function selectAllVisibleSharedReviewItems() {
+    const memoryViewerState = getMemoryViewerState();
+    const itemIds = (Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [])
+      .map((item) => String(item?.id || "").trim())
+      .filter(Boolean);
+    setSelectedSharedReviewIds(itemIds);
+  }
+
+  function selectActionableSharedReviewItems() {
+    const memoryViewerState = getMemoryViewerState();
+    const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
+    setSelectedSharedReviewIds(collectActionableSharedReviewIds(items, getActiveAgentId()));
+  }
+
+  function clearSharedReviewSelection() {
+    setSelectedSharedReviewIds([]);
+  }
+
+  function syncSharedReviewFilterUi() {
+    const stateFilters = getSharedReviewFilters();
+    if (memorySharedReviewFocusFilterEl) {
+      memorySharedReviewFocusFilterEl.value = stateFilters.focus;
+    }
+
+    const agentOptions = getSharedReviewAgentOptions();
+    if (memorySharedReviewTargetFilterEl) {
+      const options = [
+        { value: "", label: t("memory.sharedReviewTargetAll", {}, "All Target Agents") },
+        ...agentOptions.map((agent) => ({ value: agent.id, label: agent.label })),
+      ];
+      memorySharedReviewTargetFilterEl.innerHTML = buildSelectOptionsHtml(options, "-");
+      memorySharedReviewTargetFilterEl.value = stateFilters.targetAgentId;
+    }
+    if (memorySharedReviewClaimedByFilterEl) {
+      const options = [
+        { value: "", label: t("memory.sharedReviewClaimedByAll", {}, "All Claim Owners") },
+        ...agentOptions.map((agent) => ({ value: agent.id, label: agent.label })),
+      ];
+      memorySharedReviewClaimedByFilterEl.innerHTML = buildSelectOptionsHtml(options, "-");
+      memorySharedReviewClaimedByFilterEl.value = stateFilters.claimedByAgentId;
+    }
+  }
+
+  function renderSharedReviewBatchBar() {
+    if (!memorySharedReviewBatchBarEl) return;
+    const memoryViewerState = getMemoryViewerState();
+    const isSharedReview = memoryViewerState.tab === "sharedReview";
+    const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
+    if (!isSharedReview || !items.length) {
+      memorySharedReviewBatchBarEl.classList.add("hidden");
+      memorySharedReviewBatchBarEl.innerHTML = "";
+      return;
+    }
+
+    const batchState = buildSharedReviewBatchActionState(items, getSelectedSharedReviewIds(), getActiveAgentId());
+    const busy = memoryViewerState.sharedReviewBatchBusy === true;
+    const actionButtons = [
+      {
+        key: "claim",
+        label: t("memory.shareClaimAction", {}, "Claim"),
+        count: batchState.actions.claim.length,
+      },
+      {
+        key: "release",
+        label: t("memory.shareReleaseAction", {}, "Release"),
+        count: batchState.actions.release.length,
+      },
+      {
+        key: "approved",
+        label: t("memory.shareReviewApproveAction", {}, "Approve"),
+        count: batchState.actions.approved.length,
+      },
+      {
+        key: "rejected",
+        label: t("memory.shareReviewRejectAction", {}, "Reject"),
+        count: batchState.actions.rejected.length,
+      },
+      {
+        key: "revoked",
+        label: t("memory.shareReviewRevokeAction", {}, "Revoke Shared"),
+        count: batchState.actions.revoked.length,
+      },
+    ];
+
+    memorySharedReviewBatchBarEl.classList.remove("hidden");
+    memorySharedReviewBatchBarEl.innerHTML = `
+      <div class="memory-shared-review-batch-summary">
+        ${escapeHtml(t(
+          "memory.sharedReviewBatchSummary",
+          {
+            selected: formatCount(batchState.selectedCount),
+            total: formatCount(batchState.totalVisible),
+          },
+          `Selected ${formatCount(batchState.selectedCount)} / ${formatCount(batchState.totalVisible)}`,
+        ))}
+      </div>
+      <div class="memory-shared-review-batch-actions">
+        <button class="memory-usage-action-btn" data-shared-review-batch-select="all" ${busy ? "disabled" : ""}>${escapeHtml(t("memory.sharedReviewSelectAllVisible", {}, "Select Visible"))}</button>
+        <button class="memory-usage-action-btn" data-shared-review-batch-select="actionable" ${busy ? "disabled" : ""}>${escapeHtml(t("memory.sharedReviewSelectActionable", {}, "Select Actionable"))}</button>
+        <button class="memory-usage-action-btn" data-shared-review-batch-select="clear" ${(busy || batchState.selectedCount <= 0) ? "disabled" : ""}>${escapeHtml(t("memory.sharedReviewClearSelection", {}, "Clear Selection"))}</button>
+        ${actionButtons.map((action) => `
+          <button
+            class="memory-usage-action-btn"
+            data-shared-review-batch-action="${escapeHtml(action.key)}"
+            ${(busy || action.count <= 0) ? "disabled" : ""}
+          >${escapeHtml(`${action.label} (${formatCount(action.count)})`)}</button>
+        `).join("")}
+      </div>
+    `;
+
+    memorySharedReviewBatchBarEl.querySelectorAll("[data-shared-review-batch-select]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const mode = node.getAttribute("data-shared-review-batch-select");
+        if (mode === "all") {
+          selectAllVisibleSharedReviewItems();
+        } else if (mode === "actionable") {
+          selectActionableSharedReviewItems();
+        } else {
+          clearSharedReviewSelection();
+        }
+        renderSharedReviewList(items);
+        renderSharedReviewBatchBar();
+      });
+    });
+
+    memorySharedReviewBatchBarEl.querySelectorAll("[data-shared-review-batch-action]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const action = node.getAttribute("data-shared-review-batch-action") || "";
+        if (!action) return;
+        void runSharedReviewBatchAction(action);
+      });
+    });
   }
 
   function createMemoryViewerRequestContext(existingContext = null) {
@@ -130,6 +542,15 @@ export function createMemoryViewerFeature({
     if (status === "rejected") return t("memory.shareStatusRejected", {}, "rejected");
     if (status === "revoked") return t("memory.shareStatusRevoked", {}, "revoked");
     return "-";
+  }
+
+  function formatSharedReviewBatchActionLabel(action) {
+    if (action === "claim") return t("memory.shareClaimAction", {}, "Claim");
+    if (action === "release") return t("memory.shareReleaseAction", {}, "Release");
+    if (action === "approved") return t("memory.shareReviewApproveAction", {}, "Approve");
+    if (action === "rejected") return t("memory.shareReviewRejectAction", {}, "Reject");
+    if (action === "revoked") return t("memory.shareReviewRevokeAction", {}, "Revoke Shared");
+    return action || "-";
   }
 
   function getMemoryShareActionMode(item) {
@@ -361,6 +782,13 @@ export function createMemoryViewerFeature({
     if (memoryTabSharedReviewBtn) memoryTabSharedReviewBtn.classList.toggle("active", isSharedReview);
     if (memoryTaskFiltersEl) memoryTaskFiltersEl.classList.toggle("hidden", !isTasks);
     if (memoryChunkFiltersEl) memoryChunkFiltersEl.classList.toggle("hidden", isTasks);
+    if (memoryChunkTypeFilterEl) memoryChunkTypeFilterEl.classList.toggle("hidden", !isMemories);
+    if (memoryChunkVisibilityFilterEl) memoryChunkVisibilityFilterEl.classList.toggle("hidden", !isMemories);
+    if (memoryChunkGovernanceFilterEl) memoryChunkGovernanceFilterEl.classList.toggle("hidden", !(isMemories || isSharedReview));
+    if (memoryChunkCategoryFilterEl) memoryChunkCategoryFilterEl.classList.toggle("hidden", !isMemories);
+    if (memorySharedReviewFiltersEl) memorySharedReviewFiltersEl.classList.toggle("hidden", !isSharedReview);
+    syncSharedReviewFilterUi();
+    renderSharedReviewBatchBar();
     syncMemoryTaskGoalFilterUi();
   }
 
@@ -373,6 +801,8 @@ export function createMemoryViewerFeature({
     memoryViewerState.selectedTask = null;
     memoryViewerState.selectedCandidate = null;
     memoryViewerState.sharedReviewSummary = null;
+    memoryViewerState.selectedSharedReviewIds = [];
+    memoryViewerState.sharedReviewBatchBusy = false;
     if (tab !== "tasks") {
       memoryViewerState.goalIdFilter = null;
     }
@@ -487,22 +917,10 @@ export function createMemoryViewerFeature({
     }
   }
 
-  async function reviewSelectedMemoryShare(item, decision, scope = "chunk") {
-    if (!item?.id) return;
-    const promptKey = decision === "approved"
-      ? "memory.shareReviewPromptApprove"
-      : decision === "rejected"
-        ? "memory.shareReviewPromptReject"
-        : "memory.shareReviewPromptRevoke";
-    const note = window.prompt(
-      t(promptKey, {}, "Optional note"),
-      "",
-    );
-    if (note === null) return;
+  async function sendMemoryShareReviewRequest(item, decision, note = "", scope = "chunk") {
     const reviewerAgentId = getActiveAgentId();
     const targetAgentId = getMemoryShareTargetAgentId(item);
-
-    const res = await sendReq({
+    return sendReq({
       type: "req",
       id: makeId(),
       method: "memory.share.review",
@@ -516,6 +934,119 @@ export function createMemoryViewerFeature({
         note: String(note || "").trim(),
       },
     });
+  }
+
+  async function sendMemoryShareClaimRequest(item, action, scope = "chunk") {
+    const reviewerAgentId = getActiveAgentId();
+    const targetAgentId = getMemoryShareTargetAgentId(item);
+    return sendReq({
+      type: "req",
+      id: makeId(),
+      method: "memory.share.claim",
+      params: {
+        action,
+        ...(scope === "source"
+          ? { sourcePath: getMemoryShareScopeSourcePath(item) }
+          : { chunkId: item.id }),
+        targetAgentId,
+        reviewerAgentId,
+      },
+    });
+  }
+
+  async function runSharedReviewBatchAction(action) {
+    const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.sharedReviewBatchBusy === true) return;
+    const batchState = buildSharedReviewBatchActionState(
+      memoryViewerState.items,
+      getSelectedSharedReviewIds(),
+      getActiveAgentId(),
+    );
+    const eligibleItems = batchState.actions[action] || [];
+    if (!eligibleItems.length) return;
+
+    let note = "";
+    if (action === "approved" || action === "rejected" || action === "revoked") {
+      const promptKey = action === "approved"
+        ? "memory.shareReviewPromptApprove"
+        : action === "rejected"
+          ? "memory.shareReviewPromptReject"
+          : "memory.shareReviewPromptRevoke";
+      const promptValue = window.prompt(
+        t(promptKey, {}, "Optional note"),
+        "",
+      );
+      if (promptValue === null) return;
+      note = String(promptValue || "").trim();
+    }
+
+    memoryViewerState.sharedReviewBatchBusy = true;
+    renderSharedReviewBatchBar();
+
+    let successCount = 0;
+    const errors = [];
+    for (const item of eligibleItems) {
+      let res;
+      if (action === "claim" || action === "release") {
+        res = await sendMemoryShareClaimRequest(item, action, "chunk");
+      } else {
+        res = await sendMemoryShareReviewRequest(item, action, note, "chunk");
+      }
+      if (res?.ok) {
+        successCount += 1;
+        continue;
+      }
+      errors.push(res?.error?.message || t("memory.memoryReadFailed", {}, "Failed to read memory data."));
+    }
+
+    memoryViewerState.sharedReviewBatchBusy = false;
+    if (successCount > 0) {
+      const successTitle = action === "claim" || action === "release"
+        ? t("memory.shareClaimSuccessTitle", {}, "Shared Claim Updated")
+        : t("memory.shareReviewSuccessTitle", {}, "Shared Review Updated");
+      showNotice?.(
+        successTitle,
+        t(
+          "memory.sharedReviewBatchSuccessMessage",
+          {
+            action: formatSharedReviewBatchActionLabel(action),
+            count: formatCount(successCount),
+            skipped: formatCount(batchState.selectedCount - successCount),
+          },
+          `${action} applied to ${formatCount(successCount)} selected item(s).`,
+        ),
+        errors.length ? "info" : "success",
+        3200,
+      );
+    }
+    if (!successCount && errors.length) {
+      showNotice?.(
+        t("memory.sharedReviewBatchFailedTitle", {}, "Batch Shared Review Failed"),
+        errors[0],
+        "error",
+        4200,
+      );
+    }
+
+    await loadMemoryViewer(false);
+    if (getMemoryViewerState().selectedId) {
+      await loadMemoryDetail(getMemoryViewerState().selectedId);
+    }
+  }
+
+  async function reviewSelectedMemoryShare(item, decision, scope = "chunk") {
+    if (!item?.id) return;
+    const promptKey = decision === "approved"
+      ? "memory.shareReviewPromptApprove"
+      : decision === "rejected"
+        ? "memory.shareReviewPromptReject"
+        : "memory.shareReviewPromptRevoke";
+    const note = window.prompt(
+      t(promptKey, {}, "Optional note"),
+      "",
+    );
+    if (note === null) return;
+    const res = await sendMemoryShareReviewRequest(item, decision, note, scope);
     if (!res || !res.ok) {
       showNotice?.(
         t("memory.shareReviewFailedTitle", {}, "Failed to Update Shared Review"),
@@ -549,21 +1080,7 @@ export function createMemoryViewerFeature({
 
   async function claimSelectedMemoryShare(item, action, scope = "chunk") {
     if (!item?.id) return;
-    const reviewerAgentId = getActiveAgentId();
-    const targetAgentId = getMemoryShareTargetAgentId(item);
-    const res = await sendReq({
-      type: "req",
-      id: makeId(),
-      method: "memory.share.claim",
-      params: {
-        action,
-        ...(scope === "source"
-          ? { sourcePath: getMemoryShareScopeSourcePath(item) }
-          : { chunkId: item.id }),
-        targetAgentId,
-        reviewerAgentId,
-      },
-    });
+    const res = await sendMemoryShareClaimRequest(item, action, scope);
     if (!res || !res.ok) {
       showNotice?.(
         t("memory.shareClaimFailedTitle", {}, "Failed to Update Shared Claim"),
@@ -597,6 +1114,11 @@ export function createMemoryViewerFeature({
 
   function bindMemoryDetailActions(item) {
     if (!memoryViewerDetailEl || !item?.id) return;
+    memoryViewerDetailEl.querySelectorAll("[data-memory-open-shared-review-context]").forEach((node) => {
+      node.addEventListener("click", () => {
+        void openSharedReviewContextForItem(item);
+      });
+    });
     memoryViewerDetailEl.querySelectorAll("[data-memory-share-promote]").forEach((node) => {
       node.addEventListener("click", () => {
         void promoteSelectedMemoryToShared(item);
@@ -618,6 +1140,33 @@ export function createMemoryViewerFeature({
         void claimSelectedMemoryShare(item, action, scope);
       });
     });
+  }
+
+  async function openSharedReviewContextForItem(item) {
+    const targetAgentId = getMemoryShareTargetAgentId(item);
+    const queueStatus = normalizeMemorySharePromotionStatus(item);
+    const memoryViewerState = getMemoryViewerState();
+    const filters = getSharedReviewFilters();
+    filters.targetAgentId = targetAgentId || "";
+    filters.claimedByAgentId = filters.focus === "mine" ? getActiveAgentId() : filters.claimedByAgentId;
+    memoryViewerState.tab = "sharedReview";
+    memoryViewerState.items = [];
+    memoryViewerState.selectedId = typeof item?.id === "string" ? item.id.trim() : null;
+    memoryViewerState.selectedTask = null;
+    memoryViewerState.selectedCandidate = null;
+    memoryViewerState.sharedReviewSummary = null;
+    memoryViewerState.selectedSharedReviewIds = [];
+    memoryViewerState.sharedReviewBatchBusy = false;
+    if (memoryChunkGovernanceFilterEl && queueStatus && queueStatus !== "none") {
+      memoryChunkGovernanceFilterEl.value = queueStatus === "active" ? "approved" : queueStatus;
+    } else if (memoryChunkGovernanceFilterEl && !memoryChunkGovernanceFilterEl.value) {
+      memoryChunkGovernanceFilterEl.value = "pending";
+    }
+    syncMemoryViewerUi();
+    await loadSharedReviewQueue(false);
+    if (memoryViewerState.selectedId && Array.isArray(memoryViewerState.items) && memoryViewerState.items.some((entry) => entry?.id === memoryViewerState.selectedId)) {
+      await loadMemoryDetail(memoryViewerState.selectedId, null, { targetAgentId });
+    }
   }
 
   async function loadTaskUsageOverview(existingContext = null) {
@@ -783,12 +1332,13 @@ export function createMemoryViewerFeature({
     renderMemoryViewerDetailEmpty(t("memory.sharedReviewDetailLoading", {}, "Loading shared review details..."));
 
     const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
-    const filter = {};
-    if (memoryChunkGovernanceFilterEl?.value) filter.sharedPromotionStatus = memoryChunkGovernanceFilterEl.value;
-    if (!filter.sharedPromotionStatus) filter.sharedPromotionStatus = "pending";
-    const params = { limit: 50, reviewerAgentId: requestContext.agentId };
-    if (Object.keys(filter).length > 0) params.filter = filter;
-    if (query) params.query = query;
+    const params = buildSharedReviewQueueParams({
+      reviewerAgentId: requestContext.agentId,
+      limit: 50,
+      query,
+      governanceStatus: memoryChunkGovernanceFilterEl?.value || "pending",
+      sharedReviewFilters: getSharedReviewFilters(),
+    });
 
     const res = await sendReq({
       type: "req",
@@ -801,7 +1351,9 @@ export function createMemoryViewerFeature({
     if (!res || !res.ok) {
       memoryViewerState.sharedReviewSummary = null;
       memoryViewerState.items = [];
+      clearSharedReviewSelection();
       renderMemoryViewerStats(null);
+      renderSharedReviewBatchBar();
       renderMemoryViewerListEmpty(t("memory.sharedReviewLoadFailed", {}, "Failed to load shared review inbox."));
       renderMemoryViewerDetailEmpty(res?.error?.message || t("memory.sharedReviewDetailLoadFailed", {}, "Failed to read shared review data."));
       return;
@@ -810,7 +1362,9 @@ export function createMemoryViewerFeature({
     const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
     memoryViewerState.items = items;
     memoryViewerState.sharedReviewSummary = res.payload?.summary ?? null;
+    syncSelectedSharedReviewIds(items);
     renderMemoryViewerStats(memoryViewerState.stats);
+    renderSharedReviewBatchBar();
 
     if (!items.length) {
       memoryViewerState.selectedId = null;
@@ -1006,14 +1560,17 @@ export function createMemoryViewerFeature({
     if (!memoryViewerListEl) return;
     if (!items.length) {
       renderMemoryViewerListEmpty(t("memory.sharedReviewEmpty", {}, "There are no shared review items right now."));
+      renderSharedReviewBatchBar();
       return;
     }
 
     const memoryViewerState = getMemoryViewerState();
+    const selectedIds = new Set(getSelectedSharedReviewIds());
     memoryViewerListEl.innerHTML = items.map((item) => {
       const title = summarizeSourcePath(item.sourcePath);
       const summary = item.summary || item.snippet || t("memory.emptyNoSummary", {}, "No summary");
       const isActive = item.id === memoryViewerState.selectedId;
+      const isSelected = selectedIds.has(item.id);
       const visibility = normalizeMemoryVisibility(item.visibility);
       const category = formatMemoryCategory(item.category);
       const sourceView = item.sourceView || { scope: visibility };
@@ -1043,7 +1600,12 @@ export function createMemoryViewerFeature({
         : "";
       return `
         <div class="memory-list-item ${isActive ? "active" : ""}" data-shared-review-memory-id="${escapeHtml(item.id)}" data-shared-review-target-agent-id="${escapeHtml(item.targetAgentId || "")}">
-          <div class="memory-list-item-title">${escapeHtml(title)}</div>
+          <div class="memory-list-item-head">
+            <label class="memory-list-selector">
+              <input type="checkbox" data-shared-review-select="${escapeHtml(item.id)}" ${isSelected ? "checked" : ""}>
+            </label>
+            <div class="memory-list-item-title">${escapeHtml(title)}</div>
+          </div>
           <div class="memory-list-item-meta">
             <span class="memory-badge">${escapeHtml(targetLabel)}</span>
             <span class="memory-badge">${escapeHtml(statusLabel)}</span>
@@ -1059,6 +1621,17 @@ export function createMemoryViewerFeature({
       `;
     }).join("");
 
+    memoryViewerListEl.querySelectorAll("[data-shared-review-select]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+      node.addEventListener("change", () => {
+        const chunkId = node.getAttribute("data-shared-review-select");
+        toggleSharedReviewSelection(chunkId, node.checked);
+        renderSharedReviewBatchBar();
+      });
+    });
+
     memoryViewerListEl.querySelectorAll("[data-shared-review-memory-id]").forEach((node) => {
       node.addEventListener("click", async () => {
         const chunkId = node.getAttribute("data-shared-review-memory-id");
@@ -1069,6 +1642,7 @@ export function createMemoryViewerFeature({
         await loadMemoryDetail(chunkId, null, { targetAgentId });
       });
     });
+    renderSharedReviewBatchBar();
   }
 
   function renderCandidateDetailPanel(candidate) {
@@ -1080,6 +1654,7 @@ export function createMemoryViewerFeature({
     const candidateSourceView = candidate.sourceView || null;
     const candidateSourceExplanation = candidateSourceView ? formatResidentSourceExplainability(candidateSourceView) : "-";
     const candidateSourceConflict = candidateSourceView ? formatResidentSourceConflictSummary(candidateSourceView) : "-";
+    const contextTargets = extractCandidateContextTargets(candidate);
 
     return `
       <div class="memory-detail-card">
@@ -1093,6 +1668,25 @@ export function createMemoryViewerFeature({
           </div>
         </div>
         <div class="memory-detail-text"><strong>${escapeHtml(candidate.title || candidate.id || t("memory.candidateUntitled", {}, "Untitled Candidate"))}</strong></div>
+        <div class="memory-detail-card">
+          <div class="goal-summary-header">
+            <div>
+              <div class="goal-summary-title">${escapeHtml(t("memory.contextSummaryTitle", {}, "上下文链"))}</div>
+              <div class="goal-summary-text">${escapeHtml(t("memory.contextSummaryCandidateText", {}, "把来源任务、源记忆与产物入口压缩到一处，方便继续追溯。"))}</div>
+            </div>
+          </div>
+          <div class="memory-detail-badges">
+            ${contextTargets.sourceConversationId ? `<span class="memory-badge">${escapeHtml(t("memory.contextConversation", {}, "会话"))} ${escapeHtml(summarizeSourcePath(contextTargets.sourceConversationId))}</span>` : ""}
+            <span class="memory-badge">${escapeHtml(t("memory.contextLinkedMemories", {}, "关联记忆"))} ${escapeHtml(String(contextTargets.memoryCount))}</span>
+            <span class="memory-badge">${escapeHtml(t("memory.contextArtifacts", {}, "产物"))} ${escapeHtml(String(contextTargets.artifactCount))}</span>
+          </div>
+          <div class="goal-detail-actions">
+            ${contextTargets.sourceTaskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(contextTargets.sourceTaskId)}">${escapeHtml(t("memory.contextOpenSourceTask", {}, "打开来源任务"))}</button>` : ""}
+            ${contextTargets.firstMemoryId ? `<button class="button goal-inline-action-secondary" data-open-memory-id="${escapeHtml(contextTargets.firstMemoryId)}">${escapeHtml(t("memory.contextOpenFirstMemory", {}, "打开关联记忆"))}</button>` : ""}
+            ${contextTargets.firstArtifactPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(contextTargets.firstArtifactPath)}">${escapeHtml(t("memory.contextOpenFirstArtifact", {}, "打开相关产物"))}</button>` : ""}
+            ${contextTargets.publishedPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(contextTargets.publishedPath)}">${escapeHtml(t("memory.contextOpenPublishedArtifact", {}, "打开发布产物"))}</button>` : ""}
+          </div>
+        </div>
         <div class="memory-detail-grid">
           <div class="memory-detail-card"><span class="memory-detail-label">候选 ID</span><div class="memory-detail-text">${escapeHtml(candidate.id || "-")}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">来源任务</span><div class="memory-detail-text">${candidate.taskId ? `<button class="memory-path-link" data-open-task-id="${escapeHtml(candidate.taskId)}">${escapeHtml(candidate.taskId)}</button>` : "-"}</div></div>
@@ -1272,6 +1866,7 @@ export function createMemoryViewerFeature({
           : canReviewNow
             ? t("memory.detailSharedReviewerActionable", {}, "This review item is actionable for the current reviewer.")
             : t("memory.detailSharedReviewerIdle", {}, "This review item is waiting for a reviewer.");
+    const canOpenSharedReviewContext = normalizeMemorySharePromotionStatus(item) && normalizeMemorySharePromotionStatus(item) !== "none";
     memoryViewerDetailEl.innerHTML = `
       <div class="memory-detail-shell">
         <div class="memory-detail-header">
@@ -1289,6 +1884,29 @@ export function createMemoryViewerFeature({
             <span class="memory-badge">${escapeHtml(category)}</span>
             <span class="memory-badge">分数 ${formatScore(item.score)}</span>
             ${shareActionButtons.join("")}
+          </div>
+        </div>
+
+        <div class="memory-detail-card">
+          <div class="goal-summary-header">
+            <div>
+              <div class="goal-summary-title">${escapeHtml(t("memory.contextSummaryTitle", {}, "上下文链"))}</div>
+              <div class="goal-summary-text">${escapeHtml(t("memory.contextSummaryMemoryText", {}, "把来源范围、shared 治理状态与继续下钻入口收拢到一处。"))}</div>
+            </div>
+          </div>
+          <div class="memory-detail-badges">
+            <span class="memory-badge ${getVisibilityBadgeClass(visibility)}">${escapeHtml(visibility)}</span>
+            ${renderSourceViewBadge(sourceView)}
+            <span class="memory-badge">${escapeHtml(shareStatus)}</span>
+            ${targetDisplayName ? `<span class="memory-badge">${escapeHtml(targetDisplayName)}</span>` : ""}
+            ${claimOwner ? `<span class="memory-badge">${escapeHtml(claimTimedOut ? t("memory.contextClaimTimedOut", {}, "claim 超时") : t("memory.contextClaimActive", {}, "claim 生效中"))}</span>` : ""}
+          </div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(sourceExplanation)}</span>
+          </div>
+          <div class="goal-detail-actions">
+            ${item.sourcePath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(item.sourcePath)}" data-open-line="${typeof item.startLine === "number" ? item.startLine : ""}">${escapeHtml(t("memory.contextOpenSource", {}, "打开来源文件"))}</button>` : ""}
+            ${canOpenSharedReviewContext ? `<button class="button goal-inline-action-secondary" data-memory-open-shared-review-context="1">${escapeHtml(t("memory.contextOpenSharedReview", {}, "打开 Shared Review"))}</button>` : ""}
           </div>
         </div>
 
@@ -1345,6 +1963,7 @@ export function createMemoryViewerFeature({
     renderMemoryDetail,
     renderMemoryViewerStats,
     renderTaskList,
+    syncSharedReviewFilterUi,
     syncMemoryViewerHeaderTitle,
     switchMemoryViewerTab,
     syncMemoryViewerUi,

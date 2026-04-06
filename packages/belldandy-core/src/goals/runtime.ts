@@ -374,6 +374,9 @@ function normalizeCapabilityPlanSubAgent(value: unknown): GoalCapabilityPlanSubA
   const objective = normalizeString(source.objective);
   if (!agentId || !objective) return null;
   const role = normalizeString(source.role);
+  const catalogSource = source.catalogDefault && typeof source.catalogDefault === "object" && !Array.isArray(source.catalogDefault)
+    ? source.catalogDefault as Record<string, unknown>
+    : undefined;
   return {
     agentId,
     role: role === "coder" || role === "researcher" || role === "verifier" ? role : role === "default" ? "default" : undefined,
@@ -381,6 +384,41 @@ function normalizeCapabilityPlanSubAgent(value: unknown): GoalCapabilityPlanSubA
     reason: normalizeString(source.reason),
     deliverable: normalizeString(source.deliverable),
     handoffToVerifier: typeof source.handoffToVerifier === "boolean" ? source.handoffToVerifier : undefined,
+    catalogDefault: catalogSource
+      ? {
+        permissionMode: (() => {
+          const permissionMode = normalizeString(catalogSource.permissionMode);
+          return permissionMode === "plan" || permissionMode === "acceptEdits" || permissionMode === "confirm"
+            ? permissionMode
+            : undefined;
+        })(),
+        allowedToolFamilies: Array.isArray(catalogSource.allowedToolFamilies)
+          ? catalogSource.allowedToolFamilies
+            .map((item) => normalizeString(item))
+            .filter((item): item is string => Boolean(item))
+          : undefined,
+        maxToolRiskLevel: (() => {
+          const risk = normalizeString(catalogSource.maxToolRiskLevel);
+          return risk === "low" || risk === "medium" || risk === "high" || risk === "critical"
+            ? risk
+            : undefined;
+        })(),
+        handoffStyle: (() => {
+          const handoffStyle = normalizeString(catalogSource.handoffStyle);
+          return handoffStyle === "structured" ? "structured" : handoffStyle === "summary" ? "summary" : undefined;
+        })(),
+        whenToUse: Array.isArray(catalogSource.whenToUse)
+          ? catalogSource.whenToUse
+            .map((item) => normalizeString(item))
+            .filter((item): item is string => Boolean(item))
+          : undefined,
+        skills: Array.isArray(catalogSource.skills)
+          ? catalogSource.skills
+            .map((item) => normalizeString(item))
+            .filter((item): item is string => Boolean(item))
+          : undefined,
+      }
+      : undefined,
   };
 }
 

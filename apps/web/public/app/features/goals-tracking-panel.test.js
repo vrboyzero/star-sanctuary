@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  buildGoalTrackingCapabilityPlanIndex,
+  getGoalTrackingCheckpointExplainabilityLines,
+  getGoalTrackingNodeActionTargets,
+} from "./goals-tracking-panel.js";
+
+describe("goal tracking linkage helpers", () => {
+  it("extracts task id and artifact paths for node jump actions", () => {
+    expect(getGoalTrackingNodeActionTargets({
+      lastRunId: "run_goal_1",
+      artifacts: [" docs/goal.md ", "", "artifacts/out.md"],
+    })).toEqual({
+      taskId: "run_goal_1",
+      artifactPaths: ["docs/goal.md", "artifacts/out.md"],
+    });
+  });
+
+  it("returns empty targets when node has no linkage metadata", () => {
+    expect(getGoalTrackingNodeActionTargets({})).toEqual({
+      taskId: "",
+      artifactPaths: [],
+    });
+  });
+
+  it("builds checkpoint explainability lines from the latest capability plan for the node", () => {
+    const capabilityPlansByNodeId = buildGoalTrackingCapabilityPlanIndex([
+      {
+        nodeId: "node_impl",
+        updatedAt: "2026-04-01T08:00:00.000Z",
+        checkpoint: {
+          required: true,
+          approvalMode: "strict",
+          suggestedReviewer: "legacy-reviewer",
+          suggestedTitle: "Legacy checkpoint",
+          suggestedNote: "Legacy approval note",
+        },
+      },
+      {
+        nodeId: "node_impl",
+        updatedAt: "2026-04-02T08:00:00.000Z",
+        riskLevel: "high",
+        checkpoint: {
+          required: true,
+          approvalMode: "strict",
+          suggestedReviewer: "reviewer",
+          suggestedReviewerRole: "verifier",
+          suggestedTitle: "High-risk checkpoint",
+          suggestedNote: "Need approval before execution",
+          requiredRequestFields: ["impact"],
+          requiredDecisionFields: ["decision"],
+        },
+      },
+    ]);
+
+    const lines = getGoalTrackingCheckpointExplainabilityLines({
+      id: "cp_1",
+      nodeId: "node_impl",
+    }, capabilityPlansByNodeId);
+
+    expect(lines.join("\n")).toContain("suggested launch: source=goal_checkpoint, agent=reviewer");
+    expect(lines.join("\n")).toContain("delegation reason: source=goal_checkpoint");
+    expect(lines.join("\n")).not.toContain("legacy-reviewer");
+  });
+});

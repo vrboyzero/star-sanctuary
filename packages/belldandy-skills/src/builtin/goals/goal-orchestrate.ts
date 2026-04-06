@@ -38,6 +38,22 @@ function buildDelegationInstruction(plan: GoalCapabilityPlanRecord, nodeTitle: s
   if (subAgent.deliverable) {
     lines.push(`交付物: ${subAgent.deliverable}`);
   }
+  if (subAgent.catalogDefault) {
+    const defaultFragments = [
+      subAgent.catalogDefault.permissionMode ? `permission=${subAgent.catalogDefault.permissionMode}` : "",
+      subAgent.catalogDefault.maxToolRiskLevel ? `risk=${subAgent.catalogDefault.maxToolRiskLevel}` : "",
+      subAgent.catalogDefault.handoffStyle ? `handoff=${subAgent.catalogDefault.handoffStyle}` : "",
+      Array.isArray(subAgent.catalogDefault.allowedToolFamilies) && subAgent.catalogDefault.allowedToolFamilies.length > 0
+        ? `tools=${subAgent.catalogDefault.allowedToolFamilies.slice(0, 4).join("/")}${subAgent.catalogDefault.allowedToolFamilies.length > 4 ? "+" : ""}`
+        : "",
+      Array.isArray(subAgent.catalogDefault.whenToUse) && subAgent.catalogDefault.whenToUse.length > 0
+        ? `when=${subAgent.catalogDefault.whenToUse[0]}`
+        : "",
+    ].filter(Boolean);
+    if (defaultFragments.length > 0) {
+      lines.push(`catalog default: ${defaultFragments.join(", ")}`);
+    }
+  }
   if (plan.methods.length > 0) {
     lines.push(`参考 Methods: ${plan.methods.map((item) => item.file).join(", ")}`);
   }
@@ -57,6 +73,76 @@ function buildDelegationInstruction(plan: GoalCapabilityPlanRecord, nodeTitle: s
     lines.push(`已知能力缺口: ${plan.gaps.join(" | ")}`);
   }
   return lines.join("\n");
+}
+
+function buildLaunchDefaultSummary(subAgent: GoalCapabilityPlanRecord["subAgents"][number] | undefined): string | undefined {
+  if (!subAgent?.catalogDefault) return undefined;
+  const fragments = [
+    subAgent.catalogDefault.permissionMode ? `permission=${subAgent.catalogDefault.permissionMode}` : "",
+    subAgent.catalogDefault.maxToolRiskLevel ? `risk=${subAgent.catalogDefault.maxToolRiskLevel}` : "",
+    subAgent.catalogDefault.handoffStyle ? `handoff=${subAgent.catalogDefault.handoffStyle}` : "",
+    Array.isArray(subAgent.catalogDefault.allowedToolFamilies) && subAgent.catalogDefault.allowedToolFamilies.length > 0
+      ? `tools=${subAgent.catalogDefault.allowedToolFamilies.slice(0, 4).join("/")}${subAgent.catalogDefault.allowedToolFamilies.length > 4 ? "+" : ""}`
+      : "",
+  ].filter(Boolean);
+  return fragments.length > 0 ? fragments.join("; ") : undefined;
+}
+
+function buildSuggestedLaunchSummary(subAgent: GoalCapabilityPlanRecord["subAgents"][number] | undefined): string | undefined {
+  if (!subAgent) return undefined;
+  const launchDefaults = buildLaunchDefaultSummary(subAgent);
+  const fragments = [
+    subAgent.role ? `role=${subAgent.role}` : "",
+    launchDefaults,
+    subAgent.reason ? `policy=${subAgent.reason}` : "",
+  ].filter(Boolean);
+  return fragments.length > 0 ? fragments.join("; ") : undefined;
+}
+
+function buildPolicySummary(
+  coordinationPlan: GoalCapabilityPlanCoordinationPlanRecord,
+  subAgent: GoalCapabilityPlanRecord["subAgents"][number] | undefined,
+): string {
+  const launchDefaults = buildLaunchDefaultSummary(subAgent);
+  return launchDefaults
+    ? `${coordinationPlan.summary} [role=${subAgent?.role ?? "default"}; ${launchDefaults}]`
+    : `${coordinationPlan.summary} [role=${subAgent?.role ?? "default"}]`;
+}
+
+function buildOrchestrationExplainabilityNotes(
+  plan: GoalCapabilityPlanRecord,
+  coordinationPlan: GoalCapabilityPlanCoordinationPlanRecord,
+): string[] {
+  const lines = [
+    `delegation reason: ${coordinationPlan.summary}`,
+  ];
+  for (const item of plan.subAgents) {
+    const launchDefaults = buildLaunchDefaultSummary(item);
+    const suggestedLaunch = buildSuggestedLaunchSummary(item);
+    if (launchDefaults) {
+      lines.push(`catalog default -> ${item.agentId}${item.role ? `(${item.role})` : ""}: ${launchDefaults}`);
+    }
+    if (suggestedLaunch) {
+      lines.push(`suggested launch -> ${item.agentId}${item.role ? `(${item.role})` : ""}: ${suggestedLaunch}`);
+    }
+    if (item.reason) {
+      lines.push(`delegation reason -> ${item.agentId}: ${item.reason}`);
+    }
+  }
+  return lines;
+}
+
+function buildCheckpointRequestNote(plan: GoalCapabilityPlanRecord): string {
+  const guidance = plan.subAgents
+    .map((item) => {
+      const launchDefaults = buildLaunchDefaultSummary(item);
+      return launchDefaults ? `${item.agentId}${item.role ? `(${item.role})` : ""}: ${launchDefaults}` : undefined;
+    })
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 3);
+  const note = plan.checkpoint.suggestedNote || plan.checkpoint.reasons.join(" ");
+  if (guidance.length <= 0) return note;
+  return [note, `建议审批时同时确认 catalog default：${guidance.join(" ; ")}。`].filter(Boolean).join(" ");
 }
 
 function inferRolePolicy(plan: GoalCapabilityPlanRecord): GoalCapabilityPlanRolePolicyRecord {
@@ -152,7 +238,15 @@ async function delegatePlanSubAgents(
         },
         channel: "goal",
         role: item.role,
-        policySummary: `${coordinationPlan.summary} [role=${item.role ?? "default"}]`,
+        policySummary: buildPolicySummary(coordinationPlan, item),
+        delegationSource: "goal_subtask",
+        expectedDeliverableSummary: item.deliverable ?? item.objective,
+        aggregationMode: coordinationPlan.rolePolicy.fanInStrategy === "verifier_handoff"
+          ? "verifier_fan_in"
+          : "main_agent_summary",
+        goalId: plan.goalId,
+        nodeId: plan.nodeId,
+        planId: plan.id,
       })),
     );
     return {
@@ -196,7 +290,15 @@ async function delegatePlanSubAgents(
         },
         channel: "goal",
         role: item.role,
-        policySummary: `${coordinationPlan.summary} [role=${item.role ?? "default"}]`,
+        policySummary: buildPolicySummary(coordinationPlan, item),
+        delegationSource: "goal_subtask",
+        expectedDeliverableSummary: item.deliverable ?? item.objective,
+        aggregationMode: coordinationPlan.rolePolicy.fanInStrategy === "verifier_handoff"
+          ? "verifier_fan_in"
+          : "main_agent_summary",
+        goalId: plan.goalId,
+        nodeId: plan.nodeId,
+        planId: plan.id,
       });
       const result = await agentCapabilities.spawnSubAgent(launchSpec);
       delegationCount += 1;
@@ -513,7 +615,14 @@ async function launchVerifierHandoff(
     },
     channel: "goal",
     role: "verifier",
-    policySummary: `${coordinationPlan.summary} [role=verifier]`,
+    policySummary: buildPolicySummary(coordinationPlan, verifierSubAgent),
+    delegationSource: "goal_verifier",
+    expectedDeliverableSummary: "Produce verifier fan-in summary, findings, and final acceptance decision.",
+    aggregationMode: "verifier_fan_in",
+    goalId: plan.goalId,
+    nodeId: plan.nodeId,
+    planId: plan.id,
+    sourceAgentIds: handoff.sourceAgentIds,
   });
   const runningHandoff: GoalCapabilityPlanVerifierHandoffRecord = {
     ...handoff,
@@ -587,7 +696,7 @@ async function ensureRiskCheckpoint(
   const requested = await context.goalCapabilities.requestCheckpoint(goalId, nodeId, {
     title: plan.checkpoint.suggestedTitle || `${nodeTitle} checkpoint`,
     summary: `Auto checkpoint before executing ${plan.riskLevel}-risk node`,
-    note: plan.checkpoint.suggestedNote || plan.checkpoint.reasons.join(" "),
+    note: buildCheckpointRequestNote(plan),
     reviewer: plan.checkpoint.suggestedReviewer,
     reviewerRole: plan.checkpoint.suggestedReviewerRole,
     requestedBy: context.agentId || "main-agent",
@@ -703,6 +812,7 @@ export const goalOrchestrateTool: Tool = {
 
       const actualUsage = collectCapabilityPlanActualUsage(context);
       const handoffDraft = buildVerifierHandoff(plan, coordinationPlan, delegation.results, checkpointOutcome.requested);
+      const explainabilityNotes = buildOrchestrationExplainabilityNotes(plan, coordinationPlan);
       const verifierRuntime = autoDelegate
         ? await launchVerifierHandoff(
           context.agentCapabilities,
@@ -737,13 +847,14 @@ export const goalOrchestrateTool: Tool = {
             delegationResults: delegation.results,
             verifierHandoff,
             verifierResult,
-            notes: [...checkpointOutcome.notes, ...delegation.outputs, ...verifierRuntime.outputs],
+            notes: [...explainabilityNotes, ...checkpointOutcome.notes, ...delegation.outputs, ...verifierRuntime.outputs],
           },
         });
       }
 
       const lines = [
         claimed ? "节点已 claim 并进入执行态。" : `节点保持当前状态: ${latestNode.status}`,
+        ...explainabilityNotes,
         ...checkpointOutcome.notes,
         ...delegation.outputs,
         ...verifierRuntime.outputs,

@@ -398,6 +398,66 @@ test("bdd conversation prompt-snapshot text output includes token breakdown", as
   }
 });
 
+test("bdd conversation prompt-snapshot text output includes explainability sidecar", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-conversation-"));
+  const conversationId = "conv-prompt-snapshot-cli-sidecar";
+  const runId = "run-cli-sidecar-1";
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  await fs.promises.writeFile(path.join(stateDir, "agents.json"), JSON.stringify({
+    agents: [
+      {
+        id: "coder",
+        displayName: "Coder",
+        model: "primary",
+        kind: "resident",
+        workspaceBinding: "custom",
+        workspaceDir: "repo-a",
+        defaultRole: "coder",
+        defaultPermissionMode: "confirm",
+        defaultAllowedToolFamilies: ["workspace-read", "workspace-write", "patch"],
+        defaultMaxToolRiskLevel: "high",
+        handoffStyle: "structured",
+      },
+    ],
+  }, null, 2), "utf-8");
+
+  await persistConversationPromptSnapshot({
+    stateDir,
+    snapshot: {
+      agentId: "coder",
+      conversationId,
+      runId,
+      createdAt: 1712000000100,
+      systemPrompt: "coder prompt",
+      messages: [
+        { role: "system", content: "coder prompt" },
+        { role: "user", content: "hello" },
+      ],
+      hookSystemPromptUsed: false,
+    },
+  });
+
+  try {
+    await promptSnapshotCommand.run?.({
+      args: {
+        "state-dir": stateDir,
+        "conversation-id": conversationId,
+        "run-id": runId,
+      },
+    } as never);
+
+    const output = String(logSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n"));
+    expect(output).toContain("Resident State Binding");
+    expect(output).toContain("workspace scope: custom workspace scope (repo-a) rooted at");
+    expect(output).toContain("Launch Explainability");
+    expect(output).toContain("catalog default: role=coder");
+    expect(output).toContain("effective launch: source=catalog_default, agent=coder");
+  } finally {
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("bdd conversation prompt-snapshot load normalizes legacy inputMeta fields without rewriting history files", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-conversation-"));
   const conversationId = "conv-prompt-snapshot-legacy-normalize";

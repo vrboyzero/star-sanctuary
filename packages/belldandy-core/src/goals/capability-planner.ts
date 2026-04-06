@@ -13,6 +13,19 @@ import type {
 export type CapabilityPlannerMethodCandidate = GoalCapabilityPlanMethod;
 export type CapabilityPlannerSkillCandidate = GoalCapabilityPlanSkill;
 export type CapabilityPlannerMcpCandidate = GoalCapabilityPlanMcpServer;
+export type CapabilityPlannerAgentCandidate = {
+  id: string;
+  kind?: "resident" | "worker";
+  catalog?: {
+    whenToUse?: string[];
+    defaultRole?: GoalCapabilityPlanSubAgent["role"];
+    defaultPermissionMode?: "plan" | "acceptEdits" | "confirm";
+    defaultAllowedToolFamilies?: string[];
+    defaultMaxToolRiskLevel?: "low" | "medium" | "high" | "critical";
+    skills?: string[];
+    handoffStyle?: "summary" | "structured";
+  };
+};
 
 export type CapabilityPlannerInput = {
   goalTitle: string;
@@ -27,6 +40,7 @@ export type CapabilityPlannerInput = {
   skills?: CapabilityPlannerSkillCandidate[];
   mcpServers?: CapabilityPlannerMcpCandidate[];
   availableAgentIds?: string[];
+  availableAgents?: CapabilityPlannerAgentCandidate[];
   forceMode?: GoalCapabilityExecutionMode;
   runId?: string;
 };
@@ -50,6 +64,174 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
     result.push(normalized);
   }
   return result;
+}
+
+function normalizeAgentCandidates(input: CapabilityPlannerInput): CapabilityPlannerAgentCandidate[] {
+  const fromCatalog = Array.isArray(input.availableAgents)
+    ? input.availableAgents
+      .filter((item): item is CapabilityPlannerAgentCandidate => Boolean(item?.id && item.id.trim()))
+      .map((item) => ({
+        id: item.id.trim(),
+        kind: item.kind,
+        catalog: item.catalog
+          ? {
+            whenToUse: uniqueStrings(item.catalog.whenToUse ?? []),
+            defaultRole: item.catalog.defaultRole,
+            defaultPermissionMode: item.catalog.defaultPermissionMode,
+            defaultAllowedToolFamilies: uniqueStrings(item.catalog.defaultAllowedToolFamilies ?? []),
+            defaultMaxToolRiskLevel: item.catalog.defaultMaxToolRiskLevel,
+            skills: uniqueStrings(item.catalog.skills ?? []),
+            handoffStyle: item.catalog.handoffStyle,
+          }
+          : undefined,
+      }))
+    : [];
+  if (fromCatalog.length > 0) {
+    return fromCatalog;
+  }
+  return uniqueStrings(input.availableAgentIds ?? []).map((id) => ({ id }));
+}
+
+function buildTextTokens(value: string): string[] {
+  return uniqueStrings(
+    value
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 2),
+  );
+}
+
+function scoreWhenToUseMatch(textTokens: string[], hints: string[] | undefined): number {
+  if (!Array.isArray(hints) || hints.length === 0 || textTokens.length === 0) return 0;
+  let score = 0;
+  for (const hint of hints) {
+    const hintTokens = buildTextTokens(hint);
+    const overlap = hintTokens.filter((token) => textTokens.includes(token)).length;
+    if (overlap > 0) {
+      score += overlap * 2;
+    }
+  }
+  return score;
+}
+
+function scoreAgentCandidate(
+  candidate: CapabilityPlannerAgentCandidate,
+  role: GoalCapabilityPlanSubAgent["role"],
+  preferredIds: string[],
+  textTokens: string[],
+): number {
+  let score = 0;
+  const preferredIndex = preferredIds.indexOf(candidate.id);
+  if (preferredIndex >= 0) {
+    score += Math.max(0, 8 - preferredIndex * 2);
+  }
+  if (candidate.catalog?.defaultRole === role) {
+    score += 12;
+  }
+  if (role === "verifier" && candidate.catalog?.handoffStyle === "structured") {
+    score += 4;
+  }
+  if (role === "researcher" && candidate.catalog?.defaultPermissionMode === "plan") {
+    score += 2;
+  }
+  if (role === "coder" && (candidate.catalog?.defaultAllowedToolFamilies ?? []).some((item) => item === "workspace-write" || item === "patch")) {
+    score += 2;
+  }
+  if (candidate.kind === "worker" && role && role !== "default") {
+    score += 1;
+  }
+  score += scoreWhenToUseMatch(textTokens, candidate.catalog?.whenToUse);
+  return score;
+}
+
+function buildCatalogDefault(candidate: CapabilityPlannerAgentCandidate): GoalCapabilityPlanSubAgent["catalogDefault"] | undefined {
+  if (!candidate.catalog) return undefined;
+  return {
+    permissionMode: candidate.catalog.defaultPermissionMode,
+    allowedToolFamilies: candidate.catalog.defaultAllowedToolFamilies,
+    maxToolRiskLevel: candidate.catalog.defaultMaxToolRiskLevel,
+    handoffStyle: candidate.catalog.handoffStyle,
+    whenToUse: candidate.catalog.whenToUse,
+    skills: candidate.catalog.skills,
+  };
+}
+
+function formatCatalogDefaultFragments(
+  catalogDefault: GoalCapabilityPlanSubAgent["catalogDefault"] | undefined,
+): string[] {
+  if (!catalogDefault) return [];
+  return uniqueStrings([
+    catalogDefault.permissionMode ? `permission=${catalogDefault.permissionMode}` : undefined,
+    catalogDefault.maxToolRiskLevel ? `risk=${catalogDefault.maxToolRiskLevel}` : undefined,
+    catalogDefault.handoffStyle ? `handoff=${catalogDefault.handoffStyle}` : undefined,
+    Array.isArray(catalogDefault.allowedToolFamilies) && catalogDefault.allowedToolFamilies.length > 0
+      ? `tools=${catalogDefault.allowedToolFamilies.slice(0, 4).join("/")}${catalogDefault.allowedToolFamilies.length > 4 ? "+" : ""}`
+      : undefined,
+    Array.isArray(catalogDefault.whenToUse) && catalogDefault.whenToUse.length > 0
+      ? `when=${catalogDefault.whenToUse[0]}`
+      : undefined,
+    Array.isArray(catalogDefault.skills) && catalogDefault.skills.length > 0
+      ? `skills=${catalogDefault.skills.length}`
+      : undefined,
+  ]);
+}
+
+function resolveAgentCandidate(
+  availableAgents: CapabilityPlannerAgentCandidate[],
+  preferredIds: string[],
+  role: GoalCapabilityPlanSubAgent["role"],
+  text: string,
+): {
+  agentId: string;
+  matchedCatalog: boolean;
+  reasonFragments: string[];
+  catalogDefault?: GoalCapabilityPlanSubAgent["catalogDefault"];
+} {
+  if (availableAgents.length <= 0) {
+    return {
+      agentId: preferredIds[0] ?? "default",
+      matchedCatalog: false,
+      reasonFragments: [],
+      catalogDefault: undefined,
+    };
+  }
+
+  const textTokens = buildTextTokens(text);
+  const ranked = availableAgents
+    .map((candidate) => ({
+      candidate,
+      score: scoreAgentCandidate(candidate, role, preferredIds, textTokens),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      const leftPreferredIndex = preferredIds.indexOf(left.candidate.id);
+      const rightPreferredIndex = preferredIds.indexOf(right.candidate.id);
+      if (leftPreferredIndex !== rightPreferredIndex) {
+        return (leftPreferredIndex < 0 ? Number.MAX_SAFE_INTEGER : leftPreferredIndex)
+          - (rightPreferredIndex < 0 ? Number.MAX_SAFE_INTEGER : rightPreferredIndex);
+      }
+      return left.candidate.id.localeCompare(right.candidate.id);
+    });
+  const selected = ranked[0]?.candidate ?? { id: preferredIds[0] ?? "default" };
+  const matchedCatalog = ranked[0]?.score ? ranked[0].score > 0 && Boolean(selected.catalog) : false;
+  const catalogDefault = buildCatalogDefault(selected);
+  const reasonFragments = [
+    selected.catalog?.defaultRole === role ? `catalog defaultRole=${role}` : undefined,
+    role === "verifier" && selected.catalog?.handoffStyle === "structured" ? "catalog handoff=structured" : undefined,
+    role === "researcher" && selected.catalog?.defaultPermissionMode === "plan" ? "catalog permission=plan" : undefined,
+    (selected.catalog?.skills?.length ?? 0) > 0 ? `catalog skills=${selected.catalog?.skills?.length ?? 0}` : undefined,
+    Array.isArray(selected.catalog?.whenToUse) && selected.catalog.whenToUse.length > 0
+      ? `catalog when=${selected.catalog.whenToUse[0]}`
+      : undefined,
+  ].filter((item): item is string => Boolean(item));
+
+  return {
+    agentId: selected.id,
+    matchedCatalog,
+    reasonFragments,
+    catalogDefault,
+  };
 }
 
 function pickExecutionMode(text: string, forceMode?: GoalCapabilityExecutionMode): GoalCapabilityExecutionMode {
@@ -122,26 +304,37 @@ function inferRisk(text: string): {
   };
 }
 
-function buildSubAgents(text: string, availableAgentIds: string[], executionMode: GoalCapabilityExecutionMode): GoalCapabilityPlanSubAgent[] {
+function buildSubAgents(
+  text: string,
+  availableAgentIds: string[],
+  availableAgents: CapabilityPlannerAgentCandidate[],
+  executionMode: GoalCapabilityExecutionMode,
+): GoalCapabilityPlanSubAgent[] {
   if (executionMode !== "multi_agent") return [];
-  const available = new Set(availableAgentIds.map((item) => item.trim()).filter(Boolean));
-  const resolveAgent = (preferred: string, fallback = "default") => (available.has(preferred) ? preferred : fallback);
   const plans: GoalCapabilityPlanSubAgent[] = [];
 
   const pushUnique = (
-    agentId: string,
+    resolved: ReturnType<typeof resolveAgentCandidate>,
     role: GoalCapabilityPlanSubAgent["role"],
     objective: string,
     reason: string,
     deliverable: string,
   ) => {
-    if (plans.some((item) => item.agentId === agentId && item.objective === objective)) return;
-    plans.push({ agentId, role, objective, reason, deliverable });
+    if (plans.some((item) => item.agentId === resolved.agentId && item.objective === objective)) return;
+    plans.push({
+      agentId: resolved.agentId,
+      role,
+      objective,
+      reason: resolved.reasonFragments.length > 0 ? `${reason} (${resolved.reasonFragments.join("; ")})` : reason,
+      deliverable,
+      catalogDefault: resolved.catalogDefault,
+    });
   };
 
   if (/(实现|编码|开发|重构|修复|code|refactor|implement|build)/i.test(text)) {
+    const resolved = resolveAgentCandidate(availableAgents, uniqueStrings(["coder", ...availableAgentIds, "default"]), "coder", text);
     pushUnique(
-      resolveAgent("coder"),
+      resolved,
       "coder",
       "负责主实现与代码改动",
       "节点文本包含实现/重构信号，适合由编码型子代理并行处理。",
@@ -149,8 +342,9 @@ function buildSubAgents(text: string, availableAgentIds: string[], executionMode
     );
   }
   if (/(调研|文档|方案|research|docs|api|网页|browser|外部)/i.test(text)) {
+    const resolved = resolveAgentCandidate(availableAgents, uniqueStrings(["researcher", ...availableAgentIds, "default"]), "researcher", text);
     pushUnique(
-      resolveAgent("researcher"),
+      resolved,
       "researcher",
       "负责补充资料、接口或外部上下文",
       "节点涉及资料检索/文档/外部系统，需要信息侧分工。",
@@ -158,8 +352,9 @@ function buildSubAgents(text: string, availableAgentIds: string[], executionMode
     );
   }
   if (/(验证|测试|回归|qa|test|review|验收)/i.test(text)) {
+    const resolved = resolveAgentCandidate(availableAgents, uniqueStrings(["qa", "verifier", ...availableAgentIds, "default"]), "verifier", text);
     pushUnique(
-      resolveAgent("qa"),
+      resolved,
       "verifier",
       "负责验证、回归或验收检查",
       "节点文本包含验证/回归信号，适合独立验证子代理。",
@@ -168,8 +363,9 @@ function buildSubAgents(text: string, availableAgentIds: string[], executionMode
   }
 
   if (plans.length === 0) {
+    const resolved = resolveAgentCandidate(availableAgents, uniqueStrings(["default", ...availableAgentIds]), "default", text);
     pushUnique(
-      "default",
+      resolved,
       "default",
       "拆分并推进该节点的独立子任务",
       "节点被判定为 multi_agent，但未匹配到更具体的专用子代理。",
@@ -222,6 +418,33 @@ function buildRolePolicy(
   };
 }
 
+function buildCatalogGuidance(subAgents: GoalCapabilityPlanSubAgent[]): string[] {
+  return subAgents
+    .map((item) => {
+      const fragments = formatCatalogDefaultFragments(item.catalogDefault);
+      if (fragments.length <= 0) return undefined;
+      return `${item.agentId}${item.role ? `(${item.role})` : ""}: ${fragments.join(", ")}`;
+    })
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 3);
+}
+
+function enrichCheckpointNote(
+  checkpoint: ReturnType<typeof inferRisk>["checkpoint"],
+  subAgents: GoalCapabilityPlanSubAgent[],
+): ReturnType<typeof inferRisk>["checkpoint"] {
+  if (!checkpoint.required) return checkpoint;
+  const guidance = buildCatalogGuidance(subAgents);
+  if (guidance.length <= 0) return checkpoint;
+  return {
+    ...checkpoint,
+    suggestedNote: [
+      checkpoint.suggestedNote ?? "",
+      `建议审批时同时确认 catalog default：${guidance.join(" ; ")}。`,
+    ].filter(Boolean).join(" "),
+  };
+}
+
 function applyVerifierHandoff(
   subAgents: GoalCapabilityPlanSubAgent[],
   rolePolicy: GoalCapabilityPlanRolePolicy,
@@ -237,9 +460,10 @@ function buildCoordinationPlan(
   subAgents: GoalCapabilityPlanSubAgent[],
   rolePolicy: GoalCapabilityPlanRolePolicy,
 ): GoalCapabilityPlanCoordinationPlan {
+  const catalogBackedCount = subAgents.filter((item) => item.catalogDefault).length;
   return {
     summary: executionMode === "multi_agent"
-      ? `按 ${subAgents.length || 1} 路分工推进，并以 ${rolePolicy.fanInStrategy} 收口。`
+      ? `按 ${subAgents.length || 1} 路分工推进，并以 ${rolePolicy.fanInStrategy} 收口${catalogBackedCount > 0 ? `；其中 ${catalogBackedCount} 路已并入 catalog 默认 launch 建议` : ""}。`
       : `由主 Agent 直接推进，并以 ${rolePolicy.fanInStrategy} 收口。`,
     plannedDelegationCount: executionMode === "multi_agent" ? subAgents.length : 0,
     rolePolicy,
@@ -261,10 +485,14 @@ export function buildGoalCapabilityPlan(input: CapabilityPlannerInput): GoalCapa
   const methods = (input.methods ?? []).slice(0, 3);
   const skills = (input.skills ?? []).slice(0, 4);
   const mcpServers = (input.mcpServers ?? []).slice(0, 3);
-  const draftSubAgents = buildSubAgents(text, input.availableAgentIds ?? [], executionMode);
+  const availableAgents = normalizeAgentCandidates(input);
+  const draftSubAgents = buildSubAgents(text, input.availableAgentIds ?? [], availableAgents, executionMode);
   const rolePolicy = buildRolePolicy(text, executionMode, risk.riskLevel, draftSubAgents);
   const subAgents = applyVerifierHandoff(draftSubAgents, rolePolicy);
+  const checkpoint = enrichCheckpointNote(risk.checkpoint, subAgents);
   const coordinationPlan = buildCoordinationPlan(executionMode, subAgents, rolePolicy);
+  const catalogMatchedSubAgents = subAgents.filter((item) => /catalog /.test(item.reason ?? ""));
+  const catalogGuidance = buildCatalogGuidance(subAgents);
   const reasoning = uniqueStrings([
     executionMode === "multi_agent"
       ? "节点包含并行/拆分信号，优先采用 multi_agent 规划。"
@@ -274,6 +502,12 @@ export function buildGoalCapabilityPlan(input: CapabilityPlannerInput): GoalCapa
     mcpServers.length > 0 ? `检测到 ${mcpServers.length} 个相关 MCP 能力候选。` : "当前没有明显匹配的 MCP 候选，默认优先本地工具链。",
     subAgents.length > 0 && executionMode === "multi_agent"
       ? `建议拆成 ${subAgents.length} 个子代理分工。`
+      : undefined,
+    catalogMatchedSubAgents.length > 0
+      ? `子代理选择已参考 agent catalog 默认角色/使用建议：${catalogMatchedSubAgents.map((item) => item.agentId).join(", ")}。`
+      : undefined,
+    catalogGuidance.length > 0
+      ? `已将 catalog 默认 launch 建议带入 orchestration / checkpoint 语义：${catalogGuidance.join(" ; ")}。`
       : undefined,
   ]);
 
@@ -285,6 +519,9 @@ export function buildGoalCapabilityPlan(input: CapabilityPlannerInput): GoalCapa
       : undefined,
     executionMode === "multi_agent" && subAgents.every((item) => item.agentId === "default")
       ? "当前缺少更专用的子代理 profile，暂时只能用 default 子代理承接分工。"
+      : undefined,
+    executionMode === "multi_agent" && subAgents.length > 0 && catalogMatchedSubAgents.length === 0
+      ? "当前 multi_agent 规划尚未命中明确的 agent catalog 指引，后续可补充 whenToUse/defaultRole。"
       : undefined,
   ]);
 
@@ -312,7 +549,7 @@ export function buildGoalCapabilityPlan(input: CapabilityPlannerInput): GoalCapa
     mcpServers,
     subAgents,
     gaps,
-    checkpoint: risk.checkpoint,
+    checkpoint,
     actualUsage: {
       methods: [],
       skills: [],

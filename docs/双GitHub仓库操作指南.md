@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现多Agent的并行调用，已实现Agent的并发执行等功能（P1、P2），P3进行中"
+git commit -m "实现多Agent的并行相关功能，优化Agent相关功能，首个版本"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

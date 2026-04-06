@@ -23,6 +23,7 @@ type SharedMemoryManagerOptions = Omit<
   modelsDir: string;
   agentRegistry?: AgentRegistry;
   includeTeamSharedMemory?: boolean;
+  teamSharedStateDir?: string;
 };
 
 export type ScopedMemoryManagerRecord = {
@@ -39,6 +40,7 @@ function createMemoryManagerForStateDir(
 ): MemoryManager {
   const memoryIndexPaths = resolveMemoryIndexPaths(managerStateDir, {
     includeTeamSharedMemory: options.includeTeamSharedMemory,
+    teamSharedStateDir: options.teamSharedStateDir,
   });
   fs.mkdirSync(memoryIndexPaths.sessionsDir, { recursive: true });
   fs.mkdirSync(path.join(managerStateDir, "memory"), { recursive: true });
@@ -70,13 +72,35 @@ export function createScopedMemoryManagers(options: SharedMemoryManagerOptions):
     const manager = createMemoryManagerForStateDir(policy.managerStateDir, {
       ...options,
       includeTeamSharedMemory: policy.includeSharedMemoryReads,
+      teamSharedStateDir: policy.sharedStateDir,
     });
     managersByStateDir.set(policy.managerStateDir, manager);
     return manager;
   }
 
+  function ensureSharedLayerManager(sharedStateDir: string): MemoryManager {
+    const cached = managersByStateDir.get(sharedStateDir);
+    if (cached) {
+      registerGlobalMemoryManager(cached, {
+        workspaceRoot: sharedStateDir,
+      });
+      return cached;
+    }
+
+    const manager = createMemoryManagerForStateDir(sharedStateDir, {
+      ...options,
+      includeTeamSharedMemory: false,
+    });
+    managersByStateDir.set(sharedStateDir, manager);
+    registerGlobalMemoryManager(manager, {
+      workspaceRoot: sharedStateDir,
+    });
+    return manager;
+  }
+
   function registerResidentManager(profile: AgentProfile, isDefault = false): MemoryManager {
     const policy = resolveResidentMemoryPolicy(options.stateDir, profile);
+    ensureSharedLayerManager(policy.sharedStateDir);
     const manager = resolveRegisteredManager(policy);
     registerGlobalMemoryManager(manager, {
       agentId: profile.id,
@@ -94,21 +118,7 @@ export function createScopedMemoryManagers(options: SharedMemoryManagerOptions):
   }
 
   // 共享层 manager 需要始终可解析，便于 hybrid resident 查询与共享提升写入。
-  const sharedLayerManager = resolveRegisteredManager({
-    agentId: "__shared__",
-    workspaceDir: "team-memory",
-    memoryMode: "shared",
-    privateStateDir: sharedStateDir,
-    sharedStateDir,
-    managerStateDir: sharedStateDir,
-    includeSharedMemoryReads: false,
-    readTargets: ["shared"],
-    writeTarget: "shared",
-    summary: "Hidden shared layer manager for resident shared memory promotion and hybrid reads.",
-  });
-  registerGlobalMemoryManager(sharedLayerManager, {
-    workspaceRoot: sharedStateDir,
-  });
+  ensureSharedLayerManager(sharedStateDir);
 
   const configuredDefault = options.agentRegistry?.getProfile("default");
   const defaultProfile = configuredDefault && isResidentAgentProfile(configuredDefault)

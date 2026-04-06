@@ -18,6 +18,15 @@ test("resolveAgentProfileMetadata applies resident defaults", () => {
     workspaceDir: "default",
     sessionNamespace: "default",
     memoryMode: "hybrid",
+    catalog: {
+      whenToUse: [],
+      defaultRole: "default",
+      defaultPermissionMode: undefined,
+      defaultAllowedToolFamilies: undefined,
+      defaultMaxToolRiskLevel: undefined,
+      skills: [],
+      handoffStyle: "summary",
+    },
   });
 });
 
@@ -35,6 +44,11 @@ test("loadAgentProfiles accepts resident metadata extensions and ignores invalid
         workspaceDir: "coder",
         sessionNamespace: "coder-main",
         memoryMode: "isolated",
+        whenToUse: ["需要改代码", "需要补测试"],
+        defaultRole: "coder",
+        defaultAllowedToolFamilies: ["workspace-read", "patch", "workspace-read"],
+        skills: ["repo-map", "repo-map", "review-helper"],
+        handoffStyle: "structured",
       },
       {
         id: "verifier",
@@ -44,6 +58,10 @@ test("loadAgentProfiles accepts resident metadata extensions and ignores invalid
         workspaceBinding: "not-valid",
         sessionNamespace: "verifier scope",
         memoryMode: "not-valid",
+        defaultRole: "not-valid",
+        defaultPermissionMode: "not-valid",
+        defaultMaxToolRiskLevel: "not-valid",
+        handoffStyle: "not-valid",
       },
     ],
   }), "utf-8");
@@ -57,6 +75,11 @@ test("loadAgentProfiles accepts resident metadata extensions and ignores invalid
     workspaceDir: "coder",
     sessionNamespace: "coder-main",
     memoryMode: "isolated",
+    whenToUse: ["需要改代码", "需要补测试"],
+    defaultRole: "coder",
+    defaultAllowedToolFamilies: ["workspace-read", "patch"],
+    skills: ["repo-map", "review-helper"],
+    handoffStyle: "structured",
   });
   expect(profiles[1]).toMatchObject({
     id: "verifier",
@@ -72,5 +95,31 @@ test("loadAgentProfiles accepts resident metadata extensions and ignores invalid
     workspaceDir: "verifier",
     sessionNamespace: "verifier-scope",
     memoryMode: "hybrid",
+    catalog: {
+      whenToUse: [],
+      defaultRole: "default",
+      defaultPermissionMode: undefined,
+      defaultAllowedToolFamilies: undefined,
+      defaultMaxToolRiskLevel: undefined,
+      skills: [],
+      handoffStyle: "summary",
+    },
+  });
+
+  expect(resolveAgentProfileMetadata(profiles[0]!)).toEqual({
+    kind: "resident",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+    sessionNamespace: "coder-main",
+    memoryMode: "isolated",
+    catalog: {
+      whenToUse: ["需要改代码", "需要补测试"],
+      defaultRole: "coder",
+      defaultPermissionMode: "confirm",
+      defaultAllowedToolFamilies: ["workspace-read", "patch"],
+      defaultMaxToolRiskLevel: "high",
+      skills: ["repo-map", "review-helper"],
+      handoffStyle: "structured",
+    },
   });
 });

@@ -149,7 +149,14 @@ export function formatCapabilityPlan(plan: GoalCapabilityPlanRecord): string {
     : ["(none)"];
   const subAgentLines = plan.subAgents.length > 0
     ? plan.subAgents.map((item, index) => (
-      `${index + 1}. ${item.agentId}${item.role ? ` [${item.role}]` : ""} | ${item.objective}${item.deliverable ? ` | deliverable=${item.deliverable}` : ""}${item.handoffToVerifier ? " | handoff=verifier" : ""}${item.reason ? ` | ${item.reason}` : ""}`
+      `${index + 1}. ${item.agentId}${item.role ? ` [${item.role}]` : ""} | ${item.objective}${item.deliverable ? ` | deliverable=${item.deliverable}` : ""}${item.handoffToVerifier ? " | handoff=verifier" : ""}${item.catalogDefault ? ` | launchDefault=${[
+        item.catalogDefault.permissionMode ? `permission=${item.catalogDefault.permissionMode}` : "",
+        item.catalogDefault.maxToolRiskLevel ? `risk=${item.catalogDefault.maxToolRiskLevel}` : "",
+        item.catalogDefault.handoffStyle ? `handoff=${item.catalogDefault.handoffStyle}` : "",
+        Array.isArray(item.catalogDefault.allowedToolFamilies) && item.catalogDefault.allowedToolFamilies.length > 0
+          ? `tools=${item.catalogDefault.allowedToolFamilies.slice(0, 4).join("/")}${item.catalogDefault.allowedToolFamilies.length > 4 ? "+" : ""}`
+          : "",
+      ].filter(Boolean).join(",")}` : ""}${item.reason ? ` | ${item.reason}` : ""}`
     ))
     : ["(none)"];
   const delegationLines = plan.orchestration?.delegationResults && plan.orchestration.delegationResults.length > 0
@@ -183,6 +190,7 @@ export function formatCapabilityPlan(plan: GoalCapabilityPlanRecord): string {
     `Checkpoint Policy: ${plan.checkpoint.required ? "required" : "optional"} | mode=${plan.checkpoint.approvalMode}${plan.checkpoint.reasons.length > 0 ? ` | ${plan.checkpoint.reasons.join(" | ")}` : ""}`,
     `Checkpoint Requirements: request=${plan.checkpoint.requiredRequestFields.length > 0 ? plan.checkpoint.requiredRequestFields.join(", ") : "(none)"} | decision=${plan.checkpoint.requiredDecisionFields.length > 0 ? plan.checkpoint.requiredDecisionFields.join(", ") : "(none)"}`,
     `Checkpoint Routing: reviewer=${plan.checkpoint.suggestedReviewer ?? "(none)"} | reviewerRole=${plan.checkpoint.suggestedReviewerRole ?? "(none)"} | slaHours=${plan.checkpoint.suggestedSlaHours ?? "(none)"} | escalation=${plan.checkpoint.escalationMode ?? "none"}`,
+    `Checkpoint Note: ${plan.checkpoint.suggestedNote ?? "(none)"}`,
     `Methods:\n${methodLines.join("\n")}`,
     `Skills:\n${skillLines.join("\n")}`,
     `MCP:\n${mcpLines.join("\n")}`,

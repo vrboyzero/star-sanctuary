@@ -1,3 +1,7 @@
+import { buildResidentDoctorNote } from "./resident-observability-summary.js";
+import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js";
+import { buildResidentStateBindingLines } from "./resident-state-binding-lines.js";
+
 function tr(t, key, params, fallback) {
   return typeof t === "function" ? t(key, params ?? {}, fallback) : fallback;
 }
@@ -20,6 +24,8 @@ function buildPromptObservabilityCard(payload, t) {
   if (!summary) {
     return undefined;
   }
+  const launchExplainabilityLines = buildLaunchExplainabilityLines(payload?.promptObservability?.launchExplainability, t);
+  const residentStateBindingLines = buildResidentStateBindingLines(payload?.promptObservability?.residentStateBinding, t);
 
   const scopeText = summary.scope === "run"
     ? tr(
@@ -90,6 +96,8 @@ function buildPromptObservabilityCard(payload, t) {
       "当前 prompt 没有因为长度限制而裁剪。",
     ));
   }
+  notes.push(...residentStateBindingLines);
+  notes.push(...launchExplainabilityLines);
 
   return {
     title: tr(t, "settings.doctorPromptTitle", {}, "Prompt 摘要"),
@@ -104,6 +112,15 @@ function buildToolBehaviorCard(payload, t) {
   if (!observability) {
     return undefined;
   }
+  const residentStateBinding = observability?.visibilityContext?.residentStateBinding
+    && typeof observability.visibilityContext.residentStateBinding === "object"
+    ? observability.visibilityContext.residentStateBinding
+    : null;
+  const residentStateBindingLines = buildResidentStateBindingLines(residentStateBinding, t);
+  const launchExplainabilityLines = buildLaunchExplainabilityLines(
+    observability?.visibilityContext?.launchExplainability,
+    t,
+  );
 
   const disabledCount = Array.isArray(observability.experiment?.disabledContractNamesApplied)
     ? observability.experiment.disabledContractNamesApplied.length
@@ -141,6 +158,16 @@ function buildToolBehaviorCard(payload, t) {
       "这些规则会告诉模型什么时候该调用工具、什么时候先别乱用。",
     ),
   ];
+  if (residentStateBinding) {
+    notes.push(tr(
+      t,
+      "settings.doctorToolContractsScopeHelp",
+      {},
+      "当前工具可见性与审批判断，会复用 resident 的 workspace / state scope 绑定。",
+    ));
+    notes.push(...residentStateBindingLines);
+  }
+  notes.push(...launchExplainabilityLines);
 
   if (Array.isArray(observability.included) && observability.included.length > 0) {
     notes.push(tr(
@@ -270,6 +297,42 @@ function buildResidentAgentsCard(payload, t) {
       },
       `digest ready ${formatNumber(summary.digestReadyCount)} / updated ${formatNumber(summary.digestUpdatedCount)} / idle ${formatNumber(summary.digestIdleCount)} / missing ${formatNumber(summary.digestMissingCount)}`,
     ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsTasks",
+      { count: formatNumber(summary.recentTaskLinkedCount) },
+      `${formatNumber(summary.recentTaskLinkedCount)} resident(s) with recent task context`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsSubtasks",
+      { count: formatNumber(summary.recentSubtaskLinkedCount) },
+      `${formatNumber(summary.recentSubtaskLinkedCount)} resident(s) with recent subtask context`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsUsage",
+      { count: formatNumber(summary.experienceUsageLinkedCount) },
+      `${formatNumber(summary.experienceUsageLinkedCount)} resident(s) with experience usage context`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsCatalog",
+      { count: formatNumber(summary.catalogAnnotatedCount) },
+      `${formatNumber(summary.catalogAnnotatedCount)} resident(s) with catalog guidance`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsHandoff",
+      { count: formatNumber(summary.structuredHandoffCount) },
+      `${formatNumber(summary.structuredHandoffCount)} resident(s) with structured handoff`,
+    ),
+    tr(
+      t,
+      "settings.doctorResidentAgentsSkillHints",
+      { count: formatNumber(summary.skillHintedCount) },
+      `${formatNumber(summary.skillHintedCount)} resident(s) with skill hints`,
+    ),
   ];
 
   const notes = [
@@ -283,18 +346,7 @@ function buildResidentAgentsCard(payload, t) {
 
   const agents = Array.isArray(resident.agents) ? resident.agents : [];
   for (const agent of agents.slice(0, 6)) {
-    const digest = agent?.conversationDigest;
-    const digestLabel = digest
-      ? `, digest=${digest.status}${Number(digest.pendingMessageCount) > 0 ? `/${formatNumber(digest.pendingMessageCount)}` : ""}`
-      : "";
-    const pendingCount = Number(agent?.sharedGovernance?.pendingCount) || 0;
-    const claimedCount = Number(agent?.sharedGovernance?.claimedCount) || 0;
-    const reviewLabel = pendingCount > 0 || claimedCount > 0
-      ? `, review=p${pendingCount}/c${claimedCount}`
-      : "";
-    notes.push(
-      `${agent.displayName || agent.id}: ${agent.memoryMode}, write=${agent.memoryPolicy?.writeTarget || "-"}, read=${Array.isArray(agent.memoryPolicy?.readTargets) ? agent.memoryPolicy.readTargets.join("+") : "-"}, session=${agent.sessionNamespace || "-"}${agent.status ? `, status=${agent.status}` : ""}${digestLabel}${reviewLabel}`,
-    );
+    notes.push(buildResidentDoctorNote(agent, t));
   }
 
   return {
@@ -399,6 +451,86 @@ function buildSharedGovernanceCard(payload, t) {
   };
 }
 
+function buildDelegationCard(payload, t) {
+  const observability = payload?.delegationObservability;
+  const summary = observability?.summary;
+  if (!summary) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorDelegationProtocolBacked",
+      { count: formatNumber(summary.protocolBackedCount), total: formatNumber(summary.totalCount) },
+      `${formatNumber(summary.protocolBackedCount)}/${formatNumber(summary.totalCount)} protocol-backed`,
+    ),
+    tr(
+      t,
+      "settings.doctorDelegationActive",
+      { count: formatNumber(summary.activeCount) },
+      `${formatNumber(summary.activeCount)} active`,
+    ),
+    tr(
+      t,
+      "settings.doctorDelegationCompleted",
+      { count: formatNumber(summary.completedCount) },
+      `${formatNumber(summary.completedCount)} completed`,
+    ),
+  ];
+
+  const sourcePairs = Object.entries(summary.sourceCounts || {});
+  if (sourcePairs.length > 0) {
+    badges.push(tr(
+      t,
+      "settings.doctorDelegationSources",
+      { summary: sourcePairs.map(([key, count]) => `${key}:${count}`).join(", ") },
+      `sources ${sourcePairs.map(([key, count]) => `${key}:${count}`).join(", ")}`,
+    ));
+  }
+
+  const aggregationPairs = Object.entries(summary.aggregationModeCounts || {});
+  if (aggregationPairs.length > 0) {
+    badges.push(tr(
+      t,
+      "settings.doctorDelegationAggregations",
+      { summary: aggregationPairs.map(([key, count]) => `${key}:${count}`).join(", ") },
+      `aggregation ${aggregationPairs.map(([key, count]) => `${key}:${count}`).join(", ")}`,
+    ));
+  }
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorDelegationHeadline",
+      { headline: summary.headline },
+      summary.headline,
+    ),
+  ];
+
+  const items = Array.isArray(observability.items) ? observability.items : [];
+  for (const item of items.slice(0, 6)) {
+    const parts = [
+      item.status ? `status=${item.status}` : "",
+      item.source ? `source=${item.source}` : "",
+      item.aggregationMode ? `aggregation=${item.aggregationMode}` : "",
+      item.expectedDeliverableFormat ? `deliverable=${item.expectedDeliverableFormat}` : "",
+      item.expectedDeliverableSummary ? `deliverable-summary=${item.expectedDeliverableSummary}` : "",
+      item.intentSummary ? `intent=${item.intentSummary}` : "",
+    ].filter(Boolean);
+    notes.push(
+      `${item.taskId}: ${parts.join(", ")}`,
+    );
+  }
+
+  return {
+    title: tr(t, "settings.doctorDelegationTitle", {}, "Delegation Protocol"),
+    badges,
+    notes,
+    status: summary.protocolBackedCount > 0 ? "pass" : "warn",
+  };
+}
+
 function createDoctorCard(card) {
   const panel = document.createElement("div");
   panel.style.width = "100%";
@@ -452,6 +584,7 @@ export function renderDoctorObservabilityCards(container, payload, t) {
     buildToolContractV2Card(payload, t),
     buildResidentAgentsCard(payload, t),
     buildSharedGovernanceCard(payload, t),
+    buildDelegationCard(payload, t),
   ].filter(Boolean);
 
   for (const card of cards) {
@@ -499,6 +632,14 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${sharedGovernanceCard.title}:`);
     lines.push(...sharedGovernanceCard.badges.map((badge) => `- ${badge}`));
     lines.push(...sharedGovernanceCard.notes.map((note) => `- ${note}`));
+  }
+
+  const delegationCard = buildDelegationCard(payload, t);
+  if (delegationCard) {
+    lines.push(``);
+    lines.push(`${delegationCard.title}:`);
+    lines.push(...delegationCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...delegationCard.notes.map((note) => `- ${note}`));
   }
 
   return lines;

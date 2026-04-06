@@ -7,6 +7,7 @@
 
 import fs from "node:fs";
 
+import type { ToolContractFamily, ToolContractRiskLevel } from "@belldandy/skills";
 import type { ModelProfile } from "./failover-client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -14,10 +15,26 @@ import type { ModelProfile } from "./failover-client.js";
 const AGENT_PROFILE_KINDS = ["resident", "worker"] as const;
 const AGENT_WORKSPACE_BINDINGS = ["current", "custom"] as const;
 const AGENT_MEMORY_MODES = ["shared", "isolated", "hybrid"] as const;
+const AGENT_DEFAULT_ROLES = ["default", "coder", "researcher", "verifier"] as const;
+const AGENT_PERMISSION_MODES = ["plan", "acceptEdits", "confirm"] as const;
+const AGENT_HANDOFF_STYLES = ["summary", "structured"] as const;
 
 export type AgentProfileKind = typeof AGENT_PROFILE_KINDS[number];
 export type AgentWorkspaceBinding = typeof AGENT_WORKSPACE_BINDINGS[number];
 export type AgentMemoryMode = typeof AGENT_MEMORY_MODES[number];
+export type AgentProfileDefaultRole = typeof AGENT_DEFAULT_ROLES[number];
+export type AgentProfileDefaultPermissionMode = typeof AGENT_PERMISSION_MODES[number];
+export type AgentProfileHandoffStyle = typeof AGENT_HANDOFF_STYLES[number];
+
+export type AgentProfileCatalogMetadata = {
+  whenToUse: string[];
+  defaultRole: AgentProfileDefaultRole;
+  defaultPermissionMode?: AgentProfileDefaultPermissionMode;
+  defaultAllowedToolFamilies?: ToolContractFamily[];
+  defaultMaxToolRiskLevel?: ToolContractRiskLevel;
+  skills: string[];
+  handoffStyle: AgentProfileHandoffStyle;
+};
 
 /**
  * Agent Profile：描述一个可配置的 Agent 人格/能力集
@@ -47,6 +64,20 @@ export type AgentProfile = {
   sessionNamespace?: string;
   /** 记忆模式。默认 hybrid */
   memoryMode?: AgentMemoryMode;
+  /** 何时优先使用该 Agent */
+  whenToUse?: string[];
+  /** launch 默认角色 */
+  defaultRole?: AgentProfileDefaultRole;
+  /** launch 默认 permissionMode */
+  defaultPermissionMode?: AgentProfileDefaultPermissionMode;
+  /** launch 默认允许的工具族 */
+  defaultAllowedToolFamilies?: ToolContractFamily[];
+  /** launch 默认最大工具风险等级 */
+  defaultMaxToolRiskLevel?: ToolContractRiskLevel;
+  /** 推荐注入或优先参考的 skills */
+  skills?: string[];
+  /** handoff 风格，供 catalog / inspect / launch default 使用 */
+  handoffStyle?: AgentProfileHandoffStyle;
   /** 是否启用工具（覆盖环境变量 BELLDANDY_TOOLS_ENABLED） */
   toolsEnabled?: boolean;
   /** 可用工具白名单（仅这些工具对该 Agent 可用） */
@@ -70,6 +101,7 @@ export type ResolvedAgentProfileMetadata = {
   workspaceDir: string;
   sessionNamespace: string;
   memoryMode: AgentMemoryMode;
+  catalog: AgentProfileCatalogMetadata;
 };
 
 // ─── Functions ───────────────────────────────────────────────────────────
@@ -90,6 +122,32 @@ function normalizeSessionNamespace(value: string, fallback: string): string {
     .replace(/^-+|-+$/g, "")
     || fallback;
 }
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean);
+  return items.length > 0 ? [...new Set(items)] : undefined;
+}
+
+const ROLE_DEFAULT_ALLOWED_TOOL_FAMILIES: Partial<Record<AgentProfileDefaultRole, ToolContractFamily[]>> = {
+  coder: ["workspace-read", "workspace-write", "patch", "command-exec", "memory", "goal-governance"],
+  researcher: ["network-read", "workspace-read", "browser", "memory", "goal-governance"],
+  verifier: ["workspace-read", "command-exec", "browser", "memory", "goal-governance"],
+};
+
+const ROLE_DEFAULT_PERMISSION_MODE: Partial<Record<AgentProfileDefaultRole, AgentProfileDefaultPermissionMode>> = {
+  researcher: "plan",
+  coder: "confirm",
+  verifier: "confirm",
+};
+
+const ROLE_DEFAULT_MAX_RISK_LEVEL: Partial<Record<AgentProfileDefaultRole, ToolContractRiskLevel>> = {
+  researcher: "medium",
+  coder: "high",
+  verifier: "high",
+};
 
 /**
  * 构建隐式的 "default" profile（始终存在，映射到环境变量配置）
@@ -137,8 +195,72 @@ export function resolveAgentMemoryMode(profile: Pick<AgentProfile, "memoryMode">
     : "hybrid";
 }
 
+export function resolveAgentProfileDefaultRole(
+  profile: Pick<AgentProfile, "defaultRole">,
+): AgentProfileDefaultRole {
+  return profile.defaultRole === "coder"
+    || profile.defaultRole === "researcher"
+    || profile.defaultRole === "verifier"
+    ? profile.defaultRole
+    : "default";
+}
+
+export function resolveAgentProfileCatalogMetadata(
+  profile: Pick<
+    AgentProfile,
+    "kind"
+    | "whenToUse"
+    | "defaultRole"
+    | "defaultPermissionMode"
+    | "defaultAllowedToolFamilies"
+    | "defaultMaxToolRiskLevel"
+    | "skills"
+    | "handoffStyle"
+  >,
+): AgentProfileCatalogMetadata {
+  const defaultRole = resolveAgentProfileDefaultRole(profile);
+  const defaultAllowedToolFamilies = normalizeStringArray(profile.defaultAllowedToolFamilies) as ToolContractFamily[] | undefined;
+  return {
+    whenToUse: normalizeStringArray(profile.whenToUse) ?? [],
+    defaultRole,
+    defaultPermissionMode: profile.defaultPermissionMode === "plan"
+      || profile.defaultPermissionMode === "acceptEdits"
+      || profile.defaultPermissionMode === "confirm"
+      ? profile.defaultPermissionMode
+      : ROLE_DEFAULT_PERMISSION_MODE[defaultRole],
+    defaultAllowedToolFamilies: defaultAllowedToolFamilies ?? ROLE_DEFAULT_ALLOWED_TOOL_FAMILIES[defaultRole],
+    defaultMaxToolRiskLevel: profile.defaultMaxToolRiskLevel === "low"
+      || profile.defaultMaxToolRiskLevel === "medium"
+      || profile.defaultMaxToolRiskLevel === "high"
+      || profile.defaultMaxToolRiskLevel === "critical"
+      ? profile.defaultMaxToolRiskLevel
+      : ROLE_DEFAULT_MAX_RISK_LEVEL[defaultRole],
+    skills: normalizeStringArray(profile.skills) ?? [],
+    handoffStyle: profile.handoffStyle === "structured"
+      ? "structured"
+      : resolveAgentProfileKind(profile) === "worker"
+        ? "structured"
+        : "summary",
+  };
+}
+
 export function resolveAgentProfileMetadata(
-  profile: Pick<AgentProfile, "id" | "kind" | "workspaceBinding" | "workspaceDir" | "sessionNamespace" | "memoryMode">,
+  profile: Pick<
+    AgentProfile,
+    | "id"
+    | "kind"
+    | "workspaceBinding"
+    | "workspaceDir"
+    | "sessionNamespace"
+    | "memoryMode"
+    | "whenToUse"
+    | "defaultRole"
+    | "defaultPermissionMode"
+    | "defaultAllowedToolFamilies"
+    | "defaultMaxToolRiskLevel"
+    | "skills"
+    | "handoffStyle"
+  >,
 ): ResolvedAgentProfileMetadata {
   return {
     kind: resolveAgentProfileKind(profile),
@@ -146,6 +268,7 @@ export function resolveAgentProfileMetadata(
     workspaceDir: resolveAgentWorkspaceDir(profile),
     sessionNamespace: resolveAgentSessionNamespace(profile),
     memoryMode: resolveAgentMemoryMode(profile),
+    catalog: resolveAgentProfileCatalogMetadata(profile),
   };
 }
 
@@ -184,6 +307,13 @@ export async function loadAgentProfiles(filePath: string): Promise<AgentProfile[
         workspaceDir: typeof obj.workspaceDir === "string" && obj.workspaceDir.trim() ? obj.workspaceDir.trim() : undefined,
         sessionNamespace: typeof obj.sessionNamespace === "string" && obj.sessionNamespace.trim() ? obj.sessionNamespace.trim() : undefined,
         memoryMode: normalizeEnumValue(obj.memoryMode, AGENT_MEMORY_MODES),
+        whenToUse: normalizeStringArray(obj.whenToUse),
+        defaultRole: normalizeEnumValue(obj.defaultRole, AGENT_DEFAULT_ROLES),
+        defaultPermissionMode: normalizeEnumValue(obj.defaultPermissionMode, AGENT_PERMISSION_MODES),
+        defaultAllowedToolFamilies: normalizeStringArray(obj.defaultAllowedToolFamilies) as ToolContractFamily[] | undefined,
+        defaultMaxToolRiskLevel: normalizeEnumValue(obj.defaultMaxToolRiskLevel, ["low", "medium", "high", "critical"] as const),
+        skills: normalizeStringArray(obj.skills),
+        handoffStyle: normalizeEnumValue(obj.handoffStyle, AGENT_HANDOFF_STYLES),
         toolsEnabled: typeof obj.toolsEnabled === "boolean" ? obj.toolsEnabled : undefined,
         toolWhitelist: Array.isArray(obj.toolWhitelist) ? obj.toolWhitelist.filter((s): s is string => typeof s === "string") : undefined,
         maxInputTokens: typeof obj.maxInputTokens === "number" && obj.maxInputTokens > 0 ? obj.maxInputTokens : undefined,

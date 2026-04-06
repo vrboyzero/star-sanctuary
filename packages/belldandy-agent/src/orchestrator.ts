@@ -10,12 +10,13 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { DelegationProtocol } from "@belldandy/skills";
 import type { AgentRegistry } from "./agent-registry.js";
 import type { ConversationStore } from "./conversation.js";
 import type { AgentStreamItem, BelldandyAgent } from "./index.js";
 import {
   DEFAULT_AGENT_LAUNCH_TIMEOUT_MS,
-  normalizeAgentLaunchSpec,
+  normalizeAgentLaunchSpecWithCatalog,
   type AgentLaunchSpec,
   type AgentLaunchSpecInput,
 } from "./launch-spec.js";
@@ -54,6 +55,7 @@ type SpawnOptionsLegacy = {
   agentId?: string;
   instruction: string;
   context?: Record<string, unknown>;
+  delegationProtocol?: DelegationProtocol;
 };
 
 type SpawnOptionsWithSpec = {
@@ -113,7 +115,21 @@ function toLaunchSpecInput(opts: SpawnOptions): AgentLaunchSpecInput {
     parentConversationId: opts.parentConversationId,
     agentId: opts.agentId,
     context: opts.context,
+    delegationProtocol: opts.delegationProtocol,
   };
+}
+
+function resolveLaunchSpec(
+  agentRegistry: AgentRegistry,
+  opts: SpawnOptions,
+  sessionTimeoutMs: number,
+): AgentLaunchSpec {
+  return normalizeAgentLaunchSpecWithCatalog(toLaunchSpecInput(opts), {
+    agentRegistry,
+    defaults: {
+      timeoutMs: sessionTimeoutMs,
+    },
+  });
 }
 
 // ─── SubAgentOrchestrator ────────────────────────────────────────────────
@@ -165,9 +181,7 @@ export class SubAgentOrchestrator {
    * If concurrency limit is reached, the request is queued (up to maxQueueSize).
    */
   async spawn(opts: SpawnOptions): Promise<SpawnResult> {
-    const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(opts), {
-      timeoutMs: this.sessionTimeoutMs,
-    });
+    const launchSpec = resolveLaunchSpec(this.agentRegistry, opts, this.sessionTimeoutMs);
     const normalizedOpts: SpawnOptions = {
       ...opts,
       launchSpec,
@@ -222,9 +236,7 @@ export class SubAgentOrchestrator {
    * Internal: actually execute a spawn (assumes concurrency slot is available).
    */
   private async executeSpawn(opts: SpawnOptions): Promise<SpawnResult> {
-    const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(opts), {
-      timeoutMs: this.sessionTimeoutMs,
-    });
+    const launchSpec = resolveLaunchSpec(this.agentRegistry, opts, this.sessionTimeoutMs);
     const agentId = launchSpec.agentId;
     const sessionId = `sub_${randomUUID().slice(0, 8)}`;
 
@@ -316,9 +328,7 @@ export class SubAgentOrchestrator {
   private drainQueue(): void {
     while (this.pendingQueue.length > 0 && this.runningCount < this.maxConcurrent) {
       const next = this.pendingQueue.shift()!;
-      const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(next.opts), {
-        timeoutMs: this.sessionTimeoutMs,
-      });
+      const launchSpec = resolveLaunchSpec(this.agentRegistry, next.opts, this.sessionTimeoutMs);
 
       // Check if the queued request has been waiting too long
       const waitMs = Date.now() - next.enqueuedAt;
@@ -565,9 +575,7 @@ export class SubAgentOrchestrator {
     conversationId: string,
     history: Array<{ role: "user" | "assistant"; content: string }>,
   ): AsyncIterable<AgentStreamItem> {
-    const launchSpec = normalizeAgentLaunchSpec(toLaunchSpecInput(opts), {
-      timeoutMs: this.sessionTimeoutMs,
-    });
+    const launchSpec = resolveLaunchSpec(this.agentRegistry, opts, this.sessionTimeoutMs);
     const depth = ((launchSpec.context?._orchestratorDepth as number) ?? 0) + 1;
     return agent.run({
       conversationId,
@@ -577,23 +585,24 @@ export class SubAgentOrchestrator {
         ...launchSpec.context,
         _orchestratorDepth: depth,
         _parentConversationId: launchSpec.parentConversationId,
-        _agentLaunchSpec: {
-          profileId: launchSpec.profileId,
-          channel: launchSpec.channel,
-          background: launchSpec.background,
-          timeoutMs: launchSpec.timeoutMs,
+          _agentLaunchSpec: {
+            profileId: launchSpec.profileId,
+            channel: launchSpec.channel,
+            background: launchSpec.background,
+            timeoutMs: launchSpec.timeoutMs,
           role: launchSpec.role,
           cwd: launchSpec.cwd,
           toolSet: launchSpec.toolSet,
           allowedToolFamilies: launchSpec.allowedToolFamilies,
           maxToolRiskLevel: launchSpec.maxToolRiskLevel,
-          policySummary: launchSpec.policySummary,
-          permissionMode: launchSpec.permissionMode,
-          isolationMode: launchSpec.isolationMode,
-          parentTaskId: launchSpec.parentTaskId,
+            policySummary: launchSpec.policySummary,
+            permissionMode: launchSpec.permissionMode,
+            isolationMode: launchSpec.isolationMode,
+            parentTaskId: launchSpec.parentTaskId,
+            delegationProtocol: launchSpec.delegationProtocol,
+          },
         },
-      },
-    });
+      });
   }
 
   private async closeIterator(

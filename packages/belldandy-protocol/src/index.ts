@@ -404,6 +404,7 @@ export type SystemDoctorResult = {
       conversationId?: string;
       runId?: string;
     };
+    launchExplainability?: Record<string, unknown>;
     summary: {
       scope?: "agent" | "run";
       agentId: string;
@@ -455,6 +456,7 @@ export type SystemDoctorResult = {
       agentId: string;
       conversationId: string | null;
       taskId?: string;
+      launchExplainability?: Record<string, unknown>;
       launchSpec?: Record<string, unknown>;
     };
     counts: {
@@ -485,6 +487,7 @@ export type SystemDoctorResult = {
       agentId: string;
       conversationId: string | null;
       taskId?: string;
+      launchExplainability?: Record<string, unknown>;
       launchSpec?: Record<string, unknown>;
     };
     summary: {

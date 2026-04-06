@@ -247,6 +247,7 @@ import { checkForUpdates } from "../update-checker.js";
 import { createScopedMemoryManagers } from "../resident-memory-managers.js";
 import { loadConversationPromptSnapshotArtifact, persistConversationPromptSnapshot } from "../conversation-prompt-snapshot.js";
 import { resolveResidentMemoryPolicy } from "../resident-memory-policy.js";
+import { resolveResidentStateBindingView } from "../resident-state-binding.js";
 import { PromptSnapshotStore } from "../prompt-snapshot-store.js";
 import {
   applyPromptExperimentsToSections,
@@ -1311,10 +1312,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readResidentPromptMetadata(
   metadata: Record<string, unknown> | undefined,
-): { residentProfile?: Record<string, unknown>; memoryPolicy?: Record<string, unknown> } {
+): { residentProfile?: Record<string, unknown>; memoryPolicy?: Record<string, unknown>; residentStateBinding?: Record<string, unknown> } {
   return {
     ...(isRecord(metadata?.residentProfile) ? { residentProfile: { ...metadata.residentProfile } } : {}),
     ...(isRecord(metadata?.memoryPolicy) ? { memoryPolicy: { ...metadata.memoryPolicy } } : {}),
+    ...(isRecord(metadata?.residentStateBinding) ? { residentStateBinding: { ...metadata.residentStateBinding } } : {}),
   };
 }
 
@@ -1401,6 +1403,7 @@ Keep responses concise and natural for spoken delivery.`,
   });
   const resolvedProfileMetadata = resolveAgentProfileMetadata(profile);
   const memoryPolicy = resolveResidentMemoryPolicy(stateDir, profile);
+  const residentStateBinding = resolveResidentStateBindingView(stateDir, profile);
   return {
     scope: "agent",
     agentId: profile.id,
@@ -1434,6 +1437,7 @@ Keep responses concise and natural for spoken delivery.`,
         writeTarget: memoryPolicy.writeTarget,
         summary: memoryPolicy.summary,
       },
+      residentStateBinding,
       includesTtsMode: isTtsEnabled,
       hasProfileOverride: Boolean(profile.systemPromptOverride),
       baseFinalChars: baseBuild.finalChars,
@@ -1975,6 +1979,7 @@ if (agentRegistry && toolsEnabled) {
   toolExecutor.setAgentCapabilities(createSubTaskAgentCapabilities({
     orchestrator: subAgentOrchestrator,
     runtimeStore: subTaskRuntimeStore,
+    agentRegistry,
     worktreeRuntime: subTaskWorktreeRuntime,
     logger: {
       warn: (m, d) => logger.warn("task-runtime", m, d),
@@ -2671,7 +2676,8 @@ async function generateCapabilityPlanForNode(
   const methods = searchCapabilityMethods(queryHints);
   const skills = searchCapabilitySkills(queryHints);
   const mcpServers = searchCapabilityMcpServers(queryHints);
-  const availableAgentIds = agentRegistry?.list().map((profile) => profile.id) ?? ["default"];
+  const availableAgentProfiles = agentRegistry?.list() ?? [buildDefaultProfile()];
+  const availableAgentIds = availableAgentProfiles.map((profile) => profile.id);
   const planInput = buildGoalCapabilityPlan({
     goalTitle: goal.title,
     goalObjective: input.objective?.trim() || goal.objective,
@@ -2685,6 +2691,11 @@ async function generateCapabilityPlanForNode(
     skills,
     mcpServers,
     availableAgentIds,
+    availableAgents: availableAgentProfiles.map((profile) => ({
+      id: profile.id,
+      kind: resolveAgentProfileMetadata(profile).kind,
+      catalog: resolveAgentProfileMetadata(profile).catalog,
+    })),
     forceMode: input.forceMode,
     runId: input.runId ?? node.lastRunId,
   });

@@ -1,10 +1,13 @@
-import path from "node:path";
-
 import {
   resolveAgentProfileMetadata,
   type AgentMemoryMode,
   type AgentProfile,
 } from "@belldandy/agent";
+import {
+  resolveResidentPrivateStateDir as resolveResidentPrivateStateDirFromBinding,
+  resolveResidentSharedStateDir as resolveResidentSharedStateDirFromBinding,
+  resolveResidentStateBinding,
+} from "./resident-state-binding.js";
 
 export type ResidentMemoryTarget = "private" | "shared";
 
@@ -22,15 +25,14 @@ export type ResolvedResidentMemoryPolicy = {
 };
 
 export function resolveResidentPrivateStateDir(rootStateDir: string, profile: Pick<AgentProfile, "id" | "workspaceDir">): string {
-  if (profile.id === "default") {
-    return rootStateDir;
-  }
-  const metadata = resolveAgentProfileMetadata(profile);
-  return path.join(rootStateDir, "agents", metadata.workspaceDir);
+  return resolveResidentPrivateStateDirFromBinding(rootStateDir, profile);
 }
 
-export function resolveResidentSharedStateDir(rootStateDir: string): string {
-  return path.join(rootStateDir, "team-memory");
+export function resolveResidentSharedStateDir(
+  rootStateDir: string,
+  profile?: Pick<AgentProfile, "id" | "kind" | "workspaceBinding" | "workspaceDir" | "sessionNamespace" | "memoryMode">,
+): string {
+  return resolveResidentSharedStateDirFromBinding(rootStateDir, profile);
 }
 
 export function resolveResidentMemoryPolicy(
@@ -38,8 +40,9 @@ export function resolveResidentMemoryPolicy(
   profile: Pick<AgentProfile, "id" | "workspaceDir" | "kind" | "workspaceBinding" | "sessionNamespace" | "memoryMode">,
 ): ResolvedResidentMemoryPolicy {
   const metadata = resolveAgentProfileMetadata(profile);
-  const privateStateDir = resolveResidentPrivateStateDir(rootStateDir, profile);
-  const sharedStateDir = resolveResidentSharedStateDir(rootStateDir);
+  const stateBinding = resolveResidentStateBinding(rootStateDir, profile);
+  const privateStateDir = stateBinding.privateStateDir;
+  const sharedStateDir = stateBinding.sharedStateDir;
 
   if (metadata.memoryMode === "shared") {
     return {

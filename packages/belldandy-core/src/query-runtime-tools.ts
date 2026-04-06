@@ -1,3 +1,4 @@
+import type { AgentRegistry } from "@belldandy/agent";
 import type { ToolExecutionRuntimeContext } from "@belldandy/skills";
 import { TOOL_SETTINGS_CONTROL_NAME } from "@belldandy/skills";
 import type { ToolExecutor, SkillRegistry } from "@belldandy/skills";
@@ -8,6 +9,7 @@ import type { PluginRegistry } from "@belldandy/plugins";
 import type { GatewayEventFrame, GatewayResFrame } from "@belldandy/protocol";
 
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
+import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
 import { buildExtensionGovernanceReport } from "./extension-governance.js";
 import { loadExtensionMarketplaceState } from "./extension-marketplace-state.js";
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
@@ -18,6 +20,7 @@ import {
 } from "./tool-behavior-observability.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import { buildToolContractV2Observability } from "./tool-contract-v2-observability.js";
+import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
 import type { SubTaskRuntimeStore } from "./task-runtime.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 
@@ -39,6 +42,7 @@ export type QueryRuntimeToolsContext = {
   toolControlConfirmationStore?: ToolControlConfirmationStore;
   getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
   getAgentToolControlConfirmPassword?: () => string | undefined;
+  agentRegistry?: Pick<AgentRegistry, "getProfile">;
   pluginRegistry?: PluginRegistry;
   stateDir?: string;
   extensionHost?: Pick<ExtensionHostState, "lifecycle">;
@@ -186,6 +190,17 @@ export async function handleToolsListWithQueryRuntime(
 
     const visibilityAgentId = params.agentId || visibilityTask?.agentId;
     const visibilityConversationId = params.conversationId || visibilityTask?.parentConversationId;
+    const residentStateBinding = resolveResidentStateBindingViewForAgent(
+      ctx.stateDir,
+      ctx.agentRegistry,
+      visibilityAgentId,
+    );
+    const launchExplainability = buildAgentLaunchExplainability({
+      agentRegistry: ctx.agentRegistry,
+      agentId: visibilityAgentId,
+      profileId: visibilityTask?.launchSpec?.profileId,
+      launchSpec: visibilityTask?.launchSpec,
+    });
     const runtimeContext: ToolExecutionRuntimeContext | undefined = visibilityTask
       ? { launchSpec: visibilityTask.launchSpec }
       : undefined;
@@ -407,6 +422,8 @@ export async function handleToolsListWithQueryRuntime(
         visibilityContext: {
           agentId: visibilityAgentId ?? "default",
           conversationId: visibilityConversationId ?? null,
+          ...(launchExplainability ? { launchExplainability } : {}),
+          ...(residentStateBinding ? { residentStateBinding } : {}),
           ...(visibilityTask
             ? {
               taskId: visibilityTask.id,

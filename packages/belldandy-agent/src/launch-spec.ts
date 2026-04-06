@@ -1,3 +1,7 @@
+import type { DelegationProtocol } from "@belldandy/skills";
+import type { AgentRegistry } from "./agent-registry.js";
+import { resolveAgentProfileCatalogMetadata, type AgentProfileCatalogMetadata } from "./agent-profile.js";
+
 export const DEFAULT_AGENT_LAUNCH_TIMEOUT_MS = 120_000;
 
 export type AgentLaunchRole = "default" | "coder" | "researcher" | "verifier";
@@ -20,6 +24,7 @@ export type AgentLaunchSpec = {
   allowedToolFamilies?: string[];
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
+  delegationProtocol?: DelegationProtocol;
 };
 
 export type AgentLaunchSpecInput = {
@@ -40,7 +45,41 @@ export type AgentLaunchSpecInput = {
   allowedToolFamilies?: string[];
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
+  delegationProtocol?: DelegationProtocol;
 };
+
+function patchDelegationProtocolLaunchDefaults(
+  protocol: DelegationProtocol | undefined,
+  catalog: AgentProfileCatalogMetadata | undefined,
+): DelegationProtocol | undefined {
+  if (!protocol || !catalog) return protocol;
+
+  const nextLaunchDefaults = {
+    ...protocol.launchDefaults,
+    permissionMode: protocol.launchDefaults.permissionMode ?? catalog.defaultPermissionMode,
+    allowedToolFamilies: protocol.launchDefaults.allowedToolFamilies ?? catalog.defaultAllowedToolFamilies,
+    maxToolRiskLevel: protocol.launchDefaults.maxToolRiskLevel ?? catalog.defaultMaxToolRiskLevel,
+  };
+
+  return {
+    ...protocol,
+    launchDefaults: nextLaunchDefaults,
+  };
+}
+
+function resolveCatalogMetadata(
+  agentRegistry: Pick<AgentRegistry, "getProfile"> | undefined,
+  input: AgentLaunchSpecInput,
+  defaults: Partial<Omit<AgentLaunchSpec, "instruction" | "parentConversationId">>,
+): AgentProfileCatalogMetadata | undefined {
+  const profileId = normalizeOptionalString(input.profileId)
+    ?? normalizeOptionalString(input.agentId)
+    ?? normalizeOptionalString(defaults.profileId)
+    ?? normalizeOptionalString(defaults.agentId)
+    ?? "default";
+  const profile = agentRegistry?.getProfile(profileId);
+  return profile ? resolveAgentProfileCatalogMetadata(profile) : undefined;
+}
 
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -114,5 +153,41 @@ export function normalizeAgentLaunchSpec(
     allowedToolFamilies: normalizeToolSet(input.allowedToolFamilies) ?? normalizeToolSet(defaults.allowedToolFamilies),
     maxToolRiskLevel: normalizeRiskLevel(input.maxToolRiskLevel) ?? normalizeRiskLevel(defaults.maxToolRiskLevel),
     policySummary: normalizeOptionalString(input.policySummary) ?? normalizeOptionalString(defaults.policySummary),
+    delegationProtocol: input.delegationProtocol ?? defaults.delegationProtocol,
   };
+}
+
+export function normalizeAgentLaunchSpecWithCatalog(
+  input: AgentLaunchSpecInput,
+  options: {
+    agentRegistry?: Pick<AgentRegistry, "getProfile">;
+    defaults?: Partial<Omit<AgentLaunchSpec, "instruction" | "parentConversationId">>;
+  } = {},
+): AgentLaunchSpec {
+  const defaults = options.defaults ?? {};
+  const catalog = resolveCatalogMetadata(options.agentRegistry, input, defaults);
+  const patchedInput: AgentLaunchSpecInput = {
+    ...input,
+    delegationProtocol: patchDelegationProtocolLaunchDefaults(input.delegationProtocol, catalog),
+  };
+  const patchedDefaults: Partial<Omit<AgentLaunchSpec, "instruction" | "parentConversationId">> = {
+    ...defaults,
+    delegationProtocol: input.delegationProtocol
+      ? defaults.delegationProtocol
+      : patchDelegationProtocolLaunchDefaults(defaults.delegationProtocol, catalog),
+  };
+
+  return normalizeAgentLaunchSpec(patchedInput, {
+    ...patchedDefaults,
+    role: normalizeRole(patchedInput.role) ?? normalizeRole(patchedDefaults.role) ?? catalog?.defaultRole,
+    permissionMode: normalizeOptionalString(patchedInput.permissionMode)
+      ?? normalizeOptionalString(patchedDefaults.permissionMode)
+      ?? catalog?.defaultPermissionMode,
+    allowedToolFamilies: normalizeToolSet(patchedInput.allowedToolFamilies)
+      ?? normalizeToolSet(patchedDefaults.allowedToolFamilies)
+      ?? catalog?.defaultAllowedToolFamilies,
+    maxToolRiskLevel: normalizeRiskLevel(patchedInput.maxToolRiskLevel)
+      ?? normalizeRiskLevel(patchedDefaults.maxToolRiskLevel)
+      ?? catalog?.defaultMaxToolRiskLevel,
+  });
 }

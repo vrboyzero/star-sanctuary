@@ -26,4 +26,23 @@ describe("resolveMemoryIndexPaths", () => {
       path.join(stateDir, "team-memory", "MEMORY.md"),
     ]);
   });
+
+  it("can point shared memory indexing at a workspace-scoped shared layer", () => {
+    const stateDir = "C:/Users/admin/.star_sanctuary/workspaces/project-b/agents/coder";
+    const teamSharedStateDir = "C:/Users/admin/.star_sanctuary/workspaces/project-b/team-memory";
+    const result = resolveMemoryIndexPaths(stateDir, {
+      includeTeamSharedMemory: true,
+      teamSharedStateDir,
+    });
+
+    expect(result.sessionsDir).toBe(path.join(stateDir, "sessions"));
+    expect(result.additionalRoots).toEqual([
+      path.join(stateDir, "memory"),
+      path.join(teamSharedStateDir, "memory"),
+    ]);
+    expect(result.additionalFiles).toEqual([
+      path.join(stateDir, "MEMORY.md"),
+      path.join(teamSharedStateDir, "MEMORY.md"),
+    ]);
+  });
 });

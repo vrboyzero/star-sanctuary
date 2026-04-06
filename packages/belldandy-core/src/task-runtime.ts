@@ -4,13 +4,19 @@ import path from "node:path";
 
 import {
   normalizeAgentLaunchSpec,
+  normalizeAgentLaunchSpecWithCatalog,
   type AgentLaunchSpec,
   type AgentLaunchSpecInput,
+  type AgentRegistry,
   type SpawnOptions as OrchestratorSpawnOptions,
   type SubAgentEvent,
   type SubAgentOrchestrator,
 } from "@belldandy/agent";
 import type { AgentCapabilities, SessionInfo, SpawnSubAgentOptions, SubAgentResult } from "@belldandy/skills";
+import {
+  summarizeDelegationProtocol,
+  type SubTaskDelegationSummary,
+} from "./subtask-result-envelope.js";
 import type { SubTaskWorktreeRuntime, SubTaskWorktreeRuntimeSummary, WorktreeRuntimeStatus } from "./worktree-runtime.js";
 
 export type SubTaskStatus = "pending" | "running" | "done" | "error" | "timeout" | "stopped";
@@ -56,6 +62,7 @@ export type SubTaskLaunchSpec = {
   isolationMode?: string;
   parentTaskId?: string;
   contextKeys?: string[];
+  delegation?: SubTaskDelegationSummary;
   worktreePath?: string;
   worktreeRepoRoot?: string;
   worktreeBranch?: string;
@@ -162,6 +169,7 @@ function createLaunchSpecSummary(
     isolationMode: spec.isolationMode,
     parentTaskId: spec.parentTaskId,
     contextKeys: spec.context ? Object.keys(spec.context).sort() : undefined,
+    delegation: summarizeDelegationProtocol(spec.delegationProtocol),
     worktreePath: runtimeSummary.worktreePath,
     worktreeRepoRoot: runtimeSummary.worktreeRepoRoot,
     worktreeBranch: runtimeSummary.worktreeBranch,
@@ -180,12 +188,29 @@ async function atomicWriteText(targetPath: string, content: string): Promise<voi
 function cloneRecord(record: SubTaskRecord): SubTaskRecord {
   return {
     ...record,
-    launchSpec: {
-      ...record.launchSpec,
-      toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
-      allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
-      contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
-    },
+      launchSpec: {
+        ...record.launchSpec,
+        toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
+        allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
+        contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
+        delegation: record.launchSpec.delegation
+          ? {
+            ...record.launchSpec.delegation,
+            contextKeys: [...record.launchSpec.delegation.contextKeys],
+            sourceAgentIds: record.launchSpec.delegation.sourceAgentIds
+              ? [...record.launchSpec.delegation.sourceAgentIds]
+              : undefined,
+            launchDefaults: record.launchSpec.delegation.launchDefaults
+              ? {
+                ...record.launchSpec.delegation.launchDefaults,
+                allowedToolFamilies: record.launchSpec.delegation.launchDefaults.allowedToolFamilies
+                  ? [...record.launchSpec.delegation.launchDefaults.allowedToolFamilies]
+                  : undefined,
+              }
+              : undefined,
+          }
+          : undefined,
+      },
     progress: { ...record.progress },
     notifications: record.notifications.map((item) => ({ ...item })),
   };
@@ -579,6 +604,9 @@ export class SubTaskRuntimeStore {
     const launchSpecSource = value.launchSpec && typeof value.launchSpec === "object" && !Array.isArray(value.launchSpec)
       ? value.launchSpec as Record<string, unknown>
       : undefined;
+    const delegationSource = launchSpecSource?.delegation && typeof launchSpecSource.delegation === "object" && !Array.isArray(launchSpecSource.delegation)
+      ? launchSpecSource.delegation as Record<string, unknown>
+      : undefined;
     const rawContextKeys = launchSpecSource
       ? launchSpecSource.contextKeys
       : undefined;
@@ -663,9 +691,69 @@ export class SubTaskRuntimeStore {
               : fallbackLaunchSpec.parentTaskId,
             contextKeys: Array.isArray(rawContextKeys)
               ? rawContextKeys
-                .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-                .map((item) => item.trim())
+                  .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                  .map((item) => item.trim())
               : createLaunchSpecSummary(fallbackLaunchSpec).contextKeys,
+            delegation: delegationSource
+              ? {
+                source: typeof delegationSource.source === "string" ? delegationSource.source as SubTaskDelegationSummary["source"] : "session_spawn",
+                intentKind: typeof delegationSource.intentKind === "string" ? delegationSource.intentKind as SubTaskDelegationSummary["intentKind"] : "ad_hoc",
+                intentSummary: typeof delegationSource.intentSummary === "string" ? delegationSource.intentSummary : "-",
+                role: delegationSource.role === "default"
+                  || delegationSource.role === "coder"
+                  || delegationSource.role === "researcher"
+                  || delegationSource.role === "verifier"
+                  ? delegationSource.role
+                  : undefined,
+                expectedDeliverableFormat: typeof delegationSource.expectedDeliverableFormat === "string"
+                  ? delegationSource.expectedDeliverableFormat as SubTaskDelegationSummary["expectedDeliverableFormat"]
+                  : "summary",
+                expectedDeliverableSummary: typeof delegationSource.expectedDeliverableSummary === "string"
+                  ? delegationSource.expectedDeliverableSummary
+                  : "-",
+                aggregationMode: typeof delegationSource.aggregationMode === "string"
+                  ? delegationSource.aggregationMode as SubTaskDelegationSummary["aggregationMode"]
+                  : "single",
+                contextKeys: Array.isArray(delegationSource.contextKeys)
+                  ? delegationSource.contextKeys
+                    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                    .map((item) => item.trim())
+                  : [],
+                sourceAgentIds: Array.isArray(delegationSource.sourceAgentIds)
+                  ? delegationSource.sourceAgentIds
+                    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                    .map((item) => item.trim())
+                  : undefined,
+                goalId: typeof delegationSource.goalId === "string" && delegationSource.goalId.trim()
+                  ? delegationSource.goalId.trim()
+                  : undefined,
+                nodeId: typeof delegationSource.nodeId === "string" && delegationSource.nodeId.trim()
+                  ? delegationSource.nodeId.trim()
+                  : undefined,
+                planId: typeof delegationSource.planId === "string" && delegationSource.planId.trim()
+                  ? delegationSource.planId.trim()
+                  : undefined,
+                launchDefaults: delegationSource.launchDefaults && typeof delegationSource.launchDefaults === "object" && !Array.isArray(delegationSource.launchDefaults)
+                  ? {
+                    permissionMode: typeof (delegationSource.launchDefaults as Record<string, unknown>).permissionMode === "string"
+                      && String((delegationSource.launchDefaults as Record<string, unknown>).permissionMode).trim()
+                      ? String((delegationSource.launchDefaults as Record<string, unknown>).permissionMode).trim()
+                      : undefined,
+                    allowedToolFamilies: Array.isArray((delegationSource.launchDefaults as Record<string, unknown>).allowedToolFamilies)
+                      ? ((delegationSource.launchDefaults as Record<string, unknown>).allowedToolFamilies as unknown[])
+                        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                        .map((item) => item.trim())
+                      : undefined,
+                    maxToolRiskLevel: (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "low"
+                      || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "medium"
+                      || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "high"
+                      || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "critical"
+                      ? (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel as "low" | "medium" | "high" | "critical"
+                      : undefined,
+                  }
+                  : undefined,
+              }
+              : undefined,
             worktreePath: typeof launchSpecSource.worktreePath === "string" && String(launchSpecSource.worktreePath).trim()
               ? String(launchSpecSource.worktreePath).trim()
               : undefined,
@@ -768,12 +856,29 @@ export class SubTaskRuntimeStore {
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((record) => ({
           ...record,
-          launchSpec: {
-            ...record.launchSpec,
-            toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
-            allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
-            contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
-          },
+            launchSpec: {
+              ...record.launchSpec,
+              toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
+              allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
+              contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
+                delegation: record.launchSpec.delegation
+                  ? {
+                    ...record.launchSpec.delegation,
+                    contextKeys: [...record.launchSpec.delegation.contextKeys],
+                    sourceAgentIds: record.launchSpec.delegation.sourceAgentIds
+                      ? [...record.launchSpec.delegation.sourceAgentIds]
+                      : undefined,
+                    launchDefaults: record.launchSpec.delegation.launchDefaults
+                      ? {
+                        ...record.launchSpec.delegation.launchDefaults,
+                        allowedToolFamilies: record.launchSpec.delegation.launchDefaults.allowedToolFamilies
+                          ? [...record.launchSpec.delegation.launchDefaults.allowedToolFamilies]
+                          : undefined,
+                      }
+                      : undefined,
+                  }
+                  : undefined,
+            },
           progress: { ...record.progress },
           notifications: record.notifications.map((item) => ({ ...item })),
         })),
@@ -907,15 +1012,16 @@ export function createSubTaskWorktreeLifecycleHandler(input: {
 export function createSubTaskAgentCapabilities(input: {
   orchestrator: SubAgentSpawner;
   runtimeStore: SubTaskRuntimeStore;
+  agentRegistry?: Pick<AgentRegistry, "getProfile">;
   worktreeRuntime?: SubTaskWorktreeRuntime;
   logger?: RuntimeLogger;
 }): AgentCapabilities {
   const spawnOne = async (opts: SpawnSubAgentOptions): Promise<SubAgentResult> => {
-    const launchSpec = normalizeAgentLaunchSpec({
-      instruction: opts.instruction,
-      parentConversationId: opts.parentConversationId ?? "system",
-      agentId: opts.agentId,
-      profileId: opts.profileId,
+      const launchSpec = normalizeAgentLaunchSpecWithCatalog({
+        instruction: opts.instruction,
+        parentConversationId: opts.parentConversationId ?? "system",
+        agentId: opts.agentId,
+        profileId: opts.profileId,
       background: opts.background,
       timeoutMs: opts.timeoutMs,
       channel: opts.channel ?? "subtask",
@@ -925,11 +1031,14 @@ export function createSubTaskAgentCapabilities(input: {
       permissionMode: opts.permissionMode,
       isolationMode: opts.isolationMode,
       parentTaskId: opts.parentTaskId,
-      role: opts.role,
-      allowedToolFamilies: opts.allowedToolFamilies,
-      maxToolRiskLevel: opts.maxToolRiskLevel,
-      policySummary: opts.policySummary,
-    });
+        role: opts.role,
+        allowedToolFamilies: opts.allowedToolFamilies,
+        maxToolRiskLevel: opts.maxToolRiskLevel,
+        policySummary: opts.policySummary,
+        delegationProtocol: opts.delegationProtocol,
+      }, {
+        agentRegistry: input.agentRegistry,
+      });
     const task = await input.runtimeStore.createTask({
       launchSpec,
     });

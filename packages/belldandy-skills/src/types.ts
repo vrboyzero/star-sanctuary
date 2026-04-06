@@ -1,4 +1,5 @@
 import type { JsonObject } from "@belldandy/protocol";
+import type { DelegationProtocol } from "./delegation-protocol.js";
 import type { ToolContract } from "./tool-contract.js";
 export type { JsonObject };
 
@@ -150,6 +151,7 @@ export type SpawnSubAgentOptions = {
   allowedToolFamilies?: string[];
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
+  delegationProtocol?: DelegationProtocol;
 };
 
 export type ToolRuntimeLaunchSpec = {
@@ -396,6 +398,14 @@ export type GoalCapabilityPlanSubAgentRecord = {
   reason?: string;
   deliverable?: string;
   handoffToVerifier?: boolean;
+  catalogDefault?: {
+    permissionMode?: "plan" | "acceptEdits" | "confirm";
+    allowedToolFamilies?: string[];
+    maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
+    handoffStyle?: "summary" | "structured";
+    whenToUse?: string[];
+    skills?: string[];
+  };
 };
 
 export type GoalCapabilityPlanRolePolicyRecord = {

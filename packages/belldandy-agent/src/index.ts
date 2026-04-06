@@ -298,6 +298,8 @@ export {
   isResidentAgentProfile,
   loadAgentProfiles,
   resolveAgentMemoryMode,
+  resolveAgentProfileCatalogMetadata,
+  resolveAgentProfileDefaultRole,
   resolveModelConfig,
   resolveAgentProfileKind,
   resolveAgentProfileMetadata,
@@ -307,6 +309,10 @@ export {
   type AgentProfile,
   type AgentConfigFile,
   type AgentMemoryMode,
+  type AgentProfileCatalogMetadata,
+  type AgentProfileDefaultPermissionMode,
+  type AgentProfileDefaultRole,
+  type AgentProfileHandoffStyle,
   type AgentProfileKind,
   type AgentWorkspaceBinding,
   type ResolvedAgentProfileMetadata,
@@ -322,6 +328,7 @@ export {
 // Sub-Agent Orchestrator（子 Agent 编排）
 export {
   normalizeAgentLaunchSpec,
+  normalizeAgentLaunchSpecWithCatalog,
   DEFAULT_AGENT_LAUNCH_TIMEOUT_MS,
   type AgentLaunchSpec,
   type AgentLaunchSpecInput,

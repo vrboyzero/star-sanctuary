@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { expect, test } from "vitest";
 
-import type { AgentLaunchSpec } from "@belldandy/agent";
+import { AgentRegistry, type AgentLaunchSpec } from "@belldandy/agent";
 import {
   createSubTaskAgentCapabilities,
   createSubTaskRuntimeEventHandler,
@@ -142,6 +142,75 @@ test("task runtime agent capabilities wrap spawn results into structured task re
       outputPath: result.outputPath,
     }),
   ]);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("task runtime agent capabilities persist catalog-derived launch defaults", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-catalog-caps-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const registry = new AgentRegistry(() => ({
+    async *run() {
+      yield { type: "status", status: "running" } as const;
+      yield { type: "final", text: "catalog done" } as const;
+      yield { type: "status", status: "done" } as const;
+    },
+  }));
+  registry.register({
+    id: "default",
+    displayName: "Default",
+    model: "primary",
+  });
+  registry.register({
+    id: "ops-coder",
+    displayName: "Ops Coder",
+    model: "primary",
+    defaultRole: "coder",
+    defaultPermissionMode: "confirm",
+    defaultAllowedToolFamilies: ["workspace-read", "workspace-write", "patch"],
+    defaultMaxToolRiskLevel: "high",
+  });
+
+  const orchestrator = {
+    async spawn(opts: {
+      onSessionCreated?: (sessionId: string, agentId: string) => void;
+      launchSpec: AgentLaunchSpec;
+    }) {
+      opts.onSessionCreated?.("sub_catalog_1", opts.launchSpec.agentId);
+      return {
+        success: true,
+        output: "catalog child finished",
+        sessionId: "sub_catalog_1",
+      };
+    },
+    listSessions() {
+      return [];
+    },
+  };
+
+  const caps = createSubTaskAgentCapabilities({
+    orchestrator: orchestrator as any,
+    runtimeStore: store,
+    agentRegistry: registry,
+  });
+
+  const result = await caps.spawnSubAgent!({
+    parentConversationId: "conv-catalog",
+    agentId: "ops-coder",
+    instruction: "Implement task bridge",
+  });
+
+  const persisted = await store.getTask(String(result.taskId));
+  expect(persisted?.launchSpec).toMatchObject({
+    agentId: "ops-coder",
+    profileId: "ops-coder",
+    role: "coder",
+    permissionMode: "confirm",
+    allowedToolFamilies: ["workspace-read", "workspace-write", "patch"],
+    maxToolRiskLevel: "high",
+  });
 
   await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });

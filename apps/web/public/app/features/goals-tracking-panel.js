@@ -1,8 +1,55 @@
+import { buildGoalCheckpointExplainabilityEntry } from "./goal-launch-explainability.js";
+
+export function getGoalTrackingNodeActionTargets(node) {
+  const taskId = typeof node?.lastRunId === "string" && node.lastRunId.trim()
+    ? node.lastRunId.trim()
+    : "";
+  const artifactPaths = Array.isArray(node?.artifacts)
+    ? node.artifacts
+      .map((item) => typeof item === "string" ? item.trim() : "")
+      .filter(Boolean)
+      .slice(0, 2)
+    : [];
+  return { taskId, artifactPaths };
+}
+
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getGoalTrackingPlanUpdatedAt(plan) {
+  const rawValue = normalizeString(plan?.updatedAt) || normalizeString(plan?.generatedAt);
+  const timestamp = rawValue ? new Date(rawValue).getTime() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+export function buildGoalTrackingCapabilityPlanIndex(plans) {
+  return (Array.isArray(plans) ? plans : []).reduce((index, plan) => {
+    const nodeId = normalizeString(plan?.nodeId);
+    if (!nodeId) return index;
+    const current = index[nodeId];
+    if (!current || getGoalTrackingPlanUpdatedAt(plan) >= getGoalTrackingPlanUpdatedAt(current)) {
+      index[nodeId] = plan;
+    }
+    return index;
+  }, {});
+}
+
+export function getGoalTrackingCheckpointExplainabilityLines(checkpoint, capabilityPlansByNodeId, t) {
+  const nodeId = normalizeString(checkpoint?.nodeId);
+  if (!nodeId || !capabilityPlansByNodeId || typeof capabilityPlansByNodeId !== "object") return [];
+  const plan = capabilityPlansByNodeId[nodeId];
+  const entry = buildGoalCheckpointExplainabilityEntry(plan, t);
+  return Array.isArray(entry?.lines) ? entry.lines.slice(0, 2) : [];
+}
+
 export function createGoalsTrackingPanelFeature({
   refs,
   escapeHtml,
   formatDateTime,
   getGoalCheckpointSlaBadge,
+  summarizeSourcePath = (value) => value,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { goalsDetailEl } = refs;
 
@@ -50,6 +97,7 @@ export function createGoalsTrackingPanelFeature({
     if (!panel) return;
     const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
     const checkpoints = Array.isArray(payload?.checkpoints) ? payload.checkpoints : [];
+    const capabilityPlansByNodeId = buildGoalTrackingCapabilityPlanIndex(payload?.capabilityPlans);
     const completedNodeCount = nodes.filter((node) => node.status === "completed").length;
     const runningNodeCount = nodes.filter((node) => node.status === "running").length;
     const blockedNodeCount = nodes.filter((node) => node.status === "blocked").length;
@@ -109,11 +157,22 @@ export function createGoalsTrackingPanelFeature({
                     <span class="goal-tracking-item-title">${escapeHtml(node.title)}</span>
                     <span class="memory-badge ${node.status === "completed" ? "memory-badge-shared" : ""}">${escapeHtml(formatNodeStatus(node.status))}</span>
                   </div>
+                  ${node.summary ? `<div class="memory-list-item-snippet">${escapeHtml(node.summary)}</div>` : ""}
                   <div class="memory-list-item-meta">
                     <span>${escapeHtml(node.id)}</span>
                     ${node.phase ? `<span>${escapeHtml(node.phase)}</span>` : ""}
                     ${node.owner ? `<span>${escapeHtml(node.owner)}</span>` : ""}
                   </div>
+                  ${(() => {
+                    const targets = getGoalTrackingNodeActionTargets(node);
+                    if (!targets.taskId && !targets.artifactPaths.length) return "";
+                    return `
+                      <div class="goal-detail-actions goal-checkpoint-actions">
+                        ${targets.taskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(targets.taskId)}">打开运行任务</button>` : ""}
+                        ${targets.artifactPaths.map((artifactPath) => `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(summarizeSourcePath(artifactPath))}</button>`).join("")}
+                      </div>
+                    `;
+                  })()}
                 </div>
               `).join("")}
             </div>
@@ -142,7 +201,17 @@ export function createGoalsTrackingPanelFeature({
                     ${item.decidedBy ? `<span class="memory-badge">审批 ${escapeHtml(item.decidedBy)}</span>` : ""}
                     ${getGoalCheckpointSlaBadge(item)}
                   </div>
+                  ${(() => {
+                    const explainabilityLines = getGoalTrackingCheckpointExplainabilityLines(item, capabilityPlansByNodeId, t);
+                    if (!explainabilityLines.length) return "";
+                    return `
+                      <div class="tool-settings-policy-note">
+                        ${explainabilityLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+                      </div>
+                    `;
+                  })()}
                   <div class="goal-detail-actions goal-checkpoint-actions">
+                    ${item.runId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(item.runId)}">打开运行任务</button>` : ""}
                     ${["waiting_user", "required"].includes(item.status) ? `
                       <button class="button goal-inline-action" data-goal-checkpoint-action="approve" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">批准</button>
                       <button class="button goal-inline-action-secondary" data-goal-checkpoint-action="reject" data-goal-checkpoint-goal-id="${escapeHtml(goal.id)}" data-goal-checkpoint-node-id="${escapeHtml(item.nodeId || "")}" data-goal-checkpoint-id="${escapeHtml(item.id)}">拒绝</button>
@@ -180,6 +249,7 @@ export function createGoalsTrackingPanelFeature({
   }
 
   return {
+    getGoalTrackingNodeActionTargets,
     renderGoalTrackingPanel,
     renderGoalTrackingPanelError,
     renderGoalTrackingPanelLoading,

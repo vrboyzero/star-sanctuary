@@ -29,12 +29,12 @@ export default defineCommand({
       process.exit(1);
     }
 
-    const artifact = await loadConversationPromptSnapshotForCLI({
+    const snapshotView = await loadConversationPromptSnapshotForCLI({
       stateDir: ctx.stateDir,
       conversationId,
       runId,
     });
-    if (!artifact) {
+    if (!snapshotView) {
       ctx.error(
         runId
           ? `Prompt snapshot for conversation '${conversationId}' and run '${runId}' was not found`
@@ -43,9 +43,10 @@ export default defineCommand({
       process.exit(1);
     }
 
+    const artifact = snapshotView.artifact;
     const serialized = ctx.json
       ? JSON.stringify(artifact, null, 2)
-      : renderConversationPromptSnapshotArtifactText(artifact);
+      : renderConversationPromptSnapshotArtifactText(snapshotView);
     const outputPath = await resolveConversationCLIOutputPath({
       output: typeof args.output === "string" ? args.output : undefined,
       outputDir: typeof args["output-dir"] === "string" ? args["output-dir"] : undefined,

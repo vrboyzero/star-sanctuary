@@ -1,3 +1,6 @@
+import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js";
+import { buildResidentStateBindingLines } from "./resident-state-binding-lines.js";
+
 export function createToolSettingsController({
   refs,
   isConnected,
@@ -195,6 +198,9 @@ export function createToolSettingsController({
 
   function renderToolControlState(toolControl, visibilityContext) {
     if (!toolControl) return "";
+    const residentStateBinding = visibilityContext?.residentStateBinding && typeof visibilityContext.residentStateBinding === "object"
+      ? visibilityContext.residentStateBinding
+      : null;
     const contextParts = [
       `${t("toolSettings.contextAgent", {}, "Agent")}: ${visibilityContext?.agentId || "default"}`,
       `${t("toolSettings.contextConversation", {}, "Conversation")}: ${visibilityContext?.conversationId || t("toolSettings.contextConversationNone", {}, "None")}`,
@@ -217,6 +223,7 @@ export function createToolSettingsController({
         )
         : t("toolSettings.toolControlNoConfirm", {}, "Confirmation is not required for tool switch changes in the current mode."),
     ];
+    const scopeLines = buildResidentStateBindingLines(residentStateBinding, t);
     if (toolControl.pendingRequest?.requestId) {
       details.push(
         t(
@@ -232,17 +239,18 @@ export function createToolSettingsController({
     const launchSpec = visibilityContext?.launchSpec && typeof visibilityContext.launchSpec === "object"
       ? visibilityContext.launchSpec
       : null;
+    const launchExplainabilityLines = buildLaunchExplainabilityLines(visibilityContext?.launchExplainability, t);
     const runtimeLines = launchSpec
       ? [
         t("toolSettings.runtimeScoped", {}, "Visibility is currently evaluated using the selected subtask launch runtime."),
-        `${t("toolSettings.runtimeRole", {}, "Launch Role")}: ${launchSpec.role || "-"}`,
-        `${t("toolSettings.runtimeRolePolicy", {}, "Role Policy")}: ${launchSpec.policySummary || "-"}`,
-        `${t("toolSettings.runtimePermissionMode", {}, "Permission Mode")}: ${launchSpec.permissionMode || "-"}`,
         `${t("toolSettings.runtimeIsolationMode", {}, "Isolation")}: ${launchSpec.isolationMode || "-"}`,
         `${t("toolSettings.runtimeLaunchCwd", {}, "Launch CWD")}: ${launchSpec.cwd || "-"}`,
         `${t("toolSettings.runtimeResolvedCwd", {}, "Resolved CWD")}: ${launchSpec.resolvedCwd || launchSpec.cwd || "-"}`,
         `${t("toolSettings.runtimeWorktreeStatus", {}, "Worktree")}: ${launchSpec.worktreeStatus || "-"}`,
         `${t("toolSettings.runtimeWorktreePath", {}, "Worktree Path")}: ${launchSpec.worktreePath || "-"}`,
+        `${t("toolSettings.runtimeRole", {}, "Launch Role")}: ${launchSpec.role || "-"}`,
+        `${t("toolSettings.runtimeRolePolicy", {}, "Role Policy")}: ${launchSpec.policySummary || "-"}`,
+        `${t("toolSettings.runtimePermissionMode", {}, "Permission Mode")}: ${launchSpec.permissionMode || "-"}`,
         `${t("toolSettings.runtimeToolSet", {}, "Tool Set")}: ${Array.isArray(launchSpec.toolSet) && launchSpec.toolSet.length ? launchSpec.toolSet.join(", ") : "-"}`,
         `${t("toolSettings.runtimeAllowedFamilies", {}, "Allowed Families")}: ${Array.isArray(launchSpec.allowedToolFamilies) && launchSpec.allowedToolFamilies.length ? launchSpec.allowedToolFamilies.join(", ") : "-"}`,
         `${t("toolSettings.runtimeMaxRisk", {}, "Max Risk")}: ${launchSpec.maxToolRiskLevel || "-"}`,
@@ -251,6 +259,12 @@ export function createToolSettingsController({
     return `
       <div class="tool-settings-context">${escapeHtml(contextParts.join(" · "))}</div>
       <div class="tool-settings-policy-note">${details.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>
+      ${scopeLines.length > 0
+        ? `<div class="tool-settings-policy-note">${scopeLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`
+        : ""}
+      ${launchExplainabilityLines.length > 0
+        ? `<div class="tool-settings-policy-note">${launchExplainabilityLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`
+        : ""}
       ${runtimeLines.length > 0
         ? `<div class="tool-settings-policy-note">${runtimeLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>`
         : ""}

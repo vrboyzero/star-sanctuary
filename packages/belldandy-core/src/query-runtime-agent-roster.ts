@@ -5,6 +5,7 @@ import {
   isResidentAgentProfile,
   resolveAgentProfileMetadata,
   type AgentRegistry,
+  type AgentProfileCatalogMetadata,
   type AgentProfile,
 } from "@belldandy/agent";
 import type { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
@@ -34,7 +35,22 @@ async function buildAgentRosterItem(input: {
   agentRegistry?: AgentRegistry;
   residentAgentRuntime: ResidentAgentRuntimeRegistry;
   profile: AgentProfile;
-}) {
+}): Promise<{
+  id: string;
+  kind: "resident" | "worker";
+  displayName: string;
+  name: string;
+  avatar?: string;
+  model: string;
+  workspaceBinding: "current" | "custom";
+  sessionNamespace: string;
+  memoryMode: "isolated" | "shared" | "hybrid";
+  catalog: AgentProfileCatalogMetadata;
+  status: string;
+  mainConversationId?: string;
+  lastConversationId?: string;
+  lastActiveAt?: number;
+}> {
   const identityTarget = resolveAgentIdentityDir(input.stateDir, input.agentRegistry, input.profile.id);
   const identityInfo = identityTarget ? await extractIdentityInfo(identityTarget.dir) : {};
   const runtime = input.residentAgentRuntime.ensureMainConversation(input.profile.id);
@@ -49,6 +65,7 @@ async function buildAgentRosterItem(input: {
     workspaceBinding: metadata.workspaceBinding,
     sessionNamespace: metadata.sessionNamespace,
     memoryMode: metadata.memoryMode,
+    catalog: metadata.catalog,
     status: runtime.status,
     mainConversationId: runtime.mainConversationId,
     lastConversationId: runtime.lastConversationId,

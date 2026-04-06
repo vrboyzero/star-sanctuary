@@ -68,6 +68,8 @@ export const delegateParallelTool: Tool = withToolContract({
                 agentId: typeof t.agent_id === "string" ? t.agent_id : undefined,
                 context: (typeof t.context === "object" && t.context !== null ? t.context : undefined) as Record<string, unknown> | undefined,
                 channel: "subtask",
+                delegationSource: "delegate_parallel",
+                aggregationMode: "parallel_collect",
             });
         });
 

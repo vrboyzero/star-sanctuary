@@ -20,6 +20,7 @@ import { PluginRegistry } from "@belldandy/plugins";
 import { upsertInstalledExtension, upsertKnownMarketplace } from "./extension-marketplace-state.js";
 import type { ExtensionHostState } from "./extension-host.js";
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
+import { persistConversationPromptSnapshot } from "./conversation-prompt-snapshot.js";
 import { recordConversationArtifactExport } from "./conversation-export-index.js";
 import { createScopedMemoryManagers } from "./resident-memory-managers.js";
 import { resolveResidentSharedStateDir } from "./resident-memory-policy.js";
@@ -496,6 +497,25 @@ test("agents.roster.get exposes resident runtime status and main conversation id
       watch: false,
     },
   }).records;
+  const defaultRecord = residentMemoryManagers.find((record) => record.agentId === "default");
+  expect(defaultRecord).toBeTruthy();
+  (defaultRecord?.manager as any)?.store.createTask({
+    id: "roster-task-1",
+    conversationId: "agent:default:main",
+    sessionKey: "default",
+    agentId: "default",
+    source: "chat",
+    title: "整理 resident roster 观测摘要",
+    objective: "整理 resident roster 观测摘要",
+    status: "success",
+    summary: "已补齐 roster 所需的 resident 观测字段。",
+    startedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    finishedAt: new Date(Date.now() - 1 * 60 * 1000).toISOString(),
+    createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    updatedAt: new Date(Date.now() - 1 * 60 * 1000).toISOString(),
+    toolCalls: [],
+    artifactPaths: [],
+  });
 
   const server = await startGatewayServer({
     port: 0,
@@ -538,10 +558,15 @@ test("agents.roster.get exposes resident runtime status and main conversation id
         conversationDigest: expect.objectContaining({
           status: "idle",
         }),
+        recentTaskDigest: expect.objectContaining({
+          recentCount: 1,
+          latestStatus: "success",
+        }),
         observabilityBadges: expect.arrayContaining([
           "mode:hybrid",
           "write:private",
           "digest:idle",
+          "task:1",
         ]),
       }),
       expect.objectContaining({
@@ -563,6 +588,109 @@ test("agents.roster.get exposes resident runtime status and main conversation id
       }),
     ]));
     expect(rosterRes.payload?.agents.some((item: { id?: string }) => item.id === "verifier")).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("agent.catalog.get exposes normalized catalog metadata and runtime defaults", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-agent-catalog-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+    sessionNamespace: "coder-main",
+    memoryMode: "isolated",
+    whenToUse: ["需要改代码", "需要补测试"],
+    defaultRole: "coder",
+    skills: ["repo-map", "review-helper"],
+  });
+  registry.register({
+    id: "verifier",
+    displayName: "Verifier",
+    model: "primary",
+    kind: "worker",
+    defaultRole: "verifier",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "agent-catalog-get", method: "agent.catalog.get", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "agent-catalog-get"));
+    const res = frames.find((f) => f.type === "res" && f.id === "agent-catalog-get");
+
+    expect(res.ok).toBe(true);
+    expect(res.payload?.summary).toMatchObject({
+      totalCount: 3,
+      residentCount: 2,
+      workerCount: 1,
+    });
+    expect(res.payload?.agents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "coder",
+        metadata: expect.objectContaining({
+          kind: "resident",
+          workspaceBinding: "current",
+          workspaceDir: "coder",
+          sessionNamespace: "coder-main",
+          memoryMode: "isolated",
+          catalog: expect.objectContaining({
+            whenToUse: ["需要改代码", "需要补测试"],
+            defaultRole: "coder",
+            defaultPermissionMode: "confirm",
+            defaultAllowedToolFamilies: ["workspace-read", "workspace-write", "patch", "command-exec", "memory", "goal-governance"],
+            defaultMaxToolRiskLevel: "high",
+            skills: ["repo-map", "review-helper"],
+            handoffStyle: "summary",
+          }),
+        }),
+        runtime: expect.objectContaining({
+          status: "idle",
+          mainConversationId: "agent:coder:main",
+        }),
+      }),
+      expect.objectContaining({
+        id: "verifier",
+        metadata: expect.objectContaining({
+          kind: "worker",
+          catalog: expect.objectContaining({
+            whenToUse: [],
+            defaultRole: "verifier",
+            defaultPermissionMode: "confirm",
+            defaultAllowedToolFamilies: ["workspace-read", "command-exec", "browser", "memory", "goal-governance"],
+            defaultMaxToolRiskLevel: "high",
+            skills: [],
+            handoffStyle: "structured",
+          }),
+        }),
+      }),
+    ]));
   } finally {
     ws.close();
     await closeP;
@@ -1104,6 +1232,67 @@ test("resident agent main conversation persists inside agent workspace sessions"
   }
 });
 
+test("default resident main conversation persists inside root sessions", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resident-storage-default-root",
+      method: "message.send",
+      params: {
+        text: "写到 root sessions",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resident-storage-default-root" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.conversationId === "agent:default:main"));
+
+    const conversationId = "agent:default:main";
+    const safeConversationId = toSafeConversationFileIdForTest(conversationId);
+    const rootFilePath = path.join(stateDir, "sessions", `${safeConversationId}.jsonl`);
+    const legacyResidentPath = path.join(stateDir, "agents", "default", "sessions", `${safeConversationId}.jsonl`);
+
+    await waitFor(() => fs.existsSync(rootFilePath));
+    expect(fs.existsSync(rootFilePath)).toBe(true);
+    expect(fs.existsSync(legacyResidentPath)).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("resident agent session migrates legacy global session files into agent workspace sessions", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const registry = new AgentRegistry(() => new MockAgent());
@@ -1179,6 +1368,86 @@ test("resident agent session migrates legacy global session files into agent wor
     await waitFor(() => fs.existsSync(residentFilePath));
     expect(fs.existsSync(residentFilePath)).toBe(true);
     expect(fs.existsSync(globalFilePath)).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("custom workspaceBinding persists resident main conversation inside workspace-scoped sessions", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    memoryMode: "hybrid",
+    sessionNamespace: "coder-main",
+    workspaceBinding: "custom",
+    workspaceDir: "project-b",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resident-storage-coder-custom",
+      method: "message.send",
+      params: {
+        text: "写到 custom workspace sessions",
+        agentId: "coder",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resident-storage-coder-custom" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final" && f.payload?.conversationId === "agent:coder:main"));
+
+    const conversationId = "agent:coder:main";
+    const safeConversationId = toSafeConversationFileIdForTest(conversationId);
+    const residentFilePath = path.join(
+      stateDir,
+      "workspaces",
+      "project-b",
+      "agents",
+      "coder",
+      "sessions",
+      `${safeConversationId}.jsonl`,
+    );
+    const legacyCurrentBindingPath = path.join(stateDir, "agents", "project-b", "sessions", `${safeConversationId}.jsonl`);
+
+    await waitFor(() => fs.existsSync(residentFilePath));
+    expect(fs.existsSync(residentFilePath)).toBe(true);
+    expect(fs.existsSync(legacyCurrentBindingPath)).toBe(false);
   } finally {
     ws.close();
     await closeP;
@@ -1406,6 +1675,23 @@ test("agents.prompt.inspect returns prompt text and section metadata", async () 
       ],
       metadata: {
         includesHookSystemPrompt: true,
+        residentStateBinding: expect.objectContaining({
+          agentId: "default",
+          workspaceBinding: "current",
+        }),
+        launchExplainability: expect.objectContaining({
+          catalogDefault: expect.objectContaining({
+            role: "default",
+            handoffStyle: "summary",
+          }),
+          effectiveLaunch: expect.objectContaining({
+            source: "catalog_default",
+            agentId: "default",
+            role: "default",
+            handoffStyle: "summary",
+          }),
+          delegationReason: null,
+        }),
       },
     });
     expect(inspectAgentPrompt).toHaveBeenCalledWith({
@@ -1423,11 +1709,21 @@ test("agents.prompt.inspect returns prompt text and section metadata", async () 
 
 test("conversation.prompt_snapshot.get returns persisted snapshot artifact", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+    kind: "resident",
+    workspaceBinding: "current",
+    defaultRole: "default",
+  });
   const server = await startGatewayServer({
     port: 0,
     auth: { mode: "none" },
     webRoot: resolveWebRoot(),
     stateDir,
+    agentRegistry: registry,
     getConversationPromptSnapshot: async ({ conversationId, runId }) => ({
       schemaVersion: 1,
       manifest: {
@@ -1507,6 +1803,16 @@ test("conversation.prompt_snapshot.get returns persisted snapshot artifact", asy
         systemPrompt: "system prompt body",
       },
     });
+    expect(res.payload?.launchExplainability).toMatchObject({
+      effectiveLaunch: {
+        source: "catalog_default",
+        agentId: "default",
+        role: "default",
+      },
+    });
+    expect(res.payload?.residentStateBinding).toMatchObject({
+      agentId: "default",
+    });
 
     ws.send(JSON.stringify({ type: "req", id: "system-doctor-prompt-snapshot", method: "system.doctor", params: {} }));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-prompt-snapshot" && f.ok === true));
@@ -1583,6 +1889,15 @@ test("system.doctor exposes tool behavior observability summary", async () => {
       visibilityContext: {
         agentId: "default",
         conversationId: null,
+        residentStateBinding: {
+          agentId: "default",
+          workspaceBinding: "current",
+          workspaceDir: "default",
+          scopeStateDir: stateDir,
+          privateStateDir: stateDir,
+          sessionsDir: path.join(stateDir, "sessions"),
+          sharedStateDir: path.join(stateDir, "team-memory"),
+        },
       },
       counts: {
         visibleToolContractCount: 3,
@@ -5554,9 +5869,15 @@ test("tools.list exposes visibility reasons for selected agent and conversation"
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-visibility"));
     const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-visibility");
     expect(listRes.ok).toBe(true);
-    expect(listRes.payload?.visibilityContext).toEqual({
+    expect(listRes.payload?.visibilityContext).toMatchObject({
       agentId: "restricted",
       conversationId: "conv-visibility",
+      launchExplainability: expect.objectContaining({
+        effectiveLaunch: expect.objectContaining({
+          source: "catalog_default",
+          agentId: "restricted",
+        }),
+      }),
     });
     expect(listRes.payload?.visibility?.alpha_builtin).toMatchObject({
       available: false,
@@ -5708,6 +6029,21 @@ test("tools.list exposes visibility reasons for selected agent and conversation"
 
 test("tools.list resolves launch runtime visibility from subtask taskId", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    workspaceBinding: "custom",
+    workspaceDir: "workspace-alpha",
+    sessionNamespace: "coder-main",
+    memoryMode: "hybrid",
+  });
   const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
   await subTaskRuntimeStore.load();
   const repoRoot = path.join(stateDir, "demo-repo");
@@ -5770,6 +6106,7 @@ test("tools.list resolves launch runtime visibility from subtask taskId", async 
     webRoot: resolveWebRoot(),
     stateDir,
     toolExecutor,
+    agentRegistry: registry,
     toolsConfigManager: await (async () => {
       const manager = new ToolsConfigManager(stateDir);
       await manager.load();
@@ -5801,7 +6138,24 @@ test("tools.list resolves launch runtime visibility from subtask taskId", async 
     expect(listRes.payload?.visibilityContext).toMatchObject({
       agentId: "coder",
       conversationId: "conv-runtime",
+      residentStateBinding: {
+        agentId: "coder",
+        workspaceBinding: "custom",
+        workspaceDir: "workspace-alpha",
+        scopeStateDir: path.join(stateDir, "workspaces", "workspace-alpha"),
+        privateStateDir: path.join(stateDir, "workspaces", "workspace-alpha", "agents", "coder"),
+        sessionsDir: path.join(stateDir, "workspaces", "workspace-alpha", "agents", "coder", "sessions"),
+        sharedStateDir: path.join(stateDir, "workspaces", "workspace-alpha", "team-memory"),
+      },
       taskId: task.id,
+      launchExplainability: expect.objectContaining({
+        effectiveLaunch: expect.objectContaining({
+          source: "runtime_launch_spec",
+          agentId: "coder",
+          profileId: "coder",
+          permissionMode: "plan",
+        }),
+      }),
       launchSpec: {
         permissionMode: "plan",
         isolationMode: "worktree",
@@ -5843,6 +6197,20 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
   await subTaskRuntimeStore.load();
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
 
   const targetTask = await subTaskRuntimeStore.createTask({
     launchSpec: {
@@ -5852,6 +6220,33 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
       timeoutMs: 90_000,
       channel: "goal",
       toolSet: ["read", "edit"],
+      delegationProtocol: {
+        source: "delegate_task",
+        intent: {
+          kind: "ad_hoc",
+          summary: "Implement structured task runtime",
+          role: "coder",
+        },
+        contextPolicy: {
+          includeParentConversation: true,
+          includeStructuredContext: true,
+          contextKeys: ["taskId", "workspace"],
+        },
+        expectedDeliverable: {
+          format: "patch",
+          summary: "Return the patch summary",
+        },
+        aggregationPolicy: {
+          mode: "single",
+          summarizeFailures: true,
+          sourceAgentIds: ["planner", "reviewer"],
+        },
+        launchDefaults: {
+          permissionMode: "workspace_write",
+          allowedToolFamilies: ["workspace-read", "workspace-write"],
+          maxToolRiskLevel: "medium",
+        },
+      },
     },
   });
   await subTaskRuntimeStore.markQueued(targetTask.id, 1);
@@ -5860,6 +6255,21 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
     status: "done",
     sessionId: "sub_task_1",
     output: "structured runtime finished",
+  });
+  await persistConversationPromptSnapshot({
+    stateDir,
+    snapshot: {
+      agentId: "coder",
+      conversationId: "sub_task_1",
+      runId: "run-subtask-1",
+      createdAt: 1712000000100,
+      systemPrompt: "Ship the patch and keep the diff small.",
+      messages: [
+        { role: "system", content: "Ship the patch and keep the diff small." },
+        { role: "user", content: "Implement structured task runtime" },
+      ],
+      hookSystemPromptUsed: false,
+    },
   });
 
   const otherTask = await subTaskRuntimeStore.createTask({
@@ -5880,6 +6290,7 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
     auth: { mode: "none" },
     webRoot: resolveWebRoot(),
     stateDir,
+    agentRegistry: registry,
     subTaskRuntimeStore,
   });
 
@@ -5915,6 +6326,13 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
           channel: "goal",
           timeoutMs: 90_000,
           toolSet: ["read", "edit"],
+          delegation: expect.objectContaining({
+            source: "delegate_task",
+            intentKind: "ad_hoc",
+            expectedDeliverableFormat: "patch",
+            aggregationMode: "single",
+            sourceAgentIds: ["planner", "reviewer"],
+          }),
         }),
       }),
     ]);
@@ -5937,9 +6355,317 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
       launchSpec: expect.objectContaining({
         profileId: "coder",
         channel: "goal",
+        delegation: expect.objectContaining({
+          source: "delegate_task",
+          intentSummary: "Implement structured task runtime",
+          expectedDeliverableSummary: "Return the patch summary",
+          contextKeys: ["taskId", "workspace"],
+        }),
       }),
     });
+    expect(getRes.payload?.launchExplainability).toMatchObject({
+      catalogDefault: {
+        permissionMode: "workspace_write",
+        allowedToolFamilies: ["workspace-read", "workspace-write"],
+        maxToolRiskLevel: "medium",
+      },
+      effectiveLaunch: {
+        source: "runtime_launch_spec",
+        agentId: "coder",
+        profileId: "coder",
+        permissionMode: "workspace_write",
+        allowedToolFamilies: ["workspace-read", "workspace-write"],
+        maxToolRiskLevel: "medium",
+      },
+      delegationReason: {
+        source: "delegate_task",
+        intentKind: "ad_hoc",
+        intentSummary: "Implement structured task runtime",
+        expectedDeliverableSummary: "Return the patch summary",
+        aggregationMode: "single",
+        contextKeys: ["taskId", "workspace"],
+        sourceAgentIds: ["planner", "reviewer"],
+      },
+    });
+    expect(getRes.payload?.promptSnapshotView).toMatchObject({
+      snapshot: {
+        manifest: {
+          conversationId: "sub_task_1",
+          runId: "run-subtask-1",
+          agentId: "coder",
+        },
+        summary: {
+          messageCount: 2,
+        },
+        snapshot: {
+          systemPrompt: "Ship the patch and keep the diff small.",
+        },
+      },
+      residentStateBinding: {
+        agentId: "coder",
+      },
+      launchExplainability: {
+        effectiveLaunch: {
+          source: "runtime_launch_spec",
+          agentId: "coder",
+          profileId: "coder",
+        },
+      },
+    });
+    expect(getRes.payload?.resultEnvelope).toMatchObject({
+      taskId: targetTask.id,
+      sessionId: "sub_task_1",
+      agentId: "coder",
+      status: "done",
+      summary: "structured runtime finished",
+      outputPath: expect.any(String),
+      outputPreview: "structured runtime finished",
+    });
     expect(getRes.payload?.outputContent).toBe("structured runtime finished");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("delegation.inspect.get exposes persisted delegation snapshot", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const task = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-delegation",
+      agentId: "researcher",
+      instruction: "Collect delegation context",
+      delegationProtocol: {
+        source: "delegate_parallel",
+        intent: {
+          kind: "parallel_subtasks",
+          summary: "Collect delegation context",
+          role: "researcher",
+          goalId: "goal-1",
+          nodeId: "node-1",
+          planId: "plan-1",
+        },
+        contextPolicy: {
+          includeParentConversation: true,
+          includeStructuredContext: true,
+          contextKeys: ["goalId", "topic"],
+        },
+        expectedDeliverable: {
+          format: "research_notes",
+          summary: "Return research notes",
+        },
+        aggregationPolicy: {
+          mode: "parallel_collect",
+          summarizeFailures: true,
+          sourceAgentIds: ["planner", "resident-a"],
+        },
+        launchDefaults: {},
+      },
+    },
+  });
+  await subTaskRuntimeStore.attachSession(task.id, "sub_research_1");
+  await subTaskRuntimeStore.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_research_1",
+    output: "delegation context collected",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "delegation-inspect",
+      method: "delegation.inspect.get",
+      params: { taskId: task.id },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "delegation-inspect"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "delegation-inspect");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.task).toMatchObject({
+      id: task.id,
+      parentConversationId: "conv-delegation",
+      agentId: "researcher",
+      status: "done",
+    });
+    expect(res.payload?.delegation).toMatchObject({
+      source: "delegate_parallel",
+      intentKind: "parallel_subtasks",
+      intentSummary: "Collect delegation context",
+      role: "researcher",
+      expectedDeliverableFormat: "research_notes",
+      expectedDeliverableSummary: "Return research notes",
+      aggregationMode: "parallel_collect",
+      sourceAgentIds: ["planner", "resident-a"],
+      goalId: "goal-1",
+      nodeId: "node-1",
+      planId: "plan-1",
+      launchDefaults: {},
+    });
+    expect(res.payload?.launchExplainability).toMatchObject({
+      catalogDefault: {},
+      effectiveLaunch: {
+        agentId: "researcher",
+        role: null,
+        permissionMode: null,
+        allowedToolFamilies: [],
+        maxToolRiskLevel: null,
+      },
+      delegationReason: {
+        source: "delegate_parallel",
+        intentKind: "parallel_subtasks",
+        expectedDeliverableSummary: "Return research notes",
+        aggregationMode: "parallel_collect",
+        sourceAgentIds: ["planner", "resident-a"],
+      },
+    });
+    expect(res.payload?.explainability).toMatchObject({
+      effectiveLaunch: {
+        agentId: "researcher",
+      },
+      delegationReason: {
+        source: "delegate_parallel",
+      },
+    });
+    expect(res.payload?.resultEnvelope).toMatchObject({
+      taskId: task.id,
+      sessionId: "sub_research_1",
+      status: "done",
+      summary: "delegation context collected",
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes delegation observability summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const protocolTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-doctor",
+      agentId: "coder",
+      instruction: "Protocol-backed task",
+      delegationProtocol: {
+        source: "goal_subtask",
+        intent: {
+          kind: "goal_execution",
+          summary: "Protocol-backed task",
+          role: "coder",
+          goalId: "goal-main",
+        },
+        contextPolicy: {
+          includeParentConversation: true,
+          includeStructuredContext: true,
+          contextKeys: ["goalId"],
+        },
+        expectedDeliverable: {
+          format: "patch",
+          summary: "Ship a patch",
+        },
+        aggregationPolicy: {
+          mode: "main_agent_summary",
+          summarizeFailures: true,
+          sourceAgentIds: ["planner"],
+        },
+        launchDefaults: {},
+      },
+    },
+  });
+  await subTaskRuntimeStore.attachSession(protocolTask.id, "sub_doctor_1");
+
+  const plainTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-doctor",
+      agentId: "reviewer",
+      instruction: "Legacy task",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(plainTask.id, {
+    status: "done",
+    output: "legacy task done",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-delegation",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-delegation"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-delegation");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.delegationObservability?.summary).toMatchObject({
+      totalCount: 2,
+      protocolBackedCount: 1,
+      activeCount: 1,
+      completedCount: 1,
+      sourceCounts: {
+        goal_subtask: 1,
+      },
+      aggregationModeCounts: {
+        main_agent_summary: 1,
+      },
+    });
+    expect(res.payload?.delegationObservability?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: protocolTask.id,
+        agentId: "coder",
+        status: "running",
+        source: "goal_subtask",
+        aggregationMode: "main_agent_summary",
+        expectedDeliverableFormat: "patch",
+        expectedDeliverableSummary: "Ship a patch",
+      }),
+    ]));
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "delegation_protocol",
+        name: "Delegation Protocol",
+        status: "pass",
+      }),
+    ]));
   } finally {
     ws.close();
     await closeP;
@@ -6968,6 +7694,115 @@ test("workspace.write blocks secret-like content under team shared memory paths"
     await expect(fs.promises.readFile(path.join(stateDir, "team-memory", "MEMORY.md"), "utf-8")).rejects.toMatchObject({
       code: "ENOENT",
     });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("workspace.write blocks direct edits into protected resident state scopes", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "workspace-write-sessions-blocked",
+      method: "workspace.write",
+      params: {
+        path: "sessions/agent-default-main.md",
+        content: "should not write into sessions",
+      },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "workspace-write-custom-shared-blocked",
+      method: "workspace.write",
+      params: {
+        path: "workspaces/project-b/team-memory/MEMORY.md",
+        content: "should not write into custom shared memory",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-write-sessions-blocked"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-write-custom-shared-blocked"));
+
+    const sessionsResponse = frames.find((f) => f.type === "res" && f.id === "workspace-write-sessions-blocked");
+    const customSharedResponse = frames.find((f) => f.type === "res" && f.id === "workspace-write-custom-shared-blocked");
+
+    expect(sessionsResponse.ok).toBe(false);
+    expect(sessionsResponse.error?.code).toBe("protected_state_scope");
+    expect(sessionsResponse.error?.message).toContain("resident sessions");
+
+    expect(customSharedResponse.ok).toBe(false);
+    expect(customSharedResponse.error?.code).toBe("protected_state_scope");
+    expect(customSharedResponse.error?.message).toContain("custom workspace (project-b) shared memory scope");
+
+    await expect(fs.promises.readFile(path.join(stateDir, "sessions", "agent-default-main.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.promises.readFile(path.join(stateDir, "workspaces", "project-b", "team-memory", "MEMORY.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("workspace.write blocks internal state file overwrites", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    const originalPairing = await fs.promises.readFile(path.join(stateDir, "pairing.json"), "utf-8");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "workspace-write-pairing-json-blocked",
+      method: "workspace.write",
+      params: {
+        path: "pairing.json",
+        content: "{\"enabled\":false}",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-write-pairing-json-blocked"));
+    const response = frames.find((f) => f.type === "res" && f.id === "workspace-write-pairing-json-blocked");
+
+    expect(response.ok).toBe(false);
+    expect(response.error?.code).toBe("forbidden");
+    expect(response.error?.message).toContain("内部状态文件");
+    await expect(fs.promises.readFile(path.join(stateDir, "pairing.json"), "utf-8")).resolves.toBe(originalPairing);
   } finally {
     ws.close();
     await closeP;

@@ -1,10 +1,15 @@
+import type { AgentRegistry } from "@belldandy/agent";
 import type { GatewayResFrame } from "@belldandy/protocol";
 
+import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
 import type { ConversationPromptSnapshotArtifact } from "./conversation-prompt-snapshot.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
+import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
 
 export type QueryRuntimePromptSnapshotContext = {
   requestId: string;
+  stateDir: string;
+  agentRegistry?: Pick<AgentRegistry, "getProfile">;
   runtimeObserver?: QueryRuntimeObserver<"conversation.prompt_snapshot.get">;
   loadPromptSnapshot: (input: {
     conversationId: string;
@@ -68,12 +73,27 @@ export async function handleConversationPromptSnapshotGetWithQueryRuntime(
     });
     queryRuntime.mark("completed", { conversationId: params.conversationId });
 
+    const agentId = typeof snapshot.manifest.agentId === "string" && snapshot.manifest.agentId.trim()
+      ? snapshot.manifest.agentId.trim()
+      : undefined;
+    const residentStateBinding = resolveResidentStateBindingViewForAgent(
+      ctx.stateDir,
+      ctx.agentRegistry,
+      agentId,
+    );
+    const launchExplainability = buildAgentLaunchExplainability({
+      agentRegistry: ctx.agentRegistry,
+      agentId,
+    });
+
     return {
       type: "res",
       id: ctx.requestId,
       ok: true,
       payload: {
         snapshot,
+        launchExplainability: launchExplainability ?? null,
+        residentStateBinding: residentStateBinding ?? null,
       },
     };
   });

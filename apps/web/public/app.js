@@ -20,12 +20,13 @@ import { createGoalsCapabilityPanelFeature } from "./app/features/goals-capabili
 import { createGoalsOverviewFeature } from "./app/features/goals-overview.js";
 import { createGoalsReadonlyPanelsFeature } from "./app/features/goals-readonly-panels.js";
 import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-panel.js";
-import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
+import { createMemoryViewerFeature, extractTaskContextTargets } from "./app/features/memory-viewer.js";
 import {
   formatResidentSourceScopeLabel,
   formatResidentSourceSummary,
   getResidentSourceBadgeClass,
 } from "./app/features/memory-source-view.js";
+import { buildResidentPanelSummary } from "./app/features/resident-observability-summary.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
 import { createSubtasksOverviewFeature } from "./app/features/subtasks-overview.js";
 import { createLocaleController } from "./app/features/locale.js";
@@ -96,10 +97,16 @@ const memoryTaskSourceFilterEl = document.getElementById("memoryTaskSourceFilter
 const memoryTaskGoalFilterBarEl = document.getElementById("memoryTaskGoalFilterBar");
 const memoryTaskGoalFilterLabelEl = document.getElementById("memoryTaskGoalFilterLabel");
 const memoryTaskGoalFilterClearBtn = document.getElementById("memoryTaskGoalFilterClear");
+const memorySharedReviewBatchBarEl = document.getElementById("memorySharedReviewBatchBar");
 const memoryChunkTypeFilterEl = document.getElementById("memoryChunkTypeFilter");
 const memoryChunkVisibilityFilterEl = document.getElementById("memoryChunkVisibilityFilter");
 const memoryChunkGovernanceFilterEl = document.getElementById("memoryChunkGovernanceFilter");
 const memoryChunkCategoryFilterEl = document.getElementById("memoryChunkCategoryFilter");
+const memorySharedReviewFiltersEl = document.getElementById("memorySharedReviewFilters");
+const memorySharedReviewFocusFilterEl = document.getElementById("memorySharedReviewFocusFilter");
+const memorySharedReviewTargetFilterEl = document.getElementById("memorySharedReviewTargetFilter");
+const memorySharedReviewClaimedByFilterEl = document.getElementById("memorySharedReviewClaimedByFilter");
+const memorySharedReviewClearFiltersBtn = document.getElementById("memorySharedReviewClearFilters");
 const goalsSection = document.getElementById("goalsSection");
 const goalsSummaryEl = document.getElementById("goalsSummary");
 const goalsListEl = document.getElementById("goalsList");
@@ -306,6 +313,14 @@ let agentPanelUploadInput = null;
 let agentPanelUploadTargetAgentId = "";
 let agentPanelUploadBusyAgentId = "";
 
+function createDefaultSharedReviewFilters() {
+  return {
+    focus: "",
+    targetAgentId: "",
+    claimedByAgentId: "",
+  };
+}
+
 const memoryViewerState = {
   tab: "tasks",
   stats: null,
@@ -325,6 +340,9 @@ const memoryViewerState = {
   experienceQueryView: null,
   sharedGovernance: null,
   sharedReviewSummary: null,
+  sharedReviewFilters: createDefaultSharedReviewFilters(),
+  selectedSharedReviewIds: [],
+  sharedReviewBatchBusy: false,
   requestToken: 0,
   activeAgentId: "default",
 };
@@ -351,6 +369,7 @@ const subtasksState = {
   selectedId: null,
   selectedItem: null,
   selectedOutputContent: "",
+  selectedPromptSnapshot: null,
   conversationId: null,
   includeArchived: false,
   loadSeq: 0,
@@ -615,12 +634,54 @@ if (memoryChunkVisibilityFilterEl) {
 }
 if (memoryChunkGovernanceFilterEl) {
   memoryChunkGovernanceFilterEl.addEventListener("change", () => {
-    if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
+    if (memoryViewerState.tab === "memories" || memoryViewerState.tab === "sharedReview") loadMemoryViewer(true);
   });
 }
 if (memoryChunkCategoryFilterEl) {
   memoryChunkCategoryFilterEl.addEventListener("change", () => {
     if (memoryViewerState.tab === "memories") loadMemoryViewer(true);
+  });
+}
+if (memorySharedReviewFocusFilterEl) {
+  memorySharedReviewFocusFilterEl.addEventListener("change", () => {
+    const next = String(memorySharedReviewFocusFilterEl.value || "").trim();
+    memoryViewerState.sharedReviewFilters = {
+      ...createDefaultSharedReviewFilters(),
+      ...memoryViewerState.sharedReviewFilters,
+      focus: next === "actionable" || next === "mine" ? next : "",
+      claimedByAgentId: "",
+    };
+    memoryViewerFeature?.syncSharedReviewFilterUi?.();
+    if (memoryViewerState.tab === "sharedReview") loadMemoryViewer(true);
+  });
+}
+if (memorySharedReviewTargetFilterEl) {
+  memorySharedReviewTargetFilterEl.addEventListener("change", () => {
+    memoryViewerState.sharedReviewFilters = {
+      ...createDefaultSharedReviewFilters(),
+      ...memoryViewerState.sharedReviewFilters,
+      targetAgentId: String(memorySharedReviewTargetFilterEl.value || "").trim(),
+    };
+    if (memoryViewerState.tab === "sharedReview") loadMemoryViewer(true);
+  });
+}
+if (memorySharedReviewClaimedByFilterEl) {
+  memorySharedReviewClaimedByFilterEl.addEventListener("change", () => {
+    memoryViewerState.sharedReviewFilters = {
+      ...createDefaultSharedReviewFilters(),
+      ...memoryViewerState.sharedReviewFilters,
+      focus: "",
+      claimedByAgentId: String(memorySharedReviewClaimedByFilterEl.value || "").trim(),
+    };
+    memoryViewerFeature?.syncSharedReviewFilterUi?.();
+    if (memoryViewerState.tab === "sharedReview") loadMemoryViewer(true);
+  });
+}
+if (memorySharedReviewClearFiltersBtn) {
+  memorySharedReviewClearFiltersBtn.addEventListener("click", () => {
+    memoryViewerState.sharedReviewFilters = createDefaultSharedReviewFilters();
+    memoryViewerFeature?.syncSharedReviewFilterUi?.();
+    if (memoryViewerState.tab === "sharedReview") loadMemoryViewer(true);
   });
 }
 document.addEventListener("keydown", (event) => {
@@ -910,6 +971,11 @@ subtasksOverviewFeature = createSubtasksOverviewFeature({
   formatDateTime,
   summarizeSourcePath,
   onOpenSourcePath: (sourcePath) => openSourcePath(sourcePath),
+  onOpenTask: (taskId) => openTaskFromAudit(taskId),
+  onOpenGoal: async (goalId) => {
+    switchMode("goals");
+    await loadGoals(true, goalId);
+  },
   showNotice,
   t: localeController.t,
 });
@@ -968,6 +1034,8 @@ goalsTrackingPanelFeature = createGoalsTrackingPanelFeature({
   escapeHtml,
   formatDateTime,
   getGoalCheckpointSlaBadge,
+  summarizeSourcePath,
+  t: localeController.t,
 });
 
 goalsGovernancePanelFeature = createGoalsGovernancePanelFeature({
@@ -987,6 +1055,7 @@ goalsCapabilityPanelFeature = createGoalsCapabilityPanelFeature({
   formatDateTime,
   onOpenSourcePath: (sourcePath) => openSourcePath(sourcePath),
   onOpenSubtask: (taskId) => openSubtaskById(taskId),
+  t: localeController.t,
 });
 
 memoryViewerFeature = createMemoryViewerFeature({
@@ -999,6 +1068,7 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
+    memorySharedReviewBatchBarEl,
     memoryTaskFiltersEl,
     memoryChunkFiltersEl,
     memorySearchInputEl,
@@ -1008,6 +1078,10 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryChunkVisibilityFilterEl,
     memoryChunkGovernanceFilterEl,
     memoryChunkCategoryFilterEl,
+    memorySharedReviewFiltersEl,
+    memorySharedReviewFocusFilterEl,
+    memorySharedReviewTargetFilterEl,
+    memorySharedReviewClaimedByFilterEl,
   },
   isConnected: () => Boolean(ws && isReady),
   sendReq,
@@ -1015,6 +1089,7 @@ memoryViewerFeature = createMemoryViewerFeature({
   getMemoryViewerState: () => memoryViewerState,
   getSelectedAgentId: () => getCurrentAgentSelection(),
   getSelectedAgentLabel: () => getCurrentAgentLabel(),
+  getAvailableAgents: () => [...agentCatalog.values()],
   syncMemoryTaskGoalFilterUi,
   renderMemoryViewerListEmpty,
   renderMemoryViewerDetailEmpty,
@@ -1111,6 +1186,8 @@ function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
   memoryViewerState.experienceQueryView = null;
   memoryViewerState.sharedReviewSummary = null;
   memoryViewerState.sharedGovernance = null;
+  memoryViewerState.selectedSharedReviewIds = [];
+  memoryViewerState.sharedReviewBatchBusy = false;
 }
 
 async function refreshMemoryViewerForAgentSwitch(agentId = getCurrentAgentSelection()) {
@@ -1367,6 +1444,37 @@ function syncAgentCatalog(agents = [], selectedAgentId = "") {
           pendingMessageCount: Number(agent.conversationDigest.pendingMessageCount) || 0,
         }
         : null,
+      recentTaskDigest: agent.recentTaskDigest && typeof agent.recentTaskDigest === "object"
+        ? {
+          recentCount: Number(agent.recentTaskDigest.recentCount) || 0,
+          latestTaskId: typeof agent.recentTaskDigest.latestTaskId === "string" ? agent.recentTaskDigest.latestTaskId : "",
+          latestTitle: typeof agent.recentTaskDigest.latestTitle === "string" ? agent.recentTaskDigest.latestTitle : "",
+          latestStatus: typeof agent.recentTaskDigest.latestStatus === "string" ? agent.recentTaskDigest.latestStatus : "",
+          latestFinishedAt: typeof agent.recentTaskDigest.latestFinishedAt === "string" ? agent.recentTaskDigest.latestFinishedAt : "",
+        }
+        : null,
+      recentSubtaskDigest: agent.recentSubtaskDigest && typeof agent.recentSubtaskDigest === "object"
+        ? {
+          recentCount: Number(agent.recentSubtaskDigest.recentCount) || 0,
+          latestTaskId: typeof agent.recentSubtaskDigest.latestTaskId === "string" ? agent.recentSubtaskDigest.latestTaskId : "",
+          latestSummary: typeof agent.recentSubtaskDigest.latestSummary === "string" ? agent.recentSubtaskDigest.latestSummary : "",
+          latestStatus: typeof agent.recentSubtaskDigest.latestStatus === "string" ? agent.recentSubtaskDigest.latestStatus : "",
+          latestUpdatedAt: Number(agent.recentSubtaskDigest.latestUpdatedAt) || 0,
+          latestAgentId: typeof agent.recentSubtaskDigest.latestAgentId === "string" ? agent.recentSubtaskDigest.latestAgentId : "",
+          latestParentTaskId: typeof agent.recentSubtaskDigest.latestParentTaskId === "string" ? agent.recentSubtaskDigest.latestParentTaskId : "",
+        }
+        : null,
+      experienceUsageDigest: agent.experienceUsageDigest && typeof agent.experienceUsageDigest === "object"
+        ? {
+          usageCount: Number(agent.experienceUsageDigest.usageCount) || 0,
+          methodCount: Number(agent.experienceUsageDigest.methodCount) || 0,
+          skillCount: Number(agent.experienceUsageDigest.skillCount) || 0,
+          latestAssetType: typeof agent.experienceUsageDigest.latestAssetType === "string" ? agent.experienceUsageDigest.latestAssetType : "",
+          latestAssetKey: typeof agent.experienceUsageDigest.latestAssetKey === "string" ? agent.experienceUsageDigest.latestAssetKey : "",
+          latestTaskId: typeof agent.experienceUsageDigest.latestTaskId === "string" ? agent.experienceUsageDigest.latestTaskId : "",
+          latestUsedAt: typeof agent.experienceUsageDigest.latestUsedAt === "string" ? agent.experienceUsageDigest.latestUsedAt : "",
+        }
+        : null,
       sharedGovernance: agent.sharedGovernance && typeof agent.sharedGovernance === "object"
         ? {
           pendingCount: Number(agent.sharedGovernance.pendingCount) || 0,
@@ -1384,6 +1492,7 @@ function syncAgentCatalog(agents = [], selectedAgentId = "") {
   syncSelectedAgentIdentity();
   renderAgentRightPanel();
   memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
+  memoryViewerFeature?.syncSharedReviewFilterUi?.();
 }
 
 function syncSelectedAgentIdentity() {
@@ -1393,6 +1502,7 @@ function syncSelectedAgentIdentity() {
   agentAvatar = selectedAgent.avatar || agentCatalog.get("default")?.avatar || defaultAgentAvatar;
   chatUiFeature?.refreshAvatar("bot", agentAvatar);
   memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
+  memoryViewerFeature?.syncSharedReviewFilterUi?.();
 }
 
 function updateAgentCatalogAvatar(agentId, avatarPath) {
@@ -1419,58 +1529,62 @@ function updateAgentCatalogAvatar(agentId, avatarPath) {
   }
 }
 
-function formatAgentPanelDigestStatus(digest) {
-  const status = typeof digest?.status === "string" ? digest.status : "";
-  switch (status) {
-    case "ready":
-      return localeController.t("agentPanel.digestReady", {}, "digest ready");
-    case "updated":
-      return localeController.t("agentPanel.digestUpdated", {}, "digest update");
-    case "idle":
-      return localeController.t("agentPanel.digestIdle", {}, "digest idle");
-    default:
-      return "";
+async function focusAgentObservabilityTarget(agentId) {
+  const targetAgentId = typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default";
+  if (agentSelectEl && agentSelectEl.value !== targetAgentId) {
+    agentSelectEl.value = targetAgentId;
+    localStorage.setItem(AGENT_ID_KEY, targetAgentId);
+  }
+  syncSelectedAgentIdentity();
+  renderAgentRightPanel();
+  await refreshMemoryViewerForAgentSwitch(targetAgentId);
+  if (residentAgentRosterEnabled) {
+    await activateResidentAgentConversation(targetAgentId, {
+      forceEnsure: true,
+      switchToChat: false,
+    });
   }
 }
 
-function buildAgentPanelSummary(agent) {
-  const pieces = [];
-  if (agent.memoryMode) {
-    const memoryModeText = agent.memoryMode === "isolated"
-      ? localeController.t("agentPanel.memoryModeIsolated", {}, "isolated")
-      : agent.memoryMode === "shared"
-      ? localeController.t("agentPanel.memoryModeShared", {}, "shared")
-      : localeController.t("agentPanel.memoryModeHybrid", {}, "hybrid");
-    pieces.push(memoryModeText);
-  }
+async function openAgentObservabilityAction(agentId, action = {}) {
+  const kind = typeof action?.kind === "string" ? action.kind : "";
+  if (!kind) return;
 
-  if (agent.workspaceBinding === "custom") {
-    pieces.push(localeController.t("agentPanel.workspaceCustom", {}, "custom workspace"));
-  }
+  await focusAgentObservabilityTarget(agentId);
 
-  const digestLabel = formatAgentPanelDigestStatus(agent.conversationDigest);
-  if (digestLabel) {
-    const pendingCount = Number(agent.conversationDigest?.pendingMessageCount) || 0;
-    pieces.push(
-      pendingCount > 0
-        ? localeController.t("agentPanel.digestPending", { label: digestLabel, count: pendingCount }, `${digestLabel}/${pendingCount}`)
-        : digestLabel,
-    );
+  switch (kind) {
+    case "task":
+      if (!action.taskId) return;
+      switchMode("memory");
+      await openTaskFromAudit(action.taskId);
+      return;
+    case "tasks":
+      switchMode("memory");
+      if (memoryViewerState.tab !== "tasks") {
+        switchMemoryViewerTab("tasks");
+      } else {
+        await loadMemoryViewer(true);
+      }
+      return;
+    case "subtask":
+      if (!action.taskId) return;
+      await openSubtaskById(action.taskId);
+      return;
+    case "subtasks":
+      switchMode("subtasks");
+      await loadSubtasks(true);
+      return;
+    case "sharedReview":
+      switchMode("memory");
+      if (memoryViewerState.tab !== "sharedReview") {
+        switchMemoryViewerTab("sharedReview");
+      } else {
+        await loadMemoryViewer(true);
+      }
+      return;
+    default:
+      return;
   }
-
-  const pendingCount = Number(agent.sharedGovernance?.pendingCount) || 0;
-  const claimedCount = Number(agent.sharedGovernance?.claimedCount) || 0;
-  if (pendingCount > 0 || claimedCount > 0) {
-    pieces.push(
-      localeController.t(
-        "agentPanel.reviewQueue",
-        { pending: pendingCount, claimed: claimedCount },
-        `review ${pendingCount}/${claimedCount}`,
-      ),
-    );
-  }
-
-  return pieces.join(" · ");
 }
 
 function renderAgentRightPanel() {
@@ -1537,13 +1651,6 @@ function renderAgentRightPanel() {
 
     content.appendChild(name);
     content.appendChild(meta);
-    const summary = buildAgentPanelSummary(agent);
-    if (summary) {
-      const summaryEl = document.createElement("div");
-      summaryEl.className = "agent-card-summary";
-      summaryEl.textContent = summary;
-      content.appendChild(summaryEl);
-    }
     main.appendChild(avatar);
     main.appendChild(content);
     main.addEventListener("click", () => {
@@ -1553,6 +1660,50 @@ function renderAgentRightPanel() {
     });
 
     card.appendChild(main);
+    const observability = buildResidentPanelSummary(agent, localeController.t);
+    if (Array.isArray(observability?.rows) && observability.rows.length > 0) {
+      const summaryWrap = document.createElement("div");
+      summaryWrap.className = "agent-card-observability";
+      if (Array.isArray(observability.badges) && observability.badges.length > 0) {
+        const badgesEl = document.createElement("div");
+        badgesEl.className = "agent-card-observability-badges";
+        for (const text of observability.badges) {
+          if (!text) continue;
+          const badgeEl = document.createElement("span");
+          badgeEl.className = "agent-card-observability-badge";
+          badgeEl.textContent = text;
+          badgesEl.appendChild(badgeEl);
+        }
+        summaryWrap.appendChild(badgesEl);
+      }
+
+      const rowsEl = document.createElement("div");
+      rowsEl.className = "agent-card-observability-rows";
+      for (const row of observability.rows) {
+        const rowBtn = document.createElement("button");
+        rowBtn.type = "button";
+        rowBtn.className = "agent-card-observability-row";
+        rowBtn.title = row.value || row.label || "";
+        rowBtn.addEventListener("click", (event) => {
+          event.stopPropagation();
+          void openAgentObservabilityAction(agent.id, row.action);
+        });
+
+        const labelEl = document.createElement("span");
+        labelEl.className = "agent-card-observability-label";
+        labelEl.textContent = row.label || "";
+        rowBtn.appendChild(labelEl);
+
+        const valueEl = document.createElement("span");
+        valueEl.className = "agent-card-observability-value";
+        valueEl.textContent = row.value || "";
+        rowBtn.appendChild(valueEl);
+
+        rowsEl.appendChild(rowBtn);
+      }
+      summaryWrap.appendChild(rowsEl);
+      card.appendChild(summaryWrap);
+    }
     fragment.appendChild(card);
   }
 
@@ -3158,6 +3309,13 @@ function bindGoalDetailActions(goal) {
       void openSourcePath(sourcePath);
     });
   });
+  goalsDetailEl.querySelectorAll("[data-open-task-id]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const taskId = node.getAttribute("data-open-task-id");
+      if (!taskId) return;
+      void openTaskFromAudit(taskId);
+    });
+  });
   goalsDetailEl.querySelectorAll("[data-open-goal-tasks]").forEach((node) => {
     node.addEventListener("click", () => {
       const goalId = node.getAttribute("data-open-goal-tasks");
@@ -3452,12 +3610,24 @@ function parseGoalGraphNodes(rawGraph) {
     const status = normalizeGoalNodeStatus(item.status || data.status);
     const phase = item.phase || data.phase || item.stage || data.stage || "";
     const owner = item.owner || data.owner || "";
+    const lastRunId = item.lastRunId || data.lastRunId || "";
+    const summary = item.summary || data.summary || "";
+    const artifacts = Array.isArray(item.artifacts)
+      ? item.artifacts
+      : Array.isArray(data.artifacts)
+        ? data.artifacts
+        : [];
     return {
       id: String(id),
       title: String(title),
       status,
       phase: phase ? String(phase) : "",
       owner: owner ? String(owner) : "",
+      lastRunId: lastRunId ? String(lastRunId) : "",
+      summary: summary ? String(summary) : "",
+      artifacts: artifacts
+        .map((artifact) => typeof artifact === "string" ? artifact.trim() : "")
+        .filter(Boolean),
     };
   });
 }
@@ -3896,9 +4066,10 @@ async function loadGoalTrackingData(goal) {
   goalsState.trackingSeq = seq;
   renderGoalTrackingPanelLoading();
 
-  const [tasksFile, checkpointsFile] = await Promise.all([
+  const [tasksFile, checkpointsFile, capabilityEntry] = await Promise.all([
     readSourceFile(goal.tasksPath),
     readSourceFile(goalRuntimeFilePath(goal, "checkpoints.json")),
+    ensureGoalCapabilityCache(goal),
   ]);
 
   if (goalsState.trackingSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
@@ -3920,6 +4091,7 @@ async function loadGoalTrackingData(goal) {
   renderGoalTrackingPanel(goal, {
     nodes: parseGoalGraphNodes(rawGraph),
     checkpoints: parsedCheckpoints,
+    capabilityPlans: capabilityEntry?.plans || [],
   });
 }
 
@@ -4735,6 +4907,7 @@ function renderTaskDetail(task) {
   const lastUsageAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
   const candidatePanel = renderCandidateDetailPanel(memoryViewerState.selectedCandidate);
   const goalId = getTaskGoalId(task);
+  const contextTargets = extractTaskContextTargets(task);
 
   memoryViewerDetailEl.innerHTML = `
     <div class="memory-detail-shell">
@@ -4755,6 +4928,29 @@ function renderTaskDetail(task) {
         </div>
       </div>
 
+      <div class="memory-detail-card">
+        <div class="goal-summary-header">
+          <div>
+            <div class="goal-summary-title">${escapeHtml(localeController.t("memory.contextSummaryTitle", {}, "上下文链"))}</div>
+            <div class="goal-summary-text">${escapeHtml(localeController.t("memory.contextSummaryTaskText", {}, "把长期任务、会话、关联记忆与经验候选入口压缩到一处。"))}</div>
+          </div>
+        </div>
+        <div class="memory-detail-badges">
+          ${goalId ? `<span class="memory-badge memory-badge-shared">${escapeHtml(getGoalDisplayName(goalId))}</span>` : ""}
+          ${task.conversationId ? `<span class="memory-badge">${escapeHtml(localeController.t("memory.contextConversation", {}, "会话"))} ${escapeHtml(summarizeSourcePath(task.conversationId))}</span>` : ""}
+          <span class="memory-badge">${escapeHtml(localeController.t("memory.contextLinkedMemories", {}, "关联记忆"))} ${escapeHtml(String(contextTargets.memoryCount))}</span>
+          <span class="memory-badge">${escapeHtml(localeController.t("memory.contextCandidates", {}, "经验候选"))} ${escapeHtml(String(contextTargets.candidateCount))}</span>
+          <span class="memory-badge">${escapeHtml(localeController.t("memory.contextArtifacts", {}, "产物"))} ${escapeHtml(String(contextTargets.artifactCount))}</span>
+        </div>
+        <div class="goal-detail-actions">
+          ${goalId ? `<button class="button" data-open-goal-id="${escapeHtml(goalId)}">${escapeHtml(localeController.t("memory.openGoal", {}, "Open Long Task"))}</button>` : ""}
+          ${goalId ? `<button class="button goal-inline-action-secondary" data-open-goal-tasks="${escapeHtml(goalId)}">${escapeHtml(localeController.t("memory.filterTasksByGoal", {}, "Filter Tasks by Goal"))}</button>` : ""}
+          ${contextTargets.firstMemoryId ? `<button class="button goal-inline-action-secondary" data-open-memory-id="${escapeHtml(contextTargets.firstMemoryId)}">${escapeHtml(localeController.t("memory.contextOpenFirstMemory", {}, "打开关联记忆"))}</button>` : ""}
+          ${contextTargets.firstCandidateId ? `<button class="button goal-inline-action-secondary" data-open-candidate-id="${escapeHtml(contextTargets.firstCandidateId)}">${escapeHtml(localeController.t("memory.contextOpenFirstCandidate", {}, "打开经验候选"))}</button>` : ""}
+          ${contextTargets.firstArtifactPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(contextTargets.firstArtifactPath)}">${escapeHtml(localeController.t("memory.contextOpenFirstArtifact", {}, "打开相关产物"))}</button>` : ""}
+        </div>
+      </div>
+
       <div class="memory-detail-grid">
         <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.taskStartTime", {}, "Started At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.startedAt))}</div></div>
         <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.taskEndTime", {}, "Finished At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(task.finishedAt))}</div></div>
@@ -4762,13 +4958,6 @@ function renderTaskDetail(task) {
         <div class="memory-detail-card"><span class="memory-detail-label">Token</span><div class="memory-detail-text">${escapeHtml(formatCount(task.tokenTotal))}</div></div>
         ${goalId ? `<div class="memory-detail-card"><span class="memory-detail-label">Goal</span><div class="memory-detail-text">${escapeHtml(getGoalDisplayName(goalId))}</div></div>` : ""}
       </div>
-
-      ${goalId ? `
-        <div class="goal-detail-actions">
-          <button class="button" data-open-goal-id="${escapeHtml(goalId)}">${escapeHtml(localeController.t("memory.openGoal", {}, "Open Long Task"))}</button>
-          <button class="button" data-open-goal-tasks="${escapeHtml(goalId)}">${escapeHtml(localeController.t("memory.filterTasksByGoal", {}, "Filter Tasks by Goal"))}</button>
-        </div>
-      ` : ""}
 
       <div class="memory-detail-grid memory-detail-grid-usage">
         <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(localeController.t("memory.methodUsageCount", {}, "Method Usage Count"))}</span><div class="memory-detail-text">${escapeHtml(formatCount(usedMethods.length))}</div></div>

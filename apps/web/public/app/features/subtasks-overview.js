@@ -1,3 +1,6 @@
+import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js";
+import { renderPromptSnapshotDetail } from "./prompt-snapshot-detail.js";
+
 function formatSubtaskStatus(status) {
   switch (status) {
     case "running":
@@ -69,6 +72,68 @@ function formatWorktreeRuntimeStatus(status, t) {
   }
 }
 
+function formatJoinedValues(values) {
+  if (!Array.isArray(values) || values.length === 0) return "-";
+  const normalized = values
+    .filter((item) => typeof item === "string" && item.trim())
+    .map((item) => item.trim());
+  return normalized.length ? normalized.join(", ") : "-";
+}
+
+function renderExplainabilityNote(lines, escapeHtml) {
+  if (!Array.isArray(lines) || lines.length === 0) return "";
+  return `
+    <div class="tool-settings-policy-note">
+      ${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+    </div>
+  `;
+}
+
+export function buildSubtaskExecutionExplainabilityLines({
+  launchExplainability,
+  resultEnvelope,
+  promptSnapshotView,
+  sessionId = "",
+  summarizeSourcePath = (value) => value,
+  formatDateTime = (value) => String(value ?? "-"),
+  t = (_key, _params, fallback) => fallback ?? "",
+}) {
+  const lines = buildLaunchExplainabilityLines(launchExplainability, t);
+
+  if (resultEnvelope && typeof resultEnvelope === "object") {
+    const resultParts = [
+      resultEnvelope.status ? `status=${resultEnvelope.status}` : "",
+      resultEnvelope.agentId ? `agent=${resultEnvelope.agentId}` : "",
+      resultEnvelope.finishedAt ? `finished=${formatDateTime(resultEnvelope.finishedAt)}` : "",
+      resultEnvelope.outputPath ? `output=${summarizeSourcePath(resultEnvelope.outputPath)}` : "",
+    ].filter(Boolean);
+    if (resultParts.length) {
+      lines.push(`${t("subtasks.detailExecutionResultEnvelope", {}, "result envelope")}: ${resultParts.join(", ")}`);
+    }
+  }
+
+  const snapshot = promptSnapshotView?.snapshot;
+  if (snapshot && typeof snapshot === "object") {
+    const summary = snapshot.summary && typeof snapshot.summary === "object" ? snapshot.summary : {};
+    const manifest = snapshot.manifest && typeof snapshot.manifest === "object" ? snapshot.manifest : {};
+    const snapshotParts = [
+      manifest.conversationId || sessionId ? `conversation=${manifest.conversationId || sessionId}` : "",
+      Number.isFinite(summary.messageCount) ? `messages=${summary.messageCount}` : "",
+      Number.isFinite(summary.tokenBreakdown?.systemPromptEstimatedTokens)
+        ? `tokens=${summary.tokenBreakdown.systemPromptEstimatedTokens}`
+        : "",
+      manifest.createdAt ? `captured=${formatDateTime(manifest.createdAt)}` : "",
+    ].filter(Boolean);
+    if (snapshotParts.length) {
+      lines.push(`${t("subtasks.detailExecutionPromptSnapshot", {}, "prompt snapshot")}: ${snapshotParts.join(", ")}`);
+    }
+  } else if (sessionId) {
+    lines.push(`${t("subtasks.detailExecutionPromptSnapshot", {}, "prompt snapshot")}: missing for session=${sessionId}`);
+  }
+
+  return lines;
+}
+
 function describeWorktreeRuntimeStatus(status, t) {
   switch (status) {
     case "created":
@@ -88,6 +153,28 @@ function describeWorktreeRuntimeStatus(status, t) {
   }
 }
 
+export function parseGoalSessionReference(conversationId) {
+  const value = typeof conversationId === "string" ? conversationId.trim() : "";
+  if (!value) return null;
+  const goalNodeMatch = /^goal:([^:]+):node:([^:]+):run:([^:]+)$/.exec(value);
+  if (goalNodeMatch) {
+    return {
+      kind: "goal_node",
+      goalId: goalNodeMatch[1],
+      nodeId: goalNodeMatch[2],
+      runId: goalNodeMatch[3],
+    };
+  }
+  const goalMatch = /^goal:([^:]+)$/.exec(value);
+  if (goalMatch) {
+    return {
+      kind: "goal",
+      goalId: goalMatch[1],
+    };
+  }
+  return null;
+}
+
 export function createSubtasksOverviewFeature({
   refs,
   isConnected,
@@ -100,6 +187,8 @@ export function createSubtasksOverviewFeature({
   formatDateTime,
   summarizeSourcePath,
   onOpenSourcePath,
+  onOpenTask,
+  onOpenGoal,
   showNotice,
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
@@ -175,6 +264,27 @@ export function createSubtasksOverviewFeature({
         const outputPath = node.getAttribute("data-open-output-path");
         if (!outputPath) return;
         void onOpenSourcePath(outputPath);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-open-source]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const sourcePath = node.getAttribute("data-open-source");
+        if (!sourcePath) return;
+        void onOpenSourcePath(sourcePath);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-open-task-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-open-task-id");
+        if (!taskId) return;
+        void onOpenTask?.(taskId);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-open-goal-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const goalId = node.getAttribute("data-open-goal-id");
+        if (!goalId) return;
+        void onOpenGoal?.(goalId);
       });
     });
     subtasksDetailEl.querySelectorAll("[data-subtask-stop]").forEach((node) => {
@@ -275,9 +385,50 @@ export function createSubtasksOverviewFeature({
     const outputText = typeof outputContent === "string" && outputContent.trim()
       ? outputContent
       : item?.outputPreview || "";
+    const resultEnvelope = subtasksState.selectedResultEnvelope && subtasksState.selectedResultEnvelope.taskId === item.id
+      ? subtasksState.selectedResultEnvelope
+      : null;
+    const launchExplainability = subtasksState.selectedLaunchExplainability?.taskId === item.id
+      ? subtasksState.selectedLaunchExplainability.value
+      : null;
+    const promptSnapshotView = subtasksState.selectedPromptSnapshot?.taskId === item.id
+      ? subtasksState.selectedPromptSnapshot.value
+      : null;
+    const launchExplainabilityLines = buildLaunchExplainabilityLines(launchExplainability, t);
+    const executionExplainabilityLines = buildSubtaskExecutionExplainabilityLines({
+      launchExplainability,
+      resultEnvelope,
+      promptSnapshotView,
+      sessionId: item?.sessionId || "",
+      summarizeSourcePath,
+      formatDateTime,
+      t,
+    });
+    const delegation = item?.launchSpec?.delegation && typeof item.launchSpec.delegation === "object"
+      ? item.launchSpec.delegation
+      : null;
     const worktreeStatus = item?.launchSpec?.worktreeStatus || "";
     const worktreeStatusLabel = formatWorktreeRuntimeStatus(worktreeStatus, t);
     const worktreeStatusDescription = describeWorktreeRuntimeStatus(worktreeStatus, t);
+    const parentTaskId = typeof item?.launchSpec?.parentTaskId === "string" ? item.launchSpec.parentTaskId.trim() : "";
+    const worktreePath = typeof item?.launchSpec?.worktreePath === "string" ? item.launchSpec.worktreePath.trim() : "";
+    const goalSession = parseGoalSessionReference(item.parentConversationId);
+    const detailActionButtons = [];
+    if (canStop) {
+      detailActionButtons.push(`<button class="button" data-subtask-stop="${escapeHtml(item.id)}" ${pendingActionKind ? "disabled" : ""}>${escapeHtml(pendingActionKind === "stop" ? t("subtasks.actionStopping", {}, "Stopping...") : t("subtasks.actionStop", {}, "Stop"))}</button>`);
+    }
+    if (canArchive) {
+      detailActionButtons.push(`<button class="button" data-subtask-archive="${escapeHtml(item.id)}" ${pendingActionKind ? "disabled" : ""}>${escapeHtml(pendingActionKind === "archive" ? t("subtasks.actionArchiving", {}, "Archiving...") : t("subtasks.actionArchive", {}, "Archive"))}</button>`);
+    }
+    if (goalSession?.goalId) {
+      detailActionButtons.push(`<button class="button goal-inline-action-secondary" data-open-goal-id="${escapeHtml(goalSession.goalId)}">${escapeHtml(t("subtasks.openGoal", {}, "Open long task"))}</button>`);
+    }
+    if (parentTaskId) {
+      detailActionButtons.push(`<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(parentTaskId)}">${escapeHtml(t("subtasks.openParentTask", {}, "Open parent task"))}</button>`);
+    }
+    if (worktreePath) {
+      detailActionButtons.push(`<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(worktreePath)}">${escapeHtml(t("subtasks.openWorktree", {}, "Open worktree"))}</button>`);
+    }
 
     subtasksDetailEl.innerHTML = `
       <div class="memory-detail-shell">
@@ -297,10 +448,9 @@ export function createSubtasksOverviewFeature({
           </div>
         </div>
 
-        ${(canStop || canArchive) ? `
+        ${detailActionButtons.length ? `
           <div class="subtask-detail-actions">
-            ${canStop ? `<button class="button" data-subtask-stop="${escapeHtml(item.id)}" ${pendingActionKind ? "disabled" : ""}>${escapeHtml(pendingActionKind === "stop" ? t("subtasks.actionStopping", {}, "Stopping...") : t("subtasks.actionStop", {}, "Stop"))}</button>` : ""}
-            ${canArchive ? `<button class="button" data-subtask-archive="${escapeHtml(item.id)}" ${pendingActionKind ? "disabled" : ""}>${escapeHtml(pendingActionKind === "archive" ? t("subtasks.actionArchiving", {}, "Archiving...") : t("subtasks.actionArchive", {}, "Archive"))}</button>` : ""}
+            ${detailActionButtons.join("")}
           </div>
         ` : ""}
 
@@ -334,6 +484,29 @@ export function createSubtasksOverviewFeature({
             <div class="memory-detail-text">${escapeHtml(item?.progress?.message || "-")}</div>
           </section>
 
+          ${executionExplainabilityLines.length ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailExecutionExplainability", {}, "Execution Explainability"))}</span>
+              ${renderExplainabilityNote(executionExplainabilityLines, escapeHtml)}
+            </section>
+          ` : ""}
+
+          ${launchExplainabilityLines.length ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailLaunchExplainability", {}, "Launch Explainability"))}</span>
+              ${renderExplainabilityNote(launchExplainabilityLines, escapeHtml)}
+            </section>
+          ` : ""}
+
+          ${item?.sessionId
+            ? renderPromptSnapshotDetail(promptSnapshotView, {
+              escapeHtml,
+              formatDateTime,
+              t,
+              sessionId: item.sessionId,
+            })
+            : ""}
+
           <section class="memory-detail-card">
             <span class="memory-detail-label">${escapeHtml(t("subtasks.detailLaunchSpec", {}, "Launch Spec"))}</span>
             <div class="memory-detail-grid">
@@ -354,6 +527,35 @@ export function createSubtasksOverviewFeature({
               ${renderDetailCard(t("subtasks.detailLaunchContextKeys", {}, "Context Keys"), Array.isArray(item?.launchSpec?.contextKeys) && item.launchSpec.contextKeys.length ? item.launchSpec.contextKeys.join(", ") : "-", escapeHtml)}
             </div>
           </section>
+
+          ${delegation ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailDelegationProtocol", {}, "Delegation Protocol"))}</span>
+              <div class="memory-detail-grid">
+                ${renderDetailCard(t("subtasks.detailDelegationSource", {}, "Delegation Source"), delegation.source || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationIntentKind", {}, "Intent Kind"), delegation.intentKind || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationIntent", {}, "Intent"), delegation.intentSummary || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationDeliverable", {}, "Deliverable"), delegation.expectedDeliverableFormat || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationDeliverableSummary", {}, "Deliverable Summary"), delegation.expectedDeliverableSummary || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationAggregation", {}, "Aggregation"), delegation.aggregationMode || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationSourceAgents", {}, "Source Agents"), formatJoinedValues(delegation.sourceAgentIds), escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationContextKeys", {}, "Delegation Context Keys"), formatJoinedValues(delegation.contextKeys), escapeHtml)}
+              </div>
+            </section>
+          ` : ""}
+
+          ${resultEnvelope ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailResultEnvelope", {}, "Result Envelope"))}</span>
+              <div class="memory-detail-grid">
+                ${renderDetailCard(t("subtasks.detailResultEnvelopeStatus", {}, "Envelope Status"), resultEnvelope.status || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailResultEnvelopeAgent", {}, "Envelope Agent"), resultEnvelope.agentId || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailResultEnvelopeFinishedAt", {}, "Envelope Finished At"), formatDateTime(resultEnvelope.finishedAt), escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailResultEnvelopeOutputPath", {}, "Envelope Output Path"), resultEnvelope.outputPath || "-", escapeHtml)}
+              </div>
+              <div class="memory-detail-text">${escapeHtml(resultEnvelope.summary || "-")}</div>
+            </section>
+          ` : ""}
 
           ${worktreeStatus ? `
             <section class="memory-detail-card">
@@ -429,6 +631,9 @@ export function createSubtasksOverviewFeature({
     if (!res || !res.ok || !res.payload?.item) {
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedResultEnvelope = null;
+      subtasksState.selectedLaunchExplainability = null;
+      subtasksState.selectedPromptSnapshot = null;
       renderSubtasksDetailEmpty(res?.error?.message || t("subtasks.detailLoadFailed", {}, "Failed to load subtask details."));
       return;
     }
@@ -437,6 +642,15 @@ export function createSubtasksOverviewFeature({
     subtasksState.selectedId = item.id;
     subtasksState.selectedItem = item;
     subtasksState.selectedOutputContent = typeof res.payload.outputContent === "string" ? res.payload.outputContent : "";
+    subtasksState.selectedResultEnvelope = res.payload?.resultEnvelope && typeof res.payload.resultEnvelope === "object"
+      ? res.payload.resultEnvelope
+      : null;
+    subtasksState.selectedLaunchExplainability = res.payload?.launchExplainability && typeof res.payload.launchExplainability === "object"
+      ? { taskId: item.id, value: res.payload.launchExplainability }
+      : null;
+    subtasksState.selectedPromptSnapshot = res.payload?.promptSnapshotView && typeof res.payload.promptSnapshotView === "object"
+      ? { taskId: item.id, value: res.payload.promptSnapshotView }
+      : null;
     subtasksState.items = subtasksState.items.map((current) => current?.id === item.id ? item : current);
     renderSubtasksSummary(subtasksState.items);
     renderSubtaskList(subtasksState.items);
@@ -538,6 +752,9 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedId = null;
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedResultEnvelope = null;
+      subtasksState.selectedLaunchExplainability = null;
+      subtasksState.selectedPromptSnapshot = null;
       renderSubtasksEmpty(res?.error?.message || t("subtasks.listLoadFailed", {}, "Failed to load subtask list."));
       return;
     }
@@ -551,6 +768,9 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedId = null;
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedResultEnvelope = null;
+      subtasksState.selectedLaunchExplainability = null;
+      subtasksState.selectedPromptSnapshot = null;
       renderSubtasksEmpty(getEmptyStateMessage(subtasksState));
       return;
     }
@@ -631,6 +851,9 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedId = null;
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedResultEnvelope = null;
+      subtasksState.selectedLaunchExplainability = null;
+      subtasksState.selectedPromptSnapshot = null;
       if (isViewActive?.()) {
         renderSubtasksEmpty(getEmptyStateMessage(subtasksState));
       }

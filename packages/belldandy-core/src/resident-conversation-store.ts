@@ -2,14 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  buildDefaultProfile,
   ConversationStore,
   isResidentAgentProfile,
-  resolveAgentWorkspaceDir,
   type AgentRegistry,
   type CompactionRuntimeReport,
   type ConversationStoreOptions,
   type PersistedConversationSummary,
 } from "@belldandy/agent";
+import { resolveResidentSessionsDir } from "./resident-state-binding.js";
 
 const INVALID_CONVERSATION_FILENAME_CHARS = /[<>:"/\\|?*\u0000-\u001F%]/g;
 const TRAILING_CONVERSATION_FILENAME_CHARS = /[. ]+$/;
@@ -273,6 +274,9 @@ export class ResidentConversationStore extends ConversationStore {
 
   private resolveResidentStore(agentId: string): ConversationStore {
     const residentSessionsDir = this.getResidentSessionsDir(agentId);
+    if (path.resolve(residentSessionsDir) === path.resolve(this.globalSessionsDir)) {
+      return this.globalStore;
+    }
     const existing = this.residentStores.get(residentSessionsDir);
     if (existing) {
       return existing;
@@ -286,9 +290,9 @@ export class ResidentConversationStore extends ConversationStore {
     return store;
   }
 
-  private resolveWorkspaceDir(agentId: string): string {
-    const profile = this.agentRegistry?.getProfile(agentId);
-    return profile ? resolveAgentWorkspaceDir(profile) : agentId;
+  private resolveResidentProfile(agentId: string) {
+    return this.agentRegistry?.getProfile(agentId)
+      ?? (agentId === "default" ? buildDefaultProfile() : undefined);
   }
 
   private ensureResidentConversationReady(
@@ -305,14 +309,16 @@ export class ResidentConversationStore extends ConversationStore {
       return residentStore;
     }
 
-    if (!this.hasPersistedConversationFiles(this.globalSessionsDir, conversationId)) {
-      this.migratedResidentConversationIds.add(conversationId);
-      return residentStore;
-    }
-
     try {
-      this.migrateConversationFiles(conversationId, this.globalSessionsDir, residentSessionsDir);
-      this.globalStore.clear(conversationId);
+      const sourceDir = this.getConversationMigrationSourceDir(conversationId, residentSessionsDir);
+      if (!sourceDir) {
+        this.migratedResidentConversationIds.add(conversationId);
+        return residentStore;
+      }
+      this.migrateConversationFiles(conversationId, sourceDir, residentSessionsDir);
+      if (path.resolve(sourceDir) === path.resolve(this.globalSessionsDir)) {
+        this.globalStore.clear(conversationId);
+      }
       this.migratedResidentConversationIds.add(conversationId);
       return residentStore;
     } catch (error) {
@@ -323,10 +329,12 @@ export class ResidentConversationStore extends ConversationStore {
 
   private getKnownResidentStores(): ConversationStore[] {
     const residentSessionDirs = new Set<string>(this.residentStores.keys());
-    residentSessionDirs.add(this.getResidentSessionsDir("default"));
     for (const profile of this.agentRegistry?.list() ?? []) {
       if (!isResidentAgentProfile(profile)) continue;
-      residentSessionDirs.add(path.join(this.stateDir, "agents", resolveAgentWorkspaceDir(profile), "sessions"));
+      const residentSessionsDir = this.getResidentSessionsDir(profile.id);
+      if (path.resolve(residentSessionsDir) !== path.resolve(this.globalSessionsDir)) {
+        residentSessionDirs.add(residentSessionsDir);
+      }
     }
     return [...residentSessionDirs.values()].map((residentSessionsDir) => {
       const existing = this.residentStores.get(residentSessionsDir);
@@ -349,7 +357,42 @@ export class ResidentConversationStore extends ConversationStore {
   }
 
   private getResidentSessionsDir(agentId: string): string {
-    return path.join(this.stateDir, "agents", this.resolveWorkspaceDir(agentId), "sessions");
+    return resolveResidentSessionsDir(this.stateDir, this.resolveResidentProfile(agentId));
+  }
+
+  private getConversationMigrationSourceDir(conversationId: string, targetDir: string): string | null {
+    const residentAgentId = parseResidentAgentId(conversationId);
+    const candidateDirs = residentAgentId
+      ? this.getLegacyResidentSessionsDirs(residentAgentId)
+      : [];
+
+    if (path.resolve(this.globalSessionsDir) !== path.resolve(targetDir)) {
+      candidateDirs.unshift(this.globalSessionsDir);
+    }
+
+    for (const sourceDir of candidateDirs) {
+      if (path.resolve(sourceDir) === path.resolve(targetDir)) continue;
+      if (this.hasPersistedConversationFiles(sourceDir, conversationId)) {
+        return sourceDir;
+      }
+    }
+
+    return null;
+  }
+
+  private getLegacyResidentSessionsDirs(agentId: string): string[] {
+    const profile = this.resolveResidentProfile(agentId);
+    if (!profile) return [];
+
+    const dirs: string[] = [];
+    if (agentId === "default") {
+      dirs.push(path.join(this.stateDir, "agents", "default", "sessions"));
+      return dirs;
+    }
+
+    const workspaceDir = profile.workspaceDir?.trim() || agentId;
+    dirs.push(path.join(this.stateDir, "agents", workspaceDir, "sessions"));
+    return dirs;
   }
 
   private migrateConversationFiles(conversationId: string, sourceDir: string, targetDir: string): void {

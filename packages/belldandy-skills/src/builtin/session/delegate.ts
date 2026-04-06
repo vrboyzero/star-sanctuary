@@ -68,6 +68,7 @@ export const delegateTaskTool: Tool = withToolContract({
                 agentId: args.agent_id as string | undefined,
                 context: args.context as Record<string, unknown> | undefined,
                 channel: "subtask",
+                delegationSource: "delegate_task",
             });
             const result = await context.agentCapabilities.spawnSubAgent(launchSpec);
 

@@ -1,4 +1,5 @@
 import type {
+  AgentProfileCatalogMetadata,
   AgentMemoryMode,
   AgentWorkspaceBinding,
   SessionDigestRecord,
@@ -6,6 +7,52 @@ import type {
 
 import type { ResolvedResidentMemoryPolicy } from "./resident-memory-policy.js";
 import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
+import type { SubTaskRecord } from "./task-runtime.js";
+import { buildAgentLaunchExplainability, type AgentLaunchExplainability } from "./agent-launch-explainability.js";
+
+type ResidentRecentTaskSummary = {
+  taskId: string;
+  title?: string;
+  objective?: string;
+  summary?: string;
+  status: string;
+  source: string;
+  finishedAt?: string;
+  toolNames: string[];
+  artifactPaths: string[];
+};
+
+type ResidentRecentTaskDigest = {
+  recentCount: number;
+  latestTaskId: string;
+  latestTitle: string;
+  latestStatus: string;
+  latestSource: string;
+  latestFinishedAt?: string;
+  headline: string;
+};
+
+type ResidentRecentSubtaskDigest = {
+  recentCount: number;
+  latestTaskId: string;
+  latestSummary: string;
+  latestStatus: string;
+  latestUpdatedAt?: number;
+  latestAgentId?: string;
+  latestParentTaskId?: string;
+  headline: string;
+};
+
+type ResidentExperienceUsageDigest = {
+  usageCount: number;
+  methodCount: number;
+  skillCount: number;
+  latestAssetType: "method" | "skill";
+  latestAssetKey: string;
+  latestTaskId?: string;
+  latestUsedAt?: string;
+  headline: string;
+};
 
 type SharedGovernanceCounts = {
   pendingCount: number;
@@ -23,6 +70,10 @@ type ConversationDigestReader = {
   ): Promise<SessionDigestRecord>;
 };
 
+type ResidentSubTaskReader = {
+  listTasks(parentConversationId?: string, options?: { includeArchived?: boolean }): Promise<SubTaskRecord[]>;
+};
+
 export type ResidentAgentObservabilitySeed = {
   id: string;
   displayName: string;
@@ -35,6 +86,7 @@ export type ResidentAgentObservabilitySeed = {
   mainConversationId?: string;
   lastConversationId?: string;
   lastActiveAt?: number;
+  catalog?: AgentProfileCatalogMetadata;
   memoryPolicy?: ResolvedResidentMemoryPolicy;
   sharedGovernance?: SharedGovernanceCounts;
 };
@@ -51,6 +103,7 @@ export type ResidentAgentObservabilityItem = {
   mainConversationId?: string;
   lastConversationId?: string;
   lastActiveAt?: number;
+  catalog?: AgentProfileCatalogMetadata;
   memoryPolicy: ResolvedResidentMemoryPolicy;
   sharedGovernance?: SharedGovernanceCounts;
   conversationDigest?: {
@@ -61,6 +114,11 @@ export type ResidentAgentObservabilityItem = {
     threshold: number;
     lastDigestAt: number;
   };
+  recentTasks?: ResidentRecentTaskSummary[];
+  recentTaskDigest?: ResidentRecentTaskDigest;
+  recentSubtaskDigest?: ResidentRecentSubtaskDigest;
+  experienceUsageDigest?: ResidentExperienceUsageDigest;
+  launchExplainability?: AgentLaunchExplainability;
   observabilityHeadline?: string;
   observabilityBadges?: string[];
   warnings?: string[];
@@ -89,6 +147,12 @@ export type ResidentAgentDoctorReport = {
       rejectedCount: number;
       revokedCount: number;
     };
+    recentTaskLinkedCount: number;
+    recentSubtaskLinkedCount: number;
+    experienceUsageLinkedCount: number;
+    catalogAnnotatedCount: number;
+    structuredHandoffCount: number;
+    skillHintedCount: number;
     headline: string;
   };
   agents: ResidentAgentObservabilityItem[];
@@ -128,15 +192,135 @@ function toConversationDigestView(digest: SessionDigestRecord | undefined) {
   };
 }
 
+function summarizeRecentTaskLabel(task: ResidentRecentTaskSummary | undefined): string {
+  const raw = task?.title || task?.objective || task?.summary || task?.taskId || "-";
+  const normalized = raw.trim();
+  return normalized.length > 56 ? `${normalized.slice(0, 53)}...` : normalized;
+}
+
+function collectUniqueNonEmptyStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(
+    values
+      .map((value) => typeof value === "string" ? value.trim() : "")
+      .filter(Boolean),
+  )];
+}
+
+function summarizeRecentSubtaskLabel(task: SubTaskRecord | undefined): string {
+  const raw = task?.summary || task?.progress?.message || task?.instruction || task?.id || "-";
+  const normalized = raw.trim();
+  return normalized.length > 56 ? `${normalized.slice(0, 53)}...` : normalized;
+}
+
+function summarizeExperienceAssetLabel(rawValue: string | undefined): string {
+  const normalized = String(rawValue ?? "").trim() || "-";
+  return normalized.length > 48 ? `${normalized.slice(0, 45)}...` : normalized;
+}
+
+function toRecentTaskView(record: {
+  taskId: string;
+  title?: string;
+  objective?: string;
+  summary?: string;
+  status: string;
+  source: string;
+  finishedAt?: string;
+  toolNames: string[];
+  artifactPaths: string[];
+}): ResidentRecentTaskSummary {
+  return {
+    taskId: record.taskId,
+    title: record.title,
+    objective: record.objective,
+    summary: record.summary,
+    status: record.status,
+    source: record.source,
+    finishedAt: record.finishedAt,
+    toolNames: Array.isArray(record.toolNames) ? record.toolNames : [],
+    artifactPaths: Array.isArray(record.artifactPaths) ? record.artifactPaths : [],
+  };
+}
+
+function buildRecentTaskDigest(recentTasks: ResidentRecentTaskSummary[]): ResidentRecentTaskDigest | undefined {
+  if (recentTasks.length <= 0) return undefined;
+  const latest = recentTasks[0];
+  return {
+    recentCount: recentTasks.length,
+    latestTaskId: latest.taskId,
+    latestTitle: summarizeRecentTaskLabel(latest),
+    latestStatus: latest.status,
+    latestSource: latest.source,
+    latestFinishedAt: latest.finishedAt,
+    headline: `${recentTasks.length} recent, latest=${summarizeRecentTaskLabel(latest)} (${latest.status})`,
+  };
+}
+
+function buildRecentSubtaskDigest(recentSubtasks: SubTaskRecord[]): ResidentRecentSubtaskDigest | undefined {
+  if (recentSubtasks.length <= 0) return undefined;
+  const latest = recentSubtasks[0];
+  return {
+    recentCount: recentSubtasks.length,
+    latestTaskId: latest.id,
+    latestSummary: summarizeRecentSubtaskLabel(latest),
+    latestStatus: latest.status,
+    latestUpdatedAt: latest.updatedAt,
+    latestAgentId: latest.agentId,
+    latestParentTaskId: latest.launchSpec.parentTaskId,
+    headline: `${recentSubtasks.length} recent, latest=${summarizeRecentSubtaskLabel(latest)} (${latest.status})`,
+  };
+}
+
+function buildExperienceUsageDigest(
+  recentUsages: Array<{
+    taskId: string;
+    assetType: "method" | "skill";
+    assetKey: string;
+    createdAt: string;
+  }>,
+): ResidentExperienceUsageDigest | undefined {
+  if (recentUsages.length <= 0) return undefined;
+  const latest = recentUsages[0];
+  const methodKeys = new Set<string>();
+  const skillKeys = new Set<string>();
+
+  for (const item of recentUsages) {
+    if (item.assetType === "method") {
+      methodKeys.add(item.assetKey);
+    } else if (item.assetType === "skill") {
+      skillKeys.add(item.assetKey);
+    }
+  }
+
+  return {
+    usageCount: recentUsages.length,
+    methodCount: methodKeys.size,
+    skillCount: skillKeys.size,
+    latestAssetType: latest.assetType,
+    latestAssetKey: summarizeExperienceAssetLabel(latest.assetKey),
+    latestTaskId: latest.taskId,
+    latestUsedAt: latest.createdAt,
+    headline: `${recentUsages.length} recent, method=${methodKeys.size}, skill=${skillKeys.size}, latest=${summarizeExperienceAssetLabel(latest.assetKey)}`,
+  };
+}
+
 function buildAgentObservabilityBadges(
   agent: ResidentAgentObservabilitySeed,
   digest: SessionDigestRecord | undefined,
   sharedGovernance: SharedGovernanceCounts | undefined,
+  recentTaskDigest: ResidentRecentTaskDigest | undefined,
+  recentSubtaskDigest: ResidentRecentSubtaskDigest | undefined,
+  experienceUsageDigest: ResidentExperienceUsageDigest | undefined,
 ): string[] {
   const badges = [
     `mode:${agent.memoryMode}`,
     `write:${agent.memoryPolicy?.writeTarget ?? "unknown"}`,
   ];
+  if (agent.catalog?.handoffStyle) {
+    badges.push(`handoff:${agent.catalog.handoffStyle}`);
+  }
+  if ((agent.catalog?.skills?.length ?? 0) > 0) {
+    badges.push(`skills:${agent.catalog?.skills?.length ?? 0}`);
+  }
 
   if (agent.status && agent.status !== "idle") {
     badges.unshift(`status:${agent.status}`);
@@ -155,6 +339,15 @@ function buildAgentObservabilityBadges(
   if ((sharedGovernance?.claimedCount ?? 0) > 0) {
     badges.push(`claimed:${sharedGovernance?.claimedCount ?? 0}`);
   }
+  if ((recentTaskDigest?.recentCount ?? 0) > 0) {
+    badges.push(`task:${recentTaskDigest?.recentCount ?? 0}`);
+  }
+  if ((recentSubtaskDigest?.recentCount ?? 0) > 0) {
+    badges.push(`subtask:${recentSubtaskDigest?.recentCount ?? 0}`);
+  }
+  if ((experienceUsageDigest?.usageCount ?? 0) > 0) {
+    badges.push(`usage:${experienceUsageDigest?.usageCount ?? 0}`);
+  }
 
   return badges;
 }
@@ -163,6 +356,9 @@ function buildAgentObservabilityHeadline(
   agent: ResidentAgentObservabilitySeed,
   digest: SessionDigestRecord | undefined,
   sharedGovernance: SharedGovernanceCounts | undefined,
+  recentTaskDigest: ResidentRecentTaskDigest | undefined,
+  recentSubtaskDigest: ResidentRecentSubtaskDigest | undefined,
+  experienceUsageDigest: ResidentExperienceUsageDigest | undefined,
 ): string {
   const pieces = [
     agent.memoryMode,
@@ -170,6 +366,18 @@ function buildAgentObservabilityHeadline(
     `read=${Array.isArray(agent.memoryPolicy?.readTargets) ? agent.memoryPolicy.readTargets.join("+") : "-"}`,
     `session=${agent.sessionNamespace || "-"}`,
   ];
+  if (agent.catalog?.defaultRole) {
+    pieces.push(`role=${agent.catalog.defaultRole}`);
+  }
+  if (agent.catalog?.defaultPermissionMode) {
+    pieces.push(`permission=${agent.catalog.defaultPermissionMode}`);
+  }
+  if (agent.catalog?.handoffStyle) {
+    pieces.push(`handoff=${agent.catalog.handoffStyle}`);
+  }
+  if ((agent.catalog?.skills?.length ?? 0) > 0) {
+    pieces.push(`skills=${agent.catalog?.skills?.length ?? 0}`);
+  }
 
   if (agent.status) {
     pieces.push(`status=${agent.status}`);
@@ -182,6 +390,18 @@ function buildAgentObservabilityHeadline(
   if ((sharedGovernance?.pendingCount ?? 0) > 0 || (sharedGovernance?.claimedCount ?? 0) > 0) {
     pieces.push(`review=p${sharedGovernance?.pendingCount ?? 0}/c${sharedGovernance?.claimedCount ?? 0}`);
   }
+  if (recentTaskDigest) {
+    pieces.push(`tasks=${recentTaskDigest.recentCount}`);
+    pieces.push(`latest-task=${recentTaskDigest.latestTitle}`);
+  }
+  if (recentSubtaskDigest) {
+    pieces.push(`subtasks=${recentSubtaskDigest.recentCount}`);
+    pieces.push(`latest-subtask=${recentSubtaskDigest.latestSummary}`);
+  }
+  if (experienceUsageDigest) {
+    pieces.push(`usage=m${experienceUsageDigest.methodCount}/s${experienceUsageDigest.skillCount}`);
+    pieces.push(`latest-usage=${experienceUsageDigest.latestAssetKey}`);
+  }
 
   return pieces.join(", ");
 }
@@ -190,6 +410,7 @@ export async function buildResidentAgentObservabilitySnapshot(input: {
   agents: ResidentAgentObservabilitySeed[];
   residentMemoryManagers?: ScopedMemoryManagerRecord[];
   conversationStore?: ConversationDigestReader;
+  subTaskRuntimeStore?: ResidentSubTaskReader;
 }): Promise<ResidentAgentDoctorReport> {
   const managerByAgentId = new Map(
     (input.residentMemoryManagers ?? []).map((record) => [record.agentId, record] as const),
@@ -216,11 +437,84 @@ export async function buildResidentAgentObservabilitySnapshot(input: {
     }
 
     const sharedGovernance = agent.sharedGovernance ?? buildSharedGovernanceCounts(managerRecord);
+    const recentTasks = managerRecord
+      ? managerRecord.manager.getRecentTasks(12)
+        .filter((item) => (!item.agentId || item.agentId === agent.id) && (item.status === "success" || item.status === "partial"))
+        .slice(0, 3)
+        .map((item) => toRecentTaskView({
+          taskId: item.id,
+          title: item.title,
+          objective: item.objective,
+          summary: item.summary,
+          status: item.status,
+          source: item.source,
+          finishedAt: item.finishedAt,
+          toolNames: Array.isArray(item.toolCalls) ? item.toolCalls.map((call) => call.toolName).filter(Boolean) : [],
+          artifactPaths: Array.isArray(item.artifactPaths) ? item.artifactPaths : [],
+        }))
+      : [];
+    const recentTaskDigest = buildRecentTaskDigest(recentTasks);
+    let recentSubtaskDigest: ResidentRecentSubtaskDigest | undefined;
+    if (input.subTaskRuntimeStore) {
+      const parentConversationIds = collectUniqueNonEmptyStrings([
+        agent.mainConversationId,
+        agent.lastConversationId,
+      ]);
+      if (parentConversationIds.length > 0) {
+        try {
+          const recentSubtasks = [
+            ...new Map(
+              (await Promise.all(
+                parentConversationIds.map((conversationId) => input.subTaskRuntimeStore!.listTasks(conversationId, {
+                  includeArchived: false,
+                })),
+              ))
+                .flat()
+                .sort((left, right) => {
+                  const leftSort = Number(left.updatedAt || left.createdAt || 0);
+                  const rightSort = Number(right.updatedAt || right.createdAt || 0);
+                  return rightSort - leftSort;
+                })
+                .map((item) => [item.id, item] as const),
+            ).values(),
+          ].slice(0, 3);
+          recentSubtaskDigest = buildRecentSubtaskDigest(recentSubtasks);
+        } catch (error) {
+          warnings.push(`subtask-unavailable:${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        warnings.push("subtask-unavailable:missing-conversation-id");
+      }
+    }
+
+    const experienceUsages = managerRecord
+      ? managerRecord.manager.listExperienceUsages(24)
+        .filter((item) => {
+          const task = managerRecord.manager.getTask(item.taskId);
+          return !task?.agentId || task.agentId === agent.id;
+        })
+        .map((item) => ({
+          taskId: item.taskId,
+          assetType: item.assetType,
+          assetKey: item.assetKey,
+          createdAt: item.createdAt,
+        }))
+      : [];
+    const experienceUsageDigest = buildExperienceUsageDigest(experienceUsages);
     if ((sharedGovernance.pendingCount ?? 0) > 0) {
       warnings.push(`shared-review-pending:${sharedGovernance.pendingCount}`);
     }
     if (digest?.status === "updated") {
       warnings.push(`digest-refresh-recommended:${digest.pendingMessageCount}`);
+    }
+    if (recentTaskDigest) {
+      warnings.push(`recent-task:${recentTaskDigest.latestStatus}`);
+    }
+    if (recentSubtaskDigest) {
+      warnings.push(`recent-subtask:${recentSubtaskDigest.latestStatus}`);
+    }
+    if (experienceUsageDigest) {
+      warnings.push(`experience-usage:${experienceUsageDigest.latestAssetType}`);
     }
     if (agent.status === "error") {
       warnings.push("runtime-error");
@@ -229,18 +523,34 @@ export async function buildResidentAgentObservabilitySnapshot(input: {
     return {
       ...agent,
       kind: "resident" as const,
+      ...(agent.catalog ? { catalog: agent.catalog } : {}),
       memoryPolicy,
       sharedGovernance,
       conversationDigest: toConversationDigestView(digest),
+      ...(recentTasks.length > 0 ? { recentTasks } : {}),
+      ...(recentTaskDigest ? { recentTaskDigest } : {}),
+      ...(recentSubtaskDigest ? { recentSubtaskDigest } : {}),
+      ...(experienceUsageDigest ? { experienceUsageDigest } : {}),
+      launchExplainability: buildAgentLaunchExplainability({
+        agentId: agent.id,
+        profileId: agent.id,
+        catalog: agent.catalog,
+      }),
       observabilityHeadline: buildAgentObservabilityHeadline(
         { ...agent, memoryPolicy },
         digest,
         sharedGovernance,
+        recentTaskDigest,
+        recentSubtaskDigest,
+        experienceUsageDigest,
       ),
       observabilityBadges: buildAgentObservabilityBadges(
         { ...agent, memoryPolicy },
         digest,
         sharedGovernance,
+        recentTaskDigest,
+        recentSubtaskDigest,
+        experienceUsageDigest,
       ),
       warnings,
     } satisfies ResidentAgentObservabilityItem;
@@ -281,6 +591,12 @@ export function buildResidentAgentDoctorReport(input: {
   let digestUpdatedCount = 0;
   let digestIdleCount = 0;
   let digestMissingCount = 0;
+  let recentTaskLinkedCount = 0;
+  let recentSubtaskLinkedCount = 0;
+  let experienceUsageLinkedCount = 0;
+  let catalogAnnotatedCount = 0;
+  let structuredHandoffCount = 0;
+  let skillHintedCount = 0;
   const sharedGovernanceCounts = {
     pendingCount: 0,
     claimedCount: 0,
@@ -318,6 +634,24 @@ export function buildResidentAgentDoctorReport(input: {
     } else if (input.conversationStoreAvailable) {
       digestMissingCount += 1;
     }
+    if ((agent.recentTaskDigest?.recentCount ?? 0) > 0) {
+      recentTaskLinkedCount += 1;
+    }
+    if ((agent.recentSubtaskDigest?.recentCount ?? 0) > 0) {
+      recentSubtaskLinkedCount += 1;
+    }
+    if ((agent.experienceUsageDigest?.usageCount ?? 0) > 0) {
+      experienceUsageLinkedCount += 1;
+    }
+    if ((agent.catalog?.whenToUse?.length ?? 0) > 0 || (agent.catalog?.skills?.length ?? 0) > 0) {
+      catalogAnnotatedCount += 1;
+    }
+    if (agent.catalog?.handoffStyle === "structured") {
+      structuredHandoffCount += 1;
+    }
+    if ((agent.catalog?.skills?.length ?? 0) > 0) {
+      skillHintedCount += 1;
+    }
     sharedGovernanceCounts.pendingCount += agent.sharedGovernance?.pendingCount ?? 0;
     sharedGovernanceCounts.claimedCount += agent.sharedGovernance?.claimedCount ?? 0;
     sharedGovernanceCounts.approvedCount += agent.sharedGovernance?.approvedCount ?? 0;
@@ -337,6 +671,11 @@ export function buildResidentAgentDoctorReport(input: {
     `idle=${idleCount}`,
     `digest-ready=${digestReadyCount}`,
     `digest-updated=${digestUpdatedCount}`,
+    `catalog-annotated=${catalogAnnotatedCount}`,
+    `structured-handoff=${structuredHandoffCount}`,
+    `task-linked=${recentTaskLinkedCount}`,
+    `subtask-linked=${recentSubtaskLinkedCount}`,
+    `usage-linked=${experienceUsageLinkedCount}`,
   ].join(", ");
 
   return {
@@ -356,6 +695,12 @@ export function buildResidentAgentDoctorReport(input: {
       digestIdleCount,
       digestMissingCount,
       sharedGovernanceCounts,
+      recentTaskLinkedCount,
+      recentSubtaskLinkedCount,
+      experienceUsageLinkedCount,
+      catalogAnnotatedCount,
+      structuredHandoffCount,
+      skillHintedCount,
       headline,
     },
     agents: input.agents,

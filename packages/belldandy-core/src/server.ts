@@ -91,13 +91,17 @@ import {
   parsePositiveInteger,
 } from "./conversation-debug-projection.js";
 import { listRecentConversationExports } from "./conversation-export-index.js";
-import type { ConversationPromptSnapshotArtifact } from "./conversation-prompt-snapshot.js";
+import {
+  loadConversationPromptSnapshotArtifact,
+  type ConversationPromptSnapshotArtifact,
+} from "./conversation-prompt-snapshot.js";
 import {
   handleSubTaskArchiveWithQueryRuntime,
   handleSubTaskGetWithQueryRuntime,
   handleSubTaskListWithQueryRuntime,
   handleSubTaskStopWithQueryRuntime,
 } from "./query-runtime-subtask.js";
+import { handleDelegationInspectGetWithQueryRuntime } from "./query-runtime-delegation.js";
 import {
   handleWorkspaceListWithQueryRuntime,
   handleWorkspaceReadWithQueryRuntime,
@@ -109,10 +113,13 @@ import {
   handleToolsListWithQueryRuntime,
   handleToolsUpdateWithQueryRuntime,
 } from "./query-runtime-tools.js";
+import { handleAgentCatalogGetWithQueryRuntime } from "./query-runtime-agent-catalog.js";
 import { handleAgentContractsGetWithQueryRuntime } from "./query-runtime-agent-contracts.js";
 import { buildAgentRoster } from "./query-runtime-agent-roster.js";
 import { ensureResidentAgentSession } from "./query-runtime-agent-sessions.js";
 import { buildResidentAgentObservabilitySnapshot } from "./resident-agent-observability.js";
+import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
+import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
 import {
   attachResidentExperienceCandidateSourceView,
   attachResidentExperienceUsageSourceView,
@@ -142,6 +149,7 @@ import { QueryRuntimeTraceStore } from "./query-runtime-trace.js";
 import { ResidentConversationStore } from "./resident-conversation-store.js";
 import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
 import { notifyConversationToolEvent } from "./query-runtime-side-effects.js";
+import { buildDelegationObservabilitySnapshot } from "./subtask-result-envelope.js";
 import type { ToolExecutor, TranscribeOptions, TranscribeResult, SkillRegistry } from "@belldandy/skills";
 import type { ToolExecutionRuntimeContext } from "@belldandy/skills";
 import {
@@ -347,7 +355,9 @@ const DEFAULT_METHODS = [
   "subtask.archive",
   "tools.list",
   "tools.update",
+  "agent.catalog.get",
   "agent.contracts.get",
+  "delegation.inspect.get",
   "agents.prompt.inspect",
   "agents.list",
   "agents.roster.get",
@@ -924,6 +934,14 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   await ensureWebRoot(opts.webRoot);
   const stateDir = opts.stateDir ?? resolveStateDir();
   const avatarDir = path.join(stateDir, "avatar");
+  const getConversationPromptSnapshot = opts.getConversationPromptSnapshot
+    ?? (async ({ conversationId, runId }: { conversationId: string; runId?: string }) => {
+      return loadConversationPromptSnapshotArtifact({
+        stateDir,
+        conversationId,
+        runId,
+      });
+    });
 
   const log: GatewayLog = opts.logger
     ? {
@@ -1592,7 +1610,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         agentFactory: opts.agentFactory ?? (() => new MockAgent()),
         agentRegistry: opts.agentRegistry,
         inspectAgentPrompt: opts.inspectAgentPrompt,
-        getConversationPromptSnapshot: opts.getConversationPromptSnapshot,
+        getConversationPromptSnapshot,
         primaryModelConfig: opts.primaryModelConfig,
         modelFallbacks: opts.modelFallbacks,
         conversationStore,
@@ -1954,7 +1972,9 @@ async function handleReq(
     "subtask.get",
     "subtask.stop",
     "subtask.archive",
+    "agent.catalog.get",
     "agent.contracts.get",
+    "delegation.inspect.get",
     "agents.prompt.inspect",
     "tools.update",
     "memory.search",
@@ -2343,6 +2363,7 @@ async function handleReq(
         toolControlConfirmationStore: ctx.toolControlConfirmationStore,
         getAgentToolControlMode: ctx.getAgentToolControlMode,
         getAgentToolControlConfirmPassword: ctx.getAgentToolControlConfirmPassword,
+        agentRegistry: ctx.agentRegistry,
         pluginRegistry: ctx.pluginRegistry,
         stateDir: ctx.stateDir,
         extensionHost: ctx.extensionHost,
@@ -2389,6 +2410,22 @@ async function handleReq(
       });
     }
 
+    case "agent.catalog.get": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const agentId = typeof params.agentId === "string" && params.agentId.trim()
+        ? params.agentId.trim()
+        : undefined;
+      return handleAgentCatalogGetWithQueryRuntime({
+        requestId: req.id,
+        stateDir: ctx.stateDir,
+        agentRegistry: ctx.agentRegistry,
+        residentAgentRuntime: ctx.residentAgentRuntime,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"agent.catalog.get">(),
+      }, {
+        agentId,
+      });
+    }
+
     case "agent.contracts.get": {
       const params = isObjectRecord(req.params) ? req.params : {};
       const requestedTaskId = typeof params.taskId === "string" && params.taskId.trim()
@@ -2410,6 +2447,29 @@ async function handleReq(
         taskId: requestedTaskId,
         agentId: visibilityAgentId,
         conversationId: visibilityConversationId,
+      });
+    }
+
+    case "delegation.inspect.get": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" && params.taskId.trim()
+        ? params.taskId.trim()
+        : "";
+      if (!taskId) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "invalid_params", message: "taskId is required" },
+        };
+      }
+      return handleDelegationInspectGetWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        agentRegistry: ctx.agentRegistry,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"delegation.inspect.get">(),
+      }, {
+        taskId,
       });
     }
 
@@ -2738,6 +2798,7 @@ async function handleReq(
             runId?: string;
           };
           summary: ReturnType<typeof buildPromptObservabilitySummary>;
+          launchExplainability?: ReturnType<typeof buildAgentLaunchExplainability>;
         }
         | undefined;
       let toolBehaviorObservability:
@@ -2750,6 +2811,8 @@ async function handleReq(
           visibilityContext: {
             agentId: string;
             conversationId: string | null;
+            launchExplainability?: ReturnType<typeof buildAgentLaunchExplainability>;
+            residentStateBinding?: ReturnType<typeof resolveResidentStateBindingViewForAgent>;
             taskId?: string;
             launchSpec?: ToolExecutionRuntimeContext["launchSpec"];
           };
@@ -2774,6 +2837,8 @@ async function handleReq(
           visibilityContext: {
             agentId: string;
             conversationId: string | null;
+            launchExplainability?: ReturnType<typeof buildAgentLaunchExplainability>;
+            residentStateBinding?: ReturnType<typeof resolveResidentStateBindingViewForAgent>;
             taskId?: string;
             launchSpec?: ToolExecutionRuntimeContext["launchSpec"];
           };
@@ -2782,6 +2847,7 @@ async function handleReq(
         }
         | undefined;
       let residentAgents: Awaited<ReturnType<typeof buildResidentAgentObservabilitySnapshot>> | undefined;
+      let delegationObservability: ReturnType<typeof buildDelegationObservabilitySnapshot> | undefined;
 
       if (conversationId) {
         const conversationSnapshot = ctx.conversationStore.get(conversationId);
@@ -2906,6 +2972,15 @@ async function handleReq(
             conversationId: promptConversationId,
             runId: promptRunId,
           });
+          const residentStateBinding = resolveResidentStateBindingViewForAgent(
+            ctx.stateDir,
+            ctx.agentRegistry,
+            promptAgentId ?? inspection.agentId,
+          );
+          const launchExplainability = buildAgentLaunchExplainability({
+            agentRegistry: ctx.agentRegistry,
+            agentId: promptAgentId ?? inspection.agentId,
+          });
           const summary = buildPromptObservabilitySummary(inspection);
           const summaryView = toPromptObservabilityView(summary, {
             truncated: inspection.truncated,
@@ -2925,6 +3000,8 @@ async function handleReq(
               ...(promptRunId ? { runId: promptRunId } : {}),
             },
             summary,
+            ...(residentStateBinding ? { residentStateBinding } : {}),
+            ...(launchExplainability ? { launchExplainability } : {}),
           };
         } catch (error) {
           checks.push({
@@ -2946,12 +3023,24 @@ async function handleReq(
           agents: roster,
           residentMemoryManagers: ctx.residentMemoryManagers,
           conversationStore: ctx.conversationStore,
+          subTaskRuntimeStore: ctx.subTaskRuntimeStore,
         });
         checks.push({
           id: "resident_agents",
           name: "Resident Agents",
           status: residentAgents.summary.totalCount > 0 ? "pass" : "warn",
           message: residentAgents.summary.headline,
+        });
+      }
+
+      if (ctx.subTaskRuntimeStore) {
+        const subtaskItems = await ctx.subTaskRuntimeStore.listTasks(undefined, { includeArchived: true });
+        delegationObservability = buildDelegationObservabilitySnapshot(subtaskItems);
+        checks.push({
+          id: "delegation_protocol",
+          name: "Delegation Protocol",
+          status: delegationObservability.summary.protocolBackedCount > 0 ? "pass" : "warn",
+          message: delegationObservability.summary.headline,
         });
       }
 
@@ -2970,6 +3059,17 @@ async function handleReq(
           : undefined;
         const visibilityAgentId = toolAgentId || visibilityTask?.agentId;
         const visibilityConversationId = toolConversationId || visibilityTask?.parentConversationId;
+        const residentStateBinding = resolveResidentStateBindingViewForAgent(
+          ctx.stateDir,
+          ctx.agentRegistry,
+          visibilityAgentId,
+        );
+        const launchExplainability = buildAgentLaunchExplainability({
+          agentRegistry: ctx.agentRegistry,
+          agentId: visibilityAgentId,
+          profileId: visibilityTask?.launchSpec?.profileId,
+          launchSpec: visibilityTask?.launchSpec,
+        });
         const runtimeContext: ToolExecutionRuntimeContext | undefined = visibilityTask
           ? { launchSpec: visibilityTask.launchSpec }
           : undefined;
@@ -3005,6 +3105,8 @@ async function handleReq(
           visibilityContext: {
             agentId: visibilityAgentId ?? "default",
             conversationId: visibilityConversationId ?? null,
+            ...(launchExplainability ? { launchExplainability } : {}),
+            ...(residentStateBinding ? { residentStateBinding } : {}),
             ...(visibilityTask
               ? {
                 taskId: visibilityTask.id,
@@ -3031,6 +3133,8 @@ async function handleReq(
           visibilityContext: {
             agentId: visibilityAgentId ?? "default",
             conversationId: visibilityConversationId ?? null,
+            ...(launchExplainability ? { launchExplainability } : {}),
+            ...(residentStateBinding ? { residentStateBinding } : {}),
             ...(visibilityTask
               ? {
                 taskId: visibilityTask.id,
@@ -3059,6 +3163,7 @@ async function handleReq(
           ...(toolBehaviorObservability ? { toolBehaviorObservability } : {}),
           ...(toolContractV2Observability ? { toolContractV2Observability } : {}),
           ...(residentAgents ? { residentAgents } : {}),
+          ...(delegationObservability ? { delegationObservability } : {}),
           ...(conversationDebug ? { conversationDebug } : {}),
           ...(conversationCatalog ? { conversationCatalog } : {}),
           ...(recentConversationExports ? { recentConversationExports } : {}),
@@ -3093,6 +3198,7 @@ async function handleReq(
           agents: roster,
           residentMemoryManagers: ctx.residentMemoryManagers,
           conversationStore: ctx.conversationStore,
+          subTaskRuntimeStore: ctx.subTaskRuntimeStore,
         });
         return { type: "res", id: req.id, ok: true, payload: { agents: observability.agents } };
       }
@@ -3144,11 +3250,32 @@ async function handleReq(
       }
       try {
         const inspection = await ctx.inspectAgentPrompt({ agentId, conversationId, runId });
+        const residentStateBinding = resolveResidentStateBindingViewForAgent(
+          ctx.stateDir,
+          ctx.agentRegistry,
+          agentId ?? inspection.agentId,
+        );
+        const launchExplainability = buildAgentLaunchExplainability({
+          agentRegistry: ctx.agentRegistry,
+          agentId: agentId ?? inspection.agentId,
+        });
+        const metadata = isObjectRecord(inspection.metadata)
+          ? { ...inspection.metadata }
+          : {};
+        if (residentStateBinding) {
+          metadata.residentStateBinding = residentStateBinding;
+        }
+        if (launchExplainability) {
+          metadata.launchExplainability = launchExplainability;
+        }
         return {
           type: "res",
           id: req.id,
           ok: true,
-          payload: inspection,
+          payload: {
+            ...inspection,
+            metadata,
+          },
         };
       } catch (error) {
         return {
@@ -5167,6 +5294,8 @@ async function handleReq(
 
       return handleConversationPromptSnapshotGetWithQueryRuntime({
         requestId: req.id,
+        stateDir: ctx.stateDir,
+        agentRegistry: ctx.agentRegistry,
         loadPromptSnapshot: ctx.getConversationPromptSnapshot,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"conversation.prompt_snapshot.get">(),
       }, {
@@ -5403,6 +5532,7 @@ async function handleReq(
       return handleSubTaskListWithQueryRuntime({
         requestId: req.id,
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        agentRegistry: ctx.agentRegistry,
         stopSubTask: ctx.stopSubTask,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
           | "subtask.list"
@@ -5424,7 +5554,10 @@ async function handleReq(
       }
       return handleSubTaskGetWithQueryRuntime({
         requestId: req.id,
+        stateDir: ctx.stateDir,
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        agentRegistry: ctx.agentRegistry,
+        loadPromptSnapshot: ctx.getConversationPromptSnapshot,
         stopSubTask: ctx.stopSubTask,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
           | "subtask.list"

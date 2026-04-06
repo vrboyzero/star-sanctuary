@@ -328,6 +328,14 @@ export type GoalCapabilityPlanSubAgent = {
   reason?: string;
   deliverable?: string;
   handoffToVerifier?: boolean;
+  catalogDefault?: {
+    permissionMode?: "plan" | "acceptEdits" | "confirm";
+    allowedToolFamilies?: string[];
+    maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
+    handoffStyle?: "summary" | "structured";
+    whenToUse?: string[];
+    skills?: string[];
+  };
 };
 
 export type GoalCapabilityPlanRolePolicy = {

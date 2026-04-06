@@ -105,6 +105,43 @@ describe("resident shared memory", () => {
     expect(mergedStatus.chunks).toBe(2);
   });
 
+  it("keeps shared chunks queryable on a unified non-resident memory surface", async () => {
+    const manager = await createMemoryManager("viewer-unified");
+
+    manager.upsertMemoryChunk({
+      id: "private-viewer-chunk",
+      sourcePath: "memory/private-viewer.md",
+      sourceType: "manual",
+      memoryType: "other",
+      content: "viewer private marker",
+      visibility: "private",
+    });
+    manager.upsertMemoryChunk({
+      id: "shared-viewer-chunk",
+      sourcePath: "memory/shared-viewer.md",
+      sourceType: "manual",
+      memoryType: "other",
+      content: "viewer topic marker",
+      topic: "viewer-audit",
+      visibility: "shared",
+    });
+
+    const recentShared = listRecentResidentMemory({
+      manager,
+      limit: 10,
+      filter: { scope: "shared", topic: "viewer-audit" },
+      includeContent: false,
+    });
+    expect(recentShared.map((item) => item.id)).toEqual(["shared-viewer-chunk"]);
+
+    const recentAll = listRecentResidentMemory({
+      manager,
+      limit: 10,
+      includeContent: false,
+    });
+    expect(recentAll.map((item) => item.id)).toEqual(expect.arrayContaining(["private-viewer-chunk", "shared-viewer-chunk"]));
+  });
+
   it("creates a pending shared promotion first and only exposes it after approval", async () => {
     const privateManager = await createMemoryManager("promote-private");
     const sharedManager = await createMemoryManager("promote-shared");

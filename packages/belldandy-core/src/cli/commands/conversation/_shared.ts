@@ -1,9 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ConversationStore, type PersistedConversationSummary, type SessionTimelineProjection, type SessionTranscriptExportBundle } from "@belldandy/agent";
+import {
+  buildDefaultProfile,
+  ConversationStore,
+  loadAgentProfiles,
+  type AgentProfile,
+  type PersistedConversationSummary,
+  type SessionTimelineProjection,
+  type SessionTranscriptExportBundle,
+} from "@belldandy/agent";
+import { buildAgentLaunchExplainability } from "../../../agent-launch-explainability.js";
 import { loadConversationPromptSnapshotArtifact, renderConversationPromptSnapshotText, type ConversationPromptSnapshotArtifact } from "../../../conversation-prompt-snapshot.js";
 import { resolveConversationArtifactOutputPath } from "../../../conversation-debug-projection.js";
 import { listRecentConversationExports, recordConversationArtifactExport, type ConversationExportIndexRecord } from "../../../conversation-export-index.js";
+import { resolveResidentStateBindingViewForAgent } from "../../../resident-state-binding.js";
 
 export function createConversationStoreForCLI(stateDir: string): ConversationStore {
   return new ConversationStore({
@@ -67,14 +77,44 @@ export async function loadConversationPromptSnapshotForCLI(input: {
   stateDir: string;
   conversationId: string;
   runId?: string;
-}): Promise<ConversationPromptSnapshotArtifact | undefined> {
-  return loadConversationPromptSnapshotArtifact(input);
+}): Promise<{
+  artifact: ConversationPromptSnapshotArtifact;
+  launchExplainability?: ReturnType<typeof buildAgentLaunchExplainability> | null;
+  residentStateBinding?: ReturnType<typeof resolveResidentStateBindingViewForAgent> | null;
+} | undefined> {
+  const artifact = await loadConversationPromptSnapshotArtifact(input);
+  if (!artifact) {
+    return undefined;
+  }
+  const agentProfiles = await loadConversationPromptSnapshotAgentProfiles(input.stateDir);
+  const agentId = typeof artifact.manifest.agentId === "string" && artifact.manifest.agentId.trim()
+    ? artifact.manifest.agentId.trim()
+    : undefined;
+  return {
+    artifact,
+    launchExplainability: buildAgentLaunchExplainability({
+      agentRegistry: agentProfiles,
+      agentId,
+    }) ?? null,
+    residentStateBinding: resolveResidentStateBindingViewForAgent(
+      input.stateDir,
+      agentProfiles,
+      agentId,
+    ) ?? null,
+  };
 }
 
 export function renderConversationPromptSnapshotArtifactText(
-  artifact: ConversationPromptSnapshotArtifact,
+  input: {
+    artifact: ConversationPromptSnapshotArtifact;
+    launchExplainability?: ReturnType<typeof buildAgentLaunchExplainability> | null;
+    residentStateBinding?: ReturnType<typeof resolveResidentStateBindingViewForAgent> | null;
+  },
 ): string {
-  return renderConversationPromptSnapshotText(artifact);
+  return renderConversationPromptSnapshotText(input.artifact, {
+    launchExplainability: input.launchExplainability ?? null,
+    residentStateBinding: input.residentStateBinding ?? null,
+  });
 }
 
 export async function listConversationCLIRecentExports(input: {
@@ -151,4 +191,20 @@ export function renderRecentConversationExports(items: ConversationExportIndexRe
   return items.map((item) =>
     `${new Date(item.exportedAt).toISOString()} ${item.artifact}/${item.format} ${item.conversationId} -> ${item.outputPath}`,
   ).join("\n");
+}
+
+async function loadConversationPromptSnapshotAgentProfiles(
+  stateDir: string,
+): Promise<Pick<{ getProfile(agentId: string): AgentProfile | undefined }, "getProfile">> {
+  const configuredProfiles = await loadAgentProfiles(path.join(stateDir, "agents.json"));
+  const profiles = new Map<string, AgentProfile>();
+  profiles.set("default", buildDefaultProfile());
+  configuredProfiles.forEach((profile) => {
+    profiles.set(profile.id, profile);
+  });
+  return {
+    getProfile(agentId: string): AgentProfile | undefined {
+      return profiles.get(agentId);
+    },
+  };
 }

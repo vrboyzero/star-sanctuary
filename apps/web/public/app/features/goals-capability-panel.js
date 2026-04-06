@@ -1,9 +1,17 @@
+import {
+  buildGoalCheckpointExplainabilityEntry,
+  buildGoalDelegationResultExplainabilityEntry,
+  buildGoalSubAgentExplainabilityEntries,
+  buildGoalVerifierExplainabilityEntry,
+} from "./goal-launch-explainability.js";
+
 export function createGoalsCapabilityPanelFeature({
   refs,
   escapeHtml,
   formatDateTime,
   onOpenSourcePath,
   onOpenSubtask,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { goalsDetailEl } = refs;
 
@@ -72,6 +80,26 @@ export function createGoalsCapabilityPanelFeature({
     `;
   }
 
+  function renderExplainabilityEntries(entries, emptyText) {
+    if (!Array.isArray(entries) || !entries.length) {
+      return `<div class="memory-viewer-empty">${escapeHtml(emptyText)}</div>`;
+    }
+    return `
+      <div class="goal-tracking-list">
+        ${entries.map((entry) => `
+          <div class="goal-tracking-item">
+            <div class="goal-tracking-item-head">
+              <span class="goal-tracking-item-title">${escapeHtml(entry.label || "launch")}</span>
+            </div>
+            <div class="tool-settings-policy-note">
+              ${(Array.isArray(entry.lines) ? entry.lines : []).map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
   function renderCoordinatorResultList(items, emptyText) {
     if (!Array.isArray(items) || !items.length) {
       return `<div class="memory-viewer-empty">${escapeHtml(emptyText)}</div>`;
@@ -93,6 +121,11 @@ export function createGoalsCapabilityPanelFeature({
               ${item.sessionId ? `<span>会话 ${escapeHtml(item.sessionId)}</span>` : ""}
               ${item.outputPath ? `<span>${escapeHtml(item.outputPath)}</span>` : ""}
             </div>
+            ${item.explainability?.lines?.length ? `
+              <div class="tool-settings-policy-note">
+                ${item.explainability.lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+              </div>
+            ` : ""}
             <div class="memory-detail-badges">
               ${item.taskId ? `<button class="button goal-inline-action-secondary" data-open-subtask-id="${escapeHtml(item.taskId)}">打开子任务</button>` : ""}
               ${item.outputPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(item.outputPath)}">打开输出</button>` : ""}
@@ -219,6 +252,9 @@ export function createGoalsCapabilityPanelFeature({
       ? verifierResult.findings.map((item) => `[${formatFindingSeverity(item.severity)}] ${item.summary || ""}`).filter(Boolean)
       : [];
     const orchestrationNotes = Array.isArray(orchestration?.notes) ? orchestration.notes : [];
+    const subAgentExplainabilityEntries = buildGoalSubAgentExplainabilityEntries(focusPlan, t);
+    const verifierExplainabilityEntry = buildGoalVerifierExplainabilityEntry(focusPlan, t);
+    const checkpointExplainabilityEntry = buildGoalCheckpointExplainabilityEntry(focusPlan, t);
 
     panel.innerHTML = `
       <div class="goal-capability-stats">
@@ -332,11 +368,17 @@ export function createGoalsCapabilityPanelFeature({
                   focusPlan.checkpoint.suggestedReviewer ? `建议评审人：${focusPlan.checkpoint.suggestedReviewer}` : "",
                   focusPlan.checkpoint.suggestedReviewerRole ? `建议角色：${focusPlan.checkpoint.suggestedReviewerRole}` : "",
                   focusPlan.checkpoint.suggestedSlaHours ? `SLA：${focusPlan.checkpoint.suggestedSlaHours}h` : "",
+                  focusPlan.checkpoint.suggestedNote ? `审批备注：${focusPlan.checkpoint.suggestedNote}` : "",
                   focusPlan.checkpoint.escalationMode && focusPlan.checkpoint.escalationMode !== "none" ? `升级：${focusPlan.checkpoint.escalationMode}` : "",
                   ...focusPlan.checkpoint.reasons,
                   ...focusPlan.gaps.map((item) => `缺口：${item}`),
                 ].filter(Boolean),
                 "当前计划没有额外风险说明或能力缺口。",
+              )}
+              <div class="goal-summary-label">Checkpoint Routing Explainability</div>
+              ${renderExplainabilityEntries(
+                checkpointExplainabilityEntry ? [checkpointExplainabilityEntry] : [],
+                "当前 checkpoint 还没有额外 explainability 摘要。",
               )}
             </div>
           </div>
@@ -373,6 +415,11 @@ export function createGoalsCapabilityPanelFeature({
                 orchestrationNotes,
                 "当前没有额外编排备注。",
               )}
+              <div class="goal-summary-label">Sub-Agent Suggested Launch / Explainability</div>
+              ${renderExplainabilityEntries(
+                subAgentExplainabilityEntries,
+                "当前子 Agent 计划还没有 launch explainability 摘要。",
+              )}
             </div>
             <div class="goal-capability-column">
               <div class="goal-summary-label">验证器运行态 / 结果</div>
@@ -386,6 +433,11 @@ export function createGoalsCapabilityPanelFeature({
                 ${verifierHandoff?.verifierTaskId ? `<button class="button goal-inline-action-secondary" data-open-subtask-id="${escapeHtml(verifierHandoff.verifierTaskId)}">打开验证子任务</button>` : ""}
                 ${verifierResult?.outputPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(verifierResult.outputPath)}">打开验证输出</button>` : verifierHandoff?.outputPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(verifierHandoff.outputPath)}">打开验证输出</button>` : ""}
               </div>
+              <div class="goal-summary-label">Verifier Handoff / Suggested Launch</div>
+              ${renderExplainabilityEntries(
+                verifierExplainabilityEntry ? [verifierExplainabilityEntry] : [],
+                "当前验证器链路还没有 explainability 摘要。",
+              )}
             </div>
           </div>
 
@@ -393,7 +445,10 @@ export function createGoalsCapabilityPanelFeature({
             <div class="goal-capability-column">
               <div class="goal-summary-label">协调结果</div>
               ${renderCoordinatorResultList(
-                delegationResults,
+                delegationResults.map((item) => ({
+                  ...item,
+                  explainability: buildGoalDelegationResultExplainabilityEntry(focusPlan, item, t),
+                })),
                 "当前还没有委派结果。",
               )}
             </div>

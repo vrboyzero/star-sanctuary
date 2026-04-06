@@ -19,6 +19,7 @@ import {
   withDeltaPromptMetrics,
   withProviderNativeSystemBlockPromptMetrics,
 } from "./prompt-observability.js";
+import { renderAgentLaunchExplainabilityLines, renderResidentStateBindingLines } from "./agent-explainability-text.js";
 import { normalizeLegacyPromptSnapshot } from "./prompt-snapshot-legacy-normalize.js";
 
 const CONVERSATION_DEBUG_DIRNAME = "diagnostics";
@@ -273,9 +274,15 @@ export function normalizeConversationPromptSnapshotArtifact(
 
 export function renderConversationPromptSnapshotText(
   artifact: ConversationPromptSnapshotArtifact,
+  sidecar?: {
+    launchExplainability?: Record<string, unknown> | null;
+    residentStateBinding?: Record<string, unknown> | null;
+  },
 ): string {
   const residentProfile = readPromptSnapshotResidentObject(artifact.snapshot.inputMeta, "residentProfile");
   const memoryPolicy = readPromptSnapshotResidentObject(artifact.snapshot.inputMeta, "memoryPolicy");
+  const launchExplainabilityLines = renderAgentLaunchExplainabilityLines(sidecar?.launchExplainability);
+  const residentStateBindingLines = renderResidentStateBindingLines(sidecar?.residentStateBinding);
   const promptObservabilityText = renderPromptObservabilityText({
     scope: "run",
     agentId: artifact.manifest.agentId ?? "unknown",
@@ -310,11 +317,25 @@ export function renderConversationPromptSnapshotText(
     `messages: ${artifact.summary.messageCount}`,
     promptObservabilityText,
     "",
+  ];
+
+  if (residentStateBindingLines.length > 0) {
+    lines.push("Resident State Binding");
+    lines.push(...residentStateBindingLines);
+    lines.push("");
+  }
+  if (launchExplainabilityLines.length > 0) {
+    lines.push("Launch Explainability");
+    lines.push(...launchExplainabilityLines);
+    lines.push("");
+  }
+
+  lines.push(
     "System Prompt",
     artifact.snapshot.systemPrompt || "(empty)",
     "",
     "Messages",
-  ];
+  );
 
   artifact.snapshot.messages.forEach((message, index) => {
     lines.push(``);

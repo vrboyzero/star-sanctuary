@@ -110,6 +110,42 @@ describe("SubAgentOrchestrator", () => {
       expect(result.output).toBe("coder response");
     });
 
+    it("should apply catalog launch defaults when spawn input omits role and policy fields", async () => {
+      const registry = new AgentRegistry(() => createMockAgent("catalog response"));
+      registry.register(defaultProfile);
+      registry.register({
+        id: "ops-coder",
+        displayName: "Ops Coder",
+        model: "primary",
+        defaultRole: "coder",
+        defaultPermissionMode: "confirm",
+        defaultAllowedToolFamilies: ["workspace-read", "workspace-write", "patch"],
+        defaultMaxToolRiskLevel: "high",
+      });
+
+      const orch = new SubAgentOrchestrator({
+        agentRegistry: registry,
+        conversationStore: new ConversationStore(),
+      });
+
+      const result = await orch.spawn({
+        parentConversationId: "parent-1",
+        agentId: "ops-coder",
+        instruction: "Implement rollout guardrails",
+      });
+
+      expect(result.success).toBe(true);
+      const session = orch.getSession(result.sessionId);
+      expect(session?.launchSpec).toMatchObject({
+        agentId: "ops-coder",
+        profileId: "ops-coder",
+        role: "coder",
+        permissionMode: "confirm",
+        allowedToolFamilies: ["workspace-read", "workspace-write", "patch"],
+        maxToolRiskLevel: "high",
+      });
+    });
+
     it("should return error when agent ID not found", async () => {
       const { orchestrator } = setup();
 

@@ -407,6 +407,20 @@ function getSharedReadManager(input: {
   return input.sharedManager;
 }
 
+function shouldTreatManagerAsUnifiedMemorySurface(input: {
+  manager: MemoryManager;
+  sharedManager?: MemoryManager | null;
+  residentPolicy?: ResolvedResidentMemoryPolicy;
+}): boolean {
+  if (!input.residentPolicy) {
+    return true;
+  }
+  if (!input.sharedManager || input.sharedManager === input.manager) {
+    return true;
+  }
+  return false;
+}
+
 type ResidentSharePromotionContext = {
   privateItem: MemorySearchResult | null;
   sharedItem: MemorySearchResult | null;
@@ -629,10 +643,18 @@ export async function searchResidentMemory(input: {
   const sharedManager = getSharedReadManager(input);
   const wantsSharedOnly = filter?.scope === "shared";
   const wantsPrivateOnly = filter?.scope === "private";
+  const unifiedSurface = shouldTreatManagerAsUnifiedMemorySurface(input);
 
   if (wantsSharedOnly) {
-    if (!sharedManager) return [];
-    return filterVisibleSharedItems(await sharedManager.search(query, {
+    if (sharedManager) {
+      return filterVisibleSharedItems(await sharedManager.search(query, {
+        limit,
+        filter: cloneFilterWithScope(filter, "shared"),
+        includeContent,
+      }));
+    }
+    if (!unifiedSurface) return [];
+    return filterVisibleSharedItems(await manager.search(query, {
       limit,
       filter: cloneFilterWithScope(filter, "shared"),
       includeContent,
@@ -647,6 +669,14 @@ export async function searchResidentMemory(input: {
     });
   }
 
+  if (unifiedSurface) {
+    return manager.search(query, {
+      limit,
+      filter,
+      includeContent,
+    });
+  }
+
   const privateItems = await manager.search(query, {
     limit,
     filter: cloneFilterWithScope(filter, "private"),
@@ -655,7 +685,6 @@ export async function searchResidentMemory(input: {
   if (!sharedManager) {
     return privateItems.slice(0, limit);
   }
-
   const sharedItems = filterVisibleSharedItems(await sharedManager.search(query, {
     limit,
     filter: cloneFilterWithScope(filter, "shared"),
@@ -678,16 +707,23 @@ export function listRecentResidentMemory(input: {
   const sharedManager = getSharedReadManager(input);
   const wantsSharedOnly = filter?.scope === "shared";
   const wantsPrivateOnly = filter?.scope === "private";
+  const unifiedSurface = shouldTreatManagerAsUnifiedMemorySurface(input);
 
   if (wantsSharedOnly) {
-    if (!sharedManager) return [];
-    return filterVisibleSharedItems(sharedManager.getRecent(limit, cloneFilterWithScope(filter, "shared"), includeContent));
+    if (sharedManager) {
+      return filterVisibleSharedItems(sharedManager.getRecent(limit, cloneFilterWithScope(filter, "shared"), includeContent));
+    }
+    if (!unifiedSurface) return [];
+    return filterVisibleSharedItems(manager.getRecent(limit, cloneFilterWithScope(filter, "shared"), includeContent));
   }
 
   if (wantsPrivateOnly) {
     return manager.getRecent(limit, cloneFilterWithScope(filter, "private"), includeContent);
   }
 
+  if (unifiedSurface) {
+    return manager.getRecent(limit, filter, includeContent);
+  }
   const privateItems = manager.getRecent(limit, cloneFilterWithScope(filter, "private"), includeContent);
   if (!sharedManager) {
     return privateItems.slice(0, limit);

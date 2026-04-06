@@ -1,9 +1,15 @@
 import fs from "node:fs/promises";
 
+import type { AgentRegistry } from "@belldandy/agent";
 import type { GatewayResFrame } from "@belldandy/protocol";
 
+import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
+import type { ConversationPromptSnapshotArtifact } from "./conversation-prompt-snapshot.js";
 import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
+import { buildSubTaskLaunchExplainability } from "./subtask-launch-explainability.js";
+import { buildSubTaskResultEnvelope } from "./subtask-result-envelope.js";
+import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
 
 type SubTaskQueryRuntimeMethod =
   | "subtask.list"
@@ -13,7 +19,13 @@ type SubTaskQueryRuntimeMethod =
 
 export type QueryRuntimeSubTaskContext = {
   requestId: string;
+  stateDir?: string;
   subTaskRuntimeStore?: SubTaskRuntimeStore;
+  agentRegistry?: Pick<AgentRegistry, "getProfile">;
+  loadPromptSnapshot?: (input: {
+    conversationId: string;
+    runId?: string;
+  }) => Promise<ConversationPromptSnapshotArtifact | undefined>;
   stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
   runtimeObserver?: QueryRuntimeObserver<SubTaskQueryRuntimeMethod>;
 };
@@ -176,10 +188,15 @@ export async function handleSubTaskGetWithQueryRuntime(
       }
     }
 
+    const launchExplainability = buildSubTaskLaunchExplainability(item, ctx.agentRegistry);
+    const promptSnapshotView = await loadSubTaskPromptSnapshotView(ctx, item, queryRuntime);
+
     queryRuntime.mark("completed", {
       conversationId: item.parentConversationId,
       detail: {
         taskId: item.id,
+        hasLaunchExplainability: Boolean(launchExplainability),
+        hasPromptSnapshot: Boolean(promptSnapshotView),
       },
     });
 
@@ -188,11 +205,75 @@ export async function handleSubTaskGetWithQueryRuntime(
       id: ctx.requestId,
       ok: true,
       payload: {
-        item,
+        item: {
+          ...item,
+        },
+        launchExplainability: launchExplainability ?? null,
+        promptSnapshotView,
+        resultEnvelope: buildSubTaskResultEnvelope(item),
         outputContent,
       },
     };
   });
+}
+
+async function loadSubTaskPromptSnapshotView(
+  ctx: QueryRuntimeSubTaskContext,
+  item: SubTaskRecord,
+  queryRuntime: QueryRuntime<"subtask.get">,
+): Promise<{
+  snapshot: ConversationPromptSnapshotArtifact;
+  launchExplainability?: ReturnType<typeof buildAgentLaunchExplainability> | null;
+  residentStateBinding?: ReturnType<typeof resolveResidentStateBindingViewForAgent> | null;
+} | null> {
+  if (!ctx.loadPromptSnapshot || !ctx.stateDir || !item.sessionId) {
+    return null;
+  }
+
+  const snapshot = await ctx.loadPromptSnapshot({
+    conversationId: item.sessionId,
+  });
+  if (!snapshot) {
+    queryRuntime.mark("task_prompt_snapshot_missing", {
+      conversationId: item.parentConversationId,
+      detail: {
+        taskId: item.id,
+        sessionId: item.sessionId,
+      },
+    });
+    return null;
+  }
+
+  const agentId = typeof snapshot.manifest.agentId === "string" && snapshot.manifest.agentId.trim()
+    ? snapshot.manifest.agentId.trim()
+    : item.agentId;
+  const launchExplainability = buildAgentLaunchExplainability({
+    agentRegistry: ctx.agentRegistry,
+    agentId,
+    profileId: item.launchSpec?.profileId,
+    launchSpec: item.launchSpec,
+  });
+  const residentStateBinding = resolveResidentStateBindingViewForAgent(
+    ctx.stateDir,
+    ctx.agentRegistry,
+    agentId,
+  );
+
+  queryRuntime.mark("task_prompt_snapshot_loaded", {
+    conversationId: item.parentConversationId,
+    detail: {
+      taskId: item.id,
+      snapshotConversationId: snapshot.manifest.conversationId,
+      ...(snapshot.manifest.runId ? { runId: snapshot.manifest.runId } : {}),
+      messageCount: snapshot.summary.messageCount,
+    },
+  });
+
+  return {
+    snapshot,
+    launchExplainability: launchExplainability ?? null,
+    residentStateBinding: residentStateBinding ?? null,
+  };
 }
 
 export async function handleSubTaskStopWithQueryRuntime(
