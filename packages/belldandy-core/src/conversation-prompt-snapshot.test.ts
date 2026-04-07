@@ -5,7 +5,10 @@ import path from "node:path";
 import { expect, test } from "vitest";
 
 import {
+  getConversationPromptSnapshotArtifactPath,
+  getConversationPromptSnapshotSystemPromptBlobRoot,
   getConversationPromptSnapshotDirectory,
+  loadConversationPromptSnapshotArtifact,
   persistConversationPromptSnapshot,
   renderConversationPromptSnapshotText,
   type ConversationPromptSnapshotArtifact,
@@ -243,17 +246,210 @@ test("persistConversationPromptSnapshot removes aged prompt snapshots based on r
   }
 });
 
+test("persistConversationPromptSnapshot persists schema v2 with systemPromptRef and load expands the blob", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-v2-"));
+  const conversationId = "conv-v2";
+  const runId = "run-v2";
+
+  try {
+    const persisted = await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId,
+        runId,
+        createdAt: 10,
+        systemPrompt: "system prompt body v2",
+      }),
+    });
+
+    const raw = JSON.parse(await fs.readFile(persisted.outputPath, "utf-8"));
+    expect(raw.schemaVersion).toBe(2);
+    expect(raw.snapshot.systemPrompt).toBeUndefined();
+    expect(raw.snapshot.systemPromptRef).toMatchObject({
+      hash: expect.stringMatching(/^sha256:/),
+      chars: "system prompt body v2".length,
+    });
+    expect(raw.snapshot.messages[0]).toEqual({
+      role: "system",
+      contentRef: "systemPrompt",
+    });
+
+    const blobRoot = getConversationPromptSnapshotSystemPromptBlobRoot(stateDir);
+    const blobFiles = await fs.readdir(blobRoot);
+    expect(blobFiles).toHaveLength(1);
+
+    const loaded = await loadConversationPromptSnapshotArtifact({
+      stateDir,
+      conversationId,
+      runId,
+    });
+    expect(loaded?.schemaVersion).toBe(2);
+    expect(loaded?.snapshot.systemPrompt).toBe("system prompt body v2");
+    expect(loaded?.snapshot.messages[0]).toMatchObject({
+      role: "system",
+      content: "system prompt body v2",
+    });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("persistConversationPromptSnapshot keeps first system message inline when content differs from system prompt", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-inline-"));
+  const conversationId = "conv-inline";
+  const runId = "run-inline";
+
+  try {
+    const persisted = await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: {
+        ...buildSnapshot({
+          conversationId,
+          runId,
+          createdAt: 11,
+          systemPrompt: "system prompt body",
+        }),
+        messages: [{ role: "system", content: "different system message" }],
+      },
+    });
+
+    const raw = JSON.parse(await fs.readFile(persisted.outputPath, "utf-8"));
+    expect(raw.snapshot.messages[0]).toEqual({
+      role: "system",
+      content: "different system message",
+    });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("loadConversationPromptSnapshotArtifact expands older schema v2 message content without contentRef", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-v2-legacy-"));
+  const conversationId = "conv-v2-legacy";
+  const runId = "run-v2-legacy";
+  const createdAt = 12;
+  const systemPrompt = "legacy system prompt";
+
+  try {
+    const persisted = await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId,
+        runId,
+        createdAt,
+        systemPrompt,
+      }),
+    });
+
+    const raw = JSON.parse(await fs.readFile(persisted.outputPath, "utf-8"));
+    raw.snapshot.messages = [{ role: "system", content: systemPrompt }];
+    await fs.writeFile(persisted.outputPath, JSON.stringify(raw, null, 2), "utf-8");
+
+    const loaded = await loadConversationPromptSnapshotArtifact({
+      stateDir,
+      conversationId,
+      runId,
+    });
+
+    expect(loaded?.snapshot.systemPrompt).toBe(systemPrompt);
+    expect(loaded?.snapshot.messages[0]).toEqual({
+      role: "system",
+      content: systemPrompt,
+    });
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("persistConversationPromptSnapshot reuses shared system prompt blobs and cleans orphaned blobs", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-blob-"));
+  const conversationIdA = "conv-a";
+  const conversationIdB = "conv-b";
+
+  try {
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId: conversationIdA,
+        runId: "run-1",
+        createdAt: 1,
+        systemPrompt: "shared prompt",
+      }),
+    });
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId: conversationIdB,
+        runId: "run-2",
+        createdAt: 2,
+        systemPrompt: "shared prompt",
+      }),
+    });
+
+    const blobRoot = getConversationPromptSnapshotSystemPromptBlobRoot(stateDir);
+    let blobFiles = await fs.readdir(blobRoot);
+    expect(blobFiles).toHaveLength(1);
+
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId: conversationIdA,
+        runId: "run-3",
+        createdAt: 3,
+        systemPrompt: "new prompt",
+      }),
+      retention: {
+        defaultMaxRunsPerConversation: 1,
+        heartbeatMaxRuns: 5,
+        maxAgeDays: 0,
+      },
+    });
+
+    const artifactAOld = getConversationPromptSnapshotArtifactPath({
+      stateDir,
+      conversationId: conversationIdA,
+      runId: "run-1",
+    });
+    await expect(fs.access(artifactAOld)).rejects.toThrow();
+
+    blobFiles = await fs.readdir(blobRoot);
+    expect(blobFiles).toHaveLength(2);
+
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId: conversationIdB,
+        runId: "run-4",
+        createdAt: 4,
+        systemPrompt: "new prompt 2",
+      }),
+      retention: {
+        defaultMaxRunsPerConversation: 1,
+        heartbeatMaxRuns: 5,
+        maxAgeDays: 0,
+      },
+    });
+
+    blobFiles = await fs.readdir(blobRoot);
+    expect(blobFiles).toHaveLength(2);
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 function buildSnapshot(input: {
   conversationId: string;
   runId: string;
   createdAt: number;
+  systemPrompt?: string;
 }) {
+  const systemPrompt = input.systemPrompt ?? `system:${input.runId}`;
   return {
     agentId: "default",
     conversationId: input.conversationId,
     runId: input.runId,
     createdAt: input.createdAt,
-    systemPrompt: `system:${input.runId}`,
-    messages: [{ role: "system" as const, content: `system:${input.runId}` }],
+    systemPrompt,
+    messages: [{ role: "system" as const, content: systemPrompt }],
   };
 }

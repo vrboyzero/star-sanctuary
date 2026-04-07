@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "修改了AGENTS.md文件，添加了P0文件操作硬规则"
+git commit -m "实现了Prompt Snapshot 去重存储"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

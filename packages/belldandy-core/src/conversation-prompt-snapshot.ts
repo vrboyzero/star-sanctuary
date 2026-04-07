@@ -24,7 +24,9 @@ import { normalizeLegacyPromptSnapshot } from "./prompt-snapshot-legacy-normaliz
 
 const CONVERSATION_DEBUG_DIRNAME = "diagnostics";
 const PROMPT_SNAPSHOT_DIRNAME = "prompt-snapshots";
-export const CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+const PROMPT_SNAPSHOT_BLOBS_DIRNAME = "_blobs";
+const PROMPT_SNAPSHOT_SYSTEM_PROMPT_BLOBS_DIRNAME = "system-prompts";
+export const CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION = 2 as const;
 const DEFAULT_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS = 20;
 const DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS = 5;
 const DEFAULT_PROMPT_SNAPSHOT_MAX_AGE_DAYS = 7;
@@ -38,41 +40,90 @@ export type ConversationPromptSnapshotRetentionPolicy = {
   now?: number;
 };
 
-export type ConversationPromptSnapshotArtifact = {
-  schemaVersion: typeof CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION;
-  manifest: {
-    conversationId: string;
-    runId?: string;
-    agentId?: string;
-    createdAt: number;
-    persistedAt: number;
-    source: "runtime.prompt_snapshot";
-  };
-  summary: {
-    messageCount: number;
-    systemPromptChars: number;
-    includesHookSystemPrompt: boolean;
-    hasPrependContext: boolean;
-    deltaCount: number;
-    deltaChars: number;
-    systemPromptEstimatedTokens: number;
-    deltaEstimatedTokens: number;
-    providerNativeSystemBlockCount: number;
-    providerNativeSystemBlockChars: number;
-    providerNativeSystemBlockEstimatedTokens: number;
-    tokenBreakdown: PromptTokenBreakdown;
-    truncationReason?: PromptTruncationReason;
-  };
-  snapshot: {
-    systemPrompt: string;
-    messages: AgentPromptSnapshotMessage[];
-    deltas?: Array<AgentPromptDelta & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
-    providerNativeSystemBlocks?: Array<ProviderNativeSystemBlock & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
-    inputMeta?: JsonObject;
-    hookSystemPromptUsed: boolean;
-    prependContext?: string;
-  };
+export type ConversationPromptSnapshotSystemPromptRef = {
+  hash: string;
+  chars: number;
 };
+
+type ConversationPromptSnapshotArtifactManifest = {
+  conversationId: string;
+  runId?: string;
+  agentId?: string;
+  createdAt: number;
+  persistedAt: number;
+  source: "runtime.prompt_snapshot";
+};
+
+type ConversationPromptSnapshotArtifactSummary = {
+  messageCount: number;
+  systemPromptChars: number;
+  includesHookSystemPrompt: boolean;
+  hasPrependContext: boolean;
+  deltaCount: number;
+  deltaChars: number;
+  systemPromptEstimatedTokens: number;
+  deltaEstimatedTokens: number;
+  providerNativeSystemBlockCount: number;
+  providerNativeSystemBlockChars: number;
+  providerNativeSystemBlockEstimatedTokens: number;
+  tokenBreakdown: PromptTokenBreakdown;
+  truncationReason?: PromptTruncationReason;
+};
+
+type ConversationPromptSnapshotExpandedSnapshot = {
+  systemPrompt: string;
+  messages: AgentPromptSnapshotMessage[];
+  deltas?: Array<AgentPromptDelta & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
+  providerNativeSystemBlocks?: Array<ProviderNativeSystemBlock & { charLength: number; estimatedChars: number; estimatedTokens: number }>;
+  inputMeta?: JsonObject;
+  hookSystemPromptUsed: boolean;
+  prependContext?: string;
+};
+
+type ConversationPromptSnapshotPersistedSnapshotV1 = ConversationPromptSnapshotExpandedSnapshot;
+
+type ConversationPromptSnapshotMessageContentRef = "systemPrompt";
+
+type PersistedConversationPromptSnapshotMessage = Omit<AgentPromptSnapshotMessage, "content"> & (
+  | {
+    content: AgentPromptSnapshotMessage["content"];
+    contentRef?: never;
+  }
+  | {
+    contentRef: ConversationPromptSnapshotMessageContentRef;
+    content?: undefined;
+  }
+);
+
+type ConversationPromptSnapshotPersistedSnapshotV2 = Omit<ConversationPromptSnapshotExpandedSnapshot, "systemPrompt" | "messages"> & {
+  systemPromptRef: ConversationPromptSnapshotSystemPromptRef;
+  messages: PersistedConversationPromptSnapshotMessage[];
+};
+
+export type ConversationPromptSnapshotArtifact = {
+  schemaVersion: 1 | typeof CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION;
+  manifest: ConversationPromptSnapshotArtifactManifest;
+  summary: ConversationPromptSnapshotArtifactSummary;
+  snapshot: ConversationPromptSnapshotExpandedSnapshot;
+};
+
+type PersistedConversationPromptSnapshotArtifactV1 = {
+  schemaVersion: 1;
+  manifest: ConversationPromptSnapshotArtifactManifest;
+  summary: ConversationPromptSnapshotArtifactSummary;
+  snapshot: ConversationPromptSnapshotPersistedSnapshotV1;
+};
+
+type PersistedConversationPromptSnapshotArtifactV2 = {
+  schemaVersion: typeof CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION;
+  manifest: ConversationPromptSnapshotArtifactManifest;
+  summary: ConversationPromptSnapshotArtifactSummary;
+  snapshot: ConversationPromptSnapshotPersistedSnapshotV2;
+};
+
+type PersistedConversationPromptSnapshotArtifact =
+  | PersistedConversationPromptSnapshotArtifactV1
+  | PersistedConversationPromptSnapshotArtifactV2;
 
 export function buildConversationPromptSnapshotArtifact(input: {
   snapshot: AgentPromptSnapshot;
@@ -151,8 +202,26 @@ export function getConversationPromptSnapshotRoot(stateDir: string): string {
   return path.join(stateDir, CONVERSATION_DEBUG_DIRNAME, PROMPT_SNAPSHOT_DIRNAME);
 }
 
+export function getConversationPromptSnapshotBlobRoot(stateDir: string): string {
+  return path.join(getConversationPromptSnapshotRoot(stateDir), PROMPT_SNAPSHOT_BLOBS_DIRNAME);
+}
+
+export function getConversationPromptSnapshotSystemPromptBlobRoot(stateDir: string): string {
+  return path.join(getConversationPromptSnapshotBlobRoot(stateDir), PROMPT_SNAPSHOT_SYSTEM_PROMPT_BLOBS_DIRNAME);
+}
+
 export function getConversationPromptSnapshotDirectory(stateDir: string, conversationId: string): string {
   return path.join(getConversationPromptSnapshotRoot(stateDir), sanitizeFileSegment(conversationId));
+}
+
+export function getConversationPromptSnapshotSystemPromptBlobPath(input: {
+  stateDir: string;
+  hash: string;
+}): string {
+  return path.join(
+    getConversationPromptSnapshotSystemPromptBlobRoot(input.stateDir),
+    `${sanitizeSystemPromptBlobHash(input.hash)}.txt`,
+  );
 }
 
 export function getConversationPromptSnapshotArtifactPath(input: {
@@ -174,13 +243,21 @@ export async function persistConversationPromptSnapshot(input: {
   retention?: ConversationPromptSnapshotRetentionPolicy;
 }): Promise<{ artifact: ConversationPromptSnapshotArtifact; outputPath: string }> {
   const artifact = buildConversationPromptSnapshotArtifact({ snapshot: input.snapshot });
+  const systemPromptRef = await persistConversationPromptSystemPromptBlob({
+    stateDir: input.stateDir,
+    systemPrompt: artifact.snapshot.systemPrompt,
+  });
+  const persistedArtifact = toPersistedConversationPromptSnapshotArtifact({
+    artifact,
+    systemPromptRef,
+  });
   const outputPath = getConversationPromptSnapshotArtifactPath({
     stateDir: input.stateDir,
     conversationId: input.snapshot.conversationId,
     runId: input.snapshot.runId,
     createdAt: input.snapshot.createdAt,
   });
-  await atomicWriteJson(outputPath, artifact);
+  await atomicWriteJson(outputPath, persistedArtifact);
   await prunePersistedConversationPromptSnapshots({
     stateDir: input.stateDir,
     conversationId: input.snapshot.conversationId,
@@ -432,6 +509,191 @@ async function atomicWriteJson(targetPath: string, value: unknown): Promise<void
   await fs.rename(tempPath, targetPath);
 }
 
+async function atomicWriteText(targetPath: string, value: string): Promise<void> {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
+  await fs.writeFile(tempPath, value, "utf-8");
+  await fs.rename(tempPath, targetPath);
+}
+
+async function persistConversationPromptSystemPromptBlob(input: {
+  stateDir: string;
+  systemPrompt: string;
+}): Promise<ConversationPromptSnapshotSystemPromptRef> {
+  const hash = buildSystemPromptBlobHash(input.systemPrompt);
+  const blobPath = getConversationPromptSnapshotSystemPromptBlobPath({
+    stateDir: input.stateDir,
+    hash,
+  });
+  const exists = await fs.access(blobPath).then(() => true).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  });
+  if (!exists) {
+    await atomicWriteText(blobPath, input.systemPrompt);
+  }
+  return {
+    hash,
+    chars: input.systemPrompt.length,
+  };
+}
+
+function toPersistedConversationPromptSnapshotMessage(input: {
+  message: AgentPromptSnapshotMessage;
+  systemPrompt: string;
+  index: number;
+}): PersistedConversationPromptSnapshotMessage {
+  const { message, systemPrompt, index } = input;
+  const { content: _content, ...messageWithoutContent } = message;
+  const clonedContent = Array.isArray(message.content)
+    ? message.content.map((part) => ({ ...part }))
+    : message.content;
+  if (
+    index === 0
+    && message.role === "system"
+    && typeof clonedContent === "string"
+    && clonedContent === systemPrompt
+  ) {
+    return {
+      ...messageWithoutContent,
+      contentRef: "systemPrompt",
+    };
+  }
+  return {
+    ...messageWithoutContent,
+    content: clonedContent,
+  };
+}
+
+function expandPersistedConversationPromptSnapshotMessage(input: {
+  message: PersistedConversationPromptSnapshotMessage;
+  systemPrompt: string;
+}): AgentPromptSnapshotMessage {
+  const { message, systemPrompt } = input;
+  if ("contentRef" in message && message.contentRef === "systemPrompt") {
+    const { contentRef: _contentRef, ...messageWithoutContentRef } = message;
+    return {
+      ...messageWithoutContentRef,
+      content: systemPrompt,
+    };
+  }
+  return {
+    ...message,
+    content: Array.isArray(message.content)
+      ? message.content.map((part) => ({ ...part }))
+      : message.content,
+  };
+}
+
+function toPersistedConversationPromptSnapshotArtifact(input: {
+  artifact: ConversationPromptSnapshotArtifact;
+  systemPromptRef: ConversationPromptSnapshotSystemPromptRef;
+}): PersistedConversationPromptSnapshotArtifactV2 {
+  return {
+    schemaVersion: CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION,
+    manifest: { ...input.artifact.manifest },
+    summary: { ...input.artifact.summary },
+    snapshot: {
+      systemPromptRef: {
+        hash: input.systemPromptRef.hash,
+        chars: input.systemPromptRef.chars,
+      },
+      messages: input.artifact.snapshot.messages.map((message, index) => toPersistedConversationPromptSnapshotMessage({
+        message,
+        systemPrompt: input.artifact.snapshot.systemPrompt,
+        index,
+      })),
+      ...(input.artifact.snapshot.deltas
+        ? {
+          deltas: input.artifact.snapshot.deltas.map((delta) => ({
+            ...delta,
+            ...(delta.metadata ? { metadata: { ...delta.metadata } } : {}),
+          })),
+        }
+        : {}),
+      ...(input.artifact.snapshot.providerNativeSystemBlocks
+        ? {
+          providerNativeSystemBlocks: input.artifact.snapshot.providerNativeSystemBlocks.map((block) => ({
+            ...block,
+            sourceSectionIds: [...block.sourceSectionIds],
+            sourceDeltaIds: [...block.sourceDeltaIds],
+          })),
+        }
+        : {}),
+      ...(input.artifact.snapshot.inputMeta ? { inputMeta: { ...input.artifact.snapshot.inputMeta } } : {}),
+      hookSystemPromptUsed: input.artifact.snapshot.hookSystemPromptUsed === true,
+      ...(input.artifact.snapshot.prependContext ? { prependContext: input.artifact.snapshot.prependContext } : {}),
+    },
+  };
+}
+
+async function expandPersistedConversationPromptSnapshotArtifact(input: {
+  artifact: PersistedConversationPromptSnapshotArtifact;
+  artifactPath: string;
+}): Promise<ConversationPromptSnapshotArtifact | undefined> {
+  if (input.artifact.schemaVersion === 1) {
+    return input.artifact;
+  }
+  const systemPrompt = await loadConversationPromptSystemPromptBlob({
+    rootDirectory: getConversationPromptSnapshotRootFromArtifactPath(input.artifactPath),
+    ref: input.artifact.snapshot.systemPromptRef,
+  });
+  if (typeof systemPrompt !== "string") {
+    return undefined;
+  }
+  return {
+    schemaVersion: input.artifact.schemaVersion,
+    manifest: { ...input.artifact.manifest },
+    summary: { ...input.artifact.summary },
+    snapshot: {
+      systemPrompt,
+      messages: input.artifact.snapshot.messages.map((message) => expandPersistedConversationPromptSnapshotMessage({
+        message,
+        systemPrompt,
+      })),
+      ...(input.artifact.snapshot.deltas
+        ? {
+          deltas: input.artifact.snapshot.deltas.map((delta) => ({
+            ...delta,
+            ...(delta.metadata ? { metadata: { ...delta.metadata } } : {}),
+          })),
+        }
+        : {}),
+      ...(input.artifact.snapshot.providerNativeSystemBlocks
+        ? {
+          providerNativeSystemBlocks: input.artifact.snapshot.providerNativeSystemBlocks.map((block) => ({
+            ...block,
+            sourceSectionIds: [...block.sourceSectionIds],
+            sourceDeltaIds: [...block.sourceDeltaIds],
+          })),
+        }
+        : {}),
+      ...(input.artifact.snapshot.inputMeta ? { inputMeta: { ...input.artifact.snapshot.inputMeta } } : {}),
+      hookSystemPromptUsed: input.artifact.snapshot.hookSystemPromptUsed === true,
+      ...(input.artifact.snapshot.prependContext ? { prependContext: input.artifact.snapshot.prependContext } : {}),
+    },
+  };
+}
+
+async function loadConversationPromptSystemPromptBlob(input: {
+  rootDirectory: string;
+  ref: ConversationPromptSnapshotSystemPromptRef;
+}): Promise<string | undefined> {
+  const blobPath = getConversationPromptSnapshotSystemPromptBlobPathFromRoot(input.rootDirectory, input.ref.hash);
+  try {
+    return await fs.readFile(blobPath, "utf-8");
+  } catch (error) {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 async function prunePersistedConversationPromptSnapshots(input: {
   stateDir: string;
   conversationId: string;
@@ -460,6 +722,9 @@ async function prunePersistedConversationPromptSnapshots(input: {
       now: retention.now,
     });
   }
+  await pruneUnreferencedPromptSnapshotSystemPromptBlobs({
+    rootDirectory: getConversationPromptSnapshotRoot(input.stateDir),
+  });
 }
 
 function resolveConversationPromptSnapshotRetentionPolicy(
@@ -654,6 +919,67 @@ async function removeDirectoryIfEmpty(directory: string): Promise<void> {
   });
 }
 
+async function pruneUnreferencedPromptSnapshotSystemPromptBlobs(input: {
+  rootDirectory: string;
+}): Promise<void> {
+  const referencedHashes = await collectReferencedPromptSnapshotSystemPromptHashes(input.rootDirectory);
+  const blobDirectory = path.join(
+    input.rootDirectory,
+    PROMPT_SNAPSHOT_BLOBS_DIRNAME,
+    PROMPT_SNAPSHOT_SYSTEM_PROMPT_BLOBS_DIRNAME,
+  );
+  const entries = await fs.readdir(blobDirectory, { withFileTypes: true }).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!entries || entries.length === 0) {
+    return;
+  }
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.endsWith(".txt")) {
+      return;
+    }
+    const hash = `sha256:${entry.name.slice(0, -4)}`;
+    if (referencedHashes.has(hash)) {
+      return;
+    }
+    await unlinkIfExists(path.join(blobDirectory, entry.name));
+  }));
+  await removeDirectoryIfEmpty(blobDirectory);
+  await removeDirectoryIfEmpty(path.dirname(blobDirectory));
+}
+
+async function collectReferencedPromptSnapshotSystemPromptHashes(rootDirectory: string): Promise<Set<string>> {
+  const files = await listPromptSnapshotFilesAcrossDirectories(rootDirectory);
+  const hashes = new Set<string>();
+  await Promise.all(files.map(async (filePath) => {
+    const raw = await fs.readFile(filePath, "utf-8").catch((error) => {
+      const fsError = error as NodeJS.ErrnoException;
+      if (fsError.code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    });
+    if (!raw) {
+      return;
+    }
+    const parsed = JSON.parse(raw) as PersistedConversationPromptSnapshotArtifact;
+    if (
+      parsed
+      && typeof parsed === "object"
+      && parsed.schemaVersion === CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION
+      && isRecord(parsed.snapshot)
+      && typeof parsed.snapshot.systemPromptRef?.hash === "string"
+    ) {
+      hashes.add(parsed.snapshot.systemPromptRef.hash);
+    }
+  }));
+  return hashes;
+}
+
 function isHeartbeatConversationId(conversationId: string, heartbeatConversationPrefix: string): boolean {
   return conversationId.startsWith(heartbeatConversationPrefix);
 }
@@ -677,20 +1003,48 @@ function clampNonNegativeInteger(value: number | undefined, fallback: number): n
   return Math.max(0, Math.floor(value));
 }
 
+function buildSystemPromptBlobHash(systemPrompt: string): string {
+  return `sha256:${crypto.createHash("sha256").update(systemPrompt, "utf-8").digest("hex")}`;
+}
+
+function sanitizeSystemPromptBlobHash(hash: string): string {
+  return hash.replace(/^sha256:/, "").trim();
+}
+
+function getConversationPromptSnapshotRootFromArtifactPath(artifactPath: string): string {
+  return path.dirname(path.dirname(artifactPath));
+}
+
+function getConversationPromptSnapshotSystemPromptBlobPathFromRoot(rootDirectory: string, hash: string): string {
+  return path.join(
+    rootDirectory,
+    PROMPT_SNAPSHOT_BLOBS_DIRNAME,
+    PROMPT_SNAPSHOT_SYSTEM_PROMPT_BLOBS_DIRNAME,
+    `${sanitizeSystemPromptBlobHash(hash)}.txt`,
+  );
+}
+
 async function readPromptSnapshotArtifactFile(targetPath: string): Promise<ConversationPromptSnapshotArtifact | undefined> {
   try {
     const raw = await fs.readFile(targetPath, "utf-8");
-    const parsed = JSON.parse(raw) as ConversationPromptSnapshotArtifact;
+    const parsed = JSON.parse(raw) as PersistedConversationPromptSnapshotArtifact;
     if (!parsed || typeof parsed !== "object") {
       return undefined;
     }
-    if (parsed.schemaVersion !== CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION) {
+    if (parsed.schemaVersion !== 1 && parsed.schemaVersion !== CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION) {
       return undefined;
     }
     if (!parsed.manifest || typeof parsed.manifest.conversationId !== "string") {
       return undefined;
     }
-    return normalizeConversationPromptSnapshotArtifact(parsed);
+    const expanded = await expandPersistedConversationPromptSnapshotArtifact({
+      artifact: parsed,
+      artifactPath: targetPath,
+    });
+    if (!expanded) {
+      return undefined;
+    }
+    return normalizeConversationPromptSnapshotArtifact(expanded);
   } catch (error) {
     const fsError = error as NodeJS.ErrnoException;
     if (fsError.code === "ENOENT") {
