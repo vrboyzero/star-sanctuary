@@ -239,6 +239,7 @@ import {
   initMCPIntegration,
   shutdownMCPIntegration,
   registerMCPToolsToExecutor,
+  getMCPManagerIfInitialized,
   getMCPDiagnostics,
   printMCPStatus,
 } from "../mcp/index.js";
@@ -248,6 +249,7 @@ import { ToolControlConfirmationStore } from "../tool-control-confirmation-store
 import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
+import { writeMCPDiscoveryWorkspaceDocs, type MCPPromptDiscoveryState } from "../mcp-discovery.js";
 import { createScopedMemoryManagers } from "../resident-memory-managers.js";
 import { loadConversationPromptSnapshotArtifact, persistConversationPromptSnapshot } from "../conversation-prompt-snapshot.js";
 import { resolveResidentMemoryPolicy } from "../resident-memory-policy.js";
@@ -972,12 +974,22 @@ if (toolsEnabled) {
   }
 }
 
+let mcpPromptDiscovery: MCPPromptDiscoveryState | undefined;
+
 // 4.1 Initialize MCP and register MCP tools
 if (mcpEnabled && toolsEnabled) {
   try {
     logger.info("mcp", "正在初始化 MCP 支持...");
     await initMCPIntegration(logger);
     const registeredCount = registerMCPToolsToExecutor(toolExecutor);
+    const mcpManager = getMCPManagerIfInitialized();
+    if (mcpManager) {
+      mcpPromptDiscovery = await writeMCPDiscoveryWorkspaceDocs({
+        stateDir,
+        serverStates: mcpManager.getAllServerStates(),
+      });
+      logger.info("mcp", `已生成 MCP discovery docs: ${mcpPromptDiscovery.docsIndexPath}`);
+    }
     if (registeredCount > 0) {
       logger.info("mcp", `已启用，注册了 ${registeredCount} 个 MCP 工具`);
     }
@@ -1435,6 +1447,16 @@ Keep responses concise and natural for spoken delivery.`,
       source: "runtime",
       priority: 105,
       text: toolBehaviorContracts.summary,
+    }));
+  }
+
+  if (mcpPromptDiscovery?.promptSummary) {
+    sections.push(createGatewaySystemPromptSection({
+      id: "mcp-discovery",
+      label: "mcp-discovery",
+      source: "runtime",
+      priority: 108,
+      text: mcpPromptDiscovery.promptSummary,
     }));
   }
 

@@ -124,7 +124,7 @@
 |---|---|---|---|---|
 | Skills 体系 | 有 bundled/managed/workspace skills，且有 ClawHub registry | 有 Skills，支持检索、安装、内置/工作区技能 | 把可复用能力做成可组合模块 | 两者都有；OC 生态面更广 |
 | 插件/扩展 SDK | 极强，`plugin-sdk`、大量 extension 包、contracts、release/check 脚本完整 | 有 `belldandy-plugins` 与 marketplace/插件系统，但规模与成熟度较 OC 小 | 第三方扩展开发、发布、隔离与治理 | OC 明显更强 |
-| MCP | 有 `src/mcp` 与相关扩展 | 有 `belldandy-mcp`，WebChat/doctor/tool settings 已打通 | 外接工具/资源与标准协议集成 | 两者都有 |
+| MCP | 有 `src/mcp` 与相关扩展 | 有 `belldandy-mcp`，WebChat/doctor/tool settings 已打通；且第三阶段 `P0-1` 已补上“MCP 摘要发现 + workspace docs + deferred schema loading”的最小闭环 | 外接工具/资源与标准协议集成 | 两者都有；SS 正在把 MCP 从“直接桥接可调”推进到“渐进式发现” |
 | 渠道/Provider 扩展包 | `extensions/` 下 provider/channel/speech/memory/browser 等大规模拆包 | SS 主要是 monorepo 内部 package + 少量插件扩展 | 扩展能力的工程边界与生态化程度 | OC 明显更强 |
 
 ### 2.11 安全、权限、诊断与观测
@@ -311,7 +311,7 @@ SS 更适合：
 
 | 优先级 | 借鉴项 | OC 代码依据 | SS 当前基线 | 可行性 | 风险性 | 工作量 | 实现后的作用 | 预期效果 |
 |---|---|---|---|---|---|---|---|---|
-| P1 | 安装与配置向导 2.0：`QuickStart/Advanced`、风险确认、远程/本地探测、按模块分步配置 | `OC/src/wizard/setup.ts`、`OC/src/commands/onboard.ts` 已具备 `QuickStart` / `Manual`、`accept-risk`、gateway probe、`setupChannels/setupSearch/setupSkills/setupPluginConfig` | `SS/packages/belldandy-core/src/cli/wizard/onboard.ts` 与 `SS/packages/belldandy-core/src/cli/commands/setup.ts` 仍主要覆盖 `openai|mock + host/auth` 的基础向导 | 高 | 低-中 | M | 把首次安装、基础安全确认、后续扩展配置统一到一个入口 | 明显降低上手门槛、误配率和“能跑但不会配”的支持成本 |
+| P3 | 安装与配置向导 2.0：`QuickStart/Advanced`、风险确认、远程/本地探测、按模块分步配置 | `OC/src/wizard/setup.ts`、`OC/src/commands/onboard.ts` 已具备 `QuickStart` / `Manual`、`accept-risk`、gateway probe、`setupChannels/setupSearch/setupSkills/setupPluginConfig` | `SS/packages/belldandy-core/src/cli/wizard/onboard.ts` 与 `SS/packages/belldandy-core/src/cli/commands/setup.ts` 仍主要覆盖 `openai|mock + host/auth` 的基础向导 | 高 | 低-中 | M | 把首次安装、基础安全确认、后续扩展配置统一到一个入口 | 明显降低上手门槛、误配率和“能跑但不会配”的支持成本，但更适合在核心流程稳定后再收口 |
 | P1 | 渠道安全配置产品化：账号级 `dmPolicy/allowFrom/mention` 默认值、配对范围、配置警告 | `OC/extensions/telegram/src/setup-surface.ts`、`OC/src/plugin-sdk/channel-pairing.ts`、`OC/src/channels/mention-gating.ts` 已把 `pairing/allowlist/requireMention` 做成渠道向导与运行时策略 | `SS/packages/belldandy-channels/src/router/engine.ts` 目前只有通用路由规则；`SS/packages/belldandy-core/src/security/store.ts` 仍是全局 `allowlist.json/pairing.json` | 中高 | 中 | M-L | 让 Discord / 飞书 / QQ / community 后续扩张时具备更稳的安全默认值，而不是依赖人工手写规则 | 降低误开放、误路由、群聊噪音与跨渠道鉴权混乱问题 |
 | P1 | 统一的渲染感知长消息分段管线 | `OC/src/markdown/render-aware-chunking.ts`、`OC/src/plugin-sdk/reply-chunking.ts` 已把 Markdown/渲染长度限制抽象成通用分段层 | `SS/packages/belldandy-channels/src/discord.ts` 仅对 Discord 2000 字限制做按换行分段，其他渠道未见统一层 | 高 | 低 | S-M | 为所有渠道统一处理 Markdown、代码块、链接和平台消息长度限制 | 明显减少回复截断、代码块断裂、发送失败与跨渠道展示不一致 |
 | P2 | Provider 接入插件化升级：向导元数据、模型选择器、能力范围声明 | `OC/src/plugin-sdk/provider-entry.ts`、`OC/src/plugins/provider-wizard.ts` 已把 provider onboarding、model picker、wizard grouping 做成标准入口 | `SS/packages/belldandy-core/src/bin/gateway.ts` 主 provider 仍是 `openai|mock`；`SS/packages/belldandy-agent/src/failover-client.ts` 主要提供 `models.json` fallback；`SS/packages/belldandy-plugins/src/registry.ts` 目前是通用插件装载，不理解 provider onboarding | 中 | 中 | L | 给后续文本/搜索/语音/图像/视频 provider 扩展提供统一挂载方式 | 减少核心网关被 provider 分支污染，提升后续扩展速度、一致性与可维护性 |
@@ -346,10 +346,12 @@ SS 更适合：
 
 ### 5.3 为什么是这个优先级
 
-1. `安装与配置向导 2.0` 最值得先做。
+1. `安装与配置向导 2.0` 不再建议作为当前阶段的第一优先级。
 
-- SS 现在的 setup 还停留在“把环境变量写进去”的阶段，而 OC 已经把风险确认、QuickStart、远程/本地探测、后续模块配置串成一条主路径。
-- 这类优化对新用户转化、部署成功率、后续渠道/插件扩展都有直接增益，而且不会破坏 SS 现有 Goals / Resident / Review 主线。
+- 这项能力本身仍然有价值，但它更适合作为“已有能力形态基本稳定后的产品化收口项”。
+- SS 当前仍处于持续优化和结构调整期，provider、channel、安全默认值、执行链与 WebChat 流程仍可能继续变化。
+- 如果现在就把安装与配置向导做成高完成度产品面，后续大概率会因为底层流程变化而返工。
+- 更合理的顺序是：先把核心执行链、provider/channel 抽象和安全默认值做稳，再统一回收到向导入口。
 
 2. `渠道安全配置产品化` 应作为第二优先级。
 
@@ -397,20 +399,21 @@ SS 更适合：
 
 ### 5.5 最终建议
 
-如果只按“对 SS 当前路线最有帮助”来排，我建议的落地顺序是：
+如果只按“对 SS 当前路线最有帮助，且考虑当前仍在优化调整期”来排，我建议的落地顺序是：
 
-1. `安装与配置向导 2.0`
-2. `渠道安全配置产品化`
-3. `统一的渲染感知长消息分段`
-4. `Provider 接入插件化升级`
+1. `渠道安全配置产品化`
+2. `统一的渲染感知长消息分段`
+3. `Provider 接入插件化升级`
+4. `安装与配置向导 2.0`
 5. `独立 TUI 控制面`
 
 其中最值得尽快落地的，不是 OC 的多端节点或渠道数量，而是 OC 那套更成熟的：
 
-- `上手路径`
 - `安全默认值`
 - `扩展抽象`
 - `回复分发细节`
+
+而 `上手路径 / 安装向导` 更适合在这一轮核心优化基本收敛后，再作为集中产品化工作来做。
 
 这些能力补到 SS 上，不会冲淡 SS 的 Goals / Resident / Review 主线，反而会让 SS 现有强项更容易被真正稳定地用起来。
 

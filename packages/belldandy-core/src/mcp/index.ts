@@ -53,6 +53,8 @@ function mcpToolToTool(
   mcpTool: MCPToolInfo,
   callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>
 ): Tool {
+  const shortDescription = String(mcpTool.description ?? "").split(/\r?\n/)[0]?.trim()
+    || `MCP tool ${mcpTool.name}`;
   return {
     definition: {
       name: mcpTool.bridgedName,
@@ -60,6 +62,10 @@ function mcpToolToTool(
         ? `${mcpTool.description}\n[来自 MCP 服务器: ${mcpTool.serverId}]`
         : `MCP 工具: ${mcpTool.name} [来自: ${mcpTool.serverId}]`,
       parameters: mcpTool.inputSchema as Tool["definition"]["parameters"],
+      loadingMode: "deferred",
+      shortDescription,
+      keywords: ["mcp", mcpTool.serverId, mcpTool.name, mcpTool.bridgedName],
+      tags: ["mcp", `mcp:${mcpTool.serverId}`],
     },
     execute: async (args: JsonObject, context: ToolContext): Promise<ToolCallResult> => {
       const start = Date.now();
