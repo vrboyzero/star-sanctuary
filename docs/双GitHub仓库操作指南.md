@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "多Agent并行相关功能、优化Agent相关功能、记忆治理功能优化第一轮测试通过"
+git commit -m "修改系统提示词的持久化保存与清理机制"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

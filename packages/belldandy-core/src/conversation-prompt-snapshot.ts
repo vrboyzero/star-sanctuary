@@ -25,6 +25,18 @@ import { normalizeLegacyPromptSnapshot } from "./prompt-snapshot-legacy-normaliz
 const CONVERSATION_DEBUG_DIRNAME = "diagnostics";
 const PROMPT_SNAPSHOT_DIRNAME = "prompt-snapshots";
 export const CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+const DEFAULT_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS = 20;
+const DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS = 5;
+const DEFAULT_PROMPT_SNAPSHOT_MAX_AGE_DAYS = 7;
+const DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_PREFIX = "heartbeat-";
+
+export type ConversationPromptSnapshotRetentionPolicy = {
+  defaultMaxRunsPerConversation?: number;
+  heartbeatMaxRuns?: number;
+  maxAgeDays?: number;
+  heartbeatConversationPrefix?: string;
+  now?: number;
+};
 
 export type ConversationPromptSnapshotArtifact = {
   schemaVersion: typeof CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION;
@@ -159,6 +171,7 @@ export function getConversationPromptSnapshotArtifactPath(input: {
 export async function persistConversationPromptSnapshot(input: {
   stateDir: string;
   snapshot: AgentPromptSnapshot;
+  retention?: ConversationPromptSnapshotRetentionPolicy;
 }): Promise<{ artifact: ConversationPromptSnapshotArtifact; outputPath: string }> {
   const artifact = buildConversationPromptSnapshotArtifact({ snapshot: input.snapshot });
   const outputPath = getConversationPromptSnapshotArtifactPath({
@@ -168,6 +181,12 @@ export async function persistConversationPromptSnapshot(input: {
     createdAt: input.snapshot.createdAt,
   });
   await atomicWriteJson(outputPath, artifact);
+  await prunePersistedConversationPromptSnapshots({
+    stateDir: input.stateDir,
+    conversationId: input.snapshot.conversationId,
+    outputPath,
+    retention: input.retention,
+  });
   return {
     artifact,
     outputPath,
@@ -411,6 +430,251 @@ async function atomicWriteJson(targetPath: string, value: unknown): Promise<void
   const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tempPath, JSON.stringify(value, null, 2), "utf-8");
   await fs.rename(tempPath, targetPath);
+}
+
+async function prunePersistedConversationPromptSnapshots(input: {
+  stateDir: string;
+  conversationId: string;
+  outputPath: string;
+  retention?: ConversationPromptSnapshotRetentionPolicy;
+}): Promise<void> {
+  const retention = resolveConversationPromptSnapshotRetentionPolicy(input.retention);
+  const isHeartbeatConversation = isHeartbeatConversationId(input.conversationId, retention.heartbeatConversationPrefix);
+  if (!isHeartbeatConversation) {
+    await prunePromptSnapshotDirectoryByLimit({
+      directory: getConversationPromptSnapshotDirectory(input.stateDir, input.conversationId),
+      maxSnapshots: retention.defaultMaxRunsPerConversation,
+      newestPath: input.outputPath,
+    });
+  }
+  await pruneHeartbeatPromptSnapshotsByLimit({
+    rootDirectory: getConversationPromptSnapshotRoot(input.stateDir),
+    maxSnapshots: retention.heartbeatMaxRuns,
+    heartbeatConversationPrefix: retention.heartbeatConversationPrefix,
+    newestPath: isHeartbeatConversation ? input.outputPath : undefined,
+  });
+  if (typeof retention.maxAgeDays === "number" && retention.maxAgeDays > 0) {
+    await prunePromptSnapshotRootByAge({
+      rootDirectory: getConversationPromptSnapshotRoot(input.stateDir),
+      maxAgeMs: retention.maxAgeDays * 24 * 60 * 60 * 1000,
+      now: retention.now,
+    });
+  }
+}
+
+function resolveConversationPromptSnapshotRetentionPolicy(
+  policy?: ConversationPromptSnapshotRetentionPolicy,
+): Required<ConversationPromptSnapshotRetentionPolicy> {
+  return {
+    defaultMaxRunsPerConversation: clampPositiveInteger(
+      policy?.defaultMaxRunsPerConversation,
+      DEFAULT_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS,
+    ),
+    heartbeatMaxRuns: clampPositiveInteger(
+      policy?.heartbeatMaxRuns,
+      DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS,
+    ),
+    maxAgeDays: clampNonNegativeInteger(policy?.maxAgeDays, DEFAULT_PROMPT_SNAPSHOT_MAX_AGE_DAYS),
+    heartbeatConversationPrefix: normalizeHeartbeatConversationPrefix(policy?.heartbeatConversationPrefix),
+    now: typeof policy?.now === "number" && Number.isFinite(policy.now) ? policy.now : Date.now(),
+  };
+}
+
+async function prunePromptSnapshotDirectoryByLimit(input: {
+  directory: string;
+  maxSnapshots: number;
+  newestPath?: string;
+}): Promise<void> {
+  const files = await listPromptSnapshotFiles(input.directory);
+  if (files.length <= input.maxSnapshots) {
+    return;
+  }
+  const stats = await Promise.all(files.map(async (filePath) => {
+    const stat = await fs.stat(filePath).catch(() => undefined);
+    return stat
+      ? { path: filePath, mtimeMs: stat.mtimeMs }
+      : undefined;
+  }));
+  const existingFiles = stats.filter((entry): entry is { path: string; mtimeMs: number } => Boolean(entry));
+  existingFiles.sort((left, right) => {
+    if (input.newestPath && left.path === input.newestPath && right.path !== input.newestPath) {
+      return -1;
+    }
+    if (input.newestPath && right.path === input.newestPath && left.path !== input.newestPath) {
+      return 1;
+    }
+    if (right.mtimeMs !== left.mtimeMs) {
+      return right.mtimeMs - left.mtimeMs;
+    }
+    return right.path.localeCompare(left.path);
+  });
+  const toRemove = existingFiles.slice(input.maxSnapshots);
+  await Promise.all(toRemove.map(({ path: filePath }) => unlinkIfExists(filePath)));
+}
+
+async function pruneHeartbeatPromptSnapshotsByLimit(input: {
+  rootDirectory: string;
+  maxSnapshots: number;
+  heartbeatConversationPrefix: string;
+  newestPath?: string;
+}): Promise<void> {
+  const heartbeatFiles = await listPromptSnapshotFilesAcrossDirectories(input.rootDirectory, {
+    directoryPrefix: input.heartbeatConversationPrefix,
+  });
+  if (heartbeatFiles.length <= input.maxSnapshots) {
+    return;
+  }
+  const stats = await Promise.all(heartbeatFiles.map(async (filePath) => {
+    const stat = await fs.stat(filePath).catch(() => undefined);
+    return stat
+      ? { path: filePath, mtimeMs: stat.mtimeMs }
+      : undefined;
+  }));
+  const existingFiles = stats.filter((entry): entry is { path: string; mtimeMs: number } => Boolean(entry));
+  existingFiles.sort((left, right) => {
+    if (input.newestPath && left.path === input.newestPath && right.path !== input.newestPath) {
+      return -1;
+    }
+    if (input.newestPath && right.path === input.newestPath && left.path !== input.newestPath) {
+      return 1;
+    }
+    if (right.mtimeMs !== left.mtimeMs) {
+      return right.mtimeMs - left.mtimeMs;
+    }
+    return right.path.localeCompare(left.path);
+  });
+  const toRemove = existingFiles.slice(input.maxSnapshots);
+  await Promise.all(toRemove.map(async ({ path: filePath }) => {
+    await unlinkIfExists(filePath);
+    await removeDirectoryIfEmpty(path.dirname(filePath));
+  }));
+}
+
+async function prunePromptSnapshotRootByAge(input: {
+  rootDirectory: string;
+  maxAgeMs: number;
+  now?: number;
+}): Promise<void> {
+  const rootEntries = await fs.readdir(input.rootDirectory, { withFileTypes: true }).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!rootEntries || rootEntries.length === 0) {
+    return;
+  }
+  const threshold = (typeof input.now === "number" && Number.isFinite(input.now) ? input.now : Date.now()) - input.maxAgeMs;
+  await Promise.all(rootEntries.map(async (entry) => {
+    if (!entry.isDirectory()) {
+      return;
+    }
+    const directory = path.join(input.rootDirectory, entry.name);
+    const files = await listPromptSnapshotFiles(directory);
+    await Promise.all(files.map(async (filePath) => {
+      const stat = await fs.stat(filePath).catch(() => undefined);
+      if (stat && stat.mtimeMs < threshold) {
+        await unlinkIfExists(filePath);
+      }
+    }));
+    await removeDirectoryIfEmpty(directory);
+  }));
+}
+
+async function listPromptSnapshotFiles(directory: string): Promise<string[]> {
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!entries || entries.length === 0) {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".prompt-snapshot.json"))
+    .map((entry) => path.join(directory, entry.name));
+}
+
+async function listPromptSnapshotFilesAcrossDirectories(
+  rootDirectory: string,
+  options?: { directoryPrefix?: string },
+): Promise<string[]> {
+  const rootEntries = await fs.readdir(rootDirectory, { withFileTypes: true }).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!rootEntries || rootEntries.length === 0) {
+    return [];
+  }
+  const files = await Promise.all(rootEntries.map(async (entry) => {
+    if (!entry.isDirectory()) {
+      return [];
+    }
+    if (options?.directoryPrefix && !entry.name.startsWith(options.directoryPrefix)) {
+      return [];
+    }
+    return listPromptSnapshotFiles(path.join(rootDirectory, entry.name));
+  }));
+  return files.flat();
+}
+
+async function unlinkIfExists(targetPath: string): Promise<void> {
+  await fs.unlink(targetPath).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  });
+}
+
+async function removeDirectoryIfEmpty(directory: string): Promise<void> {
+  const entries = await fs.readdir(directory).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!entries || entries.length > 0) {
+    return;
+  }
+  await fs.rmdir(directory).catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT" || fsError.code === "ENOTEMPTY") {
+      return;
+    }
+    throw error;
+  });
+}
+
+function isHeartbeatConversationId(conversationId: string, heartbeatConversationPrefix: string): boolean {
+  return conversationId.startsWith(heartbeatConversationPrefix);
+}
+
+function normalizeHeartbeatConversationPrefix(value: string | undefined): string {
+  const normalized = value?.trim();
+  return normalized || DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_PREFIX;
+}
+
+function clampPositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function clampNonNegativeInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
 }
 
 async function readPromptSnapshotArtifactFile(targetPath: string): Promise<ConversationPromptSnapshotArtifact | undefined> {

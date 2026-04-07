@@ -1216,12 +1216,30 @@ const agentWorkspaceCache = new Map<string, { build: SystemPromptBuildResult }>(
 const promptSnapshotStore = new PromptSnapshotStore({
   maxSnapshots: Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_MAX_RUNS") || "48", 10) || 48),
 });
+const promptSnapshotMaxPersistedRuns = Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS") || "20", 10) || 20);
+const promptSnapshotHeartbeatMaxRuns = Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS") || "5", 10) || 5);
+const promptSnapshotRetentionDays = (() => {
+  const raw = readEnv("BELLDANDY_PROMPT_SNAPSHOT_RETENTION_DAYS");
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return 7;
+  }
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return 7;
+  }
+  return Math.max(0, parsed);
+})();
 
 function persistPromptSnapshot(snapshot: AgentPromptSnapshot): void {
   promptSnapshotStore.save(snapshot);
   void persistConversationPromptSnapshot({
     stateDir,
     snapshot,
+    retention: {
+      defaultMaxRunsPerConversation: promptSnapshotMaxPersistedRuns,
+      heartbeatMaxRuns: promptSnapshotHeartbeatMaxRuns,
+      maxAgeDays: promptSnapshotRetentionDays,
+    },
   }).catch((error) => {
     logger.warn("prompt-snapshot", `Failed to persist prompt snapshot for conversation "${snapshot.conversationId}"`, error);
   });

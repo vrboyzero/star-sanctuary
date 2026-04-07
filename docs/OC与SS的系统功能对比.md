@@ -292,3 +292,143 @@ SS 更适合：
 1. `OC 多渠道/节点体系` vs `SS Resident/Goals/Review 治理体系`
 2. `OC plugin-sdk/extensions` vs `SS skills/plugins/MCP/community 工坊`
 3. `OC Control UI/WebChat` vs `SS WebChat 工作台`
+
+---
+
+## 5. 再次代码核对后的 SS 借鉴建议清单
+
+### 5.1 评估口径
+
+- 本节不是把 OC 的强项全部照搬，而是只保留“适合 SS 当前路线”的借鉴项。
+- 判断依据改为再次阅读代码后的实现级对照，而不是上一节的总览结论重复表述。
+- 工作量为静态粗估，默认按熟悉仓库的单人开发估算：
+  - `S`：1-3 人日
+  - `M`：4-7 人日
+  - `L`：8-15 人日
+  - `XL`：15+ 人日
+
+### 5.2 优先借鉴项总表
+
+| 优先级 | 借鉴项 | OC 代码依据 | SS 当前基线 | 可行性 | 风险性 | 工作量 | 实现后的作用 | 预期效果 |
+|---|---|---|---|---|---|---|---|---|
+| P1 | 安装与配置向导 2.0：`QuickStart/Advanced`、风险确认、远程/本地探测、按模块分步配置 | `OC/src/wizard/setup.ts`、`OC/src/commands/onboard.ts` 已具备 `QuickStart` / `Manual`、`accept-risk`、gateway probe、`setupChannels/setupSearch/setupSkills/setupPluginConfig` | `SS/packages/belldandy-core/src/cli/wizard/onboard.ts` 与 `SS/packages/belldandy-core/src/cli/commands/setup.ts` 仍主要覆盖 `openai|mock + host/auth` 的基础向导 | 高 | 低-中 | M | 把首次安装、基础安全确认、后续扩展配置统一到一个入口 | 明显降低上手门槛、误配率和“能跑但不会配”的支持成本 |
+| P1 | 渠道安全配置产品化：账号级 `dmPolicy/allowFrom/mention` 默认值、配对范围、配置警告 | `OC/extensions/telegram/src/setup-surface.ts`、`OC/src/plugin-sdk/channel-pairing.ts`、`OC/src/channels/mention-gating.ts` 已把 `pairing/allowlist/requireMention` 做成渠道向导与运行时策略 | `SS/packages/belldandy-channels/src/router/engine.ts` 目前只有通用路由规则；`SS/packages/belldandy-core/src/security/store.ts` 仍是全局 `allowlist.json/pairing.json` | 中高 | 中 | M-L | 让 Discord / 飞书 / QQ / community 后续扩张时具备更稳的安全默认值，而不是依赖人工手写规则 | 降低误开放、误路由、群聊噪音与跨渠道鉴权混乱问题 |
+| P1 | 统一的渲染感知长消息分段管线 | `OC/src/markdown/render-aware-chunking.ts`、`OC/src/plugin-sdk/reply-chunking.ts` 已把 Markdown/渲染长度限制抽象成通用分段层 | `SS/packages/belldandy-channels/src/discord.ts` 仅对 Discord 2000 字限制做按换行分段，其他渠道未见统一层 | 高 | 低 | S-M | 为所有渠道统一处理 Markdown、代码块、链接和平台消息长度限制 | 明显减少回复截断、代码块断裂、发送失败与跨渠道展示不一致 |
+| P2 | Provider 接入插件化升级：向导元数据、模型选择器、能力范围声明 | `OC/src/plugin-sdk/provider-entry.ts`、`OC/src/plugins/provider-wizard.ts` 已把 provider onboarding、model picker、wizard grouping 做成标准入口 | `SS/packages/belldandy-core/src/bin/gateway.ts` 主 provider 仍是 `openai|mock`；`SS/packages/belldandy-agent/src/failover-client.ts` 主要提供 `models.json` fallback；`SS/packages/belldandy-plugins/src/registry.ts` 目前是通用插件装载，不理解 provider onboarding | 中 | 中 | L | 给后续文本/搜索/语音/图像/视频 provider 扩展提供统一挂载方式 | 减少核心网关被 provider 分支污染，提升后续扩展速度、一致性与可维护性 |
+| P3 | 独立 TUI 控制面 | `OC/src/tui/tui.ts` 已支持基于 Gateway 的会话、Agent、Model 切换与流式聊天控制 | `SS/package.json` 与 `SS/packages/belldandy-core/package.json` 当前无独立 `tui` 入口，主要依赖 WebChat 和命令式 CLI | 中 | 中 | M-L | 补齐 SSH / NAS / 无浏览器环境下的轻量控制面 | 提升远程运维和重度 CLI 用户体验，但对 SS 主线收益低于前四项 |
+
+#### 5.2.1 四个功能项的实现级借鉴表
+
+以下表格只对本轮新增核对的 4 个功能项做实现级借鉴评估，不替代上面的总表；重点是判断哪些 OC 的抽象层适合补到 SS 上。
+
+| 功能项 | SS 可借鉴优化 | OC 代码依据 | SS 当前基线 | 可行性 | 风险性 | 工作量 | 收益判断 |
+|---|---|---|---|---|---|---|---|
+| 模型接入面 | `Provider` 元数据层：把 provider 的认证方式、向导分组、模型白名单、适用能力声明做成注册式描述 | `OC/src/plugin-sdk/provider-entry.ts`、`OC/src/plugins/provider-wizard.ts` 已把 `wizard choice/group/modelAllowlist/onboardingScopes/catalog` 收到统一 provider 入口 | `SS/packages/belldandy-core/src/bin/gateway.ts` 仍以 `BELLDANDY_AGENT_PROVIDER=openai|mock` + `models.json` fallback 为主；`SS/packages/belldandy-plugins/src/registry.ts` 还不理解 provider onboarding | 中 | 中 | L | 高；这是 SS 当前最明显的产品层缺口，补上后 provider 扩展、模型切换、向导一致性都会明显改善 |
+| 模型接入面 | 认证感知的模型选择器：模型列表直接显示 `auth missing`、preferred provider、手动输入回退 | `OC/src/flows/model-picker.ts` 已把认证状态、preferred provider、手动录入、catalog 过滤统一到 picker 流程 | SS 当前有 `FailoverClient` 和 `models.json`，但缺少同等级 model picker 产品面 | 高 | 低 | M | 高；能直接改善配置体验，且不需要先做大规模 provider 平台重构 |
+| 模型接入面 | failover 分类细化：把 provider 特定错误、冷却、重试策略做细 | OC failover 已拆成独立策略面，支持更细的错误归类与 fallback 行为 | `SS/packages/belldandy-agent/src/failover-client.ts` 现在主要按 HTTP 状态粗分类 | 中 | 中 | M-L | 中高；能提升稳定性，但优先级低于 provider 元数据层和 model picker |
+| 会话模型 | 显式会话作用域策略：`main / per-peer / per-channel-peer / per-account-channel-peer` | `OC/src/routing/session-key.ts` 已把 DM/群聊会话作用域收进 session key 构建规则 | SS 更偏 `resident main conversation + goal/subtask/session` 绑定；`SS/packages/belldandy-channels/src/router/engine.ts` 目前仍以规则路由为主 | 中高 | 中 | M | 高；对 Discord / 飞书 / QQ / community 后续扩展都很有帮助 |
+| 会话模型 | “当前会话绑定 / reply-back” 持久层：把外部线程继续回哪个 session 做成显式绑定 | `OC/src/infra/outbound/current-conversation-bindings.ts`、`OC/src/infra/outbound/session-binding-service.ts` 已有 current conversation binding 机制 | SS 有 `resident-conversation-store`，但未见同等级的跨渠道 current-conversation 绑定层 | 中 | 中高 | L | 中高；能提升跨线程、多渠道回复连续性，但实现面比作用域策略更大 |
+| 会话模型 | 群聊 key 规范化与旧渠道兼容归一 | `OC/src/config/sessions/group.ts` 对 `group/channel/webchat` 做了统一 key 生成与 legacy 兼容 | SS 目前更侧重 route rule 命中，缺少群聊会话 key 的统一抽象 | 高 | 低 | S-M | 中；是低风险整理项，适合作为会话模型优化的前置收口 |
+| 自动化/定时 | Webhook 入站保护层：pre-auth body 限额、超时、并发限制、限流、Content-Type 校验 | `OC/src/plugin-sdk/webhook-request-guards.ts`、`OC/src/plugin-sdk/webhook-ingress.ts` 已把 request guard 做成统一层 | SS 当前主要有 `webhook/auth.ts` Bearer token 校验与 `webhook/idempotency.ts` 内存幂等 | 高 | 低 | S-M | 高；这是本轮 4 个功能项里最值得优先落地的低风险高回报项 |
+| 自动化/定时 | Cron job 规范化与约束校验：`sessionTarget`、`delivery`、`failureDestination`、`stagger` | `OC/src/cron/service/jobs.ts` 已把 cron spec 的合法性校验前置化 | SS 当前 `cron/store.ts + cron/scheduler.ts` 比较轻量，更多是执行层而不是约束层 | 高 | 低-中 | M | 高；能减少后续 cron 行为漂移和配置歧义 |
+| 自动化/定时 | 统一后台运行台账：把 cron / heartbeat / subtask 放到一个 shared ledger | `OC/src/tasks/task-registry.ts` 已把 background run 做成共享运行台账 | SS 现在 `task-runtime.ts` 更偏 subtask；cron/heartbeat 仍相对分离 | 中 | 中高 | L-XL | 很高；但属于结构性工程，不建议作为第一波优化 |
+| 媒体/语音/图像 | 统一媒体能力注册层：TTS / STT / Image / Voice 不再只是分散工具，而是 capability/provider registry | `OC/src/plugin-sdk/realtime-voice.ts`、`OC/src/plugin-sdk/realtime-transcription.ts`、`OC/src/media-understanding/audio-transcription-runner.ts` 已体现统一 provider registry + capability runner | SS 当前 `tts.ts`、`stt-transcribe.ts`、`image.ts`、`camera.ts` 基本还是分散实现 | 中 | 中 | M-L | 高；补齐后可为后续语音、图片、附件理解扩展提供一致入口 |
+| 媒体/语音/图像 | 统一附件理解管线：附件归一化、缓存、按 capability 跑识别 | OC 已把附件缓存、provider registry、`audio.transcription` 输出接到共享 runner | SS 当前 STT/TTS/Image 彼此独立，缺少共享附件管线 | 中高 | 中 | M | 高；尤其适合 SS 的审计说明、语音输入、附件处理场景 |
+| 媒体/语音/图像 | 相机能力抽象化：把浏览器镜像页方案从工具逻辑中剥离成 runtime/capability | OC 的 voice/media runtime 分层更明确，能力不直接写死在单个工具里 | `SS/packages/belldandy-skills/src/builtin/multimedia/camera.ts` 现在直接依赖 `/mirror.html` 和 browser screenshot | 中 | 中 | M | 中高；能降低浏览器实现细节对工具层的耦合 |
+
+实现级优先顺序建议：
+
+1. `Webhook 入站保护层`
+2. `Provider 元数据层 + 认证感知模型选择器`
+3. `Cron 约束校验 + stagger`
+4. `显式会话作用域策略`
+5. `统一媒体能力注册层 / 附件理解管线`
+
+### 5.3 为什么是这个优先级
+
+1. `安装与配置向导 2.0` 最值得先做。
+
+- SS 现在的 setup 还停留在“把环境变量写进去”的阶段，而 OC 已经把风险确认、QuickStart、远程/本地探测、后续模块配置串成一条主路径。
+- 这类优化对新用户转化、部署成功率、后续渠道/插件扩展都有直接增益，而且不会破坏 SS 现有 Goals / Resident / Review 主线。
+
+2. `渠道安全配置产品化` 应作为第二优先级。
+
+- SS 现在已经有 Channel Router、mentionRequired、pairing/allowlist 基础能力，但粒度偏粗，仍更像“底层积木”，不像 OC 那样形成“渠道级安全默认值 + 向导 + 告警”的产品面。
+- 如果后续 SS 继续扩渠道，而没有先补这层，会不断把风险和维护成本转嫁给手工配置。
+
+3. `统一长消息分段` 是低风险高回报项。
+
+- 它不改变 SS 的主架构，也不要求大规模重构。
+- 但它会直接改善跨渠道回复质量，尤其是代码块、Markdown 链接、长审计说明、长治理摘要这类 SS 高频输出内容。
+
+4. `Provider 接入插件化升级` 值得做，但不建议第一波就做成 OC 那么大。
+
+- SS 现在已经有插件市场和 `models.json` fallback，所以不是从零开始。
+- 更合理的做法是先补 provider onboarding 元数据、model picker、能力范围声明，再逐步演化，不要一口气复制 OC 全量 plugin-sdk 面。
+
+5. `TUI` 有价值，但优先级应低于前四项。
+
+- 它对 SSH / 服务器 / 低带宽环境很友好。
+- 但 SS 当前最强的主线仍是 WebChat 工作台和长期任务治理，TUI 更适合作为补强，不应抢占核心能力升级预算。
+
+### 5.4 当前不建议优先借鉴的 OC 能力
+
+以下 OC 能力虽然强，但当前不建议作为 SS 的优先优化方向：
+
+1. `Companion Apps / Device Nodes / Voice Wake`
+
+- 对应 OC 的 `apps/macos`、`apps/ios`、`apps/android`、`voice-call`、device bootstrap 体系。
+- 这类能力工作量通常是 `XL`，并且会把 SS 从“本地 Agent 工作台”拉向“全端个人助手平台”。
+- 在 SS 还没有先补齐 setup、安全配置产品化、provider/channel 扩展抽象前，投入产出比偏低。
+
+2. `渠道数量竞赛`
+
+- OC 的优势之一是渠道覆盖极广，但 SS 当前最强的是 Goals / Resident / Review / Memory / Explainability 深度。
+- 直接追求“渠道数接近 OC”容易稀释主线，也会显著增加运维、鉴权、分发与回归成本。
+- 更合理的路线是：先把“渠道接入框架 + 安全默认值 + 回复分段”做稳，再挑高价值渠道扩。
+
+3. `一次性复制 OC 全量 plugin-sdk / extension 平台`
+
+- OC 的 plugin-sdk 和 contract/test/lint 边界是长期平台化演进结果。
+- SS 当前更适合先抽最关键的两层：
+  - provider onboarding / model picker 元数据
+  - channel setup / pairing / allowlist / chunking 统一接口
+- 这类工作更适合 `split_task`，不适合一次性做“大平台重构”。
+
+### 5.5 最终建议
+
+如果只按“对 SS 当前路线最有帮助”来排，我建议的落地顺序是：
+
+1. `安装与配置向导 2.0`
+2. `渠道安全配置产品化`
+3. `统一的渲染感知长消息分段`
+4. `Provider 接入插件化升级`
+5. `独立 TUI 控制面`
+
+其中最值得尽快落地的，不是 OC 的多端节点或渠道数量，而是 OC 那套更成熟的：
+
+- `上手路径`
+- `安全默认值`
+- `扩展抽象`
+- `回复分发细节`
+
+这些能力补到 SS 上，不会冲淡 SS 的 Goals / Resident / Review 主线，反而会让 SS 现有强项更容易被真正稳定地用起来。
+
+## 6. 开发规则
+
+1. 每完成一项优化后，要进行 `OC与SS的系统功能对比.md` 的进度更新与后续计划说明，并要在 `2. 实现功能对比例表` 上进行已优化项的精简说明，以便后续查阅已实现的优化项。
+
+2. 通用技术债规避要求
+
+- 当某个代码文件已经超过 `3000` 行时，新增功能应优先考虑放到外部新文件，只在原文件保留最小接线、注册、转发或装配逻辑。
+- 除非是确实无法避免的局部修补，否则尽量不要再把新的主体逻辑继续写进已经超过 `3000` 行的文件。
+- 这条要求的目的很直接：
+  - 先阻止大文件继续恶化
+  - 让后续拆分从被动大重构变成新增功能自然外移
+
+3. Webchat 复杂度控制
+
+- 当前 `webchat` 的结构和内容已经较复杂，新增功能时必须克制 UI 膨胀。
+- 非重要的新增内容，不要默认继续在 `webchat` 上增加新元素。
+- 能减少的非重要内容应优先减少；能并入同类或近似模块的内容，应优先并入，而不是新增并列入口、并列面板或并列控件。
+- 如果某项信息主要服务诊断、审计或调试，应优先复用已有区域，例如 `doctor`、长期任务详情、子任务详情、现有设置面板或已有二级弹窗，而不是新增一级导航入口。
