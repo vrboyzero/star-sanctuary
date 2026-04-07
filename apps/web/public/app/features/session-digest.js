@@ -94,6 +94,7 @@ export function createSessionDigestFeature({
   sendReq,
   makeId,
   getActiveConversationId,
+  onSendHistoryAction,
   escapeHtml,
   formatDateTime,
   showNotice,
@@ -105,6 +106,7 @@ export function createSessionDigestFeature({
     sessionDigestModalEl,
     sessionDigestModalTitleEl,
     sessionDigestModalMetaEl,
+    sessionDigestModalActionsEl,
     sessionDigestModalContentEl,
     sessionDigestModalCloseBtn,
   } = refs;
@@ -180,6 +182,36 @@ export function createSessionDigestFeature({
     }
     if (sessionDigestModalMetaEl) {
       sessionDigestModalMetaEl.textContent = metaParts.join(" · ");
+    }
+    if (sessionDigestModalActionsEl) {
+      const actions = typeof onSendHistoryAction === "function"
+        ? [
+          {
+            id: "list_main",
+            label: t("panel.sessionHistoryListMain", {}, "列出主会话"),
+          },
+          {
+            id: "list_all_allowed",
+            label: t("panel.sessionHistoryListAllAllowed", {}, "列出全部允许会话"),
+          },
+          {
+            id: "read_timeline",
+            label: t("panel.sessionHistoryReadTimeline", {}, "读取当前时间线"),
+          },
+          {
+            id: "read_restore",
+            label: t("panel.sessionHistoryReadRestore", {}, "读取当前 restore"),
+          },
+        ]
+        : [];
+      sessionDigestModalActionsEl.innerHTML = actions.map((action) => `
+        <button
+          type="button"
+          class="button button-muted session-digest-action-btn"
+          data-history-action="${escapeHtml(action.id)}"
+        >${escapeHtml(action.label)}</button>
+      `).join("");
+      sessionDigestModalActionsEl.classList.toggle("hidden", actions.length === 0);
     }
     if (sessionDigestModalContentEl) {
       sessionDigestModalContentEl.textContent = summaryText;
@@ -387,6 +419,20 @@ export function createSessionDigestFeature({
       if (event.target === sessionDigestModalEl) {
         closeModal();
       }
+    });
+  }
+
+  if (sessionDigestModalActionsEl) {
+    sessionDigestModalActionsEl.addEventListener("click", (event) => {
+      const trigger = event.target instanceof Element ? event.target.closest("[data-history-action]") : null;
+      if (!trigger || typeof onSendHistoryAction !== "function") return;
+      const actionId = trigger.getAttribute("data-history-action") || "";
+      if (!actionId) return;
+      closeModal();
+      onSendHistoryAction({
+        actionId,
+        conversationId: getActiveConversationId?.() || "",
+      });
     });
   }
 

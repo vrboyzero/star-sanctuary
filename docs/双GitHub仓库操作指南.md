@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现了Prompt Snapshot 去重存储"
+git commit -m "自动填充记忆优化实施完成，可以摘要窗口中让Agent主动查看过往对话"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

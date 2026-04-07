@@ -9,6 +9,7 @@ import type {
   ToolAuditLog,
   AgentCapabilities,
   GoalCapabilities,
+  ConversationAccessKind,
   ConversationStoreInterface,
   ITokenCounterService,
   ToolExecutionRuntimeContext,
@@ -74,6 +75,8 @@ export type ToolExecutorOptions = {
   isToolAllowedInConversation?: (toolName: string, conversationId: string, agentId?: string) => boolean;
   /** 可选：会话存储（用于缓存等功能） */
   conversationStore?: ConversationStoreInterface;
+  /** 可选：当前运行时允许读取的会话类别白名单 */
+  allowedConversationKinds?: ConversationAccessKind[];
   /** 可选：事件广播回调（用于工具主动推送事件到前端） */
   broadcast?: (event: string, payload: Record<string, unknown>) => void;
   /** 可选：仅用于运行时观测的工具广播观察器 */
@@ -163,6 +166,7 @@ export class ToolExecutor {
   private readonly isToolAllowedInConversation?: (toolName: string, conversationId: string, agentId?: string) => boolean;
   private readonly contractAccessPolicy?: ToolContractAccessPolicy;
   private conversationStore?: ConversationStoreInterface; // 移除 readonly，允许后期绑定
+  private allowedConversationKinds?: ConversationAccessKind[];
   private readonly tokenCounters = new Map<string, ITokenCounterService>(); // 每个 conversation 的 token 计数器
   private readonly deferredToolNames: Set<string>;
   private readonly loadedDeferredToolNames = new Map<string, Set<string>>();
@@ -189,6 +193,7 @@ export class ToolExecutor {
     this.contractAccessPolicy = options.contractAccessPolicy;
     this.deferredToolNames = new Set(options.deferredToolNames ?? []);
     this.conversationStore = options.conversationStore;
+    this.allowedConversationKinds = options.allowedConversationKinds;
     this.broadcast = options.broadcast;
     this.broadcastObserver = options.broadcastObserver;
   }
@@ -209,6 +214,10 @@ export class ToolExecutor {
    */
   setConversationStore(store: ConversationStoreInterface): void {
     this.conversationStore = store;
+  }
+
+  setAllowedConversationKinds(kinds?: ConversationAccessKind[]): void {
+    this.allowedConversationKinds = kinds;
   }
 
   setBroadcast(
@@ -447,6 +456,7 @@ export class ToolExecutor {
       senderInfo, // 传递发送者信息
       roomContext, // 传递房间上下文
       conversationStore: this.conversationStore, // 传递会话存储（用于缓存）
+      allowedConversationKinds: this.allowedConversationKinds,
       tokenCounter: this.tokenCounters.get(conversationId), // 传递 token 计数器（任务级统计）
       broadcast: this.broadcast
         ? (event, payload) => {

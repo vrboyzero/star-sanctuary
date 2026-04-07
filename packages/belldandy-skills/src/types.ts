@@ -1635,6 +1635,8 @@ export type ToolContext = {
   roomContext?: RoomContext;
   /** 会话存储（用于缓存等功能） */
   conversationStore?: ConversationStoreInterface;
+  /** 当前运行时允许读取的会话类别白名单；未提供时表示不额外限制 */
+  allowedConversationKinds?: ConversationAccessKind[];
   policy: ToolPolicy;
   agentCapabilities?: AgentCapabilities;
   goalCapabilities?: GoalCapabilities;
@@ -1651,11 +1653,138 @@ export type ToolContext = {
   };
 };
 
+export type ConversationAccessKind = "main" | "subtask" | "goal" | "heartbeat";
+
+export type ConversationMessageLike = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+  agentId?: string;
+  clientContext?: {
+    sentAtMs?: number;
+    timezoneOffsetMinutes?: number;
+    locale?: string;
+  };
+};
+
+export type PersistedConversationSummaryLike = {
+  conversationId: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+  hasTranscript: boolean;
+  hasMeta: boolean;
+  hasMessages: boolean;
+  agentId?: string;
+  channel?: string;
+};
+
+export type ConversationRestoreViewLike = {
+  conversationId: string;
+  rawMessages: ConversationMessageLike[];
+  compactedView: Array<{ role: "user" | "assistant"; content: string }>;
+  canonicalExtractionView: Array<{ role: "user" | "assistant"; content: string }>;
+  diagnostics: {
+    source: "transcript" | "conversation_fallback";
+    transcriptEventCount: number;
+    transcriptMessageEventCount: number;
+    transcriptUsed: boolean;
+    relinkAttempted: boolean;
+    relinkApplied: boolean;
+    fallbackToRaw: boolean;
+    fallbackReason?: "no_boundary" | "relink_failed";
+    boundarySource?: "transcript" | "conversation_meta";
+    partialViewSource?: "transcript" | "conversation_meta";
+  };
+};
+
+export type ConversationTimelineProjectionLike = {
+  manifest: {
+    schemaVersion: number;
+    conversationId: string;
+    projectedAt: number;
+    source: string;
+  };
+  items: Array<Record<string, unknown>>;
+  summary: {
+    eventCount: number;
+    itemCount: number;
+    messageCount: number;
+    compactBoundaryCount: number;
+    partialCompactionCount: number;
+    latestEventAt?: number;
+    restore: {
+      source: "transcript" | "conversation_fallback";
+      relinkApplied: boolean;
+      fallbackToRaw: boolean;
+      fallbackReason?: "no_boundary" | "relink_failed";
+    };
+    boundaryId?: string;
+    partialViewId?: string;
+  };
+  warnings: string[];
+};
+
+export type ConversationTranscriptExportLike = {
+  manifest: {
+    schemaVersion: number;
+    conversationId: string;
+    exportedAt: number;
+    source: string;
+    redactionMode: "internal" | "shareable" | "metadata_only";
+  };
+  events: Array<Record<string, unknown>>;
+  restore: {
+    rawMessages: Array<Record<string, unknown>>;
+    compactedView: Array<Record<string, unknown>>;
+    canonicalExtractionView: Array<Record<string, unknown>>;
+    diagnostics: ConversationRestoreViewLike["diagnostics"];
+  };
+  summary: {
+    eventCount: number;
+    messageEventCount: number;
+    compactBoundaryCount: number;
+    partialCompactionViewCount: number;
+    latestEventAt?: number;
+    restore: {
+      source: "transcript" | "conversation_fallback";
+      relinkApplied: boolean;
+      fallbackToRaw: boolean;
+      fallbackReason?: "no_boundary" | "relink_failed";
+    };
+    boundaryId?: string;
+    partialViewId?: string;
+  };
+  redaction: {
+    mode: "internal" | "shareable" | "metadata_only";
+    contentRedacted: boolean;
+    notes: string[];
+  };
+};
+
 /** ConversationStore 接口（避免循环依赖） */
 export interface ConversationStoreInterface {
   getHistory(
     conversationId: string,
   ): Array<{ role: "user" | "assistant"; content: string }>;
+  listPersistedConversations?(
+    options?: {
+      limit?: number;
+      conversationIdPrefix?: string;
+    },
+  ): Promise<PersistedConversationSummaryLike[]>;
+  buildConversationRestoreView?(
+    conversationId: string,
+  ): Promise<ConversationRestoreViewLike>;
+  buildConversationTimeline?(
+    conversationId: string,
+    options?: { previewChars?: number },
+  ): Promise<ConversationTimelineProjectionLike>;
+  buildConversationTranscriptExport?(
+    conversationId: string,
+    options?: { mode?: "internal" | "shareable" | "metadata_only" },
+  ): Promise<ConversationTranscriptExportLike>;
   getLoadedToolNames?(
     conversationId: string,
   ): string[];

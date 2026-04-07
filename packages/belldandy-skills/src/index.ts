@@ -15,6 +15,7 @@ export type {
   AgentCapabilities,
   ToolRuntimeLaunchSpec,
   ToolExecutionRuntimeContext,
+  ConversationAccessKind,
 } from "./types.js";
 export {
   buildDelegationProtocol,
@@ -116,6 +117,7 @@ export { codeInterpreterTool } from "./builtin/code-interpreter/index.js";
 export { imageGenerateTool, textToSpeechTool, cameraSnapTool, synthesizeSpeech, transcribeSpeech } from "./builtin/multimedia/index.js";
 export type { SynthesizeResult, SynthesizeOptions, TranscribeResult, TranscribeOptions } from "./builtin/multimedia/index.js";
 export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";
+export { conversationListTool, conversationReadTool } from "./builtin/conversation/index.js";
 export {
   methodListTool,
   methodReadTool,

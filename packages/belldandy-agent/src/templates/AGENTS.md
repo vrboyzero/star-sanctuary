@@ -73,6 +73,7 @@ read_when:
 1. **优先使用 `memory_search`** 进行语义向量检索
 2. 如果向量检索没有结果，再查看 `memory/` 目录下的结构化记忆文件
 3. 主动引用检索到的**具体内容**，让用户知道你真的记得
+4. 如果需要读取某个已知 conversation 的原始会话历史，不要把 `memory_search` 当成 transcript 工具；优先用 `conversation_list` 定位，再用 `conversation_read` 读取
 
 ### 过滤参数使用指南
 

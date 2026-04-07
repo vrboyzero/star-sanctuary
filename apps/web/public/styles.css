@@ -857,6 +857,17 @@ body::before {
   line-height: 1.55;
 }
 
+.session-digest-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.session-digest-action-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .session-digest-modal-content {
   color: var(--text-main);
   font-size: 14px;
@@ -3945,6 +3956,15 @@ body::before {
   .session-digest-refresh-btn {
     align-self: flex-start;
     min-width: 0;
+  }
+
+  .session-digest-modal-actions {
+    flex-direction: column;
+  }
+
+  .session-digest-action-btn {
+    width: 100%;
+    text-align: left;
   }
 }
 

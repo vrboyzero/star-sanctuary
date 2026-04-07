@@ -456,6 +456,83 @@ const TOOL_CONTRACT_V2_PROFILES: Record<string, ToolContractV2Profile> = {
     ],
     userVisibleRiskNote: "网络读取工具。虽然是只读，但会产生真实外联流量，POST 请求和不熟悉域名要特别谨慎。",
   },
+  conversation_list: {
+    family: "memory",
+    riskLevel: "low",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "List persisted conversations available to the current workspace runtime",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need to locate a past conversation before reading its history",
+      "Need recent conversation ids, update times, or transcript availability in the current workspace scope",
+    ],
+    avoidWhen: [
+      "You already know the exact conversation id and can call conversation_read directly",
+      "You only need semantic recall rather than raw conversation lookup",
+    ],
+    confirmWhen: [
+      "Listing conversations may reveal unrelated historical workstreams or private threads that are not needed for the current task",
+    ],
+    preflightChecks: [
+      "Prefer conversation_id_prefix or agent_id filters when you already know the rough target",
+      "Use exclude_heartbeat=true when you want user-facing chat sessions and do not need scheduler heartbeat runtimes",
+      "Use exclude_subtasks=true or exclude_goal_sessions=true when you only want top-level chat sessions rather than subtask/goal runtime threads",
+      "Keep the limit small enough that the result stays navigable",
+    ],
+    fallbackStrategy: [
+      "Use conversation_read after you identify the target conversation",
+      "Use memory_search if the user remembers content but not the conversation identity",
+    ],
+    expectedOutput: [
+      "Text list of conversation ids with timestamps, message counts, and transcript/meta availability",
+    ],
+    sideEffectSummary: [
+      "Read-only listing of persisted conversation metadata within the current workspace runtime",
+    ],
+    userVisibleRiskNote: "会列出当前工作区内可见的历史会话元数据。虽然只读，但仍可能暴露不相关的线程存在性。",
+  },
+  conversation_read: {
+    family: "memory",
+    riskLevel: "low",
+    needsPermission: false,
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    activityDescription: "Read persisted conversation history from the current workspace runtime",
+    outputPersistencePolicy: "conversation",
+    channels: ["gateway", "web"] satisfies ToolContract["channels"],
+    safeScopes: ["local-safe", "web-safe"] satisfies ToolContract["safeScopes"],
+    recommendedWhen: [
+      "Need exact historical dialogue, restore state, transcript metadata, or timeline events for a known conversation",
+      "Need a source of truth stronger than memory_search summaries or durable memory extraction",
+    ],
+    avoidWhen: [
+      "You only need semantic recall or broad memory lookup and do not know the target conversation yet",
+      "The required source is a workspace file, task summary, or memory note rather than a conversation transcript",
+    ],
+    confirmWhen: [
+      "Reading a conversation may pull a large amount of unrelated or sensitive historical context into the current task",
+    ],
+    preflightChecks: [
+      "Use conversation_list first if the exact conversation id is not certain",
+      "Choose the narrowest view that answers the question: meta before restore, timeline before full transcript export",
+    ],
+    fallbackStrategy: [
+      "Use memory_search when the user only remembers fragments and you need to localize the right thread",
+      "Use task_recent or sessions_history when the need is task status rather than dialogue history",
+    ],
+    expectedOutput: [
+      "Formatted text for one of the supported views: meta, restore, timeline, or transcript",
+      "Missing-view or missing-runtime cases should surface as explicit capability errors",
+    ],
+    sideEffectSummary: [
+      "Read-only access to persisted conversation history and transcript-derived projections",
+    ],
+    userVisibleRiskNote: "这是原始会话读取工具，不是抽象记忆。读取前应先确认目标 conversation 和所需视图，避免把无关历史整段拉进来。",
+  },
   memory_search: {
     family: "memory",
     riskLevel: "low",

@@ -49,6 +49,10 @@ export function createSettingsController({
     cfgInjectMemory,
     cfgMaxSystemPromptChars,
     cfgMaxHistory,
+    cfgConversationKindMain,
+    cfgConversationKindSubtask,
+    cfgConversationKindGoal,
+    cfgConversationKindHeartbeat,
     channelsSettingsSection,
     openCommunityConfigBtn,
     cfgCommunityApiEnabled,
@@ -65,6 +69,34 @@ export function createSettingsController({
     cfgDiscordDefaultChannelId,
   } = refs;
   let lastLoadedConfig = null;
+  const conversationKindCheckboxes = {
+    main: cfgConversationKindMain,
+    subtask: cfgConversationKindSubtask,
+    goal: cfgConversationKindGoal,
+    heartbeat: cfgConversationKindHeartbeat,
+  };
+
+  function loadConversationAllowedKinds(rawValue) {
+    const defaultKinds = ["main", "subtask", "goal", "heartbeat"];
+    const normalized = typeof rawValue === "string" ? rawValue.trim().toLowerCase() : "";
+    const kinds = !normalized || normalized === "all"
+      ? defaultKinds
+      : normalized === "none"
+        ? []
+      : normalized.split(",").map((item) => item.trim()).filter(Boolean);
+    Object.entries(conversationKindCheckboxes).forEach(([kind, inputEl]) => {
+      if (!inputEl) return;
+      inputEl.checked = kinds.includes(kind);
+    });
+  }
+
+  function serializeConversationAllowedKinds() {
+    const kinds = Object.entries(conversationKindCheckboxes)
+      .filter(([, inputEl]) => Boolean(inputEl?.checked))
+      .map(([kind]) => kind)
+      .join(",");
+    return kinds || "none";
+  }
 
   if (openSettingsBtn) {
     openSettingsBtn.addEventListener("click", () => {
@@ -141,6 +173,7 @@ export function createSettingsController({
     cfgInjectMemory.checked = c["BELLDANDY_INJECT_MEMORY"] === "true";
     cfgMaxSystemPromptChars.value = c["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] || "";
     cfgMaxHistory.value = c["BELLDANDY_MAX_HISTORY"] || "";
+    loadConversationAllowedKinds(c["BELLDANDY_CONVERSATION_ALLOWED_KINDS"]);
     if (cfgCommunityApiEnabled) cfgCommunityApiEnabled.checked = c["BELLDANDY_COMMUNITY_API_ENABLED"] === "true";
     if (cfgCommunityApiToken) cfgCommunityApiToken.value = c["BELLDANDY_COMMUNITY_API_TOKEN"] || "";
     if (cfgFeishuAppId) cfgFeishuAppId.value = c["BELLDANDY_FEISHU_APP_ID"] || "";
@@ -252,6 +285,7 @@ export function createSettingsController({
     updates["BELLDANDY_INJECT_MEMORY"] = cfgInjectMemory.checked ? "true" : "false";
     updates["BELLDANDY_MAX_SYSTEM_PROMPT_CHARS"] = cfgMaxSystemPromptChars.value.trim();
     updates["BELLDANDY_MAX_HISTORY"] = cfgMaxHistory.value.trim();
+    updates["BELLDANDY_CONVERSATION_ALLOWED_KINDS"] = serializeConversationAllowedKinds();
     if (cfgCommunityApiEnabled) updates["BELLDANDY_COMMUNITY_API_ENABLED"] = cfgCommunityApiEnabled.checked ? "true" : "false";
     assignSecretUpdate(updates, "BELLDANDY_COMMUNITY_API_TOKEN", cfgCommunityApiToken);
     if (cfgFeishuAppId) updates["BELLDANDY_FEISHU_APP_ID"] = cfgFeishuAppId.value.trim();

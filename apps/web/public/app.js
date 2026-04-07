@@ -150,6 +150,7 @@ const sessionDigestRefreshBtn = document.getElementById("sessionDigestRefresh");
 const sessionDigestModalEl = document.getElementById("sessionDigestModal");
 const sessionDigestModalTitleEl = document.getElementById("sessionDigestModalTitle");
 const sessionDigestModalMetaEl = document.getElementById("sessionDigestModalMeta");
+const sessionDigestModalActionsEl = document.getElementById("sessionDigestModalActions");
 const sessionDigestModalContentEl = document.getElementById("sessionDigestModalContent");
 const sessionDigestModalCloseBtn = document.getElementById("sessionDigestModalClose");
 const tokenUsageEl = document.getElementById("tokenUsage");
@@ -1126,6 +1127,7 @@ sessionDigestFeature = createSessionDigestFeature({
     sessionDigestModalEl,
     sessionDigestModalTitleEl,
     sessionDigestModalMetaEl,
+    sessionDigestModalActionsEl,
     sessionDigestModalContentEl,
     sessionDigestModalCloseBtn,
   },
@@ -1133,6 +1135,9 @@ sessionDigestFeature = createSessionDigestFeature({
   sendReq,
   makeId,
   getActiveConversationId: () => activeConversationId,
+  onSendHistoryAction: ({ actionId, conversationId }) => {
+    sendConversationHistoryAction(actionId, conversationId);
+  },
   escapeHtml,
   formatDateTime,
   showNotice,
@@ -1899,6 +1904,57 @@ function restorePromptText(text) {
   promptController.restoreText(text);
 }
 
+function buildConversationHistoryActionPrompt(actionId, conversationId) {
+  switch (actionId) {
+    case "list_recent":
+    case "list_main":
+      return localeController.t(
+        "panel.sessionHistoryPromptListMain",
+        {},
+        "请直接使用 conversation_list 工具，并设置 has_messages_only=true、exclude_heartbeat=true、exclude_subtasks=true、exclude_goal_sessions=true，列出最近 8 个当前可访问会话，并用简洁列表返回 conversationId、更新时间、消息数、agentId。",
+      );
+    case "list_all_allowed":
+      return localeController.t(
+        "panel.sessionHistoryPromptListAllAllowed",
+        {},
+        "请直接使用 conversation_list 工具，列出当前运行时策略允许访问的全部会话，并用简洁列表返回 conversationId、更新时间、消息数、agentId。",
+      );
+    case "read_timeline":
+      if (!conversationId) return "";
+      return localeController.t(
+        "panel.sessionHistoryPromptReadTimeline",
+        { conversationId },
+        `请直接使用 conversation_read 工具读取当前会话（conversation_id=${conversationId}）的 timeline 视图，并用简洁中文总结关键节点。`,
+      );
+    case "read_restore":
+      if (!conversationId) return "";
+      return localeController.t(
+        "panel.sessionHistoryPromptReadRestore",
+        { conversationId },
+        `请直接使用 conversation_read 工具读取当前会话（conversation_id=${conversationId}）的 restore 视图，重点说明 raw、compacted、canonical extraction 三层差异。`,
+      );
+    default:
+      return "";
+  }
+}
+
+function sendConversationHistoryAction(actionId, conversationId) {
+  const promptText = buildConversationHistoryActionPrompt(actionId, conversationId);
+  if (!promptText) {
+    showNotice(
+      localeController.t("panel.sessionDigestFullTitle", {}, "Session Digest Full Text"),
+      localeController.t("panel.sessionDigestNoConversation", {}, "No active conversation yet."),
+      "error",
+    );
+    return;
+  }
+  switchMode("chat");
+  void sendMessage({
+    textOverride: promptText,
+    pendingAttachmentsOverride: [],
+  });
+}
+
 function buildAttachmentsPayload(attachments) {
   return attachments.map(att => {
     let base64 = "";
@@ -1920,17 +1976,24 @@ function buildAttachmentsPayload(attachments) {
   });
 }
 
-async function sendMessage() {
-  const text = promptEl.value.trim();
-  const pendingAttachments = attachmentsFeature ? attachmentsFeature.getPendingAttachments() : [];
+async function sendMessage(options = {}) {
+  const hasTextOverride = typeof options.textOverride === "string";
+  const text = hasTextOverride ? options.textOverride.trim() : promptEl.value.trim();
+  const pendingAttachments = Array.isArray(options.pendingAttachmentsOverride)
+    ? options.pendingAttachmentsOverride
+    : attachmentsFeature
+      ? attachmentsFeature.getPendingAttachments()
+      : [];
   const attachmentLimits = attachmentsFeature ? attachmentsFeature.getAttachmentLimits() : {
     maxFileBytes: DEFAULT_ATTACHMENT_MAX_FILE_BYTES,
     maxTotalBytes: DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES,
   };
 
   if (!text && !pendingAttachments.length) return;
-  promptEl.value = "";
-  promptController.syncHeight();
+  if (!hasTextOverride) {
+    promptEl.value = "";
+    promptController.syncHeight();
+  }
 
   if (!ws || !isReady) {
     queuedText = text;
@@ -2058,7 +2121,9 @@ async function sendMessage() {
       fileLimitBytes: attachmentLimits.maxFileBytes,
       attachmentCount: attachments.length,
     });
-    restorePromptText(text);
+    if (!hasTextOverride) {
+      restorePromptText(text);
+    }
     return;
   }
 
@@ -2073,7 +2138,9 @@ async function sendMessage() {
       totalLimitBytes: attachmentLimits.maxTotalBytes,
       attachmentCount: attachments.length,
     });
-    restorePromptText(text);
+    if (!hasTextOverride) {
+      restorePromptText(text);
+    }
     return;
   }
 
@@ -2101,7 +2168,9 @@ async function sendMessage() {
     isLatest: false,
   }) || appendMessage("bot", "", { timestampMs: Date.now(), isLatest: false });
 
-  attachmentsFeature?.clearPendingAttachments();
+  if (!Array.isArray(options.pendingAttachmentsOverride)) {
+    attachmentsFeature?.clearPendingAttachments();
+  }
 
   const id = makeId();
   const payload = await sendReq({
@@ -2215,6 +2284,10 @@ const cfgInjectSoul = document.getElementById("cfgInjectSoul");
 const cfgInjectMemory = document.getElementById("cfgInjectMemory");
 const cfgMaxSystemPromptChars = document.getElementById("cfgMaxSystemPromptChars");
 const cfgMaxHistory = document.getElementById("cfgMaxHistory");
+const cfgConversationKindMain = document.getElementById("cfgConversationKindMain");
+const cfgConversationKindSubtask = document.getElementById("cfgConversationKindSubtask");
+const cfgConversationKindGoal = document.getElementById("cfgConversationKindGoal");
+const cfgConversationKindHeartbeat = document.getElementById("cfgConversationKindHeartbeat");
 const channelsSettingsSection = document.getElementById("channelsSettingsSection");
 const openCommunityConfigBtn = document.getElementById("openCommunityConfig");
 const cfgCommunityApiEnabled = document.getElementById("cfgCommunityApiEnabled");
@@ -2277,6 +2350,10 @@ const settingsController = createSettingsController({
     cfgInjectMemory,
     cfgMaxSystemPromptChars,
     cfgMaxHistory,
+    cfgConversationKindMain,
+    cfgConversationKindSubtask,
+    cfgConversationKindGoal,
+    cfgConversationKindHeartbeat,
     channelsSettingsSection,
     openCommunityConfigBtn,
     cfgCommunityApiEnabled,

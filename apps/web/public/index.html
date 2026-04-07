@@ -685,6 +685,26 @@
           <input id="cfgMaxHistory" class="input" placeholder="10" />
           <div class="form-help" data-i18n="settings.maxHistoryHelp">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
         </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="settings.conversationAccessTitle">会话历史访问范围</label>
+          <div class="form-help" data-i18n="settings.conversationAccessHelp">全局限制 Agent 通过 conversation_list / conversation_read 可读取的会话类别。未配置时默认全开；保存后需重启 Gateway 生效。</div>
+          <label class="form-label" for="cfgConversationKindMain" style="margin-top: 10px;">
+            <input id="cfgConversationKindMain" type="checkbox" style="margin-right: 8px;" />
+            <span data-i18n="settings.conversationAccessMain">允许主会话</span>
+          </label>
+          <label class="form-label" for="cfgConversationKindSubtask" style="margin-top: 6px;">
+            <input id="cfgConversationKindSubtask" type="checkbox" style="margin-right: 8px;" />
+            <span data-i18n="settings.conversationAccessSubtask">允许子代理会话</span>
+          </label>
+          <label class="form-label" for="cfgConversationKindGoal" style="margin-top: 6px;">
+            <input id="cfgConversationKindGoal" type="checkbox" style="margin-right: 8px;" />
+            <span data-i18n="settings.conversationAccessGoal">允许长期任务会话</span>
+          </label>
+          <label class="form-label" for="cfgConversationKindHeartbeat" style="margin-top: 6px;">
+            <input id="cfgConversationKindHeartbeat" type="checkbox" style="margin-right: 8px;" />
+            <span data-i18n="settings.conversationAccessHeartbeat">允许心跳会话</span>
+          </label>
+        </div>
 
         <hr class="theme-divider">
 
@@ -828,6 +848,7 @@
       </div>
       <div class="modal-body session-digest-modal-body">
         <div id="sessionDigestModalMeta" class="session-digest-modal-meta"></div>
+        <div id="sessionDigestModalActions" class="session-digest-modal-actions hidden"></div>
         <div id="sessionDigestModalContent" class="session-digest-modal-content"></div>
       </div>
     </div>

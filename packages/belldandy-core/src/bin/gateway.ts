@@ -150,6 +150,8 @@ import {
   sessionsHistoryTool,
   delegateTaskTool,
   delegateParallelTool,
+  conversationListTool,
+  conversationReadTool,
   createCanvasTools,
   getUserUuidTool,
   getMessageSenderInfoTool,
@@ -174,6 +176,7 @@ import {
   timerTool,
   tokenCounterStartTool,
   tokenCounterStopTool,
+  type ConversationAccessKind,
 } from "@belldandy/skills";
 import { listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, listGlobalMemoryManagers, type MemoryCategory } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
@@ -294,6 +297,29 @@ envFiles = resolveEnvFilePaths({ envDir: runtimePaths.envDir });
 function readEnv(name: string): string | undefined {
   const v = process.env[name];
   return v && v.trim() ? v.trim() : undefined;
+}
+
+function parseConversationAllowedKinds(raw: string | undefined): ConversationAccessKind[] {
+  const allKinds: ConversationAccessKind[] = ["main", "subtask", "goal", "heartbeat"];
+  if (typeof raw === "undefined") {
+    return allKinds;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+  if (normalized === "none") {
+    return [];
+  }
+  if (normalized === "all") {
+    return allKinds;
+  }
+  const allowed = normalized
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item): item is ConversationAccessKind =>
+      item === "main" || item === "subtask" || item === "goal" || item === "heartbeat");
+  return [...new Set(allowed)];
 }
 
 // --- Configuration ---
@@ -515,6 +541,7 @@ const agentToolControlConfirmPassword = (readEnv("BELLDANDY_AGENT_TOOL_CONTROL_C
 const toolGroups = new Set(
   (readEnv("BELLDANDY_TOOL_GROUPS") ?? "all").split(",").map(s => s.trim().toLowerCase()),
 );
+const allowedConversationKinds = parseConversationAllowedKinds(readEnv("BELLDANDY_CONVERSATION_ALLOWED_KINDS"));
 const hasToolGroup = (group: string) => toolGroups.has("all") || toolGroups.has(group);
 const agentTimeoutMsRaw = readEnv("BELLDANDY_AGENT_TIMEOUT_MS");
 const agentTimeoutMs = agentTimeoutMsRaw ? Math.max(5000, parseInt(agentTimeoutMsRaw, 10) || 120_000) : undefined;
@@ -787,6 +814,8 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
       sessionsHistoryTool,
       delegateTaskTool,
       delegateParallelTool,
+      conversationListTool,
+      conversationReadTool,
     ],
   },
   {
@@ -885,6 +914,7 @@ const toolExecutor = new ToolExecutor({
   policy: toolsPolicy,
   contractAccessPolicy: gatewayExecutorContractAccessPolicy,
   deferredToolNames,
+  allowedConversationKinds,
   isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
   isToolAllowedForAgent: (toolName, agentId) => {
     const resolvedAgentId = typeof agentId === "string" && agentId.trim()
@@ -933,7 +963,7 @@ if (toolsEnabled) {
 
 // 4. Log enabled tools
 if (toolsEnabled) {
-  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, memory_share_promote, task_search, task_get, task_recent, experience_candidate_get, experience_candidate_list, experience_usage_get, experience_usage_list, browser_*, log_read, log_search";
+  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, memory_share_promote, task_search, task_get, task_recent, conversation_list, conversation_read, experience_candidate_get, experience_candidate_list, experience_usage_get, experience_usage_list, browser_*, log_read, log_search";
   if (dangerousToolsEnabled) {
     logger.warn("tools", "⚠️ DANGEROUS_TOOLS_ENABLED=true: run_command is active");
     logger.info("tools", `Tools enabled: ${safeTools}, run_command`);
