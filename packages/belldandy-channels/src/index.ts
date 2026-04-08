@@ -6,6 +6,8 @@ export * from "./manager.js";
 
 // 路由引擎
 export * from "./router/index.js";
+export * from "./reply-chunking.js";
+export * from "./reply-chunking-config.js";
 
 // 渠道实现
 export * from "./feishu.js";

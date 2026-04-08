@@ -750,8 +750,13 @@ describe("ToolExecutor", () => {
       deferredToolNames: ["web_search_deep"],
     });
     executor.registerTool(createToolSearchTool({
-      getCatalogEntries: (conversationId?: string, agentId?: string) => executor.getCatalogEntries(agentId, conversationId),
+      getDiscoveryEntries: (conversationId?: string, agentId?: string, expandedFamilyIds?: string[]) =>
+        executor.getDiscoveryEntries(agentId, conversationId, undefined, { expandedFamilyIds }),
+      getLoadedDeferredToolList: (conversationId: string) => executor.getLoadedDeferredToolList(conversationId),
       loadDeferredTools: (conversationId: string, toolNames: string[]) => executor.loadDeferredTools(conversationId, toolNames),
+      unloadDeferredTools: (conversationId: string, toolNames: string[]) => executor.unloadDeferredTools(conversationId, toolNames),
+      clearLoadedDeferredTools: (conversationId: string) => executor.clearLoadedDeferredTools(conversationId),
+      shrinkLoadedDeferredTools: (conversationId: string, toolNames: string[]) => executor.shrinkLoadedDeferredTools(conversationId, toolNames),
     }));
 
     const searchResult = await executor.execute(
@@ -770,6 +775,228 @@ describe("ToolExecutor", () => {
     expect(searchResult.output).toContain("Loaded tools for next turn");
     expect(searchResult.output).toContain("web_search_deep");
     expect(executor.getDefinitions("default", "conv-1").map((item) => item.function.name)).toContain("web_search_deep");
+  });
+
+  it("should hide heavy discovery family members until the family is expanded", () => {
+    const goalFamily = {
+      id: "goals",
+      title: "Goals",
+      summary: "Goal governance and checkpoint operations.",
+      gateMode: "hidden-until-expanded" as const,
+      keywords: ["goal", "checkpoint"],
+    };
+    const deferredGoalTool: Tool = {
+      definition: {
+        name: "goal_checkpoint_request",
+        description: "Request a goal checkpoint",
+        shortDescription: "Request a checkpoint",
+        keywords: ["goal", "checkpoint"],
+        discoveryFamily: goalFamily,
+        parameters: {
+          type: "object",
+          properties: {
+            goalId: { type: "string", description: "goal id" },
+          },
+          required: ["goalId"],
+        },
+      },
+      async execute(args): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "goal_checkpoint_request",
+          success: true,
+          output: String(args.goalId ?? ""),
+          durationMs: 0,
+        };
+      },
+    };
+
+    const executor = new ToolExecutor({
+      tools: [echoTool, deferredGoalTool],
+      workspaceRoot: "/tmp/test",
+      deferredToolNames: ["goal_checkpoint_request"],
+    });
+
+    const defaultEntries = executor.getDiscoveryEntries("default", "conv-1");
+    expect(defaultEntries.find((entry) => entry.kind === "family" && entry.id === "goals")).toMatchObject({
+      kind: "family",
+      toolCount: 1,
+      gateMode: "hidden-until-expanded",
+    });
+    expect(defaultEntries.some((entry) => entry.kind === "tool" && entry.name === "goal_checkpoint_request")).toBe(false);
+
+    const expandedEntries = executor.getDiscoveryEntries("default", "conv-1", undefined, {
+      expandedFamilyIds: ["goals"],
+    });
+    expect(expandedEntries.some((entry) => entry.kind === "tool" && entry.name === "goal_checkpoint_request")).toBe(true);
+    expect(executor.buildDeferredToolDiscoveryPromptSummary("default", "conv-1")).toContain("goals");
+  });
+
+  it("tool_search should expand a heavy family before selecting an exact deferred tool", async () => {
+    const goalFamily = {
+      id: "goals",
+      title: "Goals",
+      summary: "Goal governance and checkpoint operations.",
+      gateMode: "hidden-until-expanded" as const,
+      keywords: ["goal", "checkpoint", "governance"],
+    };
+    const deferredGoalTool: Tool = {
+      definition: {
+        name: "goal_checkpoint_request",
+        description: "Request a goal checkpoint",
+        shortDescription: "Request a checkpoint",
+        keywords: ["goal", "checkpoint"],
+        discoveryFamily: goalFamily,
+        parameters: {
+          type: "object",
+          properties: {
+            goalId: { type: "string", description: "goal id" },
+          },
+          required: ["goalId"],
+        },
+      },
+      async execute(args): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "goal_checkpoint_request",
+          success: true,
+          output: String(args.goalId ?? ""),
+          durationMs: 0,
+        };
+      },
+    };
+
+    const executor = new ToolExecutor({
+      tools: [echoTool, deferredGoalTool],
+      workspaceRoot: "/tmp/test",
+      deferredToolNames: ["goal_checkpoint_request"],
+    });
+    executor.registerTool(createToolSearchTool({
+      getDiscoveryEntries: (conversationId?: string, agentId?: string, expandedFamilyIds?: string[]) =>
+        executor.getDiscoveryEntries(agentId, conversationId, undefined, { expandedFamilyIds }),
+      getLoadedDeferredToolList: (conversationId: string) => executor.getLoadedDeferredToolList(conversationId),
+      loadDeferredTools: (conversationId: string, toolNames: string[]) => executor.loadDeferredTools(conversationId, toolNames),
+      unloadDeferredTools: (conversationId: string, toolNames: string[]) => executor.unloadDeferredTools(conversationId, toolNames),
+      clearLoadedDeferredTools: (conversationId: string) => executor.clearLoadedDeferredTools(conversationId),
+      shrinkLoadedDeferredTools: (conversationId: string, toolNames: string[]) => executor.shrinkLoadedDeferredTools(conversationId, toolNames),
+    }));
+
+    const collapsedSearch = await executor.execute(
+      {
+        id: "req-family-search",
+        name: "tool_search",
+        arguments: {
+          query: "checkpoint",
+        },
+      },
+      "conv-1",
+    );
+    expect(collapsedSearch.success).toBe(true);
+    expect(collapsedSearch.output).toContain("family:goals");
+    expect(collapsedSearch.output).not.toContain("goal_checkpoint_request [");
+
+    const expandedSearch = await executor.execute(
+      {
+        id: "req-family-expand",
+        name: "tool_search",
+        arguments: {
+          query: "checkpoint",
+          expandFamilies: ["goals"],
+          select: ["goal_checkpoint_request"],
+        },
+      },
+      "conv-1",
+    );
+    expect(expandedSearch.success).toBe(true);
+    expect(expandedSearch.output).toContain("Expanded families for this search");
+    expect(expandedSearch.output).toContain("goal_checkpoint_request");
+    expect(executor.getDefinitions("default", "conv-1").map((item) => item.function.name)).toContain("goal_checkpoint_request");
+  });
+
+  it("tool_search should support unload, shrink, and reset of loaded deferred tools", async () => {
+    const deferredAlpha: Tool = {
+      definition: {
+        name: "alpha_deferred",
+        description: "Alpha deferred tool",
+        shortDescription: "Alpha deferred",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      async execute(): Promise<ToolCallResult> {
+        return { id: "", name: "alpha_deferred", success: true, output: "alpha", durationMs: 0 };
+      },
+    };
+    const deferredBeta: Tool = {
+      definition: {
+        name: "beta_deferred",
+        description: "Beta deferred tool",
+        shortDescription: "Beta deferred",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      async execute(): Promise<ToolCallResult> {
+        return { id: "", name: "beta_deferred", success: true, output: "beta", durationMs: 0 };
+      },
+    };
+
+    const executor = new ToolExecutor({
+      tools: [echoTool, deferredAlpha, deferredBeta],
+      workspaceRoot: "/tmp/test",
+      deferredToolNames: ["alpha_deferred", "beta_deferred"],
+    });
+    executor.registerTool(createToolSearchTool({
+      getDiscoveryEntries: (conversationId?: string, agentId?: string, expandedFamilyIds?: string[]) =>
+        executor.getDiscoveryEntries(agentId, conversationId, undefined, { expandedFamilyIds }),
+      getLoadedDeferredToolList: (conversationId: string) => executor.getLoadedDeferredToolList(conversationId),
+      loadDeferredTools: (conversationId: string, toolNames: string[]) => executor.loadDeferredTools(conversationId, toolNames),
+      unloadDeferredTools: (conversationId: string, toolNames: string[]) => executor.unloadDeferredTools(conversationId, toolNames),
+      clearLoadedDeferredTools: (conversationId: string) => executor.clearLoadedDeferredTools(conversationId),
+      shrinkLoadedDeferredTools: (conversationId: string, toolNames: string[]) => executor.shrinkLoadedDeferredTools(conversationId, toolNames),
+    }));
+
+    await executor.execute({
+      id: "req-load-both",
+      name: "tool_search",
+      arguments: { select: ["alpha_deferred", "beta_deferred"] },
+    }, "conv-ops");
+    expect(executor.getLoadedDeferredToolList("conv-ops")).toEqual(["alpha_deferred", "beta_deferred"]);
+
+    const unloadResult = await executor.execute({
+      id: "req-unload",
+      name: "tool_search",
+      arguments: { unload: ["alpha_deferred"] },
+    }, "conv-ops");
+    expect(unloadResult.output).toContain("Unloaded deferred tools");
+    expect(executor.getLoadedDeferredToolList("conv-ops")).toEqual(["beta_deferred"]);
+
+    await executor.execute({
+      id: "req-reload",
+      name: "tool_search",
+      arguments: { select: ["alpha_deferred"] },
+    }, "conv-ops");
+    expect(executor.getLoadedDeferredToolList("conv-ops")).toEqual(["alpha_deferred", "beta_deferred"]);
+
+    const shrinkResult = await executor.execute({
+      id: "req-shrink",
+      name: "tool_search",
+      arguments: { shrinkTo: ["alpha_deferred"] },
+    }, "conv-ops");
+    expect(shrinkResult.output).toContain("Shrunk loaded tools to");
+    expect(executor.getLoadedDeferredToolList("conv-ops")).toEqual(["alpha_deferred"]);
+
+    const resetResult = await executor.execute({
+      id: "req-reset",
+      name: "tool_search",
+      arguments: { resetLoaded: true },
+    }, "conv-ops");
+    expect(resetResult.output).toContain("Reset loaded deferred tools");
+    expect(executor.getLoadedDeferredToolList("conv-ops")).toEqual([]);
   });
 });
 

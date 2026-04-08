@@ -1,4 +1,5 @@
 import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js";
+import { buildContinuationAction, formatContinuationTargetLabel } from "./continuation-targets.js";
 
 function tr(t, key, params, fallback) {
   return typeof t === "function" ? t(key, params ?? {}, fallback) : fallback;
@@ -41,6 +42,49 @@ function formatDigestBadge(agent, t) {
   return pendingCount > 0
     ? tr(t, "agentPanel.digestPending", { label, count: pendingCount }, `${label}/${pendingCount}`)
     : label;
+}
+
+function formatContinuationMode(agent, t) {
+  const mode = typeof agent?.continuationState?.resumeMode === "string"
+    ? agent.continuationState.resumeMode.trim()
+    : "";
+  if (!mode) return "";
+  switch (mode) {
+    case "resident_main":
+      return tr(t, "agentPanel.continueResidentMain", {}, "main");
+    case "resident_review":
+      return tr(t, "agentPanel.continueResidentReview", {}, "review");
+    case "resident_followup":
+      return tr(t, "agentPanel.continueResidentFollowup", {}, "follow-up");
+    case "resident_task_followup":
+      return tr(t, "agentPanel.continueResidentTaskFollowup", {}, "task");
+    default:
+      return mode;
+  }
+}
+
+function buildContinuationRow(agent, t) {
+  const continuation = agent?.continuationState;
+  if (continuation?.recommendedTargetId) {
+    const modeLabel = formatContinuationMode(agent, t);
+    const targetLabel = formatContinuationTargetLabel(continuation);
+    const summary = truncateLabel(continuation.summary || continuation.nextAction || targetLabel, 64);
+    return {
+      key: "continue",
+      label: tr(t, "agentPanel.summaryContinueLabel", {}, "Continue"),
+      value: modeLabel
+        ? tr(t, "agentPanel.summaryContinueValue", { mode: modeLabel, summary }, `${modeLabel} · ${summary}`)
+        : summary,
+      action: buildContinuationAction(continuation),
+    };
+  }
+
+  return {
+    key: "continue",
+    label: tr(t, "agentPanel.summaryContinueLabel", {}, "Continue"),
+    value: tr(t, "agentPanel.summaryContinueEmpty", {}, "No continuation target"),
+    action: { kind: "conversation" },
+  };
 }
 
 function buildTaskRow(agent, t) {
@@ -136,6 +180,7 @@ function buildUsageRow(agent, t) {
 
 export function buildResidentPanelSummary(agent, t) {
   const rows = [
+    buildContinuationRow(agent, t),
     buildTaskRow(agent, t),
     buildSubtaskRow(agent, t),
     buildReviewRow(agent, t),
@@ -150,6 +195,11 @@ export function buildResidentPanelSummary(agent, t) {
   const digestBadge = formatDigestBadge(agent, t);
   if (digestBadge) {
     badges.push(digestBadge);
+  }
+
+  const continuationMode = formatContinuationMode(agent, t);
+  if (continuationMode) {
+    badges.push(continuationMode);
   }
 
   if (agent?.workspaceBinding === "custom") {

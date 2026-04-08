@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConversationStore } from "@belldandy/agent";
 
 import { QqChannel } from "./qq.js";
+import { normalizeReplyChunkingConfig } from "./reply-chunking-config.js";
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -147,6 +148,56 @@ describe("QqChannel", () => {
                 msg_id: "msg-1",
             }),
         );
+    });
+
+    it("chunks long proactive markdown replies through the shared outbound chunker", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => ({
+            ok: true,
+            text: async () => "",
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+            replyChunkingConfig: normalizeReplyChunkingConfig({
+                channels: {
+                    qq: {
+                        textLimit: 120,
+                        chunkMode: "length",
+                    },
+                },
+            }),
+        });
+
+        (channel as any).accessToken = "qq-token";
+
+        await (channel as any).handleMessage({
+            id: "msg-1",
+            content: "seed",
+            channel_id: "channel-a",
+            guild_id: "guild-a",
+            author: {
+                id: "user-a",
+                username: "Alice",
+            },
+        }, "MESSAGE_CREATE");
+
+        fetchMock.mockClear();
+
+        const longCode = Array.from({ length: 180 }, (_, index) => `console.log("line-${index}-xxxxxxxx");`).join("\n");
+        const sent = await channel.sendProactiveMessage(`Intro\n\n\`\`\`ts\n${longCode}\n\`\`\`\n\nTail`, "channel-a");
+
+        expect(sent).toBe(true);
+        expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+        for (const [, init] of fetchMock.mock.calls) {
+            const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { content?: string };
+            expect((body.content ?? "").length).toBeLessThanOrEqual(120);
+            expect((((body.content ?? "").match(/```/g) ?? []).length) % 2).toBe(0);
+        }
     });
 
     it("cancels a pending reconnect timer on stop", async () => {

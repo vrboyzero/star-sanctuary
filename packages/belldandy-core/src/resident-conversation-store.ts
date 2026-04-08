@@ -242,6 +242,16 @@ export class ResidentConversationStore extends ConversationStore {
     return this.withConversationStore(conversationId, (store) => store.getTaskTokenResults(conversationId, limit));
   }
 
+  getLoadedToolNames(...args: Parameters<ConversationStore["getLoadedToolNames"]>): ReturnType<ConversationStore["getLoadedToolNames"]> {
+    const [conversationId] = args;
+    return this.withConversationStore(conversationId, (store) => store.getLoadedToolNames(conversationId));
+  }
+
+  setLoadedToolNames(...args: Parameters<ConversationStore["setLoadedToolNames"]>): ReturnType<ConversationStore["setLoadedToolNames"]> {
+    const [conversationId, toolNames] = args;
+    return this.withConversationStore(conversationId, (store) => store.setLoadedToolNames(conversationId, toolNames));
+  }
+
   setRoomMembersCache(...args: Parameters<ConversationStore["setRoomMembersCache"]>): void {
     const [conversationId, members, ttl] = args;
     this.withConversationStore(conversationId, (store) => store.setRoomMembersCache(conversationId, members, ttl));

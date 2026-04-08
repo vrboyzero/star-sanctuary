@@ -1,23 +1,34 @@
 import crypto from "node:crypto";
-import type { Tool, ToolCallResult, ToolCatalogEntry } from "../types.js";
+import type { Tool, ToolCallResult, ToolDiscoveryEntry } from "../types.js";
 
 export const TOOL_SEARCH_NAME = "tool_search";
 
 type ToolSearchOptions = {
-  getCatalogEntries: (conversationId?: string, agentId?: string) => ToolCatalogEntry[];
+  getDiscoveryEntries: (conversationId?: string, agentId?: string, expandedFamilyIds?: string[]) => ToolDiscoveryEntry[];
+  getLoadedDeferredToolList: (conversationId: string) => string[];
   loadDeferredTools: (conversationId: string, toolNames: string[]) => Promise<string[]>;
+  unloadDeferredTools: (conversationId: string, toolNames: string[]) => Promise<string[]>;
+  clearLoadedDeferredTools: (conversationId: string) => Promise<void>;
+  shrinkLoadedDeferredTools: (conversationId: string, toolNames: string[]) => Promise<string[]>;
 };
 
-function scoreCatalogEntry(entry: ToolCatalogEntry, query: string): number {
+function scoreCatalogEntry(entry: ToolDiscoveryEntry, query: string): number {
   const lowerQuery = query.trim().toLowerCase();
   if (!lowerQuery) return 0;
-  const haystacks = [
-    entry.name.toLowerCase(),
-    entry.shortDescription.toLowerCase(),
-    entry.description.toLowerCase(),
-    ...entry.keywords.map((item) => item.toLowerCase()),
-    ...entry.tags.map((item) => item.toLowerCase()),
-  ];
+  const haystacks = entry.kind === "family"
+    ? [
+      entry.id.toLowerCase(),
+      entry.title.toLowerCase(),
+      entry.summary.toLowerCase(),
+      ...entry.keywords.map((item) => item.toLowerCase()),
+    ]
+    : [
+      entry.name.toLowerCase(),
+      entry.shortDescription.toLowerCase(),
+      entry.description.toLowerCase(),
+      ...entry.keywords.map((item) => item.toLowerCase()),
+      ...entry.tags.map((item) => item.toLowerCase()),
+    ];
 
   let score = 0;
   for (const haystack of haystacks) {
@@ -27,32 +38,46 @@ function scoreCatalogEntry(entry: ToolCatalogEntry, query: string): number {
 
   const queryTerms = lowerQuery.split(/\s+/).filter(Boolean);
   for (const term of queryTerms) {
-    if (entry.name.toLowerCase().includes(term)) score += 4;
-    if (entry.shortDescription.toLowerCase().includes(term)) score += 2;
-    if (entry.keywords.some((item) => item.toLowerCase().includes(term))) score += 3;
-    if (entry.tags.some((item) => item.toLowerCase().includes(term))) score += 2;
+    if (entry.kind === "family") {
+      if (entry.id.toLowerCase().includes(term)) score += 4;
+      if (entry.title.toLowerCase().includes(term)) score += 4;
+      if (entry.summary.toLowerCase().includes(term)) score += 2;
+      if (entry.keywords.some((item) => item.toLowerCase().includes(term))) score += 3;
+    } else {
+      if (entry.name.toLowerCase().includes(term)) score += 4;
+      if (entry.shortDescription.toLowerCase().includes(term)) score += 2;
+      if (entry.keywords.some((item) => item.toLowerCase().includes(term))) score += 3;
+      if (entry.tags.some((item) => item.toLowerCase().includes(term))) score += 2;
+    }
   }
 
   return score;
 }
 
-function formatEntries(entries: ToolCatalogEntry[]): string {
+function formatEntries(entries: ToolDiscoveryEntry[]): string {
   if (entries.length === 0) {
     return "No matching tools found.";
   }
 
   return entries.map((entry) => {
+    if (entry.kind === "family") {
+      return `- family:${entry.id} [${entry.loadingMode}, ${entry.toolCount} tools, ${entry.loadedToolCount} loaded]: ${entry.summary}`;
+    }
     const suffix = entry.loaded ? "loaded" : entry.loadingMode;
     return `- ${entry.name} [${suffix}]: ${entry.shortDescription}`;
   }).join("\n");
+}
+
+function getEntrySortKey(entry: ToolDiscoveryEntry): string {
+  return entry.kind === "family" ? entry.id : entry.name;
 }
 
 export function createToolSearchTool(options: ToolSearchOptions): Tool {
   return {
     definition: {
       name: TOOL_SEARCH_NAME,
-      description: "搜索当前可用工具；对 deferred tools 使用 select 可在下一轮把完整 schema 加载进上下文。",
-      shortDescription: "搜索并加载延迟工具",
+      description: "搜索当前可用工具与重型工具簇；可先展开 family，再用 select 把精确 deferred schema 加载进下一轮上下文。",
+      shortDescription: "搜索工具并展开重型工具簇",
       parameters: {
         type: "object",
         properties: {
@@ -60,10 +85,29 @@ export function createToolSearchTool(options: ToolSearchOptions): Tool {
             type: "string",
             description: "按工具名、描述或关键词搜索工具",
           },
+          expandFamilies: {
+            type: "array",
+            description: "要展开的重型工具簇；展开后仅显示成员工具，不会自动加载 schema",
+            items: { type: "string" },
+          },
           select: {
             type: "array",
             description: "要立即加载的工具名列表；加载后下一轮可直接调用",
             items: { type: "string" },
+          },
+          unload: {
+            type: "array",
+            description: "要从当前会话 loaded deferred tools 集合中移除的工具名列表",
+            items: { type: "string" },
+          },
+          shrinkTo: {
+            type: "array",
+            description: "把当前会话 loaded deferred tools 收缩到这组工具名；不会加载新工具",
+            items: { type: "string" },
+          },
+          resetLoaded: {
+            type: "boolean",
+            description: "为 true 时清空当前会话全部 loaded deferred tools",
           },
           maxResults: {
             type: "number",
@@ -82,25 +126,49 @@ export function createToolSearchTool(options: ToolSearchOptions): Tool {
       const id = crypto.randomUUID();
       const conversationId = context.conversationId;
       const agentId = context.agentId;
-      const allEntries = options.getCatalogEntries(conversationId, agentId);
       const query = typeof args.query === "string" ? args.query.trim() : "";
+      const rawExpandedFamilies = Array.isArray(args.expandFamilies) ? args.expandFamilies : [];
+      const expandedFamilies = rawExpandedFamilies
+        .map((item) => typeof item === "string" ? item.trim() : "")
+        .filter(Boolean);
+      const allEntries = options.getDiscoveryEntries(conversationId, agentId, expandedFamilies);
       const rawSelect = Array.isArray(args.select) ? args.select : [];
       const select = rawSelect
         .map((item) => typeof item === "string" ? item.trim() : "")
         .filter(Boolean);
+      const rawUnload = Array.isArray(args.unload) ? args.unload : [];
+      const unload = rawUnload
+        .map((item) => typeof item === "string" ? item.trim() : "")
+        .filter(Boolean);
+      const rawShrinkTo = Array.isArray(args.shrinkTo) ? args.shrinkTo : [];
+      const shrinkTo = rawShrinkTo
+        .map((item) => typeof item === "string" ? item.trim() : "")
+        .filter(Boolean);
+      const resetLoaded = args.resetLoaded === true;
       const maxResults = typeof args.maxResults === "number" && Number.isFinite(args.maxResults)
         ? Math.max(1, Math.min(20, Math.floor(args.maxResults)))
         : 8;
 
+      if (resetLoaded) {
+        await options.clearLoadedDeferredTools(conversationId);
+      }
+
+      const shrunk = shrinkTo.length > 0
+        ? await options.shrinkLoadedDeferredTools(conversationId, shrinkTo)
+        : [];
+      const unloaded = unload.length > 0
+        ? await options.unloadDeferredTools(conversationId, unload)
+        : [];
       const loaded = select.length > 0
         ? await options.loadDeferredTools(conversationId, select)
         : [];
+      const currentLoaded = options.getLoadedDeferredToolList(conversationId);
 
       const matches = query
         ? allEntries
           .map((entry) => ({ entry, score: scoreCatalogEntry(entry, query) }))
           .filter((item) => item.score > 0)
-          .sort((a, b) => b.score - a.score || a.entry.name.localeCompare(b.entry.name))
+          .sort((a, b) => b.score - a.score || getEntrySortKey(a.entry).localeCompare(getEntrySortKey(b.entry)))
           .slice(0, maxResults)
           .map((item) => item.entry)
         : allEntries
@@ -108,9 +176,22 @@ export function createToolSearchTool(options: ToolSearchOptions): Tool {
           .slice(0, maxResults);
 
       const sections: string[] = [];
+      if (expandedFamilies.length > 0) {
+        sections.push(`Expanded families for this search:\n${expandedFamilies.map((name) => `- ${name}`).join("\n")}`);
+      }
+      if (resetLoaded) {
+        sections.push("Reset loaded deferred tools for this conversation.");
+      }
+      if (shrinkTo.length > 0) {
+        sections.push(`Shrunk loaded tools to:\n${shrunk.length > 0 ? shrunk.map((name) => `- ${name}`).join("\n") : "- (none)"}`);
+      }
+      if (unloaded.length > 0) {
+        sections.push(`Unloaded deferred tools:\n${unloaded.map((name) => `- ${name}`).join("\n")}`);
+      }
       if (loaded.length > 0) {
         sections.push(`Loaded tools for next turn:\n${loaded.map((name) => `- ${name}`).join("\n")}`);
       }
+      sections.push(`Currently loaded deferred tools:\n${currentLoaded.length > 0 ? currentLoaded.map((name) => `- ${name}`).join("\n") : "- (none)"}`);
       sections.push(`Matches:\n${formatEntries(matches)}`);
 
       return {

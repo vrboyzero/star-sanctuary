@@ -5,8 +5,19 @@
 
 import type { BelldandyAgent } from "@belldandy/agent";
 import type { ChannelRouter } from "./router/types.js";
+import type { SecurityBackedChannelKind } from "./router/security-config.js";
+import type { ReplyChunkingConfig } from "./reply-chunking-config.js";
 
 export type ChannelAgentResolver = (agentId?: string) => BelldandyAgent;
+export type ChannelSecurityApprovalRequestInput = {
+    channel: SecurityBackedChannelKind;
+    accountId?: string;
+    senderId: string;
+    senderName?: string;
+    chatId: string;
+    chatKind: "dm";
+    messagePreview?: string;
+};
 
 /**
  * 渠道基础配置
@@ -16,10 +27,14 @@ export interface ChannelConfig {
     agent: BelldandyAgent;
     /** 可选：渠道消息路由器 */
     router?: ChannelRouter;
+    /** 可选：统一 outbound chunking runtime 策略 */
+    replyChunkingConfig?: ReplyChunkingConfig;
     /** 可选：根据 agentId 解析 Agent 实例（用于多 Agent 路由） */
     agentResolver?: ChannelAgentResolver;
     /** 可选：路由默认 Agent ID */
     defaultAgentId?: string;
+    /** 可选：当渠道 DM 命中 allowlist 阻断时记录待审批请求 */
+    onChannelSecurityApprovalRequired?: (input: ChannelSecurityApprovalRequestInput) => void | Promise<void>;
 }
 
 /**

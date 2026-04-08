@@ -9,6 +9,7 @@ import type {
   GoalHandoffCapabilityFocus,
   GoalHandoffCheckpointSummary,
   GoalHandoffGenerateResult,
+  GoalHandoffReadResult,
   GoalHandoffResumeMode,
   GoalHandoffSnapshot,
   GoalHandoffTimelineEntry,
@@ -18,9 +19,10 @@ import type {
   GoalRuntimeState,
   LongTermGoal,
 } from "./types.js";
+import { buildGoalContinuationState } from "../continuation-state.js";
 import { parseGoalProgressEntries } from "./progress.js";
 
-type GoalHandoffInput = {
+export type GoalHandoffInput = {
   goal: LongTermGoal;
   runtime: GoalRuntimeState;
   graph: GoalTaskGraph;
@@ -255,7 +257,7 @@ async function atomicWriteText(targetPath: string, content: string): Promise<voi
   await fs.rename(tempPath, targetPath);
 }
 
-export async function generateGoalHandoff(input: GoalHandoffInput): Promise<GoalHandoffGenerateResult> {
+export function buildGoalHandoffResult(input: GoalHandoffInput): GoalHandoffReadResult {
   const { goal, runtime, graph, checkpoints, plans, progressContent } = input;
   const openCheckpoints = checkpoints.items
     .filter((item) => item.status === "required" || item.status === "waiting_user")
@@ -294,6 +296,16 @@ export async function generateGoalHandoff(input: GoalHandoffInput): Promise<Goal
     recentProgress,
   };
   const content = buildMarkdown(goal, handoff);
-  await atomicWriteText(goal.handoffPath, content);
-  return { goal, handoff, content };
+  return {
+    goal,
+    handoff,
+    continuationState: buildGoalContinuationState(handoff),
+    content,
+  };
+}
+
+export async function generateGoalHandoff(input: GoalHandoffInput): Promise<GoalHandoffGenerateResult> {
+  const result = buildGoalHandoffResult(input);
+  await atomicWriteText(input.goal.handoffPath, result.content);
+  return result;
 }

@@ -4,6 +4,7 @@ import type { AgentRegistry } from "@belldandy/agent";
 import type { GatewayResFrame } from "@belldandy/protocol";
 
 import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
+import { buildSubTaskContinuationState } from "./continuation-state.js";
 import type { ConversationPromptSnapshotArtifact } from "./conversation-prompt-snapshot.js";
 import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
@@ -14,6 +15,8 @@ import { resolveResidentStateBindingViewForAgent } from "./resident-state-bindin
 type SubTaskQueryRuntimeMethod =
   | "subtask.list"
   | "subtask.get"
+  | "subtask.resume"
+  | "subtask.update"
   | "subtask.stop"
   | "subtask.archive";
 
@@ -26,6 +29,8 @@ export type QueryRuntimeSubTaskContext = {
     conversationId: string;
     runId?: string;
   }) => Promise<ConversationPromptSnapshotArtifact | undefined>;
+  resumeSubTask?: (taskId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+  updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
   stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
   runtimeObserver?: QueryRuntimeObserver<SubTaskQueryRuntimeMethod>;
 };
@@ -208,6 +213,7 @@ export async function handleSubTaskGetWithQueryRuntime(
         item: {
           ...item,
         },
+        continuationState: buildSubTaskContinuationState(item),
         launchExplainability: launchExplainability ?? null,
         promptSnapshotView,
         resultEnvelope: buildSubTaskResultEnvelope(item),
@@ -379,6 +385,261 @@ export async function handleSubTaskStopWithQueryRuntime(
         taskId: item.id,
         status: item.status,
         stopReason: item.stopReason,
+      },
+    });
+    queryRuntime.mark("completed", {
+      conversationId: item.parentConversationId,
+      detail: {
+        taskId: item.id,
+      },
+    });
+
+    return {
+      type: "res",
+      id: ctx.requestId,
+      ok: true,
+      payload: {
+        item,
+      },
+    };
+  });
+}
+
+export async function handleSubTaskResumeWithQueryRuntime(
+  ctx: QueryRuntimeSubTaskContext,
+  params: { taskId: string; message?: string },
+): Promise<GatewayResFrame> {
+  const runtime = new QueryRuntime({
+    method: "subtask.resume" as const,
+    traceId: ctx.requestId,
+    observer: ctx.runtimeObserver,
+  });
+
+  return runtime.run(async (queryRuntime) => {
+    queryRuntime.mark("runtime_checked", {
+      detail: {
+        hasStore: Boolean(ctx.subTaskRuntimeStore),
+        hasResumeHandler: Boolean(ctx.resumeSubTask),
+      },
+    });
+
+    if (!ctx.subTaskRuntimeStore || !ctx.resumeSubTask) {
+      queryRuntime.mark("completed", {
+        detail: {
+          code: "not_available",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "not_available", message: "Subtask resume not available" },
+      };
+    }
+
+    queryRuntime.mark("request_validated", {
+      detail: {
+        taskId: params.taskId,
+        messageChars: typeof params.message === "string" ? params.message.length : 0,
+      },
+    });
+
+    const current = await ctx.subTaskRuntimeStore.getTask(params.taskId);
+    if (!current) {
+      queryRuntime.mark("completed", {
+        detail: {
+          taskId: params.taskId,
+          code: "not_found",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "not_found", message: `Subtask not found: ${params.taskId}` },
+      };
+    }
+
+    queryRuntime.mark("task_loaded", {
+      conversationId: current.parentConversationId,
+      detail: {
+        taskId: current.id,
+        status: current.status,
+        sessionId: current.sessionId,
+        archived: Boolean(current.archivedAt),
+      },
+    });
+
+    let item: SubTaskRecord | undefined;
+    try {
+      item = await ctx.resumeSubTask(params.taskId, params.message);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      queryRuntime.mark("completed", {
+        conversationId: current.parentConversationId,
+        detail: {
+          taskId: current.id,
+          code: "resume_failed",
+          error: errorMessage,
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "resume_failed", message: errorMessage },
+      };
+    }
+
+    if (!item) {
+      queryRuntime.mark("completed", {
+        conversationId: current.parentConversationId,
+        detail: {
+          taskId: current.id,
+          code: "resume_failed",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "resume_failed", message: `Failed to resume subtask: ${params.taskId}` },
+      };
+    }
+
+    queryRuntime.mark("task_resumed", {
+      conversationId: item.parentConversationId,
+      detail: {
+        taskId: item.id,
+        status: item.status,
+        resumeCount: item.resume.length,
+      },
+    });
+    queryRuntime.mark("completed", {
+      conversationId: item.parentConversationId,
+      detail: {
+        taskId: item.id,
+      },
+    });
+
+    return {
+      type: "res",
+      id: ctx.requestId,
+      ok: true,
+      payload: {
+        item,
+      },
+    };
+  });
+}
+
+export async function handleSubTaskUpdateWithQueryRuntime(
+  ctx: QueryRuntimeSubTaskContext,
+  params: { taskId: string; message: string },
+): Promise<GatewayResFrame> {
+  const runtime = new QueryRuntime({
+    method: "subtask.update" as const,
+    traceId: ctx.requestId,
+    observer: ctx.runtimeObserver,
+  });
+
+  return runtime.run(async (queryRuntime) => {
+    queryRuntime.mark("runtime_checked", {
+      detail: {
+        hasStore: Boolean(ctx.subTaskRuntimeStore),
+        hasUpdateHandler: Boolean(ctx.updateSubTask),
+      },
+    });
+
+    if (!ctx.subTaskRuntimeStore || !ctx.updateSubTask) {
+      queryRuntime.mark("completed", {
+        detail: {
+          code: "not_available",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "not_available", message: "Subtask steering not available" },
+      };
+    }
+
+    queryRuntime.mark("request_validated", {
+      detail: {
+        taskId: params.taskId,
+        messageChars: params.message.length,
+      },
+    });
+
+    const current = await ctx.subTaskRuntimeStore.getTask(params.taskId);
+    if (!current) {
+      queryRuntime.mark("completed", {
+        detail: {
+          taskId: params.taskId,
+          code: "not_found",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "not_found", message: `Subtask not found: ${params.taskId}` },
+      };
+    }
+
+    queryRuntime.mark("task_loaded", {
+      conversationId: current.parentConversationId,
+      detail: {
+        taskId: current.id,
+        status: current.status,
+        sessionId: current.sessionId,
+      },
+    });
+
+    let item: SubTaskRecord | undefined;
+    try {
+      item = await ctx.updateSubTask(params.taskId, params.message);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      queryRuntime.mark("completed", {
+        conversationId: current.parentConversationId,
+        detail: {
+          taskId: current.id,
+          code: "update_failed",
+          error: errorMessage,
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "update_failed", message: errorMessage },
+      };
+    }
+
+    if (!item) {
+      queryRuntime.mark("completed", {
+        conversationId: current.parentConversationId,
+        detail: {
+          taskId: current.id,
+          code: "update_failed",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "update_failed", message: `Failed to update subtask: ${params.taskId}` },
+      };
+    }
+
+    queryRuntime.mark("task_updated", {
+      conversationId: item.parentConversationId,
+      detail: {
+        taskId: item.id,
+        status: item.status,
+        steeringCount: item.steering.length,
       },
     });
     queryRuntime.mark("completed", {

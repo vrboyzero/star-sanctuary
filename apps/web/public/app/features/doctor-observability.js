@@ -10,6 +10,12 @@ function formatNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? String(value) : "0";
 }
 
+function formatTimestamp(value) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Date(value).toISOString()
+    : "-";
+}
+
 function joinDroppedSections(reason) {
   const labels = Array.isArray(reason?.droppedSectionLabels) ? reason.droppedSectionLabels.filter(Boolean) : [];
   if (labels.length > 0) {
@@ -531,6 +537,203 @@ function buildDelegationCard(payload, t) {
   };
 }
 
+function buildCronRuntimeCard(payload, t) {
+  const cronRuntime = payload?.cronRuntime;
+  if (!cronRuntime?.scheduler || !cronRuntime?.totals) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorCronJobs",
+      {
+        enabled: formatNumber(cronRuntime.totals.enabledJobs),
+        total: formatNumber(cronRuntime.totals.totalJobs),
+      },
+      `${formatNumber(cronRuntime.totals.enabledJobs)}/${formatNumber(cronRuntime.totals.totalJobs)} jobs enabled`,
+    ),
+    tr(
+      t,
+      "settings.doctorCronSessions",
+      {
+        main: formatNumber(cronRuntime.sessionTargetCounts?.main),
+        isolated: formatNumber(cronRuntime.sessionTargetCounts?.isolated),
+      },
+      `main ${formatNumber(cronRuntime.sessionTargetCounts?.main)} / isolated ${formatNumber(cronRuntime.sessionTargetCounts?.isolated)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorCronDelivery",
+      {
+        user: formatNumber(cronRuntime.deliveryModeCounts?.user),
+        none: formatNumber(cronRuntime.deliveryModeCounts?.none),
+      },
+      `delivery user ${formatNumber(cronRuntime.deliveryModeCounts?.user)} / none ${formatNumber(cronRuntime.deliveryModeCounts?.none)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorCronFailure",
+      {
+        user: formatNumber(cronRuntime.failureDestinationModeCounts?.user),
+        none: formatNumber(cronRuntime.failureDestinationModeCounts?.none),
+      },
+      `failure user ${formatNumber(cronRuntime.failureDestinationModeCounts?.user)} / none ${formatNumber(cronRuntime.failureDestinationModeCounts?.none)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorCronStagger",
+      { count: formatNumber(cronRuntime.totals.staggeredJobs) },
+      `${formatNumber(cronRuntime.totals.staggeredJobs)} staggered`,
+    ),
+    tr(
+      t,
+      "settings.doctorCronScheduler",
+      {
+        state: cronRuntime.scheduler.enabled
+          ? (cronRuntime.scheduler.running ? "running" : "stopped")
+          : "disabled",
+        active: formatNumber(cronRuntime.scheduler.activeRuns),
+      },
+      `${cronRuntime.scheduler.enabled ? (cronRuntime.scheduler.running ? "running" : "stopped") : "disabled"} / active ${formatNumber(cronRuntime.scheduler.activeRuns)}`,
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorCronHeadline",
+      { headline: cronRuntime.headline || "-" },
+      cronRuntime.headline || "-",
+    ),
+  ];
+
+  if (typeof cronRuntime.scheduler.lastTickAtMs === "number") {
+    notes.push(`last tick: ${formatTimestamp(cronRuntime.scheduler.lastTickAtMs)}`);
+  }
+  if (Number(cronRuntime.totals.invalidNextRunJobs) > 0) {
+    notes.push(tr(
+      t,
+      "settings.doctorCronInvalidNextRun",
+      { count: formatNumber(cronRuntime.totals.invalidNextRunJobs) },
+      `${formatNumber(cronRuntime.totals.invalidNextRunJobs)} enabled job(s) currently have no nextRunAtMs`,
+    ));
+  }
+
+  const recentJobs = Array.isArray(cronRuntime.recentJobs) ? cronRuntime.recentJobs : [];
+  for (const job of recentJobs.slice(0, 4)) {
+    const parts = [
+      job.scheduleSummary || "unknown schedule",
+      job.enabled ? "enabled" : "disabled",
+      `session=${job.sessionTarget || "-"}`,
+      `delivery=${job.deliveryMode || "-"}`,
+      `failure=${job.failureDestinationMode || "-"}`,
+      typeof job.staggerMs === "number" ? `stagger=${job.staggerMs}` : "",
+      `next=${formatTimestamp(job.nextRunAtMs)}`,
+      `last=${job.lastStatus || "never"}`,
+    ].filter(Boolean);
+    notes.push(`${job.name || job.id}: ${parts.join(", ")}`);
+  }
+
+  const status = !cronRuntime.scheduler.enabled
+    ? cronRuntime.totals.totalJobs > 0 ? "warn" : "pass"
+    : cronRuntime.scheduler.running && Number(cronRuntime.totals.invalidNextRunJobs) === 0
+      ? "pass"
+      : "warn";
+
+  return {
+    title: tr(t, "settings.doctorCronTitle", {}, "Cron Runtime"),
+    badges,
+    notes,
+    status,
+  };
+}
+
+function buildBackgroundContinuationRuntimeCard(payload, t) {
+  const runtime = payload?.backgroundContinuationRuntime;
+  if (!runtime?.totals || !Array.isArray(runtime?.recentEntries)) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorBackgroundContinuationRuns",
+      {
+        total: formatNumber(runtime.totals.totalRuns),
+        running: formatNumber(runtime.totals.runningRuns),
+      },
+      `${formatNumber(runtime.totals.totalRuns)} runs / running ${formatNumber(runtime.totals.runningRuns)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorBackgroundContinuationKinds",
+      {
+        cron: formatNumber(runtime.kindCounts?.cron),
+        heartbeat: formatNumber(runtime.kindCounts?.heartbeat),
+      },
+      `cron ${formatNumber(runtime.kindCounts?.cron)} / heartbeat ${formatNumber(runtime.kindCounts?.heartbeat)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorBackgroundContinuationSessions",
+      {
+        main: formatNumber(runtime.sessionTargetCounts?.main),
+        isolated: formatNumber(runtime.sessionTargetCounts?.isolated),
+      },
+      `main ${formatNumber(runtime.sessionTargetCounts?.main)} / isolated ${formatNumber(runtime.sessionTargetCounts?.isolated)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorBackgroundContinuationStatus",
+      {
+        failed: formatNumber(runtime.totals.failedRuns),
+        skipped: formatNumber(runtime.totals.skippedRuns),
+        linked: formatNumber(runtime.totals.conversationLinkedRuns),
+      },
+      `failed ${formatNumber(runtime.totals.failedRuns)} / skipped ${formatNumber(runtime.totals.skippedRuns)} / linked ${formatNumber(runtime.totals.conversationLinkedRuns)}`,
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorBackgroundContinuationHeadline",
+      { headline: runtime.headline || "-" },
+      runtime.headline || "-",
+    ),
+  ];
+
+  for (const entry of runtime.recentEntries.slice(0, 6)) {
+    const continuation = entry?.continuationState;
+    const targetId = typeof continuation?.recommendedTargetId === "string"
+      ? continuation.recommendedTargetId.trim()
+      : "";
+    const targetType = typeof continuation?.targetType === "string"
+      ? continuation.targetType.trim()
+      : "";
+    const parts = [
+      entry.status || "unknown",
+      entry.kind || "background",
+      entry.sessionTarget ? `session=${entry.sessionTarget}` : "",
+      targetId ? `target=${targetType || "conversation"}:${targetId}` : "",
+      entry.summary ? `summary=${entry.summary}` : "",
+      entry.reason ? `reason=${entry.reason}` : "",
+      `started=${formatTimestamp(entry.startedAt)}`,
+      typeof entry.finishedAt === "number" ? `finished=${formatTimestamp(entry.finishedAt)}` : "",
+      typeof entry.nextRunAtMs === "number" ? `next=${formatTimestamp(entry.nextRunAtMs)}` : "",
+    ].filter(Boolean);
+    notes.push(`${entry.label || entry.sourceId}: ${parts.join(", ")}`);
+  }
+
+  return {
+    title: tr(t, "settings.doctorBackgroundContinuationTitle", {}, "Background Continuation Runtime"),
+    badges,
+    notes,
+    status: Number(runtime.totals.failedRuns) > 0 ? "warn" : "pass",
+  };
+}
+
 function createDoctorCard(card) {
   const panel = document.createElement("div");
   panel.style.width = "100%";
@@ -585,6 +788,8 @@ export function renderDoctorObservabilityCards(container, payload, t) {
     buildResidentAgentsCard(payload, t),
     buildSharedGovernanceCard(payload, t),
     buildDelegationCard(payload, t),
+    buildCronRuntimeCard(payload, t),
+    buildBackgroundContinuationRuntimeCard(payload, t),
   ].filter(Boolean);
 
   for (const card of cards) {
@@ -640,6 +845,22 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${delegationCard.title}:`);
     lines.push(...delegationCard.badges.map((badge) => `- ${badge}`));
     lines.push(...delegationCard.notes.map((note) => `- ${note}`));
+  }
+
+  const cronCard = buildCronRuntimeCard(payload, t);
+  if (cronCard) {
+    lines.push(``);
+    lines.push(`${cronCard.title}:`);
+    lines.push(...cronCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...cronCard.notes.map((note) => `- ${note}`));
+  }
+
+  const backgroundContinuationCard = buildBackgroundContinuationRuntimeCard(payload, t);
+  if (backgroundContinuationCard) {
+    lines.push(``);
+    lines.push(`${backgroundContinuationCard.title}:`);
+    lines.push(...backgroundContinuationCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...backgroundContinuationCard.notes.map((note) => `- ${note}`));
   }
 
   return lines;

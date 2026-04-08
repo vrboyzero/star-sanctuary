@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 import { computeNextRun } from "./store.js";
 
@@ -61,5 +63,27 @@ describe("computeNextRun", () => {
       time: "10:30",
       timezone: "UTC",
     }, Date.now())).toBeUndefined();
+  });
+
+  it("keeps base schedule math stable even when staggerMs is present", () => {
+    const nowMs = Date.parse("2026-04-01T00:00:00.000Z");
+    const nextRunAtMs = computeNextRun({
+      kind: "every",
+      everyMs: 60_000,
+      staggerMs: 30_000,
+    }, nowMs);
+
+    expect(nextRunAtMs).toBe(nowMs);
+  });
+});
+
+describe("cron stagger offset", () => {
+  it("derives a stable offset within the stagger window", () => {
+    const staggerMs = 30_000;
+    const digest = crypto.createHash("sha256").update("cron-stagger").digest();
+    const offset = digest.readUInt32BE(0) % staggerMs;
+
+    expect(offset).toBeGreaterThanOrEqual(0);
+    expect(offset).toBeLessThan(staggerMs);
   });
 });

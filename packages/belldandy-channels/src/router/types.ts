@@ -4,6 +4,7 @@ export type ChatKind = "dm" | "group" | "channel" | "room";
 
 export interface RouteContext {
   channel: ChannelKind;
+  accountId?: string;
   chatKind: ChatKind;
   chatId: string;
   text: string;

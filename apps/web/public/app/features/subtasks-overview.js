@@ -1,4 +1,10 @@
 import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js";
+import {
+  buildContinuationAction,
+  decodeContinuationAction,
+  encodeContinuationAction,
+  formatContinuationTargetLabel,
+} from "./continuation-targets.js";
 import { renderPromptSnapshotDetail } from "./prompt-snapshot-detail.js";
 
 function formatSubtaskStatus(status) {
@@ -72,6 +78,28 @@ function formatWorktreeRuntimeStatus(status, t) {
   }
 }
 
+function formatSteeringStatus(status, t) {
+  switch (status) {
+    case "delivered":
+      return t("subtasks.steeringDelivered", {}, "Delivered");
+    case "failed":
+      return t("subtasks.steeringFailed", {}, "Failed");
+    default:
+      return t("subtasks.steeringAccepted", {}, "Accepted");
+  }
+}
+
+function formatResumeStatus(status, t) {
+  switch (status) {
+    case "delivered":
+      return t("subtasks.resumeDelivered", {}, "Delivered");
+    case "failed":
+      return t("subtasks.resumeFailed", {}, "Failed");
+    default:
+      return t("subtasks.resumeAccepted", {}, "Accepted");
+  }
+}
+
 function formatJoinedValues(values) {
   if (!Array.isArray(values) || values.length === 0) return "-";
   const normalized = values
@@ -87,6 +115,33 @@ function renderExplainabilityNote(lines, escapeHtml) {
       ${lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
     </div>
   `;
+}
+
+function formatNotificationKindLabel(kind, t) {
+  switch (kind) {
+    case "failed":
+      return t("subtasks.steeringFailed", {}, "Failed");
+    case "completed":
+      return t("subtasks.notificationCompleted", {}, "Completed");
+    case "started":
+      return t("subtasks.notificationStarted", {}, "Started");
+    case "progress":
+      return t("subtasks.notificationProgress", {}, "Progress");
+    case "steering_requested":
+      return t("subtasks.steeringAccepted", {}, "Accepted");
+    case "steering_delivered":
+      return t("subtasks.steeringDelivered", {}, "Delivered");
+    case "steering_failed":
+      return t("subtasks.steeringFailed", {}, "Failed");
+    case "resume_requested":
+      return t("subtasks.resumeAccepted", {}, "Accepted");
+    case "resume_delivered":
+      return t("subtasks.resumeDelivered", {}, "Delivered");
+    case "resume_failed":
+      return t("subtasks.resumeFailed", {}, "Failed");
+    default:
+      return kind || t("subtasks.notificationProgress", {}, "Progress");
+  }
 }
 
 export function buildSubtaskExecutionExplainabilityLines({
@@ -175,6 +230,12 @@ export function parseGoalSessionReference(conversationId) {
   return null;
 }
 
+export function findSubtaskBySessionId(items, sessionId) {
+  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!normalizedSessionId || !Array.isArray(items)) return null;
+  return items.find((item) => typeof item?.sessionId === "string" && item.sessionId.trim() === normalizedSessionId) || null;
+}
+
 export function createSubtasksOverviewFeature({
   refs,
   isConnected,
@@ -189,6 +250,7 @@ export function createSubtasksOverviewFeature({
   onOpenSourcePath,
   onOpenTask,
   onOpenGoal,
+  onOpenContinuationAction,
   showNotice,
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
@@ -287,6 +349,14 @@ export function createSubtasksOverviewFeature({
         void onOpenGoal?.(goalId);
       });
     });
+    subtasksDetailEl.querySelectorAll("[data-continuation-action]").forEach((node) => {
+      node.addEventListener("click", () => {
+        if (typeof onOpenContinuationAction !== "function") return;
+        const action = decodeContinuationAction(node.getAttribute("data-continuation-action") || "");
+        if (!action) return;
+        void onOpenContinuationAction(action);
+      });
+    });
     subtasksDetailEl.querySelectorAll("[data-subtask-stop]").forEach((node) => {
       node.addEventListener("click", () => {
         const taskId = node.getAttribute("data-subtask-stop");
@@ -303,6 +373,47 @@ export function createSubtasksOverviewFeature({
         void performSubtaskAction("subtask.archive", taskId);
       });
     });
+    subtasksDetailEl.querySelectorAll("[data-subtask-steering-send]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-subtask-steering-send");
+        if (!taskId) return;
+        const input = subtasksDetailEl.querySelector(`[data-subtask-steering-input="${taskId}"]`);
+        const message = typeof input?.value === "string" ? input.value.trim() : "";
+        if (!message) return;
+        void performSubtaskSteering(taskId, message);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-steering-input]").forEach((node) => {
+      node.addEventListener("input", () => {
+        const taskId = node.getAttribute("data-subtask-steering-input");
+        if (!taskId) return;
+        const subtasksState = getSubtasksState();
+        if (!subtasksState.steeringDrafts || typeof subtasksState.steeringDrafts !== "object") {
+          subtasksState.steeringDrafts = {};
+        }
+        subtasksState.steeringDrafts[taskId] = node.value;
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-resume-send]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-subtask-resume-send");
+        if (!taskId) return;
+        const input = subtasksDetailEl.querySelector(`[data-subtask-resume-input="${taskId}"]`);
+        const message = typeof input?.value === "string" ? input.value.trim() : "";
+        void performSubtaskResume(taskId, message);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-resume-input]").forEach((node) => {
+      node.addEventListener("input", () => {
+        const taskId = node.getAttribute("data-subtask-resume-input");
+        if (!taskId) return;
+        const subtasksState = getSubtasksState();
+        if (!subtasksState.resumeDrafts || typeof subtasksState.resumeDrafts !== "object") {
+          subtasksState.resumeDrafts = {};
+        }
+        subtasksState.resumeDrafts[taskId] = node.value;
+      });
+    });
   }
 
   function renderSubtaskList(items) {
@@ -316,15 +427,21 @@ export function createSubtasksOverviewFeature({
     const subtasksState = getSubtasksState();
     const activeConversationId = getActiveConversationId();
     const isFilteredToConversation = Boolean(subtasksState.conversationId);
+    const continuationFocusSessionId = typeof subtasksState.continuationFocusSessionId === "string"
+      ? subtasksState.continuationFocusSessionId.trim()
+      : "";
 
     subtasksListEl.innerHTML = safeItems.map((item) => {
       const isActive = item?.id === subtasksState.selectedId;
       const isCurrentConversation = !isFilteredToConversation
         && activeConversationId
         && item?.parentConversationId === activeConversationId;
+      const isContinuationFocus = continuationFocusSessionId
+        && typeof item?.sessionId === "string"
+        && item.sessionId.trim() === continuationFocusSessionId;
       const progressText = item?.progress?.message || item?.summary || item?.instruction || "";
       return `
-        <div class="memory-list-item subtask-list-item${isActive ? " active" : ""}" data-subtask-id="${escapeHtml(item.id || "")}">
+        <div class="memory-list-item subtask-list-item${isActive ? " active" : ""}${isContinuationFocus ? " is-continuation-focus" : ""}" data-subtask-id="${escapeHtml(item.id || "")}" data-subtask-session-id="${escapeHtml(item?.sessionId || "")}">
           <div class="subtask-list-item-head">
             <div class="memory-list-item-title">${escapeHtml(item.id || "-")}</div>
             <div class="memory-detail-badges">
@@ -361,13 +478,108 @@ export function createSubtasksOverviewFeature({
         ${safeItems.map((item) => `
           <div class="subtask-notification-item">
             <div class="subtask-notification-head">
-              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.kind === "failed" ? "error" : item?.kind === "completed" ? "done" : item?.kind === "started" || item?.kind === "progress" ? "running" : "pending")}">${escapeHtml(item?.kind === "failed" ? "失败" : item?.kind === "completed" ? "完成" : item?.kind === "started" ? "开始" : item?.kind === "progress" ? "进展" : item?.kind || "进展")}</span>
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.kind === "failed" || item?.kind === "steering_failed" || item?.kind === "resume_failed" ? "error" : item?.kind === "completed" || item?.kind === "steering_delivered" || item?.kind === "resume_delivered" ? "done" : item?.kind === "started" || item?.kind === "progress" || item?.kind === "steering_requested" || item?.kind === "resume_requested" ? "running" : "pending")}">${escapeHtml(formatNotificationKindLabel(item?.kind, t))}</span>
               <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.createdAt))}</span>
             </div>
             <div class="memory-detail-text">${escapeHtml(item?.message || "-")}</div>
           </div>
         `).join("")}
       </div>
+    `;
+  }
+
+  function renderSteeringRecords(items) {
+    const safeItems = Array.isArray(items) ? items : [];
+    if (!safeItems.length) {
+      return `<div class="memory-detail-text">${escapeHtml(t("subtasks.noSteering", {}, "No steering requests yet."))}</div>`;
+    }
+    return `
+      <div class="subtask-notification-list">
+        ${safeItems.map((item) => `
+          <div class="subtask-notification-item">
+            <div class="subtask-notification-head">
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.status === "failed" ? "error" : item?.status === "delivered" ? "done" : "running")}">${escapeHtml(formatSteeringStatus(item?.status, t))}</span>
+              <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.deliveredAt || item?.requestedAt))}</span>
+            </div>
+            <div class="memory-detail-text">${escapeHtml(item?.message || "-")}</div>
+            ${item?.error ? `<div class="memory-detail-text">${escapeHtml(item.error)}</div>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderResumeRecords(items) {
+    const safeItems = Array.isArray(items) ? items : [];
+    if (!safeItems.length) {
+      return `<div class="memory-detail-text">${escapeHtml(t("subtasks.noResume", {}, "No resume requests yet."))}</div>`;
+    }
+    return `
+      <div class="subtask-notification-list">
+        ${safeItems.map((item) => `
+          <div class="subtask-notification-item">
+            <div class="subtask-notification-head">
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.status === "failed" ? "error" : item?.status === "delivered" ? "done" : "running")}">${escapeHtml(formatResumeStatus(item?.status, t))}</span>
+              <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.deliveredAt || item?.requestedAt))}</span>
+            </div>
+            <div class="memory-detail-text">${escapeHtml(item?.message || t("subtasks.resumeDefaultMessage", {}, "Continue from the last recorded state."))}</div>
+            ${item?.resumedFromSessionId ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailResumeSourceSession", {}, "Resumed From"))}</span><span>${escapeHtml(item.resumedFromSessionId)}</span></div>` : ""}
+            ${item?.error ? `<div class="memory-detail-text">${escapeHtml(item.error)}</div>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderContinuationState(state) {
+    if (!state || typeof state !== "object") return "";
+    const checkpoints = state.checkpoints && typeof state.checkpoints === "object" ? state.checkpoints : {};
+    const progress = state.progress && typeof state.progress === "object" ? state.progress : {};
+    const recent = Array.isArray(progress.recent)
+      ? progress.recent.filter((item) => typeof item === "string" && item.trim())
+      : [];
+    const labels = Array.isArray(checkpoints.labels)
+      ? checkpoints.labels.filter((item) => typeof item === "string" && item.trim())
+      : [];
+    const targetText = formatContinuationTargetLabel(state);
+    const targetAction = buildContinuationAction(state);
+    const encodedTargetAction = encodeContinuationAction(targetAction);
+    const targetMarkup = state.recommendedTargetId && encodedTargetAction
+      ? `
+        <button
+          type="button"
+          class="button goal-inline-action-secondary"
+          data-continuation-action="${escapeHtml(encodedTargetAction)}"
+        >${escapeHtml(targetText)}</button>
+      `
+      : escapeHtml(targetText);
+
+    return `
+      <section class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(t("subtasks.detailContinuation", {}, "Continuation State"))}</span>
+        <div class="memory-detail-grid">
+          ${renderDetailCard(t("subtasks.detailContinuationMode", {}, "Resume Mode"), state.resumeMode || "-", escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailContinuationNextAction", {}, "Next Action"), state.nextAction || "-", escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailContinuationCheckpoints", {}, "Open Checkpoints"), String(Number(checkpoints.openCount || 0)), escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailContinuationBlockers", {}, "Blockers"), String(Number(checkpoints.blockerCount || 0)), escapeHtml)}
+          ${renderDetailCard(t("subtasks.detailContinuationProgress", {}, "Current Progress"), progress.current || "-", escapeHtml)}
+          <div class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailContinuationTarget", {}, "Recommended Target"))}</span>
+            <div class="memory-detail-text">${targetMarkup}</div>
+          </div>
+        </div>
+        <div class="memory-detail-text">${escapeHtml(state.summary || "-")}</div>
+        ${labels.length ? `<div class="memory-list-item-meta"><span>${escapeHtml(labels.join(" | "))}</span></div>` : ""}
+        ${recent.length ? `
+          <div class="subtask-notification-list">
+            ${recent.map((item) => `
+              <div class="subtask-notification-item">
+                <div class="memory-detail-text">${escapeHtml(item)}</div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="memory-detail-text">${escapeHtml(t("subtasks.detailContinuationRecentEmpty", {}, "No recent continuation events."))}</div>`}
+      </section>
     `;
   }
 
@@ -382,6 +594,7 @@ export function createSubtasksOverviewFeature({
     const pendingActionKind = subtasksState.pendingActionTaskId === item.id ? subtasksState.pendingActionKind : null;
     const canStop = item.status === "pending" || item.status === "running";
     const canArchive = !item.archivedAt && (item.status === "done" || item.status === "error" || item.status === "timeout" || item.status === "stopped");
+    const canResume = !item.archivedAt && (item.status === "done" || item.status === "error" || item.status === "timeout" || item.status === "stopped");
     const outputText = typeof outputContent === "string" && outputContent.trim()
       ? outputContent
       : item?.outputPreview || "";
@@ -393,6 +606,9 @@ export function createSubtasksOverviewFeature({
       : null;
     const promptSnapshotView = subtasksState.selectedPromptSnapshot?.taskId === item.id
       ? subtasksState.selectedPromptSnapshot.value
+      : null;
+    const continuationState = subtasksState.selectedContinuationState?.taskId === item.id
+      ? subtasksState.selectedContinuationState.value
       : null;
     const launchExplainabilityLines = buildLaunchExplainabilityLines(launchExplainability, t);
     const executionExplainabilityLines = buildSubtaskExecutionExplainabilityLines({
@@ -413,6 +629,20 @@ export function createSubtasksOverviewFeature({
     const parentTaskId = typeof item?.launchSpec?.parentTaskId === "string" ? item.launchSpec.parentTaskId.trim() : "";
     const worktreePath = typeof item?.launchSpec?.worktreePath === "string" ? item.launchSpec.worktreePath.trim() : "";
     const goalSession = parseGoalSessionReference(item.parentConversationId);
+    const steeringRecords = Array.isArray(item?.steering) ? item.steering : [];
+    const steeringDraft = typeof subtasksState.steeringDrafts?.[item.id] === "string"
+      ? subtasksState.steeringDrafts[item.id]
+      : "";
+    const resumeRecords = Array.isArray(item?.resume) ? item.resume : [];
+    const resumeDraft = typeof subtasksState.resumeDrafts?.[item.id] === "string"
+      ? subtasksState.resumeDrafts[item.id]
+      : "";
+    const continuationFocusSessionId = typeof subtasksState.continuationFocusSessionId === "string"
+      ? subtasksState.continuationFocusSessionId.trim()
+      : "";
+    const isContinuationFocus = continuationFocusSessionId
+      && typeof item?.sessionId === "string"
+      && item.sessionId.trim() === continuationFocusSessionId;
     const detailActionButtons = [];
     if (canStop) {
       detailActionButtons.push(`<button class="button" data-subtask-stop="${escapeHtml(item.id)}" ${pendingActionKind ? "disabled" : ""}>${escapeHtml(pendingActionKind === "stop" ? t("subtasks.actionStopping", {}, "Stopping...") : t("subtasks.actionStop", {}, "Stop"))}</button>`);
@@ -431,7 +661,7 @@ export function createSubtasksOverviewFeature({
     }
 
     subtasksDetailEl.innerHTML = `
-      <div class="memory-detail-shell">
+      <div class="memory-detail-shell${isContinuationFocus ? " is-continuation-focus" : ""}" data-subtask-session-focus="${escapeHtml(item?.sessionId || "")}">
         <div class="memory-detail-header">
           <div>
             <div class="memory-detail-title">${escapeHtml(item.id || "-")}</div>
@@ -456,7 +686,10 @@ export function createSubtasksOverviewFeature({
 
         <div class="memory-detail-grid">
           ${renderDetailCard(t("subtasks.detailParentConversation", {}, "Parent Conversation"), item.parentConversationId, escapeHtml)}
-          ${renderDetailCard(t("subtasks.detailSessionId", {}, "Session ID"), item.sessionId || "-", escapeHtml)}
+          <div class="memory-detail-card${isContinuationFocus ? " is-continuation-focus" : ""}">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailSessionId", {}, "Session ID"))}</span>
+            <div class="memory-detail-text">${escapeHtml(item.sessionId || "-")}</div>
+          </div>
           ${renderDetailCard(t("subtasks.detailAgentId", {}, "Agent"), item.agentId || "-", escapeHtml)}
           ${renderDetailCard(t("subtasks.detailLaunchProfile", {}, "Launch Profile"), item?.launchSpec?.profileId || "-", escapeHtml)}
           ${renderDetailCard(t("subtasks.detailLaunchChannel", {}, "Launch Channel"), item?.launchSpec?.channel || "-", escapeHtml)}
@@ -482,6 +715,34 @@ export function createSubtasksOverviewFeature({
           <section class="memory-detail-card">
             <span class="memory-detail-label">${escapeHtml(t("subtasks.detailProgress", {}, "Progress"))}</span>
             <div class="memory-detail-text">${escapeHtml(item?.progress?.message || "-")}</div>
+          </section>
+
+          ${renderContinuationState(continuationState)}
+
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailSteering", {}, "Steering"))}</span>
+            ${item.status === "running" ? `
+              <div class="subtask-steering-panel">
+                <textarea class="editor-textarea subtask-steering-input" rows="4" data-subtask-steering-input="${escapeHtml(item.id)}" placeholder="${escapeHtml(t("subtasks.steeringPlaceholder", {}, "Describe how this running subtask should adjust its next attempt."))}" ${pendingActionKind === "steering" ? "disabled" : ""}>${escapeHtml(steeringDraft)}</textarea>
+                <div class="subtask-detail-actions">
+                  <button class="button" data-subtask-steering-send="${escapeHtml(item.id)}" ${pendingActionKind === "steering" ? "disabled" : ""}>${escapeHtml(pendingActionKind === "steering" ? t("subtasks.actionSteering", {}, "Sending...") : t("subtasks.actionSteer", {}, "Send steering"))}</button>
+                </div>
+              </div>
+            ` : ""}
+            ${renderSteeringRecords(steeringRecords)}
+          </section>
+
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailResume", {}, "Resume"))}</span>
+            ${canResume ? `
+              <div class="subtask-steering-panel">
+                <textarea class="editor-textarea subtask-steering-input" rows="4" data-subtask-resume-input="${escapeHtml(item.id)}" placeholder="${escapeHtml(t("subtasks.resumePlaceholder", {}, "Optionally describe how this finished subtask should continue from its last recorded state."))}" ${pendingActionKind === "resume" ? "disabled" : ""}>${escapeHtml(resumeDraft)}</textarea>
+                <div class="subtask-detail-actions">
+                  <button class="button" data-subtask-resume-send="${escapeHtml(item.id)}" ${pendingActionKind === "resume" ? "disabled" : ""}>${escapeHtml(pendingActionKind === "resume" ? t("subtasks.actionResuming", {}, "Resuming...") : t("subtasks.actionResume", {}, "Resume"))}</button>
+                </div>
+              </div>
+            ` : ""}
+            ${renderResumeRecords(resumeRecords)}
           </section>
 
           ${executionExplainabilityLines.length ? `
@@ -631,6 +892,7 @@ export function createSubtasksOverviewFeature({
     if (!res || !res.ok || !res.payload?.item) {
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedContinuationState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -642,6 +904,9 @@ export function createSubtasksOverviewFeature({
     subtasksState.selectedId = item.id;
     subtasksState.selectedItem = item;
     subtasksState.selectedOutputContent = typeof res.payload.outputContent === "string" ? res.payload.outputContent : "";
+    subtasksState.selectedContinuationState = res.payload?.continuationState && typeof res.payload.continuationState === "object"
+      ? { taskId: item.id, value: res.payload.continuationState }
+      : null;
     subtasksState.selectedResultEnvelope = res.payload?.resultEnvelope && typeof res.payload.resultEnvelope === "object"
       ? res.payload.resultEnvelope
       : null;
@@ -715,6 +980,96 @@ export function createSubtasksOverviewFeature({
     );
   }
 
+  async function performSubtaskSteering(taskId, message) {
+    const subtasksState = getSubtasksState();
+    subtasksState.pendingActionTaskId = taskId;
+    subtasksState.pendingActionKind = "steering";
+    if (subtasksState.selectedItem?.id === taskId) {
+      renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+    }
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "subtask.update",
+      params: { taskId, message },
+    });
+
+    subtasksState.pendingActionTaskId = null;
+    subtasksState.pendingActionKind = null;
+
+    if (!res || !res.ok || !res.payload?.item) {
+      if (subtasksState.selectedItem?.id === taskId) {
+        renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+      }
+      showNotice?.(
+        t("subtasks.steeringFailedTitle", {}, "Steering failed"),
+        res?.error?.message || t("subtasks.steeringFailedMessage", {}, "Failed to send steering to the running subtask."),
+        "error",
+      );
+      return;
+    }
+
+    if (!subtasksState.steeringDrafts || typeof subtasksState.steeringDrafts !== "object") {
+      subtasksState.steeringDrafts = {};
+    }
+    subtasksState.steeringDrafts[taskId] = "";
+    handleSubtaskUpdate({
+      kind: "updated",
+      item: res.payload.item,
+    });
+    showNotice?.(
+      t("subtasks.steeringSuccessTitle", {}, "Steering accepted"),
+      t("subtasks.steeringSuccessMessage", {}, "The running subtask accepted the steering request and is relaunching with the new guidance."),
+      "info",
+    );
+  }
+
+  async function performSubtaskResume(taskId, message) {
+    const subtasksState = getSubtasksState();
+    subtasksState.pendingActionTaskId = taskId;
+    subtasksState.pendingActionKind = "resume";
+    if (subtasksState.selectedItem?.id === taskId) {
+      renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+    }
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "subtask.resume",
+      params: { taskId, ...(message ? { message } : {}) },
+    });
+
+    subtasksState.pendingActionTaskId = null;
+    subtasksState.pendingActionKind = null;
+
+    if (!res || !res.ok || !res.payload?.item) {
+      if (subtasksState.selectedItem?.id === taskId) {
+        renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+      }
+      showNotice?.(
+        t("subtasks.resumeFailedTitle", {}, "Resume failed"),
+        res?.error?.message || t("subtasks.resumeFailedMessage", {}, "Failed to resume the finished subtask."),
+        "error",
+      );
+      return;
+    }
+
+    if (!subtasksState.resumeDrafts || typeof subtasksState.resumeDrafts !== "object") {
+      subtasksState.resumeDrafts = {};
+    }
+    subtasksState.resumeDrafts[taskId] = "";
+    handleSubtaskUpdate({
+      kind: "updated",
+      item: res.payload.item,
+    });
+    showNotice?.(
+      t("subtasks.resumeSuccessTitle", {}, "Resume accepted"),
+      t("subtasks.resumeSuccessMessage", {}, "The finished subtask accepted the resume request and is relaunching from its last recorded state."),
+      "info",
+    );
+  }
+
   async function loadSubtasks(forceSelectFirst = false) {
     if (!subtasksSection) return;
     if (!isConnected()) {
@@ -733,8 +1088,16 @@ export function createSubtasksOverviewFeature({
     renderSubtasksLoading(t("subtasks.loading", {}, "Loading..."));
 
     const activeConversationId = getActiveConversationId();
+    const linkedSessionContext = subtasksState.linkedSessionContext && typeof subtasksState.linkedSessionContext === "object"
+      ? subtasksState.linkedSessionContext
+      : null;
+    const effectiveConversationId = activeConversationId
+      && linkedSessionContext?.sessionId === activeConversationId
+      && linkedSessionContext.parentConversationId
+      ? linkedSessionContext.parentConversationId
+      : activeConversationId;
     const params = {
-      ...(activeConversationId ? { conversationId: activeConversationId } : {}),
+      ...(effectiveConversationId ? { conversationId: effectiveConversationId } : {}),
       includeArchived: subtasksState.includeArchived === true,
     };
     const res = await sendReq({
@@ -752,6 +1115,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedId = null;
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedContinuationState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -768,6 +1132,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedId = null;
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedContinuationState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -775,9 +1140,12 @@ export function createSubtasksOverviewFeature({
       return;
     }
 
+    const linkedSessionId = linkedSessionContext?.sessionId || "";
+    const linkedTaskId = linkedSessionContext?.taskId || "";
+    const linkedItem = linkedSessionId ? findSubtaskBySessionId(items, linkedSessionId) : null;
     const selectedExists = items.some((item) => item?.id === subtasksState.selectedId);
     if (forceSelectFirst || !selectedExists) {
-      subtasksState.selectedId = items[0].id;
+      subtasksState.selectedId = linkedItem?.id || linkedTaskId || items[0].id;
     }
 
     renderSubtaskList(items);
@@ -851,6 +1219,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedId = null;
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
+      subtasksState.selectedContinuationState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;

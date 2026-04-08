@@ -2,6 +2,7 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import type { BelldandyAgent } from "@belldandy/agent";
 import type { ChatKind, ChannelRouter } from "./router/types.js";
 import type { Channel, ChannelAgentResolver, ChannelConfig } from "./types.js";
+import { chunkMarkdownForOutbound } from "./reply-chunking.js";
 
 import { ConversationStore } from "@belldandy/agent";
 
@@ -31,7 +32,9 @@ export class FeishuChannel implements Channel {
     private readonly defaultAgentId?: string;
     private readonly router?: ChannelRouter;
     private readonly agentResolver?: ChannelAgentResolver;
+    private readonly replyChunkingConfig?: FeishuChannelConfig["replyChunkingConfig"];
     private readonly sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
+    private readonly onChannelSecurityApprovalRequired?: FeishuChannelConfig["onChannelSecurityApprovalRequired"];
     private _running = false;
     private lastChatId?: string; // Track the last active chat for proactive messaging
     private onChatIdUpdate?: (chatId: string) => void;
@@ -52,6 +55,8 @@ export class FeishuChannel implements Channel {
         this.defaultAgentId = config.defaultAgentId;
         this.router = config.router;
         this.agentResolver = config.agentResolver;
+        this.replyChunkingConfig = config.replyChunkingConfig;
+        this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
 
         // HTTP Client for sending messages
         this.client = new lark.Client({
@@ -362,6 +367,16 @@ export class FeishuChannel implements Channel {
             };
 
         if (!decision.allow) {
+            if (decision.reason === "channel_security:dm_allowlist_blocked" && chatKind === "dm" && typeof senderId === "string") {
+                void this.onChannelSecurityApprovalRequired?.({
+                    channel: "feishu",
+                    senderId,
+                    senderName: typeof sender?.sender_id?.user_id === "string" ? sender.sender_id.user_id : undefined,
+                    chatId,
+                    chatKind: "dm",
+                    messagePreview: text,
+                });
+            }
             console.log(`[${this.name}] Route blocked message ${msgId} (${decision.reason})`);
             return;
         }
@@ -443,15 +458,20 @@ export class FeishuChannel implements Channel {
 
     private async reply(messageId: string, content: string) {
         try {
-            await this.client.im.message.reply({
-                path: {
-                    message_id: messageId,
-                },
-                data: {
-                    content: JSON.stringify({ text: content }),
-                    msg_type: "text",
-                },
+            const chunks = chunkMarkdownForOutbound(content, "feishu", {
+                config: this.replyChunkingConfig,
             });
+            for (const chunk of chunks) {
+                await this.client.im.message.reply({
+                    path: {
+                        message_id: messageId,
+                    },
+                    data: {
+                        content: JSON.stringify({ text: chunk }),
+                        msg_type: "text",
+                    },
+                });
+            }
         } catch (e) {
             console.error("Failed to reply to Feishu:", e);
         }
@@ -472,16 +492,21 @@ export class FeishuChannel implements Channel {
         }
 
         try {
-            await this.client.im.message.create({
-                params: {
-                    receive_id_type: "chat_id",
-                },
-                data: {
-                    receive_id: targetChatId,
-                    content: JSON.stringify({ text: content }),
-                    msg_type: "text",
-                },
+            const chunks = chunkMarkdownForOutbound(content, "feishu", {
+                config: this.replyChunkingConfig,
             });
+            for (const chunk of chunks) {
+                await this.client.im.message.create({
+                    params: {
+                        receive_id_type: "chat_id",
+                    },
+                    data: {
+                        receive_id: targetChatId,
+                        content: JSON.stringify({ text: chunk }),
+                        msg_type: "text",
+                    },
+                });
+            }
             console.log(`[${this.name}] Proactive message sent to ${targetChatId}`);
             return true;
         } catch (e) {

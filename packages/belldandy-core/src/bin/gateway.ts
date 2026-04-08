@@ -5,12 +5,16 @@ import { ensureDefaultEnvFile, resolveEnvFilePaths, resolveGatewayRuntimePaths }
 import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
 import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
 import { deliverAutoMessageToResidentChannel } from "../auto-chat-delivery.js";
+import { upsertChannelSecurityApprovalRequest } from "../channel-security-store.js";
 import { ResidentConversationStore } from "../resident-conversation-store.js";
 import {
   createSubTaskAgentCapabilities,
+  createSubTaskResumeController,
   createSubTaskRuntimeEventHandler,
+  createSubTaskUpdateController,
   createSubTaskWorktreeLifecycleHandler,
   reconcileSubTaskWorktreeRuntimes,
+  type SubTaskRecord,
   SubTaskRuntimeStore,
 } from "../task-runtime.js";
 import { SubTaskWorktreeRuntime } from "../worktree-runtime.js";
@@ -54,7 +58,9 @@ import {
   ToolExecutor,
   ToolPoolAssembler,
   DEFAULT_POLICY,
+  type Tool,
   type ToolPolicy,
+  type ToolDiscoveryFamilyDefinition,
   resolveSafeScopesForChannel,
   type ToolContractAccessPolicy,
   createToolSearchTool,
@@ -98,6 +104,7 @@ import {
   synthesizeSpeech,
   transcribeSpeech,
   runCommandTool,
+  ptcRuntimeTool,
   methodListTool,
   methodReadTool,
   methodCreateTool,
@@ -180,7 +187,18 @@ import {
 } from "@belldandy/skills";
 import { listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, listGlobalMemoryManagers, type MemoryCategory } from "@belldandy/memory";
 import { RelayServer } from "@belldandy/browser";
-import { FeishuChannel, QqChannel, CommunityChannel, DiscordChannel, loadCommunityConfig, getCommunityConfigPath, createChannelRouter } from "@belldandy/channels";
+import {
+  FeishuChannel,
+  QqChannel,
+  CommunityChannel,
+  DiscordChannel,
+  loadCommunityConfig,
+  getCommunityConfigPath,
+  createChannelRouter,
+  loadReplyChunkingConfig,
+  resolveReplyChunkingConfigPath,
+  type ChannelSecurityApprovalRequestInput,
+} from "@belldandy/channels";
 import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type JsonObject, type TokenUsageUploadConfig } from "@belldandy/protocol";
 import { GoalManager } from "../goals/manager.js";
 import { buildGoalCapabilityPlan } from "../goals/capability-planner.js";
@@ -196,6 +214,7 @@ const GOAL_TOOL_NAMES = new Set([
   "goal_list",
   "goal_resume",
   "goal_pause",
+  "goal_handoff_get",
   "goal_handoff_generate",
   "goal_retrospect_generate",
   "goal_experience_suggest",
@@ -233,8 +252,18 @@ const GOAL_TOOL_NAMES = new Set([
 ]);
 
 import { startGatewayServer } from "../server.js";
+import {
+  BackgroundContinuationLedger,
+  buildBackgroundContinuationRuntimeDoctorReport,
+} from "../background-continuation-runtime.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
-import { CronStore, startCronScheduler, type CronGoalApprovalScanPayload, type CronSchedulerHandle } from "../cron/index.js";
+import {
+  CronStore,
+  buildCronRuntimeDoctorReport,
+  startCronScheduler,
+  type CronGoalApprovalScanPayload,
+  type CronSchedulerHandle,
+} from "../cron/index.js";
 import {
   initMCPIntegration,
   shutdownMCPIntegration,
@@ -378,6 +407,8 @@ const cronEnabled = readEnv("BELLDANDY_CRON_ENABLED") === "true";
 // State & Memory
 const stateDir = runtimePaths.stateDir;
 const channelRouterConfigPath = readEnv("BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH") ?? path.join(stateDir, "channels-routing.json");
+const channelSecurityConfigPath = path.join(stateDir, "channel-security.json");
+const channelReplyChunkingConfigPath = resolveReplyChunkingConfigPath(stateDir);
 const webhookConfigPath = readEnv("BELLDANDY_WEBHOOK_CONFIG_PATH") ?? path.join(stateDir, "webhooks.json");
 const webhookIdempotencyWindowMs = Number(readEnv("BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS")) || 10 * 60 * 1000; // 默认 10 分钟
 const extraWorkspaceRootsRaw = readEnv("BELLDANDY_EXTRA_WORKSPACE_ROOTS");
@@ -703,6 +734,7 @@ const dangerousToolsEnabled = readEnv("BELLDANDY_DANGEROUS_TOOLS_ENABLED") === "
 
 // Cron Store（无论是否启用调度器，工具都可以管理任务）
 const cronStore = new CronStore(stateDir);
+const backgroundContinuationLedger = new BackgroundContinuationLedger(stateDir);
 let cronSchedulerHandle: CronSchedulerHandle | undefined;
 
 // 延迟绑定 broadcast：工具注册时 server 尚未创建，执行时才调用
@@ -755,6 +787,7 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
       getRoomMembersTool,
       createLeaveRoomTool(undefined),
       createJoinRoomTool(undefined),
+      ptcRuntimeTool,
       officeWorkshopSearchTool,
       officeWorkshopGetItemTool,
       officeWorkshopDownloadTool,
@@ -885,6 +918,69 @@ const toolsToRegister = toolsEnabled
   })
   : [];
 
+const HEAVY_BUILTIN_DISCOVERY_FAMILIES: Record<string, ToolDiscoveryFamilyDefinition> = {
+  goals: {
+    id: "goals",
+    title: "Goals",
+    summary: "Long-running goal governance, checkpoints, orchestration, retrospective, and task graph operations.",
+    gateMode: "hidden-until-expanded",
+    order: 10,
+    keywords: ["goal", "governance", "checkpoint", "orchestrate", "task graph", "long-running"],
+  },
+  office: {
+    id: "office",
+    title: "Office",
+    summary: "Remote office workshop and homestead operations, including download, publish, inventory, and placement actions.",
+    gateMode: "hidden-until-expanded",
+    order: 20,
+    keywords: ["office", "workshop", "homestead", "publish", "download", "inventory"],
+  },
+  browser: {
+    id: "browser",
+    title: "Browser",
+    summary: "Interactive browser automation for opening pages, navigating, clicking, typing, screenshot capture, and page content reads.",
+    gateMode: "hidden-until-expanded",
+    order: 30,
+    keywords: ["browser", "web page", "navigate", "click", "type", "screenshot"],
+  },
+  canvas: {
+    id: "canvas",
+    title: "Canvas",
+    summary: "Structured canvas board operations for reading, creating, editing nodes and edges, layout, and snapshots.",
+    gateMode: "hidden-until-expanded",
+    order: 40,
+    keywords: ["canvas", "board", "node", "edge", "layout", "snapshot"],
+  },
+};
+
+function resolveHeavyBuiltinDiscoveryFamily(toolName: string): ToolDiscoveryFamilyDefinition | undefined {
+  if (toolName.startsWith("goal_") || toolName.startsWith("task_graph_")) {
+    return HEAVY_BUILTIN_DISCOVERY_FAMILIES.goals;
+  }
+  if (toolName.startsWith("office_")) {
+    return HEAVY_BUILTIN_DISCOVERY_FAMILIES.office;
+  }
+  if (toolName.startsWith("browser_")) {
+    return HEAVY_BUILTIN_DISCOVERY_FAMILIES.browser;
+  }
+  if (toolName.startsWith("canvas_")) {
+    return HEAVY_BUILTIN_DISCOVERY_FAMILIES.canvas;
+  }
+  return undefined;
+}
+
+function applyHeavyBuiltinDiscoveryFamilies(tools: Tool[]): Tool[] {
+  return tools.map((tool) => {
+    const family = resolveHeavyBuiltinDiscoveryFamily(tool.definition.name);
+    if (family) {
+      tool.definition.discoveryFamily = family;
+    }
+    return tool;
+  });
+}
+
+const runtimeToolsToRegister = applyHeavyBuiltinDiscoveryFamilies(toolsToRegister);
+
 const gatewayExecutorContractAccessPolicy: ToolContractAccessPolicy = {
   ...gatewayContractAccessPolicy,
   blockedToolNames: [
@@ -902,14 +998,14 @@ const CORE_TOOL_NAMES = new Set<string>([
   runCommandTool.definition.name,
 ]);
 
-const deferredToolNames = toolsToRegister
+const deferredToolNames = runtimeToolsToRegister
   .map((tool) => tool.definition.name)
   .filter((name) => !CORE_TOOL_NAMES.has(name));
 
 let agentRegistry: AgentRegistry | undefined;
 
 const toolExecutor = new ToolExecutor({
-  tools: toolsToRegister,
+  tools: runtimeToolsToRegister,
   workspaceRoot: stateDir, // Use the resolved state directory as the workspace root for file operations
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
   alwaysEnabledTools: toolsEnabled ? [TOOL_SETTINGS_CONTROL_NAME, TOOL_SEARCH_NAME] : [],
@@ -956,16 +1052,24 @@ const toolExecutor = new ToolExecutor({
 
 if (toolsEnabled) {
   toolExecutor.registerTool(createToolSearchTool({
-    getCatalogEntries: (conversationId?: string, agentId?: string) =>
-      toolExecutor.getCatalogEntries(agentId, conversationId),
+    getDiscoveryEntries: (conversationId?: string, agentId?: string, expandedFamilyIds?: string[]) =>
+      toolExecutor.getDiscoveryEntries(agentId, conversationId, undefined, { expandedFamilyIds }),
+    getLoadedDeferredToolList: (conversationId: string) =>
+      toolExecutor.getLoadedDeferredToolList(conversationId),
     loadDeferredTools: (conversationId: string, toolNames: string[]) =>
       toolExecutor.loadDeferredTools(conversationId, toolNames),
+    unloadDeferredTools: (conversationId: string, toolNames: string[]) =>
+      toolExecutor.unloadDeferredTools(conversationId, toolNames),
+    clearLoadedDeferredTools: (conversationId: string) =>
+      toolExecutor.clearLoadedDeferredTools(conversationId),
+    shrinkLoadedDeferredTools: (conversationId: string, toolNames: string[]) =>
+      toolExecutor.shrinkLoadedDeferredTools(conversationId, toolNames),
   }), { silentReplace: true });
 }
 
 // 4. Log enabled tools
 if (toolsEnabled) {
-  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, memory_share_promote, task_search, task_get, task_recent, conversation_list, conversation_read, experience_candidate_get, experience_candidate_list, experience_usage_get, experience_usage_list, browser_*, log_read, log_search";
+  const safeTools = "web_fetch, apply_patch, file_read, file_write, file_delete, list_files, memory_search, memory_get, memory_read, memory_write, memory_share_promote, task_search, task_get, task_recent, conversation_list, conversation_read, experience_candidate_get, experience_candidate_list, experience_usage_get, experience_usage_list, ptc_runtime, browser_*, log_read, log_search";
   if (dangerousToolsEnabled) {
     logger.warn("tools", "⚠️ DANGEROUS_TOOLS_ENABLED=true: run_command is active");
     logger.info("tools", `Tools enabled: ${safeTools}, run_command`);
@@ -1440,6 +1544,8 @@ Keep responses concise and natural for spoken delivery.`,
     }));
   }
 
+  const builtinPromptDiscoverySummary = toolExecutor.buildDeferredToolDiscoveryPromptSummary(profile.id);
+
   if (toolBehaviorContracts.summary) {
     sections.push(createGatewaySystemPromptSection({
       id: "tool-behavior-contracts",
@@ -1447,6 +1553,16 @@ Keep responses concise and natural for spoken delivery.`,
       source: "runtime",
       priority: 105,
       text: toolBehaviorContracts.summary,
+    }));
+  }
+
+  if (builtinPromptDiscoverySummary) {
+    sections.push(createGatewaySystemPromptSection({
+      id: "builtin-discovery",
+      label: "builtin-discovery",
+      source: "runtime",
+      priority: 107,
+      text: builtinPromptDiscoverySummary,
     }));
   }
 
@@ -1990,6 +2106,8 @@ toolExecutor.setConversationStore(conversationStore);
 let subTaskRuntimeStore: SubTaskRuntimeStore | undefined;
 let subTaskWorktreeRuntime: SubTaskWorktreeRuntime | undefined;
 let subAgentOrchestrator: SubAgentOrchestrator | undefined;
+let resumeSubTask: ((taskId: string, message?: string) => Promise<SubTaskRecord | undefined>) | undefined;
+let updateSubTask: ((taskId: string, message: string) => Promise<SubTaskRecord | undefined>) | undefined;
 if (agentRegistry && toolsEnabled) {
   const subAgentMaxConcurrent = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_CONCURRENT") || "3", 10);
   const subAgentTimeoutMs = parseInt(readEnv("BELLDANDY_SUB_AGENT_TIMEOUT_MS") || "120000", 10);
@@ -2056,6 +2174,23 @@ if (agentRegistry && toolsEnabled) {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
   }));
+
+  updateSubTask = createSubTaskUpdateController({
+    runtimeStore: subTaskRuntimeStore,
+    orchestrator: subAgentOrchestrator,
+    conversationStore,
+    logger: {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    },
+  });
+  resumeSubTask = createSubTaskResumeController({
+    runtimeStore: subTaskRuntimeStore,
+    orchestrator: subAgentOrchestrator,
+    conversationStore,
+    logger: {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    },
+  });
 
   logger.info("orchestrator", `Sub-agent orchestrator initialized (maxConcurrent=${subAgentMaxConcurrent}, queue=${subAgentMaxQueueSize}, timeout=${subAgentTimeoutMs}ms, maxDepth=${subAgentMaxDepth})`);
   logger.info("task-runtime", "Sub-task runtime initialized for sub-agent orchestration.");
@@ -2850,6 +2985,15 @@ const server = await startGatewayServer({
   getAgentToolControlConfirmPassword: () => agentToolControlConfirmPassword,
   pluginRegistry,
   skillRegistry,
+  onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
+  getCronRuntimeDoctorReport: async () => buildCronRuntimeDoctorReport({
+    enabled: cronEnabled,
+    store: cronStore,
+    scheduler: cronSchedulerHandle,
+  }),
+  getBackgroundContinuationRuntimeDoctorReport: async () => buildBackgroundContinuationRuntimeDoctorReport({
+    ledger: backgroundContinuationLedger,
+  }),
   inspectAgentPrompt: async ({ agentId, conversationId, runId }) => {
     const resolvedConversationId = typeof conversationId === "string" && conversationId.trim()
       ? conversationId.trim()
@@ -2913,6 +3057,8 @@ const server = await startGatewayServer({
   extensionHost,
   goalManager,
   subTaskRuntimeStore,
+  resumeSubTask,
+  updateSubTask,
   stopSubTask: async (taskId, reason) => {
     if (!subTaskRuntimeStore) return undefined;
     const current = await subTaskRuntimeStore.getTask(taskId);
@@ -3022,6 +3168,7 @@ if (autoOpenBrowser) {
 const channelRouter = createChannelRouter({
   enabled: channelRouterEnabled,
   configPath: channelRouterConfigPath,
+  securityConfigPath: channelSecurityConfigPath,
   defaultAgentId: channelRouterDefaultAgentId,
   logger: {
     debug: (message, data) => logger.debug("channel-router", message, data),
@@ -3029,12 +3176,14 @@ const channelRouter = createChannelRouter({
     warn: (message, data) => logger.warn("channel-router", message, data),
   },
 });
+const channelReplyChunkingConfig = loadReplyChunkingConfig(channelReplyChunkingConfigPath);
 
 if (channelRouterEnabled) {
   logger.info("channel-router", `enabled (config: ${channelRouterConfigPath}, defaultAgent: ${channelRouterDefaultAgentId})`);
 } else {
-  logger.info("channel-router", "disabled");
+  logger.info("channel-router", `manual rules disabled; security fallback config: ${channelSecurityConfigPath}`);
 }
+logger.info("channel-chunking", `runtime strategy config: ${channelReplyChunkingConfigPath}`);
 
 const resolveChannelAgent = (requestedAgentId?: string): BelldandyAgent => {
   if (agentRegistry) {
@@ -3051,6 +3200,24 @@ const resolveChannelAgent = (requestedAgentId?: string): BelldandyAgent => {
   throw new Error("No agent available for channel routing");
 };
 
+async function recordChannelSecurityApprovalRequest(input: ChannelSecurityApprovalRequestInput) {
+  try {
+    const request = await upsertChannelSecurityApprovalRequest(stateDir, input);
+    if (!request.id) return;
+    serverBroadcast?.({
+      type: "event",
+      event: "channel.security.pending",
+      payload: {
+        ...request,
+        isNew: request.seenCount <= 1,
+      },
+    });
+    logger.warn("channel-security", `Pending approval recorded: channel=${input.channel}, sender=${input.senderId}, chat=${input.chatId}`);
+  } catch (error) {
+    logger.warn("channel-security", `Failed to record pending approval for ${input.channel}:${input.senderId}`, error);
+  }
+}
+
 // 9. Start Feishu Channel (if configured)
 let feishuChannel: FeishuChannel | undefined;
 if (feishuAppId && feishuAppSecret && createAgent) {
@@ -3066,7 +3233,9 @@ if (feishuAppId && feishuAppSecret && createAgent) {
       agentId: feishuAgentId,
       defaultAgentId: channelRouterDefaultAgentId,
       router: channelRouter,
+      replyChunkingConfig: channelReplyChunkingConfig,
       agentResolver: resolveChannelAgent,
+      onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
       conversationStore: conversationStore, // [PERSISTENCE] Inject store
       initialChatId: (() => {
         try {
@@ -3125,7 +3294,9 @@ if (qqAppId && qqAppSecret && createAgent) {
       agentId: qqAgentId,
       defaultAgentId: channelRouterDefaultAgentId,
       router: channelRouter,
+      replyChunkingConfig: channelReplyChunkingConfig,
       agentResolver: resolveChannelAgent,
+      onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
       conversationStore: conversationStore,
     });
     // Do not await, start in background
@@ -3150,7 +3321,9 @@ if (discordEnabled && discordBotToken && createAgent) {
       defaultChannelId: discordDefaultChannelId,
       defaultAgentId: channelRouterDefaultAgentId,
       router: channelRouter,
+      replyChunkingConfig: channelReplyChunkingConfig,
       agentResolver: resolveChannelAgent,
+      onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
       stateFilePath: path.join(stateDir, "discord-state.json"),
     });
     // Do not await, start in background
@@ -3197,6 +3370,11 @@ try {
       agents: communityConfig.agents,
       agent: agent,
       conversationStore: conversationStore,
+      defaultAgentId: channelRouterDefaultAgentId,
+      router: channelRouter,
+      replyChunkingConfig: channelReplyChunkingConfig,
+      agentResolver: resolveChannelAgent,
+      onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
       reconnect: communityConfig.reconnect,
       tokenUsageUpload: communityTokenUsageUploadConfig,
       ownerUserUuid: communityOwnerUserUuid,
@@ -3253,11 +3431,11 @@ if (heartbeatEnabled && createAgent) {
     const activeHours = parseActiveHours(heartbeatActiveHoursRaw);
 
     // Helper to send message to agent and get response
-    const sendMessage = async (prompt: string): Promise<string> => {
+    const sendMessage = async (input: { prompt: string; conversationId: string; runId: string }): Promise<string> => {
       let result = "";
       for await (const item of heartbeatAgent.run({
-        conversationId: `heartbeat-${Date.now()}`,
-        text: prompt,
+        conversationId: input.conversationId,
+        text: input.prompt,
       })) {
         if (item.type === "delta") {
           result += item.delta;
@@ -3298,6 +3476,35 @@ if (heartbeatEnabled && createAgent) {
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       isBusy,
       log: (msg) => logger.info("heartbeat", msg),
+      onRunEvent: async (event) => {
+        if (event.phase === "started") {
+          await backgroundContinuationLedger.startRun({
+            runId: event.runId,
+            kind: "heartbeat",
+            sourceId: "heartbeat",
+            label: "Heartbeat",
+            conversationId: event.conversationId,
+            startedAt: event.startedAt,
+          });
+          return;
+        }
+        await backgroundContinuationLedger.finishRun({
+          runId: event.runId,
+          kind: "heartbeat",
+          sourceId: "heartbeat",
+          label: "Heartbeat",
+          status: event.result.status === "failed"
+            ? "failed"
+            : event.result.status === "skipped"
+              ? "skipped"
+              : "ran",
+          summary: event.result.message,
+          reason: event.result.reason,
+          conversationId: event.conversationId,
+          startedAt: event.startedAt,
+          finishedAt: event.finishedAt,
+        });
+      },
     });
 
     logger.info("heartbeat", `enabled (interval=${heartbeatIntervalRaw}, activeHours=${heartbeatActiveHoursRaw ?? "all"})`);
@@ -3312,14 +3519,19 @@ if (heartbeatEnabled && createAgent) {
 if (cronEnabled) {
   const activeHours = parseActiveHours(heartbeatActiveHoursRaw); // 复用 Heartbeat 活跃时段
 
-  let cronSendMessage: ((prompt: string) => Promise<string>) | undefined;
+  let cronSendMessage:
+    ((job: import("../cron/index.js").CronJob, prompt: string) => Promise<string | { text: string; conversationId?: string }>)
+    | undefined;
   if (createAgent) {
     try {
       const cronAgent = createAgent();
-      cronSendMessage = async (prompt: string): Promise<string> => {
+      cronSendMessage = async (job, prompt: string): Promise<{ text: string; conversationId: string }> => {
         let result = "";
+        const conversationId = job.sessionTarget === "main"
+          ? `cron-main:${job.id}`
+          : `cron-run:${job.id}:${Date.now()}`;
         for await (const item of cronAgent.run({
-          conversationId: `cron-${Date.now()}`,
+          conversationId,
           text: prompt,
         })) {
           if (item.type === "delta") {
@@ -3328,7 +3540,10 @@ if (cronEnabled) {
             result = item.text;
           }
         }
-        return result;
+        return {
+          text: result,
+          conversationId,
+        };
       };
     } catch (e) {
       logger.warn("cron", "Agent creation failed; systemEvent cron jobs will be disabled, but structured approval scan jobs remain available.");
@@ -3431,6 +3646,38 @@ if (cronEnabled) {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     isBusy,
     log: (msg) => logger.info("cron", msg),
+    onExecutionEvent: async (event) => {
+      if (event.phase === "started") {
+        await backgroundContinuationLedger.startRun({
+          runId: event.runId,
+          kind: "cron",
+          sourceId: event.jobId,
+          label: event.jobName,
+          conversationId: event.conversationId,
+          sessionTarget: event.sessionTarget,
+          startedAt: event.startedAt,
+        });
+        return;
+      }
+      await backgroundContinuationLedger.finishRun({
+        runId: event.runId,
+        kind: "cron",
+        sourceId: event.jobId,
+        label: event.jobName,
+        status: event.status === "error"
+          ? "failed"
+          : event.status === "skipped"
+            ? "skipped"
+            : "ran",
+        summary: event.summary,
+        reason: event.reason,
+        conversationId: event.conversationId,
+        sessionTarget: event.sessionTarget,
+        startedAt: event.startedAt,
+        finishedAt: event.finishedAt,
+        nextRunAtMs: event.nextRunAtMs,
+      });
+    },
   });
 
   logger.info(

@@ -64,5 +64,6 @@ describe("prompt snapshot detail rendering", () => {
     expect(html).toContain("effective launch: source=catalog_default, agent=coder");
     expect(html).toContain("Follow the repo conventions.");
     expect(html).toContain("#1 system");
+    expect(html).toContain('data-subtask-prompt-snapshot-session="sub_task_1"');
   });
 });

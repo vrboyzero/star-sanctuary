@@ -1,9 +1,10 @@
 import WebSocket from "ws";
 import type { BelldandyAgent } from "@belldandy/agent";
 import { uploadTokenUsage, type TokenUsageUploadConfig } from "@belldandy/protocol";
-import type { Channel } from "./types.js";
+import type { Channel, ChannelConfig } from "./types.js";
 import { ConversationStore } from "@belldandy/agent";
 import { updateAgentRoom } from "./community-config.js";
+import { chunkMarkdownForOutbound } from "./reply-chunking.js";
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
 
@@ -32,7 +33,7 @@ export interface CommunityAgentConfig {
 /**
  * 社区渠道配置
  */
-export interface CommunityChannelConfig {
+export interface CommunityChannelConfig extends ChannelConfig {
   /** 社区服务端点 */
   endpoint: string;
   /** Agent 配置列表 */
@@ -100,6 +101,22 @@ interface CommunityConnectivityDiagnostic {
   };
 }
 
+function normalizeCommunitySenderId(sender: { uid?: string; id?: string } | undefined): string {
+  if (typeof sender?.uid === "string" && sender.uid.trim()) return sender.uid.trim();
+  if (typeof sender?.id === "string" && sender.id.trim()) return sender.id.trim();
+  return "";
+}
+
+function isCommunityMentioned(text: string, accountName: string, fallbackAgentId?: string): boolean {
+  const normalizedText = String(text ?? "").trim().toLowerCase();
+  if (!normalizedText) return false;
+  const candidates = Array.from(new Set([accountName, fallbackAgentId].map((value) => String(value ?? "").trim()).filter(Boolean)));
+  return candidates.some((candidate) => {
+    const lowered = candidate.toLowerCase();
+    return normalizedText.includes(`@${lowered}`) || normalizedText.includes(lowered);
+  });
+}
+
 /**
  * office.goddess.ai 社区渠道实现
  * 支持多个 Agent 同时连接不同房间
@@ -112,6 +129,10 @@ export class CommunityChannel implements Channel {
   private readonly agent: BelldandyAgent;
   private readonly conversationStore: ConversationStore;
   private readonly agentId?: string;
+  private readonly agentResolver?: CommunityChannelConfig["agentResolver"];
+  private readonly router?: CommunityChannelConfig["router"];
+  private readonly onChannelSecurityApprovalRequired?: CommunityChannelConfig["onChannelSecurityApprovalRequired"];
+  private readonly replyChunkingConfig?: CommunityChannelConfig["replyChunkingConfig"];
   private readonly reconnectConfig: {
     enabled: boolean;
     maxRetries: number;
@@ -137,6 +158,10 @@ export class CommunityChannel implements Channel {
     this.agent = config.agent;
     this.conversationStore = config.conversationStore;
     this.agentId = config.agentId;
+    this.agentResolver = config.agentResolver;
+    this.router = config.router;
+    this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
+    this.replyChunkingConfig = config.replyChunkingConfig;
     this.tokenUsageUpload = config.tokenUsageUpload;
     this.ownerUserUuid = config.ownerUserUuid;
     this.reconnectConfig = config.reconnect ?? {
@@ -144,6 +169,17 @@ export class CommunityChannel implements Channel {
       maxRetries: 10,
       backoffMs: 5000,
     };
+  }
+
+  private resolveAgent(agentId?: string): BelldandyAgent {
+    if (this.agentResolver) {
+      try {
+        return this.agentResolver(agentId);
+      } catch (error) {
+        console.warn(`[${this.name}] Failed to resolve agent "${agentId}", fallback to default agent:`, error);
+      }
+    }
+    return this.agent;
   }
 
   async start(): Promise<void> {
@@ -205,11 +241,16 @@ export class CommunityChannel implements Channel {
     }
 
     try {
-      // 通过 WebSocket 发送消息
-      state.ws.send(JSON.stringify({
-        type: "message",
-        data: { content },
-      }));
+      const chunks = chunkMarkdownForOutbound(content, "community", {
+        accountId: state.agentConfig.name,
+        config: this.replyChunkingConfig,
+      });
+      for (const chunk of chunks) {
+        state.ws.send(JSON.stringify({
+          type: "message",
+          data: { content: chunk },
+        }));
+      }
       return true;
     } catch (error) {
       console.error(`[${this.name}] Failed to send proactive message:`, error);
@@ -565,15 +606,55 @@ export class CommunityChannel implements Channel {
 
     console.log(`[${this.name}] Received message from ${sender.name}: ${content}`);
 
+    const senderId = normalizeCommunitySenderId(sender);
+    const mentioned = isCommunityMentioned(content, state.agentConfig.name, this.agentId);
+    const decision = this.router
+      ? this.router.decide({
+        channel: "community",
+        accountId: state.agentConfig.name,
+        chatKind: "room",
+        chatId: state.roomId,
+        text: content || "",
+        senderId: senderId || undefined,
+        senderName: typeof sender?.name === "string" ? sender.name : undefined,
+        mentions: mentioned ? [state.agentConfig.name] : [],
+        mentioned,
+        eventType: "message",
+      })
+      : {
+        allow: true,
+        reason: "router_unavailable",
+        agentId: this.agentId,
+      };
+    if (!decision.allow) {
+      if (decision.reason === "channel_security:dm_allowlist_blocked" && senderId) {
+        void this.onChannelSecurityApprovalRequired?.({
+          channel: "community",
+          accountId: state.agentConfig.name,
+          senderId,
+          senderName: typeof sender?.name === "string" ? sender.name : undefined,
+          chatId: state.roomId,
+          chatKind: "dm",
+          messagePreview: content || "",
+        });
+      }
+      console.log(
+        `[${this.name}] Route blocked message ${id} for account ${state.agentConfig.name} (${decision.reason})`,
+      );
+      return;
+    }
+
     // 构建会话 ID（房间级别）
     const conversationId = `community:${state.roomId}`;
+    const selectedAgentId = decision.agentId ?? this.agentId;
+    const runAgent = this.resolveAgent(selectedAgentId);
 
     try {
       // 调用 Agent 处理消息（流式接口）
-      const stream = this.agent.run({
+      const stream = runAgent.run({
         conversationId,
         text: content,
-        agentId: this.agentId,
+        agentId: selectedAgentId,
         roomContext: {
           roomId: state.roomId,
           environment: "community",
@@ -581,9 +662,14 @@ export class CommunityChannel implements Channel {
         },
         senderInfo: {
           type: sender.type,
-          id: sender.uid || sender.id,
+          id: senderId || sender.id,
           name: sender.name,
           identity: sender.identity,
+        },
+        meta: {
+          channel: "community",
+          accountId: state.agentConfig.name,
+          agentId: selectedAgentId,
         },
       });
 
@@ -650,10 +736,16 @@ export class CommunityChannel implements Channel {
 
       // 发送回复
       if (finalText) {
-        state.ws.send(JSON.stringify({
-          type: "message",
-          data: { content: finalText },
-        }));
+        const chunks = chunkMarkdownForOutbound(finalText, "community", {
+          accountId: state.agentConfig.name,
+          config: this.replyChunkingConfig,
+        });
+        for (const chunk of chunks) {
+          state.ws.send(JSON.stringify({
+            type: "message",
+            data: { content: chunk },
+          }));
+        }
       }
     } catch (error) {
       console.error(`[${this.name}] Failed to process message:`, error);

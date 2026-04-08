@@ -1,0 +1,376 @@
+import type { GoalHandoffSnapshot } from "./goals/types.js";
+import type { SubTaskRecord } from "./task-runtime.js";
+
+export type ContinuationTargetType = "conversation" | "session" | "node" | "goal";
+
+export type ContinuationStateSnapshot = {
+  version: 1;
+  scope: "subtask" | "goal" | "conversation" | "resident" | "background";
+  targetId: string;
+  recommendedTargetId?: string;
+  targetType?: ContinuationTargetType;
+  resumeMode: string;
+  summary: string;
+  nextAction: string;
+  checkpoints: {
+    openCount: number;
+    blockerCount: number;
+    labels: string[];
+  };
+  progress: {
+    current?: string;
+    recent: string[];
+  };
+};
+
+export type ConversationContinuationStateInput = {
+  conversationId: string;
+  messages: Array<{
+    role?: string;
+    content?: string;
+    timestampMs?: number;
+  }>;
+  loadedDeferredTools?: string[];
+  compactBoundaries?: Array<{
+    at?: number;
+    createdAt?: number;
+  }>;
+  taskTokenResults?: Array<{
+    name?: string;
+    totalTokens?: number;
+    createdAt?: number | string;
+  }>;
+};
+
+export type ResidentContinuationStateInput = {
+  agentId: string;
+  status?: string;
+  mainConversationId?: string;
+  lastConversationId?: string;
+  lastActiveAt?: number;
+  sharedGovernance?: {
+    pendingCount?: number;
+    claimedCount?: number;
+  };
+  recentTaskDigest?: {
+    recentCount?: number;
+    latestTaskId?: string;
+    latestTitle?: string;
+    latestStatus?: string;
+    latestFinishedAt?: string;
+    headline?: string;
+  };
+  recentSubtaskDigest?: {
+    recentCount?: number;
+    latestTaskId?: string;
+    latestSummary?: string;
+    latestStatus?: string;
+    latestUpdatedAt?: number;
+    headline?: string;
+  };
+  experienceUsageDigest?: {
+    usageCount?: number;
+    latestAssetKey?: string;
+    latestUsedAt?: string;
+    headline?: string;
+  };
+};
+
+export type BackgroundContinuationStateInput = {
+  scope: "cron" | "heartbeat";
+  targetId: string;
+  targetLabel?: string;
+  status: "running" | "ran" | "skipped" | "failed";
+  summary?: string;
+  reason?: string;
+  conversationId?: string;
+  sessionTarget?: "main" | "isolated";
+  nextRunAtMs?: number;
+  startedAt?: number;
+  finishedAt?: number;
+};
+
+function toTimestamp(value: number | string | undefined): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+      return numeric;
+    }
+    const parsed = new Date(value).getTime();
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
+function compactStrings(values: Array<string | undefined>, max = 4): string[] {
+  return values
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+function summarizeText(value: string | undefined, max = 140): string {
+  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
+}
+
+function buildSubTaskNextAction(record: SubTaskRecord): string {
+  if (record.archivedAt) {
+    return "Inspect the archived output before deciding whether to relaunch this task.";
+  }
+  switch (record.status) {
+    case "running":
+      return "Observe the current run or send steering if the task needs correction.";
+    case "done":
+      return "Resume this task if follow-up work is still needed.";
+    case "error":
+    case "timeout":
+    case "stopped":
+      return "Resume this task from the last recorded state or inspect the failure details first.";
+    default:
+      return "Wait for the task to start or relaunch it with updated guidance.";
+  }
+}
+
+function resolveSubTaskResumeMode(record: SubTaskRecord): string {
+  if (record.archivedAt) return "archived";
+  if (record.status === "running") return "live";
+  if (Array.isArray(record.resume) && record.resume.length > 0) return "same_task_relaunch";
+  if (record.status === "done") return "rerun";
+  return "recovery";
+}
+
+export function buildSubTaskContinuationState(record: SubTaskRecord): ContinuationStateSnapshot {
+  const recent = compactStrings(
+    (record.notifications ?? [])
+      .slice(-3)
+      .reverse()
+      .map((item) => item.message),
+    3,
+  );
+  const blockerLabels = record.status === "error" || record.status === "timeout" || record.status === "stopped"
+    ? compactStrings([record.error, record.stopReason, record.progress?.message], 2)
+    : [];
+
+  return {
+    version: 1,
+    scope: "subtask",
+    targetId: record.id,
+    recommendedTargetId: record.sessionId || record.parentConversationId || undefined,
+    targetType: record.sessionId ? "session" : record.parentConversationId ? "conversation" : undefined,
+    resumeMode: resolveSubTaskResumeMode(record),
+    summary: String(record.summary || record.outputPreview || record.error || record.instruction || "").trim(),
+    nextAction: buildSubTaskNextAction(record),
+    checkpoints: {
+      openCount: 0,
+      blockerCount: blockerLabels.length,
+      labels: blockerLabels,
+    },
+    progress: {
+      current: record.progress?.message,
+      recent,
+    },
+  };
+}
+
+export function buildGoalContinuationState(handoff: GoalHandoffSnapshot): ContinuationStateSnapshot {
+  const recommendedTargetId = handoff.recommendedNodeId || handoff.activeConversationId || handoff.goalId;
+  const targetType = handoff.recommendedNodeId
+    ? "node"
+    : handoff.activeConversationId
+      ? "conversation"
+      : "goal";
+  return {
+    version: 1,
+    scope: "goal",
+    targetId: handoff.goalId,
+    recommendedTargetId,
+    targetType,
+    resumeMode: handoff.resumeMode,
+    summary: handoff.summary,
+    nextAction: handoff.nextAction,
+    checkpoints: {
+      openCount: handoff.tracking.openCheckpointCount,
+      blockerCount: handoff.blockers.length,
+      labels: compactStrings([
+        ...handoff.openCheckpoints.map((item) => item.title),
+        ...handoff.blockers.map((item) => item.title),
+      ]),
+    },
+    progress: {
+      current: handoff.currentPhase,
+      recent: compactStrings(
+        handoff.recentProgress.map((entry) => entry.summary || entry.note || entry.title),
+        3,
+      ),
+    },
+  };
+}
+
+export function buildConversationContinuationState(input: ConversationContinuationStateInput): ContinuationStateSnapshot {
+  const messages = Array.isArray(input.messages) ? input.messages : [];
+  const latestMessage = messages
+    .slice()
+    .sort((left, right) => Number(right.timestampMs || 0) - Number(left.timestampMs || 0))[0];
+  const loadedDeferredTools = compactStrings(input.loadedDeferredTools ?? [], 4);
+  const compactBoundaries = Array.isArray(input.compactBoundaries) ? input.compactBoundaries : [];
+  const taskTokenResults = Array.isArray(input.taskTokenResults) ? input.taskTokenResults : [];
+  const lastTaskToken = taskTokenResults
+    .slice()
+    .sort((left, right) => toTimestamp(right.createdAt) - toTimestamp(left.createdAt))[0];
+  const recentMessages = messages
+    .slice(-3)
+    .reverse()
+    .map((item) => {
+      const role = String(item.role || "message").trim();
+      const content = summarizeText(item.content, 96);
+      return content ? `${role}: ${content}` : "";
+    });
+  const summary = summarizeText(latestMessage?.content, 180)
+    || (messages.length > 0 ? `Conversation has ${messages.length} persisted message(s).` : "No persisted messages yet.");
+
+  return {
+    version: 1,
+    scope: "conversation",
+    targetId: input.conversationId,
+    recommendedTargetId: input.conversationId,
+    targetType: "conversation",
+    resumeMode: loadedDeferredTools.length > 0 ? "conversation_context" : "conversation_thread",
+    summary,
+    nextAction: loadedDeferredTools.length > 0
+      ? "Continue in this conversation and only reuse already loaded tools if they are still relevant."
+      : "Continue in this conversation or refresh the digest before resuming a longer thread.",
+    checkpoints: {
+      openCount: compactBoundaries.length,
+      blockerCount: 0,
+      labels: compactStrings([
+        ...loadedDeferredTools.map((item) => `tool:${item}`),
+        compactBoundaries.length > 0 ? `compact:${compactBoundaries.length}` : "",
+        lastTaskToken?.name ? `task:${lastTaskToken.name}` : "",
+      ], 4),
+    },
+    progress: {
+      current: messages.length > 0 ? `${messages.length} messages` : "No active transcript yet",
+      recent: compactStrings(recentMessages, 3),
+    },
+  };
+}
+
+export function buildResidentContinuationState(input: ResidentContinuationStateInput): ContinuationStateSnapshot {
+  const pendingReviewCount = Number(input.sharedGovernance?.pendingCount || 0);
+  const recentTaskHeadline = summarizeText(input.recentTaskDigest?.headline || input.recentTaskDigest?.latestTitle, 96);
+  const recentSubtaskHeadline = summarizeText(input.recentSubtaskDigest?.headline || input.recentSubtaskDigest?.latestSummary, 96);
+  const usageHeadline = summarizeText(input.experienceUsageDigest?.headline || input.experienceUsageDigest?.latestAssetKey, 96);
+  const recommendedConversationId = input.mainConversationId || input.lastConversationId;
+
+  let resumeMode = "resident_idle";
+  let summary = "Resident agent is ready for the next main-conversation turn.";
+  let nextAction = "Open the resident main conversation and continue from the latest scoped context.";
+  if (pendingReviewCount > 0) {
+    resumeMode = "resident_review";
+    summary = `Resident agent has ${pendingReviewCount} pending shared-review item(s) that may need attention first.`;
+    nextAction = "Inspect the resident review queue first, then return to the main conversation if needed.";
+  } else if (input.status === "running" || input.status === "background") {
+    resumeMode = "resident_main";
+    summary = recentSubtaskHeadline || recentTaskHeadline || "Resident agent is already active on its main conversation context.";
+    nextAction = "Return to the resident conversation and continue from the current active context.";
+  } else if (recentSubtaskHeadline) {
+    resumeMode = "resident_followup";
+    summary = recentSubtaskHeadline;
+    nextAction = "Inspect the latest resident-linked subtask result, then continue in the main conversation.";
+  } else if (recentTaskHeadline) {
+    resumeMode = "resident_task_followup";
+    summary = recentTaskHeadline;
+    nextAction = "Reopen the latest resident-linked long task or continue in the main conversation.";
+  }
+
+  return {
+    version: 1,
+    scope: "resident",
+    targetId: input.agentId,
+    recommendedTargetId: recommendedConversationId,
+    targetType: recommendedConversationId ? "conversation" : undefined,
+    resumeMode,
+    summary,
+    nextAction,
+    checkpoints: {
+      openCount: pendingReviewCount,
+      blockerCount: input.status === "error" ? 1 : 0,
+      labels: compactStrings([
+        pendingReviewCount > 0 ? `review:${pendingReviewCount}` : "",
+        recentTaskHeadline,
+        recentSubtaskHeadline,
+        usageHeadline,
+      ], 4),
+    },
+    progress: {
+      current: input.status || "idle",
+      recent: compactStrings([
+        recentTaskHeadline,
+        recentSubtaskHeadline,
+        usageHeadline,
+      ], 3),
+    },
+  };
+}
+
+export function buildBackgroundContinuationState(input: BackgroundContinuationStateInput): ContinuationStateSnapshot {
+  const label = summarizeText(input.targetLabel || input.targetId, 72) || input.scope;
+  const summary = summarizeText(input.summary, 180)
+    || summarizeText(input.reason, 180)
+    || `${label} background run is ${input.status}.`;
+  const recent = compactStrings([
+    input.summary,
+    input.reason,
+    typeof input.nextRunAtMs === "number" ? `next:${new Date(input.nextRunAtMs).toISOString()}` : undefined,
+  ], 3);
+
+  let resumeMode = `${input.scope}_runtime`;
+  let nextAction = "Inspect the background runtime summary before deciding whether to rerun it.";
+  if (input.status === "running") {
+    resumeMode = `${input.scope}_live`;
+    nextAction = input.conversationId
+      ? "Open the linked conversation to observe the active background run."
+      : "Wait for the active background run to finish or inspect the runtime summary.";
+  } else if (input.conversationId) {
+    resumeMode = input.sessionTarget === "main" ? `${input.scope}_main_conversation` : `${input.scope}_conversation`;
+    nextAction = "Open the linked conversation or prompt snapshot to continue from the latest background result.";
+  } else if (input.status === "failed") {
+    resumeMode = `${input.scope}_recovery`;
+    nextAction = "Inspect the failure reason, then retry from the runtime summary or schedule surface.";
+  }
+
+  const blockerLabels = input.status === "failed"
+    ? compactStrings([input.reason || summary], 1)
+    : [];
+
+  return {
+    version: 1,
+    scope: "background",
+    targetId: input.targetId,
+    recommendedTargetId: input.conversationId,
+    targetType: input.conversationId ? "conversation" : undefined,
+    resumeMode,
+    summary,
+    nextAction,
+    checkpoints: {
+      openCount: input.status === "running" ? 1 : 0,
+      blockerCount: blockerLabels.length,
+      labels: compactStrings([
+        `scope:${input.scope}`,
+        input.sessionTarget ? `session:${input.sessionTarget}` : undefined,
+        ...blockerLabels,
+      ], 3),
+    },
+    progress: {
+      current: `${input.scope}:${input.status}`,
+      recent,
+    },
+  };
+}

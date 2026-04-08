@@ -13,6 +13,7 @@ import { createChatEventsFeature } from "./app/features/chat-events.js";
 import { createChatNetworkFeature } from "./app/features/chat-network.js";
 import { createChatUiFeature } from "./app/features/chat-ui.js";
 import { createCanvasContextFeature } from "./app/features/canvas-context.js";
+import { decodeContinuationAction } from "./app/features/continuation-targets.js";
 import { buildDoctorChatSummary } from "./app/features/doctor-observability.js";
 import { createGoalsDetailFeature } from "./app/features/goals-detail.js";
 import { createGoalsGovernancePanelFeature } from "./app/features/goals-governance-panel.js";
@@ -28,7 +29,7 @@ import {
 } from "./app/features/memory-source-view.js";
 import { buildResidentPanelSummary } from "./app/features/resident-observability-summary.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
-import { createSubtasksOverviewFeature } from "./app/features/subtasks-overview.js";
+import { createSubtasksOverviewFeature, findSubtaskBySessionId } from "./app/features/subtasks-overview.js";
 import { createLocaleController } from "./app/features/locale.js";
 import { initPromptController } from "./app/features/prompt.js";
 import { createSettingsController } from "./app/features/settings.js";
@@ -146,6 +147,7 @@ const goalCheckpointActionCancelBtn = document.getElementById("goalCheckpointAct
 const goalCheckpointActionSubmitBtn = document.getElementById("goalCheckpointActionSubmit");
 const taskTokenHistoryEl = document.getElementById("taskTokenHistory");
 const sessionDigestSummaryEl = document.getElementById("sessionDigestSummary");
+const sessionContinuationSummaryEl = document.getElementById("sessionContinuationSummary");
 const sessionDigestRefreshBtn = document.getElementById("sessionDigestRefresh");
 const sessionDigestModalEl = document.getElementById("sessionDigestModal");
 const sessionDigestModalTitleEl = document.getElementById("sessionDigestModalTitle");
@@ -362,6 +364,7 @@ const goalsState = {
   governanceCache: {},
   capabilityCache: {},
   capabilityPending: {},
+  continuationFocusNode: null,
   liveUpdateDelayMs: 120,
   liveUpdateTimers: {},
   liveUpdatePending: {},
@@ -371,6 +374,7 @@ const subtasksState = {
   selectedId: null,
   selectedItem: null,
   selectedOutputContent: "",
+  selectedContinuationState: null,
   selectedPromptSnapshot: null,
   conversationId: null,
   includeArchived: false,
@@ -380,6 +384,10 @@ const subtasksState = {
   detailLoading: false,
   pendingActionTaskId: null,
   pendingActionKind: null,
+  continuationFocusSessionId: null,
+  linkedSessionContext: null,
+  steeringDrafts: {},
+  resumeDrafts: {},
   liveUpdateDelayMs: 120,
   liveUpdateTimers: {},
   liveUpdatePending: {},
@@ -978,6 +986,7 @@ subtasksOverviewFeature = createSubtasksOverviewFeature({
     switchMode("goals");
     await loadGoals(true, goalId);
   },
+  onOpenContinuationAction: (action) => openContinuationAction(action),
   showNotice,
   t: localeController.t,
 });
@@ -1123,6 +1132,7 @@ memoryViewerFeature = createMemoryViewerFeature({
 sessionDigestFeature = createSessionDigestFeature({
   refs: {
     sessionDigestSummaryEl,
+    sessionContinuationSummaryEl,
     sessionDigestRefreshBtn,
     sessionDigestModalEl,
     sessionDigestModalTitleEl,
@@ -1138,6 +1148,7 @@ sessionDigestFeature = createSessionDigestFeature({
   onSendHistoryAction: ({ actionId, conversationId }) => {
     sendConversationHistoryAction(actionId, conversationId);
   },
+  onOpenContinuationAction: (action) => openContinuationAction(action),
   escapeHtml,
   formatDateTime,
   showNotice,
@@ -1491,6 +1502,17 @@ function syncAgentCatalog(agents = [], selectedAgentId = "") {
           claimedCount: Number(agent.sharedGovernance.claimedCount) || 0,
         }
         : null,
+      continuationState: agent.continuationState && typeof agent.continuationState === "object"
+        ? {
+          scope: typeof agent.continuationState.scope === "string" ? agent.continuationState.scope : "",
+          targetId: typeof agent.continuationState.targetId === "string" ? agent.continuationState.targetId : "",
+          recommendedTargetId: typeof agent.continuationState.recommendedTargetId === "string" ? agent.continuationState.recommendedTargetId : "",
+          targetType: typeof agent.continuationState.targetType === "string" ? agent.continuationState.targetType : "",
+          resumeMode: typeof agent.continuationState.resumeMode === "string" ? agent.continuationState.resumeMode : "",
+          summary: typeof agent.continuationState.summary === "string" ? agent.continuationState.summary : "",
+          nextAction: typeof agent.continuationState.nextAction === "string" ? agent.continuationState.nextAction : "",
+        }
+        : null,
       observabilityHeadline: typeof agent.observabilityHeadline === "string" ? agent.observabilityHeadline : "",
     });
   }
@@ -1556,6 +1578,181 @@ async function focusAgentObservabilityTarget(agentId) {
   }
 }
 
+function getElementsByDataValue(root, attribute, expectedValue) {
+  if (!root || !attribute || !expectedValue) return [];
+  return [...root.querySelectorAll(`[${attribute}]`)]
+    .filter((node) => node.getAttribute(attribute) === expectedValue);
+}
+
+function clearGoalContinuationFocus() {
+  goalsDetailEl?.querySelectorAll(".is-continuation-focus").forEach((node) => {
+    node.classList.remove("is-continuation-focus");
+  });
+}
+
+function applyGoalContinuationFocus(goalId = goalsState.selectedId) {
+  clearGoalContinuationFocus();
+  const focus = goalsState.continuationFocusNode;
+  if (!goalsDetailEl || !focus || !focus.nodeId || !goalId || focus.goalId !== goalId) {
+    return false;
+  }
+  const matched = getElementsByDataValue(goalsDetailEl, "data-goal-node-id", focus.nodeId)
+    .map((node) => node.closest("[data-goal-continuation-focus]") || node);
+  if (!matched.length) return false;
+  matched.forEach((node) => node.classList.add("is-continuation-focus"));
+  matched
+    .map((node) => node.closest(".goal-tracking-card, .goal-capability-card"))
+    .filter(Boolean)
+    .forEach((node) => node.classList.add("is-continuation-focus"));
+  if (!focus.scrolled) {
+    matched[0].scrollIntoView({ block: "center", behavior: "smooth" });
+    focus.scrolled = true;
+  }
+  return true;
+}
+
+function applySubtaskSessionFocus(sessionId) {
+  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!normalizedSessionId) return false;
+  const listMatch = getElementsByDataValue(subtasksListEl, "data-subtask-session-id", normalizedSessionId)[0];
+  const detailMatch = getElementsByDataValue(subtasksDetailEl, "data-subtask-session-focus", normalizedSessionId)[0];
+  if (listMatch) {
+    listMatch.scrollIntoView({ block: "center", behavior: "smooth" });
+  } else if (detailMatch) {
+    detailMatch.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+  return Boolean(listMatch || detailMatch);
+}
+
+function applySubtaskPromptSnapshotFocus(sessionId) {
+  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!normalizedSessionId || !subtasksDetailEl) return false;
+  subtasksDetailEl.querySelectorAll("[data-subtask-prompt-snapshot-session].is-continuation-focus").forEach((node) => {
+    node.classList.remove("is-continuation-focus");
+  });
+  const snapshotSection = getElementsByDataValue(
+    subtasksDetailEl,
+    "data-subtask-prompt-snapshot-session",
+    normalizedSessionId,
+  )[0];
+  if (!snapshotSection) return false;
+  snapshotSection.classList.add("is-continuation-focus");
+  snapshotSection.scrollIntoView({ block: "center", behavior: "smooth" });
+  return true;
+}
+
+async function openSubtaskBySession(sessionId, options = {}) {
+  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!normalizedSessionId) return;
+
+  subtasksState.continuationFocusSessionId = normalizedSessionId;
+  switchMode("subtasks");
+  await loadSubtasks(false);
+
+  let matchedItem = findSubtaskBySessionId(subtasksState.items, normalizedSessionId);
+  if (!matchedItem && subtasksState.includeArchived !== true) {
+    subtasksState.includeArchived = true;
+    if (subtasksShowArchivedEl) {
+      subtasksShowArchivedEl.checked = true;
+    }
+    await loadSubtasks(false);
+    matchedItem = findSubtaskBySessionId(subtasksState.items, normalizedSessionId);
+  }
+
+  if (!matchedItem && options.taskId) {
+    subtasksState.linkedSessionContext = {
+      sessionId: normalizedSessionId,
+      taskId: options.taskId,
+      parentConversationId: "",
+    };
+    await openSubtaskById(options.taskId);
+    openConversationSession(normalizedSessionId, "", { switchToChat: false, renderHint: false });
+    applySubtaskSessionFocus(normalizedSessionId);
+    applySubtaskPromptSnapshotFocus(normalizedSessionId);
+    return;
+  }
+
+  if (!matchedItem) {
+    openConversationSession(
+      normalizedSessionId,
+      localeController.t(
+        "agentPanel.openContinuationSessionHint",
+        { sessionId: normalizedSessionId },
+        `Switched to continuation session: ${normalizedSessionId}`,
+      ),
+    );
+    return;
+  }
+
+  subtasksState.linkedSessionContext = {
+    sessionId: normalizedSessionId,
+    taskId: matchedItem.id,
+    parentConversationId: matchedItem.parentConversationId || "",
+  };
+  subtasksState.selectedId = matchedItem.id;
+  await loadSubtaskDetail(matchedItem.id, { quiet: false });
+  openConversationSession(normalizedSessionId, "", { switchToChat: false, renderHint: false });
+  applySubtaskSessionFocus(normalizedSessionId);
+  applySubtaskPromptSnapshotFocus(normalizedSessionId);
+}
+
+async function openContinuationAction(action = {}) {
+  const kind = typeof action?.kind === "string" ? action.kind : "";
+  if (!kind) return;
+
+  switch (kind) {
+    case "goal":
+      goalsState.continuationFocusNode = null;
+      subtasksState.linkedSessionContext = null;
+      subtasksState.continuationFocusSessionId = null;
+      if (!action.goalId) return;
+      switchMode("goals");
+      await loadGoals(true, action.goalId);
+      return;
+    case "node":
+      if (action.goalId && action.nodeId) {
+        goalsState.continuationFocusNode = {
+          goalId: action.goalId,
+          nodeId: action.nodeId,
+          scrolled: false,
+        };
+      }
+      if (!action.goalId) return;
+      switchMode("goals");
+      await loadGoals(true, action.goalId);
+      return;
+    case "session":
+      goalsState.continuationFocusNode = null;
+      if (action.sessionId) {
+        await openSubtaskBySession(action.sessionId, { taskId: action.taskId });
+        return;
+      }
+      if (action.taskId) {
+        subtasksState.linkedSessionContext = null;
+        await openSubtaskById(action.taskId);
+      }
+      return;
+    case "conversation":
+      goalsState.continuationFocusNode = null;
+      subtasksState.continuationFocusSessionId = null;
+      if (action.conversationId) {
+        openConversationSession(
+          action.conversationId,
+          localeController.t(
+            "agentPanel.openContinuationConversationHint",
+            { conversationId: action.conversationId },
+            `Switched to continuation conversation: ${action.conversationId}`,
+          ),
+        );
+        return;
+      }
+      switchMode("chat");
+      return;
+    default:
+      return;
+  }
+}
+
 async function openAgentObservabilityAction(agentId, action = {}) {
   const kind = typeof action?.kind === "string" ? action.kind : "";
   if (!kind) return;
@@ -1591,6 +1788,12 @@ async function openAgentObservabilityAction(agentId, action = {}) {
       } else {
         await loadMemoryViewer(true);
       }
+      return;
+    case "goal":
+    case "node":
+    case "session":
+    case "conversation":
+      await openContinuationAction(action);
       return;
     default:
       return;
@@ -2302,6 +2505,12 @@ const cfgQqSandbox = document.getElementById("cfgQqSandbox");
 const cfgDiscordEnabled = document.getElementById("cfgDiscordEnabled");
 const cfgDiscordBotToken = document.getElementById("cfgDiscordBotToken");
 const cfgDiscordDefaultChannelId = document.getElementById("cfgDiscordDefaultChannelId");
+const refreshChannelSecurityBtn = document.getElementById("refreshChannelSecurity");
+const channelSecurityConfigMeta = document.getElementById("channelSecurityConfigMeta");
+const cfgChannelSecurityContent = document.getElementById("cfgChannelSecurityContent");
+const channelReplyChunkingConfigMeta = document.getElementById("channelReplyChunkingConfigMeta");
+const cfgChannelReplyChunkingContent = document.getElementById("cfgChannelReplyChunkingContent");
+const channelSecurityPendingList = document.getElementById("channelSecurityPendingList");
 const doctorStatusEl = document.getElementById("doctorStatus");
 const REDACTED_PLACEHOLDER = "[REDACTED]";
 
@@ -2368,6 +2577,12 @@ const settingsController = createSettingsController({
     cfgDiscordEnabled,
     cfgDiscordBotToken,
     cfgDiscordDefaultChannelId,
+    refreshChannelSecurityBtn,
+    channelSecurityConfigMeta,
+    cfgChannelSecurityContent,
+    channelReplyChunkingConfigMeta,
+    cfgChannelReplyChunkingContent,
+    channelSecurityPendingList,
   },
   isConnected: () => Boolean(ws && isReady),
   sendReq,
@@ -2398,6 +2613,41 @@ chatEventsFeature = createChatEventsFeature({
   },
   updateTokenUsage,
   showTaskTokenResult,
+  onChannelSecurityPending: (payload) => {
+    const channel = typeof payload?.channel === "string" ? payload.channel : "unknown";
+    const accountId = typeof payload?.accountId === "string" ? payload.accountId.trim() : "";
+    const senderId = typeof payload?.senderId === "string" ? payload.senderId : "";
+    const senderName = typeof payload?.senderName === "string" ? payload.senderName.trim() : "";
+    const seenCount = Number.isFinite(Number(payload?.seenCount)) ? Number(payload.seenCount) : 0;
+    const senderLabel = senderName || senderId || localeController.t("settings.channelSecurityPendingUnknownSender", {}, "未知 sender");
+    const channelLabel = accountId ? `${channel}/${accountId}` : channel;
+    if (settingsModal && !settingsModal.classList.contains("hidden")) {
+      void settingsController.refreshChannelSecurityPending();
+    }
+    const message = seenCount > 1
+      ? localeController.t(
+        "settings.channelSecurityPendingNoticeRepeat",
+        { channel: channelLabel, senderName: senderLabel, seenCount },
+        `${channelLabel} sender ${senderLabel} 再次触发待审批，当前已拦截 ${seenCount} 次。`,
+      )
+      : localeController.t(
+        "settings.channelSecurityPendingNoticeMessage",
+        { channel: channelLabel, senderName: senderLabel },
+        `${channelLabel} sender ${senderLabel} 已进入待审批队列。`,
+      );
+    showNotice(
+      localeController.t("settings.channelSecurityPendingNoticeTitle", {}, "待审批 Sender"),
+      message,
+      "info",
+      6800,
+      {
+        actionLabel: localeController.t("settings.channelSecurityPendingNoticeAction", {}, "去审批"),
+        onAction: () => {
+          void settingsController.openChannelSecurityPending();
+        },
+      },
+    );
+  },
   queueGoalUpdateEvent,
   onSubtaskUpdated: (payload) => subtasksOverviewFeature?.handleSubtaskUpdate(payload),
   onToolSettingsConfirmRequired: (payload) => toolSettingsController.handleConfirmRequired(payload),
@@ -2583,8 +2833,10 @@ async function loadConversationMeta(conversationId, options = {}) {
     if (renderMessages && Array.isArray(res.payload.messages) && conversationId === activeConversationId) {
       renderConversationMessages(res.payload.messages);
     }
+    sessionDigestFeature?.setContinuationState?.(res.payload.continuationState || null, { conversationId });
     return;
   }
+  sessionDigestFeature?.setContinuationState?.(null, { conversationId });
   renderTaskTokenHistory();
 }
 
@@ -2836,25 +3088,44 @@ function ensureNoticeStack() {
   return stack;
 }
 
-function showNotice(title, message, tone = "info", durationMs = 3200) {
+function showNotice(title, message, tone = "info", durationMs = 3200, options = {}) {
   const stack = ensureNoticeStack();
   const item = document.createElement("div");
   item.className = `notice-item notice-${tone}`;
-  item.innerHTML = `
-    <div class="notice-title">${escapeHtml(title)}</div>
-    <div class="notice-message">${escapeHtml(message)}</div>
-  `;
-  stack.appendChild(item);
-
   const remove = () => {
     if (item.parentElement) item.parentElement.removeChild(item);
   };
+  const titleEl = document.createElement("div");
+  titleEl.className = "notice-title";
+  titleEl.textContent = String(title ?? "");
+  const messageEl = document.createElement("div");
+  messageEl.className = "notice-message";
+  messageEl.textContent = String(message ?? "");
+  item.appendChild(titleEl);
+  item.appendChild(messageEl);
+  const actionLabel = typeof options?.actionLabel === "string" ? options.actionLabel.trim() : "";
+  if (actionLabel) {
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "notice-actions";
+    const actionBtn = document.createElement("button");
+    actionBtn.type = "button";
+    actionBtn.className = "button button-muted notice-action-btn";
+    actionBtn.textContent = actionLabel;
+    actionBtn.addEventListener("click", () => {
+      options.onAction?.();
+      remove();
+    });
+    actionsEl.appendChild(actionBtn);
+    item.appendChild(actionsEl);
+  }
+  stack.appendChild(item);
   setTimeout(remove, durationMs);
 }
 
 // 切换模式
 function switchMode(mode) {
   const canvasSection = document.getElementById("canvasSection");
+  const wasSubtasksVisible = Boolean(subtasksSection && !subtasksSection.classList.contains("hidden"));
 
   if (mode === "editor") {
     if (chatSection) chatSection.classList.add("hidden");
@@ -2903,6 +3174,9 @@ function switchMode(mode) {
     if (editorActions) editorActions.classList.add("hidden");
   } else {
     // chat (default)
+    if (wasSubtasksVisible && subtasksState.linkedSessionContext?.sessionId) {
+      openConversationSession(subtasksState.linkedSessionContext.sessionId, "", { switchToChat: false, renderHint: false });
+    }
     if (chatSection) chatSection.classList.remove("hidden");
     if (editorSection) editorSection.classList.add("hidden");
     if (canvasSection) canvasSection.classList.add("hidden");
@@ -4084,6 +4358,7 @@ async function loadGoalCapabilityData(goal) {
     plans: entry.plans,
     nodeMap: entry.nodeMap,
   });
+  applyGoalContinuationFocus(goal.id);
 }
 
 function parseGoalProgressEntries(rawContent) {
@@ -4214,7 +4489,11 @@ async function loadGoalTrackingData(goal) {
     nodes: parseGoalGraphNodes(rawGraph),
     checkpoints: parsedCheckpoints,
     capabilityPlans: capabilityEntry?.plans || [],
+    focusNodeId: goalsState.continuationFocusNode?.goalId === trackingGoalId
+      ? goalsState.continuationFocusNode?.nodeId || ""
+      : "",
   });
+  applyGoalContinuationFocus(goal.id);
 }
 
 function renderGoalProgressPanelLoading() {
@@ -4240,74 +4519,6 @@ async function loadGoalProgressData(goal) {
 
 // ========================== GOAL HANDOFF ==========================
 
-function parseGoalHandoffKeyValueSection(rawContent) {
-  const data = {};
-  if (typeof rawContent !== "string") return data;
-  rawContent
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .forEach((line) => {
-      const match = /^-\s+([^:]+):\s*(.*)$/.exec(line);
-      if (!match) return;
-      data[match[1].trim().toLowerCase()] = match[2].trim();
-    });
-  return data;
-}
-
-function parseGoalHandoffListSection(rawContent) {
-  if (typeof rawContent !== "string") return [];
-  return rawContent
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("- "))
-    .map((line) => line.slice(2).trim())
-    .filter(Boolean)
-    .filter((line) => line !== "(none)");
-}
-
-function parseGoalHandoffDocument(rawContent) {
-  if (typeof rawContent !== "string" || !rawContent.trim()) return null;
-  const sections = rawContent.split(/^##\s+/m).filter(Boolean);
-  if (!sections.length) return null;
-  const parsed = {};
-  for (const section of sections) {
-    const newlineIndex = section.indexOf("\n");
-    const title = (newlineIndex >= 0 ? section.slice(0, newlineIndex) : section).trim().toLowerCase();
-    const body = newlineIndex >= 0 ? section.slice(newlineIndex + 1).trim() : "";
-    parsed[title] = body;
-  }
-  const meta = parseGoalHandoffKeyValueSection(parsed["meta"] || "");
-  const tracking = parseGoalHandoffKeyValueSection(parsed["tracking"] || "");
-  const focus = parseGoalHandoffKeyValueSection(parsed["focus capability"] || "");
-  const summary = typeof parsed["summary"] === "string" ? parsed["summary"].trim() : "";
-  const nextAction = typeof parsed["next action"] === "string" ? parsed["next action"].trim() : "";
-  return {
-    generatedAt: meta["generated at"] || "",
-    goalStatus: meta["goal status"] || "",
-    currentPhase: meta["current phase"] || "",
-    resumeMode: meta["resume mode"] || "",
-    resumeNode: meta["resume node"] || "",
-    activeNode: meta["active node"] || "",
-    lastNode: meta["last node"] || "",
-    lastRun: meta["last run"] || "",
-    summary,
-    nextAction,
-    focusPlan: focus["plan"] || "",
-    focusSummary: focus["summary"] || "",
-    tracking: {
-      totalNodes: tracking["total nodes"] || "0",
-      completedNodes: tracking["completed nodes"] || "0",
-      inProgressNodes: tracking["in progress nodes"] || "0",
-      blockedNodes: tracking["blocked nodes"] || "0",
-      openCheckpoints: tracking["open checkpoints"] || "0",
-    },
-    openCheckpoints: parseGoalHandoffListSection(parsed["open checkpoints"] || ""),
-    blockers: parseGoalHandoffListSection(parsed["blockers"] || ""),
-    recentTimeline: parseGoalHandoffListSection(parsed["recent timeline"] || ""),
-  };
-}
-
 function renderGoalHandoffPanelLoading() {
   return goalsReadonlyPanelsFeature?.renderGoalHandoffPanelLoading();
 }
@@ -4315,6 +4526,13 @@ function renderGoalHandoffPanelLoading() {
 function bindGoalHandoffPanelActions(goal) {
   const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
   if (!panel || !goal) return;
+  panel.querySelectorAll("[data-continuation-action]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const action = decodeContinuationAction(node.getAttribute("data-continuation-action") || "");
+      if (!action) return;
+      void openContinuationAction(action);
+    });
+  });
   panel.querySelectorAll("[data-goal-generate-handoff]").forEach((node) => {
     node.addEventListener("click", () => {
       const goalId = node.getAttribute("data-goal-generate-handoff") || goal.id;
@@ -4335,8 +4553,8 @@ function renderGoalHandoffPanelError(goal, message) {
   return goalsReadonlyPanelsFeature?.renderGoalHandoffPanelError(goal, message);
 }
 
-function renderGoalHandoffPanel(goal, handoff) {
-  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanel(goal, handoff);
+function renderGoalHandoffPanel(goal, handoff, continuationState = null) {
+  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanel(goal, handoff, continuationState);
 }
 
 async function loadGoalHandoffData(goal) {
@@ -4345,14 +4563,18 @@ async function loadGoalHandoffData(goal) {
   const seq = (goalsState.handoffSeq || 0) + 1;
   goalsState.handoffSeq = seq;
   renderGoalHandoffPanelLoading();
-
-  const handoffFile = await readSourceFile(goal.handoffPath);
+  const res = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "goal.handoff.get",
+    params: { goalId: goal.id },
+  });
   if (goalsState.handoffSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
-  if (!handoffFile) {
-    renderGoalHandoffPanelError(goal, "无法读取 handoff.md。若使用了自定义路径，请确认该路径已加入可操作区。");
+  if (!res?.ok || !res.payload?.handoff) {
+    renderGoalHandoffPanelError(goal, res?.error?.message || "无法读取 goal handoff snapshot。");
     return;
   }
-  renderGoalHandoffPanel(goal, parseGoalHandoffDocument(handoffFile.content || ""));
+  renderGoalHandoffPanel(goal, res.payload.handoff, res.payload.continuationState || null);
 }
 
 function parseGoalReviewGovernanceSummary(rawSummary) {
@@ -4551,11 +4773,23 @@ async function loadGoals(forceReload = false, preferredGoalId) {
 }
 
 async function loadSubtasks(forceSelectFirst = false) {
-  return subtasksOverviewFeature?.loadSubtasks(forceSelectFirst);
+  const result = await subtasksOverviewFeature?.loadSubtasks(forceSelectFirst);
+  const linkedSessionId = subtasksState.linkedSessionContext?.sessionId || subtasksState.continuationFocusSessionId || "";
+  if (linkedSessionId) {
+    applySubtaskSessionFocus(linkedSessionId);
+    applySubtaskPromptSnapshotFocus(linkedSessionId);
+  }
+  return result;
 }
 
 async function loadSubtaskDetail(taskId, options = {}) {
-  return subtasksOverviewFeature?.loadSubtaskDetail(taskId, options);
+  const result = await subtasksOverviewFeature?.loadSubtaskDetail(taskId, options);
+  const linkedSessionId = subtasksState.linkedSessionContext?.sessionId || subtasksState.continuationFocusSessionId || "";
+  if (linkedSessionId) {
+    applySubtaskSessionFocus(linkedSessionId);
+    applySubtaskPromptSnapshotFocus(linkedSessionId);
+  }
+  return result;
 }
 
 async function openSubtaskById(taskId) {
@@ -5692,13 +5926,17 @@ window._belldandySyncCanvasContext = renderCanvasGoalContext;
 // Expose openFile for canvas.js (method node double-click → editor)
 window._belldandyOpenFile = (filePath) => openFile(filePath);
 
-function openConversationSession(conversationId, hintText) {
+function openConversationSession(conversationId, hintText, options = {}) {
   if (!conversationId) return;
+  const switchToChat = options.switchToChat !== false;
+  const renderHint = options.renderHint !== false;
   activeConversationId = conversationId;
   renderCanvasGoalContext();
-  switchMode("chat");
+  if (switchToChat) {
+    switchMode("chat");
+  }
   chatEventsFeature?.resetStreamingState();
-  if (messagesEl) {
+  if (messagesEl && renderHint) {
     messagesEl.innerHTML = "";
     const hint = document.createElement("div");
     hint.className = "system-msg";

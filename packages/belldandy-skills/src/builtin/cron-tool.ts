@@ -41,14 +41,17 @@ interface CronJobView {
     id: string;
     name: string;
     enabled: boolean;
+    sessionTarget: "main" | "isolated";
     schedule:
         | { kind: "at"; at: string }
-        | { kind: "every"; everyMs: number; anchorMs?: number }
-        | { kind: "dailyAt"; time: string; timezone: string }
-        | { kind: "weeklyAt"; weekdays: number[]; time: string; timezone: string };
+        | { kind: "every"; everyMs: number; anchorMs?: number; staggerMs?: number }
+        | { kind: "dailyAt"; time: string; timezone: string; staggerMs?: number }
+        | { kind: "weeklyAt"; weekdays: number[]; time: string; timezone: string; staggerMs?: number };
     payload:
         | { kind: "systemEvent"; text: string }
         | { kind: "goalApprovalScan"; goalId?: string; goalIds?: string[]; allGoals?: boolean; autoEscalate?: boolean };
+    delivery: { mode: "user" | "none"; bestEffort?: boolean };
+    failureDestination?: { mode: "user" | "none" };
     state: {
         nextRunAtMs?: number;
         lastRunAtMs?: number;
@@ -60,12 +63,15 @@ interface CronJobCreateInput {
     name: string;
     schedule:
         | { kind: "at"; at: string }
-        | { kind: "every"; everyMs: number; anchorMs?: number }
-        | { kind: "dailyAt"; time: string; timezone: string }
-        | { kind: "weeklyAt"; weekdays: number[]; time: string; timezone: string };
+        | { kind: "every"; everyMs: number; anchorMs?: number; staggerMs?: number }
+        | { kind: "dailyAt"; time: string; timezone: string; staggerMs?: number }
+        | { kind: "weeklyAt"; weekdays: number[]; time: string; timezone: string; staggerMs?: number };
     payload:
         | { kind: "systemEvent"; text: string }
         | { kind: "goalApprovalScan"; goalId?: string; goalIds?: string[]; allGoals?: boolean; autoEscalate?: boolean };
+    sessionTarget?: "main" | "isolated";
+    delivery?: { mode: "user" | "none"; bestEffort?: boolean };
+    failureDestination?: { mode: "user" | "none" };
     deleteAfterRun?: boolean;
 }
 
@@ -106,11 +112,15 @@ payload 类型:
 - allGoals: 扫描全部 goal（payloadKind=goalApprovalScan 时可填）
 - autoEscalate: 是否自动升级超时 stage（payloadKind=goalApprovalScan 时可填，默认 true）
 - scheduleKind: 调度类型 "at" / "every" / "dailyAt" / "weeklyAt"（必填）
+- sessionTarget: 会话目标 "main" / "isolated"（可选；systemEvent 默认 main，goalApprovalScan 默认 isolated）
+- deliveryMode: 成功后通知模式 "user" / "none"（可选，默认 user）
+- failureDestinationMode: 失败后通知模式 "user" / "none"（可选，默认 none）
 - at: 一次性触发时间，ISO-8601 格式（scheduleKind="at" 时必填，如 "2026-02-10T09:00:00+08:00"）
 - everyMs: 重复间隔毫秒数（scheduleKind="every" 时必填，最小 60000 = 1分钟）
 - time: 固定时刻，HH:mm 格式（scheduleKind="dailyAt" / "weeklyAt" 时必填）
 - timezone: IANA 时区名，例如 Asia/Shanghai（scheduleKind="dailyAt" / "weeklyAt" 时必填）
 - weekdays: 每周几数组，使用 1-7，1=Monday，7=Sunday（scheduleKind="weeklyAt" 时必填）
+- staggerMs: 显式错峰窗口（毫秒，适用于 every / dailyAt / weeklyAt；0 表示保持精确调度）
 - deleteAfterRun: 执行后是否自动删除（仅 at 类型，默认 false）
 
 快捷间隔参考:
@@ -162,6 +172,21 @@ payload 类型:
                         description: "调度类型：at（一次性）、every（重复）、dailyAt（每日固定时刻）、weeklyAt（每周固定时刻）",
                         enum: ["at", "every", "dailyAt", "weeklyAt"],
                     },
+                    sessionTarget: {
+                        type: "string",
+                        description: "会话目标：main（固定 job 会话）或 isolated（每次运行新会话）",
+                        enum: ["main", "isolated"],
+                    },
+                    deliveryMode: {
+                        type: "string",
+                        description: "成功后通知模式：user 或 none",
+                        enum: ["user", "none"],
+                    },
+                    failureDestinationMode: {
+                        type: "string",
+                        description: "失败后通知模式：user 或 none",
+                        enum: ["user", "none"],
+                    },
                     at: {
                         type: "string",
                         description: "一次性触发时间，ISO-8601 格式（scheduleKind=at 时必填）",
@@ -182,6 +207,10 @@ payload 类型:
                         type: "array",
                         description: "每周几数组，使用 1-7，1=Monday，7=Sunday（scheduleKind=weeklyAt 时必填）",
                         items: { type: "number" },
+                    },
+                    staggerMs: {
+                        type: "number",
+                        description: "显式错峰窗口（毫秒，适用于 every/dailyAt/weeklyAt；0 表示保持精确调度）",
                     },
                     deleteAfterRun: {
                         type: "boolean",
@@ -230,6 +259,8 @@ payload 类型:
                                 `📋 ${j.name}`,
                                 `   ID: ${j.id}`,
                                 `   调度: ${scheduleDesc}`,
+                                `   会话: ${j.sessionTarget}`,
+                                `   通知: ${formatDelivery(j.delivery, j.failureDestination)}`,
                                 `   状态: ${statusDesc}`,
                                 `   下次执行: ${nextRun}`,
                                 `   上次执行: ${lastRun}`,
@@ -244,6 +275,10 @@ payload 类型:
                         const jobName = typeof args.name === "string" ? args.name.trim() : "";
                         const payloadKind = typeof args.payloadKind === "string" ? args.payloadKind : "systemEvent";
                         const scheduleKind = typeof args.scheduleKind === "string" ? args.scheduleKind : "";
+                        const sessionTarget = readSessionTarget(args.sessionTarget, payloadKind);
+                        if (!sessionTarget.ok) return makeResult(false, "", sessionTarget.error);
+                        const delivery = readDeliveryModes(args);
+                        if (!delivery.ok) return makeResult(false, "", delivery.error);
 
                         if (!jobName) return makeResult(false, "", "参数错误：name 不能为空");
 
@@ -265,17 +300,22 @@ payload 类型:
                                 name: jobName,
                                 schedule: { kind: "at", at },
                                 payload: payloadResult.payload,
+                                sessionTarget: sessionTarget.value,
+                                delivery: delivery.delivery,
+                                failureDestination: delivery.failureDestination,
                                 deleteAfterRun: args.deleteAfterRun === true,
                             });
                             return makeResult(
                                 true,
-                                `✅ 已创建一次性任务 "${job.name}"\n   ID: ${job.id}\n   触发时间: ${at}\n   内容: ${formatPayload(job.payload)}`
+                                `✅ 已创建一次性任务 "${job.name}"\n   ID: ${job.id}\n   触发时间: ${at}\n   会话: ${job.sessionTarget}\n   通知: ${formatDelivery(job.delivery, job.failureDestination)}\n   内容: ${formatPayload(job.payload)}`
                             );
                         }
 
                         if (scheduleKind === "every") {
                             const everyMs =
                                 typeof args.everyMs === "number" ? Math.floor(args.everyMs) : 0;
+                            const staggerMs = readOptionalStaggerMs(args.staggerMs);
+                            if (!staggerMs.ok) return makeResult(false, "", staggerMs.error);
                             if (everyMs < 60_000) {
                                 return makeResult(
                                     false,
@@ -289,19 +329,31 @@ payload 类型:
                             }
                             const job = await store.add({
                                 name: jobName,
-                                schedule: { kind: "every", everyMs, anchorMs: Date.now() },
+                                schedule: {
+                                    kind: "every",
+                                    everyMs,
+                                    anchorMs: Date.now(),
+                                    ...(staggerMs.value !== undefined ? { staggerMs: staggerMs.value } : {}),
+                                },
                                 payload: payloadResult.payload,
+                                sessionTarget: sessionTarget.value,
+                                delivery: delivery.delivery,
+                                failureDestination: delivery.failureDestination,
                             });
                             return makeResult(
                                 true,
-                                `✅ 已创建周期任务 "${job.name}"\n   ID: ${job.id}\n   间隔: 每 ${formatMs(everyMs)}\n   内容: ${formatPayload(job.payload)}`
+                                `✅ 已创建周期任务 "${job.name}"\n   ID: ${job.id}\n   间隔: 每 ${formatMs(everyMs)}\n   会话: ${job.sessionTarget}\n   通知: ${formatDelivery(job.delivery, job.failureDestination)}\n   内容: ${formatPayload(job.payload)}`
                             );
                         }
 
                         if (scheduleKind === "dailyAt") {
                             const timeResult = readTimeAndTimezone(args);
+                            const staggerMs = readOptionalStaggerMs(args.staggerMs);
                             if (!timeResult.ok) {
                                 return makeResult(false, "", timeResult.error);
+                            }
+                            if (!staggerMs.ok) {
+                                return makeResult(false, "", staggerMs.error);
                             }
                             const payloadResult = buildPayload(args, payloadKind);
                             if (!payloadResult.ok) {
@@ -313,19 +365,27 @@ payload 类型:
                                     kind: "dailyAt",
                                     time: timeResult.time,
                                     timezone: timeResult.timezone,
+                                    ...(staggerMs.value !== undefined ? { staggerMs: staggerMs.value } : {}),
                                 },
                                 payload: payloadResult.payload,
+                                sessionTarget: sessionTarget.value,
+                                delivery: delivery.delivery,
+                                failureDestination: delivery.failureDestination,
                             });
                             return makeResult(
                                 true,
-                                `✅ 已创建日历任务 "${job.name}"\n   ID: ${job.id}\n   调度: 每天 ${timeResult.time} @ ${timeResult.timezone}\n   内容: ${formatPayload(job.payload)}`
+                                `✅ 已创建日历任务 "${job.name}"\n   ID: ${job.id}\n   调度: 每天 ${timeResult.time} @ ${timeResult.timezone}\n   会话: ${job.sessionTarget}\n   通知: ${formatDelivery(job.delivery, job.failureDestination)}\n   内容: ${formatPayload(job.payload)}`
                             );
                         }
 
                         if (scheduleKind === "weeklyAt") {
                             const timeResult = readTimeAndTimezone(args);
+                            const staggerMs = readOptionalStaggerMs(args.staggerMs);
                             if (!timeResult.ok) {
                                 return makeResult(false, "", timeResult.error);
+                            }
+                            if (!staggerMs.ok) {
+                                return makeResult(false, "", staggerMs.error);
                             }
                             const weekdaysResult = readWeekdays(args.weekdays);
                             if (!weekdaysResult.ok) {
@@ -342,12 +402,16 @@ payload 类型:
                                     weekdays: weekdaysResult.weekdays,
                                     time: timeResult.time,
                                     timezone: timeResult.timezone,
+                                    ...(staggerMs.value !== undefined ? { staggerMs: staggerMs.value } : {}),
                                 },
                                 payload: payloadResult.payload,
+                                sessionTarget: sessionTarget.value,
+                                delivery: delivery.delivery,
+                                failureDestination: delivery.failureDestination,
                             });
                             return makeResult(
                                 true,
-                                `✅ 已创建周历任务 "${job.name}"\n   ID: ${job.id}\n   调度: 每周 ${formatWeekdays(weekdaysResult.weekdays)} ${timeResult.time} @ ${timeResult.timezone}\n   内容: ${formatPayload(job.payload)}`
+                                `✅ 已创建周历任务 "${job.name}"\n   ID: ${job.id}\n   调度: 每周 ${formatWeekdays(weekdaysResult.weekdays)} ${timeResult.time} @ ${timeResult.timezone}\n   会话: ${job.sessionTarget}\n   通知: ${formatDelivery(job.delivery, job.failureDestination)}\n   内容: ${formatPayload(job.payload)}`
                             );
                         }
 
@@ -514,14 +578,21 @@ function formatSchedule(schedule: CronJobView["schedule"]): string {
         case "at":
             return `一次性 @ ${schedule.at}`;
         case "every":
-            return `每 ${formatMs(schedule.everyMs)} 重复`;
+            return `每 ${formatMs(schedule.everyMs)} 重复${typeof schedule.staggerMs === "number" ? ` / stagger ${formatMs(schedule.staggerMs)}` : ""}`;
         case "dailyAt":
-            return `每天 ${schedule.time} @ ${schedule.timezone}`;
+            return `每天 ${schedule.time} @ ${schedule.timezone}${typeof schedule.staggerMs === "number" ? ` / stagger ${formatMs(schedule.staggerMs)}` : ""}`;
         case "weeklyAt":
-            return `每周 ${formatWeekdays(schedule.weekdays)} ${schedule.time} @ ${schedule.timezone}`;
+            return `每周 ${formatWeekdays(schedule.weekdays)} ${schedule.time} @ ${schedule.timezone}${typeof schedule.staggerMs === "number" ? ` / stagger ${formatMs(schedule.staggerMs)}` : ""}`;
         default:
             return `未知调度 ${JSON.stringify(schedule)}`;
     }
+}
+
+function formatDelivery(
+    delivery: CronJobView["delivery"],
+    failureDestination?: CronJobView["failureDestination"],
+): string {
+    return `success=${delivery.mode}${failureDestination ? ` / failure=${failureDestination.mode}` : ""}`;
 }
 
 function buildPayload(
@@ -565,4 +636,51 @@ function formatPayload(payload: CronJobView["payload"]): string {
         return `approval scan / all goals / autoEscalate=${payload.autoEscalate !== false}`;
     }
     return `approval scan / goal=${payload.goalId ?? payload.goalIds?.join(", ") ?? "?"} / autoEscalate=${payload.autoEscalate !== false}`;
+}
+
+function readOptionalStaggerMs(
+    input: unknown,
+): { ok: true; value?: number } | { ok: false; error: string } {
+    if (input === undefined) return { ok: true };
+    if (typeof input !== "number" || !Number.isFinite(input) || input < 0) {
+        return { ok: false, error: "参数错误：staggerMs 必须为大于等于 0 的数字" };
+    }
+    return { ok: true, value: Math.floor(input) };
+}
+
+function readSessionTarget(
+    input: unknown,
+    payloadKind: string,
+): { ok: true; value: "main" | "isolated" } | { ok: false; error: string } {
+    const normalized = typeof input === "string" ? input.trim().toLowerCase() : "";
+    if (!normalized) {
+        return { ok: true, value: payloadKind === "goalApprovalScan" ? "isolated" : "main" };
+    }
+    if (normalized !== "main" && normalized !== "isolated") {
+        return { ok: false, error: "参数错误：sessionTarget 只允许 main 或 isolated" };
+    }
+    if (normalized === "main" && payloadKind === "goalApprovalScan") {
+        return { ok: false, error: "参数错误：goalApprovalScan 当前只支持 sessionTarget=isolated" };
+    }
+    return { ok: true, value: normalized };
+}
+
+function readDeliveryModes(
+    args: JsonObject,
+): { ok: true; delivery: { mode: "user" | "none" }; failureDestination?: { mode: "user" | "none" } } | { ok: false; error: string } {
+    const deliveryMode = typeof args.deliveryMode === "string" ? args.deliveryMode.trim().toLowerCase() : "user";
+    if (deliveryMode !== "user" && deliveryMode !== "none") {
+        return { ok: false, error: "参数错误：deliveryMode 只允许 user 或 none" };
+    }
+    const failureMode = typeof args.failureDestinationMode === "string"
+        ? args.failureDestinationMode.trim().toLowerCase()
+        : "";
+    if (failureMode && failureMode !== "user" && failureMode !== "none") {
+        return { ok: false, error: "参数错误：failureDestinationMode 只允许 user 或 none" };
+    }
+    return {
+        ok: true,
+        delivery: { mode: deliveryMode as "user" | "none" },
+        ...(failureMode ? { failureDestination: { mode: failureMode as "user" | "none" } } : {}),
+    };
 }

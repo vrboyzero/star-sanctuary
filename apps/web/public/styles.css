@@ -2806,6 +2806,16 @@ body::before {
   gap: 8px;
 }
 
+.subtask-list-item.is-continuation-focus,
+.memory-detail-shell.is-continuation-focus .memory-detail-card.is-continuation-focus,
+.goal-tracking-card.is-continuation-focus,
+.goal-capability-card.is-continuation-focus,
+.goal-tracking-item.is-continuation-focus,
+.goal-capability-focus.is-continuation-focus {
+  border-color: rgba(0, 243, 255, 0.52);
+  box-shadow: 0 0 0 1px rgba(0, 243, 255, 0.22), 0 0 24px rgba(0, 243, 255, 0.12);
+}
+
 .subtask-list-item-head {
   display: flex;
   align-items: flex-start;
@@ -2849,6 +2859,17 @@ body::before {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.subtask-steering-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.subtask-steering-input {
+  min-height: 96px;
 }
 
 .subtask-notification-list {
@@ -3481,6 +3502,19 @@ body::before {
   line-height: 1.55;
   color: var(--notice-message-color);
   word-break: break-word;
+}
+
+.notice-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.notice-action-btn {
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
 }
 
 @keyframes notice-slide-in {

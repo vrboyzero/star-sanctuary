@@ -9,6 +9,11 @@ export type {
   ToolPolicy,
   ToolAuditLog,
   ToolCatalogEntry,
+  ToolCatalogFamilyEntry,
+  ToolDiscoveryEntry,
+  ToolDiscoveryEntriesOptions,
+  ToolDiscoveryFamilyDefinition,
+  ToolDiscoveryFamilyGateMode,
   SubAgentResult,
   SessionInfo,
   SpawnSubAgentOptions,
@@ -114,6 +119,7 @@ export { webSearchTool } from "./builtin/web-search/index.js";
 export { createToolSearchTool, TOOL_SEARCH_NAME } from "./builtin/tool-search.js";
 export { runCommandTool, processManagerTool, terminalTool } from "./builtin/system/index.js";
 export { codeInterpreterTool } from "./builtin/code-interpreter/index.js";
+export { ptcRuntimeTool } from "./builtin/ptc-runtime/index.js";
 export { imageGenerateTool, textToSpeechTool, cameraSnapTool, synthesizeSpeech, transcribeSpeech } from "./builtin/multimedia/index.js";
 export type { SynthesizeResult, SynthesizeOptions, TranscribeResult, TranscribeOptions } from "./builtin/multimedia/index.js";
 export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";

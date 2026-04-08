@@ -52,7 +52,7 @@ export function renderPromptSnapshotDetail(view, helpers) {
   if (!snapshot || typeof snapshot !== "object") {
     if (!sessionId) return "";
     return `
-      <section class="memory-detail-card">
+      <section class="memory-detail-card" data-subtask-prompt-snapshot-session="${escapeHtml(sessionId)}">
         <span class="memory-detail-label">${escapeHtml(t("subtasks.detailPromptSnapshot", {}, "Prompt Snapshot"))}</span>
         <div class="memory-detail-text">${escapeHtml(t("subtasks.detailPromptSnapshotMissing", {}, "This subtask session has no persisted prompt snapshot yet."))}</div>
       </section>
@@ -72,7 +72,7 @@ export function renderPromptSnapshotDetail(view, helpers) {
   }));
 
   return `
-    <section class="memory-detail-card">
+    <section class="memory-detail-card" data-subtask-prompt-snapshot-session="${escapeHtml(manifest.conversationId || sessionId || "")}">
       <span class="memory-detail-label">${escapeHtml(t("subtasks.detailPromptSnapshot", {}, "Prompt Snapshot"))}</span>
       <div class="memory-detail-grid">
         ${renderDetailCard(t("subtasks.detailPromptSnapshotConversation", {}, "Snapshot Conversation"), manifest.conversationId || sessionId || "-", escapeHtml)}

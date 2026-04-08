@@ -165,6 +165,8 @@ export type Conversation = {
     taskTokenRecords?: TaskTokenRecord[];
     /** 最近工具摘要 */
     toolDigests?: ToolDigestRecord[];
+    /** 当前会话已加载的 deferred tools */
+    loadedToolNames?: string[];
     /** 最近压缩边界元数据 */
     compactBoundaries?: CompactBoundaryRecord[];
     /** 手动 partial compact 视图（当前仅 from 方向需要） */
@@ -246,7 +248,7 @@ export type PersistedConversationSummary = {
 
 type ConversationMetaSnapshot = Partial<Pick<
     Conversation,
-    "agentId" | "channel" | "activeCounters" | "taskTokenRecords" | "toolDigests" | "compactBoundaries" | "partialCompactionView" | "createdAt" | "updatedAt"
+    "agentId" | "channel" | "activeCounters" | "taskTokenRecords" | "toolDigests" | "loadedToolNames" | "compactBoundaries" | "partialCompactionView" | "createdAt" | "updatedAt"
 >> & {
     conversationId?: string;
 };
@@ -626,6 +628,7 @@ export class ConversationStore {
                 activeCounters: meta.activeCounters,
                 taskTokenRecords: meta.taskTokenRecords,
                 toolDigests: meta.toolDigests,
+                loadedToolNames: meta.loadedToolNames,
                 compactBoundaries: meta.compactBoundaries,
                 partialCompactionView: meta.partialCompactionView,
             };
@@ -656,7 +659,7 @@ export class ConversationStore {
             }
 
             if (messages.length === 0) {
-                if (!meta?.activeCounters && !meta?.taskTokenRecords) {
+                if (!meta?.activeCounters && !meta?.taskTokenRecords && !meta?.loadedToolNames?.length) {
                     return undefined;
                 }
                 return {
@@ -669,6 +672,7 @@ export class ConversationStore {
                     activeCounters: meta?.activeCounters,
                     taskTokenRecords: meta?.taskTokenRecords,
                     toolDigests: meta?.toolDigests,
+                    loadedToolNames: meta?.loadedToolNames,
                     compactBoundaries: meta?.compactBoundaries,
                     partialCompactionView: meta?.partialCompactionView,
                 };
@@ -689,6 +693,7 @@ export class ConversationStore {
                 activeCounters: meta?.activeCounters,
                 taskTokenRecords: meta?.taskTokenRecords,
                 toolDigests: meta?.toolDigests,
+                loadedToolNames: meta?.loadedToolNames,
                 compactBoundaries: meta?.compactBoundaries,
                 partialCompactionView: meta?.partialCompactionView,
             };
@@ -752,6 +757,7 @@ export class ConversationStore {
                 activeCounters: meta.activeCounters,
                 taskTokenRecords: meta.taskTokenRecords,
                 toolDigests: meta.toolDigests,
+                loadedToolNames: meta.loadedToolNames,
                 compactBoundaries: meta.compactBoundaries,
                 partialCompactionView: meta.partialCompactionView,
             };
@@ -780,7 +786,7 @@ export class ConversationStore {
             }
 
             if (messages.length === 0) {
-                if (!meta?.activeCounters && !meta?.taskTokenRecords) {
+                if (!meta?.activeCounters && !meta?.taskTokenRecords && !meta?.loadedToolNames?.length) {
                     return undefined;
                 }
                 return {
@@ -793,6 +799,7 @@ export class ConversationStore {
                     activeCounters: meta?.activeCounters,
                     taskTokenRecords: meta?.taskTokenRecords,
                     toolDigests: meta?.toolDigests,
+                    loadedToolNames: meta?.loadedToolNames,
                     compactBoundaries: meta?.compactBoundaries,
                     partialCompactionView: meta?.partialCompactionView,
                 };
@@ -812,6 +819,7 @@ export class ConversationStore {
                 activeCounters: meta?.activeCounters,
                 taskTokenRecords: meta?.taskTokenRecords,
                 toolDigests: meta?.toolDigests,
+                loadedToolNames: meta?.loadedToolNames,
                 compactBoundaries: meta?.compactBoundaries,
                 partialCompactionView: meta?.partialCompactionView,
             };
@@ -888,6 +896,7 @@ export class ConversationStore {
                     activeCounters?: ActiveCounterSnapshot[];
                     taskTokenRecords?: TaskTokenRecord[];
                     toolDigests?: ToolDigestRecord[];
+                    loadedToolNames?: string[];
                     compactBoundaries?: CompactBoundaryRecord[];
                     partialCompactionView?: PartialCompactionViewRecord;
                     createdAt?: number;
@@ -899,6 +908,7 @@ export class ConversationStore {
                     || Array.isArray(parsed.activeCounters)
                     || Array.isArray(parsed.taskTokenRecords)
                     || Array.isArray(parsed.toolDigests)
+                    || Array.isArray(parsed.loadedToolNames)
                     || Array.isArray(parsed.compactBoundaries)
                     || typeof parsed.partialCompactionView === "object"
                     || typeof parsed.createdAt === "number"
@@ -911,6 +921,9 @@ export class ConversationStore {
                     activeCounters: Array.isArray(parsed.activeCounters) ? parsed.activeCounters : undefined,
                     taskTokenRecords: Array.isArray(parsed.taskTokenRecords) ? parsed.taskTokenRecords : undefined,
                     toolDigests: Array.isArray(parsed.toolDigests) ? parsed.toolDigests : undefined,
+                    loadedToolNames: Array.isArray(parsed.loadedToolNames)
+                        ? parsed.loadedToolNames.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                        : undefined,
                     compactBoundaries: Array.isArray(parsed.compactBoundaries) ? parsed.compactBoundaries : undefined,
                     partialCompactionView: typeof parsed.partialCompactionView === "object" ? parsed.partialCompactionView : undefined,
                     createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : undefined,
@@ -935,6 +948,7 @@ export class ConversationStore {
                     activeCounters?: ActiveCounterSnapshot[];
                     taskTokenRecords?: TaskTokenRecord[];
                     toolDigests?: ToolDigestRecord[];
+                    loadedToolNames?: string[];
                     compactBoundaries?: CompactBoundaryRecord[];
                     partialCompactionView?: PartialCompactionViewRecord;
                     createdAt?: number;
@@ -946,6 +960,7 @@ export class ConversationStore {
                     || Array.isArray(parsed.activeCounters)
                     || Array.isArray(parsed.taskTokenRecords)
                     || Array.isArray(parsed.toolDigests)
+                    || Array.isArray(parsed.loadedToolNames)
                     || Array.isArray(parsed.compactBoundaries)
                     || typeof parsed.partialCompactionView === "object"
                     || typeof parsed.createdAt === "number"
@@ -958,6 +973,9 @@ export class ConversationStore {
                     activeCounters: Array.isArray(parsed.activeCounters) ? parsed.activeCounters : undefined,
                     taskTokenRecords: Array.isArray(parsed.taskTokenRecords) ? parsed.taskTokenRecords : undefined,
                     toolDigests: Array.isArray(parsed.toolDigests) ? parsed.toolDigests : undefined,
+                    loadedToolNames: Array.isArray(parsed.loadedToolNames)
+                        ? parsed.loadedToolNames.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+                        : undefined,
                     compactBoundaries: Array.isArray(parsed.compactBoundaries) ? parsed.compactBoundaries : undefined,
                     partialCompactionView: typeof parsed.partialCompactionView === "object" ? parsed.partialCompactionView : undefined,
                     createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : undefined,
@@ -985,12 +1003,22 @@ export class ConversationStore {
             activeCounters: conv.activeCounters,
             taskTokenRecords: conv.taskTokenRecords,
             toolDigests: conv.toolDigests,
+            loadedToolNames: conv.loadedToolNames,
             compactBoundaries: conv.compactBoundaries,
             partialCompactionView: conv.partialCompactionView,
             createdAt: conv.createdAt,
             updatedAt: conv.updatedAt,
         };
-        if (!payload.agentId && !payload.channel && !payload.activeCounters && !payload.taskTokenRecords && !payload.toolDigests && !payload.compactBoundaries && !payload.partialCompactionView) {
+        if (
+            !payload.agentId
+            && !payload.channel
+            && !payload.activeCounters
+            && !payload.taskTokenRecords
+            && !payload.toolDigests
+            && !payload.loadedToolNames?.length
+            && !payload.compactBoundaries
+            && !payload.partialCompactionView
+        ) {
             if (fs.existsSync(filePath)) {
                 try {
                     fs.unlinkSync(filePath);
@@ -2624,6 +2652,38 @@ export class ConversationStore {
         const conv = this.get(conversationId);
         if (!conv?.taskTokenRecords?.length) return [];
         return conv.taskTokenRecords.slice(0, Math.max(1, limit));
+    }
+
+    getLoadedToolNames(conversationId: string): string[] {
+        const conv = this.get(conversationId);
+        return conv?.loadedToolNames ? [...conv.loadedToolNames] : [];
+    }
+
+    setLoadedToolNames(conversationId: string, toolNames: string[]): void {
+        const normalized = [...new Set(
+            toolNames
+                .map((item) => typeof item === "string" ? item.trim() : "")
+                .filter(Boolean),
+        )].sort((left, right) => left.localeCompare(right));
+
+        let conv = this.get(conversationId);
+        const now = Date.now();
+        if (!conv) {
+            if (normalized.length === 0) {
+                return;
+            }
+            conv = {
+                id: conversationId,
+                messages: [],
+                createdAt: now,
+                updatedAt: now,
+            };
+            this.conversations.set(conversationId, conv);
+        }
+
+        conv.loadedToolNames = normalized.length > 0 ? normalized : undefined;
+        conv.updatedAt = now;
+        this.persistConversationMeta(conversationId, conv);
     }
 
     /**

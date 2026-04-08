@@ -1,123 +1,326 @@
-﻿# 渠道对接指南
+# Star Sanctuary 渠道对接说明
 
-本指南包含了如何将 Star Sanctuary 接入各个外部平台（如飞书、QQ机器人等）的详细步骤。
-
----
-
-## 模块一：飞书 (Feishu) 机器人配置指南
-
-为了让 Star Sanctuary 能通过飞书与你在手机上对话，你需要创建一个飞书应用并获取相关凭证。
-不用担心，**个人用户**也可以免费创建（无需企业认证，或者可以自己创建一个只有一个人的企业）。
-
-### 1. 创建应用
-1.  登录 [飞书开放平台](https://open.feishu.cn/)（用你的飞书账号扫码即可）。
-2.  点击右上角的 **“开发者后台”**。
-3.  点击 **“创建企业自建应用”**。
-4.  填写应用信息：
-    -   **名称**：`Star Sanctuary` (或者你喜欢的名字)
-    -   **描述**：`My AI Assistant`
-    -   **图标**：随便上传一张图片。
-    -   点击 **“创建”**。
-
-### 2. 获取凭证 (Credentials)
-创建成功后，进入应用详情页的 **“凭证与基础信息”** 页面：
--   找到 **App ID** 和 **App Secret**。
--   👀 **请记下这两个值**，稍后我们配置 Star Sanctuary 时需要用到。
-
-### 3. 开启机器人能力
-1.  在左侧菜单点击 **“应用功能” -> “机器人”**。
-2.  点击 **“启用机器人”** 开关。
-
-### 4. 配置权限 (Permissions)
-为了能收发消息，我们需要申请权限。
-在左侧菜单点击 **“开发配置” -> “权限管理”**，搜索并勾选以下权限（点击“批量开通”或逐个开通）：
--   **核心权限**：
-    -   `im:message` (获取用户发给机器人的单聊消息)
-    -   `im:message:send_as_bot` (以应用身份发送消息)
-    -   `im:chat` (获取群组信息 - 可选，为了将来支持群聊)
-    -   `im:resource` (获取与上传图片或文件资源)
-
-> 💡 **注意**：开通权限后，需要发布版本才能生效。但我们最后统一发布。
-
-### 5. 配置长连接 (WebSocket) - **关键步骤**
-这是我们无需公网 IP 就能使用的黑科技。
-1.  在左侧菜单点击 **“开发配置” -> “事件订阅”**。
-2.  配置方式选择：**“长连接模式”** (WebSocket)。
-    -   *(如果没看到这个选项，说明你的企业可能还在旧版，通常新创建的都支持。或者你找一下是否有"配置方式"的切换按钮)*
-3.  **添加事件**：
-    -   点击 **“添加事件”** 按钮。
-    -   搜索并选择：`接收消息 (v2.0)` 或 `im.message.receive_v1`。
-    -   点击确认。
-
-### 6. 发布应用
-所有配置改动（包括权限申请）都需要发布版本才会生效。
-1.  在左侧菜单点击 **“应用发布” -> “版本管理与发布”**。
-2.  点击 **“创建版本”**。
-3.  **版本号**：填 `1.0.0`。
-4.  **注**：随便填个 `Init`。
-5.  **可用范围**：
-    -   点击 **“编辑”**。
-    -   选择 **“所有员工”** 或者 **“按人员选择”**（把你自己的名字选上）。
-    -   点击保存。
-6.  点击 **“申请发布”**（如果你是管理员，通常会自动通过；如果不是，需要去飞书管理后台审核通过）。
-
-### 7. 在 `.env.local` 中添加：
-```env
-# 飞书相关配置
-BELLDANDY_FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
-BELLDANDY_FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-### 8. 常见问题 (飞书)
-**Q: 发送消息后 Star Sanctuary 不回复？**
-A: 检查 Gateway 终端是否有错误日志。确保：
--   应用已发布且审核通过
--   权限已正确开通
--   已添加 `im.message.receive_v1` 事件订阅
+本文基于当前仓库实际代码更新，覆盖 Star Sanctuary 现阶段已经接好的渠道接入方式、共用安全机制、社区房间连接与 `community HTTP API` 的最新行为。
 
 ---
 
-## 模块二：QQ 机器人接入指南
+## 1. 当前已接入的渠道面
 
-Star Sanctuary 支持通过 QQ 官方 Bot API 作为新渠道接入，使得 Agent 可以直接在 QQ 频道、群聊或私信中与你互动。
+当前代码中，已明确接入并在 Gateway 里有启动装配的渠道包括：
 
-### 1. 申请 QQ 机器人
-1. 前往 [QQ 机器人管理后台](https://bot.q.qq.com/) 获取你的测试/正式机器人的凭据。
-2. 创建好机器人后，在"开发配置"中找到你的 **AppID** 和 **AppSecret**（机器人密钥）。
+- 飞书 `FeishuChannel`
+- QQ `QqChannel`
+- Discord `DiscordChannel`
+- 社区房间 `CommunityChannel`
+- 社区 HTTP 入口 `/api/message`
 
-### 2. 配置 Star Sanctuary
-打开项目根目录下的 `.env`（或者 `.env.local`）文件，找到 `# ------ QQ 渠道（可选）------`。
-填入你的配置信息：
-```env
-BELLDANDY_QQ_APP_ID=你的AppID
-BELLDANDY_QQ_APP_SECRET=你的AppSecret
-# 沙箱模式下为 true，上线后改为 false
-BELLDANDY_QQ_SANDBOX=true
+对应核心接线位置：
+
+- `packages/belldandy-core/src/bin/gateway.ts`
+- `packages/belldandy-core/src/server.ts`
+- `packages/belldandy-channels/src/feishu.ts`
+- `packages/belldandy-channels/src/qq.ts`
+- `packages/belldandy-channels/src/discord.ts`
+- `packages/belldandy-channels/src/community.ts`
+- `packages/belldandy-core/src/query-runtime-http.ts`
+
+---
+
+## 2. 所有渠道共用的运行时约定
+
+### 2.1 状态目录
+
+默认状态目录是 `~/.star_sanctuary`。
+
+如果设置了以下环境变量，会改用显式目录：
+
+- `BELLDANDY_STATE_DIR`
+- Windows 下也支持 `BELLDANDY_STATE_DIR_WINDOWS`
+- WSL 下也支持 `BELLDANDY_STATE_DIR_WSL`
+
+渠道相关持久化文件目前主要落在状态目录下：
+
+- `community.json`
+- `channels-routing.json`
+- `channel-security.json`
+- `channel-security-approvals.json`
+- `discord-state.json`
+- `feishu-state.json`
+- `sessions/`
+
+### 2.2 启动方式
+
+开发态常用：
+
+```bash
+corepack pnpm bdd start
 ```
 
-**重要说明**：QQ 官方已禁用固定 Token 鉴权，现在使用 **AccessToken** 方式：
-- Star Sanctuary 会自动用 `AppID` + `AppSecret` 换取 AccessToken
-- AccessToken 有效期 2 小时，系统会自动刷新
-- 无需手动管理 Token
+或：
 
-### 3. 启动与验证
-1. 如果配置正确，当你启动 `pnpm dev:gateway` 或者重启后，终端会自动加载 QQ 模块，你将能看到类似如下的日志：
-   > `[qq] AccessToken obtained, expires in 6900s`
-   > `[qq] WebSocket Channel started. (Sandbox: true)`
-2. 现在，你可以前往沙箱环境的 QQ 频道或私信，圈出 (`@`) 你的机器人并与其对话，Star Sanctuary 将会处理并回复你的消息。
+```bash
+corepack pnpm dev:gateway
+```
 
+生产构建后也可以用：
 
-## 模块三 社区房间（多 Agent 协作）
+```bash
+corepack pnpm start
+```
 
-Star Sanctuary 支持连接到官网社区服务（当前线上地址：`https://recwcppxiamd.sealosgzg.site`），让多个 Agent 在同一个聊天室中协作交流。
+### 2.3 渠道路由与安全默认值
 
-### 1. 配置社区连接
+当前渠道运行时分两层：
 
-在 `~/.star_sanctuary/` 目录下创建 `community.json` 文件：
+1. 可选手工路由规则：`channels-routing.json`
+2. 默认安全 fallback：`channel-security.json`
+
+相关行为：
+
+- `BELLDANDY_CHANNEL_ROUTER_ENABLED=true` 时，会启用手工路由规则
+- 即使未启用手工规则，`channel-security.json` 仍会作为 fallback 生效
+- 当前安全 fallback 已覆盖：
+  - `discord`
+  - `feishu`
+  - `qq`
+  - `community`
+
+### 2.4 `channel-security.json` 结构
+
+配置文件路径：
+
+```text
+<stateDir>/channel-security.json
+```
+
+当前支持的最小结构：
 
 ```json
 {
-  "endpoint": "https://recwcppxiamd.sealosgzg.site",
+  "version": 1,
+  "channels": {
+    "discord": {
+      "dmPolicy": "allowlist",
+      "allowFrom": ["user_1"],
+      "mentionRequired": {
+        "channel": true
+      }
+    },
+    "community": {
+      "accounts": {
+        "assistant": {
+          "dmPolicy": "allowlist",
+          "allowFrom": ["u_123"],
+          "mentionRequired": {
+            "room": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+支持字段：
+
+- `dmPolicy`: `open` 或 `allowlist`
+- `allowFrom`: DM 白名单 sender 列表
+- `mentionRequired`: 对 `group / channel / room` 的 mention gate
+- `accounts.<accountId>`: 对单个渠道账号做覆盖
+
+说明：
+
+- `channels.<channel>` 是该渠道默认值
+- `channels.<channel>.accounts.<accountId>` 是账号级覆盖层
+- 当前 `community` 已实际消费 `accountId`
+- `community` 房间模式主要消费 `mentionRequired.room`
+
+### 2.5 待审批 sender 与 WebChat 入口
+
+当前 DM allowlist 阻断后，会落到：
+
+```text
+<stateDir>/channel-security-approvals.json
+```
+
+当前已接上待审批链的入口：
+
+- 飞书 DM
+- QQ DM
+- Discord DM
+- community HTTP DM
+- community 渠道 runtime 中若走到 DM allowlist 阻断，也会走同一回调
+
+当前审批方式：
+
+- WebChat 设置页可以直接读取和保存 `channel-security.json`
+- WebChat 设置页可以查看 pending sender
+- 支持 `批准 / 拒绝`
+- 批准后会把 sender 写回对应渠道或账号的 `allowFrom`
+- 有新的 pending request 时，Gateway 会广播 `channel.security.pending`
+
+### 2.6 `system.doctor` 渠道检查
+
+当前 `system.doctor` 已加入 `Channel Security (...)` 检查，主要会提示：
+
+- 渠道已启用但未配置 `channel-security.json`
+- `dmPolicy=allowlist` 但 `allowFrom` 为空
+- 群聊 / 房间场景未开启必要的 mention gate
+- `community` 会按 `community.json` 中的 agent name 作为 `accountId` 做账号级检查
+
+---
+
+## 3. 飞书接入
+
+### 3.1 需要的环境变量
+
+```env
+BELLDANDY_FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
+BELLDANDY_FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# 可选：把飞书渠道固定路由到某个 agent profile
+BELLDANDY_FEISHU_AGENT_ID=default
+```
+
+### 3.2 平台侧配置
+
+飞书开放平台侧至少要完成：
+
+1. 创建企业自建应用
+2. 启用机器人能力
+3. 开通消息相关权限
+4. 事件订阅改为长连接模式
+5. 订阅 `im.message.receive_v1`
+6. 发布应用版本
+
+### 3.3 当前代码行为
+
+飞书消息进入后会：
+
+- 推断当前是 `dm` 或群聊
+- 解析 mentions
+- 进入 channel router / security fallback
+- 若 DM 命中 `allowlist` 阻断，则写入 pending approval
+- 使用 `chatId` 作为 conversation 维度
+- `feishu-state.json` 会记录最近聊天目标
+
+### 3.4 常见问题
+
+**发送消息后不回复**
+
+优先检查：
+
+- 应用是否已发布
+- `im.message.receive_v1` 是否已订阅
+- App ID / App Secret 是否正确
+- Gateway 日志里是否出现 `Route blocked message ... (channel_security:...)`
+
+---
+
+## 4. QQ 接入
+
+### 4.1 需要的环境变量
+
+```env
+BELLDANDY_QQ_APP_ID=你的AppID
+BELLDANDY_QQ_APP_SECRET=你的AppSecret
+BELLDANDY_QQ_SANDBOX=true
+
+# 可选：把 QQ 渠道固定路由到某个 agent profile
+BELLDANDY_QQ_AGENT_ID=default
+```
+
+说明：
+
+- `BELLDANDY_QQ_SANDBOX` 默认不是 `false` 时会按沙箱模式处理
+- 当前代码使用 QQ 官方 AccessToken 模式，系统自动获取和刷新
+
+### 4.2 当前代码行为
+
+QQ 消息进入后会：
+
+- 根据事件类型推断 `dm / group / channel`
+- 非 DM 场景使用是否 `@机器人` 来决定 `mentioned`
+- 进入 channel router / security fallback
+- 若 DM 命中 `allowlist` 阻断，则写入 pending approval
+- 当前 conversationId 采用 `qq_<chatId>`
+
+### 4.3 启动验证
+
+启动后可观察日志：
+
+- AccessToken 获取成功
+- WebSocket 已启动
+- 收到消息后的 route decision 或 blocked 日志
+
+---
+
+## 5. Discord 接入
+
+### 5.1 需要的环境变量
+
+```env
+BELLDANDY_DISCORD_ENABLED=true
+BELLDANDY_DISCORD_BOT_TOKEN=你的BotToken
+
+# 可选：主动消息默认目标频道
+BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID=
+```
+
+### 5.2 平台侧配置
+
+Discord Developer Portal 侧至少要完成：
+
+1. 创建 Application
+2. 创建 Bot 并保存 Token
+3. 开启 `MESSAGE CONTENT INTENT`
+4. 将 Bot 邀请进目标服务器并授予发言权限
+
+### 5.3 当前代码行为
+
+Discord 消息进入后会：
+
+- 自动区分 DM 与 guild channel
+- 解析 mentions
+- 进入 channel router / security fallback
+- 若 DM 命中 `allowlist` 阻断，则写入 pending approval
+- 回复超出平台限制时，会按 2000 字符分段发送
+- 状态持久化到 `discord-state.json`
+
+### 5.4 常见问题
+
+**Bot 在线但不回复**
+
+优先检查：
+
+- `BELLDANDY_DISCORD_ENABLED=true`
+- `BELLDANDY_DISCORD_BOT_TOKEN` 是否有效
+- `MESSAGE CONTENT INTENT` 是否开启
+- 是否被 `channel-security.json` 阻断
+
+---
+
+## 6. 社区房间接入 `community.json`
+
+### 6.1 配置文件位置
+
+社区房间配置路径是：
+
+```text
+<stateDir>/community.json
+```
+
+默认状态目录下通常就是：
+
+```text
+~/.star_sanctuary/community.json
+```
+
+### 6.2 最小配置示例
+
+```json
+{
+  "endpoint": "https://office.goddess.ai",
   "agents": [
     {
       "name": "assistant",
@@ -136,201 +339,265 @@ Star Sanctuary 支持连接到官网社区服务（当前线上地址：`https:/
 }
 ```
 
-**字段说明**：
+字段说明：
 
 | 字段 | 必填 | 说明 |
-|------|------|------|
-| `endpoint` | 是 | 社区服务地址（推荐填写 `https://recwcppxiamd.sealosgzg.site`） |
-| `agents` | 是 | Agent 配置列表，支持多个 Agent 同时连接不同房间 |
-| `agents[].name` | 是 | Agent 名称（唯一标识） |
-| `agents[].apiKey` | 是 | 社区服务的 API Key |
-| `agents[].room` | 否 | 要加入的房间配置 |
-| `agents[].room.name` | 是 | 房间名称 |
-| `agents[].room.password` | 否 | 房间密码（如果房间需要） |
-| `reconnect.enabled` | 否 | 是否启用自动重连（默认 true） |
-| `reconnect.maxRetries` | 否 | 最大重连次数（默认 10） |
-| `reconnect.backoffMs` | 否 | 重连间隔毫秒数（默认 5000） |
+|---|---|---|
+| `endpoint` | 是 | 社区服务地址，当前默认值来自代码：`https://office.goddess.ai` |
+| `agents` | 是 | 社区账号列表，可同时配置多个 |
+| `agents[].name` | 是 | 社区账号名，同时也是该账号在安全策略里的 `accountId` |
+| `agents[].apiKey` | 是 | 社区服务 API Key |
+| `agents[].room` | 否 | 启动时要自动加入的房间 |
+| `reconnect` | 否 | 自动重连策略 |
 
-### 2 启动社区连接
+### 6.3 当前代码行为
 
-配置完成后，重启 Gateway：
+`CommunityChannel` 当前已经接入：
 
-```bash
-corepack pnpm bdd start
-```
+- channel router
+- channel security fallback
+- account-level policy
+- pending approval callback
 
-启动日志会显示：
+关键点：
 
-```
-[community] Starting community channel...
-[community] Started with 1 agent(s)
-[community] Agent 'assistant' connected to room room-123
-```
+- `agents[].name` 会被当作 `accountId`
+- 房间消息会以 `room` chatKind 进入安全策略
+- 若某个账号配置了 `mentionRequired.room=true`，房间里必须显式提及该账号才会放行
+- 当前社区房间 conversationId 采用 `community:<roomId>`
+- `join_room` / `leave_room` 工具仍然可用，且会修改 `community.json`
 
-### 3 多 Agent 同时连接
+### 6.4 多 Agent 行为
 
-你可以配置多个 Agent 同时连接到不同的房间：
+可同时配置多个 community agent：
+
+- 每个 agent 独立维护连接状态
+- 每个 agent 有自己的 `accountId`
+- 安全策略可以按 `channels.community.accounts.<agentName>` 分别控制
+
+示例：
 
 ```json
 {
-  "endpoint": "https://recwcppxiamd.sealosgzg.site",
-  "agents": [
-    {
-      "name": "coder",
-      "apiKey": "key-1",
-      "room": {
-        "name": "dev-room"
-      }
-    },
-    {
-      "name": "researcher",
-      "apiKey": "key-2",
-      "room": {
-        "name": "research-room"
+  "version": 1,
+  "channels": {
+    "community": {
+      "accounts": {
+        "coder": {
+          "mentionRequired": {
+            "room": true
+          }
+        },
+        "researcher": {
+          "dmPolicy": "allowlist",
+          "allowFrom": ["u_42"]
+        }
       }
     }
-  ]
+  }
 }
 ```
 
-每个 Agent 会独立维护自己的 WebSocket 连接和会话状态，互不干扰。
+### 6.5 注意事项
 
-### 4 动态加入房间
-
-Agent 可以通过 `join_room` 工具在运行时动态加入房间，无需重启 Gateway。在对话中告诉 Agent：
-
-| 你说的话 | Agent 做的事 |
-|----------|-------------|
-| "加入 dev-room 房间" | 调用 `join_room` 工具，使用房间名称加入 |
-| "用密码 123456 加入 private-room" | 调用 `join_room` 工具，带密码加入 |
-
-**工具参数**：
-
-```typescript
-join_room({
-  agent_name: "assistant",    // 要使用的 Agent 名称
-  room_name: "dev-room",      // 房间名称（不是 UUID）
-  password: "optional"        // 可选：房间密码
-})
-```
-
-**加入房间的效果**：
-
-1. **查询房间 ID**：通过房间名称自动查询对应的 UUID
-2. **建立连接**：调用 HTTP API 加入房间，建立 WebSocket 连接
-3. **更新配置**：将房间信息写入 `community.json`
-4. **持久化**：保存到磁盘，重启后自动重连
-
-**注意事项**：
-
-- 使用房间名称（如 `dev-room`）而非 UUID
-- Agent 同时只能连接一个房间，加入新房间前需先离开当前房间
-- 配置会自动持久化，重启后保持连接
-
-### 5 离开房间
-
-Agent 可以通过 `leave_room` 工具主动离开当前房间。在对话中告诉 Agent：
-
-| 你说的话 | Agent 做的事 |
-|----------|-------------|
-| "离开这个房间" | 调用 `leave_room` 工具，断开连接并清空房间配置 |
-| "离开房间，告诉大家我要走了" | 调用 `leave_room({ farewell_message: "..." })`，发送告别消息后离开 |
-
-**离开房间的效果**：
-
-1. **发送告别消息**（可选）：在离开前向房间发送最后一条消息
-2. **断开 WebSocket 连接**：关闭与社区服务的连接
-3. **清空房间配置**：将 `community.json` 中该 Agent 的 `room` 字段设为空
-4. **持久化配置**：保存到磁盘，重启后不会自动重连
-5. **阻止自动重连**：即使网络波动也不会重新连接到该房间
-
-**重新加入房间**：
-
-离开后如需重新加入，可以：
-- 使用 `join_room` 工具动态加入（推荐）
-- 或手动编辑 `~/.star_sanctuary/community.json`，重新配置 `room` 字段，然后重启 Gateway
-
-### 6 工作原理
-
-- **连接管理**：每个 Agent 使用独立的 WebSocket 连接，连接状态以 `agentName` 为 key 存储
-- **消息去重**：使用消息 ID 缓存（最近 1000 条）防止重复处理
-- **自动重连**：网络断开时自动重连（可配置），使用指数退避策略
-- **会话隔离**：每个房间的对话历史独立存储在 `~/.star_sanctuary/sessions/` 中
-- **房间名称解析**：`join_room` 工具自动将房间名称解析为 UUID，内部使用 `GET /rooms/by-name/:name` 接口
-
-### 7 注意事项
-
-- **API Key 安全**：`community.json` 包含敏感信息，请勿提交到版本控制系统
-- **房间权限**：确保 API Key 有权限访问指定的房间
-- **网络要求**：需要稳定的网络连接到社区服务端点
-- **工具依赖**：`leave_room` 工具需要启用工具系统（`BELLDANDY_TOOLS_ENABLED=true`）
+- `community.json` 含敏感信息，不要提交到版本控制
+- `agents[].name` 已不只是显示名，它现在会进入安全策略匹配
+- 如果房间里发了消息但 Agent 没响应，要检查是否被 `mentionRequired.room` 阻断
 
 ---
 
-## 模块四：Discord 机器人接入指南
+## 7. 社区 HTTP API `/api/message`
 
-> **状态**：已完成对接并验证可用。实现文件：`packages/belldandy-channels/src/discord.ts`
+这是独立于社区房间 WebSocket 之外的 HTTP 入口，由 `packages/belldandy-core/src/server.ts` 和 `packages/belldandy-core/src/query-runtime-http.ts` 提供。
 
-### 1. 创建 Discord 应用与 Bot
+### 7.1 启用条件
 
-1. 访问 [Discord Developer Portal](https://discord.com/developers/applications)，登录账号。
-2. 点击 **"New Application"** → 输入名称 → **"Create"**。
-3. 进入 **"Bot"** 页面：
-   - 点击 **"Reset Token"** 获取 **Bot Token**（只显示一次，立即保存）。
-   - 开启 **Privileged Gateway Intents**：
-     - `PRESENCE INTENT`
-     - `SERVER MEMBERS INTENT`
-     - `MESSAGE CONTENT INTENT`（**必须**，否则无法读取消息内容）
-
-### 2. 邀请 Bot 到服务器
-
-进入 **"OAuth2" → "URL Generator"**，Scopes 勾选 `bot`，Bot Permissions 勾选：
-`Send Messages` / `Read Message History` / `Attach Files` / `Embed Links` / `View Channels`
-
-复制生成的 URL，在浏览器打开并授权到目标服务器。
-
-### 3. 配置环境变量
-
-在 `.env.local` 中填写：
+至少需要：
 
 ```env
-BELLDANDY_DISCORD_ENABLED=true
-BELLDANDY_DISCORD_BOT_TOKEN=你的BotToken
-# 可选：主动消息默认目标频道（右键频道 → 复制频道 ID，需开启开发者模式）
-BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID=
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-gateway-token
+
+BELLDANDY_COMMUNITY_API_ENABLED=true
+BELLDANDY_COMMUNITY_API_TOKEN=your-community-api-token
 ```
 
-### 4. 启动
+说明：
 
-```bash
-corepack pnpm start
+- `BELLDANDY_COMMUNITY_API_ENABLED=true` 不能和 `BELLDANDY_AUTH_MODE=none` 一起使用
+- 若未单独设置 `BELLDANDY_COMMUNITY_API_TOKEN`，运行时会回退到 `BELLDANDY_AUTH_TOKEN`
+- 请求需要 `Authorization: Bearer <token>`
+
+### 7.2 最小请求示例
+
+```http
+POST /api/message
+Authorization: Bearer your-community-api-token
+Content-Type: application/json
 ```
 
-日志出现 `[Discord] Logged in as BotName#xxxx` 即表示连接成功。
+```json
+{
+  "text": "@assistant hello",
+  "conversationId": "conv-001",
+  "accountId": "assistant",
+  "senderInfo": {
+    "id": "u_123",
+    "name": "Alice",
+    "type": "user"
+  },
+  "roomContext": {
+    "environment": "community",
+    "roomId": "room-alpha",
+    "members": []
+  }
+}
+```
 
-### 5. 功能支持
+### 7.3 当前运行时行为
 
-| 功能 | 状态 | 说明 |
-|------|------|------|
-| 文本消息收发 | ✅ | 完整支持 |
-| 图片/视频附件 | ✅ | 多模态传递给 Agent |
-| 音频附件 | ⚠️ | 暂作为文本提示处理 |
-| 长消息自动分段 | ✅ | 按 2000 字符限制自动切割 |
-| 消息去重 | ✅ | 基于 `message.id` |
-| 主动消息推送 | ✅ | 支持指定频道或使用最后活跃频道 |
-| 状态持久化 | ✅ | `~/.star_sanctuary/discord-state.json` |
-| Slash Commands | 🔄 | 未来可扩展 |
-| 语音频道 | 🔄 | 未来可扩展（需 `@discordjs/voice`） |
+`/api/message` 当前已支持：
 
-### 6. 常见问题
+- 显式 `accountId`
+- 按 `accountId` 解析 `channels.community.accounts.<accountId>`
+- 房间消息消费 `mentionRequired.room`
+- DM 消费 `dmPolicy / allowFrom`
+- DM 命中 allowlist 阻断时写入 `channel-security-approvals.json`
+- 阻断时返回 `403` 和 `CHANNEL_SECURITY_BLOCKED`
 
-**Q: Bot 在线但不回复？**
-A: 检查 `MESSAGE CONTENT INTENT` 是否已开启，未开启时 `message.content` 为空。
+阻断返回示意：
 
-**Q: 报错 `Used disallowed intents`？**
-A: 在 Developer Portal → Bot 页面开启全部 Privileged Intents。
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "CHANNEL_SECURITY_BLOCKED",
+    "message": "Community message blocked by channel security policy (...)"
+  },
+  "payload": {
+    "reason": "channel_security:mention_required_blocked",
+    "accountId": "assistant",
+    "chatKind": "room"
+  }
+}
+```
 
-**Q: 主动消息发送失败？**
-A: 确认 `BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID` 是文字频道 ID，且 Bot 有 `Send Messages` 权限。
+### 7.4 什么时候该传 `accountId`
+
+建议：
+
+- 只要是 `community` HTTP 入口，就显式传 `accountId`
+- 多账号场景必须传
+- 单账号场景也建议传，避免后续扩展时行为漂移
 
 ---
+
+## 8. 排障建议
+
+### 8.1 渠道已启动但不回复
+
+优先检查：
+
+1. 对应渠道凭据是否完整
+2. Gateway 日志里是否出现 `Route blocked message`
+3. `channel-security.json` 是否开启了更严格的 `allowlist` 或 `mentionRequired`
+4. WebChat 设置页里是否出现待审批 sender
+5. `system.doctor` 是否对 `Channel Security (...)` 报警
+
+### 8.2 community 房间里发消息无响应
+
+优先检查：
+
+1. `community.json` 的 `agents[].name` 是否与你提及的账号一致
+2. `channel-security.json` 是否配置了：
+   - `channels.community.accounts.<accountId>.mentionRequired.room=true`
+3. 文本里是否真的提到了该账号，例如 `@assistant`
+
+### 8.3 `/api/message` 返回 401 或 404
+
+检查：
+
+- `BELLDANDY_COMMUNITY_API_ENABLED=true` 是否已开启
+- `Authorization: Bearer ...` 是否正确
+- `BELLDANDY_COMMUNITY_API_TOKEN` 是否配置正确
+
+### 8.4 `/api/message` 返回 403
+
+这通常不是系统故障，而是安全策略生效。优先看返回体中的：
+
+- `payload.reason`
+- `payload.accountId`
+- `payload.chatKind`
+
+常见原因：
+
+- `channel_security:mention_required_blocked`
+- `channel_security:dm_allowlist_blocked`
+
+---
+
+## 9. 当前边界
+
+当前这套渠道对接已经具备：
+
+- 多渠道统一接线
+- 手工路由 + 安全 fallback
+- `community` 账号级安全策略
+- WebChat 最小审批闭环
+- `system.doctor` 风险提示
+
+但仍有明确边界：
+
+- 还不是完整的渠道 onboarding wizard
+- 账号级管理主要还是 JSON + 设置页审批，不是独立 account 管理 UI
+- room 级场景当前主要做 mention gate，不做 room 级审批流
+- 各渠道的渲染分段能力仍不完全统一，Discord 支持最完整
+
+---
+
+## 10. 推荐最小上线组合
+
+如果要稳妥上线一个新渠道，建议最少同时准备：
+
+1. 渠道凭据
+2. `channel-security.json`
+3. WebChat 设置页可访问
+4. `system.doctor` 自检通过
+5. 至少一条真实消息验证
+
+一个建议起步模板：
+
+```json
+{
+  "version": 1,
+  "channels": {
+    "discord": {
+      "dmPolicy": "allowlist",
+      "allowFrom": []
+    },
+    "feishu": {
+      "dmPolicy": "allowlist",
+      "allowFrom": []
+    },
+    "qq": {
+      "dmPolicy": "allowlist",
+      "allowFrom": []
+    },
+    "community": {
+      "accounts": {
+        "assistant": {
+          "mentionRequired": {
+            "room": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+这样做的目的很直接：
+
+- DM 默认先收紧
+- community 房间默认要求显式 mention
+- 后续再通过审批链把可信 sender 放开

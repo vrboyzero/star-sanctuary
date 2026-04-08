@@ -289,7 +289,7 @@ export function createGoalsCapabilityPanelFeature({
       </div>
 
       ${focusPlan ? `
-        <div class="goal-capability-focus">
+        <div class="goal-capability-focus" data-goal-continuation-focus="node" data-goal-node-id="${escapeHtml(focusPlan.nodeId || "")}">
           <div class="goal-tracking-item-head">
             <div>
               <div class="goal-summary-title">当前重点计划</div>
@@ -474,7 +474,7 @@ export function createGoalsCapabilityPanelFeature({
           ${recentPlans.map((plan) => {
             const nodeTitle = plan.nodeId ? (nodeMap[plan.nodeId] || plan.nodeId) : plan.id;
             return `
-              <div class="goal-tracking-item">
+              <div class="goal-tracking-item" data-goal-continuation-focus="node" data-goal-node-id="${escapeHtml(plan.nodeId || "")}">
                 <div class="goal-tracking-item-head">
                   <span class="goal-tracking-item-title">${escapeHtml(nodeTitle)}</span>
                   <div class="goal-checkpoint-meta">

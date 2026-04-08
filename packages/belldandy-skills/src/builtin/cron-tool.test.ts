@@ -21,8 +21,11 @@ describe("createCronTool", () => {
       id: "job_approval_scan",
       name: input.name,
       enabled: true,
+      sessionTarget: input.sessionTarget ?? "isolated",
       schedule: input.schedule,
       payload: input.payload,
+      delivery: input.delivery ?? { mode: "user" },
+      failureDestination: input.failureDestination,
       state: {},
     }));
     const tool = createCronTool({
@@ -64,6 +67,7 @@ describe("createCronTool", () => {
           id: "job_approval_scan",
           name: "审批巡检",
           enabled: true,
+          sessionTarget: "isolated",
           schedule: {
             kind: "every",
             everyMs: 300_000,
@@ -73,6 +77,7 @@ describe("createCronTool", () => {
             allGoals: true,
             autoEscalate: true,
           },
+          delivery: { mode: "user" as const },
           state: {
             nextRunAtMs: Date.parse("2026-03-21T09:00:00.000Z"),
             lastRunAtMs: Date.parse("2026-03-21T08:55:00.000Z"),
@@ -102,8 +107,11 @@ describe("createCronTool", () => {
       id: "job_daily_at",
       name: input.name,
       enabled: true,
+      sessionTarget: input.sessionTarget ?? "main",
       schedule: input.schedule,
       payload: input.payload,
+      delivery: input.delivery ?? { mode: "user" },
+      failureDestination: input.failureDestination,
       state: {},
     }));
     const tool = createCronTool({
@@ -166,6 +174,7 @@ describe("createCronTool", () => {
           id: "job_weekly_at",
           name: "周历巡检",
           enabled: true,
+          sessionTarget: "main",
           schedule: {
             kind: "weeklyAt" as const,
             weekdays: [1, 3, 5],
@@ -176,6 +185,7 @@ describe("createCronTool", () => {
             kind: "systemEvent" as const,
             text: "执行周历巡检",
           },
+          delivery: { mode: "user" as const },
           state: {
             nextRunAtMs: Date.parse("2026-04-01T02:30:00.000Z"),
             lastRunAtMs: Date.parse("2026-03-30T02:30:00.000Z"),
@@ -197,5 +207,50 @@ describe("createCronTool", () => {
 
     expect(result.success).toBe(true);
     expect(result.output).toContain("每周 Mon/Wed/Fri 10:30 @ Asia/Shanghai");
+  });
+
+  it("passes sessionTarget, deliveryMode, failureDestinationMode, and staggerMs to store.add", async () => {
+    const add = vi.fn(async (input) => ({
+      id: "job_staggered",
+      name: input.name,
+      enabled: true,
+      sessionTarget: input.sessionTarget ?? "main",
+      schedule: input.schedule,
+      payload: input.payload,
+      delivery: input.delivery ?? { mode: "user" },
+      failureDestination: input.failureDestination,
+      state: {},
+    }));
+    const tool = createCronTool({
+      store: {
+        list: vi.fn(async () => []),
+        add,
+        remove: vi.fn(async () => false),
+      },
+    });
+
+    const result = await tool.execute({
+      action: "add",
+      name: "周期错峰任务",
+      payloadKind: "systemEvent",
+      text: "错峰执行",
+      scheduleKind: "every",
+      everyMs: 300_000,
+      staggerMs: 45_000,
+      sessionTarget: "isolated",
+      deliveryMode: "none",
+      failureDestinationMode: "user",
+    }, context);
+
+    expect(result.success).toBe(true);
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({
+      sessionTarget: "isolated",
+      delivery: { mode: "none" },
+      failureDestination: { mode: "user" },
+      schedule: expect.objectContaining({
+        kind: "every",
+        staggerMs: 45_000,
+      }),
+    }));
   });
 });

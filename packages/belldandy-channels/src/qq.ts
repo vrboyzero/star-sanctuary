@@ -2,6 +2,7 @@ import { WebSocket } from "ws";
 import type { BelldandyAgent, ConversationStore } from "@belldandy/agent";
 import type { ChatKind, ChannelRouter } from "./router/types.js";
 import type { Channel, ChannelConfig } from "./types.js";
+import { chunkMarkdownForOutbound } from "./reply-chunking.js";
 
 export interface QqChannelConfig extends ChannelConfig {
     appId: string;
@@ -58,6 +59,8 @@ export class QqChannel implements Channel {
     private readonly agentId?: string;
     private readonly defaultAgentId?: string;
     private readonly router?: ChannelRouter;
+    private readonly replyChunkingConfig?: QqChannelConfig["replyChunkingConfig"];
+    private readonly onChannelSecurityApprovalRequired?: QqChannelConfig["onChannelSecurityApprovalRequired"];
 
     private _running = false;
     private latestActiveChatId?: string;
@@ -90,6 +93,8 @@ export class QqChannel implements Channel {
         this.agentId = config.agentId;
         this.defaultAgentId = config.defaultAgentId;
         this.router = config.router;
+        this.replyChunkingConfig = config.replyChunkingConfig;
+        this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
     }
 
     private resolveAgent(agentId?: string): BelldandyAgent {
@@ -539,6 +544,19 @@ export class QqChannel implements Channel {
             };
 
         if (!decision.allow) {
+            if (decision.reason === "channel_security:dm_allowlist_blocked" && chatKind === "dm") {
+                const senderId = typeof message.author?.id === "string" ? message.author.id : "";
+                if (senderId) {
+                    void this.onChannelSecurityApprovalRequired?.({
+                        channel: "qq",
+                        senderId,
+                        senderName: typeof message.author?.username === "string" ? message.author.username : undefined,
+                        chatId,
+                        chatKind: "dm",
+                        messagePreview: content,
+                    });
+                }
+            }
             console.log(`[${this.name}] Route blocked message ${msgId} (${decision.reason})`);
             return;
         }
@@ -638,18 +656,26 @@ export class QqChannel implements Channel {
                 };
             }
 
-            const response = await fetch(url, {
-                method: "POST",
-                headers: {
-                    Authorization: `QQBot ${this.accessToken}`,
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(body),
+            const chunks = chunkMarkdownForOutbound(content, "qq", {
+                config: this.replyChunkingConfig,
             });
+            for (const chunk of chunks) {
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        Authorization: `QQBot ${this.accessToken}`,
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        ...body,
+                        content: chunk,
+                    }),
+                });
 
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(`Failed to send message: ${response.status} ${text}`);
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(`Failed to send message: ${response.status} ${text}`);
+                }
             }
 
             console.log(`[${this.name}] Message sent successfully`);

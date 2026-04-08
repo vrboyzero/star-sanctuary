@@ -15,6 +15,10 @@ import type {
   ToolExecutionRuntimeContext,
   ToolRuntimeLaunchSpec,
   ToolCatalogEntry,
+  ToolCatalogFamilyEntry,
+  ToolDiscoveryEntry,
+  ToolDiscoveryEntriesOptions,
+  ToolDiscoveryFamilyDefinition,
 } from "./types.js";
 import { getToolContract, type ToolContract } from "./tool-contract.js";
 import {
@@ -288,6 +292,7 @@ export class ToolExecutor {
     return this.getAvailableTools(agentId, conversationId, runtimeContext).map((tool) => {
       const deferred = this.isDeferredTool(tool.definition.name);
       return {
+        kind: "tool",
         name: tool.definition.name,
         description: tool.definition.description,
         shortDescription: tool.definition.shortDescription?.trim() || tool.definition.description,
@@ -295,8 +300,137 @@ export class ToolExecutor {
         tags: tool.definition.tags ?? [],
         loadingMode: deferred ? "deferred" : "core",
         loaded: deferred ? loaded.has(tool.definition.name) : true,
+        discoveryFamilyId: tool.definition.discoveryFamily?.id,
       };
     });
+  }
+
+  getDiscoveryFamilyEntries(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): ToolCatalogFamilyEntry[] {
+    const loaded = conversationId ? this.getLoadedDeferredToolNames(conversationId) : new Set<string>();
+    const available = this.getAvailableTools(agentId, conversationId, runtimeContext);
+    const families = new Map<string, {
+      definition: ToolDiscoveryFamilyDefinition;
+      toolCount: number;
+      loadedToolCount: number;
+    }>();
+
+    for (const tool of available) {
+      const family = tool.definition.discoveryFamily;
+      if (!family) continue;
+      const entry = families.get(family.id) ?? {
+        definition: family,
+        toolCount: 0,
+        loadedToolCount: 0,
+      };
+      entry.toolCount += 1;
+      if (loaded.has(tool.definition.name)) {
+        entry.loadedToolCount += 1;
+      }
+      families.set(family.id, entry);
+    }
+
+    return Array.from(families.values())
+      .sort((left, right) => {
+        const leftOrder = left.definition.order ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder = right.definition.order ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        return left.definition.title.localeCompare(right.definition.title);
+      })
+      .map((entry) => ({
+        kind: "family",
+        id: entry.definition.id,
+        title: entry.definition.title,
+        summary: entry.definition.summary,
+        keywords: entry.definition.keywords ?? [],
+        toolCount: entry.toolCount,
+        loadedToolCount: entry.loadedToolCount,
+        loadingMode: "deferred",
+        gateMode: entry.definition.gateMode ?? "none",
+      }));
+  }
+
+  getDiscoveryEntries(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+    options?: ToolDiscoveryEntriesOptions,
+  ): ToolDiscoveryEntry[] {
+    const familyEntries = this.getDiscoveryFamilyEntries(agentId, conversationId, runtimeContext);
+    const familyById = new Map(familyEntries.map((entry) => [entry.id, entry]));
+    const expandedFamilyIds = new Set(
+      (options?.expandedFamilyIds ?? [])
+        .map((item) => item.trim())
+        .filter(Boolean),
+    );
+    const toolEntries = this.getCatalogEntries(agentId, conversationId, runtimeContext)
+      .filter((entry) => {
+        if (!entry.discoveryFamilyId) {
+          return true;
+        }
+        const family = familyById.get(entry.discoveryFamilyId);
+        if (!family || family.gateMode !== "hidden-until-expanded") {
+          return true;
+        }
+        return expandedFamilyIds.has(entry.discoveryFamilyId);
+      });
+
+    const results: ToolDiscoveryEntry[] = [];
+    const pushedFamilies = new Set<string>();
+    for (const family of familyEntries) {
+      results.push(family);
+      pushedFamilies.add(family.id);
+      if (family.gateMode !== "hidden-until-expanded" || expandedFamilyIds.has(family.id)) {
+        for (const tool of toolEntries) {
+          if (tool.discoveryFamilyId === family.id) {
+            results.push(tool);
+          }
+        }
+      }
+    }
+
+    for (const tool of toolEntries) {
+      if (!tool.discoveryFamilyId || !pushedFamilies.has(tool.discoveryFamilyId)) {
+        results.push(tool);
+      }
+    }
+
+    return results;
+  }
+
+  buildDeferredToolDiscoveryPromptSummary(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): string | undefined {
+    const familyEntries = this.getDiscoveryFamilyEntries(agentId, conversationId, runtimeContext)
+      .filter((entry) => entry.gateMode === "hidden-until-expanded");
+    if (familyEntries.length === 0) {
+      return undefined;
+    }
+
+    const lines: string[] = [
+      "## Builtin Heavy Tool Discovery",
+      "",
+      "Some builtin tool families are intentionally gated to reduce prompt bloat and accidental misselection.",
+      "Use the following workflow for heavy builtin families:",
+      "1. Use `tool_search` to inspect the family summary first.",
+      "2. Use `tool_search expandFamilies=[...]` to reveal member tools without loading their schemas yet.",
+      "3. Use `tool_search select=[...]` to load only the exact tool schemas needed for the next turn.",
+      "",
+      "Heavy builtin families:",
+    ];
+
+    for (const family of familyEntries) {
+      lines.push(
+        `- ${family.id} (${family.title}) | tools=${family.toolCount} | loaded=${family.loadedToolCount} | ${family.summary}`,
+      );
+    }
+
+    return lines.join("\n");
   }
 
   getLoadedDeferredToolNames(conversationId: string): Set<string> {
@@ -311,6 +445,25 @@ export class ToolExecutor {
     ]);
     this.loadedDeferredToolNames.set(conversationId, merged);
     return new Set(merged);
+  }
+
+  getLoadedDeferredToolList(conversationId: string): string[] {
+    return Array.from(this.getLoadedDeferredToolNames(conversationId)).sort((left, right) => left.localeCompare(right));
+  }
+
+  private async persistLoadedDeferredToolNames(conversationId: string, toolNames: Iterable<string>): Promise<string[]> {
+    const next = new Set<string>();
+    for (const rawName of toolNames) {
+      const name = rawName.trim();
+      if (!name || !this.isDeferredTool(name) || !this.tools.has(name)) {
+        continue;
+      }
+      next.add(name);
+    }
+    const normalized = Array.from(next).sort((left, right) => left.localeCompare(right));
+    this.loadedDeferredToolNames.set(conversationId, new Set(normalized));
+    await this.conversationStore?.setLoadedToolNames?.(conversationId, normalized);
+    return normalized;
   }
 
   async loadDeferredTools(conversationId: string, toolNames: string[]): Promise<string[]> {
@@ -328,14 +481,42 @@ export class ToolExecutor {
       loadedNow.push(name);
     }
 
-    this.loadedDeferredToolNames.set(conversationId, next);
-    await this.conversationStore?.setLoadedToolNames?.(conversationId, Array.from(next).sort());
+    await this.persistLoadedDeferredToolNames(conversationId, next);
     return loadedNow;
   }
 
+  async unloadDeferredTools(conversationId: string, toolNames: string[]): Promise<string[]> {
+    const next = this.getLoadedDeferredToolNames(conversationId);
+    const removed: string[] = [];
+
+    for (const rawName of toolNames) {
+      const name = rawName.trim();
+      if (!name) {
+        continue;
+      }
+      if (next.delete(name)) {
+        removed.push(name);
+      }
+    }
+
+    await this.persistLoadedDeferredToolNames(conversationId, next);
+    return removed.sort((left, right) => left.localeCompare(right));
+  }
+
+  async shrinkLoadedDeferredTools(conversationId: string, toolNamesToKeep: string[]): Promise<string[]> {
+    const allowed = new Set(
+      toolNamesToKeep
+        .map((item) => item.trim())
+        .filter(Boolean),
+    );
+    const current = this.getLoadedDeferredToolNames(conversationId);
+    const retained = Array.from(current).filter((name) => allowed.has(name));
+    await this.persistLoadedDeferredToolNames(conversationId, retained);
+    return retained.sort((left, right) => left.localeCompare(right));
+  }
+
   async clearLoadedDeferredTools(conversationId: string): Promise<void> {
-    this.loadedDeferredToolNames.delete(conversationId);
-    await this.conversationStore?.setLoadedToolNames?.(conversationId, []);
+    await this.persistLoadedDeferredToolNames(conversationId, []);
   }
 
   /** 获取单个工具在当前上下文下的可见性结果 */

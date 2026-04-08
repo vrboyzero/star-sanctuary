@@ -223,6 +223,12 @@ export function createToolSettingsController({
         )
         : t("toolSettings.toolControlNoConfirm", {}, "Confirmation is not required for tool switch changes in the current mode."),
     ];
+    const loadedDeferredTools = Array.isArray(visibilityContext?.loadedDeferredTools)
+      ? visibilityContext.loadedDeferredTools.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    details.push(
+      `${t("toolSettings.loadedDeferredToolsLabel", {}, "Loaded Deferred Tools")}: ${loadedDeferredTools.length > 0 ? loadedDeferredTools.join(", ") : t("toolSettings.loadedDeferredToolsEmpty", {}, "(none)")}`,
+    );
     const scopeLines = buildResidentStateBindingLines(residentStateBinding, t);
     if (toolControl.pendingRequest?.requestId) {
       details.push(

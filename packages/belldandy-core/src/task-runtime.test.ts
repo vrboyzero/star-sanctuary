@@ -7,7 +7,9 @@ import { expect, test } from "vitest";
 import { AgentRegistry, type AgentLaunchSpec } from "@belldandy/agent";
 import {
   createSubTaskAgentCapabilities,
+  createSubTaskResumeController,
   createSubTaskRuntimeEventHandler,
+  createSubTaskUpdateController,
   createSubTaskWorktreeLifecycleHandler,
   reconcileSubTaskWorktreeRuntimes,
   SubTaskRuntimeStore,
@@ -324,6 +326,349 @@ test("subtask runtime store supports stop request and archive filtering", async 
       status: "stopped",
       archiveReason: "Archived after manual review.",
       archivedAt: expect.any(Number),
+    }),
+  ]);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("subtask runtime store persists steering records and ignores stale session completion", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-steering-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-steer",
+      agentId: "coder",
+      instruction: "Implement runtime bridge",
+    },
+  });
+  await store.attachSession(task.id, "sub_steer_1");
+
+  const accepted = await store.requestSteering(task.id, "Focus on the failing integration path.", {
+    sessionId: "sub_steer_1",
+  });
+  expect(accepted?.steering).toMatchObject({
+    status: "accepted",
+    requestedSessionId: "sub_steer_1",
+  });
+
+  await store.attachSession(task.id, "sub_steer_2");
+  await store.markSteeringDelivered(task.id, String(accepted?.steering.id), { sessionId: "sub_steer_2" });
+
+  const stale = await store.completeTask(task.id, {
+    status: "stopped",
+    sessionId: "sub_steer_1",
+    error: "stale stop",
+  });
+  expect(stale?.sessionId).toBe("sub_steer_2");
+  expect(stale?.status).toBe("running");
+
+  const completed = await store.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_steer_2",
+    output: "updated result",
+  });
+  expect(completed).toMatchObject({
+    sessionId: "sub_steer_2",
+    status: "done",
+  });
+  expect(completed?.steering).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      deliveredSessionId: "sub_steer_2",
+    }),
+  ]);
+
+  const reloaded = new SubTaskRuntimeStore(stateDir);
+  await reloaded.load();
+  const persisted = await reloaded.getTask(task.id);
+  expect(persisted?.steering).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      deliveredSessionId: "sub_steer_2",
+    }),
+  ]);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("subtask runtime store persists resume records across reload", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-resume-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-resume",
+      agentId: "coder",
+      instruction: "Continue runtime bridge",
+    },
+  });
+  await store.attachSession(task.id, "sub_resume_1");
+  await store.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_resume_1",
+    output: "first result",
+  });
+
+  const accepted = await store.requestResume(task.id, "Continue with the remaining integration cases.", {
+    sessionId: "sub_resume_1",
+  });
+  expect(accepted?.resume).toMatchObject({
+    status: "accepted",
+    requestedSessionId: "sub_resume_1",
+  });
+
+  await store.attachSession(task.id, "sub_resume_2");
+  await store.markResumeDelivered(task.id, String(accepted?.resume.id), {
+    sessionId: "sub_resume_2",
+    resumedFromSessionId: "sub_resume_1",
+  });
+
+  const completed = await store.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_resume_2",
+    output: "second result",
+  });
+  expect(completed?.resume).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      deliveredSessionId: "sub_resume_2",
+      resumedFromSessionId: "sub_resume_1",
+    }),
+  ]);
+
+  const reloaded = new SubTaskRuntimeStore(stateDir);
+  await reloaded.load();
+  const persisted = await reloaded.getTask(task.id);
+  expect(persisted?.resume).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      deliveredSessionId: "sub_resume_2",
+      resumedFromSessionId: "sub_resume_1",
+    }),
+  ]);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("createSubTaskUpdateController records steering and relaunches the same task with prior history", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-update-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-update",
+      agentId: "coder",
+      instruction: "Implement runtime bridge",
+      channel: "subtask",
+    },
+  });
+  await store.attachSession(task.id, "sub_update_1", "coder");
+
+  const stops: string[] = [];
+  const spawns: Array<Record<string, unknown>> = [];
+  const controller = createSubTaskUpdateController({
+    runtimeStore: store,
+    conversationStore: {
+      get: (conversationId: string) => conversationId === "sub_update_1"
+        ? {
+          messages: [
+            { role: "user", content: "Implement runtime bridge" },
+            { role: "assistant", content: "Need to inspect failing tests first." },
+          ],
+        }
+        : undefined,
+    },
+    orchestrator: {
+      getSession(sessionId: string) {
+        if (sessionId !== "sub_update_1") return undefined;
+        return {
+          id: sessionId,
+          status: "running" as const,
+          launchSpec: {
+            parentConversationId: "conv-update",
+            agentId: "coder",
+            profileId: "coder",
+            instruction: "Implement runtime bridge",
+            background: true,
+            timeoutMs: 60_000,
+            channel: "subtask",
+          },
+        };
+      },
+      async stopSession(sessionId: string) {
+        stops.push(sessionId);
+        await store.completeTask(task.id, {
+          status: "stopped",
+          sessionId,
+          error: "relaunching after steering",
+        });
+        return true;
+      },
+      async spawn(opts: any) {
+        spawns.push({
+          instruction: opts.launchSpec?.instruction,
+          history: opts.history,
+          resumedFromSessionId: opts.resumedFromSessionId,
+        });
+        opts.onSessionCreated?.("sub_update_2", String(opts.launchSpec?.agentId ?? "coder"));
+        return {
+          success: true,
+          output: "steered result",
+          sessionId: "sub_update_2",
+        };
+      },
+    } as any,
+  });
+
+  const accepted = await controller(task.id, "Prioritize the integration failure and skip unrelated cleanup.");
+  expect(accepted?.steering).toEqual([
+    expect.objectContaining({
+      status: "accepted",
+    }),
+  ]);
+
+  let updated = await store.getTask(task.id);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (updated?.status === "done") {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    updated = await store.getTask(task.id);
+  }
+
+  expect(stops).toEqual(["sub_update_1"]);
+  expect(spawns).toEqual([
+    expect.objectContaining({
+      instruction: "Prioritize the integration failure and skip unrelated cleanup.",
+      resumedFromSessionId: "sub_update_1",
+      history: [
+        { role: "user", content: "Implement runtime bridge" },
+        { role: "assistant", content: "Need to inspect failing tests first." },
+      ],
+    }),
+  ]);
+
+  expect(updated).toMatchObject({
+    sessionId: "sub_update_2",
+    status: "done",
+  });
+  expect(updated?.steering).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      deliveredSessionId: "sub_update_2",
+    }),
+  ]);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("createSubTaskResumeController relaunches a finished task with prior history", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-resume-controller-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-resume-controller",
+      agentId: "coder",
+      instruction: "Implement runtime bridge",
+      channel: "subtask",
+    },
+  });
+  await store.attachSession(task.id, "sub_resume_controller_1", "coder");
+  await store.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_resume_controller_1",
+    output: "first pass finished",
+  });
+
+  const spawns: Array<Record<string, unknown>> = [];
+  const controller = createSubTaskResumeController({
+    runtimeStore: store,
+    conversationStore: {
+      get: (conversationId: string) => conversationId === "sub_resume_controller_1"
+        ? {
+          messages: [
+            { role: "user", content: "Implement runtime bridge" },
+            { role: "assistant", content: "First pass finished, but integration coverage is still missing." },
+          ],
+        }
+        : undefined,
+    },
+    orchestrator: {
+      getSession(sessionId: string) {
+        if (sessionId !== "sub_resume_controller_1") return undefined;
+        return {
+          id: sessionId,
+          status: "done" as const,
+          launchSpec: {
+            parentConversationId: "conv-resume-controller",
+            agentId: "coder",
+            profileId: "coder",
+            instruction: "Implement runtime bridge",
+            background: true,
+            timeoutMs: 60_000,
+            channel: "subtask",
+          },
+        };
+      },
+      async spawn(opts: any) {
+        spawns.push({
+          instruction: opts.launchSpec?.instruction,
+          history: opts.history,
+          resumedFromSessionId: opts.resumedFromSessionId,
+        });
+        opts.onSessionCreated?.("sub_resume_controller_2", String(opts.launchSpec?.agentId ?? "coder"));
+        return {
+          success: true,
+          output: "second pass finished",
+          sessionId: "sub_resume_controller_2",
+        };
+      },
+    } as any,
+  });
+
+  const accepted = await controller(task.id, "Continue from the first pass and close the missing integration coverage.");
+  expect(accepted?.resume).toEqual([
+    expect.objectContaining({
+      status: "accepted",
+    }),
+  ]);
+
+  let updated = await store.getTask(task.id);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (updated?.status === "done" && updated?.sessionId === "sub_resume_controller_2") {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    updated = await store.getTask(task.id);
+  }
+
+  expect(spawns).toEqual([
+    expect.objectContaining({
+      resumedFromSessionId: "sub_resume_controller_1",
+      history: [
+        { role: "user", content: "Implement runtime bridge" },
+        { role: "assistant", content: "First pass finished, but integration coverage is still missing." },
+      ],
+    }),
+  ]);
+  expect(String(spawns[0]?.instruction || "")).toContain("Resume guidance: Continue from the first pass");
+
+  expect(updated).toMatchObject({
+    sessionId: "sub_resume_controller_2",
+    status: "done",
+  });
+  expect(updated?.resume).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      deliveredSessionId: "sub_resume_controller_2",
+      resumedFromSessionId: "sub_resume_controller_1",
     }),
   ]);
 

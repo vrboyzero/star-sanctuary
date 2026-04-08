@@ -147,6 +147,7 @@
             <div class="session-digest-summary" id="sessionDigestSummary">
               <div class="task-token-history-empty" data-i18n="panel.sessionDigestNoConversation">暂无活跃会话</div>
             </div>
+            <div class="session-digest-summary" id="sessionContinuationSummary"></div>
             <button id="sessionDigestRefresh" class="button session-digest-refresh-btn" data-i18n="panel.sessionDigestRefresh">刷新摘要</button>
           </div>
         </div>
@@ -784,6 +785,41 @@
             <label class="form-label" data-i18n="settings.discordDefaultChannelIdLabel">Discord Default Channel ID</label>
             <input id="cfgDiscordDefaultChannelId" class="input" placeholder="123456789012345678" />
           </div>
+
+          <hr class="theme-divider">
+
+          <div class="settings-subsection-header">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.channelSecurityTitle">渠道安全默认值</div>
+                <div class="form-help" data-i18n="settings.channelSecurityHelp">使用结构化 JSON 维护 `discord / feishu / qq / community` 的安全默认值；也可通过 `channels.&lt;channel&gt;.accounts.&lt;accountId&gt;` 覆盖账号级 `dmPolicy / allowFrom / mentionRequired`。</div>
+            </div>
+            <button id="refreshChannelSecurity" type="button" class="button button-muted" data-i18n="settings.channelSecurityRefresh">刷新</button>
+          </div>
+          <div id="channelSecurityConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
+          <div class="form-group">
+            <label class="form-label" for="cfgChannelSecurityContent" data-i18n="settings.channelSecurityContentLabel">Channel Security JSON</label>
+            <textarea id="cfgChannelSecurityContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;version&quot;: 1,&#10;  &quot;channels&quot;: {}&#10;}"></textarea>
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.channelReplyChunkingTitle">渠道回复分段策略</div>
+              <div class="form-help" data-i18n="settings.channelReplyChunkingHelp">使用结构化 JSON 维护 discord / feishu / qq / community 的回复分段 runtime 策略；支持 channels.&lt;channel&gt;.accounts.&lt;accountId&gt; 覆盖 textLimit / chunkMode。默认值：discord 1800/newline、qq 1500/newline、feishu 3000/newline、community 3500/newline。</div>
+            </div>
+          </div>
+          <div id="channelReplyChunkingConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
+          <div class="form-group">
+            <label class="form-label" for="cfgChannelReplyChunkingContent" data-i18n="settings.channelReplyChunkingContentLabel">Channel Reply Chunking JSON</label>
+            <textarea id="cfgChannelReplyChunkingContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;version&quot;: 1,&#10;  &quot;channels&quot;: {&#10;    &quot;discord&quot;: { &quot;textLimit&quot;: 1800, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;qq&quot;: { &quot;textLimit&quot;: 1500, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;feishu&quot;: { &quot;textLimit&quot;: 3000, &quot;chunkMode&quot;: &quot;newline&quot; },&#10;    &quot;community&quot;: {&#10;      &quot;textLimit&quot;: 3500,&#10;      &quot;chunkMode&quot;: &quot;newline&quot;,&#10;      &quot;accounts&quot;: {&#10;        &quot;agent-name&quot;: { &quot;textLimit&quot;: 2200, &quot;chunkMode&quot;: &quot;length&quot; }&#10;      }&#10;    }&#10;  }&#10;}"></textarea>
+          </div>
+
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div class="settings-subsection-title" data-i18n="settings.channelSecurityPendingTitle">待审批 Sender</div>
+              <div class="form-help" data-i18n="settings.channelSecurityPendingHelp">当渠道 DM 命中 `allowlist` 阻断时，会在这里生成待审批记录。批准后会自动写入对应渠道的 `allowFrom`。</div>
+            </div>
+          </div>
+          <div id="channelSecurityPendingList" class="doctor-grid"></div>
         </section>
       </div>
       <div class="modal-footer">

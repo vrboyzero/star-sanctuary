@@ -22,6 +22,8 @@ import type { ExtensionHostState } from "./extension-host.js";
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
 import { persistConversationPromptSnapshot } from "./conversation-prompt-snapshot.js";
 import { recordConversationArtifactExport } from "./conversation-export-index.js";
+import { upsertChannelSecurityApprovalRequest } from "./channel-security-store.js";
+import { GoalManager } from "./goals/manager.js";
 import { createScopedMemoryManagers } from "./resident-memory-managers.js";
 import { resolveResidentSharedStateDir } from "./resident-memory-policy.js";
 import { startGatewayServer } from "./server.js";
@@ -561,6 +563,13 @@ test("agents.roster.get exposes resident runtime status and main conversation id
         recentTaskDigest: expect.objectContaining({
           recentCount: 1,
           latestStatus: "success",
+        }),
+        continuationState: expect.objectContaining({
+          version: 1,
+          scope: "resident",
+          targetId: "default",
+          recommendedTargetId: "agent:default:main",
+          targetType: "conversation",
         }),
         observabilityBadges: expect.arrayContaining([
           "mode:hybrid",
@@ -2116,6 +2125,13 @@ test("message.send emits auto run token result and conversation.meta returns per
       totalTokens: 20,
       auto: true,
     });
+    expect(metaRes.payload.continuationState).toMatchObject({
+      version: 1,
+      scope: "conversation",
+      targetId: conversationId,
+      recommendedTargetId: conversationId,
+      targetType: "conversation",
+    });
     expect(metaRes.payload.messages).toHaveLength(2);
     expect(metaRes.payload.messages[0]).toMatchObject({
       role: "user",
@@ -2223,6 +2239,96 @@ test("conversation.meta keeps time metadata on every message and marks only the 
       { role: "assistant", content: "echo:第二轮", isLatest: true },
     ]);
     expect(messages.filter((message: { isLatest: boolean }) => message.isLatest)).toHaveLength(1);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("goal.handoff.get returns structured handoff snapshot without mutating goal artifacts", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const seededGoalManager = new GoalManager(stateDir);
+  const goal = await seededGoalManager.createGoal({
+    title: "Server Handoff Goal",
+    objective: "Read structured handoff snapshot",
+  });
+  await seededGoalManager.createTaskNode(goal.id, {
+    id: "node_server_handoff",
+    title: "Server-side review",
+    status: "ready",
+    checkpointRequired: true,
+  });
+  await seededGoalManager.claimTaskNode(goal.id, "node_server_handoff", {
+    runId: "run_server_handoff_1",
+    summary: "Server handoff started",
+  });
+  await seededGoalManager.requestCheckpoint(goal.id, "node_server_handoff", {
+    title: "Need server review",
+    summary: "Waiting for remote confirmation",
+    reviewer: "reviewer",
+    requestedBy: "main-agent",
+    runId: "run_server_handoff_1",
+  });
+
+  const handoffBefore = await fs.promises.readFile(goal.handoffPath, "utf-8");
+  const progressBefore = await fs.promises.readFile(goal.progressPath, "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    goalManager: seededGoalManager,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "goal-handoff-get",
+      method: "goal.handoff.get",
+      params: { goalId: goal.id },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "goal-handoff-get"));
+    const getRes = frames.find((f) => f.type === "res" && f.id === "goal-handoff-get");
+    expect(getRes.ok).toBe(true);
+    expect(getRes.payload?.handoff).toMatchObject({
+      goalId: goal.id,
+      resumeMode: "checkpoint",
+      recommendedNodeId: "node_server_handoff",
+      openCheckpoints: [
+        expect.objectContaining({
+          nodeId: "node_server_handoff",
+          title: "Need server review",
+        }),
+      ],
+    });
+    expect(getRes.payload?.continuationState).toMatchObject({
+      version: 1,
+      scope: "goal",
+      targetId: goal.id,
+      recommendedTargetId: "node_server_handoff",
+      targetType: "node",
+      resumeMode: "checkpoint",
+      checkpoints: {
+        openCount: 1,
+      },
+    });
+
+    const handoffAfter = await fs.promises.readFile(goal.handoffPath, "utf-8");
+    const progressAfter = await fs.promises.readFile(goal.progressPath, "utf-8");
+    expect(handoffAfter).toBe(handoffBefore);
+    expect(progressAfter).toBe(progressBefore);
   } finally {
     ws.close();
     await closeP;
@@ -4069,6 +4175,89 @@ test("config.update rejects enabling community api when auth mode is none", asyn
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("channel.reply_chunking.get and update persist runtime chunk strategy config", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "channel-reply-chunking-update",
+      method: "channel.reply_chunking.update",
+      params: {
+        content: JSON.stringify({
+          channels: {
+            discord: {
+              textLimit: 1800,
+              chunkMode: "newline",
+            },
+            community: {
+              accounts: {
+                alpha: {
+                  textLimit: 900,
+                  chunkMode: "length",
+                },
+              },
+            },
+          },
+        }),
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "channel-reply-chunking-update"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "channel-reply-chunking-update");
+    expect(updateRes.ok).toBe(true);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "channel-reply-chunking-get",
+      method: "channel.reply_chunking.get",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "channel-reply-chunking-get"));
+    const getRes = frames.find((f) => f.type === "res" && f.id === "channel-reply-chunking-get");
+    expect(getRes.ok).toBe(true);
+    expect(getRes.payload?.config).toEqual({
+      version: 1,
+      channels: {
+        discord: {
+          textLimit: 1800,
+          chunkMode: "newline",
+        },
+        community: {
+          accounts: {
+            alpha: {
+              textLimit: 900,
+              chunkMode: "length",
+            },
+          },
+        },
+      },
+    });
+
+    const stored = JSON.parse(
+      await fs.promises.readFile(path.join(stateDir, "channel-reply-chunking.json"), "utf-8"),
+    );
+    expect(stored).toEqual(getRes.payload?.config);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -6034,6 +6223,88 @@ test("tools.list exposes visibility reasons for selected agent and conversation"
   }
 });
 
+test("tools.list and conversation.meta expose loaded deferred tools from executor session state", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createTestTool("alpha_builtin"),
+      createTestTool("alpha_deferred"),
+    ],
+    workspaceRoot: process.cwd(),
+    deferredToolNames: ["alpha_deferred"],
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    await toolExecutor.loadDeferredTools("conv-loaded-tools", ["alpha_deferred"]);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-list-loaded-tools",
+      method: "tools.list",
+      params: {
+        conversationId: "conv-loaded-tools",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-loaded-tools"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-loaded-tools");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.visibilityContext).toMatchObject({
+      conversationId: "conv-loaded-tools",
+      loadedDeferredTools: ["alpha_deferred"],
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-meta-loaded-tools",
+      method: "conversation.meta",
+      params: {
+        conversationId: "conv-loaded-tools",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-meta-loaded-tools"));
+    const metaRes = frames.find((f) => f.type === "res" && f.id === "conversation-meta-loaded-tools");
+    expect(metaRes.ok).toBe(true);
+    expect(metaRes.payload?.loadedDeferredTools).toEqual(["alpha_deferred"]);
+    expect(metaRes.payload?.continuationState).toMatchObject({
+      version: 1,
+      scope: "conversation",
+      targetId: "conv-loaded-tools",
+      resumeMode: "conversation_context",
+      checkpoints: {
+        labels: ["tool:alpha_deferred"],
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("tools.list resolves launch runtime visibility from subtask taskId", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const registry = new AgentRegistry(() => new MockAgent());
@@ -6370,6 +6641,14 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
         }),
       }),
     });
+    expect(getRes.payload?.continuationState).toMatchObject({
+      version: 1,
+      scope: "subtask",
+      targetId: targetTask.id,
+      recommendedTargetId: "sub_task_1",
+      targetType: "session",
+      resumeMode: "rerun",
+    });
     expect(getRes.payload?.launchExplainability).toMatchObject({
       catalogDefault: {
         permissionMode: "workspace_write",
@@ -6681,6 +6960,214 @@ test("system.doctor exposes delegation observability summary", async () => {
   }
 });
 
+test("system.doctor exposes cron runtime summary when provided", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getCronRuntimeDoctorReport: async () => ({
+      scheduler: {
+        enabled: true,
+        running: true,
+        activeRuns: 2,
+        lastTickAtMs: 1_710_000_000_000,
+      },
+      totals: {
+        totalJobs: 3,
+        enabledJobs: 2,
+        disabledJobs: 1,
+        staggeredJobs: 1,
+        invalidNextRunJobs: 0,
+      },
+      sessionTargetCounts: {
+        main: 1,
+        isolated: 2,
+      },
+      deliveryModeCounts: {
+        user: 2,
+        none: 1,
+      },
+      failureDestinationModeCounts: {
+        user: 1,
+        none: 2,
+      },
+      recentJobs: [
+        {
+          id: "cron-job-1",
+          name: "Digest",
+          enabled: true,
+          scheduleSummary: "every 60000ms",
+          sessionTarget: "main",
+          deliveryMode: "user",
+          failureDestinationMode: "user",
+          staggerMs: 15_000,
+          nextRunAtMs: 1_710_000_060_000,
+          lastStatus: "ok",
+        },
+      ],
+      headline: "enabled; jobs=2/3; session main=1; isolated=2; delivery user=2; none=1; stagger=1; activeRuns=2",
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-cron-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-cron-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-cron-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.cronRuntime).toMatchObject({
+      scheduler: {
+        enabled: true,
+        running: true,
+        activeRuns: 2,
+      },
+      totals: {
+        totalJobs: 3,
+        enabledJobs: 2,
+        staggeredJobs: 1,
+      },
+      sessionTargetCounts: {
+        main: 1,
+        isolated: 2,
+      },
+      deliveryModeCounts: {
+        user: 2,
+        none: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "cron_runtime",
+        name: "Cron Runtime",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes background continuation runtime summary when provided", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getBackgroundContinuationRuntimeDoctorReport: async () => ({
+      totals: {
+        totalRuns: 3,
+        runningRuns: 1,
+        failedRuns: 1,
+        skippedRuns: 1,
+        conversationLinkedRuns: 2,
+      },
+      kindCounts: {
+        cron: 2,
+        heartbeat: 1,
+      },
+      sessionTargetCounts: {
+        main: 1,
+        isolated: 1,
+      },
+      recentEntries: [
+        {
+          runId: "cron-run-1",
+          kind: "cron",
+          sourceId: "cron-job-1",
+          label: "Digest",
+          status: "ran",
+          startedAt: 1_710_000_000_000,
+          updatedAt: 1_710_000_000_200,
+          finishedAt: 1_710_000_000_200,
+          conversationId: "cron-main:cron-job-1",
+          sessionTarget: "main",
+          continuationState: {
+            version: 1,
+            scope: "background",
+            targetId: "cron-job-1",
+            recommendedTargetId: "cron-main:cron-job-1",
+            targetType: "conversation",
+            resumeMode: "cron_main_conversation",
+            summary: "Digest completed.",
+            nextAction: "Open the linked conversation.",
+            checkpoints: {
+              openCount: 0,
+              blockerCount: 0,
+              labels: ["scope:cron", "session:main"],
+            },
+            progress: {
+              current: "cron:ran",
+              recent: ["Digest completed."],
+            },
+          },
+        },
+      ],
+      headline: "runs=3; running=1; failed=1; skipped=1; cron=2; heartbeat=1; linked=2; main=1; isolated=1",
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-background-continuation-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-background-continuation-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-background-continuation-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.backgroundContinuationRuntime).toMatchObject({
+      totals: {
+        totalRuns: 3,
+        runningRuns: 1,
+        failedRuns: 1,
+      },
+      kindCounts: {
+        cron: 2,
+        heartbeat: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "background_continuation_runtime",
+        name: "Background Continuation Runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("system.doctor keeps delegation protocol green when only legacy completed subtasks exist", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
@@ -6855,6 +7342,157 @@ test("subtask.stop and subtask.archive manage task runtime visibility", async ()
       expect.objectContaining({ id: runningTask.id, status: "stopped" }),
       expect.objectContaining({ id: doneTask.id, archivedAt: expect.any(Number) }),
     ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("subtask.update accepts steering for a running task and returns the updated record", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const runningTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-update",
+      agentId: "coder",
+      instruction: "Need steering",
+      channel: "subtask",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(runningTask.id, "sub_update_1");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+    updateSubTask: async (taskId, message) => {
+      const accepted = await subTaskRuntimeStore.requestSteering(taskId, message, {
+        sessionId: "sub_update_1",
+      });
+      await subTaskRuntimeStore.markSteeringDelivered(taskId, String(accepted?.steering.id), {
+        sessionId: "sub_update_2",
+      });
+      return subTaskRuntimeStore.getTask(taskId);
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-update",
+      method: "subtask.update",
+      params: {
+        taskId: runningTask.id,
+        message: "Focus on the integration failure first.",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-update"));
+
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "subtask-update");
+    expect(updateRes.ok).toBe(true);
+    expect(updateRes.payload?.item).toMatchObject({
+      id: runningTask.id,
+      sessionId: "sub_update_1",
+      steering: [
+        expect.objectContaining({
+          message: "Focus on the integration failure first.",
+          status: "delivered",
+          deliveredSessionId: "sub_update_2",
+        }),
+      ],
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("subtask.resume accepts continuation for a finished task and returns the updated record", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const finishedTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-resume",
+      agentId: "coder",
+      instruction: "Need continuation",
+      channel: "subtask",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(finishedTask.id, "sub_resume_1");
+  await subTaskRuntimeStore.completeTask(finishedTask.id, {
+    status: "done",
+    sessionId: "sub_resume_1",
+    output: "first pass output",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+    resumeSubTask: async (taskId, message) => {
+      const accepted = await subTaskRuntimeStore.requestResume(taskId, message || "", {
+        sessionId: "sub_resume_1",
+      });
+      await subTaskRuntimeStore.markResumeDelivered(taskId, String(accepted?.resume.id), {
+        sessionId: "sub_resume_2",
+        resumedFromSessionId: "sub_resume_1",
+      });
+      return subTaskRuntimeStore.getTask(taskId);
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-resume",
+      method: "subtask.resume",
+      params: {
+        taskId: finishedTask.id,
+        message: "Continue from the first pass and finish the missing validations.",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-resume"));
+
+    const resumeRes = frames.find((f) => f.type === "res" && f.id === "subtask-resume");
+    expect(resumeRes.ok).toBe(true);
+    expect(resumeRes.payload?.item).toMatchObject({
+      id: finishedTask.id,
+      sessionId: "sub_resume_1",
+      resume: [
+        expect.objectContaining({
+          message: "Continue from the first pass and finish the missing validations.",
+          status: "delivered",
+          deliveredSessionId: "sub_resume_2",
+          resumedFromSessionId: "sub_resume_1",
+        }),
+      ],
+    });
   } finally {
     ws.close();
     await closeP;
@@ -8519,6 +9157,143 @@ test("/api/message accepts valid bearer token", async () => {
   });
 });
 
+test("/api/message applies community room mention gate with explicit accountId", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-test-token",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    await fs.promises.writeFile(path.join(stateDir, "channel-security.json"), JSON.stringify({
+      channels: {
+        community: {
+          accounts: {
+            alpha: {
+              mentionRequired: {
+                room: true,
+              },
+            },
+          },
+        },
+      },
+    }, null, 2), "utf-8");
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => new MockAgent(),
+      onChannelSecurityApprovalRequired: async (input) => {
+        await upsertChannelSecurityApprovalRequest(stateDir, input);
+      },
+    });
+
+    try {
+      const blockedRes = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-test-token",
+        },
+        body: JSON.stringify({
+          text: "hello room",
+          conversationId: "conv-room-blocked",
+          accountId: "alpha",
+          senderInfo: { id: "u-room-1", name: "tester", type: "user" },
+          roomContext: { environment: "community", roomId: "room-alpha", members: [] },
+        }),
+      });
+      const blockedPayload = await blockedRes.json();
+      expect(blockedRes.status).toBe(403);
+      expect(blockedPayload.error?.code).toBe("CHANNEL_SECURITY_BLOCKED");
+
+      const allowedRes = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-test-token",
+        },
+        body: JSON.stringify({
+          text: "@alpha hello room",
+          conversationId: "conv-room-allowed",
+          accountId: "alpha",
+          senderInfo: { id: "u-room-1", name: "tester", type: "user" },
+          roomContext: { environment: "community", roomId: "room-alpha", members: [] },
+        }),
+      });
+      const allowedPayload = await allowedRes.json();
+      expect(allowedRes.status).toBe(200);
+      expect(allowedPayload.ok).toBe(true);
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("/api/message records pending approval for community dm allowlist with explicit accountId", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-test-token",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    await fs.promises.writeFile(path.join(stateDir, "channel-security.json"), JSON.stringify({
+      channels: {
+        community: {
+          accounts: {
+            alpha: {
+              dmPolicy: "allowlist",
+              allowFrom: [],
+            },
+          },
+        },
+      },
+    }, null, 2), "utf-8");
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => new MockAgent(),
+      onChannelSecurityApprovalRequired: async (input) => {
+        await upsertChannelSecurityApprovalRequest(stateDir, input);
+      },
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-test-token",
+        },
+        body: JSON.stringify({
+          text: "hello dm",
+          conversationId: "conv-dm-blocked",
+          accountId: "alpha",
+          senderInfo: { id: "u-dm-1", name: "tester", type: "user" },
+        }),
+      });
+      const payload = await res.json();
+      expect(res.status).toBe(403);
+      expect(payload.error?.code).toBe("CHANNEL_SECURITY_BLOCKED");
+
+      const pendingStore = JSON.parse(
+        await fs.promises.readFile(path.join(stateDir, "channel-security-approvals.json"), "utf-8"),
+      ) as { pending?: Array<Record<string, unknown>> };
+      expect(pendingStore.pending).toEqual([
+        expect.objectContaining({
+          channel: "community",
+          accountId: "alpha",
+          senderId: "u-dm-1",
+        }),
+      ]);
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 test("/api/webhook reuses in-flight response for concurrent idempotency key", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   let runCount = 0;
@@ -8574,6 +9349,197 @@ test("/api/webhook reuses in-flight response for concurrent idempotency key", as
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("/api/webhook rejects non-json content-type before auth", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    webhookConfig: {
+      version: 1,
+      webhooks: [
+        {
+          id: "audit",
+          enabled: true,
+          token: "webhook-test-token",
+        },
+      ],
+    },
+    webhookIdempotency: new IdempotencyManager(60_000),
+  });
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain",
+      },
+      body: "hello",
+    });
+
+    expect(response.status).toBe(415);
+    expect(await response.text()).toContain("Unsupported Media Type");
+  } finally {
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("/api/webhook enforces pre-auth body size limit", async () => {
+  await withEnv({
+    BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES: "24",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      webhookConfig: {
+        version: 1,
+        webhooks: [
+          {
+            id: "audit",
+            enabled: true,
+            token: "webhook-test-token",
+          },
+        ],
+      },
+      webhookIdempotency: new IdempotencyManager(60_000),
+    });
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: "this body should exceed pre-auth limit" }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toContain("Payload Too Large");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("/api/webhook rate limits repeated requests from the same client", async () => {
+  await withEnv({
+    BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: "1",
+    BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS: "60000",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    let runCount = 0;
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        runCount += 1;
+        yield { type: "final", text: `webhook:${input.text}` };
+      },
+    };
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+      webhookConfig: {
+        version: 1,
+        webhooks: [
+          {
+            id: "audit",
+            enabled: true,
+            token: "webhook-test-token",
+          },
+        ],
+      },
+      webhookIdempotency: new IdempotencyManager(60_000),
+    });
+
+    try {
+      const request = () =>
+        fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer webhook-test-token",
+          },
+          body: JSON.stringify({ text: "hello from webhook" }),
+        });
+
+      const first = await request();
+      const second = await request();
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+      expect(runCount).toBe(1);
+      expect(await second.text()).toContain("Too Many Requests");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("/api/webhook limits concurrent in-flight requests per client", async () => {
+  await withEnv({
+    BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_PER_KEY: "1",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    let runCount = 0;
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        runCount += 1;
+        await sleep(40);
+        yield { type: "final", text: `webhook:${input.text}` };
+      },
+    };
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+      webhookConfig: {
+        version: 1,
+        webhooks: [
+          {
+            id: "audit",
+            enabled: true,
+            token: "webhook-test-token",
+          },
+        ],
+      },
+      webhookIdempotency: new IdempotencyManager(60_000),
+    });
+
+    try {
+      const request = () =>
+        fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer webhook-test-token",
+          },
+          body: JSON.stringify({ text: "hello from webhook" }),
+        });
+
+      const [first, second] = await Promise.all([request(), request()]);
+
+      expect([first.status, second.status].sort()).toEqual([200, 429]);
+      expect(runCount).toBe(1);
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 });
 
 test("system.doctor exposes api.message and webhook query runtime lifecycle traces", async () => {

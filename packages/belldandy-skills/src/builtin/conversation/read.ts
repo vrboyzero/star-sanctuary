@@ -26,6 +26,10 @@ type TaskTokenResultLike = {
   auto?: boolean;
 };
 
+type LoadedDeferredToolsReader = {
+  getLoadedToolNames?(conversationId: string): string[];
+};
+
 async function ensureConversationExists(
   conversationId: string,
   context: Parameters<Tool["execute"]>[1],
@@ -43,16 +47,22 @@ function renderMetaView(input: {
   limit: number;
   restore: ConversationRestoreViewLike;
   taskTokenResults: TaskTokenResultLike[];
+  loadedDeferredTools: string[];
 }): string {
   const lines = [
     "Conversation Meta",
     ...formatRestoreSummary(input.restore),
     `latest_message_at=${formatTimestamp(input.restore.rawMessages.at(-1)?.timestamp)}`,
     `task_token_results=${input.taskTokenResults.length}`,
+    `loaded_deferred_tools=${input.loadedDeferredTools.length}`,
     "",
     "Recent Messages:",
     ...formatMessageLines(input.restore.rawMessages, input.limit),
   ];
+  if (input.loadedDeferredTools.length > 0) {
+    lines.push("", "Loaded Deferred Tools:");
+    lines.push(...input.loadedDeferredTools.slice(0, input.limit).map((item) => `- ${item}`));
+  }
   if (input.taskTokenResults.length > 0) {
     lines.push("", "Recent Token Results:");
     lines.push(...input.taskTokenResults.slice(0, input.limit).map((item) =>
@@ -245,6 +255,7 @@ export const conversationReadTool: Tool = withToolContract({
       }
 
       const taskTokenResults = conversationStore.getTaskTokenResults(conversationId, limit);
+      const loadedDeferredTools = (conversationStore as LoadedDeferredToolsReader).getLoadedToolNames?.(conversationId) ?? [];
       return {
         id,
         name,
@@ -253,6 +264,7 @@ export const conversationReadTool: Tool = withToolContract({
           limit,
           restore,
           taskTokenResults,
+          loadedDeferredTools,
         }),
         durationMs: Date.now() - start,
       };

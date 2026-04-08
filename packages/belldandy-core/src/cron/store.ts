@@ -9,6 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "./types.js";
+import { applyCronJobRuntimeDefaults, normalizeCronJobCreateInput, normalizeCronJobPatchInput, normalizeCronStaggerMs } from "./validation.js";
 
 const STORE_FILENAME = "cron-jobs.json";
 const MINUTE_MS = 60_000;
@@ -65,24 +66,32 @@ export class CronStore {
         const data = await this.load();
         const now = Date.now();
 
+        const normalized = normalizeCronJobCreateInput(input);
+        const jobId = crypto.randomUUID();
         const job: CronJob = {
-            id: crypto.randomUUID(),
-            name: input.name,
-            description: input.description,
-            enabled: input.enabled ?? true,
-            deleteAfterRun: input.deleteAfterRun,
+            id: jobId,
+            name: normalized.name,
+            description: normalized.description,
+            enabled: normalized.enabled ?? true,
+            deleteAfterRun: normalized.deleteAfterRun,
             createdAtMs: now,
             updatedAtMs: now,
-            schedule: input.schedule,
-            payload: input.payload,
+            schedule: normalized.schedule,
+            payload: normalized.payload,
+            sessionTarget: normalized.sessionTarget ?? "isolated",
+            delivery: normalized.delivery ?? { mode: "user" },
+            failureDestination: normalized.failureDestination,
             state: {
-                nextRunAtMs: computeNextRun(input.schedule, now),
+                nextRunAtMs: computeNextRunForJob({
+                    id: jobId,
+                    schedule: normalized.schedule,
+                }, now),
             },
         };
 
-        data.jobs.push(job);
+        data.jobs.push(applyCronJobRuntimeDefaults(job));
         await this.save(data);
-        return job;
+        return applyCronJobRuntimeDefaults(job);
     }
 
     /** 更新任务，返回更新后的 Job 或 undefined（未找到） */
@@ -93,23 +102,27 @@ export class CronStore {
 
         const job = data.jobs[index];
         const now = Date.now();
+        const normalizedPatch = normalizeCronJobPatchInput(patch, job);
 
         // 应用 patch（只覆盖非 undefined 字段）
-        if (patch.name !== undefined) job.name = patch.name;
-        if (patch.description !== undefined) job.description = patch.description;
-        if (patch.enabled !== undefined) job.enabled = patch.enabled;
-        if (patch.deleteAfterRun !== undefined) job.deleteAfterRun = patch.deleteAfterRun;
-        if (patch.schedule !== undefined) {
-            job.schedule = patch.schedule;
+        if (normalizedPatch.name !== undefined) job.name = normalizedPatch.name;
+        if ("description" in normalizedPatch) job.description = normalizedPatch.description;
+        if (normalizedPatch.enabled !== undefined) job.enabled = normalizedPatch.enabled;
+        if (normalizedPatch.deleteAfterRun !== undefined) job.deleteAfterRun = normalizedPatch.deleteAfterRun;
+        if (normalizedPatch.schedule !== undefined) {
+            job.schedule = normalizedPatch.schedule;
             // 调度变更时重新计算下次执行时间
-            job.state.nextRunAtMs = computeNextRun(patch.schedule, now);
+            job.state.nextRunAtMs = computeNextRunForJob(job, now);
         }
-        if (patch.payload !== undefined) job.payload = patch.payload;
+        if (normalizedPatch.payload !== undefined) job.payload = normalizedPatch.payload;
+        if (normalizedPatch.sessionTarget !== undefined) job.sessionTarget = normalizedPatch.sessionTarget;
+        if (normalizedPatch.delivery !== undefined) job.delivery = normalizedPatch.delivery;
+        if ("failureDestination" in normalizedPatch) job.failureDestination = normalizedPatch.failureDestination;
         job.updatedAtMs = now;
 
-        data.jobs[index] = job;
+        data.jobs[index] = applyCronJobRuntimeDefaults(job);
         await this.save(data);
-        return job;
+        return applyCronJobRuntimeDefaults(job);
     }
 
     /** 删除任务，返回是否成功 */
@@ -124,7 +137,7 @@ export class CronStore {
 
     /** 批量更新状态（调度器 tick 后调用） */
     async saveJobs(jobs: CronJob[]): Promise<void> {
-        await this.save({ version: 1, jobs });
+        await this.save({ version: 1, jobs: jobs.map((job) => applyCronJobRuntimeDefaults(job)) });
     }
 
     // ── 内部方法 ──
@@ -135,7 +148,10 @@ export class CronStore {
             const parsed = JSON.parse(content) as CronStoreFile;
             // 基本校验
             if (parsed.version === 1 && Array.isArray(parsed.jobs)) {
-                return parsed;
+                return {
+                    version: 1,
+                    jobs: parsed.jobs.map((job) => applyCronJobRuntimeDefaults(job)),
+                };
             }
         } catch {
             // 文件不存在或格式错误，返回空列表
@@ -330,4 +346,43 @@ export function computeNextRun(schedule: CronJob["schedule"], nowMs: number): nu
 
     // 未来扩展 cron 表达式时在此添加
     return undefined;
+}
+
+export function computeNextRunForJob(job: Pick<CronJob, "id" | "schedule">, nowMs: number): number | undefined {
+    if (job.schedule.kind === "at") {
+        return computeNextRun(job.schedule, nowMs);
+    }
+    const staggerMs = normalizeCronStaggerMs((job.schedule as { staggerMs?: unknown }).staggerMs) ?? 0;
+    if (staggerMs <= 0) {
+        return computeNextRun(job.schedule, nowMs);
+    }
+
+    const offsetMs = resolveStableCronOffsetMs(job.id, staggerMs);
+    let cursorMs = Math.max(0, nowMs - offsetMs);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        const baseNext = computeNextRun(job.schedule, cursorMs);
+        if (baseNext === undefined) return undefined;
+        const shifted = baseNext + offsetMs;
+        if (shifted > nowMs) return shifted;
+        cursorMs = Math.max(baseNext + 1, cursorMs + 1);
+    }
+    return undefined;
+}
+
+const STAGGER_OFFSET_CACHE_MAX = 4096;
+const staggerOffsetCache = new Map<string, number>();
+
+function resolveStableCronOffsetMs(jobId: string, staggerMs: number): number {
+    if (staggerMs <= 1) return 0;
+    const cacheKey = `${staggerMs}:${jobId}`;
+    const cached = staggerOffsetCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const digest = crypto.createHash("sha256").update(jobId).digest();
+    const offset = digest.readUInt32BE(0) % staggerMs;
+    if (staggerOffsetCache.size >= STAGGER_OFFSET_CACHE_MAX) {
+        const first = staggerOffsetCache.keys().next();
+        if (!first.done) staggerOffsetCache.delete(first.value);
+    }
+    staggerOffsetCache.set(cacheKey, offset);
+    return offset;
 }

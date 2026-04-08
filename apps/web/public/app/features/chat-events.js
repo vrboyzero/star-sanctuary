@@ -4,6 +4,7 @@ export function createChatEventsFeature({
   setTokenUsageRunning,
   updateTokenUsage,
   showTaskTokenResult,
+  onChannelSecurityPending,
   queueGoalUpdateEvent,
   onSubtaskUpdated,
   onToolSettingsConfirmRequired,
@@ -120,6 +121,11 @@ export function createChatEventsFeature({
 
     if (event === "token.counter.result") {
       showTaskTokenResult(payload);
+      return true;
+    }
+
+    if (event === "channel.security.pending") {
+      onChannelSecurityPending?.(payload);
       return true;
     }
 

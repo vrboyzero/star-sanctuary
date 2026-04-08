@@ -12,6 +12,50 @@ function setSidebarActionButtonState(button, active) {
   button.classList.toggle("is-active", Boolean(active));
 }
 
+function summarizeCronWorkspaceContent(content) {
+  if (typeof content !== "string" || !content.trim()) return null;
+  try {
+    const parsed = JSON.parse(content);
+    const jobs = Array.isArray(parsed?.jobs) ? parsed.jobs : [];
+    const summary = {
+      totalJobs: jobs.length,
+      enabledJobs: 0,
+      mainSessionJobs: 0,
+      isolatedSessionJobs: 0,
+      staggeredJobs: 0,
+    };
+    for (const job of jobs) {
+      if (job?.enabled === true) {
+        summary.enabledJobs += 1;
+      }
+      if (job?.sessionTarget === "main") {
+        summary.mainSessionJobs += 1;
+      } else if (job?.sessionTarget === "isolated") {
+        summary.isolatedSessionJobs += 1;
+      }
+      const schedule = job?.schedule;
+      const staggerMs = schedule && typeof schedule === "object" ? schedule.staggerMs : undefined;
+      if (typeof staggerMs === "number" && Number.isFinite(staggerMs) && staggerMs > 0) {
+        summary.staggeredJobs += 1;
+      }
+    }
+    return summary;
+  } catch {
+    return null;
+  }
+}
+
+function buildWorkspaceEditorLabel(filePath, content) {
+  if (filePath !== "cron-jobs.json") {
+    return filePath;
+  }
+  const summary = summarizeCronWorkspaceContent(content);
+  if (!summary) {
+    return filePath;
+  }
+  return `${filePath} · ${summary.totalJobs} jobs · ${summary.enabledJobs} enabled · main ${summary.mainSessionJobs} / isolated ${summary.isolatedSessionJobs} · stagger ${summary.staggeredJobs}`;
+}
+
 export function createWorkspaceFeature({
   refs,
   keys,
@@ -411,8 +455,22 @@ export function createWorkspaceFeature({
       path: filePath,
       content: typeof res.payload?.content === "string" ? res.payload.content : "",
       readOnly: false,
-      label: filePath,
+      label: buildWorkspaceEditorLabel(
+        filePath,
+        typeof res.payload?.content === "string" ? res.payload.content : "",
+      ),
     });
+    if (filePath === "cron-jobs.json") {
+      const summary = summarizeCronWorkspaceContent(typeof res.payload?.content === "string" ? res.payload.content : "");
+      if (summary) {
+        showNotice(
+          "Cron 配置摘要",
+          `共 ${summary.totalJobs} 个任务，已启用 ${summary.enabledJobs} 个，main ${summary.mainSessionJobs} / isolated ${summary.isolatedSessionJobs}，错峰 ${summary.staggeredJobs} 个。`,
+          "info",
+          2600,
+        );
+      }
+    }
     void loadFileTree();
   }
 

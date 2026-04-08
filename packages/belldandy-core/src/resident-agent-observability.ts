@@ -9,6 +9,7 @@ import type { ResolvedResidentMemoryPolicy } from "./resident-memory-policy.js";
 import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
 import type { SubTaskRecord } from "./task-runtime.js";
 import { buildAgentLaunchExplainability, type AgentLaunchExplainability } from "./agent-launch-explainability.js";
+import { buildResidentContinuationState, type ContinuationStateSnapshot } from "./continuation-state.js";
 
 type ResidentRecentTaskSummary = {
   taskId: string;
@@ -118,6 +119,7 @@ export type ResidentAgentObservabilityItem = {
   recentTaskDigest?: ResidentRecentTaskDigest;
   recentSubtaskDigest?: ResidentRecentSubtaskDigest;
   experienceUsageDigest?: ResidentExperienceUsageDigest;
+  continuationState?: ContinuationStateSnapshot;
   launchExplainability?: AgentLaunchExplainability;
   observabilityHeadline?: string;
   observabilityBadges?: string[];
@@ -531,6 +533,17 @@ export async function buildResidentAgentObservabilitySnapshot(input: {
       ...(recentTaskDigest ? { recentTaskDigest } : {}),
       ...(recentSubtaskDigest ? { recentSubtaskDigest } : {}),
       ...(experienceUsageDigest ? { experienceUsageDigest } : {}),
+      continuationState: buildResidentContinuationState({
+        agentId: agent.id,
+        status: agent.status,
+        mainConversationId: agent.mainConversationId,
+        lastConversationId: agent.lastConversationId,
+        lastActiveAt: agent.lastActiveAt,
+        sharedGovernance,
+        recentTaskDigest,
+        recentSubtaskDigest,
+        experienceUsageDigest,
+      }),
       launchExplainability: buildAgentLaunchExplainability({
         agentId: agent.id,
         profileId: agent.id,

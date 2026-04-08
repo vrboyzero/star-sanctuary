@@ -99,7 +99,9 @@ import {
   handleSubTaskArchiveWithQueryRuntime,
   handleSubTaskGetWithQueryRuntime,
   handleSubTaskListWithQueryRuntime,
+  handleSubTaskResumeWithQueryRuntime,
   handleSubTaskStopWithQueryRuntime,
+  handleSubTaskUpdateWithQueryRuntime,
 } from "./query-runtime-subtask.js";
 import { handleDelegationInspectGetWithQueryRuntime } from "./query-runtime-delegation.js";
 import {
@@ -161,9 +163,36 @@ import {
 } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager } from "./webhook/index.js";
+import {
+  beginWebhookRequestPipelineOrReject,
+  createFixedWindowRateLimiter,
+  createWebhookInFlightLimiter,
+  readJsonWebhookBodyOrReject,
+  WEBHOOK_BODY_READ_DEFAULTS,
+  WEBHOOK_IN_FLIGHT_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "./webhook/index.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
 import type { GoalManager } from "./goals/manager.js";
 import { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
+import { buildConversationContinuationState } from "./continuation-state.js";
+import { buildChannelSecurityDoctorReport } from "./channel-security-doctor.js";
+import {
+  getChannelReplyChunkingConfigContent,
+  parseChannelReplyChunkingConfigContent,
+  writeChannelReplyChunkingConfig,
+} from "./channel-reply-chunking-store.js";
+import {
+  approveChannelSecurityApprovalRequest,
+  getChannelSecurityConfigContent,
+  parseChannelSecurityConfigContent,
+  readChannelSecurityApprovalStore,
+  rejectChannelSecurityApprovalRequest,
+  writeChannelSecurityConfig,
+} from "./channel-security-store.js";
+import type { ChannelSecurityApprovalRequestInput } from "@belldandy/channels";
+import type { BackgroundContinuationRuntimeDoctorReport } from "./background-continuation-runtime.js";
+import type { CronRuntimeDoctorReport } from "./cron/observability.js";
 
 export type GatewayServerOptions = {
   port: number;
@@ -247,6 +276,10 @@ export type GatewayServerOptions = {
   goalManager?: GoalManager;
   /** 子任务运行时存储 */
   subTaskRuntimeStore?: SubTaskRuntimeStore;
+  /** 子任务 resume / continuation 控制 */
+  resumeSubTask?: (taskId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+  /** 子任务 steering / update 控制 */
+  updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
   /** 子任务停止控制 */
   stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
   /** Webhook 配置 */
@@ -255,6 +288,12 @@ export type GatewayServerOptions = {
   webhookIdempotency?: IdempotencyManager;
   /** Resident MemoryManager 组装记录 */
   residentMemoryManagers?: ScopedMemoryManagerRecord[];
+  /** Cron 运行态观测摘要 */
+  getCronRuntimeDoctorReport?: () => Promise<CronRuntimeDoctorReport | undefined>;
+  /** Background continuation runtime 摘要 */
+  getBackgroundContinuationRuntimeDoctorReport?: () => Promise<BackgroundContinuationRuntimeDoctorReport | undefined>;
+  /** 当 community/http 等入口命中 DM allowlist 阻断时记录待审批 sender */
+  onChannelSecurityApprovalRequired?: (input: ChannelSecurityApprovalRequestInput) => void | Promise<void>;
 };
 
 export type GatewayServer = {
@@ -332,6 +371,13 @@ const DEFAULT_METHODS = [
   "models.list",
   "config.read",
   "config.update",
+  "channel.reply_chunking.get",
+  "channel.reply_chunking.update",
+  "channel.security.get",
+  "channel.security.update",
+  "channel.security.pending.list",
+  "channel.security.approve",
+  "channel.security.reject",
   "system.doctor",
   "system.restart",
   "workspace.list",
@@ -351,6 +397,8 @@ const DEFAULT_METHODS = [
   "conversation.memory.extraction.get",
   "subtask.list",
   "subtask.get",
+  "subtask.resume",
+  "subtask.update",
   "subtask.stop",
   "subtask.archive",
   "tools.list",
@@ -385,6 +433,7 @@ const DEFAULT_METHODS = [
   "goal.get",
   "goal.resume",
   "goal.pause",
+  "goal.handoff.get",
   "goal.handoff.generate",
   "goal.retrospect.generate",
   "goal.experience.suggest",
@@ -424,6 +473,7 @@ const DEFAULT_EVENTS = [
   "agent.status",
   "token.usage",
   "token.counter.result",
+  "channel.security.pending",
   "conversation.digest.updated",
   "conversation.memory.extraction.updated",
   "goal.update",
@@ -495,6 +545,11 @@ function readEnvTrimmed(varName: string): string | undefined {
   if (!raw) return undefined;
   const trimmed = raw.trim();
   return trimmed || undefined;
+}
+
+function resolveWebhookRequestGuardKey(req: http.IncomingMessage, webhookId: string): string {
+  const remoteAddress = req.socket.remoteAddress?.trim() || "unknown";
+  return `${webhookId}:${remoteAddress}`;
 }
 
 function buildDurableExtractionUnavailableError(
@@ -1121,7 +1176,44 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     timeoutMs: parsePositiveIntEnv("BELLDANDY_TOKEN_USAGE_UPLOAD_TIMEOUT_MS", 3000),
   };
 
-  app.use(express.json());
+  const communityJsonParser = express.json();
+  const webhookPreAuthMaxBytes = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES",
+    WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes,
+  );
+  const webhookPreAuthTimeoutMs = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_PREAUTH_TIMEOUT_MS",
+    WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs,
+  );
+  const webhookRateLimitWindowMs = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  );
+  const webhookRateLimitMaxRequests = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  );
+  const webhookRateLimitMaxTrackedKeys = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  );
+  const webhookMaxInFlightPerKey = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_PER_KEY",
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
+  );
+  const webhookMaxInFlightTrackedKeys = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS",
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
+  );
+  const webhookRateLimiter = createFixedWindowRateLimiter({
+    windowMs: webhookRateLimitWindowMs,
+    maxRequests: webhookRateLimitMaxRequests,
+    maxTrackedKeys: webhookRateLimitMaxTrackedKeys,
+  });
+  const webhookInFlightLimiter = createWebhookInFlightLimiter({
+    maxInFlightPerKey: webhookMaxInFlightPerKey,
+    maxTrackedKeys: webhookMaxInFlightTrackedKeys,
+  });
   if (!communityApiEnabled) {
     app.post("/api/message", (_req, res) => {
       res.status(404).json({
@@ -1133,17 +1225,19 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       });
     });
   } else {
-    app.post("/api/message", async (req, res) => {
+    app.post("/api/message", communityJsonParser, async (req, res) => {
       const response = await handleCommunityMessageWithQueryRuntime({
         requestId: `api.message:${crypto.randomUUID()}`,
         authorization: req.headers.authorization,
         communityApiToken,
         body: req.body,
+        stateDir,
         agentFactory: opts.agentFactory,
         agentRegistry: opts.agentRegistry,
         conversationStore,
         log,
         runtimeObserver: queryRuntimeTraceStore.createObserver<"api.message">(),
+        onChannelSecurityApprovalRequired: opts.onChannelSecurityApprovalRequired,
         emitAutoRunTaskTokenResult: (store, payload) => {
           emitAutoRunTaskTokenResult(store, payload);
         },
@@ -1166,25 +1260,63 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     });
   } else {
     app.post("/api/webhook/:id", async (req, res) => {
-      const response = await handleWebhookReceiveWithQueryRuntime({
-        requestId: `webhook.receive:${crypto.randomUUID()}`,
-        webhookId: req.params.id,
-        authorization: req.headers.authorization,
-        idempotencyKey: typeof req.headers["x-idempotency-key"] === "string" ? req.headers["x-idempotency-key"] : undefined,
-        body: req.body as WebhookRequestParams,
-        agentFactory: opts.agentFactory,
-        agentRegistry: opts.agentRegistry,
-        webhookConfig: opts.webhookConfig,
-        webhookIdempotency: opts.webhookIdempotency,
-        conversationStore,
-        log,
-        runtimeObserver: queryRuntimeTraceStore.createObserver<"webhook.receive">(),
-        emitAutoRunTaskTokenResult: (store, payload) => {
-          emitAutoRunTaskTokenResult(store, payload);
-        },
+      const webhookGuardKey = resolveWebhookRequestGuardKey(req, req.params.id);
+      const pipeline = beginWebhookRequestPipelineOrReject({
+        req,
+        res,
+        rateLimiter: webhookRateLimiter,
+        rateLimitKey: webhookGuardKey,
+        requireJsonContentType: true,
+        inFlightLimiter: webhookInFlightLimiter,
+        inFlightKey: webhookGuardKey,
       });
-      sendHttpJson(res, response);
+      if (!pipeline.ok) {
+        return;
+      }
+
+      try {
+        const bodyResult = await readJsonWebhookBodyOrReject({
+          req,
+          res,
+          profile: "pre-auth",
+          maxBytes: webhookPreAuthMaxBytes,
+          timeoutMs: webhookPreAuthTimeoutMs,
+          emptyObjectOnEmpty: true,
+          invalidJsonMessage: "Invalid JSON",
+        });
+        if (!bodyResult.ok) {
+          return;
+        }
+
+        const response = await handleWebhookReceiveWithQueryRuntime({
+          requestId: `webhook.receive:${crypto.randomUUID()}`,
+          webhookId: req.params.id,
+          authorization: req.headers.authorization,
+          idempotencyKey: typeof req.headers["x-idempotency-key"] === "string" ? req.headers["x-idempotency-key"] : undefined,
+          body: bodyResult.value as WebhookRequestParams,
+          agentFactory: opts.agentFactory,
+          agentRegistry: opts.agentRegistry,
+          webhookConfig: opts.webhookConfig,
+          webhookIdempotency: opts.webhookIdempotency,
+          conversationStore,
+          log,
+          runtimeObserver: queryRuntimeTraceStore.createObserver<"webhook.receive">(),
+          emitAutoRunTaskTokenResult: (store, payload) => {
+            emitAutoRunTaskTokenResult(store, payload);
+          },
+        });
+        sendHttpJson(res, response);
+      } finally {
+        pipeline.release();
+      }
     });
+  }
+
+  if (webhookEnabled) {
+    log.info(
+      "webhook",
+      `Ingress guard enabled (preAuthMaxBytes=${webhookPreAuthMaxBytes}, preAuthTimeoutMs=${webhookPreAuthTimeoutMs}, rateLimit=${webhookRateLimitMaxRequests}/${webhookRateLimitWindowMs}ms, maxInFlightPerKey=${webhookMaxInFlightPerKey})`,
+    );
   }
 
   const server = http.createServer(app);
@@ -1262,6 +1394,9 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     stateDir,
     agentRegistry: opts.agentRegistry,
   });
+  (opts.toolExecutor as (ToolExecutor & {
+    setConversationStore?: (conversationStore?: ConversationStore) => void;
+  }) | undefined)?.setConversationStore?.(conversationStore);
   const residentAgentRuntime = new ResidentAgentRuntimeRegistry(
     opts.agentRegistry?.list().filter((profile) => isResidentAgentProfile(profile)).map((profile) => profile.id) ?? ["default"],
   );
@@ -1632,6 +1767,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         skillRegistry: opts.skillRegistry,
         goalManager: opts.goalManager,
         subTaskRuntimeStore: opts.subTaskRuntimeStore,
+        resumeSubTask: opts.resumeSubTask,
+        updateSubTask: opts.updateSubTask,
         stopSubTask: opts.stopSubTask,
         tokenUsageUploadConfig,
         broadcastEvent,
@@ -1639,6 +1776,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         queryRuntimeTraceStore,
         residentAgentRuntime,
         residentMemoryManagers: opts.residentMemoryManagers,
+        getCronRuntimeDoctorReport: opts.getCronRuntimeDoctorReport,
+        getBackgroundContinuationRuntimeDoctorReport: opts.getBackgroundContinuationRuntimeDoctorReport,
         log,
       });
       if (res) sendRes(ws, res);
@@ -1935,6 +2074,8 @@ async function handleReq(
     skillRegistry?: SkillRegistry;
     goalManager?: GoalManager;
     subTaskRuntimeStore?: SubTaskRuntimeStore;
+    resumeSubTask?: (taskId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+    updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
     stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
     tokenUsageUploadConfig: TokenUsageUploadConfig;
     broadcastEvent?: (frame: GatewayEventFrame) => void;
@@ -1942,6 +2083,8 @@ async function handleReq(
     queryRuntimeTraceStore: QueryRuntimeTraceStore;
     residentAgentRuntime: ResidentAgentRuntimeRegistry;
     residentMemoryManagers?: ScopedMemoryManagerRecord[];
+    getCronRuntimeDoctorReport?: () => Promise<CronRuntimeDoctorReport | undefined>;
+    getBackgroundContinuationRuntimeDoctorReport?: () => Promise<BackgroundContinuationRuntimeDoctorReport | undefined>;
   },
 ): Promise<GatewayResFrame | null> {
   const secureMethods = [
@@ -1951,6 +2094,13 @@ async function handleReq(
     "config.readRaw",
     "config.update",
     "config.writeRaw",
+    "channel.reply_chunking.get",
+    "channel.reply_chunking.update",
+    "channel.security.get",
+    "channel.security.update",
+    "channel.security.pending.list",
+    "channel.security.approve",
+    "channel.security.reject",
     "system.restart",
     "system.doctor",
     "workspace.write",
@@ -1970,6 +2120,8 @@ async function handleReq(
     "conversation.memory.extraction.get",
     "subtask.list",
     "subtask.get",
+    "subtask.resume",
+    "subtask.update",
     "subtask.stop",
     "subtask.archive",
     "agent.catalog.get",
@@ -1999,6 +2151,7 @@ async function handleReq(
     "goal.get",
     "goal.resume",
     "goal.pause",
+    "goal.handoff.get",
     "goal.handoff.generate",
     "goal.retrospect.generate",
     "goal.experience.suggest",
@@ -2315,6 +2468,148 @@ async function handleReq(
       return { type: "res", id: req.id, ok: true };
     }
 
+    case "channel.reply_chunking.get": {
+      const payload = getChannelReplyChunkingConfigContent(ctx.stateDir);
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload,
+      };
+    }
+
+    case "channel.reply_chunking.update": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const content = typeof params.content === "string" ? params.content : "";
+      try {
+        const config = parseChannelReplyChunkingConfigContent(content);
+        await writeChannelReplyChunkingConfig(ctx.stateDir, config);
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: getChannelReplyChunkingConfigContent(ctx.stateDir),
+        };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "invalid_channel_reply_chunking_config",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
+
+    case "channel.security.get": {
+      const payload = getChannelSecurityConfigContent(ctx.stateDir);
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload,
+      };
+    }
+
+    case "channel.security.update": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const content = typeof params.content === "string" ? params.content : "";
+      try {
+        const config = parseChannelSecurityConfigContent(content);
+        await writeChannelSecurityConfig(ctx.stateDir, config);
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: getChannelSecurityConfigContent(ctx.stateDir),
+        };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "invalid_channel_security_config",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
+
+    case "channel.security.pending.list": {
+      const store = await readChannelSecurityApprovalStore(ctx.stateDir);
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          pending: store.pending,
+        },
+      };
+    }
+
+    case "channel.security.approve": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const requestId = typeof params.requestId === "string" ? params.requestId.trim() : "";
+      if (!requestId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "requestId is required" } };
+      }
+      try {
+        const approved = await approveChannelSecurityApprovalRequest(ctx.stateDir, requestId);
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            request: approved.request,
+            config: approved.config,
+            content: getChannelSecurityConfigContent(ctx.stateDir).content,
+          },
+        };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "channel_security_approve_failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
+
+    case "channel.security.reject": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const requestId = typeof params.requestId === "string" ? params.requestId.trim() : "";
+      if (!requestId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "requestId is required" } };
+      }
+      try {
+        const rejected = await rejectChannelSecurityApprovalRequest(ctx.stateDir, requestId);
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            request: rejected,
+          },
+        };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "channel_security_reject_failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+    }
+
     // [NEW] 读取 .env 文件原始内容（用于编辑器）
     case "config.readRaw": {
       const { envPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
@@ -2539,6 +2834,58 @@ async function handleReq(
         checks.push({ id: "agent_config", name: "Agent Configuration", status: "fail", message: "Missing API Keys" });
       }
 
+      const channelSecurity = buildChannelSecurityDoctorReport({
+        stateDir: ctx.stateDir,
+        channels: {
+          discord: {
+            enabled:
+              String(process.env.BELLDANDY_DISCORD_ENABLED ?? "false").trim().toLowerCase() === "true"
+              && Boolean(String(process.env.BELLDANDY_DISCORD_BOT_TOKEN ?? "").trim()),
+          },
+          feishu: {
+            enabled:
+              Boolean(String(process.env.BELLDANDY_FEISHU_APP_ID ?? "").trim())
+              && Boolean(String(process.env.BELLDANDY_FEISHU_APP_SECRET ?? "").trim()),
+          },
+          qq: {
+            enabled:
+              Boolean(String(process.env.BELLDANDY_QQ_APP_ID ?? "").trim())
+              && Boolean(String(process.env.BELLDANDY_QQ_APP_SECRET ?? "").trim()),
+          },
+          community: (() => {
+            const communityConfigPath = path.join(ctx.stateDir, "community.json");
+            try {
+              if (!fs.existsSync(communityConfigPath)) {
+                return { enabled: false };
+              }
+              const parsed = JSON.parse(fs.readFileSync(communityConfigPath, "utf-8")) as {
+                endpoint?: unknown;
+                agents?: Array<{ name?: unknown }>;
+              };
+              const accountIds = Array.isArray(parsed.agents)
+                ? parsed.agents
+                  .map((item) => (typeof item?.name === "string" ? item.name.trim() : ""))
+                  .filter(Boolean)
+                : [];
+              return {
+                enabled: Boolean(accountIds.length) && typeof parsed.endpoint === "string" && Boolean(parsed.endpoint.trim()),
+                ...(accountIds.length ? { accountIds } : {}),
+              };
+            } catch {
+              return { enabled: false };
+            }
+          })(),
+        },
+      });
+      for (const item of channelSecurity.items) {
+        checks.push({
+          id: `channel_security_${item.channel}`,
+          name: `Channel Security (${item.channel})`,
+          status: item.status,
+          message: item.message,
+        });
+      }
+
       const memoryRuntime = await buildMemoryRuntimeDoctorReport({
         conversationStore: ctx.conversationStore,
         compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
@@ -2604,6 +2951,28 @@ async function handleReq(
         loadError: extensionMarketplace.loadError,
       });
       const queryRuntime = ctx.queryRuntimeTraceStore.getSummary();
+      let cronRuntime: CronRuntimeDoctorReport | undefined;
+      let backgroundContinuationRuntime: BackgroundContinuationRuntimeDoctorReport | undefined;
+      try {
+        cronRuntime = await ctx.getCronRuntimeDoctorReport?.();
+      } catch (error) {
+        checks.push({
+          id: "cron_runtime",
+          name: "Cron Runtime",
+          status: "warn",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        backgroundContinuationRuntime = await ctx.getBackgroundContinuationRuntimeDoctorReport?.();
+      } catch (error) {
+        checks.push({
+          id: "background_continuation_runtime",
+          name: "Background Continuation Runtime",
+          status: "warn",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       const mcpRuntime = await (async () => {
         const enabled = (process.env.BELLDANDY_MCP_ENABLED ?? "false") === "true";
         if (!enabled) {
@@ -2695,6 +3064,28 @@ async function handleReq(
         status: "pass",
         message: `Enabled (${queryRuntime.activeTraceCount} active traces, ${queryRuntime.traces.length} retained, ${queryRuntime.totalObservedEvents} observed events)`,
       });
+      if (cronRuntime) {
+        checks.push({
+          id: "cron_runtime",
+          name: "Cron Runtime",
+          status: !cronRuntime.scheduler.enabled
+            ? cronRuntime.totals.totalJobs > 0 ? "warn" : "pass"
+            : cronRuntime.scheduler.running && cronRuntime.totals.invalidNextRunJobs === 0
+              ? "pass"
+              : "warn",
+          message: cronRuntime.headline,
+        });
+      }
+      if (backgroundContinuationRuntime) {
+        checks.push({
+          id: "background_continuation_runtime",
+          name: "Background Continuation Runtime",
+          status: backgroundContinuationRuntime.totals.failedRuns > 0
+            ? "warn"
+            : "pass",
+          message: backgroundContinuationRuntime.headline,
+        });
+      }
       const hookBridgeSummary = ctx.extensionHost?.lifecycle.hookBridge;
       const extensionHookMessage = hookBridgeSummary && hookBridgeSummary.availableHookCount > 0
         ? `, legacy hooks ${hookBridgeSummary.bridgedHookCount}/${hookBridgeSummary.availableHookCount} bridged`
@@ -3160,7 +3551,10 @@ async function handleReq(
           extensionMarketplace,
           extensionGovernance,
           queryRuntime,
+          ...(cronRuntime ? { cronRuntime } : {}),
+          ...(backgroundContinuationRuntime ? { backgroundContinuationRuntime } : {}),
           mcpRuntime,
+          ...(channelSecurity.items.length ? { channelSecurity } : {}),
           ...(promptObservability ? { promptObservability } : {}),
           ...(toolBehaviorObservability ? { toolBehaviorObservability } : {}),
           ...(toolContractV2Observability ? { toolContractV2Observability } : {}),
@@ -3395,6 +3789,28 @@ async function handleReq(
           id: req.id,
           ok: false,
           error: { code: "goal_pause_failed", message: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    case "goal.handoff.get": {
+      if (!ctx.goalManager) {
+        return { type: "res", id: req.id, ok: false, error: { code: "not_available", message: "Goal manager is not available." } };
+      }
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
+      if (!goalId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
+      }
+      try {
+        const result = await ctx.goalManager.getHandoff(goalId);
+        return { type: "res", id: req.id, ok: true, payload: result as unknown as Record<string, unknown> };
+      } catch (err) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "goal_handoff_get_failed", message: err instanceof Error ? err.message : String(err) },
         };
       }
     }
@@ -5174,7 +5590,15 @@ async function handleReq(
           conversationId,
           messages: buildConversationMetaMessages(conversation),
           taskTokenResults: ctx.conversationStore.getTaskTokenResults(conversationId, limit),
+          loadedDeferredTools: ctx.conversationStore.getLoadedToolNames(conversationId),
           compactBoundaries: ctx.conversationStore.getCompactBoundaries(conversationId, limit),
+          continuationState: buildConversationContinuationState({
+            conversationId,
+            messages: buildConversationMetaMessages(conversation),
+            taskTokenResults: ctx.conversationStore.getTaskTokenResults(conversationId, limit),
+            loadedDeferredTools: ctx.conversationStore.getLoadedToolNames(conversationId),
+            compactBoundaries: ctx.conversationStore.getCompactBoundaries(conversationId, limit),
+          }),
         },
       };
     }
@@ -5535,10 +5959,14 @@ async function handleReq(
         requestId: req.id,
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
         agentRegistry: ctx.agentRegistry,
+        resumeSubTask: ctx.resumeSubTask,
+        updateSubTask: ctx.updateSubTask,
         stopSubTask: ctx.stopSubTask,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
           | "subtask.list"
           | "subtask.get"
+          | "subtask.resume"
+          | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
         >(),
@@ -5560,15 +5988,78 @@ async function handleReq(
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
         agentRegistry: ctx.agentRegistry,
         loadPromptSnapshot: ctx.getConversationPromptSnapshot,
+        resumeSubTask: ctx.resumeSubTask,
+        updateSubTask: ctx.updateSubTask,
         stopSubTask: ctx.stopSubTask,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
           | "subtask.list"
           | "subtask.get"
+          | "subtask.resume"
+          | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
         >(),
       }, {
         taskId,
+      });
+    }
+
+    case "subtask.resume": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      const message = typeof params.message === "string" && params.message.trim()
+        ? params.message.trim()
+        : undefined;
+      if (!taskId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
+      }
+      return handleSubTaskResumeWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        resumeSubTask: ctx.resumeSubTask,
+        updateSubTask: ctx.updateSubTask,
+        stopSubTask: ctx.stopSubTask,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "subtask.list"
+          | "subtask.get"
+          | "subtask.resume"
+          | "subtask.update"
+          | "subtask.stop"
+          | "subtask.archive"
+        >(),
+      }, {
+        taskId,
+        message,
+      });
+    }
+
+    case "subtask.update": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      const message = typeof params.message === "string" ? params.message.trim() : "";
+      if (!taskId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
+      }
+      if (!message) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "message is required" } };
+      }
+      return handleSubTaskUpdateWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        resumeSubTask: ctx.resumeSubTask,
+        updateSubTask: ctx.updateSubTask,
+        stopSubTask: ctx.stopSubTask,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "subtask.list"
+          | "subtask.get"
+          | "subtask.resume"
+          | "subtask.update"
+          | "subtask.stop"
+          | "subtask.archive"
+        >(),
+      }, {
+        taskId,
+        message,
       });
     }
 
@@ -5584,10 +6075,14 @@ async function handleReq(
       return handleSubTaskStopWithQueryRuntime({
         requestId: req.id,
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        resumeSubTask: ctx.resumeSubTask,
+        updateSubTask: ctx.updateSubTask,
         stopSubTask: ctx.stopSubTask,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
           | "subtask.list"
           | "subtask.get"
+          | "subtask.resume"
+          | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
         >(),
@@ -5609,10 +6104,14 @@ async function handleReq(
       return handleSubTaskArchiveWithQueryRuntime({
         requestId: req.id,
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        resumeSubTask: ctx.resumeSubTask,
+        updateSubTask: ctx.updateSubTask,
         stopSubTask: ctx.stopSubTask,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
           | "subtask.list"
           | "subtask.get"
+          | "subtask.resume"
+          | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
         >(),

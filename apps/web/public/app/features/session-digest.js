@@ -1,3 +1,10 @@
+import {
+  buildContinuationAction,
+  decodeContinuationAction,
+  encodeContinuationAction,
+  formatContinuationTargetLabel,
+} from "./continuation-targets.js";
+
 function formatDigestStatus(status, t) {
   switch (status) {
     case "ready":
@@ -95,6 +102,7 @@ export function createSessionDigestFeature({
   makeId,
   getActiveConversationId,
   onSendHistoryAction,
+  onOpenContinuationAction,
   escapeHtml,
   formatDateTime,
   showNotice,
@@ -102,6 +110,7 @@ export function createSessionDigestFeature({
 }) {
   const {
     sessionDigestSummaryEl,
+    sessionContinuationSummaryEl,
     sessionDigestRefreshBtn,
     sessionDigestModalEl,
     sessionDigestModalTitleEl,
@@ -114,6 +123,7 @@ export function createSessionDigestFeature({
   const state = {
     conversationId: null,
     digest: null,
+    continuationState: null,
     loading: false,
     refreshing: false,
     loadSeq: 0,
@@ -233,7 +243,75 @@ export function createSessionDigestFeature({
     if (!sessionDigestSummaryEl) return;
     closeModal();
     sessionDigestSummaryEl.innerHTML = `<div class="task-token-history-empty">${escapeHtml(message)}</div>`;
+    if (sessionContinuationSummaryEl) {
+      sessionContinuationSummaryEl.innerHTML = "";
+    }
     setRefreshButtonState();
+  }
+
+  function renderContinuationSummary() {
+    if (!sessionContinuationSummaryEl) return;
+    const continuation = state.continuationState;
+    if (!continuation || !isConnected() || !getActiveConversationId()) {
+      sessionContinuationSummaryEl.innerHTML = "";
+      return;
+    }
+
+    const checkpoints = continuation.checkpoints && typeof continuation.checkpoints === "object"
+      ? continuation.checkpoints
+      : {};
+    const progress = continuation.progress && typeof continuation.progress === "object"
+      ? continuation.progress
+      : {};
+    const recent = Array.isArray(progress.recent)
+      ? progress.recent.filter((item) => typeof item === "string" && item.trim()).slice(0, 2)
+      : [];
+    const labels = Array.isArray(checkpoints.labels)
+      ? checkpoints.labels.filter((item) => typeof item === "string" && item.trim()).slice(0, 3)
+      : [];
+    const targetText = formatContinuationTargetLabel(continuation);
+    const targetAction = buildContinuationAction(continuation);
+    const encodedTargetAction = encodeContinuationAction(targetAction);
+    const targetMarkup = continuation.recommendedTargetId && encodedTargetAction
+      ? `
+        <button
+          type="button"
+          class="button button-muted"
+          data-continuation-action="${escapeHtml(encodedTargetAction)}"
+        >${escapeHtml(targetText)}</button>
+      `
+      : `<span>${escapeHtml(targetText)}</span>`;
+
+    sessionContinuationSummaryEl.innerHTML = `
+      <div class="session-digest-card">
+        <div class="session-digest-head">
+          <div class="session-digest-badges">
+            <span class="memory-badge">${escapeHtml(t("panel.sessionContinuationLabel", {}, "Continuation"))}</span>
+            <span class="memory-badge">${escapeHtml(continuation.resumeMode || "-")}</span>
+            <span class="memory-badge">${escapeHtml(t("panel.sessionContinuationMessages", { count: String(progress.current || "-") }, String(progress.current || "-")))}</span>
+          </div>
+        <div class="session-digest-meta">
+            <span>${escapeHtml(t("panel.sessionContinuationTarget", { target: targetText }, `Target: ${targetText}`))}</span>
+            ${targetMarkup}
+        </div>
+      </div>
+        <div class="session-digest-summary-text">${escapeHtml(continuation.summary || t("panel.sessionContinuationEmpty", {}, "No continuation summary yet."))}</div>
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(t("panel.sessionContinuationNextAction", {}, "Next Action"))}</span>
+          <span>${escapeHtml(continuation.nextAction || "-")}</span>
+        </div>
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(t("panel.sessionContinuationBoundaries", { count: String(Number(checkpoints.openCount || 0)) }, `Boundaries ${Number(checkpoints.openCount || 0)}`))}</span>
+          <span>${escapeHtml(t("panel.sessionContinuationBlockers", { count: String(Number(checkpoints.blockerCount || 0)) }, `Blockers ${Number(checkpoints.blockerCount || 0)}`))}</span>
+        </div>
+        ${labels.length ? `<div class="memory-list-item-meta"><span>${escapeHtml(labels.join(" | "))}</span></div>` : ""}
+        ${recent.length ? `
+          <div class="memory-list-item-meta">
+            ${recent.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+          </div>
+        ` : ""}
+      </div>
+    `;
   }
 
   function renderDigest() {
@@ -286,6 +364,7 @@ export function createSessionDigestFeature({
       </div>
     `;
     setRefreshButtonState();
+    renderContinuationSummary();
     renderModal();
   }
 
@@ -376,6 +455,7 @@ export function createSessionDigestFeature({
   function clear() {
     state.conversationId = null;
     state.digest = null;
+    state.continuationState = null;
     state.loading = false;
     state.refreshing = false;
     state.lastSource = "";
@@ -383,6 +463,13 @@ export function createSessionDigestFeature({
     state.lastCompacted = false;
     state.modalOpen = false;
     renderDigest();
+  }
+
+  function setContinuationState(payload, options = {}) {
+    const conversationId = options.conversationId || getActiveConversationId();
+    if (conversationId && conversationId !== getActiveConversationId()) return;
+    state.continuationState = payload && typeof payload === "object" ? payload : null;
+    renderContinuationSummary();
   }
 
   if (sessionDigestRefreshBtn) {
@@ -405,6 +492,16 @@ export function createSessionDigestFeature({
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       openModal();
+    });
+  }
+
+  if (sessionContinuationSummaryEl) {
+    sessionContinuationSummaryEl.addEventListener("click", (event) => {
+      const trigger = event.target instanceof Element ? event.target.closest("[data-continuation-action]") : null;
+      if (!trigger || typeof onOpenContinuationAction !== "function") return;
+      const action = decodeContinuationAction(trigger.getAttribute("data-continuation-action") || "");
+      if (!action) return;
+      void onOpenContinuationAction(action);
     });
   }
 
@@ -446,9 +543,11 @@ export function createSessionDigestFeature({
   return {
     loadSessionDigest,
     handleDigestUpdated,
+    setContinuationState,
     clear,
     refreshLocale() {
       renderDigest();
+      renderContinuationSummary();
       renderModal();
     },
   };

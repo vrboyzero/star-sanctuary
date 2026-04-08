@@ -60,6 +60,7 @@
 | 模型接入面 | 极强，`extensions/` 中有大量 provider 扩展与 gateway/provider 适配 | 以 OpenAI 兼容链路为主，支持 fallback 模型队列与模型配置 | 决定模型选择弹性、供应商切换与成本策略 | OC 明显更强 |
 | 模型 failover | README 明确有 model failover | README 明确有 `models.json` fallback 模型队列 | 保障高可用与故障切换 | 两者都有；OC 生态覆盖更广 |
 | 上下文压缩 | 有 session pruning、streaming/chunking 等 | 有 compaction，并与长期任务/记忆注入联动 | 控制 token 与长期会话稳定性 | 两者都有；SS 更强调工作区上下文与记忆耦合 |
+| 结构化数据 PTC runtime | OC 已有更完整的 PTC/代码执行主路径 | SS 已新增 `ptc_runtime` 第一版最小受控运行面，并补了 `ptc.helpers.mcp / records / report` 与 3 个窄模板，可对声明过的本地文件做结构化脚本处理、归并结果并输出报表 | 降低复杂数据任务的文本拼接噪声，给后续 wrapper/helper 提供底座 | OC 仍更强；但 SS 已开始补齐这一执行层缺口 |
 | 多 Agent / 多 Profile | 有 multi-agent routing、按渠道/peer 隔离 agent | 有 Agent Registry、多 Agent Profile、Resident Agent、子任务/委派链 | 支持不同 agent 人格、权限和工作区隔离 | 两者都有；SS 在 resident 状态/记忆/治理链上更深 |
 
 ### 2.4 会话、Resident Agent 与协同执行
@@ -68,6 +69,7 @@
 |---|---|---|---|---|
 | 会话模型 | 有 main/group/isolation/queue/reply-back，会话模型成熟 | 有 session 持久化、resident 主通道、goal/subtask/session 绑定 | 管理直接聊天、群聊和任务上下文边界 | 两者都有；OC 更适配多渠道会话产品，SS 更适配任务型会话 |
 | Agent-to-Agent / Session 协同 | 有 `sessions_list / sessions_history / sessions_send` | 有 `delegate_task / delegate_parallel / subtasks / result envelope / verifier handoff` | 跨 agent 协作与交接 | OC 更像会话级互发；SS 更像结构化委派与收束 |
+| 子任务 steering / resume | 有更成熟的后台任务/会话继续交互能力 | 已新增 `subtask.update` 与 `subtask.resume`，并在 WebChat 现有 detail 区补 steering / resume 入口；当前可对运行中的子任务做 `accepted / delivered / failed` safe-point steering，也可对已结束子任务做 `accepted / delivered / failed` 的 same-task relaunch continuation。另已在 `subtask.get` / `goal.handoff.generate` 输出第一版最小 `continuationState`，统一 `summary / nextAction / checkpoints / progress / recommendedTarget` | 当子任务跑偏或提前结束时允许最小纠偏 / 续跑，而不是只能停掉或重开新 task | OC 仍更强；但 SS 已补第一版最小 steering + resume，并开始收敛 continuation state |
 | Resident Agent 独立运行底座 | README 有 multi-agent routing，但未见像 SS 一样强调 resident 生命周期治理 | 已实现 resident runtime registry、独立 session/memory、workspaceBinding/stateDir 绑定、roster/doctor 联动 | 让多个常驻 agent 作为长期工作实体持续运作 | SS 明显更强 |
 | 子任务详情与执行证据 | OC 有任务/会话工具，但未见像 SS 一样的 Web 详情收束面 | 已有 subtasks detail、launch explainability、result envelope、prompt snapshot、delegation protocol | 让委派执行过程可审计、可复盘 | SS 明显更强 |
 
@@ -131,7 +133,7 @@
 
 | 功能子项 | OC 实现 | SS 实现 | 功能作用简述 | 对比判断 |
 |---|---|---|---|---|
-| 配对/Allowlist/DM 安全默认值 | 很强，README 明确 DM pairing、allowlist、doctor 风险提示 | 有 pairing、allowlist、浏览器/社区/WebChat 配对与鉴权 | 降低未授权接入风险 | OC 更成熟，SS 也有实装 |
+| 配对/Allowlist/DM 安全默认值 | 很强，README 明确 DM pairing、allowlist、doctor 风险提示 | 有 pairing、allowlist、浏览器/社区/WebChat 配对与鉴权；第三阶段 `P1-1` 已补 `channel-security.json`、`discord/feishu/qq/community` 渠道安全 fallback、`channels.<channel>.accounts.<accountId>` 账号级覆盖、doctor 风险提示，以及 WebChat 侧最小 `pending sender -> allowFrom` 审批链，并补 `channel.security.pending` 实时提醒与一键跳转审批入口；`community HTTP /api/message` 也已支持显式 `accountId` 并走同一套 room mention / DM allowlist fallback | 降低未授权接入风险 | OC 仍更成熟；SS 已把底层积木推进到“渠道级默认值 + 账号级覆盖 + 最小审批闭环 + 轻量实时提醒” |
 | 权限与工具治理 | 有 security model、permission map、gateway/node 权限、provider/channel 边界检查 | 有 tool settings、workspace-sensitive 边界、launch explainability、tool contract v2 | 约束高风险工具与执行边界 | SS 在“可解释治理”上更深；OC 在“平台安全面”更广 |
 | Doctor/运维诊断 | 有 doctor、logging、operations/troubleshooting | 有 `bdd doctor`、`system.doctor`、resident/memory/tool/query runtime observability | 排障、系统状态体检、配置核验 | 两者都强；SS 当前在 resident/memory/goals explainability 更细 |
 | Explainability/可解释执行 | README 有 runtime/usage/presence 等观测，但未见像 SS 一样的大量 explainability 收束面 | SS 已把 catalog default / effective launch / delegation reason / snapshot / subtask / goal 面打通 | 解释为什么这样选 agent/权限/交付 | SS 明显更强 |
@@ -312,7 +314,7 @@ SS 更适合：
 | 优先级 | 借鉴项 | OC 代码依据 | SS 当前基线 | 可行性 | 风险性 | 工作量 | 实现后的作用 | 预期效果 |
 |---|---|---|---|---|---|---|---|---|
 | P3 | 安装与配置向导 2.0：`QuickStart/Advanced`、风险确认、远程/本地探测、按模块分步配置 | `OC/src/wizard/setup.ts`、`OC/src/commands/onboard.ts` 已具备 `QuickStart` / `Manual`、`accept-risk`、gateway probe、`setupChannels/setupSearch/setupSkills/setupPluginConfig` | `SS/packages/belldandy-core/src/cli/wizard/onboard.ts` 与 `SS/packages/belldandy-core/src/cli/commands/setup.ts` 仍主要覆盖 `openai|mock + host/auth` 的基础向导 | 高 | 低-中 | M | 把首次安装、基础安全确认、后续扩展配置统一到一个入口 | 明显降低上手门槛、误配率和“能跑但不会配”的支持成本，但更适合在核心流程稳定后再收口 |
-| P1 | 渠道安全配置产品化：账号级 `dmPolicy/allowFrom/mention` 默认值、配对范围、配置警告 | `OC/extensions/telegram/src/setup-surface.ts`、`OC/src/plugin-sdk/channel-pairing.ts`、`OC/src/channels/mention-gating.ts` 已把 `pairing/allowlist/requireMention` 做成渠道向导与运行时策略 | `SS/packages/belldandy-channels/src/router/engine.ts` 目前只有通用路由规则；`SS/packages/belldandy-core/src/security/store.ts` 仍是全局 `allowlist.json/pairing.json` | 中高 | 中 | M-L | 让 Discord / 飞书 / QQ / community 后续扩张时具备更稳的安全默认值，而不是依赖人工手写规则 | 降低误开放、误路由、群聊噪音与跨渠道鉴权混乱问题 |
+| P1 | 渠道安全配置产品化：账号级 `dmPolicy/allowFrom/mention` 默认值、配对范围、配置警告 | `OC/extensions/telegram/src/setup-surface.ts`、`OC/src/plugin-sdk/channel-pairing.ts`、`OC/src/channels/mention-gating.ts` 已把 `pairing/allowlist/requireMention` 做成渠道向导与运行时策略 | `SS` 已完成第三版最小落地：新增 `channel-security.json`、`discord/feishu/qq/community` 渠道级 fallback、`channels.<channel>.accounts.<accountId>` 账号级安全覆盖、doctor 风险提示、WebChat 内最小 `pending sender -> allowFrom` 审批链，并补 `channel.security.pending` 实时提醒、设置面内自动刷新与一键跳转审批入口；`community HTTP /api/message` 现也已支持显式 `accountId` 并接入同一套 security fallback；当前完整 setup wizard 与独立 account 管理 UI 仍未做 | 中高 | 中 | M-L | 让 Discord / 飞书 / QQ / community 后续扩张时具备更稳的安全默认值，而不是依赖人工手写规则 | 降低误开放、误路由、群聊噪音与跨渠道鉴权混乱问题 |
 | P1 | 统一的渲染感知长消息分段管线 | `OC/src/markdown/render-aware-chunking.ts`、`OC/src/plugin-sdk/reply-chunking.ts` 已把 Markdown/渲染长度限制抽象成通用分段层 | `SS/packages/belldandy-channels/src/discord.ts` 仅对 Discord 2000 字限制做按换行分段，其他渠道未见统一层 | 高 | 低 | S-M | 为所有渠道统一处理 Markdown、代码块、链接和平台消息长度限制 | 明显减少回复截断、代码块断裂、发送失败与跨渠道展示不一致 |
 | P2 | Provider 接入插件化升级：向导元数据、模型选择器、能力范围声明 | `OC/src/plugin-sdk/provider-entry.ts`、`OC/src/plugins/provider-wizard.ts` 已把 provider onboarding、model picker、wizard grouping 做成标准入口 | `SS/packages/belldandy-core/src/bin/gateway.ts` 主 provider 仍是 `openai|mock`；`SS/packages/belldandy-agent/src/failover-client.ts` 主要提供 `models.json` fallback；`SS/packages/belldandy-plugins/src/registry.ts` 目前是通用插件装载，不理解 provider onboarding | 中 | 中 | L | 给后续文本/搜索/语音/图像/视频 provider 扩展提供统一挂载方式 | 减少核心网关被 provider 分支污染，提升后续扩展速度、一致性与可维护性 |
 | P3 | 独立 TUI 控制面 | `OC/src/tui/tui.ts` 已支持基于 Gateway 的会话、Agent、Model 切换与流式聊天控制 | `SS/package.json` 与 `SS/packages/belldandy-core/package.json` 当前无独立 `tui` 入口，主要依赖 WebChat 和命令式 CLI | 中 | 中 | M-L | 补齐 SSH / NAS / 无浏览器环境下的轻量控制面 | 提升远程运维和重度 CLI 用户体验，但对 SS 主线收益低于前四项 |

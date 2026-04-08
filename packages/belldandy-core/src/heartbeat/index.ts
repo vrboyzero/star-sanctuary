@@ -7,6 +7,7 @@ export {
     type HeartbeatRunnerOptions,
     type HeartbeatRunnerHandle,
     type HeartbeatResult,
+    type HeartbeatRunEvent,
     HEARTBEAT_OK_TOKEN,
     DEFAULT_HEARTBEAT_PROMPT,
 } from "./runner.js";

@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Message, TextChannel } from "discord.js";
 import type { BelldandyAgent } from "@belldandy/agent";
 import type { Channel, ChannelConfig, ChannelEventListener } from "./types.js";
 import type { ChannelRouter } from "./router/types.js";
+import { chunkMarkdownForOutbound } from "./reply-chunking.js";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveStateDir } from "@belldandy/protocol";
@@ -30,11 +31,15 @@ export class DiscordChannel implements Channel {
     private state: DiscordState = {};
     private _running = false;
     private readonly router?: ChannelRouter;
+    private readonly replyChunkingConfig?: DiscordChannelConfig["replyChunkingConfig"];
+    private readonly onChannelSecurityApprovalRequired?: DiscordChannelConfig["onChannelSecurityApprovalRequired"];
 
     constructor(config: DiscordChannelConfig) {
         this.agent = config.agent;
         this.config = config;
         this.router = config.router;
+        this.replyChunkingConfig = config.replyChunkingConfig;
+        this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
         this.loadState();
     }
 
@@ -239,6 +244,16 @@ export class DiscordChannel implements Channel {
             };
 
         if (!decision.allow) {
+            if (decision.reason === "channel_security:dm_allowlist_blocked" && chatKind === "dm" && userId) {
+                void this.onChannelSecurityApprovalRequired?.({
+                    channel: "discord",
+                    senderId: userId,
+                    senderName: username,
+                    chatId,
+                    chatKind: "dm",
+                    messagePreview: message.content || "",
+                });
+            }
             console.log(`[Discord] Route blocked message ${message.id} (${decision.reason})`);
             return;
         }
@@ -303,31 +318,14 @@ export class DiscordChannel implements Channel {
      * 处理 Discord 2000 字符单条消息限制，自动分段发送
      */
     private async sendLongMessage(channel: TextChannel, content: string): Promise<void> {
-        const MAX = 2000;
-
-        if (content.length <= MAX) {
-            await channel.send(content);
-            return;
-        }
-
-        // 分段发送
-        const chunks: string[] = [];
-        let current = "";
-
-        for (const line of content.split("\n")) {
-            if (current.length + line.length + 1 > MAX) {
-                chunks.push(current);
-                current = line;
-            } else {
-                current += (current ? "\n" : "") + line;
-            }
-        }
-
-        if (current) chunks.push(current);
-
+        const chunks = chunkMarkdownForOutbound(content, "discord", {
+            config: this.replyChunkingConfig,
+        });
         for (const chunk of chunks) {
             await channel.send(chunk);
-            await new Promise((resolve) => setTimeout(resolve, 500)); // 防止速率限制
+            if (chunks.length > 1) {
+                await new Promise((resolve) => setTimeout(resolve, 500)); // 防止速率限制
+            }
         }
     }
 

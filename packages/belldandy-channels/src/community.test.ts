@@ -15,6 +15,9 @@ vi.mock("@belldandy/protocol", async () => {
 });
 
 import { CommunityChannel } from "./community.js";
+import { createRuleBasedRouter } from "./router/engine.js";
+import { normalizeChannelSecurityConfig } from "./router/security-config.js";
+import { normalizeReplyChunkingConfig } from "./reply-chunking-config.js";
 
 describe("community token usage upload", () => {
   beforeEach(() => {
@@ -352,5 +355,136 @@ describe("community token usage upload", () => {
         bodyPreview: "room not found",
       }),
     );
+  });
+
+  it("applies community channel security with per-account defaults", async () => {
+    const agent = {
+      run: vi.fn(async function* () {
+        yield { type: "final", text: "ok" };
+      }),
+    };
+
+    const router = createRuleBasedRouter(
+      { version: 1, rules: [] },
+      {
+        defaultAgentId: "default",
+        securityConfig: normalizeChannelSecurityConfig({
+          channels: {
+            community: {
+              accounts: {
+                "贝露丹蒂": {
+                  mentionRequired: {
+                    room: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      },
+    );
+
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: agent as any,
+      conversationStore: new ConversationStore(),
+      router,
+    });
+
+    const state = {
+      ws: { send: vi.fn() },
+      agentConfig: { name: "贝露丹蒂", apiKey: "gro_test_key" },
+      roomId: "room-mention",
+      reconnectAttempts: 0,
+      members: [],
+    };
+
+    await (channel as any).handleChatMessage({
+      id: "msg-room-blocked",
+      content: "你好",
+      sender: {
+        type: "user",
+        id: "u-mention",
+        uid: "u-mention",
+        name: "Alice",
+      },
+    }, state);
+
+    expect(agent.run).not.toHaveBeenCalled();
+
+    await (channel as any).handleChatMessage({
+      id: "msg-room-allowed",
+      content: "@贝露丹蒂 你好",
+      sender: {
+        type: "user",
+        id: "u-mention",
+        uid: "u-mention",
+        name: "Alice",
+      },
+    }, state);
+
+    expect(agent.run).toHaveBeenCalledTimes(1);
+    expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: "community:room-mention",
+      meta: expect.objectContaining({
+        channel: "community",
+        accountId: "贝露丹蒂",
+      }),
+    }));
+  });
+
+  it("chunks long community room replies through the shared outbound chunker", async () => {
+    const wsSend = vi.fn();
+    const longCode = Array.from({ length: 360 }, (_, index) => `console.log("line-${index}-xxxxxxxx");`).join("\n");
+    const agent = {
+      run: vi.fn(async function* () {
+        yield { type: "final", text: `Intro\n\n\`\`\`ts\n${longCode}\n\`\`\`\n\nTail` };
+      }),
+    };
+
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: agent as any,
+      conversationStore: new ConversationStore(),
+      replyChunkingConfig: normalizeReplyChunkingConfig({
+        channels: {
+          community: {
+            accounts: {
+              "贝露丹蒂": {
+                textLimit: 140,
+                chunkMode: "length",
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await (channel as any).handleChatMessage({
+      id: "msg-room-chunked",
+      content: "@贝露丹蒂 你好",
+      sender: {
+        type: "user",
+        id: "u-chunk",
+        uid: "u-chunk",
+        name: "Alice",
+      },
+    }, {
+      ws: { send: wsSend },
+      agentConfig: { name: "贝露丹蒂", apiKey: "gro_test_key" },
+      roomId: "room-chunk",
+      reconnectAttempts: 0,
+      members: [],
+    });
+
+    expect(wsSend.mock.calls.length).toBeGreaterThan(1);
+    for (const [payload] of wsSend.mock.calls) {
+      const parsed = JSON.parse(String(payload)) as { data?: { content?: string } };
+      const content = parsed.data?.content ?? "";
+      expect(content.length).toBeLessThanOrEqual(140);
+      expect(((content.match(/```/g) ?? []).length) % 2).toBe(0);
+    }
   });
 });

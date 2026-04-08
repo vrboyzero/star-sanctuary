@@ -148,7 +148,7 @@ export async function handleToolsListWithQueryRuntime(
           skills: [],
           contracts: {},
           visibility: {},
-          visibilityContext: { agentId: "default", conversationId: null },
+          visibilityContext: { agentId: "default", conversationId: null, loadedDeferredTools: [] },
           toolControl: {
             mode: "disabled",
             requiresConfirmation: false,
@@ -265,6 +265,9 @@ export async function handleToolsListWithQueryRuntime(
         },
       ] as const);
     const visibility = Object.fromEntries(visibilityEntries) as Record<string, ToolVisibilityPayload>;
+    const loadedDeferredTools = visibilityConversationId
+      ? ctx.toolExecutor.getLoadedDeferredToolList(visibilityConversationId)
+      : [];
 
     queryRuntime.mark("tool_inventory_loaded", {
       conversationId: visibilityConversationId,
@@ -422,6 +425,7 @@ export async function handleToolsListWithQueryRuntime(
         visibilityContext: {
           agentId: visibilityAgentId ?? "default",
           conversationId: visibilityConversationId ?? null,
+          loadedDeferredTools,
           ...(launchExplainability ? { launchExplainability } : {}),
           ...(residentStateBinding ? { residentStateBinding } : {}),
           ...(visibilityTask

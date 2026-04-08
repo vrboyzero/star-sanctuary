@@ -734,6 +734,21 @@ describe("GoalManager", () => {
     expect(result.handoff.openCheckpoints).toHaveLength(1);
     expect(result.handoff.recommendedNodeId).toBe("node_impl");
     expect(result.handoff.focusCapability?.nodeId).toBe("node_impl");
+    expect(result.continuationState).toMatchObject({
+      version: 1,
+      scope: "goal",
+      targetId: goal.id,
+      recommendedTargetId: "node_impl",
+      targetType: "node",
+      resumeMode: "checkpoint",
+      checkpoints: {
+        openCount: 1,
+        blockerCount: 1,
+      },
+      progress: {
+        current: "aligning",
+      },
+    });
 
     const handoffContent = await fs.readFile(goal.handoffPath, "utf-8");
     expect(handoffContent).toContain("# handoff");
@@ -742,6 +757,54 @@ describe("GoalManager", () => {
 
     const progress = await fs.readFile(goal.progressPath, "utf-8");
     expect(progress).toContain("handoff_generated");
+  });
+
+  it("reads handoff snapshot without mutating handoff artifacts or progress", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Handoff Read Goal",
+      objective: "Inspect continuation without side effects",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_review",
+      title: "Review implementation",
+      status: "ready",
+      checkpointRequired: true,
+    });
+    await manager.claimTaskNode(goal.id, "node_review", {
+      runId: "run_handoff_read_1",
+      summary: "Review started",
+    });
+    await manager.requestCheckpoint(goal.id, "node_review", {
+      title: "Need reviewer approval",
+      summary: "Waiting for sign-off",
+      reviewer: "reviewer",
+      requestedBy: "main-agent",
+      runId: "run_handoff_read_1",
+    });
+
+    const handoffBefore = await fs.readFile(goal.handoffPath, "utf-8");
+    const progressBefore = await fs.readFile(goal.progressPath, "utf-8");
+
+    const result = await manager.getHandoff(goal.id);
+    expect(result.handoff.goalId).toBe(goal.id);
+    expect(result.handoff.resumeMode).toBe("checkpoint");
+    expect(result.continuationState).toMatchObject({
+      version: 1,
+      scope: "goal",
+      targetId: goal.id,
+      recommendedTargetId: "node_review",
+      targetType: "node",
+      resumeMode: "checkpoint",
+    });
+
+    const handoffAfter = await fs.readFile(goal.handoffPath, "utf-8");
+    const progressAfter = await fs.readFile(goal.progressPath, "utf-8");
+    expect(handoffAfter).toBe(handoffBefore);
+    expect(progressAfter).toBe(progressBefore);
+    expect(progressAfter).not.toContain("handoff_generated");
   });
 
   it("generates retrospective artifacts from current goal runtime", async () => {

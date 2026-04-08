@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 
 import type { AgentRegistry, BelldandyAgent, ConversationStore } from "@belldandy/agent";
+import {
+  evaluateChannelSecurityPolicy,
+  loadChannelSecurityConfig,
+  resolveChannelSecurityConfigPath,
+  type ChannelSecurityApprovalRequestInput,
+} from "@belldandy/channels";
 import type { MessageSendParams } from "@belldandy/protocol";
 import { runAgentToCompletionWithLifecycle } from "./query-runtime-agent-run.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
@@ -27,11 +33,13 @@ export type CommunityMessageQueryRuntimeContext = {
   authorization?: string;
   communityApiToken?: string;
   body: unknown;
+  stateDir: string;
   agentFactory?: () => BelldandyAgent;
   agentRegistry?: AgentRegistry;
   conversationStore: ConversationStore;
   log: QueryRuntimeLogger;
   runtimeObserver?: QueryRuntimeObserver<"api.message">;
+  onChannelSecurityApprovalRequired?: (input: ChannelSecurityApprovalRequestInput) => void | Promise<void>;
   emitAutoRunTaskTokenResult: (
     conversationStore: ConversationStore,
     payload: {
@@ -129,8 +137,17 @@ export async function handleCommunityMessageWithQueryRuntime(
       const conversationId = typeof body.conversationId === "string" ? body.conversationId : "";
       const from = typeof body.from === "string" ? body.from : undefined;
       const agentId = typeof body.agentId === "string" ? body.agentId : undefined;
+      const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
       const senderInfo = toSenderInfo(body.senderInfo);
       const roomContext = toRoomContext(body.roomContext);
+      const mentioned = typeof body.mentioned === "boolean"
+        ? body.mentioned
+        : inferCommunityMentioned(text, accountId || agentId);
+      const mentions = Array.isArray(body.mentions)
+        ? body.mentions.map((item) => String(item)).filter(Boolean)
+        : (mentioned ? [accountId || agentId || "__mentioned__"].filter(Boolean) : []);
+      const senderId = senderInfo?.id ?? from;
+      const chatKind = roomContext?.roomId ? "room" : "dm";
 
       if (!text) {
         queryRuntime.mark("completed", {
@@ -169,8 +186,62 @@ export async function handleCommunityMessageWithQueryRuntime(
         detail: {
           from: from ?? "unknown",
           requestedAgentId: agentId ?? "default",
+          accountId: accountId || undefined,
         },
       });
+
+      const securityDecision = evaluateChannelSecurityPolicy(
+        loadChannelSecurityConfig(resolveChannelSecurityConfigPath(ctx.stateDir)),
+        {
+          channel: "community",
+          accountId: accountId || undefined,
+          chatKind,
+          chatId: roomContext?.roomId ?? conversationId,
+          text,
+          senderId,
+          senderName: senderInfo?.name,
+          mentions,
+          mentioned,
+          eventType: "http",
+        },
+      );
+      if (securityDecision && !securityDecision.allow) {
+        if (securityDecision.reason === "channel_security:dm_allowlist_blocked" && senderId) {
+          await ctx.onChannelSecurityApprovalRequired?.({
+            channel: "community",
+            accountId: accountId || undefined,
+            senderId,
+            senderName: senderInfo?.name,
+            chatId: roomContext?.roomId ?? conversationId,
+            chatKind: "dm",
+            messagePreview: text,
+          });
+        }
+        queryRuntime.mark("completed", {
+          conversationId,
+          detail: {
+            code: "CHANNEL_SECURITY_BLOCKED",
+            reason: securityDecision.reason,
+            accountId: accountId || undefined,
+            chatKind,
+          },
+        });
+        return {
+          status: 403,
+          body: {
+            ok: false,
+            error: {
+              code: "CHANNEL_SECURITY_BLOCKED",
+              message: `Community message blocked by channel security policy (${securityDecision.reason}).`,
+            },
+            payload: {
+              reason: securityDecision.reason,
+              accountId: accountId || undefined,
+              chatKind,
+            },
+          },
+        };
+      }
 
       const agent = createAgent({
         agentFactory: ctx.agentFactory,
@@ -215,6 +286,8 @@ export async function handleCommunityMessageWithQueryRuntime(
           senderInfo,
           meta: {
             runId,
+            channel: "community",
+            accountId: accountId || undefined,
           },
         },
         onToolEvent: (detail) => {
@@ -694,6 +767,13 @@ function isBearerAuthorized(authorization: string | undefined, expectedToken: st
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function inferCommunityMentioned(text: string, accountId?: string): boolean {
+  const normalizedText = String(text ?? "").trim().toLowerCase();
+  const normalizedAccountId = typeof accountId === "string" ? accountId.trim().toLowerCase() : "";
+  if (!normalizedText || !normalizedAccountId) return false;
+  return normalizedText.includes(`@${normalizedAccountId}`) || normalizedText.includes(normalizedAccountId);
 }
 
 function toSenderInfo(value: unknown): MessageSendParams["senderInfo"] {

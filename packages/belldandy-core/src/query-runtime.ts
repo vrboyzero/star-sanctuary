@@ -24,6 +24,8 @@ export type QueryRuntimeMethod =
   | "delegation.inspect.get"
   | "subtask.list"
   | "subtask.get"
+  | "subtask.resume"
+  | "subtask.update"
   | "subtask.stop"
   | "subtask.archive";
 
@@ -64,6 +66,8 @@ export type QueryRuntimeStage =
   | "task_output_loaded"
   | "task_prompt_snapshot_loaded"
   | "task_prompt_snapshot_missing"
+  | "task_resumed"
+  | "task_updated"
   | "task_stopped"
   | "task_archived"
   | "runtime_report_built"

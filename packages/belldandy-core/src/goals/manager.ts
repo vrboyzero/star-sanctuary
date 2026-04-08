@@ -6,7 +6,7 @@ import { getGlobalMemoryManager, type ExperienceCandidate } from "@belldandy/mem
 import { publishSkillCandidate, getGlobalSkillRegistry, getUserSkillsDir } from "@belldandy/skills";
 import { getGoalUpdateAreas } from "./goal-events.js";
 import { normalizeGoalId, normalizeGoalSlug, resolveGoalPaths } from "./paths.js";
-import { generateGoalHandoff } from "./handoff.js";
+import { buildGoalHandoffResult, generateGoalHandoff } from "./handoff.js";
 import { generateGoalMethodCandidates } from "./method-candidates.js";
 import { appendGoalProgressEntry } from "./progress.js";
 import { generateGoalRetrospective } from "./retrospective.js";
@@ -87,6 +87,7 @@ import type {
   GoalSuggestionType,
   GoalCrossFlowPatternGenerateResult,
   GoalHandoffGenerateResult,
+  GoalHandoffReadResult,
   GoalMethodCandidateGenerateResult,
   GoalRetrospectiveGenerateResult,
   GoalRuntimeState,
@@ -1016,7 +1017,7 @@ export class GoalManager {
 
   async generateHandoff(goalId: string): Promise<GoalHandoffGenerateResult> {
     const goal = await this.requireGoal(goalId);
-    const result = await this.buildHandoff(goal);
+    const result = await this.persistHandoff(goal);
     await appendGoalProgressEntry(goal, {
       kind: "handoff_generated",
       title: goal.title,
@@ -1027,6 +1028,11 @@ export class GoalManager {
       runId: result.handoff.lastRunId,
     });
     return result;
+  }
+
+  async getHandoff(goalId: string): Promise<GoalHandoffReadResult> {
+    const goal = await this.requireGoal(goalId);
+    return this.buildHandoff(goal);
   }
 
   private async readProgressContent(goal: LongTermGoal): Promise<string> {
@@ -1044,7 +1050,7 @@ export class GoalManager {
       readGoalCapabilityPlans(goal),
       this.readProgressContent(goal),
     ]);
-    const handoff = await generateGoalHandoff({
+    const handoff = buildGoalHandoffResult({
       goal,
       runtime,
       graph,
@@ -2494,7 +2500,28 @@ export class GoalManager {
     return null;
   }
 
-  private async buildHandoff(goal: LongTermGoal): Promise<GoalHandoffGenerateResult> {
+  private async buildHandoff(goal: LongTermGoal): Promise<GoalHandoffReadResult> {
+    const [runtime, graph, checkpoints, plansState, progressContent] = await Promise.all([
+      readGoalRuntime(goal),
+      readGoalTaskGraph(goal),
+      readGoalCheckpoints(goal),
+      readGoalCapabilityPlans(goal),
+      fs.readFile(goal.progressPath, "utf-8").catch((err: NodeJS.ErrnoException) => {
+        if (err?.code === "ENOENT") return "";
+        throw err;
+      }),
+    ]);
+    return buildGoalHandoffResult({
+      goal,
+      runtime,
+      graph,
+      checkpoints,
+      plans: plansState.items,
+      progressContent,
+    });
+  }
+
+  private async persistHandoff(goal: LongTermGoal): Promise<GoalHandoffGenerateResult> {
     const [runtime, graph, checkpoints, plansState, progressContent] = await Promise.all([
       readGoalRuntime(goal),
       readGoalTaskGraph(goal),
@@ -2517,7 +2544,7 @@ export class GoalManager {
 
   private async refreshHandoffAfterMutation(goal: LongTermGoal): Promise<void> {
     try {
-      await this.buildHandoff(goal);
+      await this.persistHandoff(goal);
     } catch {
       // best effort auto-refresh: do not break core task/checkpoint state mutation because handoff refresh failed
     }

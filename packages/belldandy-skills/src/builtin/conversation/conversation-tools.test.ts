@@ -329,6 +329,7 @@ describe("conversation tools", () => {
             createdAt: 1712000005000,
           },
         ]),
+        getLoadedToolNames: vi.fn(() => ["goal_checkpoint_request", "browser_open"]),
       },
     });
 
@@ -341,6 +342,8 @@ describe("conversation tools", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("Conversation Meta");
     expect(result.output).toContain("task_token_results=1");
+    expect(result.output).toContain("loaded_deferred_tools=2");
+    expect(result.output).toContain("goal_checkpoint_request");
     expect(result.output).toContain("third");
   });
 

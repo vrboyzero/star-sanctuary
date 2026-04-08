@@ -304,6 +304,95 @@ describe("doctor observability formatting", () => {
           },
         ],
       },
+      cronRuntime: {
+        scheduler: {
+          enabled: true,
+          running: true,
+          activeRuns: 2,
+          lastTickAtMs: 1710000000000,
+        },
+        totals: {
+          totalJobs: 3,
+          enabledJobs: 2,
+          disabledJobs: 1,
+          staggeredJobs: 1,
+          invalidNextRunJobs: 0,
+        },
+        sessionTargetCounts: {
+          main: 1,
+          isolated: 2,
+        },
+        deliveryModeCounts: {
+          user: 2,
+          none: 1,
+        },
+        failureDestinationModeCounts: {
+          user: 1,
+          none: 2,
+        },
+        recentJobs: [
+          {
+            id: "cron-job-1",
+            name: "Digest",
+            enabled: true,
+            scheduleSummary: "every 60000ms",
+            sessionTarget: "main",
+            deliveryMode: "user",
+            failureDestinationMode: "user",
+            staggerMs: 15000,
+            nextRunAtMs: 1710000060000,
+            lastStatus: "ok",
+          },
+        ],
+        headline: "enabled; jobs=2/3; session main=1; isolated=2; delivery user=2; none=1; stagger=1; activeRuns=2",
+      },
+      backgroundContinuationRuntime: {
+        totals: {
+          totalRuns: 3,
+          runningRuns: 1,
+          failedRuns: 1,
+          skippedRuns: 1,
+          conversationLinkedRuns: 2,
+        },
+        kindCounts: {
+          cron: 2,
+          heartbeat: 1,
+        },
+        sessionTargetCounts: {
+          main: 1,
+          isolated: 1,
+        },
+        recentEntries: [
+          {
+            runId: "cron-run-1",
+            kind: "cron",
+            sourceId: "cron-job-1",
+            label: "Digest",
+            status: "ran",
+            startedAt: 1710000000000,
+            finishedAt: 1710000000200,
+            summary: "Digest completed.",
+            conversationId: "cron-main:cron-job-1",
+            sessionTarget: "main",
+            continuationState: {
+              recommendedTargetId: "cron-main:cron-job-1",
+              targetType: "conversation",
+            },
+          },
+          {
+            runId: "heartbeat-run-1",
+            kind: "heartbeat",
+            sourceId: "heartbeat",
+            label: "Heartbeat",
+            status: "failed",
+            startedAt: 1710000010000,
+            finishedAt: 1710000010500,
+            reason: "provider unavailable",
+            continuationState: {},
+          },
+        ],
+        headline: "runs=3; running=1; failed=1; skipped=1; cron=2; heartbeat=1; linked=2; main=1; isolated=1",
+      },
     });
 
     expect(lines.join("\n")).toContain("Prompt");
@@ -355,5 +444,15 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("1/2 protocol-backed");
     expect(lines.join("\n")).toContain("aggregation main_agent_summary:1");
     expect(lines.join("\n")).toContain("subtask-1: status=running, source=goal_subtask, aggregation=main_agent_summary, deliverable=patch, deliverable-summary=返回治理摘要, intent=整理工具治理摘要");
+    expect(lines.join("\n")).toContain("Cron Runtime");
+    expect(lines.join("\n")).toContain("2/3 jobs enabled");
+    expect(lines.join("\n")).toContain("delivery user 2 / none 1");
+    expect(lines.join("\n")).toContain("running / active 2");
+    expect(lines.join("\n")).toContain("Digest: every 60000ms, enabled, session=main, delivery=user, failure=user, stagger=15000");
+    expect(lines.join("\n")).toContain("Background Continuation Runtime");
+    expect(lines.join("\n")).toContain("3 runs / running 1");
+    expect(lines.join("\n")).toContain("cron 2 / heartbeat 1");
+    expect(lines.join("\n")).toContain("Digest: ran, cron, session=main, target=conversation:cron-main:cron-job-1");
+    expect(lines.join("\n")).toContain("Heartbeat: failed, heartbeat, reason=provider unavailable");
   });
 });

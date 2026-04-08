@@ -43,6 +43,12 @@ export function getGoalTrackingCheckpointExplainabilityLines(checkpoint, capabil
   return Array.isArray(entry?.lines) ? entry.lines.slice(0, 2) : [];
 }
 
+export function filterGoalTrackingCheckpointsByNode(checkpoints, nodeId) {
+  const normalizedNodeId = normalizeString(nodeId);
+  if (!normalizedNodeId) return Array.isArray(checkpoints) ? checkpoints : [];
+  return (Array.isArray(checkpoints) ? checkpoints : []).filter((item) => normalizeString(item?.nodeId) === normalizedNodeId);
+}
+
 export function createGoalsTrackingPanelFeature({
   refs,
   escapeHtml,
@@ -109,6 +115,9 @@ export function createGoalsTrackingPanelFeature({
       .slice()
       .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
       .slice(0, 6);
+    const focusNodeId = normalizeString(payload?.focusNodeId);
+    const focusedCheckpoints = filterGoalTrackingCheckpointsByNode(recentCheckpoints, focusNodeId);
+    const visibleCheckpoints = focusNodeId ? focusedCheckpoints : recentCheckpoints;
 
     panel.innerHTML = `
       <div class="goal-tracking-stats">
@@ -152,7 +161,7 @@ export function createGoalsTrackingPanelFeature({
           ${recentNodes.length ? `
             <div class="goal-tracking-list">
               ${recentNodes.map((node) => `
-                <div class="goal-tracking-item">
+                <div class="goal-tracking-item" data-goal-continuation-focus="node" data-goal-node-id="${escapeHtml(node.id || "")}">
                   <div class="goal-tracking-item-head">
                     <span class="goal-tracking-item-title">${escapeHtml(node.title)}</span>
                     <span class="memory-badge ${node.status === "completed" ? "memory-badge-shared" : ""}">${escapeHtml(formatNodeStatus(node.status))}</span>
@@ -179,11 +188,12 @@ export function createGoalsTrackingPanelFeature({
           ` : '<div class="memory-viewer-empty">tasks.json 中还没有节点。</div>'}
         </div>
         <div class="goal-tracking-column">
-          <div class="goal-summary-title">最近 Checkpoint</div>
-          ${recentCheckpoints.length ? `
+          <div class="goal-summary-title">${escapeHtml(focusNodeId ? `关联 Checkpoint · ${focusNodeId}` : "最近 Checkpoint")}</div>
+          ${focusNodeId ? `<div class="goal-summary-text">当前 node focus 已收窄到该节点关联的 checkpoint。</div>` : ""}
+          ${visibleCheckpoints.length ? `
             <div class="goal-tracking-list">
-              ${recentCheckpoints.map((item) => `
-                <div class="goal-tracking-item">
+              ${visibleCheckpoints.map((item) => `
+                <div class="goal-tracking-item" data-goal-continuation-focus="node" data-goal-node-id="${escapeHtml(item.nodeId || "")}">
                   <div class="goal-tracking-item-head">
                     <span class="goal-tracking-item-title">${escapeHtml(item.title)}</span>
                     <span class="memory-badge ${item.status === "approved" ? "memory-badge-shared" : ""}">${escapeHtml(formatCheckpointStatus(item.status))}</span>
@@ -236,7 +246,9 @@ export function createGoalsTrackingPanelFeature({
                 </div>
               `).join("")}
             </div>
-          ` : '<div class="memory-viewer-empty">checkpoints.json 中还没有 checkpoint。</div>'}
+          ` : focusNodeId
+            ? '<div class="memory-viewer-empty">当前 node 还没有关联 checkpoint。</div>'
+            : '<div class="memory-viewer-empty">checkpoints.json 中还没有 checkpoint。</div>'}
         </div>
       </div>
     `;
@@ -250,6 +262,7 @@ export function createGoalsTrackingPanelFeature({
 
   return {
     getGoalTrackingNodeActionTargets,
+    filterGoalTrackingCheckpointsByNode,
     renderGoalTrackingPanel,
     renderGoalTrackingPanelError,
     renderGoalTrackingPanelLoading,

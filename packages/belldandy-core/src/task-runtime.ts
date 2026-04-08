@@ -25,12 +25,21 @@ export type SubTaskNotificationKind =
   | "queued"
   | "started"
   | "progress"
+  | "steering_requested"
+  | "steering_delivered"
+  | "steering_failed"
+  | "resume_requested"
+  | "resume_delivered"
+  | "resume_failed"
   | "stop_requested"
   | "stopped"
   | "archived"
   | "completed"
   | "failed"
   | "timeout";
+
+export type SubTaskSteeringStatus = "accepted" | "delivered" | "failed";
+export type SubTaskResumeStatus = "accepted" | "delivered" | "failed";
 
 export type SubTaskProgress = {
   phase: SubTaskStatus;
@@ -43,6 +52,29 @@ export type SubTaskNotification = {
   kind: SubTaskNotificationKind;
   message: string;
   createdAt: number;
+};
+
+export type SubTaskSteeringRecord = {
+  id: string;
+  message: string;
+  status: SubTaskSteeringStatus;
+  requestedAt: number;
+  requestedSessionId?: string;
+  deliveredAt?: number;
+  deliveredSessionId?: string;
+  error?: string;
+};
+
+export type SubTaskResumeRecord = {
+  id: string;
+  message: string;
+  status: SubTaskResumeStatus;
+  requestedAt: number;
+  requestedSessionId?: string;
+  deliveredAt?: number;
+  deliveredSessionId?: string;
+  resumedFromSessionId?: string;
+  error?: string;
 };
 
 export type SubTaskLaunchSpec = {
@@ -92,6 +124,8 @@ export type SubTaskRecord = {
   outputPath?: string;
   outputPreview?: string;
   error?: string;
+  steering: SubTaskSteeringRecord[];
+  resume: SubTaskResumeRecord[];
   notifications: SubTaskNotification[];
 };
 
@@ -125,6 +159,8 @@ type RuntimeLogger = {
 
 const STATE_VERSION = 1 as const;
 const MAX_NOTIFICATIONS = 20;
+const MAX_STEERING_RECORDS = 8;
+const MAX_RESUME_RECORDS = 8;
 const OUTPUT_FILENAME = "result.md";
 
 function truncateText(value: string, maxLength = 240): string {
@@ -212,6 +248,8 @@ function cloneRecord(record: SubTaskRecord): SubTaskRecord {
           : undefined,
       },
     progress: { ...record.progress },
+    steering: record.steering.map((item) => ({ ...item })),
+    resume: record.resume.map((item) => ({ ...item })),
     notifications: record.notifications.map((item) => ({ ...item })),
   };
 }
@@ -324,6 +362,8 @@ export class SubTaskRuntimeStore {
         },
         createdAt: now,
         updatedAt: now,
+        steering: [],
+        resume: [],
         notifications: [],
       };
       this.pushNotification(record, "queued", "Task created and waiting for orchestration.");
@@ -424,6 +464,10 @@ export class SubTaskRuntimeStore {
     return this.mutate(async () => {
       const record = this.records.get(taskId);
       if (!record) return undefined;
+      if (record.sessionId && input.sessionId && input.sessionId !== record.sessionId) {
+        this.sessionToTask.delete(input.sessionId);
+        return cloneRecord(record);
+      }
       const now = Date.now();
       const reason = input.reason?.trim() || record.stopReason || "Task stopped by user.";
       if (input.sessionId && input.sessionId !== record.sessionId) {
@@ -469,6 +513,9 @@ export class SubTaskRuntimeStore {
       const record = this.records.get(taskId);
       if (!record) return undefined;
       const now = Date.now();
+      if (record.sessionId && record.sessionId !== sessionId) {
+        this.sessionToTask.delete(record.sessionId);
+      }
       record.sessionId = sessionId;
       if (agentId?.trim()) {
         record.agentId = agentId.trim();
@@ -476,6 +523,10 @@ export class SubTaskRuntimeStore {
       }
       record.status = "running";
       record.updatedAt = now;
+      record.finishedAt = undefined;
+      record.error = undefined;
+      record.stopRequestedAt = undefined;
+      record.stopReason = undefined;
       record.progress = {
         phase: "running",
         message: "Task is running.",
@@ -496,6 +547,10 @@ export class SubTaskRuntimeStore {
       if (!taskId) return undefined;
       const record = this.records.get(taskId);
       if (!record) return undefined;
+      if (record.sessionId !== sessionId) {
+        this.sessionToTask.delete(sessionId);
+        return cloneRecord(record);
+      }
       const snippet = truncateText(delta, 180);
       if (!snippet) return cloneRecord(record);
       const now = Date.now();
@@ -519,6 +574,9 @@ export class SubTaskRuntimeStore {
     return this.mutate(async () => {
       const record = this.records.get(taskId);
       if (!record) return undefined;
+      if (record.sessionId && input.sessionId && input.sessionId !== record.sessionId) {
+        return cloneRecord(record);
+      }
       const now = Date.now();
       if (input.sessionId && input.sessionId !== record.sessionId) {
         record.sessionId = input.sessionId;
@@ -554,6 +612,157 @@ export class SubTaskRuntimeStore {
           : input.error || "Task finished with an error.",
       );
       this.emitChange(input.status === "stopped" ? "stopped" : "completed", record);
+      return cloneRecord(record);
+    });
+  }
+
+  async requestSteering(
+    taskId: string,
+    message: string,
+    input: {
+      sessionId?: string;
+    } = {},
+  ): Promise<{ item: SubTaskRecord; steering: SubTaskSteeringRecord } | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const normalizedMessage = String(message ?? "").trim();
+      if (!normalizedMessage) return undefined;
+      const now = Date.now();
+      const steering: SubTaskSteeringRecord = {
+        id: `task_steering_${crypto.randomUUID().slice(0, 8)}`,
+        message: normalizedMessage,
+        status: "accepted",
+        requestedAt: now,
+        requestedSessionId: input.sessionId?.trim() || record.sessionId,
+      };
+      record.updatedAt = now;
+      record.steering.push(steering);
+      if (record.steering.length > MAX_STEERING_RECORDS) {
+        record.steering = record.steering.slice(-MAX_STEERING_RECORDS);
+      }
+      this.pushNotification(record, "steering_requested", `Steering accepted: ${truncateText(normalizedMessage, 160)}`);
+      this.emitChange("updated", record);
+      return {
+        item: cloneRecord(record),
+        steering: { ...steering },
+      };
+    });
+  }
+
+  async markSteeringDelivered(
+    taskId: string,
+    steeringId: string,
+    input: {
+      sessionId?: string;
+    } = {},
+  ): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const steering = record.steering.find((item) => item.id === steeringId);
+      if (!steering) return cloneRecord(record);
+      steering.status = "delivered";
+      steering.deliveredAt = Date.now();
+      steering.deliveredSessionId = input.sessionId?.trim() || record.sessionId;
+      steering.error = undefined;
+      record.updatedAt = steering.deliveredAt;
+      this.pushNotification(record, "steering_delivered", "Steering delivered to the relaunched subtask session.");
+      this.emitChange("updated", record);
+      return cloneRecord(record);
+    });
+  }
+
+  async markSteeringFailed(taskId: string, steeringId: string, reason: string): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const steering = record.steering.find((item) => item.id === steeringId);
+      if (!steering) return cloneRecord(record);
+      steering.status = "failed";
+      steering.error = truncateText(reason, 300);
+      record.updatedAt = Date.now();
+      this.pushNotification(record, "steering_failed", `Steering failed: ${truncateText(reason, 160)}`);
+      this.emitChange("updated", record);
+      return cloneRecord(record);
+    });
+  }
+
+  async requestResume(
+    taskId: string,
+    message: string,
+    input: {
+      sessionId?: string;
+    } = {},
+  ): Promise<{ item: SubTaskRecord; resume: SubTaskResumeRecord } | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const normalizedMessage = String(message ?? "").trim();
+      const now = Date.now();
+      const resume: SubTaskResumeRecord = {
+        id: `task_resume_${crypto.randomUUID().slice(0, 8)}`,
+        message: normalizedMessage,
+        status: "accepted",
+        requestedAt: now,
+        requestedSessionId: input.sessionId?.trim() || record.sessionId,
+      };
+      record.updatedAt = now;
+      record.resume.push(resume);
+      if (record.resume.length > MAX_RESUME_RECORDS) {
+        record.resume = record.resume.slice(-MAX_RESUME_RECORDS);
+      }
+      this.pushNotification(record, "resume_requested", `Resume accepted: ${truncateText(normalizedMessage || "Continue from the last recorded state.", 160)}`);
+      this.emitChange("updated", record);
+      return {
+        item: cloneRecord(record),
+        resume: { ...resume },
+      };
+    });
+  }
+
+  async markResumeDelivered(
+    taskId: string,
+    resumeId: string,
+    input: {
+      sessionId?: string;
+      resumedFromSessionId?: string;
+    } = {},
+  ): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const resume = record.resume.find((item) => item.id === resumeId);
+      if (!resume) return cloneRecord(record);
+      resume.status = "delivered";
+      resume.deliveredAt = Date.now();
+      resume.deliveredSessionId = input.sessionId?.trim() || record.sessionId;
+      resume.resumedFromSessionId = input.resumedFromSessionId?.trim() || resume.requestedSessionId;
+      resume.error = undefined;
+      record.updatedAt = resume.deliveredAt;
+      this.pushNotification(record, "resume_delivered", "Resume delivered to the relaunched subtask session.");
+      this.emitChange("updated", record);
+      return cloneRecord(record);
+    });
+  }
+
+  async markResumeFailed(taskId: string, resumeId: string, reason: string): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const resume = record.resume.find((item) => item.id === resumeId);
+      if (!resume) return cloneRecord(record);
+      resume.status = "failed";
+      resume.error = truncateText(reason, 300);
+      record.updatedAt = Date.now();
+      this.pushNotification(record, "resume_failed", `Resume failed: ${truncateText(reason, 160)}`);
+      this.emitChange("updated", record);
       return cloneRecord(record);
     });
   }
@@ -628,6 +837,53 @@ export class SubTaskRuntimeStore {
             createdAt: Number(current.createdAt) || Date.now(),
           };
         })
+      : [];
+    const steering = Array.isArray(value.steering)
+      ? value.steering
+        .filter((item) => item && typeof item === "object")
+        .map((item) => {
+          const current = item as Record<string, unknown>;
+          return {
+            id: typeof current.id === "string" ? current.id : `task_steering_${crypto.randomUUID().slice(0, 8)}`,
+            message: typeof current.message === "string" ? current.message : "",
+            status: current.status === "delivered" || current.status === "failed" ? current.status : "accepted",
+            requestedAt: Number(current.requestedAt) || Date.now(),
+            requestedSessionId: typeof current.requestedSessionId === "string" && current.requestedSessionId.trim()
+              ? current.requestedSessionId.trim()
+              : undefined,
+            deliveredAt: Number.isFinite(Number(current.deliveredAt)) ? Number(current.deliveredAt) : undefined,
+            deliveredSessionId: typeof current.deliveredSessionId === "string" && current.deliveredSessionId.trim()
+              ? current.deliveredSessionId.trim()
+              : undefined,
+            error: typeof current.error === "string" && current.error.trim() ? current.error : undefined,
+          } satisfies SubTaskSteeringRecord;
+        })
+        .slice(-MAX_STEERING_RECORDS)
+      : [];
+    const resume = Array.isArray(value.resume)
+      ? value.resume
+        .filter((item) => item && typeof item === "object")
+        .map((item) => {
+          const current = item as Record<string, unknown>;
+          return {
+            id: typeof current.id === "string" ? current.id : `task_resume_${crypto.randomUUID().slice(0, 8)}`,
+            message: typeof current.message === "string" ? current.message : "",
+            status: current.status === "delivered" || current.status === "failed" ? current.status : "accepted",
+            requestedAt: Number(current.requestedAt) || Date.now(),
+            requestedSessionId: typeof current.requestedSessionId === "string" && current.requestedSessionId.trim()
+              ? current.requestedSessionId.trim()
+              : undefined,
+            deliveredAt: Number.isFinite(Number(current.deliveredAt)) ? Number(current.deliveredAt) : undefined,
+            deliveredSessionId: typeof current.deliveredSessionId === "string" && current.deliveredSessionId.trim()
+              ? current.deliveredSessionId.trim()
+              : undefined,
+            resumedFromSessionId: typeof current.resumedFromSessionId === "string" && current.resumedFromSessionId.trim()
+              ? current.resumedFromSessionId.trim()
+              : undefined,
+            error: typeof current.error === "string" && current.error.trim() ? current.error : undefined,
+          } satisfies SubTaskResumeRecord;
+        })
+        .slice(-MAX_RESUME_RECORDS)
       : [];
     return {
       id,
@@ -791,6 +1047,8 @@ export class SubTaskRuntimeStore {
       outputPath: typeof value.outputPath === "string" && value.outputPath.trim() ? value.outputPath : undefined,
       outputPreview: typeof value.outputPreview === "string" ? value.outputPreview : undefined,
       error: typeof value.error === "string" ? value.error : undefined,
+      steering,
+      resume,
       notifications: notifications.slice(-MAX_NOTIFICATIONS),
     };
   }
@@ -814,6 +1072,12 @@ export class SubTaskRuntimeStore {
       case "queued":
       case "started":
       case "progress":
+      case "steering_requested":
+      case "steering_delivered":
+      case "steering_failed":
+      case "resume_requested":
+      case "resume_delivered":
+      case "resume_failed":
       case "stop_requested":
       case "stopped":
       case "archived":
@@ -880,6 +1144,7 @@ export class SubTaskRuntimeStore {
                   : undefined,
             },
           progress: { ...record.progress },
+          steering: record.steering.map((item) => ({ ...item })),
           notifications: record.notifications.map((item) => ({ ...item })),
         })),
     };
@@ -1142,5 +1407,277 @@ export function createSubTaskAgentCapabilities(input: {
     spawnSubAgent: (opts: SpawnSubAgentOptions) => spawnOne(opts),
     spawnParallel: (tasks: SpawnSubAgentOptions[]) => Promise.all(tasks.map((task: SpawnSubAgentOptions) => spawnOne(task))),
     listSessions: (parentConversationId?: string) => input.runtimeStore.listSessionInfos(parentConversationId),
+  };
+}
+
+function extractConversationHistoryMessages(
+  conversation: {
+    messages?: Array<{ role?: unknown; content?: unknown }>;
+  } | undefined,
+): Array<{ role: "user" | "assistant"; content: string }> {
+  if (!conversation || !Array.isArray(conversation.messages)) {
+    return [];
+  }
+  return conversation.messages
+    .filter((item): item is { role: "user" | "assistant"; content: string } =>
+      item?.role === "user" || item?.role === "assistant")
+    .map((item) => ({
+      role: item.role,
+      content: typeof item.content === "string" ? item.content : "",
+    }))
+    .filter((item) => item.content.trim().length > 0);
+}
+
+function buildResumeInstruction(record: SubTaskRecord, message: string): string {
+  const normalizedMessage = String(message ?? "").trim();
+  const latestSummary = truncateText(
+    record.outputPreview || record.error || record.summary || record.progress.message || record.instruction,
+    240,
+  );
+  if (normalizedMessage) {
+    return [
+      "Resume the same subtask from its last recorded state.",
+      "",
+      `Original instruction: ${record.instruction}`,
+      `Latest recorded summary: ${latestSummary || "-"}`,
+      "",
+      `Resume guidance: ${normalizedMessage}`,
+    ].join("\n").trim();
+  }
+  return [
+    "Resume the same subtask from its last recorded state.",
+    "",
+    `Original instruction: ${record.instruction}`,
+    `Latest recorded summary: ${latestSummary || "-"}`,
+    "",
+    "Continue from here and produce the next best result.",
+  ].join("\n").trim();
+}
+
+function buildResumeLaunchSpec(
+  record: SubTaskRecord,
+  instruction: string,
+  sessionLaunchSpec?: AgentLaunchSpec,
+): AgentLaunchSpecInput {
+  if (sessionLaunchSpec) {
+    return {
+      ...sessionLaunchSpec,
+      instruction,
+    };
+  }
+  return {
+    parentConversationId: record.parentConversationId,
+    agentId: record.agentId,
+    profileId: record.launchSpec.profileId,
+    instruction,
+    background: record.background,
+    timeoutMs: record.launchSpec.timeoutMs,
+    channel: record.launchSpec.channel,
+    role: record.launchSpec.role,
+    cwd: record.launchSpec.resolvedCwd || record.launchSpec.cwd,
+    toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
+    allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
+    maxToolRiskLevel: record.launchSpec.maxToolRiskLevel,
+    policySummary: record.launchSpec.policySummary,
+    permissionMode: record.launchSpec.permissionMode,
+    isolationMode: record.launchSpec.isolationMode,
+    parentTaskId: record.launchSpec.parentTaskId,
+  };
+}
+
+export function createSubTaskUpdateController(input: {
+  runtimeStore: SubTaskRuntimeStore;
+  orchestrator: Pick<SubAgentOrchestrator, "spawn" | "getSession" | "stopSession">;
+  conversationStore: {
+    get: (conversationId: string) => {
+      messages?: Array<{ role?: unknown; content?: unknown }>;
+    } | undefined;
+  };
+  logger?: RuntimeLogger;
+}) {
+  return async (taskId: string, message: string): Promise<SubTaskRecord | undefined> => {
+    const normalizedMessage = String(message ?? "").trim();
+    if (!normalizedMessage) {
+      throw new Error("Steering message is required.");
+    }
+
+    const current = await input.runtimeStore.getTask(taskId);
+    if (!current) {
+      return undefined;
+    }
+    if (current.status !== "running" || !current.sessionId) {
+      throw new Error(`Subtask steering only supports running tasks. Current status: ${current.status}`);
+    }
+
+    const session = input.orchestrator.getSession(current.sessionId);
+    if (!session || session.status !== "running") {
+      throw new Error(`Running subtask session is not available: ${current.sessionId}`);
+    }
+
+    const accepted = await input.runtimeStore.requestSteering(taskId, normalizedMessage, {
+      sessionId: current.sessionId,
+    });
+    if (!accepted) {
+      throw new Error(`Failed to record subtask steering: ${taskId}`);
+    }
+
+    const steeringId = accepted.steering.id;
+    const priorHistory = extractConversationHistoryMessages(input.conversationStore.get(current.sessionId));
+    await input.orchestrator.stopSession(current.sessionId, "Steering update requested. Relaunching with updated guidance.");
+
+    let attachedSessionId: string | undefined;
+    void input.orchestrator.spawn({
+      launchSpec: {
+        ...session.launchSpec,
+        instruction: normalizedMessage,
+      },
+      history: priorHistory,
+      resumedFromSessionId: current.sessionId,
+      onQueued: (position: number) => {
+        void input.runtimeStore.markQueued(taskId, position).catch((error) => {
+          input.logger?.warn?.("Failed to mark queued steering continuation.", {
+            taskId,
+            position,
+            error,
+          });
+        });
+      },
+      onSessionCreated: (sessionId: string, resolvedAgentId: string) => {
+        attachedSessionId = sessionId;
+        void input.runtimeStore.attachSession(taskId, sessionId, resolvedAgentId).catch((error) => {
+          input.logger?.warn?.("Failed to attach steering continuation session.", {
+            taskId,
+            sessionId,
+            agentId: resolvedAgentId,
+            error,
+          });
+        });
+        void input.runtimeStore.markSteeringDelivered(taskId, steeringId, {
+          sessionId,
+        }).catch((error) => {
+          input.logger?.warn?.("Failed to mark steering as delivered.", {
+            taskId,
+            sessionId,
+            steeringId,
+            error,
+          });
+        });
+      },
+    }).then((result) => input.runtimeStore.completeTask(taskId, {
+      status: inferTaskStatusFromResult(result),
+      sessionId: result.sessionId ?? attachedSessionId,
+      output: result.output,
+      error: result.error,
+    })).catch(async (error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await input.runtimeStore.markSteeringFailed(taskId, steeringId, errorMessage);
+      if (!attachedSessionId) {
+        await input.runtimeStore.completeTask(taskId, {
+          status: /timed out/i.test(errorMessage) ? "timeout" : "error",
+          output: "",
+          error: errorMessage,
+        });
+      }
+    });
+
+    return accepted.item;
+  };
+}
+
+export function createSubTaskResumeController(input: {
+  runtimeStore: SubTaskRuntimeStore;
+  orchestrator: Pick<SubAgentOrchestrator, "spawn" | "getSession">;
+  conversationStore: {
+    get: (conversationId: string) => {
+      messages?: Array<{ role?: unknown; content?: unknown }>;
+    } | undefined;
+  };
+  logger?: RuntimeLogger;
+}) {
+  return async (taskId: string, message = ""): Promise<SubTaskRecord | undefined> => {
+    const current = await input.runtimeStore.getTask(taskId);
+    if (!current) {
+      return undefined;
+    }
+    if (current.archivedAt) {
+      throw new Error("Archived subtasks cannot be resumed.");
+    }
+    if (!isTerminalStatus(current.status)) {
+      throw new Error(`Subtask resume only supports finished tasks. Current status: ${current.status}`);
+    }
+
+    const resumeInstruction = buildResumeInstruction(current, message);
+    const accepted = await input.runtimeStore.requestResume(taskId, String(message ?? "").trim(), {
+      sessionId: current.sessionId,
+    });
+    if (!accepted) {
+      throw new Error(`Failed to record subtask resume: ${taskId}`);
+    }
+
+    const resumeId = accepted.resume.id;
+    const priorHistory = current.sessionId
+      ? extractConversationHistoryMessages(input.conversationStore.get(current.sessionId))
+      : [];
+    const priorSession = current.sessionId
+      ? input.orchestrator.getSession(current.sessionId)
+      : undefined;
+    const launchSpec = buildResumeLaunchSpec(current, resumeInstruction, priorSession?.launchSpec);
+
+    let attachedSessionId: string | undefined;
+    void input.orchestrator.spawn({
+      launchSpec,
+      history: priorHistory,
+      resumedFromSessionId: current.sessionId,
+      onQueued: (position: number) => {
+        void input.runtimeStore.markQueued(taskId, position).catch((error) => {
+          input.logger?.warn?.("Failed to mark queued subtask resume.", {
+            taskId,
+            position,
+            error,
+          });
+        });
+      },
+      onSessionCreated: (sessionId: string, resolvedAgentId: string) => {
+        attachedSessionId = sessionId;
+        void input.runtimeStore.attachSession(taskId, sessionId, resolvedAgentId).catch((error) => {
+          input.logger?.warn?.("Failed to attach resumed subtask session.", {
+            taskId,
+            sessionId,
+            agentId: resolvedAgentId,
+            error,
+          });
+        });
+        void input.runtimeStore.markResumeDelivered(taskId, resumeId, {
+          sessionId,
+          resumedFromSessionId: current.sessionId,
+        }).catch((error) => {
+          input.logger?.warn?.("Failed to mark subtask resume as delivered.", {
+            taskId,
+            sessionId,
+            resumeId,
+            error,
+          });
+        });
+      },
+    }).then((result) => input.runtimeStore.completeTask(taskId, {
+      status: inferTaskStatusFromResult(result),
+      sessionId: result.sessionId ?? attachedSessionId,
+      output: result.output,
+      error: result.error,
+    })).catch(async (error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (!attachedSessionId) {
+        await input.runtimeStore.markResumeFailed(taskId, resumeId, errorMessage);
+        return;
+      }
+      await input.runtimeStore.completeTask(taskId, {
+        status: /timed out/i.test(errorMessage) ? "timeout" : "error",
+        sessionId: attachedSessionId,
+        output: "",
+        error: errorMessage,
+      });
+    });
+
+    return accepted.item;
   };
 }

@@ -33,6 +33,7 @@ export type SubAgentSession = {
   instruction: string;
   launchSpec: AgentLaunchSpec;
   createdAt: number;
+  resumedFromSessionId?: string;
   finishedAt?: number;
   result?: string;
   error?: string;
@@ -48,6 +49,8 @@ type SpawnCallbacks = {
   shouldAbortBeforeStart?: () => boolean | Promise<boolean>;
   onQueued?: (position: number) => void;
   onSessionCreated?: (sessionId: string, agentId: string) => void;
+  history?: Array<{ role: "user" | "assistant"; content: string }>;
+  resumedFromSessionId?: string;
 };
 
 type SpawnOptionsLegacy = {
@@ -275,6 +278,7 @@ export class SubAgentOrchestrator {
       instruction: launchSpec.instruction,
       launchSpec,
       createdAt: Date.now(),
+      resumedFromSessionId: opts.resumedFromSessionId,
     };
     this.sessions.set(sessionId, session);
     this.runningCount++;
@@ -297,6 +301,7 @@ export class SubAgentOrchestrator {
         maxToolRiskLevel: launchSpec.maxToolRiskLevel,
         policySummary: launchSpec.policySummary,
       },
+      resumedFromSessionId: opts.resumedFromSessionId,
     });
 
     this.emitEvent({
@@ -434,13 +439,22 @@ export class SubAgentOrchestrator {
   ): Promise<SpawnResult> {
     const conversationId = session.id; // sub-agent uses its own session ID as conversationId
     const timeoutMs = session.launchSpec.timeoutMs;
+    const providedHistory = Array.isArray(opts.history) ? opts.history : [];
 
-    // Prepare history in conversation store
+    if (providedHistory.length > 0) {
+      for (const item of providedHistory) {
+        this.conversationStore.addMessage(conversationId, item.role, item.content, {
+          agentId: session.agentId,
+        });
+      }
+    }
     this.conversationStore.addMessage(conversationId, "user", session.launchSpec.instruction, {
       agentId: session.agentId,
     });
 
-    const history = this.conversationStore.getHistory(conversationId);
+    const history = providedHistory.length > 0
+      ? providedHistory.map((item) => ({ ...item }))
+      : this.conversationStore.getHistory(conversationId);
 
     return new Promise<SpawnResult>((resolve) => {
       let settled = false;

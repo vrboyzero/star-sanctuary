@@ -26,6 +26,8 @@ export type CronScheduleEvery = {
     everyMs: number;
     /** 锚定时间戳（可选，默认为创建时间） */
     anchorMs?: number;
+    /** 显式错峰窗口（毫秒）；0 表示保持精确调度 */
+    staggerMs?: number;
 };
 
 /** 日历调度：按指定时区每天 HH:mm 触发 */
@@ -35,6 +37,8 @@ export type CronScheduleDailyAt = {
     time: string;
     /** IANA 时区名，例如 Asia/Shanghai */
     timezone: string;
+    /** 显式错峰窗口（毫秒）；0 表示保持精确调度 */
+    staggerMs?: number;
 };
 
 /** 日历调度：按指定时区的周几 + HH:mm 触发 */
@@ -46,6 +50,8 @@ export type CronScheduleWeeklyAt = {
     time: string;
     /** IANA 时区名，例如 Asia/Shanghai */
     timezone: string;
+    /** 显式错峰窗口（毫秒）；0 表示保持精确调度 */
+    staggerMs?: number;
 };
 
 export type CronSchedule =
@@ -77,6 +83,21 @@ export type CronGoalApprovalScanPayload = {
 };
 
 export type CronPayload = CronSystemEventPayload | CronGoalApprovalScanPayload;
+
+export type CronSessionTarget = "main" | "isolated";
+
+export type CronDeliveryMode = "user" | "none";
+
+export type CronDelivery = {
+    mode: CronDeliveryMode;
+    bestEffort?: boolean;
+};
+
+export type CronFailureDestinationMode = "user" | "none";
+
+export type CronFailureDestination = {
+    mode: CronFailureDestinationMode;
+};
 
 // ── Job 状态 ──
 
@@ -116,6 +137,12 @@ export type CronJob = {
     schedule: CronSchedule;
     /** 执行内容 */
     payload: CronPayload;
+    /** 会话目标：main=固定 job 会话，isolated=每次运行新会话 */
+    sessionTarget: CronSessionTarget;
+    /** 成功后通知策略 */
+    delivery: CronDelivery;
+    /** 失败后通知策略 */
+    failureDestination?: CronFailureDestination;
     /** 运行时状态 */
     state: CronJobState;
 };
@@ -128,6 +155,9 @@ export type CronJobCreate = {
     description?: string;
     schedule: CronSchedule;
     payload: CronPayload;
+    sessionTarget?: CronSessionTarget;
+    delivery?: CronDelivery;
+    failureDestination?: CronFailureDestination;
     enabled?: boolean;
     deleteAfterRun?: boolean;
 };
@@ -140,6 +170,9 @@ export type CronJobPatch = {
     deleteAfterRun?: boolean;
     schedule?: CronSchedule;
     payload?: CronPayload;
+    sessionTarget?: CronSessionTarget;
+    delivery?: CronDelivery;
+    failureDestination?: CronFailureDestination;
 };
 
 // ── 持久化格式 ──

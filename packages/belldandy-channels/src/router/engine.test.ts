@@ -144,5 +144,40 @@ describe("channel router engine", () => {
     expect(decision.agentId).toBe("default");
     expect(decision.reason).toBe("default_action");
   });
+
+  it("applies channel security fallback even when manual router rules are empty", () => {
+    const config: ChannelRouterConfig = {
+      version: 1,
+      defaultAction: { allow: true, agentId: "default" },
+      rules: [],
+    };
+
+    const router = createRuleBasedRouter(config, {
+      securityConfig: {
+        version: 1,
+        channels: {
+          discord: {
+            dmPolicy: "allowlist",
+            allowFrom: ["u-safe"],
+          },
+        },
+      },
+    });
+
+    const blocked = router.decide(makeContext({
+      chatKind: "dm",
+      senderId: "u-risky",
+    }));
+    expect(blocked.allow).toBe(false);
+    expect(blocked.reason).toBe("channel_security:dm_allowlist_blocked");
+
+    const allowed = router.decide(makeContext({
+      chatKind: "dm",
+      senderId: "u-safe",
+    }));
+    expect(allowed.allow).toBe(true);
+    expect(allowed.agentId).toBe("default");
+    expect(allowed.reason).toBe("channel_security:dm_allowlist");
+  });
 });
 

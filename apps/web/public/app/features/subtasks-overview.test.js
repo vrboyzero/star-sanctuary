@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildSubtaskExecutionExplainabilityLines,
+  findSubtaskBySessionId,
   parseGoalSessionReference,
 } from "./subtasks-overview.js";
 
@@ -24,6 +25,16 @@ describe("subtasks overview linkage helpers", () => {
 
   it("returns null for non-goal conversations", () => {
     expect(parseGoalSessionReference("conv-default")).toBeNull();
+  });
+
+  it("finds a subtask by session id", () => {
+    expect(findSubtaskBySessionId([
+      { id: "task_1", sessionId: "sub_1" },
+      { id: "task_2", sessionId: "sub_2" },
+    ], " sub_2 ")).toEqual({
+      id: "task_2",
+      sessionId: "sub_2",
+    });
   });
 
   it("builds compact execution explainability lines for subtask detail", () => {

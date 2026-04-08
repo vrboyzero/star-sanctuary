@@ -21,7 +21,7 @@ export interface HeartbeatRunnerOptions {
     /** Workspace 目录（如 ~/.star_sanctuary） */
     workspaceDir: string;
     /** 发送消息到 Agent 并获取回复 */
-    sendMessage: (prompt: string) => Promise<string>;
+    sendMessage: (input: { prompt: string; conversationId: string; runId: string }) => Promise<string>;
     /** 推送消息到用户渠道（如飞书） */
     deliverToUser?: (message: string) => Promise<void>;
     /** 自定义心跳 prompt */
@@ -34,6 +34,8 @@ export interface HeartbeatRunnerOptions {
     isBusy?: () => boolean;
     /** 日志函数 */
     log?: (message: string) => void;
+    /** 运行态事件（用于统一 background continuation ledger） */
+    onRunEvent?: (event: HeartbeatRunEvent) => void | Promise<void>;
 }
 
 export interface HeartbeatRunnerHandle {
@@ -48,7 +50,25 @@ export interface HeartbeatResult {
     reason?: string;
     durationMs?: number;
     message?: string;
+    runId?: string;
+    conversationId?: string;
 }
+
+export type HeartbeatRunEvent =
+    | {
+        phase: "started";
+        runId: string;
+        conversationId: string;
+        startedAt: number;
+      }
+    | {
+        phase: "finished";
+        runId: string;
+        conversationId: string;
+        startedAt: number;
+        finishedAt: number;
+        result: HeartbeatResult;
+      };
 
 interface HeartbeatState {
     lastRunAt: number;
@@ -168,6 +188,7 @@ export function startHeartbeatRunner(
         timezone,
         isBusy,
         log = console.log,
+        onRunEvent,
     } = options;
 
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -176,11 +197,22 @@ export function startHeartbeatRunner(
 
     const runOnce = async (): Promise<HeartbeatResult> => {
         const startedAt = Date.now();
+        const runId = `heartbeat-run-${startedAt}`;
+        const conversationId = `heartbeat-${startedAt}`;
 
         // 0. Queue Awareness: Check busy
         if (isBusy && isBusy()) {
             log(`[heartbeat] skipped: system is busy`);
-            return { status: "skipped", reason: "requests-in-flight" };
+            const result = { status: "skipped", reason: "requests-in-flight", runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: startedAt,
+                result,
+            });
+            return result;
         }
 
         // 1. Timezone & Active Hours
@@ -188,7 +220,16 @@ export function startHeartbeatRunner(
             // Log less frequently? No, logging skipped is fine for debugging.
             // But to avoid log spam, maybe only debug log. Using provided log function.
             log(`[heartbeat] skipped: outside active hours`);
-            return { status: "skipped", reason: "quiet-hours" };
+            const result = { status: "skipped", reason: "quiet-hours", runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: startedAt,
+                result,
+            });
+            return result;
         }
 
         // 2. Read HEARTBEAT.md
@@ -198,23 +239,56 @@ export function startHeartbeatRunner(
             content = await fs.readFile(heartbeatPath, "utf-8");
         } catch (err) {
             log(`[heartbeat] skipped: HEARTBEAT.md not found`);
-            return { status: "skipped", reason: "file-not-found" };
+            const result = { status: "skipped", reason: "file-not-found", runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: Date.now(),
+                result,
+            });
+            return result;
         }
 
         if (isHeartbeatContentEffectivelyEmpty(content)) {
             log(`[heartbeat] skipped: HEARTBEAT.md is empty`);
-            return { status: "skipped", reason: "empty-heartbeat-file" };
+            const result = { status: "skipped", reason: "empty-heartbeat-file", runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: Date.now(),
+                result,
+            });
+            return result;
         }
 
         // 3. Execute
         log(`[heartbeat] running...`);
+        await onRunEvent?.({
+            phase: "started",
+            runId,
+            conversationId,
+            startedAt,
+        });
         let response: string;
         try {
-            response = await sendMessage(prompt);
+            response = await sendMessage({ prompt, conversationId, runId });
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             log(`[heartbeat] failed: ${message}`);
-            return { status: "failed", reason: message };
+            const result = { status: "failed", reason: message, runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: Date.now(),
+                result,
+            });
+            return result;
         }
 
         const durationMs = Date.now() - startedAt;
@@ -222,12 +296,30 @@ export function startHeartbeatRunner(
         // 4. Handle Response
         if (isHeartbeatOkResponse(response)) {
             log(`[heartbeat] ok (${durationMs}ms)`);
-            return { status: "ran", reason: "ok", durationMs };
+            const result = { status: "ran", reason: "ok", durationMs, runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: Date.now(),
+                result,
+            });
+            return result;
         }
 
         const cleanedResponse = stripHeartbeatToken(response);
         if (!cleanedResponse) {
-            return { status: "ran", reason: "ok-empty", durationMs };
+            const result = { status: "ran", reason: "ok-empty", durationMs, runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: Date.now(),
+                result,
+            });
+            return result;
         }
 
         // 5. Deduplication (Anti-Nagging)
@@ -242,7 +334,16 @@ export function startHeartbeatRunner(
             (Date.now() - prevTime) < ONE_DAY_MS
         ) {
             log(`[heartbeat] skipped: duplicate content (deduplication active)`);
-            return { status: "skipped", reason: "duplicate", message: cleanedResponse };
+            const result = { status: "skipped", reason: "duplicate", message: cleanedResponse, runId, conversationId } satisfies HeartbeatResult;
+            await onRunEvent?.({
+                phase: "finished",
+                runId,
+                conversationId,
+                startedAt,
+                finishedAt: Date.now(),
+                result,
+            });
+            return result;
         }
 
         // 6. Deliver
@@ -266,11 +367,23 @@ export function startHeartbeatRunner(
         state.lastRunAt = Date.now();
         await saveState(workspaceDir, state);
 
-        return {
+        const result = {
             status: "ran",
             durationMs,
             message: cleanedResponse,
-        };
+            runId,
+            conversationId,
+        } satisfies HeartbeatResult;
+        await onRunEvent?.({
+            phase: "finished",
+            runId,
+            conversationId,
+            startedAt,
+            finishedAt: Date.now(),
+            result,
+        });
+
+        return result;
     };
 
     const scheduleNext = () => {

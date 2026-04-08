@@ -1,3 +1,5 @@
+import type { ContinuationStateSnapshot } from "../continuation-state.js";
+
 export type GoalStatus =
   | "draft"
   | "aligning"
@@ -596,8 +598,11 @@ export type GoalHandoffSnapshot = {
 export type GoalHandoffGenerateResult = {
   goal: LongTermGoal;
   handoff: GoalHandoffSnapshot;
+  continuationState: ContinuationStateSnapshot;
   content: string;
 };
+
+export type GoalHandoffReadResult = GoalHandoffGenerateResult;
 
 export type GoalRetrospectiveOutcome = "completed" | "in_progress" | "blocked" | "paused" | "archived";
 

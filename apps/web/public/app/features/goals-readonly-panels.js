@@ -1,3 +1,9 @@
+import {
+  buildContinuationAction,
+  encodeContinuationAction,
+  formatContinuationTargetLabel,
+} from "./continuation-targets.js";
+
 export function createGoalsReadonlyPanelsFeature({
   refs,
   escapeHtml,
@@ -8,6 +14,142 @@ export function createGoalsReadonlyPanelsFeature({
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { goalsDetailEl } = refs;
+
+  function renderGoalContinuationSection(continuationState) {
+    if (!continuationState || typeof continuationState !== "object") return "";
+    const checkpoints = continuationState.checkpoints && typeof continuationState.checkpoints === "object"
+      ? continuationState.checkpoints
+      : {};
+    const progress = continuationState.progress && typeof continuationState.progress === "object"
+      ? continuationState.progress
+      : {};
+    const recent = Array.isArray(progress.recent)
+      ? progress.recent.filter((item) => typeof item === "string" && item.trim()).slice(0, 3)
+      : [];
+
+    const targetText = formatContinuationTargetLabel(continuationState);
+    const targetAction = buildContinuationAction(continuationState);
+    const encodedTargetAction = encodeContinuationAction(targetAction);
+    const targetMarkup = continuationState.recommendedTargetId && encodedTargetAction
+      ? `
+        <button
+          type="button"
+          class="button goal-inline-action-secondary"
+          data-continuation-action="${escapeHtml(encodedTargetAction)}"
+        >${escapeHtml(targetText)}</button>
+      `
+      : `<strong class="goal-summary-value">${escapeHtml(targetText)}</strong>`;
+
+    return `
+      <div class="goal-summary-title">${escapeHtml(t("goals.detailContinuationTitle", {}, "Continuation State"))}</div>
+      <div class="goal-summary-grid">
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">${escapeHtml(t("goals.detailContinuationMode", {}, "Resume Mode"))}</span>
+          <strong class="goal-summary-value">${escapeHtml(continuationState.resumeMode || "-")}</strong>
+        </div>
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">${escapeHtml(t("goals.detailContinuationTarget", {}, "Recommended Target"))}</span>
+          ${targetMarkup}
+        </div>
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">${escapeHtml(t("goals.detailContinuationCheckpoints", {}, "Open Checkpoints"))}</span>
+          <strong class="goal-summary-value">${escapeHtml(String(Number(checkpoints.openCount || 0)))}</strong>
+        </div>
+        <div class="goal-summary-item">
+          <span class="goal-summary-label">${escapeHtml(t("goals.detailContinuationBlockers", {}, "Blockers"))}</span>
+          <strong class="goal-summary-value">${escapeHtml(String(Number(checkpoints.blockerCount || 0)))}</strong>
+        </div>
+      </div>
+      <div class="memory-list-item-snippet">${escapeHtml(continuationState.summary || "-")}</div>
+      <div class="memory-list-item-snippet">${escapeHtml(continuationState.nextAction || "-")}</div>
+      ${progress.current ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("goals.detailContinuationProgress", {}, "Current Progress"))}</span><span>${escapeHtml(progress.current)}</span></div>` : ""}
+      ${recent.length ? `
+        <div class="goal-tracking-list">
+          ${recent.map((item) => `
+            <div class="goal-tracking-item">
+              <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+    `;
+  }
+
+  function deriveContinuationStateFromHandoff(goal, handoff) {
+    if (!goal || !handoff || !handoff.generatedAt) return null;
+    const openCheckpointCount = Number(
+      handoff.tracking?.openCheckpointCount
+      ?? handoff.tracking?.openCheckpoints
+      ?? (Array.isArray(handoff.openCheckpoints) ? handoff.openCheckpoints.length : 0),
+    );
+    const blockerCount = Array.isArray(handoff.blockers) ? handoff.blockers.length : 0;
+    const recentTimeline = Array.isArray(handoff.recentProgress)
+      ? handoff.recentProgress.map((entry) => formatTimelineEntry(entry)).filter(Boolean).slice(0, 3)
+      : Array.isArray(handoff.recentTimeline)
+        ? handoff.recentTimeline.slice(0, 3)
+        : [];
+    const recommendedTargetId = handoff.recommendedNodeId
+      || handoff.resumeNode
+      || handoff.activeConversationId
+      || goal.activeConversationId
+      || goal.id;
+    const targetType = handoff.recommendedNodeId || handoff.resumeNode
+      ? "node"
+      : handoff.activeConversationId || goal.activeConversationId
+        ? "conversation"
+        : "goal";
+
+    return {
+      scope: "goal",
+      targetId: goal.id,
+      recommendedTargetId,
+      targetType,
+      resumeMode: handoff.resumeMode || "goal_channel",
+      summary: handoff.summary || "",
+      nextAction: handoff.nextAction || "",
+      checkpoints: {
+        openCount: openCheckpointCount,
+        blockerCount,
+      },
+      progress: {
+        current: handoff.currentPhase || goal.currentPhase || "",
+        recent: recentTimeline,
+      },
+    };
+  }
+
+  function formatStructuredListItem(item, kind = "") {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return "";
+    const label = typeof item.id === "string" && item.id.trim()
+      ? `[${kind || item.kind || item.status || "-"}] ${item.id}`
+      : typeof item.title === "string"
+        ? item.title
+        : "";
+    const nodeId = typeof item.nodeId === "string" && item.nodeId.trim() ? `node=${item.nodeId}` : "";
+    const title = typeof item.title === "string" ? item.title : "";
+    const detail = typeof item.reason === "string"
+      ? item.reason
+      : typeof item.summary === "string"
+        ? item.summary
+        : typeof item.note === "string"
+          ? item.note
+          : "";
+    return [label, nodeId, title && title !== label ? title : "", detail].filter(Boolean).join(" | ");
+  }
+
+  function formatTimelineEntry(entry) {
+    if (typeof entry === "string") return entry;
+    if (!entry || typeof entry !== "object") return "";
+    return [
+      typeof entry.at === "string" ? entry.at : "",
+      typeof entry.event === "string" ? entry.event : "",
+      typeof entry.nodeId === "string" && entry.nodeId ? `node=${entry.nodeId}` : "",
+      typeof entry.checkpointId === "string" && entry.checkpointId ? `checkpoint=${entry.checkpointId}` : "",
+      typeof entry.summary === "string" ? entry.summary : "",
+      typeof entry.note === "string" ? entry.note : "",
+    ].filter(Boolean).join(" | ");
+  }
 
   function formatProgressEvent(value) {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -155,7 +297,7 @@ export function createGoalsReadonlyPanelsFeature({
   function renderGoalHandoffPanelLoading() {
     const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
     if (!panel) return;
-    panel.innerHTML = '<div class="memory-viewer-empty">正在读取 handoff.md …</div>';
+    panel.innerHTML = '<div class="memory-viewer-empty">正在读取 goal handoff snapshot …</div>';
   }
 
   function renderGoalHandoffPanelError(goal, message) {
@@ -171,9 +313,32 @@ export function createGoalsReadonlyPanelsFeature({
     onBindHandoffPanelActions?.(goal);
   }
 
-  function renderGoalHandoffPanel(goal, handoff) {
+  function renderGoalHandoffPanel(goal, handoff, continuationState = null) {
     const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
     if (!panel || !goal) return;
+    const effectiveContinuationState = continuationState || deriveContinuationStateFromHandoff(goal, handoff);
+    const blockers = Array.isArray(handoff?.blockers) ? handoff.blockers.map((item) => formatStructuredListItem(item, item?.kind || "blocker")).filter(Boolean) : [];
+    const openCheckpoints = Array.isArray(handoff?.openCheckpoints) ? handoff.openCheckpoints.map((item) => formatStructuredListItem(item, "checkpoint")).filter(Boolean) : [];
+    const recentTimeline = Array.isArray(handoff?.recentProgress)
+      ? handoff.recentProgress.map((item) => formatTimelineEntry(item)).filter(Boolean)
+      : Array.isArray(handoff?.recentTimeline)
+        ? handoff.recentTimeline.filter((item) => typeof item === "string" && item.trim())
+        : [];
+    const focusPlan = handoff?.focusCapability
+      ? [
+        handoff.focusCapability.planId,
+        handoff.focusCapability.nodeId ? `node=${handoff.focusCapability.nodeId}` : "",
+        handoff.focusCapability.executionMode || "",
+        handoff.focusCapability.riskLevel ? `risk=${handoff.focusCapability.riskLevel}` : "",
+        handoff.focusCapability.alignment ? `alignment=${handoff.focusCapability.alignment}` : "",
+      ].filter(Boolean).join(" | ")
+      : handoff?.focusPlan || "";
+    const focusSummary = handoff?.focusCapability?.summary || handoff?.focusSummary || "";
+    const openCheckpointCount = Number(
+      handoff?.tracking?.openCheckpointCount
+      ?? handoff?.tracking?.openCheckpoints
+      ?? openCheckpoints.length,
+    );
 
     if (!handoff || !handoff.generatedAt) {
       panel.innerHTML = `
@@ -191,9 +356,9 @@ export function createGoalsReadonlyPanelsFeature({
       <div class="goal-summary-header">
         <div>
           <div class="goal-summary-title">交接摘要 / 恢复交接</div>
-          <div class="goal-summary-text">从 handoff.md 读取当前长期任务的恢复建议、阻塞点与最近交接摘要。</div>
+          <div class="goal-summary-text">从 goal runtime 重建当前长期任务的恢复建议、阻塞点与最近交接摘要。</div>
         </div>
-        <span class="memory-badge memory-badge-shared">已生成</span>
+        <span class="memory-badge memory-badge-shared">当前快照</span>
       </div>
       <div class="goal-summary-grid">
         <div class="goal-summary-item">
@@ -206,19 +371,19 @@ export function createGoalsReadonlyPanelsFeature({
         </div>
         <div class="goal-summary-item">
           <span class="goal-summary-label">建议节点</span>
-          <strong class="goal-summary-value">${escapeHtml(handoff.resumeNode || "-")}</strong>
+          <strong class="goal-summary-value">${escapeHtml(handoff.recommendedNodeId || handoff.resumeNode || "-")}</strong>
         </div>
         <div class="goal-summary-item">
           <span class="goal-summary-label">待处理 Checkpoint</span>
-          <strong class="goal-summary-value">${escapeHtml(String(handoff.openCheckpoints.length))}</strong>
+          <strong class="goal-summary-value">${escapeHtml(String(openCheckpointCount))}</strong>
         </div>
         <div class="goal-summary-item">
           <span class="goal-summary-label">阻塞项</span>
-          <strong class="goal-summary-value">${escapeHtml(String(handoff.blockers.length))}</strong>
+          <strong class="goal-summary-value">${escapeHtml(String(blockers.length))}</strong>
         </div>
         <div class="goal-summary-item">
           <span class="goal-summary-label">上次运行</span>
-          <strong class="goal-summary-value">${escapeHtml(handoff.lastRun || "-")}</strong>
+          <strong class="goal-summary-value">${escapeHtml(handoff.lastRunId || handoff.lastRun || "-")}</strong>
         </div>
       </div>
 
@@ -234,24 +399,25 @@ export function createGoalsReadonlyPanelsFeature({
             <span>完成 ${escapeHtml(String(handoff.tracking.completedNodes || "0"))}</span>
             <span>进行中 ${escapeHtml(String(handoff.tracking.inProgressNodes || "0"))}</span>
             <span>阻塞 ${escapeHtml(String(handoff.tracking.blockedNodes || "0"))}</span>
-            <span>Checkpoint ${escapeHtml(String(handoff.tracking.openCheckpoints || "0"))}</span>
+            <span>Checkpoint ${escapeHtml(String(openCheckpointCount))}</span>
           </div>
-          ${handoff.focusPlan ? `
+          ${focusPlan ? `
             <div class="goal-summary-title">当前关注能力</div>
-            <div class="memory-list-item-snippet">${escapeHtml(handoff.focusPlan)}</div>
-            ${handoff.focusSummary ? `<div class="memory-list-item-snippet">${escapeHtml(handoff.focusSummary)}</div>` : ""}
+            <div class="memory-list-item-snippet">${escapeHtml(focusPlan)}</div>
+            ${focusSummary ? `<div class="memory-list-item-snippet">${escapeHtml(focusSummary)}</div>` : ""}
           ` : ""}
+          ${renderGoalContinuationSection(effectiveContinuationState)}
         </div>
         <div class="goal-tracking-column">
           <div class="goal-summary-title">阻塞 / 待处理</div>
-          ${handoff.blockers.length || handoff.openCheckpoints.length ? `
+          ${blockers.length || openCheckpoints.length ? `
             <div class="goal-tracking-list">
-              ${handoff.blockers.map((item) => `
+              ${blockers.map((item) => `
                 <div class="goal-tracking-item">
                   <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
                 </div>
               `).join("")}
-              ${handoff.openCheckpoints.map((item) => `
+              ${openCheckpoints.map((item) => `
                 <div class="goal-tracking-item">
                   <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
                 </div>
@@ -260,9 +426,9 @@ export function createGoalsReadonlyPanelsFeature({
           ` : '<div class="memory-viewer-empty">当前 handoff 中没有阻塞或待审批项。</div>'}
 
           <div class="goal-summary-title">最近时间线</div>
-          ${handoff.recentTimeline.length ? `
+          ${recentTimeline.length ? `
             <div class="goal-tracking-list">
-              ${handoff.recentTimeline.map((item) => `
+              ${recentTimeline.map((item) => `
                 <div class="goal-tracking-item">
                   <div class="memory-list-item-snippet">${escapeHtml(item)}</div>
                 </div>

@@ -67,8 +67,16 @@ export function createSettingsController({
     cfgDiscordEnabled,
     cfgDiscordBotToken,
     cfgDiscordDefaultChannelId,
+    refreshChannelSecurityBtn,
+    channelSecurityConfigMeta,
+    cfgChannelSecurityContent,
+    channelReplyChunkingConfigMeta,
+    cfgChannelReplyChunkingContent,
+    channelSecurityPendingList,
   } = refs;
   let lastLoadedConfig = null;
+  let lastLoadedChannelSecurityContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
+  let lastLoadedChannelReplyChunkingContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
   const conversationKindCheckboxes = {
     main: cfgConversationKindMain,
     subtask: cfgConversationKindSubtask,
@@ -123,6 +131,21 @@ export function createSettingsController({
       void openCommunityConfig();
     });
   }
+  if (refreshChannelSecurityBtn) {
+    refreshChannelSecurityBtn.addEventListener("click", () => {
+      void loadChannelSecuritySurface();
+    });
+  }
+  if (channelSecurityPendingList) {
+    channelSecurityPendingList.addEventListener("click", (event) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest("button[data-channel-security-action]") : null;
+      if (!target) return;
+      const action = target.getAttribute("data-channel-security-action");
+      const requestId = target.getAttribute("data-channel-security-request-id");
+      if (!action || !requestId) return;
+      void handleChannelSecurityPendingAction(action, requestId, target);
+    });
+  }
 
   async function toggle(show, options = {}) {
     if (!settingsModal) return;
@@ -130,9 +153,12 @@ export function createSettingsController({
       settingsModal.classList.remove("hidden");
       onToggle?.(true);
       await loadConfig();
+      await loadChannelSecuritySurface();
       await runDoctor();
       if (options.section === "channels" && channelsSettingsSection) {
         channelsSettingsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (options.section === "channel-security-pending" && channelSecurityPendingList) {
+        channelSecurityPendingList.scrollIntoView({ behavior: "smooth", block: "start" });
       }
       return;
     }
@@ -186,6 +212,187 @@ export function createSettingsController({
     if (cfgDiscordEnabled) cfgDiscordEnabled.checked = c["BELLDANDY_DISCORD_ENABLED"] === "true";
     if (cfgDiscordBotToken) cfgDiscordBotToken.value = c["BELLDANDY_DISCORD_BOT_TOKEN"] || "";
     if (cfgDiscordDefaultChannelId) cfgDiscordDefaultChannelId.value = c["BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID"] || "";
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function formatDateTime(value) {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return String(value);
+    return date.toLocaleString();
+  }
+
+  function renderChannelSecurityPending(pending = []) {
+    if (!channelSecurityPendingList) return;
+    if (!Array.isArray(pending) || pending.length === 0) {
+      channelSecurityPendingList.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("settings.channelSecurityPendingEmpty", {}, "当前没有待审批 sender。"))}</div>`;
+      return;
+    }
+    channelSecurityPendingList.innerHTML = pending.map((item) => `
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">${escapeHtml(`${item.channel}${item.accountId ? `/${item.accountId}` : ""}:${item.senderId}`)}</span>
+        <div class="memory-detail-text">${escapeHtml(item.senderName || "-")}</div>
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(item.chatId || "-")}</span>
+          <span>${escapeHtml(formatDateTime(item.updatedAt || item.requestedAt))}</span>
+          <span>${escapeHtml(`seen ${Number(item.seenCount || 0)}`)}</span>
+        </div>
+        ${item.messagePreview ? `<div class="memory-list-item-snippet">${escapeHtml(item.messagePreview)}</div>` : ""}
+        <div class="goal-detail-actions goal-checkpoint-actions">
+          <button type="button" class="button goal-inline-action" data-channel-security-action="approve" data-channel-security-request-id="${escapeHtml(item.id)}">${escapeHtml(t("settings.channelSecurityApprove", {}, "批准"))}</button>
+          <button type="button" class="button goal-inline-action-secondary" data-channel-security-action="reject" data-channel-security-request-id="${escapeHtml(item.id)}">${escapeHtml(t("settings.channelSecurityReject", {}, "拒绝"))}</button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  async function loadChannelSecurityConfig() {
+    if (!isConnected()) return;
+    const configRes = await sendReq({ type: "req", id: makeId(), method: "channel.security.get" });
+
+    if (cfgChannelSecurityContent && configRes?.ok) {
+      const content = typeof configRes.payload?.content === "string"
+        ? configRes.payload.content
+        : '{\n  "version": 1,\n  "channels": {}\n}\n';
+      cfgChannelSecurityContent.value = content;
+      lastLoadedChannelSecurityContent = content;
+    }
+    if (channelSecurityConfigMeta) {
+      if (configRes?.ok) {
+        channelSecurityConfigMeta.textContent = t(
+          "settings.channelSecurityMeta",
+          { path: configRes.payload?.path || "channel-security.json" },
+          `配置文件：${configRes.payload?.path || "channel-security.json"}`,
+        );
+      } else {
+        channelSecurityConfigMeta.textContent = t("settings.channelSecurityLoadFailed", {}, "读取渠道安全配置失败");
+      }
+    }
+  }
+
+  async function loadChannelReplyChunkingConfig() {
+    if (!isConnected()) return;
+    const configRes = await sendReq({ type: "req", id: makeId(), method: "channel.reply_chunking.get" });
+
+    if (cfgChannelReplyChunkingContent && configRes?.ok) {
+      const content = typeof configRes.payload?.content === "string"
+        ? configRes.payload.content
+        : '{\n  "version": 1,\n  "channels": {}\n}\n';
+      cfgChannelReplyChunkingContent.value = content;
+      lastLoadedChannelReplyChunkingContent = content;
+    }
+    if (channelReplyChunkingConfigMeta) {
+      if (configRes?.ok) {
+        channelReplyChunkingConfigMeta.textContent = t(
+          "settings.channelReplyChunkingMeta",
+          { path: configRes.payload?.path || "channel-reply-chunking.json" },
+          `配置文件：${configRes.payload?.path || "channel-reply-chunking.json"}`,
+        );
+      } else {
+        channelReplyChunkingConfigMeta.textContent = t("settings.channelReplyChunkingLoadFailed", {}, "读取渠道回复分段配置失败");
+      }
+    }
+  }
+
+  async function loadChannelSecurityPendingList() {
+    if (!isConnected()) return;
+    const pendingRes = await sendReq({ type: "req", id: makeId(), method: "channel.security.pending.list" });
+    renderChannelSecurityPending(pendingRes?.ok ? pendingRes.payload?.pending : []);
+  }
+
+  async function loadChannelSecuritySurface() {
+    if (!isConnected()) return;
+    await Promise.all([
+      loadChannelSecurityConfig(),
+      loadChannelReplyChunkingConfig(),
+      loadChannelSecurityPendingList(),
+    ]);
+  }
+
+  async function saveChannelSecurityConfig() {
+    if (!cfgChannelSecurityContent) return { ok: true };
+    const content = cfgChannelSecurityContent.value || '{\n  "version": 1,\n  "channels": {}\n}\n';
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "channel.security.update",
+      params: { content },
+    });
+    if (!res?.ok) {
+      return {
+        ok: false,
+        message: res?.error?.message || "Failed to save channel security config",
+      };
+    }
+    const nextContent = typeof res.payload?.content === "string" ? res.payload.content : content;
+    cfgChannelSecurityContent.value = nextContent;
+    lastLoadedChannelSecurityContent = nextContent;
+    if (channelSecurityConfigMeta) {
+      channelSecurityConfigMeta.textContent = t(
+        "settings.channelSecurityMeta",
+        { path: res.payload?.path || "channel-security.json" },
+        `配置文件：${res.payload?.path || "channel-security.json"}`,
+      );
+    }
+    return { ok: true };
+  }
+
+  async function saveChannelReplyChunkingConfig() {
+    if (!cfgChannelReplyChunkingContent) return { ok: true };
+    const content = cfgChannelReplyChunkingContent.value || '{\n  "version": 1,\n  "channels": {}\n}\n';
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "channel.reply_chunking.update",
+      params: { content },
+    });
+    if (!res?.ok) {
+      return {
+        ok: false,
+        message: res?.error?.message || "Failed to save channel reply chunking config",
+      };
+    }
+    const nextContent = typeof res.payload?.content === "string" ? res.payload.content : content;
+    cfgChannelReplyChunkingContent.value = nextContent;
+    lastLoadedChannelReplyChunkingContent = nextContent;
+    if (channelReplyChunkingConfigMeta) {
+      channelReplyChunkingConfigMeta.textContent = t(
+        "settings.channelReplyChunkingMeta",
+        { path: res.payload?.path || "channel-reply-chunking.json" },
+        `配置文件：${res.payload?.path || "channel-reply-chunking.json"}`,
+      );
+    }
+    return { ok: true };
+  }
+
+  async function handleChannelSecurityPendingAction(action, requestId, buttonEl) {
+    if (!isConnected()) return;
+    const originalText = buttonEl.textContent;
+    buttonEl.disabled = true;
+    buttonEl.textContent = t("settings.channelSecurityProcessing", {}, "处理中...");
+    const method = action === "approve" ? "channel.security.approve" : "channel.security.reject";
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method,
+      params: { requestId },
+    });
+    if (!res?.ok) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalText;
+      alert(t("settings.channelSecurityActionFailed", { message: res?.error?.message || "Unknown error" }, "渠道安全审批操作失败：{message}"));
+      return;
+    }
+    await loadChannelSecuritySurface();
+    await runDoctor();
   }
 
   function assignSecretUpdate(updates, key, inputEl) {
@@ -321,6 +528,34 @@ export function createSettingsController({
       return;
     }
 
+    const channelSecuritySave = await saveChannelSecurityConfig();
+    if (!channelSecuritySave.ok) {
+      if (saveSettingsBtn) {
+        saveSettingsBtn.textContent = t("settings.failed", {}, "Failed");
+        saveSettingsBtn.disabled = false;
+      }
+      alert(t(
+        "settings.channelSecuritySaveFailed",
+        { message: channelSecuritySave.message || "Unknown error" },
+        "Channel security save failed: {message}",
+      ));
+      return;
+    }
+
+    const channelReplyChunkingSave = await saveChannelReplyChunkingConfig();
+    if (!channelReplyChunkingSave.ok) {
+      if (saveSettingsBtn) {
+        saveSettingsBtn.textContent = t("settings.failed", {}, "Failed");
+        saveSettingsBtn.disabled = false;
+      }
+      alert(t(
+        "settings.channelReplyChunkingSaveFailed",
+        { message: channelReplyChunkingSave.message || "Unknown error" },
+        "Channel reply chunking save failed: {message}",
+      ));
+      return;
+    }
+
     const res = await sendReq({
       type: "req",
       id: makeId(),
@@ -340,6 +575,8 @@ export function createSettingsController({
         }
         alert(t("settings.configSavedRestart", {}, "Configuration saved. Please restart server to apply changes."));
       }, 1000);
+      await loadChannelSecuritySurface();
+      await runDoctor();
       return;
     }
 
@@ -367,6 +604,12 @@ export function createSettingsController({
     toggle,
     openChannels() {
       return toggle(true, { section: "channels" });
+    },
+    openChannelSecurityPending() {
+      return toggle(true, { section: "channel-security-pending" });
+    },
+    refreshChannelSecurityPending() {
+      return loadChannelSecurityPendingList();
     },
   };
 }

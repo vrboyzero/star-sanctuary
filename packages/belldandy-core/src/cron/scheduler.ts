@@ -12,7 +12,7 @@
  */
 
 import type { CronGoalApprovalScanPayload, CronJob } from "./types.js";
-import { CronStore, computeNextRun } from "./store.js";
+import { CronStore, computeNextRunForJob } from "./store.js";
 
 /** 调度器轮询间隔：30 秒 */
 const TICK_INTERVAL_MS = 30_000;
@@ -24,7 +24,7 @@ export interface CronSchedulerOptions {
     /** CronStore 实例 */
     store: CronStore;
     /** 发送消息到 Agent 并获取回复 */
-    sendMessage?: (prompt: string) => Promise<string>;
+    sendMessage?: (job: CronJob, prompt: string) => Promise<string | { text: string; conversationId?: string }>;
     /** 直接执行 goal approval scan */
     runGoalApprovalScan?: (payload: CronGoalApprovalScanPayload) => Promise<CronGoalApprovalScanResult>;
     /** 推送消息到用户渠道 */
@@ -37,6 +37,8 @@ export interface CronSchedulerOptions {
     timezone?: string;
     /** 日志函数 */
     log?: (message: string) => void;
+    /** 运行态事件（用于统一 background continuation ledger） */
+    onExecutionEvent?: (event: CronExecutionEvent) => void | Promise<void>;
 }
 
 export interface CronSchedulerHandle {
@@ -61,6 +63,45 @@ export interface CronGoalApprovalScanResult {
     notifyMessage?: string;
 }
 
+export type CronExecutionEvent =
+    | {
+        phase: "started";
+        runId: string;
+        jobId: string;
+        jobName: string;
+        payloadKind: CronJob["payload"]["kind"];
+        sessionTarget: CronJob["sessionTarget"];
+        conversationId?: string;
+        startedAt: number;
+      }
+    | {
+        phase: "finished";
+        runId: string;
+        jobId: string;
+        jobName: string;
+        payloadKind: CronJob["payload"]["kind"];
+        sessionTarget: CronJob["sessionTarget"];
+        conversationId?: string;
+        startedAt: number;
+        finishedAt: number;
+        status: "ok" | "error" | "skipped";
+        summary?: string;
+        reason?: string;
+        nextRunAtMs?: number;
+      };
+
+function normalizeSendMessageResult(
+    result: string | { text: string; conversationId?: string },
+): { text: string; conversationId?: string } {
+    if (typeof result === "string") {
+        return { text: result };
+    }
+    return {
+        text: typeof result?.text === "string" ? result.text : "",
+        conversationId: typeof result?.conversationId === "string" ? result.conversationId.trim() || undefined : undefined,
+    };
+}
+
 export function startCronScheduler(options: CronSchedulerOptions): CronSchedulerHandle {
     const {
         store,
@@ -71,6 +112,7 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
         activeHours,
         timezone,
         log = console.log,
+        onExecutionEvent,
     } = options;
 
     let stopped = false;
@@ -78,6 +120,34 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
     let activeRuns = 0;
     let lastTickAtMs: number | undefined;
     let tickInFlight = false;
+
+    const markJobsSkipped = async (jobs: CronJob[], now: number, reason: string): Promise<boolean> => {
+        let changed = false;
+        for (const job of jobs) {
+            if (job.state.lastStatus === "skipped" && job.state.lastError === reason) {
+                continue;
+            }
+            job.state.lastRunAtMs = now;
+            job.state.lastDurationMs = 0;
+            job.state.lastStatus = "skipped";
+            job.state.lastError = reason;
+            await onExecutionEvent?.({
+                phase: "finished",
+                runId: `cron-skip-${job.id}-${now}`,
+                jobId: job.id,
+                jobName: job.name,
+                payloadKind: job.payload.kind,
+                sessionTarget: job.sessionTarget,
+                startedAt: now,
+                finishedAt: now,
+                status: "skipped",
+                reason,
+                nextRunAtMs: job.state.nextRunAtMs,
+            });
+            changed = true;
+        }
+        return changed;
+    };
 
     // 活跃时段检查（复用 Heartbeat 的逻辑）
     const isWithinActiveHours = (now: number): boolean => {
@@ -127,18 +197,31 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
     // 执行单个 job
     const executeJob = async (job: CronJob, jobs: CronJob[]): Promise<void> => {
         const startedAt = Date.now();
+        const runId = `cron-run-${job.id}-${startedAt}`;
+        let completionEvent: Omit<Extract<CronExecutionEvent, { phase: "finished" }>, "nextRunAtMs"> | undefined;
         log(`[cron] 执行任务 "${job.name}" (${job.id})`);
+        await onExecutionEvent?.({
+            phase: "started",
+            runId,
+            jobId: job.id,
+            jobName: job.name,
+            payloadKind: job.payload.kind,
+            sessionTarget: job.sessionTarget,
+            startedAt,
+        });
 
         try {
             let summary = "";
             let notifyMessage: string | undefined;
+            let conversationId: string | undefined;
             if (job.payload.kind === "systemEvent") {
                 if (!sendMessage) {
                     throw new Error("Cron systemEvent executor is not available.");
                 }
-                const response = await sendMessage(job.payload.text);
-                summary = response?.trim() || "systemEvent completed";
-                notifyMessage = response?.trim() || undefined;
+                const response = normalizeSendMessageResult(await sendMessage(job, job.payload.text));
+                summary = response.text?.trim() || "systemEvent completed";
+                notifyMessage = response.text?.trim() || undefined;
+                conversationId = response.conversationId;
             } else if (job.payload.kind === "goalApprovalScan") {
                 if (!runGoalApprovalScan) {
                     throw new Error("Cron goalApprovalScan executor is not available.");
@@ -153,7 +236,7 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
             job.state.lastStatus = "ok";
             job.state.lastError = undefined;
 
-            if (notifyMessage && deliverToUser) {
+            if (notifyMessage && deliverToUser && job.delivery.mode !== "none") {
                 try {
                     await deliverToUser(`🕐 [Cron: ${job.name}] ${notifyMessage}`);
                     log(`[cron] 任务 "${job.name}" 完成并已投递 (${job.state.lastDurationMs}ms) | ${summary}`);
@@ -164,6 +247,19 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
             } else {
                 log(`[cron] 任务 "${job.name}" 完成 (${job.state.lastDurationMs}ms) | ${summary}`);
             }
+            completionEvent = {
+                phase: "finished",
+                runId,
+                jobId: job.id,
+                jobName: job.name,
+                payloadKind: job.payload.kind,
+                sessionTarget: job.sessionTarget,
+                conversationId,
+                startedAt,
+                finishedAt: Date.now(),
+                status: "ok",
+                summary,
+            };
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             job.state.lastRunAtMs = Date.now();
@@ -171,6 +267,26 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
             job.state.lastStatus = "error";
             job.state.lastError = message;
             log(`[cron] 任务 "${job.name}" 执行失败: ${message}`);
+            completionEvent = {
+                phase: "finished",
+                runId,
+                jobId: job.id,
+                jobName: job.name,
+                payloadKind: job.payload.kind,
+                sessionTarget: job.sessionTarget,
+                startedAt,
+                finishedAt: Date.now(),
+                status: "error",
+                reason: message,
+            };
+            if (deliverToUser && job.failureDestination?.mode === "user") {
+                try {
+                    await deliverToUser(`⚠️ [Cron: ${job.name}] 执行失败：${message}`);
+                } catch (deliverErr) {
+                    const deliverMessage = deliverErr instanceof Error ? deliverErr.message : String(deliverErr);
+                    log(`[cron] 任务 "${job.name}" 失败通知投递失败: ${deliverMessage}`);
+                }
+            }
         }
 
         // 后处理：at 类型执行后处理
@@ -186,8 +302,13 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
                 log(`[cron] 一次性任务 "${job.name}" 已禁用`);
             }
         } else {
-            // every 类型：计算下次执行时间
-            job.state.nextRunAtMs = computeNextRun(job.schedule, Date.now());
+            job.state.nextRunAtMs = computeNextRunForJob(job, Date.now());
+        }
+        if (completionEvent) {
+            await onExecutionEvent?.({
+                ...completionEvent,
+                nextRunAtMs: job.state.nextRunAtMs,
+            });
         }
     };
 
@@ -200,16 +321,6 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
         try {
             const now = Date.now();
             lastTickAtMs = now;
-
-            // 活跃时段检查
-            if (!isWithinActiveHours(now)) {
-                return;
-            }
-
-            // 忙碌检查
-            if (isBusy?.()) {
-                return;
-            }
 
             // 加载任务列表
             let jobs: CronJob[];
@@ -229,6 +340,24 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
             );
 
             if (dueJobs.length === 0) return;
+
+            // 活跃时段检查
+            if (!isWithinActiveHours(now)) {
+                const changed = await markJobsSkipped(dueJobs, now, "Skipped: outside active hours.");
+                if (changed) {
+                    await store.saveJobs(jobs);
+                }
+                return;
+            }
+
+            // 忙碌检查
+            if (isBusy?.()) {
+                const changed = await markJobsSkipped(dueJobs, now, "Skipped: scheduler is busy.");
+                if (changed) {
+                    await store.saveJobs(jobs);
+                }
+                return;
+            }
 
             // 限制并发
             const toRun = dueJobs.slice(0, MAX_CONCURRENT_RUNS - activeRuns);

@@ -10,11 +10,13 @@ import type {
   RouteRuleAction,
   RouteRuleMatch,
 } from "./types.js";
+import { evaluateChannelSecurityPolicy, type ChannelSecurityConfig } from "./security-config.js";
 
 export interface RuleBasedRouterOptions {
   defaultAgentId?: string;
   defaultAllow?: boolean;
   logger?: ChannelRouterLogger;
+  securityConfig?: ChannelSecurityConfig;
 }
 
 function normalizeList(values: string[] | undefined): string[] | undefined {
@@ -114,6 +116,18 @@ export function createRuleBasedRouter(
           agentId: action.agentId,
         };
         logger?.debug?.("matched route rule", { ruleId: rule.id, decision, context: ctx });
+        return decision;
+      }
+
+      const securityDecision = evaluateChannelSecurityPolicy(options.securityConfig, ctx);
+      if (securityDecision) {
+        const decision: RouteDecision = {
+          ...securityDecision,
+          ...(securityDecision.allow && defaultAction.agentId
+            ? { agentId: defaultAction.agentId }
+            : {}),
+        };
+        logger?.debug?.("channel security fallback applied", { decision, context: ctx });
         return decision;
       }
 

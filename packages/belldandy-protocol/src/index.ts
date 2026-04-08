@@ -216,6 +216,47 @@ export type SystemDoctorResult = {
     status: "pass" | "fail" | "warn";
     message?: string;
   }>;
+  cronRuntime?: {
+    scheduler: {
+      enabled: boolean;
+      running: boolean;
+      activeRuns: number;
+      lastTickAtMs?: number;
+    };
+    totals: {
+      totalJobs: number;
+      enabledJobs: number;
+      disabledJobs: number;
+      staggeredJobs: number;
+      invalidNextRunJobs: number;
+    };
+    sessionTargetCounts: {
+      main: number;
+      isolated: number;
+    };
+    deliveryModeCounts: {
+      user: number;
+      none: number;
+    };
+    failureDestinationModeCounts: {
+      user: number;
+      none: number;
+    };
+    recentJobs: Array<{
+      id: string;
+      name: string;
+      enabled: boolean;
+      scheduleSummary: string;
+      sessionTarget: "main" | "isolated";
+      deliveryMode: "user" | "none";
+      failureDestinationMode: "user" | "none";
+      staggerMs?: number;
+      nextRunAtMs?: number;
+      lastRunAtMs?: number;
+      lastStatus?: string;
+    }>;
+    headline: string;
+  };
   conversationDebug?: {
     conversationId: string;
     available: boolean;

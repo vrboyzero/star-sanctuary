@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildGoalTrackingCapabilityPlanIndex,
+  filterGoalTrackingCheckpointsByNode,
   getGoalTrackingCheckpointExplainabilityLines,
   getGoalTrackingNodeActionTargets,
 } from "./goals-tracking-panel.js";
@@ -62,5 +63,16 @@ describe("goal tracking linkage helpers", () => {
     expect(lines.join("\n")).toContain("suggested launch: source=goal_checkpoint, agent=reviewer");
     expect(lines.join("\n")).toContain("delegation reason: source=goal_checkpoint");
     expect(lines.join("\n")).not.toContain("legacy-reviewer");
+  });
+
+  it("filters checkpoints down to the focused node", () => {
+    expect(filterGoalTrackingCheckpointsByNode([
+      { id: "cp_1", nodeId: "node_impl" },
+      { id: "cp_2", nodeId: "node_review" },
+      { id: "cp_3", nodeId: "node_impl" },
+    ], " node_impl ")).toEqual([
+      { id: "cp_1", nodeId: "node_impl" },
+      { id: "cp_3", nodeId: "node_impl" },
+    ]);
   });
 });

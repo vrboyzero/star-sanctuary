@@ -16,6 +16,17 @@ export type ToolParameterSchema = {
   oneOf?: Array<{ required: string[] }>;
 };
 
+export type ToolDiscoveryFamilyGateMode = "none" | "hidden-until-expanded";
+
+export type ToolDiscoveryFamilyDefinition = {
+  id: string;
+  title: string;
+  summary: string;
+  gateMode?: ToolDiscoveryFamilyGateMode;
+  order?: number;
+  keywords?: string[];
+};
+
 /** 工具定义（用于发送给模型） */
 export type ToolDefinition = {
   name: string;
@@ -25,9 +36,11 @@ export type ToolDefinition = {
   shortDescription?: string;
   keywords?: string[];
   tags?: string[];
+  discoveryFamily?: ToolDiscoveryFamilyDefinition;
 };
 
 export type ToolCatalogEntry = {
+  kind: "tool";
   name: string;
   description: string;
   shortDescription: string;
@@ -35,6 +48,25 @@ export type ToolCatalogEntry = {
   tags: string[];
   loadingMode: "core" | "deferred";
   loaded: boolean;
+  discoveryFamilyId?: string;
+};
+
+export type ToolCatalogFamilyEntry = {
+  kind: "family";
+  id: string;
+  title: string;
+  summary: string;
+  keywords: string[];
+  toolCount: number;
+  loadedToolCount: number;
+  loadingMode: "deferred";
+  gateMode: ToolDiscoveryFamilyGateMode;
+};
+
+export type ToolDiscoveryEntry = ToolCatalogEntry | ToolCatalogFamilyEntry;
+
+export type ToolDiscoveryEntriesOptions = {
+  expandedFamilyIds?: string[];
 };
 
 /** 工具调用请求 */
