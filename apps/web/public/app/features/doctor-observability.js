@@ -1,6 +1,7 @@
 import { buildResidentDoctorNote } from "./resident-observability-summary.js";
 import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js";
 import { buildResidentStateBindingLines } from "./resident-state-binding-lines.js";
+import { buildContinuationAction } from "./continuation-targets.js";
 
 function tr(t, key, params, fallback) {
   return typeof t === "function" ? t(key, params ?? {}, fallback) : fallback;
@@ -671,8 +672,9 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
       {
         cron: formatNumber(runtime.kindCounts?.cron),
         heartbeat: formatNumber(runtime.kindCounts?.heartbeat),
+        subtask: formatNumber(runtime.kindCounts?.subtask),
       },
-      `cron ${formatNumber(runtime.kindCounts?.cron)} / heartbeat ${formatNumber(runtime.kindCounts?.heartbeat)}`,
+      `cron ${formatNumber(runtime.kindCounts?.cron)} / heartbeat ${formatNumber(runtime.kindCounts?.heartbeat)} / subtask ${formatNumber(runtime.kindCounts?.subtask)}`,
     ),
     tr(
       t,
@@ -695,14 +697,14 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
     ),
   ];
 
-  const notes = [
-    tr(
+  const notes = [{
+    text: tr(
       t,
       "settings.doctorBackgroundContinuationHeadline",
       { headline: runtime.headline || "-" },
       runtime.headline || "-",
     ),
-  ];
+  }];
 
   for (const entry of runtime.recentEntries.slice(0, 6)) {
     const continuation = entry?.continuationState;
@@ -723,7 +725,9 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
       typeof entry.finishedAt === "number" ? `finished=${formatTimestamp(entry.finishedAt)}` : "",
       typeof entry.nextRunAtMs === "number" ? `next=${formatTimestamp(entry.nextRunAtMs)}` : "",
     ].filter(Boolean);
-    notes.push(`${entry.label || entry.sourceId}: ${parts.join(", ")}`);
+    const text = `${entry.label || entry.sourceId}: ${parts.join(", ")}`;
+    const action = continuation?.recommendedTargetId ? buildContinuationAction(continuation) : null;
+    notes.push(action ? { text, action } : { text });
   }
 
   return {
@@ -734,7 +738,7 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
   };
 }
 
-function createDoctorCard(card) {
+function createDoctorCard(card, handlers = {}) {
   const panel = document.createElement("div");
   panel.style.width = "100%";
   panel.style.padding = "10px 12px";
@@ -768,8 +772,22 @@ function createDoctorCard(card) {
   notes.style.gap = "4px";
   notes.style.fontSize = "0.92em";
   for (const line of card.notes) {
+    const noteText = typeof line === "string" ? line : line?.text || "";
+    const action = line && typeof line === "object" ? line.action : null;
+    if (action && typeof handlers.onOpenContinuationAction === "function") {
+      const note = document.createElement("button");
+      note.type = "button";
+      note.className = "button goal-inline-action-secondary";
+      note.style.textAlign = "left";
+      note.textContent = noteText;
+      note.addEventListener("click", () => {
+        void handlers.onOpenContinuationAction(action);
+      });
+      notes.appendChild(note);
+      continue;
+    }
     const note = document.createElement("div");
-    note.textContent = line;
+    note.textContent = noteText;
     notes.appendChild(note);
   }
   panel.appendChild(notes);
@@ -777,7 +795,7 @@ function createDoctorCard(card) {
   return panel;
 }
 
-export function renderDoctorObservabilityCards(container, payload, t) {
+export function renderDoctorObservabilityCards(container, payload, t, handlers = {}) {
   if (!container) {
     return;
   }
@@ -793,18 +811,19 @@ export function renderDoctorObservabilityCards(container, payload, t) {
   ].filter(Boolean);
 
   for (const card of cards) {
-    container.appendChild(createDoctorCard(card));
+    container.appendChild(createDoctorCard(card, handlers));
   }
 }
 
 export function buildDoctorChatSummary(payload, t) {
+  const formatNote = (note) => typeof note === "string" ? note : note?.text || "";
   const lines = [];
   const promptCard = buildPromptObservabilityCard(payload, t);
   if (promptCard) {
     lines.push(``);
     lines.push(`${promptCard.title}:`);
     lines.push(...promptCard.badges.map((badge) => `- ${badge}`));
-    lines.push(...promptCard.notes.map((note) => `- ${note}`));
+    lines.push(...promptCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const toolCard = buildToolBehaviorCard(payload, t);
@@ -812,7 +831,7 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(``);
     lines.push(`${toolCard.title}:`);
     lines.push(...toolCard.badges.map((badge) => `- ${badge}`));
-    lines.push(...toolCard.notes.map((note) => `- ${note}`));
+    lines.push(...toolCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const toolContractV2Card = buildToolContractV2Card(payload, t);
@@ -820,7 +839,7 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(``);
     lines.push(`${toolContractV2Card.title}:`);
     lines.push(...toolContractV2Card.badges.map((badge) => `- ${badge}`));
-    lines.push(...toolContractV2Card.notes.map((note) => `- ${note}`));
+    lines.push(...toolContractV2Card.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const residentAgentsCard = buildResidentAgentsCard(payload, t);
@@ -828,7 +847,7 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(``);
     lines.push(`${residentAgentsCard.title}:`);
     lines.push(...residentAgentsCard.badges.map((badge) => `- ${badge}`));
-    lines.push(...residentAgentsCard.notes.map((note) => `- ${note}`));
+    lines.push(...residentAgentsCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const sharedGovernanceCard = buildSharedGovernanceCard(payload, t);
@@ -836,7 +855,7 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(``);
     lines.push(`${sharedGovernanceCard.title}:`);
     lines.push(...sharedGovernanceCard.badges.map((badge) => `- ${badge}`));
-    lines.push(...sharedGovernanceCard.notes.map((note) => `- ${note}`));
+    lines.push(...sharedGovernanceCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const delegationCard = buildDelegationCard(payload, t);
@@ -844,7 +863,7 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(``);
     lines.push(`${delegationCard.title}:`);
     lines.push(...delegationCard.badges.map((badge) => `- ${badge}`));
-    lines.push(...delegationCard.notes.map((note) => `- ${note}`));
+    lines.push(...delegationCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const cronCard = buildCronRuntimeCard(payload, t);
@@ -852,7 +871,7 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(``);
     lines.push(`${cronCard.title}:`);
     lines.push(...cronCard.badges.map((badge) => `- ${badge}`));
-    lines.push(...cronCard.notes.map((note) => `- ${note}`));
+    lines.push(...cronCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const backgroundContinuationCard = buildBackgroundContinuationRuntimeCard(payload, t);
@@ -860,7 +879,7 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(``);
     lines.push(`${backgroundContinuationCard.title}:`);
     lines.push(...backgroundContinuationCard.badges.map((badge) => `- ${badge}`));
-    lines.push(...backgroundContinuationCard.notes.map((note) => `- ${note}`));
+    lines.push(...backgroundContinuationCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   return lines;

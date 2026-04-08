@@ -507,7 +507,12 @@ export class SubTaskRuntimeStore {
     });
   }
 
-  async attachSession(taskId: string, sessionId: string, agentId?: string): Promise<SubTaskRecord | undefined> {
+  async attachSession(
+    taskId: string,
+    sessionId: string,
+    agentId?: string,
+    profileId?: string,
+  ): Promise<SubTaskRecord | undefined> {
     await this.load();
     return this.mutate(async () => {
       const record = this.records.get(taskId);
@@ -520,6 +525,9 @@ export class SubTaskRuntimeStore {
       if (agentId?.trim()) {
         record.agentId = agentId.trim();
         record.launchSpec.agentId = agentId.trim();
+      }
+      if (profileId?.trim()) {
+        record.launchSpec.profileId = profileId.trim();
       }
       record.status = "running";
       record.updatedAt = now;
@@ -1361,7 +1369,12 @@ export function createSubTaskAgentCapabilities(input: {
         },
         onSessionCreated: (sessionId: string, resolvedAgentId: string) => {
           attachedSessionId = sessionId;
-          void input.runtimeStore.attachSession(task.id, sessionId, resolvedAgentId).catch((error) => {
+          void input.runtimeStore.attachSession(
+            task.id,
+            sessionId,
+            resolvedAgentId,
+            resolvedLaunchSpec.profileId,
+          ).catch((error) => {
             input.logger?.warn?.("Failed to attach subtask session.", {
               error,
               taskId: task.id,
@@ -1544,7 +1557,12 @@ export function createSubTaskUpdateController(input: {
       },
       onSessionCreated: (sessionId: string, resolvedAgentId: string) => {
         attachedSessionId = sessionId;
-        void input.runtimeStore.attachSession(taskId, sessionId, resolvedAgentId).catch((error) => {
+        void input.runtimeStore.attachSession(
+          taskId,
+          sessionId,
+          resolvedAgentId,
+          session.launchSpec.profileId,
+        ).catch((error) => {
           input.logger?.warn?.("Failed to attach steering continuation session.", {
             taskId,
             sessionId,
@@ -1587,6 +1605,7 @@ export function createSubTaskUpdateController(input: {
 export function createSubTaskResumeController(input: {
   runtimeStore: SubTaskRuntimeStore;
   orchestrator: Pick<SubAgentOrchestrator, "spawn" | "getSession">;
+  agentRegistry?: Pick<AgentRegistry, "getProfile">;
   conversationStore: {
     get: (conversationId: string) => {
       messages?: Array<{ role?: unknown; content?: unknown }>;
@@ -1594,7 +1613,13 @@ export function createSubTaskResumeController(input: {
   };
   logger?: RuntimeLogger;
 }) {
-  return async (taskId: string, message = ""): Promise<SubTaskRecord | undefined> => {
+  return async (
+    taskId: string,
+    message = "",
+    options?: {
+      takeoverAgentId?: string;
+    },
+  ): Promise<SubTaskRecord | undefined> => {
     const current = await input.runtimeStore.getTask(taskId);
     if (!current) {
       return undefined;
@@ -1606,8 +1631,27 @@ export function createSubTaskResumeController(input: {
       throw new Error(`Subtask resume only supports finished tasks. Current status: ${current.status}`);
     }
 
-    const resumeInstruction = buildResumeInstruction(current, message);
-    const accepted = await input.runtimeStore.requestResume(taskId, String(message ?? "").trim(), {
+    const takeoverAgentId = typeof options?.takeoverAgentId === "string"
+      ? options.takeoverAgentId.trim()
+      : "";
+    const resumeMessage = takeoverAgentId
+      ? [
+        `Take over this subtask as agent ${takeoverAgentId}.`,
+        String(message ?? "").trim(),
+      ].filter(Boolean).join("\n\n")
+      : String(message ?? "").trim();
+    const resumeInstruction = takeoverAgentId
+      ? [
+        `Take over the same subtask under agent ${takeoverAgentId}.`,
+        "",
+        `Original instruction: ${current.instruction}`,
+        `Latest recorded summary: ${truncateText(current.outputPreview || current.error || current.summary || current.progress.message || current.instruction, 240) || "-"}`,
+        `Previous agent: ${current.agentId || current.launchSpec.agentId || "-"}`,
+        "",
+        resumeMessage || "Continue from here and produce the next best result.",
+      ].join("\n").trim()
+      : buildResumeInstruction(current, message);
+    const accepted = await input.runtimeStore.requestResume(taskId, resumeMessage, {
       sessionId: current.sessionId,
     });
     if (!accepted) {
@@ -1621,7 +1665,19 @@ export function createSubTaskResumeController(input: {
     const priorSession = current.sessionId
       ? input.orchestrator.getSession(current.sessionId)
       : undefined;
-    const launchSpec = buildResumeLaunchSpec(current, resumeInstruction, priorSession?.launchSpec);
+    let launchSpecInput = buildResumeLaunchSpec(current, resumeInstruction, priorSession?.launchSpec);
+    if (takeoverAgentId) {
+      launchSpecInput = {
+        ...launchSpecInput,
+        agentId: takeoverAgentId,
+        profileId: takeoverAgentId,
+      };
+    }
+    const launchSpec = takeoverAgentId
+      ? normalizeAgentLaunchSpecWithCatalog(launchSpecInput, {
+        agentRegistry: input.agentRegistry,
+      })
+      : launchSpecInput;
 
     let attachedSessionId: string | undefined;
     void input.orchestrator.spawn({
@@ -1639,7 +1695,12 @@ export function createSubTaskResumeController(input: {
       },
       onSessionCreated: (sessionId: string, resolvedAgentId: string) => {
         attachedSessionId = sessionId;
-        void input.runtimeStore.attachSession(taskId, sessionId, resolvedAgentId).catch((error) => {
+        void input.runtimeStore.attachSession(
+          taskId,
+          sessionId,
+          resolvedAgentId,
+          launchSpec.profileId,
+        ).catch((error) => {
           input.logger?.warn?.("Failed to attach resumed subtask session.", {
             taskId,
             sessionId,

@@ -348,15 +348,16 @@ describe("doctor observability formatting", () => {
       },
       backgroundContinuationRuntime: {
         totals: {
-          totalRuns: 3,
+          totalRuns: 4,
           runningRuns: 1,
           failedRuns: 1,
           skippedRuns: 1,
-          conversationLinkedRuns: 2,
+          conversationLinkedRuns: 3,
         },
         kindCounts: {
           cron: 2,
           heartbeat: 1,
+          subtask: 1,
         },
         sessionTargetCounts: {
           main: 1,
@@ -380,6 +381,20 @@ describe("doctor observability formatting", () => {
             },
           },
           {
+            runId: "subtask:task_sub_1",
+            kind: "subtask",
+            sourceId: "task_sub_1",
+            label: "Implement runtime bridge",
+            status: "ran",
+            startedAt: 1710000015000,
+            finishedAt: 1710000015600,
+            summary: "patch delivered",
+            continuationState: {
+              recommendedTargetId: "sub-session-1",
+              targetType: "session",
+            },
+          },
+          {
             runId: "heartbeat-run-1",
             kind: "heartbeat",
             sourceId: "heartbeat",
@@ -391,7 +406,7 @@ describe("doctor observability formatting", () => {
             continuationState: {},
           },
         ],
-        headline: "runs=3; running=1; failed=1; skipped=1; cron=2; heartbeat=1; linked=2; main=1; isolated=1",
+        headline: "runs=4; running=1; failed=1; skipped=1; cron=2; heartbeat=1; subtask=1; linked=3; main=1; isolated=1",
       },
     });
 
@@ -450,9 +465,10 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("running / active 2");
     expect(lines.join("\n")).toContain("Digest: every 60000ms, enabled, session=main, delivery=user, failure=user, stagger=15000");
     expect(lines.join("\n")).toContain("Background Continuation Runtime");
-    expect(lines.join("\n")).toContain("3 runs / running 1");
-    expect(lines.join("\n")).toContain("cron 2 / heartbeat 1");
+    expect(lines.join("\n")).toContain("4 runs / running 1");
+    expect(lines.join("\n")).toContain("cron 2 / heartbeat 1 / subtask 1");
     expect(lines.join("\n")).toContain("Digest: ran, cron, session=main, target=conversation:cron-main:cron-job-1");
+    expect(lines.join("\n")).toContain("Implement runtime bridge: ran, subtask, target=session:sub-session-1, summary=patch delivered");
     expect(lines.join("\n")).toContain("Heartbeat: failed, heartbeat, reason=provider unavailable");
   });
 });

@@ -1,0 +1,152 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { BackgroundContinuationRecord } from "./background-continuation-runtime.js";
+import { createSubTaskBackgroundContinuationLedgerHandler } from "./subtask-background-continuation-ledger.js";
+import type { SubTaskRecord } from "./task-runtime.js";
+
+function createSubTaskRecord(partial: Partial<SubTaskRecord> = {}): SubTaskRecord {
+  return {
+    id: partial.id ?? "task_sub_1",
+    kind: "sub_agent",
+    parentConversationId: partial.parentConversationId ?? "conv-parent",
+    sessionId: partial.sessionId,
+    agentId: partial.agentId ?? "coder",
+    launchSpec: partial.launchSpec ?? {
+      agentId: "coder",
+      profileId: "coder",
+      background: true,
+      timeoutMs: 60_000,
+      channel: "subtask",
+    },
+    background: partial.background ?? true,
+    status: partial.status ?? "running",
+    instruction: partial.instruction ?? "Implement runtime bridge",
+    summary: partial.summary ?? "Implement runtime bridge",
+    progress: partial.progress ?? {
+      phase: partial.status ?? "running",
+      message: "Task is running.",
+      lastActivityAt: partial.updatedAt ?? 1_710_000_000_000,
+    },
+    createdAt: partial.createdAt ?? 1_710_000_000_000,
+    updatedAt: partial.updatedAt ?? 1_710_000_000_100,
+    finishedAt: partial.finishedAt,
+    stopRequestedAt: partial.stopRequestedAt,
+    stopReason: partial.stopReason,
+    archivedAt: partial.archivedAt,
+    archiveReason: partial.archiveReason,
+    outputPath: partial.outputPath,
+    outputPreview: partial.outputPreview,
+    error: partial.error,
+    steering: partial.steering ?? [],
+    resume: partial.resume ?? [],
+    notifications: partial.notifications ?? [],
+  };
+}
+
+describe("subtask background continuation ledger handler", () => {
+  it("writes milestone-level subtask states without rewriting unchanged deltas", async () => {
+    const startRun = vi.fn(async (input): Promise<BackgroundContinuationRecord> => ({
+      runId: input.runId ?? "subtask:task_sub_1",
+      kind: input.kind,
+      sourceId: input.sourceId,
+      label: input.label,
+      status: "running",
+      startedAt: input.startedAt ?? 0,
+      updatedAt: input.updatedAt ?? input.startedAt ?? 0,
+      conversationId: input.conversationId,
+      sessionTarget: input.sessionTarget,
+      summary: input.summary,
+      continuationState: input.continuationState,
+    }));
+    const finishRun = vi.fn(async (input): Promise<BackgroundContinuationRecord> => ({
+      runId: input.runId,
+      kind: input.kind,
+      sourceId: input.sourceId,
+      label: input.label,
+      status: input.status,
+      startedAt: input.startedAt ?? 0,
+      updatedAt: input.finishedAt ?? input.startedAt ?? 0,
+      finishedAt: input.finishedAt,
+      durationMs: typeof input.finishedAt === "number" && typeof input.startedAt === "number"
+        ? Math.max(0, input.finishedAt - input.startedAt)
+        : undefined,
+      conversationId: input.conversationId,
+      sessionTarget: input.sessionTarget,
+      summary: input.summary,
+      reason: input.reason,
+      nextRunAtMs: input.nextRunAtMs,
+      continuationState: input.continuationState,
+    }));
+    const handler = createSubTaskBackgroundContinuationLedgerHandler({
+      ledger: { startRun, finishRun },
+    });
+
+    const runningRecord = createSubTaskRecord({
+      status: "running",
+      sessionId: "sub-session-1",
+      updatedAt: 1_710_000_000_100,
+      progress: {
+        phase: "running",
+        message: "delta 1",
+        lastActivityAt: 1_710_000_000_100,
+      },
+    });
+    handler({ kind: "updated", item: runningRecord });
+    handler({
+      kind: "updated",
+      item: createSubTaskRecord({
+        ...runningRecord,
+        updatedAt: 1_710_000_000_200,
+        progress: {
+          phase: "running",
+          message: "delta 2",
+          lastActivityAt: 1_710_000_000_200,
+        },
+      }),
+    });
+    handler({
+      kind: "completed",
+      item: createSubTaskRecord({
+        status: "done",
+        sessionId: "sub-session-1",
+        updatedAt: 1_710_000_000_400,
+        finishedAt: 1_710_000_000_400,
+        outputPreview: "Patch delivered",
+        progress: {
+          phase: "done",
+          message: "Task completed.",
+          lastActivityAt: 1_710_000_000_400,
+        },
+      }),
+    });
+
+    await Promise.resolve();
+
+    expect(startRun).toHaveBeenCalledTimes(1);
+    const firstStartCall = startRun.mock.calls[0];
+    expect(firstStartCall?.[0]).toMatchObject({
+      runId: "subtask:task_sub_1",
+      kind: "subtask",
+      sourceId: "task_sub_1",
+      updatedAt: 1_710_000_000_100,
+      continuationState: {
+        scope: "subtask",
+        recommendedTargetId: "sub-session-1",
+        targetType: "session",
+      },
+    });
+    expect(finishRun).toHaveBeenCalledTimes(1);
+    const firstFinishCall = finishRun.mock.calls[0];
+    expect(firstFinishCall?.[0]).toMatchObject({
+      runId: "subtask:task_sub_1",
+      kind: "subtask",
+      status: "ran",
+      continuationState: {
+        scope: "subtask",
+        recommendedTargetId: "sub-session-1",
+        targetType: "session",
+      },
+      summary: "Patch delivered",
+    });
+  });
+});

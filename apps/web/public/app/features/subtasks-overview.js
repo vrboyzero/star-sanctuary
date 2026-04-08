@@ -251,6 +251,7 @@ export function createSubtasksOverviewFeature({
   onOpenTask,
   onOpenGoal,
   onOpenContinuationAction,
+  getSelectedAgentId,
   showNotice,
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
@@ -412,6 +413,28 @@ export function createSubtasksOverviewFeature({
           subtasksState.resumeDrafts = {};
         }
         subtasksState.resumeDrafts[taskId] = node.value;
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-takeover-send]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const taskId = node.getAttribute("data-subtask-takeover-send");
+        if (!taskId) return;
+        const agentInput = subtasksDetailEl.querySelector(`[data-subtask-takeover-agent-input="${taskId}"]`);
+        const resumeInput = subtasksDetailEl.querySelector(`[data-subtask-resume-input="${taskId}"]`);
+        const agentId = typeof agentInput?.value === "string" ? agentInput.value.trim() : "";
+        const message = typeof resumeInput?.value === "string" ? resumeInput.value.trim() : "";
+        void performSubtaskTakeover(taskId, agentId, message);
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-takeover-agent-input]").forEach((node) => {
+      node.addEventListener("input", () => {
+        const taskId = node.getAttribute("data-subtask-takeover-agent-input");
+        if (!taskId) return;
+        const subtasksState = getSubtasksState();
+        if (!subtasksState.takeoverAgentDrafts || typeof subtasksState.takeoverAgentDrafts !== "object") {
+          subtasksState.takeoverAgentDrafts = {};
+        }
+        subtasksState.takeoverAgentDrafts[taskId] = node.value;
       });
     });
   }
@@ -637,6 +660,14 @@ export function createSubtasksOverviewFeature({
     const resumeDraft = typeof subtasksState.resumeDrafts?.[item.id] === "string"
       ? subtasksState.resumeDrafts[item.id]
       : "";
+    const selectedAgentId = typeof getSelectedAgentId === "function"
+      ? String(getSelectedAgentId() || "").trim()
+      : "";
+    const takeoverAgentDraft = typeof subtasksState.takeoverAgentDrafts?.[item.id] === "string"
+      ? subtasksState.takeoverAgentDrafts[item.id]
+      : selectedAgentId && selectedAgentId !== item.agentId
+        ? selectedAgentId
+        : "";
     const continuationFocusSessionId = typeof subtasksState.continuationFocusSessionId === "string"
       ? subtasksState.continuationFocusSessionId.trim()
       : "";
@@ -739,6 +770,15 @@ export function createSubtasksOverviewFeature({
                 <textarea class="editor-textarea subtask-steering-input" rows="4" data-subtask-resume-input="${escapeHtml(item.id)}" placeholder="${escapeHtml(t("subtasks.resumePlaceholder", {}, "Optionally describe how this finished subtask should continue from its last recorded state."))}" ${pendingActionKind === "resume" ? "disabled" : ""}>${escapeHtml(resumeDraft)}</textarea>
                 <div class="subtask-detail-actions">
                   <button class="button" data-subtask-resume-send="${escapeHtml(item.id)}" ${pendingActionKind === "resume" ? "disabled" : ""}>${escapeHtml(pendingActionKind === "resume" ? t("subtasks.actionResuming", {}, "Resuming...") : t("subtasks.actionResume", {}, "Resume"))}</button>
+                  <input
+                    type="text"
+                    class="editor-textarea"
+                    data-subtask-takeover-agent-input="${escapeHtml(item.id)}"
+                    value="${escapeHtml(takeoverAgentDraft)}"
+                    placeholder="${escapeHtml(t("subtasks.takeoverAgentPlaceholder", {}, "Optional. Enter the agentId that should take over this finished subtask."))}"
+                    ${pendingActionKind === "takeover" ? "disabled" : ""}
+                  />
+                  <button class="button goal-inline-action-secondary" data-subtask-takeover-send="${escapeHtml(item.id)}" ${pendingActionKind === "takeover" ? "disabled" : ""}>${escapeHtml(pendingActionKind === "takeover" ? t("subtasks.actionTakingOver", {}, "Taking over...") : t("subtasks.actionTakeover", {}, "Take over"))}</button>
                 </div>
               </div>
             ` : ""}
@@ -1066,6 +1106,61 @@ export function createSubtasksOverviewFeature({
     showNotice?.(
       t("subtasks.resumeSuccessTitle", {}, "Resume accepted"),
       t("subtasks.resumeSuccessMessage", {}, "The finished subtask accepted the resume request and is relaunching from its last recorded state."),
+      "info",
+    );
+  }
+
+  async function performSubtaskTakeover(taskId, agentId, message) {
+    const normalizedAgentId = typeof agentId === "string" ? agentId.trim() : "";
+    if (!normalizedAgentId) {
+      showNotice?.(
+        t("subtasks.takeoverFailedTitle", {}, "Takeover failed"),
+        t("subtasks.takeoverMissingAgentMessage", {}, "Agent ID is required for takeover."),
+        "error",
+      );
+      return;
+    }
+
+    const subtasksState = getSubtasksState();
+    subtasksState.pendingActionTaskId = taskId;
+    subtasksState.pendingActionKind = "takeover";
+    if (subtasksState.selectedItem?.id === taskId) {
+      renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+    }
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "subtask.takeover",
+      params: { taskId, agentId: normalizedAgentId, ...(message ? { message } : {}) },
+    });
+
+    subtasksState.pendingActionTaskId = null;
+    subtasksState.pendingActionKind = null;
+
+    if (!res || !res.ok || !res.payload?.item) {
+      if (subtasksState.selectedItem?.id === taskId) {
+        renderSubtaskDetail(subtasksState.selectedItem, subtasksState.selectedOutputContent);
+      }
+      showNotice?.(
+        t("subtasks.takeoverFailedTitle", {}, "Takeover failed"),
+        res?.error?.message || t("subtasks.takeoverFailedMessage", {}, "Failed to take over the finished subtask."),
+        "error",
+      );
+      return;
+    }
+
+    if (!subtasksState.takeoverAgentDrafts || typeof subtasksState.takeoverAgentDrafts !== "object") {
+      subtasksState.takeoverAgentDrafts = {};
+    }
+    subtasksState.takeoverAgentDrafts[taskId] = normalizedAgentId;
+    handleSubtaskUpdate({
+      kind: "updated",
+      item: res.payload.item,
+    });
+    showNotice?.(
+      t("subtasks.takeoverSuccessTitle", {}, "Takeover accepted"),
+      t("subtasks.takeoverSuccessMessage", { agentId: normalizedAgentId }, "The finished subtask accepted takeover and is relaunching under {agentId}."),
       "info",
     );
   }

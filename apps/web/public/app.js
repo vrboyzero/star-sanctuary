@@ -987,6 +987,7 @@ subtasksOverviewFeature = createSubtasksOverviewFeature({
     await loadGoals(true, goalId);
   },
   onOpenContinuationAction: (action) => openContinuationAction(action),
+  getSelectedAgentId: () => getCurrentAgentSelection(),
   showNotice,
   t: localeController.t,
 });
@@ -2596,6 +2597,7 @@ const settingsController = createSettingsController({
   onOpenCommunityConfig: () => {
     void openFile("community.json");
   },
+  onOpenContinuationAction: (action) => openContinuationAction(action),
   redactedPlaceholder: REDACTED_PLACEHOLDER,
   t: localeController.t,
 });

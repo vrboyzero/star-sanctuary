@@ -675,6 +675,114 @@ test("createSubTaskResumeController relaunches a finished task with prior histor
   await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
 
+test("createSubTaskResumeController can relaunch a finished task under a takeover agent", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-takeover-controller-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-takeover-controller",
+      agentId: "coder",
+      instruction: "Implement runtime bridge",
+      channel: "subtask",
+    },
+  });
+  await store.attachSession(task.id, "sub_takeover_controller_1", "coder");
+  await store.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_takeover_controller_1",
+    output: "first pass finished",
+  });
+
+  const spawns: Array<Record<string, unknown>> = [];
+  const controller = createSubTaskResumeController({
+    runtimeStore: store,
+    conversationStore: {
+      get: (conversationId: string) => conversationId === "sub_takeover_controller_1"
+        ? {
+          messages: [
+            { role: "user", content: "Implement runtime bridge" },
+            { role: "assistant", content: "First pass finished, but a verification agent should continue." },
+          ],
+        }
+        : undefined,
+    },
+    orchestrator: {
+      getSession(sessionId: string) {
+        if (sessionId !== "sub_takeover_controller_1") return undefined;
+        return {
+          id: sessionId,
+          status: "done" as const,
+          launchSpec: {
+            parentConversationId: "conv-takeover-controller",
+            agentId: "coder",
+            profileId: "coder",
+            instruction: "Implement runtime bridge",
+            background: true,
+            timeoutMs: 60_000,
+            channel: "subtask",
+          },
+        };
+      },
+      async spawn(opts: any) {
+        spawns.push({
+          agentId: opts.launchSpec?.agentId,
+          profileId: opts.launchSpec?.profileId,
+          instruction: opts.launchSpec?.instruction,
+          resumedFromSessionId: opts.resumedFromSessionId,
+        });
+        opts.onSessionCreated?.("sub_takeover_controller_2", String(opts.launchSpec?.agentId ?? "researcher"));
+        return {
+          success: true,
+          output: "takeover pass finished",
+          sessionId: "sub_takeover_controller_2",
+        };
+      },
+    } as any,
+  });
+
+  const accepted = await controller(
+    task.id,
+    "Continue with verification-focused follow-up.",
+    { takeoverAgentId: "researcher" },
+  );
+  expect(accepted?.resume).toEqual([
+    expect.objectContaining({
+      status: "accepted",
+      message: expect.stringContaining("Take over this subtask as agent researcher."),
+    }),
+  ]);
+
+  let updated = await store.getTask(task.id);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (updated?.status === "done" && updated?.sessionId === "sub_takeover_controller_2") {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    updated = await store.getTask(task.id);
+  }
+
+  expect(spawns).toEqual([
+    expect.objectContaining({
+      agentId: "researcher",
+      profileId: "researcher",
+      resumedFromSessionId: "sub_takeover_controller_1",
+    }),
+  ]);
+  expect(updated).toMatchObject({
+    sessionId: "sub_takeover_controller_2",
+    status: "done",
+    agentId: "researcher",
+    launchSpec: {
+      agentId: "researcher",
+      profileId: "researcher",
+    },
+  });
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
 test("reconcileSubTaskWorktreeRuntimes recovers active tasks and cleans archived worktrees", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-reconcile-"));
   const store = new SubTaskRuntimeStore(stateDir);

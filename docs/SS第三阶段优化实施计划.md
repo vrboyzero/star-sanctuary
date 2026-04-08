@@ -258,7 +258,7 @@
 - 来源文档：
   - `LA与SS`
   - `OC与SS`
-- 当前状态：`已进入第二版最小 runtime 接线：在第一版最小状态统一之上，开始补 background continuation ledger`
+- 当前状态：`已按“最小 shared ledger + 最小 replay/takeover 接线”正式收口`
 - 目标：
   - 统一 long-goal / resident / subtask / background run 的恢复与交接语义
 - 实施项：
@@ -288,28 +288,99 @@
     - `node / session` action 已补最小 focus state，进入 goals / subtasks 后会自动滚动并高亮对应 node / session
     - `session` action 已补 `chat <-> subtasks` linked session context，subtasks 进入后会同步 chat session，再切回 subtasks 仍能按 parent conversation 过滤并自动选中原 task
     - `node` action 已把 tracking / capability 两类相关 section 一并纳入 focus，高亮不再只落在单张卡片
-  - 当前已进入 A4 第一轮 runtime 接线：
+  - 当前已完成 A4 第一轮 runtime 接线：
     - 已新增独立 `background continuation ledger` 模块，不把主体逻辑继续塞进 `gateway / server`
     - `heartbeat` 已开始把 `running / ran / skipped / failed` 运行摘要写入统一 ledger
     - `cron` 已开始把 `started / finished / skipped` 运行摘要写入统一 ledger，并保留 `sessionTarget / nextRunAtMs / conversationId`
+    - `subtask` 已接入同一类 shared ledger，同步写入 `running / ran / failed / skipped` 摘要，不再停留在 `cron / heartbeat` 双轨
     - 已新增 background continuation builder，把 `cron / heartbeat` recent run 摘要收敛成同一类最小 `continuationState`
     - `system.doctor` 与现有 settings -> doctor 已开始显示统一 `Background Continuation Runtime` 摘要卡
+    - doctor 中的 background runtime recent entries 已接成现有 continuation action，可最小 replay 到 chat / goals / subtasks 等既有消费面
+    - 已新增最小 `subtask.takeover`：
+      - 仅支持 `finished subtask`
+      - 内部仍复用 same-task relaunch / resume 链
+      - 只额外允许显式覆盖接手的 `agentId / profileId`
     - 当前这一步的目的，是先把 `subtask / cron / heartbeat` 从“分散运行”推进到“至少可统一读取和诊断”的最小台账层
   - 当前这一版定位为“统一恢复工作集视图层 + 首批消费面接线”，不是完整 resident/main/subtask/goal runtime 融合
   - 已补 continuation builder 单测、RPC 断言、定向 vitest 与全仓 `build` 验证
+- 收口判定：
+  - `A4` 现可按“最小 shared ledger + 最小 replay/takeover 接线”口径正式判定为已收口
+  - 判定依据：
+    - `cron / heartbeat / subtask` 已进入同一条 background continuation ledger，而不是继续分散成多套不可统一读取的后台运行摘要
+    - 统一 ledger 已能稳定收敛为最小 `continuationState`，并进入现有 `system.doctor / settings -> doctor` 消费面
+    - doctor 中的 recent runtime entry 已可通过现有 continuation action 回看到既有 chat / goals / subtasks 入口，完成最小 replay 闭环
+    - `finished subtask` 已有显式 takeover 入口与 RPC，且实现边界仍保持在 same-task relaunch wrapper，没有演变成 unified runtime 重构
+  - 收口说明：
+    - 从第三阶段当前目标看，`A4` 的职责是先把 continuation runtime 从“分散摘要”推进到“统一最小台账 + 可回看 + 最小 takeover”
+    - 这一目标现在已经满足，不应再把更深的 replay / recovery / mid-run orchestration 继续塞回 `A4`
+    - 后续若仍需增强，应新开后置任务承接，避免 `A4` 边界持续膨胀、反复 reopen
+- 出口条件：
+  - 以下条件满足后，即可视为当前阶段 `A4` 完成：
+    - `cron / heartbeat / subtask` 三类后台/异步运行面都已进入同一 shared ledger
+    - shared ledger 中的 recent entry 至少带有可消费的最小 `continuationState`，而不是只有诊断字符串
+    - 现有消费面中，至少有一个稳定入口能从 ledger entry 直接回看/打开对应 continuation target
+    - `finished subtask` 至少支持一次显式跨 agent 承接，且状态、目标 agent、resume 记录都能在现有 subtask detail / runtime 记录中看到
+    - 本轮实现仍保持“最小接线”边界，没有引入新的 unified replay platform、checkpoint runtime 或 mid-run takeover 编排层
 - 当前边界：
-  - 还没有统一的 continuation ledger / replay runtime
-  - 当前 ledger 只覆盖 `cron / heartbeat`，还没有把 `subtask` 真正纳入同一条 background ledger
-  - 当前仍以 doctor / observability 为主，不是完整的 replay / handoff / takeover / background recovery 产品面
-  - 还没有显式跨 Agent takeover、checkpoint replay、background run recovery 产品闭环
+  - 当前仍以 doctor / observability + 既有消费面为主，不是完整的 replay / handoff / takeover / background recovery 产品面
+  - 当前 takeover 只覆盖 `finished subtask`，还没有 mid-run takeover、goal takeover、session takeover 的产品闭环
+  - 还没有 checkpoint-level replay、background run recovery runtime、统一 replay workbench
 - 技术债决策：`defer`
   - 暂不直接做 shared ledger + unified replay 大重构，避免一次性拉高耦合与验证面
 - 后续计划：
   - 继续观察 resident / main / subtask 三侧对字段的真实消费频率，决定是否进一步压缩 `labels / recent` 等聚合字段
   - 继续评估是否要把 `node / session` 的定位从“section/card 高亮”继续推进到更细粒度的节点展开、checkpoint 过滤、消息锚点或时间线锚点
-  - 下一步优先把 `subtask` 接入同一类 shared ledger 摘要，避免 `background continuation` 永远停留在 `cron / heartbeat` 双轨
-  - 若 shared ledger 的字段稳定，再评估是否继续把它从 doctor 诊断面推进到更直接的 continuation 消费面
+  - 若 shared ledger 的字段稳定，再评估是否继续把 replay 从 doctor/现有入口接线推进到更直接的 continuation 产品面
+  - 若真实场景继续需要更深恢复能力，再单独拆出 `checkpoint replay / background recovery / mid-run takeover`
   - 最后再决定是否进入真正的 unified continuation runtime 重构
+
+#### A5. continuation runtime 后置增强
+
+- 来源文档：
+  - `LA与SS`
+  - `OC与SS`
+- 当前状态：`后置增强草案；不阻塞 A4 收口`
+- 目标：
+  - 在不破坏当前最小台账边界的前提下，补更深一层的 replay / recovery / takeover 能力
+- 前置依赖：
+  - `A4` 已稳定
+  - `background continuation ledger` 字段在真实任务中已跑过一轮并确认稳定
+- 直接任务：
+  - `A5-1 checkpoint replay`
+    - 让 goal / checkpoint 能从已记录的 continuation 工作集回放到更具体的执行节点，而不只停留在“打开对应页面”
+    - 优先做最小 checkpoint-level replay，不直接扩成统一 replay 引擎
+  - `A5-2 background recovery runtime`
+    - 为 `cron / heartbeat / background subtask` 失败后补最小恢复动作与恢复状态，而不只是在 doctor 中显示失败摘要
+    - 明确 recovery record、recovered-from、latest recovery outcome 的最小字段
+  - `A5-3 mid-run takeover / handoff`
+    - 评估运行中子任务的 safe-point 接管，而不是只支持 `finished subtask`
+    - 若实现，必须继续限制在 safe-point，不做 token 级 live injection
+  - `A5-4 goal / session takeover`
+    - 把 takeover 语义从 `finished subtask` 扩到更高层目标，但保持“最小入口 + 既有消费面承接”边界
+    - 不直接引入新的统一 runtime 控制台
+  - `A5-5 replay / continuation workbench 评估`
+    - 评估是否真的需要独立 replay workbench，还是继续复用 doctor / goals / subtasks / chat 即可
+    - 只有当 doctor 入口已明显不足时，才考虑新增独立产品面
+  - `A5-6 session 锚点深化`
+    - 在 prompt snapshot 锚点之外，评估是否补真正的聊天消息时间线锚点
+    - 仅在真实回看需求稳定出现后再推进
+- 收口目标：
+  - continuation 不再只具备“看得到、点得到、接得住”三件事，而开始具备“局部回放、失败恢复、有限接管”的增强能力
+  - 这些增强仍保持最小边界，不演变成大一统 runtime 重构
+- 完成标志：
+  - 至少有一项深度恢复能力形成最小闭环并通过真实场景验证
+  - `A4` 已有入口不被破坏，shared ledger 字段没有因增强项再次失控膨胀
+  - 继续明确哪些能力仍属于后续独立大任务，而不是在 `A5` 内无限扩面
+- 当前边界：
+  - `A5` 是后置增强，不是第三阶段收口前的强制项
+  - 若 `P2-1 ~ P2-5`、产品化收口或渠道主线更紧急，`A5` 可以继续后移
+  - `A5` 默认不得回改 `A4` 已收口的出口条件、shared ledger 主链、doctor 最小消费面与既有 finished-subtask takeover 语义；若后续某项增强必须触碰这些已收口主链，应单独评估风险并另开任务，不在 `A5` 内直接扩做
+- 技术债决策：`split_task`
+  - 把 `checkpoint replay / background recovery / mid-run takeover / goal-session takeover / workbench 评估` 拆成同一主题下的后置包，而不是继续挂在 `A4` 下混做
+- 后续计划：
+  - 先观察真实使用中，doctor recent entry 与现有 continuation action 是否已经覆盖大部分回看需求
+  - 若真实场景中“需要恢复但只能查看、不能继续”的比例明显升高，再从 `A5-1 / A5-2` 开始推进
+  - 若 takeover 需求主要集中在 finished subtask 之外，再单独推进 `A5-3 / A5-4`
 
 ### 阶段 B：执行外围稳定层
 
@@ -490,25 +561,26 @@
 
 ### 6.0 当前收敛结论与优先级评估
 
-- 当前 `P0-8` 与 `P1-1 ~ P1-4` 都已达到本阶段可收口状态，不建议继续反复 reopen；后续默认只做回归修补或被后续主线明确牵引的最小接线
-- 结合当前代码状态，`P0-P2` 中仍真正影响第三阶段主线的最高优先级项是 `A4 / 统一 continuation runtime`
-- 这次进入 `A4` 的策略，不是直接做 shared replay 平台，而是先补“统一 background continuation ledger + doctor 可见 runtime 摘要”这条最小台账链
+- 当前 `P0-8`、`A4` 与 `P1-1 ~ P1-4` 都已达到本阶段可收口状态，不建议继续反复 reopen；后续默认只做回归修补或被后续主线明确牵引的最小接线
+- `A4` 已按“统一 background continuation ledger + doctor 可见 runtime 摘要 + 最小 replay/takeover 接线”正式收口
+- continuation 相关后续能力已转入 `A5 / continuation runtime 后置增强` 草案，不再阻塞第三阶段当前主线
 - 当前建议推进顺序：
-  1. `A4 / 统一 continuation runtime`
-  2. `P2-3 会话作用域与群聊 key 归一`
-  3. `P2-4 current conversation binding`
-  4. `P2-1 Provider 元数据层`
-  5. `P2-2 认证感知 model picker`
-  6. `P2-5 统一媒体能力注册层 / 附件理解管线`
+  1. `P2-3 会话作用域与群聊 key 归一`
+  2. `P2-4 current conversation binding`
+  3. `P2-1 Provider 元数据层`
+  4. `P2-2 认证感知 model picker`
+  5. `P2-5 统一媒体能力注册层 / 附件理解管线`
+  6. `A5 / continuation runtime 后置增强`
 - 排序理由：
-  - `A4` 仍直接决定复杂任务在 `subtask / goal / cron / heartbeat` 之间能否形成更稳的 continuation 语义
   - `P2-3 / P2-4` 会直接影响多渠道、多线程连续性，是后续渠道与 conversation surface 稳定化的关键前置
-  - `P2-1 / P2-2` 更偏 provider / product abstraction，可在执行 runtime 稳住后推进
-  - `P2-5` 有价值，但当前对第三阶段主线的阻塞性最低
-- 当前这一轮 `A4` 的明确出口：
-  - 至少先把 `cron / heartbeat` 纳入统一 background continuation ledger，并在现有 doctor / 诊断面可见
-  - 再评估是否继续把 `subtask` 并入同一 ledger
-  - `shared replay / checkpoint replay / cross-agent takeover` 继续保持后置，不作为这一轮出口条件
+  - `P2-1 / P2-2` 更偏 provider / product abstraction，且已逐渐成为后续产品化收口前的重要欠账
+  - `P2-5` 有价值，但当前对第三阶段主线的阻塞性低于会话与 provider 两条线
+  - `A5` 虽重要，但已被明确降级为后置增强，不应再压过当前主线
+- 当前 `A4` 的正式收口说明：
+  - `cron / heartbeat / subtask` 已纳入统一 background continuation ledger，并在现有 doctor / 诊断面可见
+  - doctor recent entry 已能复用现有 continuation action 回看既有消费面
+  - `finished subtask takeover` 已完成最小落地
+  - `checkpoint replay / background recovery runtime / mid-run takeover / goal-session takeover` 已转入 `A5`，不再作为 `A4` 阻塞项
 
 ### 6.1 P0 任务
 
@@ -743,30 +815,31 @@
 - 来源文档：
   - `LA与SS`
   - `OC与SS`
-- 当前状态：`已完成第一版最小接线`
+- 当前状态：`已完成第二版最小接线`
 - 目标：
-  - 先把 `cron / heartbeat` 从分散后台运行推进到统一可读的 continuation runtime 台账
+  - 先把 `cron / heartbeat / subtask` 从分散后台运行推进到统一可读的 continuation runtime 台账
 - 前置依赖：
   - `P0-8`
 - 实现要点：
   - 新增独立 `background continuation ledger`
-  - 记录 `cron / heartbeat` 的 `running / ran / skipped / failed` recent run 摘要
+  - 记录 `cron / heartbeat / subtask` 的 `running / ran / skipped / failed` recent run 摘要
   - 把 recent run 摘要统一映射到最小 `continuationState`
   - 在现有 `system.doctor / settings -> doctor` 中暴露统一 runtime 卡片
 - 当前已完成的最小版本：
   - 已新增独立 ledger 模块，不继续把主体逻辑塞进 `gateway / server`
   - `heartbeat` 已开始记录 `runId / conversationId / reason / message`
   - `cron` 已开始记录 `jobId / sessionTarget / nextRunAtMs / conversationId / status`
-  - 已新增 `Background Continuation Runtime` doctor 卡片，可统一查看 `cron / heartbeat` 的最近运行与 continuation target
+  - `subtask` 已并入同一 background continuation ledger，同步记录 `status / sessionId / summary / continuation target`
+  - 已新增 `Background Continuation Runtime` doctor 卡片，可统一查看 `cron / heartbeat / subtask` 的最近运行与 continuation target
+  - doctor recent entry 已支持通过现有 continuation action 直接打开对应 continuation target
   - 已补 ledger builder 单测、doctor RPC 断言、前端摘要断言与构建验证
 - 当前边界：
-  - 当前还未把 `subtask` 正式纳入同一 ledger
-  - 当前卡片仍偏诊断摘要，不是可直接 replay 的 continuation 产品面
+  - 当前卡片仍是基于既有消费面的最小 replay 接线，不是独立 replay workbench
+  - 当前只解决“可统一记录 + 可最小回看”，还没有背景恢复编排能力
 - 技术债决策：`split_task`
-  - 先把 `subtask` 并入 shared ledger 作为下一独立子任务
-  - `checkpoint replay / takeover / recovery runtime` 继续拆分后置
+  - `checkpoint replay / recovery runtime / mid-run takeover` 继续拆分后置
 - 完成标志：
-  - `cron / heartbeat` 至少不再是两套完全分离、不可统一诊断的 background run 语义
+  - `cron / heartbeat / subtask` 不再是多套完全分离、不可统一诊断的 background run 语义
   - doctor 中能看到统一 runtime 摘要、状态分布与可回看的 continuation target
 
 ### 6.2 P1 任务
@@ -1150,8 +1223,9 @@
 9. `C1` Provider 元数据层
 10. `C2` 认证感知 model picker
 11. `C3` 会话作用域与 current conversation binding
-12. `D1` 安装与配置向导 2.0
-13. `D2` 独立 TUI 控制面
+12. `A5` continuation runtime 后置增强
+13. `D1` 安装与配置向导 2.0
+14. `D2` 独立 TUI 控制面
 
 ---
 
@@ -1193,3 +1267,213 @@
 2. 非重要的新增内容，不要默认继续在 `webchat` 上增加新元素。
 3. 能减少的非重要内容应优先减少；能并入同类或近似模块的内容，应优先并入，而不是新增并列入口、并列面板或并列控件。
 4. 如果某项信息主要服务诊断、审计或调试，应优先复用已有区域，例如 `doctor`、长期任务详情、子任务详情、现有设置面板或已有二级弹窗，而不是新增一级导航入口。
+
+### 9.4 HA 借鉴边界与实现原则
+
+1. 对 `HA` 的借鉴目标是优化强化 `SS`，不是追求对 `HA` 的功能表面或代码结构做一比一复刻。
+2. 如果 `HA` 的方法作用效果更好、实现方案更优，可以优先借鉴；但只要能达成优化目标，若存在更适合 `SS` 当前架构、治理边界与产品方向的方法，应优先采用更适合 `SS` 的实现方案。
+3. 新增优化项默认优先采用：
+   - 最小接线
+   - 渐进式增强
+   - 可回滚的局部抽象
+   - 不削弱 `SS` 现有长期任务、记忆治理、审计、WebChat 工作台等已有价值能力
+4. 除非某项能力经过单独评估确有必要，否则不以吸收 `HA` 优点为理由引入中大型重构，不直接打散当前已经稳定的 `goal / resident / review governance / continuation / distribution` 主线结构。
+
+---
+
+## 10. 基于 HA 筛选结论的增补优化目标与优先级重排
+
+本章节基于 `HA与SS的系统功能对比.md` 的审查结论，重新整理后续优化目标、`HA` 可借鉴点、`SS` 更适合的实现路线，以及当前未完成计划项的整体优先级。
+
+说明：
+
+- 本章节用于覆盖“后续未完成项”的剩余排序与新增规划。
+- 若与上文 `6.0` 或 `7.` 中的旧排序存在差异，以本章节为准。
+- 核心原则仍然是：优化强化 `SS`，不做中大型重构，不削弱 `SS` 已有的长期任务、记忆治理、审计与工作台优势。
+
+### 10.1 重新确认的优化主目标
+
+1. 多层记忆系统
+   - 目标不是简单补一个“更多 memory provider 列表”，而是把短记忆、会话记忆、长期记忆、用户画像摘要逐步收敛成统一心智入口，服务长期陪伴型 agent。
+
+2. 自动学习闭环
+   - 目标是增强 `SS Agent` 的自动学习能力，但保持现有 candidate / review / publish 治理链，不走无审查自动发布。
+
+3. 自动提炼技能
+   - 目标是加强技能提炼、制作、修改能力。
+   - 自动生成技能继续保持 `SS` 当前基本机制。
+   - 优先吸收“自动发现 skill 过期并触发更新建议”这一类能力，而不是直接让 runtime 改正式 skill。
+
+4. 自我优化与运行时韧性
+   - 目标是补对 `SS` 真正有价值的 runtime resilience，而不是改变 `SS` 的治理主线。
+
+5. 模型接口
+   - 目标明确：先完成。
+   - 这里应优先收掉当前 `P2-1 / P2-2`，把 provider / model 入口先做成稳定可用的产品层。
+
+6. 部署机制
+   - 目标是保留 `Windows Portable / Single-Exe` 既有优势，同时增强云端、远程、隔离后端部署弹性，为未来常驻云端 agent 做准备。
+
+### 10.2 各目标的 HA 可借鉴点与 SS 实现取向
+
+| 主题 | 我们的优化目标 | HA 可借鉴点 | 更适合 SS 的实现取向 | 边界 |
+|---|---|---|---|---|
+| 多层记忆系统 | 把短记忆、会话记忆、长期记忆、用户画像摘要逐步整合成统一心智入口 | `MEMORY.md + USER.md + session_search + Honcho` 的分层心智；外部 memory provider abstraction | 先在 `SS` 内部做统一“mind/profile snapshot builder”，把 resident/private/shared memory、session digest、experience/method 摘要、用户画像摘要收进同一最小读取层；外部 provider 先预留 adapter/interface，不急着接多个 provider | 不削弱现有 `private/shared/hybrid`、shared review、experience usage 治理链 |
+| 自动学习闭环 | 让 agent 运行后更容易自动沉淀记忆、经验与方法候选 | Hermes 的 memory nudge、skill nudge、background review | 先做“只生成 candidate / suggestion，不自动发布”的轻量 learning loop；把 nudge 放进 prompt/runtime，把 review 结果落到 candidate layer | 不绕过现有 review / publish 审批链 |
+| 自动提炼技能 | 提升技能生成、修订、维护能力 | skill 作为 procedural memory；运行中发现缺口后触发 patch 心智 | 保持 `SS` 当前 candidate -> review -> publish 基本机制，新增“skill freshness / stale detection / update suggestion / patch candidate”链路 | 不直接允许 runtime 修改正式 skill |
+| 自我优化与运行时韧性 | 增强 runtime 在失败、降级、辅助任务上的稳定性 | auxiliary routing、fallback provider、payment fallback、prompt caching / compression 等韧性思路 | 只吸收对 `SS` 有明显收益的部分：auxiliary task provider routing、one-shot fallback、错误分类与退路；不照搬整套 HA runtime | 不削弱 explainability、doctor、审计和 continuation 既有优势 |
+| 模型接口 | 完成 provider metadata 与 model picker 产品化 | shared provider runtime、OpenRouter routing、custom endpoint 处理 | 直接推进 `P2-1 / P2-2`，必要时参考 HA 的 runtime resolver 思路，但实现保持贴合 `SS` 现有 OpenAI-compatible 主链与 fallback queue | 不为 provider 层重构拖慢当前主线 |
+| 部署机制 | 强化云端、远程、隔离后端部署弹性 | local / Docker / SSH / Modal / Daytona / Singularity 多 backend 思路 | 先做 `SS` 自己的 execution backend abstraction；第一阶段优先 `local / Docker / SSH`，随后再评估更云端化 backend；保留 `Portable / Single-Exe` 现有交付链 | 不直接把部署机制演变成平台级大重构 |
+
+### 10.3 新增工作流与实施方案
+
+#### 10.3.1 H1 统一心智入口与用户画像摘要层
+
+- 目标：
+  - 为长期陪伴型 agent 建立统一 `mind/profile snapshot` 读取层。
+- 第一阶段最小落地：
+  - 新增统一 summary builder，把以下内容收敛成同一份最小工作集：
+    - 会话侧：session digest / recent durable facts
+    - 长期记忆侧：resident private/shared/hybrid 摘要
+    - 方法经验侧：高频 methods / experience usage digest
+    - 用户画像侧：从当前会话与长期记忆归纳出的 profile summary
+  - 给这份 mind snapshot 明确预算与字段边界，避免再次扩大 prompt 体积
+  - 先预留 external memory provider adapter interface，不急着接入多个真实 provider
+- 第二阶段再考虑：
+  - 外部 provider 接线
+  - Honcho 式更深用户画像能力
+- 技术债决策：`split_task`
+
+#### 10.3.2 H2 轻量自动学习闭环
+
+- 目标：
+  - 在不改变 `SS` 治理主线的前提下增强自动学习。
+- 第一阶段最小落地：
+  - 新增 memory / method / skill nudge 规则，提示 agent 在复杂任务后优先沉淀：
+    - durable fact
+    - method candidate
+    - skill update suggestion
+  - 新增 background review / post-run review 的最小 runner，但输出只写入 candidate / suggestion 层
+  - 把学习闭环结果优先挂到现有 review inbox / memory governance / doctor 可见面
+- 第二阶段再考虑：
+  - 使用 usage / failure / replay 数据反哺学习优先级
+- 技术债决策：`fix_now`
+
+#### 10.3.3 H3 skill freshness / 过期检测 / 更新建议
+
+- 目标：
+  - 不改变正式 skill 发布机制，但让 skill 的过期与缺口更早暴露。
+- 第一阶段最小落地：
+  - 定义 stale signal：
+    - 近期多次失败
+    - 多次 resume / takeover 后仍复用旧 skill
+    - 高 usage 但低成功率
+    - 显式人工标记过期
+  - 新增 update suggestion / patch candidate 生成器
+  - 在现有 review / doctor / skill detail 中显示 freshness 状态
+- 第二阶段再考虑：
+  - 半自动 patch draft
+- 技术债决策：`fix_now`
+
+#### 10.3.4 H4 定向 runtime resilience 增强
+
+- 目标：
+  - 只补对 `SS` 有价值的自我优化与韧性能力。
+- 第一阶段最小落地：
+  - 为 auxiliary 任务补更明确的 provider / model routing
+  - 为主链补 one-shot fallback 与错误类型归类
+  - 把 fallback / degrade 原因补进 explainability / doctor
+- 第二阶段再考虑：
+  - 更完整的 side-task isolation
+  - 更精细的压缩与缓存策略
+- 技术债决策：`split_task`
+
+#### 10.3.5 H5 部署弹性增强
+
+- 目标：
+  - 在保留本地与 Windows 分发优势的同时，增强常驻云端、远程、隔离后端能力。
+- 第一阶段最小落地：
+  - 为执行面补统一 backend abstraction，先覆盖：
+    - `local`
+    - `docker`
+    - `ssh`
+  - 明确 backend config、credential boundary、workspace mount / sync、log / doctor 观测字段
+  - 保持 `Portable / Single-Exe` 不受影响
+- 第二阶段再考虑：
+  - serverless / remote sandbox
+  - 更强的云端常驻 agent 管理
+- 技术债决策：`split_task`
+
+### 10.4 与现有未完成计划的合并关系
+
+1. `P2-1 Provider 元数据层`
+   - 直接并入本轮最高优先级主线，优先完成。
+
+2. `P2-2 认证感知 model picker`
+   - 与 `P2-1` 作为同一工作流连续推进，优先完成。
+
+3. `P2-3 会话作用域与群聊 key 归一`
+   - 继续保留高优先级。
+   - 原因：长期陪伴型 agent、渠道扩展、云端常驻 agent 都依赖稳定的 session scope 语义。
+
+4. `P2-4 current conversation binding`
+   - 与 `P2-3` 合并看待，仍属于高优先级。
+   - 原因：多线程、多渠道、跨入口连续性是后续 memory mind / deployment elasticity 的前置。
+
+5. `P2-5 统一媒体能力注册层 / 附件理解管线`
+   - 继续保留，但优先级下调到上述主线之后。
+
+6. `A5 continuation runtime 后置增强`
+   - 保持后置，不阻塞本轮。
+   - 仅在真实恢复需求继续升高时再推进。
+
+7. `D1 / D2`
+   - 继续保持后置。
+   - 原因：这些属于产品化收口项，不应早于模型接口、session scope、学习闭环与部署弹性。
+
+### 10.5 新的整体剩余优先级
+
+以下排序用于覆盖当前“剩余未完成项 + 新增 HA 吸收项”的后续实施顺序：
+
+`第一优先级：先完成模型接口主线`
+
+1. `P2-1 Provider 元数据层`
+2. `P2-2 认证感知 model picker`
+
+`第二优先级：稳住长期连续性主线`
+
+3. `P2-3 会话作用域与群聊 key 归一`
+4. `P2-4 current conversation binding`
+
+`第三优先级：开始补长期陪伴型 agent 内核`
+
+5. `H1 统一心智入口与用户画像摘要层`
+6. `H2 轻量自动学习闭环`
+7. `H3 skill freshness / 过期检测 / 更新建议`
+
+`第四优先级：增强未来云端常驻能力`
+
+8. `H5 部署弹性增强`
+
+`第五优先级：定向补强项`
+
+9. `H4 定向 runtime resilience 增强`
+10. `P2-5 统一媒体能力注册层 / 附件理解管线`
+
+`第六优先级：后置增强与产品化收口`
+
+11. `A5 continuation runtime 后置增强`
+12. `D1 安装与配置向导 2.0`
+13. `D2 独立 TUI 控制面`
+
+### 10.6 当前建议的执行节奏
+
+1. 先收掉 `P2-1 / P2-2`，把 provider / model 入口做成稳定产品层。
+2. 紧接着完成 `P2-3 / P2-4`，把会话作用域与 current conversation binding 稳住。
+3. 然后进入 `H1 / H2 / H3`，先把长期陪伴型 agent 的 mind、learning loop、skill freshness 做出第一版最小闭环。
+4. 再推进 `H5`，补 `local / docker / ssh` 三档部署弹性。
+5. 最后再视真实场景决定是否继续推进 `H4 / P2-5 / A5 / D1 / D2`。
+
+### 10.7 一句话执行原则
+
+后续吸收 `HA` 优点的核心，不是把 `SS` 改造成另一个 `HA`，而是优先补齐 `SS` 在长期陪伴型 agent、自动学习、技能维护、模型接口、部署弹性上的短板，同时继续保住 `SS` 在长期任务、治理、审计、WebChat 工作台上的现有优势。

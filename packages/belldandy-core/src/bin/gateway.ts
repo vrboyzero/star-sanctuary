@@ -257,6 +257,7 @@ import {
   buildBackgroundContinuationRuntimeDoctorReport,
 } from "../background-continuation-runtime.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
+import { createSubTaskBackgroundContinuationLedgerHandler } from "../subtask-background-continuation-ledger.js";
 import {
   CronStore,
   buildCronRuntimeDoctorReport,
@@ -2106,7 +2107,12 @@ toolExecutor.setConversationStore(conversationStore);
 let subTaskRuntimeStore: SubTaskRuntimeStore | undefined;
 let subTaskWorktreeRuntime: SubTaskWorktreeRuntime | undefined;
 let subAgentOrchestrator: SubAgentOrchestrator | undefined;
-let resumeSubTask: ((taskId: string, message?: string) => Promise<SubTaskRecord | undefined>) | undefined;
+let resumeSubTask:
+  | ((taskId: string, message?: string, options?: { takeoverAgentId?: string }) => Promise<SubTaskRecord | undefined>)
+  | undefined;
+let takeoverSubTask:
+  | ((taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>)
+  | undefined;
 let updateSubTask: ((taskId: string, message: string) => Promise<SubTaskRecord | undefined>) | undefined;
 if (agentRegistry && toolsEnabled) {
   const subAgentMaxConcurrent = parseInt(readEnv("BELLDANDY_SUB_AGENT_MAX_CONCURRENT") || "3", 10);
@@ -2136,6 +2142,19 @@ if (agentRegistry && toolsEnabled) {
       debug: (m, d) => logger.debug("task-worktree", m, d),
     },
   }));
+  const subTaskBackgroundContinuationLedgerHandler = createSubTaskBackgroundContinuationLedgerHandler({
+    ledger: backgroundContinuationLedger,
+    logger: {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    },
+  });
+  subTaskRuntimeStore.subscribe(subTaskBackgroundContinuationLedgerHandler);
+  for (const item of await subTaskRuntimeStore.listTasks(undefined, { includeArchived: true })) {
+    subTaskBackgroundContinuationLedgerHandler({
+      kind: item.archivedAt ? "archived" : "updated",
+      item,
+    });
+  }
   await reconcileSubTaskWorktreeRuntimes({
     runtimeStore: subTaskRuntimeStore,
     worktreeRuntime: subTaskWorktreeRuntime,
@@ -2186,11 +2205,18 @@ if (agentRegistry && toolsEnabled) {
   resumeSubTask = createSubTaskResumeController({
     runtimeStore: subTaskRuntimeStore,
     orchestrator: subAgentOrchestrator,
+    agentRegistry,
     conversationStore,
     logger: {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
   });
+  takeoverSubTask = async (taskId, agentId, message) => {
+    if (!resumeSubTask) return undefined;
+    return resumeSubTask(taskId, message, {
+      takeoverAgentId: agentId,
+    });
+  };
 
   logger.info("orchestrator", `Sub-agent orchestrator initialized (maxConcurrent=${subAgentMaxConcurrent}, queue=${subAgentMaxQueueSize}, timeout=${subAgentTimeoutMs}ms, maxDepth=${subAgentMaxDepth})`);
   logger.info("task-runtime", "Sub-task runtime initialized for sub-agent orchestration.");
@@ -3058,6 +3084,7 @@ const server = await startGatewayServer({
   goalManager,
   subTaskRuntimeStore,
   resumeSubTask,
+  takeoverSubTask,
   updateSubTask,
   stopSubTask: async (taskId, reason) => {
     if (!subTaskRuntimeStore) return undefined;

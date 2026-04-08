@@ -100,6 +100,7 @@ import {
   handleSubTaskGetWithQueryRuntime,
   handleSubTaskListWithQueryRuntime,
   handleSubTaskResumeWithQueryRuntime,
+  handleSubTaskTakeoverWithQueryRuntime,
   handleSubTaskStopWithQueryRuntime,
   handleSubTaskUpdateWithQueryRuntime,
 } from "./query-runtime-subtask.js";
@@ -278,6 +279,8 @@ export type GatewayServerOptions = {
   subTaskRuntimeStore?: SubTaskRuntimeStore;
   /** 子任务 resume / continuation 控制 */
   resumeSubTask?: (taskId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+  /** 子任务 takeover 控制 */
+  takeoverSubTask?: (taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>;
   /** 子任务 steering / update 控制 */
   updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
   /** 子任务停止控制 */
@@ -398,6 +401,7 @@ const DEFAULT_METHODS = [
   "subtask.list",
   "subtask.get",
   "subtask.resume",
+  "subtask.takeover",
   "subtask.update",
   "subtask.stop",
   "subtask.archive",
@@ -1768,6 +1772,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         goalManager: opts.goalManager,
         subTaskRuntimeStore: opts.subTaskRuntimeStore,
         resumeSubTask: opts.resumeSubTask,
+        takeoverSubTask: opts.takeoverSubTask,
         updateSubTask: opts.updateSubTask,
         stopSubTask: opts.stopSubTask,
         tokenUsageUploadConfig,
@@ -2075,6 +2080,7 @@ async function handleReq(
     goalManager?: GoalManager;
     subTaskRuntimeStore?: SubTaskRuntimeStore;
     resumeSubTask?: (taskId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+    takeoverSubTask?: (taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>;
     updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
     stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
     tokenUsageUploadConfig: TokenUsageUploadConfig;
@@ -2121,6 +2127,7 @@ async function handleReq(
     "subtask.list",
     "subtask.get",
     "subtask.resume",
+    "subtask.takeover",
     "subtask.update",
     "subtask.stop",
     "subtask.archive",
@@ -5966,6 +5973,7 @@ async function handleReq(
           | "subtask.list"
           | "subtask.get"
           | "subtask.resume"
+          | "subtask.takeover"
           | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
@@ -5995,6 +6003,7 @@ async function handleReq(
           | "subtask.list"
           | "subtask.get"
           | "subtask.resume"
+          | "subtask.takeover"
           | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
@@ -6023,12 +6032,49 @@ async function handleReq(
           | "subtask.list"
           | "subtask.get"
           | "subtask.resume"
+          | "subtask.takeover"
           | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
         >(),
       }, {
         taskId,
+        message,
+      });
+    }
+
+    case "subtask.takeover": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const taskId = typeof params.taskId === "string" ? params.taskId.trim() : "";
+      const agentId = typeof params.agentId === "string" ? params.agentId.trim() : "";
+      const message = typeof params.message === "string" && params.message.trim()
+        ? params.message.trim()
+        : undefined;
+      if (!taskId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "taskId is required" } };
+      }
+      if (!agentId) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "agentId is required" } };
+      }
+      return handleSubTaskTakeoverWithQueryRuntime({
+        requestId: req.id,
+        subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        resumeSubTask: ctx.resumeSubTask,
+        takeoverSubTask: ctx.takeoverSubTask,
+        updateSubTask: ctx.updateSubTask,
+        stopSubTask: ctx.stopSubTask,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<
+          | "subtask.list"
+          | "subtask.get"
+          | "subtask.resume"
+          | "subtask.takeover"
+          | "subtask.update"
+          | "subtask.stop"
+          | "subtask.archive"
+        >(),
+      }, {
+        taskId,
+        agentId,
         message,
       });
     }
@@ -6053,6 +6099,7 @@ async function handleReq(
           | "subtask.list"
           | "subtask.get"
           | "subtask.resume"
+          | "subtask.takeover"
           | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
@@ -6082,6 +6129,7 @@ async function handleReq(
           | "subtask.list"
           | "subtask.get"
           | "subtask.resume"
+          | "subtask.takeover"
           | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"
@@ -6111,6 +6159,7 @@ async function handleReq(
           | "subtask.list"
           | "subtask.get"
           | "subtask.resume"
+          | "subtask.takeover"
           | "subtask.update"
           | "subtask.stop"
           | "subtask.archive"

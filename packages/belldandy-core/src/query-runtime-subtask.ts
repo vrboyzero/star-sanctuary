@@ -16,6 +16,7 @@ type SubTaskQueryRuntimeMethod =
   | "subtask.list"
   | "subtask.get"
   | "subtask.resume"
+  | "subtask.takeover"
   | "subtask.update"
   | "subtask.stop"
   | "subtask.archive";
@@ -30,6 +31,7 @@ export type QueryRuntimeSubTaskContext = {
     runId?: string;
   }) => Promise<ConversationPromptSnapshotArtifact | undefined>;
   resumeSubTask?: (taskId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+  takeoverSubTask?: (taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>;
   updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
   stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
   runtimeObserver?: QueryRuntimeObserver<SubTaskQueryRuntimeMethod>;
@@ -519,6 +521,141 @@ export async function handleSubTaskResumeWithQueryRuntime(
       conversationId: item.parentConversationId,
       detail: {
         taskId: item.id,
+      },
+    });
+
+    return {
+      type: "res",
+      id: ctx.requestId,
+      ok: true,
+      payload: {
+        item,
+      },
+    };
+  });
+}
+
+export async function handleSubTaskTakeoverWithQueryRuntime(
+  ctx: QueryRuntimeSubTaskContext,
+  params: { taskId: string; agentId: string; message?: string },
+): Promise<GatewayResFrame> {
+  const runtime = new QueryRuntime({
+    method: "subtask.takeover" as const,
+    traceId: ctx.requestId,
+    observer: ctx.runtimeObserver,
+  });
+
+  return runtime.run(async (queryRuntime) => {
+    queryRuntime.mark("runtime_checked", {
+      detail: {
+        hasStore: Boolean(ctx.subTaskRuntimeStore),
+        hasTakeoverHandler: Boolean(ctx.takeoverSubTask),
+      },
+    });
+
+    if (!ctx.subTaskRuntimeStore || !ctx.takeoverSubTask) {
+      queryRuntime.mark("completed", {
+        detail: {
+          code: "not_available",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "not_available", message: "Subtask takeover not available" },
+      };
+    }
+
+    queryRuntime.mark("request_validated", {
+      detail: {
+        taskId: params.taskId,
+        agentId: params.agentId,
+        messageChars: typeof params.message === "string" ? params.message.length : 0,
+      },
+    });
+
+    const current = await ctx.subTaskRuntimeStore.getTask(params.taskId);
+    if (!current) {
+      queryRuntime.mark("completed", {
+        detail: {
+          taskId: params.taskId,
+          code: "not_found",
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "not_found", message: `Subtask not found: ${params.taskId}` },
+      };
+    }
+
+    queryRuntime.mark("task_loaded", {
+      conversationId: current.parentConversationId,
+      detail: {
+        taskId: current.id,
+        status: current.status,
+        sessionId: current.sessionId,
+        archived: Boolean(current.archivedAt),
+        fromAgentId: current.agentId,
+        toAgentId: params.agentId,
+      },
+    });
+
+    let item: SubTaskRecord | undefined;
+    try {
+      item = await ctx.takeoverSubTask(params.taskId, params.agentId, params.message);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      queryRuntime.mark("completed", {
+        conversationId: current.parentConversationId,
+        detail: {
+          taskId: current.id,
+          code: "takeover_failed",
+          error: errorMessage,
+          toAgentId: params.agentId,
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "takeover_failed", message: errorMessage },
+      };
+    }
+
+    if (!item) {
+      queryRuntime.mark("completed", {
+        conversationId: current.parentConversationId,
+        detail: {
+          taskId: current.id,
+          code: "takeover_failed",
+          toAgentId: params.agentId,
+        },
+      });
+      return {
+        type: "res",
+        id: ctx.requestId,
+        ok: false,
+        error: { code: "takeover_failed", message: `Failed to take over subtask: ${params.taskId}` },
+      };
+    }
+
+    queryRuntime.mark("task_taken_over", {
+      conversationId: item.parentConversationId,
+      detail: {
+        taskId: item.id,
+        status: item.status,
+        resumeCount: item.resume.length,
+        agentId: item.agentId,
+      },
+    });
+    queryRuntime.mark("completed", {
+      conversationId: item.parentConversationId,
+      detail: {
+        taskId: item.id,
+        agentId: item.agentId,
       },
     });
 

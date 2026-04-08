@@ -25,6 +25,7 @@ export type QueryRuntimeMethod =
   | "subtask.list"
   | "subtask.get"
   | "subtask.resume"
+  | "subtask.takeover"
   | "subtask.update"
   | "subtask.stop"
   | "subtask.archive";
@@ -67,6 +68,7 @@ export type QueryRuntimeStage =
   | "task_prompt_snapshot_loaded"
   | "task_prompt_snapshot_missing"
   | "task_resumed"
+  | "task_taken_over"
   | "task_updated"
   | "task_stopped"
   | "task_archived"

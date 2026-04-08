@@ -7,7 +7,7 @@ import {
   type ContinuationStateSnapshot,
 } from "./continuation-state.js";
 
-export type BackgroundContinuationKind = "cron" | "heartbeat";
+export type BackgroundContinuationKind = "cron" | "heartbeat" | "subtask";
 export type BackgroundContinuationStatus = "running" | "ran" | "skipped" | "failed";
 export type BackgroundContinuationSessionTarget = "main" | "isolated";
 
@@ -26,6 +26,7 @@ export type BackgroundContinuationRecord = {
   conversationId?: string;
   sessionTarget?: BackgroundContinuationSessionTarget;
   nextRunAtMs?: number;
+  continuationState?: ContinuationStateSnapshot;
 };
 
 type PersistedBackgroundContinuationState = {
@@ -48,6 +49,7 @@ export type BackgroundContinuationRuntimeDoctorReport = {
   kindCounts: {
     cron: number;
     heartbeat: number;
+    subtask: number;
   };
   sessionTargetCounts: {
     main: number;
@@ -62,7 +64,22 @@ const STATE_VERSION = 1 as const;
 const MAX_ITEMS = 40;
 
 function cloneRecord(record: BackgroundContinuationRecord): BackgroundContinuationRecord {
-  return { ...record };
+  return {
+    ...record,
+    continuationState: record.continuationState
+      ? {
+        ...record.continuationState,
+        checkpoints: {
+          ...record.continuationState.checkpoints,
+          labels: [...record.continuationState.checkpoints.labels],
+        },
+        progress: {
+          ...record.continuationState.progress,
+          recent: [...record.continuationState.progress.recent],
+        },
+      }
+      : undefined,
+  };
 }
 
 function trimText(value: string | undefined, maxLength = 240): string | undefined {
@@ -79,10 +96,10 @@ async function atomicWriteJson(filePath: string, content: PersistedBackgroundCon
 }
 
 function toRuntimeEntry(record: BackgroundContinuationRecord): BackgroundContinuationRuntimeEntry {
-  return {
-    ...record,
-    continuationState: buildBackgroundContinuationState({
-      scope: record.kind,
+  const continuationState = record.continuationState
+    ? cloneRecord(record).continuationState as ContinuationStateSnapshot
+    : buildBackgroundContinuationState({
+      scope: record.kind === "subtask" ? "heartbeat" : record.kind,
       targetId: record.sourceId,
       targetLabel: record.label,
       status: record.status,
@@ -93,7 +110,10 @@ function toRuntimeEntry(record: BackgroundContinuationRecord): BackgroundContinu
       nextRunAtMs: record.nextRunAtMs,
       startedAt: record.startedAt,
       finishedAt: record.finishedAt,
-    }),
+    });
+  return {
+    ...record,
+    continuationState,
   };
 }
 
@@ -114,8 +134,13 @@ export class BackgroundContinuationLedger {
     sessionTarget?: BackgroundContinuationSessionTarget;
     summary?: string;
     startedAt?: number;
+    updatedAt?: number;
+    continuationState?: ContinuationStateSnapshot;
   }): Promise<BackgroundContinuationRecord> {
     const startedAt = Number.isFinite(input.startedAt) ? Number(input.startedAt) : Date.now();
+    const updatedAt = Number.isFinite(input.updatedAt)
+      ? Math.max(startedAt, Number(input.updatedAt))
+      : startedAt;
     const record: BackgroundContinuationRecord = {
       runId: String(input.runId || crypto.randomUUID()),
       kind: input.kind,
@@ -123,10 +148,11 @@ export class BackgroundContinuationLedger {
       label: String(input.label || input.sourceId || input.kind).trim() || input.kind,
       status: "running",
       startedAt,
-      updatedAt: startedAt,
+      updatedAt,
       ...(input.conversationId ? { conversationId: String(input.conversationId).trim() } : {}),
       ...(input.sessionTarget ? { sessionTarget: input.sessionTarget } : {}),
       ...(trimText(input.summary) ? { summary: trimText(input.summary) } : {}),
+      ...(input.continuationState ? { continuationState: input.continuationState } : {}),
     };
     await this.mutate((state) => {
       upsertRecord(state.items, record);
@@ -149,6 +175,7 @@ export class BackgroundContinuationLedger {
     startedAt?: number;
     finishedAt?: number;
     nextRunAtMs?: number;
+    continuationState?: ContinuationStateSnapshot;
   }): Promise<BackgroundContinuationRecord> {
     const finishedAt = Number.isFinite(input.finishedAt) ? Number(input.finishedAt) : Date.now();
     let output!: BackgroundContinuationRecord;
@@ -176,6 +203,9 @@ export class BackgroundContinuationLedger {
           : typeof existing?.nextRunAtMs === "number"
             ? { nextRunAtMs: existing.nextRunAtMs }
             : {}),
+        ...(input.continuationState || existing?.continuationState
+          ? { continuationState: input.continuationState || existing?.continuationState }
+          : {}),
       };
       upsertRecord(state.items, record);
       state.items = sortAndTrimRecords(state.items);
@@ -205,6 +235,7 @@ export class BackgroundContinuationLedger {
               ...item,
               summary: trimText(item.summary),
               reason: trimText(item.reason),
+              continuationState: normalizeContinuationStateSnapshot(item.continuationState),
             })),
         };
       }
@@ -238,6 +269,7 @@ export class BackgroundContinuationLedger {
               ...item,
               summary: trimText(item.summary),
               reason: trimText(item.reason),
+              continuationState: normalizeContinuationStateSnapshot(item.continuationState),
             })),
         };
       }
@@ -246,6 +278,56 @@ export class BackgroundContinuationLedger {
     }
     return { version: STATE_VERSION, items: [] };
   }
+}
+
+function normalizeContinuationStateSnapshot(value: unknown): ContinuationStateSnapshot | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Record<string, unknown>;
+  const progress = item.progress && typeof item.progress === "object"
+    ? item.progress as Record<string, unknown>
+    : {};
+  const checkpoints = item.checkpoints && typeof item.checkpoints === "object"
+    ? item.checkpoints as Record<string, unknown>
+    : {};
+  const scope = typeof item.scope === "string" ? item.scope.trim() : "";
+  const targetId = typeof item.targetId === "string" ? item.targetId.trim() : "";
+  const resumeMode = typeof item.resumeMode === "string" ? item.resumeMode.trim() : "";
+  const summary = typeof item.summary === "string" ? item.summary.trim() : "";
+  const nextAction = typeof item.nextAction === "string" ? item.nextAction.trim() : "";
+  if (
+    (scope !== "subtask" && scope !== "goal" && scope !== "conversation" && scope !== "resident" && scope !== "background")
+    || !targetId
+    || !resumeMode
+    || !summary
+    || !nextAction
+  ) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    scope,
+    targetId,
+    recommendedTargetId: typeof item.recommendedTargetId === "string" ? item.recommendedTargetId.trim() || undefined : undefined,
+    targetType: item.targetType === "conversation" || item.targetType === "session" || item.targetType === "node" || item.targetType === "goal"
+      ? item.targetType
+      : undefined,
+    resumeMode,
+    summary,
+    nextAction,
+    checkpoints: {
+      openCount: Number.isFinite(Number(checkpoints.openCount)) ? Number(checkpoints.openCount) : 0,
+      blockerCount: Number.isFinite(Number(checkpoints.blockerCount)) ? Number(checkpoints.blockerCount) : 0,
+      labels: Array.isArray(checkpoints.labels)
+        ? checkpoints.labels.map((label) => typeof label === "string" ? label.trim() : "").filter(Boolean)
+        : [],
+    },
+    progress: {
+      current: typeof progress.current === "string" ? progress.current.trim() || undefined : undefined,
+      recent: Array.isArray(progress.recent)
+        ? progress.recent.map((label) => typeof label === "string" ? label.trim() : "").filter(Boolean)
+        : [],
+    },
+  };
 }
 
 function upsertRecord(items: BackgroundContinuationRecord[], record: BackgroundContinuationRecord): void {
@@ -278,14 +360,14 @@ export async function buildBackgroundContinuationRuntimeDoctorReport(input: {
     runningRuns: records.filter((item) => item.status === "running").length,
     failedRuns: records.filter((item) => item.status === "failed").length,
     skippedRuns: records.filter((item) => item.status === "skipped").length,
-    conversationLinkedRuns: records.filter((item) => Boolean(item.conversationId)).length,
+    conversationLinkedRuns: records.filter((item) => Boolean(item.conversationId || item.continuationState?.recommendedTargetId)).length,
   };
   const kindCounts = records.reduce(
     (acc, item) => {
       acc[item.kind] += 1;
       return acc;
     },
-    { cron: 0, heartbeat: 0 },
+    { cron: 0, heartbeat: 0, subtask: 0 },
   );
   const sessionTargetCounts = records.reduce(
     (acc, item) => {
@@ -303,6 +385,7 @@ export async function buildBackgroundContinuationRuntimeDoctorReport(input: {
     `skipped=${totals.skippedRuns}`,
     `cron=${kindCounts.cron}`,
     `heartbeat=${kindCounts.heartbeat}`,
+    `subtask=${kindCounts.subtask}`,
     `linked=${totals.conversationLinkedRuns}`,
     `main=${sessionTargetCounts.main}`,
     `isolated=${sessionTargetCounts.isolated}`,

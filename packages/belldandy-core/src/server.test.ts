@@ -7082,6 +7082,7 @@ test("system.doctor exposes background continuation runtime summary when provide
       kindCounts: {
         cron: 2,
         heartbeat: 1,
+        subtask: 0,
       },
       sessionTargetCounts: {
         main: 1,
@@ -7151,6 +7152,7 @@ test("system.doctor exposes background continuation runtime summary when provide
       kindCounts: {
         cron: 2,
         heartbeat: 1,
+        subtask: 0,
       },
     });
     expect(res.payload?.checks).toEqual(expect.arrayContaining([
@@ -7490,6 +7492,91 @@ test("subtask.resume accepts continuation for a finished task and returns the up
           status: "delivered",
           deliveredSessionId: "sub_resume_2",
           resumedFromSessionId: "sub_resume_1",
+        }),
+      ],
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("subtask.takeover accepts takeover for a finished task and returns the updated record", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const finishedTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-takeover",
+      agentId: "coder",
+      instruction: "Need takeover",
+      channel: "subtask",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(finishedTask.id, "sub_takeover_1", "coder");
+  await subTaskRuntimeStore.completeTask(finishedTask.id, {
+    status: "done",
+    sessionId: "sub_takeover_1",
+    output: "first pass output",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+    takeoverSubTask: async (taskId, agentId, message) => {
+      const accepted = await subTaskRuntimeStore.requestResume(taskId, message || "", {
+        sessionId: "sub_takeover_1",
+      });
+      await subTaskRuntimeStore.attachSession(taskId, "sub_takeover_2", agentId);
+      await subTaskRuntimeStore.markResumeDelivered(taskId, String(accepted?.resume.id), {
+        sessionId: "sub_takeover_2",
+        resumedFromSessionId: "sub_takeover_1",
+      });
+      return subTaskRuntimeStore.getTask(taskId);
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-takeover",
+      method: "subtask.takeover",
+      params: {
+        taskId: finishedTask.id,
+        agentId: "researcher",
+        message: "Continue with verification-focused follow-up.",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-takeover"));
+
+    const takeoverRes = frames.find((f) => f.type === "res" && f.id === "subtask-takeover");
+    expect(takeoverRes.ok).toBe(true);
+    expect(takeoverRes.payload?.item).toMatchObject({
+      id: finishedTask.id,
+      sessionId: "sub_takeover_2",
+      agentId: "researcher",
+      launchSpec: {
+        agentId: "researcher",
+      },
+      resume: [
+        expect.objectContaining({
+          message: "Continue with verification-focused follow-up.",
+          status: "delivered",
+          deliveredSessionId: "sub_takeover_2",
+          resumedFromSessionId: "sub_takeover_1",
         }),
       ],
     });

@@ -8,6 +8,7 @@ import {
   BackgroundContinuationLedger,
   buildBackgroundContinuationRuntimeDoctorReport,
 } from "./background-continuation-runtime.js";
+import { buildSubTaskContinuationState } from "./continuation-state.js";
 
 describe("background continuation runtime", () => {
   const tempDirs: string[] = [];
@@ -17,7 +18,7 @@ describe("background continuation runtime", () => {
     tempDirs.length = 0;
   });
 
-  it("persists recent cron and heartbeat runs into a unified doctor report", async () => {
+  it("persists recent cron, heartbeat, and subtask entries into a unified doctor report", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-background-runtime-"));
     tempDirs.push(stateDir);
     const ledger = new BackgroundContinuationLedger(stateDir);
@@ -62,25 +63,76 @@ describe("background continuation runtime", () => {
       startedAt: 1_710_000_100_000,
       finishedAt: 1_710_000_100_100,
     });
+    await ledger.finishRun({
+      runId: "subtask:task_sub_1",
+      kind: "subtask",
+      sourceId: "task_sub_1",
+      label: "Implement runtime bridge",
+      status: "ran",
+      summary: "patch delivered",
+      conversationId: "conv-parent",
+      startedAt: 1_710_000_200_000,
+      finishedAt: 1_710_000_201_000,
+      continuationState: buildSubTaskContinuationState({
+        id: "task_sub_1",
+        kind: "sub_agent",
+        parentConversationId: "conv-parent",
+        sessionId: "sub-session-1",
+        agentId: "coder",
+        launchSpec: {
+          agentId: "coder",
+          profileId: "coder",
+          background: true,
+          timeoutMs: 60_000,
+          channel: "subtask",
+        },
+        background: true,
+        status: "done",
+        instruction: "Implement runtime bridge",
+        summary: "patch delivered",
+        progress: {
+          phase: "done",
+          message: "Task completed.",
+          lastActivityAt: 1_710_000_201_000,
+        },
+        createdAt: 1_710_000_200_000,
+        updatedAt: 1_710_000_201_000,
+        finishedAt: 1_710_000_201_000,
+        outputPreview: "patch delivered",
+        steering: [],
+        resume: [],
+        notifications: [],
+      }),
+    });
 
     const report = await buildBackgroundContinuationRuntimeDoctorReport({ ledger, recentLimit: 6 });
 
     expect(report.totals).toMatchObject({
-      totalRuns: 2,
+      totalRuns: 3,
       runningRuns: 0,
       skippedRuns: 1,
       failedRuns: 0,
-      conversationLinkedRuns: 2,
+      conversationLinkedRuns: 3,
     });
     expect(report.kindCounts).toEqual({
       cron: 1,
       heartbeat: 1,
+      subtask: 1,
     });
     expect(report.sessionTargetCounts).toEqual({
       main: 1,
       isolated: 0,
     });
     expect(report.recentEntries[0]).toMatchObject({
+      kind: "subtask",
+      status: "ran",
+      continuationState: {
+        scope: "subtask",
+        recommendedTargetId: "sub-session-1",
+        targetType: "session",
+      },
+    });
+    expect(report.recentEntries[1]).toMatchObject({
       kind: "heartbeat",
       status: "skipped",
       continuationState: {
@@ -89,7 +141,7 @@ describe("background continuation runtime", () => {
         targetType: "conversation",
       },
     });
-    expect(report.recentEntries[1]).toMatchObject({
+    expect(report.recentEntries[2]).toMatchObject({
       kind: "cron",
       status: "ran",
       continuationState: {

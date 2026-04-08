@@ -12,6 +12,7 @@ export function createSettingsController({
   onToggle,
   getConnectionAuthMode,
   onOpenCommunityConfig,
+  onOpenContinuationAction,
   redactedPlaceholder = "[REDACTED]",
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
@@ -436,7 +437,9 @@ export function createSettingsController({
         badge.textContent = `${check.name}: ${check.message || check.status}`;
         doctorStatusEl.appendChild(badge);
       });
-      renderDoctorObservabilityCards(doctorStatusEl, res.payload, t);
+      renderDoctorObservabilityCards(doctorStatusEl, res.payload, t, {
+        onOpenContinuationAction,
+      });
       if (hasFail) {
         doctorToggleBtn.className = "button badge fail";
         doctorToggleBtn.textContent = t("settings.doctorHasIssues", {}, "存在未通过的检查");
