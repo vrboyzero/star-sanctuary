@@ -177,4 +177,46 @@ describe("DiscordChannel", () => {
     expect(sent).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("rejects explicit sessionKey when binding belongs to another channel", async () => {
+    const channel = new DiscordChannel({
+      botToken: "discord-token",
+      agent: {
+        run: vi.fn(),
+      } as any,
+      currentConversationBindingStore: {
+        async upsert() {},
+        async get() {
+          return {
+            channel: "qq",
+            sessionKey: "channel=qq:scope=per-channel-peer:chat=channel-a:peer=user-a",
+            sessionScope: "per-channel-peer",
+            legacyConversationId: "qq_channel-a",
+            chatKind: "channel",
+            chatId: "channel-a",
+            updatedAt: Date.now(),
+            target: { channelId: "channel-a" },
+          };
+        },
+        async getLatestByChannel() {
+          return undefined;
+        },
+      },
+    });
+    const fetchMock = vi.fn();
+    (channel as any).client = {
+      isReady: () => true,
+      channels: {
+        fetch: fetchMock,
+      },
+    };
+    (channel as any)._running = true;
+
+    const sent = await channel.sendProactiveMessage("manual", {
+      sessionKey: "channel=qq:scope=per-channel-peer:chat=channel-a:peer=user-a",
+    });
+
+    expect(sent).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

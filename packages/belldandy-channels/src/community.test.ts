@@ -622,4 +622,39 @@ describe("community token usage upload", () => {
       await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }
   });
+
+  it("rejects explicit sessionKey when binding belongs to another channel", async () => {
+    const wsSend = vi.fn();
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: { run: vi.fn(async function* () { yield { type: "final", text: "ok" }; }) } as any,
+      conversationStore: new ConversationStore(),
+      currentConversationBindingStore: {
+        async upsert() {},
+        async get() {
+          return {
+            channel: "qq",
+            sessionKey: "channel=qq:scope=per-channel-peer:chat=channel-a:peer=user-a",
+            sessionScope: "per-channel-peer",
+            legacyConversationId: "qq_channel-a",
+            chatKind: "channel",
+            chatId: "channel-a",
+            updatedAt: Date.now(),
+            target: { chatId: "channel-a" },
+          };
+        },
+        async getLatestByChannel() {
+          return undefined;
+        },
+      },
+    });
+
+    const sent = await channel.sendProactiveMessage("manual", {
+      sessionKey: "channel=qq:scope=per-channel-peer:chat=channel-a:peer=user-a",
+    });
+
+    expect(sent).toBe(false);
+    expect(wsSend).not.toHaveBeenCalled();
+  });
 });

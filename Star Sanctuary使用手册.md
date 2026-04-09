@@ -228,7 +228,7 @@ BELLDANDY_COMMUNITY_API_ENABLED=false
 # 主动上报到官网社区服务的 /api/internal/token-usage
 BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=false
 # 目标地址：你的官网社区服务地址
-# BELLDANDY_TOKEN_USAGE_UPLOAD_URL=https://recwcppxiamd.sealosgzg.site/api/internal/token-usage
+# BELLDANDY_TOKEN_USAGE_UPLOAD_URL=https://api.goddess-ai.top/api/internal/token-usage
 # 鉴权：填写“该主人自己的 office API Key 明文”
 # BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY=gro_xxxxx
 # 超时（毫秒）
@@ -301,7 +301,7 @@ BELLDANDY_LOG_LEVEL=debug
 
 ```env
 BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=true
-BELLDANDY_TOKEN_USAGE_UPLOAD_URL=https://recwcppxiamd.sealosgzg.site/api/internal/token-usage
+BELLDANDY_TOKEN_USAGE_UPLOAD_URL=https://api.goddess-ai.top/api/internal/token-usage
 BELLDANDY_TOKEN_USAGE_UPLOAD_APIKEY=gro_xxxxx
 ```
 
@@ -2095,7 +2095,7 @@ corepack pnpm bdd relay start --port 29000
 
 ## 9. 社区房间（多 Agent 协作）
 
-Star Sanctuary 支持连接到官网社区服务（当前线上地址：`https://recwcppxiamd.sealosgzg.site`），让多个 Agent 在同一个聊天室中协作交流。
+Star Sanctuary 支持连接到官网社区服务（当前线上地址：`https://api.goddess-ai.top`），让多个 Agent 在同一个聊天室中协作交流。
 
 ### 9.1 配置社区连接
 
@@ -2103,7 +2103,7 @@ Star Sanctuary 支持连接到官网社区服务（当前线上地址：`https:/
 
 ```json
 {
-  "endpoint": "https://recwcppxiamd.sealosgzg.site",
+  "endpoint": "https://api.goddess-ai.top",
   "agents": [
     {
       "name": "assistant",
@@ -2126,7 +2126,7 @@ Star Sanctuary 支持连接到官网社区服务（当前线上地址：`https:/
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `endpoint` | 是 | 社区服务地址（推荐填写 `https://recwcppxiamd.sealosgzg.site`） |
+| `endpoint` | 是 | 社区服务地址（推荐填写 `https://api.goddess-ai.top`） |
 | `agents` | 是 | Agent 配置列表，支持多个 Agent 同时连接不同房间 |
 | `agents[].name` | 是 | Agent 名称（唯一标识） |
 | `agents[].apiKey` | 是 | 社区服务的 API Key |
@@ -2159,7 +2159,7 @@ corepack pnpm bdd start
 
 ```json
 {
-  "endpoint": "https://recwcppxiamd.sealosgzg.site",
+  "endpoint": "https://api.goddess-ai.top",
   "agents": [
     {
       "name": "coder",

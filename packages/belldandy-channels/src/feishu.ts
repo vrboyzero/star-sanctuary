@@ -504,6 +504,10 @@ export class FeishuChannel implements Channel {
         const directBinding = explicitSessionKey
             ? await this.currentConversationBindingStore?.get(explicitSessionKey)
             : undefined;
+        if (explicitSessionKey && directBinding && directBinding.channel !== "feishu") {
+            console.warn(`[${this.name}] Cannot send proactive message - sessionKey channel mismatch: ${directBinding.channel}`);
+            return false;
+        }
         const fallbackBinding = !explicitChatId && !directBinding
             ? await this.currentConversationBindingStore?.getLatestByChannel({ channel: "feishu" })
             : undefined;

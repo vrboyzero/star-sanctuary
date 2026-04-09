@@ -1194,7 +1194,7 @@
 #### P2-3 会话作用域与群聊 key 归一
 
 - 来源文档：`OC与SS`
-- 当前状态：`进行中（v1 已开始统一 canonical session key 接线）`
+- 当前状态：`已完成（v1 已完成 canonical session key 接线与本轮兼容边界收口）`
 - 目标：
   - 提升多渠道会话连续性与路由一致性
 - 前置依赖：
@@ -1206,12 +1206,17 @@
   - 已新增统一 `session-key` builder，开始为 `discord / feishu / qq / community` 生成 canonical `sessionScope / sessionKey`
   - 路由上下文已开始透传 `sessionScope / sessionKey`，为后续 `P2-4` binding 持久层预留稳定接线点
   - 当前仍保持旧 `conversationId` 持久化规则不变，避免在 `P2-3 v1` 提前引入历史 session 迁移与 reply-back 回归
+  - 本轮已完成 `session scope / group-channel key` 兼容边界检查，确认当前主风险不在 `session-key` 生成，而在“显式 canonical `sessionKey` 被用于主动外发”时的跨渠道误用边界
+  - 已为 `feishu / qq / discord / community` 四渠道补齐显式 `sessionKey` 的渠道一致性校验；当 binding 记录的 `channel` 与当前渠道不一致时，会直接拒绝主动外发，不再误读其他渠道 binding
+  - 已补四渠道回归测试，锁定“错渠道 `sessionKey` 不得继续外发”的边界
+  - 已完成定向 `vitest` 与 `@belldandy/channels build` 验证
 - 当前边界：
   - 当前只统一 canonical session 语义与渠道接线，不改 resident main conversation 语义
-  - 当前不包含 current conversation binding 持久层，不包含 outbound reply-back 改造
-- 第一版收口说明：
-  - `P2-3 v1` 先按“统一 session key builder + 四渠道接线 + 旧 conversationId 兼容保留”口径推进
-  - 当前 `P2-4` 已完成第一版收口；`P2-3` 下一步应转为做剩余 session scope / group-channel key 兼容边界检查，而不是继续扩新的 binding 主线
+  - 当前仍保持旧 `conversationId / legacyConversationId` 兼容保留，不做历史 session 迁移
+  - 当前不把 `current conversation binding` 持久层、外发审计或 reply-back 产品面继续并回 `P2-3`；这些已归入 `P2-4`
+- 收口说明：
+  - `P2-3` 现可按“统一 session key builder + 四渠道接线 + 旧 `conversationId` 兼容保留 + 主动外发跨渠道误用边界补齐”口径判定为已完成
+  - 这次收口后，`P2-3` 不再继续扩新的 binding 主线；后续仅保留与 `P2-4` 相邻面的回归观察和零星兼容修补
 - 完成标志：
   - 会话 key 与路由语义更一致
 
@@ -1803,8 +1808,8 @@
 ### 10.6 当前建议的执行节奏
 
 1. `P2-1 / P2-2 / P2-4` 已完成当前阶段收口，后续默认只保留回归修补与观察项。
-2. 当前先对 `P2-3` 做一次收口检查，把会话作用域与 group/channel key 的剩余兼容边界确认清楚。
-3. 紧接着进入 `H1`，先把长期陪伴型 agent 的统一心智入口做出第一版最小读取层与摘要 builder。
+2. `P2-3` 已完成本轮收口检查；canonical session key 与 group/channel key 的主要兼容边界已确认，后续默认只保留回归观察与最小修补。
+3. 当前可直接进入 `H1`，先把长期陪伴型 agent 的统一心智入口做出第一版最小读取层与摘要 builder。
 4. 在 `H1` 稳住后，再进入 `H2 / H3`，补 learning loop 与 skill freshness 的第一版闭环。
 5. 再推进 `H5`，补 `local / docker / ssh` 三档部署弹性。
 6. 最后再视真实场景决定是否继续推进 `H4 / P2-5 / A5 / D1 / D2`。
@@ -1837,7 +1842,7 @@
 | 已完成 | `P1-4` Cron 约束校验与 `stagger` | 第一版最小约束层已落地，已达到当前阶段可收口状态 |
 | 已完成 | `P2-1` Provider 元数据层 | 已完成第一版最小只读 catalog 接线：provider/model catalog 与 `models.list` 外移已收口 |
 | 已完成 | `P2-2` 认证感知 model picker | 已完成第一版最小 picker 产品化：auth-aware labels、`Manual Model...`、provider 分组/过滤与显式 preferred provider 配置均已收口 |
-| 进行中 | `P2-3` 会话作用域与群聊 key 归一 | `v1` 已开始统一 canonical session key 与四渠道接线；旧 `conversationId` 兼容仍保留 |
+| 已完成 | `P2-3` 会话作用域与群聊 key 归一 | `v1` 已完成 canonical session key 与四渠道接线，并已补齐主动外发显式 `sessionKey` 的跨渠道误用边界；旧 `conversationId` 兼容继续保留 |
 | 已完成 | `P2-4` current conversation binding | `v1` 已接入共享 binding store，`WebChat -> 飞书 / QQ / Community / Discord` 文本外发 `v1`、外发审计与 doctor/outbound failure diagnosis 第二版细化已收口；剩余仅保留多渠道手测观察 |
 | 进行中 | `H1` 统一心智入口与用户画像摘要层 | `v1` 第一版最小只读摘要层已落地：`mind/profile snapshot builder` + `system.doctor` 接线 + doctor 卡片；后续再评估 prompt/runtime 消费与外部 provider adapter |
 | 进行中 | `H2` 轻量自动学习闭环 | `v1` 主链已打通：已完成 input builder、最小 runner、doctor runtime 摘要、长期任务通道 `goal session context / start banner / status event / self-check guidance`；当前进入观察与第二轮细化阶段，后续优先看 `H2-3b` 事件噪音与 goal runner refresh/priority，仍未做自动发布 |

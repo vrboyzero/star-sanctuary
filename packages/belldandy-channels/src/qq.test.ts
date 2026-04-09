@@ -393,6 +393,49 @@ describe("QqChannel", () => {
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
+    it("rejects explicit sessionKey when binding belongs to another channel", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => ({
+            ok: true,
+            text: async () => "",
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+            currentConversationBindingStore: {
+                async upsert() {},
+                async get() {
+                    return {
+                        channel: "feishu",
+                        sessionKey: "channel=feishu:scope=per-peer:chat=chat-a:peer=user-a",
+                        sessionScope: "per-peer",
+                        legacyConversationId: "chat-a",
+                        chatKind: "dm",
+                        chatId: "chat-a",
+                        updatedAt: Date.now(),
+                        target: { chatId: "chat-a" },
+                    };
+                },
+                async getLatestByChannel() {
+                    return undefined;
+                },
+            },
+        });
+
+        (channel as any).accessToken = "qq-token";
+
+        const sent = await channel.sendProactiveMessage("manual", {
+            sessionKey: "channel=feishu:scope=per-peer:chat=chat-a:peer=user-a",
+        });
+
+        expect(sent).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
     it("cancels a pending reconnect timer on stop", async () => {
         vi.useFakeTimers();
 

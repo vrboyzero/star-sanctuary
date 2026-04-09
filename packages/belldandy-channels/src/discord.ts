@@ -359,6 +359,10 @@ export class DiscordChannel implements Channel {
         const directBinding = explicitSessionKey
             ? await this.currentConversationBindingStore?.get(explicitSessionKey)
             : undefined;
+        if (explicitSessionKey && directBinding && directBinding.channel !== "discord") {
+            console.error("[Discord] Invalid proactive sessionKey channel:", directBinding.channel);
+            return false;
+        }
         const fallbackBinding = !explicitChannelId && !directBinding
             ? await this.currentConversationBindingStore?.getLatestByChannel({ channel: "discord" })
             : undefined;

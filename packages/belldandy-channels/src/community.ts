@@ -245,6 +245,10 @@ export class CommunityChannel implements Channel {
     const directBinding = explicitSessionKey
       ? await this.currentConversationBindingStore?.get(explicitSessionKey)
       : undefined;
+    if (explicitSessionKey && directBinding && directBinding.channel !== "community") {
+      console.warn(`[${this.name}] Invalid proactive sessionKey channel: ${directBinding.channel}`);
+      return false;
+    }
     const fallbackBinding = !explicitRoomId && !directBinding
       ? await this.currentConversationBindingStore?.getLatestByChannel({
         channel: "community",

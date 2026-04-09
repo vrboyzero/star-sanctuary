@@ -313,7 +313,7 @@ Discord 消息进入后会：
 
 ```json
 {
-  "endpoint": "https://office.goddess.ai",
+  "endpoint": "https://api.goddess-ai.top",
   "agents": [
     {
       "name": "assistant",
@@ -336,7 +336,7 @@ Discord 消息进入后会：
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `endpoint` | 是 | 社区服务地址，当前默认值来自代码：`https://office.goddess.ai` |
+| `endpoint` | 是 | 社区服务地址，推荐填写 `https://api.goddess-ai.top` |
 | `agents` | 是 | 社区账号列表，可同时配置多个 |
 | `agents[].name` | 是 | 社区账号名，同时也是该账号在安全策略里的 `accountId` |
 | `agents[].apiKey` | 是 | 社区服务 API Key |
