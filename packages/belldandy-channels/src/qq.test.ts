@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { ConversationStore } from "@belldandy/agent";
 
 import { QqChannel } from "./qq.js";
+import { createFileCurrentConversationBindingStore } from "./current-conversation-binding-store.js";
 import { normalizeReplyChunkingConfig } from "./reply-chunking-config.js";
+import { buildChannelSessionDescriptor } from "./session-key.js";
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,7 +29,7 @@ describe("QqChannel", () => {
         vi.stubGlobal("fetch", fetchMock);
 
         const agent = {
-            async *run(input: { text: string }) {
+            run: vi.fn(async function* (input: { text: string }) {
                 if (input.text === "first") {
                     await sleep(20);
                 }
@@ -32,7 +37,7 @@ describe("QqChannel", () => {
                     type: "final" as const,
                     text: `reply:${input.text}`,
                 };
-            },
+            }),
         };
 
         const channel = new QqChannel({
@@ -71,6 +76,24 @@ describe("QqChannel", () => {
             (channel as any).handleMessage(secondMessage, "MESSAGE_CREATE"),
         ]);
 
+        expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
+            conversationId: "qq_channel-a",
+            meta: expect.objectContaining({
+                channel: "qq",
+                sessionScope: "per-channel-peer",
+                sessionKey: expect.stringContaining("channel=qq"),
+                legacyConversationId: "qq_channel-a",
+            }),
+        }));
+        expect(agent.run).toHaveBeenCalledWith(expect.objectContaining({
+            conversationId: "qq_channel-b",
+            meta: expect.objectContaining({
+                channel: "qq",
+                sessionScope: "per-channel-peer",
+                sessionKey: expect.stringContaining("chat=channel-b"),
+                legacyConversationId: "qq_channel-b",
+            }),
+        }));
         expect(fetchMock).toHaveBeenCalledTimes(2);
 
         const sent = fetchMock.mock.calls.map(([url, init]) => ({
@@ -198,6 +221,176 @@ describe("QqChannel", () => {
             expect((body.content ?? "").length).toBeLessThanOrEqual(120);
             expect((((body.content ?? "").match(/```/g) ?? []).length) % 2).toBe(0);
         }
+    });
+
+    it("falls back to persisted current conversation binding when proactive target is omitted", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => ({
+            ok: true,
+            text: async () => "",
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "qq-binding-"));
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+            currentConversationBindingStore: createFileCurrentConversationBindingStore(path.join(stateDir, "bindings.json")),
+        });
+
+        try {
+            (channel as any).accessToken = "qq-token";
+
+            await (channel as any).handleMessage({
+                id: "msg-1",
+                content: "seed",
+                channel_id: "channel-a",
+                guild_id: "guild-a",
+                author: {
+                    id: "user-a",
+                    username: "Alice",
+                },
+            }, "MESSAGE_CREATE");
+
+            fetchMock.mockClear();
+            (channel as any).replyContextByChatId.clear();
+
+            const sent = await channel.sendProactiveMessage("manual");
+
+            expect(sent).toBe(true);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://sandbox.api.sgroup.qq.com/channels/channel-a/messages");
+        } finally {
+            await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+        }
+    });
+
+    it("accepts canonical sessionKey as proactive target", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => ({
+            ok: true,
+            text: async () => "",
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "qq-binding-session-key-"));
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+            currentConversationBindingStore: createFileCurrentConversationBindingStore(path.join(stateDir, "bindings.json")),
+        });
+
+        try {
+            (channel as any).accessToken = "qq-token";
+
+            await (channel as any).handleMessage({
+                id: "msg-1",
+                content: "seed",
+                channel_id: "channel-a",
+                guild_id: "guild-a",
+                author: {
+                    id: "user-a",
+                    username: "Alice",
+                },
+            }, "MESSAGE_CREATE");
+
+            fetchMock.mockClear();
+            (channel as any).replyContextByChatId.clear();
+
+            const session = buildChannelSessionDescriptor({
+                channel: "qq",
+                chatKind: "channel",
+                chatId: "channel-a",
+                senderId: "user-a",
+            });
+            const sent = await channel.sendProactiveMessage("manual", { sessionKey: session.sessionKey });
+
+            expect(sent).toBe(true);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://sandbox.api.sgroup.qq.com/channels/channel-a/messages");
+        } finally {
+            await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+        }
+    });
+
+    it("does not backfill binding-only proactive target from in-memory reply context", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => ({
+            ok: true,
+            text: async () => "",
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+            currentConversationBindingStore: {
+                async upsert() {},
+                async get() {
+                    return undefined;
+                },
+                async getLatestByChannel() {
+                    return {
+                        channel: "qq",
+                        sessionKey: "channel=qq:scope=per-channel-peer:chat=channel-bind:peer=user-bind",
+                        sessionScope: "per-channel-peer",
+                        legacyConversationId: "qq_channel-bind",
+                        chatKind: "channel",
+                        chatId: "channel-bind",
+                        updatedAt: Date.now(),
+                        target: {},
+                    };
+                },
+            },
+        });
+
+        (channel as any).accessToken = "qq-token";
+        (channel as any).replyContextByChatId.set("channel-bind", {
+            channelId: "channel-bind",
+            guildId: "guild-bind",
+            messageId: "msg-bind",
+            eventType: "MESSAGE_CREATE",
+        });
+
+        const sent = await channel.sendProactiveMessage("manual");
+
+        expect(sent).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not fall back to in-memory reply context when binding is missing", async () => {
+        const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => ({
+            ok: true,
+            text: async () => "",
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const channel = new QqChannel({
+            appId: "app-id",
+            appSecret: "app-secret",
+            sandbox: true,
+            agent: { async *run() {} } as any,
+            conversationStore: new ConversationStore(),
+        });
+
+        (channel as any).accessToken = "qq-token";
+        (channel as any).replyContextByChatId.set("channel-legacy", {
+            channelId: "channel-legacy",
+            guildId: "guild-legacy",
+            messageId: "msg-legacy",
+            eventType: "MESSAGE_CREATE",
+        });
+
+        const sent = await channel.sendProactiveMessage("manual");
+
+        expect(sent).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("cancels a pending reconnect timer on stop", async () => {

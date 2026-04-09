@@ -1,22 +1,14 @@
 import { Client, GatewayIntentBits, Message, TextChannel } from "discord.js";
 import type { BelldandyAgent } from "@belldandy/agent";
-import type { Channel, ChannelConfig, ChannelEventListener } from "./types.js";
+import type { CurrentConversationBindingStore } from "./current-conversation-binding-store.js";
+import type { Channel, ChannelConfig, ChannelEventListener, ChannelProactiveTarget } from "./types.js";
 import type { ChannelRouter } from "./router/types.js";
 import { chunkMarkdownForOutbound } from "./reply-chunking.js";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { resolveStateDir } from "@belldandy/protocol";
+import { buildChannelSessionDescriptor } from "./session-key.js";
 
 export interface DiscordChannelConfig extends ChannelConfig {
     botToken: string;
     intents?: number;
-    defaultChannelId?: string;
-    stateFilePath?: string;
-}
-
-interface DiscordState {
-    lastChannelId?: string;
-    lastGuildId?: string;
 }
 
 export class DiscordChannel implements Channel {
@@ -28,10 +20,10 @@ export class DiscordChannel implements Channel {
     private config: DiscordChannelConfig;
     private listeners: ChannelEventListener[] = [];
     private processedMessages = new Set<string>();
-    private state: DiscordState = {};
     private _running = false;
     private readonly router?: ChannelRouter;
     private readonly replyChunkingConfig?: DiscordChannelConfig["replyChunkingConfig"];
+    private readonly currentConversationBindingStore?: CurrentConversationBindingStore;
     private readonly onChannelSecurityApprovalRequired?: DiscordChannelConfig["onChannelSecurityApprovalRequired"];
 
     constructor(config: DiscordChannelConfig) {
@@ -39,8 +31,8 @@ export class DiscordChannel implements Channel {
         this.config = config;
         this.router = config.router;
         this.replyChunkingConfig = config.replyChunkingConfig;
+        this.currentConversationBindingStore = config.currentConversationBindingStore;
         this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
-        this.loadState();
     }
 
     private resolveAgent(agentId?: string): BelldandyAgent {
@@ -160,13 +152,6 @@ export class DiscordChannel implements Channel {
         const userId = message.author.id;
         const username = message.author.username;
 
-        // 更新最后活跃频道
-        this.state.lastChannelId = chatId;
-        if (message.guildId) {
-            this.state.lastGuildId = message.guildId;
-        }
-        this.saveState();
-
         console.log(`[Discord] Message from ${username} in ${chatId}: ${message.content}`);
         this.emit({ type: "message_received", channel: this.name, messageId: message.id, chatId });
 
@@ -225,11 +210,19 @@ export class DiscordChannel implements Channel {
         const chatKind = message.guildId ? "channel" : "dm";
         const mentions = message.mentions.users.map((u) => u.id);
         const mentioned = message.guildId ? message.mentions.has(this.client!.user!.id) : true;
+        const session = buildChannelSessionDescriptor({
+            channel: "discord",
+            chatKind,
+            chatId,
+            senderId: userId,
+        });
         const decision = this.router
             ? this.router.decide({
                 channel: "discord",
                 chatKind,
                 chatId,
+                sessionScope: session.sessionScope,
+                sessionKey: session.sessionKey,
                 text: message.content || "",
                 senderId: userId,
                 senderName: username,
@@ -261,6 +254,20 @@ export class DiscordChannel implements Channel {
         const selectedAgentId = decision.agentId ?? this.config.defaultAgentId;
         const runAgent = this.resolveAgent(selectedAgentId);
         console.log(`[Discord] Route decision for ${message.id}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
+        await this.currentConversationBindingStore?.upsert({
+            channel: "discord",
+            sessionKey: session.sessionKey,
+            sessionScope: session.sessionScope,
+            legacyConversationId: session.legacyConversationId,
+            chatKind,
+            chatId,
+            ...(session.peerId ? { peerId: session.peerId } : {}),
+            updatedAt: Date.now(),
+            target: {
+                channelId: chatId,
+                ...(message.guildId ? { guildId: message.guildId } : {}),
+            },
+        });
 
         // 显示 "正在输入..." 状态
         if (message.channel.isTextBased() && 'sendTyping' in message.channel) {
@@ -272,7 +279,7 @@ export class DiscordChannel implements Channel {
             const stream = runAgent.run({
                 text: message.content || "",
                 content: contentParts,
-                conversationId: chatId,
+                conversationId: session.legacyConversationId,
                 meta: {
                     channel: "discord",
                     userId,
@@ -280,6 +287,9 @@ export class DiscordChannel implements Channel {
                     guildId: message.guildId ?? undefined,
                     channelId: chatId,
                     agentId: selectedAgentId,
+                    sessionScope: session.sessionScope,
+                    sessionKey: session.sessionKey,
+                    legacyConversationId: session.legacyConversationId,
                 }
             });
 
@@ -332,16 +342,34 @@ export class DiscordChannel implements Channel {
     /**
      * 主动发送消息
      */
-    async sendProactiveMessage(content: string, chatId?: string): Promise<boolean> {
+    async sendProactiveMessage(content: string, target?: ChannelProactiveTarget): Promise<boolean> {
         if (!this.isRunning) {
             console.error("[Discord] Cannot send message: client not running");
             return false;
         }
 
-        const targetChannelId = chatId ?? this.config.defaultChannelId ?? this.state.lastChannelId;
+        const explicitChannelId = typeof target === "string"
+            ? target
+            : typeof target?.chatId === "string"
+                ? target.chatId
+                : "";
+        const explicitSessionKey = typeof target === "object" && typeof target?.sessionKey === "string"
+            ? target.sessionKey.trim()
+            : "";
+        const directBinding = explicitSessionKey
+            ? await this.currentConversationBindingStore?.get(explicitSessionKey)
+            : undefined;
+        const fallbackBinding = !explicitChannelId && !directBinding
+            ? await this.currentConversationBindingStore?.getLatestByChannel({ channel: "discord" })
+            : undefined;
+        const targetChannelId = directBinding?.target.channelId
+            || directBinding?.chatId
+            || explicitChannelId
+            || fallbackBinding?.target.channelId
+            || fallbackBinding?.chatId;
 
         if (!targetChannelId) {
-            console.error("[Discord] No target channel specified");
+            console.error("[Discord] No binding-backed target channel specified");
             return false;
         }
 
@@ -384,31 +412,6 @@ export class DiscordChannel implements Channel {
             } catch (e) {
                 console.error("[Discord] Event listener error:", e);
             }
-        }
-    }
-
-    /**
-     * 状态持久化
-     */
-    private loadState(): void {
-        const path = this.config.stateFilePath ?? join(resolveStateDir(process.env), "discord-state.json");
-
-        if (existsSync(path)) {
-            try {
-                this.state = JSON.parse(readFileSync(path, "utf-8"));
-            } catch (e) {
-                console.warn("[Discord] Failed to load state:", e);
-            }
-        }
-    }
-
-    private saveState(): void {
-        const path = this.config.stateFilePath ?? join(resolveStateDir(process.env), "discord-state.json");
-
-        try {
-            writeFileSync(path, JSON.stringify(this.state, null, 2));
-        } catch (e) {
-            console.error("[Discord] Failed to save state:", e);
         }
     }
 }

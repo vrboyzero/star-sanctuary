@@ -4,11 +4,17 @@
  */
 
 import type { BelldandyAgent } from "@belldandy/agent";
+import type { CurrentConversationBindingStore } from "./current-conversation-binding-store.js";
 import type { ChannelRouter } from "./router/types.js";
 import type { SecurityBackedChannelKind } from "./router/security-config.js";
 import type { ReplyChunkingConfig } from "./reply-chunking-config.js";
 
 export type ChannelAgentResolver = (agentId?: string) => BelldandyAgent;
+export type ChannelProactiveTarget = string | {
+    chatId?: string;
+    sessionKey?: string;
+    accountId?: string;
+};
 export type ChannelSecurityApprovalRequestInput = {
     channel: SecurityBackedChannelKind;
     accountId?: string;
@@ -33,6 +39,8 @@ export interface ChannelConfig {
     agentResolver?: ChannelAgentResolver;
     /** 可选：路由默认 Agent ID */
     defaultAgentId?: string;
+    /** 可选：current conversation binding 持久层 */
+    currentConversationBindingStore?: CurrentConversationBindingStore;
     /** 可选：当渠道 DM 命中 allowlist 阻断时记录待审批请求 */
     onChannelSecurityApprovalRequired?: (input: ChannelSecurityApprovalRequestInput) => void | Promise<void>;
 }
@@ -97,10 +105,10 @@ export interface Channel {
      * 用于心跳提醒、定时任务等场景
      * 
      * @param content - 消息内容
-     * @param chatId - 可选，指定发送目标。不指定则发送到最后活跃的会话
+     * @param target - 可选，指定发送目标。支持旧 `chatId` 字符串，也支持 `{ sessionKey }`
      * @returns 是否发送成功
      */
-    sendProactiveMessage(content: string, chatId?: string): Promise<boolean>;
+    sendProactiveMessage(content: string, target?: ChannelProactiveTarget): Promise<boolean>;
 
     /**
      * 添加事件监听器（可选实现）

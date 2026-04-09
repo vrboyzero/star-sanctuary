@@ -70,6 +70,20 @@ export function createGoalsGovernancePanelFeature({
         <div class="goal-summary-item"><span class="goal-summary-label">模板</span><strong class="goal-summary-value">${escapeHtml(String(data.templates.length))}</strong></div>
         <div class="goal-summary-item"><span class="goal-summary-label">分发记录</span><strong class="goal-summary-value">${escapeHtml(String(data.notificationDispatchCounts?.total || data.notificationDispatches.length || 0))}</strong></div>
       </div>
+      ${data.learningReviewInput ? `
+        <div class="memory-detail-card" style="margin-bottom:12px;">
+          <div class="goal-summary-title">Learning / Review Input</div>
+          <div class="memory-detail-badges">
+            <span class="memory-badge">${escapeHtml(data.learningReviewInput.summary?.headline || "-")}</span>
+          </div>
+          ${(Array.isArray(data.learningReviewInput.summaryLines) ? data.learningReviewInput.summaryLines : []).slice(0, 4).map((line) => `
+            <div class="memory-detail-text">${escapeHtml(line)}</div>
+          `).join("")}
+          ${(Array.isArray(data.learningReviewInput.nudges) ? data.learningReviewInput.nudges : []).slice(0, 4).map((line) => `
+            <div class="memory-detail-text">Nudge: ${escapeHtml(line)}</div>
+          `).join("")}
+        </div>
+      ` : ""}
       <div class="goal-tracking-columns">
         <div class="goal-tracking-column">
           <div class="goal-summary-title">待处理建议评审</div>

@@ -6,6 +6,7 @@ import {
   formatResidentSourceSummary,
   getResidentSourceBadgeClass,
 } from "./memory-source-view.js";
+import { buildExternalOutboundDiagnosis } from "./external-outbound-diagnosis.js";
 
 function normalizeSharedReviewFocus(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -158,7 +159,7 @@ function collectUniqueNonEmptyStrings(values) {
 
 function normalizeMemoryViewerTab(value, fallback = "tasks") {
   const normalized = typeof value === "string" ? value.trim() : "";
-  if (normalized === "tasks" || normalized === "memories" || normalized === "sharedReview") {
+  if (normalized === "tasks" || normalized === "memories" || normalized === "sharedReview" || normalized === "outboundAudit") {
     return normalized;
   }
   return fallback;
@@ -301,6 +302,7 @@ export function createMemoryViewerFeature({
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
+    memoryTabOutboundAuditBtn,
     memorySharedReviewBatchBarEl,
     memoryTaskFiltersEl,
     memoryChunkFiltersEl,
@@ -841,6 +843,10 @@ export function createMemoryViewerFeature({
       ? String(getSelectedAgentLabel() || "").trim()
       : "";
     const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.tab === "outboundAudit") {
+      memoryViewerTitleEl.textContent = t("memory.outboundAuditTitle", {}, "外发审计");
+      return;
+    }
     if (memoryViewerState.tab === "sharedReview") {
       memoryViewerTitleEl.textContent = agentName
         ? t("memory.sharedReviewTitleWithAgent", { agentName }, `${agentName} Shared Review Inbox`)
@@ -901,17 +907,24 @@ export function createMemoryViewerFeature({
     const isTasks = memoryViewerState.tab === "tasks";
     const isMemories = memoryViewerState.tab === "memories";
     const isSharedReview = memoryViewerState.tab === "sharedReview";
+    const isOutboundAudit = memoryViewerState.tab === "outboundAudit";
     if (memoryViewerSection) memoryViewerSection.classList.toggle("tasks-mode", isTasks);
     if (memoryTabTasksBtn) memoryTabTasksBtn.classList.toggle("active", isTasks);
     if (memoryTabMemoriesBtn) memoryTabMemoriesBtn.classList.toggle("active", isMemories);
     if (memoryTabSharedReviewBtn) memoryTabSharedReviewBtn.classList.toggle("active", isSharedReview);
+    if (memoryTabOutboundAuditBtn) memoryTabOutboundAuditBtn.classList.toggle("active", isOutboundAudit);
     if (memoryTaskFiltersEl) memoryTaskFiltersEl.classList.toggle("hidden", !isTasks);
-    if (memoryChunkFiltersEl) memoryChunkFiltersEl.classList.toggle("hidden", isTasks);
+    if (memoryChunkFiltersEl) memoryChunkFiltersEl.classList.toggle("hidden", isTasks || isOutboundAudit);
     if (memoryChunkTypeFilterEl) memoryChunkTypeFilterEl.classList.toggle("hidden", !isMemories);
     if (memoryChunkVisibilityFilterEl) memoryChunkVisibilityFilterEl.classList.toggle("hidden", !isMemories);
     if (memoryChunkGovernanceFilterEl) memoryChunkGovernanceFilterEl.classList.toggle("hidden", !(isMemories || isSharedReview));
     if (memoryChunkCategoryFilterEl) memoryChunkCategoryFilterEl.classList.toggle("hidden", !isMemories);
     if (memorySharedReviewFiltersEl) memorySharedReviewFiltersEl.classList.toggle("hidden", !isSharedReview);
+    if (memorySearchInputEl) {
+      memorySearchInputEl.placeholder = isOutboundAudit
+        ? t("memory.outboundAuditSearchPlaceholder", {}, "搜索渠道、requestId、sessionKey、会话、Agent 或消息预览")
+        : t("memory.searchPlaceholder", {}, "搜索任务标题、总结或记忆内容");
+    }
     syncSharedReviewFilterUi();
     renderSharedReviewBatchBar();
     syncMemoryTaskGoalFilterUi();
@@ -972,6 +985,10 @@ export function createMemoryViewerFeature({
       memoryViewerState.selectedTask = null;
       memoryViewerState.selectedCandidate = null;
       await loadSharedReviewQueue(forceSelectFirst, requestContext);
+    } else if (memoryViewerState.tab === "outboundAudit") {
+      memoryViewerState.selectedTask = null;
+      memoryViewerState.selectedCandidate = null;
+      await loadExternalOutboundAuditViewer(forceSelectFirst, requestContext);
     } else {
       memoryViewerState.selectedTask = null;
       memoryViewerState.selectedCandidate = null;
@@ -979,6 +996,116 @@ export function createMemoryViewerFeature({
       if (!isMemoryViewerRequestCurrent(requestContext)) return;
       await loadMemoryChunkViewer(forceSelectFirst, requestContext);
     }
+  }
+
+  function getExternalOutboundAuditItemId(item, index = 0) {
+    const requestId = typeof item?.requestId === "string" ? item.requestId.trim() : "";
+    if (requestId) return requestId;
+    const timestamp = Number.isFinite(Number(item?.timestamp)) ? Number(item.timestamp) : 0;
+    const channel = typeof item?.targetChannel === "string" ? item.targetChannel.trim() : "unknown";
+    const chatId = typeof item?.targetChatId === "string" ? item.targetChatId.trim() : "";
+    const preview = typeof item?.contentPreview === "string" ? item.contentPreview.trim() : "";
+    return `${timestamp}:${channel}:${chatId}:${preview}:${index}`;
+  }
+
+  function formatExternalOutboundDecisionLabel(value) {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (normalized === "confirmed") return t("memory.outboundAuditDecisionConfirmed", {}, "确认通过");
+    if (normalized === "rejected") return t("memory.outboundAuditDecisionRejected", {}, "已拒绝");
+    if (normalized === "auto_approved") return t("memory.outboundAuditDecisionAutoApproved", {}, "自动放行");
+    return value || "-";
+  }
+
+  function formatExternalOutboundDeliveryLabel(value) {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (normalized === "sent") return t("memory.outboundAuditDeliverySent", {}, "已发送");
+    if (normalized === "failed") return t("memory.outboundAuditDeliveryFailed", {}, "发送失败");
+    if (normalized === "rejected") return t("memory.outboundAuditDeliveryRejected", {}, "未发送");
+    return value || "-";
+  }
+
+  function formatExternalOutboundResolutionLabel(value) {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    return normalized || "-";
+  }
+
+  function matchesExternalOutboundAuditQuery(item, query) {
+    const normalized = typeof query === "string" ? query.trim().toLowerCase() : "";
+    if (!normalized) return true;
+    const diagnosis = buildExternalOutboundDiagnosis({
+      errorCode: item?.errorCode,
+      error: item?.error,
+      targetSessionKey: item?.targetSessionKey,
+      delivery: item?.delivery,
+    }, t);
+    const haystack = [
+      item?.contentPreview,
+      item?.targetChannel,
+      item?.targetSessionKey,
+      item?.requestedSessionKey,
+      item?.sourceConversationId,
+      item?.requestId,
+      item?.requestedByAgentId,
+      item?.targetChatId,
+      item?.targetAccountId,
+      item?.resolution,
+      item?.decision,
+      item?.delivery,
+      item?.errorCode,
+      item?.error,
+      diagnosis.failureStage,
+      diagnosis.stageLabel,
+      diagnosis.codeLabel,
+      diagnosis.summary,
+    ]
+      .map((value) => typeof value === "string" ? value.toLowerCase() : "")
+      .join("\n");
+    return haystack.includes(normalized);
+  }
+
+  async function loadExternalOutboundAuditViewer(forceSelectFirst = false, existingContext = null) {
+    const requestContext = createMemoryViewerRequestContext(existingContext);
+    renderMemoryViewerListEmpty(t("memory.outboundAuditLoading", {}, "外发审计加载中…"));
+    renderMemoryViewerDetailEmpty(t("memory.outboundAuditDetailLoading", {}, "正在加载外发审计详情…"));
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "external_outbound.audit.list",
+      params: { limit: 50 },
+    });
+    const memoryViewerState = getMemoryViewerState();
+    if (!isMemoryViewerRequestCurrent(requestContext)) return;
+    if (!res || !res.ok) {
+      memoryViewerState.items = [];
+      memoryViewerState.selectedId = null;
+      renderMemoryViewerStats({});
+      renderMemoryViewerListEmpty(t("memory.outboundAuditLoadFailed", {}, "外发审计列表加载失败。"));
+      renderMemoryViewerDetailEmpty(res?.error?.message || t("memory.outboundAuditDetailLoadFailed", {}, "无法读取外发审计数据。"));
+      return;
+    }
+
+    const query = memorySearchInputEl ? memorySearchInputEl.value.trim() : "";
+    const allItems = Array.isArray(res.payload?.items) ? res.payload.items : [];
+    const items = allItems.filter((item) => matchesExternalOutboundAuditQuery(item, query));
+    memoryViewerState.items = items;
+    renderMemoryViewerStats({});
+
+    if (!items.length) {
+      memoryViewerState.selectedId = null;
+      renderExternalOutboundAuditList(items);
+      renderMemoryViewerDetailEmpty(t("memory.outboundAuditEmpty", {}, "当前还没有匹配的外发审计记录。"));
+      return;
+    }
+
+    const selectedExists = items.some((item, index) => getExternalOutboundAuditItemId(item, index) === memoryViewerState.selectedId);
+    if (forceSelectFirst || !selectedExists) {
+      memoryViewerState.selectedId = getExternalOutboundAuditItemId(items[0], 0);
+    }
+
+    renderExternalOutboundAuditList(items);
+    const selected = items.find((item, index) => getExternalOutboundAuditItemId(item, index) === memoryViewerState.selectedId) || items[0];
+    renderExternalOutboundAuditDetail(selected);
   }
 
   async function loadMemoryViewerStats(existingContext = null) {
@@ -1523,22 +1650,41 @@ export function createMemoryViewerFeature({
 
   function renderMemoryViewerStats(stats) {
     if (!memoryViewerStatsEl) return;
+    const memoryViewerState = getMemoryViewerState();
     if (!stats) {
-      const memoryViewerState = getMemoryViewerState();
       if (memoryViewerState.tab === "sharedReview" && memoryViewerState.sharedReviewSummary) {
         stats = {};
+      } else if (memoryViewerState.tab === "outboundAudit") {
+        stats = {};
       } else {
-      memoryViewerStatsEl.innerHTML = `
-        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statFiles", {}, "Memory Files"))}</span><strong class="memory-stat-value">--</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statChunks", {}, "Memory Chunks"))}</span><strong class="memory-stat-value">--</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statVectors", {}, "Vector Index"))}</span><strong class="memory-stat-value">--</strong></div>
-        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statSummaries", {}, "Summaries Ready"))}</span><strong class="memory-stat-value">--</strong></div>
-      `;
-      return;
+        memoryViewerStatsEl.innerHTML = `
+          <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statFiles", {}, "Memory Files"))}</span><strong class="memory-stat-value">--</strong></div>
+          <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statChunks", {}, "Memory Chunks"))}</span><strong class="memory-stat-value">--</strong></div>
+          <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statVectors", {}, "Vector Index"))}</span><strong class="memory-stat-value">--</strong></div>
+          <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statSummaries", {}, "Summaries Ready"))}</span><strong class="memory-stat-value">--</strong></div>
+        `;
+        return;
       }
     }
 
-    const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.tab === "outboundAudit") {
+      const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
+      const confirmedCount = items.filter((item) => item?.decision === "confirmed").length;
+      const autoApprovedCount = items.filter((item) => item?.decision === "auto_approved").length;
+      const rejectedCount = items.filter((item) => item?.decision === "rejected" || item?.delivery === "rejected").length;
+      const sentCount = items.filter((item) => item?.delivery === "sent").length;
+      const failedCount = items.filter((item) => item?.delivery === "failed").length;
+      memoryViewerStatsEl.innerHTML = `
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.statCurrentResults", {}, "Current Results"))}</span><strong class="memory-stat-value">${formatCount(items.length)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.outboundAuditStatConfirmed", {}, "确认通过"))}</span><strong class="memory-stat-value">${formatCount(confirmedCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.outboundAuditStatAutoApproved", {}, "自动放行"))}</span><strong class="memory-stat-value">${formatCount(autoApprovedCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.outboundAuditStatRejected", {}, "已拒绝"))}</span><strong class="memory-stat-value">${formatCount(rejectedCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.outboundAuditStatSent", {}, "已发送"))}</span><strong class="memory-stat-value">${formatCount(sentCount)}</strong></div>
+        <div class="memory-stat-card"><span class="memory-stat-label">${escapeHtml(t("memory.outboundAuditStatFailed", {}, "发送失败"))}</span><strong class="memory-stat-value">${formatCount(failedCount)}</strong></div>
+      `;
+      return;
+    }
+
     if (memoryViewerState.tab === "sharedReview") {
       const summary = memoryViewerState.sharedReviewSummary || {};
       const byAgent = Array.isArray(summary.byAgent) ? summary.byAgent.slice(0, 3) : [];
@@ -1781,12 +1927,106 @@ export function createMemoryViewerFeature({
     renderSharedReviewBatchBar();
   }
 
+  function renderExternalOutboundAuditList(items) {
+    if (!memoryViewerListEl) return;
+    if (!items.length) {
+      renderMemoryViewerListEmpty(t("memory.outboundAuditEmpty", {}, "当前还没有匹配的外发审计记录。"));
+      return;
+    }
+
+    const memoryViewerState = getMemoryViewerState();
+    memoryViewerListEl.innerHTML = items.map((item, index) => {
+      const itemId = getExternalOutboundAuditItemId(item, index);
+      const isActive = itemId === memoryViewerState.selectedId;
+      const channel = typeof item?.targetChannel === "string" ? item.targetChannel : "-";
+      const preview = item?.contentPreview || t("memory.outboundAuditPreviewEmpty", {}, "(空文本)");
+      return `
+        <div class="memory-list-item ${isActive ? "active" : ""}" data-outbound-audit-id="${escapeHtml(itemId)}">
+          <div class="memory-list-item-title">${escapeHtml(`${channel} · ${formatExternalOutboundDecisionLabel(item?.decision)} / ${formatExternalOutboundDeliveryLabel(item?.delivery)}`)}</div>
+          <div class="memory-list-item-meta">
+            <span>${escapeHtml(formatDateTime(item?.timestamp))}</span>
+            <span>${escapeHtml(item?.requestId || "-")}</span>
+            <span>${escapeHtml(item?.requestedByAgentId || "-")}</span>
+          </div>
+          <div class="memory-list-item-snippet">${escapeHtml(preview)}</div>
+        </div>
+      `;
+    }).join("");
+
+    memoryViewerListEl.querySelectorAll("[data-outbound-audit-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const itemId = node.getAttribute("data-outbound-audit-id");
+        if (!itemId) return;
+        memoryViewerState.selectedId = itemId;
+        renderExternalOutboundAuditList(memoryViewerState.items);
+        const selected = (Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [])
+          .find((item, index) => getExternalOutboundAuditItemId(item, index) === itemId);
+        renderExternalOutboundAuditDetail(selected || null);
+      });
+    });
+  }
+
+  function renderExternalOutboundAuditDetail(item) {
+    if (!memoryViewerDetailEl) return;
+    if (!item) {
+      renderMemoryViewerDetailEmpty(t("memory.outboundAuditNoSelection", {}, "请选择一条外发审计记录。"));
+      return;
+    }
+
+    const preview = item?.contentPreview || t("memory.outboundAuditPreviewEmpty", {}, "(空文本)");
+    const diagnosis = buildExternalOutboundDiagnosis({
+      errorCode: item?.errorCode,
+      error: item?.error,
+      targetSessionKey: item?.targetSessionKey,
+      delivery: item?.delivery,
+    }, t);
+    memoryViewerDetailEl.innerHTML = `
+      <div class="memory-detail-shell">
+        <div class="memory-detail-card">
+          <div class="memory-detail-title">${escapeHtml(t("memory.outboundAuditTitle", {}, "外发审计"))}</div>
+          <div class="memory-detail-badges">
+            <span class="memory-badge">${escapeHtml(item?.targetChannel || "-")}</span>
+            <span class="memory-badge">${escapeHtml(formatExternalOutboundDecisionLabel(item?.decision))}</span>
+            <span class="memory-badge">${escapeHtml(formatExternalOutboundDeliveryLabel(item?.delivery))}</span>
+          </div>
+        </div>
+        <div class="memory-detail-grid">
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditTime", {}, "时间"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(item?.timestamp))}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditRequestId", {}, "Request ID"))}</span><div class="memory-detail-text">${escapeHtml(item?.requestId || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditSourceConversation", {}, "来源会话"))}</span><div class="memory-detail-text">${escapeHtml(item?.sourceConversationId || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditRequestedByAgent", {}, "请求 Agent"))}</span><div class="memory-detail-text">${escapeHtml(item?.requestedByAgentId || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditTargetChatId", {}, "目标 Chat ID"))}</span><div class="memory-detail-text">${escapeHtml(item?.targetChatId || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditTargetAccountId", {}, "目标 Account ID"))}</span><div class="memory-detail-text">${escapeHtml(item?.targetAccountId || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditRequestedSessionKey", {}, "请求 Session Key"))}</span><div class="memory-detail-text">${escapeHtml(item?.requestedSessionKey || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditTargetSessionKey", {}, "目标 Session Key"))}</span><div class="memory-detail-text">${escapeHtml(item?.targetSessionKey || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditResolution", {}, "目标解析"))}</span><div class="memory-detail-text">${escapeHtml(formatExternalOutboundResolutionLabel(item?.resolution))}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditFailureStage", {}, "失败阶段"))}</span><div class="memory-detail-text">${escapeHtml(item?.delivery === "failed" ? diagnosis.stageLabel : "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditErrorCode", {}, "错误码"))}</span><div class="memory-detail-text">${escapeHtml(item?.errorCode || "-")}</div></div>
+          <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditDiagnosis", {}, "诊断"))}</span><div class="memory-detail-text">${escapeHtml(item?.delivery === "failed" || item?.errorCode || item?.error ? diagnosis.summary : "-")}</div></div>
+        </div>
+        <div class="memory-detail-card">
+          <span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditContentPreview", {}, "消息预览"))}</span>
+          <pre class="memory-detail-pre">${escapeHtml(preview)}</pre>
+        </div>
+        ${item?.error ? `
+          <div class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("memory.outboundAuditError", {}, "错误信息"))}</span>
+            <pre class="memory-detail-pre">${escapeHtml(item.error)}</pre>
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
   function renderCandidateDetailPanel(candidate) {
     if (!candidate) return "";
     const snapshot = candidate.sourceTaskSnapshot || {};
     const memoryLinks = Array.isArray(snapshot.memoryLinks) ? snapshot.memoryLinks : [];
     const artifactPaths = Array.isArray(snapshot.artifactPaths) ? snapshot.artifactPaths : [];
     const toolCalls = Array.isArray(snapshot.toolCalls) ? snapshot.toolCalls : [];
+    const learningReviewInput = candidate.learningReviewInput && typeof candidate.learningReviewInput === "object"
+      ? candidate.learningReviewInput
+      : null;
     const candidateSourceView = candidate.sourceView || null;
     const candidateSourceExplanation = candidateSourceView ? formatResidentSourceExplainability(candidateSourceView) : "-";
     const candidateSourceConflict = candidateSourceView ? formatResidentSourceConflictSummary(candidateSourceView) : "-";
@@ -1833,6 +2073,20 @@ export function createMemoryViewerFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">冲突说明</span><div class="memory-detail-text">${escapeHtml(candidateSourceConflict)}</div></div>
         </div>
         ${candidate.summary ? `<div class="memory-detail-text">${escapeHtml(candidate.summary)}</div>` : ""}
+        ${learningReviewInput ? `
+          <div class="memory-detail-card">
+            <span class="memory-detail-label">Learning / Review Input</span>
+            <div class="memory-detail-badges">
+              <span class="memory-badge">${escapeHtml(learningReviewInput.summary?.headline || "-")}</span>
+            </div>
+            ${(Array.isArray(learningReviewInput.summaryLines) ? learningReviewInput.summaryLines : []).slice(0, 4).map((line) => `
+              <div class="memory-detail-text">${escapeHtml(line)}</div>
+            `).join("")}
+            ${(Array.isArray(learningReviewInput.nudges) ? learningReviewInput.nudges : []).slice(0, 4).map((line) => `
+              <div class="memory-detail-text">Nudge: ${escapeHtml(line)}</div>
+            `).join("")}
+          </div>
+        ` : ""}
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.snapshotTitle", {}, "Source Snapshot"))}</span>
           <div class="memory-detail-grid">
@@ -2088,6 +2342,7 @@ export function createMemoryViewerFeature({
   return {
     applyAgentViewState,
     captureAgentViewState,
+    loadExternalOutboundAuditViewer,
     loadMemoryChunkViewer,
     loadMemoryViewer,
     loadMemoryViewerStats,
@@ -2096,6 +2351,8 @@ export function createMemoryViewerFeature({
     loadTaskViewer,
     renderCandidateDetailPanel,
     renderCandidateOnlyDetail,
+    renderExternalOutboundAuditDetail,
+    renderExternalOutboundAuditList,
     renderMemoryList,
     renderSharedReviewList,
     renderMemoryDetail,

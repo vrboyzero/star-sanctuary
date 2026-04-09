@@ -261,6 +261,85 @@ describe("doctor observability formatting", () => {
           },
         ],
       },
+      mindProfileSnapshot: {
+        summary: {
+          available: true,
+          selectedAgentId: "default",
+          headline: "user ready, private 2, shared 1, digest 1/1, usage 1",
+          activeResidentCount: 1,
+          digestReadyCount: 1,
+          digestUpdatedCount: 1,
+          usageLinkedCount: 1,
+          privateMemoryCount: 2,
+          sharedMemoryCount: 1,
+          summaryLineCount: 3,
+          hasUserProfile: true,
+          hasPrivateMemoryFile: true,
+          hasSharedMemoryFile: true,
+        },
+        profile: {
+          summaryLines: [
+            "USER.md: 喜欢简洁状态表与短结论。",
+            "Private MEMORY.md: 优先把大文件主体逻辑外移。",
+            "Shared MEMORY.md: 外发统一走 sessionKey / binding。",
+          ],
+        },
+        conversation: {
+          topResidents: [
+            {
+              agentId: "default",
+              headline: "Belldandy: status=running, digest=updated, pending=3",
+            },
+          ],
+        },
+        memory: {
+          recentMemorySnippets: [
+            {
+              scope: "private",
+              text: "优先把大文件主体逻辑外移。",
+            },
+            {
+              scope: "shared",
+              text: "外发统一走 sessionKey / binding。",
+            },
+          ],
+        },
+      },
+      learningReviewInput: {
+        summary: {
+          available: true,
+          headline: "memory=4, candidate=1, review=0, nudges=2",
+          memorySignalCount: 4,
+          candidateSignalCount: 1,
+          reviewSignalCount: 0,
+          nudgeCount: 2,
+        },
+        summaryLines: [
+          "Mind snapshot: USER.md: 喜欢简洁状态表与短结论。",
+          "Profile anchor: USER.md: 喜欢简洁状态表与短结论。",
+        ],
+        nudges: [
+          "当前输入已具备最小 learning/review 条件，可继续进入 candidate / governance 审阅。",
+          "优先回顾高频 methods/skills 的最新 usage。",
+        ],
+      },
+      learningReviewNudgeRuntime: {
+        summary: {
+          available: true,
+          triggered: true,
+          headline: "latest foreground run triggered learning/review nudge; session=goal_node; source=explicit_user_intent+goal_review_pressure; signals=candidate/review; lines=1",
+          sessionKind: "goal_node",
+          triggerSources: ["explicit_user_intent", "goal_review_pressure"],
+          signalKinds: ["candidate", "review"],
+          lineCount: 1,
+        },
+        latest: {
+          conversationId: "goal:goal_alpha:node:node_1:run:run_1",
+          runId: "run_1",
+          createdAt: 1710000130000,
+          currentTurnPreview: "请帮我整理这轮长期任务的经验候选",
+        },
+      },
       memoryRuntime: {
         sharedMemory: {
           enabled: true,
@@ -408,6 +487,58 @@ describe("doctor observability formatting", () => {
         ],
         headline: "runs=4; running=1; failed=1; skipped=1; cron=2; heartbeat=1; subtask=1; linked=3; main=1; isolated=1",
       },
+      externalOutboundRuntime: {
+        requireConfirmation: true,
+        totals: {
+          totalRecords: 5,
+          confirmedCount: 2,
+          autoApprovedCount: 2,
+          rejectedCount: 1,
+          sentCount: 3,
+          failedCount: 2,
+          resolveFailedCount: 1,
+          deliveryFailedCount: 1,
+        },
+        channelCounts: {
+          feishu: 2,
+          qq: 2,
+          discord: 1,
+        },
+        errorCodeCounts: {
+          binding_not_found: 1,
+          send_failed: 1,
+        },
+        failureStageCounts: {
+          resolve: 1,
+          delivery: 1,
+          confirmation: 0,
+        },
+        recentFailures: [
+          {
+            timestamp: 1710000100000,
+            targetChannel: "qq",
+            delivery: "failed",
+            resolution: "latest_binding",
+            failureStage: "resolve",
+            errorCode: "binding_not_found",
+            error: "当前没有可用于 qq 的最新会话绑定。",
+            requestedSessionKey: "channel=qq:chat=chat-2",
+            contentPreview: "请去 QQ 提醒我",
+          },
+          {
+            timestamp: 1710000120000,
+            targetChannel: "discord",
+            delivery: "failed",
+            resolution: "explicit_session_key",
+            failureStage: "delivery",
+            errorCode: "send_failed",
+            error: "discord send failed",
+            targetSessionKey: "channel=discord:chat=room-1",
+            contentPreview: "请去 Discord 提醒我",
+          },
+        ],
+        headline: "records=5; sent=3; failed=2; resolve_failed=1; delivery_failed=1; confirm=required",
+      },
     });
 
     expect(lines.join("\n")).toContain("Prompt");
@@ -450,6 +581,18 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("subtask=整理 resident 连续观测摘要卡 · running · coder");
     expect(lines.join("\n")).toContain("review=p1/c1");
     expect(lines.join("\n")).toContain("usage=m1/s1 · resident-observability-playbook.md");
+    expect(lines.join("\n")).toContain("Mind / Profile Snapshot");
+    expect(lines.join("\n")).toContain("user ready, private 2, shared 1, digest 1/1, usage 1");
+    expect(lines.join("\n")).toContain("USER.md: 喜欢简洁状态表与短结论。");
+    expect(lines.join("\n")).toContain("Resident: Belldandy: status=running, digest=updated, pending=3");
+    expect(lines.join("\n")).toContain("Learning / Review Input");
+    expect(lines.join("\n")).toContain("memory 4 / candidate 1 / review 0");
+    expect(lines.join("\n")).toContain("runtime triggered");
+    expect(lines.join("\n")).toContain("session goal_node");
+    expect(lines.join("\n")).toContain("sources: explicit_user_intent, goal_review_pressure");
+    expect(lines.join("\n")).toContain("signals: candidate, review");
+    expect(lines.join("\n")).toContain("Latest turn: 请帮我整理这轮长期任务的经验候选");
+    expect(lines.join("\n")).toContain("Nudge: 当前输入已具备最小 learning/review 条件，可继续进入 candidate / governance 审阅。");
     expect(lines.join("\n")).toContain("Shared Governance");
     expect(lines.join("\n")).toContain("1 个 shared reader");
     expect(lines.join("\n")).toContain("1 pending approval(s)");
@@ -470,5 +613,13 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("Digest: ran, cron, session=main, target=conversation:cron-main:cron-job-1");
     expect(lines.join("\n")).toContain("Implement runtime bridge: ran, subtask, target=session:sub-session-1, summary=patch delivered");
     expect(lines.join("\n")).toContain("Heartbeat: failed, heartbeat, reason=provider unavailable");
+    expect(lines.join("\n")).toContain("External Outbound Runtime");
+    expect(lines.join("\n")).toContain("5 records / sent 3 / failed 2");
+    expect(lines.join("\n")).toContain("resolve 1 / delivery 1 / confirmation 0");
+    expect(lines.join("\n")).toContain("channels feishu:2, qq:2, discord:1");
+    expect(lines.join("\n")).toContain("error codes binding_not_found:1, send_failed:1");
+    expect(lines.join("\n")).toContain("qq, 目标解析失败 · binding_not_found / 没有可用 binding");
+    expect(lines.join("\n")).toContain("discord, 渠道投递失败 · send_failed / 渠道发送失败 · discord send failed");
+    expect(lines.join("\n")).toContain("详细逐条记录仍可在 记忆查看 -> 外发审计 中查看。");
   });
 });

@@ -1,6 +1,3 @@
-import os from "node:os";
-import path from "node:path";
-import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const discordMock = vi.hoisted(() => {
@@ -112,10 +109,9 @@ describe("DiscordChannel", () => {
     vi.restoreAllMocks();
   });
 
-  function createChannel(stateFilePath: string) {
+  function createChannel() {
     return new DiscordChannel({
       botToken: "discord-token",
-      stateFilePath,
       agent: {
         run: vi.fn(),
       } as any,
@@ -123,8 +119,7 @@ describe("DiscordChannel", () => {
   }
 
   it("deduplicates concurrent start calls before ready", async () => {
-    const stateFilePath = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "discord-state-")), "discord-state.json");
-    const channel = createChannel(stateFilePath);
+    const channel = createChannel();
 
     const firstStart = channel.start();
     const secondStart = channel.start();
@@ -141,8 +136,7 @@ describe("DiscordChannel", () => {
   });
 
   it("ignores late ready from a stopped startup client", async () => {
-    const stateFilePath = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "discord-state-")), "discord-state.json");
-    const channel = createChannel(stateFilePath);
+    const channel = createChannel();
     const listener = vi.fn();
     channel.addEventListener(listener);
 
@@ -160,5 +154,27 @@ describe("DiscordChannel", () => {
     expect(channel.isRunning).toBe(false);
     expect(listener).toHaveBeenCalledWith({ type: "stopped", channel: "discord" });
     expect(listener).not.toHaveBeenCalledWith({ type: "started", channel: "discord" });
+  });
+
+  it("does not fall back to historical discord state when binding is missing", async () => {
+    const channel = new DiscordChannel({
+      botToken: "discord-token",
+      agent: {
+        run: vi.fn(),
+      } as any,
+    });
+    const fetchMock = vi.fn();
+    (channel as any).client = {
+      isReady: () => true,
+      channels: {
+        fetch: fetchMock,
+      },
+    };
+    (channel as any)._running = true;
+
+    const sent = await channel.sendProactiveMessage("manual");
+
+    expect(sent).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -386,10 +386,60 @@ test("models.list returns sanitized model list with current default model ref", 
     const res = frames.find((f) => f.type === "res" && f.id === reqId);
     expect(res.ok).toBe(true);
     expect(res.payload.currentDefault).toBe("kimi-k2.5");
+    expect(res.payload.preferredProviderIds).toEqual([]);
+    expect(res.payload.manualEntrySupported).toBe(true);
+    expect(res.payload.providers).toEqual([
+      {
+        id: "openai",
+        label: "OpenAI",
+        onboardingScopes: ["api_key", "base_url", "model"],
+        capabilities: ["chat"],
+      },
+      {
+        id: "moonshot",
+        label: "Moonshot",
+        onboardingScopes: ["api_key", "base_url", "model"],
+        capabilities: ["chat"],
+      },
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        onboardingScopes: ["api_key", "base_url", "model"],
+        capabilities: ["chat"],
+      },
+    ]);
     expect(res.payload.models).toEqual([
-      { id: "primary", displayName: "gpt-5", model: "gpt-5" },
-      { id: "kimi-k2.5", displayName: "Kimi K2.5（默认）", model: "kimi-k2.5" },
-      { id: "claude-opus", displayName: "Claude Opus 4.5", model: "claude-opus-4-5" },
+      expect.objectContaining({
+        id: "primary",
+        displayName: "gpt-5",
+        model: "gpt-5",
+        providerId: "openai",
+        providerLabel: "OpenAI",
+        source: "primary",
+        authStatus: "ready",
+        isDefault: false,
+      }),
+      expect.objectContaining({
+        id: "kimi-k2.5",
+        displayName: "Kimi K2.5（默认）",
+        model: "kimi-k2.5",
+        providerId: "moonshot",
+        providerLabel: "Moonshot",
+        source: "named",
+        authStatus: "ready",
+        isDefault: true,
+      }),
+      expect.objectContaining({
+        id: "claude-opus",
+        displayName: "Claude Opus 4.5",
+        model: "claude-opus-4-5",
+        providerId: "anthropic",
+        providerLabel: "Anthropic",
+        source: "named",
+        authStatus: "ready",
+        protocol: "anthropic",
+        isDefault: false,
+      }),
     ]);
     expect(res.payload.models[0].apiKey).toBeUndefined();
     expect(res.payload.models[0].baseUrl).toBeUndefined();
@@ -1933,6 +1983,151 @@ test("system.doctor exposes tool behavior observability summary", async () => {
         governedTools: expect.arrayContaining(["run_command", "apply_patch", "delegate_task"]),
       },
     });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes mind/profile snapshot summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.mkdir(path.join(stateDir, "team-memory"), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(stateDir, "USER.md"),
+    "# USER\n**名字：** 小星\n偏好简洁状态表与短结论。\n",
+    "utf-8",
+  );
+  await fs.promises.writeFile(
+    path.join(stateDir, "MEMORY.md"),
+    "# MEMORY\n优先把大文件里的主体逻辑外移。\n",
+    "utf-8",
+  );
+  await fs.promises.writeFile(
+    path.join(stateDir, "team-memory", "MEMORY.md"),
+    "# Shared Memory\n团队约定：外发统一走 sessionKey / binding。\n",
+    "utf-8",
+  );
+
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    memoryMode: "hybrid",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
+
+  const residentMemoryManagers = createScopedMemoryManagers({
+    stateDir,
+    agentRegistry: registry,
+    modelsDir: path.join(stateDir, "models"),
+    conversationStore: new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+    }),
+    indexerOptions: {
+      watch: false,
+    },
+  }).records;
+  const defaultRecord = residentMemoryManagers.find((record) => record.agentId === "default");
+  expect(defaultRecord).toBeTruthy();
+  (defaultRecord?.manager as any)?.store.upsertChunk({
+    id: "mind-private-1",
+    sourcePath: "MEMORY.md",
+    sourceType: "file",
+    memoryType: "core",
+    content: "优先把大文件里的主体逻辑外移，server.ts 只做装配。",
+    agentId: "default",
+    visibility: "private",
+  });
+  (defaultRecord?.manager as any)?.store.upsertChunk({
+    id: "mind-shared-1",
+    sourcePath: "team-memory/MEMORY.md",
+    sourceType: "file",
+    memoryType: "core",
+    content: "团队约定：外发统一走 sessionKey / binding。",
+    visibility: "shared",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    residentMemoryManagers,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-mind-profile",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-mind-profile" && f.ok === true));
+
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-mind-profile");
+    expect(response.payload?.mindProfileSnapshot).toMatchObject({
+      summary: {
+        available: true,
+        hasUserProfile: true,
+        hasPrivateMemoryFile: true,
+        hasSharedMemoryFile: true,
+        privateMemoryCount: 1,
+        sharedMemoryCount: 1,
+      },
+      identity: {
+        userName: "小星",
+      },
+      memory: {
+        recentMemorySnippets: expect.arrayContaining([
+          expect.objectContaining({ scope: "private" }),
+          expect.objectContaining({ scope: "shared" }),
+        ]),
+      },
+    });
+    expect(response.payload?.mindProfileSnapshot?.profile?.summaryLines).toEqual(expect.arrayContaining([
+      expect.stringContaining("USER.md:"),
+      expect.stringContaining("Private MEMORY.md:"),
+      expect.stringContaining("Shared MEMORY.md:"),
+    ]));
+    expect(response.payload?.learningReviewInput).toMatchObject({
+      summary: {
+        available: true,
+      },
+    });
+    expect(response.payload?.learningReviewNudgeRuntime).toMatchObject({
+      summary: {
+        available: false,
+        triggered: false,
+      },
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "mind_profile_snapshot",
+        status: "pass",
+      }),
+      expect.objectContaining({
+        id: "learning_review_input",
+        status: "pass",
+      }),
+    ]));
   } finally {
     ws.close();
     await closeP;
@@ -4086,7 +4281,6 @@ test("config.update accepts channel settings and config.read redacts channel sec
           BELLDANDY_QQ_SANDBOX: "false",
           BELLDANDY_DISCORD_ENABLED: "true",
           BELLDANDY_DISCORD_BOT_TOKEN: "discord-secret",
-          BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID: "1234567890",
         },
       },
     }));
@@ -4105,7 +4299,6 @@ test("config.update accepts channel settings and config.read redacts channel sec
     expect(readRes.payload?.config?.BELLDANDY_QQ_APP_ID).toBe("qq-app-id");
     expect(readRes.payload?.config?.BELLDANDY_QQ_SANDBOX).toBe("false");
     expect(readRes.payload?.config?.BELLDANDY_DISCORD_ENABLED).toBe("true");
-    expect(readRes.payload?.config?.BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID).toBe("1234567890");
     expect(readRes.payload?.config?.BELLDANDY_COMMUNITY_API_TOKEN).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_FEISHU_APP_SECRET).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_QQ_APP_SECRET).toBe("[REDACTED]");
@@ -4175,6 +4368,197 @@ test("config.update rejects enabling community api when auth mode is none", asyn
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("config.update persists preferred providers and refreshes models.list immediately", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+    primaryModelConfig: {
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-primary",
+      model: "gpt-5",
+    },
+    modelFallbacks: [
+      {
+        id: "moonshot-main",
+        displayName: "Moonshot Main",
+        baseUrl: "https://api.moonshot.cn/v1",
+        apiKey: "sk-moonshot",
+        model: "kimi-k2.5",
+      },
+      {
+        id: "anthropic-main",
+        displayName: "Anthropic Main",
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "sk-anthropic",
+        model: "claude-sonnet-4",
+        protocol: "anthropic",
+      },
+    ],
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-update-preferred-providers",
+      method: "config.update",
+      params: {
+        updates: {
+          BELLDANDY_MODEL_PREFERRED_PROVIDERS: "anthropic, moonshot, anthropic",
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-update-preferred-providers"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "config-update-preferred-providers");
+    expect(updateRes.ok).toBe(true);
+
+    ws.send(JSON.stringify({ type: "req", id: "models-list-preferred-providers", method: "models.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "models-list-preferred-providers"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "models-list-preferred-providers");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.preferredProviderIds).toEqual(["anthropic", "moonshot"]);
+
+    const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
+    expect(envLocalContent).toContain('BELLDANDY_MODEL_PREFERRED_PROVIDERS="anthropic, moonshot, anthropic"');
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("models.config.update preserves redacted secrets and refreshes models.list immediately", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const modelsPath = path.join(stateDir, "models.json");
+  const modelFallbacks = [
+    {
+      id: "openrouter-main",
+      displayName: "OpenRouter Main",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "sk-openrouter-old",
+      model: "openai/gpt-4o-mini",
+    },
+  ];
+  await fs.promises.writeFile(modelsPath, `${JSON.stringify({ fallbacks: modelFallbacks }, null, 2)}\n`, "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    primaryModelConfig: {
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-primary",
+      model: "gpt-4o",
+    },
+    modelFallbacks,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "models-config-get", method: "models.config.get", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "models-config-get"));
+    const getRes = frames.find((f) => f.type === "res" && f.id === "models-config-get");
+    expect(getRes.ok).toBe(true);
+    expect(getRes.payload?.content).toContain('"apiKey": "[REDACTED]"');
+    expect(getRes.payload?.content).not.toContain("sk-openrouter-old");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "models-config-update",
+      method: "models.config.update",
+      params: {
+        content: JSON.stringify({
+          fallbacks: [
+            {
+              id: "openrouter-main",
+              displayName: "OpenRouter Main",
+              baseUrl: "https://openrouter.ai/api/v1",
+              apiKey: "[REDACTED]",
+              model: "openai/gpt-4.1-mini",
+              protocol: "openai",
+              wireApi: "responses",
+            },
+            {
+              id: "anthropic-alt",
+              displayName: "Anthropic Alt",
+              baseUrl: "https://anthropic.example/v1",
+              apiKey: "sk-anthropic-new",
+              model: "claude-sonnet-4",
+              protocol: "anthropic",
+            },
+          ],
+        }, null, 2),
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "models-config-update"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "models-config-update");
+    expect(updateRes.ok).toBe(true);
+    expect(updateRes.payload?.content).toContain('"apiKey": "[REDACTED]"');
+    expect(updateRes.payload?.content).not.toContain("sk-openrouter-old");
+    expect(updateRes.payload?.content).not.toContain("sk-anthropic-new");
+
+    const persisted = JSON.parse(await fs.promises.readFile(modelsPath, "utf-8"));
+    expect(persisted).toEqual({
+      fallbacks: [
+        {
+          id: "openrouter-main",
+          displayName: "OpenRouter Main",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "sk-openrouter-old",
+          model: "openai/gpt-4.1-mini",
+          protocol: "openai",
+          wireApi: "responses",
+        },
+        {
+          id: "anthropic-alt",
+          displayName: "Anthropic Alt",
+          baseUrl: "https://anthropic.example/v1",
+          apiKey: "sk-anthropic-new",
+          model: "claude-sonnet-4",
+          protocol: "anthropic",
+        },
+      ],
+    });
+
+    expect(modelFallbacks).toHaveLength(2);
+    expect(modelFallbacks[0]?.apiKey).toBe("sk-openrouter-old");
+    expect(modelFallbacks[1]?.apiKey).toBe("sk-anthropic-new");
+
+    ws.send(JSON.stringify({ type: "req", id: "models-list-after-update", method: "models.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "models-list-after-update"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "models-list-after-update");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.models?.some((item: any) => item.id === "openrouter-main" && item.model === "openai/gpt-4.1-mini")).toBe(true);
+    expect(listRes.payload?.models?.some((item: any) => item.id === "anthropic-alt" && item.model === "claude-sonnet-4")).toBe(true);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -7170,6 +7554,118 @@ test("system.doctor exposes background continuation runtime summary when provide
   }
 });
 
+test("system.doctor exposes external outbound runtime summary when audit data is available", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const previousConfirm = process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+  process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = "false";
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    externalOutboundAuditStore: {
+      async append() {},
+      async listRecent() {
+        return [
+          {
+            timestamp: 1710000000000,
+            sourceConversationId: "conv-1",
+            sourceChannel: "webchat" as const,
+            targetChannel: "feishu" as const,
+            targetSessionKey: "channel=feishu:chat=chat-1",
+            resolution: "latest_binding" as const,
+            decision: "confirmed" as const,
+            delivery: "sent" as const,
+            contentPreview: "hello",
+          },
+          {
+            timestamp: 1710000002000,
+            sourceConversationId: "conv-2",
+            sourceChannel: "webchat" as const,
+            targetChannel: "qq" as const,
+            requestedSessionKey: "channel=qq:chat=chat-2",
+            resolution: "explicit_session_key" as const,
+            decision: "auto_approved" as const,
+            delivery: "failed" as const,
+            contentPreview: "resolve fail",
+            errorCode: "binding_not_found",
+            error: "not found",
+          },
+          {
+            timestamp: 1710000004000,
+            sourceConversationId: "conv-3",
+            sourceChannel: "webchat" as const,
+            targetChannel: "discord" as const,
+            targetSessionKey: "channel=discord:chat=room-1",
+            resolution: "latest_binding" as const,
+            decision: "confirmed" as const,
+            delivery: "failed" as const,
+            contentPreview: "send fail",
+            errorCode: "send_failed",
+            error: "send failed",
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-external-outbound-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-external-outbound-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-external-outbound-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.externalOutboundRuntime).toMatchObject({
+      requireConfirmation: false,
+      totals: {
+        totalRecords: 3,
+        sentCount: 1,
+        failedCount: 2,
+        resolveFailedCount: 1,
+        deliveryFailedCount: 1,
+      },
+      channelCounts: {
+        feishu: 1,
+        qq: 1,
+        discord: 1,
+      },
+      errorCodeCounts: {
+        binding_not_found: 1,
+        send_failed: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "external_outbound_runtime",
+        name: "External Outbound Runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    if (typeof previousConfirm === "string") {
+      process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = previousConfirm;
+    } else {
+      delete process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+    }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("system.doctor keeps delegation protocol green when only legacy completed subtasks exist", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
@@ -8142,6 +8638,8 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(candidateGetRes.payload.candidate.publishedPath).toBe(acceptedMethodCandidate!.publishedPath);
     expect(candidateGetRes.payload.candidate.sourceView.scope).toBe("hybrid");
     expect(candidateGetRes.payload.candidate.sourceTaskSnapshot.memoryLinks.some((item: any) => item.sourceView.scope === "shared")).toBe(true);
+    expect(candidateGetRes.payload.candidate.learningReviewInput.summary.available).toBe(true);
+    expect(candidateGetRes.payload.candidate.learningReviewInput.summaryLines.some((item: string) => item.includes("method candidate"))).toBe(true);
 
     const usageIdToRevoke = usageListRes.payload.items[0].id;
     ws.send(JSON.stringify({ type: "req", id: "usage-revoke", method: "experience.usage.revoke", params: { usageId: usageIdToRevoke } }));

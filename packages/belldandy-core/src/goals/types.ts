@@ -1,4 +1,5 @@
 import type { ContinuationStateSnapshot } from "../continuation-state.js";
+import type { LearningReviewInput } from "../learning-review-input.js";
 
 export type GoalStatus =
   | "draft"
@@ -1232,6 +1233,22 @@ export type GoalApprovalWorkflowScanResult = {
   checkpointItems: GoalApprovalWorkflowScanItem[];
   notifications: GoalReviewNotification[];
   dispatches: GoalReviewNotificationDispatch[];
+  learningReview?: GoalReviewScanLearningReviewRunResult;
+  summary: string;
+  recommendations: string[];
+};
+
+export type GoalReviewScanLearningReviewRunResult = {
+  goalId: string;
+  generated: boolean;
+  generatedAt?: string;
+  learningReviewInput: LearningReviewInput;
+  reviews?: GoalSuggestionReviewState;
+  suggestionCounts: {
+    method: number;
+    skill: number;
+    flow: number;
+  };
   summary: string;
   recommendations: string[];
 };
@@ -1244,6 +1261,7 @@ export type GoalSuggestionReviewWorkflowScanResult = {
   overdueCount: number;
   escalatedCount: number;
   items: GoalSuggestionReviewWorkflowScanItem[];
+  learningReview?: GoalReviewScanLearningReviewRunResult;
   summary: string;
   recommendations: string[];
 };

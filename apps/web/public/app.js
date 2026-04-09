@@ -15,6 +15,7 @@ import { createChatUiFeature } from "./app/features/chat-ui.js";
 import { createCanvasContextFeature } from "./app/features/canvas-context.js";
 import { decodeContinuationAction } from "./app/features/continuation-targets.js";
 import { buildDoctorChatSummary } from "./app/features/doctor-observability.js";
+import { createExternalOutboundController } from "./app/features/external-outbound.js";
 import { createGoalsDetailFeature } from "./app/features/goals-detail.js";
 import { createGoalsGovernancePanelFeature } from "./app/features/goals-governance-panel.js";
 import { createGoalsCapabilityPanelFeature } from "./app/features/goals-capability-panel.js";
@@ -29,7 +30,7 @@ import {
 } from "./app/features/memory-source-view.js";
 import { buildResidentPanelSummary } from "./app/features/resident-observability-summary.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
-import { createSubtasksOverviewFeature, findSubtaskBySessionId } from "./app/features/subtasks-overview.js";
+import { createSubtasksOverviewFeature, findSubtaskBySessionId, parseGoalSessionReference } from "./app/features/subtasks-overview.js";
 import { createLocaleController } from "./app/features/locale.js";
 import { initPromptController } from "./app/features/prompt.js";
 import { createSettingsController } from "./app/features/settings.js";
@@ -51,6 +52,7 @@ const promptEl = document.getElementById("prompt");
 const voiceBtn = document.getElementById("voiceBtn");
 const voiceDurationEl = document.getElementById("voiceDuration");
 const messagesEl = document.getElementById("messages");
+const modelFilterEl = document.getElementById("modelFilter");
 const modelSelectEl = document.getElementById("modelSelect");
 const agentSelectEl = document.getElementById("agentSelect");
 const themeToggleBtn = document.getElementById("themeToggleBtn");
@@ -89,6 +91,7 @@ const memoryViewerRefreshBtn = document.getElementById("memoryViewerRefresh");
 const memoryTabTasksBtn = document.getElementById("memoryTabTasks");
 const memoryTabMemoriesBtn = document.getElementById("memoryTabMemories");
 const memoryTabSharedReviewBtn = document.getElementById("memoryTabSharedReview");
+const memoryTabOutboundAuditBtn = document.getElementById("memoryTabOutboundAudit");
 const memorySearchInputEl = document.getElementById("memorySearchInput");
 const memorySearchBtn = document.getElementById("memorySearchBtn");
 const memoryTaskFiltersEl = document.getElementById("memoryTaskFilters");
@@ -251,6 +254,7 @@ let goalsTrackingPanelFeature = null;
 let memoryViewerFeature = null;
 let sessionDigestFeature = null;
 let subtasksOverviewFeature = null;
+let externalOutboundController = null;
 let residentAgentActivationSeq = 0;
 
 function debugLog(...args) {
@@ -518,6 +522,9 @@ if (memoryTabMemoriesBtn) {
 }
 if (memoryTabSharedReviewBtn) {
   memoryTabSharedReviewBtn.addEventListener("click", () => switchMemoryViewerTab("sharedReview"));
+}
+if (memoryTabOutboundAuditBtn) {
+  memoryTabOutboundAuditBtn.addEventListener("click", () => switchMemoryViewerTab("outboundAudit"));
 }
 if (memorySearchBtn) {
   memorySearchBtn.addEventListener("click", () => loadMemoryViewer(true));
@@ -862,6 +869,7 @@ chatNetworkFeature = createChatNetworkFeature({
     workspaceRootsEl,
     userUuidEl,
     agentSelectEl,
+    modelFilterEl,
     modelSelectEl,
   },
   keys: {
@@ -1080,6 +1088,7 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
+    memoryTabOutboundAuditBtn,
     memorySharedReviewBatchBarEl,
     memoryTaskFiltersEl,
     memoryChunkFiltersEl,
@@ -1320,7 +1329,7 @@ async function activateResidentAgentConversation(agentId, options = {}) {
     renderConversationMessages([]);
   }
 
-  void loadConversationMeta(conversationId);
+  void loadConversationMeta(conversationId, { showGoalEntryBanner: true });
   void sessionDigestFeature?.loadSessionDigest(conversationId);
 }
 
@@ -2460,6 +2469,11 @@ const cfgApiKey = document.getElementById("cfgApiKey");
 const cfgLocale = document.getElementById("cfgLocale");
 const cfgBaseUrl = document.getElementById("cfgBaseUrl");
 const cfgModel = document.getElementById("cfgModel");
+const cfgModelPreferredProviders = document.getElementById("cfgModelPreferredProviders");
+const refreshModelFallbackConfigBtn = document.getElementById("refreshModelFallbackConfig");
+const modelFallbackConfigMeta = document.getElementById("modelFallbackConfigMeta");
+const cfgModelFallbackContent = document.getElementById("cfgModelFallbackContent");
+const cfgExternalOutboundRequireConfirmation = document.getElementById("cfgExternalOutboundRequireConfirmation");
 const cfgHeartbeat = document.getElementById("cfgHeartbeat");
 const cfgHeartbeatEnabled = document.getElementById("cfgHeartbeatEnabled");
 const cfgHeartbeatActiveHours = document.getElementById("cfgHeartbeatActiveHours");
@@ -2505,7 +2519,6 @@ const cfgQqAgentId = document.getElementById("cfgQqAgentId");
 const cfgQqSandbox = document.getElementById("cfgQqSandbox");
 const cfgDiscordEnabled = document.getElementById("cfgDiscordEnabled");
 const cfgDiscordBotToken = document.getElementById("cfgDiscordBotToken");
-const cfgDiscordDefaultChannelId = document.getElementById("cfgDiscordDefaultChannelId");
 const refreshChannelSecurityBtn = document.getElementById("refreshChannelSecurity");
 const channelSecurityConfigMeta = document.getElementById("channelSecurityConfigMeta");
 const cfgChannelSecurityContent = document.getElementById("cfgChannelSecurityContent");
@@ -2536,6 +2549,11 @@ const settingsController = createSettingsController({
     cfgApiKey,
     cfgBaseUrl,
     cfgModel,
+    cfgModelPreferredProviders,
+    refreshModelFallbackConfigBtn,
+    modelFallbackConfigMeta,
+    cfgModelFallbackContent,
+    cfgExternalOutboundRequireConfirmation,
     cfgHeartbeat,
     cfgHeartbeatEnabled,
     cfgHeartbeatActiveHours,
@@ -2577,7 +2595,6 @@ const settingsController = createSettingsController({
     cfgQqSandbox,
     cfgDiscordEnabled,
     cfgDiscordBotToken,
-    cfgDiscordDefaultChannelId,
     refreshChannelSecurityBtn,
     channelSecurityConfigMeta,
     cfgChannelSecurityContent,
@@ -2596,6 +2613,9 @@ const settingsController = createSettingsController({
   getConnectionAuthMode: () => authModeEl?.value || "none",
   onOpenCommunityConfig: () => {
     void openFile("community.json");
+  },
+  onModelCatalogChanged: async () => {
+    await chatNetworkFeature?.loadModelList?.();
   },
   onOpenContinuationAction: (action) => openContinuationAction(action),
   redactedPlaceholder: REDACTED_PLACEHOLDER,
@@ -2654,6 +2674,8 @@ chatEventsFeature = createChatEventsFeature({
   onSubtaskUpdated: (payload) => subtasksOverviewFeature?.handleSubtaskUpdate(payload),
   onToolSettingsConfirmRequired: (payload) => toolSettingsController.handleConfirmRequired(payload),
   onToolSettingsConfirmResolved: (payload) => toolSettingsController.handleConfirmResolved(payload),
+  onExternalOutboundConfirmRequired: (payload) => externalOutboundController?.handleConfirmRequired(payload),
+  onExternalOutboundConfirmResolved: (payload) => externalOutboundController?.handleConfirmResolved(payload),
   onToolsConfigUpdated: (payload) => toolSettingsController.handleToolsConfigUpdated(payload),
   onConversationDigestUpdated: (payload) => sessionDigestFeature?.handleDigestUpdated(payload),
   stripThinkBlocks,
@@ -2812,6 +2834,7 @@ function renderConversationMessages(messages) {
 
 async function loadConversationMeta(conversationId, options = {}) {
   const renderMessages = options.renderMessages !== false;
+  const showGoalEntryBanner = options.showGoalEntryBanner === true;
   if (!conversationId || !ws || !isReady) {
     renderTaskTokenHistory();
     sessionDigestFeature?.clear?.();
@@ -2834,6 +2857,14 @@ async function loadConversationMeta(conversationId, options = {}) {
     }
     if (renderMessages && Array.isArray(res.payload.messages) && conversationId === activeConversationId) {
       renderConversationMessages(res.payload.messages);
+      if (showGoalEntryBanner && parseGoalSessionReference(conversationId)) {
+        const goalSessionEntryBanner = typeof res.payload.goalSessionEntryBanner === "string"
+          ? res.payload.goalSessionEntryBanner.trim()
+          : "";
+        if (goalSessionEntryBanner) {
+          appendMessage("system", goalSessionEntryBanner);
+        }
+      }
     }
     sessionDigestFeature?.setContinuationState?.(res.payload.continuationState || null, { conversationId });
     return;
@@ -4103,6 +4134,23 @@ function parseStringList(value) {
     .filter(Boolean);
 }
 
+function parseLearningReviewInput(rawInput) {
+  if (!rawInput || typeof rawInput !== "object") return null;
+  const summary = rawInput.summary && typeof rawInput.summary === "object" ? rawInput.summary : {};
+  return {
+    summary: {
+      available: summary.available === true,
+      headline: summary.headline ? String(summary.headline) : "",
+      memorySignalCount: Number(summary.memorySignalCount || 0),
+      candidateSignalCount: Number(summary.candidateSignalCount || 0),
+      reviewSignalCount: Number(summary.reviewSignalCount || 0),
+      nudgeCount: Number(summary.nudgeCount || 0),
+    },
+    summaryLines: parseStringList(rawInput.summaryLines),
+    nudges: parseStringList(rawInput.nudges),
+  };
+}
+
 function parseGoalCapabilityPlans(rawPlans) {
   if (!rawPlans || typeof rawPlans !== "object") return [];
   const items = Array.isArray(rawPlans.items) ? rawPlans.items : [];
@@ -4651,6 +4699,7 @@ function parseGoalReviewGovernanceSummary(rawSummary) {
         updatedAt: data.updatedAt ? String(data.updatedAt) : "",
       };
     }),
+    learningReviewInput: parseLearningReviewInput(summary.learningReviewInput),
     recommendations: parseStringList(summary.recommendations),
     actionableReviews: actionableReviews.map((item, index) => {
       const data = item && typeof item === "object" ? item : {};
@@ -5217,6 +5266,7 @@ function resolveMemoryDetailTargetAgentId(chunkId) {
 
 function refreshMemoryLocale() {
   if (!memoryViewerSection) return;
+  syncMemoryViewerUi();
   if (!ws || !isReady) {
     renderMemoryViewerStats(null);
     renderMemoryViewerListEmpty(localeController.t("memory.disconnectedList", {}, "Not connected to the server."));
@@ -5239,6 +5289,9 @@ function refreshMemoryLocale() {
   }
   if (memoryViewerState.tab === "sharedReview") {
     renderSharedReviewList(memoryViewerState.items);
+  } else if (memoryViewerState.tab === "outboundAudit") {
+    void memoryViewerFeature?.loadExternalOutboundAuditViewer?.(false);
+    return;
   } else {
     renderMemoryList(memoryViewerState.items);
   }
@@ -5945,7 +5998,7 @@ function openConversationSession(conversationId, hintText, options = {}) {
     hint.textContent = hintText || localeController.t("canvas.switchedConversationHint", { conversationId }, `Switched to conversation: ${conversationId}`);
     messagesEl.appendChild(hint);
   }
-  void loadConversationMeta(conversationId);
+  void loadConversationMeta(conversationId, { showGoalEntryBanner: true });
   void sessionDigestFeature?.loadSessionDigest(conversationId);
 }
 
@@ -6016,6 +6069,12 @@ const toolSettingsConfirmSummaryEl = document.getElementById("toolSettingsConfir
 const toolSettingsConfirmExpiryEl = document.getElementById("toolSettingsConfirmExpiry");
 const toolSettingsConfirmApproveBtn = document.getElementById("toolSettingsConfirmApprove");
 const toolSettingsConfirmRejectBtn = document.getElementById("toolSettingsConfirmReject");
+const externalOutboundConfirmModal = document.getElementById("externalOutboundConfirmModal");
+const externalOutboundConfirmPreviewEl = document.getElementById("externalOutboundConfirmPreview");
+const externalOutboundConfirmTargetEl = document.getElementById("externalOutboundConfirmTarget");
+const externalOutboundConfirmExpiryEl = document.getElementById("externalOutboundConfirmExpiry");
+const externalOutboundConfirmApproveBtn = document.getElementById("externalOutboundConfirmApprove");
+const externalOutboundConfirmRejectBtn = document.getElementById("externalOutboundConfirmReject");
 const toolSettingsModal = document.getElementById("toolSettingsModal");
 const openToolSettingsBtn = document.getElementById("openToolSettings");
 const closeToolSettingsBtn = document.getElementById("closeToolSettings");
@@ -6046,6 +6105,24 @@ const toolSettingsController = createToolSettingsController({
   getActiveConversationId: () => activeConversationId || "",
   getSelectedSubtaskId: () => subtasksState.selectedId || "",
   isSubtasksViewActive: () => Boolean(subtasksSection && !subtasksSection.classList.contains("hidden")),
+  escapeHtml,
+  showNotice,
+  t: localeController.t,
+});
+
+externalOutboundController = createExternalOutboundController({
+  refs: {
+    externalOutboundConfirmModal,
+    externalOutboundConfirmPreviewEl,
+    externalOutboundConfirmTargetEl,
+    externalOutboundConfirmExpiryEl,
+    externalOutboundConfirmApproveBtn,
+    externalOutboundConfirmRejectBtn,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  clientId,
   escapeHtml,
   showNotice,
   t: localeController.t,

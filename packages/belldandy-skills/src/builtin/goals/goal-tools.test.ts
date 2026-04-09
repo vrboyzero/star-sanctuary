@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { goalInitTool } from "./goal-init.js";
+import { goalGetTool } from "./goal-get.js";
 import { goalListTool } from "./goal-list.js";
 import { goalResumeTool } from "./goal-resume.js";
 import { goalCheckpointApproveTool } from "./goal-checkpoint-approve.js";
@@ -52,6 +53,29 @@ const baseContext: ToolContext = {
     }))),
   },
   goalCapabilities: {
+    getGoal: vi.fn(async () => ({
+      id: "goal_alpha",
+      slug: "alpha",
+      title: "Alpha Goal",
+      status: "executing",
+      goalRoot: "E:/goals/goal_alpha",
+      runtimeRoot: "E:/goals/goal_alpha",
+      docRoot: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha",
+      northstarPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/NORTHSTAR.md",
+      tasksPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/tasks.json",
+      progressPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/progress.md",
+      handoffPath: "C:/Users/admin/.star_sanctuary/docs/long-tasks/alpha/handoff.md",
+      registryPath: "C:/Users/admin/.star_sanctuary/goals/index.json",
+      pathSource: "default",
+      currentPhase: "implementation",
+      activeConversationId: "goal:goal_alpha",
+      activeNodeId: "node_root",
+      lastNodeId: "node_root",
+      lastRunId: "run_123",
+      objective: "Ship Alpha Goal",
+      createdAt: "2026-03-20T00:00:00.000Z",
+      updatedAt: "2026-03-20T00:00:00.000Z",
+    })),
     createGoal: vi.fn(async (input) => ({
       id: "goal_alpha",
       slug: "alpha",
@@ -1997,6 +2021,13 @@ describe("goal tools", () => {
     const result = await goalListTool.execute({}, baseContext);
     expect(result.success).toBe(true);
     expect(result.output).toContain("goal_alpha");
+  });
+
+  it("goal_get should infer current goal in goal sessions", async () => {
+    const result = await goalGetTool.execute({}, goalContext);
+    expect(result.success).toBe(true);
+    expect(result.output).toContain("Goal ID: goal_alpha");
+    expect(result.output).toContain("Active Conversation:");
   });
 
   it("goal_resume should resume a goal", async () => {

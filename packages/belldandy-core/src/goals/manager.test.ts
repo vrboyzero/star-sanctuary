@@ -1523,6 +1523,74 @@ describe("GoalManager", () => {
     expect(progress).toContain("suggestion_review_scanned");
   });
 
+  it("uses review scan learning runner to generate first suggestion batch when reviews are still empty", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Learning Review Scan Goal",
+      objective: "Use review scan to backfill first suggestion batch",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_learning_scan",
+      title: "Learning Scan Node",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["Review runner can backfill suggestions"],
+    });
+    await manager.claimTaskNode(goal.id, "node_learning_scan", {
+      runId: "run_learning_scan_1",
+      summary: "Started learning scan node",
+    });
+    await manager.requestCheckpoint(goal.id, "node_learning_scan", {
+      title: "Learning scan checkpoint",
+      summary: "Ready for approval",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      runId: "run_learning_scan_1",
+    });
+    await manager.approveCheckpoint(goal.id, "node_learning_scan", {
+      summary: "Approved",
+      note: "Looks stable",
+      decidedBy: "producer",
+      runId: "run_learning_scan_1",
+    });
+    await manager.completeTaskNode(goal.id, "node_learning_scan", {
+      summary: "Learning scan node completed",
+      artifacts: ["artifacts/learning-scan.md"],
+      runId: "run_learning_scan_1",
+    });
+    await manager.saveCapabilityPlan(goal.id, "node_learning_scan", {
+      executionMode: "multi_agent",
+      riskLevel: "medium",
+      objective: "Backfill first suggestion batch from review scan",
+      summary: "Need reusable learning review wrapper",
+      gaps: ["Need reusable learning review wrapper"],
+      methods: [{ file: "Learning-Review.md" }],
+      skills: [{ name: "find-skills" }],
+      mcpServers: [{ serverId: "docs", status: "connected" }],
+      actualUsage: {
+        methods: ["Learning-Review.md"],
+        skills: ["find-skills"],
+        mcpServers: ["docs"],
+        toolNames: ["file_read", "apply_patch"],
+      },
+      status: "orchestrated",
+      orchestratedAt: "2026-03-20T17:00:00.000Z",
+    });
+
+    const beforeScan = await manager.listSuggestionReviews(goal.id);
+    expect(beforeScan.items).toHaveLength(0);
+
+    const scanned = await manager.scanSuggestionReviewWorkflows(goal.id, {});
+    expect(scanned.learningReview?.generated).toBe(true);
+    expect(scanned.learningReview?.suggestionCounts.method).toBeGreaterThan(0);
+    expect(scanned.reviews.items.length).toBeGreaterThan(0);
+
+    const progress = await fs.readFile(goal.progressPath, "utf-8");
+    expect(progress).toContain("experience_suggestions_generated");
+  });
+
   it("materializes approval notifications into dispatch outbox channels without duplicate fanout", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
     await fs.mkdir(path.join(stateDir, "governance"), { recursive: true });

@@ -1776,6 +1776,14 @@ body::before {
   flex-shrink: 0;
 }
 
+.composer-model-filter {
+  height: 36px;
+  min-width: 150px;
+  max-width: 220px;
+  flex: 0 1 180px;
+  padding: 0 10px;
+}
+
 .agent-select option {
   background: var(--select-option-bg);
   color: var(--select-option-text);
@@ -1784,6 +1792,13 @@ body::before {
 .agent-select:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .composer-model-filter {
+    min-width: 112px;
+    flex-basis: 132px;
+  }
 }
 
 /* Attach Button */

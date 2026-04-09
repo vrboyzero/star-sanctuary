@@ -1,3 +1,6 @@
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConversationStore } from "@belldandy/agent";
@@ -15,9 +18,11 @@ vi.mock("@belldandy/protocol", async () => {
 });
 
 import { CommunityChannel } from "./community.js";
+import { createFileCurrentConversationBindingStore } from "./current-conversation-binding-store.js";
 import { createRuleBasedRouter } from "./router/engine.js";
 import { normalizeChannelSecurityConfig } from "./router/security-config.js";
 import { normalizeReplyChunkingConfig } from "./reply-chunking-config.js";
+import { buildChannelSessionDescriptor } from "./session-key.js";
 
 describe("community token usage upload", () => {
   beforeEach(() => {
@@ -96,6 +101,12 @@ describe("community token usage upload", () => {
       text: "你好",
       senderInfo: expect.objectContaining({ id: "u-1", name: "Alice", type: "user" }),
       roomContext: expect.objectContaining({ roomId: "room-1", environment: "community" }),
+      meta: expect.objectContaining({
+        channel: "community",
+        sessionScope: "per-account-channel-peer",
+        sessionKey: expect.stringContaining("channel=community"),
+        legacyConversationId: "community:room-1",
+      }),
     }));
 
     expect(uploadTokenUsageMock).toHaveBeenCalledTimes(2);
@@ -430,6 +441,9 @@ describe("community token usage upload", () => {
       meta: expect.objectContaining({
         channel: "community",
         accountId: "贝露丹蒂",
+        sessionScope: "per-account-channel-peer",
+        sessionKey: expect.stringContaining(`account=${encodeURIComponent("贝露丹蒂")}`),
+        legacyConversationId: "community:room-mention",
       }),
     }));
   });
@@ -485,6 +499,127 @@ describe("community token usage upload", () => {
       const content = parsed.data?.content ?? "";
       expect(content.length).toBeLessThanOrEqual(140);
       expect(((content.match(/```/g) ?? []).length) % 2).toBe(0);
+    }
+  });
+
+  it("falls back to persisted current conversation binding when proactive roomId is omitted", async () => {
+    const wsSend = vi.fn();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "community-binding-"));
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: { run: vi.fn(async function* () { yield { type: "final", text: "ok" }; }) } as any,
+      conversationStore: new ConversationStore(),
+      currentConversationBindingStore: createFileCurrentConversationBindingStore(
+        path.join(stateDir, "bindings.json"),
+      ),
+    });
+
+    const openSocket = {
+      readyState: 1,
+      send: wsSend,
+    } as any;
+    (channel as any).connections.set("贝露丹蒂", {
+      ws: openSocket,
+      agentConfig: { name: "贝露丹蒂", apiKey: "gro_test_key" },
+      roomId: "room-bind",
+      reconnectAttempts: 0,
+      members: [],
+    });
+
+    try {
+      await (channel as any).handleChatMessage({
+        id: "msg-bind-1",
+        content: "@贝露丹蒂 你好",
+        sender: {
+          type: "user",
+          id: "u-bind",
+          uid: "u-bind",
+          name: "Alice",
+        },
+      }, {
+        ws: openSocket,
+        agentConfig: { name: "贝露丹蒂", apiKey: "gro_test_key" },
+        roomId: "room-bind",
+        reconnectAttempts: 0,
+        members: [],
+      });
+
+      wsSend.mockClear();
+      const sent = await channel.sendProactiveMessage("manual");
+
+      expect(sent).toBe(true);
+      expect(wsSend).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(wsSend.mock.calls[0][0]))).toEqual({
+        type: "message",
+        data: { content: "manual" },
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("accepts canonical sessionKey as proactive target", async () => {
+    const wsSend = vi.fn();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "community-binding-session-key-"));
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: { run: vi.fn(async function* () { yield { type: "final", text: "ok" }; }) } as any,
+      conversationStore: new ConversationStore(),
+      currentConversationBindingStore: createFileCurrentConversationBindingStore(
+        path.join(stateDir, "bindings.json"),
+      ),
+    });
+
+    const openSocket = {
+      readyState: 1,
+      send: wsSend,
+    } as any;
+    (channel as any).connections.set("贝露丹蒂", {
+      ws: openSocket,
+      agentConfig: { name: "贝露丹蒂", apiKey: "gro_test_key" },
+      roomId: "room-bind",
+      reconnectAttempts: 0,
+      members: [],
+    });
+
+    try {
+      await (channel as any).handleChatMessage({
+        id: "msg-bind-1",
+        content: "@贝露丹蒂 你好",
+        sender: {
+          type: "user",
+          id: "u-bind",
+          uid: "u-bind",
+          name: "Alice",
+        },
+      }, {
+        ws: openSocket,
+        agentConfig: { name: "贝露丹蒂", apiKey: "gro_test_key" },
+        roomId: "room-bind",
+        reconnectAttempts: 0,
+        members: [],
+      });
+
+      wsSend.mockClear();
+      const session = buildChannelSessionDescriptor({
+        channel: "community",
+        accountId: "贝露丹蒂",
+        chatKind: "room",
+        chatId: "room-bind",
+        senderId: "u-bind",
+      });
+      const sent = await channel.sendProactiveMessage("manual", { sessionKey: session.sessionKey });
+
+      expect(sent).toBe(true);
+      expect(wsSend).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(wsSend.mock.calls[0][0]))).toEqual({
+        type: "message",
+        data: { content: "manual" },
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }
   });
 });

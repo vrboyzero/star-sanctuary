@@ -6,7 +6,12 @@ import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
 import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
 import { deliverAutoMessageToResidentChannel } from "../auto-chat-delivery.js";
 import { upsertChannelSecurityApprovalRequest } from "../channel-security-store.js";
+import { buildGoalSessionContextPrelude } from "../goal-session-context.js";
+import { buildGoalSessionRuntimeEventMessage } from "../goal-session-runtime-event.js";
+import { normalizePreferredProviderIds } from "../provider-model-catalog.js";
 import { ResidentConversationStore } from "../resident-conversation-store.js";
+import { buildLearningReviewNudgePrelude } from "../learning-review-nudge.js";
+import { runPostTaskLearningReview } from "../learning-review-runner.js";
 import {
   createSubTaskAgentCapabilities,
   createSubTaskResumeController,
@@ -67,6 +72,7 @@ import {
   TOOL_SEARCH_NAME,
   TOOL_SETTINGS_CONTROL_NAME,
   createToolSettingsControlTool,
+  createSendChannelMessageTool,
   type AgentToolControlMode,
   fetchTool,
   applyPatchTool,
@@ -192,11 +198,13 @@ import {
   QqChannel,
   CommunityChannel,
   DiscordChannel,
+  createFileCurrentConversationBindingStore,
   loadCommunityConfig,
   getCommunityConfigPath,
   createChannelRouter,
   loadReplyChunkingConfig,
   resolveReplyChunkingConfigPath,
+  resolveCurrentConversationBindingStorePath,
   type ChannelSecurityApprovalRequestInput,
 } from "@belldandy/channels";
 import { DEFAULT_STATE_DIR_DISPLAY, extractOwnerUuid, type JsonObject, type TokenUsageUploadConfig } from "@belldandy/protocol";
@@ -276,6 +284,9 @@ import {
 import { createLoggerFromEnv } from "../logger/index.js";
 import { ToolsConfigManager } from "../tools-config.js";
 import { ToolControlConfirmationStore } from "../tool-control-confirmation-store.js";
+import { createFileExternalOutboundAuditStore, resolveExternalOutboundAuditStorePath } from "../external-outbound-audit-store.js";
+import { ExternalOutboundConfirmationStore } from "../external-outbound-confirmation-store.js";
+import { ExternalOutboundSenderRegistry } from "../external-outbound-sender-registry.js";
 import { loadWebhookConfig, IdempotencyManager } from "../webhook/index.js";
 import { BELLDANDY_VERSION } from "../version.generated.js";
 import { checkForUpdates } from "../update-checker.js";
@@ -393,7 +404,6 @@ const qqSandbox = readEnv("BELLDANDY_QQ_SANDBOX") !== "false";
 // Channels - Discord
 const discordEnabled = readEnv("BELLDANDY_DISCORD_ENABLED") === "true";
 const discordBotToken = readEnv("BELLDANDY_DISCORD_BOT_TOKEN");
-const discordDefaultChannelId = readEnv("BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID");
 const channelRouterEnabled = readEnv("BELLDANDY_CHANNEL_ROUTER_ENABLED") === "true";
 const channelRouterDefaultAgentId = readEnv("BELLDANDY_CHANNEL_ROUTER_DEFAULT_AGENT_ID") ?? "default";
 
@@ -535,6 +545,7 @@ const agentProvider = (readEnv("BELLDANDY_AGENT_PROVIDER") ?? "mock") as "mock" 
 const openaiBaseUrl = readEnv("BELLDANDY_OPENAI_BASE_URL");
 const openaiApiKey = readEnv("BELLDANDY_OPENAI_API_KEY");
 const openaiModel = readEnv("BELLDANDY_OPENAI_MODEL");
+const preferredProviderIds = normalizePreferredProviderIds(readEnv("BELLDANDY_MODEL_PREFERRED_PROVIDERS"));
 const openaiWireApi = (readEnv("BELLDANDY_OPENAI_WIRE_API") ?? "chat_completions").toLowerCase() === "responses"
   ? "responses"
   : "chat_completions";
@@ -732,6 +743,7 @@ if (embeddingEnabled && !openaiApiKey) {
 
 // [SECURITY] 危险工具需显式启用
 const dangerousToolsEnabled = readEnv("BELLDANDY_DANGEROUS_TOOLS_ENABLED") === "true";
+const externalOutboundRequireConfirmation = readEnv("BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false";
 
 // Cron Store（无论是否启用调度器，工具都可以管理任务）
 const cronStore = new CronStore(stateDir);
@@ -748,6 +760,10 @@ const toolsConfigManager = new ToolsConfigManager(stateDir, {
 });
 await toolsConfigManager.load();
 const toolControlConfirmationStore = new ToolControlConfirmationStore();
+const externalOutboundConfirmationStore = new ExternalOutboundConfirmationStore();
+const currentConversationBindingStore = createFileCurrentConversationBindingStore(
+  resolveCurrentConversationBindingStorePath(stateDir),
+);
 
 // 3. Init Executor (conditional)
 // Inject browser logger before registering tools
@@ -1050,6 +1066,10 @@ const toolExecutor = new ToolExecutor({
     debug: (m) => logger.debug("tools", m),
   },
 });
+const externalOutboundSenderRegistry = new ExternalOutboundSenderRegistry(currentConversationBindingStore);
+const externalOutboundAuditStore = createFileExternalOutboundAuditStore(
+  resolveExternalOutboundAuditStorePath(stateDir),
+);
 
 if (toolsEnabled) {
   toolExecutor.registerTool(createToolSearchTool({
@@ -1146,6 +1166,13 @@ if (toolsEnabled) {
     confirmationStore: toolControlConfirmationStore,
   }));
   logger.info("tools", `registered ${TOOL_SETTINGS_CONTROL_NAME} (mode=${agentToolControlMode})`);
+  toolExecutor.registerTool(createSendChannelMessageTool({
+    senderRegistry: externalOutboundSenderRegistry,
+    confirmationStore: externalOutboundConfirmationStore,
+    auditStore: externalOutboundAuditStore,
+    getRequireConfirmation: () => externalOutboundRequireConfirmation,
+  }));
+  logger.info("tools", `registered send_channel_message (confirm=${externalOutboundRequireConfirmation ? "required" : "auto"})`);
 }
 
 // 4.4 Bridge plugin hooks → HookRegistry (deferred to after hookRegistry init, see section 7.5)
@@ -1253,6 +1280,63 @@ if (contextInjectionEnabled || autoRecallEnabled) {
   if (autoRecallEnabled) logger.info("auto-recall", `enabled (limit=${autoRecallLimit}, minScore=${autoRecallMinScore})`);
 }
 
+hookRegistry.register({
+  source: "goal-session-context",
+  hookName: "before_agent_start",
+  priority: 110,
+  handler: async (_event, _ctx) => {
+    try {
+      return await buildGoalSessionContextPrelude({
+        sessionKey: _ctx.sessionKey,
+        getGoal: (goalId) => goalManager.getGoal(goalId),
+        getHandoff: (goalId) => goalManager.getHandoff(goalId),
+        readTaskGraph: (goalId) => goalManager.readTaskGraph(goalId),
+      });
+    } catch (err) {
+      logger.warn("goals", `Failed to build goal session context prelude: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  },
+});
+
+hookRegistry.register({
+  source: "learning-review-nudge",
+  hookName: "before_agent_start",
+  priority: 120,
+  handler: async (_event, _ctx) => {
+    const mm = getGlobalMemoryManager({
+      agentId: _ctx.agentId,
+      conversationId: _ctx.sessionKey,
+    });
+    if (!mm) return undefined;
+    try {
+      return await buildLearningReviewNudgePrelude({
+        stateDir,
+        agentId: _ctx.agentId,
+        sessionKey: _ctx.sessionKey,
+        currentTurnText: _event.userInput?.trim() || _event.prompt?.trim() || undefined,
+        manager: mm,
+        residentMemoryManagers: scopedMemoryManagers.records,
+        getGoalReviewNudgeSummary: async (goalId) => {
+          try {
+            const reviews = await goalManager.listSuggestionReviews(goalId);
+            return {
+              pendingReviewCount: reviews.items.filter((item) => item.status === "pending_review").length,
+              needsRevisionCount: reviews.items.filter((item) => item.status === "needs_revision").length,
+            };
+          } catch {
+            return undefined;
+          }
+        },
+      });
+    } catch (err) {
+      logger.warn("learning-review", `Failed to build learning/review nudge prelude: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
+  },
+});
+logger.info("learning-review", "enabled prompt/runtime nudge prelude");
+
 if (toolResultTranscriptCharLimit > 0) {
   hookRegistry.register({
     source: "tool-transcript",
@@ -1297,6 +1381,8 @@ const primaryModelConfig = {
   baseUrl: openaiBaseUrl ?? "",
   apiKey: openaiApiKey ?? "",
   model: openaiModel ?? "",
+  protocol: agentProtocol,
+  wireApi: openaiWireApi,
 };
 
 let primaryBootstrapCooldownUntil = 0;
@@ -2633,12 +2719,29 @@ if (taskMemoryEnabled) {
       });
       if (!mm) return;
 
-      mm.completeTaskCapture({
+      const taskId = mm.completeTaskCapture({
         conversationId: sessionKey,
         success: event.success,
         durationMs: event.durationMs,
         error: event.error,
         messages: Array.isArray(event.messages) ? event.messages : undefined,
+      });
+      if (!taskId) return;
+
+      runPostTaskLearningReview({
+        stateDir,
+        residentMemoryManagers: scopedMemoryManagers.records,
+        agentId: ctx.agentId,
+        task: mm.getTaskDetail(taskId),
+        findCandidate: (resolvedTaskId, type) => mm.findExperienceCandidateByTaskAndType(resolvedTaskId, type),
+        promote: (resolvedTaskId, type) => type === "method"
+          ? mm.promoteTaskToMethodCandidate(resolvedTaskId)
+          : mm.promoteTaskToSkillCandidate(resolvedTaskId),
+      }).then((result) => {
+        if (!result) return;
+        logger.info("learning-review", `post-run ${result.summary}`);
+      }).catch((err) => {
+        logger.warn("learning-review", `Post-run learning review failed for task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
       });
     },
   });
@@ -2999,15 +3102,20 @@ const server = await startGatewayServer({
   agentRegistry: agentRegistry,
   primaryModelConfig,
   modelFallbacks,
+  preferredProviderIds,
+  modelConfigPath: modelConfigFile,
   residentMemoryManagers: scopedMemoryManagers.records,
   conversationStore: conversationStore, // Pass shared instance
   getCompactionRuntimeReport: () => compactionRuntimeTracker.getReport(),
   onActivity,
   logger,
   toolsConfigManager,
-  toolExecutor: toolsEnabled ? toolExecutor : undefined,
-  toolControlConfirmationStore,
-  getAgentToolControlMode: () => agentToolControlMode,
+        toolExecutor: toolsEnabled ? toolExecutor : undefined,
+        toolControlConfirmationStore,
+        externalOutboundConfirmationStore,
+        externalOutboundSenderRegistry,
+        externalOutboundAuditStore,
+        getAgentToolControlMode: () => agentToolControlMode,
   getAgentToolControlConfirmPassword: () => agentToolControlConfirmPassword,
   pluginRegistry,
   skillRegistry,
@@ -3135,6 +3243,43 @@ goalManager.setEventSink((payload) => {
     event: "goal.update",
     payload,
   });
+  void (async () => {
+    try {
+      const runtimeEvent = await buildGoalSessionRuntimeEventMessage({
+        event: payload,
+        readTaskGraph: (goalId) => goalManager.readTaskGraph(goalId),
+      });
+      if (!runtimeEvent) {
+        return;
+      }
+      const message = conversationStore.addMessage(
+        runtimeEvent.conversationId,
+        "assistant",
+        runtimeEvent.text,
+        {
+          agentId: "default",
+          channel: "webchat",
+        },
+      );
+      await conversationStore.waitForPendingPersistence(runtimeEvent.conversationId);
+      server.broadcast({
+        type: "event",
+        event: "chat.final",
+        payload: {
+          agentId: "default",
+          conversationId: runtimeEvent.conversationId,
+          role: "assistant",
+          text: runtimeEvent.text,
+          messageMeta: {
+            timestampMs: message.timestamp,
+            isLatest: true,
+          },
+        },
+      });
+    } catch (error) {
+      logger.warn("goals", `Failed to persist goal runtime event: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  })();
 });
 
 // 绑定 broadcast 给 service_restart 工具使用
@@ -3204,6 +3349,43 @@ const channelRouter = createChannelRouter({
   },
 });
 const channelReplyChunkingConfig = loadReplyChunkingConfig(channelReplyChunkingConfigPath);
+const residentExternalDeliveryPreference = ["feishu", "qq", "community", "discord"] as const;
+
+async function deliverToLatestBoundExternalChannel(
+  source: "heartbeat" | "cron",
+  message: string,
+): Promise<boolean> {
+  const resolved = await externalOutboundSenderRegistry.resolvePreferredLatestTarget([
+    ...residentExternalDeliveryPreference,
+  ]);
+  if (!resolved.ok) {
+    logger.warn(
+      source,
+      `Failed to deliver to external channel: ${resolved.message}`,
+      { attemptedChannels: resolved.attemptedChannels },
+    );
+    return false;
+  }
+  logger.info(
+    source,
+    `Delivering to user via ${resolved.channel}...`,
+    { sessionKey: resolved.resolvedSessionKey, resolution: resolved.resolution },
+  );
+  const sent = await externalOutboundSenderRegistry.sendResolvedText({
+    channel: resolved.channel,
+    content: message,
+    resolvedSessionKey: resolved.resolvedSessionKey,
+  });
+  if (!sent.ok) {
+    logger.warn(
+      source,
+      `Failed to deliver via ${resolved.channel}: ${sent.message}`,
+      { sessionKey: resolved.resolvedSessionKey },
+    );
+    return false;
+  }
+  return true;
+}
 
 if (channelRouterEnabled) {
   logger.info("channel-router", `enabled (config: ${channelRouterConfigPath}, defaultAgent: ${channelRouterDefaultAgentId})`);
@@ -3261,34 +3443,10 @@ if (feishuAppId && feishuAppSecret && createAgent) {
       defaultAgentId: channelRouterDefaultAgentId,
       router: channelRouter,
       replyChunkingConfig: channelReplyChunkingConfig,
+      currentConversationBindingStore,
       agentResolver: resolveChannelAgent,
       onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
       conversationStore: conversationStore, // [PERSISTENCE] Inject store
-      initialChatId: (() => {
-        try {
-          const statePath = path.join(stateDir, "feishu-state.json");
-          if (fs.existsSync(statePath)) {
-            const data = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-            if (data.lastChatId) {
-              logger.info("feishu", `Loaded persisted chat ID: ${data.lastChatId}`);
-              return data.lastChatId;
-            }
-          }
-        } catch (e) {
-          logger.error("feishu", "Failed to load state", e);
-        }
-        return undefined;
-      })(),
-      onChatIdUpdate: (chatId: string) => {
-        try {
-          const statePath = path.join(stateDir, "feishu-state.json");
-          const data = { lastChatId: chatId, updatedAt: Date.now() };
-          fs.writeFileSync(statePath, JSON.stringify(data, null, 2), "utf-8");
-          logger.info("feishu", `Persisted chat ID: ${chatId}`);
-        } catch (e) {
-          logger.error("feishu", "Failed to save state", e);
-        }
-      },
       sttTranscribe: async (opts) => {
         const result = await transcribeSpeech(opts);
         if (result) logger.info("feishu", `Transcribed audio (${result.durationSec?.toFixed(1) ?? "?"}s) from ${result.provider}`);
@@ -3296,6 +3454,7 @@ if (feishuAppId && feishuAppSecret && createAgent) {
       },
     });
     // Do not await, start in background
+    externalOutboundSenderRegistry.register("feishu", feishuChannel);
     feishuChannel.start().catch((err: unknown) => {
       logger.error("feishu", "Channel Error", err);
     });
@@ -3322,11 +3481,13 @@ if (qqAppId && qqAppSecret && createAgent) {
       defaultAgentId: channelRouterDefaultAgentId,
       router: channelRouter,
       replyChunkingConfig: channelReplyChunkingConfig,
+      currentConversationBindingStore,
       agentResolver: resolveChannelAgent,
       onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
       conversationStore: conversationStore,
     });
     // Do not await, start in background
+    externalOutboundSenderRegistry.register("qq", qqChannel);
     qqChannel.start().catch((err: unknown) => {
       logger.error("qq", "Channel Error", err);
     });
@@ -3345,15 +3506,15 @@ if (discordEnabled && discordBotToken && createAgent) {
     discordChannel = new DiscordChannel({
       agent: agent,
       botToken: discordBotToken,
-      defaultChannelId: discordDefaultChannelId,
       defaultAgentId: channelRouterDefaultAgentId,
       router: channelRouter,
       replyChunkingConfig: channelReplyChunkingConfig,
+      currentConversationBindingStore,
       agentResolver: resolveChannelAgent,
       onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
-      stateFilePath: path.join(stateDir, "discord-state.json"),
     });
     // Do not await, start in background
+    externalOutboundSenderRegistry.register("discord", discordChannel);
     discordChannel.start().catch((err: unknown) => {
       logger.error("discord", "Channel Error", err);
     });
@@ -3400,6 +3561,7 @@ try {
       defaultAgentId: channelRouterDefaultAgentId,
       router: channelRouter,
       replyChunkingConfig: channelReplyChunkingConfig,
+      currentConversationBindingStore,
       agentResolver: resolveChannelAgent,
       onChannelSecurityApprovalRequired: recordChannelSecurityApprovalRequest,
       reconnect: communityConfig.reconnect,
@@ -3408,6 +3570,7 @@ try {
     });
 
     // 注册 leave_room 和 join_room 工具（带 channel 实例）
+    externalOutboundSenderRegistry.register("community", communityChannel);
     if (toolsEnabled) {
       const leaveRoomToolWithChannel = createLeaveRoomTool(communityChannel);
       toolExecutor.registerTool(leaveRoomToolWithChannel, { silentReplace: true });
@@ -3482,16 +3645,7 @@ if (heartbeatEnabled && createAgent) {
         text: `❤️ [Heartbeat] ${message}`,
       });
 
-      // 2. Deliver to Feishu (if configured)
-      if (feishuChannel) {
-        logger.info("heartbeat", "Delivering to user via Feishu...");
-        const sent = await feishuChannel.sendProactiveMessage(message);
-        if (!sent) {
-          logger.warn("heartbeat", "Failed to deliver: No active Feishu chat session (user needs to speak first).");
-        }
-      } else {
-        logger.info("heartbeat", "Broadcasted to local Web clients (Feishu disabled).");
-      }
+      await deliverToLatestBoundExternalChannel("heartbeat", message);
     };
 
     heartbeatRunner = startHeartbeatRunner({
@@ -3587,16 +3741,7 @@ if (cronEnabled) {
       text: message,
     });
 
-    // 2. 推送到飞书（如果配置了）
-    if (feishuChannel) {
-      logger.info("cron", "Delivering to user via Feishu...");
-      const sent = await feishuChannel.sendProactiveMessage(message);
-      if (!sent) {
-        logger.warn("cron", "Failed to deliver: No active Feishu chat session.");
-      }
-    } else {
-      logger.info("cron", "Broadcasted to local Web clients (Feishu disabled).");
-    }
+    await deliverToLatestBoundExternalChannel("cron", message);
   };
 
   const runGoalApprovalScan = async (payload: CronGoalApprovalScanPayload): Promise<{ summary: string; notifyMessage?: string }> => {

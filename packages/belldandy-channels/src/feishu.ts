@@ -1,8 +1,10 @@
 import * as lark from "@larksuiteoapi/node-sdk";
 import type { BelldandyAgent } from "@belldandy/agent";
+import type { CurrentConversationBindingStore } from "./current-conversation-binding-store.js";
 import type { ChatKind, ChannelRouter } from "./router/types.js";
-import type { Channel, ChannelAgentResolver, ChannelConfig } from "./types.js";
+import type { Channel, ChannelAgentResolver, ChannelConfig, ChannelProactiveTarget } from "./types.js";
 import { chunkMarkdownForOutbound } from "./reply-chunking.js";
+import { buildChannelSessionDescriptor } from "./session-key.js";
 
 import { ConversationStore } from "@belldandy/agent";
 
@@ -11,8 +13,6 @@ export interface FeishuChannelConfig extends ChannelConfig {
     appSecret: string;
     conversationStore: ConversationStore;
     agentId?: string;
-    initialChatId?: string;
-    onChatIdUpdate?: (chatId: string) => void;
     sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
 }
 
@@ -33,11 +33,10 @@ export class FeishuChannel implements Channel {
     private readonly router?: ChannelRouter;
     private readonly agentResolver?: ChannelAgentResolver;
     private readonly replyChunkingConfig?: FeishuChannelConfig["replyChunkingConfig"];
+    private readonly currentConversationBindingStore?: CurrentConversationBindingStore;
     private readonly sttTranscribe?: (opts: { buffer: Buffer; fileName: string; mime?: string }) => Promise<{ text: string } | null>;
     private readonly onChannelSecurityApprovalRequired?: FeishuChannelConfig["onChannelSecurityApprovalRequired"];
     private _running = false;
-    private lastChatId?: string; // Track the last active chat for proactive messaging
-    private onChatIdUpdate?: (chatId: string) => void;
 
     // Deduplication: track processed message IDs to avoid responding multiple times
     private readonly processedMessages = new Set<string>();
@@ -56,6 +55,7 @@ export class FeishuChannel implements Channel {
         this.router = config.router;
         this.agentResolver = config.agentResolver;
         this.replyChunkingConfig = config.replyChunkingConfig;
+        this.currentConversationBindingStore = config.currentConversationBindingStore;
         this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
 
         // HTTP Client for sending messages
@@ -71,16 +71,7 @@ export class FeishuChannel implements Channel {
             loggerLevel: lark.LoggerLevel.info,
         });
 
-        // Store callback
-        this.onChatIdUpdate = config.onChatIdUpdate;
         this.sttTranscribe = config.sttTranscribe;
-
-        // setupEventHandlers was removed
-
-        if (config.initialChatId) {
-            this.lastChatId = config.initialChatId;
-            console.log(`Feishu: Restored last chat ID: ${this.lastChatId}`);
-        }
     }
 
     private inferChatKind(message: any): ChatKind {
@@ -200,12 +191,6 @@ export class FeishuChannel implements Channel {
         }
 
         const chatId = message.chat_id;
-        if (this.lastChatId !== chatId) {
-            this.lastChatId = chatId;
-            // Notify listener for persistence
-            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-            this.onChatIdUpdate?.(chatId);
-        }
         const msgId = message.message_id;
 
         // === Deduplication: skip if we've already processed this message ===
@@ -347,12 +332,20 @@ export class FeishuChannel implements Channel {
         const mentions = this.extractMentions(message);
         const mentioned = chatKind === "dm" ? true : mentions.length > 0;
         const senderId = sender?.sender_id?.open_id || sender?.sender_id?.user_id || sender?.sender_id?.union_id;
+        const session = buildChannelSessionDescriptor({
+            channel: "feishu",
+            chatKind,
+            chatId,
+            senderId: typeof senderId === "string" ? senderId : undefined,
+        });
 
         const decision = this.router
             ? this.router.decide({
                 channel: "feishu",
                 chatKind,
                 chatId,
+                sessionScope: session.sessionScope,
+                sessionKey: session.sessionKey,
                 text,
                 senderId: typeof senderId === "string" ? senderId : undefined,
                 senderName: typeof sender?.sender_id?.user_id === "string" ? sender.sender_id.user_id : undefined,
@@ -384,6 +377,19 @@ export class FeishuChannel implements Channel {
         const selectedAgentId = decision.agentId ?? this.agentId ?? this.defaultAgentId;
         const runAgent = this.resolveAgent(selectedAgentId);
         console.log(`[${this.name}] Route decision for ${msgId}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
+        await this.currentConversationBindingStore?.upsert({
+            channel: "feishu",
+            sessionKey: session.sessionKey,
+            sessionScope: session.sessionScope,
+            legacyConversationId: session.legacyConversationId,
+            chatKind,
+            chatId,
+            ...(session.peerId ? { peerId: session.peerId } : {}),
+            updatedAt: Date.now(),
+            target: {
+                chatId,
+            },
+        });
 
         console.log(`Feishu: Processing message ${msgId} from chat ${chatId}: "${text.slice(0, 50)}..."`);
 
@@ -393,23 +399,26 @@ export class FeishuChannel implements Channel {
         // We pass conversationId as chatId
 
         // [PERSISTENCE] Add User Message to Store
-        this.conversationStore.addMessage(chatId, "user", text, {
+        this.conversationStore.addMessage(session.legacyConversationId, "user", text, {
             agentId: selectedAgentId,
             channel: "feishu",
         });
 
         // [PERSISTENCE] Get History from Store
-        const history = this.conversationStore.getHistory(chatId);
+        const history = this.conversationStore.getHistory(session.legacyConversationId);
 
         const runInput = {
-            conversationId: chatId, // Map Feishu Chat ID to Conversation ID
+            conversationId: session.legacyConversationId,
             text: text,
             history: history, // Provide history context
             // We could pass sender info in meta
             meta: {
                 from: sender,
                 messageId: msgId,
-                channel: "feishu"
+                channel: "feishu",
+                sessionScope: session.sessionScope,
+                sessionKey: session.sessionKey,
+                legacyConversationId: session.legacyConversationId,
             }
         };
 
@@ -439,7 +448,7 @@ export class FeishuChannel implements Channel {
                     .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
                     .replace(/\n{3,}/g, "\n\n")
                     .trim();
-                this.conversationStore.addMessage(chatId, "assistant", sanitized || replyText, {
+                this.conversationStore.addMessage(session.legacyConversationId, "assistant", sanitized || replyText, {
                     agentId: selectedAgentId,
                     channel: "feishu",
                 });
@@ -480,14 +489,32 @@ export class FeishuChannel implements Channel {
     /**
      * 主动发送消息（非回复）
      * @param content - 消息内容
-     * @param chatId - 可选，指定发送目标。不指定则发送到最后活跃的会话
+     * @param target - 可选，指定显式 chatId 或 canonical sessionKey；未指定时仅回退到持久化 binding
      * @returns 是否发送成功
      */
-    async sendProactiveMessage(content: string, chatId?: string): Promise<boolean> {
-        const targetChatId = chatId || this.lastChatId;
+    async sendProactiveMessage(content: string, target?: ChannelProactiveTarget): Promise<boolean> {
+        const explicitChatId = typeof target === "string"
+            ? target
+            : typeof target?.chatId === "string"
+                ? target.chatId
+                : "";
+        const explicitSessionKey = typeof target === "object" && typeof target?.sessionKey === "string"
+            ? target.sessionKey.trim()
+            : "";
+        const directBinding = explicitSessionKey
+            ? await this.currentConversationBindingStore?.get(explicitSessionKey)
+            : undefined;
+        const fallbackBinding = !explicitChatId && !directBinding
+            ? await this.currentConversationBindingStore?.getLatestByChannel({ channel: "feishu" })
+            : undefined;
+        const targetChatId = directBinding?.target.chatId
+            || directBinding?.chatId
+            || explicitChatId
+            || fallbackBinding?.target.chatId
+            || fallbackBinding?.chatId;
 
         if (!targetChatId) {
-            console.warn(`[${this.name}] Cannot send proactive message - no active chat ID found.`);
+            console.warn(`[${this.name}] Cannot send proactive message - no binding-backed target chat ID found.`);
             return false;
         }
 

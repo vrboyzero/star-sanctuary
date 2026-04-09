@@ -59,6 +59,7 @@ export type {
   UpdateMarketplaceExtensionInput,
 } from "./extension-marketplace-service.js";
 export { GoalManager } from "./goals/manager.js";
+export { runGoalReviewScanLearningReview, runPostTaskLearningReview } from "./learning-review-runner.js";
 export { GOAL_UPDATE_AREA_SEMANTICS, GOAL_UPDATE_PROTOCOL, getGoalUpdateAreas } from "./goals/goal-events.js";
 export { parseGoalSessionKey, createGoalConversationId, createGoalNodeConversationId } from "./goals/session.js";
 export type {
@@ -129,6 +130,7 @@ export type {
   GoalReviewGovernanceSummary,
   GoalApprovalWorkflowScanItem,
   GoalApprovalWorkflowScanResult,
+  GoalReviewScanLearningReviewRunResult,
   GoalCheckpointEscalateInput,
   GoalExperienceSuggestSection,
   GoalExperienceSuggestResult,
@@ -136,4 +138,8 @@ export type {
   GoalUpdateReason,
   GoalUpdateEvent,
 } from "./goals/types.js";
+export type {
+  PostTaskLearningReviewRunResult,
+  LearningReviewTaskAction,
+} from "./learning-review-runner.js";
 

@@ -8,6 +8,7 @@ import {
   buildDefaultProfile,
   loadAgentProfiles,
   resolveAgentProfileMetadata,
+  resolveModelConfig,
 } from "./agent-profile.js";
 
 test("resolveAgentProfileMetadata applies resident defaults", () => {
@@ -121,5 +122,31 @@ test("loadAgentProfiles accepts resident metadata extensions and ignores invalid
       skills: ["repo-map", "review-helper"],
       handoffStyle: "structured",
     },
+  });
+});
+
+test("resolveModelConfig accepts manual model override without falling back to named profiles", () => {
+  const resolved = resolveModelConfig(
+    "manual:gpt-5.1-mini",
+    {
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-primary",
+      model: "gpt-5",
+    },
+    [
+      {
+        id: "kimi-k2.5",
+        baseUrl: "https://api.moonshot.cn/v1",
+        apiKey: "sk-kimi",
+        model: "kimi-k2.5",
+      },
+    ],
+  );
+
+  expect(resolved).toEqual({
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "sk-primary",
+    model: "gpt-5.1-mini",
+    source: "manual",
   });
 });

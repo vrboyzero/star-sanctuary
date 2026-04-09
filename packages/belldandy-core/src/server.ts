@@ -37,6 +37,9 @@ import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import type { ExternalOutboundAuditStore } from "./external-outbound-audit-store.js";
+import type { ExternalOutboundConfirmationStore } from "./external-outbound-confirmation-store.js";
+import type { ExternalOutboundSenderRegistry } from "./external-outbound-sender-registry.js";
 import {
   buildPromptObservabilitySummary,
   formatPromptObservabilityHeadline,
@@ -71,6 +74,7 @@ import { loadExtensionMarketplaceState } from "./extension-marketplace-state.js"
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
 import type { ExtensionHostState } from "./extension-host.js";
 import { handleMessageSendWithQueryRuntime, MessageSendConfigurationError } from "./query-runtime-message-send.js";
+import { buildGoalSessionStartBanner } from "./goal-session-banner.js";
 import {
   handleConversationRestoreWithQueryRuntime,
   handleConversationTranscriptExportWithQueryRuntime,
@@ -116,10 +120,15 @@ import {
   handleToolsListWithQueryRuntime,
   handleToolsUpdateWithQueryRuntime,
 } from "./query-runtime-tools.js";
+import { handleExternalOutboundConfirmWithQueryRuntime } from "./query-runtime-external-outbound.js";
+import { handleModelCatalogListWithQueryRuntime } from "./query-runtime-model-catalog.js";
 import { handleAgentCatalogGetWithQueryRuntime } from "./query-runtime-agent-catalog.js";
 import { handleAgentContractsGetWithQueryRuntime } from "./query-runtime-agent-contracts.js";
 import { buildAgentRoster } from "./query-runtime-agent-roster.js";
 import { ensureResidentAgentSession } from "./query-runtime-agent-sessions.js";
+import { buildLearningReviewInput } from "./learning-review-input.js";
+import { buildLearningReviewNudgeRuntimeReport } from "./learning-review-nudge-runtime.js";
+import { buildMindProfileSnapshot } from "./mind-profile-snapshot.js";
 import { buildResidentAgentObservabilitySnapshot } from "./resident-agent-observability.js";
 import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
 import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
@@ -191,6 +200,17 @@ import {
   rejectChannelSecurityApprovalRequest,
   writeChannelSecurityConfig,
 } from "./channel-security-store.js";
+import {
+  getModelFallbackConfigContent,
+  mergeModelFallbackConfigSecrets,
+  parseModelFallbackConfigContent,
+  REDACTED_MODEL_SECRET_PLACEHOLDER,
+  resolveModelFallbackConfigPath,
+  writeModelFallbackConfig,
+} from "./model-fallback-config.js";
+import { createFileExternalOutboundAuditStore, resolveExternalOutboundAuditStorePath } from "./external-outbound-audit-store.js";
+import { buildExternalOutboundDoctorReport, type ExternalOutboundDoctorReport } from "./external-outbound-doctor.js";
+import { normalizePreferredProviderIds } from "./provider-model-catalog.js";
 import type { ChannelSecurityApprovalRequestInput } from "@belldandy/channels";
 import type { BackgroundContinuationRuntimeDoctorReport } from "./background-continuation-runtime.js";
 import type { CronRuntimeDoctorReport } from "./cron/observability.js";
@@ -211,9 +231,13 @@ export type GatewayServerOptions = {
   /** Multi-Agent registry (takes precedence over agentFactory when agentId is specified) */
   agentRegistry?: AgentRegistry;
   /** 主模型配置（用于 models.list 返回默认模型） */
-  primaryModelConfig?: { baseUrl: string; apiKey: string; model: string };
+  primaryModelConfig?: { baseUrl: string; apiKey: string; model: string; protocol?: string; wireApi?: string };
   /** 备用模型配置（来自 models.json） */
   modelFallbacks?: ModelProfile[];
+  /** provider 排序偏好（来自 env/config） */
+  preferredProviderIds?: string[];
+  /** models.json 的实际路径（支持自定义配置文件） */
+  modelConfigPath?: string;
   conversationStoreOptions?: { maxHistory?: number; ttlSeconds?: number };
   conversationStore?: ConversationStore; // [NEW] Allow passing shared instance
   getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
@@ -230,6 +254,12 @@ export type GatewayServerOptions = {
   toolExecutor?: ToolExecutor;
   /** 工具调用设置确认存储 */
   toolControlConfirmationStore?: ToolControlConfirmationStore;
+  /** 外部渠道外发确认存储 */
+  externalOutboundConfirmationStore?: ExternalOutboundConfirmationStore;
+  /** 外部渠道外发 sender registry */
+  externalOutboundSenderRegistry?: ExternalOutboundSenderRegistry;
+  /** 外部渠道外发审计存储 */
+  externalOutboundAuditStore?: ExternalOutboundAuditStore;
   /** 获取 Agent 工具控制模式 */
   getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
   /** 获取 Agent 工具控制确认密码 */
@@ -371,7 +401,11 @@ function summarizeGroupedVisibility(entries: ToolVisibilityPayload[]): ToolVisib
 const DEFAULT_METHODS = [
   "message.send",
   "tool_settings.confirm",
+  "external_outbound.confirm",
+  "external_outbound.audit.list",
   "models.list",
+  "models.config.get",
+  "models.config.update",
   "config.read",
   "config.update",
   "channel.reply_chunking.get",
@@ -486,6 +520,8 @@ const DEFAULT_EVENTS = [
   "tools.config.updated",
   "tool_settings.confirm.required",
   "tool_settings.confirm.resolved",
+  "external_outbound.confirm.required",
+  "external_outbound.confirm.resolved",
 ];
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
@@ -993,6 +1029,9 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   await ensureWebRoot(opts.webRoot);
   const stateDir = opts.stateDir ?? resolveStateDir();
   const avatarDir = path.join(stateDir, "avatar");
+  const runtimePreferredProviderIds = Array.isArray(opts.preferredProviderIds)
+    ? opts.preferredProviderIds
+    : [];
   const getConversationPromptSnapshot = opts.getConversationPromptSnapshot
     ?? (async ({ conversationId, runId }: { conversationId: string; runId?: string }) => {
       return loadConversationPromptSnapshotArtifact({
@@ -1752,6 +1791,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         getConversationPromptSnapshot,
         primaryModelConfig: opts.primaryModelConfig,
         modelFallbacks: opts.modelFallbacks,
+        preferredProviderIds: runtimePreferredProviderIds,
+        modelConfigPath: opts.modelConfigPath,
         conversationStore,
         durableExtractionRuntime,
         requestDurableExtraction,
@@ -1763,6 +1804,9 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         toolsConfigManager: opts.toolsConfigManager,
         toolExecutor: opts.toolExecutor,
         toolControlConfirmationStore: opts.toolControlConfirmationStore,
+        externalOutboundConfirmationStore: opts.externalOutboundConfirmationStore,
+        externalOutboundSenderRegistry: opts.externalOutboundSenderRegistry,
+        externalOutboundAuditStore: opts.externalOutboundAuditStore,
         getAgentToolControlMode: opts.getAgentToolControlMode,
         getAgentToolControlConfirmPassword: opts.getAgentToolControlConfirmPassword,
         sttTranscribe: opts.sttTranscribe,
@@ -2054,8 +2098,10 @@ async function handleReq(
     agentRegistry?: AgentRegistry;
     inspectAgentPrompt?: GatewayServerOptions["inspectAgentPrompt"];
     getConversationPromptSnapshot?: GatewayServerOptions["getConversationPromptSnapshot"];
-    primaryModelConfig?: { baseUrl: string; apiKey: string; model: string };
+    primaryModelConfig?: { baseUrl: string; apiKey: string; model: string; protocol?: string; wireApi?: string };
     modelFallbacks?: ModelProfile[];
+    preferredProviderIds: string[];
+    modelConfigPath?: string;
     conversationStore: ConversationStore;
     durableExtractionRuntime?: DurableExtractionRuntime;
     requestDurableExtraction?: (input: {
@@ -2071,6 +2117,9 @@ async function handleReq(
     toolsConfigManager?: ToolsConfigManager;
     toolExecutor?: ToolExecutor;
     toolControlConfirmationStore?: ToolControlConfirmationStore;
+    externalOutboundConfirmationStore?: ExternalOutboundConfirmationStore;
+    externalOutboundSenderRegistry?: ExternalOutboundSenderRegistry;
+    externalOutboundAuditStore?: ExternalOutboundAuditStore;
     getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
     getAgentToolControlConfirmPassword?: () => string | undefined;
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
@@ -2096,6 +2145,10 @@ async function handleReq(
   const secureMethods = [
     "message.send",
     "tool_settings.confirm",
+    "external_outbound.confirm",
+    "external_outbound.audit.list",
+    "models.config.get",
+    "models.config.update",
     "config.read",
     "config.readRaw",
     "config.update",
@@ -2206,37 +2259,72 @@ async function handleReq(
 
   switch (req.method) {
     case "models.list": {
-      const models: Array<{ id: string; displayName: string; model: string }> = [];
-      const defaultModelRef = ctx.agentRegistry?.getProfile("default")?.model ?? "primary";
+      return handleModelCatalogListWithQueryRuntime({
+        requestId: req.id,
+        primaryModelConfig: ctx.primaryModelConfig,
+        modelFallbacks: ctx.modelFallbacks,
+        currentDefault: ctx.agentRegistry?.getProfile("default")?.model ?? "primary",
+        preferredProviderIds: ctx.preferredProviderIds,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"models.list">(),
+      });
+    }
 
-      if (ctx.primaryModelConfig?.model) {
-        const defaultTag = defaultModelRef === "primary" ? "（默认）" : "";
-        models.push({
-          id: "primary",
-          displayName: `${ctx.primaryModelConfig.model}${defaultTag}`,
-          model: ctx.primaryModelConfig.model,
-        });
+    case "models.config.get": {
+      try {
+        const payload = await getModelFallbackConfigContent(
+          resolveModelFallbackConfigPath(ctx.stateDir, ctx.modelConfigPath),
+          { redactApiKeys: true },
+        );
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload,
+        };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "model_config_read_failed",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
       }
+    }
 
-      for (const fb of ctx.modelFallbacks ?? []) {
-        const fallbackId = fb.id ?? fb.model;
-        const defaultTag = fallbackId === defaultModelRef ? "（默认）" : "";
-        models.push({
-          id: fallbackId,
-          displayName: `${fb.displayName ?? fb.model}${defaultTag}`,
-          model: fb.model,
+    case "models.config.update": {
+      const params = req.params as unknown as { content?: string } | undefined;
+      const content = typeof params?.content === "string" ? params.content : "";
+      const modelConfigPath = resolveModelFallbackConfigPath(ctx.stateDir, ctx.modelConfigPath);
+      try {
+        const existingConfig = await getModelFallbackConfigContent(modelConfigPath);
+        const editedConfig = parseModelFallbackConfigContent(content);
+        const mergedConfig = mergeModelFallbackConfigSecrets(existingConfig.config, editedConfig, {
+          redactedPlaceholder: REDACTED_MODEL_SECRET_PLACEHOLDER,
         });
+        await writeModelFallbackConfig(modelConfigPath, mergedConfig);
+        if (ctx.modelFallbacks) {
+          ctx.modelFallbacks.splice(0, ctx.modelFallbacks.length, ...mergedConfig.fallbacks.map((item) => ({ ...item })));
+        }
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: await getModelFallbackConfigContent(modelConfigPath, { redactApiKeys: true }),
+        };
+      } catch (error) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: {
+            code: "invalid_model_config",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
       }
-
-      return {
-        type: "res",
-        id: req.id,
-        ok: true,
-        payload: {
-          models,
-          currentDefault: defaultModelRef,
-        },
-      };
     }
 
     case "message.send": {
@@ -2363,6 +2451,46 @@ async function handleReq(
       }, parsed.value);
     }
 
+    case "external_outbound.confirm": {
+      const parsed = parseExternalOutboundConfirmParams(req.params);
+      if (!parsed.ok) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
+      }
+      return handleExternalOutboundConfirmWithQueryRuntime({
+        requestId: req.id,
+        clientId: ctx.clientId,
+        confirmationStore: ctx.externalOutboundConfirmationStore,
+        senderRegistry: ctx.externalOutboundSenderRegistry,
+        auditStore: ctx.externalOutboundAuditStore,
+        emitEvent: (frame) => {
+          if (ctx.broadcastEvent) {
+            ctx.broadcastEvent(frame);
+          } else {
+            sendEvent(ws, frame);
+          }
+        },
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"external_outbound.confirm">(),
+      }, parsed.value);
+    }
+
+    case "external_outbound.audit.list": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = typeof params.limit === "number" && Number.isFinite(params.limit)
+        ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+        : 20;
+      const auditStore = ctx.externalOutboundAuditStore
+        ?? createFileExternalOutboundAuditStore(resolveExternalOutboundAuditStorePath(ctx.stateDir));
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: await auditStore.listRecent(limit),
+          limit,
+        },
+      };
+    }
+
     case "config.read": {
       const { envPath, envLocalPath: localEnvPath } = resolveEnvFilePaths({ envDir: ctx.envDir });
       const config: Record<string, string> = {};
@@ -2393,6 +2521,7 @@ async function handleReq(
       // [SECURITY] 仅允许修改白名单内的配置项
       const SAFE_UPDATE_KEYS = new Set([
         "BELLDANDY_OPENAI_BASE_URL", "BELLDANDY_OPENAI_MODEL",
+        "BELLDANDY_MODEL_PREFERRED_PROVIDERS",
         "BELLDANDY_HEARTBEAT_ENABLED", "BELLDANDY_HEARTBEAT_INTERVAL",
         "BELLDANDY_HEARTBEAT_ACTIVE_HOURS", "BELLDANDY_AGENT_TIMEOUT_MS",
         "BELLDANDY_OPENAI_STREAM", "BELLDANDY_MEMORY_ENABLED",
@@ -2405,6 +2534,7 @@ async function handleReq(
         "BELLDANDY_TOOLS_ENABLED",
         "BELLDANDY_AGENT_TOOL_CONTROL_MODE",
         "BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD",
+        "BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION",
         "BELLDANDY_EMBEDDING_ENABLED",
         "BELLDANDY_EMBEDDING_OPENAI_API_KEY", "BELLDANDY_EMBEDDING_OPENAI_BASE_URL",
         "BELLDANDY_EMBEDDING_MODEL",
@@ -2419,7 +2549,7 @@ async function handleReq(
         "BELLDANDY_COMMUNITY_API_ENABLED", "BELLDANDY_COMMUNITY_API_TOKEN",
         "BELLDANDY_FEISHU_APP_ID", "BELLDANDY_FEISHU_APP_SECRET", "BELLDANDY_FEISHU_AGENT_ID",
         "BELLDANDY_QQ_APP_ID", "BELLDANDY_QQ_APP_SECRET", "BELLDANDY_QQ_AGENT_ID", "BELLDANDY_QQ_SANDBOX",
-        "BELLDANDY_DISCORD_ENABLED", "BELLDANDY_DISCORD_BOT_TOKEN", "BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID",
+        "BELLDANDY_DISCORD_ENABLED", "BELLDANDY_DISCORD_BOT_TOKEN",
       ]);
       for (const key of Object.keys(updates)) {
         if (!SAFE_UPDATE_KEYS.has(key)) {
@@ -2470,6 +2600,11 @@ async function handleReq(
 
       if (!envOk || !localOk) {
         return { type: "res", id: req.id, ok: false, error: { code: "write_failed", message: "Failed to write config files" } };
+      }
+
+      if (Object.prototype.hasOwnProperty.call(updates, "BELLDANDY_MODEL_PREFERRED_PROVIDERS")) {
+        const preferredProviderIds = normalizePreferredProviderIds(updates.BELLDANDY_MODEL_PREFERRED_PROVIDERS);
+        ctx.preferredProviderIds.splice(0, ctx.preferredProviderIds.length, ...preferredProviderIds);
       }
 
       return { type: "res", id: req.id, ok: true };
@@ -2960,6 +3095,7 @@ async function handleReq(
       const queryRuntime = ctx.queryRuntimeTraceStore.getSummary();
       let cronRuntime: CronRuntimeDoctorReport | undefined;
       let backgroundContinuationRuntime: BackgroundContinuationRuntimeDoctorReport | undefined;
+      let externalOutboundRuntime: ExternalOutboundDoctorReport | undefined;
       try {
         cronRuntime = await ctx.getCronRuntimeDoctorReport?.();
       } catch (error) {
@@ -2976,6 +3112,21 @@ async function handleReq(
         checks.push({
           id: "background_continuation_runtime",
           name: "Background Continuation Runtime",
+          status: "warn",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
+        if (ctx.externalOutboundAuditStore) {
+          externalOutboundRuntime = await buildExternalOutboundDoctorReport({
+            auditStore: ctx.externalOutboundAuditStore,
+            requireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
+          });
+        }
+      } catch (error) {
+        checks.push({
+          id: "external_outbound_runtime",
+          name: "External Outbound Runtime",
           status: "warn",
           message: error instanceof Error ? error.message : String(error),
         });
@@ -3091,6 +3242,16 @@ async function handleReq(
             ? "warn"
             : "pass",
           message: backgroundContinuationRuntime.headline,
+        });
+      }
+      if (externalOutboundRuntime) {
+        checks.push({
+          id: "external_outbound_runtime",
+          name: "External Outbound Runtime",
+          status: externalOutboundRuntime.totals.failedCount > 0 || !externalOutboundRuntime.requireConfirmation
+            ? "warn"
+            : "pass",
+          message: externalOutboundRuntime.headline,
         });
       }
       const hookBridgeSummary = ctx.extensionHost?.lifecycle.hookBridge;
@@ -3245,6 +3406,9 @@ async function handleReq(
         }
         | undefined;
       let residentAgents: Awaited<ReturnType<typeof buildResidentAgentObservabilitySnapshot>> | undefined;
+      let mindProfileSnapshot: Awaited<ReturnType<typeof buildMindProfileSnapshot>> | undefined;
+      let learningReviewInput: ReturnType<typeof buildLearningReviewInput> | undefined;
+      let learningReviewNudgeRuntime: Awaited<ReturnType<typeof buildLearningReviewNudgeRuntimeReport>> | undefined;
       let delegationObservability: ReturnType<typeof buildDelegationObservabilitySnapshot> | undefined;
 
       if (conversationId) {
@@ -3429,6 +3593,34 @@ async function handleReq(
           status: residentAgents.summary.totalCount > 0 ? "pass" : "warn",
           message: residentAgents.summary.headline,
         });
+        mindProfileSnapshot = await buildMindProfileSnapshot({
+          stateDir: ctx.stateDir,
+          residentAgents,
+          residentMemoryManagers: ctx.residentMemoryManagers,
+          agentId: typeof params.mindAgentId === "string" && params.mindAgentId.trim()
+            ? params.mindAgentId.trim()
+            : undefined,
+        });
+        checks.push({
+          id: "mind_profile_snapshot",
+          name: "Mind / Profile Snapshot",
+          status: mindProfileSnapshot.summary.available ? "pass" : "warn",
+          message: mindProfileSnapshot.summary.headline,
+        });
+        learningReviewInput = buildLearningReviewInput({
+          mindProfileSnapshot,
+        });
+        learningReviewNudgeRuntime = await buildLearningReviewNudgeRuntimeReport({
+          stateDir: ctx.stateDir,
+        });
+        checks.push({
+          id: "learning_review_input",
+          name: "Learning / Review Input",
+          status: learningReviewInput.summary.available || learningReviewNudgeRuntime.summary.available ? "pass" : "warn",
+          message: learningReviewNudgeRuntime.summary.available
+            ? learningReviewNudgeRuntime.summary.headline
+            : learningReviewInput.summary.headline,
+        });
       }
 
       if (ctx.subTaskRuntimeStore) {
@@ -3560,12 +3752,16 @@ async function handleReq(
           queryRuntime,
           ...(cronRuntime ? { cronRuntime } : {}),
           ...(backgroundContinuationRuntime ? { backgroundContinuationRuntime } : {}),
+          ...(externalOutboundRuntime ? { externalOutboundRuntime } : {}),
           mcpRuntime,
           ...(channelSecurity.items.length ? { channelSecurity } : {}),
           ...(promptObservability ? { promptObservability } : {}),
           ...(toolBehaviorObservability ? { toolBehaviorObservability } : {}),
           ...(toolContractV2Observability ? { toolContractV2Observability } : {}),
           ...(residentAgents ? { residentAgents } : {}),
+          ...(mindProfileSnapshot ? { mindProfileSnapshot } : {}),
+          ...(learningReviewInput ? { learningReviewInput } : {}),
+          ...(learningReviewNudgeRuntime ? { learningReviewNudgeRuntime } : {}),
           ...(delegationObservability ? { delegationObservability } : {}),
           ...(conversationDebug ? { conversationDebug } : {}),
           ...(conversationCatalog ? { conversationCatalog } : {}),
@@ -3982,7 +4178,27 @@ async function handleReq(
       }
       try {
         const summary = await ctx.goalManager.getReviewGovernanceSummary(goalId);
-        return { type: "res", id: req.id, ok: true, payload: { summary } };
+        const mindProfileSnapshot = await buildMindProfileSnapshot({
+          stateDir: ctx.stateDir,
+          residentMemoryManagers: ctx.residentMemoryManagers,
+          agentId: typeof params.agentId === "string" && params.agentId.trim()
+            ? params.agentId.trim()
+            : undefined,
+        });
+        return {
+          type: "res",
+          id: req.id,
+          ok: true,
+          payload: {
+            summary: {
+              ...summary,
+              learningReviewInput: buildLearningReviewInput({
+                mindProfileSnapshot,
+                goalReviewGovernanceSummary: summary,
+              }),
+            },
+          },
+        };
       } catch (err) {
         return {
           type: "res",
@@ -5198,7 +5414,19 @@ async function handleReq(
         id: req.id,
         ok: true,
         payload: {
-          candidate: toExperienceCandidatePayloadItem(candidate, residentPolicy),
+          candidate: {
+            ...toExperienceCandidatePayloadItem(candidate, residentPolicy),
+            learningReviewInput: buildLearningReviewInput({
+              mindProfileSnapshot: await buildMindProfileSnapshot({
+                stateDir: ctx.stateDir,
+                residentMemoryManagers: ctx.residentMemoryManagers,
+                agentId: typeof params.agentId === "string" && params.agentId.trim()
+                  ? params.agentId.trim()
+                  : undefined,
+              }),
+              experienceCandidate: candidate,
+            }),
+          },
           queryView: buildResidentMemoryQueryView(residentPolicy),
         },
       };
@@ -5589,6 +5817,14 @@ async function handleReq(
       }
 
       const conversation = ctx.conversationStore.get(conversationId);
+      const goalSessionEntryBanner = ctx.goalManager
+        ? await buildGoalSessionStartBanner({
+          sessionKey: conversationId,
+          getGoal: (goalId) => ctx.goalManager!.getGoal(goalId),
+          getHandoff: (goalId) => ctx.goalManager!.getHandoff(goalId),
+          readTaskGraph: (goalId) => ctx.goalManager!.readTaskGraph(goalId),
+        }).catch(() => undefined)
+        : undefined;
       return {
         type: "res",
         id: req.id,
@@ -5606,6 +5842,7 @@ async function handleReq(
             loadedDeferredTools: ctx.conversationStore.getLoadedToolNames(conversationId),
             compactBoundaries: ctx.conversationStore.getCompactBoundaries(conversationId, limit),
           }),
+          goalSessionEntryBanner,
         },
       };
     }
@@ -6258,6 +6495,12 @@ function parseToolSettingsConfirmParams(
     return { ok: false, message: 'decision must be "approve" or "reject"' };
   }
   return { ok: true, value: { requestId, decision, conversationId } };
+}
+
+function parseExternalOutboundConfirmParams(
+  value: unknown,
+): { ok: true; value: { requestId: string; decision: "approve" | "reject"; conversationId?: string } } | { ok: false; message: string } {
+  return parseToolSettingsConfirmParams(value);
 }
 
 function safeParseFrame(raw: string): GatewayFrame | null {

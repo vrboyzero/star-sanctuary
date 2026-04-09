@@ -2,6 +2,7 @@ import { buildResidentDoctorNote } from "./resident-observability-summary.js";
 import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js";
 import { buildResidentStateBindingLines } from "./resident-state-binding-lines.js";
 import { buildContinuationAction } from "./continuation-targets.js";
+import { buildExternalOutboundDiagnosis } from "./external-outbound-diagnosis.js";
 
 function tr(t, key, params, fallback) {
   return typeof t === "function" ? t(key, params ?? {}, fallback) : fallback;
@@ -15,6 +16,14 @@ function formatTimestamp(value) {
   return typeof value === "number" && Number.isFinite(value)
     ? new Date(value).toISOString()
     : "-";
+}
+
+function formatKeyCountSummary(value) {
+  const entries = Object.entries(value || {}).filter(([, count]) => Number.isFinite(count) && Number(count) > 0);
+  if (entries.length === 0) {
+    return "-";
+  }
+  return entries.map(([key, count]) => `${key}:${count}`).join(", ");
 }
 
 function joinDroppedSections(reason) {
@@ -361,6 +370,175 @@ function buildResidentAgentsCard(payload, t) {
     badges,
     notes,
     status: summary.totalCount > 0 ? "pass" : "warn",
+  };
+}
+
+function buildMindProfileSnapshotCard(payload, t) {
+  const snapshot = payload?.mindProfileSnapshot;
+  const summary = snapshot?.summary;
+  if (!summary) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorMindProfileUser",
+      { status: summary.hasUserProfile ? "ready" : "missing" },
+      `user ${summary.hasUserProfile ? "ready" : "missing"}`,
+    ),
+    tr(
+      t,
+      "settings.doctorMindProfileMemory",
+      {
+        private: formatNumber(summary.privateMemoryCount),
+        shared: formatNumber(summary.sharedMemoryCount),
+      },
+      `private ${formatNumber(summary.privateMemoryCount)} / shared ${formatNumber(summary.sharedMemoryCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorMindProfileDigest",
+      {
+        active: formatNumber(summary.activeResidentCount),
+        ready: formatNumber(summary.digestReadyCount),
+        updated: formatNumber(summary.digestUpdatedCount),
+      },
+      `active ${formatNumber(summary.activeResidentCount)} / digest ${formatNumber(summary.digestReadyCount)} ready ${formatNumber(summary.digestUpdatedCount)} updated`,
+    ),
+    tr(
+      t,
+      "settings.doctorMindProfileUsage",
+      { count: formatNumber(summary.usageLinkedCount) },
+      `${formatNumber(summary.usageLinkedCount)} usage-linked resident(s)`,
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorMindProfileHeadline",
+      { headline: summary.headline },
+      summary.headline,
+    ),
+  ];
+
+  const profileLines = Array.isArray(snapshot?.profile?.summaryLines) ? snapshot.profile.summaryLines : [];
+  notes.push(...profileLines.slice(0, 6));
+
+  const topResidents = Array.isArray(snapshot?.conversation?.topResidents) ? snapshot.conversation.topResidents : [];
+  for (const item of topResidents.slice(0, 3)) {
+    notes.push(`Resident: ${item.headline}`);
+  }
+
+  const snippets = Array.isArray(snapshot?.memory?.recentMemorySnippets) ? snapshot.memory.recentMemorySnippets : [];
+  for (const item of snippets.slice(0, 3)) {
+    notes.push(`${item.scope === "shared" ? "Shared" : "Private"} recent: ${item.text}`);
+  }
+
+  return {
+    title: tr(t, "settings.doctorMindProfileTitle", {}, "Mind / Profile Snapshot"),
+    badges,
+    notes,
+    status: summary.available ? "pass" : "warn",
+  };
+}
+
+function buildLearningReviewInputCard(payload, t) {
+  const input = payload?.learningReviewInput;
+  const summary = input?.summary;
+  const runtime = payload?.learningReviewNudgeRuntime?.summary;
+  if (!summary && !runtime) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorLearningReviewSignals",
+      {
+        memory: formatNumber(summary?.memorySignalCount),
+        candidate: formatNumber(summary?.candidateSignalCount),
+        review: formatNumber(summary?.reviewSignalCount),
+      },
+      `memory ${formatNumber(summary?.memorySignalCount)} / candidate ${formatNumber(summary?.candidateSignalCount)} / review ${formatNumber(summary?.reviewSignalCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorLearningReviewNudges",
+      { count: formatNumber(summary?.nudgeCount) },
+      `${formatNumber(summary?.nudgeCount)} nudges`,
+    ),
+  ];
+  if (runtime) {
+    badges.push(
+      tr(
+        t,
+        "settings.doctorLearningReviewRuntime",
+        { state: runtime.triggered ? "triggered" : "idle" },
+        `runtime ${runtime.triggered ? "triggered" : "idle"}`,
+      ),
+    );
+    badges.push(
+      tr(
+        t,
+        "settings.doctorLearningReviewSession",
+        { kind: runtime.sessionKind || "main" },
+        `session ${runtime.sessionKind || "main"}`,
+      ),
+    );
+  }
+
+  const notes = [];
+  if (summary) {
+    notes.push(tr(
+      t,
+      "settings.doctorLearningReviewHeadline",
+      { headline: summary.headline },
+      summary.headline,
+    ));
+  }
+  if (runtime) {
+    notes.push(tr(
+      t,
+      "settings.doctorLearningReviewRuntimeHeadline",
+      { headline: runtime.headline },
+      runtime.headline,
+    ));
+    if (Array.isArray(runtime.triggerSources) && runtime.triggerSources.length > 0) {
+      notes.push(tr(
+        t,
+        "settings.doctorLearningReviewTriggerSources",
+        { summary: runtime.triggerSources.join(", ") },
+        `sources: ${runtime.triggerSources.join(", ")}`,
+      ));
+    }
+    if (Array.isArray(runtime.signalKinds) && runtime.signalKinds.length > 0) {
+      notes.push(tr(
+        t,
+        "settings.doctorLearningReviewSignalKinds",
+        { summary: runtime.signalKinds.join(", ") },
+        `signals: ${runtime.signalKinds.join(", ")}`,
+      ));
+    }
+    if (payload?.learningReviewNudgeRuntime?.latest?.currentTurnPreview) {
+      notes.push(`Latest turn: ${payload.learningReviewNudgeRuntime.latest.currentTurnPreview}`);
+    }
+  }
+
+  const summaryLines = Array.isArray(input?.summaryLines) ? input.summaryLines : [];
+  notes.push(...summaryLines.slice(0, 4));
+
+  const nudges = Array.isArray(input?.nudges) ? input.nudges : [];
+  for (const item of nudges.slice(0, 4)) {
+    notes.push(`Nudge: ${item}`);
+  }
+
+  return {
+    title: tr(t, "settings.doctorLearningReviewTitle", {}, "Learning / Review Input"),
+    badges,
+    notes,
+    status: runtime?.available || summary?.available ? "pass" : "warn",
   };
 }
 
@@ -738,6 +916,107 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
   };
 }
 
+function buildExternalOutboundRuntimeCard(payload, t) {
+  const runtime = payload?.externalOutboundRuntime;
+  if (!runtime?.totals) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorExternalOutboundTotal",
+      {
+        total: formatNumber(runtime.totals.totalRecords),
+        sent: formatNumber(runtime.totals.sentCount),
+        failed: formatNumber(runtime.totals.failedCount),
+      },
+      `${formatNumber(runtime.totals.totalRecords)} records / sent ${formatNumber(runtime.totals.sentCount)} / failed ${formatNumber(runtime.totals.failedCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorExternalOutboundFailures",
+      {
+        resolve: formatNumber(runtime.failureStageCounts?.resolve),
+        delivery: formatNumber(runtime.failureStageCounts?.delivery),
+        confirmation: formatNumber(runtime.failureStageCounts?.confirmation),
+      },
+      `resolve ${formatNumber(runtime.failureStageCounts?.resolve)} / delivery ${formatNumber(runtime.failureStageCounts?.delivery)} / confirmation ${formatNumber(runtime.failureStageCounts?.confirmation)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorExternalOutboundDecision",
+      {
+        confirmed: formatNumber(runtime.totals.confirmedCount),
+        autoApproved: formatNumber(runtime.totals.autoApprovedCount),
+        rejected: formatNumber(runtime.totals.rejectedCount),
+      },
+      `confirmed ${formatNumber(runtime.totals.confirmedCount)} / auto ${formatNumber(runtime.totals.autoApprovedCount)} / rejected ${formatNumber(runtime.totals.rejectedCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorExternalOutboundConfirmMode",
+      { mode: runtime.requireConfirmation ? "required" : "disabled" },
+      runtime.requireConfirmation ? "confirm required" : "confirm disabled",
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorExternalOutboundHeadline",
+      { headline: runtime.headline || "-" },
+      runtime.headline || "-",
+    ),
+    tr(
+      t,
+      "settings.doctorExternalOutboundChannels",
+      { summary: formatKeyCountSummary(runtime.channelCounts) },
+      `channels ${formatKeyCountSummary(runtime.channelCounts)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorExternalOutboundErrorCodes",
+      { summary: formatKeyCountSummary(runtime.errorCodeCounts) },
+      `error codes ${formatKeyCountSummary(runtime.errorCodeCounts)}`,
+    ),
+  ];
+
+  const recentFailures = Array.isArray(runtime.recentFailures) ? runtime.recentFailures : [];
+  for (const item of recentFailures.slice(0, 4)) {
+    const diagnosis = buildExternalOutboundDiagnosis({
+      errorCode: item?.errorCode,
+      error: item?.error,
+      targetSessionKey: item?.targetSessionKey,
+      delivery: item?.delivery,
+    }, t);
+    const parts = [
+      item.targetChannel || "unknown",
+      diagnosis.summary,
+      item.resolution ? `resolution=${item.resolution}` : "",
+      item.requestedSessionKey ? `requested=${item.requestedSessionKey}` : "",
+      item.targetSessionKey ? `target=${item.targetSessionKey}` : "",
+      item.contentPreview ? `preview=${item.contentPreview}` : "",
+      `time=${formatTimestamp(item.timestamp)}`,
+    ].filter(Boolean);
+    notes.push(parts.join(", "));
+  }
+
+  notes.push(tr(
+    t,
+    "settings.doctorExternalOutboundAuditHint",
+    {},
+    "详细逐条记录仍可在 记忆查看 -> 外发审计 中查看。",
+  ));
+
+  return {
+    title: tr(t, "settings.doctorExternalOutboundTitle", {}, "External Outbound Runtime"),
+    badges,
+    notes,
+    status: Number(runtime.totals.failedCount) > 0 || runtime.requireConfirmation !== true ? "warn" : "pass",
+  };
+}
+
 function createDoctorCard(card, handlers = {}) {
   const panel = document.createElement("div");
   panel.style.width = "100%";
@@ -804,10 +1083,13 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildToolBehaviorCard(payload, t),
     buildToolContractV2Card(payload, t),
     buildResidentAgentsCard(payload, t),
+    buildMindProfileSnapshotCard(payload, t),
+    buildLearningReviewInputCard(payload, t),
     buildSharedGovernanceCard(payload, t),
     buildDelegationCard(payload, t),
     buildCronRuntimeCard(payload, t),
     buildBackgroundContinuationRuntimeCard(payload, t),
+    buildExternalOutboundRuntimeCard(payload, t),
   ].filter(Boolean);
 
   for (const card of cards) {
@@ -850,6 +1132,22 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(...residentAgentsCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
+  const mindProfileSnapshotCard = buildMindProfileSnapshotCard(payload, t);
+  if (mindProfileSnapshotCard) {
+    lines.push(``);
+    lines.push(`${mindProfileSnapshotCard.title}:`);
+    lines.push(...mindProfileSnapshotCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...mindProfileSnapshotCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const learningReviewInputCard = buildLearningReviewInputCard(payload, t);
+  if (learningReviewInputCard) {
+    lines.push(``);
+    lines.push(`${learningReviewInputCard.title}:`);
+    lines.push(...learningReviewInputCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...learningReviewInputCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
   const sharedGovernanceCard = buildSharedGovernanceCard(payload, t);
   if (sharedGovernanceCard) {
     lines.push(``);
@@ -880,6 +1178,14 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${backgroundContinuationCard.title}:`);
     lines.push(...backgroundContinuationCard.badges.map((badge) => `- ${badge}`));
     lines.push(...backgroundContinuationCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const externalOutboundCard = buildExternalOutboundRuntimeCard(payload, t);
+  if (externalOutboundCard) {
+    lines.push(``);
+    lines.push(`${externalOutboundCard.title}:`);
+    lines.push(...externalOutboundCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...externalOutboundCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   return lines;

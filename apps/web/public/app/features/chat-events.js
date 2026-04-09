@@ -9,6 +9,8 @@ export function createChatEventsFeature({
   onSubtaskUpdated,
   onToolSettingsConfirmRequired,
   onToolSettingsConfirmResolved,
+  onExternalOutboundConfirmRequired,
+  onExternalOutboundConfirmResolved,
   onToolsConfigUpdated,
   onConversationDigestUpdated,
   stripThinkBlocks,
@@ -146,6 +148,16 @@ export function createChatEventsFeature({
 
     if (event === "tool_settings.confirm.resolved") {
       onToolSettingsConfirmResolved(payload);
+      return true;
+    }
+
+    if (event === "external_outbound.confirm.required") {
+      onExternalOutboundConfirmRequired?.(payload);
+      return true;
+    }
+
+    if (event === "external_outbound.confirm.resolved") {
+      onExternalOutboundConfirmResolved?.(payload);
       return true;
     }
 

@@ -1106,6 +1106,7 @@
 #### P2-1 Provider 元数据层
 
 - 来源文档：`OC与SS`
+- 当前状态：`已完成第一版最小只读 catalog 接线（provider/model catalog + models.list 外移）`
 - 目标：
   - 建立 provider onboarding 与能力声明的统一描述层
 - 前置依赖：
@@ -1114,12 +1115,43 @@
   - provider metadata registry
   - onboarding scopes
   - 模型白名单 / 能力范围声明
+- 当前进展：
+  - 已新增独立 provider/model catalog 模块，不再把 `models.list` 主体逻辑继续塞回 `server.ts`
+  - 已把 `models.list` 外移为独立 query-runtime 处理器，统一返回：
+    - `providers`
+    - `models`
+    - `currentDefault`
+    - `manualEntrySupported`
+  - 第一版已开始输出最小 provider metadata：
+    - `providerId / providerLabel`
+    - `onboardingScopes`
+    - `authStatus`
+    - `protocol / wireApi`
+    - 最小 `capabilities`
+  - 第一版来源当前先覆盖：
+    - env primary model
+    - `models.json` fallback profiles
+  - 第一版已把 `models.json` 在线编辑接入现有 WebChat settings：
+    - 编辑入口位于 `OpenAI Model` 与 `Heartbeat Interval` 之间
+    - 形态沿用轻量 JSON 编辑区，不新增一级设置入口
+    - 服务端已补 `models.config.get / update` 最小 RPC
+    - 已补 `[REDACTED]` 保留旧密钥语义，避免把 fallback `apiKey` 明文回传到前端
+    - 保存后会原地刷新 runtime `modelFallbacks`，并立刻反映到 `models.list / model picker`
+  - 当前目的，是先把 provider/model 目录从“零散 env + fallback 列表”推进到“统一只读 catalog 入口”，为后续 `P2-2` model picker 提供单一数据源
+- 当前边界：
+  - 当前仍不包含 provider setup wizard、provider 插件化 onboarding 或独立 provider 管理面板
+  - 当前 `manualEntrySupported` 仅先作为 catalog 能力位输出，手动输入模型的完整产品闭环仍留给 `P2-2`
+  - 当前 provider metadata 仍是最小注册式描述，不是完整 provider runtime / routing 重构
+- 第一版收口说明：
+  - `P2-1 v1` 当前按“最小 catalog + models.list 外移 + settings 内联 models.json 编辑”口径先行收口
+  - 后续继续围绕 `P2-2` 扩成 auth-aware model picker，但不应把 provider setup wizard 或 plugin-sdk 式大抽象提前塞进本轮
 - 完成标志：
   - provider 不再继续污染 gateway 主分支
 
 #### P2-2 认证感知 model picker
 
 - 来源文档：`OC与SS`
+- 当前状态：`已完成第一版最小 picker 接线（auth-aware labels + manual model fallback）`
 - 目标：
   - 改善模型选择与配置体验
 - 前置依赖：
@@ -1129,12 +1161,40 @@
   - preferred provider
   - 手动输入回退
   - catalog 过滤
+- 当前进展：
+  - WebChat 现有 `modelSelect` 已开始消费 `P2-1` 的统一 catalog 数据，不再只显示裸模型名
+  - 第一版已补最小 auth-aware picker 能力：
+    - option label 已开始显示 `providerLabel`
+    - `authStatus=missing` 已开始显示显式缺失提示
+    - 当前 default model 展示已复用同一套格式化逻辑
+  - 第一版已补手动模型输入回退：
+    - 现有下拉已新增最小 `Manual Model...` 入口
+    - 已新增 `manual:<model>` override 语义
+    - message send 主链继续复用现有 `modelId -> modelOverride` 接线，不做额外重构
+  - 当前已补下一小步产品化增强：
+    - `modelSelect` 已开始按 provider 分组展示
+    - provider 组顺序已按“当前默认 provider 优先、已就绪 provider 在前、缺鉴权 provider 后置”收敛
+    - 已新增最小 catalog 过滤输入框，可按模型名 / provider 关键字过滤
+    - default option 文案已去掉前置“默认模型”，仅保留模型名自身携带的 `（默认）`
+  - 当前已补显式 preferred provider 配置：
+    - settings 已新增 `BELLDANDY_MODEL_PREFERRED_PROVIDERS` 轻量输入
+    - `models.list` 已开始返回 `preferredProviderIds`
+    - 保存后会原地刷新 model picker 排序，不需要等待重启才能看到 provider 分组顺序变化
+  - 已补前端 `chat-network` 定向测试与 agent profile 解析测试
+- 当前边界：
+  - 当前仍是“增强现有 modelSelect”的最小方案，不是新的 provider/model 设置面板
+  - 当前仍没有 setup wizard 联动、复杂 provider 权重策略或独立 catalog 管理面板
+  - 当前手动输入模型默认仍复用 primary provider 的 baseUrl/apiKey，不是独立 custom provider 配置流
+- 第一版收口说明：
+  - `P2-2 v1` 当前按“auth-aware labels + manual model fallback + 不重构消息发送主链”口径先行收口
+  - 后续若继续增强，应优先围绕 provider 分组、preferred provider 与 catalog 过滤，不应直接膨胀成新的设置入口
 - 完成标志：
   - 模型选择不再主要靠手填和外部记忆
 
 #### P2-3 会话作用域与群聊 key 归一
 
 - 来源文档：`OC与SS`
+- 当前状态：`进行中（v1 已开始统一 canonical session key 接线）`
 - 目标：
   - 提升多渠道会话连续性与路由一致性
 - 前置依赖：
@@ -1142,12 +1202,23 @@
 - 直接任务：
   - session scope 策略
   - group/channel/webchat key 归一
+- 当前进展：
+  - 已新增统一 `session-key` builder，开始为 `discord / feishu / qq / community` 生成 canonical `sessionScope / sessionKey`
+  - 路由上下文已开始透传 `sessionScope / sessionKey`，为后续 `P2-4` binding 持久层预留稳定接线点
+  - 当前仍保持旧 `conversationId` 持久化规则不变，避免在 `P2-3 v1` 提前引入历史 session 迁移与 reply-back 回归
+- 当前边界：
+  - 当前只统一 canonical session 语义与渠道接线，不改 resident main conversation 语义
+  - 当前不包含 current conversation binding 持久层，不包含 outbound reply-back 改造
+- 第一版收口说明：
+  - `P2-3 v1` 先按“统一 session key builder + 四渠道接线 + 旧 conversationId 兼容保留”口径推进
+  - 当前 `P2-4` 已完成第一版收口；`P2-3` 下一步应转为做剩余 session scope / group-channel key 兼容边界检查，而不是继续扩新的 binding 主线
 - 完成标志：
   - 会话 key 与路由语义更一致
 
 #### P2-4 current conversation binding
 
 - 来源文档：`OC与SS`
+- 当前状态：`已完成第一版收口（v1 已接入显式 binding store）`
 - 目标：
   - 让跨线程、多渠道 reply-back 更稳定
 - 前置依赖：
@@ -1155,8 +1226,166 @@
 - 直接任务：
   - current conversation binding 持久层
   - 与现有 resident conversation 绑定机制对齐
+- 当前进展：
+  - 已新增共享 current conversation binding store，开始把 `canonical sessionKey -> 当前回复目标` 持久化到独立状态文件
+  - `discord / feishu / qq / community` 收到消息时已开始更新 binding 记录
+  - `sendProactiveMessage()` 在未显式传入目标时，已优先回退到 binding store，而不是只依赖进程内最后活跃 chatId
+  - `sendProactiveMessage()` 已开始支持显式 `{ sessionKey }` 目标，且 `heartbeat / cron` 等上游主动发送入口已开始直接传入 canonical `sessionKey`
+  - `heartbeat / cron` 的用户外发已不再写死飞书，现已开始通过统一 sender registry 按已有 binding 顺序解析 `feishu / qq / community / discord` 的 canonical `sessionKey`
+  - `community leave_room` 的告别消息发送已开始优先消费当前房间上下文里的 canonical `sessionKey`，不再只按旧 `roomId` 直发
+  - `feishu / qq / discord` 的无目标 `sendProactiveMessage()` 已收窄为 binding-only，不再继续回退到旧 `last-active / default channel` 兜底
+  - `system.doctor / settings -> doctor` 已新增最小 `External Outbound Runtime` 诊断卡，可汇总近期外发记录、失败量、resolve vs delivery 失败拆分、错误码分布与最近失败样本
+- 当前边界：
+  - 当前仍只覆盖渠道侧“当前回复目标”绑定，不触及 resident main conversation / goal / subtask 绑定语义
+  - 当前不提供独立 binding 管理 UI，也不改现有外部工具入参
+- 第一版收口说明：
+  - `P2-4 v1` 先按“共享 binding store + 四渠道更新 + proactive fallback”口径推进
+  - 当前已完成的收口范围：
+    - `discord / feishu / qq / community` 收到消息时更新 current conversation binding
+    - `sendProactiveMessage()` 支持显式 `{ sessionKey }`
+    - `WebChat -> 飞书 / QQ / Community / Discord` 文本外发 `v1` 已完成
+    - `heartbeat / cron / community leave_room` 等主动发送入口已开始优先消费 canonical `sessionKey`
+    - `feishu / qq / discord` 的旧 `last-active / default channel` 兜底已退场
+    - 外发审计、doctor runtime 与 outbound failure diagnosis 第二版细化已完成
+  - 当前剩余仅保留：
+    - 多渠道手测回归
+    - 真实使用中的观察性补丁
+  - 若后续再继续增强，再考虑把更多 outbound / reply-back 入口直接消费 canonical `sessionKey`
 - 完成标志：
   - 外部线程继续回复到哪个 session 具备显式绑定
+
+##### P2-4 WebChat -> 飞书 outbound v1
+
+- 当前判断：
+  - 可行，且与 `P2-3 / P2-4` 已落地的 `canonical sessionKey + current conversation binding` 主线直接衔接
+  - `v1` 不做外部渠道互发，也不做外部渠道回发到本地 `WebChat`
+- `v1` 范围：
+  - 支持 `WebChat -> 飞书 / QQ / Community / Discord`
+  - 仅支持文本消息
+  - 全部通过 `sessionKey / current conversation binding` 解析目标
+  - 默认要求显式确认后再外发，但提供设置开关允许用户关闭确认
+  - 不做联系人搜索、不做 chat 目标猜测、不做图片/附件/卡片/富媒体
+- 目标：
+  - 让用户可在 `WebChat` 中明确要求 Agent 向当前已绑定的外部渠道会话发送一段文本
+  - 让这类跨渠道外发具备可审计、可拒绝、可失败回显的最小闭环
+- 前置依赖：
+  - `P2-3`
+  - `P2-4 v1`
+- 建议实现：
+  - 新增一个最小 outbound 工具，例如 `send_channel_message`
+  - 首版开放：
+    - `channel=feishu`
+    - `channel=qq`
+    - `channel=community`
+    - `channel=discord`
+  - 工具内部只接受：
+    - `channel`
+    - `content`
+    - 可选 `sessionKey`
+  - 当未显式传入 `sessionKey` 时，仅允许解析目标渠道的最新 binding；若无 binding 则直接失败
+  - gateway 侧新增最小 sender registry，把四个外部渠道实例统一暴露给受控工具
+  - 外发前先生成待发送摘要，并按设置决定是否要求用户显式确认
+  - 确认后由 sender registry 调度对应渠道执行 `sendProactiveMessage(content, { sessionKey })`
+- 直接任务：
+  - 在 gateway 侧补一个最小 outbound sender registry，把 `feishu / qq / community / discord` 四个渠道实例暴露给受控工具，而不是在工具层直接感知具体渠道实现
+  - 在 skills 侧新增 `send_channel_message` 最小工具
+  - 在 settings / config 中补一个最小开关，例如 `external outbound require confirmation`
+  - 为外发工具补审计字段：
+    - source conversationId
+    - source channel=`webchat`
+    - target channel
+    - target sessionKey
+    - sent / failed / rejected
+  - 为 WebChat 对话补最小确认链，避免模型直接把提示词中的文本外发到外部渠道
+  - 补无 binding / binding 失效 / 渠道未初始化 / 发送失败等错误回显
+- 风险：
+  - 最大风险是发错目标；`v1` 必须坚持“仅发往已有 binding 的外部渠道会话，不猜测目标”
+  - 跨渠道外发属于外部写操作；若无确认链，风险高于普通只读工具
+  - 若缺少审计，后续无法追踪“是谁从哪个会话触发了这次外发”
+- 工作量判断：
+  - `v1` 按上述范围推进，预计为 `中偏小`
+  - 以当前代码状态估计，可按 `1.5 ~ 3` 天口径实现与验证
+- 收口标志：
+  - 用户可在 `WebChat` 中要求 Agent 向已绑定 `飞书 / QQ / Community / Discord` 会话发送文本
+  - 系统在发送前默认具备显式确认，且确认可通过设置开关关闭
+  - 成功 / 失败 / 拒绝三类结果都能在当前会话中回显并带最小审计记录
+- 当前边界：
+  - 不扩为外部渠道之间通用互发
+  - 不支持外部渠道主动回发到本地 `WebChat`
+  - 不支持附件、图片、音频、卡片消息
+  - 不支持陌生外部会话首次发起；仍要求目标会话先通过现有 binding 建立
+  - 这一步定位为 `P2-4` 的受控 outbound 延伸，不单独升级为新的渠道产品面
+
+- 当前实现进展（已完成）：
+  - 已新增统一 `send_channel_message` builtin，支持：
+    - `WebChat -> 飞书`
+    - `WebChat -> QQ`
+    - `WebChat -> Community`
+    - `WebChat -> Discord`
+  - 已新增统一 outbound sender registry，把四个外部渠道实例从 gateway 侧受控暴露给工具层
+  - 已新增独立 external outbound confirmation store，默认通过 WebChat 页面确认弹窗完成审批
+  - 已新增独立 external outbound audit store，开始把：
+    - source conversationId
+    - source channel=`webchat`
+    - target channel
+    - target sessionKey
+    - confirmed / rejected / auto_approved
+    - sent / failed / rejected
+    - content preview
+    写入独立 JSONL 审计文件
+  - 已新增 `external_outbound.confirm` RPC 与 `external_outbound.confirm.required / resolved` 事件链
+  - 已在 settings 中补 `BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION` 开关，默认开启
+  - 已完成至少一轮真实 `WebChat -> 飞书` 手工联调，主链路可用
+
+- 当前收口判断：
+  - `P2-4` 下的 “WebChat -> 外部渠道文本外发 v1” 已按既定范围落地完成
+  - 该子项当前可按“文本-only + binding-only + 默认确认 + 审计落盘”口径收口
+  - `P2-4` 当前可按“代码主链已收口、剩余仅保留多渠道手测观察”口径转为完成态
+
+  - 已完成的收口清单：
+  - `send_channel_message` 最小工具已完成
+  - `feishu / qq / community / discord` 统一 sender registry 已完成
+  - `sessionKey / current conversation binding` 目标解析已完成
+  - 默认确认 + 可关闭确认开关已完成
+  - 成功 / 失败 / 拒绝三类结果最小回显已完成
+  - 最小审计落盘已完成
+  - resolve 失败的错误码 / 原因已开始进入审计与详情展示，不再只覆盖真正发起后的 send failed
+  - `qq` 的 binding-only 主动发送已不再借道进程内 `replyContextByChatId` 回填旧目标
+  - `feishu / discord` 的历史 `last-active / default channel` 状态面与配置面已退场
+
+- 下一步计划：
+  - `P2-4` 主线当前不再继续扩做
+  - 剩余仅保留多渠道手测回归与真实问题驱动的小修补
+
+- 后续计划推进状态：
+  - 已完成一版最小“审计可视化 / outbound 可观察性”接线：
+    - server 已支持读取最近 external outbound audit 记录
+    - WebChat 已把“外部消息外发审计”迁入 `记忆查看 -> 外发审计` 页签，不再放在 settings 中
+    - 当前可直接查看最近文本外发的：
+      - 时间
+      - target channel
+      - target sessionKey
+      - confirmed / rejected / auto_approved
+      - sent / failed / rejected
+      - content preview
+      - source conversationId
+      - error
+  - 这一步仍保持“最小消费面”定位：复用现有记忆查看列表/详情框架，不新增一级导航，不做完整 audit workspace
+
+- 基于当前真实进度修正后的下一阶段可开工清单：
+  1. `P2-3 / 会话作用域与群聊 key 归一` 收口检查
+     - 复核 `canonical sessionKey / sessionScope` 在 `webchat / discord / feishu / qq / community` 的剩余兼容边界
+     - 保持旧 `conversationId` 兼容不动，仅确认是否还有必须补的 group/channel key 归一残口
+  2. `H1 / 统一心智入口与用户画像摘要层` 预研切口
+     - 先梳理现有 `private/shared memory`、`session digest`、`experience usage`、`USER.md / MEMORY.md` 等读取面
+     - 先形成最小 `mind/profile snapshot builder` 方案，不直接扩成新的一级 UI
+  3. `H1 / v1 第一刀实现`
+     - 先做服务端统一摘要 builder 与最小 query/runtime 输出
+     - 消费面优先复用现有 doctor、memory viewer、agent detail，而不是新增一级产品面
+  4. `H2 / 轻量自动学习闭环` 前置梳理
+     - 等 `H1` 最小 mind/profile snapshot 稳定后，再评估 learning loop 的最小输入输出边界
+  5. `P2-4 / 多渠道手测观察`
+     - 作为收口后观察项保留，不再作为主线开发任务
 
 #### P2-5 统一媒体能力注册层 / 附件理解管线
 
@@ -1342,6 +1571,22 @@
 - 第二阶段再考虑：
   - 外部 provider 接线
   - Honcho 式更深用户画像能力
+- 当前进展：
+  - 已新增独立 `mind/profile snapshot builder`，先把摘要拼装逻辑外移到 `packages/belldandy-core/src/mind-profile-snapshot.ts`，避免继续堆入 `server.ts`
+  - 当前第一版已统一收敛以下只读数据源：
+    - `resident observability` 的 `conversation digest / experience usage / resident headline`
+    - `USER.md`
+    - resident 私有 `MEMORY.md`
+    - shared `MEMORY.md`
+    - resident memory manager 的 `private/shared` recent snippets 与 chunk count
+  - `system.doctor` 已新增 `mindProfileSnapshot` payload 与 `mind_profile_snapshot` check
+  - `webchat` 当前先不新增一级入口，只在现有 `doctor` 卡片中显示 `Mind / Profile Snapshot`
+- 当前边界：
+  - 当前第一版仍是只读摘要层，不直接参与 prompt 注入
+  - 当前画像摘要仍以 `USER.md / MEMORY.md / resident digest` 为主，没有引入新的外部 memory provider
+  - 当前只做预算内的简短 summary / snippet，不展开长块原文
+- 下一小步：
+  - 评估把这份 `mind/profile snapshot` 以更小预算接入后续 `H2` 的 learning nudge / review 输入面
 - 技术债决策：`split_task`
 
 #### 10.3.2 H2 轻量自动学习闭环
@@ -1357,6 +1602,95 @@
   - 把学习闭环结果优先挂到现有 review inbox / memory governance / doctor 可见面
 - 第二阶段再考虑：
   - 使用 usage / failure / replay 数据反哺学习优先级
+- 当前进展：
+  - 已先完成第一版 `learning/review input` 输入层，把 `H1` 的 `mind/profile snapshot` 接到现有学习/审阅消费面，而不是直接做自动发布或 prompt 注入
+  - 当前第一版已新增统一 `learning/review input builder`，汇总：
+    - `mindProfileSnapshot`
+    - `taskExperienceDetail` 的来源任务/记忆/工具/产物信号
+    - `experience candidate` 的来源任务/记忆/工具/产物证据
+    - `goal review governance summary` 的 pending / overdue / accepted-unpublished / needs_revision 信号
+  - 当前已接入的消费面：
+    - `system.doctor`
+    - `experience.candidate.get`
+    - `goal.review_governance.summary`
+    - web 侧现有 `doctor`、candidate detail、goal governance panel
+  - 已新增独立 `learning-review-runner`，不再把 `H2` 主体逻辑继续塞进 `gateway / goals/manager`
+  - 已完成第一版最小 runner 接线：
+    - `post-run`：`gateway agent_end -> completeTaskCapture -> learning review runner`
+    - `review scan`：`GoalManager.scanSuggestionReviewWorkflows / scanApprovalWorkflows -> learning review runner`
+  - 已完成第一版最小 prompt/runtime nudge 输入面：
+    - `gateway before_agent_start` 已新增独立 `learning-review nudge` hook
+    - 当前会按 agent 视角的 memory / recent task / draft candidate / goal review queue 生成轻量 `prependContext + promptDeltas`
+    - 当前提示只做“提醒优先沉淀或继续审阅”，不会自动调用 `memory_write / task_promote_method / task_promote_skill_draft / goal_* review` 工具
+  - 已完成 `H2-1 doctor 可视化补面` 第一版：
+    - `system.doctor` 与 web doctor 已显式补出 `learning/review nudge` runtime 摘要
+    - 当前可见最近一次是否触发、触发来源、命中类型、会话类型与最近 turn preview
+  - 已完成 `H2-2 long-goal channel context awareness` 第一版：
+    - `gateway before_agent_start` 已新增独立 `goal-session-context` hook
+    - 对 `goal:<goalId>` / `goal:<goalId>:node:<nodeId>:run:<runId>` 会话补最小 `goal session context` prelude / delta
+    - 当前已显式暴露：
+      - 会话 kind（`goal / goal_node`）
+      - `goalId`、goal 标题、goal objective 摘要、goal status / phase
+      - 当前焦点 node 或当前 node、node status / phase、`runId`
+      - handoff `nextAction` 与 open checkpoint / blocker 计数
+    - 目标是先稳定解决“Agent 知道自己当前正在做哪个长期任务 / 哪个 node / run”，不在这一步扩成完整 replay / takeover / workbench
+  - 已完成 `H2-3a goal session start banner` 第一版：
+    - `WebChat` 当前在每次进入 `goal:<goalId>` / `goal:<goalId>:node:<nodeId>:run:<runId>` 会话时，都会显示一次当前 `Goal` banner
+    - 当前 banner 通过 `conversation.meta` 返回并在前端消息区以 system-style 提示临时渲染：
+      - 用户每次进入 / 切回该长期任务会话时都能重新看到当前锚点
+      - 不会继续写入会话历史，避免恢复/切换多次后把聊天记录刷满
+    - 第一版内容包含：
+      - goal 标题 / `goalId` / `status` / `phase`
+      - goal objective 摘要
+      - 当前 focus node 或当前 node / `runId`
+      - handoff `nextAction`
+    - 当前去重策略改为“当前 WebChat 进入该会话时显示一次”；切到普通会话后再进入 goal 会话，会再次显示
+  - 已完成 `H2-3b goal runtime status event` 第一版：
+    - `goal.update` 当前会对关键状态变化补一条持久化 runtime event，并写入对应长期任务会话历史
+    - 当前只接两类关键变化：
+      - `goal status`：`goal_resumed` / `goal_paused`
+      - `active node status`：`task_node_claimed / pending_review / validating / completed / blocked / failed / skipped`
+    - 当前表现为：
+      - 在对应 `goal` / `goal_node` 会话中插入一条 system-style 状态事件
+      - 若该会话当前正在 WebChat 打开，也会实时显示到消息区
+      - Agent 后续继续在该会话中工作时，也能从会话历史里看到这条状态变化
+    - 第一版刻意不播报普通字段更新、checkpoint 细节或 capability 变化，先避免刷屏
+  - 已完成 `H2-3c goal status self-check guidance` 第一版：
+    - 不新增新工具，先把 Agent 默认自查顺序补清楚
+    - `goal-session-context` 当前已明确提示：
+      - 默认先用 `goal_get` 核对 goal 级 runtime（`status / activeNode / lastRun`）
+      - 若要进一步看节点状态、依赖关系与 checkpoint 分布，再用 `task_graph_read`
+    - `goal_get` 已补成和 `task_graph_read` 一样可在 `goal` / `goal_node` 会话里自动推断当前 `goal_id`
+    - 这一版目标是降低 Agent“明明在长期任务通道里，却不知道先查什么”的决策摩擦，不引入新的工具面
+  - 当前第一版 runner 语义：
+    - `post-run` 优先消费 `learningReviewInput + task signal`，只生成 `method / skill candidate`
+    - `review scan` 仅在当前 goal 还没有 suggestion/review 记录时，补第一批 `method / skill / flow` suggestion
+    - 全部继续走现有 `candidate / review / publish` 治理链，不做自动发布
+  - 已补 runner / nudge / goal session context / goal session banner / goal runtime event / goal self-check guidance 单测，并通过定向 `vitest` 与全仓 `build`
+- 当前边界：
+  - 当前 runner 仍只做最小“生成候选 / suggestion”闭环，没有自动审阅、自动发布或优先级重排
+  - 当前 nudge 仍是轻量 prompt/runtime 提示，不会按 usage / failure / freshness 做精细优先级重排
+  - `post-run` 目前只先接 `method / skill candidate`；durable memory 仍停留在 `memory_write` 人工触发，不做自动写入
+  - `review scan` 目前只在“review 为空时补第一批 suggestion”，不会在已有 review 队列上重复生成或重刷
+  - `system.doctor / web doctor` 当前只补了最近一次 runtime nudge 摘要，还没有做历史趋势、采样对比或 prompt 长度归因
+  - 长期任务通道当前只补了最小 `goal session context + start banner + status event`，还没有扩到更细的 checkpoint / capability / takeover / replay 级工作台
+- 当前阶段判定：
+  - `H2` 目前已经完成第一版最小闭环，可按“`v1` 主链已打通、进入观察与第二轮细化阶段”理解
+  - 今天完成后，长期任务通道侧的核心缺口已经从“Agent 不知道当前 goal / node / run，也不知道该怎么自查”收敛为“已有最小闭环，后续主要看噪音、优先级与细化程度”
+- 下一小步：
+  - 继续观察 `H2-3b` 的真实噪音水平；若事件过多，再优先评估是否把 `completed / skipped` 收窄为只在 active node 会话中显示
+  - 继续观察 `learning-review nudge` 的 prompt 长度、真实触发质量与误触发率；当前不把“再收一版阈值”作为硬前置，只有在真实误触发明显时再进入第二轮去噪
+  - 评估是否把 goal runner 从“review 为空时补第一批 suggestion”推进到更细的 refresh / priority 规则
+  - 若后续真实需求明确，再评估是否把 checkpoint / review / capability 事件纳入长期任务会话事件流
+  - 若后续真实使用中仍频繁出现“还得自己组合多次读取”的摩擦，再评估是否补单独聚合工具；当前先以 `goal_get + task_graph_read` 作为默认自查组合
+- 明日可直接续做的建议顺序：
+  - `1.` 先做一轮真实手测观察，重点记录：
+    - `H2-3b` 状态事件是否偏多、是否打断阅读
+    - `H2-3a` 进入提示在恢复/切换场景下是否都符合预期
+    - `learning-review nudge` 是否仍有明显误触发
+  - `2.` 若 `H2-3b` 噪音明显，优先收窄 `completed / skipped` 的展示范围
+  - `3.` 若 `H2-3b` 基本稳定，再进入 `H2` 第二轮：评估 `goal runner refresh / priority`，而不是先默认继续加重 prompt nudge
+  - `4.` `H2` 这条线在第二轮细化前，不建议继续扩成 checkpoint/capability 工作台或新聚合工具，避免重新放大改动面
 - 技术债决策：`fix_now`
 
 #### 10.3.3 H3 skill freshness / 过期检测 / 更新建议
@@ -1468,12 +1802,49 @@
 
 ### 10.6 当前建议的执行节奏
 
-1. 先收掉 `P2-1 / P2-2`，把 provider / model 入口做成稳定产品层。
-2. 紧接着完成 `P2-3 / P2-4`，把会话作用域与 current conversation binding 稳住。
-3. 然后进入 `H1 / H2 / H3`，先把长期陪伴型 agent 的 mind、learning loop、skill freshness 做出第一版最小闭环。
-4. 再推进 `H5`，补 `local / docker / ssh` 三档部署弹性。
-5. 最后再视真实场景决定是否继续推进 `H4 / P2-5 / A5 / D1 / D2`。
+1. `P2-1 / P2-2 / P2-4` 已完成当前阶段收口，后续默认只保留回归修补与观察项。
+2. 当前先对 `P2-3` 做一次收口检查，把会话作用域与 group/channel key 的剩余兼容边界确认清楚。
+3. 紧接着进入 `H1`，先把长期陪伴型 agent 的统一心智入口做出第一版最小读取层与摘要 builder。
+4. 在 `H1` 稳住后，再进入 `H2 / H3`，补 learning loop 与 skill freshness 的第一版闭环。
+5. 再推进 `H5`，补 `local / docker / ssh` 三档部署弹性。
+6. 最后再视真实场景决定是否继续推进 `H4 / P2-5 / A5 / D1 / D2`。
 
 ### 10.7 一句话执行原则
 
 后续吸收 `HA` 优点的核心，不是把 `SS` 改造成另一个 `HA`，而是优先补齐 `SS` 在长期陪伴型 agent、自动学习、技能维护、模型接口、部署弹性上的短板，同时继续保住 `SS` 在长期任务、治理、审计、WebChat 工作台上的现有优势。
+
+---
+
+## 11. 简版状态表
+
+说明：
+
+- 本表仅用于快速查看当前开发状态。
+- 状态判定以本文当前记录为准：
+  - `已完成`：已明确写明“已完成”或“已收口”
+  - `进行中`：已形成明确后续草案或后置增强方案，但未进入完成态
+  - `未开始`：已纳入计划，但本文尚未记录明确开工进展
+
+| 状态 | 项目 | 当前说明 |
+|---|---|---|
+| 已完成 | `A1` 渐进式工具发现增强 | 主线已形成闭环，`P0-1 ~ P0-5` 已完成第一版最小落地 |
+| 已完成 | `A2` PTC 落地 | 第一版最小能力已落地，已具备受控 runtime 与首批 helper |
+| 已完成 | `A3` 子任务 steering / resume / continuation | 第一版最小落地已完成，WebChat 与服务端已有统一 continuation 工作集消费面 |
+| 已完成 | `A4` 统一 continuation runtime | 已按“最小 shared ledger + 最小 replay/takeover 接线”正式收口 |
+| 已完成 | `P1-1` 渠道安全配置产品化 | 已完成第三版最小落地，可按当前阶段口径收口 |
+| 已完成 | `P1-2` 统一渲染感知长消息分段 | 第一版最小统一层已落地，已达到当前阶段可收口状态 |
+| 已完成 | `P1-3` Webhook 入站保护层 | 第一版最小 ingress guard 已落地，已达到当前阶段可收口状态 |
+| 已完成 | `P1-4` Cron 约束校验与 `stagger` | 第一版最小约束层已落地，已达到当前阶段可收口状态 |
+| 已完成 | `P2-1` Provider 元数据层 | 已完成第一版最小只读 catalog 接线：provider/model catalog 与 `models.list` 外移已收口 |
+| 已完成 | `P2-2` 认证感知 model picker | 已完成第一版最小 picker 产品化：auth-aware labels、`Manual Model...`、provider 分组/过滤与显式 preferred provider 配置均已收口 |
+| 进行中 | `P2-3` 会话作用域与群聊 key 归一 | `v1` 已开始统一 canonical session key 与四渠道接线；旧 `conversationId` 兼容仍保留 |
+| 已完成 | `P2-4` current conversation binding | `v1` 已接入共享 binding store，`WebChat -> 飞书 / QQ / Community / Discord` 文本外发 `v1`、外发审计与 doctor/outbound failure diagnosis 第二版细化已收口；剩余仅保留多渠道手测观察 |
+| 进行中 | `H1` 统一心智入口与用户画像摘要层 | `v1` 第一版最小只读摘要层已落地：`mind/profile snapshot builder` + `system.doctor` 接线 + doctor 卡片；后续再评估 prompt/runtime 消费与外部 provider adapter |
+| 进行中 | `H2` 轻量自动学习闭环 | `v1` 主链已打通：已完成 input builder、最小 runner、doctor runtime 摘要、长期任务通道 `goal session context / start banner / status event / self-check guidance`；当前进入观察与第二轮细化阶段，后续优先看 `H2-3b` 事件噪音与 goal runner refresh/priority，仍未做自动发布 |
+| 未开始 | `H3` skill freshness / 过期检测 / 更新建议 | 已纳入新增主线，但本文尚未记录明确开工进展 |
+| 未开始 | `H5` 部署弹性增强 | 已纳入第四优先级主线，但本文尚未记录明确开工进展 |
+| 未开始 | `H4` 定向 runtime resilience 增强 | 已纳入第五优先级补强项，但本文尚未记录明确开工进展 |
+| 未开始 | `P2-5` 统一媒体能力注册层 / 附件理解管线 | 已纳入第五优先级补强项，优先级后于 provider / session / H1~H5 主线 |
+| 未开始 | `A5` continuation runtime 后置增强 | 已明确后置到第六优先级；不阻塞 `A4` 收口，待前序主线完成后再评估 |
+| 未开始 | `D1` 安装与配置向导 2.0 | 后置产品化收口项，本文尚未记录明确开工进展 |
+| 未开始 | `D2` 独立 TUI 控制面 | 后置产品化收口项，本文尚未记录明确开工进展 |

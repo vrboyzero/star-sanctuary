@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "对标优化，统一 continuation runtime完成收口"
+git commit -m "实现了Agent的自我学习闭环,Agent感知当前长期任务，Agent向社交渠道发送消息"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

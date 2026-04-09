@@ -57,7 +57,7 @@ const WORKSPACE_READABLE_TEXT_EXTENSIONS = [
   ".sh", ".bash", ".zsh", ".ps1", ".bat", ".cmd",
 ];
 const WORKSPACE_IGNORED_NAMES = ["generated", "memory.db", ".DS_Store", "node_modules"];
-const WORKSPACE_SENSITIVE_FILES = ["allowlist.json", "pairing.json", "channel-security.json", "channel-security-approvals.json", "channel-reply-chunking.json", "mcp.json", "feishu-state.json"];
+const WORKSPACE_SENSITIVE_FILES = ["allowlist.json", "pairing.json", "channel-security.json", "channel-security-approvals.json", "channel-reply-chunking.json", "models.json", "mcp.json"];
 
 export async function handleWorkspaceListWithQueryRuntime(
   ctx: QueryRuntimeWorkspaceContext,

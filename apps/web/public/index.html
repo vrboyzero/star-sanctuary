@@ -278,6 +278,7 @@
                 <button id="memoryTabTasks" class="memory-tab-btn active" data-i18n="memory.tabs.tasks">任务记录</button>
                 <button id="memoryTabMemories" class="memory-tab-btn" data-i18n="memory.tabs.memories">记忆</button>
                 <button id="memoryTabSharedReview" class="memory-tab-btn" data-i18n="memory.tabs.sharedReview">共享审批</button>
+                <button id="memoryTabOutboundAudit" class="memory-tab-btn" data-i18n="memory.tabs.outboundAudit">外发审计</button>
               </div>
               <div class="memory-viewer-filters">
                 <input id="memorySearchInput" class="input input-sm memory-search-input" data-i18n-placeholder="memory.searchPlaceholder" placeholder="搜索 task 标题、总结或 memory 内容" />
@@ -450,6 +451,7 @@
         <input type="file" id="fileInput" class="hidden" multiple
           accept=".jpg,.jpeg,.png,.gif,.webp,.txt,.md,.json,.log,.mp4,.mov,.avi,.webm,.mkv" />
         <textarea id="prompt" class="input" data-i18n-placeholder="composer.promptPlaceholder" placeholder="输入消息… (可拖拽文件到此)" rows="1"></textarea>
+        <input id="modelFilter" class="input composer-model-filter hidden" data-i18n-placeholder="composer.modelFilterPlaceholder" placeholder="筛选模型或 Provider" />
         <select id="modelSelect" class="agent-select hidden" data-i18n-title="composer.modelSelectTitle" title="选择模型">
           <option value="" data-i18n="composer.defaultModel">默认模型</option>
         </select>
@@ -512,6 +514,30 @@
           <label class="form-label" data-i18n="settings.modelLabel">OpenAI Model</label>
           <input id="cfgModel" class="input" placeholder="gpt-4o" />
           <div class="form-help" data-i18n="settings.modelHelp">主聊天模型名称，例如 `gpt-4o`、`deepseek-chat`、`kimi-k2`。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="settings.modelPreferredProvidersLabel">Preferred Providers</label>
+          <input id="cfgModelPreferredProviders" class="input" data-i18n-placeholder="settings.modelPreferredProvidersPlaceholder" placeholder="openrouter,moonshot,anthropic" />
+          <div class="form-help" data-i18n="settings.modelPreferredProvidersHelp">显式指定 model picker 的 provider 排序偏好，使用 providerId 逗号分隔；未命中时仍回退到当前默认模型与可用性排序。</div>
+        </div>
+        <div class="settings-subsection-header" style="margin-top: 16px;">
+          <div>
+            <div class="settings-subsection-title" data-i18n="settings.modelFallbackConfigTitle">Model Fallback Profiles</div>
+            <div class="form-help" data-i18n="settings.modelFallbackConfigHelp">使用结构化 JSON 维护 `models.json` fallback 列表；primary provider 仍由上方 OpenAI API Key / Base URL / Model 控制。已有条目的 `apiKey` 可保留 `[REDACTED]` 占位，保存后会立即刷新 model picker。</div>
+          </div>
+          <button id="refreshModelFallbackConfig" type="button" class="button button-muted" data-i18n="settings.modelFallbackConfigRefresh">刷新</button>
+        </div>
+        <div id="modelFallbackConfigMeta" class="form-help" style="margin-bottom: 8px;"></div>
+        <div class="form-group">
+          <label class="form-label" for="cfgModelFallbackContent" data-i18n="settings.modelFallbackConfigContentLabel">Model Fallback JSON</label>
+          <textarea id="cfgModelFallbackContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;fallbacks&quot;: [&#10;    {&#10;      &quot;id&quot;: &quot;openrouter-main&quot;,&#10;      &quot;displayName&quot;: &quot;OpenRouter Main&quot;,&#10;      &quot;baseUrl&quot;: &quot;https://openrouter.ai/api/v1&quot;,&#10;      &quot;apiKey&quot;: &quot;sk-or-v1-...&quot;,&#10;      &quot;model&quot;: &quot;openai/gpt-4o-mini&quot;,&#10;      &quot;protocol&quot;: &quot;openai&quot;,&#10;      &quot;wireApi&quot;: &quot;responses&quot;&#10;    }&#10;  ]&#10;}"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgExternalOutboundRequireConfirmation">
+            <input id="cfgExternalOutboundRequireConfirmation" type="checkbox" style="margin-right: 8px;" checked />
+            <span data-i18n="settings.externalOutboundRequireConfirmationLabel">外部渠道外发需要确认</span>
+          </label>
+          <div class="form-help" data-i18n="settings.externalOutboundRequireConfirmationHelp">控制 WebChat 请求 Agent 向飞书 / QQ / Community / Discord 外发文本时，是否必须先经过页面确认弹窗。默认开启；保存后需重启 Gateway 生效。</div>
         </div>
         <div class="form-group">
           <label class="form-label" data-i18n="settings.heartbeatLabel">Heartbeat Interval</label>
@@ -781,10 +807,6 @@
             <label class="form-label" data-i18n="settings.discordBotTokenLabel">Discord Bot Token</label>
             <input id="cfgDiscordBotToken" class="input" type="password" placeholder="your-discord-bot-token" />
           </div>
-          <div class="form-group">
-            <label class="form-label" data-i18n="settings.discordDefaultChannelIdLabel">Discord Default Channel ID</label>
-            <input id="cfgDiscordDefaultChannelId" class="input" placeholder="123456789012345678" />
-          </div>
 
           <hr class="theme-divider">
 
@@ -820,6 +842,7 @@
             </div>
           </div>
           <div id="channelSecurityPendingList" class="doctor-grid"></div>
+
         </section>
       </div>
       <div class="modal-footer">
@@ -986,6 +1009,32 @@
       <div class="modal-footer">
         <button id="toolSettingsConfirmReject" class="button" data-i18n="toolSettings.reject">拒绝</button>
         <button id="toolSettingsConfirmApprove" class="button" data-i18n="toolSettings.approve" style="background: var(--button-primary-bg); color: var(--button-primary-text);">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="externalOutboundConfirmModal" class="modal-overlay hidden">
+    <div class="modal tool-settings-confirm-modal">
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <span data-i18n="externalOutbound.confirmTitle">确认外部消息发送</span>
+      </div>
+      <div class="modal-body">
+        <p class="tool-settings-confirm-copy" data-i18n="externalOutbound.confirmCopy">
+          这条消息将从当前 WebChat 会话发送到外部渠道。请确认目标和内容无误后再继续。
+        </p>
+        <div class="tool-settings-confirm-impact">
+          <div class="tool-settings-confirm-label" data-i18n="externalOutbound.previewLabel">消息预览</div>
+          <div id="externalOutboundConfirmPreview" class="tool-settings-policy-note"></div>
+        </div>
+        <div class="tool-settings-confirm-impact">
+          <div class="tool-settings-confirm-label" data-i18n="externalOutbound.targetLabel">目标信息</div>
+          <div id="externalOutboundConfirmTarget" class="tool-settings-policy-note"></div>
+        </div>
+        <div id="externalOutboundConfirmExpiry" class="tool-settings-confirm-expiry"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="externalOutboundConfirmReject" class="button" data-i18n="externalOutbound.reject">取消</button>
+        <button id="externalOutboundConfirmApprove" class="button" data-i18n="externalOutbound.approve" style="background: var(--button-primary-bg); color: var(--button-primary-text);">确认发送</button>
       </div>
     </div>
   </div>

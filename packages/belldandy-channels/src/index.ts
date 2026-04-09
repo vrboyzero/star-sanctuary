@@ -8,6 +8,8 @@ export * from "./manager.js";
 export * from "./router/index.js";
 export * from "./reply-chunking.js";
 export * from "./reply-chunking-config.js";
+export * from "./session-key.js";
+export * from "./current-conversation-binding-store.js";
 
 // 渠道实现
 export * from "./feishu.js";

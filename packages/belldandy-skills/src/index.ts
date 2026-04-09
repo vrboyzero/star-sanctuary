@@ -199,6 +199,11 @@ export {
   type ToolControlChanges,
 } from "./builtin/tool-settings-control.js";
 export {
+  createSendChannelMessageTool,
+  SEND_CHANNEL_MESSAGE_TOOL_NAME,
+  type SendChannelMessageDeps,
+} from "./builtin/send-channel-message.js";
+export {
   checkAndConsumeRestartCooldown,
   formatRestartCooldownMessage,
   getRestartCommandCooldownSeconds,

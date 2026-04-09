@@ -7,6 +7,8 @@ export interface RouteContext {
   accountId?: string;
   chatKind: ChatKind;
   chatId: string;
+  sessionScope?: string;
+  sessionKey?: string;
   text: string;
   senderId?: string;
   senderName?: string;

@@ -1592,7 +1592,7 @@
 
 - **修复内容**：
   - 将 `workspace.read/list` 纳入 `secureMethods`（server.ts L245）
-  - 敏感文件黑名单：`allowlist.json/pairing.json/mcp.json/feishu-state.json`（server.ts L507-512）
+  - 敏感文件黑名单：`allowlist.json/pairing.json/mcp.json`（server.ts L507-512）
 
 ### 2. P1：CSWSH 防护 + 安全启动 ✅
 

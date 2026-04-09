@@ -152,6 +152,7 @@ export type RoomMember = {
 export type RoomContext = {
   roomId?: string;
   environment: "local" | "community"; // 本地WebChat vs office.goddess.ai社区
+  sessionKey?: string;
   members?: RoomMember[];
   clientId?: string;
 };

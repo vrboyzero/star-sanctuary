@@ -1,0 +1,384 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import { extractIdentityInfo } from "@belldandy/agent";
+
+import type { ResidentAgentDoctorReport } from "./resident-agent-observability.js";
+import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
+
+type MindProfileResidentView = {
+  agentId: string;
+  displayName: string;
+  status?: string;
+  conversationId?: string;
+  digestStatus?: string;
+  pendingMessageCount: number;
+  headline: string;
+};
+
+type MindProfileExperienceView = {
+  agentId: string;
+  displayName: string;
+  usageCount: number;
+  headline: string;
+};
+
+type MindProfileMemorySnippetView = {
+  scope: "private" | "shared";
+  sourcePath: string;
+  text: string;
+};
+
+export type MindProfileSnapshot = {
+  summary: {
+    available: boolean;
+    selectedAgentId: string;
+    headline: string;
+    activeResidentCount: number;
+    digestReadyCount: number;
+    digestUpdatedCount: number;
+    usageLinkedCount: number;
+    privateMemoryCount: number;
+    sharedMemoryCount: number;
+    summaryLineCount: number;
+    hasUserProfile: boolean;
+    hasPrivateMemoryFile: boolean;
+    hasSharedMemoryFile: boolean;
+  };
+  identity: {
+    userName?: string;
+    userAvatar?: string;
+    hasUserProfile: boolean;
+    hasPrivateMemoryFile: boolean;
+    hasSharedMemoryFile: boolean;
+  };
+  conversation: {
+    activeResidentCount: number;
+    digestReadyCount: number;
+    digestUpdatedCount: number;
+    topResidents: MindProfileResidentView[];
+  };
+  memory: {
+    privateMemoryCount: number;
+    sharedMemoryCount: number;
+    privateSummary: string;
+    sharedSummary: string;
+    recentMemorySnippets: MindProfileMemorySnippetView[];
+  };
+  experience: {
+    usageLinkedCount: number;
+    topUsageResidents: MindProfileExperienceView[];
+  };
+  profile: {
+    headline: string;
+    summaryLines: string[];
+  };
+};
+
+function truncateText(value: string | undefined, maxLength = 96): string {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+  return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 3))}...` : normalized;
+}
+
+function toPlainLine(value: string | undefined): string {
+  return truncateText(
+    String(value ?? "")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/\*([^*]+)\*/g, "$1")
+      .replace(/[_>#-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+  );
+}
+
+function extractMeaningfulLines(content: string | undefined, maxLines = 2): string[] {
+  if (!content) return [];
+  const lines: string[] = [];
+  for (const rawLine of content.split(/\r?\n/g)) {
+    const normalized = toPlainLine(rawLine);
+    if (!normalized) continue;
+    if (/^(名字|头像|Emoji|Name|Avatar)\s*[：:]/i.test(normalized)) continue;
+    if (/^(user|profile|memory)\s*$/i.test(normalized)) continue;
+    lines.push(normalized);
+    if (lines.length >= maxLines) break;
+  }
+  return lines;
+}
+
+async function readTextFileIfExists(filePath: string): Promise<string | undefined> {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function dedupeStrings(values: Array<string | undefined>, limit = values.length): string[] {
+  const items: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = truncateText(value, 160);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    items.push(normalized);
+    if (items.length >= limit) break;
+  }
+  return items;
+}
+
+function buildResidentHeadline(agent: NonNullable<ResidentAgentDoctorReport["agents"]>[number]): string {
+  const status = agent.status || "idle";
+  const digestStatus = agent.conversationDigest?.status || "missing";
+  const pendingMessageCount = Number(agent.conversationDigest?.pendingMessageCount) || 0;
+  return `${agent.displayName || agent.id}: status=${status}, digest=${digestStatus}, pending=${pendingMessageCount}`;
+}
+
+function buildExperienceHeadline(agent: NonNullable<ResidentAgentDoctorReport["agents"]>[number]): string {
+  const digest = agent.experienceUsageDigest;
+  const usageCount = Number(digest?.usageCount) || 0;
+  const methodCount = Number(digest?.methodCount) || 0;
+  const skillCount = Number(digest?.skillCount) || 0;
+  const latestAssetKey = truncateText(digest?.latestAssetKey, 72);
+  return `${agent.displayName || agent.id}: usage=${usageCount}, methods=${methodCount}, skills=${skillCount}${latestAssetKey ? `, latest=${latestAssetKey}` : ""}`;
+}
+
+function buildMemorySnippetText(item: { snippet?: string; summary?: string; content?: string }): string {
+  return truncateText(toPlainLine(item.summary || item.snippet || item.content), 100);
+}
+
+function buildMemorySummary(options: {
+  label: string;
+  count: number;
+  fileSummary?: string;
+  recentSnippets: MindProfileMemorySnippetView[];
+}): string {
+  const parts = [`${options.label} ${options.count} chunk(s)`];
+  if (options.fileSummary) {
+    parts.push(`file=${options.fileSummary}`);
+  }
+  if (options.recentSnippets.length > 0) {
+    parts.push(`latest=${options.recentSnippets.map((item) => item.text).join(" | ")}`);
+  }
+  return parts.join(", ");
+}
+
+function resolveSelectedRecord(
+  residentMemoryManagers: ScopedMemoryManagerRecord[] | undefined,
+  agentId?: string,
+): ScopedMemoryManagerRecord | undefined {
+  const records = Array.isArray(residentMemoryManagers) ? residentMemoryManagers : [];
+  if (records.length <= 0) return undefined;
+  if (agentId) {
+    const matched = records.find((record) => record.agentId === agentId);
+    if (matched) return matched;
+  }
+  return records.find((record) => record.agentId === "default") ?? records[0];
+}
+
+export async function buildMindProfileSnapshot(input: {
+  stateDir: string;
+  residentAgents?: ResidentAgentDoctorReport;
+  residentMemoryManagers?: ScopedMemoryManagerRecord[];
+  agentId?: string;
+}): Promise<MindProfileSnapshot> {
+  const selectedRecord = resolveSelectedRecord(input.residentMemoryManagers, input.agentId);
+  const selectedAgentId = selectedRecord?.agentId || input.agentId || "default";
+  const identityDir = selectedRecord?.stateDir || input.stateDir;
+  const identity = await extractIdentityInfo(identityDir);
+
+  const privateMemoryFilePath = path.join(identityDir, "MEMORY.md");
+  const sharedMemoryFilePath = selectedRecord?.policy?.sharedStateDir
+    ? path.join(selectedRecord.policy.sharedStateDir, "MEMORY.md")
+    : path.join(input.stateDir, "team-memory", "MEMORY.md");
+  const [privateMemoryFileContent, sharedMemoryFileContent] = await Promise.all([
+    readTextFileIfExists(privateMemoryFilePath),
+    readTextFileIfExists(sharedMemoryFilePath),
+  ]);
+  const userProfileFileContent = await readTextFileIfExists(path.join(identityDir, "USER.md"));
+  const [hasPrivateMemoryFile, hasSharedMemoryFile] = await Promise.all([
+    pathExists(privateMemoryFilePath),
+    pathExists(sharedMemoryFilePath),
+  ]);
+
+  const userProfileFileSummary = extractMeaningfulLines(userProfileFileContent, 1)[0];
+  const privateMemoryFileSummary = extractMeaningfulLines(privateMemoryFileContent, 1)[0];
+  const sharedMemoryFileSummary = extractMeaningfulLines(sharedMemoryFileContent, 1)[0];
+
+  const privateMemoryCount = selectedRecord?.manager.countChunks({
+    agentId: selectedAgentId,
+    scope: "private",
+  }) ?? 0;
+  const sharedMemoryCount = selectedRecord?.manager.countChunks({
+    agentId: selectedAgentId,
+    scope: "shared",
+  }) ?? 0;
+
+  const privateSnippets = selectedRecord?.manager.getRecent(
+    2,
+    { agentId: selectedAgentId, scope: "private" },
+    true,
+  ).map((item) => ({
+    scope: "private" as const,
+    sourcePath: item.sourcePath,
+    text: buildMemorySnippetText(item),
+  })).filter((item) => item.text) ?? [];
+
+  const sharedSnippets = selectedRecord?.manager.getRecent(
+    1,
+    { agentId: selectedAgentId, scope: "shared" },
+    true,
+  ).map((item) => ({
+    scope: "shared" as const,
+    sourcePath: item.sourcePath,
+    text: buildMemorySnippetText(item),
+  })).filter((item) => item.text) ?? [];
+
+  const residentSummary = input.residentAgents?.summary;
+  const residentItems = Array.isArray(input.residentAgents?.agents) ? input.residentAgents.agents : [];
+  const topResidents = residentItems
+    .slice()
+    .sort((left, right) => {
+      const pendingDelta = (Number(right.conversationDigest?.pendingMessageCount) || 0) - (Number(left.conversationDigest?.pendingMessageCount) || 0);
+      if (pendingDelta !== 0) return pendingDelta;
+      const digestDelta = (Number(right.conversationDigest?.lastDigestAt) || 0) - (Number(left.conversationDigest?.lastDigestAt) || 0);
+      if (digestDelta !== 0) return digestDelta;
+      return (Number(right.lastActiveAt) || 0) - (Number(left.lastActiveAt) || 0);
+    })
+    .slice(0, 3)
+    .map((agent) => ({
+      agentId: agent.id,
+      displayName: agent.displayName,
+      status: agent.status,
+      conversationId: agent.mainConversationId || agent.lastConversationId || agent.conversationDigest?.conversationId,
+      digestStatus: agent.conversationDigest?.status,
+      pendingMessageCount: Number(agent.conversationDigest?.pendingMessageCount) || 0,
+      headline: buildResidentHeadline(agent),
+    }));
+
+  const topUsageResidents = residentItems
+    .filter((agent) => Number(agent.experienceUsageDigest?.usageCount) > 0)
+    .slice()
+    .sort((left, right) => (Number(right.experienceUsageDigest?.usageCount) || 0) - (Number(left.experienceUsageDigest?.usageCount) || 0))
+    .slice(0, 3)
+    .map((agent) => ({
+      agentId: agent.id,
+      displayName: agent.displayName,
+      usageCount: Number(agent.experienceUsageDigest?.usageCount) || 0,
+      headline: buildExperienceHeadline(agent),
+    }));
+
+  const activeResidentCount = Number(residentSummary?.activeCount) || 0;
+  const digestReadyCount = Number(residentSummary?.digestReadyCount) || 0;
+  const digestUpdatedCount = Number(residentSummary?.digestUpdatedCount) || 0;
+  const usageLinkedCount = Number(residentSummary?.experienceUsageLinkedCount) || 0;
+
+  const hasUserProfile = Boolean(identity.userName || identity.userAvatar);
+  const conversationHeadline = residentSummary?.headline
+    ? `Residents: ${truncateText(residentSummary.headline, 150)}`
+    : undefined;
+  const experienceHeadline = topUsageResidents.length > 0
+    ? `Experience: ${topUsageResidents.map((item) => item.headline).join(" | ")}`
+    : usageLinkedCount > 0
+      ? `Experience: linked on ${usageLinkedCount} resident(s)`
+      : undefined;
+
+  const summaryLines = dedupeStrings([
+    hasUserProfile
+      ? `User profile: ${truncateText(identity.userName || "-", 48)}${identity.userAvatar ? ` / ${truncateText(identity.userAvatar, 24)}` : ""}`
+      : undefined,
+    userProfileFileSummary
+      ? `USER.md: ${userProfileFileSummary}`
+      : undefined,
+    privateMemoryFileSummary ? `Private MEMORY.md: ${privateMemoryFileSummary}` : hasPrivateMemoryFile ? "Private MEMORY.md present" : undefined,
+    sharedMemoryFileSummary ? `Shared MEMORY.md: ${sharedMemoryFileSummary}` : hasSharedMemoryFile ? "Shared MEMORY.md present" : undefined,
+    conversationHeadline,
+    experienceHeadline,
+    ...privateSnippets.map((item) => `Private recent: ${item.text}`),
+    ...sharedSnippets.map((item) => `Shared recent: ${item.text}`),
+  ], 6);
+
+  const profileHeadline = summaryLines[0] || "Mind/profile snapshot is currently empty";
+  const headlineParts = [
+    hasUserProfile ? "user ready" : "user missing",
+    `private ${privateMemoryCount}`,
+    `shared ${sharedMemoryCount}`,
+    `digest ${digestReadyCount}/${digestUpdatedCount}`,
+    `usage ${usageLinkedCount}`,
+  ];
+  const available = hasUserProfile
+    || hasPrivateMemoryFile
+    || hasSharedMemoryFile
+    || privateMemoryCount > 0
+    || sharedMemoryCount > 0
+    || activeResidentCount > 0
+    || summaryLines.length > 0;
+
+  return {
+    summary: {
+      available,
+      selectedAgentId,
+      headline: headlineParts.join(", "),
+      activeResidentCount,
+      digestReadyCount,
+      digestUpdatedCount,
+      usageLinkedCount,
+      privateMemoryCount,
+      sharedMemoryCount,
+      summaryLineCount: summaryLines.length,
+      hasUserProfile,
+      hasPrivateMemoryFile,
+      hasSharedMemoryFile,
+    },
+    identity: {
+      userName: identity.userName,
+      userAvatar: identity.userAvatar,
+      hasUserProfile,
+      hasPrivateMemoryFile,
+      hasSharedMemoryFile,
+    },
+    conversation: {
+      activeResidentCount,
+      digestReadyCount,
+      digestUpdatedCount,
+      topResidents,
+    },
+    memory: {
+      privateMemoryCount,
+      sharedMemoryCount,
+      privateSummary: buildMemorySummary({
+        label: "private",
+        count: privateMemoryCount,
+        fileSummary: privateMemoryFileSummary,
+        recentSnippets: privateSnippets,
+      }),
+      sharedSummary: buildMemorySummary({
+        label: "shared",
+        count: sharedMemoryCount,
+        fileSummary: sharedMemoryFileSummary,
+        recentSnippets: sharedSnippets,
+      }),
+      recentMemorySnippets: [...privateSnippets, ...sharedSnippets].slice(0, 4),
+    },
+    experience: {
+      usageLinkedCount,
+      topUsageResidents,
+    },
+    profile: {
+      headline: profileHeadline,
+      summaryLines,
+    },
+  };
+}

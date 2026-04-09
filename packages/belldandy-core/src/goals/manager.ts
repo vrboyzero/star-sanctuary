@@ -13,6 +13,7 @@ import { generateGoalRetrospective } from "./retrospective.js";
 import { generateGoalSkillCandidates } from "./skill-candidates.js";
 import { generateGoalFlowPatterns } from "./flow-patterns.js";
 import { generateCrossGoalFlowPatterns } from "./cross-goal-flow-patterns.js";
+import { runGoalReviewScanLearningReview } from "../learning-review-runner.js";
 import { getGoalRegistryEntry, listGoalRegistryEntries, upsertGoalRegistryEntry } from "./registry.js";
 import { scaffoldGoalFiles } from "./scaffold.js";
 import { createGoalConversationId, createGoalNodeConversationId, createGoalRunId } from "./session.js";
@@ -743,14 +744,26 @@ export class GoalManager {
         ? "当前没有超 SLA 的 suggestion review workflow。"
         : "",
     ].filter(Boolean);
+    let learningReview: GoalSuggestionReviewWorkflowScanResult["learningReview"];
+    try {
+      learningReview = await runGoalReviewScanLearningReview({
+        stateDir: this.stateDir,
+        governanceSummary: await this.getReviewGovernanceSummary(goalId),
+        generateSuggestions: () => this.generateExperienceSuggestions(goalId),
+        syncReviews: () => this.syncSuggestionReviews(updatedGoal),
+      });
+    } catch (err) {
+      console.warn("[GoalManager] Failed to run review-scan learning review:", err);
+    }
     return {
       goal: updatedGoal,
-      reviews: nextReviews,
+      reviews: learningReview?.reviews ?? nextReviews,
       scannedAt,
       scannedCount: reviews.items.filter((item) => this.getPendingSuggestionReviewWorkflowStage(item.workflow)).length,
       overdueCount,
       escalatedCount,
       items,
+      learningReview,
       summary: `scanned=${reviews.items.length} | overdue=${overdueCount} | escalated=${escalatedCount}`,
       recommendations,
     };
@@ -1746,6 +1759,7 @@ export class GoalManager {
       checkpointItems: checkpointScan.scanItems,
       notifications: notifications.created,
       dispatches: dispatches.created,
+      learningReview: reviewResult.learningReview,
       summary: `review_overdue=${reviewResult.overdueCount} | review_escalated=${reviewResult.escalatedCount} | checkpoint_overdue=${checkpointScan.overdueCount} | checkpoint_escalated=${checkpointScan.escalatedCount} | notifications=${notifications.created.length} | dispatches=${dispatches.created.length}`,
       recommendations: [
         reviewResult.overdueCount > 0 || checkpointScan.overdueCount > 0

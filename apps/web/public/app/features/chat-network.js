@@ -35,6 +35,158 @@ export function resolvePreferredAgentSelection(agents, currentValue = "", savedV
   return typeof items[0]?.id === "string" ? items[0].id : "";
 }
 
+export const MANUAL_MODEL_SENTINEL = "__manual_model__";
+export const MANUAL_MODEL_PREFIX = "manual:";
+
+export function isManualModelValue(value) {
+  return typeof value === "string" && value.trim().startsWith(MANUAL_MODEL_PREFIX);
+}
+
+export function parseManualModelValue(value) {
+  if (!isManualModelValue(value)) return "";
+  return value.trim().slice(MANUAL_MODEL_PREFIX.length).trim();
+}
+
+export function buildManualModelValue(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized ? `${MANUAL_MODEL_PREFIX}${normalized}` : "";
+}
+
+export function formatModelOptionLabel(model, t = (_key, _params, fallback) => fallback ?? "") {
+  if (!model || typeof model !== "object") return "";
+  const baseLabel = model.displayName || model.model || model.id || t("composer.defaultModel", {}, "Default Model");
+  const suffixes = [];
+  if (typeof model.providerLabel === "string" && model.providerLabel.trim()) {
+    suffixes.push(model.providerLabel.trim());
+  }
+  if (model.authStatus === "missing") {
+    suffixes.push(t("composer.modelAuthMissing", {}, "auth missing"));
+  }
+  return suffixes.length > 0 ? `${baseLabel} · ${suffixes.join(" · ")}` : baseLabel;
+}
+
+export function normalizeModelCatalogFilter(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+export function modelMatchesCatalogFilter(model, filterValue) {
+  const normalizedFilter = normalizeModelCatalogFilter(filterValue);
+  if (!normalizedFilter) return true;
+  if (!model || typeof model !== "object") return false;
+  const haystack = [
+    model.displayName,
+    model.model,
+    model.id,
+    model.providerLabel,
+    model.providerId,
+  ]
+    .filter((item) => typeof item === "string" && item.trim())
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(normalizedFilter);
+}
+
+export function buildModelCatalogGroups(models, currentDefault = "", preferredProviderIds = []) {
+  const items = Array.isArray(models) ? models.filter((item) => item && typeof item === "object") : [];
+  const normalizedCurrentDefault = typeof currentDefault === "string" ? currentDefault.trim() : "";
+  const defaultModel = items.find((item) => item.id === normalizedCurrentDefault);
+  const normalizedPreferredProviderIds = Array.isArray(preferredProviderIds)
+    ? preferredProviderIds
+      .filter((item) => typeof item === "string" && item.trim())
+      .map((item) => item.trim().toLowerCase())
+    : [];
+  const inferredPreferredProviderId =
+    defaultModel?.providerId
+    || items.find((item) => item.id === "primary")?.providerId
+    || "";
+  const preferredProviderOrder = normalizedPreferredProviderIds.length > 0
+    ? normalizedPreferredProviderIds
+    : inferredPreferredProviderId
+      ? [String(inferredPreferredProviderId).trim().toLowerCase()]
+      : [];
+
+  const groups = new Map();
+  for (const model of items) {
+    const providerId = typeof model.providerId === "string" && model.providerId.trim() ? model.providerId.trim() : "custom";
+    const providerOrderIndex = preferredProviderOrder.indexOf(providerId.toLowerCase());
+    const existing = groups.get(providerId) ?? {
+      providerId,
+      providerLabel: typeof model.providerLabel === "string" && model.providerLabel.trim()
+        ? model.providerLabel.trim()
+        : providerId,
+      preferred: providerOrderIndex >= 0,
+      preferredOrder: providerOrderIndex >= 0 ? providerOrderIndex : Number.POSITIVE_INFINITY,
+      hasReadyAuth: false,
+      hasPrimarySource: false,
+      models: [],
+    };
+    existing.preferred = existing.preferred || providerOrderIndex >= 0;
+    existing.preferredOrder = Math.min(
+      existing.preferredOrder,
+      providerOrderIndex >= 0 ? providerOrderIndex : Number.POSITIVE_INFINITY,
+    );
+    existing.hasReadyAuth = existing.hasReadyAuth || model.authStatus !== "missing";
+    existing.hasPrimarySource = existing.hasPrimarySource || model.source === "primary";
+    existing.models.push(model);
+    groups.set(providerId, existing);
+  }
+
+  const compareGroups = (left, right) => {
+    if (left.preferred !== right.preferred) return left.preferred ? -1 : 1;
+    if (left.preferredOrder !== right.preferredOrder) return left.preferredOrder - right.preferredOrder;
+    if (left.hasReadyAuth !== right.hasReadyAuth) return left.hasReadyAuth ? -1 : 1;
+    if (left.hasPrimarySource !== right.hasPrimarySource) return left.hasPrimarySource ? -1 : 1;
+    return String(left.providerLabel).localeCompare(String(right.providerLabel), "zh-Hans-CN-u-co-pinyin");
+  };
+
+  const compareModels = (left, right) => {
+    if (left.isDefault !== right.isDefault) return left.isDefault ? -1 : 1;
+    if ((left.source === "primary") !== (right.source === "primary")) return left.source === "primary" ? -1 : 1;
+    if ((left.authStatus !== "missing") !== (right.authStatus !== "missing")) return left.authStatus !== "missing" ? -1 : 1;
+    return String(left.displayName || left.model || left.id).localeCompare(
+      String(right.displayName || right.model || right.id),
+      "zh-Hans-CN-u-co-pinyin",
+    );
+  };
+
+  return [...groups.values()]
+    .sort(compareGroups)
+    .map((group) => ({
+      ...group,
+      models: [...group.models].sort(compareModels),
+    }));
+}
+
+export function formatModelProviderGroupLabel(group, t = (_key, _params, fallback) => fallback ?? "") {
+  if (!group || typeof group !== "object") return "";
+  const suffixes = [];
+  if (group.preferred) {
+    suffixes.push(t("composer.modelProviderPreferred", {}, "preferred"));
+  }
+  if (!group.hasReadyAuth) {
+    suffixes.push(t("composer.modelAuthMissing", {}, "auth missing"));
+  }
+  return suffixes.length > 0
+    ? `${group.providerLabel} · ${suffixes.join(" · ")}`
+    : String(group.providerLabel || "");
+}
+
+export function resolvePreferredModelSelection(models, currentValue = "", savedValue = "", manualEntrySupported = false) {
+  const items = Array.isArray(models) ? models : [];
+  const normalizedCurrent = typeof currentValue === "string" ? currentValue.trim() : "";
+  const normalizedSaved = typeof savedValue === "string" ? savedValue.trim() : "";
+  const hasListedModel = (candidate) => Boolean(candidate) && items.some((model) => model?.id === candidate);
+  const hasManual = (candidate) => manualEntrySupported && Boolean(parseManualModelValue(candidate));
+
+  if (hasListedModel(normalizedCurrent) || hasManual(normalizedCurrent)) {
+    return normalizedCurrent;
+  }
+  if (hasListedModel(normalizedSaved) || hasManual(normalizedSaved)) {
+    return normalizedSaved;
+  }
+  return "";
+}
+
 export function createChatNetworkFeature({
   refs,
   keys,
@@ -61,6 +213,7 @@ export function createChatNetworkFeature({
     workspaceRootsEl,
     userUuidEl,
     agentSelectEl,
+    modelFilterEl,
     modelSelectEl,
   } = refs;
 
@@ -81,6 +234,53 @@ export function createChatNetworkFeature({
   };
   let lastModelListState = null;
   let lastAgentListState = null;
+
+  function refreshModelFilterVisibility(models) {
+    if (!modelFilterEl) return;
+    const providerCount = new Set((Array.isArray(models) ? models : []).map((item) => item?.providerId).filter(Boolean)).size;
+    const shouldShow = (Array.isArray(models) ? models.length : 0) >= 5 || providerCount >= 2;
+    modelFilterEl.classList.toggle("hidden", !shouldShow);
+    if (!shouldShow) {
+      modelFilterEl.value = "";
+    }
+  }
+
+  function upsertManualModelOption(manualValue) {
+    if (!modelSelectEl) return;
+    const manualModel = parseManualModelValue(manualValue);
+    if (!manualModel) return;
+
+    let option = [...modelSelectEl.options].find((item) => isManualModelValue(item.value));
+    if (!option) {
+      option = document.createElement("option");
+      const manualEntryOption = [...modelSelectEl.options].find((item) => item.value === MANUAL_MODEL_SENTINEL);
+      if (manualEntryOption?.parentNode) {
+        manualEntryOption.parentNode.insertBefore(option, manualEntryOption);
+      } else {
+        modelSelectEl.appendChild(option);
+      }
+    }
+    option.value = manualValue;
+    option.textContent = t(
+      "composer.manualModelSelected",
+      { name: manualModel },
+      `Manual Model (${manualModel})`,
+    );
+  }
+
+  function promptManualModelValue() {
+    const promptFn = typeof globalThis.prompt === "function" ? globalThis.prompt.bind(globalThis) : null;
+    if (!promptFn) return "";
+    const previousManual = parseManualModelValue(localStorage.getItem(modelIdKey) || "");
+    return buildManualModelValue(promptFn(
+      t(
+        "composer.manualModelPrompt",
+        {},
+        "Enter a model name to use with the current primary provider.",
+      ),
+      previousManual || "",
+    ));
+  }
 
   function isConnected() {
     return Boolean(getSocket() && getReady());
@@ -234,49 +434,74 @@ export function createChatNetworkFeature({
     const currentDefault = typeof res.payload.currentDefault === "string" && res.payload.currentDefault.trim()
       ? res.payload.currentDefault.trim()
       : "primary";
+    const preferredProviderIds = Array.isArray(res.payload?.preferredProviderIds)
+      ? res.payload.preferredProviderIds
+      : [];
+    const manualEntrySupported = res.payload?.manualEntrySupported !== false;
 
-    lastModelListState = { models, currentDefault };
-    renderModelOptions(models, currentDefault);
+    lastModelListState = { models, currentDefault, preferredProviderIds, manualEntrySupported };
+    renderModelOptions(models, currentDefault, preferredProviderIds, manualEntrySupported);
   }
 
-  function renderModelOptions(models, currentDefault) {
+  function renderModelOptions(models, currentDefault, preferredProviderIds = [], manualEntrySupported = false) {
     if (!modelSelectEl) return;
 
     const currentValue = modelSelectEl.value;
     const defaultModel = models.find((model) => model.id === currentDefault);
     const defaultLabel =
-      defaultModel?.displayName ||
-      defaultModel?.model ||
+      formatModelOptionLabel(defaultModel, t) ||
       t("composer.defaultModel", {}, "Default Model");
+    refreshModelFilterVisibility(models);
+    const normalizedFilter = normalizeModelCatalogFilter(modelFilterEl?.value || "");
+    const groupedModels = buildModelCatalogGroups(models, currentDefault, preferredProviderIds)
+      .map((group) => ({
+        ...group,
+        models: group.models.filter((model) =>
+          !normalizedFilter || model.id === currentValue || modelMatchesCatalogFilter(model, normalizedFilter)
+        ),
+      }))
+      .filter((group) => group.models.length > 0);
 
     modelSelectEl.innerHTML = "";
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "";
-    defaultOpt.textContent = t(
-      "composer.defaultModelWithName",
-      { name: defaultLabel },
-      `Default Model (${defaultLabel})`,
-    );
+    defaultOpt.textContent = defaultLabel;
     modelSelectEl.appendChild(defaultOpt);
 
-    for (const model of models) {
-      if (!model || typeof model !== "object") continue;
-      if (model.id === currentDefault) continue;
-      const opt = document.createElement("option");
-      opt.value = model.id;
-      opt.textContent = model.displayName || model.model || model.id;
-      modelSelectEl.appendChild(opt);
+    for (const group of groupedModels) {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = formatModelProviderGroupLabel(group, t);
+      for (const model of group.models) {
+        if (!model || typeof model !== "object") continue;
+        if (model.id === currentDefault) continue;
+        const opt = document.createElement("option");
+        opt.value = model.id;
+        opt.textContent = formatModelOptionLabel(model, t);
+        optgroup.appendChild(opt);
+      }
+      if (optgroup.children.length > 0) {
+        modelSelectEl.appendChild(optgroup);
+      }
     }
 
     const saved = localStorage.getItem(modelIdKey);
-    const preferredValue = currentValue || saved || "";
+    const preferredValue = resolvePreferredModelSelection(models, currentValue, saved || "", manualEntrySupported);
+    if (isManualModelValue(preferredValue)) {
+      upsertManualModelOption(preferredValue);
+    }
+    if (manualEntrySupported) {
+      const manualOpt = document.createElement("option");
+      manualOpt.value = MANUAL_MODEL_SENTINEL;
+      manualOpt.textContent = t("composer.manualModelAction", {}, "Manual Model...");
+      modelSelectEl.appendChild(manualOpt);
+    }
     if (preferredValue && [...modelSelectEl.options].some((opt) => opt.value === preferredValue)) {
       modelSelectEl.value = preferredValue;
     } else {
       modelSelectEl.value = "";
     }
 
-    modelSelectEl.classList.toggle("hidden", modelSelectEl.options.length <= 1);
+    modelSelectEl.classList.toggle("hidden", modelSelectEl.options.length <= 1 && !manualEntrySupported);
   }
 
   function connect() {
@@ -363,6 +588,37 @@ export function createChatNetworkFeature({
     });
   }
 
+  if (modelSelectEl) {
+    modelSelectEl.addEventListener("change", () => {
+      if (modelSelectEl.value !== MANUAL_MODEL_SENTINEL) return;
+      const manualValue = promptManualModelValue();
+      if (manualValue) {
+        upsertManualModelOption(manualValue);
+        modelSelectEl.value = manualValue;
+        return;
+      }
+      const fallbackValue = resolvePreferredModelSelection(
+        lastModelListState?.models ?? [],
+        "",
+        localStorage.getItem(modelIdKey) || "",
+        lastModelListState?.manualEntrySupported !== false,
+      );
+      modelSelectEl.value = fallbackValue;
+    });
+  }
+
+  if (modelFilterEl) {
+    modelFilterEl.addEventListener("input", () => {
+      if (!lastModelListState) return;
+      renderModelOptions(
+        lastModelListState.models,
+        lastModelListState.currentDefault,
+        lastModelListState.preferredProviderIds,
+        lastModelListState.manualEntrySupported,
+      );
+    });
+  }
+
   return {
     connect,
     isConnected,
@@ -381,7 +637,12 @@ export function createChatNetworkFeature({
         );
       }
       if (lastModelListState) {
-        renderModelOptions(lastModelListState.models, lastModelListState.currentDefault);
+        renderModelOptions(
+          lastModelListState.models,
+          lastModelListState.currentDefault,
+          lastModelListState.preferredProviderIds,
+          lastModelListState.manualEntrySupported,
+        );
       }
       if (lastAgentListState) {
         onAgentListLoaded?.(lastAgentListState, agentSelectEl?.value || lastAgentListState[0]?.id || "");

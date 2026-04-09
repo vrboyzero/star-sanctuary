@@ -828,6 +828,7 @@ function toRoomContext(value: unknown): MessageSendParams["roomContext"] {
   return {
     environment,
     roomId: typeof value.roomId === "string" ? value.roomId : undefined,
+    sessionKey: typeof value.sessionKey === "string" ? value.sessionKey : undefined,
     clientId: typeof value.clientId === "string" ? value.clientId : undefined,
     members,
   };

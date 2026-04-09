@@ -1,8 +1,10 @@
 import { WebSocket } from "ws";
 import type { BelldandyAgent, ConversationStore } from "@belldandy/agent";
 import type { ChatKind, ChannelRouter } from "./router/types.js";
-import type { Channel, ChannelConfig } from "./types.js";
+import type { Channel, ChannelConfig, ChannelProactiveTarget } from "./types.js";
 import { chunkMarkdownForOutbound } from "./reply-chunking.js";
+import type { CurrentConversationBindingStore } from "./current-conversation-binding-store.js";
+import { buildChannelSessionDescriptor } from "./session-key.js";
 
 export interface QqChannelConfig extends ChannelConfig {
     appId: string;
@@ -27,6 +29,14 @@ type QqReplyContext = {
     messageId?: string;
     eventType: string;
 };
+
+function isQqReplyContextResolved(replyContext: QqReplyContext | undefined): replyContext is QqReplyContext {
+    if (!replyContext) return false;
+    if (replyContext.eventType === "DIRECT_MESSAGE_CREATE") return typeof replyContext.guildId === "string" && replyContext.guildId.length > 0;
+    if (replyContext.eventType === "C2C_MESSAGE_CREATE") return typeof replyContext.userOpenId === "string" && replyContext.userOpenId.length > 0;
+    if (replyContext.eventType === "GROUP_AT_MESSAGE_CREATE") return typeof replyContext.groupOpenId === "string" && replyContext.groupOpenId.length > 0;
+    return typeof replyContext.channelId === "string" && replyContext.channelId.length > 0;
+}
 
 // WebSocket OpCodes
 const OpCode = {
@@ -60,10 +70,10 @@ export class QqChannel implements Channel {
     private readonly defaultAgentId?: string;
     private readonly router?: ChannelRouter;
     private readonly replyChunkingConfig?: QqChannelConfig["replyChunkingConfig"];
+    private readonly currentConversationBindingStore?: CurrentConversationBindingStore;
     private readonly onChannelSecurityApprovalRequired?: QqChannelConfig["onChannelSecurityApprovalRequired"];
 
     private _running = false;
-    private latestActiveChatId?: string;
     private readonly replyContextByChatId = new Map<string, QqReplyContext>();
 
     private readonly processedMessages = new Set<string>();
@@ -94,6 +104,7 @@ export class QqChannel implements Channel {
         this.defaultAgentId = config.defaultAgentId;
         this.router = config.router;
         this.replyChunkingConfig = config.replyChunkingConfig;
+        this.currentConversationBindingStore = config.currentConversationBindingStore;
         this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
     }
 
@@ -120,18 +131,11 @@ export class QqChannel implements Channel {
     }
 
     private rememberReplyContext(chatId: string, replyContext: QqReplyContext): void {
-        this.latestActiveChatId = chatId;
         this.replyContextByChatId.set(chatId, replyContext);
     }
 
-    private getReplyContext(chatId?: string): QqReplyContext | undefined {
-        if (chatId) {
-            return this.replyContextByChatId.get(chatId);
-        }
-        if (!this.latestActiveChatId) {
-            return undefined;
-        }
-        return this.replyContextByChatId.get(this.latestActiveChatId);
+    private getReplyContext(chatId: string): QqReplyContext | undefined {
+        return this.replyContextByChatId.get(chatId);
     }
 
     /**
@@ -525,13 +529,22 @@ export class QqChannel implements Channel {
         const chatKind = this.inferChatKind(eventType);
         const mentions = eventType.includes("_AT_") ? ["__mention__"] : [];
         const mentioned = chatKind === "dm" ? true : mentions.length > 0;
+        const senderId = typeof message.author?.id === "string" ? message.author.id : undefined;
+        const session = buildChannelSessionDescriptor({
+            channel: "qq",
+            chatKind,
+            chatId,
+            senderId,
+        });
         const decision = this.router
             ? this.router.decide({
                 channel: "qq",
                 chatKind,
                 chatId,
+                sessionScope: session.sessionScope,
+                sessionKey: session.sessionKey,
                 text: content,
-                senderId: typeof message.author?.id === "string" ? message.author.id : undefined,
+                senderId,
                 senderName: typeof message.author?.username === "string" ? message.author.username : undefined,
                 mentions,
                 mentioned,
@@ -564,9 +577,28 @@ export class QqChannel implements Channel {
         const selectedAgentId = decision.agentId ?? this.agentId ?? this.defaultAgentId;
         const runAgent = this.resolveAgent(selectedAgentId);
         console.log(`[${this.name}] Route decision for ${msgId}: allow=${decision.allow}, rule=${decision.matchedRuleId ?? "default"}, agent=${selectedAgentId ?? "default"}`);
+        await this.currentConversationBindingStore?.upsert({
+            channel: "qq",
+            sessionKey: session.sessionKey,
+            sessionScope: session.sessionScope,
+            legacyConversationId: session.legacyConversationId,
+            chatKind,
+            chatId,
+            ...(session.peerId ? { peerId: session.peerId } : {}),
+            updatedAt: Date.now(),
+            target: {
+                chatId,
+                ...(replyContext.channelId ? { channelId: replyContext.channelId } : {}),
+                ...(replyContext.guildId ? { guildId: replyContext.guildId } : {}),
+                ...(replyContext.groupOpenId ? { groupOpenId: replyContext.groupOpenId } : {}),
+                ...(replyContext.userOpenId ? { userOpenId: replyContext.userOpenId } : {}),
+                ...(replyContext.messageId ? { messageId: replyContext.messageId } : {}),
+                eventType: replyContext.eventType,
+            },
+        });
 
         // 获取或创建会话
-        const conversationId = `qq_${chatId}`;
+        const conversationId = session.legacyConversationId;
 
         // 添加用户消息到会话历史
         this.conversationStore.addMessage(conversationId, "user", content, {
@@ -587,6 +619,9 @@ export class QqChannel implements Channel {
                     eventType,
                     channel: this.name,
                     agentId: selectedAgentId,
+                    sessionScope: session.sessionScope,
+                    sessionKey: session.sessionKey,
+                    legacyConversationId: session.legacyConversationId,
                 },
             })) {
                 if (item.type === "final") {
@@ -607,14 +642,13 @@ export class QqChannel implements Channel {
     /**
      * 发送回复
      */
-    private async sendReply(content: string, replyContext?: QqReplyContext): Promise<void> {
-        const targetContext = replyContext ?? this.getReplyContext();
-        if (!targetContext) {
+    private async sendReply(content: string, replyContext: QqReplyContext): Promise<void> {
+        if (!replyContext) {
             console.warn(`[${this.name}] No reply context available`);
             return;
         }
 
-        const { channelId, guildId, groupOpenId, userOpenId, messageId, eventType } = targetContext;
+        const { channelId, guildId, groupOpenId, userOpenId, messageId, eventType } = replyContext;
 
         try {
             const baseUrl = this.config.sandbox
@@ -721,16 +755,53 @@ export class QqChannel implements Channel {
         }
 
         this.processedMessages.clear();
-        this.latestActiveChatId = undefined;
         this.replyContextByChatId.clear();
         console.log(`[${this.name}] Channel stopped.`);
     }
 
-    async sendProactiveMessage(content: string, chatId?: string): Promise<boolean> {
-        const targetChatId = chatId || this.latestActiveChatId;
-        const targetContext = this.getReplyContext(targetChatId);
-        if (!targetChatId || !targetContext) {
-            console.warn(`[${this.name}] Cannot send proactive message - no active chat ID found.`);
+    async sendProactiveMessage(content: string, target?: ChannelProactiveTarget): Promise<boolean> {
+        const explicitChatId = typeof target === "string"
+            ? target
+            : typeof target?.chatId === "string"
+                ? target.chatId
+                : "";
+        const explicitSessionKey = typeof target === "object" && typeof target?.sessionKey === "string"
+            ? target.sessionKey.trim()
+            : "";
+        const directBinding = explicitSessionKey
+            ? await this.currentConversationBindingStore?.get(explicitSessionKey)
+            : undefined;
+        const fallbackBinding = !explicitChatId && !directBinding
+            ? await this.currentConversationBindingStore?.getLatestByChannel({ channel: "qq" })
+            : undefined;
+        const targetChatId = directBinding?.chatId
+            || explicitChatId
+            || fallbackBinding?.chatId;
+        const directTargetContext = directBinding?.target
+            ? {
+                channelId: directBinding.target.channelId,
+                guildId: directBinding.target.guildId,
+                groupOpenId: directBinding.target.groupOpenId,
+                userOpenId: directBinding.target.userOpenId,
+                messageId: directBinding.target.messageId,
+                eventType: directBinding.target.eventType || "MESSAGE_CREATE",
+            }
+            : undefined;
+        const fallbackTargetContext = fallbackBinding?.target
+            ? {
+                channelId: fallbackBinding.target.channelId,
+                guildId: fallbackBinding.target.guildId,
+                groupOpenId: fallbackBinding.target.groupOpenId,
+                userOpenId: fallbackBinding.target.userOpenId,
+                messageId: fallbackBinding.target.messageId,
+                eventType: fallbackBinding.target.eventType || "MESSAGE_CREATE",
+            }
+            : undefined;
+        const targetContext = directTargetContext
+            ?? (explicitChatId ? this.getReplyContext(explicitChatId) : undefined)
+            ?? fallbackTargetContext;
+        if (!targetChatId || !isQqReplyContextResolved(targetContext)) {
+            console.warn(`[${this.name}] Cannot send proactive message - no binding-backed target chat ID found.`);
             return false;
         }
 

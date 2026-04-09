@@ -87,11 +87,17 @@ describe("createLeaveRoomTool", () => {
         maxTimeoutMs: 1000,
         maxResponseBytes: 1024,
       },
-      roomContext: { environment: "community", roomId: "room-context-1" },
+      roomContext: {
+        environment: "community",
+        roomId: "room-context-1",
+        sessionKey: "channel=community:scope=per-account-channel-peer:chat=room-context-1:account=%E8%B4%9D%E9%9C%B2%E4%B8%B9%E8%92%82",
+      },
     });
 
     expect(result.success).toBe(true);
-    expect(channel.sendProactiveMessage).toHaveBeenCalledWith("先走了", "room-context-1");
+    expect(channel.sendProactiveMessage).toHaveBeenCalledWith("先走了", {
+      sessionKey: "channel=community:scope=per-account-channel-peer:chat=room-context-1:account=%E8%B4%9D%E9%9C%B2%E4%B8%B9%E8%92%82",
+    });
     expect(channel.leaveRoom).toHaveBeenCalledWith("room-context-1");
     expect(JSON.parse(result.output)).toMatchObject({
       success: true,

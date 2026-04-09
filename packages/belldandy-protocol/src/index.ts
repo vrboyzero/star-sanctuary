@@ -109,6 +109,7 @@ export type MessageSendParams = {
   roomContext?: {
     roomId?: string;
     environment: "local" | "community"; // 本地WebChat vs office.goddess.ai社区
+    sessionKey?: string;
     clientId?: string;
     members?: Array<{
       type: "user" | "agent";

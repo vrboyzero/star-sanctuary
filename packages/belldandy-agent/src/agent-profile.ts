@@ -104,6 +104,8 @@ export type ResolvedAgentProfileMetadata = {
   catalog: AgentProfileCatalogMetadata;
 };
 
+export const MANUAL_MODEL_OVERRIDE_PREFIX = "manual:";
+
 // ─── Functions ───────────────────────────────────────────────────────────
 
 function normalizeEnumValue<T extends readonly string[]>(
@@ -350,14 +352,26 @@ export function resolveModelConfig(
   maxRetries?: number;
   retryBackoffMs?: number;
   proxyUrl?: string;
-  source: "primary" | "named";
+  source: "primary" | "named" | "manual";
 } {
+  const normalizedModelRef = typeof modelRef === "string" ? modelRef.trim() : "";
   if (modelRef === "primary") {
     return { ...primaryConfig, source: "primary" };
   }
 
+  if (normalizedModelRef.startsWith(MANUAL_MODEL_OVERRIDE_PREFIX)) {
+    const manualModel = normalizedModelRef.slice(MANUAL_MODEL_OVERRIDE_PREFIX.length).trim();
+    if (manualModel) {
+      return {
+        ...primaryConfig,
+        model: manualModel,
+        source: "manual",
+      };
+    }
+  }
+
   // 在 fallbacks 中按 id 查找
-  const found = fallbacks.find((f) => f.id === modelRef);
+  const found = fallbacks.find((f) => f.id === normalizedModelRef);
   if (found) {
     return {
       baseUrl: found.baseUrl,

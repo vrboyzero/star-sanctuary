@@ -1,10 +1,12 @@
 import WebSocket from "ws";
 import type { BelldandyAgent } from "@belldandy/agent";
 import { uploadTokenUsage, type TokenUsageUploadConfig } from "@belldandy/protocol";
-import type { Channel, ChannelConfig } from "./types.js";
+import type { Channel, ChannelConfig, ChannelProactiveTarget } from "./types.js";
 import { ConversationStore } from "@belldandy/agent";
+import type { CurrentConversationBindingStore } from "./current-conversation-binding-store.js";
 import { updateAgentRoom } from "./community-config.js";
 import { chunkMarkdownForOutbound } from "./reply-chunking.js";
+import { buildChannelSessionDescriptor } from "./session-key.js";
 import { lookup as dnsLookup } from "node:dns/promises";
 import net from "node:net";
 
@@ -133,6 +135,7 @@ export class CommunityChannel implements Channel {
   private readonly router?: CommunityChannelConfig["router"];
   private readonly onChannelSecurityApprovalRequired?: CommunityChannelConfig["onChannelSecurityApprovalRequired"];
   private readonly replyChunkingConfig?: CommunityChannelConfig["replyChunkingConfig"];
+  private readonly currentConversationBindingStore?: CurrentConversationBindingStore;
   private readonly reconnectConfig: {
     enabled: boolean;
     maxRetries: number;
@@ -162,6 +165,7 @@ export class CommunityChannel implements Channel {
     this.router = config.router;
     this.onChannelSecurityApprovalRequired = config.onChannelSecurityApprovalRequired;
     this.replyChunkingConfig = config.replyChunkingConfig;
+    this.currentConversationBindingStore = config.currentConversationBindingStore;
     this.tokenUsageUpload = config.tokenUsageUpload;
     this.ownerUserUuid = config.ownerUserUuid;
     this.reconnectConfig = config.reconnect ?? {
@@ -226,17 +230,50 @@ export class CommunityChannel implements Channel {
     console.log(`[${this.name}] Community channel stopped`);
   }
 
-  async sendProactiveMessage(content: string, chatId?: string): Promise<boolean> {
+  async sendProactiveMessage(content: string, target?: ChannelProactiveTarget): Promise<boolean> {
+    const explicitRoomId = typeof target === "string"
+      ? target
+      : typeof target?.chatId === "string"
+        ? target.chatId
+        : "";
+    const explicitSessionKey = typeof target === "object" && typeof target?.sessionKey === "string"
+      ? target.sessionKey.trim()
+      : "";
+    const explicitAccountId = typeof target === "object" && typeof target?.accountId === "string"
+      ? target.accountId.trim()
+      : "";
+    const directBinding = explicitSessionKey
+      ? await this.currentConversationBindingStore?.get(explicitSessionKey)
+      : undefined;
+    const fallbackBinding = !explicitRoomId && !directBinding
+      ? await this.currentConversationBindingStore?.getLatestByChannel({
+        channel: "community",
+        ...(explicitAccountId ? { accountId: explicitAccountId } : {}),
+      })
+      : undefined;
+    const targetRoomId = directBinding?.target.roomId
+      || directBinding?.chatId
+      || explicitRoomId
+      || fallbackBinding?.target.roomId
+      || fallbackBinding?.chatId;
+    const targetAccountId = directBinding?.target.accountId
+      || directBinding?.accountId
+      || explicitAccountId
+      || fallbackBinding?.target.accountId
+      || fallbackBinding?.accountId;
     // chatId 在社区场景中是 roomId，但我们需要找到对应的 agentName
-    if (!chatId) {
+    if (!targetRoomId) {
       console.warn(`[${this.name}] No roomId specified for proactive message`);
       return false;
     }
 
     // 找到在这个房间的第一个 Agent（如果有多个 Agent 在同一房间，使用第一个）
-    const state = Array.from(this.connections.values()).find(s => s.roomId === chatId);
+    const state = Array.from(this.connections.values()).find((item) =>
+      item.roomId === targetRoomId
+      && (!targetAccountId || item.agentConfig.name === targetAccountId)
+    );
     if (!state || state.ws.readyState !== WebSocket.OPEN) {
-      console.warn(`[${this.name}] No active connection for room ${chatId}`);
+      console.warn(`[${this.name}] No active connection for room ${targetRoomId}`);
       return false;
     }
 
@@ -608,12 +645,21 @@ export class CommunityChannel implements Channel {
 
     const senderId = normalizeCommunitySenderId(sender);
     const mentioned = isCommunityMentioned(content, state.agentConfig.name, this.agentId);
+    const session = buildChannelSessionDescriptor({
+      channel: "community",
+      accountId: state.agentConfig.name,
+      chatKind: "room",
+      chatId: state.roomId,
+      senderId: senderId || undefined,
+    });
     const decision = this.router
       ? this.router.decide({
         channel: "community",
         accountId: state.agentConfig.name,
         chatKind: "room",
         chatId: state.roomId,
+        sessionScope: session.sessionScope,
+        sessionKey: session.sessionKey,
         text: content || "",
         senderId: senderId || undefined,
         senderName: typeof sender?.name === "string" ? sender.name : undefined,
@@ -645,9 +691,24 @@ export class CommunityChannel implements Channel {
     }
 
     // 构建会话 ID（房间级别）
-    const conversationId = `community:${state.roomId}`;
+    const conversationId = session.legacyConversationId;
     const selectedAgentId = decision.agentId ?? this.agentId;
     const runAgent = this.resolveAgent(selectedAgentId);
+    await this.currentConversationBindingStore?.upsert({
+      channel: "community",
+      sessionKey: session.sessionKey,
+      sessionScope: session.sessionScope,
+      legacyConversationId: session.legacyConversationId,
+      chatKind: "room",
+      chatId: state.roomId,
+      ...(session.accountId ? { accountId: session.accountId } : {}),
+      ...(session.peerId ? { peerId: session.peerId } : {}),
+      updatedAt: Date.now(),
+      target: {
+        roomId: state.roomId,
+        accountId: state.agentConfig.name,
+      },
+    });
 
     try {
       // 调用 Agent 处理消息（流式接口）
@@ -658,6 +719,7 @@ export class CommunityChannel implements Channel {
         roomContext: {
           roomId: state.roomId,
           environment: "community",
+          sessionKey: session.sessionKey,
           members: data.roomMembers ?? state.members, // 优先用消息附带的，fallback 到本地维护的成员列表
         },
         senderInfo: {
@@ -670,6 +732,9 @@ export class CommunityChannel implements Channel {
           channel: "community",
           accountId: state.agentConfig.name,
           agentId: selectedAgentId,
+          sessionScope: session.sessionScope,
+          sessionKey: session.sessionKey,
+          legacyConversationId: session.legacyConversationId,
         },
       });
 

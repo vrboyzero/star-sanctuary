@@ -1,5 +1,11 @@
 import type { Tool, ToolContext, ToolCallResult } from "../../types.js";
 
+type LeaveRoomChannelTarget = string | {
+  chatId?: string;
+  sessionKey?: string;
+  accountId?: string;
+};
+
 /**
  * leave_room 工具工厂函数
  *
@@ -13,7 +19,7 @@ import type { Tool, ToolContext, ToolCallResult } from "../../types.js";
 
 export interface LeaveRoomChannelAdapter {
   leaveRoom(roomId: string): Promise<void>;
-  sendProactiveMessage(content: string, chatId: string): Promise<boolean>;
+  sendProactiveMessage(content: string, target: LeaveRoomChannelTarget): Promise<boolean>;
   getJoinedRooms?(): Array<{ agentName: string; roomId: string; roomName?: string }>;
 }
 
@@ -116,7 +122,13 @@ export function createLeaveRoomTool(channel?: LeaveRoomChannelAdapter): Tool {
         // 1. 可选：发送告别消息（在离开前发送，此时还在房间里）
         if (farewellMessage) {
           try {
-            await channel.sendProactiveMessage(farewellMessage, roomId);
+            const farewellTarget = roomContext?.environment === "community" && typeof roomContext.sessionKey === "string" && roomContext.sessionKey.trim()
+              ? { sessionKey: roomContext.sessionKey.trim() }
+              : {
+                chatId: roomId,
+                ...(targetAgentName ? { accountId: targetAgentName } : {}),
+              };
+            await channel.sendProactiveMessage(farewellMessage, farewellTarget);
           } catch (err) {
             ctx.logger?.warn(`发送告别消息失败: ${err}`);
           }

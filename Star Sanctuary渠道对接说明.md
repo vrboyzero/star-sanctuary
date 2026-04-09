@@ -44,8 +44,6 @@
 - `channels-routing.json`
 - `channel-security.json`
 - `channel-security-approvals.json`
-- `discord-state.json`
-- `feishu-state.json`
 - `sessions/`
 
 ### 2.2 启动方式
@@ -202,7 +200,6 @@ BELLDANDY_FEISHU_AGENT_ID=default
 - 进入 channel router / security fallback
 - 若 DM 命中 `allowlist` 阻断，则写入 pending approval
 - 使用 `chatId` 作为 conversation 维度
-- `feishu-state.json` 会记录最近聊天目标
 
 ### 3.4 常见问题
 
@@ -262,9 +259,6 @@ QQ 消息进入后会：
 ```env
 BELLDANDY_DISCORD_ENABLED=true
 BELLDANDY_DISCORD_BOT_TOKEN=你的BotToken
-
-# 可选：主动消息默认目标频道
-BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID=
 ```
 
 ### 5.2 平台侧配置
@@ -285,7 +279,6 @@ Discord 消息进入后会：
 - 进入 channel router / security fallback
 - 若 DM 命中 `allowlist` 阻断，则写入 pending approval
 - 回复超出平台限制时，会按 2000 字符分段发送
-- 状态持久化到 `discord-state.json`
 
 ### 5.4 常见问题
 

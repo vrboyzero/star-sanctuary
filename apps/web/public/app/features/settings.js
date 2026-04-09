@@ -12,6 +12,7 @@ export function createSettingsController({
   onToggle,
   getConnectionAuthMode,
   onOpenCommunityConfig,
+  onModelCatalogChanged,
   onOpenContinuationAction,
   redactedPlaceholder = "[REDACTED]",
   t = (_key, _params, fallback) => fallback ?? "",
@@ -26,6 +27,11 @@ export function createSettingsController({
     cfgApiKey,
     cfgBaseUrl,
     cfgModel,
+    cfgModelPreferredProviders,
+    refreshModelFallbackConfigBtn,
+    modelFallbackConfigMeta,
+    cfgModelFallbackContent,
+    cfgExternalOutboundRequireConfirmation,
     cfgHeartbeat,
     cfgHeartbeatEnabled,
     cfgHeartbeatActiveHours,
@@ -67,7 +73,6 @@ export function createSettingsController({
     cfgQqSandbox,
     cfgDiscordEnabled,
     cfgDiscordBotToken,
-    cfgDiscordDefaultChannelId,
     refreshChannelSecurityBtn,
     channelSecurityConfigMeta,
     cfgChannelSecurityContent,
@@ -132,6 +137,11 @@ export function createSettingsController({
       void openCommunityConfig();
     });
   }
+  if (refreshModelFallbackConfigBtn) {
+    refreshModelFallbackConfigBtn.addEventListener("click", () => {
+      void loadModelFallbackConfig();
+    });
+  }
   if (refreshChannelSecurityBtn) {
     refreshChannelSecurityBtn.addEventListener("click", () => {
       void loadChannelSecuritySurface();
@@ -147,13 +157,13 @@ export function createSettingsController({
       void handleChannelSecurityPendingAction(action, requestId, target);
     });
   }
-
   async function toggle(show, options = {}) {
     if (!settingsModal) return;
     if (show) {
       settingsModal.classList.remove("hidden");
       onToggle?.(true);
       await loadConfig();
+      await loadModelFallbackConfig();
       await loadChannelSecuritySurface();
       await runDoctor();
       if (options.section === "channels" && channelsSettingsSection) {
@@ -176,6 +186,12 @@ export function createSettingsController({
     cfgApiKey.value = c["BELLDANDY_OPENAI_API_KEY"] || "";
     cfgBaseUrl.value = c["BELLDANDY_OPENAI_BASE_URL"] || "";
     cfgModel.value = c["BELLDANDY_OPENAI_MODEL"] || "";
+    if (cfgModelPreferredProviders) {
+      cfgModelPreferredProviders.value = c["BELLDANDY_MODEL_PREFERRED_PROVIDERS"] || "";
+    }
+    if (cfgExternalOutboundRequireConfirmation) {
+      cfgExternalOutboundRequireConfirmation.checked = c["BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION"] !== "false";
+    }
     cfgHeartbeat.value = c["BELLDANDY_HEARTBEAT_INTERVAL"] || "";
     cfgHeartbeatEnabled.checked = c["BELLDANDY_HEARTBEAT_ENABLED"] === "true";
     cfgHeartbeatActiveHours.value = c["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] || "";
@@ -212,7 +228,33 @@ export function createSettingsController({
     if (cfgQqSandbox) cfgQqSandbox.checked = c["BELLDANDY_QQ_SANDBOX"] !== "false";
     if (cfgDiscordEnabled) cfgDiscordEnabled.checked = c["BELLDANDY_DISCORD_ENABLED"] === "true";
     if (cfgDiscordBotToken) cfgDiscordBotToken.value = c["BELLDANDY_DISCORD_BOT_TOKEN"] || "";
-    if (cfgDiscordDefaultChannelId) cfgDiscordDefaultChannelId.value = c["BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID"] || "";
+  }
+
+  async function loadModelFallbackConfig() {
+    if (!isConnected()) return;
+    const configRes = await sendReq({ type: "req", id: makeId(), method: "models.config.get" });
+
+    if (cfgModelFallbackContent && configRes?.ok) {
+      const content = typeof configRes.payload?.content === "string"
+        ? configRes.payload.content
+        : '{\n  "fallbacks": []\n}\n';
+      cfgModelFallbackContent.value = content;
+    }
+    if (modelFallbackConfigMeta) {
+      if (configRes?.ok) {
+        modelFallbackConfigMeta.textContent = t(
+          "settings.modelFallbackConfigMeta",
+          { path: configRes.payload?.path || "models.json" },
+          `配置文件：${configRes.payload?.path || "models.json"}`,
+        );
+      } else {
+        modelFallbackConfigMeta.textContent = t(
+          "settings.modelFallbackConfigLoadFailed",
+          {},
+          "读取模型 fallback 配置失败",
+        );
+      }
+    }
   }
 
   function escapeHtml(value) {
@@ -346,6 +388,33 @@ export function createSettingsController({
     return { ok: true };
   }
 
+  async function saveModelFallbackConfig() {
+    if (!cfgModelFallbackContent) return { ok: true };
+    const content = cfgModelFallbackContent.value || '{\n  "fallbacks": []\n}\n';
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "models.config.update",
+      params: { content },
+    });
+    if (!res?.ok) {
+      return {
+        ok: false,
+        message: res?.error?.message || "Failed to save model fallback config",
+      };
+    }
+    const nextContent = typeof res.payload?.content === "string" ? res.payload.content : content;
+    cfgModelFallbackContent.value = nextContent;
+    if (modelFallbackConfigMeta) {
+      modelFallbackConfigMeta.textContent = t(
+        "settings.modelFallbackConfigMeta",
+        { path: res.payload?.path || "models.json" },
+        `配置文件：${res.payload?.path || "models.json"}`,
+      );
+    }
+    return { ok: true };
+  }
+
   async function saveChannelReplyChunkingConfig() {
     if (!cfgChannelReplyChunkingContent) return { ok: true };
     const content = cfgChannelReplyChunkingContent.value || '{\n  "version": 1,\n  "channels": {}\n}\n';
@@ -471,6 +540,12 @@ export function createSettingsController({
     assignSecretUpdate(updates, "BELLDANDY_OPENAI_API_KEY", cfgApiKey);
     updates["BELLDANDY_OPENAI_BASE_URL"] = cfgBaseUrl.value.trim() || "https://api.openai.com/v1";
     updates["BELLDANDY_OPENAI_MODEL"] = cfgModel.value.trim();
+    if (cfgModelPreferredProviders) {
+      updates["BELLDANDY_MODEL_PREFERRED_PROVIDERS"] = cfgModelPreferredProviders.value.trim();
+    }
+    if (cfgExternalOutboundRequireConfirmation) {
+      updates["BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION"] = cfgExternalOutboundRequireConfirmation.checked ? "true" : "false";
+    }
     updates["BELLDANDY_HEARTBEAT_ENABLED"] = cfgHeartbeatEnabled.checked ? "true" : "false";
     updates["BELLDANDY_HEARTBEAT_INTERVAL"] = cfgHeartbeat.value.trim();
     updates["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] = cfgHeartbeatActiveHours.value.trim();
@@ -507,7 +582,6 @@ export function createSettingsController({
     if (cfgQqSandbox) updates["BELLDANDY_QQ_SANDBOX"] = cfgQqSandbox.checked ? "true" : "false";
     if (cfgDiscordEnabled) updates["BELLDANDY_DISCORD_ENABLED"] = cfgDiscordEnabled.checked ? "true" : "false";
     assignSecretUpdate(updates, "BELLDANDY_DISCORD_BOT_TOKEN", cfgDiscordBotToken);
-    if (cfgDiscordDefaultChannelId) updates["BELLDANDY_DISCORD_DEFAULT_CHANNEL_ID"] = cfgDiscordDefaultChannelId.value.trim();
 
     if (mainApiKey && mainApiKey !== redactedPlaceholder) {
       updates["BELLDANDY_AGENT_PROVIDER"] = "openai";
@@ -527,6 +601,20 @@ export function createSettingsController({
         "settings.communityApiRequiresAuth",
         {},
         "Community API cannot be used with AUTH_MODE=none. Switch to token or password first.",
+      ));
+      return;
+    }
+
+    const modelFallbackSave = await saveModelFallbackConfig();
+    if (!modelFallbackSave.ok) {
+      if (saveSettingsBtn) {
+        saveSettingsBtn.textContent = t("settings.failed", {}, "Failed");
+        saveSettingsBtn.disabled = false;
+      }
+      alert(t(
+        "settings.modelFallbackConfigSaveFailed",
+        { message: modelFallbackSave.message || "Unknown error" },
+        "Model fallback config save failed: {message}",
       ));
       return;
     }
@@ -568,6 +656,7 @@ export function createSettingsController({
 
     if (res && res.ok) {
       invalidateServerConfigCache?.();
+      await onModelCatalogChanged?.();
       if (saveSettingsBtn) {
         saveSettingsBtn.textContent = t("settings.saved", {}, "Saved");
       }
