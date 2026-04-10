@@ -542,6 +542,63 @@ function buildLearningReviewInputCard(payload, t) {
   };
 }
 
+function buildSkillFreshnessCard(payload, t) {
+  const summary = payload?.skillFreshness?.summary;
+  if (!summary) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorSkillFreshnessCounts",
+      {
+        healthy: formatNumber(summary.healthyCount),
+        warn: formatNumber(summary.warnCount),
+        patch: formatNumber(summary.needsPatchCount),
+        fresh: formatNumber(summary.needsNewSkillCount),
+      },
+      `healthy ${formatNumber(summary.healthyCount)} / warn ${formatNumber(summary.warnCount)} / patch ${formatNumber(summary.needsPatchCount)} / new ${formatNumber(summary.needsNewSkillCount)}`,
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorSkillFreshnessHeadline",
+      { headline: summary.headline || "-" },
+      summary.headline || "-",
+    ),
+  ];
+  const topItems = Array.isArray(summary.topItems) ? summary.topItems.slice(0, 4) : [];
+  if (!topItems.length) {
+    notes.push(tr(t, "settings.doctorSkillFreshnessEmpty", {}, "当前没有需要处理的 skill freshness 风险。"));
+  }
+  for (const item of topItems) {
+    notes.push(tr(
+      t,
+      "settings.doctorSkillFreshnessTopItem",
+      {
+        name: item.displayName || item.skillKey || "-",
+        status: item.status || "healthy",
+        summary: item.summary || "-",
+      },
+      `${item.displayName || item.skillKey || "-"} [${item.status || "healthy"}]: ${item.summary || "-"}`,
+    ));
+  }
+
+  return {
+    title: tr(t, "settings.doctorSkillFreshnessTitle", {}, "Skill Freshness"),
+    badges,
+    notes,
+    status: (Number(summary.warnCount) || 0) + (Number(summary.needsPatchCount) || 0) + (Number(summary.needsNewSkillCount) || 0) > 0
+      ? "warn"
+      : summary.available
+        ? "pass"
+        : "warn",
+  };
+}
+
 function buildSharedGovernanceCard(payload, t) {
   const sharedMemory = payload?.memoryRuntime?.sharedMemory;
   const residentSummary = payload?.residentAgents?.summary;
@@ -873,6 +930,16 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
       },
       `failed ${formatNumber(runtime.totals.failedRuns)} / skipped ${formatNumber(runtime.totals.skippedRuns)} / linked ${formatNumber(runtime.totals.conversationLinkedRuns)}`,
     ),
+    tr(
+      t,
+      "settings.doctorBackgroundContinuationRecovery",
+      {
+        attempted: formatNumber(runtime.totals.recoveryAttemptedRuns),
+        succeeded: formatNumber(runtime.totals.recoverySucceededRuns),
+        recoverable: formatNumber(runtime.totals.recoverableFailedRuns),
+      },
+      `recovery ${formatNumber(runtime.totals.recoverySucceededRuns)}/${formatNumber(runtime.totals.recoveryAttemptedRuns)} / recoverable ${formatNumber(runtime.totals.recoverableFailedRuns)}`,
+    ),
   ];
 
   const notes = [{
@@ -899,6 +966,10 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
       targetId ? `target=${targetType || "conversation"}:${targetId}` : "",
       entry.summary ? `summary=${entry.summary}` : "",
       entry.reason ? `reason=${entry.reason}` : "",
+      entry.latestRecoveryOutcome ? `recovery=${entry.latestRecoveryOutcome}` : "",
+      entry.latestRecoveryRunId ? `recoveryRun=${entry.latestRecoveryRunId}` : "",
+      entry.recoveredFromRunId ? `recoveredFrom=${entry.recoveredFromRunId}` : "",
+      entry.latestRecoveryReason ? `recoveryReason=${entry.latestRecoveryReason}` : "",
       `started=${formatTimestamp(entry.startedAt)}`,
       typeof entry.finishedAt === "number" ? `finished=${formatTimestamp(entry.finishedAt)}` : "",
       typeof entry.nextRunAtMs === "number" ? `next=${formatTimestamp(entry.nextRunAtMs)}` : "",
@@ -1017,6 +1088,152 @@ function buildExternalOutboundRuntimeCard(payload, t) {
   };
 }
 
+function buildDeploymentBackendsCard(payload, t) {
+  const runtime = payload?.deploymentBackends;
+  if (!runtime?.summary || !Array.isArray(runtime?.items)) {
+    return undefined;
+  }
+
+  const selectedLabel = runtime.summary.selectedProfileId || "-";
+  const badges = [
+    tr(
+      t,
+      "settings.doctorDeploymentBackendsProfiles",
+      {
+        enabled: formatNumber(runtime.summary.enabledCount),
+        total: formatNumber(runtime.summary.profileCount),
+      },
+      `${formatNumber(runtime.summary.enabledCount)}/${formatNumber(runtime.summary.profileCount)} profiles enabled`,
+    ),
+    tr(
+      t,
+      "settings.doctorDeploymentBackendsKinds",
+      {
+        local: formatNumber(runtime.summary.backendCounts?.local),
+        docker: formatNumber(runtime.summary.backendCounts?.docker),
+        ssh: formatNumber(runtime.summary.backendCounts?.ssh),
+      },
+      `local ${formatNumber(runtime.summary.backendCounts?.local)} / docker ${formatNumber(runtime.summary.backendCounts?.docker)} / ssh ${formatNumber(runtime.summary.backendCounts?.ssh)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorDeploymentBackendsSelected",
+      {
+        profile: selectedLabel,
+        backend: runtime.summary.selectedBackend || "-",
+      },
+      `selected ${selectedLabel} (${runtime.summary.selectedBackend || "-"})`,
+    ),
+    tr(
+      t,
+      "settings.doctorDeploymentBackendsWarnings",
+      { count: formatNumber(runtime.summary.warningCount) },
+      `${formatNumber(runtime.summary.warningCount)} warning profiles`,
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorDeploymentBackendsHeadline",
+      { headline: runtime.headline || "-" },
+      runtime.headline || "-",
+    ),
+    `config: ${runtime.configPath || "-"}`,
+  ];
+
+  if (runtime.summary.selectedProfileId && runtime.summary.selectedResolved === false) {
+    notes.push(`selected profile not found: ${runtime.summary.selectedProfileId}`);
+  }
+
+  for (const item of runtime.items.slice(0, 6)) {
+    notes.push(`${item.label}: ${item.message}`);
+  }
+
+  return {
+    title: tr(t, "settings.doctorDeploymentBackendsTitle", {}, "Deployment Backends"),
+    badges,
+    notes,
+    status: runtime.summary.warningCount > 0 || runtime.summary.selectedResolved === false ? "warn" : "pass",
+  };
+}
+
+function buildRuntimeResilienceCard(payload, t) {
+  const runtime = payload?.runtimeResilience;
+  if (!runtime?.routing?.primary || !runtime?.summary) {
+    return undefined;
+  }
+
+  const latest = runtime.latest;
+  const badges = [
+    tr(
+      t,
+      "settings.doctorRuntimeResiliencePrimary",
+      { route: `${runtime.routing.primary.provider}/${runtime.routing.primary.model}` },
+      `primary ${runtime.routing.primary.provider}/${runtime.routing.primary.model}`,
+    ),
+    tr(
+      t,
+      "settings.doctorRuntimeResilienceFallbacks",
+      { count: formatNumber(runtime.routing.fallbacks?.length) },
+      `${formatNumber(runtime.routing.fallbacks?.length)} fallbacks`,
+    ),
+  ];
+  if (latest) {
+    badges.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceLatest",
+      { status: latest.finalStatus || "idle" },
+      `latest ${latest.finalStatus || "idle"}`,
+    ));
+    badges.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceSignals",
+      {
+        retry: formatNumber(latest.stepCounts?.sameProfileRetries),
+        switch: formatNumber(latest.stepCounts?.crossProfileFallbacks),
+        cooldown: formatNumber(latest.stepCounts?.cooldownSkips),
+      },
+      `retry ${formatNumber(latest.stepCounts?.sameProfileRetries)} / switch ${formatNumber(latest.stepCounts?.crossProfileFallbacks)} / cooldown ${formatNumber(latest.stepCounts?.cooldownSkips)}`,
+    ));
+  }
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorRuntimeResilienceHeadline",
+      { headline: runtime.summary.headline || "-" },
+      runtime.summary.headline || "-",
+    ),
+  ];
+  if (runtime.routing.compaction?.configured) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceCompaction",
+      {
+        route: runtime.routing.compaction.route
+          ? `${runtime.routing.compaction.route.provider}/${runtime.routing.compaction.route.model}`
+          : "-",
+      },
+      `compaction route ${runtime.routing.compaction.route ? `${runtime.routing.compaction.route.provider}/${runtime.routing.compaction.route.model}` : "-"}`,
+    ));
+  }
+  if (latest?.headline) {
+    notes.push(latest.headline);
+  }
+  const reasonSummary = formatKeyCountSummary(runtime.reasonCounts);
+  if (reasonSummary) {
+    notes.push(`reasons: ${reasonSummary}`);
+  }
+
+  return {
+    title: tr(t, "settings.doctorRuntimeResilienceTitle", {}, "Runtime Resilience"),
+    badges,
+    notes,
+    status: latest && (latest.finalStatus !== "success" || latest.degraded) ? "warn" : "pass",
+  };
+}
+
 function createDoctorCard(card, handlers = {}) {
   const panel = document.createElement("div");
   panel.style.width = "100%";
@@ -1085,11 +1302,14 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildResidentAgentsCard(payload, t),
     buildMindProfileSnapshotCard(payload, t),
     buildLearningReviewInputCard(payload, t),
+    buildSkillFreshnessCard(payload, t),
     buildSharedGovernanceCard(payload, t),
     buildDelegationCard(payload, t),
     buildCronRuntimeCard(payload, t),
     buildBackgroundContinuationRuntimeCard(payload, t),
     buildExternalOutboundRuntimeCard(payload, t),
+    buildDeploymentBackendsCard(payload, t),
+    buildRuntimeResilienceCard(payload, t),
   ].filter(Boolean);
 
   for (const card of cards) {
@@ -1148,6 +1368,14 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(...learningReviewInputCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
+  const skillFreshnessCard = buildSkillFreshnessCard(payload, t);
+  if (skillFreshnessCard) {
+    lines.push(``);
+    lines.push(`${skillFreshnessCard.title}:`);
+    lines.push(...skillFreshnessCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...skillFreshnessCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
   const sharedGovernanceCard = buildSharedGovernanceCard(payload, t);
   if (sharedGovernanceCard) {
     lines.push(``);
@@ -1186,6 +1414,22 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${externalOutboundCard.title}:`);
     lines.push(...externalOutboundCard.badges.map((badge) => `- ${badge}`));
     lines.push(...externalOutboundCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const deploymentBackendsCard = buildDeploymentBackendsCard(payload, t);
+  if (deploymentBackendsCard) {
+    lines.push(``);
+    lines.push(`${deploymentBackendsCard.title}:`);
+    lines.push(...deploymentBackendsCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...deploymentBackendsCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const runtimeResilienceCard = buildRuntimeResilienceCard(payload, t);
+  if (runtimeResilienceCard) {
+    lines.push(``);
+    lines.push(`${runtimeResilienceCard.title}:`);
+    lines.push(...runtimeResilienceCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...runtimeResilienceCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   return lines;

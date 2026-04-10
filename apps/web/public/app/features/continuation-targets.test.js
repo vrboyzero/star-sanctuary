@@ -41,6 +41,26 @@ describe("continuation target helpers", () => {
     });
   });
 
+  it("builds goal replay continuation actions for checkpoint recovery", () => {
+    expect(buildContinuationAction({
+      scope: "goal",
+      targetId: "goal_alpha",
+      recommendedTargetId: "node_impl",
+      targetType: "node",
+      resumeMode: "checkpoint",
+      replay: {
+        kind: "goal_checkpoint",
+        checkpointId: "checkpoint_1",
+        nodeId: "node_impl",
+      },
+    })).toEqual({
+      kind: "goalReplay",
+      goalId: "goal_alpha",
+      nodeId: "node_impl",
+      checkpointId: "checkpoint_1",
+    });
+  });
+
   it("round-trips continuation actions through encoded html payloads", () => {
     const encoded = encodeContinuationAction({
       kind: "conversation",

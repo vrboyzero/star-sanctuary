@@ -1,4 +1,9 @@
 import type { ModelProfile } from "@belldandy/agent";
+import {
+  inferModelMediaCapabilities,
+  inferProviderId,
+  inferProviderMediaCapabilities,
+} from "./media-capability-registry.js";
 
 export type PrimaryModelCatalogConfig = {
   baseUrl: string;
@@ -132,40 +137,14 @@ function normalizeProtocol(value: string | undefined): "openai" | "anthropic" | 
   return undefined;
 }
 
-function inferProviderId(input: {
-  baseUrl?: string;
-  protocol?: string;
-}): string {
-  const protocol = normalizeProtocol(input.protocol);
-  const normalizedBaseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim().toLowerCase() : "";
-  if (normalizedBaseUrl) {
-    try {
-      const host = new URL(normalizedBaseUrl).hostname.toLowerCase();
-      if (host.includes("openai")) return "openai";
-      if (host.includes("anthropic")) return "anthropic";
-      if (host.includes("moonshot")) return "moonshot";
-      if (host.includes("openrouter")) return "openrouter";
-      if (host.includes("groq")) return "groq";
-      if (host.includes("dashscope") || host.includes("aliyuncs")) return "dashscope";
-      if (host.includes("deepseek")) return "deepseek";
-      if (host.includes("ollama")) return "ollama";
-      if (host.includes("azure")) return "azure";
-      if (host.includes("x.ai") || host.includes("xai") || host.includes("grok")) return "xai";
-      if (host.includes("together")) return "together";
-    } catch {
-      return protocol === "anthropic" ? "anthropic" : "custom";
-    }
-  }
-  if (protocol === "anthropic") return "anthropic";
-  if (protocol === "openai") return "openai-compatible";
-  return "openai-compatible";
-}
-
 function describeProvider(providerId: string): ProviderDescriptor {
   return PROVIDER_REGISTRY[providerId] ?? {
     label: humanizeProviderId(providerId) || "Custom Provider",
     onboardingScopes: GENERIC_PROVIDER_SCOPES,
-    capabilities: GENERIC_PROVIDER_CAPABILITIES,
+    capabilities: uniqueStrings([
+      ...GENERIC_PROVIDER_CAPABILITIES,
+      ...inferProviderMediaCapabilities(providerId),
+    ]),
   };
 }
 
@@ -197,13 +176,21 @@ export function normalizePreferredProviderIds(values: string[] | string | undefi
 }
 
 function buildModelCapabilities(input: {
+  providerId?: string;
   protocol?: string;
   wireApi?: string;
+  model?: string;
 }): string[] {
   return uniqueStrings([
     "chat",
     normalizeProtocol(input.protocol) === "anthropic" ? "anthropic_api" : undefined,
     input.wireApi === "responses" ? "responses_api" : undefined,
+    ...inferModelMediaCapabilities({
+      providerId: input.providerId,
+      protocol: input.protocol,
+      wireApi: input.wireApi,
+      model: input.model,
+    }),
   ]);
 }
 
@@ -230,8 +217,10 @@ function buildModelCatalogEntry(input: {
     ...(input.protocol ? { protocol: input.protocol } : {}),
     ...(input.wireApi ? { wireApi: input.wireApi } : {}),
     capabilities: buildModelCapabilities({
+      providerId: input.providerId,
       protocol: input.protocol,
       wireApi: input.wireApi,
+      model: input.model,
     }),
     isDefault: input.isDefault,
   };
@@ -257,7 +246,10 @@ export function buildProviderModelCatalog(input: {
       id: providerId,
       label: descriptor.label,
       onboardingScopes: [...descriptor.onboardingScopes],
-      capabilities: [...descriptor.capabilities],
+      capabilities: uniqueStrings([
+        ...descriptor.capabilities,
+        ...inferProviderMediaCapabilities(providerId),
+      ]),
     });
   };
 

@@ -14,6 +14,11 @@ export {
   type FailoverReason,
   type FailoverAttempt,
   type FailoverResult,
+  type FailoverExecutionStatus,
+  type FailoverExecutionStepKind,
+  type FailoverExecutionStep,
+  type FailoverExecutionSummary,
+  FailoverExhaustedError,
   type FailoverLogger,
   type ModelConfigFile,
 } from "./failover-client.js";

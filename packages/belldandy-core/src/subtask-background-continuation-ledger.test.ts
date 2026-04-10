@@ -38,6 +38,7 @@ function createSubTaskRecord(partial: Partial<SubTaskRecord> = {}): SubTaskRecor
     outputPreview: partial.outputPreview,
     error: partial.error,
     steering: partial.steering ?? [],
+    takeover: partial.takeover ?? [],
     resume: partial.resume ?? [],
     notifications: partial.notifications ?? [],
   };
@@ -147,6 +148,118 @@ describe("subtask background continuation ledger handler", () => {
         targetType: "session",
       },
       summary: "Patch delivered",
+    });
+  });
+
+  it("forwards failed subtask records into the background recovery callback", async () => {
+    const startRun = vi.fn();
+    const finishRun = vi.fn(async (input): Promise<BackgroundContinuationRecord> => ({
+      runId: input.runId,
+      kind: input.kind,
+      sourceId: input.sourceId,
+      label: input.label,
+      status: input.status,
+      startedAt: input.startedAt ?? 0,
+      updatedAt: input.finishedAt ?? input.startedAt ?? 0,
+      finishedAt: input.finishedAt,
+      summary: input.summary,
+      reason: input.reason,
+      continuationState: input.continuationState,
+    }));
+    const onFailedRecord = vi.fn();
+    const handler = createSubTaskBackgroundContinuationLedgerHandler({
+      ledger: { startRun, finishRun },
+      onFailedRecord,
+    });
+
+    handler({
+      kind: "completed",
+      item: createSubTaskRecord({
+        status: "error",
+        sessionId: "sub-session-err",
+        error: "integration failed",
+        updatedAt: 1_710_000_000_400,
+        finishedAt: 1_710_000_000_400,
+        progress: {
+          phase: "error",
+          message: "integration failed",
+          lastActivityAt: 1_710_000_000_400,
+        },
+      }),
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(finishRun).toHaveBeenCalledTimes(1);
+    expect(onFailedRecord).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "subtask:task_sub_1",
+      kind: "subtask",
+      status: "failed",
+      reason: "integration failed",
+    }));
+  });
+
+  it("treats takeover changes as meaningful ledger signature updates", async () => {
+    const startRun = vi.fn(async (input): Promise<BackgroundContinuationRecord> => ({
+      runId: input.runId ?? "subtask:task_sub_1",
+      kind: input.kind,
+      sourceId: input.sourceId,
+      label: input.label,
+      status: "running",
+      startedAt: input.startedAt ?? 0,
+      updatedAt: input.updatedAt ?? input.startedAt ?? 0,
+      conversationId: input.conversationId,
+      summary: input.summary,
+      continuationState: input.continuationState,
+    }));
+    const finishRun = vi.fn();
+    const handler = createSubTaskBackgroundContinuationLedgerHandler({
+      ledger: { startRun, finishRun },
+    });
+
+    handler({
+      kind: "updated",
+      item: createSubTaskRecord({
+        status: "running",
+        sessionId: "sub-session-takeover-1",
+        updatedAt: 1_710_000_000_100,
+      }),
+    });
+    handler({
+      kind: "updated",
+      item: createSubTaskRecord({
+        status: "running",
+        sessionId: "sub-session-takeover-2",
+        agentId: "researcher",
+        updatedAt: 1_710_000_000_200,
+        takeover: [
+          {
+            id: "task_takeover_1",
+            agentId: "researcher",
+            mode: "safe_point",
+            message: "Take over this subtask as agent researcher.",
+            status: "delivered",
+            requestedAt: 1_710_000_000_120,
+            deliveredAt: 1_710_000_000_180,
+            requestedSessionId: "sub-session-takeover-1",
+            deliveredSessionId: "sub-session-takeover-2",
+            resumedFromSessionId: "sub-session-takeover-1",
+          },
+        ],
+      }),
+    });
+
+    await Promise.resolve();
+
+    expect(startRun).toHaveBeenCalledTimes(2);
+    expect(startRun.mock.calls[1]?.[0]).toMatchObject({
+      runId: "subtask:task_sub_1",
+      updatedAt: 1_710_000_000_200,
+      continuationState: {
+        resumeMode: "safe_point_takeover",
+        recommendedTargetId: "sub-session-takeover-2",
+      },
     });
   });
 });

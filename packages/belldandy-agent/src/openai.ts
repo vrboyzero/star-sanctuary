@@ -1,7 +1,7 @@
 import type { JsonObject } from "@belldandy/protocol";
 
 import type { AgentRunInput, AgentStreamItem, BelldandyAgent } from "./index.js";
-import { FailoverClient, type ModelProfile, type FailoverLogger } from "./failover-client.js";
+import { FailoverClient, type ModelProfile, type FailoverExecutionSummary, type FailoverLogger } from "./failover-client.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
 import {
   createAgentPromptSnapshot,
@@ -46,6 +46,14 @@ export type OpenAIChatAgentOptions = {
   systemPromptSections?: SystemPromptSection[];
   /** 预置到 prompt snapshot 的 system prompt 观测元数据 */
   systemPromptMetadata?: JsonObject;
+  /** runtime resilience 观察回调 */
+  onRuntimeResilienceEvent?: (event: {
+    source: "openai_chat";
+    phase: "primary_chat";
+    agentId?: string;
+    conversationId: string;
+    summary: FailoverExecutionSummary;
+  }) => void;
 };
 
 type ApiProtocol = "openai" | "anthropic";
@@ -210,6 +218,15 @@ export class OpenAIChatAgent implements BelldandyAgent {
         minimumTimeoutMs: minimumAdaptiveTimeoutMs,
         maxRetries: this.opts.maxRetries,
         retryBackoffMs: this.opts.retryBackoffMs,
+        onSummary: (summary) => {
+          this.opts.onRuntimeResilienceEvent?.({
+            source: "openai_chat",
+            phase: "primary_chat",
+            agentId: input.agentId,
+            conversationId: input.conversationId,
+            summary,
+          });
+        },
         buildRequest: (profile) => this.buildRequest(profile, messages),
       });
 

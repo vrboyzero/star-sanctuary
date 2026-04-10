@@ -26,6 +26,25 @@ export function buildContinuationAction(continuation) {
   if (!recommendedTargetId) {
     return { kind: "conversation" };
   }
+  const replay = continuation?.replay && typeof continuation.replay === "object"
+    ? continuation.replay
+    : null;
+  if (
+    scope === "goal"
+    && replay?.kind === "goal_checkpoint"
+    && typeof replay.checkpointId === "string"
+    && replay.checkpointId.trim()
+    && typeof replay.nodeId === "string"
+    && replay.nodeId.trim()
+    && targetId
+  ) {
+    return {
+      kind: "goalReplay",
+      goalId: targetId,
+      nodeId: replay.nodeId.trim(),
+      checkpointId: replay.checkpointId.trim(),
+    };
+  }
   switch (normalizeContinuationTargetType(continuation)) {
     case "conversation":
       return { kind: "conversation", conversationId: recommendedTargetId };

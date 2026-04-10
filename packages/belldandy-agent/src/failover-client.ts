@@ -65,7 +65,74 @@ export type FailoverResult = {
     profile: ModelProfile;
     /** 所有失败尝试的记录 */
     attempts: FailoverAttempt[];
+    /** 本次 failover 执行的结构化摘要 */
+    summary: FailoverExecutionSummary;
 };
+
+export type FailoverExecutionStatus = "success" | "non_retryable" | "exhausted" | "aborted";
+
+export type FailoverExecutionStepKind =
+    | "cooldown_skip"
+    | "same_profile_retry"
+    | "cross_profile_fallback"
+    | "terminal_fail";
+
+export type FailoverExecutionStep = {
+    kind: FailoverExecutionStepKind;
+    profileId: string;
+    provider: string;
+    model: string;
+    reason?: FailoverReason | "aborted";
+    status?: number;
+    attempt?: number;
+    maxAttempts?: number;
+    timeoutMs?: number;
+    wireApi?: string;
+    error?: string;
+    waitMs?: number;
+};
+
+export type FailoverExecutionSummary = {
+    configuredProfiles: Array<{
+        profileId: string;
+        provider: string;
+        model: string;
+        protocol?: string;
+        wireApi?: string;
+    }>;
+    finalStatus: FailoverExecutionStatus;
+    finalProfileId?: string;
+    finalProvider?: string;
+    finalModel?: string;
+    finalReason?: FailoverReason | "aborted";
+    finalStatusCode?: number;
+    requestCount: number;
+    failedStageCount: number;
+    degraded: boolean;
+    stepCounts: {
+        cooldownSkips: number;
+        sameProfileRetries: number;
+        crossProfileFallbacks: number;
+        terminalFailures: number;
+    };
+    reasonCounts: Partial<Record<FailoverReason, number>>;
+    steps: FailoverExecutionStep[];
+    startedAt: number;
+    updatedAt: number;
+    durationMs: number;
+};
+
+export class FailoverExhaustedError extends Error {
+    readonly attempts: FailoverAttempt[];
+    readonly summary: FailoverExecutionSummary;
+
+    constructor(message: string, attempts: FailoverAttempt[], summary: FailoverExecutionSummary) {
+        super(message);
+        this.name = "FailoverExhaustedError";
+        this.attempts = attempts;
+        this.summary = summary;
+    }
+}
 
 /** 可选的日志接口 */
 export type FailoverLogger = {
@@ -249,6 +316,8 @@ export class FailoverClient {
         maxRetries?: number;
         /** 默认重试退避基线（毫秒） */
         retryBackoffMs?: number;
+        /** 本次执行完成后的结构化摘要 */
+        onSummary?: (summary: FailoverExecutionSummary) => void;
     }): Promise<FailoverResult> {
         const {
             buildRequest,
@@ -257,205 +326,395 @@ export class FailoverClient {
             minimumTimeoutMs,
             maxRetries = 0,
             retryBackoffMs = 300,
+            onSummary,
         } = params;
         const attempts: FailoverAttempt[] = [];
+        const steps: FailoverExecutionStep[] = [];
+        const reasonCounts: Partial<Record<FailoverReason, number>> = {};
+        const startedAt = Date.now();
+        const primaryProfileId = this.profiles[0]?.id ?? "primary";
+        const configuredProfiles = this.profiles.map((profile) => ({
+            profileId: profile.id ?? "unknown",
+            provider: extractProvider(profile.baseUrl),
+            model: profile.model,
+            protocol: profile.protocol,
+            wireApi: profile.wireApi,
+        }));
         let lastError: Error | undefined;
+        let requestCount = 0;
 
-        throwIfAborted(signal);
+        const incrementReason = (reason: FailoverReason) => {
+            reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1;
+        };
 
-        for (const profile of this.profiles) {
+        const buildSummary = (input: {
+            finalStatus: FailoverExecutionStatus;
+            profile?: ModelProfile;
+            reason?: FailoverReason | "aborted";
+            statusCode?: number;
+        }): FailoverExecutionSummary => {
+            const stepCounts = summarizeStepCounts(steps);
+            const finalProfileId = input.profile?.id;
+            const updatedAt = Date.now();
+            return {
+                configuredProfiles,
+                finalStatus: input.finalStatus,
+                finalProfileId,
+                finalProvider: input.profile ? extractProvider(input.profile.baseUrl) : undefined,
+                finalModel: input.profile?.model,
+                finalReason: input.reason,
+                finalStatusCode: input.statusCode,
+                requestCount,
+                failedStageCount: attempts.length,
+                degraded: (
+                    stepCounts.cooldownSkips
+                    + stepCounts.sameProfileRetries
+                    + stepCounts.crossProfileFallbacks
+                    + stepCounts.terminalFailures
+                ) > 0 || (finalProfileId !== undefined && finalProfileId !== primaryProfileId),
+                stepCounts,
+                reasonCounts: { ...reasonCounts },
+                steps: steps.map((step) => ({ ...step })),
+                startedAt,
+                updatedAt,
+                durationMs: Math.max(0, updatedAt - startedAt),
+            };
+        };
+
+        const emitSummary = (summary: FailoverExecutionSummary): FailoverExecutionSummary => {
+            try {
+                onSummary?.(summary);
+            } catch {
+                // observer errors must not break the main failover path
+            }
+            return summary;
+        };
+
+        try {
             throwIfAborted(signal);
-            const profileId = profile.id ?? "unknown";
-            const baseTimeoutMs = normalizePositiveInt(profile.requestTimeoutMs) ?? timeoutMs;
-            const timeoutFloorMs = normalizePositiveInt(minimumTimeoutMs) ?? 0;
-            const resolvedTimeoutMs = Math.max(baseTimeoutMs, timeoutFloorMs);
-            const resolvedMaxRetries = normalizeNonNegativeInt(profile.maxRetries) ?? maxRetries;
-            const resolvedBackoffMs = normalizePositiveInt(profile.retryBackoffMs) ?? retryBackoffMs;
-            const maxAttempts = resolvedMaxRetries + 1;
 
-            // 跳过冷却中的 Profile
-            if (this.cooldown.isInCooldown(profileId)) {
-                this.logger?.info("failover", `跳过冷却中的 Profile: ${profileId}`);
-                attempts.push({
-                    profileId,
-                    provider: extractProvider(profile.baseUrl),
-                    model: profile.model,
-                    error: `Profile ${profileId} 处于冷却中，跳过`,
-                    reason: "rate_limit",
-                    maxAttempts,
-                    timeoutMs: resolvedTimeoutMs,
-                    wireApi: profile.wireApi,
-                });
-                continue;
-            }
-
-            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            for (let profileIndex = 0; profileIndex < this.profiles.length; profileIndex++) {
                 throwIfAborted(signal);
-                // 构建请求
-                const { url, init } = buildRequest(profile);
-                const requestSignal = init.signal ?? undefined;
-                const externalSignal = signal ?? requestSignal;
-                throwIfAborted(externalSignal);
+                const profile = this.profiles[profileIndex];
+                const profileId = profile.id ?? "unknown";
+                const provider = extractProvider(profile.baseUrl);
+                const baseTimeoutMs = normalizePositiveInt(profile.requestTimeoutMs) ?? timeoutMs;
+                const timeoutFloorMs = normalizePositiveInt(minimumTimeoutMs) ?? 0;
+                const resolvedTimeoutMs = Math.max(baseTimeoutMs, timeoutFloorMs);
+                const resolvedMaxRetries = normalizeNonNegativeInt(profile.maxRetries) ?? maxRetries;
+                const resolvedBackoffMs = normalizePositiveInt(profile.retryBackoffMs) ?? retryBackoffMs;
+                const maxAttempts = resolvedMaxRetries + 1;
+                const hasNextProfile = profileIndex < this.profiles.length - 1;
 
-                // 设置超时
-                const controller = new AbortController();
-                let timedOut = false;
-                let removeAbortForwarder: (() => void) | undefined;
-                const timer = setTimeout(() => {
-                    timedOut = true;
-                    controller.abort();
-                }, resolvedTimeoutMs);
-
-                // 合并 signal
-                if (externalSignal) {
-                    // 如果调用方也传了 signal，任一触发都 abort
-                    const onAbort = () => controller.abort();
-                    externalSignal.addEventListener("abort", onAbort, { once: true });
-                    removeAbortForwarder = () => externalSignal.removeEventListener("abort", onAbort);
+                if (this.cooldown.isInCooldown(profileId)) {
+                    this.logger?.info("failover", `跳过冷却中的 Profile: ${profileId}`);
+                    const skippedAttempt: FailoverAttempt = {
+                        profileId,
+                        provider,
+                        model: profile.model,
+                        error: `Profile ${profileId} 处于冷却中，跳过`,
+                        reason: "rate_limit",
+                        maxAttempts,
+                        timeoutMs: resolvedTimeoutMs,
+                        wireApi: profile.wireApi,
+                    };
+                    attempts.push(skippedAttempt);
+                    incrementReason("rate_limit");
+                    steps.push({
+                        kind: "cooldown_skip",
+                        profileId,
+                        provider,
+                        model: profile.model,
+                        reason: "rate_limit",
+                        maxAttempts,
+                        timeoutMs: resolvedTimeoutMs,
+                        wireApi: profile.wireApi,
+                        error: skippedAttempt.error,
+                    });
+                    continue;
                 }
 
-                try {
-                    const requestInit: RequestInit = {
-                        ...init,
-                        signal: controller.signal,
-                    };
-                    const dispatcher = await getProxyDispatcher(profile.proxyUrl);
-                    if (dispatcher) {
-                        (requestInit as any).dispatcher = dispatcher;
+                for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                    throwIfAborted(signal);
+                    const { url, init } = buildRequest(profile);
+                    const requestSignal = init.signal ?? undefined;
+                    const externalSignal = signal ?? requestSignal;
+                    throwIfAborted(externalSignal);
+
+                    const controller = new AbortController();
+                    let timedOut = false;
+                    let removeAbortForwarder: (() => void) | undefined;
+                    const timer = setTimeout(() => {
+                        timedOut = true;
+                        controller.abort();
+                    }, resolvedTimeoutMs);
+
+                    if (externalSignal) {
+                        const onAbort = () => controller.abort();
+                        externalSignal.addEventListener("abort", onAbort, { once: true });
+                        removeAbortForwarder = () => externalSignal.removeEventListener("abort", onAbort);
                     }
 
-                    const response = await fetch(url, requestInit);
-
-                    // 成功（2xx）
-                    if (response.ok) {
-                        this.cooldown.markSuccess(profileId);
-                        if (attempts.length > 0) {
-                            this.logger?.info(
-                                "failover",
-                                `✅ Profile "${profileId}" (${profile.model}) 成功（经过 ${attempts.length} 次失败尝试）`,
-                            );
+                    try {
+                        requestCount += 1;
+                        const requestInit: RequestInit = {
+                            ...init,
+                            signal: controller.signal,
+                        };
+                        const dispatcher = await getProxyDispatcher(profile.proxyUrl);
+                        if (dispatcher) {
+                            (requestInit as any).dispatcher = dispatcher;
                         }
-                        return { response, profile, attempts };
-                    }
 
-                    // 非 2xx：分类错误
-                    const reason = classifyFailoverReason(response.status);
-                    const errorText = await safeReadText(response);
-                    const errorMsg = `HTTP ${response.status}: ${errorText}`;
-                    const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
+                        const response = await fetch(url, requestInit);
 
-                    // 400 (format) 不可重试——直接返回给调用方处理
-                    if (!isRetryableReason(reason)) {
+                        if (response.ok) {
+                            this.cooldown.markSuccess(profileId);
+                            if (attempts.length > 0) {
+                                this.logger?.info(
+                                    "failover",
+                                    `✅ Profile "${profileId}" (${profile.model}) 成功（经过 ${attempts.length} 次失败尝试）`,
+                                );
+                            }
+                            const summary = emitSummary(buildSummary({
+                                finalStatus: "success",
+                                profile,
+                            }));
+                            return { response, profile, attempts, summary };
+                        }
+
+                        const reason = classifyFailoverReason(response.status);
+                        const errorText = await safeReadText(response);
+                        const errorMsg = `HTTP ${response.status}: ${errorText}`;
+                        const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
+                        incrementReason(reason);
+
+                        const failedAttempt: FailoverAttempt = {
+                            profileId,
+                            provider,
+                            model: profile.model,
+                            error: errorMsg,
+                            reason,
+                            status: response.status,
+                            attempt,
+                            maxAttempts,
+                            timeoutMs: resolvedTimeoutMs,
+                            wireApi: profile.wireApi,
+                        };
+                        attempts.push(failedAttempt);
+                        lastError = new Error(errorMsg);
+
+                        if (!isRetryableReason(reason)) {
+                            this.logger?.warn(
+                                "failover",
+                                `Profile "${profileId}" 返回 HTTP ${response.status}（${reason}），不可重试`,
+                            );
+                            steps.push({
+                                kind: "terminal_fail",
+                                profileId,
+                                provider,
+                                model: profile.model,
+                                reason,
+                                status: response.status,
+                                attempt,
+                                maxAttempts,
+                                timeoutMs: resolvedTimeoutMs,
+                                wireApi: profile.wireApi,
+                                error: errorMsg,
+                            });
+                            const summary = emitSummary(buildSummary({
+                                finalStatus: "non_retryable",
+                                profile,
+                                reason,
+                                statusCode: response.status,
+                            }));
+                            return { response, profile, attempts, summary };
+                        }
+
+                        if (canRetrySameProfile) {
+                            const retryAfterMs = reason === "rate_limit" ? parseRetryAfter(response) : undefined;
+                            const waitMs = retryAfterMs ?? calcBackoffDelay(resolvedBackoffMs, attempt);
+                            steps.push({
+                                kind: "same_profile_retry",
+                                profileId,
+                                provider,
+                                model: profile.model,
+                                reason,
+                                status: response.status,
+                                attempt,
+                                maxAttempts,
+                                timeoutMs: resolvedTimeoutMs,
+                                wireApi: profile.wireApi,
+                                error: errorMsg,
+                                waitMs,
+                            });
+                            this.logger?.warn(
+                                "failover",
+                                `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
+                            );
+                            await sleep(waitMs, externalSignal);
+                            continue;
+                        }
+
+                        if (hasNextProfile) {
+                            steps.push({
+                                kind: "cross_profile_fallback",
+                                profileId,
+                                provider,
+                                model: profile.model,
+                                reason,
+                                status: response.status,
+                                attempt,
+                                maxAttempts,
+                                timeoutMs: resolvedTimeoutMs,
+                                wireApi: profile.wireApi,
+                                error: errorMsg,
+                            });
+                        }
                         this.logger?.warn(
                             "failover",
-                            `Profile "${profileId}" 返回 HTTP ${response.status}（${reason}），不可重试`,
+                            `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），尝试下一个...`,
                         );
-                        return { response, profile, attempts };
-                    }
 
-                    attempts.push({
-                        profileId,
-                        provider: extractProvider(profile.baseUrl),
-                        model: profile.model,
-                        error: errorMsg,
-                        reason,
-                        status: response.status,
-                        attempt,
-                        maxAttempts,
-                        timeoutMs: resolvedTimeoutMs,
-                        wireApi: profile.wireApi,
-                    });
-                    lastError = new Error(errorMsg);
+                        if (reason === "rate_limit") {
+                            const retryAfterMs = parseRetryAfter(response);
+                            this.cooldown.mark(profileId, retryAfterMs);
+                        } else if (reason === "billing") {
+                            this.cooldown.mark(profileId, 600_000);
+                        } else {
+                            this.cooldown.mark(profileId);
+                        }
+                        break;
+                    } catch (err) {
+                        const isAbort = err instanceof Error && err.name === "AbortError";
+                        if (isAbort && externalSignal?.aborted && !timedOut) {
+                            throw toAbortError(externalSignal.reason);
+                        }
+                        const reason: FailoverReason = isAbort ? "timeout" : "unknown";
+                        const errorMsg = isAbort
+                            ? `请求超时（${resolvedTimeoutMs}ms）`
+                            : err instanceof Error
+                                ? err.message
+                                : String(err);
+                        const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
+                        incrementReason(reason);
 
-                    if (canRetrySameProfile) {
-                        const retryAfterMs = reason === "rate_limit" ? parseRetryAfter(response) : undefined;
-                        const waitMs = retryAfterMs ?? calcBackoffDelay(resolvedBackoffMs, attempt);
+                        attempts.push({
+                            profileId,
+                            provider,
+                            model: profile.model,
+                            error: errorMsg,
+                            reason,
+                            attempt,
+                            maxAttempts,
+                            timeoutMs: resolvedTimeoutMs,
+                            wireApi: profile.wireApi,
+                        });
+                        lastError = err instanceof Error ? err : new Error(String(err));
+
+                        if (canRetrySameProfile) {
+                            const waitMs = calcBackoffDelay(resolvedBackoffMs, attempt);
+                            steps.push({
+                                kind: "same_profile_retry",
+                                profileId,
+                                provider,
+                                model: profile.model,
+                                reason,
+                                attempt,
+                                maxAttempts,
+                                timeoutMs: resolvedTimeoutMs,
+                                wireApi: profile.wireApi,
+                                error: errorMsg,
+                                waitMs,
+                            });
+                            this.logger?.warn(
+                                "failover",
+                                `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
+                            );
+                            await sleep(waitMs, externalSignal);
+                            continue;
+                        }
+
+                        if (hasNextProfile) {
+                            steps.push({
+                                kind: "cross_profile_fallback",
+                                profileId,
+                                provider,
+                                model: profile.model,
+                                reason,
+                                attempt,
+                                maxAttempts,
+                                timeoutMs: resolvedTimeoutMs,
+                                wireApi: profile.wireApi,
+                                error: errorMsg,
+                            });
+                        }
                         this.logger?.warn(
                             "failover",
-                            `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
+                            `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），尝试下一个...`,
                         );
-                        await sleep(waitMs, externalSignal);
-                        continue;
-                    }
-
-                    this.logger?.warn(
-                        "failover",
-                        `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），尝试下一个...`,
-                    );
-
-                    // 对 rate_limit 和 billing 设置冷却
-                    // 优先使用 Retry-After 响应头（Anthropic 会返回）
-                    if (reason === "rate_limit") {
-                        const retryAfterMs = parseRetryAfter(response);
-                        this.cooldown.mark(profileId, retryAfterMs); // 有 Retry-After 用它，否则指数退避
-                    } else if (reason === "billing") {
-                        this.cooldown.mark(profileId, 600_000); // 10 分钟
-                    } else {
                         this.cooldown.mark(profileId);
+                        break;
+                    } finally {
+                        clearTimeout(timer);
+                        removeAbortForwarder?.();
                     }
-                    break;
-                } catch (err) {
-                    // 网络错误或超时
-                    const isAbort = err instanceof Error && err.name === "AbortError";
-                    if (isAbort && externalSignal?.aborted && !timedOut) {
-                        throw toAbortError(externalSignal.reason);
-                    }
-                    const reason: FailoverReason = isAbort ? "timeout" : "unknown";
-                    const errorMsg = isAbort
-                        ? `请求超时（${resolvedTimeoutMs}ms）`
-                        : err instanceof Error
-                            ? err.message
-                            : String(err);
-                    const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
-
-                    attempts.push({
-                        profileId,
-                        provider: extractProvider(profile.baseUrl),
-                        model: profile.model,
-                        error: errorMsg,
-                        reason,
-                        attempt,
-                        maxAttempts,
-                        timeoutMs: resolvedTimeoutMs,
-                        wireApi: profile.wireApi,
-                    });
-                    lastError = err instanceof Error ? err : new Error(String(err));
-
-                    if (canRetrySameProfile) {
-                        const waitMs = calcBackoffDelay(resolvedBackoffMs, attempt);
-                        this.logger?.warn(
-                            "failover",
-                            `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），${waitMs}ms 后重试同 profile...`,
-                        );
-                        await sleep(waitMs, externalSignal);
-                        continue;
-                    }
-
-                    this.logger?.warn(
-                        "failover",
-                        `⚠️ Profile "${profileId}" (${profile.model}) 异常: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），尝试下一个...`,
-                    );
-                    this.cooldown.mark(profileId);
-                    break;
-                } finally {
-                    clearTimeout(timer);
-                    removeAbortForwarder?.();
                 }
             }
-        }
 
-        // 所有 Profile 均失败
-        const summary = attempts
-            .map((a) => `${a.profileId}/${a.model}: ${a.error} (${a.reason})`)
-            .join(" | ");
+            const lastAttempt = attempts[attempts.length - 1];
+            if (lastAttempt) {
+                steps.push({
+                    kind: "terminal_fail",
+                    profileId: lastAttempt.profileId,
+                    provider: lastAttempt.provider,
+                    model: lastAttempt.model,
+                    reason: lastAttempt.reason,
+                    status: lastAttempt.status,
+                    attempt: lastAttempt.attempt,
+                    maxAttempts: lastAttempt.maxAttempts,
+                    timeoutMs: lastAttempt.timeoutMs,
+                    wireApi: lastAttempt.wireApi,
+                    error: lastAttempt.error,
+                });
+            }
 
-        const finalError = new Error(
-            `所有模型均失败（共 ${attempts.length} 次尝试）: ${summary}`,
-        );
-        if (lastError) {
-            finalError.cause = lastError;
+            const failureSummary = attempts
+                .map((attempt) => `${attempt.profileId}/${attempt.model}: ${attempt.error} (${attempt.reason})`)
+                .join(" | ");
+            const summary = emitSummary(buildSummary({
+                finalStatus: "exhausted",
+                profile: lastAttempt
+                    ? {
+                        id: lastAttempt.profileId,
+                        baseUrl: "",
+                        apiKey: "",
+                        model: lastAttempt.model,
+                        wireApi: lastAttempt.wireApi,
+                    }
+                    : undefined,
+                reason: lastAttempt?.reason,
+                statusCode: lastAttempt?.status,
+            }));
+
+            const finalError = new FailoverExhaustedError(
+                `所有模型均失败（共 ${attempts.length} 次尝试）: ${failureSummary}`,
+                attempts,
+                summary,
+            );
+            if (lastError) {
+                finalError.cause = lastError;
+            }
+            throw finalError;
+        } catch (error) {
+            if (error instanceof Error && error.name === "AbortError") {
+                emitSummary(buildSummary({
+                    finalStatus: "aborted",
+                    reason: "aborted",
+                }));
+            }
+            throw error;
         }
-        throw finalError;
     }
 }
 
@@ -480,6 +739,15 @@ function isSameProfileRetryable(reason: FailoverReason): boolean {
         || reason === "rate_limit"
         || reason === "server_error"
         || reason === "unknown";
+}
+
+function summarizeStepCounts(steps: FailoverExecutionStep[]): FailoverExecutionSummary["stepCounts"] {
+    return {
+        cooldownSkips: steps.filter((step) => step.kind === "cooldown_skip").length,
+        sameProfileRetries: steps.filter((step) => step.kind === "same_profile_retry").length,
+        crossProfileFallbacks: steps.filter((step) => step.kind === "cross_profile_fallback").length,
+        terminalFailures: steps.filter((step) => step.kind === "terminal_fail").length,
+    };
 }
 
 function calcBackoffDelay(baseMs: number, attempt: number): number {

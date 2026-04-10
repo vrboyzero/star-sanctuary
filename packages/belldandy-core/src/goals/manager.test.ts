@@ -5,11 +5,13 @@ import { describe, expect, it, vi } from "vitest";
 import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import { getGoalUpdateAreas } from "./goal-events.js";
 import { GoalManager } from "./manager.js";
+import { readGoalLearningReviewRefreshState } from "./learning-review-refresh.js";
 import {
   getGoalReviewNotificationDispatchesPath,
   getGoalReviewNotificationsPath,
   getReviewGovernanceConfigPath,
 } from "./review-governance.js";
+import { writeGoalSuggestionReviews } from "./runtime.js";
 
 describe("GoalManager", () => {
   it("creates goals with default and custom roots, and supports resume/pause", async () => {
@@ -57,6 +59,49 @@ describe("GoalManager", () => {
 
     const registry = JSON.parse(await fs.readFile(path.join(stateDir, "goals", "index.json"), "utf-8"));
     expect(registry.goals).toHaveLength(2);
+  });
+
+  it("records checkpoint replay when resuming a goal from an open checkpoint", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Checkpoint Replay Goal",
+      objective: "Replay from an open checkpoint",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_replay",
+      title: "Replay Node",
+      status: "ready",
+      checkpointRequired: true,
+    });
+    await manager.claimTaskNode(goal.id, "node_replay", {
+      runId: "run_replay_1",
+      summary: "Checkpoint replay setup",
+    });
+    await manager.requestCheckpoint(goal.id, "node_replay", {
+      title: "Need replay review",
+      summary: "Replay should reopen the node channel.",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      runId: "run_replay_1",
+    });
+
+    const handoff = await manager.getHandoff(goal.id);
+    expect(handoff.handoff.checkpointReplay).toMatchObject({
+      checkpointId: expect.any(String),
+      nodeId: "node_replay",
+      title: "Need replay review",
+    });
+
+    const replayed = await manager.resumeGoal(goal.id, "node_replay", {
+      checkpointId: handoff.handoff.checkpointReplay?.checkpointId,
+    });
+    expect(replayed.goal.activeNodeId).toBe("node_replay");
+
+    const progress = await fs.readFile(goal.progressPath, "utf-8");
+    expect(progress).toContain("checkpoint_replay_started");
+    expect(progress).toContain(`Checkpoint: ${handoff.handoff.checkpointReplay?.checkpointId}`);
   });
 
   it("does not advance goal registry when runtime header persistence fails during resume", async () => {
@@ -733,6 +778,11 @@ describe("GoalManager", () => {
     expect(result.handoff.resumeMode).toBe("checkpoint");
     expect(result.handoff.openCheckpoints).toHaveLength(1);
     expect(result.handoff.recommendedNodeId).toBe("node_impl");
+    expect(result.handoff.checkpointReplay).toMatchObject({
+      checkpointId: expect.any(String),
+      nodeId: "node_impl",
+      title: "Need producer review",
+    });
     expect(result.handoff.focusCapability?.nodeId).toBe("node_impl");
     expect(result.continuationState).toMatchObject({
       version: 1,
@@ -741,6 +791,11 @@ describe("GoalManager", () => {
       recommendedTargetId: "node_impl",
       targetType: "node",
       resumeMode: "checkpoint",
+      replay: {
+        kind: "goal_checkpoint",
+        checkpointId: expect.any(String),
+        nodeId: "node_impl",
+      },
       checkpoints: {
         openCount: 1,
         blockerCount: 1,
@@ -791,6 +846,11 @@ describe("GoalManager", () => {
     const result = await manager.getHandoff(goal.id);
     expect(result.handoff.goalId).toBe(goal.id);
     expect(result.handoff.resumeMode).toBe("checkpoint");
+    expect(result.handoff.checkpointReplay).toMatchObject({
+      checkpointId: expect.any(String),
+      nodeId: "node_review",
+      title: "Need reviewer approval",
+    });
     expect(result.continuationState).toMatchObject({
       version: 1,
       scope: "goal",
@@ -798,6 +858,11 @@ describe("GoalManager", () => {
       recommendedTargetId: "node_review",
       targetType: "node",
       resumeMode: "checkpoint",
+      replay: {
+        kind: "goal_checkpoint",
+        checkpointId: expect.any(String),
+        nodeId: "node_review",
+      },
     });
 
     const handoffAfter = await fs.readFile(goal.handoffPath, "utf-8");
@@ -1589,6 +1654,112 @@ describe("GoalManager", () => {
 
     const progress = await fs.readFile(goal.progressPath, "utf-8");
     expect(progress).toContain("experience_suggestions_generated");
+  });
+
+  it("skips unchanged refresh and reopens when new goal signals appear", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Learning Refresh Goal",
+      objective: "Verify refresh fingerprint gate",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_refresh_1",
+      title: "Refresh Node 1",
+      status: "ready",
+      checkpointRequired: true,
+      acceptance: ["First refresh signal exists"],
+    });
+    await manager.claimTaskNode(goal.id, "node_refresh_1", {
+      runId: "run_refresh_1",
+      summary: "Started refresh node 1",
+    });
+    await manager.requestCheckpoint(goal.id, "node_refresh_1", {
+      title: "Refresh checkpoint 1",
+      summary: "Ready for approval",
+      reviewer: "producer",
+      requestedBy: "main-agent",
+      runId: "run_refresh_1",
+    });
+    await manager.approveCheckpoint(goal.id, "node_refresh_1", {
+      summary: "Approved",
+      note: "Looks stable",
+      decidedBy: "producer",
+      runId: "run_refresh_1",
+    });
+    await manager.completeTaskNode(goal.id, "node_refresh_1", {
+      summary: "Refresh node 1 completed",
+      artifacts: ["artifacts/refresh-1.md"],
+      runId: "run_refresh_1",
+    });
+    await manager.saveCapabilityPlan(goal.id, "node_refresh_1", {
+      executionMode: "multi_agent",
+      riskLevel: "medium",
+      objective: "Generate first refresh batch",
+      summary: "Need first refresh wrapper",
+      gaps: ["Need first refresh wrapper"],
+      actualUsage: {
+        methods: ["Refresh-Review.md"],
+        skills: ["find-skills"],
+        mcpServers: ["docs"],
+        toolNames: ["file_read", "apply_patch"],
+      },
+      status: "orchestrated",
+      orchestratedAt: "2026-03-20T17:00:00.000Z",
+    });
+
+    const firstScan = await manager.scanSuggestionReviewWorkflows(goal.id, {});
+    expect(firstScan.learningReview?.refreshed).toBe(true);
+    expect(firstScan.learningReview?.generated).toBe(true);
+
+    const reviews = await manager.listSuggestionReviews(goal.id);
+    await writeGoalSuggestionReviews(goal, {
+      version: 1,
+      syncedAt: "2026-04-10T01:00:00.000Z",
+      items: reviews.items.map((item) => ({
+        ...item,
+        status: "rejected",
+        reviewer: item.reviewer ?? "producer",
+        decidedBy: "producer",
+        decidedAt: "2026-04-10T01:00:00.000Z",
+        updatedAt: "2026-04-10T01:00:00.000Z",
+      })),
+    });
+
+    const secondScan = await manager.scanSuggestionReviewWorkflows(goal.id, {});
+    expect(secondScan.learningReview?.outcome).toBe("unchanged_signal");
+    expect(secondScan.learningReview?.refreshed).toBe(false);
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_refresh_2",
+      title: "Refresh Node 2",
+      status: "ready",
+      checkpointRequired: false,
+      acceptance: ["Second refresh signal exists"],
+    });
+    await manager.claimTaskNode(goal.id, "node_refresh_2", {
+      runId: "run_refresh_2",
+      summary: "Started refresh node 2",
+    });
+    await manager.completeTaskNode(goal.id, "node_refresh_2", {
+      summary: "Refresh node 2 completed",
+      artifacts: ["artifacts/refresh-2.md"],
+      runId: "run_refresh_2",
+    });
+
+    const thirdScan = await manager.scanSuggestionReviewWorkflows(goal.id, {});
+    expect(thirdScan.learningReview?.refreshed).toBe(true);
+    expect(thirdScan.learningReview?.outcome).toBe("generated");
+
+    const refreshState = await readGoalLearningReviewRefreshState(goal);
+    expect(refreshState.lastOutcome).toBe("generated");
+    expect(refreshState.lastRefreshFingerprint).toBeTruthy();
+    expect(refreshState.lastScanFingerprint).toBeTruthy();
+
+    const progress = await fs.readFile(goal.progressPath, "utf-8");
+    const matches = progress.match(/experience_suggestions_generated/g) ?? [];
+    expect(matches).toHaveLength(2);
   });
 
   it("materializes approval notifications into dispatch outbox channels without duplicate fanout", async () => {

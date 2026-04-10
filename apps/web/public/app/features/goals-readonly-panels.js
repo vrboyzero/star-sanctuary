@@ -26,19 +26,31 @@ export function createGoalsReadonlyPanelsFeature({
     const recent = Array.isArray(progress.recent)
       ? progress.recent.filter((item) => typeof item === "string" && item.trim()).slice(0, 3)
       : [];
+    const replay = continuationState.replay && typeof continuationState.replay === "object"
+      ? continuationState.replay
+      : null;
 
     const targetText = formatContinuationTargetLabel(continuationState);
     const targetAction = buildContinuationAction(continuationState);
     const encodedTargetAction = encodeContinuationAction(targetAction);
+    const targetLabel = targetAction?.kind === "goalReplay"
+      ? t("goals.detailReplayCheckpointButton", {}, "Replay Checkpoint")
+      : targetText;
     const targetMarkup = continuationState.recommendedTargetId && encodedTargetAction
       ? `
         <button
           type="button"
           class="button goal-inline-action-secondary"
           data-continuation-action="${escapeHtml(encodedTargetAction)}"
-        >${escapeHtml(targetText)}</button>
+        >${escapeHtml(targetLabel)}</button>
       `
-      : `<strong class="goal-summary-value">${escapeHtml(targetText)}</strong>`;
+      : `<strong class="goal-summary-value">${escapeHtml(targetLabel || targetText)}</strong>`;
+    const replayText = replay?.kind === "goal_checkpoint"
+      ? `${replay.checkpointId || "-"} -> ${replay.nodeId || "-"}`
+      : "";
+    const replayReason = replay?.kind === "goal_checkpoint"
+      ? replay.summary || replay.reason || ""
+      : "";
 
     return `
       <div class="goal-summary-title">${escapeHtml(t("goals.detailContinuationTitle", {}, "Continuation State"))}</div>
@@ -51,6 +63,12 @@ export function createGoalsReadonlyPanelsFeature({
           <span class="goal-summary-label">${escapeHtml(t("goals.detailContinuationTarget", {}, "Recommended Target"))}</span>
           ${targetMarkup}
         </div>
+        ${replayText ? `
+          <div class="goal-summary-item">
+            <span class="goal-summary-label">${escapeHtml(t("goals.detailContinuationReplay", {}, "Replay Target"))}</span>
+            <strong class="goal-summary-value">${escapeHtml(replayText)}</strong>
+          </div>
+        ` : ""}
         <div class="goal-summary-item">
           <span class="goal-summary-label">${escapeHtml(t("goals.detailContinuationCheckpoints", {}, "Open Checkpoints"))}</span>
           <strong class="goal-summary-value">${escapeHtml(String(Number(checkpoints.openCount || 0)))}</strong>
@@ -62,6 +80,7 @@ export function createGoalsReadonlyPanelsFeature({
       </div>
       <div class="memory-list-item-snippet">${escapeHtml(continuationState.summary || "-")}</div>
       <div class="memory-list-item-snippet">${escapeHtml(continuationState.nextAction || "-")}</div>
+      ${replayReason ? `<div class="memory-list-item-snippet">${escapeHtml(replayReason)}</div>` : ""}
       ${progress.current ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("goals.detailContinuationProgress", {}, "Current Progress"))}</span><span>${escapeHtml(progress.current)}</span></div>` : ""}
       ${recent.length ? `
         <div class="goal-tracking-list">
@@ -107,6 +126,17 @@ export function createGoalsReadonlyPanelsFeature({
       resumeMode: handoff.resumeMode || "goal_channel",
       summary: handoff.summary || "",
       nextAction: handoff.nextAction || "",
+      replay: handoff.checkpointReplay && typeof handoff.checkpointReplay === "object"
+        ? {
+          kind: "goal_checkpoint",
+          checkpointId: handoff.checkpointReplay.checkpointId || "",
+          nodeId: handoff.checkpointReplay.nodeId || "",
+          runId: handoff.checkpointReplay.runId || "",
+          title: handoff.checkpointReplay.title || "",
+          summary: handoff.checkpointReplay.summary || "",
+          reason: handoff.checkpointReplay.reason || "",
+        }
+        : undefined,
       checkpoints: {
         openCount: openCheckpointCount,
         blockerCount,
@@ -155,6 +185,7 @@ export function createGoalsReadonlyPanelsFeature({
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
     if (!normalized) return "-";
     if (normalized === "timeline") return "时间线";
+    if (normalized === "checkpoint_replay_started") return "Checkpoint Replay 已开始";
     if (normalized === "checkpoint_approved") return "Checkpoint 已批准";
     if (normalized === "checkpoint_rejected") return "Checkpoint 已拒绝";
     if (normalized === "checkpoint_expired") return "Checkpoint 已过期";

@@ -575,6 +575,15 @@ export type GoalHandoffTrackingSnapshot = {
   openCheckpointCount: number;
 };
 
+export type GoalCheckpointReplayDescriptor = {
+  checkpointId: string;
+  nodeId: string;
+  runId?: string;
+  title: string;
+  summary?: string;
+  reason: string;
+};
+
 export type GoalHandoffSnapshot = {
   version: 1;
   goalId: string;
@@ -591,6 +600,7 @@ export type GoalHandoffSnapshot = {
   nextAction: string;
   tracking: GoalHandoffTrackingSnapshot;
   openCheckpoints: GoalHandoffCheckpointSummary[];
+  checkpointReplay?: GoalCheckpointReplayDescriptor;
   blockers: GoalHandoffBlocker[];
   focusCapability?: GoalHandoffCapabilityFocus;
   recentProgress: GoalHandoffTimelineEntry[];
@@ -1238,8 +1248,29 @@ export type GoalApprovalWorkflowScanResult = {
   recommendations: string[];
 };
 
+export type GoalLearningReviewRefreshOutcome =
+  | "generated"
+  | "empty_input"
+  | "actionable_reviews"
+  | "weak_seed"
+  | "unchanged_signal";
+
+export type GoalLearningReviewRefreshState = {
+  version: 1;
+  lastScanAt?: string;
+  lastScanFingerprint?: string;
+  lastRefreshAt?: string;
+  lastRefreshFingerprint?: string;
+  lastGeneratedAt?: string;
+  lastOutcome?: GoalLearningReviewRefreshOutcome;
+  lastReason?: string;
+  lastPriority?: "method" | "skill" | "flow";
+};
+
 export type GoalReviewScanLearningReviewRunResult = {
   goalId: string;
+  outcome: GoalLearningReviewRefreshOutcome;
+  refreshed: boolean;
   generated: boolean;
   generatedAt?: string;
   learningReviewInput: LearningReviewInput;
@@ -1249,6 +1280,7 @@ export type GoalReviewScanLearningReviewRunResult = {
     skill: number;
     flow: number;
   };
+  priorityKind?: "method" | "skill" | "flow";
   summary: string;
   recommendations: string[];
 };

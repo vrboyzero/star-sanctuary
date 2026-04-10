@@ -61,6 +61,10 @@ import {
   getGoalReviewNotificationDispatchesPath,
   getGoalReviewNotificationsPath,
 } from "./review-governance.js";
+import {
+  getDefaultGoalLearningReviewRefreshState,
+  getGoalLearningReviewRefreshStatePath,
+} from "./learning-review-refresh.js";
 
 async function atomicWriteJson(targetPath: string, value: unknown): Promise<void> {
   mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -168,6 +172,7 @@ export async function ensureGoalRuntime(goal: LongTermGoal): Promise<void> {
   await ensureJsonFile(getGoalPublishRecordsPath(goal), initialPublishRecords);
   await ensureJsonFile(getGoalReviewNotificationsPath(goal), getDefaultGoalReviewNotifications());
   await ensureJsonFile(getGoalReviewNotificationDispatchesPath(goal), getDefaultGoalReviewNotificationDispatches());
+  await ensureJsonFile(getGoalLearningReviewRefreshStatePath(goal), getDefaultGoalLearningReviewRefreshState());
   await ensureJsonFile(getGoalBoardRefPath(goal), { boardId: goal.boardId ?? null });
 }
 

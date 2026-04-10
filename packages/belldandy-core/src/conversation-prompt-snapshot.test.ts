@@ -246,6 +246,49 @@ test("persistConversationPromptSnapshot removes aged prompt snapshots based on r
   }
 });
 
+test("persistConversationPromptSnapshot writes a human-readable index for latest prompt snapshots", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-index-"));
+
+  try {
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId: "agent:default:main",
+        runId: "run-main-1",
+        createdAt: 100,
+      }),
+    });
+    await persistConversationPromptSnapshot({
+      stateDir,
+      snapshot: buildSnapshot({
+        conversationId: "goal:goal_alpha",
+        runId: "run-goal-1",
+        createdAt: 200,
+      }),
+    });
+
+    const indexRoot = path.join(stateDir, "diagnostics", "prompt-snapshots");
+    const indexJson = JSON.parse(await fs.readFile(path.join(indexRoot, "_index.json"), "utf-8"));
+    const indexText = await fs.readFile(path.join(indexRoot, "_index.txt"), "utf-8");
+
+    expect(indexJson.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        conversationId: "agent:default:main",
+        sessionKind: "agent_main",
+      }),
+      expect.objectContaining({
+        conversationId: "goal:goal_alpha",
+        sessionKind: "goal",
+      }),
+    ]));
+    expect(indexText).toContain("Prompt Snapshot Index");
+    expect(indexText).toContain("agent:default:main");
+    expect(indexText).toContain("goal:goal_alpha");
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("persistConversationPromptSnapshot persists schema v2 with systemPromptRef and load expands the blob", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-v2-"));
   const conversationId = "conv-v2";

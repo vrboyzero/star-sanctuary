@@ -45,6 +45,7 @@ import {
   formatPromptObservabilityHeadline,
   toPromptObservabilityView,
 } from "./prompt-observability.js";
+import { resolveModelMediaCapabilities } from "./media-capability-registry.js";
 import {
   buildToolBehaviorObservability,
   readConfiguredPromptExperimentToolContracts,
@@ -128,10 +129,18 @@ import { buildAgentRoster } from "./query-runtime-agent-roster.js";
 import { ensureResidentAgentSession } from "./query-runtime-agent-sessions.js";
 import { buildLearningReviewInput } from "./learning-review-input.js";
 import { buildLearningReviewNudgeRuntimeReport } from "./learning-review-nudge-runtime.js";
+import { buildDeploymentBackendsDoctorReport, ensureDeploymentBackendsConfig } from "./deployment-backends.js";
 import { buildMindProfileSnapshot } from "./mind-profile-snapshot.js";
 import { buildResidentAgentObservabilitySnapshot } from "./resident-agent-observability.js";
+import {
+  buildSkillFreshnessSnapshot,
+  findSkillFreshnessForCandidate,
+  findSkillFreshnessForUsage,
+} from "./skill-freshness.js";
+import { updateSkillFreshnessManualMark } from "./skill-freshness-state.js";
 import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
 import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
+import type { RuntimeResilienceDoctorReport } from "./runtime-resilience.js";
 import {
   attachResidentExperienceCandidateSourceView,
   attachResidentExperienceUsageSourceView,
@@ -241,6 +250,7 @@ export type GatewayServerOptions = {
   conversationStoreOptions?: { maxHistory?: number; ttlSeconds?: number };
   conversationStore?: ConversationStore; // [NEW] Allow passing shared instance
   getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
+  getRuntimeResilienceReport?: () => RuntimeResilienceDoctorReport | undefined;
   onActivity?: () => void;
   /** 可选：统一 Logger，未提供时使用 console */
   logger?: BelldandyLogger;
@@ -466,6 +476,7 @@ const DEFAULT_METHODS = [
   "experience.usage.list",
   "experience.usage.stats",
   "experience.usage.revoke",
+  "experience.skill.freshness.update",
   "goal.create",
   "goal.list",
   "goal.get",
@@ -920,6 +931,34 @@ function resolveScopedResidentMemoryPolicy(
   const agentId = extractScopedMemoryAgentId(params) ?? "default";
   return records.find((item) => item.agentId === agentId)?.policy
     ?? records.find((item) => item.agentId === "default")?.policy;
+}
+
+async function buildScopedSkillFreshnessSnapshot(
+  stateDir: string,
+  manager: ReturnType<typeof resolveScopedMemoryManager>,
+) {
+  return buildSkillFreshnessSnapshot({
+    manager,
+    stateDir,
+  });
+}
+
+function attachSkillFreshnessToCandidatePayload(
+  payload: Record<string, unknown>,
+  candidate: any,
+  snapshot?: Awaited<ReturnType<typeof buildSkillFreshnessSnapshot>>,
+): Record<string, unknown> {
+  const skillFreshness = candidate?.type === "skill" ? findSkillFreshnessForCandidate(snapshot, candidate) : undefined;
+  return skillFreshness ? { ...payload, skillFreshness } : payload;
+}
+
+function attachSkillFreshnessToUsagePayload(
+  payload: Record<string, unknown>,
+  item: any,
+  snapshot?: Awaited<ReturnType<typeof buildSkillFreshnessSnapshot>>,
+): Record<string, unknown> {
+  const skillFreshness = item?.assetType === "skill" ? findSkillFreshnessForUsage(snapshot, item) : undefined;
+  return skillFreshness ? { ...payload, skillFreshness } : payload;
 }
 
 function resolveResidentMemoryManagerRecord(
@@ -1431,6 +1470,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   // Ensure sessions dir exists
   await fsp.mkdir(sessionsDir, { recursive: true });
   await fsp.mkdir(avatarDir, { recursive: true });
+  await ensureDeploymentBackendsConfig(stateDir);
 
   const conversationStore = opts.conversationStore ?? new ResidentConversationStore({
     ...opts.conversationStoreOptions,
@@ -1822,6 +1862,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
         tokenUsageUploadConfig,
         broadcastEvent,
         getCompactionRuntimeReport: opts.getCompactionRuntimeReport,
+        getRuntimeResilienceReport: opts.getRuntimeResilienceReport,
         queryRuntimeTraceStore,
         residentAgentRuntime,
         residentMemoryManagers: opts.residentMemoryManagers,
@@ -2135,6 +2176,7 @@ async function handleReq(
     tokenUsageUploadConfig: TokenUsageUploadConfig;
     broadcastEvent?: (frame: GatewayEventFrame) => void;
     getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
+    getRuntimeResilienceReport?: () => RuntimeResilienceDoctorReport | undefined;
     queryRuntimeTraceStore: QueryRuntimeTraceStore;
     residentAgentRuntime: ResidentAgentRuntimeRegistry;
     residentMemoryManagers?: ScopedMemoryManagerRecord[];
@@ -2206,6 +2248,7 @@ async function handleReq(
     "experience.usage.list",
     "experience.usage.stats",
     "experience.usage.revoke",
+    "experience.skill.freshness.update",
     "goal.create",
     "goal.list",
     "goal.get",
@@ -2379,6 +2422,17 @@ async function handleReq(
             sttTranscribe: ctx.sttTranscribe,
             ttsEnabled: ctx.ttsEnabled,
             ttsSynthesize: ctx.ttsSynthesize,
+            resolveCurrentModelMediaCapabilities: ({ requestedAgentId, requestedModelId }) => {
+              const resolvedAgentId = requestedAgentId ?? "default";
+              const modelRef = typeof requestedModelId === "string" && requestedModelId.trim()
+                ? requestedModelId.trim()
+                : ctx.agentRegistry?.getProfile(resolvedAgentId)?.model;
+              return resolveModelMediaCapabilities({
+                modelRef,
+                primaryModelConfig: ctx.primaryModelConfig,
+                modelFallbacks: ctx.modelFallbacks,
+              });
+            },
             getAttachmentPromptLimits,
             truncateTextForPrompt,
             formatLocalMessageTime,
@@ -3046,6 +3100,10 @@ async function handleReq(
         skillRegistry: ctx.skillRegistry,
         toolsConfigManager: ctx.toolsConfigManager,
       });
+      const deploymentBackends = buildDeploymentBackendsDoctorReport({
+        stateDir: ctx.stateDir,
+      });
+      const runtimeResilience = ctx.getRuntimeResilienceReport?.();
       const extensionRuntime = ctx.extensionHost
         ? {
           ...extensionRuntimeBase,
@@ -3216,6 +3274,27 @@ async function handleReq(
           ? `enabled at ${memoryRuntime.sharedMemory.scope.relativeRoot} (${memoryRuntime.sharedMemory.scope.fileCount} files), secret guard ready, sync plan ${memoryRuntime.sharedMemory.syncPolicy.status}`
           : `disabled by default, path ${memoryRuntime.sharedMemory.scope.relativeRoot}, secret guard ready, sync plan ${memoryRuntime.sharedMemory.syncPolicy.status}`,
       });
+      checks.push({
+        id: "deployment_backends",
+        name: "Deployment Backends",
+        status: deploymentBackends.summary.warningCount > 0
+          || deploymentBackends.summary.selectedResolved === false
+          ? "warn"
+          : "pass",
+        message: deploymentBackends.headline,
+      });
+      if (runtimeResilience) {
+        checks.push({
+          id: "runtime_resilience",
+          name: "Runtime Resilience",
+          status: runtimeResilience.latest && runtimeResilience.latest.finalStatus !== "success"
+            ? "warn"
+            : runtimeResilience.latest?.degraded
+              ? "warn"
+              : "pass",
+          message: runtimeResilience.summary.headline,
+        });
+      }
       checks.push({
         id: "query_runtime_trace",
         name: "Query Runtime Trace",
@@ -3409,6 +3488,7 @@ async function handleReq(
       let mindProfileSnapshot: Awaited<ReturnType<typeof buildMindProfileSnapshot>> | undefined;
       let learningReviewInput: ReturnType<typeof buildLearningReviewInput> | undefined;
       let learningReviewNudgeRuntime: Awaited<ReturnType<typeof buildLearningReviewNudgeRuntimeReport>> | undefined;
+      let skillFreshness: Awaited<ReturnType<typeof buildSkillFreshnessSnapshot>> | undefined;
       let delegationObservability: ReturnType<typeof buildDelegationObservabilitySnapshot> | undefined;
 
       if (conversationId) {
@@ -3542,6 +3622,7 @@ async function handleReq(
           const launchExplainability = buildAgentLaunchExplainability({
             agentRegistry: ctx.agentRegistry,
             agentId: promptAgentId ?? inspection.agentId,
+            runtimeResilience,
           });
           const summary = buildPromptObservabilitySummary(inspection);
           const summaryView = toPromptObservabilityView(summary, {
@@ -3623,6 +3704,21 @@ async function handleReq(
         });
       }
 
+      skillFreshness = await buildScopedSkillFreshnessSnapshot(
+        ctx.stateDir,
+        resolveScopedMemoryManager(params),
+      );
+      checks.push({
+        id: "skill_freshness",
+        name: "Skill Freshness",
+        status: (skillFreshness.summary.warnCount + skillFreshness.summary.needsPatchCount + skillFreshness.summary.needsNewSkillCount) > 0
+          ? "warn"
+          : skillFreshness.summary.available
+            ? "pass"
+            : "warn",
+        message: skillFreshness.summary.headline,
+      });
+
       if (ctx.subTaskRuntimeStore) {
         const subtaskItems = await ctx.subTaskRuntimeStore.listTasks(undefined, { includeArchived: true });
         delegationObservability = buildDelegationObservabilitySnapshot(subtaskItems);
@@ -3660,6 +3756,7 @@ async function handleReq(
           agentId: visibilityAgentId,
           profileId: visibilityTask?.launchSpec?.profileId,
           launchSpec: visibilityTask?.launchSpec,
+          runtimeResilience,
         });
         const runtimeContext: ToolExecutionRuntimeContext | undefined = visibilityTask
           ? { launchSpec: visibilityTask.launchSpec }
@@ -3746,6 +3843,8 @@ async function handleReq(
         payload: {
           checks,
           memoryRuntime,
+          deploymentBackends,
+          ...(runtimeResilience ? { runtimeResilience } : {}),
           extensionRuntime,
           extensionMarketplace,
           extensionGovernance,
@@ -3762,6 +3861,7 @@ async function handleReq(
           ...(mindProfileSnapshot ? { mindProfileSnapshot } : {}),
           ...(learningReviewInput ? { learningReviewInput } : {}),
           ...(learningReviewNudgeRuntime ? { learningReviewNudgeRuntime } : {}),
+          ...(skillFreshness ? { skillFreshness } : {}),
           ...(delegationObservability ? { delegationObservability } : {}),
           ...(conversationDebug ? { conversationDebug } : {}),
           ...(conversationCatalog ? { conversationCatalog } : {}),
@@ -3953,11 +4053,12 @@ async function handleReq(
       const params = isObjectRecord(req.params) ? req.params : {};
       const goalId = typeof params.goalId === "string" ? params.goalId.trim() : "";
       const nodeId = typeof params.nodeId === "string" ? params.nodeId.trim() : undefined;
+      const checkpointId = typeof params.checkpointId === "string" ? params.checkpointId.trim() : undefined;
       if (!goalId) {
         return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "goalId is required" } };
       }
       try {
-        const result = await ctx.goalManager.resumeGoal(goalId, nodeId);
+        const result = await ctx.goalManager.resumeGoal(goalId, nodeId, { checkpointId });
         return {
           type: "res",
           id: req.id,
@@ -5379,13 +5480,20 @@ async function handleReq(
       if (!task) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Task not found." } };
       }
+      const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
+      const taskPayload = toTaskExperiencePayloadItem(manager, task, residentPolicy) as Record<string, unknown> & {
+        usedSkills?: Array<Record<string, unknown>>;
+      };
+      taskPayload.usedSkills = (Array.isArray(taskPayload.usedSkills) ? taskPayload.usedSkills : []).map((item, index) =>
+        attachSkillFreshnessToUsagePayload(item, task.usedSkills?.[index], skillFreshnessSnapshot),
+      );
 
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          task: toTaskExperiencePayloadItem(manager, task, residentPolicy),
+          task: taskPayload,
           queryView: buildResidentMemoryQueryView(residentPolicy),
         },
       };
@@ -5408,13 +5516,14 @@ async function handleReq(
       if (!candidate) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience candidate not found." } };
       }
+      const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
 
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          candidate: {
+          candidate: attachSkillFreshnessToCandidatePayload({
             ...toExperienceCandidatePayloadItem(candidate, residentPolicy),
             learningReviewInput: buildLearningReviewInput({
               mindProfileSnapshot: await buildMindProfileSnapshot({
@@ -5426,7 +5535,7 @@ async function handleReq(
               }),
               experienceCandidate: candidate,
             }),
-          },
+          }, candidate, skillFreshnessSnapshot),
           queryView: buildResidentMemoryQueryView(residentPolicy),
         },
       };
@@ -5443,12 +5552,17 @@ async function handleReq(
       const limit = clampListLimit(params.limit, 50);
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = manager.listExperienceCandidates(limit, filter as any);
+      const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          items: items.map((item) => toExperienceCandidatePayloadItem(item, residentPolicy)),
+          items: items.map((item) => attachSkillFreshnessToCandidatePayload(
+            toExperienceCandidatePayloadItem(item, residentPolicy),
+            item,
+            skillFreshnessSnapshot,
+          )),
           limit,
           queryView: buildResidentMemoryQueryView(residentPolicy),
         },
@@ -5542,13 +5656,18 @@ async function handleReq(
       if (!usage) {
         return { type: "res", id: req.id, ok: false, error: { code: "not_found", message: "Experience usage not found." } };
       }
+      const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
 
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          usage: toExperienceUsagePayloadItem(manager, usage, residentPolicy),
+          usage: attachSkillFreshnessToUsagePayload(
+            toExperienceUsagePayloadItem(manager, usage, residentPolicy),
+            usage,
+            skillFreshnessSnapshot,
+          ),
           queryView: buildResidentMemoryQueryView(residentPolicy),
         },
       };
@@ -5565,12 +5684,17 @@ async function handleReq(
       const limit = clampListLimit(params.limit, 50);
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = manager.listExperienceUsages(limit, filter as any);
+      const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          items: items.map((item) => toExperienceUsagePayloadItem(manager, item, residentPolicy)),
+          items: items.map((item) => attachSkillFreshnessToUsagePayload(
+            toExperienceUsagePayloadItem(manager, item, residentPolicy),
+            item,
+            skillFreshnessSnapshot,
+          )),
           limit,
           queryView: buildResidentMemoryQueryView(residentPolicy),
         },
@@ -5588,12 +5712,17 @@ async function handleReq(
       const limit = clampListLimit(params.limit, 50);
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
       const items = manager.listExperienceUsageStats(limit, filter as any);
+      const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
       return {
         type: "res",
         id: req.id,
         ok: true,
         payload: {
-          items: items.map((item) => toExperienceUsagePayloadItem(manager, item, residentPolicy)),
+          items: items.map((item) => attachSkillFreshnessToUsagePayload(
+            toExperienceUsagePayloadItem(manager, item, residentPolicy),
+            item,
+            skillFreshnessSnapshot,
+          )),
           limit,
           queryView: buildResidentMemoryQueryView(residentPolicy),
         },
@@ -5629,6 +5758,61 @@ async function handleReq(
       });
 
       return { type: "res", id: req.id, ok: true, payload: { usage, revoked: Boolean(usage) } };
+    }
+
+    case "experience.skill.freshness.update": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const manager = resolveScopedMemoryManager(params);
+      const sourceCandidateId = typeof params.sourceCandidateId === "string" ? params.sourceCandidateId.trim() : "";
+      const stale = params.stale !== false;
+      const candidate = sourceCandidateId && manager ? manager.getExperienceCandidate(sourceCandidateId) : null;
+      if (candidate && candidate.type !== "skill") {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "invalid_params", message: "sourceCandidateId must point to a skill candidate." },
+        };
+      }
+
+      const skillKey = typeof params.skillKey === "string" && params.skillKey.trim()
+        ? params.skillKey.trim()
+        : candidate?.title || candidate?.slug || "";
+      if (!skillKey && !sourceCandidateId) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "invalid_params", message: "skillKey or sourceCandidateId is required." },
+        };
+      }
+
+      const updated = await updateSkillFreshnessManualMark(ctx.stateDir, {
+        skillKey,
+        sourceCandidateId: sourceCandidateId || undefined,
+        reason: typeof params.reason === "string" ? params.reason.trim() : undefined,
+        markedBy: typeof params.markedBy === "string" ? params.markedBy.trim() : extractScopedMemoryAgentId(params),
+        stale,
+      });
+      const skillFreshnessSnapshot = manager
+        ? await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager)
+        : undefined;
+      const skillFreshness = candidate
+        ? findSkillFreshnessForCandidate(skillFreshnessSnapshot, candidate)
+        : skillKey
+          ? skillFreshnessSnapshot?.bySkillKey?.[skillKey.toLowerCase()]
+          : undefined;
+
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          stale,
+          mark: updated.mark,
+          skillFreshness,
+        },
+      };
     }
 
     case "workspace.list": {

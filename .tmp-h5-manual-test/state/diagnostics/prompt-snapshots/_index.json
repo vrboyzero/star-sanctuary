@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "generatedAt": 1775821891678,
+  "entries": [
+    {
+      "directoryName": "heartbeat-1775821891062",
+      "conversationId": "heartbeat-1775821891062",
+      "sessionKind": "heartbeat",
+      "snapshotCount": 1,
+      "latestCreatedAt": 1775821891663,
+      "latestPersistedAt": 1775821891664,
+      "latestFileName": "created-1775821891663.prompt-snapshot.json"
+    }
+  ]
+}

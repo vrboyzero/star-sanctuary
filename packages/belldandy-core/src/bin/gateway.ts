@@ -8,6 +8,7 @@ import { deliverAutoMessageToResidentChannel } from "../auto-chat-delivery.js";
 import { upsertChannelSecurityApprovalRequest } from "../channel-security-store.js";
 import { buildGoalSessionContextPrelude } from "../goal-session-context.js";
 import { buildGoalSessionRuntimeEventMessage } from "../goal-session-runtime-event.js";
+import { buildMindProfileRuntimePrelude } from "../mind-profile-runtime-prelude.js";
 import { normalizePreferredProviderIds } from "../provider-model-catalog.js";
 import { ResidentConversationStore } from "../resident-conversation-store.js";
 import { buildLearningReviewNudgePrelude } from "../learning-review-nudge.js";
@@ -15,6 +16,7 @@ import { runPostTaskLearningReview } from "../learning-review-runner.js";
 import {
   createSubTaskAgentCapabilities,
   createSubTaskResumeController,
+  createSubTaskTakeoverController,
   createSubTaskRuntimeEventHandler,
   createSubTaskUpdateController,
   createSubTaskWorktreeLifecycleHandler,
@@ -22,6 +24,7 @@ import {
   type SubTaskRecord,
   SubTaskRuntimeStore,
 } from "../task-runtime.js";
+import { createSubTaskTakeoverDispatcher } from "../subtask-takeover-runtime.js";
 import { SubTaskWorktreeRuntime } from "../worktree-runtime.js";
 
 import {
@@ -264,8 +267,10 @@ import {
   BackgroundContinuationLedger,
   buildBackgroundContinuationRuntimeDoctorReport,
 } from "../background-continuation-runtime.js";
+import { BackgroundRecoveryRuntime } from "../background-recovery-runtime.js";
 import { startHeartbeatRunner, type HeartbeatRunnerHandle } from "../heartbeat/index.js";
 import { createSubTaskBackgroundContinuationLedgerHandler } from "../subtask-background-continuation-ledger.js";
+import { RuntimeResilienceTracker } from "../runtime-resilience.js";
 import {
   CronStore,
   buildCronRuntimeDoctorReport,
@@ -748,6 +753,7 @@ const externalOutboundRequireConfirmation = readEnv("BELLDANDY_EXTERNAL_OUTBOUND
 // Cron Store（无论是否启用调度器，工具都可以管理任务）
 const cronStore = new CronStore(stateDir);
 const backgroundContinuationLedger = new BackgroundContinuationLedger(stateDir);
+let backgroundRecoveryRuntime: BackgroundRecoveryRuntime | undefined;
 let cronSchedulerHandle: CronSchedulerHandle | undefined;
 
 // 延迟绑定 broadcast：工具注册时 server 尚未创建，执行时才调用
@@ -1232,6 +1238,11 @@ const autoRecallEnabled = readEnv("BELLDANDY_AUTO_RECALL_ENABLED") === "true";
 const autoRecallLimit = Math.max(1, parseInt(readEnv("BELLDANDY_AUTO_RECALL_LIMIT") || "3", 10) || 3);
 const autoRecallMinScoreRaw = Number(readEnv("BELLDANDY_AUTO_RECALL_MIN_SCORE") || "0.3");
 const autoRecallMinScore = Number.isFinite(autoRecallMinScoreRaw) ? autoRecallMinScoreRaw : 0.3;
+const mindProfileRuntimeEnabled = readEnv("BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED") !== "false";
+const mindProfileRuntimeMaxLines = Math.max(1, parseInt(readEnv("BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINES") || "4", 10) || 4);
+const mindProfileRuntimeMaxLineLength = Math.max(24, parseInt(readEnv("BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINE_LENGTH") || "120", 10) || 120);
+const mindProfileRuntimeMaxChars = Math.max(80, parseInt(readEnv("BELLDANDY_MIND_PROFILE_RUNTIME_MAX_CHARS") || "360", 10) || 360);
+const mindProfileRuntimeMinSignalCount = Math.max(1, parseInt(readEnv("BELLDANDY_MIND_PROFILE_RUNTIME_MIN_SIGNAL_COUNT") || "2", 10) || 2);
 const toolResultTranscriptCharLimit = Math.max(0, parseInt(readEnv("BELLDANDY_TOOL_RESULT_TRANSCRIPT_CHAR_LIMIT") || "12000", 10) || 12000);
 const taskDedupGuardEnabled = readEnv("BELLDANDY_TASK_DEDUP_GUARD_ENABLED") !== "false";
 const taskDedupWindowMinutes = Math.max(1, parseInt(readEnv("BELLDANDY_TASK_DEDUP_WINDOW_MINUTES") || "20", 10) || 20);
@@ -1298,6 +1309,39 @@ hookRegistry.register({
     }
   },
 });
+
+if (mindProfileRuntimeEnabled) {
+  hookRegistry.register({
+    source: "mind-profile-runtime",
+    hookName: "before_agent_start",
+    priority: 115,
+    handler: async (_event, _ctx) => {
+      try {
+        return await buildMindProfileRuntimePrelude({
+          stateDir,
+          agentId: _ctx.agentId,
+          sessionKey: _ctx.sessionKey,
+          currentTurnText: _event.userInput?.trim() || _event.prompt?.trim() || undefined,
+          residentMemoryManagers: scopedMemoryManagers.records,
+          config: {
+            enabled: mindProfileRuntimeEnabled,
+            maxLines: mindProfileRuntimeMaxLines,
+            maxLineLength: mindProfileRuntimeMaxLineLength,
+            maxChars: mindProfileRuntimeMaxChars,
+            minSignalCount: mindProfileRuntimeMinSignalCount,
+          },
+        });
+      } catch (err) {
+        logger.warn("mind-profile-runtime", `Failed to build runtime prelude: ${err instanceof Error ? err.message : String(err)}`);
+        return undefined;
+      }
+    },
+  });
+  logger.info(
+    "mind-profile-runtime",
+    `enabled (maxLines=${mindProfileRuntimeMaxLines}, maxLineLength=${mindProfileRuntimeMaxLineLength}, maxChars=${mindProfileRuntimeMaxChars}, minSignals=${mindProfileRuntimeMinSignalCount})`,
+  );
+}
 
 hookRegistry.register({
   source: "learning-review-nudge",
@@ -1443,6 +1487,75 @@ async function runPrimaryWarmupProbe(): Promise<void> {
 }
 
 void runPrimaryWarmupProbe();
+
+const readProviderLabel = (baseUrl: string): string => {
+  if (!baseUrl) {
+    return "unknown";
+  }
+  try {
+    return new URL(baseUrl).hostname.replace(/^api\./, "").replace(/^www\./, "");
+  } catch {
+    return baseUrl;
+  }
+};
+
+const toRuntimeResilienceRoute = (profile: {
+  id?: string;
+  baseUrl: string;
+  model: string;
+  protocol?: string;
+  wireApi?: string;
+}) => ({
+  profileId: profile.id ?? "primary",
+  provider: readProviderLabel(profile.baseUrl),
+  model: profile.model,
+  ...(profile.protocol ? { protocol: profile.protocol } : {}),
+  ...(profile.wireApi ? { wireApi: profile.wireApi } : {}),
+});
+
+const compactionRoute = (() => {
+  const summarizerBaseUrl = compactionBaseUrl || openaiBaseUrl;
+  const summarizerModel = compactionModel || openaiModel;
+  if (!compactionEnabled || !summarizerBaseUrl || !summarizerModel) {
+    return undefined;
+  }
+  return toRuntimeResilienceRoute({
+    id: "compaction",
+    baseUrl: summarizerBaseUrl,
+    model: summarizerModel,
+    protocol: agentProtocol,
+    wireApi: openaiWireApi,
+  });
+})();
+
+const runtimeResilienceTracker = new RuntimeResilienceTracker({
+  stateDir,
+  routing: {
+    primary: toRuntimeResilienceRoute({
+      id: "primary",
+      baseUrl: primaryModelConfig.baseUrl,
+      model: primaryModelConfig.model,
+      protocol: primaryModelConfig.protocol,
+      wireApi: primaryModelConfig.wireApi,
+    }),
+    fallbacks: modelFallbacks.map(toRuntimeResilienceRoute),
+    ...(compactionRoute
+      ? {
+        compaction: {
+          configured: true,
+          sharesPrimaryRoute: compactionRoute.provider === readProviderLabel(primaryModelConfig.baseUrl)
+            && compactionRoute.model === primaryModelConfig.model,
+          route: compactionRoute,
+        },
+      }
+      : {
+        compaction: {
+          configured: false,
+          sharesPrimaryRoute: false,
+        },
+      }),
+  },
+});
 
 // 8.1 Pre-load per-agent workspaces (async, before sync factory)
 const agentWorkspaceCache = new Map<string, { build: SystemPromptBuildResult }>();
@@ -2012,6 +2125,9 @@ agentRegistry = agentProvider === "openai"
         ...(bootstrapProfileCooldowns && { bootstrapProfileCooldowns }),
         fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
         failoverLogger: logger,
+        onRuntimeResilienceEvent: (event) => {
+          runtimeResilienceTracker.record(event);
+        },
         videoUploadConfig,
         protocol: resolvedProtocol,
         wireApi: resolvedWireApi,
@@ -2038,6 +2154,9 @@ agentRegistry = agentProvider === "openai"
       },
       fallbacks: modelFallbacks.length > 0 ? modelFallbacks : undefined,
       failoverLogger: logger,
+      onRuntimeResilienceEvent: (event) => {
+        runtimeResilienceTracker.record(event);
+      },
       videoUploadConfig,
       protocol: resolvedProtocol,
       wireApi: resolvedWireApi,
@@ -2094,6 +2213,13 @@ if (compactionEnabled) {
     compactionSummarizer = async (prompt: string): Promise<string> => {
       const { response } = await summarizerClient.fetchWithFailover({
         timeoutMs: 30_000,
+        onSummary: (summary) => {
+          runtimeResilienceTracker.record({
+            source: "compaction",
+            phase: "compaction",
+            summary,
+          });
+        },
         buildRequest: (profile) => {
           const trimmedBase = profile.baseUrl.replace(/\/+$/, "");
           const base = /\/v\d+$/.test(trimmedBase) ? trimmedBase : `${trimmedBase}/v1`;
@@ -2196,6 +2322,9 @@ let subAgentOrchestrator: SubAgentOrchestrator | undefined;
 let resumeSubTask:
   | ((taskId: string, message?: string, options?: { takeoverAgentId?: string }) => Promise<SubTaskRecord | undefined>)
   | undefined;
+let takeoverSubTaskController:
+  | ((taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>)
+  | undefined;
 let takeoverSubTask:
   | ((taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>)
   | undefined;
@@ -2228,8 +2357,52 @@ if (agentRegistry && toolsEnabled) {
       debug: (m, d) => logger.debug("task-worktree", m, d),
     },
   }));
+  backgroundRecoveryRuntime = new BackgroundRecoveryRuntime({
+    ledger: backgroundContinuationLedger,
+    recoverHeartbeat: async () => {
+      if (!heartbeatRunner) {
+        return {
+          status: "skipped",
+          reason: "Heartbeat runner is not available.",
+        };
+      }
+      const result = await heartbeatRunner.runOnce();
+      return {
+        status: result.status,
+        runId: result.runId,
+        reason: result.reason,
+        message: result.message,
+      };
+    },
+    recoverCron: async (jobId) => {
+      if (!cronSchedulerHandle) {
+        return {
+          status: "skipped",
+          reason: "Cron scheduler is not available.",
+        };
+      }
+      return cronSchedulerHandle.runJobNow(jobId);
+    },
+    recoverSubtask: async (taskId, message) => {
+      if (!resumeSubTask) {
+        return {
+          accepted: false,
+          reason: "Subtask resume controller is not available.",
+        };
+      }
+      const resumed = await resumeSubTask(taskId, message);
+      return {
+        accepted: Boolean(resumed),
+        runId: resumed?.sessionId || resumed?.id,
+        reason: resumed ? "Subtask recovery accepted." : "Subtask recovery returned no task.",
+      };
+    },
+  });
   const subTaskBackgroundContinuationLedgerHandler = createSubTaskBackgroundContinuationLedgerHandler({
     ledger: backgroundContinuationLedger,
+    onFailedRecord: async (record) => {
+      await backgroundRecoveryRuntime?.maybeRecover(record);
+    },
     logger: {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
@@ -2297,16 +2470,66 @@ if (agentRegistry && toolsEnabled) {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
   });
-  takeoverSubTask = async (taskId, agentId, message) => {
-    if (!resumeSubTask) return undefined;
-    return resumeSubTask(taskId, message, {
-      takeoverAgentId: agentId,
-    });
-  };
+  takeoverSubTaskController = createSubTaskTakeoverController({
+    runtimeStore: subTaskRuntimeStore,
+    orchestrator: subAgentOrchestrator,
+    agentRegistry,
+    conversationStore,
+    logger: {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    },
+  });
+  takeoverSubTask = createSubTaskTakeoverDispatcher({
+    runtimeStore: subTaskRuntimeStore,
+    takeoverRunningSubTask: takeoverSubTaskController,
+    takeoverFinishedSubTask: takeoverSubTaskController,
+  });
 
   logger.info("orchestrator", `Sub-agent orchestrator initialized (maxConcurrent=${subAgentMaxConcurrent}, queue=${subAgentMaxQueueSize}, timeout=${subAgentTimeoutMs}ms, maxDepth=${subAgentMaxDepth})`);
   logger.info("task-runtime", "Sub-task runtime initialized for sub-agent orchestration.");
 }
+
+backgroundRecoveryRuntime ??= new BackgroundRecoveryRuntime({
+  ledger: backgroundContinuationLedger,
+  recoverHeartbeat: async () => {
+    if (!heartbeatRunner) {
+      return {
+        status: "skipped",
+        reason: "Heartbeat runner is not available.",
+      };
+    }
+    const result = await heartbeatRunner.runOnce();
+    return {
+      status: result.status,
+      runId: result.runId,
+      reason: result.reason,
+      message: result.message,
+    };
+  },
+  recoverCron: async (jobId) => {
+    if (!cronSchedulerHandle) {
+      return {
+        status: "skipped",
+        reason: "Cron scheduler is not available.",
+      };
+    }
+    return cronSchedulerHandle.runJobNow(jobId);
+  },
+  recoverSubtask: async (taskId, message) => {
+    if (!resumeSubTask) {
+      return {
+        accepted: false,
+        reason: "Subtask resume controller is not available.",
+      };
+    }
+    const resumed = await resumeSubTask(taskId, message);
+    return {
+      accepted: Boolean(resumed),
+      runId: resumed?.sessionId || resumed?.id,
+      reason: resumed ? "Subtask recovery accepted." : "Subtask recovery returned no task.",
+    };
+  },
+});
 
 const ttsEnabledPath = path.join(stateDir, "TTS_ENABLED");
 const isTtsEnabledFn = () => {
@@ -3107,6 +3330,7 @@ const server = await startGatewayServer({
   residentMemoryManagers: scopedMemoryManagers.records,
   conversationStore: conversationStore, // Pass shared instance
   getCompactionRuntimeReport: () => compactionRuntimeTracker.getReport(),
+  getRuntimeResilienceReport: () => runtimeResilienceTracker.getReport(),
   onActivity,
   logger,
   toolsConfigManager,
@@ -3669,7 +3893,7 @@ if (heartbeatEnabled && createAgent) {
           });
           return;
         }
-        await backgroundContinuationLedger.finishRun({
+        const finalized = await backgroundContinuationLedger.finishRun({
           runId: event.runId,
           kind: "heartbeat",
           sourceId: "heartbeat",
@@ -3685,6 +3909,9 @@ if (heartbeatEnabled && createAgent) {
           startedAt: event.startedAt,
           finishedAt: event.finishedAt,
         });
+        if (finalized.status === "failed") {
+          await backgroundRecoveryRuntime?.maybeRecover(finalized);
+        }
       },
     });
 
@@ -3831,7 +4058,7 @@ if (cronEnabled) {
         });
         return;
       }
-      await backgroundContinuationLedger.finishRun({
+      const finalized = await backgroundContinuationLedger.finishRun({
         runId: event.runId,
         kind: "cron",
         sourceId: event.jobId,
@@ -3849,6 +4076,9 @@ if (cronEnabled) {
         finishedAt: event.finishedAt,
         nextRunAtMs: event.nextRunAtMs,
       });
+      if (finalized.status === "failed") {
+        await backgroundRecoveryRuntime?.maybeRecover(finalized);
+      }
     },
   });
 

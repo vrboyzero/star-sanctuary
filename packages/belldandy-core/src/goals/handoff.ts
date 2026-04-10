@@ -8,6 +8,7 @@ import type {
   GoalHandoffBlocker,
   GoalHandoffCapabilityFocus,
   GoalHandoffCheckpointSummary,
+  GoalCheckpointReplayDescriptor,
   GoalHandoffGenerateResult,
   GoalHandoffReadResult,
   GoalHandoffResumeMode,
@@ -171,6 +172,21 @@ function buildNextAction(snapshot: {
   return "先进入基础 goal channel，补齐目标分解、任务图或恢复策略。";
 }
 
+function buildCheckpointReplay(openCheckpoints: GoalCheckpointItem[]): GoalCheckpointReplayDescriptor | undefined {
+  const checkpoint = openCheckpoints[0];
+  const checkpointId = checkpoint?.id?.trim();
+  const nodeId = checkpoint?.nodeId?.trim();
+  if (!checkpointId || !nodeId) return undefined;
+  return {
+    checkpointId,
+    nodeId,
+    runId: checkpoint.runId,
+    title: checkpoint.title,
+    summary: checkpoint.summary,
+    reason: checkpoint.summary || checkpoint.note || "Checkpoint is still open and needs replay-aware follow-up.",
+  };
+}
+
 function buildCapabilityFocus(plan: GoalCapabilityPlan | null): GoalHandoffCapabilityFocus | undefined {
   if (!plan) return undefined;
   return {
@@ -198,6 +214,15 @@ function buildMarkdown(goal: LongTermGoal, handoff: GoalHandoffSnapshot): string
   const blockerLines = handoff.blockers.map((item) =>
     `[${item.kind}:${item.status}] ${item.id}${item.nodeId ? ` | node=${item.nodeId}` : ""} | ${item.title}${item.reason ? ` | ${item.reason}` : ""}`,
   );
+  const replayLines = handoff.checkpointReplay
+    ? [
+      `checkpoint=${handoff.checkpointReplay.checkpointId}`,
+      `node=${handoff.checkpointReplay.nodeId}`,
+      handoff.checkpointReplay.runId ? `run=${handoff.checkpointReplay.runId}` : "",
+      handoff.checkpointReplay.title,
+      handoff.checkpointReplay.reason,
+    ].filter(Boolean).join(" | ")
+    : "(none)";
   const progressLines = handoff.recentProgress.map((entry) =>
     `${entry.at} | ${entry.event || "-"}${entry.nodeId ? ` | node=${entry.nodeId}` : ""}${entry.checkpointId ? ` | checkpoint=${entry.checkpointId}` : ""}${entry.summary ? ` | ${entry.summary}` : ""}`,
   );
@@ -241,6 +266,9 @@ function buildMarkdown(goal: LongTermGoal, handoff: GoalHandoffSnapshot): string
     "## Open Checkpoints",
     renderList(checkpointLines),
     "",
+    "## Checkpoint Replay",
+    `- ${escapeMarkdown(replayLines)}`,
+    "",
     "## Blockers",
     renderList(blockerLines),
     "",
@@ -268,6 +296,7 @@ export function buildGoalHandoffResult(input: GoalHandoffInput): GoalHandoffRead
   const recentProgress: GoalHandoffTimelineEntry[] = parseGoalProgressEntries(progressContent).slice(0, 6);
   const tracking = buildTracking(graph, checkpoints);
   const resume = resolveResumeMode(goal, openCheckpoints, blockedNodes);
+  const checkpointReplay = buildCheckpointReplay(openCheckpoints);
   const nextReadyNode = graph.nodes.find((node) => node.status === "ready");
   const handoff: GoalHandoffSnapshot = {
     version: 1,
@@ -291,6 +320,7 @@ export function buildGoalHandoffResult(input: GoalHandoffInput): GoalHandoffRead
     }),
     tracking,
     openCheckpoints: openCheckpoints.slice(0, 6).map(summarizeCheckpoint),
+    checkpointReplay,
     blockers: buildBlockers(blockedNodes, openCheckpoints),
     focusCapability: buildCapabilityFocus(focusPlan),
     recentProgress,

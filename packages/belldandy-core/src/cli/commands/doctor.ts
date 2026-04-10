@@ -29,6 +29,8 @@ import {
 } from "@belldandy/skills";
 import { buildResidentAgentObservabilitySnapshot } from "../../resident-agent-observability.js";
 import { resolveResidentMemoryPolicy } from "../../resident-memory-policy.js";
+import { buildDeploymentBackendsDoctorReport } from "../../deployment-backends.js";
+import { readRuntimeResilienceDoctorReport } from "../../runtime-resilience.js";
 
 interface CheckResult {
   name: string;
@@ -392,6 +394,31 @@ export default defineCommand({
       status: residentAgents.summary.totalCount > 0 ? "pass" : "warn",
       message: residentAgents.summary.headline,
     });
+    const deploymentBackends = buildDeploymentBackendsDoctorReport({ stateDir });
+    results.push({
+      name: "Deployment Backends",
+      status: deploymentBackends.summary.warningCount > 0 || deploymentBackends.summary.selectedResolved === false
+        ? "warn"
+        : "pass",
+      message: deploymentBackends.headline,
+      fix: !deploymentBackends.configExists
+        ? `Create ${deploymentBackends.configPath} or start gateway once to materialize the default profile`
+        : deploymentBackends.summary.selectedResolved === false
+          ? `Update selectedProfileId in ${deploymentBackends.configPath}`
+          : undefined,
+    });
+    const runtimeResilience = await readRuntimeResilienceDoctorReport(stateDir);
+    if (runtimeResilience) {
+      results.push({
+        name: "Runtime Resilience",
+        status: runtimeResilience.latest && runtimeResilience.latest.finalStatus !== "success"
+          ? "warn"
+          : runtimeResilience.latest?.degraded
+            ? "warn"
+            : "pass",
+        message: runtimeResilience.summary.headline,
+      });
+    }
 
     // Output
     if (ctx.json) {
@@ -400,7 +427,15 @@ export default defineCommand({
         warn: results.filter((r) => r.status === "warn").length,
         fail: results.filter((r) => r.status === "fail").length,
       };
-      ctx.output({ checks: results, summary, toolBehaviorObservability, toolContractV2Observability, residentAgents });
+      ctx.output({
+        checks: results,
+        summary,
+        toolBehaviorObservability,
+        toolContractV2Observability,
+        residentAgents,
+        deploymentBackends,
+        ...(runtimeResilience ? { runtimeResilience } : {}),
+      });
       return;
     }
 
@@ -435,6 +470,30 @@ export default defineCommand({
     for (const agent of residentAgents.agents.slice(0, 3)) {
       ctx.log(`  - ${agent.displayName}: ${agent.observabilityHeadline ?? agent.memoryMode}`);
     }
+    ctx.log("");
+    ctx.log("Deployment Backends");
+    ctx.log(`  config: ${deploymentBackends.configPath}`);
+    ctx.log(`  profiles: ${deploymentBackends.summary.enabledCount}/${deploymentBackends.summary.profileCount} enabled`);
+    ctx.log(
+      `  selected: ${deploymentBackends.summary.selectedProfileId ?? "-"} (${deploymentBackends.summary.selectedBackend ?? "-"})`,
+    );
+    ctx.log(
+      `  kinds: local ${deploymentBackends.summary.backendCounts.local}, docker ${deploymentBackends.summary.backendCounts.docker}, ssh ${deploymentBackends.summary.backendCounts.ssh}`,
+    );
+    for (const item of deploymentBackends.items.slice(0, 3)) {
+      ctx.log(`  - ${item.label}: ${item.message}`);
+    }
+    if (runtimeResilience) {
+      ctx.log("");
+      ctx.log("Runtime Resilience");
+      ctx.log(`  routing: primary ${runtimeResilience.routing.primary.provider}/${runtimeResilience.routing.primary.model}`);
+      ctx.log(`  fallbacks: ${runtimeResilience.routing.fallbacks.length}`);
+      if (runtimeResilience.routing.compaction?.configured) {
+        ctx.log(`  compaction: ${runtimeResilience.routing.compaction.route?.provider ?? "-"} / ${runtimeResilience.routing.compaction.route?.model ?? "-"}`);
+      }
+      ctx.log(`  headline: ${runtimeResilience.summary.headline}`);
+    }
+
     ctx.log("");
     ctx.log("Tool Contract V2");
     ctx.log(`  total governed tools: ${toolContractV2Observability.summary.totalCount}`);

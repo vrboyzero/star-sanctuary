@@ -1,0 +1,6 @@
+Prompt Snapshot Index
+generatedAt: 2026-04-10T08:43:17.658Z
+entries: 2
+
+2026-04-10T08:43:17.424Z | goal | goal:goal_alpha | run=d1dddb86-0b66-457b-a72c-71c6e6d67342 | snapshots=1 | dir=goal-goal_alpha | latest=run-d1dddb86-0b66-457b-a72c-71c6e6d67342.prompt-snapshot.json
+2026-04-10T08:43:17.207Z | agent_main | agent:default:main | run=6abda34f-b9f6-4945-9203-265a74370de6 | snapshots=1 | dir=agent-default-main | latest=run-6abda34f-b9f6-4945-9203-265a74370de6.prompt-snapshot.json

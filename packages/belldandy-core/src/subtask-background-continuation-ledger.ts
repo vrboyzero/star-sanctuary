@@ -1,4 +1,5 @@
 import {
+  type BackgroundContinuationRecord,
   type BackgroundContinuationLedger,
   type BackgroundContinuationStatus,
 } from "./background-continuation-runtime.js";
@@ -41,6 +42,7 @@ function buildSubTaskLedgerSignature(record: SubTaskRecord): string {
     error: record.error || "",
     outputPreview: record.outputPreview || "",
     steering: record.steering.map((item) => `${item.id}:${item.status}`).join("|"),
+    takeover: record.takeover.map((item) => `${item.id}:${item.mode}:${item.agentId}:${item.status}`).join("|"),
     resume: record.resume.map((item) => `${item.id}:${item.status}`).join("|"),
     notifications: record.notifications.slice(-3).map((item) => `${item.kind}:${item.message}`).join("|"),
   });
@@ -48,6 +50,7 @@ function buildSubTaskLedgerSignature(record: SubTaskRecord): string {
 
 export function createSubTaskBackgroundContinuationLedgerHandler(input: {
   ledger: Pick<BackgroundContinuationLedger, "startRun" | "finishRun">;
+  onFailedRecord?: (record: BackgroundContinuationRecord) => void | Promise<void>;
   logger?: {
     warn?: (message: string, data?: unknown) => void;
   };
@@ -92,6 +95,11 @@ export function createSubTaskBackgroundContinuationLedgerHandler(input: {
       ...ledgerInput,
       status: mapSubTaskLedgerStatus(record),
       finishedAt: record.finishedAt || record.updatedAt || Date.now(),
+    }).then((finalized) => {
+      if (finalized.status === "failed") {
+        return input.onFailedRecord?.(finalized);
+      }
+      return undefined;
     }).catch((error) => {
       input.logger?.warn?.("Failed to finalize subtask shared ledger entry.", {
         taskId: record.id,

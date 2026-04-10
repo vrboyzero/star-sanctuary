@@ -339,7 +339,7 @@
 - 来源文档：
   - `LA与SS`
   - `OC与SS`
-- 当前状态：`后置增强草案；不阻塞 A4 收口`
+- 当前状态：`已按“checkpoint replay + background recovery + 受限 safe-point takeover”完成当前阶段收口`
 - 目标：
   - 在不破坏当前最小台账边界的前提下，补更深一层的 replay / recovery / takeover 能力
 - 前置依赖：
@@ -375,12 +375,289 @@
   - `A5` 是后置增强，不是第三阶段收口前的强制项
   - 若 `P2-1 ~ P2-5`、产品化收口或渠道主线更紧急，`A5` 可以继续后移
   - `A5` 默认不得回改 `A4` 已收口的出口条件、shared ledger 主链、doctor 最小消费面与既有 finished-subtask takeover 语义；若后续某项增强必须触碰这些已收口主链，应单独评估风险并另开任务，不在 `A5` 内直接扩做
+- 当前阶段收口定义（更新）：
+  - `A5` 当前阶段不以完整做完 `A5-1 ~ A5-6` 为目标
+  - 当前阶段的完成定义调整为：
+    - `A5-1 checkpoint replay` 已完成
+    - 继续补 `A5-2 background recovery runtime` 的最小失败恢复闭环
+    - 再补 `A5-3` 的受限版 safe-point takeover / handoff
+  - `A5-4 / A5-5 / A5-6` 明确保留为后续增强储备，不作为当前阶段收口条件
+  - 这样收口后，`A5` 即满足：
+    - 已具备“局部回放”
+    - 已具备“失败恢复”
+    - 已具备“有限接管”
+    - 但仍不演变成大一统 continuation runtime 重构
+- 当前阶段风险判断（更新）：
+  - 继续推进 `A5` 当前阶段收口属于`中等、可控`
+  - `A5-2` 的主要风险是 recovery 字段膨胀、自动恢复循环、误恢复到错误目标
+  - `A5-3` 的主要风险是从 safe-point 滑向 live injection；因此必须继续限制为 safe-point takeover
+  - `A5-4 / A5-5 / A5-6` 当前若继续推进，扩面风险明显高于收益，故保持后置
 - 技术债决策：`split_task`
   - 把 `checkpoint replay / background recovery / mid-run takeover / goal-session takeover / workbench 评估` 拆成同一主题下的后置包，而不是继续挂在 `A4` 下混做
 - 后续计划：
-  - 先观察真实使用中，doctor recent entry 与现有 continuation action 是否已经覆盖大部分回看需求
-  - 若真实场景中“需要恢复但只能查看、不能继续”的比例明显升高，再从 `A5-1 / A5-2` 开始推进
-  - 若 takeover 需求主要集中在 finished subtask 之外，再单独推进 `A5-3 / A5-4`
+  - `A5` 当前阶段不再主动扩面
+  - 仅继续观察真实 `checkpoint replay / background recovery / safe-point takeover` 使用信号
+  - 若出现误判、误恢复或接管语义不清，再做最小修补
+  - `A5-4 / A5-5 / A5-6` 继续保持后置，不纳入当前阶段完成定义
+
+##### A5-2 background recovery runtime 文件级计划
+
+- 本轮目标：
+  - 在现有 `background continuation ledger` 之上补最小恢复闭环
+  - 让 `cron / heartbeat / background subtask` 在失败后不再只是“看得到失败”，而是能形成一次受控恢复尝试
+  - 继续复用 doctor / 现有 continuation 消费面，不新增统一恢复控制台
+- 本轮边界：
+  - 仅处理 `failed` 的后台项
+  - 仅允许“最多一次受控恢复尝试 + 恢复结果落账 + doctor 可见”
+  - 必须有节流 / 去重，避免失败后无限自旋
+  - 不扩成统一后台任务编排器，不改 `A4` 的 shared ledger 主链
+- 文件级实现清单：
+  - `packages/belldandy-core/src/background-recovery-runtime.ts`
+    - 新增 `A5-2` 主体逻辑，避免把主体继续塞进 `gateway.ts`
+    - 定义最小恢复决策、节流 / 去重、恢复结果记录与执行器接口
+    - 仅支持：
+      - `recoverHeartbeat()`
+      - `recoverCron(jobId)`
+      - `recoverSubtask(taskId)`
+  - `packages/belldandy-core/src/background-continuation-runtime.ts`
+    - 为 `BackgroundContinuationRecord` 增加最小 recovery 字段
+    - 建议字段控制在：
+      - `recoveredFromRunId?`
+      - `recoveryAttemptCount?`
+      - `latestRecoveryAttemptAt?`
+      - `latestRecoveryOutcome?`
+      - `latestRecoveryRunId?`
+      - `latestRecoveryReason?`
+    - 同步补 `clone / normalize / persist / doctor report`
+    - doctor 汇总补最小恢复计数
+  - `packages/belldandy-core/src/cron/scheduler.ts`
+    - 为 `CronSchedulerHandle` 增加极小 `runJobNow(jobId)` 手动恢复入口
+    - 复用现有 `executeJob`，不引入新的调度语义
+  - `packages/belldandy-core/src/heartbeat/runner.ts`
+    - 复用现有 `runOnce()` 作为 heartbeat recovery 执行器
+    - 不额外改调度语义
+  - `packages/belldandy-core/src/task-runtime.ts`
+    - subtask recovery 继续复用现有 `resumeSubTask` 主链，只支持终态失败任务
+  - `packages/belldandy-core/src/subtask-background-continuation-ledger.ts`
+    - 确保失败 subtask ledger 记录稳定带出 recovery 所需 source/task 语义
+    - 避免恢复前后因签名问题重复刷账
+  - `packages/belldandy-core/src/bin/gateway.ts`
+    - 实例化 background recovery runtime
+    - 注入 `heartbeatRunner.runOnce` / `cronSchedulerHandle.runJobNow` / `resumeSubTask`
+    - 在后台失败事件落账后触发最小恢复判断
+    - 保持为装配 / 接线层，不承载主体逻辑
+  - `packages/belldandy-core/src/server.ts`
+    - `system.doctor` 继续复用现有 background continuation runtime 卡片
+    - 补最小 recovery 汇总与最近恢复结果可见性
+  - `apps/web/public/app/features/doctor-observability.js`
+    - 在现有 background runtime 卡片中补 recovery 摘要
+    - 不新增新面板
+  - 测试：
+    - `packages/belldandy-core/src/background-recovery-runtime.test.ts`
+    - `packages/belldandy-core/src/background-continuation-runtime.test.ts`
+    - `packages/belldandy-core/src/subtask-background-continuation-ledger.test.ts`
+    - `packages/belldandy-core/src/server.test.ts`
+- 本轮完成判定：
+  - failed background run 能触发一次最小恢复尝试
+  - 同一失败信号在节流窗口内不会重复恢复
+  - ledger / doctor 能看见 `recoveredFrom` 与最近恢复结果
+  - 不新增新导航、不新增独立恢复控制台
+- 当前进度：
+  - `A5-2 background recovery runtime` 已完成第一版最小闭环
+  - 已落地内容：
+    - 已新增独立 `background-recovery-runtime` 模块，专门承载后台失败恢复决策、节流 / 去重与结果落账，不把主体逻辑继续塞进 `gateway.ts`
+    - `background continuation ledger` 已补最小 recovery 字段：
+      - `recoveredFromRunId`
+      - `recoveryAttemptCount`
+      - `latestRecoveryAttemptAt`
+      - `latestRecoveryOutcome`
+      - `latestRecoveryRunId`
+      - `latestRecoveryReason`
+      - `latestRecoveryFingerprint`
+    - `cron` 已补极小 `runJobNow(jobId)` 恢复入口，复用现有执行主链而不是引入新调度语义
+    - `heartbeat` 已复用现有 `runOnce()` 作为 recovery 执行器
+    - `background subtask` 已复用现有 `resumeSubTask` 主链做最小失败恢复，并在 shared ledger finalize 后触发 recovery 判断
+    - `gateway` 已把 `cron / heartbeat / subtask` 的 failed run 接到统一 background recovery runtime，而不是三处各自散落处理
+    - `system.doctor / web doctor` 的 background continuation runtime 卡片已补 recovery 汇总与最近恢复结果可见性
+  - 已完成验证：
+    - `packages/belldandy-core/src/background-continuation-runtime.test.ts`
+    - `packages/belldandy-core/src/background-recovery-runtime.test.ts`
+    - `packages/belldandy-core/src/subtask-background-continuation-ledger.test.ts`
+    - `packages/belldandy-core/src/server.test.ts` 已定向通过 background continuation runtime 的 doctor 用例
+    - `corepack pnpm build` 已通过
+  - 当前收口说明：
+    - `A5-2` 到此收口为“failed background run 已能触发一次最小恢复尝试，并把恢复结果稳定落到 ledger / doctor”
+    - 当前仍未扩做后台统一恢复控制台、策略编排器或多轮自动重试器
+- 后续计划：
+  - 下一步进入 `A5-3` 的受限版 safe-point takeover / handoff
+  - 继续明确边界：
+    - 仅做 safe-point takeover
+    - 不做 token 级 live injection
+    - 不把 takeover 扩成更高层统一 runtime 控制台
+
+##### A5-3 safe-point takeover / handoff 文件级计划
+
+- 本轮目标：
+  - 为 `running subtask` 补最小 `safe-point takeover`
+  - 语义上是“停止当前 session -> 以新 agent 重新拉起”，而不是 live injection
+  - 在 runtime record / query runtime / Web detail 区都补明确的 takeover / handoff 表达
+- 本轮边界：
+  - 只处理 `subtask` 层
+  - 不扩到 `goal / session takeover`
+  - 不新增新 RPC，不新增统一 takeover 控制台
+  - 必须继续限制在 safe-point，不做 token 级 live steering / injection
+- 文件级实现清单：
+  - `packages/belldandy-core/src/task-runtime.ts`
+    - 为 `SubTaskRecord` 增加独立 `takeover` 记录
+    - 新增 `SubTaskTakeoverStatus / SubTaskTakeoverRecord`
+    - 新增 `createSubTaskTakeoverController`
+    - 运行中接管语义固定为：
+      - 记录 accepted
+      - stop current session
+      - 复用 prior history
+      - 用新 `agentId/profileId` relaunch
+      - 标记 delivered / failed
+  - `packages/belldandy-core/src/subtask-takeover-runtime.ts`
+    - 承载 running / terminal takeover 的最小分发逻辑
+    - `gateway.ts` 只保留装配与接线
+  - `packages/belldandy-core/src/continuation-state.ts`
+    - 为 subtask continuation 补最小 takeover 感知
+    - 至少能表达：
+      - 可接管
+      - 正在接管
+      - 已由新 agent 接管
+  - `packages/belldandy-core/src/query-runtime-subtask.ts`
+    - 继续复用 `subtask.takeover`
+    - 但在 query runtime 中明确 running task 命中的是 `safe-point takeover`
+    - 不再默认把 takeover 视为 finished-task only
+  - `packages/belldandy-core/src/server.ts`
+    - 继续复用 `subtask.takeover` RPC
+    - 接入新的 running / terminal takeover dispatcher
+  - `packages/belldandy-core/src/bin/gateway.ts`
+    - 注入新的 safe-point takeover controller / dispatcher
+    - 不承载 takeover 主体逻辑
+  - `apps/web/public/app/features/subtasks-overview.js`
+    - running task 也显示 `safe-point takeover` 输入与按钮
+    - finished task 继续保留现有 takeover
+    - 在 detail 区单独渲染 takeover 记录，不再混在普通 resume / steering 里
+  - `apps/web/public/app/i18n/zh-CN.js`
+  - `apps/web/public/app/i18n/en-US.js`
+    - 补明确文案：
+      - safe-point takeover placeholder
+      - accepted / delivered / failed
+      - “停止后重拉起，不是 live injection”
+  - `packages/belldandy-core/src/subtask-background-continuation-ledger.ts`
+    - 把 takeover 记录纳入 ledger signature，确保 background continuation / doctor 能感知接管变化
+  - 测试：
+    - `packages/belldandy-core/src/task-runtime.test.ts`
+    - `packages/belldandy-core/src/server.test.ts`
+    - `packages/belldandy-core/src/subtask-background-continuation-ledger.test.ts`
+    - `apps/web/public/app/features/subtasks-overview.test.js`
+- 本轮完成判定：
+  - running subtask 可以由新 agent 发起 safe-point takeover
+  - takeover 语义明确是 stop + relaunch，而不是 live injection
+  - takeover 在 runtime record / UI / query runtime 中有独立表达
+  - finished-task takeover 旧行为不回归
+- 当前进度：
+  - `A5-3 safe-point takeover / handoff` 已完成受限版最小闭环
+  - 已落地内容：
+    - `task-runtime` 已新增独立 `takeover` 记录、`SubTaskTakeoverStatus / Record / Mode` 与显式 `createSubTaskTakeoverController`
+    - running subtask takeover 已固定为 `stop current session -> prior history -> new agent relaunch` 的 safe-point 语义，不做 live injection
+    - 已新增独立 `subtask-takeover-runtime` 分发层，`gateway.ts` 只保留 running / terminal takeover 接线，不再把 takeover 隐藏成 finished-task resume 包装
+    - `continuation-state` 已补最小 takeover 感知，能区分 `safe_point_takeover / agent_takeover`
+    - `query-runtime-subtask` 已明确 running task 命中的是 `safe_point takeover`
+    - Web 子任务详情区已新增 running / finished 统一 takeover 区，并把 takeover 记录从普通 resume 区分离展示
+    - 中英文本地化已补齐 “安全点重拉起，不是 live injection” 的提示
+    - `subtask-background-continuation-ledger` 已把 takeover 记录纳入 signature，避免 background continuation / doctor 漏感知接管变化
+  - 已完成验证：
+    - `packages/belldandy-core/src/task-runtime.test.ts`
+    - `packages/belldandy-core/src/subtask-background-continuation-ledger.test.ts`
+    - `packages/belldandy-core/src/continuation-state.test.ts`
+    - `packages/belldandy-core/src/background-continuation-runtime.test.ts`
+    - `apps/web/public/app/features/subtasks-overview.test.js`
+    - `packages/belldandy-core/src/server.test.ts -t "subtask.takeover accepts"` 已定向通过 finished takeover 与 running safe-point takeover 两组 RPC 用例
+    - `corepack pnpm build` 已通过
+  - 当前收口说明：
+    - `A5` 当前阶段到此按“checkpoint replay + background recovery + 受限 safe-point takeover”正式收口
+    - 当前仍未扩做 `goal / session takeover`、统一 takeover 控制台、checkpoint replay workbench 或更深 session 锚点
+- 后续计划：
+  - `A5` 后续不再主动开发
+  - 只在真实使用中观察三类信号：
+    - safe-point takeover 是否存在误停、误接管或文案理解偏差
+    - background recovery 是否出现误恢复或恢复节流不足
+    - checkpoint replay 是否仍有 target 锚点不清问题
+  - 若出现问题，仅做最小修补；`A5-4 / A5-5 / A5-6` 继续后置
+
+##### A5 当前建议的首刀与文件级计划
+
+- 当前建议首刀：`A5-1 checkpoint replay`
+  - 先把 `A5` 收敛成 goal / checkpoint 级最小 replay 闭环
+  - 让用户可从现有 `handoff / continuation` 入口，直接 replay 到对应 node channel，而不只是打开 goals 详情页
+  - 不新开 replay workbench，不扩成统一 continuation 平台
+- 当前阶段收口边界：
+  - 仅实现 `checkpoint replay`
+  - 不顺手扩做 `A5-2 background recovery runtime`
+  - 不在这一轮推进 `A5-3 / A5-4` 的 mid-run takeover / goal-session takeover
+  - 不回改 `A4` 已收口的 shared ledger / doctor 最小消费面主链
+- 文件级实现清单：
+  - `packages/belldandy-core/src/goals/types.ts`
+    - 为 `GoalHandoffSnapshot` 增加最小 `checkpoint replay descriptor`
+    - 字段控制在最小集：`checkpointId / nodeId / runId? / title / summary? / reason`
+  - `packages/belldandy-core/src/goals/handoff.ts`
+    - 从 open checkpoint 生成 replay descriptor
+    - 在 `resumeMode=checkpoint` 时让 `nextAction` 与 replay target 对齐
+    - `handoff.md` 补最小 replay 摘要，不新增独立大面板
+  - `packages/belldandy-core/src/continuation-state.ts`
+    - 为 goal continuation 补可选 replay 字段
+    - `buildGoalContinuationState` 透传 checkpoint replay descriptor
+    - 其他 scope 暂不扩面，仅保留可选字段兼容后续增强
+  - `packages/belldandy-core/src/goals/manager.ts`
+    - 评估并落地 `resumeGoal(goalId, nodeId?)` 的最小 replay 参数扩展
+    - 若接入 replay，则把 `checkpointId` 写入最小进度事件，保留可审计性
+  - `packages/belldandy-core/src/server.ts`
+    - 为 `goal.resume` 透传最小 replay 参数
+    - `goal.handoff.get / generate` 返回新增 replay 字段
+  - `apps/web/public/app/features/continuation-targets.js`
+    - 在 goal checkpoint 场景生成最小 `goalReplay` continuation action
+    - 其他 `goal / node / session / conversation` 语义保持不变
+  - `apps/web/public/app.js`
+    - 在 `openContinuationAction` 中新增 `goalReplay` 分支
+    - 点击后复用现有 `resumeGoal` 主链进入目标 node channel
+  - `apps/web/public/app/features/goals-readonly-panels.js`
+    - 在现有 continuation 区补 replay target 的最小说明
+    - 按钮文案在 checkpoint 场景更明确为 replay 语义
+  - `apps/web/public/app/features/goals-detail.js`
+    - 在 recovery suggestion 文案中与 checkpoint replay 语义对齐
+    - 不新增新区域
+  - 测试：
+    - `packages/belldandy-core/src/goals/manager.test.ts`
+    - `packages/belldandy-core/src/server.test.ts`
+    - `apps/web/public/app/features/continuation-targets.test.js`
+- 本轮完成判定：
+  - open checkpoint 的 goal 能产出明确 replay target
+  - Web continuation 点击后能进入对应 node channel，而不是只停在 goals 详情
+  - 不新增一级导航、不新增 replay workbench、不破坏既有 continuation action
+- 当前进度：
+  - `A5-1 checkpoint replay` 已完成第一刀闭环
+  - 已落地内容：
+    - `goal.handoff.get / generate` 已输出最小 `checkpointReplay` 描述，明确 `checkpointId / nodeId / title / reason`
+    - `goal continuationState` 已补可选 `replay` 字段，复用现有 continuation 消费面承接
+    - `goal.resume` 已支持最小 `checkpointId` 透传，并在 `progress.md` 写入 `checkpoint_replay_started`
+    - Web 端现有 continuation action 已新增 `goalReplay` 分支，点击后会直接 replay 到目标 node channel
+    - goals readonly handoff / continuation 区已补最小 replay 摘要，不新增独立 workbench
+    - goals detail recovery suggestion 文案已与 checkpoint replay 语义对齐
+  - 已完成验证：
+    - `packages/belldandy-core/src/continuation-state.test.ts`
+    - `packages/belldandy-core/src/goals/manager.test.ts`
+    - `apps/web/public/app/features/continuation-targets.test.js`
+    - `packages/belldandy-core/src/server.test.ts` 已定向通过 `goal.handoff.get` 与 `goal.resume` 两个 A5-1 相关用例
+  - 当前收口说明：
+    - `A5-1` 到此收口为“checkpoint 级 replay 已能从现有 handoff / continuation 入口进入目标 node channel”
+    - 本轮不继续扩做 background recovery runtime、mid-run takeover、goal / session takeover
+- 后续计划：
+  - 先观察真实使用中，checkpoint replay 是否已覆盖大部分“看得到但继续不了”的场景
+  - 若后续真实需求继续集中在后台失败恢复，再单独推进 `A5-2 background recovery runtime`
+  - 若后续真实需求集中在运行中接管或更高层 takeover，再分别拆进 `A5-3 / A5-4`
 
 ### 阶段 B：执行外围稳定层
 
@@ -1397,12 +1674,88 @@
 - 来源文档：`OC与SS`
 - 目标：
   - 为后续语音、图片、附件理解提供统一入口
+- 当前策略：
+  - 先做 `P2-5-v1` 最小闭环，不做跨产品媒体平台重构
+  - 先统一能力声明、附件归一化、共享理解 runner/cache
+  - 首版不新增新面板，不重做 Web，不一次性替换现有 `STT / TTS / Image / Camera`
 - 前置依赖：
   - `P2-1`
 - 直接任务：
   - capability/provider registry
   - 附件归一化
   - 缓存与识别 runner
+- `P2-5-v1` 文件级实现清单：
+  - `packages/belldandy-core/src/media-capability-registry.ts`
+    - 定义统一媒体 capability 词表与最小查询入口
+    - 收口 `image_input / video_input / audio_transcription / text_inline / tts_output / image_generation / camera_capture`
+  - `packages/belldandy-core/src/provider-model-catalog.ts`
+    - 补最小媒体 capability 推断
+    - 让 runtime 至少能回答“当前 chat model 是否具备图像/视频输入能力”
+  - `packages/belldandy-core/src/attachment-understanding-runner.ts`
+    - 抽离 `message.send` 中当前附件判路
+    - 统一附件归一化、kind 判定、prompt delta 生成、content part 生成、能力判路和降级策略
+  - `packages/belldandy-core/src/attachment-understanding-cache.ts`
+    - 增加最小 fingerprint cache
+    - 首版优先避免同一音频附件重复 STT
+  - `packages/belldandy-core/src/query-runtime-message-send.ts`
+    - 收缩为接线、落盘、stats 汇总和 run input 组装
+    - 不继续堆具体附件判路逻辑
+  - `packages/belldandy-core/src/attachment-understanding-runner.test.ts`
+    - 覆盖缓存命中与能力降级两组核心边界
+  - `packages/belldandy-core/src/server.test.ts`
+    - 保留 `message.send` 集成测试主路径
+    - 补附件归一化后 prompt/meta 注入与缓存命中验证
+- 建议执行顺序：
+  1. 先定 `media-capability-registry.ts` 与 `provider-model-catalog.ts` 的能力词表
+  2. 再做 `attachment-understanding-runner.ts` 与 `attachment-understanding-cache.ts`
+  3. 然后回接 `query-runtime-message-send.ts`
+  4. 最后补 `runner.test.ts` 与 `server.test.ts`
+- 本轮收口标准：
+  - `message.send` 的附件判路不再继续堆在单一大函数里
+  - 同一附件至少对音频转录具备 fingerprint 级去重缓存
+  - runtime 有单一入口回答“当前模型/当前媒体工具支持什么能力”
+  - `STT / TTS / Image / Camera` 至少在能力声明层已统一，不再只是分散文件
+  - 首版不扩成 OCR / 视频理解平台，不进入 provider runtime 大重构
+- 当前实现进展（2026-04-10）：
+  - 已新增 `packages/belldandy-core/src/media-capability-registry.ts`
+    - 已统一收口 `image_input / video_input / audio_transcription / text_inline / tts_output / image_generation / camera_capture`
+    - 已提供 `provider/model` 最小媒体 capability 推断，以及 `builtin media tools` 的统一能力声明
+  - 已完成 `packages/belldandy-core/src/provider-model-catalog.ts` 接线
+    - `models.list` 现在会带出最小媒体 capability，而不再只有 `chat / responses_api / anthropic_api`
+    - 当前已能回答“当前 chat model 是否具备图像/视频输入能力”
+  - 已新增 `packages/belldandy-core/src/attachment-understanding-cache.ts`
+    - 已增加最小音频转录 fingerprint cache
+    - 当前同一音频附件重复提交时，会优先复用已缓存 STT 结果，而不是每次重跑
+  - 已新增 `packages/belldandy-core/src/attachment-understanding-runner.ts`
+    - 已从 `message.send` 中抽出附件归一化、kind 判定、prompt delta 生成、content part 生成
+    - 已补基于 capability 的最小降级：当当前模型未声明 `image_input / video_input` 时，不再盲目走多模态注入
+  - 已完成 `packages/belldandy-core/src/query-runtime-message-send.ts` 收口
+    - 当前只保留 `message.send` 接线、stats 汇总与 run input 组装
+    - 附件主链已改为统一调用 `attachment-understanding-runner`
+  - 已完成 `packages/belldandy-core/src/server.ts` 最小接线
+    - 已把当前请求对应的 model ref 解析为统一媒体 capability，供附件 runner 判路使用
+  - 已补两组测试：
+    - `packages/belldandy-core/src/attachment-understanding-runner.test.ts`
+      - 覆盖音频 fingerprint cache 命中
+      - 覆盖图片在无 `image_input` capability 下的稳定降级
+    - `packages/belldandy-core/src/server.test.ts`
+      - 覆盖 `models.list` 的媒体 capability 输出
+      - 覆盖 `message.send` 的音频转录缓存复用
+- 本轮验证：
+  - `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/provider-model-catalog.test.ts packages/belldandy-core/src/attachment-understanding-runner.test.ts`
+  - `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/server.test.ts -t "models.list returns sanitized model list with current default model ref|message.send caps appended audio transcript chars when user text already exists|message.send reuses cached audio transcription for repeated attachments"`
+  - `corepack pnpm build`
+- 当前阶段判定：
+  - `P2-5-v1` 当前已完成最小闭环，可按“已完成（当前阶段收口）”处理
+  - 当前阶段收口说明：
+    - 已形成统一媒体 capability registry，而不是继续把能力散落在 `provider catalog / multimedia tools / message.send` 各处
+    - 已形成统一附件理解 runner/cache，而不是继续把附件逻辑堆在 `message.send` 单文件里
+    - `STT / TTS / Image / Camera` 当前已至少在能力声明层收口，不再只是彼此独立的工具文件
+    - 当前阶段不做 OCR / 通用文件理解平台 / provider runtime 重构 / 新 Web 面板
+- 后续计划：
+  - 后续默认只观察真实图片/视频/音频附件场景下的 capability 误判与降级提示质量
+  - 若出现误判，优先补更稳的 provider/model capability 映射，不先扩新面板或新附件类型
+  - 若后续真实需求明确，再单独评估是否把 OCR、更多文件类型理解或共享附件摘要缓存纳入下一轮
 - 完成标志：
   - STT / TTS / Image / Camera 不再只是分散工具集合
 
@@ -1586,12 +1939,55 @@
     - resident memory manager 的 `private/shared` recent snippets 与 chunk count
   - `system.doctor` 已新增 `mindProfileSnapshot` payload 与 `mind_profile_snapshot` check
   - `webchat` 当前先不新增一级入口，只在现有 `doctor` 卡片中显示 `Mind / Profile Snapshot`
+  - 已新增独立 `mind runtime digest` 投影层：`packages/belldandy-core/src/mind-profile-runtime-digest.ts`
+    - 从现有 `mindProfileSnapshot` 派生更短的 prompt-safe lines
+    - 当前只保留 `identity / profile / durable memory / resident / experience` 等高价值信号
+    - 已显式限制最大行数、单行长度与总字符预算
+  - 已新增独立 `mind runtime prelude`：`packages/belldandy-core/src/mind-profile-runtime-prelude.ts`
+    - 通过独立 `before_agent_start` hook 接入 `gateway`
+    - 当前只在 `main` 会话尝试注入，`goal / goal_node` 会话默认跳过
+    - 当前要求达到最小稳定信号数后才注入，不做全局无条件 prompt 注入
+  - 已补两组 H1 相关测试：
+    - `mind-profile-runtime-digest.test.ts`
+    - `mind-profile-runtime-prelude.test.ts`
+  - 已完成与现有链路的兼容验证：
+    - `mind-profile-snapshot.test.ts`
+    - `learning-review-nudge.test.ts`
+    - `@belldandy/core build`
+  - 已补 prompt snapshot 可读性与清理增强，降低 H1 手测与回顾成本：
+    - runtime prompt snapshot 持久化后会自动写出 `diagnostics/prompt-snapshots/_index.json` 与 `_index.txt`
+    - index 当前会汇总 `conversationId / sessionKind / latestRunId / latestCreatedAt / latestFileName / snapshotCount`
+    - CLI 导出的 prompt snapshot 已默认隔离到 `diagnostics/conversation-exports/prompt-snapshots`，避免继续和 runtime 归档混放
+    - CLI 导出副本已复用 prompt snapshot retention 天数做自动清理，避免长期堆积
+  - 已对当前本机 prompt snapshot 目录做一次性现场收口：
+    - 已把根目录散落的 prompt snapshot 导出副本迁移到独立导出目录
+    - 已按“仅保留最近 3 天”手工清理旧 runtime snapshot 与空目录，作为当前现场目录整理；环境变量中的默认 retention 仍保持 `7` 天未改
+  - 已完成一轮隔离环境真实手测，当前三组结果符合预期：
+    - `main` 会话命中 `mind-profile-runtime`：`agent:default:main / run=6abda34f-b9f6-4945-9203-265a74370de6`
+    - `goal` 会话未命中 `mind-profile-runtime`：`goal:goal_alpha / run=d1dddb86-0b66-457b-a72c-71c6e6d67342`
+    - `weak main` 会话未命中 `mind-profile-runtime`：`agent:default:main / run=09069023-9404-40d8-b287-a2df9d0c46d2`
+    - 本轮手测使用隔离 `state dir + fake OpenAI` 只为稳定取证 prompt snapshot；结论针对的是 `mind-profile-runtime` gate 本身
 - 当前边界：
-  - 当前第一版仍是只读摘要层，不直接参与 prompt 注入
+  - 当前已从“只读摘要层”推进到“预算内、带 gate 的最小 runtime 消费边界”，但仍不是全局 prompt 注入系统
+  - 当前 runtime prelude 只覆盖 `main` 会话；`goal / goal_node` 仍优先使用既有 `goal-session-context` 与 `learning-review-nudge`
   - 当前画像摘要仍以 `USER.md / MEMORY.md / resident digest` 为主，没有引入新的外部 memory provider
-  - 当前只做预算内的简短 summary / snippet，不展开长块原文
-- 下一小步：
-  - 评估把这份 `mind/profile snapshot` 以更小预算接入后续 `H2` 的 learning nudge / review 输入面
+  - 当前只做预算内的简短 summary / snippet，不展开长块原文，也不做更深用户画像推理
+- 当前阶段判定：
+  - `H1` 当前已完成最小 `mind runtime digest + runtime prelude + gate` 闭环，且已通过一轮真实 prompt snapshot 手测
+  - `H1` 现可按“已完成（当前阶段收口）”处理：后续不再继续主动扩 UI、external provider 或更深画像，只保留真实使用观察与最小 gate / budget 修补
+  - 后续主线从 `H1` 切到 `H3 skill freshness / 过期检测 / 更新建议`
+  - 当前阶段默认不继续扩 UI，也不提前接 external provider；若后续出现误判，优先做最小 gate / budget 修补
+  - 当前阶段收口标准：
+    - 已形成独立 `mind runtime digest`，而不是原样复用整份 snapshot 入 prompt
+    - 已形成独立 gate，仅在少数明确场景注入，不做全局 prompt 注入
+    - 已形成独立 `before_agent_start` hook，与 `H2 learning-review nudge` 分层清楚
+    - 已补至少两组测试：`digest/budget` 与 `gate/prelude`
+    - `system.doctor` 与 H2 现有行为保持兼容
+  - 当前阶段不做：
+    - 不新增 webchat 一级入口或新面板
+    - 不直接接多个 external memory provider
+    - 不做 Honcho 式更深用户画像
+    - 不把 `H1` 扩成大而全的 prompt 注入系统
 - 技术债决策：`split_task`
 
 #### 10.3.2 H2 轻量自动学习闭环
@@ -1682,20 +2078,35 @@
 - 当前阶段判定：
   - `H2` 目前已经完成第一版最小闭环，可按“`v1` 主链已打通、进入观察与第二轮细化阶段”理解
   - 今天完成后，长期任务通道侧的核心缺口已经从“Agent 不知道当前 goal / node / run，也不知道该怎么自查”收敛为“已有最小闭环，后续主要看噪音、优先级与细化程度”
-- 下一小步：
-  - 继续观察 `H2-3b` 的真实噪音水平；若事件过多，再优先评估是否把 `completed / skipped` 收窄为只在 active node 会话中显示
-  - 继续观察 `learning-review nudge` 的 prompt 长度、真实触发质量与误触发率；当前不把“再收一版阈值”作为硬前置，只有在真实误触发明显时再进入第二轮去噪
-  - 评估是否把 goal runner 从“review 为空时补第一批 suggestion”推进到更细的 refresh / priority 规则
-  - 若后续真实需求明确，再评估是否把 checkpoint / review / capability 事件纳入长期任务会话事件流
+- 当前观察结论（已完成一轮手测）：
+  - `H2-3a goal session start banner` 在进入 / 切换 / 恢复场景下表现稳定，当前未观察到错 `goal` / 错 `node` / 错 `run` 的锚点
+  - `H2-3b goal runtime status event` 已完成一轮最小去噪修补；`completed / skipped` 当前仅保留在对应 active node/run 会话中显示，未再观察到它们在 `goal` 根会话或无关 node 会话中刷屏
+  - `learning-review nudge` 已完成一轮最小观察：`explicit_user_intent` 触发边界正常，当前未见明显误触发，也未观察到其对主任务目标造成明显抢焦
+- 当前完成情况：
+  - `H2-3` 当前继续维持收口状态，不再把 banner / status event / nudge 去噪作为硬前置
+  - `H2` 第二轮的 refresh / priority 主线已完成第一版收口，不再停留在“评估是否进入第二轮”
+  - 当前已完成第二轮前两刀：
+    - `goal runner refresh` 不再被“任意历史 review 记录”一刀切阻断，而是只在仍存在 actionable review / publish 项时跳过重复生成
+    - `goal runner priority` 已补最小优先级提示：当前会结合 `cross-goal / checkpoint` 治理信号、历史 review 类型分布与 task-vs-memory signal，把 refresh 推荐优先级收敛到 `flow / method / skill` 之一
+  - 当前已完成第二轮第三刀：
+    - 已新增独立 `learning-review-refresh state`，把 `lastScanAt / lastRefreshFingerprint / lastGeneratedAt / lastOutcome / lastPriority` 收口到 goal runtime 侧，而不是继续散落在 scan 临时返回值里
+    - `review scan` 已补 `refresh fingerprint gate`：当一个 goal 的 `done/approved node`、相关 `capability plan`、待处理 checkpoint 与 `lastRun/lastNode` 等关键运行信号自上次 refresh 后未变化时，当前会直接返回 `skipped=unchanged_signal`，不再每次 scan 都重跑 suggestion 生成
+    - 已明确把“已收口但出现新运行信号”定义为再次 refresh 的最小触发条件；当前最小覆盖 `lastRun/lastNode` 变化、可进入 method 候选的 node 信号、影响 skill/flow 判断的 capability plan 信号、以及 actionable checkpoint 变化
+- 本轮收口结论：
+  - `H2-3` 当前可按“start banner 稳定、status event 去噪生效、learning-review nudge 非阻塞”口径继续维持收口
+  - `H2` 当前已完成第二轮第一版收口：`refresh gate + priority hint + refresh state/fingerprint gate` 已形成闭环
+  - 在当前口径下，`H2` 第二轮的 refresh 主链已经具备第一版收口条件：
+    - 仍有 actionable review / publish 项时继续阻断重复生成
+    - 已收口 goal 在无新运行信号时不会因 cron / approval scan 重复刷新 suggestion
+    - 已收口 goal 在出现新 `run / node / capability / checkpoint` 信号后可再次触发 refresh
+  - 当前不再把“更细 refresh 条件”继续作为阻塞项；若无真实使用回归，第二轮不再 reopen
+  - 因此，`H2` 现可按“当前阶段收口完成”处理：后续不再作为主线开发任务推进，只在真实使用出现误判、噪音或回归时按观察项 reopen
+- 后续计划：
+  - 默认只保留真实使用下的规则观察与最小修补，不再继续扩新面板或扩 `H2-3` 事件面
+  - 先观察 `refresh fingerprint` 的稳定性，重点看是否仍出现“该刷没刷 / 该跳没跳”的误判
+  - 若出现误判，优先只调整当前指纹纳入的 `run / node / capability / checkpoint` 字段，不引入新的治理面或新的后台任务面
+  - 若后续真实需求明确，再单独评估是否把 checkpoint / review / capability 事件纳入长期任务会话事件流
   - 若后续真实使用中仍频繁出现“还得自己组合多次读取”的摩擦，再评估是否补单独聚合工具；当前先以 `goal_get + task_graph_read` 作为默认自查组合
-- 明日可直接续做的建议顺序：
-  - `1.` 先做一轮真实手测观察，重点记录：
-    - `H2-3b` 状态事件是否偏多、是否打断阅读
-    - `H2-3a` 进入提示在恢复/切换场景下是否都符合预期
-    - `learning-review nudge` 是否仍有明显误触发
-  - `2.` 若 `H2-3b` 噪音明显，优先收窄 `completed / skipped` 的展示范围
-  - `3.` 若 `H2-3b` 基本稳定，再进入 `H2` 第二轮：评估 `goal runner refresh / priority`，而不是先默认继续加重 prompt nudge
-  - `4.` `H2` 这条线在第二轮细化前，不建议继续扩成 checkpoint/capability 工作台或新聚合工具，避免重新放大改动面
 - 技术债决策：`fix_now`
 
 #### 10.3.3 H3 skill freshness / 过期检测 / 更新建议
@@ -1710,6 +2121,48 @@
     - 显式人工标记过期
   - 新增 update suggestion / patch candidate 生成器
   - 在现有 review / doctor / skill detail 中显示 freshness 状态
+- 当前实现进展（2026-04-10）：
+  - 已新增独立 `skill freshness state`，把人工 stale mark 收口到状态文件，而不是改动 experience sqlite 结构
+  - 已完成第一版 `skill freshness / gap` 评估：
+    - 已覆盖 `近期多次失败`
+    - 已覆盖 `高 usage 但低成功率`
+    - 已覆盖 `显式人工 stale mark`
+    - 已覆盖基于待审 `skill candidate` 的 `needs_patch / needs_new_skill` 判定
+  - 已把 `skillFreshness` 接入现有链路：
+    - `system.doctor`
+    - `memory.task.get` 的 `usedSkills`
+    - `experience.candidate.get / list`
+    - `experience.usage.get / list / stats`
+    - Web 端现有 `doctor`、`candidate detail`、`usage overview / usage detail`
+  - 已新增独立手测文档：
+    - `docs/h3-skill-freshness手测清单.md`
+  - 已补一组模块单测与一组 `server` 集成测试，并已通过定向验证
+  - 已完成本轮自动化验证（2026-04-10）：
+    - `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/skill-freshness.test.ts`
+    - `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/server.test.ts -t "server exposes skill freshness across doctor, candidate, usage, and task payloads"`
+    - `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/server.test.ts -t "usage-only manual stale"`
+    - `corepack pnpm build`
+  - 已完成一轮真实运行态手测与现场修补（2026-04-10）：
+    - 真实数据中确认 `doctor` 已稳定显示 `Skill Freshness`
+    - 真实数据中确认待审 `skill candidate` 可通过 `experience.candidate.list / get` 返回 `needs_new_skill`
+    - 初次真实手测暴露出一个边界：当某个 `skill` 只有 usage、没有 accepted candidate 时，人工 stale mark 不会反映到 `doctor / usage / task`
+    - 已补 usage-only fallback：对只有 usage 的历史 `skill`，人工 stale mark 现在也会生成 `warn_stale`
+    - 修补后已用真实样本 `web-monitor` 复测：
+      - `experience.skill.freshness.update(stale=true)` 后，`system.doctor` 由 `healthy 0 / warn 0 / patch 0 / new 71` 变为 `healthy 0 / warn 1 / patch 0 / new 71`
+      - `experience.usage.stats / get` 与 `memory.task.get.usedSkills` 对同一 `web-monitor` 都返回 `warn_stale`
+      - Web 端现有 `usage overview` 中，`web-monitor` 已出现 `快过期` 提示
+      - 取消 stale mark 后，`doctor` 已回到 `healthy 0 / warn 0 / patch 0 / new 71`
+  - 当前首批未纳入：
+    - `resume / takeover` 关联信号
+    - 自动 patch draft / 自动发布
+    - `skills` 文本工具输出层的 freshness 展示
+- 当前阶段判定：
+  - `H3` 第一版现在可按“已完成（当前阶段收口）”处理
+  - 当前阶段收口说明：
+    - 已形成最小 `skill freshness state + freshness/gap evaluator + doctor/candidate/usage/task` 闭环
+    - 真实运行态已确认 `needs_new_skill` 与 usage-only `manual stale mark -> warn_stale` 两条主链
+    - 当前真实数据中没有自然存在的 accepted skill candidate，因此 `accepted -> needs_patch` 仍主要依赖定向自动化样本验证；这不再阻塞本阶段收口
+    - 后续不再主动扩新面板、自动 patch draft 或自动发布，只保留真实使用观察与最小修补
 - 第二阶段再考虑：
   - 半自动 patch draft
 - 技术债决策：`fix_now`
@@ -1722,6 +2175,86 @@
   - 为 auxiliary 任务补更明确的 provider / model routing
   - 为主链补 one-shot fallback 与错误类型归类
   - 把 fallback / degrade 原因补进 explainability / doctor
+  - 当前阶段实现口径：
+    - 本轮 `H4-1` 先只做“现有 failover 能力的结构化可观测闭环”，不做新的 provider runtime 平台重构
+  - 主链优先覆盖：
+    - `packages/belldandy-agent/src/openai.ts`
+    - `packages/belldandy-agent/src/tool-agent.ts`
+    - 消费面优先复用：
+      - `bdd doctor`
+      - `system.doctor`
+      - WebChat 现有 `settings -> doctor`
+      - 现有 `launch explainability`
+    - 当前 auxiliary 侧先收口到“routing / degrade 原因可见”，不在第一轮直接做 side-task executor 隔离或新的运行面
+  - 当前进度：
+    - `H4-1` 已完成第一版最小闭环：
+      - `packages/belldandy-agent/src/failover-client.ts`
+        - 已补结构化 `summary`
+        - 已区分 `cooldown_skip / same_profile_retry / cross_profile_fallback / terminal_fail`
+        - 已补 `FailoverExhaustedError`
+      - `packages/belldandy-agent/src/openai.ts`
+      - `packages/belldandy-agent/src/tool-agent.ts`
+        - 已把主链与工具循环的 failover 运行信号回传到统一 runtime tracker
+      - `packages/belldandy-core/src/runtime-resilience.ts`
+        - 已新增轻量持久化 tracker
+        - 已统一输出 routing / latest / totals / reasonCounts
+        - 已落盘到 `stateDir/diagnostics/runtime-resilience.json`
+      - `packages/belldandy-core/src/server.ts`
+      - `packages/belldandy-core/src/cli/commands/doctor.ts`
+      - `apps/web/public/app/features/doctor-observability.js`
+      - `packages/belldandy-core/src/agent-launch-explainability.ts`
+      - `apps/web/public/app/features/agent-launch-explainability.js`
+        - 已接通 `bdd doctor / system.doctor / Web doctor / launch explainability`
+      - 已补自动化验证：
+        - `packages/belldandy-agent/src/failover-client.test.ts`
+        - `packages/belldandy-core/src/cli/commands/doctor.test.ts`
+        - `packages/belldandy-core/src/server.test.ts`
+        - `apps/web/public/app/features/doctor-observability.test.js`
+      - 已完成构建验证：`corepack pnpm build`
+  - 文件级实现清单：
+  - `packages/belldandy-agent/src/failover-client.ts`
+    - 收窄错误分类
+    - 增加结构化 fallback / degrade 摘要
+    - 区分 same-profile retry、cross-profile fallback、cooldown skip、terminal fail
+  - `packages/belldandy-agent/src/openai.ts`
+    - 把 failover 过程摘要挂到运行结果元数据
+    - 保留主链最小 one-shot fallback 证据
+  - `packages/belldandy-agent/src/tool-agent.ts`
+    - 同步接入 failover / degrade 元数据
+    - 让主对话与工具循环共享同一份最小 resilience 视图
+  - `packages/belldandy-core/src/agent-launch-explainability.ts`
+    - 在现有 explainability 结构中补 runtime fallback / degrade 投影
+  - `packages/belldandy-core/src/server.ts`
+    - 为 `system.doctor` 增加最小 `runtime resilience` 摘要
+    - 汇总最近一次主链 fallback / degrade 与 auxiliary routing 状态
+  - `packages/belldandy-protocol/src/index.ts`
+    - 为新的 doctor / explainability 字段补协议类型
+  - `packages/belldandy-core/src/cli/commands/doctor.ts`
+    - `bdd doctor` 接入 H4 摘要，保持与 `system.doctor` 同口径
+  - `apps/web/public/app/features/doctor-observability.js`
+    - 在现有 doctor 中补最小 `Runtime Resilience` 卡片
+  - `apps/web/public/app/features/agent-launch-explainability.js`
+    - 补前端 fallback / degrade explainability 文本格式化
+  - `apps/web/public/app/i18n/zh-CN.js`
+  - `apps/web/public/app/i18n/en-US.js`
+    - 补 H4 doctor / explainability 文案
+  - `packages/belldandy-agent/src/failover-client.test.ts`
+    - 覆盖 same-profile retry、cross-profile fallback、cooldown skip、terminal fail
+  - `packages/belldandy-core/src/server.test.ts`
+    - 覆盖 `system.doctor` H4 payload 与 explainability 接线
+  - `apps/web/public/app/features/doctor-observability.test.js`
+    - 覆盖前端 doctor 卡片摘要渲染
+- 建议执行顺序：
+  - `1.` 先补 `failover-client` 的结构化结果与错误分类
+  - `2.` 再接 `openai / tool-agent`，让运行态真正产出 H4 证据
+  - `3.` 再接 `system.doctor / bdd doctor / protocol`
+  - `4.` 最后补 Web doctor、前端 explainability 与测试
+- 当前阶段收口标准：
+  - 主链发生 fallback 时，能明确区分“同 profile 重试”与“跨 profile 切换”
+  - `bdd doctor / system.doctor / web doctor` 都能看到同一份最小 resilience 摘要
+  - explainability 中能说明最近一次 fallback / degrade 原因
+  - auxiliary 至少能说明当前 routing/config 来源与 degrade 状态
+  - 不新增一级产品面，不重构 provider 主链
 - 第二阶段再考虑：
   - 更完整的 side-task isolation
   - 更精细的压缩与缓存策略
@@ -1738,6 +2271,42 @@
     - `ssh`
   - 明确 backend config、credential boundary、workspace mount / sync、log / doctor 观测字段
   - 保持 `Portable / Single-Exe` 不受影响
+- 当前进度：
+  - `H5-1` 已完成第一版最小落地：
+    - 已新增独立 `deployment-backends` 配置/诊断模块：`packages/belldandy-core/src/deployment-backends.ts`
+    - 已统一 `stateDir/deployment-backends.json` profile schema，当前最小覆盖：
+      - `local`
+      - `docker`
+      - `ssh`
+    - gateway/server 启动时会自动确保默认 `local-default` profile 存在，避免配置文件不可发现
+    - `system.doctor` 已新增 `deploymentBackends` payload 与 `deployment_backends` check
+    - `bdd doctor` 已接入同一套 `deployment backends` 诊断输出，CLI / Web / gateway 三边口径已对齐
+    - web 侧现有 `doctor` 已复用新增 `Deployment Backends` 摘要卡，不新增一级入口或新面板
+    - 已补三组自动化验证：
+      - `packages/belldandy-core/src/deployment-backends.test.ts`
+      - `packages/belldandy-core/src/cli/commands/doctor.test.ts`
+      - `packages/belldandy-core/src/server.test.ts` 中的 `system.doctor exposes deployment backend summary from unified profile config`
+    - 已完成一轮真实手测起步：
+      - 当前真实安装态 `bdd doctor --json` 已确认在 `deployment-backends.json` 尚未物化时返回 `config_missing=1` 与明确 fix 提示
+      - 纯净临时实例已确认 gateway 启动后会自动补出默认 `local-default`
+      - 在纯净临时实例中，干净 `local + docker + ssh` profile 集合下，`bdd doctor` 与 `system.doctor` 的 `selectedProfileId / selectedBackend / profileCount / warningCount / backendCounts` 一致
+      - 在缺口样本下，`bdd doctor` 与 `system.doctor` 都能给出 `selected_missing / runtime.host / workspace.remotePath / credentials.ref / logMode file ref` 等针对性 warning
+      - 已补完临时实例的 WebChat `doctor` 目视确认：现有 settings -> `doctor` 已真实显示 `Deployment Backends` 卡片，且与三 profile 干净样本一致显示 `3/3 profiles enabled`、`local 1 / docker 1 / ssh 1`、`selected docker-main (docker)`、`0 warning profiles` 与对应 `config path`
+- 当前边界：
+  - 当前第一轮只先收口“统一 profile config + doctor 可观测 + 默认配置可发现性”，还不是实际执行链路的 backend 切换系统
+  - 当前不会把 `SS` 直接扩成 remote gateway / serverless / sandbox 平台，也不改动 `Portable / Single-Exe` 主链
+  - 当前 `docker / ssh` 仍主要体现为统一配置与诊断面，不代表远程运行编排已经完成
+- 当前阶段收口标准：
+  - 已存在统一 `deployment-backends.json`，不再由分散脚本/文档各自表达 backend 配置
+  - 已能在 `bdd doctor / system.doctor / web doctor` 中明确看到 selected profile、backend 分布、workspace/credential/log 关键字段与缺口告警
+  - 已通过最小单测 + CLI doctor 断言 + `system.doctor` 集成断言，确认配置与诊断链路闭环成立
+- 当前阶段收口说明：
+  - `H5-1` 现已按“统一 profile config + 默认配置可发现 + CLI/Web/gateway 三边诊断一致 + WebChat doctor 目视确认完成”口径收口
+  - 当前阶段不再主动扩成真正的 backend 执行切换、远程执行编排、serverless 平台或独立 deployment 管理面
+- 后续计划：
+  - 后续默认只观察真实 `docker / ssh` profile 的字段稳定性，只在出现明显缺口时做最小 schema / warning 修补
+  - 若后续真实使用明确需要，再单独评估是否进入真正的 backend 选择/切换接线；当前不直接进入远程执行重构
+  - 优先观察 `workspace.remotePath / credentials.ref / logMode` 三类字段是否还需要继续收窄，未出现真实误判前不继续扩面
 - 第二阶段再考虑：
   - serverless / remote sandbox
   - 更强的云端常驻 agent 管理
@@ -1809,10 +2378,15 @@
 
 1. `P2-1 / P2-2 / P2-4` 已完成当前阶段收口，后续默认只保留回归修补与观察项。
 2. `P2-3` 已完成本轮收口检查；canonical session key 与 group/channel key 的主要兼容边界已确认，后续默认只保留回归观察与最小修补。
-3. 当前可直接进入 `H1`，先把长期陪伴型 agent 的统一心智入口做出第一版最小读取层与摘要 builder。
-4. 在 `H1` 稳住后，再进入 `H2 / H3`，补 learning loop 与 skill freshness 的第一版闭环。
-5. 再推进 `H5`，补 `local / docker / ssh` 三档部署弹性。
-6. 最后再视真实场景决定是否继续推进 `H4 / P2-5 / A5 / D1 / D2`。
+3. `H1` 已完成当前阶段收口；`mind runtime digest + runtime prelude + gate` 已形成闭环，并已通过一轮真实 prompt snapshot 手测。
+4. `H2` 已完成当前阶段收口，后续默认只保留真实使用下的观察与最小修补，不再作为主线开发任务继续推进。
+5. `H3` 已完成当前阶段收口；第一版 `skill freshness / gap` 闭环已经落地，并完成一轮真实手测与 usage-only manual stale 边界修补。
+6. `H5` 已完成当前阶段收口：统一 `deployment-backends.json` profile schema、默认 `local-default` 配置、`bdd doctor / system.doctor / web doctor` 三边诊断摘要、三组自动化验证与一轮真实 Web doctor 目视确认均已完成。
+7. `H5` 后续默认只观察真实 `docker / ssh` profile 的字段稳定性与 warning 质量；未出现真实误判前，不继续扩成远程执行重构、新面板或 serverless 平台。
+8. `H3` 后续默认只保留真实使用观察与最小修补，不再主动扩新面板、自动 patch draft 或自动发布。
+9. `H4` 已完成 `H4-1` 第一版最小闭环：failover 结构化摘要、runtime resilience tracker、`bdd doctor / system.doctor / web doctor` 与 launch explainability 已接通；后续默认先观察真实 fallback / degrade 信号质量，再决定是否进入 `H4-2`。
+10. `P2-5` 已完成 `v1` 当前阶段收口：统一媒体 capability registry、附件理解 runner/cache 与 `message.send` 主链接线已落地；后续默认只观察真实附件场景下的 capability 误判与降级提示质量。
+11. 最后再视真实场景决定是否继续推进 `A5 / D1 / D2`。
 
 ### 10.7 一句话执行原则
 
@@ -1844,12 +2418,12 @@
 | 已完成 | `P2-2` 认证感知 model picker | 已完成第一版最小 picker 产品化：auth-aware labels、`Manual Model...`、provider 分组/过滤与显式 preferred provider 配置均已收口 |
 | 已完成 | `P2-3` 会话作用域与群聊 key 归一 | `v1` 已完成 canonical session key 与四渠道接线，并已补齐主动外发显式 `sessionKey` 的跨渠道误用边界；旧 `conversationId` 兼容继续保留 |
 | 已完成 | `P2-4` current conversation binding | `v1` 已接入共享 binding store，`WebChat -> 飞书 / QQ / Community / Discord` 文本外发 `v1`、外发审计与 doctor/outbound failure diagnosis 第二版细化已收口；剩余仅保留多渠道手测观察 |
-| 进行中 | `H1` 统一心智入口与用户画像摘要层 | `v1` 第一版最小只读摘要层已落地：`mind/profile snapshot builder` + `system.doctor` 接线 + doctor 卡片；后续再评估 prompt/runtime 消费与外部 provider adapter |
-| 进行中 | `H2` 轻量自动学习闭环 | `v1` 主链已打通：已完成 input builder、最小 runner、doctor runtime 摘要、长期任务通道 `goal session context / start banner / status event / self-check guidance`；当前进入观察与第二轮细化阶段，后续优先看 `H2-3b` 事件噪音与 goal runner refresh/priority，仍未做自动发布 |
-| 未开始 | `H3` skill freshness / 过期检测 / 更新建议 | 已纳入新增主线，但本文尚未记录明确开工进展 |
-| 未开始 | `H5` 部署弹性增强 | 已纳入第四优先级主线，但本文尚未记录明确开工进展 |
-| 未开始 | `H4` 定向 runtime resilience 增强 | 已纳入第五优先级补强项，但本文尚未记录明确开工进展 |
-| 未开始 | `P2-5` 统一媒体能力注册层 / 附件理解管线 | 已纳入第五优先级补强项，优先级后于 provider / session / H1~H5 主线 |
-| 未开始 | `A5` continuation runtime 后置增强 | 已明确后置到第六优先级；不阻塞 `A4` 收口，待前序主线完成后再评估 |
+| 已完成（当前阶段收口） | `H1` 统一心智入口与用户画像摘要层 | 已落地 `mind/profile snapshot builder` + `system.doctor` 接线 + doctor 卡片，并已补齐 `mind runtime digest + runtime prelude + before_agent_start hook gate` 与两组测试；隔离环境下已完成一轮真实 prompt snapshot 手测，确认 `main` 命中、`goal` 不命中、`weak main` 不命中；当前阶段按“最小 runtime 摘要注入闭环已成立”收口，外部 provider adapter 与更深画像仍后置 |
+| 已完成（当前阶段收口） | `H2` 轻量自动学习闭环 | `v1` 主链已打通；`H2-3` 已完成一轮手测收口并维持收口状态；`H2` 第二轮已完成第一版收口：最小 `refresh gate + priority hint + refresh state/fingerprint gate` 已形成闭环，goal runner 仅在仍存在 actionable review / publish 项时跳过重复生成；已收口 goal 在无新运行信号时会以 `unchanged_signal` 跳过重复 refresh，在出现新 `run / node / capability / checkpoint` 信号后才重新生成；当前阶段不再作为主线开发任务推进，后续默认只保留真实使用下的规则观察与最小修补，仍未做自动发布 |
+| 已完成（当前阶段收口） | `H3` skill freshness / 过期检测 / 更新建议 | 第一版 `skill freshness state + freshness/gap evaluator + doctor/task/candidate/usage 接线 + Web 现有详情展示` 已落地；真实手测中已确认 `needs_new_skill` 与 usage-only `manual stale mark -> warn_stale` 闭环，并已补 usage-only manual stale 边界修补；`accepted -> needs_patch` 当前继续由定向自动化样本覆盖，后续默认只保留真实使用观察与最小修补 |
+| 已完成（当前阶段收口） | `H5` 部署弹性增强 | `H5-1` 已完成第一版最小落地：已新增统一 `deployment-backends.json` profile schema、默认 `local-default` 配置，并打通 `bdd doctor / system.doctor / web doctor` 三边诊断摘要、三组自动化验证与一轮真实 Web doctor 目视确认；当前阶段按“配置与诊断闭环已成立”收口，后续默认只保留真实 `docker / ssh` profile 字段稳定性观察与最小修补，不进入远程执行主链重构 |
+| 进行中 | `H4` 定向 runtime resilience 增强 | `H4-1` 已完成第一版最小闭环：主链 failover 已补结构化 `summary` 与 `FailoverExhaustedError`，并已新增持久化 `runtime-resilience` tracker，打通 `bdd doctor / system.doctor / web doctor / launch explainability`；当前先按“最小可观测闭环已成立、继续观察真实 degrade 信号”口径推进，未进入 provider runtime 重构 |
+| 已完成（当前阶段收口） | `P2-5` 统一媒体能力注册层 / 附件理解管线 | `P2-5-v1` 已完成最小闭环：已新增统一媒体 capability registry、附件理解 runner/cache，并完成 `message.send` 与 `models.list` 接线；已补 runner / server 两组验证，当前阶段按“能力声明与附件理解主链已成立”收口，后续默认只观察真实附件场景下的 capability 误判与降级提示质量 |
+| 已完成（当前阶段收口） | `A5` continuation runtime 后置增强 | 已按“`A5-1 checkpoint replay` + `A5-2 background recovery runtime` + 受限版 `A5-3 safe-point takeover / handoff`”完成当前阶段收口；后续默认只观察真实 replay / recovery / takeover 信号并做最小修补，`A5-4 / A5-5 / A5-6` 继续后置 |
 | 未开始 | `D1` 安装与配置向导 2.0 | 后置产品化收口项，本文尚未记录明确开工进展 |
 | 未开始 | `D2` 独立 TUI 控制面 | 后置产品化收口项，本文尚未记录明确开工进展 |

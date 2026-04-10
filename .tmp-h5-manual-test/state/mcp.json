@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "servers": [
+    {
+      "id": "example-filesystem",
+      "name": "文件系统服务器 (示例)",
+      "description": "示例：提供文件系统访问能力的 MCP 服务器",
+      "transport": {
+        "type": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "/tmp"
+        ]
+      },
+      "autoConnect": false,
+      "enabled": false
+    }
+  ],
+  "settings": {
+    "defaultTimeout": 30000,
+    "debug": false,
+    "toolPrefix": true
+  }
+}

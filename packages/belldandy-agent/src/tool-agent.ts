@@ -9,7 +9,7 @@ import type { ToolExecutionRuntimeContext, ToolExecutor, ToolCallRequest } from 
 import type { AgentRunInput, AgentStreamItem, AgentUsage, BelldandyAgent, AgentHooks } from "./index.js";
 import type { HookRunner } from "./hook-runner.js";
 import type { AfterCompactionEvent, BeforeCompactionEvent, HookAgentContext, HookToolContext, HookToolResultPersistContext } from "./hooks.js";
-import { FailoverClient, type ModelProfile, type FailoverLogger } from "./failover-client.js";
+import { FailoverClient, type ModelProfile, type FailoverExecutionSummary, type FailoverLogger } from "./failover-client.js";
 import { buildUrl, preprocessMultimodalContent, type VideoUploadConfig } from "./multimodal.js";
 import {
   buildAnthropicRequest,
@@ -106,6 +106,14 @@ export type ToolEnabledAgentOptions = {
   onPromptSnapshot?: (snapshot: AgentPromptSnapshot) => void;
   /** 预置到 prompt snapshot 的 system prompt 观测元数据 */
   systemPromptMetadata?: JsonObject;
+  /** runtime resilience 观察回调 */
+  onRuntimeResilienceEvent?: (event: {
+    source: "tool_agent";
+    phase: "tool_loop";
+    agentId?: string;
+    conversationId?: string;
+    summary: FailoverExecutionSummary;
+  }) => void;
 };
 
 type Message =
@@ -799,6 +807,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
           messages,
           tools.length > 0 ? tools : undefined,
           textAttachmentChars,
+          {
+            agentId: resolvedAgentId,
+            conversationId: input.conversationId,
+          },
           !promptSnapshotCaptured ? capturePromptSnapshot : undefined,
           providerNativeSystemBlocks,
         );
@@ -1273,6 +1285,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
     messages: Message[],
     tools?: { type: "function"; function: { name: string; description: string; parameters: object } }[],
     textAttachmentChars?: number,
+    runtimeScope?: { conversationId?: string; agentId?: string },
     onBeforeRequest?: (messages: Message[]) => void,
     providerNativeSystemBlocks?: ProviderNativeSystemBlock[],
   ): Promise<{ ok: true; content: string; toolCalls?: OpenAIToolCall[]; reasoning_content?: string; usage?: AnthropicUsage } | { ok: false; error: string }> {
@@ -1299,6 +1312,15 @@ export class ToolEnabledAgent implements BelldandyAgent {
         minimumTimeoutMs: minimumAdaptiveTimeoutMs,
         maxRetries: this.opts.maxRetries,
         retryBackoffMs: this.opts.retryBackoffMs,
+        onSummary: (summary) => {
+          this.opts.onRuntimeResilienceEvent?.({
+            source: "tool_agent",
+            phase: "tool_loop",
+            agentId: runtimeScope?.agentId,
+            conversationId: runtimeScope?.conversationId,
+            summary,
+          });
+        },
         buildRequest: (profile) => {
           // 优先使用 profile 自身的 protocol（models.json 配置），再 fallback 到 agent 级别协议
           const profileProtocol = (profile.protocol as ApiProtocol) ?? this.opts.protocol ?? detectProtocol(profile.baseUrl);

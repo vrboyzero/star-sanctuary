@@ -106,4 +106,106 @@ describe("buildGoalSessionRuntimeEventMessage", () => {
     expect(result?.text).toContain("Goal: 推进 outbound 审计 (goal_beta) / status=blocked");
     expect(result?.text).toContain("Node: 落地外发与 doctor 联动 (node_ship) / status=blocked / phase=verification / run=run_123");
   });
+
+  it("suppresses completed node events when the active conversation is not the same node run session", async () => {
+    const result = await buildGoalSessionRuntimeEventMessage({
+      event: {
+        goal: {
+          id: "goal_gamma",
+          slug: "goal-gamma",
+          title: "观察 goal 事件噪音",
+          status: "executing",
+          goalRoot: "goalRoot",
+          runtimeRoot: "runtimeRoot",
+          docRoot: "docRoot",
+          northstarPath: "northstar",
+          tasksPath: "tasks",
+          progressPath: "progress",
+          handoffPath: "handoff",
+          registryPath: "registry",
+          pathSource: "default",
+          activeConversationId: "goal:goal_gamma",
+          activeNodeId: "node_ship",
+          lastNodeId: "node_ship",
+          lastRunId: "run_123",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        reason: "task_node_completed",
+        areas: ["goal", "tracking", "progress", "handoff"],
+        nodeId: "node_ship",
+        runId: "run_123",
+        at: new Date().toISOString(),
+      },
+      readTaskGraph: async () => ({
+        version: 2,
+        goalId: "goal_gamma",
+        nodes: [],
+        edges: [],
+        updatedAt: new Date().toISOString(),
+      }),
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it("keeps completed node events when the active conversation matches the same node run session", async () => {
+    const result = await buildGoalSessionRuntimeEventMessage({
+      event: {
+        goal: {
+          id: "goal_delta",
+          slug: "goal-delta",
+          title: "观察 node 完成事件",
+          status: "executing",
+          goalRoot: "goalRoot",
+          runtimeRoot: "runtimeRoot",
+          docRoot: "docRoot",
+          northstarPath: "northstar",
+          tasksPath: "tasks",
+          progressPath: "progress",
+          handoffPath: "handoff",
+          registryPath: "registry",
+          pathSource: "default",
+          activeConversationId: "goal:goal_delta:node:node_ship:run:run_456",
+          activeNodeId: "node_ship",
+          lastNodeId: "node_ship",
+          lastRunId: "run_456",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        reason: "task_node_completed",
+        areas: ["goal", "tracking", "progress", "handoff"],
+        nodeId: "node_ship",
+        runId: "run_456",
+        at: new Date().toISOString(),
+      },
+      readTaskGraph: async () => ({
+        version: 2,
+        goalId: "goal_delta",
+        nodes: [
+          {
+            id: "node_ship",
+            title: "继续收口噪音范围",
+            status: "done",
+            phase: "verification",
+            dependsOn: [],
+            acceptance: [],
+            artifacts: [],
+            checkpointRequired: false,
+            checkpointStatus: "not_required",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+        edges: [],
+        updatedAt: new Date().toISOString(),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      conversationId: "goal:goal_delta:node:node_ship:run:run_456",
+    });
+    expect(result?.text).toContain("当前节点已完成");
+    expect(result?.text).toContain("Node: 继续收口噪音范围 (node_ship) / status=done / phase=verification / run=run_456");
+  });
 });

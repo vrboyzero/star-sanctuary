@@ -28,6 +28,9 @@ export type SubTaskNotificationKind =
   | "steering_requested"
   | "steering_delivered"
   | "steering_failed"
+  | "takeover_requested"
+  | "takeover_delivered"
+  | "takeover_failed"
   | "resume_requested"
   | "resume_delivered"
   | "resume_failed"
@@ -39,7 +42,9 @@ export type SubTaskNotificationKind =
   | "timeout";
 
 export type SubTaskSteeringStatus = "accepted" | "delivered" | "failed";
+export type SubTaskTakeoverStatus = "accepted" | "delivered" | "failed";
 export type SubTaskResumeStatus = "accepted" | "delivered" | "failed";
+export type SubTaskTakeoverMode = "safe_point" | "resume_relaunch";
 
 export type SubTaskProgress = {
   phase: SubTaskStatus;
@@ -69,6 +74,20 @@ export type SubTaskResumeRecord = {
   id: string;
   message: string;
   status: SubTaskResumeStatus;
+  requestedAt: number;
+  requestedSessionId?: string;
+  deliveredAt?: number;
+  deliveredSessionId?: string;
+  resumedFromSessionId?: string;
+  error?: string;
+};
+
+export type SubTaskTakeoverRecord = {
+  id: string;
+  agentId: string;
+  mode: SubTaskTakeoverMode;
+  message: string;
+  status: SubTaskTakeoverStatus;
   requestedAt: number;
   requestedSessionId?: string;
   deliveredAt?: number;
@@ -125,6 +144,7 @@ export type SubTaskRecord = {
   outputPreview?: string;
   error?: string;
   steering: SubTaskSteeringRecord[];
+  takeover: SubTaskTakeoverRecord[];
   resume: SubTaskResumeRecord[];
   notifications: SubTaskNotification[];
 };
@@ -160,6 +180,7 @@ type RuntimeLogger = {
 const STATE_VERSION = 1 as const;
 const MAX_NOTIFICATIONS = 20;
 const MAX_STEERING_RECORDS = 8;
+const MAX_TAKEOVER_RECORDS = 8;
 const MAX_RESUME_RECORDS = 8;
 const OUTPUT_FILENAME = "result.md";
 
@@ -249,6 +270,7 @@ function cloneRecord(record: SubTaskRecord): SubTaskRecord {
       },
     progress: { ...record.progress },
     steering: record.steering.map((item) => ({ ...item })),
+    takeover: record.takeover.map((item) => ({ ...item })),
     resume: record.resume.map((item) => ({ ...item })),
     notifications: record.notifications.map((item) => ({ ...item })),
   };
@@ -363,6 +385,7 @@ export class SubTaskRuntimeStore {
         createdAt: now,
         updatedAt: now,
         steering: [],
+        takeover: [],
         resume: [],
         notifications: [],
       };
@@ -733,6 +756,103 @@ export class SubTaskRuntimeStore {
     });
   }
 
+  async requestTakeover(
+    taskId: string,
+    agentId: string,
+    message: string,
+    input: {
+      sessionId?: string;
+      mode?: SubTaskTakeoverMode;
+    } = {},
+  ): Promise<{ item: SubTaskRecord; takeover: SubTaskTakeoverRecord } | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const normalizedAgentId = String(agentId ?? "").trim();
+      if (!normalizedAgentId) return undefined;
+      const normalizedMessage = String(message ?? "").trim();
+      const now = Date.now();
+      const takeover: SubTaskTakeoverRecord = {
+        id: `task_takeover_${crypto.randomUUID().slice(0, 8)}`,
+        agentId: normalizedAgentId,
+        mode: input.mode === "safe_point" ? "safe_point" : "resume_relaunch",
+        message: normalizedMessage,
+        status: "accepted",
+        requestedAt: now,
+        requestedSessionId: input.sessionId?.trim() || record.sessionId,
+      };
+      record.updatedAt = now;
+      record.takeover.push(takeover);
+      if (record.takeover.length > MAX_TAKEOVER_RECORDS) {
+        record.takeover = record.takeover.slice(-MAX_TAKEOVER_RECORDS);
+      }
+      const modeLabel = takeover.mode === "safe_point" ? "Safe-point takeover" : "Takeover";
+      this.pushNotification(
+        record,
+        "takeover_requested",
+        `${modeLabel} accepted for agent ${normalizedAgentId}: ${truncateText(normalizedMessage || "Relaunch the same subtask under a new agent.", 160)}`,
+      );
+      this.emitChange("updated", record);
+      return {
+        item: cloneRecord(record),
+        takeover: { ...takeover },
+      };
+    });
+  }
+
+  async markTakeoverDelivered(
+    taskId: string,
+    takeoverId: string,
+    input: {
+      sessionId?: string;
+      resumedFromSessionId?: string;
+    } = {},
+  ): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const takeover = record.takeover.find((item) => item.id === takeoverId);
+      if (!takeover) return cloneRecord(record);
+      takeover.status = "delivered";
+      takeover.deliveredAt = Date.now();
+      takeover.deliveredSessionId = input.sessionId?.trim() || record.sessionId;
+      takeover.resumedFromSessionId = input.resumedFromSessionId?.trim() || takeover.requestedSessionId;
+      takeover.error = undefined;
+      record.updatedAt = takeover.deliveredAt;
+      this.pushNotification(
+        record,
+        "takeover_delivered",
+        takeover.mode === "safe_point"
+          ? `Safe-point takeover delivered to agent ${takeover.agentId}.`
+          : `Takeover delivered to agent ${takeover.agentId}.`,
+      );
+      this.emitChange("updated", record);
+      return cloneRecord(record);
+    });
+  }
+
+  async markTakeoverFailed(taskId: string, takeoverId: string, reason: string): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const takeover = record.takeover.find((item) => item.id === takeoverId);
+      if (!takeover) return cloneRecord(record);
+      takeover.status = "failed";
+      takeover.error = truncateText(reason, 300);
+      record.updatedAt = Date.now();
+      this.pushNotification(
+        record,
+        "takeover_failed",
+        `Takeover failed for agent ${takeover.agentId}: ${truncateText(reason, 160)}`,
+      );
+      this.emitChange("updated", record);
+      return cloneRecord(record);
+    });
+  }
+
   async markResumeDelivered(
     taskId: string,
     resumeId: string,
@@ -892,6 +1012,33 @@ export class SubTaskRuntimeStore {
           } satisfies SubTaskResumeRecord;
         })
         .slice(-MAX_RESUME_RECORDS)
+      : [];
+    const takeover = Array.isArray(value.takeover)
+      ? value.takeover
+        .filter((item) => item && typeof item === "object")
+        .map((item) => {
+          const current = item as Record<string, unknown>;
+          return {
+            id: typeof current.id === "string" ? current.id : `task_takeover_${crypto.randomUUID().slice(0, 8)}`,
+            agentId: typeof current.agentId === "string" && current.agentId.trim() ? current.agentId.trim() : "default",
+            mode: current.mode === "safe_point" ? "safe_point" : "resume_relaunch",
+            message: typeof current.message === "string" ? current.message : "",
+            status: current.status === "delivered" || current.status === "failed" ? current.status : "accepted",
+            requestedAt: Number(current.requestedAt) || Date.now(),
+            requestedSessionId: typeof current.requestedSessionId === "string" && current.requestedSessionId.trim()
+              ? current.requestedSessionId.trim()
+              : undefined,
+            deliveredAt: Number.isFinite(Number(current.deliveredAt)) ? Number(current.deliveredAt) : undefined,
+            deliveredSessionId: typeof current.deliveredSessionId === "string" && current.deliveredSessionId.trim()
+              ? current.deliveredSessionId.trim()
+              : undefined,
+            resumedFromSessionId: typeof current.resumedFromSessionId === "string" && current.resumedFromSessionId.trim()
+              ? current.resumedFromSessionId.trim()
+              : undefined,
+            error: typeof current.error === "string" && current.error.trim() ? current.error : undefined,
+          } satisfies SubTaskTakeoverRecord;
+        })
+        .slice(-MAX_TAKEOVER_RECORDS)
       : [];
     return {
       id,
@@ -1056,6 +1203,7 @@ export class SubTaskRuntimeStore {
       outputPreview: typeof value.outputPreview === "string" ? value.outputPreview : undefined,
       error: typeof value.error === "string" ? value.error : undefined,
       steering,
+      takeover,
       resume,
       notifications: notifications.slice(-MAX_NOTIFICATIONS),
     };
@@ -1083,6 +1231,9 @@ export class SubTaskRuntimeStore {
       case "steering_requested":
       case "steering_delivered":
       case "steering_failed":
+      case "takeover_requested":
+      case "takeover_delivered":
+      case "takeover_failed":
       case "resume_requested":
       case "resume_delivered":
       case "resume_failed":
@@ -1153,6 +1304,7 @@ export class SubTaskRuntimeStore {
             },
           progress: { ...record.progress },
           steering: record.steering.map((item) => ({ ...item })),
+          takeover: record.takeover.map((item) => ({ ...item })),
           notifications: record.notifications.map((item) => ({ ...item })),
         })),
     };
@@ -1467,6 +1619,44 @@ function buildResumeInstruction(record: SubTaskRecord, message: string): string 
   ].join("\n").trim();
 }
 
+function buildTakeoverMessage(agentId: string, message: string): string {
+  return [
+    `Take over this subtask as agent ${agentId}.`,
+    String(message ?? "").trim(),
+  ].filter(Boolean).join("\n\n");
+}
+
+function buildTakeoverInstruction(
+  record: SubTaskRecord,
+  agentId: string,
+  message: string,
+  mode: SubTaskTakeoverMode,
+): string {
+  const normalizedMessage = String(message ?? "").trim();
+  const latestSummary = truncateText(
+    record.outputPreview || record.error || record.summary || record.progress.message || record.instruction,
+    240,
+  );
+  const opening = mode === "safe_point"
+    ? `Take over this running subtask at the next safe point under agent ${agentId}.`
+    : `Take over the same subtask under agent ${agentId}.`;
+  const defaultGuidance = mode === "safe_point"
+    ? "Stop the current run, keep the prior history, and continue from the latest safe point."
+    : "Continue from the latest recorded state and produce the next best result.";
+  return [
+    opening,
+    mode === "safe_point"
+      ? "This is a safe-point relaunch, not a live injection into the current run."
+      : "This is a takeover relaunch of the same task under a different agent.",
+    "",
+    `Original instruction: ${record.instruction}`,
+    `Latest recorded summary: ${latestSummary || "-"}`,
+    `Previous agent: ${record.agentId || record.launchSpec.agentId || "-"}`,
+    "",
+    `Takeover guidance: ${normalizedMessage || defaultGuidance}`,
+  ].join("\n").trim();
+}
+
 function buildResumeLaunchSpec(
   record: SubTaskRecord,
   instruction: string,
@@ -1729,6 +1919,147 @@ export function createSubTaskResumeController(input: {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (!attachedSessionId) {
         await input.runtimeStore.markResumeFailed(taskId, resumeId, errorMessage);
+        return;
+      }
+      await input.runtimeStore.completeTask(taskId, {
+        status: /timed out/i.test(errorMessage) ? "timeout" : "error",
+        sessionId: attachedSessionId,
+        output: "",
+        error: errorMessage,
+      });
+    });
+
+    return accepted.item;
+  };
+}
+
+export function createSubTaskTakeoverController(input: {
+  runtimeStore: SubTaskRuntimeStore;
+  orchestrator: Pick<SubAgentOrchestrator, "spawn" | "getSession" | "stopSession">;
+  agentRegistry?: Pick<AgentRegistry, "getProfile">;
+  conversationStore: {
+    get: (conversationId: string) => {
+      messages?: Array<{ role?: unknown; content?: unknown }>;
+    } | undefined;
+  };
+  logger?: RuntimeLogger;
+}) {
+  return async (
+    taskId: string,
+    agentId: string,
+    message = "",
+  ): Promise<SubTaskRecord | undefined> => {
+    const normalizedAgentId = String(agentId ?? "").trim();
+    if (!normalizedAgentId) {
+      throw new Error("Takeover agentId is required.");
+    }
+
+    const current = await input.runtimeStore.getTask(taskId);
+    if (!current) {
+      return undefined;
+    }
+    if (current.archivedAt) {
+      throw new Error("Archived subtasks cannot be taken over.");
+    }
+
+    const isRunningTakeover = current.status === "running" && Boolean(current.sessionId);
+    if (!isRunningTakeover && !isTerminalStatus(current.status)) {
+      throw new Error(`Subtask takeover only supports running or finished tasks. Current status: ${current.status}`);
+    }
+
+    const takeoverMessage = buildTakeoverMessage(normalizedAgentId, message);
+    const takeoverInstruction = buildTakeoverInstruction(
+      current,
+      normalizedAgentId,
+      message,
+      isRunningTakeover ? "safe_point" : "resume_relaunch",
+    );
+    const accepted = await input.runtimeStore.requestTakeover(taskId, normalizedAgentId, takeoverMessage, {
+      sessionId: current.sessionId,
+      mode: isRunningTakeover ? "safe_point" : "resume_relaunch",
+    });
+    if (!accepted) {
+      throw new Error(`Failed to record subtask takeover: ${taskId}`);
+    }
+
+    const takeoverId = accepted.takeover.id;
+    const priorHistory = current.sessionId
+      ? extractConversationHistoryMessages(input.conversationStore.get(current.sessionId))
+      : [];
+    const priorSession = current.sessionId
+      ? input.orchestrator.getSession(current.sessionId)
+      : undefined;
+    const launchSpec = normalizeAgentLaunchSpecWithCatalog({
+      ...buildResumeLaunchSpec(current, takeoverInstruction, priorSession?.launchSpec),
+      agentId: normalizedAgentId,
+      profileId: normalizedAgentId,
+    }, {
+      agentRegistry: input.agentRegistry,
+    });
+
+    if (isRunningTakeover) {
+      const currentSessionId = String(current.sessionId);
+      const session = input.orchestrator.getSession(currentSessionId);
+      if (!session || session.status !== "running") {
+        await input.runtimeStore.markTakeoverFailed(taskId, takeoverId, `Running subtask session is not available: ${currentSessionId}`);
+        throw new Error(`Running subtask session is not available: ${currentSessionId}`);
+      }
+      await input.orchestrator.stopSession(
+        currentSessionId,
+        `Safe-point takeover requested for agent ${normalizedAgentId}. Relaunching under the new agent.`,
+      );
+    }
+
+    let attachedSessionId: string | undefined;
+    void input.orchestrator.spawn({
+      launchSpec,
+      history: priorHistory,
+      resumedFromSessionId: current.sessionId,
+      onQueued: (position: number) => {
+        void input.runtimeStore.markQueued(taskId, position).catch((error) => {
+          input.logger?.warn?.("Failed to mark queued subtask takeover.", {
+            taskId,
+            position,
+            error,
+          });
+        });
+      },
+      onSessionCreated: (sessionId: string, resolvedAgentId: string) => {
+        attachedSessionId = sessionId;
+        void input.runtimeStore.attachSession(
+          taskId,
+          sessionId,
+          resolvedAgentId,
+          launchSpec.profileId,
+        ).catch((error) => {
+          input.logger?.warn?.("Failed to attach taken-over subtask session.", {
+            taskId,
+            sessionId,
+            agentId: resolvedAgentId,
+            error,
+          });
+        });
+        void input.runtimeStore.markTakeoverDelivered(taskId, takeoverId, {
+          sessionId,
+          resumedFromSessionId: current.sessionId,
+        }).catch((error) => {
+          input.logger?.warn?.("Failed to mark subtask takeover as delivered.", {
+            taskId,
+            sessionId,
+            takeoverId,
+            error,
+          });
+        });
+      },
+    }).then((result) => input.runtimeStore.completeTask(taskId, {
+      status: inferTaskStatusFromResult(result),
+      sessionId: result.sessionId ?? attachedSessionId,
+      output: result.output,
+      error: result.error,
+    })).catch(async (error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (!attachedSessionId) {
+        await input.runtimeStore.markTakeoverFailed(taskId, takeoverId, errorMessage);
         return;
       }
       await input.runtimeStore.completeTask(taskId, {

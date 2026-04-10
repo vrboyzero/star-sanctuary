@@ -559,6 +559,76 @@ export type SystemDoctorResult = {
       hasBehaviorContract: boolean;
     }>;
   };
+  runtimeResilience?: {
+    version: 1;
+    updatedAt: number;
+    routing: {
+      primary: {
+        profileId: string;
+        provider: string;
+        model: string;
+        protocol?: string;
+        wireApi?: string;
+      };
+      fallbacks: Array<{
+        profileId: string;
+        provider: string;
+        model: string;
+        protocol?: string;
+        wireApi?: string;
+      }>;
+      compaction?: {
+        configured: boolean;
+        sharesPrimaryRoute: boolean;
+        route?: {
+          profileId: string;
+          provider: string;
+          model: string;
+          protocol?: string;
+          wireApi?: string;
+        };
+      };
+    };
+    totals: {
+      observedRuns: number;
+      degradedRuns: number;
+      failedRuns: number;
+      sameProfileRetries: number;
+      crossProfileFallbacks: number;
+      cooldownSkips: number;
+      terminalFailures: number;
+    };
+    summary: {
+      available: boolean;
+      configuredFallbackCount: number;
+      lastOutcome: "idle" | "success" | "non_retryable" | "exhausted" | "aborted";
+      headline: string;
+    };
+    reasonCounts: Record<string, number>;
+    latest?: {
+      source: "openai_chat" | "tool_agent" | "compaction";
+      phase: string;
+      agentId?: string;
+      conversationId?: string;
+      finalStatus: "success" | "non_retryable" | "exhausted" | "aborted";
+      finalProfileId?: string;
+      finalProvider?: string;
+      finalModel?: string;
+      finalReason?: string;
+      requestCount: number;
+      failedStageCount: number;
+      degraded: boolean;
+      stepCounts: {
+        cooldownSkips: number;
+        sameProfileRetries: number;
+        crossProfileFallbacks: number;
+        terminalFailures: number;
+      };
+      reasonCounts: Record<string, number>;
+      updatedAt: number;
+      headline: string;
+    };
+  };
 };
 
 // Result payload for agents.list (Response payload)

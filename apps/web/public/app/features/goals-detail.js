@@ -83,7 +83,11 @@ export function createGoalsDetailFeature({
       `;
     } else if (goal.status === "executing" && activeNodeId) {
       title = t("goals.detailResumeActiveNodeTitle", {}, "Resume Current Node");
-      text = t("goals.detailResumeActiveNodeText", { nodeId: activeNodeId }, `The current recorded active node is ${activeNodeId}. Resume from this node first.`);
+      text = t(
+        "goals.detailResumeActiveNodeText",
+        { nodeId: activeNodeId },
+        `The current recorded active node is ${activeNodeId}. If handoff shows an open checkpoint, replay should resume this node first.`,
+      );
       actions = `
         <button class="button" data-goal-resume-last-node="${escapeHtml(goal.id)}" data-goal-last-node-id="${escapeHtml(activeNodeId)}">${escapeHtml(t("goals.detailResumeCurrentNode", {}, "Resume Current Node"))}</button>
         <button class="button" data-goal-resume-detail="${escapeHtml(goal.id)}">${escapeHtml(t("goals.detailEnterBase", {}, "Enter Base Channel"))}</button>

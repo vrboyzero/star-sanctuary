@@ -978,6 +978,15 @@ BELLDANDY_CONTEXT_INJECTION_INCLUDE_SESSION=false
 BELLDANDY_CONTEXT_INJECTION_TASK_LIMIT=3
 BELLDANDY_CONTEXT_INJECTION_ALLOWED_CATEGORIES=preference,fact,decision,entity
 
+# ========== H1：Mind Profile Runtime 最小运行时摘要 ==========
+# 打开后，会在部分 main 会话开始前注入一小段稳定用户画像/长期记忆摘要
+# 当前 goal / goal_node 会话默认不会注入
+BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED=true
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINES=4
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINE_LENGTH=120
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_CHARS=360
+BELLDANDY_MIND_PROFILE_RUNTIME_MIN_SIGNAL_COUNT=2
+
 # ========== L0 摘要层 ==========
 BELLDANDY_MEMORY_SUMMARY_ENABLED=true
 # 摘要模型（可选，不设则继承主模型）
@@ -1028,7 +1037,55 @@ BELLDANDY_TEAM_SHARED_MEMORY_ENABLED=true
 - `Session Digest`：更像“当前会话的小抄”，帮助长对话不断线。
 - `Durable Extraction`：更像“长期归档”，只把更值得保留的内容写进长期记忆。
 - `Auto-Recall / Context Injection`：负责“聊天开始前先把相关记忆带回来”。
+- `Mind Profile Runtime`：负责“在少数主会话里，把稳定用户画像与长期记忆压成一小段运行时背景锚点”。
 - `Team Shared Memory`：当前还只是本地共享记忆前置条件，不是远端同步平台。
+
+**`Mind Profile Runtime` 推荐起步配置：**
+
+```env
+BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED=true
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINES=4
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINE_LENGTH=120
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_CHARS=360
+BELLDANDY_MIND_PROFILE_RUNTIME_MIN_SIGNAL_COUNT=2
+```
+
+**变量说明：**
+
+- `BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED`
+  - H1 的总开关；设为 `false` 可完全回退
+- `BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINES`
+  - 最多注入多少条摘要行
+- `BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINE_LENGTH`
+  - 限制每条摘要行长度，避免单行膨胀
+- `BELLDANDY_MIND_PROFILE_RUNTIME_MAX_CHARS`
+  - 限制整段 prelude 的总字符预算
+- `BELLDANDY_MIND_PROFILE_RUNTIME_MIN_SIGNAL_COUNT`
+  - 触发注入所需的最小稳定信号数；值越高越保守
+
+**调参建议：**
+
+1. 先保持 `MAX_LINES=4`、`MAX_LINE_LENGTH=120`
+2. 若觉得命中太多、噪音偏大，优先提高 `MIN_SIGNAL_COUNT`
+3. 若仍觉得 prompt 体积偏大，再下调 `MAX_CHARS`
+4. 若主聊天命中太少，再把 `MIN_SIGNAL_COUNT` 从 `2` 降到 `1`
+
+**一个保守示例：**
+
+```env
+# 只在稳定信号比较明确时注入，适合先观察真实使用
+BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED=true
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINES=4
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_LINE_LENGTH=120
+BELLDANDY_MIND_PROFILE_RUNTIME_MAX_CHARS=320
+BELLDANDY_MIND_PROFILE_RUNTIME_MIN_SIGNAL_COUNT=3
+```
+
+**快速回滚：**
+
+```env
+BELLDANDY_MIND_PROFILE_RUNTIME_ENABLED=false
+```
 
 #### 5.2.3 检索增强与过滤
 
@@ -2017,6 +2074,80 @@ corepack pnpm bdd conversation exports --limit 20
 - `recentConversationExports`
 
 因此，`bdd doctor` 负责“系统体检”，`bdd conversation ...` 负责“具体会话复盘”，两者最好分开理解。
+
+#### 8.3.2.1 怎么看 Prompt Snapshot（短版）
+
+如果你只是想快速判断“这轮 prompt 到底注入了什么”，优先看下面这几处：
+
+**关键目录：**
+
+- `~/.star_sanctuary/diagnostics/prompt-snapshots/`
+  - runtime prompt snapshot 的归档根目录
+- `~/.star_sanctuary/diagnostics/prompt-snapshots/_index.txt`
+  - 给人看的最新索引，适合先快速扫一眼最近有哪些会话
+- `~/.star_sanctuary/diagnostics/prompt-snapshots/_index.json`
+  - 机器可读索引，字段更完整
+- `~/.star_sanctuary/diagnostics/conversation-exports/prompt-snapshots/`
+  - CLI 导出的 prompt snapshot 副本
+- `~/.star_sanctuary/diagnostics/prompt-snapshots/_blobs/`
+  - system prompt 去重 blob，不是排查主入口
+
+**目录大致怎么理解：**
+
+- `agent-default-main`
+  - 默认主会话
+- `agent-xxx-main`
+  - 其他 resident 主会话
+- `goal-*`
+  - `goal` / `goal_node` 会话
+- `sub_*`
+  - 子任务会话
+- `cron-*`
+  - cron 会话
+- `heartbeat-*`
+  - heartbeat 会话
+- `community-*`
+  - 社区/API 入口会话
+
+注意：
+
+- 目录名主要是 `conversationId` 的清洗版，不保证肉眼可读
+- 真正更适合人工排查的是 `_index.txt` 和 CLI 导出的副本
+
+**最短排查顺序：**
+
+1. 先看 `_index.txt`，确认最近生成的是哪类会话、最新 run 是哪个
+2. 再用 CLI 导出指定会话的 prompt snapshot：
+
+```bash
+corepack pnpm bdd conversation prompt-snapshot --conversation-id <id> --output-dir ./artifacts
+```
+
+3. 若想看最近导出到哪里了：
+
+```bash
+corepack pnpm bdd conversation exports --limit 20
+```
+
+**一个常见场景：检查 H1 的 `mind-profile-runtime` 是否命中**
+
+1. 先在主聊天发一条带唯一 marker 的消息
+2. 打开 `_index.txt` 找到最近的 `agent-default-main`
+3. 导出该会话的 prompt snapshot
+4. 搜索：
+
+```text
+mind-profile-runtime
+<mind-profile-runtime
+User anchor:
+Durable memory:
+```
+
+**当前保留策略：**
+
+- runtime prompt snapshot 默认按 `BELLDANDY_PROMPT_SNAPSHOT_RETENTION_DAYS` 清理
+- CLI 导出的 prompt snapshot 副本也会按同样的天数自动清理
+- 因此，长期排查建议保留导出记录或手动另存重要案例，不要假设旧快照会一直存在
 
 ### 8.4 配置管理（Config）
 

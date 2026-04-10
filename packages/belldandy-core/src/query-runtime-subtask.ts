@@ -600,6 +600,7 @@ export async function handleSubTaskTakeoverWithQueryRuntime(
         archived: Boolean(current.archivedAt),
         fromAgentId: current.agentId,
         toAgentId: params.agentId,
+        takeoverMode: current.status === "running" && current.sessionId ? "safe_point" : "resume_relaunch",
       },
     });
 
@@ -647,6 +648,7 @@ export async function handleSubTaskTakeoverWithQueryRuntime(
       detail: {
         taskId: item.id,
         status: item.status,
+        takeoverCount: Array.isArray(item.takeover) ? item.takeover.length : 0,
         resumeCount: item.resume.length,
         agentId: item.agentId,
       },

@@ -1,7 +1,17 @@
-import type { GoalHandoffSnapshot } from "./goals/types.js";
+import type { GoalCheckpointReplayDescriptor, GoalHandoffSnapshot } from "./goals/types.js";
 import type { SubTaskRecord } from "./task-runtime.js";
 
 export type ContinuationTargetType = "conversation" | "session" | "node" | "goal";
+
+export type ContinuationReplaySnapshot = {
+  kind: "goal_checkpoint";
+  checkpointId: string;
+  nodeId: string;
+  runId?: string;
+  title: string;
+  summary?: string;
+  reason: string;
+};
 
 export type ContinuationStateSnapshot = {
   version: 1;
@@ -12,6 +22,7 @@ export type ContinuationStateSnapshot = {
   resumeMode: string;
   summary: string;
   nextAction: string;
+  replay?: ContinuationReplaySnapshot;
   checkpoints: {
     openCount: number;
     blockerCount: number;
@@ -22,6 +33,21 @@ export type ContinuationStateSnapshot = {
     recent: string[];
   };
 };
+
+function buildGoalCheckpointReplay(
+  replay: GoalCheckpointReplayDescriptor | undefined,
+): ContinuationReplaySnapshot | undefined {
+  if (!replay?.checkpointId || !replay?.nodeId) return undefined;
+  return {
+    kind: "goal_checkpoint",
+    checkpointId: replay.checkpointId,
+    nodeId: replay.nodeId,
+    runId: replay.runId,
+    title: replay.title,
+    summary: replay.summary,
+    reason: replay.reason,
+  };
+}
 
 export type ConversationContinuationStateInput = {
   conversationId: string;
@@ -120,18 +146,33 @@ function summarizeText(value: string | undefined, max = 140): string {
   return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
 }
 
+function getLatestTakeoverRecord(record: SubTaskRecord) {
+  if (!Array.isArray(record.takeover) || record.takeover.length === 0) return null;
+  return record.takeover[record.takeover.length - 1] ?? null;
+}
+
 function buildSubTaskNextAction(record: SubTaskRecord): string {
+  const latestTakeover = getLatestTakeoverRecord(record);
   if (record.archivedAt) {
     return "Inspect the archived output before deciding whether to relaunch this task.";
   }
   switch (record.status) {
     case "running":
+      if (latestTakeover && latestTakeover.mode === "safe_point") {
+        return "Observe the safe-point takeover relaunch and inspect the new agent session before sending more steering.";
+      }
       return "Observe the current run or send steering if the task needs correction.";
     case "done":
+      if (latestTakeover) {
+        return "Inspect the latest takeover result and relaunch again only if more follow-up work is still needed.";
+      }
       return "Resume this task if follow-up work is still needed.";
     case "error":
     case "timeout":
     case "stopped":
+      if (latestTakeover) {
+        return "Inspect the latest takeover failure details before deciding whether to relaunch this task again.";
+      }
       return "Resume this task from the last recorded state or inspect the failure details first.";
     default:
       return "Wait for the task to start or relaunch it with updated guidance.";
@@ -140,7 +181,10 @@ function buildSubTaskNextAction(record: SubTaskRecord): string {
 
 function resolveSubTaskResumeMode(record: SubTaskRecord): string {
   if (record.archivedAt) return "archived";
+  const latestTakeover = getLatestTakeoverRecord(record);
+  if (record.status === "running" && latestTakeover?.mode === "safe_point") return "safe_point_takeover";
   if (record.status === "running") return "live";
+  if (latestTakeover) return latestTakeover.mode === "safe_point" ? "safe_point_takeover" : "agent_takeover";
   if (Array.isArray(record.resume) && record.resume.length > 0) return "same_task_relaunch";
   if (record.status === "done") return "rerun";
   return "recovery";
@@ -195,6 +239,7 @@ export function buildGoalContinuationState(handoff: GoalHandoffSnapshot): Contin
     resumeMode: handoff.resumeMode,
     summary: handoff.summary,
     nextAction: handoff.nextAction,
+    replay: buildGoalCheckpointReplay(handoff.checkpointReplay),
     checkpoints: {
       openCount: handoff.tracking.openCheckpointCount,
       blockerCount: handoff.blockers.length,

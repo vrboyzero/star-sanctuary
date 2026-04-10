@@ -46,6 +46,13 @@ export interface CronSchedulerHandle {
     stop: () => void;
     /** 获取当前状态 */
     status: () => CronSchedulerStatus;
+    /** 立即执行指定 job（用于最小恢复链路） */
+    runJobNow: (jobId: string) => Promise<{
+        runId?: string;
+        status: "ok" | "error" | "skipped";
+        summary?: string;
+        reason?: string;
+      }>;
 }
 
 export interface CronSchedulerStatus {
@@ -195,7 +202,12 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
     };
 
     // 执行单个 job
-    const executeJob = async (job: CronJob, jobs: CronJob[]): Promise<void> => {
+    const executeJob = async (job: CronJob, jobs: CronJob[]): Promise<{
+        runId: string;
+        status: "ok" | "error" | "skipped";
+        summary?: string;
+        reason?: string;
+      }> => {
         const startedAt = Date.now();
         const runId = `cron-run-${job.id}-${startedAt}`;
         let completionEvent: Omit<Extract<CronExecutionEvent, { phase: "finished" }>, "nextRunAtMs"> | undefined;
@@ -310,6 +322,12 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
                 nextRunAtMs: job.state.nextRunAtMs,
             });
         }
+        return {
+            runId,
+            status: completionEvent?.status ?? "skipped",
+            summary: completionEvent?.summary,
+            reason: completionEvent?.reason,
+        };
     };
 
     // 调度 tick
@@ -415,6 +433,28 @@ export function startCronScheduler(options: CronSchedulerOptions): CronScheduler
                 activeRuns,
                 lastTickAtMs,
             };
+        },
+        runJobNow: async (jobId: string) => {
+            if (stopped) {
+                return { status: "skipped" as const, reason: "Cron scheduler is stopped." };
+            }
+            const normalizedJobId = String(jobId || "").trim();
+            if (!normalizedJobId) {
+                return { status: "skipped" as const, reason: "Cron job id is required." };
+            }
+            const jobs = await store.list();
+            const job = jobs.find((item) => item.id === normalizedJobId);
+            if (!job || !job.enabled) {
+                return { status: "skipped" as const, reason: `Cron job ${normalizedJobId} is not available.` };
+            }
+            activeRuns++;
+            try {
+                const result = await executeJob(job, jobs);
+                await store.saveJobs(jobs);
+                return result;
+            } finally {
+                activeRuns = Math.max(0, activeRuns - 1);
+            }
         },
     };
 }

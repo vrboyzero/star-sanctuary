@@ -21,6 +21,7 @@ import {
 } from "./prompt-observability.js";
 import { renderAgentLaunchExplainabilityLines, renderResidentStateBindingLines } from "./agent-explainability-text.js";
 import { normalizeLegacyPromptSnapshot } from "./prompt-snapshot-legacy-normalize.js";
+import { writePromptSnapshotIndex } from "./prompt-snapshot-index.js";
 
 const CONVERSATION_DEBUG_DIRNAME = "diagnostics";
 const PROMPT_SNAPSHOT_DIRNAME = "prompt-snapshots";
@@ -263,6 +264,9 @@ export async function persistConversationPromptSnapshot(input: {
     conversationId: input.snapshot.conversationId,
     outputPath,
     retention: input.retention,
+  });
+  await writePromptSnapshotIndex({
+    rootDirectory: getConversationPromptSnapshotRoot(input.stateDir),
   });
   return {
     artifact,

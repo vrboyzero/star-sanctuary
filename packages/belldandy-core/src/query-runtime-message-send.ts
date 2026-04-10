@@ -1,16 +1,16 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 import type { WebSocket } from "ws";
 import type { AgentPromptDelta, AgentRegistry, BelldandyAgent, ConversationStore } from "@belldandy/agent";
 import type { DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
 import { uploadTokenUsage, type ChatMessageMeta, type GatewayEventFrame, type GatewayResFrame, type MessageSendParams, type TokenUsageUploadConfig } from "@belldandy/protocol";
 import type { MemoryRuntimeBudgetGuard, MemoryRuntimeUsageAccounting } from "./memory-runtime-budget.js";
+import { preparePromptWithAttachments, type AttachmentPromptLimits } from "./attachment-understanding-runner.js";
 import { runAgentWithLifecycle } from "./query-runtime-agent-run.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import type { TranscribeOptions, TranscribeResult } from "@belldandy/skills";
+import type { MediaCapability } from "./media-capability-registry.js";
 import type { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
 
 type QueryRuntimeLogger = {
@@ -19,35 +19,6 @@ type QueryRuntimeLogger = {
   warn: (module: string, message: string, data?: unknown) => void;
   error: (module: string, message: string, data?: unknown) => void;
 };
-
-type AttachmentPromptLimits = {
-  textCharLimit: number;
-  totalTextCharLimit: number;
-  audioTranscriptAppendCharLimit: number;
-};
-
-function createPromptDelta(input: {
-  id: string;
-  deltaType: AgentPromptDelta["deltaType"];
-  role: AgentPromptDelta["role"];
-  text: string;
-  metadata?: Record<string, unknown>;
-}): AgentPromptDelta {
-  return {
-    id: input.id,
-    deltaType: input.deltaType,
-    role: input.role,
-    source: "message.send",
-    text: input.text.trim(),
-    ...(input.metadata ? { metadata: input.metadata } : {}),
-  };
-}
-
-function toSafeAttachmentConversationDirName(conversationId: string): string {
-  const trimmed = typeof conversationId === "string" ? conversationId.trim() : "";
-  if (!trimmed) return "_";
-  return encodeURIComponent(trimmed).replace(/\./g, "%2E");
-}
 
 type ToolControlPasswordApproval = {
   sanitizedText: string;
@@ -86,6 +57,10 @@ export type MessageSendQueryRuntimeContext = {
     sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
     ttsEnabled?: () => boolean;
     ttsSynthesize?: (text: string) => Promise<{ webPath: string; htmlAudio: string } | null>;
+    resolveCurrentModelMediaCapabilities?: (input: {
+      requestedAgentId?: string;
+      requestedModelId?: string;
+    }) => MediaCapability[];
     getAttachmentPromptLimits: () => AttachmentPromptLimits;
     truncateTextForPrompt: (text: string, limit: number, suffix: string) => { text: string; truncated: boolean };
     formatLocalMessageTime: (timestampMs: number) => string;
@@ -264,6 +239,10 @@ export async function handleMessageSendWithQueryRuntime(
       log: runtimeDeps.log,
       getAttachmentPromptLimits: media.getAttachmentPromptLimits,
       truncateTextForPrompt: media.truncateTextForPrompt,
+      acceptedContentCapabilities: media.resolveCurrentModelMediaCapabilities?.({
+        requestedAgentId,
+        requestedModelId,
+      }),
     });
 
     void runAgentInBackground({
@@ -284,6 +263,7 @@ export async function handleMessageSendWithQueryRuntime(
       textAttachmentCount: preparedPrompt.textAttachmentCount,
       textAttachmentChars: preparedPrompt.textAttachmentChars,
       audioTranscriptChars: preparedPrompt.audioTranscriptChars,
+      audioTranscriptCacheHits: preparedPrompt.audioTranscriptCacheHits,
       attachmentPromptLimits: preparedPrompt.attachmentPromptLimits,
       senderInfo: request.params.senderInfo,
       clientContext: request.params.clientContext,
@@ -350,6 +330,7 @@ type MessageSendBackgroundInput = {
   textAttachmentCount: number;
   textAttachmentChars: number;
   audioTranscriptChars: number;
+  audioTranscriptCacheHits: number;
   attachmentPromptLimits: AttachmentPromptLimits;
   senderInfo?: unknown;
   clientContext?: MessageSendParams["clientContext"];
@@ -391,338 +372,6 @@ type MessageSendBackgroundRunState = {
     setLastUploadedUsageTotal: (value: number) => void;
   };
 };
-
-async function preparePromptWithAttachments(input: {
-  conversationId: string;
-  promptText: string;
-  attachments: MessageSendParams["attachments"];
-  stateDir: string;
-  sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
-  log: QueryRuntimeLogger;
-  getAttachmentPromptLimits: () => AttachmentPromptLimits;
-  truncateTextForPrompt: (text: string, limit: number, suffix: string) => { text: string; truncated: boolean };
-}): Promise<{
-  promptText: string;
-  contentParts: Array<Record<string, unknown>>;
-  textAttachmentCount: number;
-  textAttachmentChars: number;
-  audioTranscriptChars: number;
-  attachmentPromptLimits: AttachmentPromptLimits;
-  promptDeltas: AgentPromptDelta[];
-}> {
-  let promptText = input.promptText;
-  const contentParts: Array<Record<string, unknown>> = [];
-  const attachmentPromptLimits = input.getAttachmentPromptLimits();
-  let textAttachmentCount = 0;
-  let textAttachmentChars = 0;
-  let audioTranscriptChars = 0;
-  const promptDeltas: AgentPromptDelta[] = [];
-
-  if (!input.attachments || input.attachments.length === 0) {
-    return {
-      promptText,
-      contentParts,
-      textAttachmentCount,
-      textAttachmentChars,
-      audioTranscriptChars,
-      attachmentPromptLimits,
-      promptDeltas,
-    };
-  }
-
-  input.log.debug("message", "Processing attachments", {
-    count: input.attachments.length,
-    conversationId: input.conversationId,
-  });
-
-  const attachmentDir = path.join(
-    input.stateDir,
-    "storage",
-    "attachments",
-    toSafeAttachmentConversationDirName(input.conversationId),
-  );
-  await fs.mkdir(attachmentDir, { recursive: true });
-
-  const attachmentPrompts: string[] = [];
-  for (const [index, att] of input.attachments.entries()) {
-    const safeName = att.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const savePath = path.join(attachmentDir, safeName);
-
-    try {
-      const buffer = Buffer.from(att.base64, "base64");
-      await fs.writeFile(savePath, buffer);
-
-      if (att.type.startsWith("image/")) {
-        contentParts.push({
-          type: "image_url",
-          image_url: { url: `data:${att.type};base64,${att.base64}` },
-        });
-        attachmentPrompts.push(`\n[用户上传了图片: ${att.name}]`);
-        promptDeltas.push(createPromptDelta({
-          id: `attachment-image-${index + 1}`,
-          deltaType: "attachment",
-          role: "attachment",
-          text: `[用户上传了图片: ${att.name}]`,
-          metadata: { name: att.name, mime: att.type, kind: "image" },
-        }));
-        continue;
-      }
-
-      if (att.type.startsWith("video/")) {
-        const absPath = path.resolve(savePath);
-        contentParts.push({
-          type: "video_url",
-          video_url: { url: `file://${absPath}` },
-        });
-        attachmentPrompts.push(`\n[用户上传了视频: ${att.name}] (System Note: Video content has been injected via multimodal channel. Please analyze it directly.)`);
-        promptDeltas.push(createPromptDelta({
-          id: `attachment-video-${index + 1}`,
-          deltaType: "attachment",
-          role: "attachment",
-          text: `[用户上传了视频: ${att.name}] (System Note: Video content has been injected via multimodal channel. Please analyze it directly.)`,
-          metadata: { name: att.name, mime: att.type, kind: "video" },
-        }));
-        continue;
-      }
-
-      if (att.type.startsWith("audio/")) {
-        const audioResult = await buildAudioAttachmentPrompt({
-          attachment: att,
-          buffer,
-          promptText,
-          audioTranscriptChars,
-          textAttachmentChars,
-          sttTranscribe: input.sttTranscribe,
-          log: input.log,
-          limits: attachmentPromptLimits,
-          truncateTextForPrompt: input.truncateTextForPrompt,
-        });
-        promptText = audioResult.promptText;
-        audioTranscriptChars = audioResult.audioTranscriptChars;
-        attachmentPrompts.push(...audioResult.prompts);
-        promptDeltas.push(...audioResult.promptDeltas);
-        continue;
-      }
-
-      const isText = att.type.startsWith("text/")
-        || att.name.endsWith(".md")
-        || att.name.endsWith(".json")
-        || att.name.endsWith(".js")
-        || att.name.endsWith(".ts")
-        || att.name.endsWith(".txt")
-        || att.name.endsWith(".log");
-
-      if (isText) {
-        const content = buffer.toString("utf-8");
-        const remainingChars = Math.max(
-          0,
-          attachmentPromptLimits.totalTextCharLimit - textAttachmentChars - audioTranscriptChars,
-        );
-        const fileCharLimit = Math.min(attachmentPromptLimits.textCharLimit, remainingChars);
-        if (fileCharLimit <= 0) {
-          attachmentPrompts.push(`\n[用户上传了文本附件: ${att.name}（因本次上下文预算已用尽，未注入全文）]`);
-          continue;
-        }
-        const truncated = input.truncateTextForPrompt(content, fileCharLimit, "\n...[Truncated]");
-        textAttachmentCount += 1;
-        textAttachmentChars += truncated.text.length;
-        if (truncated.truncated) {
-          input.log.debug("message", "Text attachment truncated by char limit", {
-            name: att.name,
-            originalChars: content.length,
-            keptChars: truncated.text.length,
-            charLimit: attachmentPromptLimits.textCharLimit,
-            totalCharLimit: attachmentPromptLimits.totalTextCharLimit,
-            remainingChars,
-          });
-        }
-        attachmentPrompts.push(`\n\n--- Attachment: ${att.name} ---\n${truncated.text}\n--- End of Attachment ---\n`);
-        promptDeltas.push(createPromptDelta({
-          id: `attachment-text-${index + 1}`,
-          deltaType: "attachment",
-          role: "attachment",
-          text: `--- Attachment: ${att.name} ---\n${truncated.text}\n--- End of Attachment ---`,
-          metadata: {
-            name: att.name,
-            mime: att.type,
-            kind: "text",
-            truncated: truncated.truncated,
-          },
-        }));
-        continue;
-      }
-
-      attachmentPrompts.push(`\n[User uploaded a file: ${att.name} (type: ${att.type}), saved at: ${savePath}]`);
-      promptDeltas.push(createPromptDelta({
-        id: `attachment-file-${index + 1}`,
-        deltaType: "attachment",
-        role: "attachment",
-        text: `[User uploaded a file: ${att.name} (type: ${att.type}), saved at: ${savePath}]`,
-        metadata: { name: att.name, mime: att.type, kind: "file" },
-      }));
-    } catch (error) {
-      input.log.error("message", `Failed to save attachment ${att.name}`, error);
-      attachmentPrompts.push(`\n[Failed to upload file: ${att.name}]`);
-      promptDeltas.push(createPromptDelta({
-        id: `attachment-error-${index + 1}`,
-        deltaType: "attachment",
-        role: "attachment",
-        text: `[Failed to upload file: ${att.name}]`,
-        metadata: { name: att.name, mime: att.type, kind: "error" },
-      }));
-    }
-  }
-
-  if (attachmentPrompts.length > 0) {
-    promptText += "\n" + attachmentPrompts.join("\n");
-  }
-
-  return {
-    promptText,
-    contentParts,
-    textAttachmentCount,
-    textAttachmentChars,
-    audioTranscriptChars,
-    attachmentPromptLimits,
-    promptDeltas,
-  };
-}
-
-async function buildAudioAttachmentPrompt(input: {
-  attachment: NonNullable<MessageSendParams["attachments"]>[number];
-  buffer: Buffer;
-  promptText: string;
-  audioTranscriptChars: number;
-  textAttachmentChars: number;
-  sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
-  log: QueryRuntimeLogger;
-  limits: AttachmentPromptLimits;
-  truncateTextForPrompt: (text: string, limit: number, suffix: string) => { text: string; truncated: boolean };
-}): Promise<{
-  promptText: string;
-  audioTranscriptChars: number;
-  prompts: string[];
-  promptDeltas: AgentPromptDelta[];
-}> {
-  const prompts: string[] = [];
-  const promptDeltas: AgentPromptDelta[] = [];
-  let promptText = input.promptText;
-  let audioTranscriptChars = input.audioTranscriptChars;
-
-  if (!input.sttTranscribe) {
-    prompts.push(`\n[用户上传了音频: ${input.attachment.name}（STT未配置）]`);
-    promptDeltas.push(createPromptDelta({
-      id: `audio-transcript-${input.attachment.name}-unconfigured`,
-      deltaType: "audio-transcript",
-      role: "attachment",
-      text: `[用户上传了音频: ${input.attachment.name}（STT未配置）]`,
-      metadata: { name: input.attachment.name, mime: input.attachment.type, status: "stt-unconfigured" },
-    }));
-    return { promptText, audioTranscriptChars, prompts, promptDeltas };
-  }
-
-  input.log.debug("stt", "Transcribing audio attachment", { name: input.attachment.name });
-  try {
-    const sttResult = await input.sttTranscribe({
-      buffer: input.buffer,
-      fileName: input.attachment.name,
-      mime: input.attachment.type,
-    });
-    if (!sttResult?.text) {
-      prompts.push(`\n[用户上传了音频: ${input.attachment.name}（转录失败）]`);
-      promptDeltas.push(createPromptDelta({
-        id: `audio-transcript-${input.attachment.name}-failed`,
-        deltaType: "audio-transcript",
-        role: "attachment",
-        text: `[用户上传了音频: ${input.attachment.name}（转录失败）]`,
-        metadata: { name: input.attachment.name, mime: input.attachment.type, status: "empty" },
-      }));
-      return { promptText, audioTranscriptChars, prompts, promptDeltas };
-    }
-
-    input.log.debug("stt", "Audio transcribed", {
-      name: input.attachment.name,
-      textLength: sttResult.text.length,
-    });
-
-    if (!promptText.trim()) {
-      const truncatedTranscript = input.truncateTextForPrompt(
-        sttResult.text,
-        input.limits.totalTextCharLimit,
-        "\n...[Transcript truncated]",
-      );
-      promptText = truncatedTranscript.text;
-      audioTranscriptChars += truncatedTranscript.text.length;
-      if (truncatedTranscript.truncated) {
-        input.log.debug("stt", "Primary audio transcript truncated by total prompt limit", {
-          name: input.attachment.name,
-          originalChars: sttResult.text.length,
-          keptChars: truncatedTranscript.text.length,
-          totalCharLimit: input.limits.totalTextCharLimit,
-        });
-      }
-      return { promptText, audioTranscriptChars, prompts, promptDeltas };
-    }
-
-    const remainingChars = Math.max(
-      0,
-      input.limits.totalTextCharLimit - input.textAttachmentChars - audioTranscriptChars,
-    );
-    const transcriptCharLimit = Math.min(input.limits.audioTranscriptAppendCharLimit, remainingChars);
-    if (transcriptCharLimit <= 0) {
-      prompts.push(`\n[用户上传了音频: ${input.attachment.name}（转录已完成，但因本次上下文预算已用尽未注入全文）]`);
-      promptDeltas.push(createPromptDelta({
-        id: `audio-transcript-${input.attachment.name}-skipped`,
-        deltaType: "audio-transcript",
-        role: "attachment",
-        text: `[用户上传了音频: ${input.attachment.name}（转录已完成，但因本次上下文预算已用尽未注入全文）]`,
-        metadata: { name: input.attachment.name, mime: input.attachment.type, status: "budget-exhausted" },
-      }));
-      return { promptText, audioTranscriptChars, prompts, promptDeltas };
-    }
-
-    const truncatedTranscript = input.truncateTextForPrompt(
-      sttResult.text,
-      transcriptCharLimit,
-      "\n...[Transcript truncated]",
-    );
-    audioTranscriptChars += truncatedTranscript.text.length;
-    if (truncatedTranscript.truncated) {
-      input.log.debug("stt", "Audio transcript truncated for appended context", {
-        name: input.attachment.name,
-        originalChars: sttResult.text.length,
-        keptChars: truncatedTranscript.text.length,
-        appendCharLimit: input.limits.audioTranscriptAppendCharLimit,
-        remainingChars,
-      });
-    }
-    const transcriptText = `[语音转录: "${truncatedTranscript.text}"]`;
-    prompts.push(`\n${transcriptText}`);
-    promptDeltas.push(createPromptDelta({
-      id: `audio-transcript-${input.attachment.name}`,
-      deltaType: "audio-transcript",
-      role: "attachment",
-      text: transcriptText,
-      metadata: {
-        name: input.attachment.name,
-        mime: input.attachment.type,
-        truncated: truncatedTranscript.truncated,
-      },
-    }));
-    return { promptText, audioTranscriptChars, prompts, promptDeltas };
-  } catch (error) {
-    input.log.error("stt", `STT failed for ${input.attachment.name}`, error);
-    prompts.push(`\n[用户上传了音频: ${input.attachment.name}（转录出错）]`);
-    promptDeltas.push(createPromptDelta({
-      id: `audio-transcript-${input.attachment.name}-error`,
-      deltaType: "audio-transcript",
-      role: "attachment",
-      text: `[用户上传了音频: ${input.attachment.name}（转录出错）]`,
-      metadata: { name: input.attachment.name, mime: input.attachment.type, status: "error" },
-    }));
-    return { promptText, audioTranscriptChars, prompts, promptDeltas };
-  }
-}
 
 function buildMessageSendAgentRunInput(
   input: MessageSendBackgroundInput,
@@ -779,7 +428,7 @@ function buildMessageSendAgentRunInput(
 function buildMessageSendAttachmentStats(
   input: Pick<
     MessageSendBackgroundInput,
-    "textAttachmentCount" | "textAttachmentChars" | "audioTranscriptChars" | "attachmentPromptLimits"
+    "textAttachmentCount" | "textAttachmentChars" | "audioTranscriptChars" | "audioTranscriptCacheHits" | "attachmentPromptLimits"
   >,
 ): Record<string, unknown> | undefined {
   if (input.textAttachmentCount <= 0 && input.audioTranscriptChars <= 0) {
@@ -790,6 +439,7 @@ function buildMessageSendAttachmentStats(
     textAttachmentCount: input.textAttachmentCount,
     textAttachmentChars: input.textAttachmentChars,
     audioTranscriptChars: input.audioTranscriptChars,
+    audioTranscriptCacheHits: input.audioTranscriptCacheHits,
     promptAugmentationChars: input.textAttachmentChars + input.audioTranscriptChars,
     textAttachmentTruncatedCharLimit: input.attachmentPromptLimits.textCharLimit,
     textAttachmentTotalCharLimit: input.attachmentPromptLimits.totalTextCharLimit,

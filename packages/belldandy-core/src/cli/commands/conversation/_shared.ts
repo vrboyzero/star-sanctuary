@@ -41,6 +41,7 @@ export async function writeConversationCommandOutput(targetPath: string, content
 export async function resolveConversationCLIOutputPath(input: {
   output?: string;
   outputDir?: string;
+  stateDir?: string;
   conversationId: string;
   artifact: "transcript" | "timeline" | "prompt_snapshot";
   variant?: string;

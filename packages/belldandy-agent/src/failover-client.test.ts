@@ -108,6 +108,130 @@ describe("FailoverClient", () => {
       attempt: 1,
       maxAttempts: 2,
     });
+    expect(result.summary).toMatchObject({
+      finalStatus: "success",
+      finalProfileId: "primary",
+      degraded: true,
+      requestCount: 2,
+      stepCounts: {
+        sameProfileRetries: 1,
+        crossProfileFallbacks: 0,
+        cooldownSkips: 0,
+      },
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("records cross-profile fallback when primary fails and backup succeeds", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("server error", { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new FailoverClient({
+      primary: createProfile(),
+      fallbacks: [createProfile({
+        id: "backup",
+        baseUrl: "https://backup.example.com",
+        model: "backup-model",
+      })],
+    });
+
+    const result = await client.fetchWithFailover({
+      buildRequest: () => ({
+        url: "https://api.openai.com/chat/completions",
+        init: {
+          method: "POST",
+        },
+      }),
+    });
+
+    expect(result.profile.id).toBe("backup");
+    expect(result.summary).toMatchObject({
+      finalStatus: "success",
+      finalProfileId: "backup",
+      degraded: true,
+      requestCount: 2,
+      stepCounts: {
+        sameProfileRetries: 0,
+        crossProfileFallbacks: 1,
+        cooldownSkips: 0,
+        terminalFailures: 0,
+      },
+    });
+  });
+
+  it("records cooldown skips before using a fallback profile", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new FailoverClient({
+      primary: createProfile(),
+      fallbacks: [createProfile({
+        id: "backup",
+        baseUrl: "https://backup.example.com",
+        model: "backup-model",
+      })],
+      bootstrapCooldowns: {
+        primary: 60_000,
+      },
+    });
+
+    const result = await client.fetchWithFailover({
+      buildRequest: () => ({
+        url: "https://backup.example.com/chat/completions",
+        init: {
+          method: "POST",
+        },
+      }),
+    });
+
+    expect(result.profile.id).toBe("backup");
+    expect(result.summary).toMatchObject({
+      finalStatus: "success",
+      finalProfileId: "backup",
+      requestCount: 1,
+      stepCounts: {
+        cooldownSkips: 1,
+        sameProfileRetries: 0,
+        crossProfileFallbacks: 0,
+      },
+    });
+  });
+
+  it("surfaces exhausted summaries when all profiles fail", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValue(new Response("server error", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new FailoverClient({
+      primary: createProfile(),
+      fallbacks: [createProfile({
+        id: "backup",
+        baseUrl: "https://backup.example.com",
+        model: "backup-model",
+      })],
+    });
+
+    await expect(
+      client.fetchWithFailover({
+        buildRequest: () => ({
+          url: "https://api.openai.com/chat/completions",
+          init: {
+            method: "POST",
+          },
+        }),
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverExhaustedError",
+      summary: {
+        finalStatus: "exhausted",
+        stepCounts: {
+          crossProfileFallbacks: 1,
+          terminalFailures: 1,
+        },
+      },
+    });
   });
 });

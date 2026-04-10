@@ -100,6 +100,7 @@ describe("background continuation runtime", () => {
         finishedAt: 1_710_000_201_000,
         outputPreview: "patch delivered",
         steering: [],
+        takeover: [],
         resume: [],
         notifications: [],
       }),
@@ -113,6 +114,9 @@ describe("background continuation runtime", () => {
       skippedRuns: 1,
       failedRuns: 0,
       conversationLinkedRuns: 3,
+      recoverableFailedRuns: 0,
+      recoveryAttemptedRuns: 0,
+      recoverySucceededRuns: 0,
     });
     expect(report.kindCounts).toEqual({
       cron: 1,
@@ -149,6 +153,65 @@ describe("background continuation runtime", () => {
         recommendedTargetId: "cron-main:cron-job-1",
         targetType: "conversation",
       },
+    });
+  });
+
+  it("persists recovery metadata and surfaces it in the doctor report", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-background-runtime-"));
+    tempDirs.push(stateDir);
+    const ledger = new BackgroundContinuationLedger(stateDir);
+
+    await ledger.finishRun({
+      runId: "heartbeat-run-1",
+      kind: "heartbeat",
+      sourceId: "heartbeat",
+      label: "Heartbeat",
+      status: "failed",
+      reason: "network timeout",
+      startedAt: 1_710_000_000_000,
+      finishedAt: 1_710_000_000_400,
+    });
+    await ledger.finishRun({
+      runId: "heartbeat-run-2",
+      kind: "heartbeat",
+      sourceId: "heartbeat",
+      label: "Heartbeat",
+      status: "ran",
+      summary: "recovered",
+      startedAt: 1_710_000_001_000,
+      finishedAt: 1_710_000_001_400,
+    });
+    await ledger.recordRecovery({
+      runId: "heartbeat-run-1",
+      outcome: "succeeded",
+      reason: "recovered on retry",
+      recoveryRunId: "heartbeat-run-2",
+      fingerprint: "heartbeat-failure",
+    });
+    await ledger.recordRecovery({
+      runId: "heartbeat-run-2",
+      outcome: "succeeded",
+      recoveredFromRunId: "heartbeat-run-1",
+      reason: "Recovered from heartbeat-run-1.",
+      fingerprint: "heartbeat-failure",
+      incrementAttemptCount: false,
+    });
+
+    const report = await buildBackgroundContinuationRuntimeDoctorReport({ ledger, recentLimit: 4 });
+    expect(report.totals).toMatchObject({
+      totalRuns: 2,
+      failedRuns: 1,
+      recoverableFailedRuns: 0,
+      recoveryAttemptedRuns: 2,
+      recoverySucceededRuns: 2,
+    });
+    expect(report.recentEntries.find((item) => item.runId === "heartbeat-run-1")).toMatchObject({
+      latestRecoveryOutcome: "succeeded",
+      latestRecoveryRunId: "heartbeat-run-2",
+    });
+    expect(report.recentEntries.find((item) => item.runId === "heartbeat-run-2")).toMatchObject({
+      recoveredFromRunId: "heartbeat-run-1",
+      latestRecoveryOutcome: "succeeded",
     });
   });
 });

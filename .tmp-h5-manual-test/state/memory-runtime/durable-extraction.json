@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "conversationId": "heartbeat-1775821891062",
+      "status": "idle",
+      "pending": false,
+      "runCount": 0,
+      "updatedAt": 1775821902117,
+      "consecutiveFailures": 0,
+      "lastSkipReason": "digest_not_ready"
+    }
+  ]
+}

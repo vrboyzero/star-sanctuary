@@ -7,6 +7,7 @@ import {
   getResidentSourceBadgeClass,
 } from "./memory-source-view.js";
 import { buildExternalOutboundDiagnosis } from "./external-outbound-diagnosis.js";
+import { renderSkillFreshnessDetail } from "./skill-freshness-view.js";
 
 function normalizeSharedReviewFocus(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -2027,6 +2028,9 @@ export function createMemoryViewerFeature({
     const learningReviewInput = candidate.learningReviewInput && typeof candidate.learningReviewInput === "object"
       ? candidate.learningReviewInput
       : null;
+    const skillFreshness = candidate.skillFreshness && typeof candidate.skillFreshness === "object"
+      ? candidate.skillFreshness
+      : null;
     const candidateSourceView = candidate.sourceView || null;
     const candidateSourceExplanation = candidateSourceView ? formatResidentSourceExplainability(candidateSourceView) : "-";
     const candidateSourceConflict = candidateSourceView ? formatResidentSourceConflictSummary(candidateSourceView) : "-";
@@ -2073,6 +2077,7 @@ export function createMemoryViewerFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">冲突说明</span><div class="memory-detail-text">${escapeHtml(candidateSourceConflict)}</div></div>
         </div>
         ${candidate.summary ? `<div class="memory-detail-text">${escapeHtml(candidate.summary)}</div>` : ""}
+        ${skillFreshness ? renderSkillFreshnessDetail(skillFreshness, { escapeHtml, t, maxSignals: 3 }) : ""}
         ${learningReviewInput ? `
           <div class="memory-detail-card">
             <span class="memory-detail-label">Learning / Review Input</span>

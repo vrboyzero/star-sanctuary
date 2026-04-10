@@ -39,6 +39,7 @@ test("buildSubTaskContinuationState summarizes minimal recovery state", () => {
     outputPreview: "Partial patch applied.",
     error: "integration test failed",
     steering: [],
+    takeover: [],
     resume: [
       {
         id: "task_resume_1",
@@ -118,6 +119,13 @@ test("buildGoalContinuationState normalizes goal handoff into shared shape", () 
         updatedAt: "2026-04-08T07:58:00.000Z",
       },
     ],
+    checkpointReplay: {
+      checkpointId: "checkpoint_1",
+      nodeId: "node_impl",
+      title: "Need producer review",
+      summary: "Please confirm the rollout decision.",
+      reason: "Approval pending",
+    },
     blockers: [
       {
         kind: "checkpoint",
@@ -153,6 +161,14 @@ test("buildGoalContinuationState normalizes goal handoff into shared shape", () 
     resumeMode: "checkpoint",
     summary: "One checkpoint is waiting for approval before the next node can continue.",
     nextAction: "Review the open checkpoint for node_impl, then resume execution from that node.",
+    replay: {
+      kind: "goal_checkpoint",
+      checkpointId: "checkpoint_1",
+      nodeId: "node_impl",
+      title: "Need producer review",
+      summary: "Please confirm the rollout decision.",
+      reason: "Approval pending",
+    },
     checkpoints: {
       openCount: 1,
       blockerCount: 1,

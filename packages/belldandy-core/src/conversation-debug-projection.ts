@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionTimelineProjection, SessionTranscriptExportBundle } from "@belldandy/agent";
+import { getConversationArtifactExportRoot } from "./conversation-export-index.js";
 
 export const SUPPORTED_TRANSCRIPT_EVENT_TYPES = [
   "user_message_accepted",
@@ -206,9 +207,15 @@ async function ensureUniqueFilePath(targetPath: string): Promise<string> {
   }
 }
 
+function isPathInsideDirectory(targetPath: string, directory: string): boolean {
+  const relative = path.relative(directory, targetPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 export async function resolveConversationArtifactOutputPath(input: {
   output?: string;
   outputDir?: string;
+  stateDir?: string;
   conversationId: string;
   artifact: "transcript" | "timeline" | "prompt_snapshot";
   variant?: string;
@@ -230,13 +237,46 @@ export async function resolveConversationArtifactOutputPath(input: {
     const stat = await fs.stat(resolvedOutput).catch(() => null);
     if (looksLikeDirectory || stat?.isDirectory()) {
       await fs.mkdir(resolvedOutput, { recursive: true });
+      if (input.artifact === "prompt_snapshot" && input.stateDir) {
+        const promptSnapshotRoot = path.join(path.resolve(input.stateDir), "diagnostics", "prompt-snapshots");
+        if (isPathInsideDirectory(resolvedOutput, promptSnapshotRoot)) {
+          const exportRoot = getConversationArtifactExportRoot({
+            stateDir: input.stateDir,
+            artifact: input.artifact,
+          });
+          await fs.mkdir(exportRoot, { recursive: true });
+          return ensureUniqueFilePath(path.join(exportRoot, suggestedFileName));
+        }
+      }
       return ensureUniqueFilePath(path.join(resolvedOutput, suggestedFileName));
     }
     await fs.mkdir(path.dirname(resolvedOutput), { recursive: true });
+    if (input.artifact === "prompt_snapshot" && input.stateDir) {
+      const promptSnapshotRoot = path.join(path.resolve(input.stateDir), "diagnostics", "prompt-snapshots");
+      if (isPathInsideDirectory(resolvedOutput, promptSnapshotRoot)) {
+        const exportRoot = getConversationArtifactExportRoot({
+          stateDir: input.stateDir,
+          artifact: input.artifact,
+        });
+        await fs.mkdir(exportRoot, { recursive: true });
+        return ensureUniqueFilePath(path.join(exportRoot, path.basename(resolvedOutput)));
+      }
+    }
     return resolvedOutput;
   }
 
   const resolvedDir = path.resolve(outputDir!);
   await fs.mkdir(resolvedDir, { recursive: true });
+  if (input.artifact === "prompt_snapshot" && input.stateDir) {
+    const promptSnapshotRoot = path.join(path.resolve(input.stateDir), "diagnostics", "prompt-snapshots");
+    if (isPathInsideDirectory(resolvedDir, promptSnapshotRoot)) {
+      const exportRoot = getConversationArtifactExportRoot({
+        stateDir: input.stateDir,
+        artifact: input.artifact,
+      });
+      await fs.mkdir(exportRoot, { recursive: true });
+      return ensureUniqueFilePath(path.join(exportRoot, suggestedFileName));
+    }
+  }
   return ensureUniqueFilePath(path.join(resolvedDir, suggestedFileName));
 }

@@ -539,6 +539,74 @@ describe("doctor observability formatting", () => {
         ],
         headline: "records=5; sent=3; failed=2; resolve_failed=1; delivery_failed=1; confirm=required",
       },
+      runtimeResilience: {
+        version: 1,
+        updatedAt: 1712736000000,
+        routing: {
+          primary: {
+            profileId: "primary",
+            provider: "openai.com",
+            model: "gpt-4.1",
+          },
+          fallbacks: [
+            {
+              profileId: "backup",
+              provider: "moonshot.ai",
+              model: "kimi-k2",
+            },
+          ],
+          compaction: {
+            configured: true,
+            sharesPrimaryRoute: false,
+            route: {
+              profileId: "compaction",
+              provider: "openai.com",
+              model: "gpt-4.1-mini",
+            },
+          },
+        },
+        totals: {
+          observedRuns: 3,
+          degradedRuns: 1,
+          failedRuns: 0,
+          sameProfileRetries: 1,
+          crossProfileFallbacks: 1,
+          cooldownSkips: 0,
+          terminalFailures: 0,
+        },
+        summary: {
+          available: true,
+          configuredFallbackCount: 1,
+          lastOutcome: "success",
+          headline: "Primary openai.com/gpt-4.1, 1 fallback profile(s) configured. Latest run recovered via fallback (backup/kimi-k2); retry=1, switch=1, cooldown=0.",
+        },
+        reasonCounts: {
+          server_error: 1,
+          rate_limit: 1,
+        },
+        latest: {
+          source: "openai_chat",
+          phase: "primary_chat",
+          finalStatus: "success",
+          finalProfileId: "backup",
+          finalProvider: "moonshot.ai",
+          finalModel: "kimi-k2",
+          requestCount: 2,
+          failedStageCount: 1,
+          degraded: true,
+          stepCounts: {
+            cooldownSkips: 0,
+            sameProfileRetries: 1,
+            crossProfileFallbacks: 1,
+            terminalFailures: 0,
+          },
+          reasonCounts: {
+            server_error: 1,
+          },
+          updatedAt: 1712736000000,
+          headline: "Latest run recovered via fallback (backup/kimi-k2); retry=1, switch=1, cooldown=0.",
+        },
+      },
     });
 
     expect(lines.join("\n")).toContain("Prompt");
@@ -621,5 +689,10 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("qq, 目标解析失败 · binding_not_found / 没有可用 binding");
     expect(lines.join("\n")).toContain("discord, 渠道投递失败 · send_failed / 渠道发送失败 · discord send failed");
     expect(lines.join("\n")).toContain("详细逐条记录仍可在 记忆查看 -> 外发审计 中查看。");
+    expect(lines.join("\n")).toContain("Runtime Resilience");
+    expect(lines.join("\n")).toContain("primary openai.com/gpt-4.1");
+    expect(lines.join("\n")).toContain("1 fallbacks");
+    expect(lines.join("\n")).toContain("latest success");
+    expect(lines.join("\n")).toContain("compaction route openai.com/gpt-4.1-mini");
   });
 });

@@ -3,6 +3,7 @@ import {
   type AgentProfileCatalogMetadata,
   type AgentRegistry,
 } from "@belldandy/agent";
+import type { RuntimeResilienceDoctorReport } from "./runtime-resilience.js";
 
 type LaunchRole = "default" | "coder" | "researcher" | "verifier";
 type LaunchRiskLevel = "low" | "medium" | "high" | "critical";
@@ -79,6 +80,13 @@ export type AgentLaunchExplainability = {
     aggregationMode: string | null;
     contextKeys: string[];
     sourceAgentIds: string[];
+  } | null;
+  runtimeResilience: {
+    configuredFallbackCount: number;
+    latestStatus: string | null;
+    latestHeadline: string | null;
+    latestRoute: string | null;
+    compactionRoute: string | null;
   } | null;
 };
 
@@ -175,6 +183,33 @@ function buildDelegationReasonView(source: DelegationReasonLike | undefined) {
   return view;
 }
 
+function buildRuntimeResilienceView(source: RuntimeResilienceDoctorReport | undefined) {
+  if (!source) return null;
+  const latestRoute = source.latest?.finalProfileId
+    ? `${source.latest.finalProfileId}/${source.latest.finalModel ?? "-"}`
+    : null;
+  const compactionRoute = source.routing.compaction?.route
+    ? `${source.routing.compaction.route.provider}/${source.routing.compaction.route.model}`
+    : null;
+  const view = {
+    configuredFallbackCount: source.routing.fallbacks.length,
+    latestStatus: normalizeOptionalString(source.latest?.finalStatus),
+    latestHeadline: normalizeOptionalString(source.latest?.headline),
+    latestRoute,
+    compactionRoute,
+  };
+  if (
+    view.configuredFallbackCount <= 0
+    && !view.latestStatus
+    && !view.latestHeadline
+    && !view.latestRoute
+    && !view.compactionRoute
+  ) {
+    return null;
+  }
+  return view;
+}
+
 export function buildAgentLaunchExplainability(input: {
   agentRegistry?: Pick<AgentRegistry, "getProfile">;
   agentId?: string;
@@ -183,6 +218,7 @@ export function buildAgentLaunchExplainability(input: {
   catalogDefaultOverride?: CatalogDefaultLike;
   launchSpec?: LaunchSpecLike;
   delegationReason?: DelegationReasonLike;
+  runtimeResilience?: RuntimeResilienceDoctorReport;
 }): AgentLaunchExplainability | undefined {
   const catalog = input.catalog
     ?? resolveCatalogMetadata(
@@ -233,8 +269,9 @@ export function buildAgentLaunchExplainability(input: {
     };
   })();
   const delegationReason = buildDelegationReasonView(input.delegationReason ?? input.launchSpec?.delegation);
+  const runtimeResilience = buildRuntimeResilienceView(input.runtimeResilience);
 
-  if (!catalogDefault && !effectiveLaunch && !delegationReason) {
+  if (!catalogDefault && !effectiveLaunch && !delegationReason && !runtimeResilience) {
     return undefined;
   }
 
@@ -242,5 +279,6 @@ export function buildAgentLaunchExplainability(input: {
     catalogDefault,
     effectiveLaunch,
     delegationReason,
+    runtimeResilience,
   };
 }

@@ -15,6 +15,7 @@ export type GoalProgressEntry = {
     | "task_node_failed"
     | "task_node_skipped"
     | "checkpoint_requested"
+    | "checkpoint_replay_started"
     | "checkpoint_approved"
     | "checkpoint_rejected"
     | "checkpoint_expired"

@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "consumer": "session_digest_refresh",
+      "outcome": "skipped",
+      "timestamp": 1775810597397,
+      "conversationId": "agent:default:main",
+      "source": "message.send",
+      "metadata": {
+        "force": false,
+        "compacted": false,
+        "digestStatus": "idle",
+        "digestLastDigestAt": 0,
+        "messageCount": 2,
+        "pendingMessageCount": 2
+      }
+    },
+    {
+      "consumer": "session_digest_refresh",
+      "outcome": "skipped",
+      "timestamp": 1775810597654,
+      "conversationId": "goal:goal_alpha",
+      "source": "message.send",
+      "metadata": {
+        "force": false,
+        "compacted": false,
+        "digestStatus": "idle",
+        "digestLastDigestAt": 0,
+        "messageCount": 2,
+        "pendingMessageCount": 2
+      }
+    }
+  ]
+}

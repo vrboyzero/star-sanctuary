@@ -31,6 +31,7 @@ import { approvePairingCode } from "./security/store.js";
 import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import { SubTaskRuntimeStore } from "./task-runtime.js";
 import { ToolsConfigManager } from "./tools-config.js";
+import { RuntimeResilienceTracker } from "./runtime-resilience.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
 import { IdempotencyManager } from "./webhook/index.js";
 
@@ -393,13 +394,13 @@ test("models.list returns sanitized model list with current default model ref", 
         id: "openai",
         label: "OpenAI",
         onboardingScopes: ["api_key", "base_url", "model"],
-        capabilities: ["chat"],
+        capabilities: ["chat", "audio_transcription", "tts_output", "image_generation"],
       },
       {
         id: "moonshot",
         label: "Moonshot",
         onboardingScopes: ["api_key", "base_url", "model"],
-        capabilities: ["chat"],
+        capabilities: ["chat", "image_input", "video_input"],
       },
       {
         id: "anthropic",
@@ -417,6 +418,7 @@ test("models.list returns sanitized model list with current default model ref", 
         providerLabel: "OpenAI",
         source: "primary",
         authStatus: "ready",
+        capabilities: expect.arrayContaining(["chat", "image_input", "text_inline"]),
         isDefault: false,
       }),
       expect.objectContaining({
@@ -427,6 +429,7 @@ test("models.list returns sanitized model list with current default model ref", 
         providerLabel: "Moonshot",
         source: "named",
         authStatus: "ready",
+        capabilities: expect.arrayContaining(["chat", "image_input", "video_input", "text_inline"]),
         isDefault: true,
       }),
       expect.objectContaining({
@@ -438,6 +441,7 @@ test("models.list returns sanitized model list with current default model ref", 
         source: "named",
         authStatus: "ready",
         protocol: "anthropic",
+        capabilities: expect.arrayContaining(["chat", "anthropic_api", "image_input", "text_inline"]),
         isDefault: false,
       }),
     ]);
@@ -2501,6 +2505,11 @@ test("goal.handoff.get returns structured handoff snapshot without mutating goal
       goalId: goal.id,
       resumeMode: "checkpoint",
       recommendedNodeId: "node_server_handoff",
+      checkpointReplay: {
+        checkpointId: expect.any(String),
+        nodeId: "node_server_handoff",
+        title: "Need server review",
+      },
       openCheckpoints: [
         expect.objectContaining({
           nodeId: "node_server_handoff",
@@ -2515,6 +2524,11 @@ test("goal.handoff.get returns structured handoff snapshot without mutating goal
       recommendedTargetId: "node_server_handoff",
       targetType: "node",
       resumeMode: "checkpoint",
+      replay: {
+        kind: "goal_checkpoint",
+        checkpointId: expect.any(String),
+        nodeId: "node_server_handoff",
+      },
       checkpoints: {
         openCount: 1,
       },
@@ -2524,6 +2538,81 @@ test("goal.handoff.get returns structured handoff snapshot without mutating goal
     const progressAfter = await fs.promises.readFile(goal.progressPath, "utf-8");
     expect(handoffAfter).toBe(handoffBefore);
     expect(progressAfter).toBe(progressBefore);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("goal.resume accepts checkpoint replay metadata and records replay progress", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const seededGoalManager = new GoalManager(stateDir);
+  const goal = await seededGoalManager.createGoal({
+    title: "Server Replay Goal",
+    objective: "Resume from checkpoint replay",
+  });
+  await seededGoalManager.createTaskNode(goal.id, {
+    id: "node_server_replay",
+    title: "Replay node",
+    status: "ready",
+    checkpointRequired: true,
+  });
+  await seededGoalManager.claimTaskNode(goal.id, "node_server_replay", {
+    runId: "run_server_replay_1",
+    summary: "Replay node setup",
+  });
+  await seededGoalManager.requestCheckpoint(goal.id, "node_server_replay", {
+    title: "Need replay approval",
+    summary: "Resume should target the replay node",
+    reviewer: "reviewer",
+    requestedBy: "main-agent",
+    runId: "run_server_replay_1",
+  });
+  const handoff = await seededGoalManager.getHandoff(goal.id);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    goalManager: seededGoalManager,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "goal-resume-replay",
+      method: "goal.resume",
+      params: {
+        goalId: goal.id,
+        nodeId: "node_server_replay",
+        checkpointId: handoff.handoff.checkpointReplay?.checkpointId,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "goal-resume-replay"));
+    const resumeRes = frames.find((f) => f.type === "res" && f.id === "goal-resume-replay");
+    expect(resumeRes.ok).toBe(true);
+    expect(resumeRes.payload?.goal).toMatchObject({
+      id: goal.id,
+      activeNodeId: "node_server_replay",
+      status: "executing",
+    });
+    expect(String(resumeRes.payload?.conversationId || "")).toContain(`goal:${goal.id}:node:node_server_replay:run:`);
+
+    const progress = await fs.promises.readFile(goal.progressPath, "utf-8");
+    expect(progress).toContain("checkpoint_replay_started");
+    expect(progress).toContain(`Checkpoint: ${handoff.handoff.checkpointReplay?.checkpointId}`);
   } finally {
     ws.close();
     await closeP;
@@ -5567,6 +5656,162 @@ test("system.doctor exposes compaction runtime circuit and retry stats", async (
   }
 });
 
+test("system.doctor exposes runtime resilience summary and launch explainability signal", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const tracker = new RuntimeResilienceTracker({
+    stateDir,
+    routing: {
+      primary: {
+        profileId: "primary",
+        provider: "openai.com",
+        model: "gpt-4.1",
+      },
+      fallbacks: [
+        {
+          profileId: "backup",
+          provider: "moonshot.ai",
+          model: "kimi-k2",
+        },
+      ],
+      compaction: {
+        configured: true,
+        sharesPrimaryRoute: false,
+        route: {
+          profileId: "compaction",
+          provider: "openai.com",
+          model: "gpt-4.1-mini",
+        },
+      },
+    },
+  });
+  tracker.record({
+    source: "openai_chat",
+    phase: "primary_chat",
+    agentId: "default",
+    conversationId: "conv-runtime-resilience",
+    summary: {
+      configuredProfiles: [
+        { profileId: "primary", provider: "openai.com", model: "gpt-4.1" },
+        { profileId: "backup", provider: "moonshot.ai", model: "kimi-k2" },
+      ],
+      finalStatus: "success",
+      finalProfileId: "backup",
+      finalProvider: "moonshot.ai",
+      finalModel: "kimi-k2",
+      requestCount: 2,
+      failedStageCount: 1,
+      degraded: true,
+      stepCounts: {
+        cooldownSkips: 0,
+        sameProfileRetries: 1,
+        crossProfileFallbacks: 1,
+        terminalFailures: 0,
+      },
+      reasonCounts: {
+        server_error: 1,
+      },
+      steps: [],
+      startedAt: Date.now() - 500,
+      updatedAt: Date.now(),
+      durationMs: 500,
+    },
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getRuntimeResilienceReport: () => tracker.getReport(),
+    inspectAgentPrompt: async () => ({
+      agentId: "default",
+      sections: [],
+      text: "system prompt",
+      metadata: {},
+      prompt: "system prompt",
+      messages: [
+        { role: "system", content: "system prompt" },
+        { role: "user", content: "hello" },
+      ],
+      createdAt: Date.now(),
+      tokenBreakdown: {
+        systemPromptEstimatedChars: 12,
+        systemPromptEstimatedTokens: 4,
+        sectionEstimatedChars: 0,
+        sectionEstimatedTokens: 0,
+        droppedSectionEstimatedChars: 0,
+        droppedSectionEstimatedTokens: 0,
+        deltaEstimatedChars: 0,
+        deltaEstimatedTokens: 0,
+        providerNativeSystemBlockEstimatedChars: 0,
+        providerNativeSystemBlockEstimatedTokens: 0,
+      },
+      counts: {
+        sectionCount: 0,
+        droppedSectionCount: 0,
+        deltaCount: 0,
+        providerNativeSystemBlockCount: 0,
+      },
+      promptSizes: {
+        totalChars: 12,
+        finalChars: 12,
+      },
+    } as any),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-runtime-resilience",
+      method: "system.doctor",
+      params: {
+        promptAgentId: "default",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-runtime-resilience"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-runtime-resilience");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.runtimeResilience).toMatchObject({
+      routing: {
+        primary: {
+          provider: "openai.com",
+          model: "gpt-4.1",
+        },
+      },
+      latest: {
+        finalStatus: "success",
+        finalProfileId: "backup",
+        degraded: true,
+      },
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime_resilience",
+        status: "warn",
+      }),
+    ]));
+    expect(response.payload?.promptObservability?.launchExplainability).toMatchObject({
+      runtimeResilience: {
+        configuredFallbackCount: 1,
+        latestStatus: "success",
+        latestRoute: "backup/kimi-k2",
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("system.doctor exposes recent query runtime lifecycle traces", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
 
@@ -7462,6 +7707,9 @@ test("system.doctor exposes background continuation runtime summary when provide
         failedRuns: 1,
         skippedRuns: 1,
         conversationLinkedRuns: 2,
+        recoverableFailedRuns: 1,
+        recoveryAttemptedRuns: 2,
+        recoverySucceededRuns: 1,
       },
       kindCounts: {
         cron: 2,
@@ -7484,6 +7732,9 @@ test("system.doctor exposes background continuation runtime summary when provide
           finishedAt: 1_710_000_000_200,
           conversationId: "cron-main:cron-job-1",
           sessionTarget: "main",
+          latestRecoveryOutcome: "succeeded",
+          latestRecoveryRunId: "cron-run-2",
+          latestRecoveryReason: "Recovered on retry",
           continuationState: {
             version: 1,
             scope: "background",
@@ -7505,7 +7756,7 @@ test("system.doctor exposes background continuation runtime summary when provide
           },
         },
       ],
-      headline: "runs=3; running=1; failed=1; skipped=1; cron=2; heartbeat=1; linked=2; main=1; isolated=1",
+      headline: "runs=3; running=1; failed=1; skipped=1; recoverable=1; recovery=1/2; cron=2; heartbeat=1; linked=2; main=1; isolated=1",
     }),
   });
 
@@ -7659,6 +7910,127 @@ test("system.doctor exposes external outbound runtime summary when audit data is
     } else {
       delete process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
     }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes deployment backend summary from unified profile config", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.writeFile(path.join(stateDir, "deployment-backends.json"), `${JSON.stringify({
+    version: 1,
+    selectedProfileId: "docker-main",
+    profiles: [
+      {
+        id: "local-default",
+        label: "Local Default",
+        backend: "local",
+        enabled: true,
+        workspace: {
+          mode: "direct",
+        },
+        credentials: {
+          mode: "inherit_env",
+        },
+        observability: {
+          logMode: "local",
+        },
+      },
+      {
+        id: "docker-main",
+        label: "Docker Main",
+        backend: "docker",
+        enabled: true,
+        runtime: {
+          service: "belldandy-gateway",
+          composeFile: "docker-compose.yml",
+        },
+        workspace: {
+          mode: "mount",
+          remotePath: "/workspace",
+        },
+        credentials: {
+          mode: "env_file",
+          ref: ".env.deploy",
+        },
+        observability: {
+          logMode: "docker",
+        },
+      },
+      {
+        id: "ssh-burst",
+        label: "SSH Burst",
+        backend: "ssh",
+        enabled: false,
+        runtime: {
+          host: "gateway.internal",
+          user: "admin",
+          port: 2222,
+        },
+        workspace: {
+          mode: "sync",
+          remotePath: "/srv/star-sanctuary",
+        },
+        credentials: {
+          mode: "ssh_agent",
+        },
+        observability: {
+          logMode: "ssh",
+        },
+      },
+    ],
+  }, null, 2)}\n`, "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-deployment-backends",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-deployment-backends"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-deployment-backends");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.deploymentBackends).toMatchObject({
+      summary: {
+        profileCount: 3,
+        enabledCount: 2,
+        warningCount: 0,
+        selectedProfileId: "docker-main",
+        selectedResolved: true,
+        selectedBackend: "docker",
+        backendCounts: {
+          local: 1,
+          docker: 1,
+          ssh: 1,
+        },
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "deployment_backends",
+        name: "Deployment Backends",
+        status: "pass",
+      }),
+    ]));
+  } finally {
     ws.close();
     await closeP;
     await server.close();
@@ -8073,6 +8445,89 @@ test("subtask.takeover accepts takeover for a finished task and returns the upda
           status: "delivered",
           deliveredSessionId: "sub_takeover_2",
           resumedFromSessionId: "sub_takeover_1",
+        }),
+      ],
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("subtask.takeover accepts safe-point takeover for a running task and returns the updated record", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const runningTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-safe-point-takeover",
+      agentId: "coder",
+      instruction: "Need safe-point takeover",
+      channel: "subtask",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(runningTask.id, "sub_safe_point_takeover_1", "coder");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+    takeoverSubTask: async (taskId, agentId, message) => {
+      const accepted = await subTaskRuntimeStore.requestTakeover(taskId, agentId, message || "", {
+        sessionId: "sub_safe_point_takeover_1",
+        mode: "safe_point",
+      });
+      await subTaskRuntimeStore.attachSession(taskId, "sub_safe_point_takeover_2", agentId, agentId);
+      await subTaskRuntimeStore.markTakeoverDelivered(taskId, String(accepted?.takeover.id), {
+        sessionId: "sub_safe_point_takeover_2",
+        resumedFromSessionId: "sub_safe_point_takeover_1",
+      });
+      return subTaskRuntimeStore.getTask(taskId);
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-safe-point-takeover",
+      method: "subtask.takeover",
+      params: {
+        taskId: runningTask.id,
+        agentId: "researcher",
+        message: "Stop at a safe point and continue with verification.",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-safe-point-takeover"));
+
+    const takeoverRes = frames.find((f) => f.type === "res" && f.id === "subtask-safe-point-takeover");
+    expect(takeoverRes.ok).toBe(true);
+    expect(takeoverRes.payload?.item).toMatchObject({
+      id: runningTask.id,
+      sessionId: "sub_safe_point_takeover_2",
+      agentId: "researcher",
+      launchSpec: {
+        agentId: "researcher",
+        profileId: "researcher",
+      },
+      takeover: [
+        expect.objectContaining({
+          agentId: "researcher",
+          mode: "safe_point",
+          status: "delivered",
+          deliveredSessionId: "sub_safe_point_takeover_2",
+          resumedFromSessionId: "sub_safe_point_takeover_1",
         }),
       ],
     });
@@ -8693,6 +9148,279 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(sourceReadRes.ok).toBe(true);
     expect(sourceReadRes.payload.readOnly).toBe(true);
     expect(sourceReadRes.payload.content).toContain("Memory viewer test content");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("server exposes skill freshness across doctor, candidate, usage, and task payloads", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-skill-freshness-server-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-skill-freshness-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+  (memoryManager as any).embeddingProvider = {
+    modelName: "test-skill-freshness",
+    embed: async () => [0.1],
+    embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+    embedQuery: async () => [0.1],
+  };
+  registerGlobalMemoryManager(memoryManager);
+
+  const acceptedSkillCandidate = {
+    id: "exp-skill-freshness-accepted",
+    taskId: "task-skill-source",
+    type: "skill" as const,
+    status: "accepted" as const,
+    title: "Browser Repair Skill",
+    slug: "browser-repair-skill",
+    content: "name: Browser Repair Skill\n# Browser Repair Skill",
+    sourceTaskSnapshot: {
+      taskId: "task-skill-source",
+      conversationId: "conv-skill-source",
+      source: "chat" as const,
+      status: "success" as const,
+      startedAt: "2026-04-10T00:00:00.000Z",
+    },
+    publishedPath: path.join(workspaceRoot, "skills", "browser-repair-skill", "SKILL.md"),
+    createdAt: "2026-04-10T00:00:00.000Z",
+    acceptedAt: "2026-04-10T00:05:00.000Z",
+  };
+  (memoryManager as any).store.createExperienceCandidate(acceptedSkillCandidate);
+  (memoryManager as any).store.createExperienceCandidate({
+    id: "exp-skill-freshness-patch",
+    taskId: "task-skill-patch",
+    type: "skill",
+    status: "draft",
+    title: "Browser Repair Skill",
+    slug: "browser-repair-skill",
+    content: "name: Browser Repair Skill\n# Patch candidate",
+    sourceTaskSnapshot: {
+      taskId: "task-skill-patch",
+      conversationId: "conv-skill-patch",
+      source: "chat",
+      status: "failed",
+      startedAt: "2026-04-10T05:00:00.000Z",
+    },
+    createdAt: "2026-04-10T05:00:00.000Z",
+  });
+
+  for (const item of [
+    { id: "task-skill-use-1", status: "failed" as const, time: "2026-04-10T01:00:00.000Z" },
+    { id: "task-skill-use-2", status: "partial" as const, time: "2026-04-10T02:00:00.000Z" },
+    { id: "task-skill-use-3", status: "success" as const, time: "2026-04-10T03:00:00.000Z" },
+    { id: "task-skill-use-4", status: "failed" as const, time: "2026-04-10T04:00:00.000Z" },
+  ]) {
+    (memoryManager as any).store.createTask({
+      id: item.id,
+      conversationId: `conv-${item.id}`,
+      sessionKey: `session-${item.id}`,
+      source: "chat",
+      status: item.status,
+      title: item.id,
+      startedAt: item.time,
+      finishedAt: item.time,
+      createdAt: item.time,
+      updatedAt: item.time,
+    });
+    memoryManager.recordSkillUsage(item.id, "Browser Repair Skill", {
+      sourceCandidateId: acceptedSkillCandidate.id,
+      usedVia: "tool",
+    });
+  }
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    additionalWorkspaceRoots: [workspaceRoot],
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "doctor-skill-freshness", method: "system.doctor", params: {} }));
+    ws.send(JSON.stringify({ type: "req", id: "candidate-skill-freshness", method: "experience.candidate.get", params: { candidateId: acceptedSkillCandidate.id } }));
+    ws.send(JSON.stringify({ type: "req", id: "usage-stats-skill-freshness", method: "experience.usage.stats", params: { limit: 10, filter: { assetType: "skill" } } }));
+    ws.send(JSON.stringify({ type: "req", id: "task-skill-freshness", method: "memory.task.get", params: { taskId: "task-skill-use-4" } }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "doctor-skill-freshness"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-skill-freshness"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-stats-skill-freshness"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-skill-freshness"));
+
+    const doctorRes = frames.find((f) => f.type === "res" && f.id === "doctor-skill-freshness");
+    const candidateRes = frames.find((f) => f.type === "res" && f.id === "candidate-skill-freshness");
+    const usageStatsRes = frames.find((f) => f.type === "res" && f.id === "usage-stats-skill-freshness");
+    const taskRes = frames.find((f) => f.type === "res" && f.id === "task-skill-freshness");
+
+    expect(doctorRes.ok).toBe(true);
+    expect(doctorRes.payload?.skillFreshness?.summary?.needsPatchCount).toBeGreaterThanOrEqual(1);
+    expect(doctorRes.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "skill_freshness",
+        status: "warn",
+      }),
+    ]));
+
+    expect(candidateRes.ok).toBe(true);
+    expect(candidateRes.payload?.candidate?.skillFreshness?.status).toBe("needs_patch");
+    expect(candidateRes.payload?.candidate?.skillFreshness?.signals?.some((entry: any) => entry.code === "pending_update_candidate")).toBe(true);
+
+    expect(usageStatsRes.ok).toBe(true);
+    expect(usageStatsRes.payload?.items?.[0]?.skillFreshness?.status).toBe("needs_patch");
+
+    expect(taskRes.ok).toBe(true);
+    expect(taskRes.payload?.task?.usedSkills?.[0]?.skillFreshness?.status).toBe("needs_patch");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "skill-freshness-manual-mark",
+      method: "experience.skill.freshness.update",
+      params: {
+        sourceCandidateId: acceptedSkillCandidate.id,
+        reason: "手测发现说明已经过时",
+        markedBy: "tester",
+        stale: true,
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "skill-freshness-manual-mark"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "skill-freshness-manual-mark");
+    expect(updateRes.ok).toBe(true);
+    expect(updateRes.payload?.mark?.reason).toContain("过时");
+
+    ws.send(JSON.stringify({ type: "req", id: "candidate-skill-freshness-after-mark", method: "experience.candidate.get", params: { candidateId: acceptedSkillCandidate.id } }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-skill-freshness-after-mark"));
+    const candidateAfterMarkRes = frames.find((f) => f.type === "res" && f.id === "candidate-skill-freshness-after-mark");
+    expect(candidateAfterMarkRes.payload?.candidate?.skillFreshness?.manualStaleMark?.reason).toContain("过时");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("server exposes usage-only manual stale marks across doctor, usage, and task payloads", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-skill-freshness-usage-only-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-skill-freshness-usage-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+  (memoryManager as any).embeddingProvider = {
+    modelName: "test-skill-freshness-usage-only",
+    embed: async () => [0.1],
+    embedBatch: async (texts: string[]) => texts.map(() => [0.1]),
+    embedQuery: async () => [0.1],
+  };
+  registerGlobalMemoryManager(memoryManager);
+
+  (memoryManager as any).store.createTask({
+    id: "task-usage-only-skill",
+    conversationId: "conv-usage-only-skill",
+    sessionKey: "session-usage-only-skill",
+    source: "chat",
+    status: "success",
+    title: "usage only skill task",
+    startedAt: "2026-04-10T07:00:00.000Z",
+    finishedAt: "2026-04-10T07:00:00.000Z",
+    createdAt: "2026-04-10T07:00:00.000Z",
+    updatedAt: "2026-04-10T07:00:00.000Z",
+  });
+  memoryManager.recordSkillUsage("task-usage-only-skill", "web-monitor", {
+    usedVia: "tool",
+  });
+  const usageId = memoryManager.listExperienceUsages(10, { assetType: "skill" })[0]?.id;
+  expect(usageId).toBeTruthy();
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    additionalWorkspaceRoots: [workspaceRoot],
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "usage-only-manual-mark",
+      method: "experience.skill.freshness.update",
+      params: {
+        skillKey: "web-monitor",
+        reason: "真实手测后怀疑说明已过时",
+        markedBy: "tester",
+        stale: true,
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-only-manual-mark"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "usage-only-manual-mark");
+    expect(updateRes.ok).toBe(true);
+    expect(updateRes.payload?.skillFreshness?.status).toBe("warn_stale");
+
+    ws.send(JSON.stringify({ type: "req", id: "doctor-usage-only", method: "system.doctor", params: {} }));
+    ws.send(JSON.stringify({ type: "req", id: "usage-stats-usage-only", method: "experience.usage.stats", params: { limit: 10, filter: { assetType: "skill" } } }));
+    ws.send(JSON.stringify({ type: "req", id: "usage-get-usage-only", method: "experience.usage.get", params: { usageId } }));
+    ws.send(JSON.stringify({ type: "req", id: "task-usage-only", method: "memory.task.get", params: { taskId: "task-usage-only-skill" } }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "doctor-usage-only"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-stats-usage-only"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-get-usage-only"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-usage-only"));
+
+    const doctorRes = frames.find((f) => f.type === "res" && f.id === "doctor-usage-only");
+    const usageStatsRes = frames.find((f) => f.type === "res" && f.id === "usage-stats-usage-only");
+    const usageGetRes = frames.find((f) => f.type === "res" && f.id === "usage-get-usage-only");
+    const taskRes = frames.find((f) => f.type === "res" && f.id === "task-usage-only");
+
+    expect(doctorRes.ok).toBe(true);
+    expect(doctorRes.payload?.skillFreshness?.summary?.warnCount).toBeGreaterThanOrEqual(1);
+    expect(doctorRes.payload?.skillFreshness?.summary?.topItems?.some((item: any) => item.skillKey === "web-monitor" && item.status === "warn_stale")).toBe(true);
+
+    expect(usageStatsRes.ok).toBe(true);
+    expect(usageStatsRes.payload?.items?.find((item: any) => item.assetKey === "web-monitor")?.skillFreshness?.manualStaleMark?.reason).toContain("过时");
+    expect(usageGetRes.ok).toBe(true);
+    expect(usageGetRes.payload?.usage?.skillFreshness?.status).toBe("warn_stale");
+
+    expect(taskRes.ok).toBe(true);
+    expect(taskRes.payload?.task?.usedSkills?.find((item: any) => item.assetKey === "web-monitor")?.skillFreshness?.status).toBe("warn_stale");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "usage-only-manual-clear",
+      method: "experience.skill.freshness.update",
+      params: {
+        skillKey: "web-monitor",
+        stale: false,
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "usage-only-manual-clear"));
+    const clearRes = frames.find((f) => f.type === "res" && f.id === "usage-only-manual-clear");
+    expect(clearRes.ok).toBe(true);
   } finally {
     ws.close();
     await closeP;
@@ -9602,6 +10330,101 @@ test("message.send caps appended audio transcript chars when user text already e
       await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }
   });
+});
+
+test("message.send reuses cached audio transcription for repeated attachments", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const seenInputs: any[] = [];
+  let sttCalls = 0;
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      seenInputs.push(input);
+      yield { type: "final" as const, text: "ok" };
+      yield { type: "status", status: "done" as const };
+    },
+  };
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => agent,
+    sttTranscribe: async () => {
+      sttCalls += 1;
+      return {
+        text: "cached-audio-transcript",
+        provider: "test",
+        model: "mock-stt",
+      };
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    const sharedAudio = toBase64("repeat-audio");
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "audio-cache-1",
+      method: "message.send",
+      params: {
+        text: "first audio",
+        conversationId: "audio-cache-conv-1",
+        attachments: [
+          { name: "voice.webm", type: "audio/webm", base64: sharedAudio },
+        ],
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "audio-cache-1" && f.ok === true));
+    await waitFor(() => frames.filter((f) => f.type === "event" && f.event === "chat.final").length >= 1);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "audio-cache-2",
+      method: "message.send",
+      params: {
+        text: "second audio",
+        conversationId: "audio-cache-conv-2",
+        attachments: [
+          { name: "voice.webm", type: "audio/webm", base64: sharedAudio },
+        ],
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "audio-cache-2" && f.ok === true));
+    await waitFor(() => frames.filter((f) => f.type === "event" && f.event === "chat.final").length >= 2);
+
+    expect(sttCalls).toBe(1);
+    expect(seenInputs).toHaveLength(2);
+    expect(seenInputs[0].meta?.attachmentStats).toMatchObject({
+      audioTranscriptChars: expect.any(Number),
+      audioTranscriptCacheHits: 0,
+    });
+    expect(seenInputs[1].meta?.attachmentStats).toMatchObject({
+      audioTranscriptChars: expect.any(Number),
+      audioTranscriptCacheHits: 1,
+    });
+    expect(String(seenInputs[1].text)).toContain("cached-audio-transcript");
+    expect(seenInputs[1].meta?.promptDeltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        deltaType: "audio-transcript",
+        metadata: expect.objectContaining({
+          cacheHit: true,
+        }),
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("/api/message is disabled by default", async () => {

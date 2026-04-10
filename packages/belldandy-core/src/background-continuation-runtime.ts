@@ -10,6 +10,7 @@ import {
 export type BackgroundContinuationKind = "cron" | "heartbeat" | "subtask";
 export type BackgroundContinuationStatus = "running" | "ran" | "skipped" | "failed";
 export type BackgroundContinuationSessionTarget = "main" | "isolated";
+export type BackgroundRecoveryOutcome = "succeeded" | "failed" | "throttled" | "skipped_not_eligible";
 
 export type BackgroundContinuationRecord = {
   runId: string;
@@ -26,6 +27,13 @@ export type BackgroundContinuationRecord = {
   conversationId?: string;
   sessionTarget?: BackgroundContinuationSessionTarget;
   nextRunAtMs?: number;
+  recoveredFromRunId?: string;
+  recoveryAttemptCount?: number;
+  latestRecoveryAttemptAt?: number;
+  latestRecoveryOutcome?: BackgroundRecoveryOutcome;
+  latestRecoveryRunId?: string;
+  latestRecoveryReason?: string;
+  latestRecoveryFingerprint?: string;
   continuationState?: ContinuationStateSnapshot;
 };
 
@@ -45,6 +53,9 @@ export type BackgroundContinuationRuntimeDoctorReport = {
     failedRuns: number;
     skippedRuns: number;
     conversationLinkedRuns: number;
+    recoverableFailedRuns: number;
+    recoveryAttemptedRuns: number;
+    recoverySucceededRuns: number;
   };
   kindCounts: {
     cron: number;
@@ -79,6 +90,48 @@ function cloneRecord(record: BackgroundContinuationRecord): BackgroundContinuati
         },
       }
       : undefined,
+  };
+}
+
+function normalizeRecoveryFields(
+  input: Partial<BackgroundContinuationRecord>,
+  existing?: BackgroundContinuationRecord,
+): Pick<
+  BackgroundContinuationRecord,
+  | "recoveredFromRunId"
+  | "recoveryAttemptCount"
+  | "latestRecoveryAttemptAt"
+  | "latestRecoveryOutcome"
+  | "latestRecoveryRunId"
+  | "latestRecoveryReason"
+  | "latestRecoveryFingerprint"
+> {
+  return {
+    ...(input.recoveredFromRunId || existing?.recoveredFromRunId
+      ? { recoveredFromRunId: String(input.recoveredFromRunId || existing?.recoveredFromRunId).trim() }
+      : {}),
+    ...(typeof input.recoveryAttemptCount === "number" && Number.isFinite(input.recoveryAttemptCount)
+      ? { recoveryAttemptCount: input.recoveryAttemptCount }
+      : typeof existing?.recoveryAttemptCount === "number"
+        ? { recoveryAttemptCount: existing.recoveryAttemptCount }
+        : {}),
+    ...(typeof input.latestRecoveryAttemptAt === "number" && Number.isFinite(input.latestRecoveryAttemptAt)
+      ? { latestRecoveryAttemptAt: input.latestRecoveryAttemptAt }
+      : typeof existing?.latestRecoveryAttemptAt === "number"
+        ? { latestRecoveryAttemptAt: existing.latestRecoveryAttemptAt }
+        : {}),
+    ...(input.latestRecoveryOutcome || existing?.latestRecoveryOutcome
+      ? { latestRecoveryOutcome: (input.latestRecoveryOutcome || existing?.latestRecoveryOutcome) as BackgroundRecoveryOutcome }
+      : {}),
+    ...(input.latestRecoveryRunId || existing?.latestRecoveryRunId
+      ? { latestRecoveryRunId: String(input.latestRecoveryRunId || existing?.latestRecoveryRunId).trim() }
+      : {}),
+    ...(trimText(input.latestRecoveryReason ?? existing?.latestRecoveryReason)
+      ? { latestRecoveryReason: trimText(input.latestRecoveryReason ?? existing?.latestRecoveryReason) }
+      : {}),
+    ...(trimText(input.latestRecoveryFingerprint ?? existing?.latestRecoveryFingerprint)
+      ? { latestRecoveryFingerprint: trimText(input.latestRecoveryFingerprint ?? existing?.latestRecoveryFingerprint) }
+      : {}),
   };
 }
 
@@ -154,12 +207,19 @@ export class BackgroundContinuationLedger {
       ...(trimText(input.summary) ? { summary: trimText(input.summary) } : {}),
       ...(input.continuationState ? { continuationState: input.continuationState } : {}),
     };
+    let output!: BackgroundContinuationRecord;
     await this.mutate((state) => {
-      upsertRecord(state.items, record);
+      const existing = state.items.find((item) => item.runId === record.runId);
+      const merged = {
+        ...record,
+        ...normalizeRecoveryFields(record, existing),
+      };
+      upsertRecord(state.items, merged);
       state.items = sortAndTrimRecords(state.items);
-      return record;
+      output = cloneRecord(merged);
+      return merged;
     });
-    return cloneRecord(record);
+    return output;
   }
 
   async finishRun(input: {
@@ -206,10 +266,47 @@ export class BackgroundContinuationLedger {
         ...(input.continuationState || existing?.continuationState
           ? { continuationState: input.continuationState || existing?.continuationState }
           : {}),
+        ...normalizeRecoveryFields(input, existing),
       };
       upsertRecord(state.items, record);
       state.items = sortAndTrimRecords(state.items);
       output = cloneRecord(record);
+    });
+    return output;
+  }
+
+  async recordRecovery(input: {
+    runId: string;
+    attemptedAt?: number;
+    outcome: BackgroundRecoveryOutcome;
+    reason?: string;
+    recoveryRunId?: string;
+    recoveredFromRunId?: string;
+    fingerprint?: string;
+    incrementAttemptCount?: boolean;
+  }): Promise<BackgroundContinuationRecord | null> {
+    let output: BackgroundContinuationRecord | null = null;
+    const attemptedAt = Number.isFinite(input.attemptedAt) ? Number(input.attemptedAt) : Date.now();
+    await this.mutate((state) => {
+      const existing = state.items.find((item) => item.runId === input.runId);
+      if (!existing) return null;
+      const record: BackgroundContinuationRecord = {
+        ...existing,
+        updatedAt: Math.max(existing.updatedAt || 0, attemptedAt),
+        ...normalizeRecoveryFields({
+          recoveredFromRunId: input.recoveredFromRunId,
+          recoveryAttemptCount: (existing.recoveryAttemptCount ?? 0) + (input.incrementAttemptCount === false ? 0 : 1),
+          latestRecoveryAttemptAt: attemptedAt,
+          latestRecoveryOutcome: input.outcome,
+          latestRecoveryRunId: input.recoveryRunId,
+          latestRecoveryReason: input.reason,
+          latestRecoveryFingerprint: input.fingerprint,
+        }, existing),
+      };
+      upsertRecord(state.items, record);
+      state.items = sortAndTrimRecords(state.items);
+      output = cloneRecord(record);
+      return output;
     });
     return output;
   }
@@ -235,6 +332,7 @@ export class BackgroundContinuationLedger {
               ...item,
               summary: trimText(item.summary),
               reason: trimText(item.reason),
+              ...normalizeRecoveryFields(item),
               continuationState: normalizeContinuationStateSnapshot(item.continuationState),
             })),
         };
@@ -269,6 +367,7 @@ export class BackgroundContinuationLedger {
               ...item,
               summary: trimText(item.summary),
               reason: trimText(item.reason),
+              ...normalizeRecoveryFields(item),
               continuationState: normalizeContinuationStateSnapshot(item.continuationState),
             })),
         };
@@ -361,6 +460,9 @@ export async function buildBackgroundContinuationRuntimeDoctorReport(input: {
     failedRuns: records.filter((item) => item.status === "failed").length,
     skippedRuns: records.filter((item) => item.status === "skipped").length,
     conversationLinkedRuns: records.filter((item) => Boolean(item.conversationId || item.continuationState?.recommendedTargetId)).length,
+    recoverableFailedRuns: records.filter((item) => item.status === "failed" && item.latestRecoveryOutcome !== "succeeded").length,
+    recoveryAttemptedRuns: records.filter((item) => typeof item.latestRecoveryAttemptAt === "number").length,
+    recoverySucceededRuns: records.filter((item) => item.latestRecoveryOutcome === "succeeded").length,
   };
   const kindCounts = records.reduce(
     (acc, item) => {
@@ -383,6 +485,8 @@ export async function buildBackgroundContinuationRuntimeDoctorReport(input: {
     `running=${totals.runningRuns}`,
     `failed=${totals.failedRuns}`,
     `skipped=${totals.skippedRuns}`,
+    `recoverable=${totals.recoverableFailedRuns}`,
+    `recovery=${totals.recoverySucceededRuns}/${totals.recoveryAttemptedRuns}`,
     `cron=${kindCounts.cron}`,
     `heartbeat=${kindCounts.heartbeat}`,
     `subtask=${kindCounts.subtask}`,

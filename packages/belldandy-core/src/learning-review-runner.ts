@@ -7,6 +7,7 @@ import type {
 
 import type {
   GoalExperienceSuggestResult,
+  GoalLearningReviewRefreshState,
   GoalReviewScanLearningReviewRunResult,
   GoalReviewGovernanceSummary,
   GoalSuggestionReviewState,
@@ -33,6 +34,8 @@ export type PostTaskLearningReviewRunResult = {
   summary: string;
   recommendations: string[];
 };
+
+type GoalRefreshPriorityKind = "method" | "skill" | "flow";
 
 function hasTaskExecutionSignal(task: TaskExperienceDetail): boolean {
   return Boolean(task.summary?.trim())
@@ -144,6 +147,10 @@ function countGoalReviews(summary: GoalReviewGovernanceSummary): number {
   return Array.isArray(summary.reviews?.items) ? summary.reviews.items.length : 0;
 }
 
+function countActionableGoalReviews(summary: GoalReviewGovernanceSummary): number {
+  return Array.isArray(summary.actionableReviews) ? summary.actionableReviews.length : 0;
+}
+
 function hasGoalLearningSeed(summary: GoalReviewGovernanceSummary, learningReviewInput: LearningReviewInput): boolean {
   return Boolean(summary.goal.lastRunId || summary.goal.lastNodeId || summary.goal.activeNodeId)
     || summary.actionableCheckpoints.length > 0
@@ -151,11 +158,80 @@ function hasGoalLearningSeed(summary: GoalReviewGovernanceSummary, learningRevie
     || learningReviewInput.summary.reviewSignalCount > 0;
 }
 
+function selectGoalRefreshPriority(input: {
+  governanceSummary: GoalReviewGovernanceSummary;
+  learningReviewInput: LearningReviewInput;
+  suggestionCounts: { method: number; skill: number; flow: number };
+}): { kind: GoalRefreshPriorityKind; reason: string } | undefined {
+  const { governanceSummary, learningReviewInput, suggestionCounts } = input;
+  const reviewTypeCounts = governanceSummary.reviewTypeCounts ?? {
+    method_candidate: 0,
+    skill_candidate: 0,
+    flow_pattern: 0,
+  };
+  if (
+    suggestionCounts.flow > 0
+    && (
+      governanceSummary.crossGoal.items.length > 0
+      || governanceSummary.actionableCheckpoints.length > 0
+      || governanceSummary.checkpointWorkflowPendingCount > 0
+      || governanceSummary.checkpointWorkflowOverdueCount > 0
+    )
+  ) {
+    return {
+      kind: "flow",
+      reason: "当前 goal 已出现跨 goal 流程或 checkpoint 治理信号，优先看 flow pattern 更容易收敛治理动作。",
+    };
+  }
+  if (suggestionCounts.method > 0 && (reviewTypeCounts.method_candidate ?? 0) === 0) {
+    return {
+      kind: "method",
+      reason: "当前 goal 还没有 method review 历史，优先补齐 method 线更容易形成首批可治理样本。",
+    };
+  }
+  if (suggestionCounts.skill > 0 && (reviewTypeCounts.skill_candidate ?? 0) === 0) {
+    return {
+      kind: "skill",
+      reason: "当前 goal 还没有 skill review 历史，优先补齐 skill 线更容易暴露能力缺口。",
+    };
+  }
+  if (suggestionCounts.method > 0 && learningReviewInput.summary.taskSignalCount >= learningReviewInput.summary.memorySignalCount) {
+    return {
+      kind: "method",
+      reason: "当前 task execution signal 更强，优先处理 method candidate 更贴近本轮已验证步骤。",
+    };
+  }
+  if (suggestionCounts.skill > 0) {
+    return {
+      kind: "skill",
+      reason: "当前 memory / capability signal 仍可支撑 skill draft，优先看 skill candidate 能更早暴露能力缺口。",
+    };
+  }
+  if (suggestionCounts.flow > 0) {
+    return {
+      kind: "flow",
+      reason: "当前已生成可复用流程模式，优先看 flow pattern 有助于后续治理复用。",
+    };
+  }
+  return undefined;
+}
+
+function formatGoalRefreshPriorityHint(priority: { kind: GoalRefreshPriorityKind; reason: string }): string {
+  const label = priority.kind === "method"
+    ? "method candidate"
+    : priority.kind === "skill"
+      ? "skill candidate"
+      : "flow pattern";
+  return `当前 refresh 优先级：${label}；${priority.reason}`;
+}
+
 export async function runGoalReviewScanLearningReview(input: {
   stateDir: string;
   residentMemoryManagers?: ScopedMemoryManagerRecord[];
   agentId?: string;
   governanceSummary: GoalReviewGovernanceSummary;
+  refreshState?: GoalLearningReviewRefreshState;
+  refreshFingerprint?: string;
   generateSuggestions: () => Promise<GoalExperienceSuggestResult>;
   syncReviews?: () => Promise<GoalSuggestionReviewState>;
 }): Promise<GoalReviewScanLearningReviewRunResult> {
@@ -168,9 +244,12 @@ export async function runGoalReviewScanLearningReview(input: {
     goalReviewGovernanceSummary: input.governanceSummary,
   });
   const existingReviewCount = countGoalReviews(input.governanceSummary);
+  const actionableReviewCount = countActionableGoalReviews(input.governanceSummary);
   if (!learningReviewInput.summary.available) {
     return {
       goalId: input.governanceSummary.goal.id,
+      outcome: "empty_input",
+      refreshed: false,
       generated: false,
       learningReviewInput,
       suggestionCounts: { method: 0, skill: 0, flow: 0 },
@@ -178,24 +257,50 @@ export async function runGoalReviewScanLearningReview(input: {
       recommendations: ["learning/review input 仍为空，暂不触发 suggestion 生成。"],
     };
   }
-  if (existingReviewCount > 0) {
+  if (actionableReviewCount > 0) {
     return {
       goalId: input.governanceSummary.goal.id,
+      outcome: "actionable_reviews",
+      refreshed: false,
       generated: false,
       learningReviewInput,
       suggestionCounts: { method: 0, skill: 0, flow: 0 },
-      summary: `goal=${input.governanceSummary.goal.id} | skipped=existing_reviews:${existingReviewCount}`,
-      recommendations: ["当前 goal 已存在 suggestion/review 记录，review scan 先不重复生成。"],
+      summary: `goal=${input.governanceSummary.goal.id} | skipped=actionable_reviews:${actionableReviewCount}/${existingReviewCount}`,
+      recommendations: [
+        "当前 goal 仍有待处理的 review / publish 项，review scan 先不重复生成 suggestion。",
+        ...input.governanceSummary.recommendations.slice(0, 2),
+      ].filter(Boolean),
     };
   }
   if (!hasGoalLearningSeed(input.governanceSummary, learningReviewInput)) {
     return {
       goalId: input.governanceSummary.goal.id,
+      outcome: "weak_seed",
+      refreshed: false,
       generated: false,
       learningReviewInput,
       suggestionCounts: { method: 0, skill: 0, flow: 0 },
       summary: `goal=${input.governanceSummary.goal.id} | skipped=weak_seed`,
       recommendations: ["当前 goal 缺少稳定运行或治理信号，暂不触发 suggestion 生成。"],
+    };
+  }
+  if (
+    input.refreshFingerprint
+    && input.refreshState?.lastRefreshFingerprint
+    && input.refreshFingerprint === input.refreshState.lastRefreshFingerprint
+  ) {
+    return {
+      goalId: input.governanceSummary.goal.id,
+      outcome: "unchanged_signal",
+      refreshed: false,
+      generated: false,
+      learningReviewInput,
+      suggestionCounts: { method: 0, skill: 0, flow: 0 },
+      summary: `goal=${input.governanceSummary.goal.id} | skipped=unchanged_signal`,
+      recommendations: [
+        "当前 goal 自上次 refresh 后没有新的运行信号，review scan 本轮跳过重复生成。",
+        ...input.governanceSummary.recommendations.slice(0, 1),
+      ].filter(Boolean),
     };
   }
 
@@ -207,19 +312,29 @@ export async function runGoalReviewScanLearningReview(input: {
     flow: result.flowPatterns.count,
   };
   const generatedCount = suggestionCounts.method + suggestionCounts.skill + suggestionCounts.flow;
+  const priority = selectGoalRefreshPriority({
+    governanceSummary: input.governanceSummary,
+    learningReviewInput,
+    suggestionCounts,
+  });
 
   return {
     goalId: input.governanceSummary.goal.id,
+    outcome: "generated",
+    refreshed: true,
     generated: generatedCount > 0,
     generatedAt: result.generatedAt,
     learningReviewInput,
     reviews,
     suggestionCounts,
-    summary: `goal=${input.governanceSummary.goal.id} | generated=${generatedCount} | method=${suggestionCounts.method} | skill=${suggestionCounts.skill} | flow=${suggestionCounts.flow}`,
+    priorityKind: priority?.kind,
+    summary: `goal=${input.governanceSummary.goal.id} | generated=${generatedCount} | method=${suggestionCounts.method} | skill=${suggestionCounts.skill} | flow=${suggestionCounts.flow}${priority ? ` | priority=${priority.kind}` : ""}`,
     recommendations: [
+      ...(priority ? [formatGoalRefreshPriorityHint(priority)] : []),
       generatedCount > 0
         ? `review scan 额外生成 ${generatedCount} 个 suggestion，后续走现有 review/publish 治理链。`
         : "已触发 suggestion runner，但当前没有生成新的 suggestion。",
+      ...input.governanceSummary.recommendations.slice(0, 1),
       ...result.recommendations.slice(0, 2),
       ...learningReviewInput.nudges.slice(0, 1),
     ].filter(Boolean),

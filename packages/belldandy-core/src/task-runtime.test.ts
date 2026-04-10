@@ -8,6 +8,7 @@ import { AgentRegistry, type AgentLaunchSpec } from "@belldandy/agent";
 import {
   createSubTaskAgentCapabilities,
   createSubTaskResumeController,
+  createSubTaskTakeoverController,
   createSubTaskRuntimeEventHandler,
   createSubTaskUpdateController,
   createSubTaskWorktreeLifecycleHandler,
@@ -454,6 +455,68 @@ test("subtask runtime store persists resume records across reload", async () => 
   await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
 
+test("subtask runtime store persists takeover records across reload", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-takeover-store-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-takeover-store",
+      agentId: "coder",
+      instruction: "Continue runtime bridge",
+    },
+  });
+  await store.attachSession(task.id, "sub_takeover_store_1");
+
+  const accepted = await store.requestTakeover(task.id, "researcher", "Switch to verification-focused continuation.", {
+    sessionId: "sub_takeover_store_1",
+    mode: "safe_point",
+  });
+  expect(accepted?.takeover).toMatchObject({
+    status: "accepted",
+    agentId: "researcher",
+    mode: "safe_point",
+    requestedSessionId: "sub_takeover_store_1",
+  });
+
+  await store.attachSession(task.id, "sub_takeover_store_2", "researcher", "researcher");
+  await store.markTakeoverDelivered(task.id, String(accepted?.takeover.id), {
+    sessionId: "sub_takeover_store_2",
+    resumedFromSessionId: "sub_takeover_store_1",
+  });
+
+  const completed = await store.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_takeover_store_2",
+    output: "takeover result",
+  });
+  expect(completed?.takeover).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      agentId: "researcher",
+      mode: "safe_point",
+      deliveredSessionId: "sub_takeover_store_2",
+      resumedFromSessionId: "sub_takeover_store_1",
+    }),
+  ]);
+
+  const reloaded = new SubTaskRuntimeStore(stateDir);
+  await reloaded.load();
+  const persisted = await reloaded.getTask(task.id);
+  expect(persisted?.takeover).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      agentId: "researcher",
+      mode: "safe_point",
+      deliveredSessionId: "sub_takeover_store_2",
+      resumedFromSessionId: "sub_takeover_store_1",
+    }),
+  ]);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
 test("createSubTaskUpdateController records steering and relaunches the same task with prior history", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-update-"));
   const store = new SubTaskRuntimeStore(stateDir);
@@ -561,6 +624,138 @@ test("createSubTaskUpdateController records steering and relaunches the same tas
     expect.objectContaining({
       status: "delivered",
       deliveredSessionId: "sub_update_2",
+    }),
+  ]);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("createSubTaskTakeoverController relaunches a running task at a safe point under a new agent", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-safe-point-takeover-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-safe-point-takeover",
+      agentId: "coder",
+      instruction: "Implement runtime bridge",
+      channel: "subtask",
+    },
+  });
+  await store.attachSession(task.id, "sub_safe_takeover_1", "coder");
+
+  const stops: string[] = [];
+  const spawns: Array<Record<string, unknown>> = [];
+  const controller = createSubTaskTakeoverController({
+    runtimeStore: store,
+    conversationStore: {
+      get: (conversationId: string) => conversationId === "sub_safe_takeover_1"
+        ? {
+          messages: [
+            { role: "user", content: "Implement runtime bridge" },
+            { role: "assistant", content: "Current run is blocked on verification details." },
+          ],
+        }
+        : undefined,
+    },
+    orchestrator: {
+      getSession(sessionId: string) {
+        if (sessionId !== "sub_safe_takeover_1") return undefined;
+        return {
+          id: sessionId,
+          status: "running" as const,
+          launchSpec: {
+            parentConversationId: "conv-safe-point-takeover",
+            agentId: "coder",
+            profileId: "coder",
+            instruction: "Implement runtime bridge",
+            background: true,
+            timeoutMs: 60_000,
+            channel: "subtask",
+          },
+        };
+      },
+      async stopSession(sessionId: string) {
+        stops.push(sessionId);
+        await store.completeTask(task.id, {
+          status: "stopped",
+          sessionId,
+          error: "safe-point takeover relaunch",
+        });
+        return true;
+      },
+      async spawn(opts: any) {
+        spawns.push({
+          agentId: opts.launchSpec?.agentId,
+          profileId: opts.launchSpec?.profileId,
+          instruction: opts.launchSpec?.instruction,
+          history: opts.history,
+          resumedFromSessionId: opts.resumedFromSessionId,
+        });
+        opts.onSessionCreated?.("sub_safe_takeover_2", String(opts.launchSpec?.agentId ?? "researcher"));
+        return {
+          success: true,
+          output: "safe-point takeover finished",
+          sessionId: "sub_safe_takeover_2",
+        };
+      },
+    } as any,
+  });
+
+  const accepted = await controller(
+    task.id,
+    "researcher",
+    "Continue from the latest safe point and focus on verification.",
+  );
+  expect(accepted?.takeover).toEqual([
+    expect.objectContaining({
+      status: "accepted",
+      agentId: "researcher",
+      mode: "safe_point",
+      message: expect.stringContaining("Take over this subtask as agent researcher."),
+    }),
+  ]);
+
+  let updated = await store.getTask(task.id);
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (updated?.status === "done" && updated?.sessionId === "sub_safe_takeover_2") {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    updated = await store.getTask(task.id);
+  }
+
+  expect(stops).toEqual(["sub_safe_takeover_1"]);
+  expect(spawns).toEqual([
+    expect.objectContaining({
+      agentId: "researcher",
+      profileId: "researcher",
+      resumedFromSessionId: "sub_safe_takeover_1",
+      history: [
+        { role: "user", content: "Implement runtime bridge" },
+        { role: "assistant", content: "Current run is blocked on verification details." },
+      ],
+    }),
+  ]);
+  expect(String(spawns[0]?.instruction || "")).toContain("safe point under agent researcher");
+
+  expect(updated).toMatchObject({
+    sessionId: "sub_safe_takeover_2",
+    status: "done",
+    agentId: "researcher",
+    launchSpec: {
+      agentId: "researcher",
+      profileId: "researcher",
+    },
+  });
+  expect(updated?.takeover).toEqual([
+    expect.objectContaining({
+      status: "delivered",
+      agentId: "researcher",
+      mode: "safe_point",
+      deliveredSessionId: "sub_safe_takeover_2",
+      resumedFromSessionId: "sub_safe_takeover_1",
     }),
   ]);
 

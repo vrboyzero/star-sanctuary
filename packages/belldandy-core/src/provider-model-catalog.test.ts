@@ -34,7 +34,7 @@ describe("provider model catalog", () => {
         id: "openai",
         label: "OpenAI",
         onboardingScopes: ["api_key", "base_url", "model"],
-        capabilities: ["chat"],
+        capabilities: ["chat", "audio_transcription", "tts_output", "image_generation"],
       },
       {
         id: "anthropic",
@@ -52,7 +52,7 @@ describe("provider model catalog", () => {
         source: "primary",
         authStatus: "missing",
         wireApi: "responses",
-        capabilities: expect.arrayContaining(["chat", "responses_api"]),
+        capabilities: expect.arrayContaining(["chat", "responses_api", "image_input", "text_inline"]),
         isDefault: false,
       }),
       expect.objectContaining({
@@ -64,7 +64,7 @@ describe("provider model catalog", () => {
         source: "named",
         authStatus: "ready",
         protocol: "anthropic",
-        capabilities: expect.arrayContaining(["chat", "anthropic_api"]),
+        capabilities: expect.arrayContaining(["chat", "anthropic_api", "image_input", "text_inline"]),
         isDefault: true,
       }),
     ]);

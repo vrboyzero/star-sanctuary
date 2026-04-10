@@ -1,6 +1,7 @@
 import { defineCommand } from "citty";
 
 import { createCLIContext } from "../../shared/context.js";
+import { pruneConversationArtifactExports } from "../../../conversation-export-index.js";
 import {
   loadConversationPromptSnapshotForCLI,
   recordConversationCLIExport,
@@ -50,6 +51,7 @@ export default defineCommand({
     const outputPath = await resolveConversationCLIOutputPath({
       output: typeof args.output === "string" ? args.output : undefined,
       outputDir: typeof args["output-dir"] === "string" ? args["output-dir"] : undefined,
+      stateDir: ctx.stateDir,
       conversationId,
       artifact: "prompt_snapshot",
       variant: runId ?? artifact.manifest.runId ?? (ctx.json ? undefined : "text"),
@@ -64,6 +66,12 @@ export default defineCommand({
         format: ctx.json ? "json" : "text",
         outputPath: targetPath,
         projectionFilter: runId ? { runId } : undefined,
+      });
+      const retentionDaysRaw = Number(process.env.BELLDANDY_PROMPT_SNAPSHOT_RETENTION_DAYS ?? "7");
+      await pruneConversationArtifactExports({
+        stateDir: ctx.stateDir,
+        artifact: "prompt_snapshot",
+        maxAgeDays: Number.isFinite(retentionDaysRaw) ? Math.max(0, Math.floor(retentionDaysRaw)) : 7,
       });
       if (ctx.json) {
         ctx.output({

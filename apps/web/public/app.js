@@ -28,6 +28,10 @@ import {
   formatResidentSourceSummary,
   getResidentSourceBadgeClass,
 } from "./app/features/memory-source-view.js";
+import {
+  formatSkillFreshnessStatusLabel,
+  getSkillFreshnessBadgeClass,
+} from "./app/features/skill-freshness-view.js";
 import { buildResidentPanelSummary } from "./app/features/resident-observability-summary.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
 import { createSubtasksOverviewFeature, findSubtaskBySessionId, parseGoalSessionReference } from "./app/features/subtasks-overview.js";
@@ -1711,6 +1715,26 @@ async function openContinuationAction(action = {}) {
   if (!kind) return;
 
   switch (kind) {
+    case "goalReplay":
+      if (action.goalId && action.nodeId) {
+        goalsState.continuationFocusNode = {
+          goalId: action.goalId,
+          nodeId: action.nodeId,
+          scrolled: false,
+        };
+      } else {
+        goalsState.continuationFocusNode = null;
+      }
+      subtasksState.linkedSessionContext = null;
+      subtasksState.continuationFocusSessionId = null;
+      if (!action.goalId) return;
+      await resumeGoal(action.goalId, {
+        nodeId: typeof action.nodeId === "string" ? action.nodeId : undefined,
+        checkpointId: typeof action.checkpointId === "string" ? action.checkpointId : undefined,
+        silent: true,
+      });
+      await loadGoals(true, action.goalId);
+      return;
     case "goal":
       goalsState.continuationFocusNode = null;
       subtasksState.linkedSessionContext = null;
@@ -4942,11 +4966,14 @@ async function resumeGoal(goalId, options = {}) {
     return;
   }
   const nodeId = typeof options.nodeId === "string" && options.nodeId.trim() ? options.nodeId.trim() : undefined;
+  const checkpointId = typeof options.checkpointId === "string" && options.checkpointId.trim()
+    ? options.checkpointId.trim()
+    : undefined;
   const res = await sendReq({
     type: "req",
     id: makeId(),
     method: "goal.resume",
-    params: { goalId, nodeId },
+    params: { goalId, nodeId, checkpointId },
   });
   if (!res || !res.ok) {
     showNotice(
@@ -4965,7 +4992,13 @@ async function resumeGoal(goalId, options = {}) {
   if (!options.silent) {
     showNotice(
       localeController.t("goals.resumedTitle", {}, "Long task resumed"),
-      nodeId
+      checkpointId && nodeId
+        ? localeController.t(
+          "goals.replayedCheckpointMessage",
+          { goalName: goal?.title || goalId, checkpointId, nodeId },
+          `${goal?.title || goalId} replayed checkpoint ${checkpointId} and resumed node ${nodeId}.`,
+        )
+        : nodeId
         ? localeController.t("goals.resumedNodeMessage", { goalName: goal?.title || goalId, nodeId }, `${goal?.title || goalId} resumed from the last node ${nodeId}.`)
         : localeController.t("goals.resumedMessage", { goalName: goal?.title || goalId }, `${goal?.title || goalId} switched to its dedicated goal channel.`),
       "success",
@@ -5770,6 +5803,7 @@ function renderTaskUsageOverviewLane(title, items, tone) {
           const usageCount = Number(item?.usageCount) || 0;
           const percent = maxCount > 0 ? (usageCount / maxCount) * 100 : 0;
           const sourceView = item?.sourceView || null;
+          const skillFreshness = tone === "skill" && item?.skillFreshness ? item.skillFreshness : null;
           return `
             <div class="memory-usage-overview-row">
               <div class="memory-usage-overview-row-main">
@@ -5777,10 +5811,12 @@ function renderTaskUsageOverviewLane(title, items, tone) {
                 <div class="memory-usage-overview-meta">
                   ${item?.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
                   ${item?.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
+                  ${skillFreshness ? `<span>${escapeHtml(formatSkillFreshnessStatusLabel(skillFreshness.status, localeController.t.bind(localeController)))}</span>` : ""}
                   ${sourceView ? `<span>${escapeHtml(formatResidentSourceScopeLabel(sourceView))}</span>` : ""}
                   <span>${escapeHtml(localeController.t("memory.usageOverviewRecentAt", {}, "Recent"))} ${escapeHtml(formatDateTime(item?.lastUsedAt))}</span>
                 </div>
                 <div class="memory-detail-badges">
+                  ${skillFreshness ? `<span class="memory-badge ${getSkillFreshnessBadgeClass(skillFreshness.status)}">${escapeHtml(formatSkillFreshnessStatusLabel(skillFreshness.status, localeController.t.bind(localeController)))}</span>` : ""}
                   ${sourceView ? `<span class="memory-badge ${getResidentSourceBadgeClass(sourceView)}">${escapeHtml(formatResidentSourceScopeLabel(sourceView))}</span>` : ""}
                   ${item?.sourceCandidateId ? `<button class="memory-usage-action-btn" data-open-candidate-id="${escapeHtml(item.sourceCandidateId)}">${escapeHtml(localeController.t("memory.openCandidate", {}, "Candidate"))}</button>` : ""}
                   ${item?.lastUsedTaskId ? `<button class="memory-usage-action-btn" data-open-task-id="${escapeHtml(item.lastUsedTaskId)}">${escapeHtml(localeController.t("memory.openRecentTask", {}, "Recent Task"))}</button>` : ""}
@@ -5809,12 +5845,14 @@ function renderTaskUsageItems(items, assetType) {
     <div class="memory-usage-list">
       ${safeItems.map((item) => {
         const sourceView = item?.sourceView || null;
+        const skillFreshness = assetType === "skill" && item?.skillFreshness ? item.skillFreshness : null;
         return `
         <div class="memory-usage-item">
           <div class="memory-usage-item-head">
             <div class="memory-usage-item-key">${escapeHtml(item.assetKey || "-")}</div>
             <div class="memory-usage-item-actions">
             <div class="memory-detail-badges">
+              ${skillFreshness ? `<span class="memory-badge ${getSkillFreshnessBadgeClass(skillFreshness.status)}">${escapeHtml(formatSkillFreshnessStatusLabel(skillFreshness.status, localeController.t.bind(localeController)))}</span>` : ""}
               ${item.sourceCandidateStatus ? `<span class="memory-badge">${escapeHtml(item.sourceCandidateStatus)}</span>` : ""}
               ${item.sourceCandidateId ? `<span class="memory-badge">candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
               ${sourceView ? `<span class="memory-badge ${getResidentSourceBadgeClass(sourceView)}">${escapeHtml(formatResidentSourceScopeLabel(sourceView))}</span>` : ""}
@@ -5842,6 +5880,7 @@ function renderTaskUsageItems(items, assetType) {
             <span>usage ${escapeHtml(item.usageId || "-")}</span>
             <span>${escapeHtml(localeController.t("memory.usageUsedAtTask", {}, "Used in task"))} ${escapeHtml(formatDateTime(item.createdAt))}</span>
             <span>${escapeHtml(localeController.t("memory.usageRecentGlobal", {}, "Global recent"))} ${escapeHtml(formatDateTime(item.lastUsedAt || item.createdAt))}</span>
+            ${skillFreshness?.summary ? `<span>${escapeHtml(skillFreshness.summary)}</span>` : ""}
             ${item.sourceCandidateId ? `<span>candidate ${escapeHtml(item.sourceCandidateId)}</span>` : ""}
             ${item.sourceCandidateTitle ? `<span>${escapeHtml(item.sourceCandidateTitle)}</span>` : ""}
             ${sourceView ? `<span>${escapeHtml(formatResidentSourceSummary(sourceView))}</span>` : ""}

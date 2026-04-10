@@ -1,0 +1,5 @@
+Prompt Snapshot Index
+generatedAt: 2026-04-10T11:51:31.678Z
+entries: 1
+
+2026-04-10T11:51:31.663Z | heartbeat | heartbeat-1775821891062 | run=- | snapshots=1 | dir=heartbeat-1775821891062 | latest=created-1775821891663.prompt-snapshot.json

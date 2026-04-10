@@ -100,6 +100,17 @@ function formatResumeStatus(status, t) {
   }
 }
 
+function formatTakeoverStatus(status, t) {
+  switch (status) {
+    case "delivered":
+      return t("subtasks.takeoverDelivered", {}, "Delivered");
+    case "failed":
+      return t("subtasks.takeoverFailed", {}, "Failed");
+    default:
+      return t("subtasks.takeoverAccepted", {}, "Accepted");
+  }
+}
+
 function formatJoinedValues(values) {
   if (!Array.isArray(values) || values.length === 0) return "-";
   const normalized = values
@@ -139,6 +150,12 @@ function formatNotificationKindLabel(kind, t) {
       return t("subtasks.resumeDelivered", {}, "Delivered");
     case "resume_failed":
       return t("subtasks.resumeFailed", {}, "Failed");
+    case "takeover_requested":
+      return t("subtasks.takeoverAccepted", {}, "Accepted");
+    case "takeover_delivered":
+      return t("subtasks.takeoverDelivered", {}, "Delivered");
+    case "takeover_failed":
+      return t("subtasks.takeoverFailed", {}, "Failed");
     default:
       return kind || t("subtasks.notificationProgress", {}, "Progress");
   }
@@ -420,9 +437,9 @@ export function createSubtasksOverviewFeature({
         const taskId = node.getAttribute("data-subtask-takeover-send");
         if (!taskId) return;
         const agentInput = subtasksDetailEl.querySelector(`[data-subtask-takeover-agent-input="${taskId}"]`);
-        const resumeInput = subtasksDetailEl.querySelector(`[data-subtask-resume-input="${taskId}"]`);
+        const takeoverInput = subtasksDetailEl.querySelector(`[data-subtask-takeover-input="${taskId}"]`);
         const agentId = typeof agentInput?.value === "string" ? agentInput.value.trim() : "";
-        const message = typeof resumeInput?.value === "string" ? resumeInput.value.trim() : "";
+        const message = typeof takeoverInput?.value === "string" ? takeoverInput.value.trim() : "";
         void performSubtaskTakeover(taskId, agentId, message);
       });
     });
@@ -435,6 +452,17 @@ export function createSubtasksOverviewFeature({
           subtasksState.takeoverAgentDrafts = {};
         }
         subtasksState.takeoverAgentDrafts[taskId] = node.value;
+      });
+    });
+    subtasksDetailEl.querySelectorAll("[data-subtask-takeover-input]").forEach((node) => {
+      node.addEventListener("input", () => {
+        const taskId = node.getAttribute("data-subtask-takeover-input");
+        if (!taskId) return;
+        const subtasksState = getSubtasksState();
+        if (!subtasksState.takeoverDrafts || typeof subtasksState.takeoverDrafts !== "object") {
+          subtasksState.takeoverDrafts = {};
+        }
+        subtasksState.takeoverDrafts[taskId] = node.value;
       });
     });
   }
@@ -501,7 +529,7 @@ export function createSubtasksOverviewFeature({
         ${safeItems.map((item) => `
           <div class="subtask-notification-item">
             <div class="subtask-notification-head">
-              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.kind === "failed" || item?.kind === "steering_failed" || item?.kind === "resume_failed" ? "error" : item?.kind === "completed" || item?.kind === "steering_delivered" || item?.kind === "resume_delivered" ? "done" : item?.kind === "started" || item?.kind === "progress" || item?.kind === "steering_requested" || item?.kind === "resume_requested" ? "running" : "pending")}">${escapeHtml(formatNotificationKindLabel(item?.kind, t))}</span>
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.kind === "failed" || item?.kind === "steering_failed" || item?.kind === "resume_failed" || item?.kind === "takeover_failed" ? "error" : item?.kind === "completed" || item?.kind === "steering_delivered" || item?.kind === "resume_delivered" || item?.kind === "takeover_delivered" ? "done" : item?.kind === "started" || item?.kind === "progress" || item?.kind === "steering_requested" || item?.kind === "resume_requested" || item?.kind === "takeover_requested" ? "running" : "pending")}">${escapeHtml(formatNotificationKindLabel(item?.kind, t))}</span>
               <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.createdAt))}</span>
             </div>
             <div class="memory-detail-text">${escapeHtml(item?.message || "-")}</div>
@@ -546,6 +574,30 @@ export function createSubtasksOverviewFeature({
               <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.deliveredAt || item?.requestedAt))}</span>
             </div>
             <div class="memory-detail-text">${escapeHtml(item?.message || t("subtasks.resumeDefaultMessage", {}, "Continue from the last recorded state."))}</div>
+            ${item?.resumedFromSessionId ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailResumeSourceSession", {}, "Resumed From"))}</span><span>${escapeHtml(item.resumedFromSessionId)}</span></div>` : ""}
+            ${item?.error ? `<div class="memory-detail-text">${escapeHtml(item.error)}</div>` : ""}
+          </div>
+        `).join("")}
+      </div>
+    `;
+  }
+
+  function renderTakeoverRecords(items) {
+    const safeItems = Array.isArray(items) ? items : [];
+    if (!safeItems.length) {
+      return `<div class="memory-detail-text">${escapeHtml(t("subtasks.noTakeover", {}, "No takeover requests yet."))}</div>`;
+    }
+    return `
+      <div class="subtask-notification-list">
+        ${safeItems.map((item) => `
+          <div class="subtask-notification-item">
+            <div class="subtask-notification-head">
+              <span class="memory-badge subtask-status-badge ${getStatusToneClass(item?.status === "failed" ? "error" : item?.status === "delivered" ? "done" : "running")}">${escapeHtml(formatTakeoverStatus(item?.status, t))}</span>
+              <span class="subtask-notification-meta">${escapeHtml(formatDateTime(item?.deliveredAt || item?.requestedAt))}</span>
+            </div>
+            <div class="memory-detail-text">${escapeHtml(item?.message || t("subtasks.takeoverDefaultMessage", { agentId: item?.agentId || "-" }, "Relaunch this subtask under {agentId}."))}</div>
+            <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTakeoverAgent", {}, "Takeover Agent"))}</span><span>${escapeHtml(item?.agentId || "-")}</span></div>
+            <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTakeoverMode", {}, "Mode"))}</span><span>${escapeHtml(item?.mode === "safe_point" ? t("subtasks.takeoverModeSafePoint", {}, "safe-point relaunch") : t("subtasks.takeoverModeResumeRelaunch", {}, "finished-task relaunch"))}</span></div>
             ${item?.resumedFromSessionId ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailResumeSourceSession", {}, "Resumed From"))}</span><span>${escapeHtml(item.resumedFromSessionId)}</span></div>` : ""}
             ${item?.error ? `<div class="memory-detail-text">${escapeHtml(item.error)}</div>` : ""}
           </div>
@@ -618,6 +670,7 @@ export function createSubtasksOverviewFeature({
     const canStop = item.status === "pending" || item.status === "running";
     const canArchive = !item.archivedAt && (item.status === "done" || item.status === "error" || item.status === "timeout" || item.status === "stopped");
     const canResume = !item.archivedAt && (item.status === "done" || item.status === "error" || item.status === "timeout" || item.status === "stopped");
+    const canTakeover = !item.archivedAt && (item.status === "running" || item.status === "done" || item.status === "error" || item.status === "timeout" || item.status === "stopped");
     const outputText = typeof outputContent === "string" && outputContent.trim()
       ? outputContent
       : item?.outputPreview || "";
@@ -659,6 +712,10 @@ export function createSubtasksOverviewFeature({
     const resumeRecords = Array.isArray(item?.resume) ? item.resume : [];
     const resumeDraft = typeof subtasksState.resumeDrafts?.[item.id] === "string"
       ? subtasksState.resumeDrafts[item.id]
+      : "";
+    const takeoverRecords = Array.isArray(item?.takeover) ? item.takeover : [];
+    const takeoverDraft = typeof subtasksState.takeoverDrafts?.[item.id] === "string"
+      ? subtasksState.takeoverDrafts[item.id]
       : "";
     const selectedAgentId = typeof getSelectedAgentId === "function"
       ? String(getSelectedAgentId() || "").trim()
@@ -770,19 +827,38 @@ export function createSubtasksOverviewFeature({
                 <textarea class="editor-textarea subtask-steering-input" rows="4" data-subtask-resume-input="${escapeHtml(item.id)}" placeholder="${escapeHtml(t("subtasks.resumePlaceholder", {}, "Optionally describe how this finished subtask should continue from its last recorded state."))}" ${pendingActionKind === "resume" ? "disabled" : ""}>${escapeHtml(resumeDraft)}</textarea>
                 <div class="subtask-detail-actions">
                   <button class="button" data-subtask-resume-send="${escapeHtml(item.id)}" ${pendingActionKind === "resume" ? "disabled" : ""}>${escapeHtml(pendingActionKind === "resume" ? t("subtasks.actionResuming", {}, "Resuming...") : t("subtasks.actionResume", {}, "Resume"))}</button>
+                </div>
+              </div>
+            ` : ""}
+            ${renderResumeRecords(resumeRecords)}
+          </section>
+
+          <section class="memory-detail-card">
+            <span class="memory-detail-label">${escapeHtml(t("subtasks.detailTakeover", {}, "Takeover / Handoff"))}</span>
+            ${canTakeover ? `
+              <div class="subtask-steering-panel">
+                <textarea class="editor-textarea subtask-steering-input" rows="4" data-subtask-takeover-input="${escapeHtml(item.id)}" placeholder="${escapeHtml(item.status === "running"
+                  ? t("subtasks.takeoverSafePointPlaceholder", {}, "Optionally describe how the new agent should continue after the current run stops at a safe point.")
+                  : t("subtasks.takeoverPlaceholder", {}, "Optionally describe how the new agent should continue from the last recorded state."))}" ${pendingActionKind === "takeover" ? "disabled" : ""}>${escapeHtml(takeoverDraft)}</textarea>
+                <div class="subtask-detail-actions">
                   <input
                     type="text"
                     class="editor-textarea"
                     data-subtask-takeover-agent-input="${escapeHtml(item.id)}"
                     value="${escapeHtml(takeoverAgentDraft)}"
-                    placeholder="${escapeHtml(t("subtasks.takeoverAgentPlaceholder", {}, "Optional. Enter the agentId that should take over this finished subtask."))}"
+                    placeholder="${escapeHtml(item.status === "running"
+                      ? t("subtasks.takeoverSafePointAgentPlaceholder", {}, "Enter the agentId that should take over this running subtask at a safe point.")
+                      : t("subtasks.takeoverAgentPlaceholder", {}, "Enter the agentId that should take over this finished subtask."))}"
                     ${pendingActionKind === "takeover" ? "disabled" : ""}
                   />
                   <button class="button goal-inline-action-secondary" data-subtask-takeover-send="${escapeHtml(item.id)}" ${pendingActionKind === "takeover" ? "disabled" : ""}>${escapeHtml(pendingActionKind === "takeover" ? t("subtasks.actionTakingOver", {}, "Taking over...") : t("subtasks.actionTakeover", {}, "Take over"))}</button>
                 </div>
+                <div class="memory-list-item-meta"><span>${escapeHtml(item.status === "running"
+                  ? t("subtasks.takeoverSafePointNote", {}, "Takeover will stop the current run and relaunch the same subtask under the new agent.")
+                  : t("subtasks.takeoverResumeNote", {}, "Takeover will relaunch the same finished subtask under the new agent."))}</span></div>
               </div>
             ` : ""}
-            ${renderResumeRecords(resumeRecords)}
+            ${renderTakeoverRecords(takeoverRecords)}
           </section>
 
           ${executionExplainabilityLines.length ? `
@@ -1154,13 +1230,22 @@ export function createSubtasksOverviewFeature({
       subtasksState.takeoverAgentDrafts = {};
     }
     subtasksState.takeoverAgentDrafts[taskId] = normalizedAgentId;
+    if (!subtasksState.takeoverDrafts || typeof subtasksState.takeoverDrafts !== "object") {
+      subtasksState.takeoverDrafts = {};
+    }
+    subtasksState.takeoverDrafts[taskId] = "";
     handleSubtaskUpdate({
       kind: "updated",
       item: res.payload.item,
     });
+    const takeoverMode = Array.isArray(res.payload.item?.takeover) && res.payload.item.takeover.length
+      ? res.payload.item.takeover[res.payload.item.takeover.length - 1]?.mode
+      : null;
     showNotice?.(
       t("subtasks.takeoverSuccessTitle", {}, "Takeover accepted"),
-      t("subtasks.takeoverSuccessMessage", { agentId: normalizedAgentId }, "The finished subtask accepted takeover and is relaunching under {agentId}."),
+      takeoverMode === "safe_point"
+        ? t("subtasks.takeoverSafePointSuccessMessage", { agentId: normalizedAgentId }, "The running subtask accepted safe-point takeover and is relaunching under {agentId}.")
+        : t("subtasks.takeoverSuccessMessage", { agentId: normalizedAgentId }, "The finished subtask is relaunching under {agentId}."),
       "info",
     );
   }

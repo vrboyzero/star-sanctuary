@@ -19,6 +19,11 @@ import { scaffoldGoalFiles } from "./scaffold.js";
 import { createGoalConversationId, createGoalNodeConversationId, createGoalRunId } from "./session.js";
 import { analyzeGoalCapabilityPlan, getDefaultCapabilityPlanAnalysis } from "./capability-analysis.js";
 import {
+  buildGoalLearningReviewRefreshFingerprint,
+  readGoalLearningReviewRefreshState,
+  writeGoalLearningReviewRefreshState,
+} from "./learning-review-refresh.js";
+import {
   getGoalFlowPatternsPath,
   getGoalMethodCandidatesPath,
   getGoalPublishRecordsPath,
@@ -181,7 +186,11 @@ export class GoalManager {
     return getGoalRegistryEntry(this.stateDir, goalId);
   }
 
-  async resumeGoal(goalId: string, nodeId?: string): Promise<{ goal: LongTermGoal; conversationId: string; runId?: string }> {
+  async resumeGoal(
+    goalId: string,
+    nodeId?: string,
+    replay?: { checkpointId?: string },
+  ): Promise<{ goal: LongTermGoal; conversationId: string; runId?: string }> {
     return this.withGoalMutationLock(goalId, async () => {
       const goal = await this.requireGoal(goalId);
       const runId = nodeId ? createGoalRunId() : undefined;
@@ -204,10 +213,25 @@ export class GoalManager {
         resumedAt: now,
         pausedAt: undefined,
       });
+      if (replay?.checkpointId) {
+        await appendGoalProgressEntry(updatedGoal, {
+          kind: "checkpoint_replay_started",
+          title: `Replay checkpoint ${replay.checkpointId}`,
+          nodeId,
+          status: updatedGoal.status,
+          summary: `Resume replay started from checkpoint ${replay.checkpointId}.`,
+          note: nodeId
+            ? `Checkpoint replay resumed into node ${nodeId}.`
+            : "Checkpoint replay resumed into the goal channel.",
+          runId,
+          checkpointId: replay.checkpointId,
+        });
+      }
       await this.refreshHandoffAfterMutation(updatedGoal);
       await this.emitGoalUpdate(updatedGoal, {
         reason: "goal_resumed",
         nodeId,
+        checkpointId: replay?.checkpointId,
         runId,
       });
       return { goal: updatedGoal, conversationId, runId };
@@ -633,6 +657,20 @@ export class GoalManager {
     };
   }
 
+  private async buildGoalLearningReviewRefreshFingerprint(goal: LongTermGoal): Promise<string> {
+    const [graph, plans, checkpoints] = await Promise.all([
+      readGoalTaskGraph(goal),
+      readGoalCapabilityPlans(goal),
+      readGoalCheckpoints(goal),
+    ]);
+    return buildGoalLearningReviewRefreshFingerprint({
+      goal,
+      nodes: graph.nodes,
+      plans: plans.items,
+      checkpoints: checkpoints.items,
+    });
+  }
+
   async scanSuggestionReviewWorkflows(
     goalId: string,
     input: GoalSuggestionReviewWorkflowScanInput = {},
@@ -746,11 +784,27 @@ export class GoalManager {
     ].filter(Boolean);
     let learningReview: GoalSuggestionReviewWorkflowScanResult["learningReview"];
     try {
+      const governanceSummary = await this.getReviewGovernanceSummary(goalId);
+      const refreshState = await readGoalLearningReviewRefreshState(updatedGoal);
+      const refreshFingerprint = await this.buildGoalLearningReviewRefreshFingerprint(updatedGoal);
       learningReview = await runGoalReviewScanLearningReview({
         stateDir: this.stateDir,
-        governanceSummary: await this.getReviewGovernanceSummary(goalId),
+        governanceSummary,
+        refreshState,
+        refreshFingerprint,
         generateSuggestions: () => this.generateExperienceSuggestions(goalId),
         syncReviews: () => this.syncSuggestionReviews(updatedGoal),
+      });
+      await writeGoalLearningReviewRefreshState(updatedGoal, {
+        version: 1,
+        lastScanAt: scannedAt,
+        lastScanFingerprint: refreshFingerprint,
+        lastRefreshAt: learningReview.refreshed ? scannedAt : refreshState.lastRefreshAt,
+        lastRefreshFingerprint: learningReview.refreshed ? refreshFingerprint : refreshState.lastRefreshFingerprint,
+        lastGeneratedAt: learningReview.generated ? (learningReview.generatedAt ?? scannedAt) : refreshState.lastGeneratedAt,
+        lastOutcome: learningReview.outcome,
+        lastReason: learningReview.recommendations[0] ?? refreshState.lastReason,
+        lastPriority: learningReview.priorityKind ?? refreshState.lastPriority,
       });
     } catch (err) {
       console.warn("[GoalManager] Failed to run review-scan learning review:", err);

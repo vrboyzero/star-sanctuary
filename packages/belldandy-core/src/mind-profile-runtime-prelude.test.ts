@@ -1,0 +1,161 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MemoryManager } from "@belldandy/memory";
+
+import { buildMindProfileRuntimePrelude } from "./mind-profile-runtime-prelude.js";
+
+describe("buildMindProfileRuntimePrelude", () => {
+  let stateDir: string;
+  let sharedStateDir: string;
+  let manager: MemoryManager;
+
+  beforeEach(async () => {
+    if (!process.env.OPENAI_API_KEY) {
+      process.env.OPENAI_API_KEY = "test-placeholder-key";
+    }
+
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-mind-runtime-prelude-"));
+    sharedStateDir = path.join(stateDir, "team-memory");
+    const sessionsDir = path.join(stateDir, "sessions");
+    const memoryDir = path.join(stateDir, "memory");
+    const sharedMemoryDir = path.join(sharedStateDir, "memory");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.mkdir(sharedMemoryDir, { recursive: true });
+
+    manager = new MemoryManager({
+      workspaceRoot: sessionsDir,
+      additionalRoots: [memoryDir, sharedMemoryDir],
+      additionalFiles: [
+        path.join(stateDir, "MEMORY.md"),
+        path.join(sharedStateDir, "MEMORY.md"),
+      ],
+      storePath: path.join(stateDir, "memory.sqlite"),
+      modelsDir: path.join(stateDir, "models"),
+      stateDir,
+    });
+  });
+
+  afterEach(async () => {
+    manager.close();
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("builds runtime prelude for main sessions with stable mind signals", async () => {
+    await fs.writeFile(path.join(stateDir, "USER.md"), "# USER\n**名字：** 小星\n偏好简洁结论。\n", "utf-8");
+    await fs.writeFile(path.join(stateDir, "MEMORY.md"), "# MEMORY\n优先给短结论与验证口径。\n", "utf-8");
+    (manager as any).store.upsertChunk({
+      id: "private-memory-1",
+      sourcePath: "MEMORY.md",
+      sourceType: "file",
+      memoryType: "core",
+      content: "优先给短结论与验证口径。",
+      agentId: "default",
+      visibility: "private",
+    });
+
+    const result = await buildMindProfileRuntimePrelude({
+      stateDir,
+      agentId: "default",
+      sessionKey: "agent:default:main",
+      currentTurnText: "继续这个项目，先告诉我最关键的结论。",
+      residentMemoryManagers: [{
+        agentId: "default",
+        stateDir,
+        memoryMode: "hybrid",
+        policy: {
+          memoryMode: "hybrid",
+          managerStateDir: stateDir,
+          sharedStateDir,
+          writeTarget: "private",
+          readTargets: ["private", "shared"],
+          includeSharedMemoryReads: true,
+        },
+        manager,
+      } as any],
+      config: {
+        enabled: true,
+        maxLines: 3,
+        maxLineLength: 96,
+        maxChars: 240,
+        minSignalCount: 2,
+      },
+    });
+
+    expect(result?.prependContext).toContain("<mind-profile-runtime");
+    expect(result?.prependContext).toContain("User anchor:");
+    expect(result?.prependContext).toContain("Durable memory:");
+    expect(result?.deltas?.[0]?.metadata).toMatchObject({
+      blockTag: "mind-profile-runtime",
+      sessionKind: "main",
+      signalCount: expect.any(Number),
+    });
+  });
+
+  it("does not inject runtime prelude for goal sessions", async () => {
+    await fs.writeFile(path.join(stateDir, "USER.md"), "# USER\n**名字：** 小星\n", "utf-8");
+
+    const result = await buildMindProfileRuntimePrelude({
+      stateDir,
+      agentId: "default",
+      sessionKey: "goal:goal_alpha",
+      residentMemoryManagers: [{
+        agentId: "default",
+        stateDir,
+        memoryMode: "hybrid",
+        policy: {
+          memoryMode: "hybrid",
+          managerStateDir: stateDir,
+          sharedStateDir,
+          writeTarget: "private",
+          readTargets: ["private", "shared"],
+          includeSharedMemoryReads: true,
+        },
+        manager,
+      } as any],
+      config: {
+        enabled: true,
+        maxLines: 3,
+        maxLineLength: 96,
+        maxChars: 240,
+        minSignalCount: 2,
+      },
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it("does not inject when stable mind signals are too weak", async () => {
+    const result = await buildMindProfileRuntimePrelude({
+      stateDir,
+      agentId: "default",
+      sessionKey: "agent:default:main",
+      residentMemoryManagers: [{
+        agentId: "default",
+        stateDir,
+        memoryMode: "hybrid",
+        policy: {
+          memoryMode: "hybrid",
+          managerStateDir: stateDir,
+          sharedStateDir,
+          writeTarget: "private",
+          readTargets: ["private", "shared"],
+          includeSharedMemoryReads: true,
+        },
+        manager,
+      } as any],
+      config: {
+        enabled: true,
+        maxLines: 3,
+        maxLineLength: 96,
+        maxChars: 240,
+        minSignalCount: 2,
+      },
+    });
+
+    expect(result).toBeUndefined();
+  });
+});

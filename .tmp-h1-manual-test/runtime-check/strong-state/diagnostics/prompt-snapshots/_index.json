@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "generatedAt": 1775810597658,
+  "entries": [
+    {
+      "directoryName": "goal-goal_alpha",
+      "conversationId": "goal:goal_alpha",
+      "sessionKind": "goal",
+      "snapshotCount": 1,
+      "latestRunId": "d1dddb86-0b66-457b-a72c-71c6e6d67342",
+      "latestCreatedAt": 1775810597424,
+      "latestPersistedAt": 1775810597424,
+      "latestFileName": "run-d1dddb86-0b66-457b-a72c-71c6e6d67342.prompt-snapshot.json"
+    },
+    {
+      "directoryName": "agent-default-main",
+      "conversationId": "agent:default:main",
+      "sessionKind": "agent_main",
+      "snapshotCount": 1,
+      "latestRunId": "6abda34f-b9f6-4945-9203-265a74370de6",
+      "latestCreatedAt": 1775810597207,
+      "latestPersistedAt": 1775810597207,
+      "latestFileName": "run-6abda34f-b9f6-4945-9203-265a74370de6.prompt-snapshot.json"
+    }
+  ]
+}

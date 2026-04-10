@@ -94,6 +94,20 @@ function formatDelegationReason(value, t) {
   return `${tr(t, "launchExplainability.delegationReason", {}, "delegation reason")}: ${compactJoin(parts)}`;
 }
 
+function formatRuntimeResilience(value, t) {
+  const item = normalizeObject(value);
+  if (!item) return "";
+  const parts = [
+    typeof item.configuredFallbackCount === "number" ? `fallbacks=${item.configuredFallbackCount}` : "",
+    normalizeString(item.latestStatus) ? `latest=${normalizeString(item.latestStatus)}` : "",
+    normalizeString(item.latestRoute) ? `route=${normalizeString(item.latestRoute)}` : "",
+    normalizeString(item.compactionRoute) ? `compaction=${normalizeString(item.compactionRoute)}` : "",
+    normalizeString(item.latestHeadline) ? `note=${normalizeString(item.latestHeadline)}` : "",
+  ];
+  if (!parts.some(Boolean)) return "";
+  return `${tr(t, "launchExplainability.runtimeResilience", {}, "runtime resilience")}: ${compactJoin(parts)}`;
+}
+
 export function buildLaunchExplainabilityLines(value, t) {
   const explainability = normalizeObject(value);
   if (!explainability) return [];
@@ -102,5 +116,6 @@ export function buildLaunchExplainabilityLines(value, t) {
     formatSuggestedLaunch(explainability.suggestedLaunch, t),
     formatEffectiveLaunch(explainability.effectiveLaunch, t),
     formatDelegationReason(explainability.delegationReason, t),
+    formatRuntimeResilience(explainability.runtimeResilience, t),
   ].filter(Boolean);
 }

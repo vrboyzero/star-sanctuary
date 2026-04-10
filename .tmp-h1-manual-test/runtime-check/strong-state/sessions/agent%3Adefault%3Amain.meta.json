@@ -1,0 +1,18 @@
+{
+  "conversationId": "agent:default:main",
+  "agentId": "default",
+  "channel": "webchat",
+  "taskTokenRecords": [
+    {
+      "name": "run",
+      "inputTokens": 1,
+      "outputTokens": 1,
+      "totalTokens": 2,
+      "durationMs": 197,
+      "auto": true,
+      "createdAt": 1775810597390
+    }
+  ],
+  "createdAt": 1775810597186,
+  "updatedAt": 1775810597390
+}

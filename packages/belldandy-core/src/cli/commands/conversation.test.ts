@@ -324,6 +324,49 @@ test("bdd conversation prompt-snapshot exports persisted prompt snapshot and rec
   }
 });
 
+test("bdd conversation prompt-snapshot redirects exports away from runtime prompt-snapshot root", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-conversation-"));
+  const conversationId = "conv-prompt-snapshot-cli-redirect";
+  const runId = "run-cli-redirect-1";
+  const promptSnapshotRoot = path.join(stateDir, "diagnostics", "prompt-snapshots");
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  await persistConversationPromptSnapshot({
+    stateDir,
+    snapshot: {
+      agentId: "default",
+      conversationId,
+      runId,
+      createdAt: 1712000000000,
+      systemPrompt: "hook-system-prompt",
+      messages: [
+        { role: "system", content: "hook-system-prompt" },
+        { role: "user", content: "hello" },
+      ],
+      hookSystemPromptUsed: true,
+    },
+  });
+
+  try {
+    await promptSnapshotCommand.run?.({
+      args: {
+        json: true,
+        "state-dir": stateDir,
+        "conversation-id": conversationId,
+        "run-id": runId,
+        "output-dir": promptSnapshotRoot,
+      },
+    } as never);
+
+    const output = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
+    const parsed = JSON.parse(output);
+    expect(parsed.output).toContain(path.join("diagnostics", "conversation-exports", "prompt-snapshots"));
+    expect(parsed.output).not.toContain(path.join("diagnostics", "prompt-snapshots", `conversation-${conversationId}`));
+  } finally {
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("bdd conversation prompt-snapshot text output includes token breakdown", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-conversation-"));
   const conversationId = "conv-prompt-snapshot-cli-text";

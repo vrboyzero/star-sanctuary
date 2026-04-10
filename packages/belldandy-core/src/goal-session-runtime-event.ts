@@ -1,4 +1,4 @@
-import { createGoalConversationId, createGoalNodeConversationId } from "./goals/session.js";
+import { createGoalConversationId, createGoalNodeConversationId, parseGoalSessionKey } from "./goals/session.js";
 import type { GoalTaskGraph, GoalTaskNode, GoalUpdateEvent } from "./goals/types.js";
 
 const GOAL_EVENT_LABELS: Partial<Record<GoalUpdateEvent["reason"], string>> = {
@@ -17,11 +17,24 @@ function shouldEmitRuntimeEvent(reason: GoalUpdateEvent["reason"]): boolean {
   return Boolean(GOAL_EVENT_LABELS[reason]);
 }
 
-function resolveConversationId(event: GoalUpdateEvent): string {
+function isCompletionLikeNodeEvent(reason: GoalUpdateEvent["reason"]): boolean {
+  return reason === "task_node_completed" || reason === "task_node_skipped";
+}
+
+function resolveConversationId(event: GoalUpdateEvent): string | undefined {
   const activeConversationId = typeof event.goal.activeConversationId === "string"
     ? event.goal.activeConversationId.trim()
     : "";
   if (activeConversationId) {
+    if (isCompletionLikeNodeEvent(event.reason)) {
+      const parsedActiveSession = parseGoalSessionKey(activeConversationId);
+      const activeNodeMatches = parsedActiveSession?.kind === "goal_node"
+        && parsedActiveSession.nodeId === event.nodeId
+        && parsedActiveSession.runId === event.runId;
+      if (!activeNodeMatches) {
+        return undefined;
+      }
+    }
     return activeConversationId;
   }
   if (event.nodeId && event.runId) {
@@ -54,6 +67,9 @@ export async function buildGoalSessionRuntimeEventMessage(input: {
   }
 
   const conversationId = resolveConversationId(input.event);
+  if (!conversationId) {
+    return undefined;
+  }
   const lines = [
     "【系统事件｜长期任务状态变更】",
     `${GOAL_EVENT_LABELS[input.event.reason]}`,

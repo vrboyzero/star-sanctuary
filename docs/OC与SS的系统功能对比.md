@@ -90,7 +90,7 @@
 | 长期任务/Goal 系统 | 当前 README 未见类似 goal graph / checkpoint / reviewer workflow 的完整链 | 已有 Goals、节点、run、capability plan、orchestration、checkpoint、handoff | 支持长期项目拆解与阶段推进 | SS 明显更强 |
 | Capability Planning / Orchestration | README 未见明确 capability planner / verifier handoff 体系 | 已有 `goal_capability_plan`、`goal_orchestrate`、sub-agent suggested/effective launch explainability | 在执行前规划能力与委派结构 | SS 明显更强 |
 | 审批/Checkpoint | 有 pairing/DM 安全/部分审批扩展，但不是长期任务审查治理主线 | 已实现 checkpoint request/approve/reject/reopen/escalate 与 reviewer workflow | 高风险步骤可控、可审计 | SS 明显更强 |
-| Shared Review 治理 | 未见对应的 shared review inbox / claim / reviewer 机制 | 已有 shared review、batch review、集中治理、resident 联动摘要 | 让多 Agent/多候选记忆进入人审闭环 | SS 明显更强 |
+| Shared Review 治理 | 未见对应的 shared review inbox / claim / reviewer 机制 | 已有 shared review、batch review、集中治理、resident 联动摘要；`H2` 第二轮已把 goal review scan 补到“仅 actionable review/publish 阻断 + refresh fingerprint 去重 + 新运行信号触发 refresh” | 让多 Agent/多候选记忆进入人审闭环，同时避免 cron/scan 重复生成噪音 | SS 明显更强 |
 
 ### 2.7 工具、浏览器、Canvas 与自动化
 
@@ -142,7 +142,7 @@
 
 | 功能子项 | OC 实现 | SS 实现 | 功能作用简述 | 对比判断 |
 |---|---|---|---|---|
-| Docker / Nix / Remote | 有 Docker、Tailscale、SSH tunnels、Nix、remote gateway | 有 Docker、Tailscale、Nix | 适配不同部署场景 | OC 更强 |
+| Docker / Nix / Remote | 有 Docker、Tailscale、SSH tunnels、Nix、remote gateway | 有 Docker、Tailscale、Nix；`H5` 已补第一版最小 deployment profile/config 诊断层：新增统一 `deployment-backends.json`（`local / docker / ssh`），并打通 `bdd doctor / system.doctor / web doctor` 摘要，但尚未形成真正的 remote gateway/backend 切换闭环 | 适配不同部署场景 | OC 仍更强；SS 已开始补 deployment abstraction 的配置/诊断层 |
 | 桌面/移动端打包 | 有 macOS/iOS/Android 构建链 | SS 有 Portable / Single-Exe Windows 打包链，但无移动端/桌面 companion app | 面向终端用户的交付能力 | 各有优势；OC 平台端更广，SS Windows 便携包更聚焦 |
 | 测试矩阵 | 非常大，package scripts 显示 vitest config、docker/live/e2e/extensions/contracts/perf 很全面 | 有 vitest 与构建验证，但测试矩阵规模明显小于 OC | 决定大规模演进时的稳定性 | OC 明显更强 |
 | 代码生成/基线检查/工程约束 | 有大量 check/gen/lint/baseline 脚本、plugin-sdk/api/schema/runtime-sidecars 等 | 有 build/verify/doctor，但工程规范自动化面较收敛 | 影响大型平台项目的可持续维护性 | OC 更强 |
@@ -398,6 +398,20 @@ SS 更适合：
   - provider onboarding / model picker 元数据
   - channel setup / pairing / allowlist / chunking 统一接口
 - 这类工作更适合 `split_task`，不适合一次性做“大平台重构”。
+
+### 5.5 当前进展（2026-04-10）
+
+- `H2 / 轻量自动学习闭环` 已继续推进第二轮 refresh 收口：
+  - goal review scan 已不再因为“存在任意历史 review”而一刀切阻断，只在仍有 actionable review / publish 项时阻断重复生成。
+  - 已新增最小 `refresh state + fingerprint gate`：同一 goal 在 `done/approved node`、相关 capability plan、actionable checkpoint、`lastRun/lastNode` 等关键运行信号未变化时，会以 `unchanged_signal` 跳过重复 refresh，不再每次 cron/scan 都重写 suggestion 产物。
+  - 已明确“已收口但出现新运行信号”才再次 refresh，当前最小覆盖 `run / node / capability / checkpoint` 四类信号。
+- 这一步的价值不是继续扩新治理面，而是把现有 `goal governance panel + approval scan` 的噪音压下去，让 scan 重新回到“有变化才重刷”的口径。
+
+后续计划：
+
+- 先观察真实 goal 下的 fingerprint 稳定性，确认当前纳入指纹的 `node / capability plan / checkpoint / lastRun` 信号是否足够，避免继续扩大字段面。
+- 若后续只出现零星误判，优先做最小字段修补，不再扩新面板。
+- 若真实使用中仍有明显“该刷没刷”或“该跳没跳”，再单独评估 refresh 条件细化；当前不转向自动发布或更重的 freshness 平台。
 
 ### 5.5 最终建议
 
