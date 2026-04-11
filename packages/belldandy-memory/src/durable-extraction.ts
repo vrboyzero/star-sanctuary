@@ -340,8 +340,10 @@ export class DurableExtractionRuntime {
   private readonly records = new Map<string, DurableExtractionRecord>();
   private readonly listeners = new Set<(event: DurableExtractionChangeEvent) => void>();
   private readonly scheduled = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly inFlight = new Set<Promise<void>>();
   private writeChain = Promise.resolve();
   private loadPromise: Promise<void> | null = null;
+  private closed = false;
 
   constructor(options: DurableExtractionRuntimeOptions) {
     this.runtimeDir = path.join(options.stateDir, "memory-runtime");
@@ -522,6 +524,19 @@ export class DurableExtractionRuntime {
     return record;
   }
 
+  async close(): Promise<void> {
+    this.closed = true;
+    for (const timer of this.scheduled.values()) {
+      clearTimeout(timer);
+    }
+    this.scheduled.clear();
+
+    while (this.inFlight.size > 0) {
+      await Promise.allSettled([...this.inFlight]);
+    }
+    await this.writeChain.catch(() => {});
+  }
+
   private evaluateQueueDecision(record: DurableExtractionRecord, snapshot: ExtractionSnapshot): {
     shouldQueue: boolean;
     reason: string;
@@ -565,17 +580,26 @@ export class DurableExtractionRuntime {
   }
 
   private scheduleRun(conversationId: string, delayMs = 0): void {
+    if (this.closed) {
+      return;
+    }
     if (this.scheduled.has(conversationId)) {
       return;
     }
     const timer = setTimeout(() => {
       this.scheduled.delete(conversationId);
-      void this.processConversation(conversationId).catch((error) => {
+      if (this.closed) {
+        return;
+      }
+      const task = this.processConversation(conversationId).catch((error) => {
         this.logger?.error?.("Durable extraction processing crashed.", {
           conversationId,
           error,
         });
+      }).finally(() => {
+        this.inFlight.delete(task);
       });
+      this.inFlight.add(task);
     }, Math.max(0, delayMs));
     this.scheduled.set(conversationId, timer);
   }

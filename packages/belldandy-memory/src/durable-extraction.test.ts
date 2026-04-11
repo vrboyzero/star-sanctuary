@@ -328,3 +328,56 @@ test("durable extraction runtime preserves extractor skip reason when no memory 
 
   await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
+
+test("durable extraction runtime close waits for in-flight finish hooks", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-durable-extraction-close-"));
+  let releaseFinishHook: (() => void) | undefined;
+  let finishHookStarted = false;
+  let closeResolved = false;
+
+  const runtime = new DurableExtractionRuntime({
+    stateDir,
+    extractor: {
+      get isPaused() {
+        return false;
+      },
+      isConversationMemoryExtractionEnabled() {
+        return true;
+      },
+      async extractMemoriesFromConversation() {
+        return 1;
+      },
+    },
+    getMessages: async () => [
+      { role: "user", content: "关闭前需要等 durable extraction hook 收尾。" },
+      { role: "assistant", content: "否则测试会在删目录后看到异步写盘噪音。" },
+    ],
+    retryDelayMs: 20,
+    onRunFinished: async () => {
+      finishHookStarted = true;
+      await new Promise<void>((resolve) => {
+        releaseFinishHook = resolve;
+      });
+    },
+  });
+
+  await runtime.load();
+  await runtime.requestExtraction({
+    conversationId: "conv-close-waits",
+    source: "manual",
+    digest: { lastDigestAt: 100, messageCount: 4, pendingMessageCount: 2, threshold: 2, status: "ready" },
+  });
+  await waitFor(() => finishHookStarted);
+
+  const closePromise = runtime.close().then(() => {
+    closeResolved = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(closeResolved).toBe(false);
+
+  releaseFinishHook?.();
+  await closePromise;
+  expect(closeResolved).toBe(true);
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});

@@ -1,0 +1,431 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeAll, expect, test } from "vitest";
+import WebSocket from "ws";
+
+import { type BelldandyAgent } from "@belldandy/agent";
+
+import { startGatewayServer } from "./server.js";
+import {
+  cleanupGlobalMemoryManagersForTest,
+  pairWebSocketClient,
+  resolveWebRoot,
+  toBase64,
+  waitFor,
+  withEnv,
+} from "./server-testkit.js";
+
+// MemoryManager 内部会初始化 OpenAIEmbeddingProvider，需要 OPENAI_API_KEY
+// 测试环境中设置一个占位值，避免构造函数抛错（不会实际调用 API）
+beforeAll(() => {
+  if (!process.env.OPENAI_API_KEY) {
+    process.env.OPENAI_API_KEY = "test-placeholder-key";
+  }
+});
+
+afterEach(() => {
+  cleanupGlobalMemoryManagersForTest();
+});
+
+test("message.send rejects attachment larger than configured per-file limit", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "8",
+    BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "64",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      const reqId = "att-file-limit";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "message.send",
+        params: {
+          text: "",
+          attachments: [
+            { name: "big.txt", type: "text/plain", base64: toBase64("123456789") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId));
+      const res = frames.find((f) => f.type === "res" && f.id === reqId);
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("invalid_params");
+      expect(String(res.error?.message ?? "")).toContain("max file size");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send rejects attachments exceeding configured total limit", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "16",
+    BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "12",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      const reqId = "att-total-limit";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "message.send",
+        params: {
+          text: "limit test",
+          attachments: [
+            { name: "a.txt", type: "text/plain", base64: toBase64("12345678") },
+            { name: "b.txt", type: "text/plain", base64: toBase64("ABCDEFGH") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId));
+      const res = frames.find((f) => f.type === "res" && f.id === reqId);
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("invalid_params");
+      expect(String(res.error?.message ?? "")).toContain("total size");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send accepts multiple attachments within configured limits", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_MAX_FILE_BYTES: "32",
+    BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES: "64",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      const reqId = "att-ok";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "message.send",
+        params: {
+          text: "with attachments",
+          attachments: [
+            { name: "a.txt", type: "text/plain", base64: toBase64("hello-a") },
+            { name: "b.txt", type: "text/plain", base64: toBase64("hello-b") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === reqId && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+      const res = frames.find((f) => f.type === "res" && f.id === reqId);
+      const conversationId = String(res?.payload?.conversationId ?? "");
+      expect(conversationId.length).toBeGreaterThan(0);
+
+      const attachmentDir = path.join(
+        stateDir,
+        "storage",
+        "attachments",
+        encodeURIComponent(conversationId).replace(/\./g, "%2E"),
+      );
+      const fileA = await fs.promises.readFile(path.join(attachmentDir, "a.txt"), "utf-8");
+      const fileB = await fs.promises.readFile(path.join(attachmentDir, "b.txt"), "utf-8");
+      expect(fileA).toBe("hello-a");
+      expect(fileB).toBe("hello-b");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send caps total injected text attachment chars across files", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_TEXT_CHAR_LIMIT: "50",
+    BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT: "70",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const seenInputs: any[] = [];
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        seenInputs.push(input);
+        yield { type: "final" as const, text: "ok" };
+        yield { type: "status", status: "done" as const };
+      },
+    };
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "att-char-budget",
+        method: "message.send",
+        params: {
+          text: "attachments budget",
+          attachments: [
+            { name: "a.txt", type: "text/plain", base64: toBase64("A".repeat(60)) },
+            { name: "b.txt", type: "text/plain", base64: toBase64("B".repeat(60)) },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "att-char-budget" && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+      expect(seenInputs).toHaveLength(1);
+      expect(seenInputs[0].meta?.attachmentStats).toMatchObject({
+        textAttachmentCount: 2,
+        textAttachmentChars: 70,
+        promptAugmentationChars: 70,
+        textAttachmentTruncatedCharLimit: 50,
+        textAttachmentTotalCharLimit: 70,
+      });
+      expect(seenInputs[0].meta?.promptDeltas).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          deltaType: "attachment",
+          role: "attachment",
+        }),
+      ]));
+      expect(String(seenInputs[0].text)).toContain("A".repeat(35));
+      expect(String(seenInputs[0].text)).toContain("B".repeat(5));
+      expect(String(seenInputs[0].text)).not.toContain("B".repeat(6));
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send caps appended audio transcript chars when user text already exists", async () => {
+  await withEnv({
+    BELLDANDY_ATTACHMENT_TEXT_TOTAL_CHAR_LIMIT: "30",
+    BELLDANDY_AUDIO_TRANSCRIPT_APPEND_CHAR_LIMIT: "20",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const seenInputs: any[] = [];
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        seenInputs.push(input);
+        yield { type: "final" as const, text: "ok" };
+        yield { type: "status", status: "done" as const };
+      },
+    };
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+      sttTranscribe: async () => ({
+        text: "ABCDEFGHIJABCDEFGHIJABCDEFGHIJ",
+        provider: "test",
+        model: "mock-stt",
+      }),
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "audio-transcript-budget",
+        method: "message.send",
+        params: {
+          text: "summarize this audio",
+          attachments: [
+            { name: "voice.webm", type: "audio/webm", base64: toBase64("fake-audio") },
+          ],
+        },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "audio-transcript-budget" && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+      expect(seenInputs).toHaveLength(1);
+      expect(seenInputs[0].meta?.attachmentStats).toMatchObject({
+        textAttachmentCount: 0,
+        textAttachmentChars: 0,
+        audioTranscriptChars: 20,
+        promptAugmentationChars: 20,
+        textAttachmentTotalCharLimit: 30,
+        audioTranscriptAppendCharLimit: 20,
+      });
+      expect(seenInputs[0].meta?.promptDeltas).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          deltaType: "audio-transcript",
+          role: "attachment",
+        }),
+      ]));
+      expect(String(seenInputs[0].text)).toContain('语音转录: "ABCDE');
+      expect(String(seenInputs[0].text)).toContain("ABCDEFGHIJABCDEFGHIJ");
+      expect(String(seenInputs[0].text)).not.toContain("ABCDEFGHIJABCDEFGHIJABCDEFGHIJ");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send reuses cached audio transcription for repeated attachments", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const seenInputs: any[] = [];
+  let sttCalls = 0;
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      seenInputs.push(input);
+      yield { type: "final" as const, text: "ok" };
+      yield { type: "status", status: "done" as const };
+    },
+  };
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => agent,
+    sttTranscribe: async () => {
+      sttCalls += 1;
+      return {
+        text: "cached-audio-transcript",
+        provider: "test",
+        model: "mock-stt",
+      };
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    const sharedAudio = toBase64("repeat-audio");
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "audio-cache-1",
+      method: "message.send",
+      params: {
+        text: "first audio",
+        conversationId: "audio-cache-conv-1",
+        attachments: [
+          { name: "voice.webm", type: "audio/webm", base64: sharedAudio },
+        ],
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "audio-cache-1" && f.ok === true));
+    await waitFor(() => frames.filter((f) => f.type === "event" && f.event === "chat.final").length >= 1);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "audio-cache-2",
+      method: "message.send",
+      params: {
+        text: "second audio",
+        conversationId: "audio-cache-conv-2",
+        attachments: [
+          { name: "voice.webm", type: "audio/webm", base64: sharedAudio },
+        ],
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "audio-cache-2" && f.ok === true));
+    await waitFor(() => frames.filter((f) => f.type === "event" && f.event === "chat.final").length >= 2);
+
+    expect(sttCalls).toBe(1);
+    expect(seenInputs).toHaveLength(2);
+    expect(seenInputs[0].meta?.attachmentStats).toMatchObject({
+      audioTranscriptChars: expect.any(Number),
+      audioTranscriptCacheHits: 0,
+    });
+    expect(seenInputs[1].meta?.attachmentStats).toMatchObject({
+      audioTranscriptChars: expect.any(Number),
+      audioTranscriptCacheHits: 1,
+    });
+    expect(String(seenInputs[1].text)).toContain("cached-audio-transcript");
+    expect(seenInputs[1].meta?.promptDeltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        deltaType: "audio-transcript",
+        metadata: expect.objectContaining({
+          cacheHit: true,
+        }),
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

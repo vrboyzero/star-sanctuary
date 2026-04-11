@@ -80,6 +80,8 @@ export type MemoryRuntimeBudgetGuardOptions = {
 
 const STATE_VERSION = 1 as const;
 const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+const RENAME_RETRIES = 3;
+const RENAME_RETRY_DELAY_MS = 50;
 
 function normalizePositiveInteger(value: unknown): number | undefined {
   const parsed = Number(value);
@@ -89,11 +91,40 @@ function normalizePositiveInteger(value: unknown): number | undefined {
   return parsed;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function atomicWriteText(targetPath: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tempPath, content, "utf-8");
-  await fs.rename(tempPath, targetPath);
+  let lastErr: NodeJS.ErrnoException | null = null;
+  for (let attempt = 0; attempt < RENAME_RETRIES; attempt += 1) {
+    try {
+      await fs.rename(tempPath, targetPath);
+      return;
+    } catch (error) {
+      lastErr = error as NodeJS.ErrnoException;
+      if (attempt < RENAME_RETRIES - 1) {
+        await delay(RENAME_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  if (process.platform === "win32" && lastErr && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")) {
+    try {
+      await fs.writeFile(targetPath, content, "utf-8");
+      await fs.unlink(tempPath).catch(() => {});
+      return;
+    } catch (fallbackErr) {
+      await fs.unlink(tempPath).catch(() => {});
+      throw fallbackErr;
+    }
+  }
+
+  await fs.unlink(tempPath).catch(() => {});
+  throw lastErr;
 }
 
 export class SlidingWindowRateLimiter {
@@ -222,6 +253,10 @@ export class MemoryRuntimeUsageAccounting {
       return undefined;
     }
     return items.reduce((min, item) => Math.min(min, item.timestamp), items[0].timestamp);
+  }
+
+  async flush(): Promise<void> {
+    await this.writeChain.catch(() => {});
   }
 
   private matchesFilter(item: MemoryUsageEvent, filter: MemoryUsageEventFilter): boolean {

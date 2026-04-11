@@ -1,0 +1,2530 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import WebSocket from "ws";
+
+import { AgentRegistry, ConversationStore, MockAgent } from "@belldandy/agent";
+import { CompactionRuntimeTracker as SourceCompactionRuntimeTracker } from "../../belldandy-agent/src/compaction-runtime.js";
+import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
+import {
+  SkillRegistry,
+  ToolExecutor,
+  createToolSettingsControlTool,
+} from "@belldandy/skills";
+import { PluginRegistry } from "@belldandy/plugins";
+
+import { upsertInstalledExtension, upsertKnownMarketplace } from "./extension-marketplace-state.js";
+import type { ExtensionHostState } from "./extension-host.js";
+import { buildExtensionRuntimeReport } from "./extension-runtime.js";
+import { recordConversationArtifactExport } from "./conversation-export-index.js";
+import { createScopedMemoryManagers } from "./resident-memory-managers.js";
+import { startGatewayServer } from "./server.js";
+import {
+  cleanupGlobalMemoryManagersForTest,
+  createContractedTestTool,
+  createTestTool,
+  pairWebSocketClient,
+  resolveWebRoot,
+  waitFor,
+  withEnv,
+} from "./server-testkit.js";
+import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import { SubTaskRuntimeStore } from "./task-runtime.js";
+import { ToolsConfigManager } from "./tools-config.js";
+import { RuntimeResilienceTracker } from "./runtime-resilience.js";
+
+// MemoryManager 内部会初始化 OpenAIEmbeddingProvider，需要 OPENAI_API_KEY
+// 测试环境中设置一个占位值，避免构造函数抛错（不会实际调用 API）
+beforeAll(() => {
+  if (!process.env.OPENAI_API_KEY) {
+    process.env.OPENAI_API_KEY = "test-placeholder-key";
+  }
+});
+
+afterEach(() => {
+  cleanupGlobalMemoryManagersForTest();
+});
+
+test("system.doctor exposes tool behavior observability summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("run_command"),
+      createContractedTestTool("apply_patch"),
+      createContractedTestTool("delegate_task"),
+      createTestTool("beta_builtin"),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-tool-behavior",
+      method: "system.doctor",
+      params: {
+        toolAgentId: "default",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-tool-behavior" && f.ok === true));
+
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-tool-behavior");
+    expect(response.payload?.toolBehaviorObservability).toMatchObject({
+      requested: {
+        agentId: "default",
+      },
+      visibilityContext: {
+        agentId: "default",
+        conversationId: null,
+        residentStateBinding: {
+          agentId: "default",
+          workspaceBinding: "current",
+          workspaceDir: "default",
+          scopeStateDir: stateDir,
+          privateStateDir: stateDir,
+          sessionsDir: path.join(stateDir, "sessions"),
+          sharedStateDir: path.join(stateDir, "team-memory"),
+        },
+      },
+      counts: {
+        visibleToolContractCount: 3,
+        includedContractCount: 3,
+        behaviorContractCount: 3,
+      },
+      included: ["run_command", "apply_patch", "delegate_task"],
+    });
+    expect(response.payload?.toolBehaviorObservability?.contracts?.run_command).toMatchObject({
+      useWhen: expect.any(Array),
+      fallbackStrategy: expect.any(Array),
+    });
+    expect(response.payload?.toolBehaviorObservability?.summary).toContain("## run_command");
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "tool_behavior_observability",
+        status: "pass",
+      }),
+    ]));
+    expect(response.payload?.toolContractV2Observability).toMatchObject({
+      summary: {
+        totalCount: 3,
+        missingV2Count: 0,
+        governedTools: expect.arrayContaining(["run_command", "apply_patch", "delegate_task"]),
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes mind/profile snapshot summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.mkdir(path.join(stateDir, "team-memory"), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(stateDir, "USER.md"),
+    "# USER\n**名字：** 小星\n偏好简洁状态表与短结论。\n",
+    "utf-8",
+  );
+  await fs.promises.writeFile(
+    path.join(stateDir, "MEMORY.md"),
+    "# MEMORY\n优先把大文件里的主体逻辑外移。\n",
+    "utf-8",
+  );
+  await fs.promises.writeFile(
+    path.join(stateDir, "team-memory", "MEMORY.md"),
+    "# Shared Memory\n团队约定：外发统一走 sessionKey / binding。\n",
+    "utf-8",
+  );
+
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    memoryMode: "hybrid",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
+
+  const residentMemoryManagers = createScopedMemoryManagers({
+    stateDir,
+    agentRegistry: registry,
+    modelsDir: path.join(stateDir, "models"),
+    conversationStore: new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+    }),
+    indexerOptions: {
+      watch: false,
+    },
+  }).records;
+  const defaultRecord = residentMemoryManagers.find((record) => record.agentId === "default");
+  expect(defaultRecord).toBeTruthy();
+  (defaultRecord?.manager as any)?.store.upsertChunk({
+    id: "mind-private-1",
+    sourcePath: "MEMORY.md",
+    sourceType: "file",
+    memoryType: "core",
+    content: "优先把大文件里的主体逻辑外移，server.ts 只做装配。",
+    agentId: "default",
+    visibility: "private",
+  });
+  (defaultRecord?.manager as any)?.store.upsertChunk({
+    id: "mind-shared-1",
+    sourcePath: "team-memory/MEMORY.md",
+    sourceType: "file",
+    memoryType: "core",
+    content: "团队约定：外发统一走 sessionKey / binding。",
+    visibility: "shared",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    residentMemoryManagers,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-mind-profile",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-mind-profile" && f.ok === true));
+
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-mind-profile");
+    expect(response.payload?.mindProfileSnapshot).toMatchObject({
+      summary: {
+        available: true,
+        hasUserProfile: true,
+        hasPrivateMemoryFile: true,
+        hasSharedMemoryFile: true,
+        privateMemoryCount: 1,
+        sharedMemoryCount: 1,
+      },
+      identity: {
+        userName: "小星",
+      },
+      memory: {
+        recentMemorySnippets: expect.arrayContaining([
+          expect.objectContaining({ scope: "private" }),
+          expect.objectContaining({ scope: "shared" }),
+        ]),
+      },
+    });
+    expect(response.payload?.mindProfileSnapshot?.profile?.summaryLines).toEqual(expect.arrayContaining([
+      expect.stringContaining("USER.md:"),
+      expect.stringContaining("Private MEMORY.md:"),
+      expect.stringContaining("Shared MEMORY.md:"),
+    ]));
+    expect(response.payload?.learningReviewInput).toMatchObject({
+      summary: {
+        available: true,
+      },
+    });
+    expect(response.payload?.learningReviewNudgeRuntime).toMatchObject({
+      summary: {
+        available: false,
+        triggered: false,
+      },
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "mind_profile_snapshot",
+        status: "pass",
+      }),
+      expect.objectContaining({
+        id: "learning_review_input",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor can include on-demand conversation transcript export and timeline", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const conversationId = "conv-doctor-conversation-debug";
+  conversationStore.addMessage(conversationId, "user", "doctor timeline user");
+  conversationStore.addMessage(conversationId, "assistant", "doctor timeline assistant");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-conversation-debug",
+      method: "system.doctor",
+      params: {
+        conversationId,
+        includeTranscript: true,
+        includeTimeline: true,
+        timelinePreviewChars: 32,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-conversation-debug" && f.ok === true));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-conversation-debug");
+
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "conversation_debug",
+        status: "pass",
+        message: expect.stringContaining(conversationId),
+      }),
+    ]));
+    expect(response.payload?.conversationDebug).toMatchObject({
+      conversationId,
+      available: true,
+      messageCount: 2,
+      requested: {
+        includeTranscript: true,
+        includeTimeline: true,
+        timelinePreviewChars: 32,
+      },
+      transcriptExport: {
+        manifest: {
+          conversationId,
+          redactionMode: "internal",
+        },
+      },
+      timeline: {
+        manifest: {
+          conversationId,
+          source: "conversation.timeline.get",
+        },
+      },
+    });
+    expect(response.payload?.conversationDebug?.timeline?.summary?.messageCount).toBe(2);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor applies lightweight conversation debug filters", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const conversationId = "conv-doctor-conversation-filter";
+  conversationStore.addMessage(conversationId, "user", "doctor filter user");
+  conversationStore.addMessage(conversationId, "assistant", "doctor filter assistant");
+  await conversationStore.waitForPendingPersistence(conversationId);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-conversation-filter",
+      method: "system.doctor",
+      params: {
+        conversationId,
+        includeTranscript: true,
+        includeTimeline: true,
+        transcriptEventTypes: ["assistant_message_finalized"],
+        transcriptRestoreView: "canonical",
+        timelineKinds: ["restore_result"],
+        timelineLimit: 1,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-conversation-filter" && f.ok === true));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-conversation-filter");
+
+    expect(response.payload?.conversationDebug).toMatchObject({
+      conversationId,
+      requested: {
+        includeTranscript: true,
+        includeTimeline: true,
+        transcriptEventTypes: ["assistant_message_finalized"],
+        transcriptRestoreView: "canonical",
+        timelineKinds: ["restore_result"],
+        timelineLimit: 1,
+      },
+    });
+    expect(response.payload?.conversationDebug?.transcriptExport?.events).toHaveLength(1);
+    expect(response.payload?.conversationDebug?.transcriptExport?.projectionSummary).toMatchObject({
+      visibleEventCount: 1,
+      visibleRawMessageCount: 0,
+      visibleCanonicalExtractionCount: 2,
+    });
+    expect(response.payload?.conversationDebug?.timeline?.items).toHaveLength(1);
+    expect(response.payload?.conversationDebug?.timeline?.items[0]?.kind).toBe("restore_result");
+    expect(response.payload?.conversationDebug?.timeline?.projectionSummary).toMatchObject({
+      visibleItemCount: 1,
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor can expose conversation catalog and recent export index", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+  });
+  const conversationId = "conv-doctor-catalog-alpha";
+  conversationStore.addMessage(conversationId, "user", "doctor catalog user");
+  await conversationStore.waitForPendingPersistence(conversationId);
+  await recordConversationArtifactExport({
+    stateDir,
+    conversationId,
+    artifact: "transcript",
+    format: "json",
+    outputPath: path.join(stateDir, "artifacts", "conversation-alpha.transcript.json"),
+    mode: "internal",
+    projectionFilter: { restoreView: "all" },
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-conversation-catalog",
+      method: "system.doctor",
+      params: {
+        includeConversationCatalog: true,
+        includeRecentExports: true,
+        conversationIdPrefix: "conv-doctor-catalog-",
+        conversationListLimit: 10,
+        recentExportLimit: 10,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-conversation-catalog" && f.ok === true));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-conversation-catalog");
+
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "conversation_catalog", status: "pass" }),
+      expect.objectContaining({ id: "conversation_export_index", status: "pass" }),
+    ]));
+    expect(response.payload?.conversationCatalog?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        conversationId,
+        hasTranscript: true,
+      }),
+    ]));
+    expect(response.payload?.recentConversationExports?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        conversationId,
+        artifact: "transcript",
+        format: "json",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor reads memory db status without blocking sync fs path", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.writeFile(path.join(stateDir, "memory.sqlite"), Buffer.alloc(2048, 1));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor");
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "memory_db",
+        status: "pass",
+        message: expect.stringContaining("Size: 2.0 KB"),
+      }),
+      expect.objectContaining({
+        id: "mcp_runtime",
+        status: "pass",
+        message: "Disabled",
+      }),
+    ]));
+    expect(response.payload?.mcpRuntime).toEqual({
+      enabled: false,
+      diagnostics: null,
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor includes MCP recovery and persisted-result summary when MCP diagnostics are available", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const previousMcpEnabled = process.env.BELLDANDY_MCP_ENABLED;
+  process.env.BELLDANDY_MCP_ENABLED = "true";
+
+  const mcpModule = await import("./mcp/index.js");
+  const getMCPDiagnosticsSpy = vi.spyOn(mcpModule, "getMCPDiagnostics").mockReturnValue({
+    initialized: true,
+    toolCount: 5,
+    serverCount: 2,
+    connectedCount: 1,
+    summary: {
+      recentErrorServers: 1,
+      recoveryAttemptedServers: 1,
+      recoverySucceededServers: 1,
+      persistedResultServers: 1,
+      truncatedResultServers: 1,
+    },
+    servers: [
+      {
+        id: "mcp_a",
+        name: "MCP A",
+        status: "connected",
+        toolCount: 5,
+        resourceCount: 2,
+        diagnostics: {
+          connectionAttempts: 1,
+          reconnectAttempts: 1,
+          lastRecoveryAt: new Date("2026-04-02T10:00:00.000Z"),
+          lastRecoverySucceeded: true,
+          lastResult: {
+            at: new Date("2026-04-02T10:01:00.000Z"),
+            source: "call_tool",
+            strategy: "persisted",
+            estimatedChars: 4096,
+            truncatedItems: 1,
+            persistedItems: 1,
+            persistedWebPath: "/generated/mcp-doctor.txt",
+          },
+        },
+      },
+      {
+        id: "mcp_b",
+        name: "MCP B",
+        status: "error",
+        error: "session expired",
+        toolCount: 0,
+        resourceCount: 0,
+        diagnostics: {
+          connectionAttempts: 2,
+          reconnectAttempts: 1,
+          lastErrorAt: new Date("2026-04-02T09:59:00.000Z"),
+          lastErrorKind: "session_expired",
+          lastErrorMessage: "session expired",
+        },
+      },
+    ],
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-mcp-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-mcp-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-mcp-runtime");
+
+    expect(getMCPDiagnosticsSpy).toHaveBeenCalled();
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "mcp_runtime",
+        status: "pass",
+        message: "1/2 connected, 5 tools, recovery 1/1, persisted refs 1",
+      }),
+    ]));
+    expect(response.payload?.mcpRuntime?.diagnostics?.summary).toEqual({
+      recentErrorServers: 1,
+      recoveryAttemptedServers: 1,
+      recoverySucceededServers: 1,
+      persistedResultServers: 1,
+      truncatedResultServers: 1,
+    });
+    expect(response.payload?.mcpRuntime?.diagnostics?.servers[0]?.diagnostics?.lastResult).toEqual(expect.objectContaining({
+      strategy: "persisted",
+      persistedWebPath: "/generated/mcp-doctor.txt",
+    }));
+  } finally {
+    getMCPDiagnosticsSpy.mockRestore();
+    if (previousMcpEnabled === undefined) {
+      delete process.env.BELLDANDY_MCP_ENABLED;
+    } else {
+      process.env.BELLDANDY_MCP_ENABLED = previousMcpEnabled;
+    }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes unified extension runtime diagnostics for plugins and skills", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  await toolsConfigManager.updateConfig({
+    plugins: ["demo-plugin"],
+    skills: ["disabled-skill"],
+  });
+
+  const pluginRegistry = new PluginRegistry();
+  ((pluginRegistry as any).plugins).set("demo-plugin", {
+    id: "demo-plugin",
+    name: "Demo Plugin",
+    version: "1.0.0",
+    description: "demo",
+    activate: async () => {},
+  });
+  ((pluginRegistry as any).pluginToolMap).set("demo-plugin", ["plugin_demo_tool"]);
+  ((pluginRegistry as any).loadErrors).push({
+    at: new Date("2026-04-02T12:00:00.000Z"),
+    phase: "load_plugin",
+    target: "broken-plugin.mjs",
+    message: "missing activate function",
+  });
+
+  const skillRegistry = new SkillRegistry();
+  ((skillRegistry as any).skills).set("bundled:available-skill", {
+    name: "available-skill",
+    description: "available skill",
+    instructions: "available",
+    source: { type: "bundled" },
+    priority: "normal",
+    tags: ["ops"],
+  });
+  ((skillRegistry as any).skills).set("bundled:disabled-skill", {
+    name: "disabled-skill",
+    description: "disabled skill",
+    instructions: "disabled",
+    source: { type: "bundled" },
+    priority: "high",
+    tags: ["blocked"],
+  });
+  ((skillRegistry as any).eligibilityCache).set("available-skill", { eligible: true, reasons: [] });
+  ((skillRegistry as any).eligibilityCache).set("disabled-skill", { eligible: true, reasons: [] });
+  const extensionHost: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle"> = {
+    extensionRuntime: buildExtensionRuntimeReport({
+      pluginRegistry,
+      skillRegistry,
+      toolsConfigManager,
+    }),
+    lifecycle: {
+      pluginToolsRegistered: 1,
+      skillManagementToolsRegistered: ["skills_list", "skills_search", "skill_get"],
+      bundledSkillsLoaded: 2,
+      userSkillsLoaded: 0,
+      pluginSkillsLoaded: 0,
+      installedMarketplaceExtensionsLoaded: 0,
+      installedMarketplacePluginsLoaded: 0,
+      installedMarketplaceSkillPacksLoaded: 0,
+      eligibilityRefreshed: true,
+      loadCompletedAt: new Date("2026-04-02T12:05:00.000Z"),
+      hookBridge: {
+        source: "plugin-bridge",
+        availableHookCount: 2,
+        bridgedHookCount: 2,
+        registrations: [
+          {
+            legacyHookName: "beforeRun",
+            hookName: "before_agent_start",
+            available: true,
+            bridged: true,
+          },
+          {
+            legacyHookName: "afterRun",
+            hookName: "agent_end",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "beforeToolCall",
+            hookName: "before_tool_call",
+            available: true,
+            bridged: true,
+          },
+          {
+            legacyHookName: "afterToolCall",
+            hookName: "after_tool_call",
+            available: false,
+            bridged: false,
+          },
+        ],
+        lastBridgedAt: new Date("2026-04-02T12:06:00.000Z"),
+      },
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    pluginRegistry,
+    extensionHost,
+    skillRegistry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-extension-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-extension-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-extension-runtime");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "extension_runtime",
+        status: "warn",
+        message: "plugins 1 (1 disabled, 1 load errors), skills 2 (1 disabled, 0 ineligible), legacy hooks 2/2 bridged",
+      }),
+    ]));
+    expect(response.payload?.extensionRuntime?.summary).toEqual({
+      pluginCount: 1,
+      disabledPluginCount: 1,
+      pluginToolCount: 1,
+      pluginLoadErrorCount: 1,
+      skillCount: 2,
+      disabledSkillCount: 1,
+      ineligibleSkillCount: 0,
+      promptSkillCount: 0,
+      searchableSkillCount: 1,
+    });
+    expect(response.payload?.extensionRuntime?.diagnostics?.pluginLoadErrors).toEqual([
+      expect.objectContaining({
+        phase: "load_plugin",
+        target: "broken-plugin.mjs",
+        message: "missing activate function",
+      }),
+    ]);
+    expect(response.payload?.extensionRuntime?.registry).toEqual({
+      pluginToolRegistrations: [
+        {
+          pluginId: "demo-plugin",
+          toolNames: ["plugin_demo_tool"],
+          disabled: true,
+        },
+      ],
+      skillManagementTools: [
+        { name: "skills_list", shouldRegister: true, reasonCode: "available" },
+        { name: "skills_search", shouldRegister: true, reasonCode: "available" },
+        { name: "skill_get", shouldRegister: true, reasonCode: "available" },
+      ],
+      promptSkillNames: [],
+      searchableSkillNames: ["available-skill"],
+    });
+    expect(response.payload?.extensionRuntime?.host?.lifecycle).toMatchObject({
+      pluginToolsRegistered: 1,
+      skillManagementToolsRegistered: ["skills_list", "skills_search", "skill_get"],
+      bundledSkillsLoaded: 2,
+      userSkillsLoaded: 0,
+      pluginSkillsLoaded: 0,
+      installedMarketplaceExtensionsLoaded: 0,
+      installedMarketplacePluginsLoaded: 0,
+      installedMarketplaceSkillPacksLoaded: 0,
+      eligibilityRefreshed: true,
+      loadCompletedAt: "2026-04-02T12:05:00.000Z",
+      hookBridge: {
+        source: "plugin-bridge",
+        availableHookCount: 2,
+        bridgedHookCount: 2,
+        lastBridgedAt: "2026-04-02T12:06:00.000Z",
+        registrations: extensionHost.lifecycle.hookBridge.registrations,
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor reports extension marketplace summary from installed ledgers", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  await toolsConfigManager.updateConfig({
+    plugins: ["demo-plugin"],
+    skills: ["disabled-skill"],
+  });
+  await upsertKnownMarketplace(stateDir, {
+    name: "official-market",
+    source: {
+      source: "github",
+      repo: "star-sanctuary/official-market",
+      ref: "main",
+    },
+    installLocation: path.join(stateDir, "extensions", "cache", "official-market"),
+    autoUpdate: true,
+    lastUpdated: "2026-04-02T12:30:00.000Z",
+  });
+  await upsertInstalledExtension(stateDir, {
+    name: "demo-plugin",
+    kind: "plugin",
+    marketplace: "official-market",
+    version: "1.2.3",
+    manifestPath: "belldandy-extension.json",
+    installPath: path.join(stateDir, "extensions", "installed", "official-market", "demo-plugin"),
+    status: "installed",
+    enabled: true,
+    lastUpdated: "2026-04-02T12:31:00.000Z",
+  });
+  await upsertInstalledExtension(stateDir, {
+    name: "ops-skills",
+    kind: "skill-pack",
+    marketplace: "official-market",
+    version: "0.4.0",
+    installPath: path.join(stateDir, "extensions", "installed", "official-market", "ops-skills"),
+    status: "broken",
+    enabled: false,
+  });
+  const pluginRegistry = new PluginRegistry();
+  ((pluginRegistry as any).plugins).set("demo-plugin", {
+    id: "demo-plugin",
+    name: "Demo Plugin",
+    activate: async () => {},
+  });
+  ((pluginRegistry as any).pluginToolMap).set("demo-plugin", ["plugin_demo_tool"]);
+  const skillRegistry = new SkillRegistry();
+  ((skillRegistry as any).skills).set("bundled:available-skill", {
+    name: "available-skill",
+    description: "available skill",
+    instructions: "available",
+    source: { type: "bundled" },
+    priority: "normal",
+    tags: ["ops"],
+  });
+  ((skillRegistry as any).skills).set("bundled:disabled-skill", {
+    name: "disabled-skill",
+    description: "disabled skill",
+    instructions: "disabled",
+    source: { type: "bundled" },
+    priority: "high",
+    tags: ["blocked"],
+  });
+  ((skillRegistry as any).eligibilityCache).set("available-skill", { eligible: true, reasons: [] });
+  ((skillRegistry as any).eligibilityCache).set("disabled-skill", { eligible: true, reasons: [] });
+  const extensionHost: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle"> = {
+    extensionRuntime: buildExtensionRuntimeReport({
+      pluginRegistry,
+      skillRegistry,
+      toolsConfigManager,
+    }),
+    lifecycle: {
+      pluginToolsRegistered: 1,
+      skillManagementToolsRegistered: ["skills_list", "skills_search", "skill_get"],
+      bundledSkillsLoaded: 2,
+      userSkillsLoaded: 0,
+      pluginSkillsLoaded: 0,
+      installedMarketplaceExtensionsLoaded: 1,
+      installedMarketplacePluginsLoaded: 1,
+      installedMarketplaceSkillPacksLoaded: 0,
+      eligibilityRefreshed: true,
+      loadCompletedAt: new Date("2026-04-02T12:35:00.000Z"),
+      hookBridge: {
+        source: "plugin-bridge",
+        availableHookCount: 0,
+        bridgedHookCount: 0,
+        registrations: [
+          {
+            legacyHookName: "beforeRun",
+            hookName: "before_agent_start",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "afterRun",
+            hookName: "agent_end",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "beforeToolCall",
+            hookName: "before_tool_call",
+            available: false,
+            bridged: false,
+          },
+          {
+            legacyHookName: "afterToolCall",
+            hookName: "after_tool_call",
+            available: false,
+            bridged: false,
+          },
+        ],
+      },
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    pluginRegistry,
+    extensionHost,
+    skillRegistry,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-extension-marketplace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-extension-marketplace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-extension-marketplace");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "extension_marketplace",
+        status: "warn",
+        message: "marketplaces 1 (1 auto-update), installed 2 (1 plugins, 1 skill-packs, 1 broken, 1 disabled)",
+      }),
+      expect.objectContaining({
+        id: "extension_governance",
+        status: "warn",
+        message: "ledger enabled 1/2, host loaded 1 (1 plugins, 0 skill-packs), runtime policy disabled 1 plugins / 1 skills",
+      }),
+    ]));
+    expect(response.payload?.extensionMarketplace?.summary).toEqual({
+      knownMarketplaceCount: 1,
+      autoUpdateMarketplaceCount: 1,
+      installedExtensionCount: 2,
+      installedPluginCount: 1,
+      installedSkillPackCount: 1,
+      pendingExtensionCount: 0,
+      brokenExtensionCount: 1,
+      disabledExtensionCount: 1,
+    });
+    expect(response.payload?.extensionMarketplace?.knownMarketplaces?.marketplaces?.["official-market"]).toMatchObject({
+      name: "official-market",
+      autoUpdate: true,
+    });
+    expect(response.payload?.extensionMarketplace?.installedExtensions?.extensions?.["demo-plugin@official-market"]).toMatchObject({
+      name: "demo-plugin",
+      marketplace: "official-market",
+      status: "installed",
+    });
+    expect(response.payload?.extensionGovernance?.summary).toEqual({
+      installedExtensionCount: 2,
+      installedEnabledExtensionCount: 1,
+      installedDisabledExtensionCount: 1,
+      installedBrokenExtensionCount: 1,
+      loadedMarketplaceExtensionCount: 1,
+      loadedMarketplacePluginCount: 1,
+      loadedMarketplaceSkillPackCount: 0,
+      runtimePolicyDisabledPluginCount: 1,
+      runtimePolicyDisabledSkillCount: 1,
+    });
+    expect(response.payload?.extensionGovernance?.layers).toMatchObject({
+      installedLedger: {
+        extensionIds: ["demo-plugin@official-market", "ops-skills@official-market"],
+        enabledExtensionIds: ["demo-plugin@official-market"],
+        disabledExtensionIds: ["ops-skills@official-market"],
+        brokenExtensionIds: ["ops-skills@official-market"],
+      },
+      hostLoad: {
+        lifecycleAvailable: true,
+        loadedMarketplaceExtensionCount: 1,
+        loadedMarketplacePluginCount: 1,
+        loadedMarketplaceSkillPackCount: 0,
+      },
+      runtimePolicy: {
+        disabledPluginIds: ["demo-plugin"],
+        disabledSkillNames: ["disabled-skill"],
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor reports durable extraction gating reasons and restricted memory surfaces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-doctor-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    evolutionEnabled: true,
+    evolutionModel: "test-evolution-model",
+    evolutionBaseUrl: "https://example.invalid/v1",
+    evolutionApiKey: "",
+    evolutionMinMessages: 4,
+  });
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-memory", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-memory"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-memory");
+    expect(response.ok).toBe(true);
+    expect(response.payload?.memoryRuntime?.mainThreadToolSurface?.mode).toBe("tool-executor");
+    expect(response.payload?.memoryRuntime?.durableExtraction?.permissionSurface?.mode).toBe("internal-restricted");
+    expect(response.payload?.memoryRuntime?.durableExtraction?.availability).toMatchObject({
+      available: false,
+      enabled: true,
+      reasonCodes: expect.arrayContaining(["api_key_missing"]),
+      model: "test-evolution-model",
+      hasBaseUrl: true,
+      hasApiKey: false,
+    });
+    expect(response.payload?.memoryRuntime?.durableExtraction?.guidance?.policyVersion).toBe("week9-v1");
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "durable_extraction_runtime",
+        status: "fail",
+      }),
+      expect.objectContaining({
+        id: "durable_extraction_policy",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes team shared memory readiness and deferred sync policy", async () => {
+  await withEnv({
+    BELLDANDY_TEAM_SHARED_MEMORY_ENABLED: "true",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    await fs.promises.mkdir(path.join(stateDir, "team-memory", "memory"), { recursive: true });
+    await fs.promises.writeFile(path.join(stateDir, "team-memory", "MEMORY.md"), "# Shared Memory\n", "utf-8");
+    await fs.promises.writeFile(path.join(stateDir, "team-memory", "memory", "2026-04-02.md"), "# 2026-04-02\n", "utf-8");
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      ws.send(JSON.stringify({ type: "req", id: "system-doctor-team-memory", method: "system.doctor", params: {} }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-team-memory"));
+      const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-team-memory");
+
+      expect(response.ok).toBe(true);
+      expect(response.payload?.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "team_shared_memory",
+          status: "pass",
+          message: "enabled at team-memory (2 files), secret guard ready, sync plan planned",
+        }),
+      ]));
+      expect(response.payload?.memoryRuntime?.sharedMemory).toMatchObject({
+        enabled: true,
+        available: true,
+        reasonCodes: [],
+        scope: {
+          relativeRoot: "team-memory",
+          fileCount: 2,
+          hasMainMemory: true,
+          dailyCount: 1,
+        },
+        secretGuard: {
+          enabled: true,
+          scanner: "curated-high-confidence",
+        },
+        syncPolicy: {
+          status: "planned",
+          deltaSync: {
+            enabled: true,
+            mode: "checksum-delta",
+          },
+          conflictPolicy: {
+            mode: "local-write-wins-per-entry",
+            maxConflictRetries: 2,
+          },
+          deletionPolicy: {
+            propagatesDeletes: false,
+          },
+          suppressionPolicy: {
+            enabled: true,
+          },
+        },
+      });
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("system.doctor reports session digest rate-limit state after budget is exceeded", async () => {
+  await withEnv({
+    BELLDANDY_MEMORY_SESSION_DIGEST_MAX_RUNS: "1",
+    BELLDANDY_MEMORY_SESSION_DIGEST_WINDOW_MS: "60000",
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_MAX_RUNS: undefined,
+    BELLDANDY_MEMORY_DURABLE_EXTRACTION_WINDOW_MS: undefined,
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const conversationStore = new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+      compaction: {
+        enabled: true,
+        tokenThreshold: 10,
+        keepRecentCount: 1,
+      },
+      summarizer: async () => "rolling-summary-rate-limit",
+    });
+    const conversationId = "conv-rate-limit-state";
+    conversationStore.addMessage(conversationId, "user", "A".repeat(80));
+    conversationStore.addMessage(conversationId, "assistant", "B".repeat(80));
+    conversationStore.addMessage(conversationId, "user", "C".repeat(80));
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      conversationStore,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "digest-rate-limit-first",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2 },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-rate-limit-first" && f.ok === true));
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "digest-rate-limit-second",
+        method: "conversation.digest.refresh",
+        params: { conversationId, threshold: 2, force: true },
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-rate-limit-second"));
+
+      ws.send(JSON.stringify({ type: "req", id: "system-doctor-rate-limit", method: "system.doctor", params: {} }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-rate-limit"));
+      const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-rate-limit");
+      expect(response.ok).toBe(true);
+      expect(response.payload?.memoryRuntime?.sessionDigest?.rateLimit).toMatchObject({
+        status: "limited",
+        configured: true,
+        maxRuns: 1,
+      });
+      expect(response.payload?.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "session_digest_runtime",
+          status: "warn",
+        }),
+      ]));
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("system.doctor exposes compaction runtime circuit and retry stats", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const tracker = new SourceCompactionRuntimeTracker({
+    maxConsecutiveCompactionFailures: 1,
+  });
+  tracker.recordResult({
+    messages: [],
+    compacted: true,
+    originalTokens: 120,
+    compactedTokens: 48,
+    state: {
+      rollingSummary: "fallback summary",
+      archivalSummary: "",
+      compactedMessageCount: 2,
+      lastCompactedMessageCount: 2,
+      lastCompactedMessageFingerprint: "2:test",
+      rollingSummaryMergeCount: 1,
+      lastCompactedAt: Date.now(),
+    },
+    tier: "rolling",
+    deltaMessageCount: 2,
+    fallbackUsed: true,
+    rebuildTriggered: false,
+    promptTooLongRetries: 0,
+    warningTriggered: false,
+    blockingTriggered: false,
+    failureReason: "compaction backend unavailable",
+  }, {
+    source: "request",
+    participatesInCircuitBreaker: true,
+  });
+  tracker.shouldSkip("request");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getCompactionRuntimeReport: () => tracker.getReport(),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-compaction-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-compaction-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-compaction-runtime");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.memoryRuntime?.compactionRuntime).toMatchObject({
+      totals: {
+        attempts: expect.any(Number),
+        failures: 1,
+        skippedByCircuitBreaker: expect.any(Number),
+      },
+      circuitBreaker: {
+        open: expect.any(Boolean),
+        lastFailureReason: "compaction backend unavailable",
+      },
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "compaction_runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes runtime resilience summary and launch explainability signal", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const tracker = new RuntimeResilienceTracker({
+    stateDir,
+    routing: {
+      primary: {
+        profileId: "primary",
+        provider: "openai.com",
+        model: "gpt-4.1",
+      },
+      fallbacks: [
+        {
+          profileId: "backup",
+          provider: "moonshot.ai",
+          model: "kimi-k2",
+        },
+      ],
+      compaction: {
+        configured: true,
+        sharesPrimaryRoute: false,
+        route: {
+          profileId: "compaction",
+          provider: "openai.com",
+          model: "gpt-4.1-mini",
+        },
+      },
+    },
+  });
+  tracker.record({
+    source: "openai_chat",
+    phase: "primary_chat",
+    agentId: "default",
+    conversationId: "conv-runtime-resilience",
+    summary: {
+      configuredProfiles: [
+        { profileId: "primary", provider: "openai.com", model: "gpt-4.1" },
+        { profileId: "backup", provider: "moonshot.ai", model: "kimi-k2" },
+      ],
+      finalStatus: "success",
+      finalProfileId: "backup",
+      finalProvider: "moonshot.ai",
+      finalModel: "kimi-k2",
+      requestCount: 2,
+      failedStageCount: 1,
+      degraded: true,
+      stepCounts: {
+        cooldownSkips: 0,
+        sameProfileRetries: 1,
+        crossProfileFallbacks: 1,
+        terminalFailures: 0,
+      },
+      reasonCounts: {
+        server_error: 1,
+      },
+      steps: [],
+      startedAt: Date.now() - 500,
+      updatedAt: Date.now(),
+      durationMs: 500,
+    },
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getRuntimeResilienceReport: () => tracker.getReport(),
+    inspectAgentPrompt: async () => ({
+      agentId: "default",
+      sections: [],
+      text: "system prompt",
+      metadata: {},
+      prompt: "system prompt",
+      messages: [
+        { role: "system", content: "system prompt" },
+        { role: "user", content: "hello" },
+      ],
+      createdAt: Date.now(),
+      tokenBreakdown: {
+        systemPromptEstimatedChars: 12,
+        systemPromptEstimatedTokens: 4,
+        sectionEstimatedChars: 0,
+        sectionEstimatedTokens: 0,
+        droppedSectionEstimatedChars: 0,
+        droppedSectionEstimatedTokens: 0,
+        deltaEstimatedChars: 0,
+        deltaEstimatedTokens: 0,
+        providerNativeSystemBlockEstimatedChars: 0,
+        providerNativeSystemBlockEstimatedTokens: 0,
+      },
+      counts: {
+        sectionCount: 0,
+        droppedSectionCount: 0,
+        deltaCount: 0,
+        providerNativeSystemBlockCount: 0,
+      },
+      promptSizes: {
+        totalChars: 12,
+        finalChars: 12,
+      },
+    } as any),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-runtime-resilience",
+      method: "system.doctor",
+      params: {
+        promptAgentId: "default",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-runtime-resilience"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-runtime-resilience");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.runtimeResilience).toMatchObject({
+      routing: {
+        primary: {
+          provider: "openai.com",
+          model: "gpt-4.1",
+        },
+      },
+      latest: {
+        finalStatus: "success",
+        finalProfileId: "backup",
+        degraded: true,
+      },
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "runtime_resilience",
+        status: "warn",
+      }),
+    ]));
+    expect(response.payload?.promptObservability?.launchExplainability).toMatchObject({
+      runtimeResilience: {
+        configuredFallbackCount: 1,
+        latestStatus: "success",
+        latestRoute: "backup/kimi-k2",
+      },
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes recent query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "query-runtime-message-send",
+      method: "message.send",
+      params: { text: "追踪这一轮 runtime" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "query-runtime-message-send" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-query-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-query-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-query-runtime");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "query_runtime_trace",
+        status: "pass",
+      }),
+    ]));
+    expect(response.payload?.queryRuntime?.observerEnabled).toBe(true);
+    expect(response.payload?.queryRuntime?.totalObservedEvents).toBeGreaterThan(0);
+    expect(response.payload?.queryRuntime?.traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "query-runtime-message-send",
+        method: "message.send",
+        status: "completed",
+        latestStage: "completed",
+      }),
+    ]));
+
+    const trace = response.payload?.queryRuntime?.traces?.find((item: any) => item.traceId === "query-runtime-message-send");
+    const stages = trace?.stages ?? [];
+    expect(trace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "conversation_loaded",
+      "agent_running",
+      "assistant_persisted",
+      "completed",
+    ]));
+    expect(stages[stages.length - 1]?.stage).toBe("completed");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes delegation observability summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const protocolTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-doctor",
+      agentId: "coder",
+      instruction: "Protocol-backed task",
+      delegationProtocol: {
+        source: "goal_subtask",
+        intent: {
+          kind: "goal_execution",
+          summary: "Protocol-backed task",
+          role: "coder",
+          goalId: "goal-main",
+        },
+        contextPolicy: {
+          includeParentConversation: true,
+          includeStructuredContext: true,
+          contextKeys: ["goalId"],
+        },
+        expectedDeliverable: {
+          format: "patch",
+          summary: "Ship a patch",
+        },
+        aggregationPolicy: {
+          mode: "main_agent_summary",
+          summarizeFailures: true,
+          sourceAgentIds: ["planner"],
+        },
+        launchDefaults: {},
+      },
+    },
+  });
+  await subTaskRuntimeStore.attachSession(protocolTask.id, "sub_doctor_1");
+
+  const plainTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-doctor",
+      agentId: "reviewer",
+      instruction: "Legacy task",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(plainTask.id, {
+    status: "done",
+    output: "legacy task done",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-delegation",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-delegation"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-delegation");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.delegationObservability?.summary).toMatchObject({
+      totalCount: 2,
+      protocolBackedCount: 1,
+      activeCount: 1,
+      completedCount: 1,
+      sourceCounts: {
+        goal_subtask: 1,
+      },
+      aggregationModeCounts: {
+        main_agent_summary: 1,
+      },
+    });
+    expect(res.payload?.delegationObservability?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: protocolTask.id,
+        agentId: "coder",
+        status: "running",
+        source: "goal_subtask",
+        aggregationMode: "main_agent_summary",
+        expectedDeliverableFormat: "patch",
+        expectedDeliverableSummary: "Ship a patch",
+      }),
+    ]));
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "delegation_protocol",
+        name: "Delegation Protocol",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes cron runtime summary when provided", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getCronRuntimeDoctorReport: async () => ({
+      scheduler: {
+        enabled: true,
+        running: true,
+        activeRuns: 2,
+        lastTickAtMs: 1_710_000_000_000,
+      },
+      totals: {
+        totalJobs: 3,
+        enabledJobs: 2,
+        disabledJobs: 1,
+        staggeredJobs: 1,
+        invalidNextRunJobs: 0,
+      },
+      sessionTargetCounts: {
+        main: 1,
+        isolated: 2,
+      },
+      deliveryModeCounts: {
+        user: 2,
+        none: 1,
+      },
+      failureDestinationModeCounts: {
+        user: 1,
+        none: 2,
+      },
+      recentJobs: [
+        {
+          id: "cron-job-1",
+          name: "Digest",
+          enabled: true,
+          scheduleSummary: "every 60000ms",
+          sessionTarget: "main",
+          deliveryMode: "user",
+          failureDestinationMode: "user",
+          staggerMs: 15_000,
+          nextRunAtMs: 1_710_000_060_000,
+          lastStatus: "ok",
+        },
+      ],
+      headline: "enabled; jobs=2/3; session main=1; isolated=2; delivery user=2; none=1; stagger=1; activeRuns=2",
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-cron-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-cron-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-cron-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.cronRuntime).toMatchObject({
+      scheduler: {
+        enabled: true,
+        running: true,
+        activeRuns: 2,
+      },
+      totals: {
+        totalJobs: 3,
+        enabledJobs: 2,
+        staggeredJobs: 1,
+      },
+      sessionTargetCounts: {
+        main: 1,
+        isolated: 2,
+      },
+      deliveryModeCounts: {
+        user: 2,
+        none: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "cron_runtime",
+        name: "Cron Runtime",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes background continuation runtime summary when provided", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    getBackgroundContinuationRuntimeDoctorReport: async () => ({
+      totals: {
+        totalRuns: 3,
+        runningRuns: 1,
+        failedRuns: 1,
+        skippedRuns: 1,
+        conversationLinkedRuns: 2,
+        recoverableFailedRuns: 1,
+        recoveryAttemptedRuns: 2,
+        recoverySucceededRuns: 1,
+      },
+      kindCounts: {
+        cron: 2,
+        heartbeat: 1,
+        subtask: 0,
+      },
+      sessionTargetCounts: {
+        main: 1,
+        isolated: 1,
+      },
+      recentEntries: [
+        {
+          runId: "cron-run-1",
+          kind: "cron",
+          sourceId: "cron-job-1",
+          label: "Digest",
+          status: "ran",
+          startedAt: 1_710_000_000_000,
+          updatedAt: 1_710_000_000_200,
+          finishedAt: 1_710_000_000_200,
+          conversationId: "cron-main:cron-job-1",
+          sessionTarget: "main",
+          latestRecoveryOutcome: "succeeded",
+          latestRecoveryRunId: "cron-run-2",
+          latestRecoveryReason: "Recovered on retry",
+          continuationState: {
+            version: 1,
+            scope: "background",
+            targetId: "cron-job-1",
+            recommendedTargetId: "cron-main:cron-job-1",
+            targetType: "conversation",
+            resumeMode: "cron_main_conversation",
+            summary: "Digest completed.",
+            nextAction: "Open the linked conversation.",
+            checkpoints: {
+              openCount: 0,
+              blockerCount: 0,
+              labels: ["scope:cron", "session:main"],
+            },
+            progress: {
+              current: "cron:ran",
+              recent: ["Digest completed."],
+            },
+          },
+        },
+      ],
+      headline: "runs=3; running=1; failed=1; skipped=1; recoverable=1; recovery=1/2; cron=2; heartbeat=1; linked=2; main=1; isolated=1",
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-background-continuation-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-background-continuation-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-background-continuation-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.backgroundContinuationRuntime).toMatchObject({
+      totals: {
+        totalRuns: 3,
+        runningRuns: 1,
+        failedRuns: 1,
+      },
+      kindCounts: {
+        cron: 2,
+        heartbeat: 1,
+        subtask: 0,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "background_continuation_runtime",
+        name: "Background Continuation Runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes external outbound runtime summary when audit data is available", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const previousConfirm = process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+  process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = "false";
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    externalOutboundAuditStore: {
+      async append() {},
+      async listRecent() {
+        return [
+          {
+            timestamp: 1710000000000,
+            sourceConversationId: "conv-1",
+            sourceChannel: "webchat" as const,
+            targetChannel: "feishu" as const,
+            targetSessionKey: "channel=feishu:chat=chat-1",
+            resolution: "latest_binding" as const,
+            decision: "confirmed" as const,
+            delivery: "sent" as const,
+            contentPreview: "hello",
+          },
+          {
+            timestamp: 1710000002000,
+            sourceConversationId: "conv-2",
+            sourceChannel: "webchat" as const,
+            targetChannel: "qq" as const,
+            requestedSessionKey: "channel=qq:chat=chat-2",
+            resolution: "explicit_session_key" as const,
+            decision: "auto_approved" as const,
+            delivery: "failed" as const,
+            contentPreview: "resolve fail",
+            errorCode: "binding_not_found",
+            error: "not found",
+          },
+          {
+            timestamp: 1710000004000,
+            sourceConversationId: "conv-3",
+            sourceChannel: "webchat" as const,
+            targetChannel: "discord" as const,
+            targetSessionKey: "channel=discord:chat=room-1",
+            resolution: "latest_binding" as const,
+            decision: "confirmed" as const,
+            delivery: "failed" as const,
+            contentPreview: "send fail",
+            errorCode: "send_failed",
+            error: "send failed",
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-external-outbound-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-external-outbound-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-external-outbound-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.externalOutboundRuntime).toMatchObject({
+      requireConfirmation: false,
+      totals: {
+        totalRecords: 3,
+        sentCount: 1,
+        failedCount: 2,
+        resolveFailedCount: 1,
+        deliveryFailedCount: 1,
+      },
+      channelCounts: {
+        feishu: 1,
+        qq: 1,
+        discord: 1,
+      },
+      errorCodeCounts: {
+        binding_not_found: 1,
+        send_failed: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "external_outbound_runtime",
+        name: "External Outbound Runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    if (typeof previousConfirm === "string") {
+      process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = previousConfirm;
+    } else {
+      delete process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+    }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes deployment backend summary from unified profile config", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.writeFile(path.join(stateDir, "deployment-backends.json"), `${JSON.stringify({
+    version: 1,
+    selectedProfileId: "docker-main",
+    profiles: [
+      {
+        id: "local-default",
+        label: "Local Default",
+        backend: "local",
+        enabled: true,
+        workspace: {
+          mode: "direct",
+        },
+        credentials: {
+          mode: "inherit_env",
+        },
+        observability: {
+          logMode: "local",
+        },
+      },
+      {
+        id: "docker-main",
+        label: "Docker Main",
+        backend: "docker",
+        enabled: true,
+        runtime: {
+          service: "belldandy-gateway",
+          composeFile: "docker-compose.yml",
+        },
+        workspace: {
+          mode: "mount",
+          remotePath: "/workspace",
+        },
+        credentials: {
+          mode: "env_file",
+          ref: ".env.deploy",
+        },
+        observability: {
+          logMode: "docker",
+        },
+      },
+      {
+        id: "ssh-burst",
+        label: "SSH Burst",
+        backend: "ssh",
+        enabled: false,
+        runtime: {
+          host: "gateway.internal",
+          user: "admin",
+          port: 2222,
+        },
+        workspace: {
+          mode: "sync",
+          remotePath: "/srv/star-sanctuary",
+        },
+        credentials: {
+          mode: "ssh_agent",
+        },
+        observability: {
+          logMode: "ssh",
+        },
+      },
+    ],
+  }, null, 2)}\n`, "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-deployment-backends",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-deployment-backends"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-deployment-backends");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.deploymentBackends).toMatchObject({
+      summary: {
+        profileCount: 3,
+        enabledCount: 2,
+        warningCount: 0,
+        selectedProfileId: "docker-main",
+        selectedResolved: true,
+        selectedBackend: "docker",
+        backendCounts: {
+          local: 1,
+          docker: 1,
+          ssh: 1,
+        },
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "deployment_backends",
+        name: "Deployment Backends",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor keeps delegation protocol green when only legacy completed subtasks exist", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const legacyTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-doctor-legacy",
+      agentId: "reviewer",
+      instruction: "Legacy completed task",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(legacyTask.id, {
+    status: "done",
+    output: "legacy done",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-delegation-legacy-only",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-delegation-legacy-only"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-delegation-legacy-only");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.delegationObservability?.summary).toMatchObject({
+      totalCount: 1,
+      protocolBackedCount: 0,
+      activeCount: 0,
+      completedCount: 1,
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "delegation_protocol",
+        name: "Delegation Protocol",
+        status: "pass",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes recent subtask query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const runningTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-subtask-trace",
+      agentId: "coder",
+      instruction: "Need runtime trace",
+      channel: "subtask",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(runningTask.id, "sub_trace_1");
+
+  const doneTask = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-subtask-trace",
+      agentId: "reviewer",
+      instruction: "Archive me",
+    },
+  });
+  await subTaskRuntimeStore.completeTask(doneTask.id, {
+    status: "done",
+    output: "archivable output",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+    stopSubTask: async (taskId, reason) => subTaskRuntimeStore.markStopped(taskId, {
+      reason: reason ?? "Stopped from trace test.",
+      sessionId: "sub_trace_1",
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-list",
+      method: "subtask.list",
+      params: { conversationId: "conv-subtask-trace", includeArchived: true },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-get",
+      method: "subtask.get",
+      params: { taskId: doneTask.id },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-stop",
+      method: "subtask.stop",
+      params: { taskId: runningTask.id, reason: "Stop for trace" },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-trace-archive",
+      method: "subtask.archive",
+      params: { taskId: doneTask.id, reason: "Archive for trace" },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-get"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-stop"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-trace-archive"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-subtask-trace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-subtask-trace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-subtask-trace");
+
+    expect(response.ok).toBe(true);
+    const traces = response.payload?.queryRuntime?.traces ?? [];
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "subtask-trace-list",
+        method: "subtask.list",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "subtask-trace-get",
+        method: "subtask.get",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "subtask-trace-stop",
+        method: "subtask.stop",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "subtask-trace-archive",
+        method: "subtask.archive",
+        status: "completed",
+      }),
+    ]));
+
+    const stopTrace = traces.find((item: any) => item.traceId === "subtask-trace-stop");
+    const archiveTrace = traces.find((item: any) => item.traceId === "subtask-trace-archive");
+    expect(stopTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "task_loaded",
+      "task_stopped",
+      "completed",
+    ]));
+    expect(archiveTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "task_loaded",
+      "task_archived",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes recent workspace query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  await fs.promises.mkdir(path.join(stateDir, "docs"), { recursive: true });
+  await fs.promises.writeFile(path.join(stateDir, "docs", "note.md"), "# hello", "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "workspace-trace-list", method: "workspace.list", params: { path: "docs" } }));
+    ws.send(JSON.stringify({ type: "req", id: "workspace-trace-read", method: "workspace.read", params: { path: "docs/note.md" } }));
+    ws.send(JSON.stringify({ type: "req", id: "workspace-trace-write", method: "workspace.write", params: { path: "docs/generated.md", content: "generated" } }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-read"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-write"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-workspace-trace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-workspace-trace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-workspace-trace");
+
+    expect(response.ok).toBe(true);
+    const traces = response.payload?.queryRuntime?.traces ?? [];
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "workspace-trace-list",
+        method: "workspace.list",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "workspace-trace-read",
+        method: "workspace.read",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "workspace-trace-write",
+        method: "workspace.write",
+        status: "completed",
+      }),
+    ]));
+
+    const listTrace = traces.find((item: any) => item.traceId === "workspace-trace-list");
+    const readTrace = traces.find((item: any) => item.traceId === "workspace-trace-read");
+    const writeTrace = traces.find((item: any) => item.traceId === "workspace-trace-write");
+    expect(listTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_listed",
+      "completed",
+    ]));
+    expect(readTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_read",
+      "completed",
+    ]));
+    expect(writeTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_written",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes workspace.readSource and tools query runtime lifecycle traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-tools-workspace-"));
+  await fs.promises.writeFile(path.join(workspaceRoot, "source.ts"), "export const value = 1;\n", "utf-8");
+
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  const confirmationStore = new ToolControlConfirmationStore();
+  let toolExecutor!: ToolExecutor;
+  toolExecutor = new ToolExecutor({
+    tools: [
+      createContractedTestTool("alpha_builtin"),
+      createContractedTestTool("beta_builtin"),
+      createToolSettingsControlTool({
+        toolsConfigManager,
+        getControlMode: () => "auto",
+        listRegisteredTools: () => toolExecutor.getRegisteredToolNames(),
+        confirmationStore,
+      }),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    additionalWorkspaceRoots: [workspaceRoot],
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "workspace-trace-read-source",
+      method: "workspace.readSource",
+      params: { path: path.join(workspaceRoot, "source.ts") },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-trace-list",
+      method: "tools.list",
+      params: {},
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-trace-update",
+      method: "tools.update",
+      params: { disabled: { builtin: ["alpha_builtin"] } },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "workspace-trace-read-source"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-trace-list"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-trace-update"));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-tools-workspace-trace", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-tools-workspace-trace"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-tools-workspace-trace");
+
+    expect(response.ok).toBe(true);
+    const traces = response.payload?.queryRuntime?.traces ?? [];
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        traceId: "workspace-trace-read-source",
+        method: "workspace.readSource",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "tools-trace-list",
+        method: "tools.list",
+        status: "completed",
+      }),
+      expect.objectContaining({
+        traceId: "tools-trace-update",
+        method: "tools.update",
+        status: "completed",
+      }),
+    ]));
+
+    const sourceTrace = traces.find((item: any) => item.traceId === "workspace-trace-read-source");
+    const toolsListTrace = traces.find((item: any) => item.traceId === "tools-trace-list");
+    const toolsUpdateTrace = traces.find((item: any) => item.traceId === "tools-trace-update");
+    expect(sourceTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "workspace_target_resolved",
+      "workspace_source_read",
+      "completed",
+    ]));
+    expect(toolsListTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "tool_inventory_loaded",
+      "tool_visibility_built",
+      "completed",
+    ]));
+    expect(toolsUpdateTrace?.stages.map((item: any) => item.stage)).toEqual(expect.arrayContaining([
+      "request_validated",
+      "tool_settings_updated",
+      "completed",
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

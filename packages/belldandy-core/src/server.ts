@@ -1058,6 +1058,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       detachDurableExtractionBroadcast?.();
       await websocketRuntime.close();
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+      await durableExtractionRuntime?.close();
+      await memoryUsageAccounting.flush();
     },
     broadcast: broadcastEvent,
     requestDurableExtractionFromDigest,
