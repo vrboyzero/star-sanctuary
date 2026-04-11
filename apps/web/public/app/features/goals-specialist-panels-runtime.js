@@ -1,0 +1,873 @@
+import { decodeContinuationAction } from "./continuation-targets.js";
+
+function parseStringList(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => typeof item === "string" ? item.trim() : "")
+    .filter(Boolean);
+}
+
+function parseLearningReviewInput(rawInput) {
+  if (!rawInput || typeof rawInput !== "object") return null;
+  const summary = rawInput.summary && typeof rawInput.summary === "object" ? rawInput.summary : {};
+  return {
+    summary: {
+      available: summary.available === true,
+      headline: summary.headline ? String(summary.headline) : "",
+      memorySignalCount: Number(summary.memorySignalCount || 0),
+      candidateSignalCount: Number(summary.candidateSignalCount || 0),
+      reviewSignalCount: Number(summary.reviewSignalCount || 0),
+      nudgeCount: Number(summary.nudgeCount || 0),
+    },
+    summaryLines: parseStringList(rawInput.summaryLines),
+    nudges: parseStringList(rawInput.nudges),
+  };
+}
+
+function parseGoalProgressEntries(rawContent) {
+  if (typeof rawContent !== "string" || !rawContent.trim()) return [];
+  const entries = [];
+  const sections = rawContent.split(/^##\s+/m).filter(Boolean);
+  for (const section of sections) {
+    const newlineIndex = section.indexOf("\n");
+    const at = newlineIndex >= 0 ? section.slice(0, newlineIndex).trim() : section.trim();
+    const body = newlineIndex >= 0 ? section.slice(newlineIndex + 1) : "";
+    const lines = body
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const data = {};
+    for (const line of lines) {
+      const itemMatch = /^-\s+([^:]+):\s*(.*)$/.exec(line);
+      if (!itemMatch) continue;
+      data[itemMatch[1].trim().toLowerCase()] = itemMatch[2].trim();
+    }
+    entries.push({
+      at,
+      event: data.event || "",
+      title: data.title || "",
+      nodeId: data.node || "",
+      status: data.status || "",
+      runId: data.run || "",
+      checkpointId: data.checkpoint || "",
+      summary: data.summary || "",
+      note: data.note || "",
+    });
+  }
+  return entries;
+}
+
+function normalizeGoalBoardId(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function parseGoalBoardRef(rawBoardRef) {
+  const item = rawBoardRef && typeof rawBoardRef === "object" ? rawBoardRef : {};
+  return {
+    boardId: normalizeGoalBoardId(item.boardId || item.id),
+    linkedAt: typeof item.linkedAt === "string" && item.linkedAt.trim() ? item.linkedAt.trim() : "",
+    updatedAt: typeof item.updatedAt === "string" && item.updatedAt.trim() ? item.updatedAt.trim() : "",
+  };
+}
+
+function parseGoalReviewGovernanceSummary(rawSummary, parseGoalCheckpoints) {
+  if (!rawSummary || typeof rawSummary !== "object") return null;
+  const summary = rawSummary;
+  const governanceConfig = summary.governanceConfig && typeof summary.governanceConfig === "object" ? summary.governanceConfig : {};
+  const notificationsState = summary.notifications && typeof summary.notifications === "object" ? summary.notifications : {};
+  const dispatchesState = summary.notificationDispatches && typeof summary.notificationDispatches === "object" ? summary.notificationDispatches : {};
+  const actionableReviews = Array.isArray(summary.actionableReviews) ? summary.actionableReviews : [];
+  const overdueReviews = Array.isArray(summary.overdueReviews) ? summary.overdueReviews : [];
+  const templates = Array.isArray(governanceConfig.templates) ? governanceConfig.templates : [];
+  const reviewers = Array.isArray(governanceConfig.reviewers) ? governanceConfig.reviewers : [];
+  const notifications = Array.isArray(notificationsState.items) ? notificationsState.items : [];
+  const dispatches = Array.isArray(dispatchesState.items) ? dispatchesState.items : [];
+  return {
+    generatedAt: summary.generatedAt ? String(summary.generatedAt) : "",
+    summary: summary.summary ? String(summary.summary) : "",
+    governanceConfigPath: summary.governanceConfigPath ? String(summary.governanceConfigPath) : "",
+    notificationsPath: summary.notificationsPath ? String(summary.notificationsPath) : "",
+    notificationDispatchesPath: summary.notificationDispatchesPath ? String(summary.notificationDispatchesPath) : "",
+    notificationDispatchCounts: summary.notificationDispatchCounts && typeof summary.notificationDispatchCounts === "object"
+      ? summary.notificationDispatchCounts
+      : { total: dispatches.length, byChannel: {}, byStatus: {} },
+    reviewStatusCounts: summary.reviewStatusCounts && typeof summary.reviewStatusCounts === "object" ? summary.reviewStatusCounts : {},
+    reviewTypeCounts: summary.reviewTypeCounts && typeof summary.reviewTypeCounts === "object" ? summary.reviewTypeCounts : {},
+    workflowPendingCount: Number(summary.workflowPendingCount || 0),
+    workflowOverdueCount: Number(summary.workflowOverdueCount || 0),
+    checkpointWorkflowPendingCount: Number(summary.checkpointWorkflowPendingCount || 0),
+    checkpointWorkflowOverdueCount: Number(summary.checkpointWorkflowOverdueCount || 0),
+    templates: templates.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `template-${index + 1}`,
+        title: data.title ? String(data.title) : data.id ? String(data.id) : `template-${index + 1}`,
+        target: data.target ? String(data.target) : "all",
+        mode: data.mode ? String(data.mode) : "single",
+      };
+    }),
+    reviewers: reviewers.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `reviewer-${index + 1}`,
+        name: data.name ? String(data.name) : data.id ? String(data.id) : `reviewer-${index + 1}`,
+        reviewerRole: data.reviewerRole ? String(data.reviewerRole) : "",
+      };
+    }),
+    notifications: notifications.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `notification-${index + 1}`,
+        kind: data.kind ? String(data.kind) : "sla_reminder",
+        targetType: data.targetType ? String(data.targetType) : "suggestion_review",
+        targetId: data.targetId ? String(data.targetId) : "",
+        recipient: data.recipient ? String(data.recipient) : "",
+        message: data.message ? String(data.message) : "",
+        createdAt: data.createdAt ? String(data.createdAt) : "",
+      };
+    }),
+    notificationDispatches: dispatches.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `dispatch-${index + 1}`,
+        notificationId: data.notificationId ? String(data.notificationId) : "",
+        channel: data.channel ? String(data.channel) : "goal_detail",
+        status: data.status ? String(data.status) : "pending",
+        targetType: data.targetType ? String(data.targetType) : "suggestion_review",
+        targetId: data.targetId ? String(data.targetId) : "",
+        recipient: data.recipient ? String(data.recipient) : "",
+        routeKey: data.routeKey ? String(data.routeKey) : "",
+        message: data.message ? String(data.message) : "",
+        createdAt: data.createdAt ? String(data.createdAt) : "",
+        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+      };
+    }),
+    learningReviewInput: parseLearningReviewInput(summary.learningReviewInput),
+    recommendations: parseStringList(summary.recommendations),
+    actionableReviews: actionableReviews.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `review-${index + 1}`,
+        title: data.title ? String(data.title) : data.id ? String(data.id) : `review-${index + 1}`,
+        suggestionType: data.suggestionType ? String(data.suggestionType) : "method_candidate",
+        status: data.status ? String(data.status) : "pending_review",
+        reviewer: data.reviewer ? String(data.reviewer) : "",
+        nodeId: data.nodeId ? String(data.nodeId) : "",
+        suggestionId: data.suggestionId ? String(data.suggestionId) : "",
+        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+      };
+    }),
+    overdueReviews: overdueReviews.map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      return {
+        id: data.id ? String(data.id) : `overdue-review-${index + 1}`,
+        title: data.title ? String(data.title) : data.id ? String(data.id) : `overdue-review-${index + 1}`,
+        suggestionType: data.suggestionType ? String(data.suggestionType) : "method_candidate",
+        status: data.status ? String(data.status) : "pending_review",
+      };
+    }),
+    actionableCheckpoints: parseGoalCheckpoints({
+      items: Array.isArray(summary.actionableCheckpoints) ? summary.actionableCheckpoints : [],
+    }),
+  };
+}
+
+function normalizeGoalNodeStatus(status) {
+  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (!normalized) return "pending";
+  if (["done", "completed", "complete", "success", "succeeded", "approved"].includes(normalized)) return "completed";
+  if (["running", "executing", "in_progress", "processing"].includes(normalized)) return "running";
+  if (["blocked", "failed", "error"].includes(normalized)) return "blocked";
+  return normalized;
+}
+
+function normalizeCheckpointStatus(status) {
+  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (!normalized) return "required";
+  return normalized;
+}
+
+function parseGoalGraphNodes(rawGraph) {
+  if (!rawGraph || typeof rawGraph !== "object") return [];
+  const rawNodes = Array.isArray(rawGraph.nodes)
+    ? rawGraph.nodes
+    : rawGraph.nodes && typeof rawGraph.nodes === "object"
+      ? Object.values(rawGraph.nodes)
+      : [];
+  return rawNodes.map((node, index) => {
+    const item = node && typeof node === "object" ? node : {};
+    const data = item.data && typeof item.data === "object" ? item.data : {};
+    const id = item.id || data.id || `node-${index + 1}`;
+    const title = item.title || data.title || item.name || data.name || id;
+    const status = normalizeGoalNodeStatus(item.status || data.status);
+    const phase = item.phase || data.phase || item.stage || data.stage || "";
+    const owner = item.owner || data.owner || "";
+    const lastRunId = item.lastRunId || data.lastRunId || "";
+    const summary = item.summary || data.summary || "";
+    const artifacts = Array.isArray(item.artifacts)
+      ? item.artifacts
+      : Array.isArray(data.artifacts)
+        ? data.artifacts
+        : [];
+    return {
+      id: String(id),
+      title: String(title),
+      status,
+      phase: phase ? String(phase) : "",
+      owner: owner ? String(owner) : "",
+      lastRunId: lastRunId ? String(lastRunId) : "",
+      summary: summary ? String(summary) : "",
+      artifacts: artifacts
+        .map((artifact) => typeof artifact === "string" ? artifact.trim() : "")
+        .filter(Boolean),
+    };
+  });
+}
+
+function parseGoalCheckpoints(rawCheckpoints) {
+  if (!rawCheckpoints || typeof rawCheckpoints !== "object") return [];
+  const items = Array.isArray(rawCheckpoints.items) ? rawCheckpoints.items : [];
+  return items.map((item, index) => {
+    const data = item && typeof item === "object" ? item : {};
+    const id = data.id || `checkpoint-${index + 1}`;
+    const title = data.title || data.summary || id;
+    const history = Array.isArray(data.history)
+      ? data.history.map((entry, historyIndex) => {
+        const historyItem = entry && typeof entry === "object" ? entry : {};
+        return {
+          action: historyItem.action ? String(historyItem.action) : `history-${historyIndex + 1}`,
+          status: normalizeCheckpointStatus(historyItem.status),
+          at: historyItem.at ? String(historyItem.at) : "",
+          summary: historyItem.summary ? String(historyItem.summary) : "",
+          note: historyItem.note ? String(historyItem.note) : "",
+          actor: historyItem.actor ? String(historyItem.actor) : "",
+          reviewer: historyItem.reviewer ? String(historyItem.reviewer) : "",
+          reviewerRole: historyItem.reviewerRole ? String(historyItem.reviewerRole) : "",
+          requestedBy: historyItem.requestedBy ? String(historyItem.requestedBy) : "",
+          decidedBy: historyItem.decidedBy ? String(historyItem.decidedBy) : "",
+          slaAt: historyItem.slaAt ? String(historyItem.slaAt) : "",
+          runId: historyItem.runId ? String(historyItem.runId) : "",
+        };
+      })
+      : [];
+    return {
+      id: String(id),
+      title: String(title),
+      status: normalizeCheckpointStatus(data.status),
+      updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+      requestedAt: data.requestedAt ? String(data.requestedAt) : "",
+      decidedAt: data.decidedAt ? String(data.decidedAt) : "",
+      summary: data.summary ? String(data.summary) : "",
+      note: data.note ? String(data.note) : "",
+      reviewer: data.reviewer ? String(data.reviewer) : "",
+      reviewerRole: data.reviewerRole ? String(data.reviewerRole) : "",
+      requestedBy: data.requestedBy ? String(data.requestedBy) : "",
+      decidedBy: data.decidedBy ? String(data.decidedBy) : "",
+      slaAt: data.slaAt ? String(data.slaAt) : "",
+      nodeId: data.nodeId ? String(data.nodeId) : "",
+      runId: data.runId ? String(data.runId) : "",
+      workflow: data.workflow && typeof data.workflow === "object" ? data.workflow : null,
+      history,
+    };
+  });
+}
+
+function normalizeGoalCapabilityPlanStatus(status) {
+  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
+  if (normalized === "orchestrated") return "orchestrated";
+  return "planned";
+}
+
+function normalizeGoalCapabilityExecutionMode(mode) {
+  const normalized = typeof mode === "string" ? mode.trim().toLowerCase() : "";
+  return normalized === "multi_agent" ? "multi_agent" : "single_agent";
+}
+
+function normalizeGoalCapabilityRiskLevel(level) {
+  const normalized = typeof level === "string" ? level.trim().toLowerCase() : "";
+  if (normalized === "high") return "high";
+  if (normalized === "medium") return "medium";
+  return "low";
+}
+
+function parseGoalCapabilityPlans(rawPlans) {
+  if (!rawPlans || typeof rawPlans !== "object") return [];
+  const items = Array.isArray(rawPlans.items) ? rawPlans.items : [];
+  return items
+    .map((item, index) => {
+      const data = item && typeof item === "object" ? item : {};
+      const checkpoint = data.checkpoint && typeof data.checkpoint === "object" ? data.checkpoint : {};
+      const actualUsage = data.actualUsage && typeof data.actualUsage === "object" ? data.actualUsage : {};
+      const analysis = data.analysis && typeof data.analysis === "object" ? data.analysis : {};
+      const orchestration = data.orchestration && typeof data.orchestration === "object" ? data.orchestration : {};
+      const coordinationPlan = orchestration.coordinationPlan && typeof orchestration.coordinationPlan === "object"
+        ? orchestration.coordinationPlan
+        : {};
+      const rolePolicy = coordinationPlan.rolePolicy && typeof coordinationPlan.rolePolicy === "object"
+        ? coordinationPlan.rolePolicy
+        : {};
+      const verifierHandoff = orchestration.verifierHandoff && typeof orchestration.verifierHandoff === "object"
+        ? orchestration.verifierHandoff
+        : {};
+      const verifierResult = orchestration.verifierResult && typeof orchestration.verifierResult === "object"
+        ? orchestration.verifierResult
+        : {};
+      const methods = Array.isArray(data.methods) ? data.methods : [];
+      const skills = Array.isArray(data.skills) ? data.skills : [];
+      const mcpServers = Array.isArray(data.mcpServers) ? data.mcpServers : [];
+      const subAgents = Array.isArray(data.subAgents) ? data.subAgents : [];
+      const deviations = Array.isArray(analysis.deviations) ? analysis.deviations : [];
+      const delegationResults = Array.isArray(orchestration.delegationResults) ? orchestration.delegationResults : [];
+      const verifierFindings = Array.isArray(verifierResult.findings) ? verifierResult.findings : [];
+      return {
+        id: data.id ? String(data.id) : `plan-${index + 1}`,
+        goalId: data.goalId ? String(data.goalId) : "",
+        nodeId: data.nodeId ? String(data.nodeId) : "",
+        runId: data.runId ? String(data.runId) : "",
+        status: normalizeGoalCapabilityPlanStatus(data.status),
+        executionMode: normalizeGoalCapabilityExecutionMode(data.executionMode),
+        riskLevel: normalizeGoalCapabilityRiskLevel(data.riskLevel),
+        objective: data.objective ? String(data.objective) : "",
+        summary: data.summary ? String(data.summary) : "",
+        queryHints: parseStringList(data.queryHints),
+        reasoning: parseStringList(data.reasoning),
+        methods: methods
+          .map((entry) => entry && typeof entry === "object" ? {
+            file: entry.file ? String(entry.file) : "",
+            title: entry.title ? String(entry.title) : "",
+            score: Number.isFinite(entry.score) ? Number(entry.score) : null,
+            reason: entry.reason ? String(entry.reason) : "",
+          } : null)
+          .filter((entry) => entry && entry.file),
+        skills: skills
+          .map((entry) => entry && typeof entry === "object" ? {
+            name: entry.name ? String(entry.name) : "",
+            description: entry.description ? String(entry.description) : "",
+            score: Number.isFinite(entry.score) ? Number(entry.score) : null,
+            priority: entry.priority ? String(entry.priority) : "",
+            source: entry.source ? String(entry.source) : "",
+            reason: entry.reason ? String(entry.reason) : "",
+          } : null)
+          .filter((entry) => entry && entry.name),
+        mcpServers: mcpServers
+          .map((entry) => entry && typeof entry === "object" ? {
+            serverId: entry.serverId ? String(entry.serverId) : "",
+            status: entry.status ? String(entry.status) : "unknown",
+            toolCount: Number.isFinite(entry.toolCount) ? Number(entry.toolCount) : null,
+            resourceCount: Number.isFinite(entry.resourceCount) ? Number(entry.resourceCount) : null,
+            reason: entry.reason ? String(entry.reason) : "",
+          } : null)
+          .filter((entry) => entry && entry.serverId),
+        subAgents: subAgents
+          .map((entry) => entry && typeof entry === "object" ? {
+            agentId: entry.agentId ? String(entry.agentId) : "",
+            role: entry.role ? String(entry.role) : "",
+            objective: entry.objective ? String(entry.objective) : "",
+            reason: entry.reason ? String(entry.reason) : "",
+            deliverable: entry.deliverable ? String(entry.deliverable) : "",
+            handoffToVerifier: entry.handoffToVerifier === true,
+          } : null)
+          .filter((entry) => entry && entry.agentId && entry.objective),
+        gaps: parseStringList(data.gaps),
+        checkpoint: {
+          required: checkpoint.required === true,
+          reasons: parseStringList(checkpoint.reasons),
+          approvalMode: checkpoint.approvalMode ? String(checkpoint.approvalMode) : "none",
+          requiredRequestFields: parseStringList(checkpoint.requiredRequestFields),
+          requiredDecisionFields: parseStringList(checkpoint.requiredDecisionFields),
+          suggestedTitle: checkpoint.suggestedTitle ? String(checkpoint.suggestedTitle) : "",
+          suggestedNote: checkpoint.suggestedNote ? String(checkpoint.suggestedNote) : "",
+          suggestedReviewer: checkpoint.suggestedReviewer ? String(checkpoint.suggestedReviewer) : "",
+          suggestedReviewerRole: checkpoint.suggestedReviewerRole ? String(checkpoint.suggestedReviewerRole) : "",
+          suggestedSlaHours: Number.isFinite(checkpoint.suggestedSlaHours) ? Number(checkpoint.suggestedSlaHours) : null,
+          escalationMode: checkpoint.escalationMode ? String(checkpoint.escalationMode) : "none",
+        },
+        actualUsage: {
+          methods: parseStringList(actualUsage.methods),
+          skills: parseStringList(actualUsage.skills),
+          mcpServers: parseStringList(actualUsage.mcpServers),
+          toolNames: parseStringList(actualUsage.toolNames),
+          updatedAt: actualUsage.updatedAt ? String(actualUsage.updatedAt) : "",
+        },
+        analysis: {
+          status: typeof analysis.status === "string" && analysis.status.trim() ? String(analysis.status).trim() : "pending",
+          summary: analysis.summary ? String(analysis.summary) : "",
+          deviations: deviations
+            .map((entry) => entry && typeof entry === "object" ? {
+              kind: entry.kind ? String(entry.kind) : "",
+              area: entry.area ? String(entry.area) : "",
+              severity: entry.severity ? String(entry.severity) : "",
+              summary: entry.summary ? String(entry.summary) : "",
+              planned: parseStringList(entry.planned),
+              actual: parseStringList(entry.actual),
+            } : null)
+            .filter(Boolean),
+          recommendations: parseStringList(analysis.recommendations),
+          updatedAt: analysis.updatedAt ? String(analysis.updatedAt) : "",
+        },
+        generatedAt: data.generatedAt ? String(data.generatedAt) : "",
+        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+        orchestratedAt: data.orchestratedAt ? String(data.orchestratedAt) : "",
+        orchestration: {
+          claimed: orchestration.claimed === true,
+          delegated: orchestration.delegated === true,
+          delegationCount: Number.isFinite(orchestration.delegationCount) ? Number(orchestration.delegationCount) : 0,
+          coordinationPlan: coordinationPlan.summary ? {
+            summary: String(coordinationPlan.summary),
+            plannedDelegationCount: Number.isFinite(coordinationPlan.plannedDelegationCount)
+              ? Number(coordinationPlan.plannedDelegationCount)
+              : 0,
+            rolePolicy: {
+              selectedRoles: parseStringList(rolePolicy.selectedRoles),
+              selectionReasons: parseStringList(rolePolicy.selectionReasons),
+              verifierRole: rolePolicy.verifierRole ? String(rolePolicy.verifierRole) : "",
+              fanInStrategy: rolePolicy.fanInStrategy ? String(rolePolicy.fanInStrategy) : "",
+            },
+          } : null,
+          delegationResults: delegationResults
+            .map((entry) => entry && typeof entry === "object" ? {
+              agentId: entry.agentId ? String(entry.agentId) : "",
+              role: entry.role ? String(entry.role) : "",
+              status: entry.status ? String(entry.status) : "success",
+              summary: entry.summary ? String(entry.summary) : "",
+              error: entry.error ? String(entry.error) : "",
+              sessionId: entry.sessionId ? String(entry.sessionId) : "",
+              taskId: entry.taskId ? String(entry.taskId) : "",
+              outputPath: entry.outputPath ? String(entry.outputPath) : "",
+            } : null)
+            .filter((entry) => entry && entry.agentId && entry.summary),
+          verifierHandoff: verifierHandoff.summary ? {
+            status: verifierHandoff.status ? String(verifierHandoff.status) : "not_required",
+            verifierRole: verifierHandoff.verifierRole ? String(verifierHandoff.verifierRole) : "",
+            verifierAgentId: verifierHandoff.verifierAgentId ? String(verifierHandoff.verifierAgentId) : "",
+            verifierTaskId: verifierHandoff.verifierTaskId ? String(verifierHandoff.verifierTaskId) : "",
+            verifierSessionId: verifierHandoff.verifierSessionId ? String(verifierHandoff.verifierSessionId) : "",
+            summary: String(verifierHandoff.summary),
+            sourceAgentIds: parseStringList(verifierHandoff.sourceAgentIds),
+            sourceTaskIds: parseStringList(verifierHandoff.sourceTaskIds),
+            outputPath: verifierHandoff.outputPath ? String(verifierHandoff.outputPath) : "",
+            notes: parseStringList(verifierHandoff.notes),
+            error: verifierHandoff.error ? String(verifierHandoff.error) : "",
+          } : null,
+          verifierResult: verifierResult.summary ? {
+            status: verifierResult.status ? String(verifierResult.status) : "pending",
+            summary: String(verifierResult.summary),
+            recommendation: verifierResult.recommendation ? String(verifierResult.recommendation) : "unknown",
+            findings: verifierFindings
+              .map((entry) => entry && typeof entry === "object" ? {
+                severity: entry.severity ? String(entry.severity) : "low",
+                summary: entry.summary ? String(entry.summary) : "",
+              } : null)
+              .filter((entry) => entry && entry.summary),
+            evidenceTaskIds: parseStringList(verifierResult.evidenceTaskIds),
+            outputPath: verifierResult.outputPath ? String(verifierResult.outputPath) : "",
+            generatedAt: verifierResult.generatedAt ? String(verifierResult.generatedAt) : "",
+          } : null,
+          notes: parseStringList(orchestration.notes),
+        },
+      };
+    })
+    .sort((a, b) => {
+      const left = new Date(b.updatedAt || b.generatedAt || 0).getTime();
+      const right = new Date(a.updatedAt || a.generatedAt || 0).getTime();
+      return left - right;
+    });
+}
+
+export function createGoalsSpecialistPanelsRuntimeFeature({
+  refs,
+  getGoalsState,
+  getGoalsCapabilityPanelFeature,
+  getGoalsReadonlyPanelsFeature,
+  getGoalsTrackingPanelFeature,
+  getGoalsGovernancePanelFeature,
+  readSourceFile,
+  goalRuntimeFilePath,
+  safeJsonParse,
+  sendReq,
+  makeId,
+  getCanvasContextFeature,
+  openSourcePath,
+  openContinuationAction,
+  generateGoalHandoff,
+  runGoalApprovalScan,
+  runGoalSuggestionReviewDecision,
+  runGoalSuggestionReviewEscalation,
+  runGoalCheckpointEscalation,
+  applyGoalContinuationFocus,
+}) {
+  const { goalsDetailEl } = refs;
+
+  function renderGoalCapabilityPanelLoading() {
+    return getGoalsCapabilityPanelFeature?.()?.renderGoalCapabilityPanelLoading();
+  }
+
+  function renderGoalCapabilityPanelError(message) {
+    return getGoalsCapabilityPanelFeature?.()?.renderGoalCapabilityPanelError(message);
+  }
+
+  function renderGoalCapabilityPanel(goal, payload) {
+    return getGoalsCapabilityPanelFeature?.()?.renderGoalCapabilityPanel(goal, payload);
+  }
+
+  function getCachedGoalCapabilityEntry(goalId) {
+    const goalsState = getGoalsState();
+    if (!goalId || !goalsState?.capabilityCache || typeof goalsState.capabilityCache !== "object") return null;
+    return goalsState.capabilityCache[goalId] || null;
+  }
+
+  async function ensureGoalCapabilityCache(goal, options = {}) {
+    if (!goal?.id) return null;
+    const goalsState = getGoalsState();
+    const goalId = goal.id;
+    const forceReload = options.forceReload === true;
+    const cached = getCachedGoalCapabilityEntry(goalId);
+    if (cached && !forceReload) return cached;
+    if (!forceReload && goalsState.capabilityPending?.[goalId]) {
+      return goalsState.capabilityPending[goalId];
+    }
+
+    const pending = (async () => {
+      const [tasksFile, capabilityPlansFile] = await Promise.all([
+        readSourceFile(goal.tasksPath),
+        readSourceFile(goalRuntimeFilePath(goal, "capability-plans.json")),
+      ]);
+      const rawGraph = tasksFile?.content ? safeJsonParse(tasksFile.content) : null;
+      const rawPlans = capabilityPlansFile?.content ? safeJsonParse(capabilityPlansFile.content) : null;
+      const nodes = parseGoalGraphNodes(rawGraph);
+      const entry = {
+        plans: parseGoalCapabilityPlans(rawPlans),
+        nodeMap: Object.fromEntries(nodes.map((node) => [node.id, node.title])),
+        capabilityPath: goalRuntimeFilePath(goal, "capability-plans.json"),
+        loadedAt: new Date().toISOString(),
+        readError: !tasksFile && !capabilityPlansFile,
+      };
+      goalsState.capabilityCache[goalId] = entry;
+      return entry;
+    })();
+
+    goalsState.capabilityPending[goalId] = pending;
+    try {
+      return await pending;
+    } finally {
+      delete goalsState.capabilityPending[goalId];
+    }
+  }
+
+  async function loadGoalCapabilityData(goal) {
+    if (!goal || !goalsDetailEl) return;
+    const goalsState = getGoalsState();
+    const trackingGoalId = goal.id;
+    const seq = goalsState.capabilitySeq + 1;
+    goalsState.capabilitySeq = seq;
+    renderGoalCapabilityPanelLoading();
+
+    const entry = await ensureGoalCapabilityCache(goal, { forceReload: true });
+    if (goalsState.capabilitySeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+    if (!entry || entry.readError) {
+      renderGoalCapabilityPanelError("无法读取 tasks.json / capability-plans.json。若使用了自定义路径，请确认该路径已加入可操作区。");
+      return;
+    }
+
+    renderGoalCapabilityPanel(goal, {
+      plans: entry.plans,
+      nodeMap: entry.nodeMap,
+    });
+    applyGoalContinuationFocus?.(goal.id);
+  }
+
+  function renderGoalCanvasPanelLoading() {
+    return getGoalsReadonlyPanelsFeature?.()?.renderGoalCanvasPanelLoading();
+  }
+
+  function renderGoalCanvasPanel(goal, payload) {
+    return getGoalsReadonlyPanelsFeature?.()?.renderGoalCanvasPanel(goal, payload);
+  }
+
+  async function loadGoalCanvasData(goal) {
+    if (!goal || !goalsDetailEl) return;
+    const goalsState = getGoalsState();
+    const trackingGoalId = goal.id;
+    const seq = goalsState.canvasSeq + 1;
+    goalsState.canvasSeq = seq;
+    renderGoalCanvasPanelLoading();
+
+    const boardRefFile = await readSourceFile(goalRuntimeFilePath(goal, "board-ref.json"));
+    if (goalsState.canvasSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+    const rawBoardRef = boardRefFile?.content ? safeJsonParse(boardRefFile.content) : null;
+    const parsed = parseGoalBoardRef(rawBoardRef);
+
+    renderGoalCanvasPanel(goal, {
+      runtimeBoardId: parsed.boardId,
+      linkedAt: parsed.linkedAt,
+      updatedAt: parsed.updatedAt,
+      readError: !boardRefFile,
+    });
+  }
+
+  async function openGoalCanvasList(goalId) {
+    return getCanvasContextFeature?.()?.openGoalCanvasList(goalId);
+  }
+
+  async function openGoalCanvasBoard(boardId, goalId) {
+    return getCanvasContextFeature?.()?.openGoalCanvasBoard(boardId, goalId);
+  }
+
+  function renderGoalTrackingPanelLoading() {
+    return getGoalsTrackingPanelFeature?.()?.renderGoalTrackingPanelLoading();
+  }
+
+  function renderGoalTrackingPanel(goal, payload) {
+    return getGoalsTrackingPanelFeature?.()?.renderGoalTrackingPanel(goal, payload);
+  }
+
+  function renderGoalTrackingPanelError(message) {
+    return getGoalsTrackingPanelFeature?.()?.renderGoalTrackingPanelError(message);
+  }
+
+  async function loadGoalTrackingData(goal) {
+    if (!goal || !goalsDetailEl) return;
+    const goalsState = getGoalsState();
+    const trackingGoalId = goal.id;
+    const seq = goalsState.trackingSeq + 1;
+    goalsState.trackingSeq = seq;
+    renderGoalTrackingPanelLoading();
+
+    const [tasksFile, checkpointsFile, capabilityEntry] = await Promise.all([
+      readSourceFile(goal.tasksPath),
+      readSourceFile(goalRuntimeFilePath(goal, "checkpoints.json")),
+      ensureGoalCapabilityCache(goal),
+    ]);
+
+    if (goalsState.trackingSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+    const rawGraph = tasksFile?.content ? safeJsonParse(tasksFile.content) : null;
+    const rawCheckpoints = checkpointsFile?.content ? safeJsonParse(checkpointsFile.content) : null;
+
+    if (!tasksFile && !checkpointsFile) {
+      goalsState.trackingCheckpoints = [];
+      renderGoalTrackingPanelError("无法读取 tasks.json / checkpoints.json。若使用了自定义路径，请确认该路径已加入可操作区。");
+      return;
+    }
+
+    const parsedCheckpoints = parseGoalCheckpoints(rawCheckpoints).map((item) => ({
+      ...item,
+      goalId: item.goalId || trackingGoalId,
+    }));
+    goalsState.trackingCheckpoints = parsedCheckpoints;
+    renderGoalTrackingPanel(goal, {
+      nodes: parseGoalGraphNodes(rawGraph),
+      checkpoints: parsedCheckpoints,
+      capabilityPlans: capabilityEntry?.plans || [],
+      focusNodeId: goalsState.continuationFocusNode?.goalId === trackingGoalId
+        ? goalsState.continuationFocusNode?.nodeId || ""
+        : "",
+    });
+    applyGoalContinuationFocus?.(goal.id);
+  }
+
+  function renderGoalProgressPanelLoading() {
+    return getGoalsReadonlyPanelsFeature?.()?.renderGoalProgressPanelLoading();
+  }
+
+  function renderGoalProgressPanel(entries) {
+    return getGoalsReadonlyPanelsFeature?.()?.renderGoalProgressPanel(entries);
+  }
+
+  async function loadGoalProgressData(goal) {
+    if (!goal || !goalsDetailEl) return;
+    const goalsState = getGoalsState();
+    const trackingGoalId = goal.id;
+    const seq = (goalsState.progressSeq || 0) + 1;
+    goalsState.progressSeq = seq;
+    renderGoalProgressPanelLoading();
+
+    const progressFile = await readSourceFile(goal.progressPath);
+    if (goalsState.progressSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
+    renderGoalProgressPanel(parseGoalProgressEntries(progressFile?.content || ""));
+  }
+
+  function renderGoalHandoffPanelLoading() {
+    return getGoalsReadonlyPanelsFeature?.()?.renderGoalHandoffPanelLoading();
+  }
+
+  function bindGoalHandoffPanelActions(goal) {
+    const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
+    if (!panel || !goal) return;
+    panel.querySelectorAll("[data-continuation-action]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const action = decodeContinuationAction(node.getAttribute("data-continuation-action") || "");
+        if (!action) return;
+        void openContinuationAction(action);
+      });
+    });
+    panel.querySelectorAll("[data-goal-generate-handoff]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const goalId = node.getAttribute("data-goal-generate-handoff") || goal.id;
+        if (!goalId) return;
+        void generateGoalHandoff(goalId);
+      });
+    });
+    panel.querySelectorAll("[data-open-source]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const sourcePath = node.getAttribute("data-open-source");
+        if (!sourcePath) return;
+        void openSourcePath(sourcePath);
+      });
+    });
+  }
+
+  function renderGoalHandoffPanelError(goal, message) {
+    return getGoalsReadonlyPanelsFeature?.()?.renderGoalHandoffPanelError(goal, message);
+  }
+
+  function renderGoalHandoffPanel(goal, handoff, continuationState = null) {
+    return getGoalsReadonlyPanelsFeature?.()?.renderGoalHandoffPanel(goal, handoff, continuationState);
+  }
+
+  async function loadGoalHandoffData(goal) {
+    if (!goal || !goalsDetailEl) return;
+    const goalsState = getGoalsState();
+    const trackingGoalId = goal.id;
+    const seq = (goalsState.handoffSeq || 0) + 1;
+    goalsState.handoffSeq = seq;
+    renderGoalHandoffPanelLoading();
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "goal.handoff.get",
+      params: { goalId: goal.id },
+    });
+    if (goalsState.handoffSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+    if (!res?.ok || !res.payload?.handoff) {
+      renderGoalHandoffPanelError(goal, res?.error?.message || "无法读取 goal handoff snapshot。");
+      return;
+    }
+    renderGoalHandoffPanel(goal, res.payload.handoff, res.payload.continuationState || null);
+  }
+
+  function renderGoalReviewGovernancePanelLoading() {
+    return getGoalsGovernancePanelFeature?.()?.renderGoalReviewGovernancePanelLoading();
+  }
+
+  function renderGoalReviewGovernancePanelError(message) {
+    return getGoalsGovernancePanelFeature?.()?.renderGoalReviewGovernancePanelError(message);
+  }
+
+  function renderGoalReviewGovernancePanel(goal, data) {
+    return getGoalsGovernancePanelFeature?.()?.renderGoalReviewGovernancePanel(goal, data);
+  }
+
+  function bindGoalReviewGovernanceActions(goal) {
+    const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
+    if (!panel || !goal) return;
+    panel.querySelectorAll("[data-goal-approval-scan]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const goalId = node.getAttribute("data-goal-approval-scan") || goal.id;
+        if (!goalId) return;
+        void runGoalApprovalScan(goalId, { autoEscalate: node.getAttribute("data-goal-auto-escalate") !== "false" });
+      });
+    });
+    panel.querySelectorAll("[data-goal-suggestion-decision]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const goalId = node.getAttribute("data-goal-suggestion-goal-id") || goal.id;
+        const reviewId = node.getAttribute("data-goal-suggestion-review-id");
+        const decision = node.getAttribute("data-goal-suggestion-decision");
+        const suggestionType = node.getAttribute("data-goal-suggestion-type");
+        const suggestionId = node.getAttribute("data-goal-suggestion-id");
+        if (!goalId || !reviewId || !decision) return;
+        void runGoalSuggestionReviewDecision(goalId, {
+          reviewId,
+          decision,
+          suggestionType,
+          suggestionId,
+        });
+      });
+    });
+    panel.querySelectorAll("[data-goal-suggestion-escalate]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const goalId = node.getAttribute("data-goal-suggestion-goal-id") || goal.id;
+        const reviewId = node.getAttribute("data-goal-suggestion-review-id");
+        const suggestionType = node.getAttribute("data-goal-suggestion-type");
+        const suggestionId = node.getAttribute("data-goal-suggestion-id");
+        if (!goalId || !reviewId) return;
+        void runGoalSuggestionReviewEscalation(goalId, {
+          reviewId,
+          suggestionType,
+          suggestionId,
+        });
+      });
+    });
+    panel.querySelectorAll("[data-goal-checkpoint-escalate]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const goalId = node.getAttribute("data-goal-checkpoint-goal-id") || goal.id;
+        const nodeId = node.getAttribute("data-goal-checkpoint-node-id");
+        const checkpointId = node.getAttribute("data-goal-checkpoint-id");
+        if (!goalId || !nodeId || !checkpointId) return;
+        void runGoalCheckpointEscalation(goalId, nodeId, checkpointId);
+      });
+    });
+  }
+
+  async function loadGoalReviewGovernanceData(goal) {
+    if (!goal || !goalsDetailEl) return;
+    const goalsState = getGoalsState();
+    const trackingGoalId = goal.id;
+    const seq = (goalsState.governanceSeq || 0) + 1;
+    goalsState.governanceSeq = seq;
+    renderGoalReviewGovernancePanelLoading();
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "goal.review_governance.summary",
+      params: { goalId: goal.id },
+    });
+    if (goalsState.governanceSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+    if (!res?.ok || !res.payload?.summary) {
+      renderGoalReviewGovernancePanelError(res?.error?.message || "无法读取 review governance summary。");
+      return;
+    }
+    const parsed = parseGoalReviewGovernanceSummary(res.payload.summary, parseGoalCheckpoints);
+    goalsState.governanceCache[goal.id] = parsed;
+    renderGoalReviewGovernancePanel(goal, parsed);
+    bindGoalReviewGovernanceActions(goal);
+  }
+
+  return {
+    renderGoalCapabilityPanelLoading,
+    renderGoalCapabilityPanelError,
+    renderGoalCapabilityPanel,
+    getCachedGoalCapabilityEntry,
+    ensureGoalCapabilityCache,
+    loadGoalCapabilityData,
+    parseGoalProgressEntries,
+    normalizeGoalBoardId,
+    parseGoalBoardRef,
+    renderGoalCanvasPanelLoading,
+    renderGoalCanvasPanel,
+    loadGoalCanvasData,
+    openGoalCanvasList,
+    openGoalCanvasBoard,
+    renderGoalTrackingPanelLoading,
+    renderGoalTrackingPanel,
+    renderGoalTrackingPanelError,
+    loadGoalTrackingData,
+    renderGoalProgressPanelLoading,
+    renderGoalProgressPanel,
+    loadGoalProgressData,
+    renderGoalHandoffPanelLoading,
+    bindGoalHandoffPanelActions,
+    renderGoalHandoffPanelError,
+    renderGoalHandoffPanel,
+    loadGoalHandoffData,
+    parseGoalReviewGovernanceSummary,
+    renderGoalReviewGovernancePanelLoading,
+    renderGoalReviewGovernancePanelError,
+    renderGoalReviewGovernancePanel,
+    bindGoalReviewGovernanceActions,
+    loadGoalReviewGovernanceData,
+  };
+}

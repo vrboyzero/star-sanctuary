@@ -27,25 +27,27 @@ import {
   subtasksState,
 } from "./app/bootstrap/state.js";
 import { createAttachmentsFeature } from "./app/features/attachments.js";
+import { createAgentRuntimeFeature } from "./app/features/agent-runtime.js";
 import { createAgentSessionCacheFeature } from "./app/features/agent-session-cache.js";
 import { createChatEventsFeature } from "./app/features/chat-events.js";
 import { createChatNetworkFeature } from "./app/features/chat-network.js";
 import { createChatUiFeature } from "./app/features/chat-ui.js";
 import { createCanvasContextFeature } from "./app/features/canvas-context.js";
-import { decodeContinuationAction } from "./app/features/continuation-targets.js";
 import { buildDoctorChatSummary } from "./app/features/doctor-observability.js";
 import { createAppShellFeature } from "./app/features/app-shell.js";
 import { createGoalsDetailFeature } from "./app/features/goals-detail.js";
 import { createGoalsGovernancePanelFeature } from "./app/features/goals-governance-panel.js";
 import { createGoalsCapabilityPanelFeature } from "./app/features/goals-capability-panel.js";
+import { createGoalsActionsRuntimeFeature } from "./app/features/goals-actions-runtime.js";
 import { createGoalsOverviewFeature } from "./app/features/goals-overview.js";
+import { createGoalsSpecialistPanelsRuntimeFeature } from "./app/features/goals-specialist-panels-runtime.js";
+import { createGoalsStateRuntimeFeature } from "./app/features/goals-state-runtime.js";
 import { createGoalsReadonlyPanelsFeature } from "./app/features/goals-readonly-panels.js";
 import { createGoalsRuntimeFeature } from "./app/features/goals-runtime.js";
 import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-panel.js";
 import { createMemoryDetailRenderFeature } from "./app/features/memory-detail-render.js";
 import { createMemoryRuntimeFeature } from "./app/features/memory-runtime.js";
 import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
-import { buildResidentPanelSummary } from "./app/features/resident-observability-summary.js";
 import { createSessionNavigationFeature } from "./app/features/session-navigation.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
 import { createSettingsRuntimeFeature } from "./app/features/settings-runtime.js";
@@ -320,6 +322,7 @@ const themeController = createThemeController({
 });
 
 let attachmentsFeature = null;
+let agentRuntimeFeature = null;
 const agentSessionCacheFeature = createAgentSessionCacheFeature();
 let workspaceFeature = null;
 let chatEventsFeature = null;
@@ -327,10 +330,13 @@ let chatNetworkFeature = null;
 let chatUiFeature = null;
 let canvasContextFeature = null;
 let goalsCapabilityPanelFeature = null;
+let goalsActionsRuntimeFeature = null;
 let goalsDetailFeature = null;
 let goalsGovernancePanelFeature = null;
 let goalsOverviewFeature = null;
 let goalsReadonlyPanelsFeature = null;
+let goalsSpecialistPanelsFeature = null;
+let goalsStateRuntimeFeature = null;
 let goalsRuntimeFeature = null;
 let goalsTrackingPanelFeature = null;
 let memoryDetailRenderFeature = null;
@@ -341,7 +347,6 @@ let settingsRuntimeFeature = null;
 let subtasksOverviewFeature = null;
 let subtasksRuntimeFeature = null;
 let sessionNavigationFeature = null;
-let residentAgentActivationSeq = 0;
 
 function debugLog(...args) {
   if (!webchatDebugEnabled) return;
@@ -434,22 +439,15 @@ localeController.subscribe(() => {
   memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
   sessionDigestFeature?.refreshLocale?.();
   refreshSubtasksLocale();
-  renderAgentRightPanel();
+  agentRuntimeFeature?.refreshLocale?.();
   syncSaveWorkspaceRootsButton();
   renderTaskTokenHistory();
 });
 
 // 身份信息（从 hello-ok 获取）
-let agentName = "Agent";
-let agentAvatar = "🤖";
 let userName = "User";
 let userAvatar = "👤";
-let defaultAgentName = "Agent";
-let defaultAgentAvatar = "🤖";
 const agentCatalog = new Map();
-let agentPanelUploadInput = null;
-let agentPanelUploadTargetAgentId = "";
-let agentPanelUploadBusyAgentId = "";
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
 const IMAGE_COMPRESS_TRIGGER_BYTES = 800 * 1024;
@@ -606,63 +604,11 @@ if (goalCreateSubmitBtn) {
     void submitGoalCreateForm();
   });
 }
-if (goalCreateModal) {
-  goalCreateModal.addEventListener("click", (event) => {
-    if (event.target === goalCreateModal) {
-      toggleGoalCreateModal(false);
-    }
-  });
-}
 if (goalCheckpointActionCloseBtn) {
   goalCheckpointActionCloseBtn.addEventListener("click", () => toggleGoalCheckpointActionModal(false));
 }
 if (goalCheckpointActionCancelBtn) {
   goalCheckpointActionCancelBtn.addEventListener("click", () => toggleGoalCheckpointActionModal(false));
-}
-if (goalCheckpointActionSubmitBtn) {
-  goalCheckpointActionSubmitBtn.addEventListener("click", () => {
-    void submitGoalCheckpointActionForm();
-  });
-}
-if (goalCheckpointActionModal) {
-  goalCheckpointActionModal.addEventListener("click", (event) => {
-    if (event.target === goalCheckpointActionModal) {
-      if (goalCheckpointActionSubmitBtn?.disabled) return;
-      toggleGoalCheckpointActionModal(false);
-    }
-  });
-}
-if (goalCreateTitleEl) {
-  goalCreateTitleEl.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void submitGoalCreateForm();
-    }
-  });
-}
-if (goalCreateObjectiveEl) {
-  goalCreateObjectiveEl.addEventListener("keydown", (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-      event.preventDefault();
-      void submitGoalCreateForm();
-    }
-  });
-}
-if (goalCheckpointActionSummaryEl) {
-  goalCheckpointActionSummaryEl.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void submitGoalCheckpointActionForm();
-    }
-  });
-}
-if (goalCheckpointActionNoteEl) {
-  goalCheckpointActionNoteEl.addEventListener("keydown", (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-      event.preventDefault();
-      void submitGoalCheckpointActionForm();
-    }
-  });
 }
 if (memoryTaskGoalFilterClearBtn) {
   memoryTaskGoalFilterClearBtn.addEventListener("click", () => {
@@ -825,17 +771,9 @@ async function loadWorkspaceRootsFromServer() {
 
 function handleHelloOk(frame) {
   invalidateServerConfigCache();
-  if (frame.agentName) {
-    agentName = frame.agentName;
-    defaultAgentName = frame.agentName;
-  }
-  if (frame.agentAvatar) {
-    agentAvatar = frame.agentAvatar;
-    defaultAgentAvatar = frame.agentAvatar;
-  }
+  agentRuntimeFeature?.applyHelloIdentity(frame);
   if (frame.userName) userName = frame.userName;
   if (frame.userAvatar) userAvatar = frame.userAvatar;
-  chatUiFeature?.refreshAvatar("bot", agentAvatar);
   chatUiFeature?.refreshAvatar("me", userAvatar);
 
   sessionTotalTokens = 0;
@@ -865,11 +803,7 @@ function handleHelloOk(frame) {
   workspaceFeature?.refreshAfterConnectionReady();
   loadWorkspaceRootsFromServer();
   void loadAgentList().then((agents) => {
-    if (!residentAgentRosterEnabled) return;
-    const selectedAgentId = agentSelectEl?.value || agents?.[0]?.id || "default";
-    if (selectedAgentId) {
-      void activateResidentAgentConversation(selectedAgentId, { forceEnsure: true, switchToChat: false });
-    }
+    void agentRuntimeFeature?.activatePreferredResidentAgent(agents);
   });
   void loadModelList();
 
@@ -976,10 +910,7 @@ chatUiFeature = createChatUiFeature({
     messagesEl,
     chatSection,
   },
-  getAgentProfile: () => ({
-    name: agentName,
-    avatar: agentAvatar,
-  }),
+  getAgentProfile: () => agentRuntimeFeature?.getAgentProfile() || { name: "Agent", avatar: "🤖" },
   getUserProfile: () => ({
     name: userName,
     avatar: userAvatar,
@@ -992,6 +923,22 @@ chatUiFeature = createChatUiFeature({
 });
 
 chatUiFeature.initCopyButtonDelegation();
+
+goalsStateRuntimeFeature = createGoalsStateRuntimeFeature({
+  refs: {
+    goalsSection,
+  },
+  getGoalsState: () => goalsState,
+  getGoalsOverviewFeature: () => goalsOverviewFeature,
+  getGoalsDetailFeature: () => goalsDetailFeature,
+  renderCanvasGoalContext,
+  loadGoalTrackingData: (goal) => loadGoalTrackingData(goal),
+  loadGoalProgressData: (goal) => loadGoalProgressData(goal),
+  loadGoalHandoffData: (goal) => loadGoalHandoffData(goal),
+  loadGoalCapabilityData: (goal) => loadGoalCapabilityData(goal),
+  loadGoalReviewGovernanceData: (goal) => loadGoalReviewGovernanceData(goal),
+  loadGoalCanvasData: (goal) => loadGoalCanvasData(goal),
+});
 
 goalsOverviewFeature = createGoalsOverviewFeature({
   refs: {
@@ -1011,8 +958,8 @@ goalsOverviewFeature = createGoalsOverviewFeature({
   formatDateTime,
   summarizeSourcePath,
   formatGoalPathSource,
-  sortGoals,
-  getGoalById,
+  sortGoals: (items) => goalsStateRuntimeFeature?.sortGoals(items) || [],
+  getGoalById: (goalId) => goalsStateRuntimeFeature?.getGoalById(goalId) || null,
   renderGoalDetail,
   renderCanvasGoalContext,
   onResumeGoal: (goalId) => resumeGoal(goalId),
@@ -1138,6 +1085,68 @@ goalsCapabilityPanelFeature = createGoalsCapabilityPanelFeature({
   onOpenSourcePath: (sourcePath) => openSourcePath(sourcePath),
   onOpenSubtask: (taskId) => openSubtaskById(taskId),
   t: localeController.t,
+});
+
+goalsActionsRuntimeFeature = createGoalsActionsRuntimeFeature({
+  refs: {
+    goalCreateModal,
+    goalCreateTitleEl,
+    goalCreateObjectiveEl,
+    goalCreateRootEl,
+    goalCreateAutoResumeEl,
+    goalCreateSubmitBtn,
+    goalCheckpointActionModal,
+    goalCheckpointActionSummaryEl,
+    goalCheckpointActionNoteEl,
+    goalCheckpointActionSubmitBtn,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  getGoalById: (goalId) => goalsStateRuntimeFeature?.getGoalById(goalId) || null,
+  loadGoals: (forceReload = false, preferredGoalId) => loadGoals(forceReload, preferredGoalId),
+  goalBaseConversationId,
+  openConversationSession,
+  isConversationForGoal,
+  getActiveConversationId: () => activeConversationId,
+  setActiveConversationId: (conversationId) => {
+    activeConversationId = conversationId;
+  },
+  renderCanvasGoalContext,
+  getChatEventsFeature: () => chatEventsFeature,
+  loadGoalHandoffData: (goal) => loadGoalHandoffData(goal),
+  loadGoalReviewGovernanceData: (goal) => loadGoalReviewGovernanceData(goal),
+  loadGoalTrackingData: (goal) => loadGoalTrackingData(goal),
+  getGoalsRuntimeFeature: () => goalsRuntimeFeature,
+  getGoalActionActor: () => getGoalActionActor(),
+  showNotice,
+  t: localeController.t,
+});
+goalsActionsRuntimeFeature.bindUi();
+
+goalsSpecialistPanelsFeature = createGoalsSpecialistPanelsRuntimeFeature({
+  refs: {
+    goalsDetailEl,
+  },
+  getGoalsState: () => goalsState,
+  getGoalsCapabilityPanelFeature: () => goalsCapabilityPanelFeature,
+  getGoalsReadonlyPanelsFeature: () => goalsReadonlyPanelsFeature,
+  getGoalsTrackingPanelFeature: () => goalsTrackingPanelFeature,
+  getGoalsGovernancePanelFeature: () => goalsGovernancePanelFeature,
+  readSourceFile,
+  goalRuntimeFilePath,
+  safeJsonParse,
+  sendReq,
+  makeId,
+  getCanvasContextFeature: () => canvasContextFeature,
+  openSourcePath: (sourcePath) => openSourcePath(sourcePath),
+  openContinuationAction: (action) => openContinuationAction(action),
+  generateGoalHandoff: (goalId) => generateGoalHandoff(goalId),
+  runGoalApprovalScan: (goalId, options = {}) => runGoalApprovalScan(goalId, options),
+  runGoalSuggestionReviewDecision: (goalId, options = {}) => runGoalSuggestionReviewDecision(goalId, options),
+  runGoalSuggestionReviewEscalation: (goalId, options = {}) => runGoalSuggestionReviewEscalation(goalId, options),
+  runGoalCheckpointEscalation: (goalId, nodeId, checkpointId) => runGoalCheckpointEscalation(goalId, nodeId, checkpointId),
+  applyGoalContinuationFocus: (goalId) => applyGoalContinuationFocus(goalId),
 });
 
 goalsRuntimeFeature = createGoalsRuntimeFeature({
@@ -1332,6 +1341,64 @@ sessionDigestFeature = createSessionDigestFeature({
   t: localeController.t,
 });
 
+agentRuntimeFeature = createAgentRuntimeFeature({
+  refs: {
+    agentSelectEl,
+    agentRightPanelEl,
+    goalsDetailEl,
+    messagesEl,
+  },
+  agentCatalog,
+  residentAgentRosterEnabled,
+  storageKey: AGENT_ID_KEY,
+  initialIdentity: {
+    agentName: "Agent",
+    agentAvatar: "🤖",
+    defaultAgentName: "Agent",
+    defaultAgentAvatar: "🤖",
+  },
+  agentSessionCacheFeature,
+  sendReq,
+  makeId,
+  getHttpAuthHeaders,
+  getActiveConversationId: () => activeConversationId,
+  setActiveConversationId: (conversationId) => {
+    activeConversationId = conversationId;
+  },
+  renderCanvasGoalContext,
+  switchMode,
+  getChatEventsFeature: () => chatEventsFeature,
+  getSessionDigestFeature: () => sessionDigestFeature,
+  renderConversationMessages,
+  loadConversationMeta: (conversationId, options) => loadConversationMeta(conversationId, options),
+  refreshMemoryViewerForAgentSwitch: (agentId) => refreshMemoryViewerForAgentSwitch(agentId),
+  getSubtasksState: () => subtasksState,
+  openSubtaskBySession: (sessionId, options = {}) => openSubtaskBySession(sessionId, options),
+  openSubtaskById: (taskId) => openSubtaskById(taskId),
+  loadSubtasks: (forceSelectFirst = false) => loadSubtasks(forceSelectFirst),
+  getGoalsState: () => goalsState,
+  loadGoals: (forceReload = false, preferredGoalId) => loadGoals(forceReload, preferredGoalId),
+  resumeGoal: (goalId, options = {}) => resumeGoal(goalId, options),
+  getMemoryViewerState: () => memoryViewerState,
+  switchMemoryViewerTab: (tab) => switchMemoryViewerTab(tab),
+  loadMemoryViewer: (forceSelectFirst = false) => loadMemoryViewer(forceSelectFirst),
+  openTaskFromAudit: (taskId) => openTaskFromAudit(taskId),
+  openConversationSession: (conversationId, hintText, options = {}) => openConversationSession(conversationId, hintText, options),
+  appendMessage,
+  getChatUiFeature: () => chatUiFeature,
+  onAgentIdentityChanged: () => {
+    memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
+    memoryViewerFeature?.syncSharedReviewFilterUi?.();
+  },
+  onAgentCatalogChanged: () => {
+    memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
+    memoryViewerFeature?.syncSharedReviewFilterUi?.();
+  },
+  showNotice,
+  localeController,
+  t: localeController.t,
+});
+
 function loadAgentList() {
   return chatNetworkFeature?.loadAgentList();
 }
@@ -1341,24 +1408,11 @@ function loadModelList() {
 }
 
 function getCurrentAgentSelection() {
-  const selected = agentSelectEl?.value?.trim();
-  return selected || "default";
+  return agentRuntimeFeature?.getCurrentAgentSelection() || "default";
 }
 
 function getCurrentAgentLabel() {
-  const selectedAgentId = getCurrentAgentSelection();
-  const selectedAgent = agentCatalog.get(selectedAgentId);
-  if (selectedAgent?.displayName || selectedAgent?.name) {
-    return selectedAgent.displayName || selectedAgent.name;
-  }
-  const selectedIndex = typeof agentSelectEl?.selectedIndex === "number" ? agentSelectEl.selectedIndex : -1;
-  if (selectedIndex >= 0) {
-    const optionLabel = agentSelectEl?.options?.[selectedIndex]?.text;
-    if (typeof optionLabel === "string" && optionLabel.trim()) {
-      return optionLabel.trim();
-    }
-  }
-  return "";
+  return agentRuntimeFeature?.getCurrentAgentLabel() || "";
 }
 
 function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
@@ -1414,378 +1468,41 @@ async function refreshMemoryViewerForAgentSwitch(agentId = getCurrentAgentSelect
 }
 
 function syncAgentRuntimeEntry(agentId, patch = {}) {
-  if (!agentId) return null;
-  const existing = agentCatalog.get(agentId);
-  if (!existing) return null;
-  const next = {
-    ...existing,
-    ...patch,
-  };
-  agentCatalog.set(agentId, next);
-  return next;
+  return agentRuntimeFeature?.syncAgentRuntimeEntry(agentId, patch) || null;
 }
 
 async function ensureResidentAgentSession(agentId) {
-  if (!residentAgentRosterEnabled || !agentId) return null;
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "agent.session.ensure",
-    params: { agentId },
-  });
-  if (!res || !res.ok || !res.payload?.conversationId) {
-    return null;
-  }
-
-  const mainConversationId = typeof res.payload.mainConversationId === "string" && res.payload.mainConversationId.trim()
-    ? res.payload.mainConversationId.trim()
-    : String(res.payload.conversationId);
-  const lastConversationId = typeof res.payload.lastConversationId === "string" && res.payload.lastConversationId.trim()
-    ? res.payload.lastConversationId.trim()
-    : String(res.payload.conversationId);
-  agentSessionCacheFeature.bindAgentConversation(agentId, mainConversationId, { main: true });
-  agentSessionCacheFeature.bindAgentConversation(agentId, lastConversationId);
-  syncAgentRuntimeEntry(agentId, {
-    status: typeof res.payload.status === "string" ? res.payload.status : "idle",
-    mainConversationId,
-    lastConversationId,
-    lastActiveAt: typeof res.payload.lastActiveAt === "number" ? res.payload.lastActiveAt : undefined,
-  });
-  return res.payload;
+  return agentRuntimeFeature?.ensureResidentAgentSession(agentId) || null;
 }
 
 async function activateResidentAgentConversation(agentId, options = {}) {
-  if (!agentId) return;
-  const activationSeq = ++residentAgentActivationSeq;
-  const forceEnsure = options.forceEnsure === true;
-  const switchToChat = options.switchToChat !== false;
-  let conversationId = agentSessionCacheFeature.getAgentConversation(agentId)
-    || agentCatalog.get(agentId)?.lastConversationId
-    || agentCatalog.get(agentId)?.mainConversationId
-    || "";
-
-  if (!conversationId || forceEnsure) {
-    const ensured = await ensureResidentAgentSession(agentId);
-    if (activationSeq !== residentAgentActivationSeq) return;
-    conversationId = typeof ensured?.conversationId === "string" ? ensured.conversationId : conversationId;
-  }
-
-  if (!conversationId) {
-    activeConversationId = null;
-    renderCanvasGoalContext();
-    chatEventsFeature?.resetStreamingState();
-    sessionDigestFeature?.clear?.();
-    renderConversationMessages([]);
-    return;
-  }
-
-  agentSessionCacheFeature.bindAgentConversation(agentId, conversationId, {
-    main: conversationId === agentCatalog.get(agentId)?.mainConversationId,
-  });
-  activeConversationId = conversationId;
-  renderCanvasGoalContext();
-  if (switchToChat) {
-    switchMode("chat");
-  }
-  chatEventsFeature?.resetStreamingState();
-
-  const cachedMessages = agentSessionCacheFeature.getConversationMessages(conversationId);
-  if (cachedMessages.length > 0) {
-    renderConversationMessages(cachedMessages);
-  } else {
-    renderConversationMessages([]);
-  }
-
-  void loadConversationMeta(conversationId, { showGoalEntryBanner: true });
-  void sessionDigestFeature?.loadSessionDigest(conversationId);
+  return agentRuntimeFeature?.activateResidentAgentConversation(agentId, options);
 }
 
 function applyUploadedAvatarChange({ role, agentId, avatarPath }) {
-  const bustedPath = `${avatarPath}${avatarPath.includes("?") ? "&" : "?"}v=${Date.now()}`;
   if (role === "agent") {
-    const targetAgentId = agentId && typeof agentId === "string" ? agentId : getCurrentAgentSelection();
-    updateAgentCatalogAvatar(targetAgentId, bustedPath);
-    if (targetAgentId === "default") {
-      defaultAgentAvatar = bustedPath;
-    }
-    syncSelectedAgentIdentity();
-    chatUiFeature?.refreshAvatar("bot", agentAvatar);
-    renderAgentRightPanel();
+    agentRuntimeFeature?.applyUploadedAgentAvatarChange({ agentId, avatarPath });
     return;
   }
+  const bustedPath = `${avatarPath}${avatarPath.includes("?") ? "&" : "?"}v=${Date.now()}`;
   userAvatar = bustedPath;
   chatUiFeature?.refreshAvatar("me", userAvatar);
 }
 
-function ensureAgentPanelAvatarUploadInput() {
-  if (agentPanelUploadInput) return agentPanelUploadInput;
-
-  agentPanelUploadInput = document.createElement("input");
-  agentPanelUploadInput.type = "file";
-  agentPanelUploadInput.accept = "image/png,image/jpeg,image/gif,image/webp";
-  agentPanelUploadInput.className = "hidden";
-  agentPanelUploadInput.addEventListener("change", () => {
-    const selectedFile = agentPanelUploadInput?.files?.[0];
-    const targetAgentId = agentPanelUploadTargetAgentId;
-    agentPanelUploadTargetAgentId = "";
-    if (agentPanelUploadInput) {
-      agentPanelUploadInput.value = "";
-    }
-    if (!selectedFile || !targetAgentId) return;
-    void uploadAgentPanelAvatar(targetAgentId, selectedFile);
-  });
-  document.body.appendChild(agentPanelUploadInput);
-  return agentPanelUploadInput;
-}
-
-function openAgentPanelAvatarPicker(agentId) {
-  if (!agentId || agentPanelUploadBusyAgentId) return;
-  agentPanelUploadTargetAgentId = agentId;
-  ensureAgentPanelAvatarUploadInput().click();
-}
-
-async function uploadAgentPanelAvatar(agentId, file) {
-  if (!agentId || !file || agentPanelUploadBusyAgentId) return;
-
-  agentPanelUploadBusyAgentId = agentId;
-  renderAgentRightPanel();
-
-  try {
-    const formData = new FormData();
-    formData.append("role", "agent");
-    if (agentId !== "default") {
-      formData.append("agentId", agentId);
-    }
-    formData.append("file", file, file.name || "avatar.png");
-
-    const res = await fetch("/api/avatar/upload", {
-      method: "POST",
-      body: formData,
-      headers: getHttpAuthHeaders(),
-    });
-    const payload = await res.json().catch(() => null);
-    if (!res.ok || !payload?.ok) {
-      const message = payload?.error?.message || localeController.t("agentPanel.avatarUploadFailedMessage", {}, "头像上传失败。");
-      showNotice(
-        localeController.t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
-        message,
-        "error",
-        3800,
-      );
-      return;
-    }
-
-    const avatarPath = typeof payload.avatarPath === "string" ? payload.avatarPath : "";
-    if (!avatarPath) {
-      showNotice(
-        localeController.t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
-        localeController.t("agentPanel.avatarMissingPathMessage", {}, "服务端未返回头像路径。"),
-        "error",
-        3800,
-      );
-      return;
-    }
-
-    applyUploadedAvatarChange({ role: "agent", agentId, avatarPath });
-    const agentLabel = agentCatalog.get(agentId)?.displayName || agentCatalog.get(agentId)?.name || agentId;
-    showNotice(
-      localeController.t("agentPanel.avatarUpdatedTitle", {}, "头像已更新"),
-      localeController.t(
-        "agentPanel.avatarUpdatedMessage",
-        { agentName: agentLabel },
-        `${agentLabel} 的头像已写入对应的 IDENTITY.md。`,
-      ),
-      "success",
-      2200,
-    );
-  } catch (error) {
-    showNotice(
-      localeController.t("agentPanel.avatarUploadFailedTitle", {}, "头像上传失败"),
-      error instanceof Error ? error.message : String(error),
-      "error",
-      3800,
-    );
-  } finally {
-    agentPanelUploadBusyAgentId = "";
-    renderAgentRightPanel();
-  }
-}
-
 function syncAgentCatalog(agents = [], selectedAgentId = "") {
-  agentCatalog.clear();
-  for (const agent of Array.isArray(agents) ? agents : []) {
-    if (!agent || typeof agent !== "object" || !agent.id) continue;
-    const mainConversationId = typeof agent.mainConversationId === "string" ? agent.mainConversationId : "";
-    const lastConversationId = typeof agent.lastConversationId === "string" ? agent.lastConversationId : "";
-    if (mainConversationId) {
-      agentSessionCacheFeature.bindAgentConversation(agent.id, mainConversationId, { main: true });
-    }
-    if (lastConversationId) {
-      agentSessionCacheFeature.bindAgentConversation(agent.id, lastConversationId);
-    }
-    agentCatalog.set(agent.id, {
-      id: agent.id,
-      displayName: agent.displayName || agent.id,
-      name: agent.name || agent.displayName || agent.id,
-      avatar: agent.avatar || "",
-      model: agent.model || "",
-      status: typeof agent.status === "string" ? agent.status : "idle",
-      mainConversationId,
-      lastConversationId,
-      lastActiveAt: typeof agent.lastActiveAt === "number" ? agent.lastActiveAt : undefined,
-      memoryMode: typeof agent.memoryMode === "string" ? agent.memoryMode : "",
-      workspaceBinding: typeof agent.workspaceBinding === "string" ? agent.workspaceBinding : "",
-      sessionNamespace: typeof agent.sessionNamespace === "string" ? agent.sessionNamespace : "",
-      conversationDigest: agent.conversationDigest && typeof agent.conversationDigest === "object"
-        ? {
-          status: typeof agent.conversationDigest.status === "string" ? agent.conversationDigest.status : "",
-          pendingMessageCount: Number(agent.conversationDigest.pendingMessageCount) || 0,
-        }
-        : null,
-      recentTaskDigest: agent.recentTaskDigest && typeof agent.recentTaskDigest === "object"
-        ? {
-          recentCount: Number(agent.recentTaskDigest.recentCount) || 0,
-          latestTaskId: typeof agent.recentTaskDigest.latestTaskId === "string" ? agent.recentTaskDigest.latestTaskId : "",
-          latestTitle: typeof agent.recentTaskDigest.latestTitle === "string" ? agent.recentTaskDigest.latestTitle : "",
-          latestStatus: typeof agent.recentTaskDigest.latestStatus === "string" ? agent.recentTaskDigest.latestStatus : "",
-          latestFinishedAt: typeof agent.recentTaskDigest.latestFinishedAt === "string" ? agent.recentTaskDigest.latestFinishedAt : "",
-        }
-        : null,
-      recentSubtaskDigest: agent.recentSubtaskDigest && typeof agent.recentSubtaskDigest === "object"
-        ? {
-          recentCount: Number(agent.recentSubtaskDigest.recentCount) || 0,
-          latestTaskId: typeof agent.recentSubtaskDigest.latestTaskId === "string" ? agent.recentSubtaskDigest.latestTaskId : "",
-          latestSummary: typeof agent.recentSubtaskDigest.latestSummary === "string" ? agent.recentSubtaskDigest.latestSummary : "",
-          latestStatus: typeof agent.recentSubtaskDigest.latestStatus === "string" ? agent.recentSubtaskDigest.latestStatus : "",
-          latestUpdatedAt: Number(agent.recentSubtaskDigest.latestUpdatedAt) || 0,
-          latestAgentId: typeof agent.recentSubtaskDigest.latestAgentId === "string" ? agent.recentSubtaskDigest.latestAgentId : "",
-          latestParentTaskId: typeof agent.recentSubtaskDigest.latestParentTaskId === "string" ? agent.recentSubtaskDigest.latestParentTaskId : "",
-        }
-        : null,
-      experienceUsageDigest: agent.experienceUsageDigest && typeof agent.experienceUsageDigest === "object"
-        ? {
-          usageCount: Number(agent.experienceUsageDigest.usageCount) || 0,
-          methodCount: Number(agent.experienceUsageDigest.methodCount) || 0,
-          skillCount: Number(agent.experienceUsageDigest.skillCount) || 0,
-          latestAssetType: typeof agent.experienceUsageDigest.latestAssetType === "string" ? agent.experienceUsageDigest.latestAssetType : "",
-          latestAssetKey: typeof agent.experienceUsageDigest.latestAssetKey === "string" ? agent.experienceUsageDigest.latestAssetKey : "",
-          latestTaskId: typeof agent.experienceUsageDigest.latestTaskId === "string" ? agent.experienceUsageDigest.latestTaskId : "",
-          latestUsedAt: typeof agent.experienceUsageDigest.latestUsedAt === "string" ? agent.experienceUsageDigest.latestUsedAt : "",
-        }
-        : null,
-      sharedGovernance: agent.sharedGovernance && typeof agent.sharedGovernance === "object"
-        ? {
-          pendingCount: Number(agent.sharedGovernance.pendingCount) || 0,
-          claimedCount: Number(agent.sharedGovernance.claimedCount) || 0,
-        }
-        : null,
-      continuationState: agent.continuationState && typeof agent.continuationState === "object"
-        ? {
-          scope: typeof agent.continuationState.scope === "string" ? agent.continuationState.scope : "",
-          targetId: typeof agent.continuationState.targetId === "string" ? agent.continuationState.targetId : "",
-          recommendedTargetId: typeof agent.continuationState.recommendedTargetId === "string" ? agent.continuationState.recommendedTargetId : "",
-          targetType: typeof agent.continuationState.targetType === "string" ? agent.continuationState.targetType : "",
-          resumeMode: typeof agent.continuationState.resumeMode === "string" ? agent.continuationState.resumeMode : "",
-          summary: typeof agent.continuationState.summary === "string" ? agent.continuationState.summary : "",
-          nextAction: typeof agent.continuationState.nextAction === "string" ? agent.continuationState.nextAction : "",
-        }
-        : null,
-      observabilityHeadline: typeof agent.observabilityHeadline === "string" ? agent.observabilityHeadline : "",
-    });
-  }
-
-  if (agentSelectEl && selectedAgentId && agentSelectEl.value !== selectedAgentId) {
-    agentSelectEl.value = selectedAgentId;
-  }
-
-  syncSelectedAgentIdentity();
-  renderAgentRightPanel();
-  memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
-  memoryViewerFeature?.syncSharedReviewFilterUi?.();
-}
-
-function syncSelectedAgentIdentity() {
-  const selectedAgent = agentCatalog.get(getCurrentAgentSelection());
-  if (!selectedAgent) return;
-  agentName = selectedAgent.name || selectedAgent.displayName || defaultAgentName;
-  agentAvatar = selectedAgent.avatar || agentCatalog.get("default")?.avatar || defaultAgentAvatar;
-  chatUiFeature?.refreshAvatar("bot", agentAvatar);
-  memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
-  memoryViewerFeature?.syncSharedReviewFilterUi?.();
-}
-
-function updateAgentCatalogAvatar(agentId, avatarPath) {
-  const targetAgentId = agentId && agentId !== "default" ? agentId : "default";
-  const existing = agentCatalog.get(targetAgentId);
-  if (existing) {
-    existing.avatar = avatarPath;
-    agentCatalog.set(targetAgentId, existing);
-    if (targetAgentId === getCurrentAgentSelection()) {
-      agentAvatar = avatarPath;
-    }
-    return;
-  }
-
-  agentCatalog.set(targetAgentId, {
-    id: targetAgentId,
-    displayName: targetAgentId,
-    name: targetAgentId,
-    avatar: avatarPath,
-    model: "",
-  });
-  if (targetAgentId === getCurrentAgentSelection()) {
-    agentAvatar = avatarPath;
-  }
+  agentRuntimeFeature?.syncAgentCatalog(agents, selectedAgentId);
 }
 
 async function focusAgentObservabilityTarget(agentId) {
-  const targetAgentId = typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default";
-  if (agentSelectEl && agentSelectEl.value !== targetAgentId) {
-    agentSelectEl.value = targetAgentId;
-    localStorage.setItem(AGENT_ID_KEY, targetAgentId);
-  }
-  syncSelectedAgentIdentity();
-  renderAgentRightPanel();
-  await refreshMemoryViewerForAgentSwitch(targetAgentId);
-  if (residentAgentRosterEnabled) {
-    await activateResidentAgentConversation(targetAgentId, {
-      forceEnsure: true,
-      switchToChat: false,
-    });
-  }
-}
-
-function getElementsByDataValue(root, attribute, expectedValue) {
-  if (!root || !attribute || !expectedValue) return [];
-  return [...root.querySelectorAll(`[${attribute}]`)]
-    .filter((node) => node.getAttribute(attribute) === expectedValue);
+  return agentRuntimeFeature?.focusAgentObservabilityTarget(agentId);
 }
 
 function clearGoalContinuationFocus() {
-  goalsDetailEl?.querySelectorAll(".is-continuation-focus").forEach((node) => {
-    node.classList.remove("is-continuation-focus");
-  });
+  return agentRuntimeFeature?.clearGoalContinuationFocus();
 }
 
 function applyGoalContinuationFocus(goalId = goalsState.selectedId) {
-  clearGoalContinuationFocus();
-  const focus = goalsState.continuationFocusNode;
-  if (!goalsDetailEl || !focus || !focus.nodeId || !goalId || focus.goalId !== goalId) {
-    return false;
-  }
-  const matched = getElementsByDataValue(goalsDetailEl, "data-goal-node-id", focus.nodeId)
-    .map((node) => node.closest("[data-goal-continuation-focus]") || node);
-  if (!matched.length) return false;
-  matched.forEach((node) => node.classList.add("is-continuation-focus"));
-  matched
-    .map((node) => node.closest(".goal-tracking-card, .goal-capability-card"))
-    .filter(Boolean)
-    .forEach((node) => node.classList.add("is-continuation-focus"));
-  if (!focus.scrolled) {
-    matched[0].scrollIntoView({ block: "center", behavior: "smooth" });
-    focus.scrolled = true;
-  }
-  return true;
+  return agentRuntimeFeature?.applyGoalContinuationFocus(goalId) || false;
 }
 
 async function openSubtaskBySession(sessionId, options = {}) {
@@ -1793,314 +1510,15 @@ async function openSubtaskBySession(sessionId, options = {}) {
 }
 
 async function openContinuationAction(action = {}) {
-  const kind = typeof action?.kind === "string" ? action.kind : "";
-  if (!kind) return;
-
-  switch (kind) {
-    case "goalReplay":
-      if (action.goalId && action.nodeId) {
-        goalsState.continuationFocusNode = {
-          goalId: action.goalId,
-          nodeId: action.nodeId,
-          scrolled: false,
-        };
-      } else {
-        goalsState.continuationFocusNode = null;
-      }
-      subtasksState.linkedSessionContext = null;
-      subtasksState.continuationFocusSessionId = null;
-      if (!action.goalId) return;
-      await resumeGoal(action.goalId, {
-        nodeId: typeof action.nodeId === "string" ? action.nodeId : undefined,
-        checkpointId: typeof action.checkpointId === "string" ? action.checkpointId : undefined,
-        silent: true,
-      });
-      await loadGoals(true, action.goalId);
-      return;
-    case "goal":
-      goalsState.continuationFocusNode = null;
-      subtasksState.linkedSessionContext = null;
-      subtasksState.continuationFocusSessionId = null;
-      if (!action.goalId) return;
-      switchMode("goals");
-      await loadGoals(true, action.goalId);
-      return;
-    case "node":
-      if (action.goalId && action.nodeId) {
-        goalsState.continuationFocusNode = {
-          goalId: action.goalId,
-          nodeId: action.nodeId,
-          scrolled: false,
-        };
-      }
-      if (!action.goalId) return;
-      switchMode("goals");
-      await loadGoals(true, action.goalId);
-      return;
-    case "session":
-      goalsState.continuationFocusNode = null;
-      if (action.sessionId) {
-        await openSubtaskBySession(action.sessionId, { taskId: action.taskId });
-        return;
-      }
-      if (action.taskId) {
-        subtasksState.linkedSessionContext = null;
-        await openSubtaskById(action.taskId);
-      }
-      return;
-    case "conversation":
-      goalsState.continuationFocusNode = null;
-      subtasksState.continuationFocusSessionId = null;
-      if (action.conversationId) {
-        openConversationSession(
-          action.conversationId,
-          localeController.t(
-            "agentPanel.openContinuationConversationHint",
-            { conversationId: action.conversationId },
-            `Switched to continuation conversation: ${action.conversationId}`,
-          ),
-        );
-        return;
-      }
-      switchMode("chat");
-      return;
-    default:
-      return;
-  }
+  return agentRuntimeFeature?.openContinuationAction(action);
 }
 
 async function openAgentObservabilityAction(agentId, action = {}) {
-  const kind = typeof action?.kind === "string" ? action.kind : "";
-  if (!kind) return;
-
-  await focusAgentObservabilityTarget(agentId);
-
-  switch (kind) {
-    case "task":
-      if (!action.taskId) return;
-      switchMode("memory");
-      await openTaskFromAudit(action.taskId);
-      return;
-    case "tasks":
-      switchMode("memory");
-      if (memoryViewerState.tab !== "tasks") {
-        switchMemoryViewerTab("tasks");
-      } else {
-        await loadMemoryViewer(true);
-      }
-      return;
-    case "subtask":
-      if (!action.taskId) return;
-      await openSubtaskById(action.taskId);
-      return;
-    case "subtasks":
-      switchMode("subtasks");
-      await loadSubtasks(true);
-      return;
-    case "sharedReview":
-      switchMode("memory");
-      if (memoryViewerState.tab !== "sharedReview") {
-        switchMemoryViewerTab("sharedReview");
-      } else {
-        await loadMemoryViewer(true);
-      }
-      return;
-    case "goal":
-    case "node":
-    case "session":
-    case "conversation":
-      await openContinuationAction(action);
-      return;
-    default:
-      return;
-  }
-}
-
-function openAgentObservabilityModal(agent, observability) {
-  const modalOverlay = document.getElementById("agentObservabilityModal");
-  const modalTitle = document.getElementById("agentObservabilityModalTitle");
-  const modalBody = document.getElementById("agentObservabilityModalBody");
-  const modalClose = document.getElementById("agentObservabilityModalClose");
-  if (!modalOverlay || !modalBody) return;
-
-  if (modalTitle) {
-    modalTitle.textContent = agent.displayName || agent.id || "Agent";
-  }
-
-  modalBody.textContent = "";
-
-  if (Array.isArray(observability.badges) && observability.badges.length > 0) {
-    const badgesEl = document.createElement("div");
-    badgesEl.className = "agent-observability-modal-badges";
-    for (const text of observability.badges) {
-      if (!text) continue;
-      const badge = document.createElement("span");
-      badge.className = "agent-observability-modal-badge";
-      badge.textContent = text;
-      badgesEl.appendChild(badge);
-    }
-    modalBody.appendChild(badgesEl);
-  }
-
-  if (Array.isArray(observability.rows) && observability.rows.length > 0) {
-    const rowsEl = document.createElement("div");
-    rowsEl.className = "agent-observability-modal-rows";
-    for (const row of observability.rows) {
-      const rowBtn = document.createElement("button");
-      rowBtn.type = "button";
-      rowBtn.className = "agent-observability-modal-row";
-      rowBtn.title = row.value || row.label || "";
-      rowBtn.addEventListener("click", () => {
-        modalOverlay.classList.add("hidden");
-        void openAgentObservabilityAction(agent.id, row.action);
-      });
-
-      const labelEl = document.createElement("span");
-      labelEl.className = "agent-observability-modal-label";
-      labelEl.textContent = row.label || "";
-      rowBtn.appendChild(labelEl);
-
-      const valueEl = document.createElement("span");
-      valueEl.className = "agent-observability-modal-value";
-      valueEl.textContent = row.value || "";
-      rowBtn.appendChild(valueEl);
-
-      rowsEl.appendChild(rowBtn);
-    }
-    modalBody.appendChild(rowsEl);
-  }
-
-  modalOverlay.classList.remove("hidden");
-
-  const closeHandler = () => {
-    modalOverlay.classList.add("hidden");
-  };
-  if (modalClose) {
-    modalClose.onclick = closeHandler;
-  }
-  modalOverlay.addEventListener("click", (e) => {
-    if (e.target === modalOverlay) closeHandler();
-  }, { once: true });
+  return agentRuntimeFeature?.openAgentObservabilityAction(agentId, action);
 }
 
 function renderAgentRightPanel() {
-  if (!agentRightPanelEl) return;
-
-  const agents = [...agentCatalog.values()];
-  agentRightPanelEl.textContent = "";
-  agentRightPanelEl.classList.toggle("hidden", agents.length <= 1);
-  if (agents.length <= 1) return;
-
-  const fragment = document.createDocumentFragment();
-  const activeAgentId = getCurrentAgentSelection();
-  const uploadBusy = Boolean(agentPanelUploadBusyAgentId);
-  for (const agent of agents) {
-    const card = document.createElement("div");
-    card.className = "agent-card";
-    if (agent.id === activeAgentId) {
-      card.classList.add("active");
-    }
-    card.setAttribute("data-agent-id", agent.id);
-
-    const main = document.createElement("button");
-    main.type = "button";
-    main.className = "agent-card-main";
-    main.title = agent.observabilityHeadline || agent.displayName || agent.id;
-
-    const avatar = document.createElement("div");
-    avatar.className = "agent-card-avatar avatar-clickable";
-    avatar.title = localeController.t(
-      "agentPanel.changeAvatarTitle",
-      { agentName: agent.displayName || agent.id },
-      `为 ${agent.displayName || agent.id} 更换头像`,
-    );
-    if (uploadBusy && agentPanelUploadBusyAgentId === agent.id) {
-      avatar.style.opacity = "0.5";
-      avatar.title = localeController.t("agentPanel.uploadingAvatar", {}, "上传中...");
-    }
-    avatar.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openAgentPanelAvatarPicker(agent.id);
-    });
-
-    if (typeof agent.avatar === "string" && agent.avatar.trim()) {
-      avatar.style.backgroundImage = `url(${agent.avatar})`;
-      avatar.classList.add("agent-card-avatar-image");
-    } else {
-      const fallbackSeed = (agent.displayName || agent.name || agent.id || "?").trim();
-      avatar.textContent = fallbackSeed.slice(0, 1).toUpperCase();
-    }
-
-    const content = document.createElement("div");
-    content.className = "agent-card-content";
-
-    const name = document.createElement("div");
-    name.className = "agent-card-name";
-    name.textContent = agent.displayName || agent.id;
-
-    const meta = document.createElement("div");
-    meta.className = "agent-card-meta";
-    const statusText = typeof agent.status === "string" && agent.status && agent.status !== "idle"
-      ? ` · ${agent.status}`
-      : "";
-    meta.textContent = `${agent.model || agent.id}${statusText}`;
-
-    content.appendChild(name);
-    content.appendChild(meta);
-    main.appendChild(avatar);
-    main.appendChild(content);
-    main.addEventListener("click", () => {
-      if (!agentSelectEl) return;
-      agentSelectEl.value = agent.id;
-      agentSelectEl.dispatchEvent(new Event("change"));
-    });
-
-    card.appendChild(main);
-    const observability = buildResidentPanelSummary(agent, localeController.t);
-    if (Array.isArray(observability?.badges) && observability.badges.length > 0 ||
-        Array.isArray(observability?.rows) && observability.rows.length > 0) {
-      const summaryWrap = document.createElement("div");
-      summaryWrap.className = "agent-card-observability";
-
-      const detailBtn = document.createElement("button");
-      detailBtn.type = "button";
-      detailBtn.className = "agent-card-detail-btn";
-      detailBtn.textContent = localeController.t("agentPanel.showDetail", {}, "详情 ▸");
-      detailBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        openAgentObservabilityModal(agent, observability);
-      });
-      summaryWrap.appendChild(detailBtn);
-      card.appendChild(summaryWrap);
-    }
-    fragment.appendChild(card);
-  }
-
-  agentRightPanelEl.appendChild(fragment);
-}
-
-if (agentSelectEl) {
-  agentSelectEl.addEventListener("change", async () => {
-    const selectedAgentId = agentSelectEl.value || "default";
-    localStorage.setItem(AGENT_ID_KEY, selectedAgentId);
-    syncSelectedAgentIdentity();
-    renderAgentRightPanel();
-    void refreshMemoryViewerForAgentSwitch(selectedAgentId);
-
-    if (residentAgentRosterEnabled) {
-      await activateResidentAgentConversation(selectedAgentId, { forceEnsure: true });
-      return;
-    }
-
-    // 切换 Agent = 新建会话（隔离上下文）
-    activeConversationId = null;
-    renderCanvasGoalContext();
-    chatEventsFeature?.resetStreamingState();
-    sessionDigestFeature?.clear?.();
-    messagesEl.innerHTML = "";
-    const displayName = agentSelectEl.options[agentSelectEl.selectedIndex]?.text || agentSelectEl.value;
-    appendMessage("system", `已切换到 ${displayName}`);
-  });
+  return agentRuntimeFeature?.renderAgentRightPanel();
 }
 
 if (modelSelectEl) {
@@ -2468,19 +1886,12 @@ async function sendMessage(options = {}) {
     isLatest: true,
   };
   appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""), optimisticUserMeta);
-  if (residentAgentRosterEnabled && activeConversationId) {
-    agentSessionCacheFeature.bindAgentConversation(getCurrentAgentSelection(), activeConversationId, {
-      main: activeConversationId === agentCatalog.get(getCurrentAgentSelection())?.mainConversationId,
-    });
-    agentSessionCacheFeature.appendUserMessage(
-      activeConversationId,
-      displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""),
-      {
-        timestampMs: optimisticUserMeta.timestampMs,
-        agentId: getCurrentAgentSelection(),
-      },
-    );
-  }
+  agentRuntimeFeature?.cacheOutgoingUserMessage({
+    conversationId: activeConversationId,
+    displayText: displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""),
+    timestampMs: optimisticUserMeta.timestampMs,
+    agentId: getCurrentAgentSelection(),
+  });
   const botMsgEl = chatEventsFeature?.beginStreamingReply({
     timestampMs: Date.now(),
     isLatest: false,
@@ -2517,16 +1928,10 @@ async function sendMessage(options = {}) {
 
   if (payload && payload.ok && payload.payload && payload.payload.conversationId) {
     activeConversationId = String(payload.payload.conversationId);
-    if (residentAgentRosterEnabled) {
-      const currentAgentId = getCurrentAgentSelection();
-      agentSessionCacheFeature.bindAgentConversation(currentAgentId, activeConversationId, {
-        main: activeConversationId === agentCatalog.get(currentAgentId)?.mainConversationId,
-      });
-      syncAgentRuntimeEntry(currentAgentId, {
-        lastConversationId: activeConversationId,
-      });
-      renderAgentRightPanel();
-    }
+    agentRuntimeFeature?.handleMessageSendConversationBound({
+      conversationId: activeConversationId,
+      agentId: getCurrentAgentSelection(),
+    });
     if (payload.payload.messageMeta) {
       const wrappers = messagesEl?.querySelectorAll(".msg-wrapper.me .msg[data-latest='true']") || [];
       const latestUserBubble = wrappers.length ? wrappers[wrappers.length - 1] : null;
@@ -2602,7 +2007,7 @@ chatEventsFeature = createChatEventsFeature({
   updateTokenUsage,
   showTaskTokenResult,
   onChannelSecurityPending: (payload) => settingsRuntimeFeature?.handleChannelSecurityPending(payload),
-  queueGoalUpdateEvent,
+  queueGoalUpdateEvent: (payload) => goalsStateRuntimeFeature?.queueGoalUpdateEvent(payload),
   onSubtaskUpdated: (payload) => subtasksOverviewFeature?.handleSubtaskUpdate(payload),
   onToolSettingsConfirmRequired: (payload) => settingsRuntimeFeature?.handleToolSettingsConfirmRequired(payload),
   onToolSettingsConfirmResolved: (payload) => settingsRuntimeFeature?.handleToolSettingsConfirmResolved(payload),
@@ -2617,37 +2022,9 @@ chatEventsFeature = createChatEventsFeature({
   forceScrollToBottom,
   getCanvasApp: () => window._canvasApp,
   getActiveConversationId: () => activeConversationId,
-  onAgentStatusEvent: (payload) => {
-    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
-    const agentId = typeof payload?.agentId === "string"
-      ? payload.agentId
-      : [...agentCatalog.values()].find((agent) => agentSessionCacheFeature.getAgentConversation(agent.id) === conversationId)?.id;
-    if (!agentId) return;
-    const nextStatus = payload?.status === "running"
-      ? "running"
-      : payload?.status === "error"
-        ? "error"
-        : "idle";
-    syncAgentRuntimeEntry(agentId, { status: nextStatus });
-    renderAgentRightPanel();
-  },
-  onConversationDelta: (payload) => {
-    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
-    const delta = typeof payload?.delta === "string" ? payload.delta : "";
-    if (!conversationId || !delta) return;
-    agentSessionCacheFeature.appendAssistantDelta(conversationId, delta, {
-      timestampMs: Date.now(),
-    });
-  },
-  onConversationFinal: (payload) => {
-    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
-    if (!conversationId) return;
-    agentSessionCacheFeature.finalizeAssistantMessage(conversationId, payload?.text || "", {
-      timestampMs: typeof payload?.messageMeta?.timestampMs === "number" ? payload.messageMeta.timestampMs : Date.now(),
-      displayTimeText: typeof payload?.messageMeta?.displayTimeText === "string" ? payload.messageMeta.displayTimeText : "",
-      agentId: typeof payload?.agentId === "string" ? payload.agentId : undefined,
-    });
-  },
+  onAgentStatusEvent: (payload) => agentRuntimeFeature?.handleAgentStatusPayload(payload),
+  onConversationDelta: (payload) => agentRuntimeFeature?.handleConversationDeltaPayload(payload),
+  onConversationFinal: (payload) => agentRuntimeFeature?.handleConversationFinalPayload(payload),
   escapeHtml,
 });
 
@@ -2785,7 +2162,7 @@ async function loadConversationMeta(conversationId, options = {}) {
       renderTaskTokenHistory();
     }
     if (Array.isArray(res.payload.messages)) {
-      agentSessionCacheFeature.setConversationMessages(conversationId, res.payload.messages);
+      agentRuntimeFeature?.setConversationMessages(conversationId, res.payload.messages);
     }
     if (renderMessages && Array.isArray(res.payload.messages) && conversationId === activeConversationId) {
       renderConversationMessages(res.payload.messages);
@@ -3049,119 +2426,11 @@ function renderCanvasGoalContext() {
 }
 
 function getGoalById(goalId) {
-  return Array.isArray(goalsState.items)
-    ? goalsState.items.find((goal) => goal && goal.id === goalId) || null
-    : null;
-}
-
-function upsertGoalStateItem(goal) {
-  if (!goal || !goal.id) return null;
-  const current = Array.isArray(goalsState.items) ? goalsState.items : [];
-  const next = [...current.filter((item) => item && item.id !== goal.id), goal];
-  goalsState.items = sortGoals(next);
-  return getGoalById(goal.id);
+  return goalsStateRuntimeFeature?.getGoalById(goalId) || null;
 }
 
 function sortGoals(items) {
-  return [...items].sort((a, b) => {
-    const aActive = a?.status === "executing" ? 1 : 0;
-    const bActive = b?.status === "executing" ? 1 : 0;
-    if (aActive !== bActive) return bActive - aActive;
-    const aUpdated = new Date(a?.updatedAt || a?.createdAt || 0).getTime();
-    const bUpdated = new Date(b?.updatedAt || b?.createdAt || 0).getTime();
-    if (aUpdated !== bUpdated) return bUpdated - aUpdated;
-    return String(a?.title || "").localeCompare(String(b?.title || ""));
-  });
-}
-
-function isGoalsViewActive() {
-  return Boolean(goalsSection && !goalsSection.classList.contains("hidden"));
-}
-
-function needsGoalDetailRerender(previousGoal, nextGoal) {
-  if (!previousGoal) return true;
-  const fields = [
-    "title",
-    "objective",
-    "status",
-    "currentPhase",
-    "pathSource",
-    "activeConversationId",
-    "activeNodeId",
-    "lastNodeId",
-    "lastRunId",
-    "pausedAt",
-    "goalRoot",
-    "docRoot",
-    "runtimeRoot",
-    "northstarPath",
-    "tasksPath",
-    "progressPath",
-    "handoffPath",
-    "boardId",
-  ];
-  return fields.some((field) => String(previousGoal?.[field] || "") !== String(nextGoal?.[field] || ""));
-}
-
-function refreshGoalDetailAreas(goal, areas) {
-  if (!goal || !Array.isArray(areas) || !isGoalsViewActive() || goalsState.selectedId !== goal.id) return;
-  const areaSet = new Set(areas);
-  if (areaSet.has("tracking")) void loadGoalTrackingData(goal);
-  if (areaSet.has("progress")) void loadGoalProgressData(goal);
-  if (areaSet.has("handoff")) void loadGoalHandoffData(goal);
-  if (areaSet.has("capability")) void loadGoalCapabilityData(goal);
-  if (areaSet.has("goal") || areaSet.has("tracking") || areaSet.has("capability")) void loadGoalReviewGovernanceData(goal);
-  if (areaSet.has("goal") && areaSet.has("tracking")) void loadGoalCanvasData(goal);
-}
-
-function flushGoalUpdate(goalId) {
-  if (!goalId) return;
-  if (goalsState.liveUpdateTimers?.[goalId]) {
-    clearTimeout(goalsState.liveUpdateTimers[goalId]);
-    delete goalsState.liveUpdateTimers[goalId];
-  }
-  const pending = goalsState.liveUpdatePending?.[goalId];
-  if (!pending?.goal) return;
-  delete goalsState.liveUpdatePending[goalId];
-
-  const previousGoal = getGoalById(goalId);
-  const mergedGoal = upsertGoalStateItem(pending.goal) || pending.goal;
-  if (isGoalsViewActive()) {
-    renderGoalsSummary(goalsState.items);
-    renderGoalList(goalsState.items);
-  }
-  if (goalsState.selectedId === goalId && isGoalsViewActive()) {
-    if (needsGoalDetailRerender(previousGoal, mergedGoal)) {
-      renderGoalDetail(mergedGoal);
-    } else {
-      refreshGoalDetailAreas(mergedGoal, pending.areas);
-    }
-  }
-  renderCanvasGoalContext();
-}
-
-function queueGoalUpdateEvent(payload) {
-  const goal = payload && payload.goal && typeof payload.goal === "object" ? payload.goal : null;
-  const goalId = typeof goal?.id === "string" ? goal.id : "";
-  if (!goalId) return;
-  const areas = Array.isArray(payload?.areas)
-    ? payload.areas.map((item) => String(item || "").trim()).filter(Boolean)
-    : [];
-  const pending = goalsState.liveUpdatePending?.[goalId];
-  goalsState.liveUpdatePending[goalId] = {
-    goal,
-    areas: pending?.areas
-      ? [...new Set([...pending.areas, ...areas])]
-      : [...new Set(areas)],
-    reason: payload?.reason || pending?.reason || "",
-    at: payload?.at || pending?.at || "",
-  };
-  if (goalsState.liveUpdateTimers?.[goalId]) {
-    clearTimeout(goalsState.liveUpdateTimers[goalId]);
-  }
-  goalsState.liveUpdateTimers[goalId] = setTimeout(() => {
-    flushGoalUpdate(goalId);
-  }, goalsState.liveUpdateDelayMs || 120);
+  return goalsStateRuntimeFeature?.sortGoals(items) || [];
 }
 
 function formatGoalStatus(status) {
@@ -3197,9 +2466,7 @@ function goalRuntimeFilePath(goal, fileName) {
 }
 
 function getGoalDisplayName(goalId) {
-  if (!goalId) return "-";
-  const goal = getGoalById(goalId);
-  return goal?.title || goalId;
+  return goalsStateRuntimeFeature?.getGoalDisplayName(goalId) || "-";
 }
 
 function syncMemoryTaskGoalFilterUi() {
@@ -3214,22 +2481,8 @@ async function openGoalTaskViewer(goalId) {
   return memoryRuntimeFeature?.openGoalTaskViewer(goalId);
 }
 
-function resetGoalCreateForm() {
-  if (goalCreateTitleEl) goalCreateTitleEl.value = "";
-  if (goalCreateObjectiveEl) goalCreateObjectiveEl.value = "";
-  if (goalCreateRootEl) goalCreateRootEl.value = "";
-  if (goalCreateAutoResumeEl) goalCreateAutoResumeEl.checked = true;
-}
-
 function toggleGoalCreateModal(show) {
-  if (!goalCreateModal) return;
-  if (show) {
-    resetGoalCreateForm();
-    goalCreateModal.classList.remove("hidden");
-    setTimeout(() => goalCreateTitleEl?.focus(), 0);
-  } else {
-    goalCreateModal.classList.add("hidden");
-  }
+  return goalsActionsRuntimeFeature?.toggleGoalCreateModal(show);
 }
 
 function getGoalCheckpointSlaBadge(checkpoint) {
@@ -3284,934 +2537,157 @@ function getGoalActionActor() {
 }
 
 async function runGoalApprovalScan(goalId, options = {}) {
-  if (!ws || !isReady) {
-    showNotice("无法执行审批扫描", "未连接到服务器。", "error");
-    return;
-  }
-  const goal = getGoalById(goalId);
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.approval.scan",
-    params: {
-      goalId,
-      autoEscalate: options.autoEscalate !== false,
-    },
-  });
-  if (!res?.ok) {
-    showNotice("审批扫描失败", res?.error?.message || "goal.approval.scan 调用失败。", "error");
-    return;
-  }
-  showNotice("审批扫描完成", res.payload?.summary || "已刷新 approval workflow 状态。", "success");
-  if (goal) {
-    void loadGoalReviewGovernanceData(goal);
-    void loadGoalTrackingData(goal);
-  }
+  return goalsActionsRuntimeFeature?.runGoalApprovalScan(goalId, options);
 }
 
 async function runGoalSuggestionReviewDecision(goalId, input) {
-  if (!ws || !isReady) {
-    showNotice("无法执行 suggestion review", "未连接到服务器。", "error");
-    return;
-  }
-  const actor = window.prompt("审批人 / Reviewer", getGoalActionActor()) || getGoalActionActor();
-  const note = window.prompt("审批备注（可留空）", "") || "";
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.suggestion_review.decide",
-    params: {
-      goalId,
-      reviewId: input.reviewId,
-      suggestionType: input.suggestionType || undefined,
-      suggestionId: input.suggestionId || undefined,
-      decision: input.decision,
-      reviewer: actor,
-      decidedBy: actor,
-      note: note || undefined,
-    },
-  });
-  if (!res?.ok) {
-    showNotice("suggestion review 失败", res?.error?.message || "goal.suggestion_review.decide 调用失败。", "error");
-    return;
-  }
-  showNotice("suggestion review 已提交", `${input.decision} 已写入审批流。`, "success");
-  const goal = getGoalById(goalId);
-  if (goal) void loadGoalReviewGovernanceData(goal);
+  return goalsActionsRuntimeFeature?.runGoalSuggestionReviewDecision(goalId, input);
 }
 
 async function runGoalSuggestionReviewEscalation(goalId, input) {
-  if (!ws || !isReady) {
-    showNotice("无法升级 suggestion review", "未连接到服务器。", "error");
-    return;
-  }
-  const escalatedTo = window.prompt("升级到的 Reviewer", "") || "";
-  const reason = window.prompt("升级原因", "Need escalation") || "";
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.suggestion_review.escalate",
-    params: {
-      goalId,
-      reviewId: input.reviewId,
-      suggestionType: input.suggestionType || undefined,
-      suggestionId: input.suggestionId || undefined,
-      escalatedBy: getGoalActionActor(),
-      escalatedTo: escalatedTo || undefined,
-      reason: reason || undefined,
-      force: true,
-    },
-  });
-  if (!res?.ok) {
-    showNotice("suggestion review 升级失败", res?.error?.message || "goal.suggestion_review.escalate 调用失败。", "error");
-    return;
-  }
-  showNotice("suggestion review 已升级", "当前审批 stage 已升级。", "success");
-  const goal = getGoalById(goalId);
-  if (goal) void loadGoalReviewGovernanceData(goal);
+  return goalsActionsRuntimeFeature?.runGoalSuggestionReviewEscalation(goalId, input);
 }
 
 async function runGoalCheckpointEscalation(goalId, nodeId, checkpointId) {
-  if (!ws || !isReady) {
-    showNotice("无法升级 checkpoint", "未连接到服务器。", "error");
-    return;
-  }
-  const escalatedTo = window.prompt("升级到的 Reviewer", "") || "";
-  const reason = window.prompt("升级原因", "Need escalation") || "";
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.checkpoint.escalate",
-    params: {
-      goalId,
-      nodeId,
-      checkpointId,
-      escalatedBy: getGoalActionActor(),
-      escalatedTo: escalatedTo || undefined,
-      reason: reason || undefined,
-      force: true,
-    },
-  });
-  if (!res?.ok) {
-    showNotice("checkpoint 升级失败", res?.error?.message || "goal.checkpoint.escalate 调用失败。", "error");
-    return;
-  }
-  showNotice("checkpoint 已升级", "当前 checkpoint 审批 stage 已升级。", "success");
-  const goal = getGoalById(goalId);
-  if (goal) {
-    void loadGoalReviewGovernanceData(goal);
-    void loadGoalTrackingData(goal);
-  }
+  return goalsActionsRuntimeFeature?.runGoalCheckpointEscalation(goalId, nodeId, checkpointId);
 }
 
 async function submitGoalCheckpointActionForm() {
   return goalsRuntimeFeature?.submitGoalCheckpointActionForm();
 }
 
-function normalizeGoalNodeStatus(status) {
-  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
-  if (!normalized) return "pending";
-  if (["done", "completed", "complete", "success", "succeeded", "approved"].includes(normalized)) return "completed";
-  if (["running", "executing", "in_progress", "processing"].includes(normalized)) return "running";
-  if (["blocked", "failed", "error"].includes(normalized)) return "blocked";
-  return normalized;
-}
-
-function normalizeCheckpointStatus(status) {
-  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
-  if (!normalized) return "required";
-  return normalized;
-}
-
-function parseGoalGraphNodes(rawGraph) {
-  if (!rawGraph || typeof rawGraph !== "object") return [];
-  const rawNodes = Array.isArray(rawGraph.nodes)
-    ? rawGraph.nodes
-    : rawGraph.nodes && typeof rawGraph.nodes === "object"
-      ? Object.values(rawGraph.nodes)
-      : [];
-  return rawNodes.map((node, index) => {
-    const item = node && typeof node === "object" ? node : {};
-    const data = item.data && typeof item.data === "object" ? item.data : {};
-    const id = item.id || data.id || `node-${index + 1}`;
-    const title = item.title || data.title || item.name || data.name || id;
-    const status = normalizeGoalNodeStatus(item.status || data.status);
-    const phase = item.phase || data.phase || item.stage || data.stage || "";
-    const owner = item.owner || data.owner || "";
-    const lastRunId = item.lastRunId || data.lastRunId || "";
-    const summary = item.summary || data.summary || "";
-    const artifacts = Array.isArray(item.artifacts)
-      ? item.artifacts
-      : Array.isArray(data.artifacts)
-        ? data.artifacts
-        : [];
-    return {
-      id: String(id),
-      title: String(title),
-      status,
-      phase: phase ? String(phase) : "",
-      owner: owner ? String(owner) : "",
-      lastRunId: lastRunId ? String(lastRunId) : "",
-      summary: summary ? String(summary) : "",
-      artifacts: artifacts
-        .map((artifact) => typeof artifact === "string" ? artifact.trim() : "")
-        .filter(Boolean),
-    };
-  });
-}
-
-function parseGoalCheckpoints(rawCheckpoints) {
-  if (!rawCheckpoints || typeof rawCheckpoints !== "object") return [];
-  const items = Array.isArray(rawCheckpoints.items) ? rawCheckpoints.items : [];
-  return items.map((item, index) => {
-    const data = item && typeof item === "object" ? item : {};
-    const id = data.id || `checkpoint-${index + 1}`;
-    const title = data.title || data.summary || id;
-    const history = Array.isArray(data.history)
-      ? data.history.map((entry, historyIndex) => {
-        const historyItem = entry && typeof entry === "object" ? entry : {};
-        return {
-          action: historyItem.action ? String(historyItem.action) : `history-${historyIndex + 1}`,
-          status: normalizeCheckpointStatus(historyItem.status),
-          at: historyItem.at ? String(historyItem.at) : "",
-          summary: historyItem.summary ? String(historyItem.summary) : "",
-          note: historyItem.note ? String(historyItem.note) : "",
-          actor: historyItem.actor ? String(historyItem.actor) : "",
-          reviewer: historyItem.reviewer ? String(historyItem.reviewer) : "",
-          reviewerRole: historyItem.reviewerRole ? String(historyItem.reviewerRole) : "",
-          requestedBy: historyItem.requestedBy ? String(historyItem.requestedBy) : "",
-          decidedBy: historyItem.decidedBy ? String(historyItem.decidedBy) : "",
-          slaAt: historyItem.slaAt ? String(historyItem.slaAt) : "",
-          runId: historyItem.runId ? String(historyItem.runId) : "",
-        };
-      })
-      : [];
-    return {
-      id: String(id),
-      title: String(title),
-      status: normalizeCheckpointStatus(data.status),
-      updatedAt: data.updatedAt ? String(data.updatedAt) : "",
-      requestedAt: data.requestedAt ? String(data.requestedAt) : "",
-      decidedAt: data.decidedAt ? String(data.decidedAt) : "",
-      summary: data.summary ? String(data.summary) : "",
-      note: data.note ? String(data.note) : "",
-      reviewer: data.reviewer ? String(data.reviewer) : "",
-      reviewerRole: data.reviewerRole ? String(data.reviewerRole) : "",
-      requestedBy: data.requestedBy ? String(data.requestedBy) : "",
-      decidedBy: data.decidedBy ? String(data.decidedBy) : "",
-      slaAt: data.slaAt ? String(data.slaAt) : "",
-      nodeId: data.nodeId ? String(data.nodeId) : "",
-      runId: data.runId ? String(data.runId) : "",
-      workflow: data.workflow && typeof data.workflow === "object" ? data.workflow : null,
-      history,
-    };
-  });
-}
-
-function normalizeGoalCapabilityPlanStatus(status) {
-  const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
-  if (normalized === "orchestrated") return "orchestrated";
-  return "planned";
-}
-
-function normalizeGoalCapabilityExecutionMode(mode) {
-  const normalized = typeof mode === "string" ? mode.trim().toLowerCase() : "";
-  return normalized === "multi_agent" ? "multi_agent" : "single_agent";
-}
-
-function normalizeGoalCapabilityRiskLevel(level) {
-  const normalized = typeof level === "string" ? level.trim().toLowerCase() : "";
-  if (normalized === "high") return "high";
-  if (normalized === "medium") return "medium";
-  return "low";
-}
-
-function parseStringList(value) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => typeof item === "string" ? item.trim() : "")
-    .filter(Boolean);
-}
-
-function parseLearningReviewInput(rawInput) {
-  if (!rawInput || typeof rawInput !== "object") return null;
-  const summary = rawInput.summary && typeof rawInput.summary === "object" ? rawInput.summary : {};
-  return {
-    summary: {
-      available: summary.available === true,
-      headline: summary.headline ? String(summary.headline) : "",
-      memorySignalCount: Number(summary.memorySignalCount || 0),
-      candidateSignalCount: Number(summary.candidateSignalCount || 0),
-      reviewSignalCount: Number(summary.reviewSignalCount || 0),
-      nudgeCount: Number(summary.nudgeCount || 0),
-    },
-    summaryLines: parseStringList(rawInput.summaryLines),
-    nudges: parseStringList(rawInput.nudges),
-  };
-}
-
-function parseGoalCapabilityPlans(rawPlans) {
-  if (!rawPlans || typeof rawPlans !== "object") return [];
-  const items = Array.isArray(rawPlans.items) ? rawPlans.items : [];
-  return items
-    .map((item, index) => {
-      const data = item && typeof item === "object" ? item : {};
-      const checkpoint = data.checkpoint && typeof data.checkpoint === "object" ? data.checkpoint : {};
-        const actualUsage = data.actualUsage && typeof data.actualUsage === "object" ? data.actualUsage : {};
-        const analysis = data.analysis && typeof data.analysis === "object" ? data.analysis : {};
-        const orchestration = data.orchestration && typeof data.orchestration === "object" ? data.orchestration : {};
-        const coordinationPlan = orchestration.coordinationPlan && typeof orchestration.coordinationPlan === "object"
-          ? orchestration.coordinationPlan
-          : {};
-        const rolePolicy = coordinationPlan.rolePolicy && typeof coordinationPlan.rolePolicy === "object"
-          ? coordinationPlan.rolePolicy
-          : {};
-        const verifierHandoff = orchestration.verifierHandoff && typeof orchestration.verifierHandoff === "object"
-          ? orchestration.verifierHandoff
-          : {};
-        const verifierResult = orchestration.verifierResult && typeof orchestration.verifierResult === "object"
-          ? orchestration.verifierResult
-          : {};
-        const methods = Array.isArray(data.methods) ? data.methods : [];
-        const skills = Array.isArray(data.skills) ? data.skills : [];
-        const mcpServers = Array.isArray(data.mcpServers) ? data.mcpServers : [];
-        const subAgents = Array.isArray(data.subAgents) ? data.subAgents : [];
-        const deviations = Array.isArray(analysis.deviations) ? analysis.deviations : [];
-        const delegationResults = Array.isArray(orchestration.delegationResults) ? orchestration.delegationResults : [];
-        const verifierFindings = Array.isArray(verifierResult.findings) ? verifierResult.findings : [];
-        return {
-        id: data.id ? String(data.id) : `plan-${index + 1}`,
-        goalId: data.goalId ? String(data.goalId) : "",
-        nodeId: data.nodeId ? String(data.nodeId) : "",
-        runId: data.runId ? String(data.runId) : "",
-        status: normalizeGoalCapabilityPlanStatus(data.status),
-        executionMode: normalizeGoalCapabilityExecutionMode(data.executionMode),
-        riskLevel: normalizeGoalCapabilityRiskLevel(data.riskLevel),
-        objective: data.objective ? String(data.objective) : "",
-        summary: data.summary ? String(data.summary) : "",
-        queryHints: parseStringList(data.queryHints),
-        reasoning: parseStringList(data.reasoning),
-        methods: methods
-          .map((entry) => entry && typeof entry === "object" ? {
-            file: entry.file ? String(entry.file) : "",
-            title: entry.title ? String(entry.title) : "",
-            score: Number.isFinite(entry.score) ? Number(entry.score) : null,
-            reason: entry.reason ? String(entry.reason) : "",
-          } : null)
-          .filter((entry) => entry && entry.file),
-        skills: skills
-          .map((entry) => entry && typeof entry === "object" ? {
-            name: entry.name ? String(entry.name) : "",
-            description: entry.description ? String(entry.description) : "",
-            score: Number.isFinite(entry.score) ? Number(entry.score) : null,
-            priority: entry.priority ? String(entry.priority) : "",
-            source: entry.source ? String(entry.source) : "",
-            reason: entry.reason ? String(entry.reason) : "",
-          } : null)
-          .filter((entry) => entry && entry.name),
-        mcpServers: mcpServers
-          .map((entry) => entry && typeof entry === "object" ? {
-            serverId: entry.serverId ? String(entry.serverId) : "",
-            status: entry.status ? String(entry.status) : "unknown",
-            toolCount: Number.isFinite(entry.toolCount) ? Number(entry.toolCount) : null,
-            resourceCount: Number.isFinite(entry.resourceCount) ? Number(entry.resourceCount) : null,
-            reason: entry.reason ? String(entry.reason) : "",
-          } : null)
-          .filter((entry) => entry && entry.serverId),
-          subAgents: subAgents
-            .map((entry) => entry && typeof entry === "object" ? {
-              agentId: entry.agentId ? String(entry.agentId) : "",
-              role: entry.role ? String(entry.role) : "",
-              objective: entry.objective ? String(entry.objective) : "",
-              reason: entry.reason ? String(entry.reason) : "",
-              deliverable: entry.deliverable ? String(entry.deliverable) : "",
-              handoffToVerifier: entry.handoffToVerifier === true,
-            } : null)
-            .filter((entry) => entry && entry.agentId && entry.objective),
-        gaps: parseStringList(data.gaps),
-        checkpoint: {
-          required: checkpoint.required === true,
-          reasons: parseStringList(checkpoint.reasons),
-          approvalMode: checkpoint.approvalMode ? String(checkpoint.approvalMode) : "none",
-          requiredRequestFields: parseStringList(checkpoint.requiredRequestFields),
-          requiredDecisionFields: parseStringList(checkpoint.requiredDecisionFields),
-          suggestedTitle: checkpoint.suggestedTitle ? String(checkpoint.suggestedTitle) : "",
-          suggestedNote: checkpoint.suggestedNote ? String(checkpoint.suggestedNote) : "",
-          suggestedReviewer: checkpoint.suggestedReviewer ? String(checkpoint.suggestedReviewer) : "",
-          suggestedReviewerRole: checkpoint.suggestedReviewerRole ? String(checkpoint.suggestedReviewerRole) : "",
-          suggestedSlaHours: Number.isFinite(checkpoint.suggestedSlaHours) ? Number(checkpoint.suggestedSlaHours) : null,
-          escalationMode: checkpoint.escalationMode ? String(checkpoint.escalationMode) : "none",
-        },
-        actualUsage: {
-          methods: parseStringList(actualUsage.methods),
-          skills: parseStringList(actualUsage.skills),
-          mcpServers: parseStringList(actualUsage.mcpServers),
-          toolNames: parseStringList(actualUsage.toolNames),
-          updatedAt: actualUsage.updatedAt ? String(actualUsage.updatedAt) : "",
-        },
-        analysis: {
-          status: typeof analysis.status === "string" && analysis.status.trim() ? String(analysis.status).trim() : "pending",
-          summary: analysis.summary ? String(analysis.summary) : "",
-          deviations: deviations
-            .map((entry) => entry && typeof entry === "object" ? {
-              kind: entry.kind ? String(entry.kind) : "",
-              area: entry.area ? String(entry.area) : "",
-              severity: entry.severity ? String(entry.severity) : "",
-              summary: entry.summary ? String(entry.summary) : "",
-              planned: parseStringList(entry.planned),
-              actual: parseStringList(entry.actual),
-            } : null)
-            .filter(Boolean),
-          recommendations: parseStringList(analysis.recommendations),
-          updatedAt: analysis.updatedAt ? String(analysis.updatedAt) : "",
-        },
-          generatedAt: data.generatedAt ? String(data.generatedAt) : "",
-          updatedAt: data.updatedAt ? String(data.updatedAt) : "",
-          orchestratedAt: data.orchestratedAt ? String(data.orchestratedAt) : "",
-          orchestration: {
-            claimed: orchestration.claimed === true,
-            delegated: orchestration.delegated === true,
-            delegationCount: Number.isFinite(orchestration.delegationCount) ? Number(orchestration.delegationCount) : 0,
-            coordinationPlan: coordinationPlan.summary ? {
-              summary: String(coordinationPlan.summary),
-              plannedDelegationCount: Number.isFinite(coordinationPlan.plannedDelegationCount)
-                ? Number(coordinationPlan.plannedDelegationCount)
-                : 0,
-              rolePolicy: {
-                selectedRoles: parseStringList(rolePolicy.selectedRoles),
-                selectionReasons: parseStringList(rolePolicy.selectionReasons),
-                verifierRole: rolePolicy.verifierRole ? String(rolePolicy.verifierRole) : "",
-                fanInStrategy: rolePolicy.fanInStrategy ? String(rolePolicy.fanInStrategy) : "",
-              },
-            } : null,
-            delegationResults: delegationResults
-              .map((entry) => entry && typeof entry === "object" ? {
-                agentId: entry.agentId ? String(entry.agentId) : "",
-                role: entry.role ? String(entry.role) : "",
-                status: entry.status ? String(entry.status) : "success",
-                summary: entry.summary ? String(entry.summary) : "",
-                error: entry.error ? String(entry.error) : "",
-                sessionId: entry.sessionId ? String(entry.sessionId) : "",
-                taskId: entry.taskId ? String(entry.taskId) : "",
-                outputPath: entry.outputPath ? String(entry.outputPath) : "",
-              } : null)
-              .filter((entry) => entry && entry.agentId && entry.summary),
-            verifierHandoff: verifierHandoff.summary ? {
-              status: verifierHandoff.status ? String(verifierHandoff.status) : "not_required",
-              verifierRole: verifierHandoff.verifierRole ? String(verifierHandoff.verifierRole) : "",
-              verifierAgentId: verifierHandoff.verifierAgentId ? String(verifierHandoff.verifierAgentId) : "",
-              verifierTaskId: verifierHandoff.verifierTaskId ? String(verifierHandoff.verifierTaskId) : "",
-              verifierSessionId: verifierHandoff.verifierSessionId ? String(verifierHandoff.verifierSessionId) : "",
-              summary: String(verifierHandoff.summary),
-              sourceAgentIds: parseStringList(verifierHandoff.sourceAgentIds),
-              sourceTaskIds: parseStringList(verifierHandoff.sourceTaskIds),
-              outputPath: verifierHandoff.outputPath ? String(verifierHandoff.outputPath) : "",
-              notes: parseStringList(verifierHandoff.notes),
-              error: verifierHandoff.error ? String(verifierHandoff.error) : "",
-            } : null,
-            verifierResult: verifierResult.summary ? {
-              status: verifierResult.status ? String(verifierResult.status) : "pending",
-              summary: String(verifierResult.summary),
-              recommendation: verifierResult.recommendation ? String(verifierResult.recommendation) : "unknown",
-              findings: verifierFindings
-                .map((entry) => entry && typeof entry === "object" ? {
-                  severity: entry.severity ? String(entry.severity) : "low",
-                  summary: entry.summary ? String(entry.summary) : "",
-                } : null)
-                .filter((entry) => entry && entry.summary),
-              evidenceTaskIds: parseStringList(verifierResult.evidenceTaskIds),
-              outputPath: verifierResult.outputPath ? String(verifierResult.outputPath) : "",
-              generatedAt: verifierResult.generatedAt ? String(verifierResult.generatedAt) : "",
-            } : null,
-            notes: parseStringList(orchestration.notes),
-          },
-        };
-      })
-    .sort((a, b) => {
-      const left = new Date(b.updatedAt || b.generatedAt || 0).getTime();
-      const right = new Date(a.updatedAt || a.generatedAt || 0).getTime();
-      return left - right;
-    });
-}
-
 function renderGoalCapabilityPanelLoading() {
-  return goalsCapabilityPanelFeature?.renderGoalCapabilityPanelLoading();
+  return goalsSpecialistPanelsFeature?.renderGoalCapabilityPanelLoading();
 }
 
 function renderGoalCapabilityPanelError(message) {
-  return goalsCapabilityPanelFeature?.renderGoalCapabilityPanelError(message);
+  return goalsSpecialistPanelsFeature?.renderGoalCapabilityPanelError(message);
 }
 
 function renderGoalCapabilityPanel(goal, payload) {
-  return goalsCapabilityPanelFeature?.renderGoalCapabilityPanel(goal, payload);
+  return goalsSpecialistPanelsFeature?.renderGoalCapabilityPanel(goal, payload);
 }
 
 function getCachedGoalCapabilityEntry(goalId) {
-  if (!goalId || !goalsState.capabilityCache || typeof goalsState.capabilityCache !== "object") return null;
-  return goalsState.capabilityCache[goalId] || null;
+  return goalsSpecialistPanelsFeature?.getCachedGoalCapabilityEntry(goalId) || null;
 }
 
 async function ensureGoalCapabilityCache(goal, options = {}) {
-  if (!goal?.id) return null;
-  const goalId = goal.id;
-  const forceReload = options.forceReload === true;
-  const cached = getCachedGoalCapabilityEntry(goalId);
-  if (cached && !forceReload) return cached;
-  if (!forceReload && goalsState.capabilityPending?.[goalId]) {
-    return goalsState.capabilityPending[goalId];
-  }
-
-  const pending = (async () => {
-    const [tasksFile, capabilityPlansFile] = await Promise.all([
-      readSourceFile(goal.tasksPath),
-      readSourceFile(goalRuntimeFilePath(goal, "capability-plans.json")),
-    ]);
-    const rawGraph = tasksFile?.content ? safeJsonParse(tasksFile.content) : null;
-    const rawPlans = capabilityPlansFile?.content ? safeJsonParse(capabilityPlansFile.content) : null;
-    const nodes = parseGoalGraphNodes(rawGraph);
-    const entry = {
-      plans: parseGoalCapabilityPlans(rawPlans),
-      nodeMap: Object.fromEntries(nodes.map((node) => [node.id, node.title])),
-      capabilityPath: goalRuntimeFilePath(goal, "capability-plans.json"),
-      loadedAt: new Date().toISOString(),
-      readError: !tasksFile && !capabilityPlansFile,
-    };
-    goalsState.capabilityCache[goalId] = entry;
-    return entry;
-  })();
-
-  goalsState.capabilityPending[goalId] = pending;
-  try {
-    return await pending;
-  } finally {
-    delete goalsState.capabilityPending[goalId];
-  }
+  return goalsSpecialistPanelsFeature?.ensureGoalCapabilityCache(goal, options) || null;
 }
 
 async function loadGoalCapabilityData(goal) {
-  if (!goal || !goalsDetailEl) return;
-  const trackingGoalId = goal.id;
-  const seq = goalsState.capabilitySeq + 1;
-  goalsState.capabilitySeq = seq;
-  renderGoalCapabilityPanelLoading();
-
-  const entry = await ensureGoalCapabilityCache(goal, { forceReload: true });
-  if (goalsState.capabilitySeq !== seq || goalsState.selectedId !== trackingGoalId) return;
-
-  if (!entry || entry.readError) {
-    renderGoalCapabilityPanelError("无法读取 tasks.json / capability-plans.json。若使用了自定义路径，请确认该路径已加入可操作区。");
-    return;
-  }
-
-  renderGoalCapabilityPanel(goal, {
-    plans: entry.plans,
-    nodeMap: entry.nodeMap,
-  });
-  applyGoalContinuationFocus(goal.id);
+  return goalsSpecialistPanelsFeature?.loadGoalCapabilityData(goal);
 }
 
 function parseGoalProgressEntries(rawContent) {
-  if (typeof rawContent !== "string" || !rawContent.trim()) return [];
-  const entries = [];
-  const sections = rawContent.split(/^##\s+/m).filter(Boolean);
-  for (const section of sections) {
-    const newlineIndex = section.indexOf("\n");
-    const at = newlineIndex >= 0 ? section.slice(0, newlineIndex).trim() : section.trim();
-    const body = newlineIndex >= 0 ? section.slice(newlineIndex + 1) : "";
-    const lines = body
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const data = {};
-    for (const line of lines) {
-      const itemMatch = /^-\s+([^:]+):\s*(.*)$/.exec(line);
-      if (!itemMatch) continue;
-      data[itemMatch[1].trim().toLowerCase()] = itemMatch[2].trim();
-    }
-    entries.push({
-      at,
-      event: data.event || "",
-      title: data.title || "",
-      nodeId: data.node || "",
-      status: data.status || "",
-      runId: data.run || "",
-      checkpointId: data.checkpoint || "",
-      summary: data.summary || "",
-      note: data.note || "",
-    });
-  }
-  return entries;
+  return goalsSpecialistPanelsFeature?.parseGoalProgressEntries(rawContent) || [];
 }
 
 function normalizeGoalBoardId(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
+  return goalsSpecialistPanelsFeature?.normalizeGoalBoardId(value) || "";
 }
 
 function parseGoalBoardRef(rawBoardRef) {
-  const item = rawBoardRef && typeof rawBoardRef === "object" ? rawBoardRef : {};
-  return {
-    boardId: normalizeGoalBoardId(item.boardId || item.id),
-    linkedAt: typeof item.linkedAt === "string" && item.linkedAt.trim() ? item.linkedAt.trim() : "",
-    updatedAt: typeof item.updatedAt === "string" && item.updatedAt.trim() ? item.updatedAt.trim() : "",
+  return goalsSpecialistPanelsFeature?.parseGoalBoardRef(rawBoardRef) || {
+    boardId: "",
+    linkedAt: "",
+    updatedAt: "",
   };
 }
 
 function renderGoalCanvasPanelLoading() {
-  return goalsReadonlyPanelsFeature?.renderGoalCanvasPanelLoading();
+  return goalsSpecialistPanelsFeature?.renderGoalCanvasPanelLoading();
 }
 
 function renderGoalCanvasPanel(goal, payload) {
-  return goalsReadonlyPanelsFeature?.renderGoalCanvasPanel(goal, payload);
+  return goalsSpecialistPanelsFeature?.renderGoalCanvasPanel(goal, payload);
 }
 
 async function loadGoalCanvasData(goal) {
-  if (!goal || !goalsDetailEl) return;
-  const trackingGoalId = goal.id;
-  const seq = goalsState.canvasSeq + 1;
-  goalsState.canvasSeq = seq;
-  renderGoalCanvasPanelLoading();
-
-  const boardRefFile = await readSourceFile(goalRuntimeFilePath(goal, "board-ref.json"));
-  if (goalsState.canvasSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
-
-  const rawBoardRef = boardRefFile?.content ? safeJsonParse(boardRefFile.content) : null;
-  const parsed = parseGoalBoardRef(rawBoardRef);
-
-  renderGoalCanvasPanel(goal, {
-    runtimeBoardId: parsed.boardId,
-    linkedAt: parsed.linkedAt,
-    updatedAt: parsed.updatedAt,
-    readError: !boardRefFile,
-  });
+  return goalsSpecialistPanelsFeature?.loadGoalCanvasData(goal);
 }
 
 async function openGoalCanvasList(goalId) {
-  return canvasContextFeature?.openGoalCanvasList(goalId);
+  return goalsSpecialistPanelsFeature?.openGoalCanvasList(goalId);
 }
 
 async function openGoalCanvasBoard(boardId, goalId) {
-  return canvasContextFeature?.openGoalCanvasBoard(boardId, goalId);
+  return goalsSpecialistPanelsFeature?.openGoalCanvasBoard(boardId, goalId);
 }
 
 function renderGoalTrackingPanelLoading() {
-  return goalsTrackingPanelFeature?.renderGoalTrackingPanelLoading();
+  return goalsSpecialistPanelsFeature?.renderGoalTrackingPanelLoading();
 }
 
 function renderGoalTrackingPanel(goal, payload) {
-  return goalsTrackingPanelFeature?.renderGoalTrackingPanel(goal, payload);
+  return goalsSpecialistPanelsFeature?.renderGoalTrackingPanel(goal, payload);
 }
 
 function renderGoalTrackingPanelError(message) {
-  return goalsTrackingPanelFeature?.renderGoalTrackingPanelError(message);
+  return goalsSpecialistPanelsFeature?.renderGoalTrackingPanelError(message);
 }
 
 async function loadGoalTrackingData(goal) {
-  if (!goal || !goalsDetailEl) return;
-  const trackingGoalId = goal.id;
-  const seq = goalsState.trackingSeq + 1;
-  goalsState.trackingSeq = seq;
-  renderGoalTrackingPanelLoading();
-
-  const [tasksFile, checkpointsFile, capabilityEntry] = await Promise.all([
-    readSourceFile(goal.tasksPath),
-    readSourceFile(goalRuntimeFilePath(goal, "checkpoints.json")),
-    ensureGoalCapabilityCache(goal),
-  ]);
-
-  if (goalsState.trackingSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
-
-  const rawGraph = tasksFile?.content ? safeJsonParse(tasksFile.content) : null;
-  const rawCheckpoints = checkpointsFile?.content ? safeJsonParse(checkpointsFile.content) : null;
-
-  if (!tasksFile && !checkpointsFile) {
-    goalsState.trackingCheckpoints = [];
-    renderGoalTrackingPanelError("无法读取 tasks.json / checkpoints.json。若使用了自定义路径，请确认该路径已加入可操作区。");
-    return;
-  }
-
-  const parsedCheckpoints = parseGoalCheckpoints(rawCheckpoints).map((item) => ({
-    ...item,
-    goalId: item.goalId || trackingGoalId,
-  }));
-  goalsState.trackingCheckpoints = parsedCheckpoints;
-  renderGoalTrackingPanel(goal, {
-    nodes: parseGoalGraphNodes(rawGraph),
-    checkpoints: parsedCheckpoints,
-    capabilityPlans: capabilityEntry?.plans || [],
-    focusNodeId: goalsState.continuationFocusNode?.goalId === trackingGoalId
-      ? goalsState.continuationFocusNode?.nodeId || ""
-      : "",
-  });
-  applyGoalContinuationFocus(goal.id);
+  return goalsSpecialistPanelsFeature?.loadGoalTrackingData(goal);
 }
 
 function renderGoalProgressPanelLoading() {
-  return goalsReadonlyPanelsFeature?.renderGoalProgressPanelLoading();
+  return goalsSpecialistPanelsFeature?.renderGoalProgressPanelLoading();
 }
 
 function renderGoalProgressPanel(entries) {
-  return goalsReadonlyPanelsFeature?.renderGoalProgressPanel(entries);
+  return goalsSpecialistPanelsFeature?.renderGoalProgressPanel(entries);
 }
 
 async function loadGoalProgressData(goal) {
-  if (!goal || !goalsDetailEl) return;
-  const trackingGoalId = goal.id;
-  const seq = (goalsState.progressSeq || 0) + 1;
-  goalsState.progressSeq = seq;
-  renderGoalProgressPanelLoading();
-
-  const progressFile = await readSourceFile(goal.progressPath);
-  if (goalsState.progressSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
-
-  renderGoalProgressPanel(parseGoalProgressEntries(progressFile?.content || ""));
+  return goalsSpecialistPanelsFeature?.loadGoalProgressData(goal);
 }
 
 // ========================== GOAL HANDOFF ==========================
 
 function renderGoalHandoffPanelLoading() {
-  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanelLoading();
+  return goalsSpecialistPanelsFeature?.renderGoalHandoffPanelLoading();
 }
 
 function bindGoalHandoffPanelActions(goal) {
-  const panel = goalsDetailEl?.querySelector("#goalHandoffPanel");
-  if (!panel || !goal) return;
-  panel.querySelectorAll("[data-continuation-action]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const action = decodeContinuationAction(node.getAttribute("data-continuation-action") || "");
-      if (!action) return;
-      void openContinuationAction(action);
-    });
-  });
-  panel.querySelectorAll("[data-goal-generate-handoff]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-generate-handoff") || goal.id;
-      if (!goalId) return;
-      void generateGoalHandoff(goalId);
-    });
-  });
-  panel.querySelectorAll("[data-open-source]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const sourcePath = node.getAttribute("data-open-source");
-      if (!sourcePath) return;
-      void openSourcePath(sourcePath);
-    });
-  });
+  return goalsSpecialistPanelsFeature?.bindGoalHandoffPanelActions(goal);
 }
 
 function renderGoalHandoffPanelError(goal, message) {
-  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanelError(goal, message);
+  return goalsSpecialistPanelsFeature?.renderGoalHandoffPanelError(goal, message);
 }
 
 function renderGoalHandoffPanel(goal, handoff, continuationState = null) {
-  return goalsReadonlyPanelsFeature?.renderGoalHandoffPanel(goal, handoff, continuationState);
+  return goalsSpecialistPanelsFeature?.renderGoalHandoffPanel(goal, handoff, continuationState);
 }
 
 async function loadGoalHandoffData(goal) {
-  if (!goal || !goalsDetailEl) return;
-  const trackingGoalId = goal.id;
-  const seq = (goalsState.handoffSeq || 0) + 1;
-  goalsState.handoffSeq = seq;
-  renderGoalHandoffPanelLoading();
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.handoff.get",
-    params: { goalId: goal.id },
-  });
-  if (goalsState.handoffSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
-  if (!res?.ok || !res.payload?.handoff) {
-    renderGoalHandoffPanelError(goal, res?.error?.message || "无法读取 goal handoff snapshot。");
-    return;
-  }
-  renderGoalHandoffPanel(goal, res.payload.handoff, res.payload.continuationState || null);
+  return goalsSpecialistPanelsFeature?.loadGoalHandoffData(goal);
 }
 
 function parseGoalReviewGovernanceSummary(rawSummary) {
-  if (!rawSummary || typeof rawSummary !== "object") return null;
-  const summary = rawSummary;
-  const governanceConfig = summary.governanceConfig && typeof summary.governanceConfig === "object" ? summary.governanceConfig : {};
-  const notificationsState = summary.notifications && typeof summary.notifications === "object" ? summary.notifications : {};
-  const dispatchesState = summary.notificationDispatches && typeof summary.notificationDispatches === "object" ? summary.notificationDispatches : {};
-  const actionableReviews = Array.isArray(summary.actionableReviews) ? summary.actionableReviews : [];
-  const overdueReviews = Array.isArray(summary.overdueReviews) ? summary.overdueReviews : [];
-  const templates = Array.isArray(governanceConfig.templates) ? governanceConfig.templates : [];
-  const reviewers = Array.isArray(governanceConfig.reviewers) ? governanceConfig.reviewers : [];
-  const notifications = Array.isArray(notificationsState.items) ? notificationsState.items : [];
-  const dispatches = Array.isArray(dispatchesState.items) ? dispatchesState.items : [];
-  return {
-    generatedAt: summary.generatedAt ? String(summary.generatedAt) : "",
-    summary: summary.summary ? String(summary.summary) : "",
-    governanceConfigPath: summary.governanceConfigPath ? String(summary.governanceConfigPath) : "",
-    notificationsPath: summary.notificationsPath ? String(summary.notificationsPath) : "",
-    notificationDispatchesPath: summary.notificationDispatchesPath ? String(summary.notificationDispatchesPath) : "",
-    notificationDispatchCounts: summary.notificationDispatchCounts && typeof summary.notificationDispatchCounts === "object"
-      ? summary.notificationDispatchCounts
-      : { total: dispatches.length, byChannel: {}, byStatus: {} },
-    reviewStatusCounts: summary.reviewStatusCounts && typeof summary.reviewStatusCounts === "object" ? summary.reviewStatusCounts : {},
-    reviewTypeCounts: summary.reviewTypeCounts && typeof summary.reviewTypeCounts === "object" ? summary.reviewTypeCounts : {},
-    workflowPendingCount: Number(summary.workflowPendingCount || 0),
-    workflowOverdueCount: Number(summary.workflowOverdueCount || 0),
-    checkpointWorkflowPendingCount: Number(summary.checkpointWorkflowPendingCount || 0),
-    checkpointWorkflowOverdueCount: Number(summary.checkpointWorkflowOverdueCount || 0),
-    templates: templates.map((item, index) => {
-      const data = item && typeof item === "object" ? item : {};
-      return {
-        id: data.id ? String(data.id) : `template-${index + 1}`,
-        title: data.title ? String(data.title) : data.id ? String(data.id) : `template-${index + 1}`,
-        target: data.target ? String(data.target) : "all",
-        mode: data.mode ? String(data.mode) : "single",
-      };
-    }),
-    reviewers: reviewers.map((item, index) => {
-      const data = item && typeof item === "object" ? item : {};
-      return {
-        id: data.id ? String(data.id) : `reviewer-${index + 1}`,
-        name: data.name ? String(data.name) : data.id ? String(data.id) : `reviewer-${index + 1}`,
-        reviewerRole: data.reviewerRole ? String(data.reviewerRole) : "",
-      };
-    }),
-    notifications: notifications.map((item, index) => {
-      const data = item && typeof item === "object" ? item : {};
-      return {
-        id: data.id ? String(data.id) : `notification-${index + 1}`,
-        kind: data.kind ? String(data.kind) : "sla_reminder",
-        targetType: data.targetType ? String(data.targetType) : "suggestion_review",
-        targetId: data.targetId ? String(data.targetId) : "",
-        recipient: data.recipient ? String(data.recipient) : "",
-        message: data.message ? String(data.message) : "",
-        createdAt: data.createdAt ? String(data.createdAt) : "",
-      };
-    }),
-    notificationDispatches: dispatches.map((item, index) => {
-      const data = item && typeof item === "object" ? item : {};
-      return {
-        id: data.id ? String(data.id) : `dispatch-${index + 1}`,
-        notificationId: data.notificationId ? String(data.notificationId) : "",
-        channel: data.channel ? String(data.channel) : "goal_detail",
-        status: data.status ? String(data.status) : "pending",
-        targetType: data.targetType ? String(data.targetType) : "suggestion_review",
-        targetId: data.targetId ? String(data.targetId) : "",
-        recipient: data.recipient ? String(data.recipient) : "",
-        routeKey: data.routeKey ? String(data.routeKey) : "",
-        message: data.message ? String(data.message) : "",
-        createdAt: data.createdAt ? String(data.createdAt) : "",
-        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
-      };
-    }),
-    learningReviewInput: parseLearningReviewInput(summary.learningReviewInput),
-    recommendations: parseStringList(summary.recommendations),
-    actionableReviews: actionableReviews.map((item, index) => {
-      const data = item && typeof item === "object" ? item : {};
-      return {
-        id: data.id ? String(data.id) : `review-${index + 1}`,
-        title: data.title ? String(data.title) : data.id ? String(data.id) : `review-${index + 1}`,
-        suggestionType: data.suggestionType ? String(data.suggestionType) : "method_candidate",
-        status: data.status ? String(data.status) : "pending_review",
-        reviewer: data.reviewer ? String(data.reviewer) : "",
-        nodeId: data.nodeId ? String(data.nodeId) : "",
-        suggestionId: data.suggestionId ? String(data.suggestionId) : "",
-        updatedAt: data.updatedAt ? String(data.updatedAt) : "",
-      };
-    }),
-    overdueReviews: overdueReviews.map((item, index) => {
-      const data = item && typeof item === "object" ? item : {};
-      return {
-        id: data.id ? String(data.id) : `overdue-review-${index + 1}`,
-        title: data.title ? String(data.title) : data.id ? String(data.id) : `overdue-review-${index + 1}`,
-        suggestionType: data.suggestionType ? String(data.suggestionType) : "method_candidate",
-        status: data.status ? String(data.status) : "pending_review",
-      };
-    }),
-    actionableCheckpoints: parseGoalCheckpoints({
-      items: Array.isArray(summary.actionableCheckpoints) ? summary.actionableCheckpoints : [],
-    }),
-  };
+  return goalsSpecialistPanelsFeature?.parseGoalReviewGovernanceSummary(rawSummary) || null;
 }
 
 function renderGoalReviewGovernancePanelLoading() {
-  return goalsGovernancePanelFeature?.renderGoalReviewGovernancePanelLoading();
+  return goalsSpecialistPanelsFeature?.renderGoalReviewGovernancePanelLoading();
 }
 
 function renderGoalReviewGovernancePanelError(message) {
-  return goalsGovernancePanelFeature?.renderGoalReviewGovernancePanelError(message);
+  return goalsSpecialistPanelsFeature?.renderGoalReviewGovernancePanelError(message);
 }
 
 function renderGoalReviewGovernancePanel(goal, data) {
-  return goalsGovernancePanelFeature?.renderGoalReviewGovernancePanel(goal, data);
+  return goalsSpecialistPanelsFeature?.renderGoalReviewGovernancePanel(goal, data);
 }
 
 function bindGoalReviewGovernanceActions(goal) {
-  const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
-  if (!panel || !goal) return;
-  panel.querySelectorAll("[data-goal-approval-scan]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-approval-scan") || goal.id;
-      if (!goalId) return;
-      void runGoalApprovalScan(goalId, { autoEscalate: node.getAttribute("data-goal-auto-escalate") !== "false" });
-    });
-  });
-  panel.querySelectorAll("[data-goal-suggestion-decision]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-suggestion-goal-id") || goal.id;
-      const reviewId = node.getAttribute("data-goal-suggestion-review-id");
-      const decision = node.getAttribute("data-goal-suggestion-decision");
-      const suggestionType = node.getAttribute("data-goal-suggestion-type");
-      const suggestionId = node.getAttribute("data-goal-suggestion-id");
-      if (!goalId || !reviewId || !decision) return;
-      void runGoalSuggestionReviewDecision(goalId, {
-        reviewId,
-        decision,
-        suggestionType,
-        suggestionId,
-      });
-    });
-  });
-  panel.querySelectorAll("[data-goal-suggestion-escalate]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-suggestion-goal-id") || goal.id;
-      const reviewId = node.getAttribute("data-goal-suggestion-review-id");
-      const suggestionType = node.getAttribute("data-goal-suggestion-type");
-      const suggestionId = node.getAttribute("data-goal-suggestion-id");
-      if (!goalId || !reviewId) return;
-      void runGoalSuggestionReviewEscalation(goalId, {
-        reviewId,
-        suggestionType,
-        suggestionId,
-      });
-    });
-  });
-  panel.querySelectorAll("[data-goal-checkpoint-escalate]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-checkpoint-goal-id") || goal.id;
-      const nodeId = node.getAttribute("data-goal-checkpoint-node-id");
-      const checkpointId = node.getAttribute("data-goal-checkpoint-id");
-      if (!goalId || !nodeId || !checkpointId) return;
-      void runGoalCheckpointEscalation(goalId, nodeId, checkpointId);
-    });
-  });
+  return goalsSpecialistPanelsFeature?.bindGoalReviewGovernanceActions(goal);
 }
 
 async function loadGoalReviewGovernanceData(goal) {
-  if (!goal || !goalsDetailEl) return;
-  const trackingGoalId = goal.id;
-  const seq = (goalsState.governanceSeq || 0) + 1;
-  goalsState.governanceSeq = seq;
-  renderGoalReviewGovernancePanelLoading();
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.review_governance.summary",
-    params: { goalId: goal.id },
-  });
-  if (goalsState.governanceSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
-  if (!res?.ok || !res.payload?.summary) {
-    renderGoalReviewGovernancePanelError(res?.error?.message || "无法读取 review governance summary。");
-    return;
-  }
-  const parsed = parseGoalReviewGovernanceSummary(res.payload.summary);
-  goalsState.governanceCache[goal.id] = parsed;
-  renderGoalReviewGovernancePanel(goal, parsed);
-  bindGoalReviewGovernanceActions(goal);
+  return goalsSpecialistPanelsFeature?.loadGoalReviewGovernanceData(goal);
 }
 
 function renderGoalDetail(goal) {
@@ -4235,189 +2711,19 @@ async function openSubtaskById(taskId) {
 }
 
 async function submitGoalCreateForm() {
-  if (!ws || !isReady) {
-    showNotice(
-      localeController.t("goals.createUnavailableTitle", {}, "Unable to create long task"),
-      localeController.t("goals.notConnected", {}, "Not connected to the server."),
-      "error",
-    );
-    return;
-  }
-  const normalizedTitle = goalCreateTitleEl?.value.trim() || "";
-  if (!normalizedTitle) {
-    showNotice(
-      localeController.t("goals.createUnavailableTitle", {}, "Unable to create long task"),
-      localeController.t("goals.titleRequired", {}, "Title cannot be empty."),
-      "error",
-    );
-    goalCreateTitleEl?.focus();
-    return;
-  }
-  const objective = goalCreateObjectiveEl?.value.trim() || "";
-  const goalRoot = goalCreateRootEl?.value.trim() || "";
-  const autoResume = goalCreateAutoResumeEl?.checked !== false;
-  if (goalCreateSubmitBtn) {
-    goalCreateSubmitBtn.disabled = true;
-    goalCreateSubmitBtn.textContent = localeController.t("goals.creating", {}, "Creating...");
-  }
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.create",
-    params: {
-      title: normalizedTitle,
-      objective: objective.trim() || undefined,
-      goalRoot: goalRoot.trim() || undefined,
-    },
-  });
-  if (goalCreateSubmitBtn) {
-    goalCreateSubmitBtn.disabled = false;
-    goalCreateSubmitBtn.textContent = localeController.t("goals.createButton", {}, "Create");
-  }
-  if (!res || !res.ok || !res.payload?.goal?.id) {
-    showNotice(
-      localeController.t("goals.createFailedTitle", {}, "Failed to create long task"),
-      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
-      "error",
-    );
-    return;
-  }
-  const goal = res.payload.goal;
-  toggleGoalCreateModal(false);
-  showNotice(
-    localeController.t("goals.createdTitle", {}, "Long task created"),
-    localeController.t("goals.createdMessage", { goalName: goal.title || goal.id }, `${goal.title || goal.id} was created and is ready to enter its execution channel.`),
-    "success",
-    2200,
-  );
-  await loadGoals(true, goal.id);
-  if (autoResume) {
-    await resumeGoal(goal.id, { silent: true });
-  }
+  return goalsActionsRuntimeFeature?.submitGoalCreateForm();
 }
 
 async function resumeGoal(goalId, options = {}) {
-  if (!ws || !isReady) {
-    showNotice(
-      localeController.t("goals.resumeUnavailableTitle", {}, "Unable to resume long task"),
-      localeController.t("goals.notConnected", {}, "Not connected to the server."),
-      "error",
-    );
-    return;
-  }
-  const nodeId = typeof options.nodeId === "string" && options.nodeId.trim() ? options.nodeId.trim() : undefined;
-  const checkpointId = typeof options.checkpointId === "string" && options.checkpointId.trim()
-    ? options.checkpointId.trim()
-    : undefined;
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.resume",
-    params: { goalId, nodeId, checkpointId },
-  });
-  if (!res || !res.ok) {
-    showNotice(
-      localeController.t("goals.resumeFailedTitle", {}, "Failed to resume long task"),
-      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
-      "error",
-    );
-    return;
-  }
-  const goal = res.payload?.goal || getGoalById(goalId);
-  const conversationId = res.payload?.conversationId || goal?.activeConversationId || goalBaseConversationId(goalId);
-  await loadGoals(true, goalId);
-  openConversationSession(conversationId, nodeId
-    ? localeController.t("goals.resumedNodeChannelHint", { goalName: goal?.title || goalId, nodeId }, `Entered long task node channel: ${goal?.title || goalId} / ${nodeId}`)
-    : localeController.t("goals.resumedChannelHint", { goalName: goal?.title || goalId }, `Entered long task channel: ${goal?.title || goalId}`));
-  if (!options.silent) {
-    showNotice(
-      localeController.t("goals.resumedTitle", {}, "Long task resumed"),
-      checkpointId && nodeId
-        ? localeController.t(
-          "goals.replayedCheckpointMessage",
-          { goalName: goal?.title || goalId, checkpointId, nodeId },
-          `${goal?.title || goalId} replayed checkpoint ${checkpointId} and resumed node ${nodeId}.`,
-        )
-        : nodeId
-        ? localeController.t("goals.resumedNodeMessage", { goalName: goal?.title || goalId, nodeId }, `${goal?.title || goalId} resumed from the last node ${nodeId}.`)
-        : localeController.t("goals.resumedMessage", { goalName: goal?.title || goalId }, `${goal?.title || goalId} switched to its dedicated goal channel.`),
-      "success",
-      2200,
-    );
-  }
+  return goalsActionsRuntimeFeature?.resumeGoal(goalId, options);
 }
 
 async function pauseGoal(goalId) {
-  if (!ws || !isReady) {
-    showNotice(
-      localeController.t("goals.pauseUnavailableTitle", {}, "Unable to pause long task"),
-      localeController.t("goals.notConnected", {}, "Not connected to the server."),
-      "error",
-    );
-    return;
-  }
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.pause",
-    params: { goalId },
-  });
-  if (!res || !res.ok) {
-    showNotice(
-      localeController.t("goals.pauseFailedTitle", {}, "Failed to pause long task"),
-      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
-      "error",
-    );
-    return;
-  }
-  if (isConversationForGoal(activeConversationId, goalId)) {
-    activeConversationId = null;
-    renderCanvasGoalContext();
-    chatEventsFeature?.resetStreamingState();
-  }
-  const goal = res.payload?.goal || getGoalById(goalId);
-  await loadGoals(true, goalId);
-  showNotice(
-    localeController.t("goals.pausedTitle", {}, "Long task paused"),
-    localeController.t("goals.pausedMessage", { goalName: goal?.title || goalId }, `${goal?.title || goalId} has been paused. The normal chat channel is unaffected.`),
-    "info",
-    2400,
-  );
+  return goalsActionsRuntimeFeature?.pauseGoal(goalId);
 }
 
 async function generateGoalHandoff(goalId) {
-  if (!ws || !isReady) {
-    showNotice(
-      localeController.t("goals.handoffUnavailableTitle", {}, "Unable to generate handoff"),
-      localeController.t("goals.notConnected", {}, "Not connected to the server."),
-      "error",
-    );
-    return;
-  }
-  const goal = getGoalById(goalId);
-  const res = await sendReq({
-    type: "req",
-    id: makeId(),
-    method: "goal.handoff.generate",
-    params: { goalId },
-  });
-  if (!res || !res.ok) {
-    showNotice(
-      localeController.t("goals.handoffFailedTitle", {}, "Failed to generate handoff"),
-      res?.error?.message || localeController.t("goals.unknownError", {}, "Unknown error."),
-      "error",
-    );
-    return;
-  }
-  if (goal && goalsState.selectedId === goalId) {
-    void loadGoalHandoffData(goal);
-  }
-  showNotice(
-    localeController.t("goals.handoffGeneratedTitle", {}, "Handoff generated"),
-    localeController.t("goals.handoffGeneratedMessage", { goalName: goal?.title || goalId }, `The recovery handoff summary for ${goal?.title || goalId} has been updated.`),
-    "success",
-    2200,
-  );
+  return goalsActionsRuntimeFeature?.generateGoalHandoff(goalId);
 }
 
 function switchMemoryViewerTab(tab) {
