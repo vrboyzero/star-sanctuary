@@ -1,0 +1,314 @@
+import path from "node:path";
+import { Readable } from "node:stream";
+
+import { resolveAgentWorkspaceDir, type AgentRegistry, type ConversationStore } from "@belldandy/agent";
+import type { Request, Response, Express } from "express";
+
+import type { QueryRuntimeHttpJsonResponse } from "./query-runtime-http.js";
+import type { QueryRuntimeTraceStore } from "./query-runtime-trace.js";
+import type { RegisterGatewayHttpRoutesContext } from "./server-http-routes.js";
+import type { GatewayServerOptions } from "./server.js";
+import { BELLDANDY_VERSION } from "./version.generated.js";
+import {
+  createFixedWindowRateLimiter,
+  createWebhookInFlightLimiter,
+  WEBHOOK_BODY_READ_DEFAULTS,
+  WEBHOOK_IN_FLIGHT_DEFAULTS,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "./webhook/index.js";
+
+const AVATAR_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+const AVATAR_ALLOWED_MIME_TYPES = new Map<string, string>([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/jpg", ".jpg"],
+  ["image/gif", ".gif"],
+  ["image/webp", ".webp"],
+]);
+
+type AvatarUploadRole = "user" | "agent";
+type AvatarUploadFileLike = File;
+
+type GatewayHttpRuntimeContextInput = {
+  app: Express;
+  stateDir: string;
+  log: RegisterGatewayHttpRoutesContext["log"];
+  options: Pick<
+    GatewayServerOptions,
+    | "auth"
+    | "webRoot"
+    | "stateDir"
+    | "agentFactory"
+    | "agentRegistry"
+    | "webhookConfig"
+    | "webhookIdempotency"
+    | "onChannelSecurityApprovalRequired"
+  >;
+  getConversationStore: () => ConversationStore;
+  getQueryRuntimeTraceStore: () => QueryRuntimeTraceStore;
+  writeBinaryFileAtomic: RegisterGatewayHttpRoutesContext["writeBinaryFileAtomic"];
+  writeTextFileAtomic: RegisterGatewayHttpRoutesContext["writeTextFileAtomic"];
+  emitAutoRunTaskTokenResult: RegisterGatewayHttpRoutesContext["emitAutoRunTaskTokenResult"];
+};
+
+type GatewayHttpRuntimeSettings = Pick<
+  RegisterGatewayHttpRoutesContext,
+  | "communityApiEnabled"
+  | "communityApiToken"
+  | "webhookEnabled"
+  | "webhookPreAuthMaxBytes"
+  | "webhookPreAuthTimeoutMs"
+  | "webhookRateLimitWindowMs"
+  | "webhookRateLimitMaxRequests"
+  | "webhookMaxInFlightPerKey"
+  | "webhookRateLimiter"
+  | "webhookInFlightLimiter"
+>;
+
+export function buildGatewayHttpRoutesContext(
+  input: GatewayHttpRuntimeContextInput,
+): RegisterGatewayHttpRoutesContext {
+  const avatarDir = path.join(input.stateDir, "avatar");
+  const runtimeSettings = readGatewayHttpRuntimeSettings(input.options);
+
+  return {
+    app: input.app,
+    version: BELLDANDY_VERSION,
+    stateDir: input.stateDir,
+    avatarDir,
+    webRoot: input.options.webRoot,
+    generatedDir: input.options.stateDir ? path.join(input.options.stateDir, "generated") : undefined,
+    auth: input.options.auth,
+    agentFactory: input.options.agentFactory,
+    agentRegistry: input.options.agentRegistry,
+    webhookConfig: input.options.webhookConfig,
+    webhookIdempotency: input.options.webhookIdempotency,
+    onChannelSecurityApprovalRequired: input.options.onChannelSecurityApprovalRequired,
+    ...runtimeSettings,
+    log: input.log,
+    getConversationStore: input.getConversationStore,
+    getQueryRuntimeTraceStore: input.getQueryRuntimeTraceStore,
+    requestToFormData,
+    isAuthorizedAvatarUpload,
+    normalizeAvatarUploadRole,
+    isAvatarUploadFileLike,
+    resolveAvatarUploadExtension,
+    resolveAgentIdentityDir: (rootDir, agentRegistry, requestedAgentId) => {
+      const resolved = resolveAgentIdentityDir(rootDir, agentRegistry, requestedAgentId);
+      return resolved
+        ? { dir: resolved.dir, agentId: resolved.profileId }
+        : null;
+    },
+    replaceAvatarMarkdown,
+    writeBinaryFileAtomic: input.writeBinaryFileAtomic,
+    writeTextFileAtomic: input.writeTextFileAtomic,
+    sendHttpJson,
+    resolveWebhookRequestGuardKey,
+    emitAutoRunTaskTokenResult: input.emitAutoRunTaskTokenResult,
+    avatarUploadMaxBytes: AVATAR_UPLOAD_MAX_BYTES,
+  };
+}
+
+function readGatewayHttpRuntimeSettings(
+  options: GatewayHttpRuntimeContextInput["options"],
+): GatewayHttpRuntimeSettings {
+  const communityApiEnabled = String(process.env.BELLDANDY_COMMUNITY_API_ENABLED ?? "false").toLowerCase() === "true";
+  const communityApiToken =
+    process.env.BELLDANDY_COMMUNITY_API_TOKEN
+    ?? process.env.BELLDANDY_AUTH_TOKEN
+    ?? (options.auth.mode === "token" ? options.auth.token : undefined);
+  const webhookPreAuthMaxBytes = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_PREAUTH_MAX_BYTES",
+    WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes,
+  );
+  const webhookPreAuthTimeoutMs = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_PREAUTH_TIMEOUT_MS",
+    WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs,
+  );
+  const webhookRateLimitWindowMs = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_WINDOW_MS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  );
+  const webhookRateLimitMaxRequests = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_REQUESTS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  );
+  const webhookRateLimitMaxTrackedKeys = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS",
+    WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  );
+  const webhookMaxInFlightPerKey = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_PER_KEY",
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
+  );
+  const webhookMaxInFlightTrackedKeys = parsePositiveIntEnv(
+    "BELLDANDY_WEBHOOK_MAX_IN_FLIGHT_TRACKED_KEYS",
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
+  );
+
+  return {
+    communityApiEnabled,
+    communityApiToken,
+    webhookEnabled: Boolean(options.webhookConfig && options.webhookConfig.webhooks.length > 0),
+    webhookPreAuthMaxBytes,
+    webhookPreAuthTimeoutMs,
+    webhookRateLimitWindowMs,
+    webhookRateLimitMaxRequests,
+    webhookMaxInFlightPerKey,
+    webhookRateLimiter: createFixedWindowRateLimiter({
+      windowMs: webhookRateLimitWindowMs,
+      maxRequests: webhookRateLimitMaxRequests,
+      maxTrackedKeys: webhookRateLimitMaxTrackedKeys,
+    }),
+    webhookInFlightLimiter: createWebhookInFlightLimiter({
+      maxInFlightPerKey: webhookMaxInFlightPerKey,
+      maxTrackedKeys: webhookMaxInFlightTrackedKeys,
+    }),
+  };
+}
+
+function parsePositiveIntEnv(varName: string, fallback: number): number {
+  const raw = process.env[varName];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+function resolveWebhookRequestGuardKey(req: Request, webhookId: string): string {
+  const remoteAddress = req.socket.remoteAddress?.trim() || "unknown";
+  return `${webhookId}:${remoteAddress}`;
+}
+
+function normalizeAvatarUploadRole(value: unknown): AvatarUploadRole | null {
+  const role = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (role === "user" || role === "agent") {
+    return role;
+  }
+  return null;
+}
+
+function isAvatarUploadFileLike(value: FormDataEntryValue | null): value is AvatarUploadFileLike {
+  return Boolean(value)
+    && typeof value === "object"
+    && typeof (value as AvatarUploadFileLike).arrayBuffer === "function"
+    && typeof (value as AvatarUploadFileLike).size === "number"
+    && typeof (value as AvatarUploadFileLike).type === "string"
+    && typeof (value as AvatarUploadFileLike).name === "string";
+}
+
+function resolveAvatarUploadExtension(file: AvatarUploadFileLike): string | null {
+  const mimeType = file.type.trim().toLowerCase();
+  if (AVATAR_ALLOWED_MIME_TYPES.has(mimeType)) {
+    return AVATAR_ALLOWED_MIME_TYPES.get(mimeType) ?? null;
+  }
+
+  const ext = path.extname(file.name).toLowerCase();
+  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg" || ext === ".gif" || ext === ".webp") {
+    if (ext === ".jpeg") return ".jpg";
+    return ext;
+  }
+
+  return null;
+}
+
+function replaceAvatarMarkdown(content: string, avatarPath: string): string {
+  const avatarLinePattern = /^(\s*[-*]?\s*\*\*头像[：:]\*\*\s*)(.*)$/m;
+  if (avatarLinePattern.test(content)) {
+    return content.replace(avatarLinePattern, `$1${avatarPath}`);
+  }
+
+  const emojiLinePattern = /^(\s*[-*]?\s*\*\*Emoji[：:]\*\*\s*.*)$/m;
+  const avatarLine = `- **头像：** ${avatarPath}`;
+  if (!content.trim()) {
+    return `${avatarLine}\n`;
+  }
+  if (emojiLinePattern.test(content)) {
+    return content.replace(emojiLinePattern, `$1\n${avatarLine}`);
+  }
+
+  const nameLinePattern = /^(\s*[-*]?\s*\*\*名字[：:]\*\*\s*.*)$/m;
+  if (nameLinePattern.test(content)) {
+    return content.replace(nameLinePattern, `$1\n${avatarLine}`);
+  }
+
+  return `${content.trimEnd()}\n\n${avatarLine}\n`;
+}
+
+function resolveAgentIdentityDir(
+  rootDir: string,
+  agentRegistry: AgentRegistry | undefined,
+  agentId: string | undefined,
+): { dir: string; profileId: string } | null {
+  const resolvedAgentId = typeof agentId === "string" && agentId.trim() ? agentId.trim() : "default";
+  if (resolvedAgentId === "default") {
+    return { dir: rootDir, profileId: "default" };
+  }
+
+  const profile = agentRegistry?.getProfile(resolvedAgentId);
+  if (!profile) return null;
+
+  const workspaceDir = resolveAgentWorkspaceDir(profile);
+  return {
+    dir: path.join(rootDir, "agents", workspaceDir),
+    profileId: profile.id,
+  };
+}
+
+function readHeaderValue(headers: Request["headers"], name: string): string | undefined {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    return value[0]?.trim() || undefined;
+  }
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  return undefined;
+}
+
+function isAuthorizedAvatarUpload(req: Request, auth: GatewayServerOptions["auth"]): boolean {
+  if (auth.mode === "none") {
+    return true;
+  }
+
+  if (auth.mode === "token") {
+    const bearer = readHeaderValue(req.headers, "authorization");
+    const token = bearer?.startsWith("Bearer ") ? bearer.slice("Bearer ".length).trim() : "";
+    return Boolean(auth.token?.trim()) && token === auth.token?.trim();
+  }
+
+  const password = readHeaderValue(req.headers, "x-belldandy-password");
+  return Boolean(auth.password?.trim()) && password === auth.password?.trim();
+}
+
+async function requestToFormData(req: Request): Promise<FormData> {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (typeof value === "undefined") continue;
+    if (Array.isArray(value)) {
+      headers.set(name, value.join(", "));
+    } else {
+      headers.set(name, value);
+    }
+  }
+
+  const url = `http://127.0.0.1${req.url ?? "/"}`;
+  const request = new Request(url, {
+    method: req.method ?? "POST",
+    headers,
+    body: Readable.toWeb(req) as unknown as BodyInit,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+
+  return request.formData();
+}
+
+function sendHttpJson(
+  res: Response,
+  response: QueryRuntimeHttpJsonResponse,
+) {
+  for (const [key, value] of Object.entries(response.headers ?? {})) {
+    res.setHeader(key, value);
+  }
+  return res.status(response.status).json(response.body);
+}

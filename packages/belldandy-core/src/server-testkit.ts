@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect } from "vitest";
 import WebSocket from "ws";
 
+import { listGlobalMemoryManagers, resetGlobalMemoryManagers } from "@belldandy/memory";
 import { type Tool, withToolContract } from "@belldandy/skills";
 
 import { approvePairingCode } from "./security/store.js";
@@ -115,6 +116,18 @@ export function createWriteContractedTestTool(name: string): Tool {
 
 export function toBase64(value: string): string {
   return Buffer.from(value, "utf-8").toString("base64");
+}
+
+export function cleanupGlobalMemoryManagersForTest(): void {
+  const managers = listGlobalMemoryManagers();
+  resetGlobalMemoryManagers();
+  for (const manager of managers) {
+    try {
+      manager.close();
+    } catch {
+      // ignore cleanup noise from already-disposed managers
+    }
+  }
 }
 
 export async function withEnv(

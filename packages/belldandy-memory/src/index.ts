@@ -16,6 +16,7 @@ export {
   registerGlobalMemoryManager,
   getGlobalMemoryManager,
   listGlobalMemoryManagers,
+  resetGlobalMemoryManagers,
 } from "./manager.js";
 export {
   DurableExtractionRuntime,

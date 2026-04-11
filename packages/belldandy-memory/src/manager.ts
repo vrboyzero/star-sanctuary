@@ -122,6 +122,12 @@ export function listGlobalMemoryManagers(): MemoryManager[] {
     return [...new Set(ordered)];
 }
 
+export function resetGlobalMemoryManagers(): void {
+    globalMemoryManager = null;
+    scopedGlobalMemoryManagersByAgent.clear();
+    scopedGlobalMemoryManagersByWorkspace.clear();
+}
+
 function registerGlobalMemoryManagerInternal(
     manager: MemoryManager,
     options: GlobalMemoryManagerRegistrationOptions = {},

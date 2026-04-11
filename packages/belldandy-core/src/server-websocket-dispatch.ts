@@ -1,0 +1,179 @@
+import type {
+  AgentRegistry,
+  BelldandyAgent,
+  CompactionRuntimeReport,
+  ConversationStore,
+  ModelProfile,
+} from "@belldandy/agent";
+import type { GatewayEventFrame, GatewayReqFrame, GatewayResFrame, TokenUsageUploadConfig } from "@belldandy/protocol";
+import type { PluginRegistry } from "@belldandy/plugins";
+import type { SkillRegistry, ToolExecutor, TranscribeOptions, TranscribeResult } from "@belldandy/skills";
+import type { WebSocket } from "ws";
+
+import type { BackgroundContinuationRuntimeDoctorReport } from "./background-continuation-runtime.js";
+import type { CronRuntimeDoctorReport } from "./cron/observability.js";
+import type { DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
+import type { ExtensionHostState } from "./extension-host.js";
+import type { ExternalOutboundAuditStore } from "./external-outbound-audit-store.js";
+import type { ExternalOutboundConfirmationStore } from "./external-outbound-confirmation-store.js";
+import type { ExternalOutboundSenderRegistry } from "./external-outbound-sender-registry.js";
+import type { GoalManager } from "./goals/manager.js";
+import type {
+  MemoryRuntimeBudgetGuard,
+  MemoryRuntimeUsageAccounting,
+  SlidingWindowRateLimiter,
+} from "./memory-runtime-budget.js";
+import type { QueryRuntimeTraceStore } from "./query-runtime-trace.js";
+import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
+import type { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
+import type { RuntimeResilienceDoctorReport } from "./runtime-resilience.js";
+import type { GatewayServerOptions } from "./server.js";
+import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
+import type { ToolsConfigManager } from "./tools-config.js";
+import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
+import type { GatewayWebSocketConnectionContext } from "./server-websocket-runtime.js";
+
+type GatewayLog = {
+  debug: (module: string, message: string, data?: unknown) => void;
+  info: (module: string, message: string, data?: unknown) => void;
+  warn: (module: string, message: string, data?: unknown) => void;
+  error: (module: string, message: string, data?: unknown) => void;
+};
+
+export type GatewayWebSocketRequestContext = {
+  clientId: string;
+  userUuid?: string;
+  stateDir: string;
+  additionalWorkspaceRoots: string[];
+  envDir?: string;
+  auth: GatewayServerOptions["auth"];
+  log: GatewayLog;
+  agentFactory: () => BelldandyAgent;
+  agentRegistry?: AgentRegistry;
+  inspectAgentPrompt?: GatewayServerOptions["inspectAgentPrompt"];
+  getConversationPromptSnapshot?: GatewayServerOptions["getConversationPromptSnapshot"];
+  primaryModelConfig?: { baseUrl: string; apiKey: string; model: string; protocol?: string; wireApi?: string };
+  modelFallbacks?: ModelProfile[];
+  preferredProviderIds: string[];
+  modelConfigPath?: string;
+  conversationStore: ConversationStore;
+  durableExtractionRuntime?: DurableExtractionRuntime;
+  requestDurableExtraction?: (input: {
+    conversationId: string;
+    source: string;
+    digest: DurableExtractionDigestSnapshot;
+  }) => Promise<DurableExtractionRecord | undefined>;
+  memoryUsageAccounting: MemoryRuntimeUsageAccounting;
+  memoryBudgetGuard: MemoryRuntimeBudgetGuard;
+  durableExtractionRequestRateLimiter: SlidingWindowRateLimiter;
+  ttsEnabled?: () => boolean;
+  ttsSynthesize?: (text: string) => Promise<{ webPath: string; htmlAudio: string } | null>;
+  toolsConfigManager?: ToolsConfigManager;
+  toolExecutor?: ToolExecutor;
+  toolControlConfirmationStore?: ToolControlConfirmationStore;
+  externalOutboundConfirmationStore?: ExternalOutboundConfirmationStore;
+  externalOutboundSenderRegistry?: ExternalOutboundSenderRegistry;
+  externalOutboundAuditStore?: ExternalOutboundAuditStore;
+  getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
+  getAgentToolControlConfirmPassword?: () => string | undefined;
+  sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
+  pluginRegistry?: PluginRegistry;
+  extensionHost?: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle">;
+  skillRegistry?: SkillRegistry;
+  goalManager?: GoalManager;
+  subTaskRuntimeStore?: SubTaskRuntimeStore;
+  resumeSubTask?: (taskId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+  takeoverSubTask?: (taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>;
+  updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
+  stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
+  tokenUsageUploadConfig: TokenUsageUploadConfig;
+  broadcastEvent?: (frame: GatewayEventFrame) => void;
+  getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
+  getRuntimeResilienceReport?: () => RuntimeResilienceDoctorReport | undefined;
+  queryRuntimeTraceStore: QueryRuntimeTraceStore;
+  residentAgentRuntime: ResidentAgentRuntimeRegistry;
+  residentMemoryManagers?: ScopedMemoryManagerRecord[];
+  getCronRuntimeDoctorReport?: () => Promise<CronRuntimeDoctorReport | undefined>;
+  getBackgroundContinuationRuntimeDoctorReport?: () => Promise<BackgroundContinuationRuntimeDoctorReport | undefined>;
+};
+
+type CreateGatewayWebSocketRequestHandlerOptions = Omit<
+  GatewayWebSocketRequestContext,
+  "clientId" | "userUuid"
+> & {
+  handleReq: (
+    ws: WebSocket,
+    req: GatewayReqFrame,
+    ctx: GatewayWebSocketRequestContext,
+  ) => Promise<GatewayResFrame | null>;
+};
+
+export function buildGatewayWebSocketRequestContext(
+  connection: GatewayWebSocketConnectionContext,
+  options: Omit<CreateGatewayWebSocketRequestHandlerOptions, "handleReq">,
+): GatewayWebSocketRequestContext {
+  return {
+    clientId: connection.clientId,
+    userUuid: connection.userUuid,
+    stateDir: options.stateDir,
+    additionalWorkspaceRoots: options.additionalWorkspaceRoots,
+    envDir: options.envDir,
+    auth: options.auth,
+    log: options.log,
+    agentFactory: options.agentFactory,
+    agentRegistry: options.agentRegistry,
+    inspectAgentPrompt: options.inspectAgentPrompt,
+    getConversationPromptSnapshot: options.getConversationPromptSnapshot,
+    primaryModelConfig: options.primaryModelConfig,
+    modelFallbacks: options.modelFallbacks,
+    preferredProviderIds: options.preferredProviderIds,
+    modelConfigPath: options.modelConfigPath,
+    conversationStore: options.conversationStore,
+    durableExtractionRuntime: options.durableExtractionRuntime,
+    requestDurableExtraction: options.requestDurableExtraction,
+    memoryUsageAccounting: options.memoryUsageAccounting,
+    memoryBudgetGuard: options.memoryBudgetGuard,
+    durableExtractionRequestRateLimiter: options.durableExtractionRequestRateLimiter,
+    ttsEnabled: options.ttsEnabled,
+    ttsSynthesize: options.ttsSynthesize,
+    toolsConfigManager: options.toolsConfigManager,
+    toolExecutor: options.toolExecutor,
+    toolControlConfirmationStore: options.toolControlConfirmationStore,
+    externalOutboundConfirmationStore: options.externalOutboundConfirmationStore,
+    externalOutboundSenderRegistry: options.externalOutboundSenderRegistry,
+    externalOutboundAuditStore: options.externalOutboundAuditStore,
+    getAgentToolControlMode: options.getAgentToolControlMode,
+    getAgentToolControlConfirmPassword: options.getAgentToolControlConfirmPassword,
+    sttTranscribe: options.sttTranscribe,
+    pluginRegistry: options.pluginRegistry,
+    extensionHost: options.extensionHost,
+    skillRegistry: options.skillRegistry,
+    goalManager: options.goalManager,
+    subTaskRuntimeStore: options.subTaskRuntimeStore,
+    resumeSubTask: options.resumeSubTask,
+    takeoverSubTask: options.takeoverSubTask,
+    updateSubTask: options.updateSubTask,
+    stopSubTask: options.stopSubTask,
+    tokenUsageUploadConfig: options.tokenUsageUploadConfig,
+    broadcastEvent: options.broadcastEvent,
+    getCompactionRuntimeReport: options.getCompactionRuntimeReport,
+    getRuntimeResilienceReport: options.getRuntimeResilienceReport,
+    queryRuntimeTraceStore: options.queryRuntimeTraceStore,
+    residentAgentRuntime: options.residentAgentRuntime,
+    residentMemoryManagers: options.residentMemoryManagers,
+    getCronRuntimeDoctorReport: options.getCronRuntimeDoctorReport,
+    getBackgroundContinuationRuntimeDoctorReport: options.getBackgroundContinuationRuntimeDoctorReport,
+  };
+}
+
+export function createGatewayWebSocketRequestHandler(
+  options: CreateGatewayWebSocketRequestHandlerOptions,
+) {
+  return (
+    ws: WebSocket,
+    frame: GatewayReqFrame,
+    connection: GatewayWebSocketConnectionContext,
+  ): Promise<GatewayResFrame | null> => {
+    return options.handleReq(ws, frame, buildGatewayWebSocketRequestContext(connection, options));
+  };
+}
