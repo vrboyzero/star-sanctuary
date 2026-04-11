@@ -1,0 +1,348 @@
+export function createMemoryRuntimeFeature({
+  refs,
+  isConnected,
+  sendReq,
+  makeId,
+  getMemoryViewerState,
+  getMemoryViewerFeature,
+  getCurrentAgentSelection,
+  getGoalDisplayName,
+  switchMode,
+  loadGoals,
+  showNotice,
+  renderMemoryViewerStats,
+  renderTaskList,
+  renderMemoryList,
+  renderSharedReviewList,
+  renderTaskDetail,
+  renderCandidateOnlyDetail,
+  renderMemoryDetail,
+  renderMemoryViewerListEmpty,
+  renderMemoryViewerDetailEmpty,
+  getCurrentAgentLabel,
+  t = (_key, _params, fallback) => fallback ?? "",
+}) {
+  const {
+    memoryViewerSection,
+    memoryTaskGoalFilterBarEl,
+    memoryTaskGoalFilterLabelEl,
+  } = refs;
+
+  function getFeature() {
+    return getMemoryViewerFeature?.();
+  }
+
+  function switchMemoryViewerTab(tab) {
+    return getFeature()?.switchMemoryViewerTab(tab);
+  }
+
+  function syncMemoryViewerUi() {
+    return getFeature()?.syncMemoryViewerUi();
+  }
+
+  async function loadMemoryViewer(forceSelectFirst = false) {
+    return getFeature()?.loadMemoryViewer(forceSelectFirst);
+  }
+
+  async function loadMemoryViewerStats() {
+    return getFeature()?.loadMemoryViewerStats();
+  }
+
+  async function loadTaskUsageOverview() {
+    return getFeature()?.loadTaskUsageOverview();
+  }
+
+  async function loadTaskViewer(forceSelectFirst = false) {
+    return getFeature()?.loadTaskViewer(forceSelectFirst);
+  }
+
+  async function loadMemoryChunkViewer(forceSelectFirst = false) {
+    return getFeature()?.loadMemoryChunkViewer(forceSelectFirst);
+  }
+
+  function resolveMemoryDetailTargetAgentId(chunkId) {
+    const memoryViewerState = getMemoryViewerState();
+    if (!chunkId || memoryViewerState.tab !== "sharedReview") return undefined;
+    const selected = Array.isArray(memoryViewerState.items)
+      ? memoryViewerState.items.find((item) => item?.id === chunkId)
+      : null;
+    return typeof selected?.targetAgentId === "string" && selected.targetAgentId.trim()
+      ? selected.targetAgentId.trim()
+      : undefined;
+  }
+
+  function syncMemoryTaskGoalFilterUi() {
+    if (!memoryTaskGoalFilterBarEl || !memoryTaskGoalFilterLabelEl) return;
+    const memoryViewerState = getMemoryViewerState();
+    const goalId = memoryViewerState.goalIdFilter;
+    const visible = memoryViewerState.tab === "tasks" && Boolean(goalId);
+    memoryTaskGoalFilterBarEl.classList.toggle("hidden", !visible);
+    if (!visible) return;
+    memoryTaskGoalFilterLabelEl.textContent = `当前仅查看长期任务：${getGoalDisplayName(goalId)} (${goalId})`;
+  }
+
+  async function clearMemoryTaskGoalFilter() {
+    const memoryViewerState = getMemoryViewerState();
+    if (!memoryViewerState.goalIdFilter) return;
+    memoryViewerState.goalIdFilter = null;
+    syncMemoryTaskGoalFilterUi();
+    if (memoryViewerState.tab === "tasks") {
+      await loadMemoryViewer(true);
+    }
+  }
+
+  async function openGoalTaskViewer(goalId) {
+    if (!goalId) return;
+    const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.tab !== "tasks") {
+      memoryViewerState.tab = "tasks";
+      memoryViewerState.items = [];
+      memoryViewerState.selectedTask = null;
+      memoryViewerState.selectedCandidate = null;
+    }
+    memoryViewerState.goalIdFilter = goalId;
+    memoryViewerState.selectedId = null;
+    syncMemoryViewerUi();
+    syncMemoryTaskGoalFilterUi();
+    switchMode("memory");
+    await loadMemoryViewer(true);
+    showNotice(
+      t("goals.taskViewSwitchedTitle", {}, "Switched to task view"),
+      t(
+        "goals.taskViewSwitchedMessage",
+        { goalName: getGoalDisplayName(goalId) },
+        `Now showing only tasks related to ${getGoalDisplayName(goalId)}.`,
+      ),
+      "info",
+      2200,
+    );
+  }
+
+  async function loadTaskDetail(taskId, requestContext = null) {
+    const memoryViewerState = getMemoryViewerState();
+    if (!taskId) {
+      memoryViewerState.selectedTask = null;
+      memoryViewerState.selectedCandidate = null;
+      memoryViewerState.pendingUsageRevokeId = null;
+      renderMemoryViewerDetailEmpty(t("memory.selectTask", {}, "Please select a task."));
+      renderMemoryViewerStats(memoryViewerState.stats);
+      return;
+    }
+
+    renderMemoryViewerDetailEmpty(t("memory.taskDetailLoadingShort", {}, "Loading task details…"));
+    const requestToken = Number(requestContext?.requestToken ?? memoryViewerState.requestToken ?? 0);
+    const requestAgentId = String(requestContext?.agentId || memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
+    const id = makeId();
+    const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId, agentId: requestAgentId } });
+    if (
+      Number(memoryViewerState.requestToken || 0) !== requestToken
+      || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
+    ) {
+      return;
+    }
+    if (!res || !res.ok) {
+      memoryViewerState.selectedTask = null;
+      memoryViewerState.selectedCandidate = null;
+      memoryViewerState.pendingUsageRevokeId = null;
+      renderMemoryViewerDetailEmpty(res?.error?.message || t("memory.taskDetailLoadFailed", {}, "Failed to load task details."));
+      renderMemoryViewerStats(memoryViewerState.stats);
+      return;
+    }
+
+    memoryViewerState.selectedTask = res.payload?.task ?? null;
+    memoryViewerState.experienceQueryView = res.payload?.queryView ?? memoryViewerState.experienceQueryView ?? null;
+    if (
+      memoryViewerState.selectedCandidate?.taskId
+      && memoryViewerState.selectedTask?.id
+      && memoryViewerState.selectedCandidate.taskId !== memoryViewerState.selectedTask.id
+    ) {
+      memoryViewerState.selectedCandidate = null;
+    }
+    memoryViewerState.pendingUsageRevokeId = null;
+    renderTaskList(memoryViewerState.items);
+    renderTaskDetail(memoryViewerState.selectedTask);
+    renderMemoryViewerStats(memoryViewerState.stats);
+  }
+
+  async function loadMemoryDetail(chunkId, requestContext = null, options = {}) {
+    const memoryViewerState = getMemoryViewerState();
+    if (!chunkId) {
+      renderMemoryViewerDetailEmpty(t("memory.selectMemory", {}, "Please select a memory."));
+      return;
+    }
+
+    renderMemoryViewerDetailEmpty(t("memory.memoryDetailLoadingShort", {}, "Loading memory details…"));
+    const requestToken = Number(requestContext?.requestToken ?? memoryViewerState.requestToken ?? 0);
+    const requestAgentId = String(
+      options?.targetAgentId
+      || resolveMemoryDetailTargetAgentId(chunkId)
+      || requestContext?.agentId
+      || memoryViewerState.activeAgentId
+      || getCurrentAgentSelection(),
+    ).trim() || "default";
+    const id = makeId();
+    const res = await sendReq({ type: "req", id, method: "memory.get", params: { chunkId, agentId: requestAgentId } });
+    if (
+      Number(memoryViewerState.requestToken || 0) !== requestToken
+      || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
+    ) {
+      return;
+    }
+    if (!res || !res.ok) {
+      renderMemoryViewerDetailEmpty(res?.error?.message || t("memory.memoryDetailLoadFailed", {}, "Failed to load memory details."));
+      return;
+    }
+
+    if (memoryViewerState.tab === "sharedReview") {
+      renderSharedReviewList(memoryViewerState.items);
+    } else {
+      renderMemoryList(memoryViewerState.items);
+    }
+    memoryViewerState.memoryQueryView = res.payload?.queryView ?? memoryViewerState.memoryQueryView ?? null;
+    const queueItem = memoryViewerState.tab === "sharedReview" && Array.isArray(memoryViewerState.items)
+      ? memoryViewerState.items.find((item) => item?.id === chunkId)
+      : null;
+    renderMemoryDetail(queueItem && res.payload?.item
+      ? {
+        ...res.payload.item,
+        targetAgentId: queueItem.targetAgentId,
+        targetDisplayName: queueItem.targetDisplayName,
+        targetMemoryMode: queueItem.targetMemoryMode,
+        reviewStatus: queueItem.reviewStatus,
+        claimOwner: queueItem.claimOwner,
+        claimAgeMs: queueItem.claimAgeMs,
+        claimExpiresAt: queueItem.claimExpiresAt,
+        claimTimedOut: queueItem.claimTimedOut,
+        actionableByReviewer: queueItem.actionableByReviewer,
+        blockedByOtherReviewer: queueItem.blockedByOtherReviewer,
+      }
+      : res.payload?.item);
+  }
+
+  async function openTaskFromAudit(taskId) {
+    if (!taskId) return;
+    const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.tab !== "tasks") {
+      memoryViewerState.tab = "tasks";
+      memoryViewerState.items = [];
+      memoryViewerState.selectedTask = null;
+      syncMemoryViewerUi();
+    }
+
+    memoryViewerState.selectedId = taskId;
+    await loadTaskViewer(false);
+
+    if (!Array.isArray(memoryViewerState.items) || !memoryViewerState.items.some((item) => item.id === taskId)) {
+      memoryViewerState.selectedId = taskId;
+      renderTaskList(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
+      await loadTaskDetail(taskId);
+    }
+  }
+
+  async function openMemoryFromAudit(chunkId) {
+    if (!chunkId) return;
+    const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.tab !== "memories") {
+      memoryViewerState.tab = "memories";
+      memoryViewerState.items = [];
+      memoryViewerState.selectedTask = null;
+      memoryViewerState.selectedCandidate = null;
+      syncMemoryViewerUi();
+    }
+
+    memoryViewerState.selectedId = chunkId;
+    await loadMemoryChunkViewer(false);
+
+    if (!Array.isArray(memoryViewerState.items) || !memoryViewerState.items.some((item) => item.id === chunkId)) {
+      memoryViewerState.selectedId = chunkId;
+      renderMemoryList(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
+      await loadMemoryDetail(chunkId);
+    }
+  }
+
+  async function loadCandidateDetail(candidateId) {
+    const memoryViewerState = getMemoryViewerState();
+    if (!candidateId || !isConnected()) return;
+    const requestToken = Number(memoryViewerState.requestToken || 0);
+    const requestAgentId = String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
+    const id = makeId();
+    const res = await sendReq({ type: "req", id, method: "experience.candidate.get", params: { candidateId, agentId: requestAgentId } });
+    if (
+      Number(memoryViewerState.requestToken || 0) !== requestToken
+      || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
+    ) {
+      return;
+    }
+    if (!res || !res.ok) {
+      showNotice("候选详情加载失败", res?.error?.message || "无法读取 candidate。", "error");
+      return;
+    }
+    memoryViewerState.selectedCandidate = res.payload?.candidate ?? null;
+    memoryViewerState.experienceQueryView = res.payload?.queryView ?? memoryViewerState.experienceQueryView ?? null;
+    if (memoryViewerState.tab === "tasks" && memoryViewerState.selectedTask) {
+      renderTaskDetail(memoryViewerState.selectedTask);
+    } else {
+      renderCandidateOnlyDetail(memoryViewerState.selectedCandidate);
+    }
+  }
+
+  function refreshMemoryLocale() {
+    if (!memoryViewerSection) return;
+    const memoryViewerState = getMemoryViewerState();
+    syncMemoryViewerUi();
+    if (!isConnected()) {
+      renderMemoryViewerStats(null);
+      renderMemoryViewerListEmpty(t("memory.disconnectedList", {}, "Not connected to the server."));
+      renderMemoryViewerDetailEmpty(t("memory.disconnectedDetail", {}, "Tasks and memories will be available after connection is ready."));
+      return;
+    }
+    renderMemoryViewerStats(memoryViewerState.stats);
+    if (memoryViewerState.tab === "tasks") {
+      renderTaskList(memoryViewerState.items);
+      if (memoryViewerState.selectedTask) {
+        renderTaskDetail(memoryViewerState.selectedTask);
+        return;
+      }
+      if (memoryViewerState.selectedCandidate) {
+        renderCandidateOnlyDetail(memoryViewerState.selectedCandidate);
+        return;
+      }
+      renderMemoryViewerDetailEmpty(t("memory.selectTask", {}, "Please select a task."));
+      return;
+    }
+    if (memoryViewerState.tab === "sharedReview") {
+      renderSharedReviewList(memoryViewerState.items);
+    } else if (memoryViewerState.tab === "outboundAudit") {
+      void getFeature()?.loadExternalOutboundAuditViewer?.(false);
+      return;
+    } else {
+      renderMemoryList(memoryViewerState.items);
+    }
+    if (memoryViewerState.selectedId) {
+      void loadMemoryDetail(memoryViewerState.selectedId);
+      return;
+    }
+    renderMemoryViewerDetailEmpty(t("memory.selectMemory", {}, "Please select a memory."));
+  }
+
+  return {
+    clearMemoryTaskGoalFilter,
+    loadCandidateDetail,
+    loadMemoryChunkViewer,
+    loadMemoryDetail,
+    loadMemoryViewer,
+    loadMemoryViewerStats,
+    loadTaskDetail,
+    loadTaskUsageOverview,
+    loadTaskViewer,
+    openGoalTaskViewer,
+    openMemoryFromAudit,
+    openTaskFromAudit,
+    refreshMemoryLocale,
+    resolveMemoryDetailTargetAgentId,
+    switchMemoryViewerTab,
+    syncMemoryTaskGoalFilterUi,
+    syncMemoryViewerUi,
+    getCurrentAgentLabel,
+  };
+}

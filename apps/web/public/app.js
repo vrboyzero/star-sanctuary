@@ -34,13 +34,15 @@ import { createChatUiFeature } from "./app/features/chat-ui.js";
 import { createCanvasContextFeature } from "./app/features/canvas-context.js";
 import { decodeContinuationAction } from "./app/features/continuation-targets.js";
 import { buildDoctorChatSummary } from "./app/features/doctor-observability.js";
-import { createExternalOutboundController } from "./app/features/external-outbound.js";
+import { createAppShellFeature } from "./app/features/app-shell.js";
 import { createGoalsDetailFeature } from "./app/features/goals-detail.js";
 import { createGoalsGovernancePanelFeature } from "./app/features/goals-governance-panel.js";
 import { createGoalsCapabilityPanelFeature } from "./app/features/goals-capability-panel.js";
 import { createGoalsOverviewFeature } from "./app/features/goals-overview.js";
 import { createGoalsReadonlyPanelsFeature } from "./app/features/goals-readonly-panels.js";
+import { createGoalsRuntimeFeature } from "./app/features/goals-runtime.js";
 import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-panel.js";
+import { createMemoryRuntimeFeature } from "./app/features/memory-runtime.js";
 import { createMemoryViewerFeature, extractTaskContextTargets } from "./app/features/memory-viewer.js";
 import {
   formatResidentSourceScopeLabel,
@@ -52,13 +54,14 @@ import {
   getSkillFreshnessBadgeClass,
 } from "./app/features/skill-freshness-view.js";
 import { buildResidentPanelSummary } from "./app/features/resident-observability-summary.js";
+import { createSessionNavigationFeature } from "./app/features/session-navigation.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
-import { createSubtasksOverviewFeature, findSubtaskBySessionId, parseGoalSessionReference } from "./app/features/subtasks-overview.js";
+import { createSettingsRuntimeFeature } from "./app/features/settings-runtime.js";
+import { createSubtasksOverviewFeature, parseGoalSessionReference } from "./app/features/subtasks-overview.js";
+import { createSubtasksRuntimeFeature } from "./app/features/subtasks-runtime.js";
 import { createLocaleController } from "./app/features/locale.js";
 import { initPromptController } from "./app/features/prompt.js";
-import { createSettingsController } from "./app/features/settings.js";
 import { createThemeController } from "./app/features/theme.js";
-import { createToolSettingsController } from "./app/features/tool-settings.js";
 import { createVoiceFeature } from "./app/features/voice.js";
 import { createWorkspaceFeature } from "./app/features/workspace.js";
 import { LOCALE_DICTIONARIES, LOCALE_META } from "./app/i18n/index.js";
@@ -336,17 +339,66 @@ let goalsDetailFeature = null;
 let goalsGovernancePanelFeature = null;
 let goalsOverviewFeature = null;
 let goalsReadonlyPanelsFeature = null;
+let goalsRuntimeFeature = null;
 let goalsTrackingPanelFeature = null;
+let memoryRuntimeFeature = null;
 let memoryViewerFeature = null;
 let sessionDigestFeature = null;
+let settingsRuntimeFeature = null;
 let subtasksOverviewFeature = null;
-let externalOutboundController = null;
+let subtasksRuntimeFeature = null;
+let sessionNavigationFeature = null;
 let residentAgentActivationSeq = 0;
 
 function debugLog(...args) {
   if (!webchatDebugEnabled) return;
   console.debug(...args);
 }
+
+const appShellFeature = createAppShellFeature({
+  refs: {
+    switchRootBtn,
+    switchFacetBtn,
+    switchCronBtn,
+    switchMemoryBtn,
+    switchGoalsBtn,
+    switchSubtasksBtn,
+    switchCanvasBtn,
+    chatSection,
+    editorSection,
+    memoryViewerSection,
+    goalsSection,
+    subtasksSection,
+    composerSection,
+    editorActions,
+  },
+  getTreeMode: () => workspaceFeature?.getTreeMode() ?? "root",
+  subtasksState,
+  reopenLinkedSession: (sessionId) => sessionNavigationFeature?.openConversationSession(sessionId, "", {
+    switchToChat: false,
+    renderHint: false,
+  }),
+  renderCanvasGoalContext: () => renderCanvasGoalContext(),
+});
+const showNotice = (...args) => appShellFeature.showNotice(...args);
+const switchMode = (...args) => appShellFeature.switchMode(...args);
+const updateSidebarModeButtons = (...args) => appShellFeature.updateSidebarModeButtons(...args);
+
+sessionNavigationFeature = createSessionNavigationFeature({
+  refs: {
+    messagesEl,
+  },
+  setActiveConversationId: (conversationId) => {
+    activeConversationId = conversationId;
+  },
+  renderCanvasGoalContext: () => renderCanvasGoalContext(),
+  switchMode,
+  getChatEventsFeature: () => chatEventsFeature,
+  loadConversationMeta: (conversationId, options) => loadConversationMeta(conversationId, options),
+  getSessionDigestFeature: () => sessionDigestFeature,
+  t: localeController.t,
+});
+const openConversationSession = (...args) => sessionNavigationFeature.openConversationSession(...args);
 
 const voiceFeature = createVoiceFeature({
   storageKey: VOICE_SHORTCUT_KEY,
@@ -383,7 +435,7 @@ localeController.subscribe(() => {
   workspaceFeature?.refreshLocale?.();
   canvasContextFeature?.refreshLocale?.();
   window._canvasApp?.refreshLocale?.();
-  toolSettingsController.refreshLocale?.();
+  settingsRuntimeFeature?.refreshLocale?.();
   refreshGoalsLocale();
   refreshMemoryLocale();
   memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
@@ -405,7 +457,6 @@ const agentCatalog = new Map();
 let agentPanelUploadInput = null;
 let agentPanelUploadTargetAgentId = "";
 let agentPanelUploadBusyAgentId = "";
-let pendingGoalCheckpointAction = null;
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
 const IMAGE_COMPRESS_TRIGGER_BYTES = 800 * 1024;
@@ -1004,6 +1055,20 @@ subtasksOverviewFeature = createSubtasksOverviewFeature({
   t: localeController.t,
 });
 
+subtasksRuntimeFeature = createSubtasksRuntimeFeature({
+  refs: {
+    subtasksSection,
+    subtasksListEl,
+    subtasksDetailEl,
+    subtasksShowArchivedEl,
+  },
+  getSubtasksState: () => subtasksState,
+  getSubtasksOverviewFeature: () => subtasksOverviewFeature,
+  switchMode,
+  openConversationSession,
+  t: localeController.t,
+});
+
 goalsDetailFeature = createGoalsDetailFeature({
   refs: {
     goalsDetailEl,
@@ -1082,6 +1147,52 @@ goalsCapabilityPanelFeature = createGoalsCapabilityPanelFeature({
   t: localeController.t,
 });
 
+goalsRuntimeFeature = createGoalsRuntimeFeature({
+  refs: {
+    goalsSection,
+    goalsDetailEl,
+    goalCheckpointActionModal,
+    goalCheckpointActionTitleEl,
+    goalCheckpointActionHintEl,
+    goalCheckpointActionContextEl,
+    goalCheckpointActionReviewerEl,
+    goalCheckpointActionReviewerRoleEl,
+    goalCheckpointActionRequestedByEl,
+    goalCheckpointActionActorLabelEl,
+    goalCheckpointActionActorEl,
+    goalCheckpointActionSlaAtEl,
+    goalCheckpointActionSummaryEl,
+    goalCheckpointActionNoteLabelEl,
+    goalCheckpointActionNoteHelpEl,
+    goalCheckpointActionNoteEl,
+    goalCheckpointActionCloseBtn,
+    goalCheckpointActionCancelBtn,
+    goalCheckpointActionSubmitBtn,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  getGoalsState: () => goalsState,
+  getGoalsOverviewFeature: () => goalsOverviewFeature,
+  getGoalsDetailFeature: () => goalsDetailFeature,
+  getGoalById,
+  loadGoals: (forceReload = false, preferredGoalId) => goalsOverviewFeature?.loadGoals(forceReload, preferredGoalId),
+  showNotice,
+  formatDateTime,
+  escapeHtml,
+  onResumeGoal: (goalId, options) => resumeGoal(goalId, options),
+  onPauseGoal: (goalId) => pauseGoal(goalId),
+  onOpenSourcePath: (sourcePath) => openSourcePath(sourcePath),
+  onOpenTask: (taskId) => openTaskFromAudit(taskId),
+  onOpenGoalTaskViewer: (goalId) => openGoalTaskViewer(goalId),
+  onOpenGoalBoard: (boardId, goalId) => openGoalCanvasBoard(boardId, goalId),
+  onOpenGoalBoardList: (goalId) => openGoalCanvasList(goalId),
+  onGenerateGoalHandoff: (goalId) => generateGoalHandoff(goalId),
+  onLoadGoalReviewGovernanceData: (goal) => loadGoalReviewGovernanceData(goal),
+  onLoadGoalTrackingData: (goal) => loadGoalTrackingData(goal),
+  t: localeController.t,
+});
+
 memoryViewerFeature = createMemoryViewerFeature({
   refs: {
     memoryViewerSection,
@@ -1140,6 +1251,35 @@ memoryViewerFeature = createMemoryViewerFeature({
   bindMemoryPathLinks,
   bindTaskAuditJumpLinks,
   showNotice,
+  t: localeController.t,
+});
+
+memoryRuntimeFeature = createMemoryRuntimeFeature({
+  refs: {
+    memoryViewerSection,
+    memoryTaskGoalFilterBarEl,
+    memoryTaskGoalFilterLabelEl,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  getMemoryViewerState: () => memoryViewerState,
+  getMemoryViewerFeature: () => memoryViewerFeature,
+  getCurrentAgentSelection,
+  getGoalDisplayName,
+  switchMode,
+  loadGoals: (forceReload = false, preferredGoalId) => loadGoals(forceReload, preferredGoalId),
+  showNotice,
+  renderMemoryViewerStats: (stats) => renderMemoryViewerStats(stats),
+  renderTaskList: (items) => renderTaskList(items),
+  renderMemoryList: (items) => renderMemoryList(items),
+  renderSharedReviewList: (items) => renderSharedReviewList(items),
+  renderTaskDetail: (task) => renderTaskDetail(task),
+  renderCandidateOnlyDetail: (candidate) => renderCandidateOnlyDetail(candidate),
+  renderMemoryDetail: (item) => renderMemoryDetail(item),
+  renderMemoryViewerListEmpty: (message) => renderMemoryViewerListEmpty(message),
+  renderMemoryViewerDetailEmpty: (message) => renderMemoryViewerDetailEmpty(message),
+  getCurrentAgentLabel: () => getCurrentAgentLabel(),
   t: localeController.t,
 });
 
@@ -1625,89 +1765,8 @@ function applyGoalContinuationFocus(goalId = goalsState.selectedId) {
   return true;
 }
 
-function applySubtaskSessionFocus(sessionId) {
-  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
-  if (!normalizedSessionId) return false;
-  const listMatch = getElementsByDataValue(subtasksListEl, "data-subtask-session-id", normalizedSessionId)[0];
-  const detailMatch = getElementsByDataValue(subtasksDetailEl, "data-subtask-session-focus", normalizedSessionId)[0];
-  if (listMatch) {
-    listMatch.scrollIntoView({ block: "center", behavior: "smooth" });
-  } else if (detailMatch) {
-    detailMatch.scrollIntoView({ block: "center", behavior: "smooth" });
-  }
-  return Boolean(listMatch || detailMatch);
-}
-
-function applySubtaskPromptSnapshotFocus(sessionId) {
-  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
-  if (!normalizedSessionId || !subtasksDetailEl) return false;
-  subtasksDetailEl.querySelectorAll("[data-subtask-prompt-snapshot-session].is-continuation-focus").forEach((node) => {
-    node.classList.remove("is-continuation-focus");
-  });
-  const snapshotSection = getElementsByDataValue(
-    subtasksDetailEl,
-    "data-subtask-prompt-snapshot-session",
-    normalizedSessionId,
-  )[0];
-  if (!snapshotSection) return false;
-  snapshotSection.classList.add("is-continuation-focus");
-  snapshotSection.scrollIntoView({ block: "center", behavior: "smooth" });
-  return true;
-}
-
 async function openSubtaskBySession(sessionId, options = {}) {
-  const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
-  if (!normalizedSessionId) return;
-
-  subtasksState.continuationFocusSessionId = normalizedSessionId;
-  switchMode("subtasks");
-  await loadSubtasks(false);
-
-  let matchedItem = findSubtaskBySessionId(subtasksState.items, normalizedSessionId);
-  if (!matchedItem && subtasksState.includeArchived !== true) {
-    subtasksState.includeArchived = true;
-    if (subtasksShowArchivedEl) {
-      subtasksShowArchivedEl.checked = true;
-    }
-    await loadSubtasks(false);
-    matchedItem = findSubtaskBySessionId(subtasksState.items, normalizedSessionId);
-  }
-
-  if (!matchedItem && options.taskId) {
-    subtasksState.linkedSessionContext = {
-      sessionId: normalizedSessionId,
-      taskId: options.taskId,
-      parentConversationId: "",
-    };
-    await openSubtaskById(options.taskId);
-    openConversationSession(normalizedSessionId, "", { switchToChat: false, renderHint: false });
-    applySubtaskSessionFocus(normalizedSessionId);
-    applySubtaskPromptSnapshotFocus(normalizedSessionId);
-    return;
-  }
-
-  if (!matchedItem) {
-    openConversationSession(
-      normalizedSessionId,
-      localeController.t(
-        "agentPanel.openContinuationSessionHint",
-        { sessionId: normalizedSessionId },
-        `Switched to continuation session: ${normalizedSessionId}`,
-      ),
-    );
-    return;
-  }
-
-  subtasksState.linkedSessionContext = {
-    sessionId: normalizedSessionId,
-    taskId: matchedItem.id,
-    parentConversationId: matchedItem.parentConversationId || "",
-  };
-  subtasksState.selectedId = matchedItem.id;
-  await loadSubtaskDetail(matchedItem.id, { quiet: false });
-  openConversationSession(normalizedSessionId, "", { switchToChat: false, renderHint: false });
-  applySubtaskSessionFocus(normalizedSessionId);
-  applySubtaskPromptSnapshotFocus(normalizedSessionId);
+  return subtasksRuntimeFeature?.openSubtaskBySession(sessionId, options);
 }
 
 async function openContinuationAction(action = {}) {
@@ -2479,80 +2538,8 @@ if (workshopLink && window.BELLDANDY_WEB_CONFIG?.workshopUrl) {
 }
 const REDACTED_PLACEHOLDER = "[REDACTED]";
 
-voiceFeature.bindSettingsUI({
-  inputEl: cfgVoiceShortcut,
-  statusEl: cfgVoiceShortcutStatus,
-  defaultBtn: cfgVoiceShortcutDefault,
-  clearBtn: cfgVoiceShortcutClear,
-});
-
-localeController.bindSelect(cfgLocale);
-
-const settingsController = createSettingsController({
-  refs: {
-    settingsModal,
-    openSettingsBtn,
-    closeSettingsBtn,
-    saveSettingsBtn,
-    restartBtn,
-    doctorStatusEl,
-    cfgLocale,
-    cfgApiKey,
-    cfgBaseUrl,
-    cfgModel,
-    cfgModelPreferredProviders,
-    refreshModelFallbackConfigBtn,
-    modelFallbackConfigMeta,
-    cfgModelFallbackContent,
-    cfgExternalOutboundRequireConfirmation,
-    cfgHeartbeat,
-    cfgHeartbeatEnabled,
-    cfgHeartbeatActiveHours,
-    cfgBrowserRelayEnabled,
-    cfgRelayPort,
-    cfgMcpEnabled,
-    cfgCronEnabled,
-    cfgEmbeddingEnabled,
-    cfgEmbeddingApiKey,
-    cfgEmbeddingBaseUrl,
-    cfgEmbeddingModel,
-    cfgToolsEnabled,
-    cfgAgentToolControlMode,
-    cfgAgentToolControlConfirmPassword,
-    cfgTtsEnabled,
-    cfgTtsProvider,
-    cfgTtsVoice,
-    cfgDashScopeApiKey,
-    cfgFacetAnchor,
-    cfgInjectAgents,
-    cfgInjectSoul,
-    cfgInjectMemory,
-    cfgMaxSystemPromptChars,
-    cfgMaxHistory,
-    cfgConversationKindMain,
-    cfgConversationKindSubtask,
-    cfgConversationKindGoal,
-    cfgConversationKindHeartbeat,
-    channelsSettingsSection,
-    openCommunityConfigBtn,
-    cfgCommunityApiEnabled,
-    cfgCommunityApiToken,
-    cfgFeishuAppId,
-    cfgFeishuAppSecret,
-    cfgFeishuAgentId,
-    cfgQqAppId,
-    cfgQqAppSecret,
-    cfgQqAgentId,
-    cfgQqSandbox,
-    cfgDiscordEnabled,
-    cfgDiscordBotToken,
-    refreshChannelSecurityBtn,
-    channelSecurityConfigMeta,
-    cfgChannelSecurityContent,
-    channelReplyChunkingConfigMeta,
-    cfgChannelReplyChunkingContent,
-    channelSecurityPendingList,
-  },
+settingsRuntimeFeature = createSettingsRuntimeFeature({
+  refs: APP_DOM_REFS,
   isConnected: () => Boolean(ws && isReady),
   sendReq,
   makeId,
@@ -2560,21 +2547,26 @@ const settingsController = createSettingsController({
   loadServerConfig,
   invalidateServerConfigCache,
   syncAttachmentLimitsFromConfig,
-  onToggle: (show) => voiceFeature.onSettingsToggle(show),
-  getConnectionAuthMode: () => authModeEl?.value || "none",
+  voiceFeature,
+  localeController,
+  chatNetworkFeature,
   onOpenCommunityConfig: () => {
     void openFile("community.json");
   },
-  onModelCatalogChanged: async () => {
-    await chatNetworkFeature?.loadModelList?.();
-  },
   onOpenContinuationAction: (action) => openContinuationAction(action),
+  getConnectionAuthMode: () => authModeEl?.value || "none",
+  clientId,
+  getSelectedAgentId: () => agentSelectEl?.value || localStorage.getItem(AGENT_ID_KEY) || "default",
+  getActiveConversationId: () => activeConversationId || "",
+  getSelectedSubtaskId: () => subtasksState.selectedId || "",
+  isSubtasksViewActive: () => Boolean(subtasksSection && !subtasksSection.classList.contains("hidden")),
+  escapeHtml,
+  showNotice,
   redactedPlaceholder: REDACTED_PLACEHOLDER,
-  t: localeController.t,
 });
 
 function toggleSettings(show) {
-  void settingsController.toggle(show);
+  settingsRuntimeFeature?.toggleSettings(show);
 }
 
 chatEventsFeature = createChatEventsFeature({
@@ -2586,48 +2578,14 @@ chatEventsFeature = createChatEventsFeature({
   },
   updateTokenUsage,
   showTaskTokenResult,
-  onChannelSecurityPending: (payload) => {
-    const channel = typeof payload?.channel === "string" ? payload.channel : "unknown";
-    const accountId = typeof payload?.accountId === "string" ? payload.accountId.trim() : "";
-    const senderId = typeof payload?.senderId === "string" ? payload.senderId : "";
-    const senderName = typeof payload?.senderName === "string" ? payload.senderName.trim() : "";
-    const seenCount = Number.isFinite(Number(payload?.seenCount)) ? Number(payload.seenCount) : 0;
-    const senderLabel = senderName || senderId || localeController.t("settings.channelSecurityPendingUnknownSender", {}, "未知 sender");
-    const channelLabel = accountId ? `${channel}/${accountId}` : channel;
-    if (settingsModal && !settingsModal.classList.contains("hidden")) {
-      void settingsController.refreshChannelSecurityPending();
-    }
-    const message = seenCount > 1
-      ? localeController.t(
-        "settings.channelSecurityPendingNoticeRepeat",
-        { channel: channelLabel, senderName: senderLabel, seenCount },
-        `${channelLabel} sender ${senderLabel} 再次触发待审批，当前已拦截 ${seenCount} 次。`,
-      )
-      : localeController.t(
-        "settings.channelSecurityPendingNoticeMessage",
-        { channel: channelLabel, senderName: senderLabel },
-        `${channelLabel} sender ${senderLabel} 已进入待审批队列。`,
-      );
-    showNotice(
-      localeController.t("settings.channelSecurityPendingNoticeTitle", {}, "待审批 Sender"),
-      message,
-      "info",
-      6800,
-      {
-        actionLabel: localeController.t("settings.channelSecurityPendingNoticeAction", {}, "去审批"),
-        onAction: () => {
-          void settingsController.openChannelSecurityPending();
-        },
-      },
-    );
-  },
+  onChannelSecurityPending: (payload) => settingsRuntimeFeature?.handleChannelSecurityPending(payload),
   queueGoalUpdateEvent,
   onSubtaskUpdated: (payload) => subtasksOverviewFeature?.handleSubtaskUpdate(payload),
-  onToolSettingsConfirmRequired: (payload) => toolSettingsController.handleConfirmRequired(payload),
-  onToolSettingsConfirmResolved: (payload) => toolSettingsController.handleConfirmResolved(payload),
-  onExternalOutboundConfirmRequired: (payload) => externalOutboundController?.handleConfirmRequired(payload),
-  onExternalOutboundConfirmResolved: (payload) => externalOutboundController?.handleConfirmResolved(payload),
-  onToolsConfigUpdated: (payload) => toolSettingsController.handleToolsConfigUpdated(payload),
+  onToolSettingsConfirmRequired: (payload) => settingsRuntimeFeature?.handleToolSettingsConfirmRequired(payload),
+  onToolSettingsConfirmResolved: (payload) => settingsRuntimeFeature?.handleToolSettingsConfirmResolved(payload),
+  onExternalOutboundConfirmRequired: (payload) => settingsRuntimeFeature?.handleExternalOutboundConfirmRequired(payload),
+  onExternalOutboundConfirmResolved: (payload) => settingsRuntimeFeature?.handleExternalOutboundConfirmResolved(payload),
+  onToolsConfigUpdated: (payload) => settingsRuntimeFeature?.handleToolsConfigUpdated(payload),
   onConversationDigestUpdated: (payload) => sessionDigestFeature?.handleDigestUpdated(payload),
   stripThinkBlocks,
   configureMarkedOnce,
@@ -2995,7 +2953,7 @@ if (switchSubtasksBtn) {
 }
 if (openChannelSettingsBtn) {
   openChannelSettingsBtn.addEventListener("click", () => {
-    void settingsController.openChannels();
+    void settingsRuntimeFeature?.openChannels?.();
   });
 }
 
@@ -3043,138 +3001,6 @@ function cancelEdit() {
 
 function switchTreeMode(mode) {
   return workspaceFeature?.switchTreeMode(mode);
-}
-
-function setSidebarActionButtonState(button, active) {
-  if (!button) return;
-  button.classList.toggle("is-active", Boolean(active));
-}
-
-function updateSidebarModeButtons(treeModeOverride) {
-  const treeMode = treeModeOverride ?? workspaceFeature?.getTreeMode() ?? "root";
-  setSidebarActionButtonState(switchRootBtn, treeMode === "root");
-  setSidebarActionButtonState(switchFacetBtn, treeMode === "facets");
-  setSidebarActionButtonState(switchCronBtn, treeMode === "cron");
-  setSidebarActionButtonState(switchMemoryBtn, memoryViewerSection && !memoryViewerSection.classList.contains("hidden"));
-  setSidebarActionButtonState(switchGoalsBtn, goalsSection && !goalsSection.classList.contains("hidden"));
-  setSidebarActionButtonState(switchSubtasksBtn, subtasksSection && !subtasksSection.classList.contains("hidden"));
-  const canvasSection = document.getElementById("canvasSection");
-  setSidebarActionButtonState(switchCanvasBtn, canvasSection && !canvasSection.classList.contains("hidden"));
-}
-
-function ensureNoticeStack() {
-  let stack = document.getElementById("noticeStack");
-  if (stack) return stack;
-  stack = document.createElement("div");
-  stack.id = "noticeStack";
-  stack.className = "notice-stack";
-  document.body.appendChild(stack);
-  return stack;
-}
-
-function showNotice(title, message, tone = "info", durationMs = 3200, options = {}) {
-  const stack = ensureNoticeStack();
-  const item = document.createElement("div");
-  item.className = `notice-item notice-${tone}`;
-  const remove = () => {
-    if (item.parentElement) item.parentElement.removeChild(item);
-  };
-  const titleEl = document.createElement("div");
-  titleEl.className = "notice-title";
-  titleEl.textContent = String(title ?? "");
-  const messageEl = document.createElement("div");
-  messageEl.className = "notice-message";
-  messageEl.textContent = String(message ?? "");
-  item.appendChild(titleEl);
-  item.appendChild(messageEl);
-  const actionLabel = typeof options?.actionLabel === "string" ? options.actionLabel.trim() : "";
-  if (actionLabel) {
-    const actionsEl = document.createElement("div");
-    actionsEl.className = "notice-actions";
-    const actionBtn = document.createElement("button");
-    actionBtn.type = "button";
-    actionBtn.className = "button button-muted notice-action-btn";
-    actionBtn.textContent = actionLabel;
-    actionBtn.addEventListener("click", () => {
-      options.onAction?.();
-      remove();
-    });
-    actionsEl.appendChild(actionBtn);
-    item.appendChild(actionsEl);
-  }
-  stack.appendChild(item);
-  setTimeout(remove, durationMs);
-}
-
-// 切换模式
-function switchMode(mode) {
-  const canvasSection = document.getElementById("canvasSection");
-  const wasSubtasksVisible = Boolean(subtasksSection && !subtasksSection.classList.contains("hidden"));
-
-  if (mode === "editor") {
-    if (chatSection) chatSection.classList.add("hidden");
-    if (editorSection) editorSection.classList.remove("hidden");
-    if (canvasSection) canvasSection.classList.add("hidden");
-    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
-    if (goalsSection) goalsSection.classList.add("hidden");
-    if (subtasksSection) subtasksSection.classList.add("hidden");
-    if (composerSection) composerSection.classList.add("hidden");
-    if (editorActions) editorActions.classList.remove("hidden");
-  } else if (mode === "canvas") {
-    if (chatSection) chatSection.classList.add("hidden");
-    if (editorSection) editorSection.classList.add("hidden");
-    if (canvasSection) canvasSection.classList.remove("hidden");
-    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
-    if (goalsSection) goalsSection.classList.add("hidden");
-    if (subtasksSection) subtasksSection.classList.add("hidden");
-    if (composerSection) composerSection.classList.add("hidden");
-    if (editorActions) editorActions.classList.add("hidden");
-  } else if (mode === "memory") {
-    if (chatSection) chatSection.classList.add("hidden");
-    if (editorSection) editorSection.classList.add("hidden");
-    if (canvasSection) canvasSection.classList.add("hidden");
-    if (memoryViewerSection) memoryViewerSection.classList.remove("hidden");
-    if (goalsSection) goalsSection.classList.add("hidden");
-    if (subtasksSection) subtasksSection.classList.add("hidden");
-    if (composerSection) composerSection.classList.add("hidden");
-    if (editorActions) editorActions.classList.add("hidden");
-  } else if (mode === "goals") {
-    if (chatSection) chatSection.classList.add("hidden");
-    if (editorSection) editorSection.classList.add("hidden");
-    if (canvasSection) canvasSection.classList.add("hidden");
-    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
-    if (goalsSection) goalsSection.classList.remove("hidden");
-    if (subtasksSection) subtasksSection.classList.add("hidden");
-    if (composerSection) composerSection.classList.add("hidden");
-    if (editorActions) editorActions.classList.add("hidden");
-  } else if (mode === "subtasks") {
-    if (chatSection) chatSection.classList.add("hidden");
-    if (editorSection) editorSection.classList.add("hidden");
-    if (canvasSection) canvasSection.classList.add("hidden");
-    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
-    if (goalsSection) goalsSection.classList.add("hidden");
-    if (subtasksSection) subtasksSection.classList.remove("hidden");
-    if (composerSection) composerSection.classList.add("hidden");
-    if (editorActions) editorActions.classList.add("hidden");
-  } else {
-    // chat (default)
-    if (wasSubtasksVisible && subtasksState.linkedSessionContext?.sessionId) {
-      openConversationSession(subtasksState.linkedSessionContext.sessionId, "", { switchToChat: false, renderHint: false });
-    }
-    if (chatSection) chatSection.classList.remove("hidden");
-    if (editorSection) editorSection.classList.add("hidden");
-    if (canvasSection) canvasSection.classList.add("hidden");
-    if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
-    if (goalsSection) goalsSection.classList.add("hidden");
-    if (subtasksSection) subtasksSection.classList.add("hidden");
-    if (composerSection) composerSection.classList.remove("hidden");
-    if (editorActions) editorActions.classList.add("hidden");
-  }
-
-  updateSidebarModeButtons();
-  if (mode === "canvas") {
-    renderCanvasGoalContext();
-  }
 }
 
 function goalBaseConversationId(goalId) {
@@ -3359,43 +3185,15 @@ function getGoalDisplayName(goalId) {
 }
 
 function syncMemoryTaskGoalFilterUi() {
-  if (!memoryTaskGoalFilterBarEl || !memoryTaskGoalFilterLabelEl) return;
-  const goalId = memoryViewerState.goalIdFilter;
-  const visible = memoryViewerState.tab === "tasks" && Boolean(goalId);
-  memoryTaskGoalFilterBarEl.classList.toggle("hidden", !visible);
-  if (!visible) return;
-  memoryTaskGoalFilterLabelEl.textContent = `当前仅查看长期任务：${getGoalDisplayName(goalId)} (${goalId})`;
+  return memoryRuntimeFeature?.syncMemoryTaskGoalFilterUi();
 }
 
 async function clearMemoryTaskGoalFilter() {
-  if (!memoryViewerState.goalIdFilter) return;
-  memoryViewerState.goalIdFilter = null;
-  syncMemoryTaskGoalFilterUi();
-  if (memoryViewerState.tab === "tasks") {
-    await loadMemoryViewer(true);
-  }
+  return memoryRuntimeFeature?.clearMemoryTaskGoalFilter();
 }
 
 async function openGoalTaskViewer(goalId) {
-  if (!goalId) return;
-  if (memoryViewerState.tab !== "tasks") {
-    memoryViewerState.tab = "tasks";
-    memoryViewerState.items = [];
-    memoryViewerState.selectedTask = null;
-    memoryViewerState.selectedCandidate = null;
-  }
-  memoryViewerState.goalIdFilter = goalId;
-  memoryViewerState.selectedId = null;
-  syncMemoryViewerUi();
-  syncMemoryTaskGoalFilterUi();
-  switchMode("memory");
-  await loadMemoryViewer(true);
-  showNotice(
-    localeController.t("goals.taskViewSwitchedTitle", {}, "Switched to task view"),
-    localeController.t("goals.taskViewSwitchedMessage", { goalName: getGoalDisplayName(goalId) }, `Now showing only tasks related to ${getGoalDisplayName(goalId)}.`),
-    "info",
-    2200,
-  );
+  return memoryRuntimeFeature?.openGoalTaskViewer(goalId);
 }
 
 function resetGoalCreateForm() {
@@ -3416,131 +3214,6 @@ function toggleGoalCreateModal(show) {
   }
 }
 
-function getGoalCheckpointActionConfig(action) {
-  const actionMap = {
-    approve: {
-      method: "goal.checkpoint.approve",
-      modalTitle: "批准 Checkpoint",
-      successTitle: "已批准 checkpoint",
-      submitLabel: "批准",
-      defaultSummary: "已批准",
-      actorLabel: "审批人",
-      noteLabel: "审批说明",
-      notePlaceholder: "可选，例如：验证通过，可进入下一节点",
-      noteHelp: "可选。用于记录批准依据、验证结果或补充说明。",
-      noteRequired: false,
-      hint: "批准后会把 checkpoint 推进到下一状态，并把摘要写入进度时间线。",
-    },
-    reject: {
-      method: "goal.checkpoint.reject",
-      modalTitle: "拒绝 Checkpoint",
-      successTitle: "已拒绝 checkpoint",
-      submitLabel: "拒绝",
-      defaultSummary: "已拒绝",
-      actorLabel: "审批人",
-      noteLabel: "拒绝原因",
-      notePlaceholder: "必填，例如：需要补充修改后再提交",
-      noteHelp: "必填。拒绝不能只留下状态，必须给出明确原因。",
-      noteRequired: true,
-      hint: "拒绝会保留 checkpoint 记录，并让后续恢复动作有明确依据。",
-    },
-    expire: {
-      method: "goal.checkpoint.expire",
-      modalTitle: "标记 Checkpoint 过期",
-      successTitle: "已标记 checkpoint 过期",
-      submitLabel: "标记过期",
-      defaultSummary: "已过期",
-      actorLabel: "操作人",
-      noteLabel: "过期原因",
-      notePlaceholder: "必填，例如：审批超时，需要重新发起",
-      noteHelp: "必填。建议写明为什么当前 checkpoint 需要作废。",
-      noteRequired: true,
-      hint: "过期适用于审批超时、上下文失效或产物已被新版本替换的场景。",
-    },
-    reopen: {
-      method: "goal.checkpoint.reopen",
-      modalTitle: "重新打开 Checkpoint",
-      successTitle: "已重新打开 checkpoint",
-      submitLabel: "重新打开",
-      defaultSummary: "已重新打开",
-      actorLabel: "重新发起人",
-      noteLabel: "重新打开说明",
-      notePlaceholder: "必填，例如：已完成补充修改，重新发起审批",
-      noteHelp: "必填。说明为什么重新打开，以及期望下一步如何处理。",
-      noteRequired: true,
-      hint: "重新打开会让 checkpoint 回到可继续处理状态，并保留历史记录。",
-    },
-  };
-  return actionMap[action] || null;
-}
-
-function setGoalCheckpointActionBusy(busy) {
-  const config = pendingGoalCheckpointAction
-    ? getGoalCheckpointActionConfig(pendingGoalCheckpointAction.action)
-    : null;
-  if (goalCheckpointActionCloseBtn) goalCheckpointActionCloseBtn.disabled = busy;
-  if (goalCheckpointActionCancelBtn) goalCheckpointActionCancelBtn.disabled = busy;
-  if (goalCheckpointActionSubmitBtn) {
-    goalCheckpointActionSubmitBtn.disabled = busy;
-    goalCheckpointActionSubmitBtn.textContent = busy
-      ? `${config?.submitLabel || "提交"}中...`
-      : config?.submitLabel || "提交";
-  }
-  if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.disabled = busy;
-  if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.disabled = busy;
-  if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.disabled = busy;
-  if (goalCheckpointActionActorEl) goalCheckpointActionActorEl.disabled = busy;
-  if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.disabled = busy;
-  if (goalCheckpointActionSummaryEl) goalCheckpointActionSummaryEl.disabled = busy;
-  if (goalCheckpointActionNoteEl) goalCheckpointActionNoteEl.disabled = busy;
-}
-
-function resetGoalCheckpointActionForm() {
-  if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = "处理 Checkpoint";
-  if (goalCheckpointActionHintEl) {
-    goalCheckpointActionHintEl.textContent = "在这里完成 checkpoint 审批或状态流转，避免使用临时 prompt 输入。";
-  }
-  if (goalCheckpointActionContextEl) goalCheckpointActionContextEl.innerHTML = "";
-  if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.value = "";
-  if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.value = "";
-  if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.value = "";
-  if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = "审批人";
-  if (goalCheckpointActionActorEl) goalCheckpointActionActorEl.value = "";
-  if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.value = "";
-  if (goalCheckpointActionSummaryEl) {
-    goalCheckpointActionSummaryEl.value = "";
-    goalCheckpointActionSummaryEl.placeholder = "例如：已批准 / 已拒绝 / 已过期 / 已重新打开";
-  }
-  if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = "说明";
-  if (goalCheckpointActionNoteHelpEl) {
-    goalCheckpointActionNoteHelpEl.textContent = "部分操作要求填写原因，避免只留下状态没有上下文。";
-  }
-  if (goalCheckpointActionNoteEl) {
-    goalCheckpointActionNoteEl.value = "";
-    goalCheckpointActionNoteEl.placeholder = "补充审批意见、过期原因或重新打开说明";
-  }
-}
-
-function findTrackedGoalCheckpoint(goalId, checkpointId) {
-  if (!goalId || !checkpointId) return null;
-  return goalsState.trackingCheckpoints.find((item) => item.goalId === goalId && item.id === checkpointId) || null;
-}
-
-function formatDateTimeLocalValue(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (input) => String(input).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function parseDateTimeLocalValue(value) {
-  if (!value) return undefined;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-  return date.toISOString();
-}
-
 function getGoalCheckpointSlaBadge(checkpoint) {
   if (!checkpoint?.slaAt) return "";
   const deadline = new Date(checkpoint.slaAt);
@@ -3551,225 +3224,40 @@ function getGoalCheckpointSlaBadge(checkpoint) {
   return `<span class="memory-badge ${overdue ? "is-overdue" : ""}">${overdue ? "SLA 已超时" : "SLA"} ${escapeHtml(formatDateTime(checkpoint.slaAt))}</span>`;
 }
 
-function renderGoalCheckpointActionContext(context) {
-  if (!goalCheckpointActionContextEl || !context) return;
-  goalCheckpointActionContextEl.innerHTML = `
-    <div class="goal-checkpoint-action-context-item">
-      <span class="goal-summary-label">Goal</span>
-      <strong>${escapeHtml(context.goalId)}</strong>
-    </div>
-    <div class="goal-checkpoint-action-context-item">
-      <span class="goal-summary-label">Node</span>
-      <strong>${escapeHtml(context.nodeId)}</strong>
-    </div>
-    <div class="goal-checkpoint-action-context-item">
-      <span class="goal-summary-label">Checkpoint</span>
-      <strong>${escapeHtml(context.checkpointId)}</strong>
-    </div>
-    <div class="goal-checkpoint-action-context-item">
-      <span class="goal-summary-label">Status</span>
-      <strong>${escapeHtml(context.status || "-")}</strong>
-    </div>
-    <div class="goal-checkpoint-action-context-item">
-      <span class="goal-summary-label">Reviewer</span>
-      <strong>${escapeHtml(context.reviewer || "-")}</strong>
-    </div>
-    <div class="goal-checkpoint-action-context-item">
-      <span class="goal-summary-label">SLA</span>
-      <strong>${escapeHtml(context.slaAt ? formatDateTime(context.slaAt) : "-")}</strong>
-    </div>
-  `;
-}
-
 function toggleGoalCheckpointActionModal(show, context = null) {
-  if (!goalCheckpointActionModal) return;
-  if (show) {
-    const nextContext = context && typeof context === "object" ? { ...context } : null;
-    const config = nextContext ? getGoalCheckpointActionConfig(nextContext.action) : null;
-    if (!nextContext || !config) return;
-    pendingGoalCheckpointAction = nextContext;
-    resetGoalCheckpointActionForm();
-    if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = config.modalTitle;
-    if (goalCheckpointActionHintEl) goalCheckpointActionHintEl.textContent = config.hint;
-    if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.value = nextContext.reviewer || "";
-    if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.value = nextContext.reviewerRole || "";
-    if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.value = nextContext.requestedBy || "";
-    if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = config.actorLabel;
-    if (goalCheckpointActionActorEl) {
-      goalCheckpointActionActorEl.value = config.method === "goal.checkpoint.reopen"
-        ? nextContext.requestedBy || ""
-        : nextContext.decidedBy || "";
-    }
-    if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.value = formatDateTimeLocalValue(nextContext.slaAt);
-    if (goalCheckpointActionSummaryEl) goalCheckpointActionSummaryEl.value = nextContext.summary || config.defaultSummary;
-    if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = config.noteLabel;
-    if (goalCheckpointActionNoteHelpEl) goalCheckpointActionNoteHelpEl.textContent = config.noteHelp;
-    if (goalCheckpointActionNoteEl) {
-      goalCheckpointActionNoteEl.placeholder = config.notePlaceholder;
-      goalCheckpointActionNoteEl.value = nextContext.note || "";
-    }
-    renderGoalCheckpointActionContext(nextContext);
-    setGoalCheckpointActionBusy(false);
-    goalCheckpointActionModal.classList.remove("hidden");
-    setTimeout(() => {
-      if (config.noteRequired) {
-        goalCheckpointActionNoteEl?.focus();
-      } else {
-        goalCheckpointActionSummaryEl?.focus();
-        goalCheckpointActionSummaryEl?.select();
-      }
-    }, 0);
-    return;
-  }
-
-  pendingGoalCheckpointAction = null;
-  resetGoalCheckpointActionForm();
-  setGoalCheckpointActionBusy(false);
-  goalCheckpointActionModal.classList.add("hidden");
+  return goalsRuntimeFeature?.toggleGoalCheckpointActionModal(show, context);
 }
 
 function renderGoalsLoading(message) {
-  goalsOverviewFeature?.renderGoalsLoading(message);
+  return goalsRuntimeFeature?.renderGoalsLoading(message);
 }
 
 function renderGoalsSummary(items) {
-  goalsOverviewFeature?.renderGoalsSummary(items);
+  return goalsRuntimeFeature?.renderGoalsSummary(items);
 }
 
 function renderGoalsEmpty(message) {
-  goalsOverviewFeature?.renderGoalsEmpty(message);
+  return goalsRuntimeFeature?.renderGoalsEmpty(message);
 }
 
 function renderGoalList(items) {
-  goalsOverviewFeature?.renderGoalList(items);
+  return goalsRuntimeFeature?.renderGoalList(items);
 }
 
 function refreshGoalsLocale() {
-  if (!goalsSection) return;
-  if (!ws || !isReady) {
-    renderGoalsLoading(localeController.t("goals.loadingDisconnected", {}, "Disconnected"));
-    return;
-  }
-  if (Array.isArray(goalsState.items) && goalsState.items.length) {
-    renderGoalsSummary(goalsState.items);
-    renderGoalList(goalsState.items);
-    renderGoalDetail(getGoalById(goalsState.selectedId));
-    return;
-  }
-  if (goalsState.loadSeq > 0) {
-    renderGoalsLoading(localeController.t("goals.loading", {}, "Loading..."));
-  }
+  return goalsRuntimeFeature?.refreshGoalsLocale();
 }
 
 function refreshSubtasksLocale() {
-  if (!subtasksSection) return;
-  subtasksOverviewFeature?.refreshLocale();
+  return subtasksRuntimeFeature?.refreshSubtasksLocale();
 }
 
 function bindGoalDetailActions(goal) {
-  if (!goalsDetailEl || !goal) return;
-  goalsDetailEl.querySelectorAll("[data-goal-resume-detail]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-resume-detail");
-      if (!goalId) return;
-      void resumeGoal(goalId);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-goal-pause-detail]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-pause-detail");
-      if (!goalId) return;
-      void pauseGoal(goalId);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-open-source]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const sourcePath = node.getAttribute("data-open-source");
-      if (!sourcePath) return;
-      void openSourcePath(sourcePath);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-open-task-id]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const taskId = node.getAttribute("data-open-task-id");
-      if (!taskId) return;
-      void openTaskFromAudit(taskId);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-open-goal-tasks]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-open-goal-tasks");
-      if (!goalId) return;
-      void openGoalTaskViewer(goalId);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-goal-resume-last-node]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-resume-last-node");
-      if (!goalId) return;
-      const lastNodeId = node.getAttribute("data-goal-last-node-id");
-      void resumeGoal(goalId, { nodeId: lastNodeId || undefined });
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-open-goal-board]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const boardId = node.getAttribute("data-open-goal-board");
-      void openGoalCanvasBoard(boardId, goal.id);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-open-goal-board-list]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-open-goal-board-list") || goal.id;
-      void openGoalCanvasList(goalId);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-goal-checkpoint-action]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const action = node.getAttribute("data-goal-checkpoint-action");
-      const goalId = node.getAttribute("data-goal-checkpoint-goal-id") || goal.id;
-      const nodeId = node.getAttribute("data-goal-checkpoint-node-id");
-      const checkpointId = node.getAttribute("data-goal-checkpoint-id");
-      if (!action || !goalId || !nodeId || !checkpointId) return;
-      void runGoalCheckpointAction(goalId, nodeId, checkpointId, action);
-    });
-  });
-  goalsDetailEl.querySelectorAll("[data-goal-generate-handoff]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const goalId = node.getAttribute("data-goal-generate-handoff") || goal.id;
-      if (!goalId) return;
-      void generateGoalHandoff(goalId);
-    });
-  });
+  return goalsRuntimeFeature?.bindGoalDetailActions(goal);
 }
 
 async function runGoalCheckpointAction(goalId, nodeId, checkpointId, action) {
-  if (!ws || !isReady) {
-    showNotice("无法执行 checkpoint 操作", "未连接到服务器。", "error");
-    return;
-  }
-
-  const config = getGoalCheckpointActionConfig(action);
-  if (!config) return;
-  if (!goalCheckpointActionModal) {
-    showNotice("checkpoint 操作失败", "前端操作面板未初始化。", "error");
-    return;
-  }
-
-  const checkpoint = findTrackedGoalCheckpoint(goalId, checkpointId);
-  toggleGoalCheckpointActionModal(true, {
-    action,
-    goalId,
-    nodeId,
-    checkpointId,
-    status: checkpoint?.status || "",
-    reviewer: checkpoint?.reviewer || "",
-    reviewerRole: checkpoint?.reviewerRole || "",
-    requestedBy: checkpoint?.requestedBy || "",
-    decidedBy: checkpoint?.decidedBy || "",
-    slaAt: checkpoint?.slaAt || "",
-    summary: checkpoint?.summary || "",
-    note: checkpoint?.note || "",
-  });
+  return goalsRuntimeFeature?.runGoalCheckpointAction(goalId, nodeId, checkpointId, action);
 }
 
 function getGoalActionActor() {
@@ -3899,65 +3387,7 @@ async function runGoalCheckpointEscalation(goalId, nodeId, checkpointId) {
 }
 
 async function submitGoalCheckpointActionForm() {
-  if (!pendingGoalCheckpointAction) return;
-  if (!ws || !isReady) {
-    showNotice("无法执行 checkpoint 操作", "未连接到服务器。", "error");
-    return;
-  }
-
-  const context = pendingGoalCheckpointAction;
-  const config = getGoalCheckpointActionConfig(context.action);
-  if (!config) return;
-
-  const reviewer = goalCheckpointActionReviewerEl?.value.trim() || "";
-  const reviewerRole = goalCheckpointActionReviewerRoleEl?.value.trim() || "";
-  const requestedBy = goalCheckpointActionRequestedByEl?.value.trim() || "";
-  const actor = goalCheckpointActionActorEl?.value.trim() || "";
-  const slaAt = parseDateTimeLocalValue(goalCheckpointActionSlaAtEl?.value || "") || "";
-  const summary = goalCheckpointActionSummaryEl?.value.trim() || config.defaultSummary;
-  const note = goalCheckpointActionNoteEl?.value.trim() || "";
-  if (config.noteRequired && !note) {
-    showNotice("无法执行 checkpoint 操作", `${config.noteLabel}不能为空。`, "error");
-    goalCheckpointActionNoteEl?.focus();
-    return;
-  }
-
-  setGoalCheckpointActionBusy(true);
-  try {
-    const res = await sendReq({
-      type: "req",
-      id: makeId(),
-      method: config.method,
-      params: {
-        goalId: context.goalId,
-        nodeId: context.nodeId,
-        checkpointId: context.checkpointId,
-        reviewer: reviewer || undefined,
-        reviewerRole: reviewerRole || undefined,
-        requestedBy: (context.action === "reopen" ? actor : requestedBy) || undefined,
-        decidedBy: (context.action === "approve" || context.action === "reject" || context.action === "expire")
-          ? (actor || undefined)
-          : undefined,
-        slaAt: slaAt || undefined,
-        summary: summary || config.defaultSummary,
-        note: note || undefined,
-      },
-    });
-    if (!res || !res.ok) {
-      showNotice("checkpoint 操作失败", res?.error?.message || "未知错误。", "error");
-      return;
-    }
-
-    toggleGoalCheckpointActionModal(false);
-    await loadGoals(true, context.goalId);
-    showNotice(config.successTitle, `${context.goalId} / ${context.nodeId} 已更新。`, "success", 2200);
-  } catch (error) {
-    showNotice("checkpoint 操作失败", error instanceof Error ? error.message : String(error), "error");
-  } finally {
-    if (pendingGoalCheckpointAction) {
-      setGoalCheckpointActionBusy(false);
-    }
-  }
+  return goalsRuntimeFeature?.submitGoalCheckpointActionForm();
 }
 
 function normalizeGoalNodeStatus(status) {
@@ -4767,58 +4197,23 @@ async function loadGoalReviewGovernanceData(goal) {
 }
 
 function renderGoalDetail(goal) {
-  return goalsDetailFeature?.renderGoalDetail(goal);
+  return goalsRuntimeFeature?.renderGoalDetail(goal);
 }
 
 async function loadGoals(forceReload = false, preferredGoalId) {
-  return goalsOverviewFeature?.loadGoals(forceReload, preferredGoalId);
+  return goalsRuntimeFeature?.loadGoals(forceReload, preferredGoalId);
 }
 
 async function loadSubtasks(forceSelectFirst = false) {
-  const result = await subtasksOverviewFeature?.loadSubtasks(forceSelectFirst);
-  const linkedSessionId = subtasksState.linkedSessionContext?.sessionId || subtasksState.continuationFocusSessionId || "";
-  if (linkedSessionId) {
-    applySubtaskSessionFocus(linkedSessionId);
-    applySubtaskPromptSnapshotFocus(linkedSessionId);
-  }
-  return result;
+  return subtasksRuntimeFeature?.loadSubtasks(forceSelectFirst);
 }
 
 async function loadSubtaskDetail(taskId, options = {}) {
-  const result = await subtasksOverviewFeature?.loadSubtaskDetail(taskId, options);
-  const linkedSessionId = subtasksState.linkedSessionContext?.sessionId || subtasksState.continuationFocusSessionId || "";
-  if (linkedSessionId) {
-    applySubtaskSessionFocus(linkedSessionId);
-    applySubtaskPromptSnapshotFocus(linkedSessionId);
-  }
-  return result;
+  return subtasksRuntimeFeature?.loadSubtaskDetail(taskId, options);
 }
 
 async function openSubtaskById(taskId) {
-  const normalizedTaskId = typeof taskId === "string" ? taskId.trim() : "";
-  if (!normalizedTaskId) return;
-
-  switchMode("subtasks");
-  subtasksState.selectedId = normalizedTaskId;
-  await loadSubtasks(false);
-
-  let existsInList = Array.isArray(subtasksState.items)
-    && subtasksState.items.some((item) => item?.id === normalizedTaskId);
-
-  if (!existsInList && subtasksState.includeArchived !== true) {
-    subtasksState.includeArchived = true;
-    if (subtasksShowArchivedEl) {
-      subtasksShowArchivedEl.checked = true;
-    }
-    await loadSubtasks(false);
-    existsInList = Array.isArray(subtasksState.items)
-      && subtasksState.items.some((item) => item?.id === normalizedTaskId);
-  }
-
-  if (!existsInList) {
-    subtasksState.selectedId = normalizedTaskId;
-  }
-  await loadSubtaskDetail(normalizedTaskId, { quiet: !existsInList });
+  return subtasksRuntimeFeature?.openSubtaskById(taskId);
 }
 
 async function submitGoalCreateForm() {
@@ -5008,194 +4403,51 @@ async function generateGoalHandoff(goalId) {
 }
 
 function switchMemoryViewerTab(tab) {
-  return memoryViewerFeature?.switchMemoryViewerTab(tab);
+  return memoryRuntimeFeature?.switchMemoryViewerTab(tab);
 }
 
 function syncMemoryViewerUi() {
-  return memoryViewerFeature?.syncMemoryViewerUi();
+  return memoryRuntimeFeature?.syncMemoryViewerUi();
 }
 
 async function loadMemoryViewer(forceSelectFirst = false) {
-  return memoryViewerFeature?.loadMemoryViewer(forceSelectFirst);
+  return memoryRuntimeFeature?.loadMemoryViewer(forceSelectFirst);
 }
 
 async function loadMemoryViewerStats() {
-  return memoryViewerFeature?.loadMemoryViewerStats();
+  return memoryRuntimeFeature?.loadMemoryViewerStats();
 }
 
 async function loadTaskUsageOverview() {
-  return memoryViewerFeature?.loadTaskUsageOverview();
+  return memoryRuntimeFeature?.loadTaskUsageOverview();
 }
 
 async function loadTaskViewer(forceSelectFirst = false) {
-  return memoryViewerFeature?.loadTaskViewer(forceSelectFirst);
+  return memoryRuntimeFeature?.loadTaskViewer(forceSelectFirst);
 }
 
 async function loadTaskDetail(taskId, requestContext = null) {
-  if (!taskId) {
-    memoryViewerState.selectedTask = null;
-    memoryViewerState.selectedCandidate = null;
-    memoryViewerState.pendingUsageRevokeId = null;
-    renderMemoryViewerDetailEmpty(localeController.t("memory.selectTask", {}, "Please select a task."));
-    renderMemoryViewerStats(memoryViewerState.stats);
-    return;
-  }
-
-  renderMemoryViewerDetailEmpty(localeController.t("memory.taskDetailLoadingShort", {}, "Loading task details…"));
-  const requestToken = Number(requestContext?.requestToken ?? memoryViewerState.requestToken ?? 0);
-  const requestAgentId = String(requestContext?.agentId || memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "memory.task.get", params: { taskId, agentId: requestAgentId } });
-  if (
-    Number(memoryViewerState.requestToken || 0) !== requestToken
-    || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
-  ) {
-    return;
-  }
-  if (!res || !res.ok) {
-    memoryViewerState.selectedTask = null;
-    memoryViewerState.selectedCandidate = null;
-    memoryViewerState.pendingUsageRevokeId = null;
-    renderMemoryViewerDetailEmpty(res?.error?.message || localeController.t("memory.taskDetailLoadFailed", {}, "Failed to load task details."));
-    renderMemoryViewerStats(memoryViewerState.stats);
-    return;
-  }
-
-  memoryViewerState.selectedTask = res.payload?.task ?? null;
-  memoryViewerState.experienceQueryView = res.payload?.queryView ?? memoryViewerState.experienceQueryView ?? null;
-  if (
-    memoryViewerState.selectedCandidate?.taskId &&
-    memoryViewerState.selectedTask?.id &&
-    memoryViewerState.selectedCandidate.taskId !== memoryViewerState.selectedTask.id
-  ) {
-    memoryViewerState.selectedCandidate = null;
-  }
-  memoryViewerState.pendingUsageRevokeId = null;
-  renderTaskList(memoryViewerState.items);
-  renderTaskDetail(memoryViewerState.selectedTask);
-  renderMemoryViewerStats(memoryViewerState.stats);
+  return memoryRuntimeFeature?.loadTaskDetail(taskId, requestContext);
 }
 
 async function loadMemoryChunkViewer(forceSelectFirst = false) {
-  return memoryViewerFeature?.loadMemoryChunkViewer(forceSelectFirst);
+  return memoryRuntimeFeature?.loadMemoryChunkViewer(forceSelectFirst);
 }
 
 async function loadMemoryDetail(chunkId, requestContext = null, options = {}) {
-  if (!chunkId) {
-    renderMemoryViewerDetailEmpty(localeController.t("memory.selectMemory", {}, "Please select a memory."));
-    return;
-  }
-
-  renderMemoryViewerDetailEmpty(localeController.t("memory.memoryDetailLoadingShort", {}, "Loading memory details…"));
-  const requestToken = Number(requestContext?.requestToken ?? memoryViewerState.requestToken ?? 0);
-  const requestAgentId = String(
-    options?.targetAgentId
-    || resolveMemoryDetailTargetAgentId(chunkId)
-    || requestContext?.agentId
-    || memoryViewerState.activeAgentId
-    || getCurrentAgentSelection(),
-  ).trim() || "default";
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "memory.get", params: { chunkId, agentId: requestAgentId } });
-  if (
-    Number(memoryViewerState.requestToken || 0) !== requestToken
-    || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
-  ) {
-    return;
-  }
-  if (!res || !res.ok) {
-    renderMemoryViewerDetailEmpty(res?.error?.message || localeController.t("memory.memoryDetailLoadFailed", {}, "Failed to load memory details."));
-    return;
-  }
-
-  if (memoryViewerState.tab === "sharedReview") {
-    renderSharedReviewList(memoryViewerState.items);
-  } else {
-    renderMemoryList(memoryViewerState.items);
-  }
-  memoryViewerState.memoryQueryView = res.payload?.queryView ?? memoryViewerState.memoryQueryView ?? null;
-  const queueItem = memoryViewerState.tab === "sharedReview" && Array.isArray(memoryViewerState.items)
-    ? memoryViewerState.items.find((item) => item?.id === chunkId)
-    : null;
-  renderMemoryDetail(queueItem && res.payload?.item
-    ? {
-      ...res.payload.item,
-      targetAgentId: queueItem.targetAgentId,
-      targetDisplayName: queueItem.targetDisplayName,
-      targetMemoryMode: queueItem.targetMemoryMode,
-      reviewStatus: queueItem.reviewStatus,
-      claimOwner: queueItem.claimOwner,
-      claimAgeMs: queueItem.claimAgeMs,
-      claimExpiresAt: queueItem.claimExpiresAt,
-      claimTimedOut: queueItem.claimTimedOut,
-      actionableByReviewer: queueItem.actionableByReviewer,
-      blockedByOtherReviewer: queueItem.blockedByOtherReviewer,
-    }
-    : res.payload?.item);
+  return memoryRuntimeFeature?.loadMemoryDetail(chunkId, requestContext, options);
 }
 
 async function openTaskFromAudit(taskId) {
-  if (!taskId) return;
-  if (memoryViewerState.tab !== "tasks") {
-    memoryViewerState.tab = "tasks";
-    memoryViewerState.items = [];
-    memoryViewerState.selectedTask = null;
-    syncMemoryViewerUi();
-  }
-
-  memoryViewerState.selectedId = taskId;
-  await loadTaskViewer(false);
-
-  if (!Array.isArray(memoryViewerState.items) || !memoryViewerState.items.some((item) => item.id === taskId)) {
-    memoryViewerState.selectedId = taskId;
-    renderTaskList(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
-    await loadTaskDetail(taskId);
-  }
+  return memoryRuntimeFeature?.openTaskFromAudit(taskId);
 }
 
 async function openMemoryFromAudit(chunkId) {
-  if (!chunkId) return;
-  if (memoryViewerState.tab !== "memories") {
-    memoryViewerState.tab = "memories";
-    memoryViewerState.items = [];
-    memoryViewerState.selectedTask = null;
-    memoryViewerState.selectedCandidate = null;
-    syncMemoryViewerUi();
-  }
-
-  memoryViewerState.selectedId = chunkId;
-  await loadMemoryChunkViewer(false);
-
-  if (!Array.isArray(memoryViewerState.items) || !memoryViewerState.items.some((item) => item.id === chunkId)) {
-    memoryViewerState.selectedId = chunkId;
-    renderMemoryList(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
-    await loadMemoryDetail(chunkId);
-  }
+  return memoryRuntimeFeature?.openMemoryFromAudit(chunkId);
 }
 
 async function loadCandidateDetail(candidateId) {
-  if (!candidateId || !ws || !isReady) return;
-  const requestToken = Number(memoryViewerState.requestToken || 0);
-  const requestAgentId = String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
-  const id = makeId();
-  const res = await sendReq({ type: "req", id, method: "experience.candidate.get", params: { candidateId, agentId: requestAgentId } });
-  if (
-    Number(memoryViewerState.requestToken || 0) !== requestToken
-    || (String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default") !== requestAgentId
-  ) {
-    return;
-  }
-  if (!res || !res.ok) {
-    showNotice("候选详情加载失败", res?.error?.message || "无法读取 candidate。", "error");
-    return;
-  }
-  memoryViewerState.selectedCandidate = res.payload?.candidate ?? null;
-  memoryViewerState.experienceQueryView = res.payload?.queryView ?? memoryViewerState.experienceQueryView ?? null;
-  if (memoryViewerState.tab === "tasks" && memoryViewerState.selectedTask) {
-    renderTaskDetail(memoryViewerState.selectedTask);
-  } else {
-    renderCandidateOnlyDetail(memoryViewerState.selectedCandidate);
-  }
+  return memoryRuntimeFeature?.loadCandidateDetail(candidateId);
 }
 
 function renderMemoryViewerStats(stats) {
@@ -5215,51 +4467,11 @@ function renderSharedReviewList(items) {
 }
 
 function resolveMemoryDetailTargetAgentId(chunkId) {
-  if (!chunkId || memoryViewerState.tab !== "sharedReview") return undefined;
-  const selected = Array.isArray(memoryViewerState.items)
-    ? memoryViewerState.items.find((item) => item?.id === chunkId)
-    : null;
-  return typeof selected?.targetAgentId === "string" && selected.targetAgentId.trim()
-    ? selected.targetAgentId.trim()
-    : undefined;
+  return memoryRuntimeFeature?.resolveMemoryDetailTargetAgentId(chunkId);
 }
 
 function refreshMemoryLocale() {
-  if (!memoryViewerSection) return;
-  syncMemoryViewerUi();
-  if (!ws || !isReady) {
-    renderMemoryViewerStats(null);
-    renderMemoryViewerListEmpty(localeController.t("memory.disconnectedList", {}, "Not connected to the server."));
-    renderMemoryViewerDetailEmpty(localeController.t("memory.disconnectedDetail", {}, "Tasks and memories will be available after connection is ready."));
-    return;
-  }
-  renderMemoryViewerStats(memoryViewerState.stats);
-  if (memoryViewerState.tab === "tasks") {
-    renderTaskList(memoryViewerState.items);
-    if (memoryViewerState.selectedTask) {
-      renderTaskDetail(memoryViewerState.selectedTask);
-      return;
-    }
-    if (memoryViewerState.selectedCandidate) {
-      renderCandidateOnlyDetail(memoryViewerState.selectedCandidate);
-      return;
-    }
-    renderMemoryViewerDetailEmpty(localeController.t("memory.selectTask", {}, "Please select a task."));
-    return;
-  }
-  if (memoryViewerState.tab === "sharedReview") {
-    renderSharedReviewList(memoryViewerState.items);
-  } else if (memoryViewerState.tab === "outboundAudit") {
-    void memoryViewerFeature?.loadExternalOutboundAuditViewer?.(false);
-    return;
-  } else {
-    renderMemoryList(memoryViewerState.items);
-  }
-  if (memoryViewerState.selectedId) {
-    void loadMemoryDetail(memoryViewerState.selectedId);
-    return;
-  }
-  renderMemoryViewerDetailEmpty(localeController.t("memory.selectMemory", {}, "Please select a memory."));
+  return memoryRuntimeFeature?.refreshMemoryLocale();
 }
 
 function renderTaskDetail(task) {
@@ -5947,27 +5159,6 @@ window._belldandySyncCanvasContext = renderCanvasGoalContext;
 // Expose openFile for canvas.js (method node double-click → editor)
 window._belldandyOpenFile = (filePath) => openFile(filePath);
 
-function openConversationSession(conversationId, hintText, options = {}) {
-  if (!conversationId) return;
-  const switchToChat = options.switchToChat !== false;
-  const renderHint = options.renderHint !== false;
-  activeConversationId = conversationId;
-  renderCanvasGoalContext();
-  if (switchToChat) {
-    switchMode("chat");
-  }
-  chatEventsFeature?.resetStreamingState();
-  if (messagesEl && renderHint) {
-    messagesEl.innerHTML = "";
-    const hint = document.createElement("div");
-    hint.className = "system-msg";
-    hint.textContent = hintText || localeController.t("canvas.switchedConversationHint", { conversationId }, `Switched to conversation: ${conversationId}`);
-    messagesEl.appendChild(hint);
-  }
-  void loadConversationMeta(conversationId, { showGoalEntryBanner: true });
-  void sessionDigestFeature?.loadSessionDigest(conversationId);
-}
-
 // Expose loadConversation for canvas.js (session node double-click → chat)
 window._belldandyLoadConversation = (conversationId) => {
   openConversationSession(conversationId);
@@ -6028,48 +5219,3 @@ function sanitizeAssistantHtml(rawHtml) {
   return chatUiFeature?.sanitizeAssistantHtml(rawHtml) || "";
 }
 
-const toolSettingsController = createToolSettingsController({
-  refs: {
-    toolSettingsConfirmModal,
-    toolSettingsConfirmImpactEl,
-    toolSettingsConfirmSummaryEl,
-    toolSettingsConfirmExpiryEl,
-    toolSettingsConfirmApproveBtn,
-    toolSettingsConfirmRejectBtn,
-    toolSettingsModal,
-    openToolSettingsBtn,
-    closeToolSettingsBtn,
-    saveToolSettingsBtn,
-    toolSettingsBody,
-    toolTabButtons,
-  },
-  isConnected: () => Boolean(ws && isReady),
-  sendReq,
-  makeId,
-  clientId,
-  getSelectedAgentId: () => agentSelectEl?.value || localStorage.getItem(AGENT_ID_KEY) || "default",
-  getActiveConversationId: () => activeConversationId || "",
-  getSelectedSubtaskId: () => subtasksState.selectedId || "",
-  isSubtasksViewActive: () => Boolean(subtasksSection && !subtasksSection.classList.contains("hidden")),
-  escapeHtml,
-  showNotice,
-  t: localeController.t,
-});
-
-externalOutboundController = createExternalOutboundController({
-  refs: {
-    externalOutboundConfirmModal,
-    externalOutboundConfirmPreviewEl,
-    externalOutboundConfirmTargetEl,
-    externalOutboundConfirmExpiryEl,
-    externalOutboundConfirmApproveBtn,
-    externalOutboundConfirmRejectBtn,
-  },
-  isConnected: () => Boolean(ws && isReady),
-  sendReq,
-  makeId,
-  clientId,
-  escapeHtml,
-  showNotice,
-  t: localeController.t,
-});
