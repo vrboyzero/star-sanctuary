@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "技术债偿还执行中备份，完成server.test.ts的拆分"
+git commit -m "技术债偿还执行中备份，继续app.js的拆分，修改了两个bug"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

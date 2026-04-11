@@ -20,9 +20,11 @@ export const enUS = {
     connecting: "Connecting",
     awaitingChallenge: "Connected (awaiting challenge)",
     disconnectedRetrying: "Disconnected (retrying {url} in 3s...)",
+    authRequired: "Connection rejected (authentication required: {reason})",
     ready: "Ready",
     serviceRestarting: "Service Restarting",
     disconnectHint: "If this persists in WSL, try accessing via IP (for example 172.x.x.x) instead of localhost.",
+    authRequiredHint: "Enter the correct token/password in the Auth controls, then click Connect manually. If you just changed .env, restart the service first.",
   },
   launchExplainability: {
     runtimeResilience: "runtime resilience",

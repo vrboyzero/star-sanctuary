@@ -20,9 +20,11 @@ export const zhCN = {
     connecting: "连接中",
     awaitingChallenge: "已连接（等待握手）",
     disconnectedRetrying: "连接断开（3 秒后重试 {url}）",
+    authRequired: "连接被拒绝（需要鉴权：{reason}）",
     ready: "已就绪",
     serviceRestarting: "服务重启中",
     disconnectHint: "如果在 WSL 下持续断开，可尝试改用 IP（如 172.x.x.x）访问，而不是 localhost。",
+    authRequiredHint: "请在顶部 Auth 中填入正确的 token / password 后手动点“连接”；如果你刚修改了 .env，需要先重启服务。",
   },
   launchExplainability: {
     runtimeResilience: "运行韧性",

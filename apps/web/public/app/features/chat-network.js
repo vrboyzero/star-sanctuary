@@ -5,7 +5,11 @@ function buildWebSocketUrl() {
 
 function ensureDisconnectHint(statusEl, message) {
   if (!statusEl?.parentElement) return;
-  if (document.getElementById("status-hint")) return;
+  const existingHint = document.getElementById("status-hint");
+  if (existingHint) {
+    existingHint.textContent = message;
+    return;
+  }
 
   const hint = document.createElement("div");
   hint.id = "status-hint";
@@ -295,6 +299,33 @@ export function createChatNetworkFeature({
     applyLocalizedStatus();
   }
 
+  function isAuthRejectedClose(event) {
+    return Number(event?.code) === 4403;
+  }
+
+  function formatCloseReason(event, fallback) {
+    const reason = typeof event?.reason === "string" ? event.reason.trim() : "";
+    return reason || fallback;
+  }
+
+  function getStatusHintMessage(statusKey) {
+    if (statusKey === "status.disconnectedRetrying") {
+      return t(
+        "status.disconnectHint",
+        {},
+        "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.",
+      );
+    }
+    if (statusKey === "status.authRequired") {
+      return t(
+        "status.authRequiredHint",
+        {},
+        "Enter the correct token/password in the Auth controls, then click Connect manually. If you just changed .env, restart the service first.",
+      );
+    }
+    return "";
+  }
+
   function teardown() {
     const socket = getSocket();
     if (socket) {
@@ -531,21 +562,25 @@ export function createChatNetworkFeature({
       setLocalizedStatus("status.awaitingChallenge", {}, "connected (awaiting challenge)");
     });
 
-    socket.addEventListener("close", () => {
-      const url = buildWebSocketUrl();
-      setLocalizedStatus("status.disconnectedRetrying", { url }, `disconnected (retrying ${url} in 3s...)`);
-      ensureDisconnectHint(
-        statusEl,
-        t(
-          "status.disconnectHint",
-          {},
-          "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.",
-        ),
-      );
+    socket.addEventListener("close", (event) => {
       setReady(false);
       if (sendBtn) {
         sendBtn.disabled = true;
       }
+      if (isAuthRejectedClose(event)) {
+        const reason = formatCloseReason(event, "token required");
+        setLocalizedStatus(
+          "status.authRequired",
+          { reason },
+          `connection rejected (authentication required: ${reason})`,
+        );
+        ensureDisconnectHint(statusEl, getStatusHintMessage("status.authRequired"));
+        return;
+      }
+
+      const url = buildWebSocketUrl();
+      setLocalizedStatus("status.disconnectedRetrying", { url }, `disconnected (retrying ${url} in 3s...)`);
+      ensureDisconnectHint(statusEl, getStatusHintMessage("status.disconnectedRetrying"));
       setTimeout(() => {
         const currentSocket = getSocket();
         if (!currentSocket || currentSocket.readyState === WebSocket.CLOSED) {
@@ -626,15 +661,9 @@ export function createChatNetworkFeature({
     loadModelList,
     refreshLocale() {
       applyLocalizedStatus();
-      if (currentStatus.key === "status.disconnectedRetrying") {
-        ensureDisconnectHint(
-          statusEl,
-          t(
-            "status.disconnectHint",
-            {},
-            "If this persists in WSL, try accessing via IP (e.g. 172.x.x.x) instead of localhost.",
-          ),
-        );
+      const statusHintMessage = getStatusHintMessage(currentStatus.key);
+      if (statusHintMessage) {
+        ensureDisconnectHint(statusEl, statusHintMessage);
       }
       if (lastModelListState) {
         renderModelOptions(
