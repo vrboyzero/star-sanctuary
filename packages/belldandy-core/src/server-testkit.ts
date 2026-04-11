@@ -1,0 +1,158 @@
+import path from "node:path";
+
+import { expect } from "vitest";
+import WebSocket from "ws";
+
+import { type Tool, withToolContract } from "@belldandy/skills";
+
+import { approvePairingCode } from "./security/store.js";
+
+export function resolveWebRoot(rootDir = process.cwd()): string {
+  return path.join(rootDir, "apps", "web", "public");
+}
+
+export async function pairWebSocketClient(ws: WebSocket, frames: any[], stateDir: string): Promise<void> {
+  await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
+  ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
+  await waitFor(() => frames.some((f) => f.type === "hello-ok"));
+
+  const reqId = `pairing-${Date.now()}`;
+  ws.send(JSON.stringify({ type: "req", id: reqId, method: "message.send", params: { text: "pairing-init" } }));
+  await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
+  const pairingEvents = frames.filter((f) => f.type === "event" && f.event === "pairing.required");
+  const pairing = pairingEvents[pairingEvents.length - 1];
+  const code = pairing?.payload?.code ? String(pairing.payload.code) : "";
+  expect(code.length).toBeGreaterThan(0);
+  const approved = await approvePairingCode({ code, stateDir });
+  expect(approved.ok).toBe(true);
+}
+
+export function toSafeConversationFileIdForTest(id: string): string {
+  const encodeChar = (char: string): string => {
+    const codePoint = char.codePointAt(0);
+    if (typeof codePoint !== "number") return "_";
+    return `%${codePoint.toString(16).toUpperCase().padStart(2, "0")}`;
+  };
+
+  let safeId = id.replace(/[<>:"/\\|?*\u0000-\u001F%]/g, encodeChar);
+  safeId = safeId.replace(/[. ]+$/g, (match) => Array.from(match).map(encodeChar).join(""));
+  if (!safeId) {
+    safeId = "_";
+  }
+
+  const windowsBasename = safeId.split(".")[0] ?? safeId;
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(windowsBasename)) {
+    safeId = `_${safeId}`;
+  }
+
+  return safeId;
+}
+
+export function formatLocalDateForTest(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function createTestTool(name: string): Tool {
+  return {
+    definition: {
+      name,
+      description: `test tool ${name}`,
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+    async execute() {
+      return {
+        id: "",
+        name,
+        success: true,
+        output: name,
+        durationMs: 0,
+      };
+    },
+  };
+}
+
+export function createContractedTestTool(name: string): Tool {
+  return withToolContract(createTestTool(name), {
+    family: "other",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway"],
+    safeScopes: ["local-safe"],
+    activityDescription: `contracted tool ${name}`,
+    resultSchema: {
+      kind: "text",
+      description: "test tool output",
+    },
+    outputPersistencePolicy: "conversation",
+  });
+}
+
+export function createWriteContractedTestTool(name: string): Tool {
+  return withToolContract(createTestTool(name), {
+    family: "workspace-write",
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    needsPermission: true,
+    riskLevel: "high",
+    channels: ["gateway"],
+    safeScopes: ["privileged"],
+    activityDescription: `write tool ${name}`,
+    resultSchema: {
+      kind: "text",
+      description: "test tool output",
+    },
+    outputPersistencePolicy: "artifact",
+  });
+}
+
+export function toBase64(value: string): string {
+  return Buffer.from(value, "utf-8").toString("base64");
+}
+
+export async function withEnv(
+  changes: Record<string, string | undefined>,
+  run: () => Promise<void>,
+): Promise<void> {
+  const prev: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(changes)) {
+    prev[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+export async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await sleep(10);
+  }
+  throw new Error("timeout");
+}
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

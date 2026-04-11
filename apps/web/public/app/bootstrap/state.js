@@ -1,0 +1,78 @@
+export function createDefaultSharedReviewFilters() {
+  return {
+    focus: "",
+    targetAgentId: "",
+    claimedByAgentId: "",
+  };
+}
+
+export const memoryViewerState = {
+  tab: "tasks",
+  stats: null,
+  items: [],
+  selectedId: null,
+  selectedTask: null,
+  selectedCandidate: null,
+  goalIdFilter: null,
+  pendingUsageRevokeId: null,
+  usageOverview: {
+    loading: false,
+    methods: [],
+    skills: [],
+  },
+  usageOverviewSeq: 0,
+  memoryQueryView: null,
+  experienceQueryView: null,
+  sharedGovernance: null,
+  sharedReviewSummary: null,
+  sharedReviewFilters: createDefaultSharedReviewFilters(),
+  selectedSharedReviewIds: [],
+  sharedReviewBatchBusy: false,
+  requestToken: 0,
+  activeAgentId: "default",
+  agentViewStates: {},
+};
+
+export const goalsState = {
+  items: [],
+  selectedId: null,
+  loadSeq: 0,
+  trackingSeq: 0,
+  canvasSeq: 0,
+  progressSeq: 0,
+  capabilitySeq: 0,
+  handoffSeq: 0,
+  governanceSeq: 0,
+  trackingCheckpoints: [],
+  governanceCache: {},
+  capabilityCache: {},
+  capabilityPending: {},
+  continuationFocusNode: null,
+  liveUpdateDelayMs: 120,
+  liveUpdateTimers: {},
+  liveUpdatePending: {},
+};
+
+export const subtasksState = {
+  items: [],
+  selectedId: null,
+  selectedItem: null,
+  selectedOutputContent: "",
+  selectedContinuationState: null,
+  selectedPromptSnapshot: null,
+  conversationId: null,
+  includeArchived: false,
+  loadSeq: 0,
+  detailSeq: 0,
+  loading: false,
+  detailLoading: false,
+  pendingActionTaskId: null,
+  pendingActionKind: null,
+  continuationFocusSessionId: null,
+  linkedSessionContext: null,
+  steeringDrafts: {},
+  resumeDrafts: {},
+  liveUpdateDelayMs: 120,
+  liveUpdateTimers: {},
+  liveUpdatePending: {},
+};

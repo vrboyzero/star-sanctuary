@@ -1,5 +1,0 @@
-Prompt Snapshot Index
-generatedAt: 2026-04-10T08:43:28.049Z
-entries: 1
-
-2026-04-10T08:43:27.791Z | agent_main | agent:default:main | run=09069023-9404-40d8-b287-a2df9d0c46d2 | snapshots=1 | dir=agent-default-main | latest=run-09069023-9404-40d8-b287-a2df9d0c46d2.prompt-snapshot.json

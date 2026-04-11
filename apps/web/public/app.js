@@ -7,6 +7,25 @@ import {
   restoreUuidField,
   restoreWorkspaceRootsField,
 } from "./app/features/persistence.js";
+import { APP_DOM_REFS } from "./app/bootstrap/dom.js";
+import {
+  DEFAULT_VOICE_SHORTCUT,
+  AGENT_ID_KEY,
+  CLIENT_KEY,
+  MODEL_ID_KEY,
+  STORE_KEY,
+  UUID_KEY,
+  VOICE_SHORTCUT_DISABLED_VALUE,
+  VOICE_SHORTCUT_KEY,
+  WEBCHAT_DEBUG_KEY,
+  WORKSPACE_ROOTS_KEY,
+} from "./app/bootstrap/storage-keys.js";
+import {
+  createDefaultSharedReviewFilters,
+  goalsState,
+  memoryViewerState,
+  subtasksState,
+} from "./app/bootstrap/state.js";
 import { createAttachmentsFeature } from "./app/features/attachments.js";
 import { createAgentSessionCacheFeature } from "./app/features/agent-session-cache.js";
 import { createChatEventsFeature } from "./app/features/chat-events.js";
@@ -44,159 +63,222 @@ import { createVoiceFeature } from "./app/features/voice.js";
 import { createWorkspaceFeature } from "./app/features/workspace.js";
 import { LOCALE_DICTIONARIES, LOCALE_META } from "./app/i18n/index.js";
 
-const statusEl = document.getElementById("status");
-const authModeEl = document.getElementById("authMode");
-const authValueEl = document.getElementById("authValue");
-const userUuidEl = document.getElementById("userUuid"); // UUID输入框
-const saveUuidBtn = document.getElementById("saveUuid"); // UUID保存按钮
-const workspaceRootsEl = document.getElementById("workspaceRoots");
-const connectBtn = document.getElementById("connect");
-const sendBtn = document.getElementById("send");
-const promptEl = document.getElementById("prompt");
-const voiceBtn = document.getElementById("voiceBtn");
-const voiceDurationEl = document.getElementById("voiceDuration");
-const messagesEl = document.getElementById("messages");
-const modelFilterEl = document.getElementById("modelFilter");
-const modelSelectEl = document.getElementById("modelSelect");
-const agentSelectEl = document.getElementById("agentSelect");
-const themeToggleBtn = document.getElementById("themeToggleBtn");
-
-// 文件树和编辑器 DOM 元素
-const sidebarEl = document.getElementById("sidebar");
-const sidebarTitleEl = document.querySelector(".sidebar-title");
-const fileTreeEl = document.getElementById("fileTree");
-const refreshTreeBtn = document.getElementById("refreshTree");
-const chatSection = document.getElementById("chatSection");
-const editorSection = document.getElementById("editorSection");
-const canvasContextBarEl = document.getElementById("canvasContextBar");
-const editorPath = document.getElementById("editorPath");
-const editorModeBadge = document.getElementById("editorModeBadge");
-const editorTextarea = document.getElementById("editorTextarea");
-const composerSection = document.getElementById("composerSection");
-const editorActions = document.getElementById("editorActions");
-const cancelEditBtn = document.getElementById("cancelEdit");
-const saveEditBtn = document.getElementById("saveEdit");
-const openEnvEditorBtn = document.getElementById("openEnvEditor");
-const switchRootBtn = document.getElementById("switchRoot");
-const switchFacetBtn = document.getElementById("switchFacet");
-const switchCronBtn = document.getElementById("switchCron");
-const switchMemoryBtn = document.getElementById("switchMemory");
-const switchGoalsBtn = document.getElementById("switchGoals");
-const switchSubtasksBtn = document.getElementById("switchSubtasks");
-const switchCanvasBtn = document.getElementById("switchCanvas");
-const openChannelSettingsBtn = document.getElementById("openChannelSettings");
-const agentRightPanelEl = document.getElementById("agentRightPanel");
-const memoryViewerSection = document.getElementById("memoryViewerSection");
-const memoryViewerTitleEl = document.getElementById("memoryViewerTitle");
-const memoryViewerStatsEl = document.getElementById("memoryViewerStats");
-const memoryViewerListEl = document.getElementById("memoryViewerList");
-const memoryViewerDetailEl = document.getElementById("memoryViewerDetail");
-const memoryViewerRefreshBtn = document.getElementById("memoryViewerRefresh");
-const memoryTabTasksBtn = document.getElementById("memoryTabTasks");
-const memoryTabMemoriesBtn = document.getElementById("memoryTabMemories");
-const memoryTabSharedReviewBtn = document.getElementById("memoryTabSharedReview");
-const memoryTabOutboundAuditBtn = document.getElementById("memoryTabOutboundAudit");
-const memorySearchInputEl = document.getElementById("memorySearchInput");
-const memorySearchBtn = document.getElementById("memorySearchBtn");
-const memoryTaskFiltersEl = document.getElementById("memoryTaskFilters");
-const memoryChunkFiltersEl = document.getElementById("memoryChunkFilters");
-const memoryTaskStatusFilterEl = document.getElementById("memoryTaskStatusFilter");
-const memoryTaskSourceFilterEl = document.getElementById("memoryTaskSourceFilter");
-const memoryTaskGoalFilterBarEl = document.getElementById("memoryTaskGoalFilterBar");
-const memoryTaskGoalFilterLabelEl = document.getElementById("memoryTaskGoalFilterLabel");
-const memoryTaskGoalFilterClearBtn = document.getElementById("memoryTaskGoalFilterClear");
-const memorySharedReviewBatchBarEl = document.getElementById("memorySharedReviewBatchBar");
-const memoryChunkTypeFilterEl = document.getElementById("memoryChunkTypeFilter");
-const memoryChunkVisibilityFilterEl = document.getElementById("memoryChunkVisibilityFilter");
-const memoryChunkGovernanceFilterEl = document.getElementById("memoryChunkGovernanceFilter");
-const memoryChunkCategoryFilterEl = document.getElementById("memoryChunkCategoryFilter");
-const memorySharedReviewFiltersEl = document.getElementById("memorySharedReviewFilters");
-const memorySharedReviewFocusFilterEl = document.getElementById("memorySharedReviewFocusFilter");
-const memorySharedReviewTargetFilterEl = document.getElementById("memorySharedReviewTargetFilter");
-const memorySharedReviewClaimedByFilterEl = document.getElementById("memorySharedReviewClaimedByFilter");
-const memorySharedReviewClearFiltersBtn = document.getElementById("memorySharedReviewClearFilters");
-const goalsSection = document.getElementById("goalsSection");
-const goalsSummaryEl = document.getElementById("goalsSummary");
-const goalsListEl = document.getElementById("goalsList");
-const goalsDetailEl = document.getElementById("goalsDetail");
-const goalsRefreshBtn = document.getElementById("goalsRefresh");
-const subtasksSection = document.getElementById("subtasksSection");
-const subtasksSummaryEl = document.getElementById("subtasksSummary");
-const subtasksListEl = document.getElementById("subtasksList");
-const subtasksDetailEl = document.getElementById("subtasksDetail");
-const subtasksShowArchivedEl = document.getElementById("subtasksShowArchived");
-const subtasksRefreshBtn = document.getElementById("subtasksRefresh");
-const goalCreateBtn = document.getElementById("goalCreate");
-const goalCreateModal = document.getElementById("goalCreateModal");
-const goalCreateCloseBtn = document.getElementById("goalCreateClose");
-const goalCreateCancelBtn = document.getElementById("goalCreateCancel");
-const goalCreateSubmitBtn = document.getElementById("goalCreateSubmit");
-const goalCreateTitleEl = document.getElementById("goalCreateTitle");
-const goalCreateObjectiveEl = document.getElementById("goalCreateObjective");
-const goalCreateRootEl = document.getElementById("goalCreateRoot");
-const goalCreateAutoResumeEl = document.getElementById("goalCreateAutoResume");
-const goalCheckpointActionModal = document.getElementById("goalCheckpointActionModal");
-const goalCheckpointActionTitleEl = document.getElementById("goalCheckpointActionTitle");
-const goalCheckpointActionHintEl = document.getElementById("goalCheckpointActionHint");
-const goalCheckpointActionContextEl = document.getElementById("goalCheckpointActionContext");
-const goalCheckpointActionReviewerEl = document.getElementById("goalCheckpointActionReviewer");
-const goalCheckpointActionReviewerRoleEl = document.getElementById("goalCheckpointActionReviewerRole");
-const goalCheckpointActionRequestedByEl = document.getElementById("goalCheckpointActionRequestedBy");
-const goalCheckpointActionActorLabelEl = document.getElementById("goalCheckpointActionActorLabel");
-const goalCheckpointActionActorEl = document.getElementById("goalCheckpointActionActor");
-const goalCheckpointActionSlaAtEl = document.getElementById("goalCheckpointActionSlaAt");
-const goalCheckpointActionSummaryEl = document.getElementById("goalCheckpointActionSummary");
-const goalCheckpointActionNoteLabelEl = document.getElementById("goalCheckpointActionNoteLabel");
-const goalCheckpointActionNoteHelpEl = document.getElementById("goalCheckpointActionNoteHelp");
-const goalCheckpointActionNoteEl = document.getElementById("goalCheckpointActionNote");
-const goalCheckpointActionCloseBtn = document.getElementById("goalCheckpointActionClose");
-const goalCheckpointActionCancelBtn = document.getElementById("goalCheckpointActionCancel");
-const goalCheckpointActionSubmitBtn = document.getElementById("goalCheckpointActionSubmit");
-const taskTokenHistoryEl = document.getElementById("taskTokenHistory");
-const sessionDigestSummaryEl = document.getElementById("sessionDigestSummary");
-const sessionContinuationSummaryEl = document.getElementById("sessionContinuationSummary");
-const sessionDigestRefreshBtn = document.getElementById("sessionDigestRefresh");
-const sessionDigestModalEl = document.getElementById("sessionDigestModal");
-const sessionDigestModalTitleEl = document.getElementById("sessionDigestModalTitle");
-const sessionDigestModalMetaEl = document.getElementById("sessionDigestModalMeta");
-const sessionDigestModalActionsEl = document.getElementById("sessionDigestModalActions");
-const sessionDigestModalContentEl = document.getElementById("sessionDigestModalContent");
-const sessionDigestModalCloseBtn = document.getElementById("sessionDigestModalClose");
-const tokenUsageEl = document.getElementById("tokenUsage");
-const restartOverlayEl = document.getElementById("restartOverlay");
-const restartCountdownEl = document.getElementById("restartCountdown");
-const restartReasonEl = document.getElementById("restartReason");
-const tokenUsageValueEls = {
-  tuSys: document.getElementById("tuSys"),
-  tuCtx: document.getElementById("tuCtx"),
-  tuIn: document.getElementById("tuIn"),
-  tuOut: document.getElementById("tuOut"),
-  tuAll: document.getElementById("tuAll"),
-};
-const taskTokenUsagePanelEl = document.getElementById("taskTokenUsage");
-const taskTokenValueEls = {
-  taskName: document.getElementById("taskName"),
-  taskIn: document.getElementById("taskIn"),
-  taskOut: document.getElementById("taskOut"),
-  taskTotal: document.getElementById("taskTotal"),
-};
-
-const STORE_KEY = "belldandy.webchat.auth";
-const CLIENT_KEY = "belldandy.webchat.clientId";
-const WORKSPACE_ROOTS_KEY = "belldandy.webchat.workspaceRoots";
-const MODEL_ID_KEY = "belldandy.webchat.modelId";
-const AGENT_ID_KEY = "belldandy.webchat.agentId";
-const UUID_KEY = "belldandy.webchat.userUuid"; // UUID存储键
-const WEBCHAT_DEBUG_KEY = "belldandy.webchat.debug";
-const VOICE_SHORTCUT_KEY = "belldandy.webchat.voiceShortcut";
-const VOICE_SHORTCUT_DISABLED_VALUE = "disabled";
-const DEFAULT_VOICE_SHORTCUT = Object.freeze({
-  code: "KeyR",
-  ctrlKey: false,
-  altKey: true,
-  shiftKey: false,
-  metaKey: false,
-});
+const {
+  statusEl,
+  authModeEl,
+  authValueEl,
+  userUuidEl,
+  saveUuidBtn,
+  workspaceRootsEl,
+  connectBtn,
+  sendBtn,
+  promptEl,
+  voiceBtn,
+  voiceDurationEl,
+  messagesEl,
+  modelFilterEl,
+  modelSelectEl,
+  agentSelectEl,
+  themeToggleBtn,
+  sidebarEl,
+  sidebarTitleEl,
+  fileTreeEl,
+  refreshTreeBtn,
+  chatSection,
+  editorSection,
+  canvasContextBarEl,
+  editorPath,
+  editorModeBadge,
+  editorTextarea,
+  composerSection,
+  editorActions,
+  cancelEditBtn,
+  saveEditBtn,
+  openEnvEditorBtn,
+  switchRootBtn,
+  switchFacetBtn,
+  switchCronBtn,
+  switchMemoryBtn,
+  switchGoalsBtn,
+  switchSubtasksBtn,
+  switchCanvasBtn,
+  openChannelSettingsBtn,
+  agentRightPanelEl,
+  memoryViewerSection,
+  memoryViewerTitleEl,
+  memoryViewerStatsEl,
+  memoryViewerListEl,
+  memoryViewerDetailEl,
+  memoryViewerRefreshBtn,
+  memoryTabTasksBtn,
+  memoryTabMemoriesBtn,
+  memoryTabSharedReviewBtn,
+  memoryTabOutboundAuditBtn,
+  memorySearchInputEl,
+  memorySearchBtn,
+  memoryTaskFiltersEl,
+  memoryChunkFiltersEl,
+  memoryTaskStatusFilterEl,
+  memoryTaskSourceFilterEl,
+  memoryTaskGoalFilterBarEl,
+  memoryTaskGoalFilterLabelEl,
+  memoryTaskGoalFilterClearBtn,
+  memorySharedReviewBatchBarEl,
+  memoryChunkTypeFilterEl,
+  memoryChunkVisibilityFilterEl,
+  memoryChunkGovernanceFilterEl,
+  memoryChunkCategoryFilterEl,
+  memorySharedReviewFiltersEl,
+  memorySharedReviewFocusFilterEl,
+  memorySharedReviewTargetFilterEl,
+  memorySharedReviewClaimedByFilterEl,
+  memorySharedReviewClearFiltersBtn,
+  goalsSection,
+  goalsSummaryEl,
+  goalsListEl,
+  goalsDetailEl,
+  goalsRefreshBtn,
+  subtasksSection,
+  subtasksSummaryEl,
+  subtasksListEl,
+  subtasksDetailEl,
+  subtasksShowArchivedEl,
+  subtasksRefreshBtn,
+  goalCreateBtn,
+  goalCreateModal,
+  goalCreateCloseBtn,
+  goalCreateCancelBtn,
+  goalCreateSubmitBtn,
+  goalCreateTitleEl,
+  goalCreateObjectiveEl,
+  goalCreateRootEl,
+  goalCreateAutoResumeEl,
+  goalCheckpointActionModal,
+  goalCheckpointActionTitleEl,
+  goalCheckpointActionHintEl,
+  goalCheckpointActionContextEl,
+  goalCheckpointActionReviewerEl,
+  goalCheckpointActionReviewerRoleEl,
+  goalCheckpointActionRequestedByEl,
+  goalCheckpointActionActorLabelEl,
+  goalCheckpointActionActorEl,
+  goalCheckpointActionSlaAtEl,
+  goalCheckpointActionSummaryEl,
+  goalCheckpointActionNoteLabelEl,
+  goalCheckpointActionNoteHelpEl,
+  goalCheckpointActionNoteEl,
+  goalCheckpointActionCloseBtn,
+  goalCheckpointActionCancelBtn,
+  goalCheckpointActionSubmitBtn,
+  taskTokenHistoryEl,
+  sessionDigestSummaryEl,
+  sessionContinuationSummaryEl,
+  sessionDigestRefreshBtn,
+  sessionDigestModalEl,
+  sessionDigestModalTitleEl,
+  sessionDigestModalMetaEl,
+  sessionDigestModalActionsEl,
+  sessionDigestModalContentEl,
+  sessionDigestModalCloseBtn,
+  tokenUsageEl,
+  restartOverlayEl,
+  restartCountdownEl,
+  restartReasonEl,
+  tokenUsageValueEls,
+  taskTokenUsagePanelEl,
+  taskTokenValueEls,
+  attachmentsPreviewEl,
+  attachBtn,
+  fileInput,
+  saveWorkspaceRootsBtn,
+  settingsModal,
+  openSettingsBtn,
+  closeSettingsBtn,
+  saveSettingsBtn,
+  restartBtn,
+  recommendApiLink,
+  officialHomeLink,
+  workshopLink,
+  cfgApiKey,
+  cfgLocale,
+  cfgBaseUrl,
+  cfgModel,
+  cfgModelPreferredProviders,
+  refreshModelFallbackConfigBtn,
+  modelFallbackConfigMeta,
+  cfgModelFallbackContent,
+  cfgExternalOutboundRequireConfirmation,
+  cfgHeartbeat,
+  cfgHeartbeatEnabled,
+  cfgHeartbeatActiveHours,
+  cfgBrowserRelayEnabled,
+  cfgRelayPort,
+  cfgMcpEnabled,
+  cfgCronEnabled,
+  cfgEmbeddingEnabled,
+  cfgEmbeddingApiKey,
+  cfgEmbeddingBaseUrl,
+  cfgEmbeddingModel,
+  cfgToolsEnabled,
+  cfgAgentToolControlMode,
+  cfgAgentToolControlConfirmPassword,
+  cfgTtsEnabled,
+  cfgTtsProvider,
+  cfgTtsVoice,
+  cfgDashScopeApiKey,
+  cfgVoiceShortcut,
+  cfgVoiceShortcutStatus,
+  cfgVoiceShortcutDefault,
+  cfgVoiceShortcutClear,
+  cfgFacetAnchor,
+  cfgInjectAgents,
+  cfgInjectSoul,
+  cfgInjectMemory,
+  cfgMaxSystemPromptChars,
+  cfgMaxHistory,
+  cfgConversationKindMain,
+  cfgConversationKindSubtask,
+  cfgConversationKindGoal,
+  cfgConversationKindHeartbeat,
+  channelsSettingsSection,
+  openCommunityConfigBtn,
+  cfgCommunityApiEnabled,
+  cfgCommunityApiToken,
+  cfgFeishuAppId,
+  cfgFeishuAppSecret,
+  cfgFeishuAgentId,
+  cfgQqAppId,
+  cfgQqAppSecret,
+  cfgQqAgentId,
+  cfgQqSandbox,
+  cfgDiscordEnabled,
+  cfgDiscordBotToken,
+  refreshChannelSecurityBtn,
+  channelSecurityConfigMeta,
+  cfgChannelSecurityContent,
+  channelReplyChunkingConfigMeta,
+  cfgChannelReplyChunkingContent,
+  channelSecurityPendingList,
+  doctorStatusEl,
+  toolSettingsConfirmModal,
+  toolSettingsConfirmImpactEl,
+  toolSettingsConfirmSummaryEl,
+  toolSettingsConfirmExpiryEl,
+  toolSettingsConfirmApproveBtn,
+  toolSettingsConfirmRejectBtn,
+  externalOutboundConfirmModal,
+  externalOutboundConfirmPreviewEl,
+  externalOutboundConfirmTargetEl,
+  externalOutboundConfirmExpiryEl,
+  externalOutboundConfirmApproveBtn,
+  externalOutboundConfirmRejectBtn,
+  toolSettingsModal,
+  openToolSettingsBtn,
+  closeToolSettingsBtn,
+  saveToolSettingsBtn,
+  toolSettingsBody,
+  toolTabButtons,
+} = APP_DOM_REFS;
 
 let ws = null;
 let isReady = false;
@@ -323,89 +405,7 @@ const agentCatalog = new Map();
 let agentPanelUploadInput = null;
 let agentPanelUploadTargetAgentId = "";
 let agentPanelUploadBusyAgentId = "";
-
-function createDefaultSharedReviewFilters() {
-  return {
-    focus: "",
-    targetAgentId: "",
-    claimedByAgentId: "",
-  };
-}
-
-const memoryViewerState = {
-  tab: "tasks",
-  stats: null,
-  items: [],
-  selectedId: null,
-  selectedTask: null,
-  selectedCandidate: null,
-  goalIdFilter: null,
-  pendingUsageRevokeId: null,
-  usageOverview: {
-    loading: false,
-    methods: [],
-    skills: [],
-  },
-  usageOverviewSeq: 0,
-  memoryQueryView: null,
-  experienceQueryView: null,
-  sharedGovernance: null,
-  sharedReviewSummary: null,
-  sharedReviewFilters: createDefaultSharedReviewFilters(),
-  selectedSharedReviewIds: [],
-  sharedReviewBatchBusy: false,
-  requestToken: 0,
-  activeAgentId: "default",
-  agentViewStates: {},
-};
-const goalsState = {
-  items: [],
-  selectedId: null,
-  loadSeq: 0,
-  trackingSeq: 0,
-  canvasSeq: 0,
-  progressSeq: 0,
-  capabilitySeq: 0,
-  handoffSeq: 0,
-  governanceSeq: 0,
-  trackingCheckpoints: [],
-  governanceCache: {},
-  capabilityCache: {},
-  capabilityPending: {},
-  continuationFocusNode: null,
-  liveUpdateDelayMs: 120,
-  liveUpdateTimers: {},
-  liveUpdatePending: {},
-};
-const subtasksState = {
-  items: [],
-  selectedId: null,
-  selectedItem: null,
-  selectedOutputContent: "",
-  selectedContinuationState: null,
-  selectedPromptSnapshot: null,
-  conversationId: null,
-  includeArchived: false,
-  loadSeq: 0,
-  detailSeq: 0,
-  loading: false,
-  detailLoading: false,
-  pendingActionTaskId: null,
-  pendingActionKind: null,
-  continuationFocusSessionId: null,
-  linkedSessionContext: null,
-  steeringDrafts: {},
-  resumeDrafts: {},
-  liveUpdateDelayMs: 120,
-  liveUpdateTimers: {},
-  liveUpdatePending: {},
-};
 let pendingGoalCheckpointAction = null;
-
-// 附件状态
-const attachmentsPreviewEl = document.getElementById("attachmentsPreview");
-const attachBtn = document.getElementById("attachBtn");
-const fileInput = document.getElementById("fileInput");
 const DEFAULT_ATTACHMENT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 const DEFAULT_ATTACHMENT_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
 const IMAGE_COMPRESS_TRIGGER_BYTES = 800 * 1024;
@@ -2033,7 +2033,6 @@ if (modelSelectEl) {
 }
 
 // 保存按钮点击事件
-const saveWorkspaceRootsBtn = document.getElementById("saveWorkspaceRoots");
 let saveWorkspaceRootsButtonState = "default";
 let saveWorkspaceRootsResetTimer = null;
 
@@ -2461,95 +2460,23 @@ async function sendMessage(options = {}) {
 
 // ... existing handleEvent ...
 
-// --- Settings Logic ---
-const settingsModal = document.getElementById("settingsModal");
-const openSettingsBtn = document.getElementById("openSettings");
-const closeSettingsBtn = document.getElementById("closeSettings");
-const saveSettingsBtn = document.getElementById("saveSettings");
-const restartBtn = document.getElementById("restartBtn");
-
 // 暴露给 WebView 等环境的接口
 window.__BELLDANDY_WEBCHAT_READY__ = true;
 
 // Initialize Recommend API Link
-const recommendApiLink = document.getElementById("recommendApiLink");
 if (recommendApiLink && window.BELLDANDY_WEB_CONFIG?.recommendApiUrl) {
   recommendApiLink.href = window.BELLDANDY_WEB_CONFIG.recommendApiUrl;
 }
 
 // Initialize Official Home Link（官方主页链接）
-const officialHomeLink = document.getElementById("officialHomeLink");
 if (officialHomeLink && window.BELLDANDY_WEB_CONFIG?.officialHomeUrl) {
   officialHomeLink.href = window.BELLDANDY_WEB_CONFIG.officialHomeUrl;
 }
 
 // Initialize Workshop Link（工坊入口链接）
-const workshopLink = document.getElementById("workshopLink");
 if (workshopLink && window.BELLDANDY_WEB_CONFIG?.workshopUrl) {
   workshopLink.href = window.BELLDANDY_WEB_CONFIG.workshopUrl;
 }
-
-const cfgApiKey = document.getElementById("cfgApiKey");
-const cfgLocale = document.getElementById("cfgLocale");
-const cfgBaseUrl = document.getElementById("cfgBaseUrl");
-const cfgModel = document.getElementById("cfgModel");
-const cfgModelPreferredProviders = document.getElementById("cfgModelPreferredProviders");
-const refreshModelFallbackConfigBtn = document.getElementById("refreshModelFallbackConfig");
-const modelFallbackConfigMeta = document.getElementById("modelFallbackConfigMeta");
-const cfgModelFallbackContent = document.getElementById("cfgModelFallbackContent");
-const cfgExternalOutboundRequireConfirmation = document.getElementById("cfgExternalOutboundRequireConfirmation");
-const cfgHeartbeat = document.getElementById("cfgHeartbeat");
-const cfgHeartbeatEnabled = document.getElementById("cfgHeartbeatEnabled");
-const cfgHeartbeatActiveHours = document.getElementById("cfgHeartbeatActiveHours");
-const cfgBrowserRelayEnabled = document.getElementById("cfgBrowserRelayEnabled");
-const cfgRelayPort = document.getElementById("cfgRelayPort");
-const cfgMcpEnabled = document.getElementById("cfgMcpEnabled");
-const cfgCronEnabled = document.getElementById("cfgCronEnabled");
-const cfgEmbeddingEnabled = document.getElementById("cfgEmbeddingEnabled");
-const cfgEmbeddingApiKey = document.getElementById("cfgEmbeddingApiKey");
-const cfgEmbeddingBaseUrl = document.getElementById("cfgEmbeddingBaseUrl");
-const cfgEmbeddingModel = document.getElementById("cfgEmbeddingModel");
-const cfgToolsEnabled = document.getElementById("cfgToolsEnabled");
-const cfgAgentToolControlMode = document.getElementById("cfgAgentToolControlMode");
-const cfgAgentToolControlConfirmPassword = document.getElementById("cfgAgentToolControlConfirmPassword");
-const cfgTtsEnabled = document.getElementById("cfgTtsEnabled");
-const cfgTtsProvider = document.getElementById("cfgTtsProvider");
-const cfgTtsVoice = document.getElementById("cfgTtsVoice");
-const cfgDashScopeApiKey = document.getElementById("cfgDashScopeApiKey");
-const cfgVoiceShortcut = document.getElementById("cfgVoiceShortcut");
-const cfgVoiceShortcutStatus = document.getElementById("cfgVoiceShortcutStatus");
-const cfgVoiceShortcutDefault = document.getElementById("cfgVoiceShortcutDefault");
-const cfgVoiceShortcutClear = document.getElementById("cfgVoiceShortcutClear");
-const cfgFacetAnchor = document.getElementById("cfgFacetAnchor");
-const cfgInjectAgents = document.getElementById("cfgInjectAgents");
-const cfgInjectSoul = document.getElementById("cfgInjectSoul");
-const cfgInjectMemory = document.getElementById("cfgInjectMemory");
-const cfgMaxSystemPromptChars = document.getElementById("cfgMaxSystemPromptChars");
-const cfgMaxHistory = document.getElementById("cfgMaxHistory");
-const cfgConversationKindMain = document.getElementById("cfgConversationKindMain");
-const cfgConversationKindSubtask = document.getElementById("cfgConversationKindSubtask");
-const cfgConversationKindGoal = document.getElementById("cfgConversationKindGoal");
-const cfgConversationKindHeartbeat = document.getElementById("cfgConversationKindHeartbeat");
-const channelsSettingsSection = document.getElementById("channelsSettingsSection");
-const openCommunityConfigBtn = document.getElementById("openCommunityConfig");
-const cfgCommunityApiEnabled = document.getElementById("cfgCommunityApiEnabled");
-const cfgCommunityApiToken = document.getElementById("cfgCommunityApiToken");
-const cfgFeishuAppId = document.getElementById("cfgFeishuAppId");
-const cfgFeishuAppSecret = document.getElementById("cfgFeishuAppSecret");
-const cfgFeishuAgentId = document.getElementById("cfgFeishuAgentId");
-const cfgQqAppId = document.getElementById("cfgQqAppId");
-const cfgQqAppSecret = document.getElementById("cfgQqAppSecret");
-const cfgQqAgentId = document.getElementById("cfgQqAgentId");
-const cfgQqSandbox = document.getElementById("cfgQqSandbox");
-const cfgDiscordEnabled = document.getElementById("cfgDiscordEnabled");
-const cfgDiscordBotToken = document.getElementById("cfgDiscordBotToken");
-const refreshChannelSecurityBtn = document.getElementById("refreshChannelSecurity");
-const channelSecurityConfigMeta = document.getElementById("channelSecurityConfigMeta");
-const cfgChannelSecurityContent = document.getElementById("cfgChannelSecurityContent");
-const channelReplyChunkingConfigMeta = document.getElementById("channelReplyChunkingConfigMeta");
-const cfgChannelReplyChunkingContent = document.getElementById("cfgChannelReplyChunkingContent");
-const channelSecurityPendingList = document.getElementById("channelSecurityPendingList");
-const doctorStatusEl = document.getElementById("doctorStatus");
 const REDACTED_PLACEHOLDER = "[REDACTED]";
 
 voiceFeature.bindSettingsUI({
@@ -6100,26 +6027,6 @@ function stripThinkBlocks(text) {
 function sanitizeAssistantHtml(rawHtml) {
   return chatUiFeature?.sanitizeAssistantHtml(rawHtml) || "";
 }
-
-// ── Tool Settings (调用设置) ──
-const toolSettingsConfirmModal = document.getElementById("toolSettingsConfirmModal");
-const toolSettingsConfirmImpactEl = document.getElementById("toolSettingsConfirmImpact");
-const toolSettingsConfirmSummaryEl = document.getElementById("toolSettingsConfirmSummary");
-const toolSettingsConfirmExpiryEl = document.getElementById("toolSettingsConfirmExpiry");
-const toolSettingsConfirmApproveBtn = document.getElementById("toolSettingsConfirmApprove");
-const toolSettingsConfirmRejectBtn = document.getElementById("toolSettingsConfirmReject");
-const externalOutboundConfirmModal = document.getElementById("externalOutboundConfirmModal");
-const externalOutboundConfirmPreviewEl = document.getElementById("externalOutboundConfirmPreview");
-const externalOutboundConfirmTargetEl = document.getElementById("externalOutboundConfirmTarget");
-const externalOutboundConfirmExpiryEl = document.getElementById("externalOutboundConfirmExpiry");
-const externalOutboundConfirmApproveBtn = document.getElementById("externalOutboundConfirmApprove");
-const externalOutboundConfirmRejectBtn = document.getElementById("externalOutboundConfirmReject");
-const toolSettingsModal = document.getElementById("toolSettingsModal");
-const openToolSettingsBtn = document.getElementById("openToolSettings");
-const closeToolSettingsBtn = document.getElementById("closeToolSettings");
-const saveToolSettingsBtn = document.getElementById("saveToolSettings");
-const toolSettingsBody = document.getElementById("toolSettingsBody");
-const toolTabButtons = [...document.querySelectorAll(".tool-tab")];
 
 const toolSettingsController = createToolSettingsController({
   refs: {
