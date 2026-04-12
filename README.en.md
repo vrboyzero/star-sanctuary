@@ -133,6 +133,10 @@ Fast rule of thumb:
 - Automatic context compaction
 - Multi-Agent Profiles, Agent Registry, and per-channel / per-rule routing
 
+For `agents.json` field semantics, implicit `default` behavior, tool permission boundaries, and workspace inheritance rules, see:
+
+- [docs/agents.json配置说明.md](./docs/agents.json%E9%85%8D%E7%BD%AE%E8%AF%B4%E6%98%8E.md)
+
 ### 3. Memory and Long-term Workspace
 
 - Hybrid retrieval with SQLite + FTS5 + sqlite-vec
@@ -667,6 +671,10 @@ See:
 
 - [docs/channels-routing.md](./docs/channels-routing.md)
 
+If you also need channel-level safety defaults such as DM allowlists, mention gates, and the approval flow, see:
+
+- [docs/channel-security配置说明.md](./docs/channel-security%E9%85%8D%E7%BD%AE%E8%AF%B4%E6%98%8E.md)
+
 ### Community HTTP API
 
 When `BELLDANDY_COMMUNITY_API_ENABLED=true` is enabled, you can use:
@@ -1016,6 +1024,8 @@ Check:
 - [DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)
 - [docs/webhook.md](./docs/webhook.md)
 - [docs/channels-routing.md](./docs/channels-routing.md)
+- [docs/channel-security配置说明.md](./docs/channel-security%E9%85%8D%E7%BD%AE%E8%AF%B4%E6%98%8E.md)
+- [docs/agents.json配置说明.md](./docs/agents.json%E9%85%8D%E7%BD%AE%E8%AF%B4%E6%98%8E.md)
 
 ---
 
