@@ -712,6 +712,14 @@
           <input id="cfgMaxHistory" class="input" placeholder="10" />
           <div class="form-help" data-i18n="settings.maxHistoryHelp">传给模型的最近对话轮数。数值越小，越节省上下文长度。</div>
         </div>
+        <hr class="theme-divider">
+        <div class="settings-subsection-header">
+          <div>
+            <div class="settings-subsection-title" data-i18n="settings.pairingPendingTitle">待批准配对</div>
+            <div class="form-help" data-i18n="settings.pairingPendingHelp">当当前 WebChat 会话尚未完成 Pairing 时，这里会显示待批准的配对码。你可以直接在设置页内批准，不需要回终端。</div>
+          </div>
+        </div>
+        <div id="pairingPendingList" class="doctor-grid"></div>
         <div class="form-group">
           <label class="form-label" data-i18n="settings.conversationAccessTitle">会话历史访问范围</label>
           <div class="form-help" data-i18n="settings.conversationAccessHelp">全局限制 Agent 通过 conversation_list / conversation_read 可读取的会话类别。未配置时默认全开；保存后需重启 Gateway 生效。</div>

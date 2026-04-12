@@ -11,6 +11,7 @@ export function createSettingsController({
   syncAttachmentLimitsFromConfig,
   onToggle,
   getConnectionAuthMode,
+  onApprovePairing,
   onOpenCommunityConfig,
   onModelCatalogChanged,
   onOpenContinuationAction,
@@ -56,6 +57,7 @@ export function createSettingsController({
     cfgInjectMemory,
     cfgMaxSystemPromptChars,
     cfgMaxHistory,
+    pairingPendingList,
     cfgConversationKindMain,
     cfgConversationKindSubtask,
     cfgConversationKindGoal,
@@ -157,17 +159,31 @@ export function createSettingsController({
       void handleChannelSecurityPendingAction(action, requestId, target);
     });
   }
+  if (pairingPendingList) {
+    pairingPendingList.addEventListener("click", (event) => {
+      const target = event.target instanceof HTMLElement ? event.target.closest("button[data-pairing-action]") : null;
+      if (!target) return;
+      const action = target.getAttribute("data-pairing-action");
+      const code = target.getAttribute("data-pairing-code");
+      if (action !== "approve" || !code) return;
+      void handlePairingPendingAction(code, target);
+    });
+  }
   async function toggle(show, options = {}) {
     if (!settingsModal) return;
     if (show) {
       settingsModal.classList.remove("hidden");
       onToggle?.(true);
-      await loadConfig();
-      await loadModelFallbackConfig();
-      await loadChannelSecuritySurface();
-      await runDoctor();
+      if (!options.skipLoad) {
+        await loadConfig();
+        await loadModelFallbackConfig();
+        await loadChannelSecuritySurface();
+        await runDoctor();
+      }
       if (options.section === "channels" && channelsSettingsSection) {
         channelsSettingsSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      } else if (options.section === "pairing-pending" && pairingPendingList) {
+        pairingPendingList.scrollIntoView({ behavior: "smooth", block: "start" });
       } else if (options.section === "channel-security-pending" && channelSecurityPendingList) {
         channelSecurityPendingList.scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -292,6 +308,27 @@ export function createSettingsController({
         <div class="goal-detail-actions goal-checkpoint-actions">
           <button type="button" class="button goal-inline-action" data-channel-security-action="approve" data-channel-security-request-id="${escapeHtml(item.id)}">${escapeHtml(t("settings.channelSecurityApprove", {}, "批准"))}</button>
           <button type="button" class="button goal-inline-action-secondary" data-channel-security-action="reject" data-channel-security-request-id="${escapeHtml(item.id)}">${escapeHtml(t("settings.channelSecurityReject", {}, "拒绝"))}</button>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  function renderPairingPending(pending = []) {
+    if (!pairingPendingList) return;
+    if (!Array.isArray(pending) || pending.length === 0) {
+      pairingPendingList.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(t("settings.pairingPendingEmpty", {}, "当前没有待批准的配对码。"))}</div>`;
+      return;
+    }
+    pairingPendingList.innerHTML = pending.map((item) => `
+      <div class="memory-detail-card">
+        <span class="memory-detail-label">Pairing Code: ${escapeHtml(item.code || "-")}</span>
+        <div class="memory-detail-text">${escapeHtml(item.message || t("settings.pairingPendingDefaultMessage", {}, "当前 WebChat 会话需要完成配对批准。"))}</div>
+        <div class="memory-list-item-meta">
+          <span>${escapeHtml(item.clientId || "-")}</span>
+          <span>${escapeHtml(formatDateTime(item.updatedAt))}</span>
+        </div>
+        <div class="goal-detail-actions goal-checkpoint-actions">
+          <button type="button" class="button goal-inline-action" data-pairing-action="approve" data-pairing-code="${escapeHtml(item.code || "")}">${escapeHtml(t("settings.pairingApprove", {}, "批准"))}</button>
         </div>
       </div>
     `).join("");
@@ -463,6 +500,20 @@ export function createSettingsController({
     }
     await loadChannelSecuritySurface();
     await runDoctor();
+  }
+
+  async function handlePairingPendingAction(code, buttonEl) {
+    if (!isConnected()) return;
+    if (typeof onApprovePairing !== "function") return;
+    const originalText = buttonEl.textContent;
+    buttonEl.disabled = true;
+    buttonEl.textContent = t("settings.pairingProcessing", {}, "处理中...");
+    const res = await onApprovePairing(code);
+    if (!res?.ok) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalText;
+      alert(t("settings.pairingApproveFailed", { message: res?.message || "Unknown error" }, "配对批准失败：{message}"));
+    }
   }
 
   function assignSecretUpdate(updates, key, inputEl) {
@@ -694,6 +745,10 @@ export function createSettingsController({
 
   return {
     toggle,
+    renderPairingPending,
+    openPairingPending(options = {}) {
+      return toggle(true, { section: "pairing-pending", skipLoad: options.skipLoad === true });
+    },
     openChannels() {
       return toggle(true, { section: "channels" });
     },

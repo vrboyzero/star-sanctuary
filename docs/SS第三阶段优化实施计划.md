@@ -53,7 +53,7 @@
    - 来源：`OC与SS`
    - 原因：会稀释 SS 当前长期执行与治理主线
 
-5. 安装与配置向导 2.0 作为当前阶段最高优先级
+5. `D0 / D1` 产品化安装路径不作为当前阶段最高优先级
    - 来源：`OC与SS`
    - 原因：当前仍处于持续优化和结构调整期，过早产品化大概率返工
 
@@ -105,15 +105,19 @@
 
 以下项不是不能做，而是顺序必须后移：
 
-1. 安装与配置向导 2.0
-   - 来源：`OC与SS`
-   - 原因：依赖 provider、channel、安全默认值、模型选择器、执行链这些底层能力先稳定
+1. `D0` 一行命令安装器 / bootstrap installer
+   - 来源：本轮新增产品化收口项
+   - 原因：依赖发布产物命名、跨平台安装协议、`bdd` shim 与安装后交接链路先稳定
 
-2. 独立 TUI 控制面
+2. `D1` 安装与配置向导 2.0
+   - 来源：`OC与SS`
+   - 原因：依赖 `D0`、provider、channel、安全默认值、模型选择器、执行链这些底层能力先稳定
+
+3. 独立 TUI 控制面
    - 来源：`OC与SS`
    - 原因：收益低于当前复杂任务主线，且会分散 UI/交互预算
 
-3. 统一媒体能力注册层
+4. 统一媒体能力注册层
    - 来源：`OC与SS`
    - 原因：有价值，但优先级仍低于复杂任务执行闭环与 provider/tooling 主线
 
@@ -134,8 +138,9 @@
 3. 子任务 steering / resume / continuation
 4. 渠道安全、分段、webhook、cron 这类外围稳定层
 5. provider 元数据与 model picker
-6. 安装与配置向导 2.0
-7. TUI
+6. `D0` 一行命令安装器 / bootstrap installer
+7. `D1` 安装与配置向导 2.0
+8. `D2` 独立 TUI 控制面
 
 ---
 
@@ -795,6 +800,30 @@
 
 这一阶段必须在 A/B/C 的核心能力形态稳定后再做。
 
+#### D0. 一行命令安装器 / bootstrap installer
+
+- 来源文档：本轮新增产品化收口项
+- 当前策略：`后置实施`
+- 原因：
+  - 目前仍在优化调整期
+  - 发布产物命名、跨平台安装协议、`bdd` 命令 shim 与安装后交接链路尚未完全稳定
+  - 现在固化安装协议，大概率会放大后续返工成本
+- 进入实施的前置条件：
+  - GitHub Releases tag / metadata 解析链已稳定
+  - `Windows / macOS / Linux` 至少各有一条稳定的源码包 bootstrap 路径
+  - `bdd` CLI 入口与安装后 `setup/start/doctor` 交接语义已稳定
+- 默认安装源：
+  - GitHub Releases 的源码包（`zipball / tarball`）
+  - GitHub Releases metadata API（用于解析目标 tag 与源码包地址）
+- 边界说明：
+  - `artifacts/` 仍可保留为内部构建中间产物与小白特供 exe/portable 包来源
+  - 但 `artifacts/` 不作为默认安装协议，也不作为 Setup 2.0 的主入口定义
+- 收口目标：
+  - 用户只需一行命令即可完成“下载源码包 -> 检查 `Node / corepack` -> `pnpm install / build` -> 进入 `bdd setup`”
+  - 覆盖 `Windows / macOS / Linux`
+  - 安装目录保留 `start.bat / start.sh` 作为重复启动入口；`Windows` 默认生成桌面快捷方式
+  - 默认路径允许依赖用户机器已有 `Node.js`，但不依赖用户预先装好全局 `pnpm`
+
 #### D1. 安装与配置向导 2.0
 
 - 来源文档：`OC与SS`
@@ -804,12 +833,15 @@
   - provider / channel / security / execution 流程尚未完全稳定
   - 现在做成高完成度向导大概率返工
 - 进入实施的前置条件：
+  - `D0` 已让默认产品路径具备“用户先获得可运行 `bdd`”的能力
   - provider metadata 已稳定
   - model picker 已稳定
   - 渠道安全默认值已明确
   - 至少一轮复杂任务执行链收口完成
 - 收口目标：
-  - 用统一向导把已成熟流程产品化，而不是把未稳定流程提前固化
+  - 在 `bdd` 已可运行后，用统一向导把已成熟流程产品化，而不是把未稳定流程提前固化
+  - `D1` 只负责安装后的配置与首次引导，不承担默认下载职责
+  - 配对批准默认在 WebChat 内闭环完成，不要求用户回终端执行批准命令
 
 #### D2. 独立 TUI 控制面
 
@@ -1761,12 +1793,84 @@
 
 ### 6.4 P3 任务
 
-#### P3-1 安装与配置向导 2.0
+#### P3-1 `D0` 一行命令安装器 / bootstrap installer
 
-- 来源文档：`OC与SS`
+- 来源文档：
+  - 本轮新增产品化收口项
+- 当前状态：
+  - `已完成第一版源码包 installer 主链与安装态 envDir 固定；Unix 侧仍待真实环境验证`
 - 当前策略：
   - 后置产品化收口项
 - 前置依赖：
+  - GitHub Releases tag / metadata 规则稳定
+  - `bdd` CLI 安装后交接链稳定
+- 直接任务：
+  - GitHub Releases 源码包与 metadata API
+  - `install.ps1 / install.sh`
+  - `Windows / macOS / Linux` 平台识别、用户目录安装约定与 `Node / corepack` 检查
+  - GitHub release 源码包下载、解压、`pnpm install / build` bootstrap
+  - `bdd` shim 生成、`start.bat / start.sh` 保留与安装后直接进入 `bdd setup`
+  - `Windows` 桌面快捷方式默认创建
+- 当前进展：
+  - 已新增仓库级 `install.ps1 / install.sh`
+  - 默认协议已切换为“GitHub Releases 源码包 + `Node / corepack / pnpm / build` bootstrap + 安装后进入 `bdd setup`”
+  - `install.ps1` 已完成一轮真实 Windows 手测：
+    - 在独立安装目录中成功完成源码包下载、依赖安装、构建与 `current/` 落盘
+    - 已成功落盘 `bdd.cmd / start.bat / install-info.json`
+    - `bdd.cmd --help` 已通过
+    - `start.bat` 已在临时端口成功拉起 Gateway，并通过 `/health` 返回 `200`
+  - `install.sh` 已完成与 Windows 版一致的安装顺序、回滚语义和 wrapper 行为静态对称性修补
+  - 安装器生成的 `bdd.cmd / bdd / start.bat / start.sh / start.ps1` 现已直接执行安装态 `current/packages/belldandy-core/dist/bin/bdd.js`，不再回退到仓库根 `start.*` 或 `corepack pnpm ... bdd` 开发链
+  - 已完成一轮真实 `WSL Ubuntu (Linux)` 手测：
+    - `install.sh --version v0.2.4 --no-setup` 已跑通
+    - 完整 `install.sh --version v0.2.4` 已成功把 `.env.local` 写入安装根
+    - 安装态 `start.sh` 已成功拉起 Gateway，并通过 `/health` 返回 `200`
+    - `bdd doctor --json` 已确认 `Environment directory` 与 `.env.local` 都指向安装根
+    - 已额外完成一轮真实 `PTY` 驱动的安装态 `bdd setup` 冒烟，确认配置写入安装根后可自然 `exit 0`
+  - 已完成一轮基于真实模型凭据的隔离端到端手测：
+    - 使用隔离 `envDir / stateDir` 写入真实模型配置
+    - `bdd doctor --json` 已确认 `OpenAI Base URL / API Key / Model` 通过
+    - gateway 已成功启动并通过 `/health`
+    - WebChat 已成功以 `MiniMax-M2.7-highspeed` 作为默认模型完成真实发送
+    - 通过消息区“复制全文”已确认 assistant 实际回复内容为 `E2E smoke ok`
+  - 已完成一轮 WebChat assistant 正文自动化可观测性修补与真实 smoke：
+    - assistant 消息 DOM 已补稳定 `.msg-body` 节点，并同步 `role="article"`、`aria-label` 与 `data-message-text`
+    - Playwright 自动化快照已可直接读到 assistant 正文，不再依赖“复制全文”旁路确认
+    - 真实 smoke 中已确认最新 assistant 回复会直接呈现为 `article "Belldandy(MVP) 收到：只回复：E2E smoke ok"`
+  - 安装器生成的 `bdd.cmd / bdd / start.bat / start.sh / start.ps1` 已显式注入安装态 `runtimeDir/envDir`
+  - 安装布局已固定为“安装根就是 `envDir`，`current/` 只是 runtime workspace”，安装后的 `.env / .env.local` 默认落在安装根
+  - `install-info.json` 已补 `envDir` 元数据，用于后续 runtime 识别安装态目录结构
+  - distribution runtime 已补“`install-info.json` + `current/`”安装态识别，即使当前工作目录本身存在 `.env.local`，安装态 `bdd setup` 也会优先写回安装根，而不是回退到源码仓库 `legacy_root`
+  - `start.bat / start.sh` 已完成跨平台启动上下文对齐：既保留源码态可用性，也能在安装态下自动回推安装根 `envDir`
+- 当前边界：
+  - `Linux / WSL` 侧当前剩余边界主要是“非 TTY 自动化驱动 `bdd setup`”的交互兼容性；真实 `PTY`/手工终端主链已确认可自然退出
+  - `macOS` 当前暂无验证环境，仍标记为“未验证”，但不再作为当前阶段阻塞项
+  - assistant 正文的基础自动化可观测性已修补，但长 Markdown、代码块、表格、图片/视频缩略图等富文本回复仍只做了基础回归，后续需继续观察快照稳定性
+  - 当前 installer 仍依赖用户机器已安装 `Node.js v22.12+` 与自带 `corepack` 的 Node 发行版
+- 当前可用安装命令：
+  - Windows PowerShell 默认安装：
+    - `irm https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/install.ps1 | iex`
+  - Windows PowerShell 指定版本并跳过 setup：
+    - `& ([scriptblock]::Create((irm https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/install.ps1))) -Version v0.2.4 -NoSetup`
+  - Linux / macOS 默认安装：
+    - `curl -fsSL https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/install.sh | bash`
+  - Linux / macOS 指定版本并跳过 setup：
+    - `curl -fsSL https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/install.sh | bash -s -- --version v0.2.4 --no-setup`
+- 完成标志：
+  - 默认用户无需预先手工下载源码包或自行判断构建步骤
+  - 默认路径基于 GitHub Releases 源码包 bootstrap，而不是官网大包下载链
+  - `artifacts/` 保持内部构建中间产物与特供包定位，不成为默认安装协议
+  - 安装完成后仍有稳定的重复启动入口，不要求用户再次理解安装目录结构
+  - 安装态运行、再次启动与 `bdd setup` 默认都稳定落到安装根 `envDir`
+
+#### P3-2 `D1` 安装与配置向导 2.0
+
+- 来源文档：`OC与SS`
+- 当前状态：`已完成第一版 CLI setup 主流程、Advanced 模块化入口第一版与第一版 WebChat 配对闭环，整体仍处于后置产品化收口前的局部落地阶段`
+- 当前策略：
+  - 后置产品化收口项
+- 前置依赖：
+  - `P3-1`
   - `P2-1`
   - `P2-2`
   - `P1-1`
@@ -1776,10 +1880,85 @@
   - 风险确认
   - 远程 / 本地探测
   - 按模块分步配置
+  - WebChat 内配对批准入口
+- 当前进展：
+  - `bdd setup` 已完成第一版 2.0 主流程收口：
+    - 已支持 `QuickStart / Advanced`
+    - 已支持 `local / lan / remote`
+    - 已支持已有配置 `reuse / modify / reset`
+    - 已支持非交互 flag 到答案模型的统一转换
+    - 已补 summary 输出与非本地访问 `auth` 安全校验
+    - 已修正 `.env.local` 托管键覆盖式写入，避免旧的 `OPENAI_* / AUTH_*` 键残留
+  - 已补 WebChat 内 pairing 批准最小闭环，默认用户流不再要求切回终端执行 `bdd pairing approve <code>`
+  - 初次模型配置继续复用当前设置弹窗，不新增独立配置入口
+  - WebChat 打开时，若默认模型尚未设置完成，当前会自动弹出设置弹窗
+  - WebChat 打开时，若当前会话尚未完成配对，当前会自动弹出设置弹窗并聚焦 pairing 批准区域
+  - pairing pending 已按当前 `clientId` 收口为“当前会话只保留最新一条待批准配对码”，避免旧码残留
+  - 已完成一轮真实手测，确认“打开 WebChat -> 自动弹设置 -> 批准 pairing -> pending 清空”的主链闭环成立
+  - 已完成一轮真实 CLI 冒烟，确认安装态 `runtimeDir` 下的 `bdd setup` 会写回安装根 `envDir`，不会误命中源码仓库配置
+  - 已额外完成一轮真实 `WSL PTY` 驱动冒烟，确认安装态 `bdd setup` 在真实终端输入下会自然退出；当前剩余问题只收敛在非 TTY 自动化交互边界
+  - 已完成一轮带真实模型凭据的隔离端到端手测，确认“保存配置 -> 启动 gateway -> 打开 WebChat -> 真实发消息 -> 收到有效回复”主链闭环成立
+  - 已完成一轮 WebChat assistant 正文自动化可观测性修补与真实 smoke：
+    - assistant 消息 DOM 已补稳定 `.msg-body` 节点，并同步 `role="article"`、`aria-label` 与 `data-message-text`
+    - Playwright 自动化快照已可直接读到 assistant 正文，不再依赖“复制全文”旁路确认
+    - 真实 smoke 中已确认最新 assistant 回复会直接呈现为 `article "Belldandy(MVP) 收到：只回复：E2E smoke ok"`
+  - `Advanced` 第一版模块化入口已落地：
+    - 已支持 `community / models / webhook / cron`
+    - 已新增 `bdd configure community|models|webhook|cron` 作为后续统一补配置入口
+    - `community` 已支持最小 endpoint / agent / Community API token 复用策略
+    - `models` 已支持最小 `models.json fallback` 配置写入
+    - `webhook` 已支持最小单条 webhook rule 的 add/update/clear
+    - `cron` 已支持 `.env.local` 内 `BELLDANDY_CRON_ENABLED / BELLDANDY_HEARTBEAT_*` 开关
+    - `community / models / webhook / cron` 进入前均已补当前配置摘要
+    - `community` 已支持显式选择已有 agent 进行更新，也已支持删除单个 agent
+    - `models` 已支持显式选择已有 fallback 进行编辑，也已支持删除单个 fallback
+    - `webhook` 已支持显式选择已有 rule 进行编辑，也已支持删除单个 rule
+    - `cron` 在关闭 heartbeat 时会自动清理旧的 `BELLDANDY_HEARTBEAT_INTERVAL`
+    - 已补第一轮输入校验：`community endpoint / fallback base URL` 仅允许合法 `http(s)` URL，`webhook id` 收敛为安全 path segment，`heartbeat interval` 与 gateway 实际解析规则保持一致
+  - `bdd configure <module>` 已补显式 completion banner，自动化可稳定等待 `Community / Models / Webhook / Cron configuration saved`
+  - `bdd configure <module>` 现已区分：
+    - 实际有变更时输出 `configuration saved`
+    - 用户一路 `Skip` 时输出 `configuration unchanged`
+  - 已完成一轮隔离 `envDir / stateDir` 的真实交互 smoke：
+    - `bdd setup --flow advanced --scenario local`
+    - `bdd configure community`
+    - `bdd configure webhook`
+    - `bdd configure cron`
+    - 已确认只写入隔离目录，不误写回仓库根
+  - 已完成一轮 `configuration unchanged` 的真实交互 smoke，确认 `bdd configure community|models|webhook|cron` 在 skip-only 路径下都会稳定输出 `configuration unchanged`，且不会误落盘
+  - 已补 `Advanced` 校验与 `configure` completion 的定向自动化测试，并已通过
+  - 已完成一轮 `Advanced UX` 隔离真实交互 smoke：
+    - `bdd configure community` 已命中“选择已有 agent 更新”与“删除单个 agent”
+    - `bdd configure models` 已命中“删除单个 fallback”
+    - `bdd configure webhook` 已命中“删除单个 rule”
+    - 以上分支均已检查隔离 `stateDir` 落盘结果，与交互选择一致
+- 当前边界：
+  - 这不代表 `D1` 已整体完成；当前只完成了第一版基础主流程、第一版 `Advanced` 模块入口与 WebChat 侧第一版闭环
+  - `Advanced` 下的 `community / models.json fallback / webhook / cron` 已完成第一轮“摘要 + 已有项选择 + 单条删除”体验收口，但仍不是完整编辑器、批量操作面或完整诊断面
+  - `D0` 已完成第一版 installer 主链与安装态 envDir 固定，但跨平台真实验证与“安装后直接进入 setup”完整链路仍未完全收口
+  - 已完成一轮真实 `WSL Ubuntu (Linux)` 安装链验证与一轮 `WSL PTY` 交互复核；当前剩余 Unix 侧验证重点只剩非 TTY 自动化兼容边界，`macOS` 维持未验证标记但不阻塞
+  - 已完成一轮带真实凭据的“保存配置 -> 启动 -> WebChat -> 正常发消息”端到端手测，且已额外完成 assistant 正文自动化可观测性修补；当前前端剩余观察点主要转为富文本消息快照稳定性，而不是基础文本消息是否可见
+- 已确认决策：
+  - 默认下载源确定为 GitHub Releases 的源码包与 metadata API，而不是 GitHub 上的 `portable / single-exe` 大包
+  - 默认 installer 本身就是“release 源码包 bootstrap + 本机构建”路径；不再单独定义 `--from-source`
+  - 默认安装目录统一收敛到用户目录
+  - 安装完成后默认立即进入 `bdd setup`
+  - `start.bat / start.sh` 作为所有正式安装形态的标准重复启动入口；`Windows` 桌面快捷方式默认创建，并指向同一 `start.bat`
+  - WebChat 内配对批准入口默认两者都保留：设置页作为稳定主入口，配对弹窗负责即时提醒与就地批准
+  - `QuickStart` 不只支持本地单机；它应覆盖本地、局域网、远程/反向代理后的基础场景，但仍只问最少问题
+  - `community` 与 `models.json fallback` 都不进入 `QuickStart`：前者放入 `Advanced` 的统一入口，后者放入 `Advanced` 的最小子流程；更完整模型面后置
+  - `webhook / cron` 第一阶段只保留基础开关；后续新增 `bdd configure <module>` 作为统一补配置入口
 - 完成标志：
   - 向导收口的是“已稳定流程”，而不是“仍在变化的流程”
+  - `D1` 仅负责安装后的配置与首次引导，不与默认下载协议耦合
+  - 默认用户流中的配对批准可在 WebChat 内完成，不要求额外 CLI 命令
+- 后续计划：
+  - 当前主优先级仍是继续收口 `D1 Advanced` 第一版模块体验与反馈文案，重点补 `community / models / webhook / cron` 的更完整编辑、批量整理与诊断反馈
+  - 前端侧下一条不是继续改基础文本消息链路，而是补 assistant 富文本消息的自动化稳定性覆盖，重点包括长 Markdown、代码块、表格与图片/视频缩略图
+  - `Linux` 侧“非 TTY 自动化驱动 `bdd setup`”暂时降为观察项；如后续确有脚本化首装需求，再单独补自动化兼容层
+  - `macOS` 保持未验证标记，待后续有真实环境时再补，不作为当前阶段推进前置条件
 
-#### P3-2 独立 TUI 控制面
+#### P3-3 `D2` 独立 TUI 控制面
 
 - 来源文档：`OC与SS`
 - 当前策略：
@@ -1811,8 +1990,9 @@
 10. `C2` 认证感知 model picker
 11. `C3` 会话作用域与 current conversation binding
 12. `A5` continuation runtime 后置增强
-13. `D1` 安装与配置向导 2.0
-14. `D2` 独立 TUI 控制面
+13. `D0` 一行命令安装器 / bootstrap installer
+14. `D1` 安装与配置向导 2.0
+15. `D2` 独立 TUI 控制面
 
 ---
 
@@ -1826,7 +2006,7 @@
 4. long-goal / resident / subtask / background run 已具备统一的恢复与交接语义
 5. 多渠道输入输出侧已经补齐安全默认值、长消息分段、webhook guard、cron 约束
 6. provider 与 model 选择不再只靠环境变量和人工记忆，已具备统一元数据与选择入口
-7. 安装与配置向导 2.0 只在上述核心流程稳定后再进入实施，而不是提前固化不稳定流程
+7. `D0 / D1` 只在上述核心流程稳定后再进入实施，而不是提前固化不稳定流程
 
 如果只用一句话概括第三阶段的总收口目标，就是：
 
@@ -2335,7 +2515,7 @@
    - 保持后置，不阻塞本轮。
    - 仅在真实恢复需求继续升高时再推进。
 
-7. `D1 / D2`
+7. `D0 / D1 / D2`
    - 继续保持后置。
    - 原因：这些属于产品化收口项，不应早于模型接口、session scope、学习闭环与部署弹性。
 
@@ -2371,8 +2551,9 @@
 `第六优先级：后置增强与产品化收口`
 
 11. `A5 continuation runtime 后置增强`
-12. `D1 安装与配置向导 2.0`
-13. `D2 独立 TUI 控制面`
+12. `D0 一行命令安装器 / bootstrap installer`
+13. `D1 安装与配置向导 2.0`
+14. `D2 独立 TUI 控制面`
 
 ### 10.6 当前建议的执行节奏
 
@@ -2386,7 +2567,7 @@
 8. `H3` 后续默认只保留真实使用观察与最小修补，不再主动扩新面板、自动 patch draft 或自动发布。
 9. `H4` 已完成 `H4-1` 第一版最小闭环：failover 结构化摘要、runtime resilience tracker、`bdd doctor / system.doctor / web doctor` 与 launch explainability 已接通；后续默认先观察真实 fallback / degrade 信号质量，再决定是否进入 `H4-2`。
 10. `P2-5` 已完成 `v1` 当前阶段收口：统一媒体 capability registry、附件理解 runner/cache 与 `message.send` 主链接线已落地；后续默认只观察真实附件场景下的 capability 误判与降级提示质量。
-11. 最后再视真实场景决定是否继续推进 `A5 / D1 / D2`。
+11. `D1` 已完成 WebChat 侧第一版最小闭环，但整体仍是后置产品化收口项；后续默认先实现 `D0`，再决定是否推进完整 `D1 / D2` 实施。
 
 ### 10.7 一句话执行原则
 
@@ -2425,5 +2606,6 @@
 | 进行中 | `H4` 定向 runtime resilience 增强 | `H4-1` 已完成第一版最小闭环：主链 failover 已补结构化 `summary` 与 `FailoverExhaustedError`，并已新增持久化 `runtime-resilience` tracker，打通 `bdd doctor / system.doctor / web doctor / launch explainability`；当前先按“最小可观测闭环已成立、继续观察真实 degrade 信号”口径推进，未进入 provider runtime 重构 |
 | 已完成（当前阶段收口） | `P2-5` 统一媒体能力注册层 / 附件理解管线 | `P2-5-v1` 已完成最小闭环：已新增统一媒体 capability registry、附件理解 runner/cache，并完成 `message.send` 与 `models.list` 接线；已补 runner / server 两组验证，当前阶段按“能力声明与附件理解主链已成立”收口，后续默认只观察真实附件场景下的 capability 误判与降级提示质量 |
 | 已完成（当前阶段收口） | `A5` continuation runtime 后置增强 | 已按“`A5-1 checkpoint replay` + `A5-2 background recovery runtime` + 受限版 `A5-3 safe-point takeover / handoff`”完成当前阶段收口；后续默认只观察真实 replay / recovery / takeover 信号并做最小修补，`A5-4 / A5-5 / A5-6` 继续后置 |
-| 未开始 | `D1` 安装与配置向导 2.0 | 后置产品化收口项，本文尚未记录明确开工进展 |
+| 进行中 | `D0` 一行命令安装器 / bootstrap installer | 已完成第一版源码包 installer 主链、Windows 闭环与安装态 `envDir` 固定：`install.ps1` 可完成源码包下载、依赖安装、构建、`bdd.cmd / start.bat / install-info.json` 落盘，并已通过 `bdd.cmd --help`、`start.bat -> /health` 与“安装态 `runtimeDir` 下 `bdd setup` 回写安装根 `envDir`”冒烟；`install.sh` 已完成静态对称性修补，但仍缺真实 Unix 环境验证 |
+| 进行中 | `D1` 安装与配置向导 2.0 | 已完成第一版 CLI setup 主流程、`Advanced` 模块化入口与第一版 WebChat 闭环：`bdd setup` 已支持 `QuickStart / Advanced`、`local / lan / remote`、已有配置 `reuse / modify / reset`，`bdd configure <module>` 已支持 `community / models / webhook / cron` 并补显式 completion banner；WebChat 内可直接批准 pairing，且在“未配对 / 默认模型未完成”时会自动弹出设置弹窗；但完整安装后端到端链路与更完整模块编辑体验仍未收口 |
 | 未开始 | `D2` 独立 TUI 控制面 | 后置产品化收口项，本文尚未记录明确开工进展 |

@@ -27,7 +27,7 @@ import type {
   MessageSendParams,
   ChatMessageMeta,
 } from "@belldandy/protocol";
-import { ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
+import { approvePairingCode, ensurePairingCode, isClientAllowed, resolveStateDir } from "./security/store.js";
 import type { BelldandyLogger } from "./logger/index.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
@@ -1417,6 +1417,34 @@ async function handleReq(
   } as const;
 
   switch (req.method) {
+    case "pairing.approve": {
+      const parsed = parsePairingApproveParams(req.params);
+      if (!parsed.ok) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
+      }
+      const approved = await approvePairingCode({
+        code: parsed.value.code,
+        stateDir: ctx.stateDir,
+      });
+      if (!approved.ok) {
+        return {
+          type: "res",
+          id: req.id,
+          ok: false,
+          error: { code: "pairing_approve_failed", message: approved.message },
+        };
+      }
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          code: parsed.value.code,
+          clientId: approved.clientId,
+        },
+      };
+    }
+
     case "models.list":
     case "models.config.get":
     case "models.config.update":
@@ -1739,6 +1767,16 @@ function parseToolSettingsConfirmParams(
     return { ok: false, message: 'decision must be "approve" or "reject"' };
   }
   return { ok: true, value: { requestId, decision, conversationId } };
+}
+
+function parsePairingApproveParams(
+  value: unknown,
+): { ok: true; value: { code: string } } | { ok: false; message: string } {
+  if (!value || typeof value !== "object") return { ok: false, message: "params must be an object" };
+  const obj = value as Record<string, unknown>;
+  const code = typeof obj.code === "string" ? obj.code.trim().toUpperCase() : "";
+  if (!code) return { ok: false, message: "code is required" };
+  return { ok: true, value: { code } };
 }
 
 function parseExternalOutboundConfirmParams(

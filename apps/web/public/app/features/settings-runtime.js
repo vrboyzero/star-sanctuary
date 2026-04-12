@@ -14,6 +14,7 @@ export function createSettingsRuntimeFeature({
   voiceFeature,
   localeController,
   chatNetworkFeature,
+  approvePairing,
   onOpenCommunityConfig,
   onOpenContinuationAction,
   getConnectionAuthMode,
@@ -70,6 +71,7 @@ export function createSettingsRuntimeFeature({
     cfgInjectMemory,
     cfgMaxSystemPromptChars,
     cfgMaxHistory,
+    pairingPendingList,
     cfgConversationKindMain,
     cfgConversationKindSubtask,
     cfgConversationKindGoal,
@@ -164,6 +166,7 @@ export function createSettingsRuntimeFeature({
       cfgInjectMemory,
       cfgMaxSystemPromptChars,
       cfgMaxHistory,
+      pairingPendingList,
       cfgConversationKindMain,
       cfgConversationKindSubtask,
       cfgConversationKindGoal,
@@ -197,6 +200,7 @@ export function createSettingsRuntimeFeature({
     syncAttachmentLimitsFromConfig,
     onToggle: (show) => voiceFeature?.onSettingsToggle?.(show),
     getConnectionAuthMode,
+    onApprovePairing: (code) => approvePairingPending(code, { showSuccessNotice: true }),
     onOpenCommunityConfig,
     onModelCatalogChanged: async () => {
       await chatNetworkFeature?.loadModelList?.();
@@ -205,6 +209,8 @@ export function createSettingsRuntimeFeature({
     redactedPlaceholder,
     t,
   });
+
+  const pairingPendingByCode = new Map();
 
   const toolSettingsController = createToolSettingsController({
     refs: {
@@ -252,8 +258,19 @@ export function createSettingsRuntimeFeature({
     t,
   });
 
-  function toggleSettings(show) {
-    void settingsController.toggle(show);
+  function syncPairingPendingSurface() {
+    settingsController.renderPairingPending?.(
+      [...pairingPendingByCode.values()].sort((a, b) => {
+        const left = Date.parse(b.updatedAt || "") || 0;
+        const right = Date.parse(a.updatedAt || "") || 0;
+        return left - right;
+      }),
+    );
+  }
+
+  async function toggleSettings(show, options = {}) {
+    await settingsController.toggle(show, options);
+    if (show) syncPairingPendingSurface();
   }
 
   function handleChannelSecurityPending(payload) {
@@ -292,11 +309,87 @@ export function createSettingsRuntimeFeature({
     );
   }
 
+  function handlePairingRequired(payload) {
+    const code = typeof payload?.code === "string" ? payload.code.trim().toUpperCase() : "";
+    if (!code) return;
+    const message = typeof payload?.message === "string" && payload.message.trim()
+      ? payload.message.trim()
+      : t("settings.pairingPendingDefaultMessage", {}, "当前 WebChat 会话需要完成配对批准。");
+    const clientIdValue = typeof payload?.clientId === "string" ? payload.clientId.trim() : "";
+    if (clientIdValue) {
+      for (const [existingCode, item] of pairingPendingByCode.entries()) {
+        if (item.clientId === clientIdValue && existingCode !== code) {
+          pairingPendingByCode.delete(existingCode);
+        }
+      }
+    }
+    pairingPendingByCode.set(code, {
+      code,
+      message,
+      clientId: clientIdValue,
+      updatedAt: new Date().toISOString(),
+    });
+    syncPairingPendingSurface();
+    showNotice(
+      t("settings.pairingPendingNoticeTitle", {}, "待批准配对"),
+      t("settings.pairingPendingNoticeMessage", { code }, `检测到新的配对码 ${code}，可直接在 WebChat 设置页内批准。`),
+      "info",
+      6800,
+      {
+        actionLabel: t("settings.pairingPendingNoticeAction", {}, "去批准"),
+        onAction: () => {
+          void settingsController.openPairingPending();
+        },
+      },
+    );
+    void settingsController.openPairingPending?.({ skipLoad: true });
+  }
+
+  async function approvePairingPending(code, options = {}) {
+    if (typeof approvePairing !== "function") {
+      return { ok: false, message: t("settings.pairingApproveUnavailable", {}, "当前连接不支持配对批准。") };
+    }
+    const normalizedCode = typeof code === "string" ? code.trim().toUpperCase() : "";
+    if (!normalizedCode) {
+      return { ok: false, message: t("settings.pairingCodeMissing", {}, "缺少配对码，无法批准。") };
+    }
+    const res = await approvePairing(normalizedCode);
+    if (!res?.ok) {
+      return {
+        ok: false,
+        message: res?.message || t("settings.pairingApproveFailedFallback", {}, "配对批准失败。"),
+      };
+    }
+    pairingPendingByCode.delete(normalizedCode);
+    syncPairingPendingSurface();
+    if (settingsModal && !settingsModal.classList.contains("hidden")) {
+      await settingsController.toggle(true, { section: "pairing-pending" });
+      syncPairingPendingSurface();
+    }
+    if (options.showSuccessNotice !== false) {
+      showNotice(
+        t("settings.pairingApprovedTitle", {}, "配对已批准"),
+        t("settings.pairingApprovedMessage", { code: normalizedCode }, `配对码 ${normalizedCode} 已批准，可直接继续在当前 WebChat 对话。`),
+        "success",
+        3200,
+      );
+    }
+    return res;
+  }
+
   return {
     refreshLocale() {
       toolSettingsController.refreshLocale?.();
     },
     toggleSettings,
+    openPairingPending(options = {}) {
+      return settingsController.openPairingPending?.(options);
+    },
+    hasPendingPairing() {
+      return pairingPendingByCode.size > 0;
+    },
+    handlePairingRequired,
+    approvePairingPending,
     openChannels() {
       return settingsController.openChannels();
     },

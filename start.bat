@@ -1,5 +1,32 @@
 @echo off
 setlocal
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+for %%I in ("%SCRIPT_DIR%..") do set "PARENT_DIR=%%~fI"
+if not defined STAR_SANCTUARY_RUNTIME_MODE (
+    if defined BELLDANDY_RUNTIME_MODE (
+        set "STAR_SANCTUARY_RUNTIME_MODE=%BELLDANDY_RUNTIME_MODE%"
+    ) else (
+        set "STAR_SANCTUARY_RUNTIME_MODE=source"
+    )
+)
+if not defined BELLDANDY_RUNTIME_MODE set "BELLDANDY_RUNTIME_MODE=%STAR_SANCTUARY_RUNTIME_MODE%"
+if not defined STAR_SANCTUARY_RUNTIME_DIR (
+    if defined BELLDANDY_RUNTIME_DIR (
+        set "STAR_SANCTUARY_RUNTIME_DIR=%BELLDANDY_RUNTIME_DIR%"
+    ) else (
+        set "STAR_SANCTUARY_RUNTIME_DIR=%SCRIPT_DIR%"
+    )
+)
+if not defined BELLDANDY_RUNTIME_DIR set "BELLDANDY_RUNTIME_DIR=%STAR_SANCTUARY_RUNTIME_DIR%"
+if not defined STAR_SANCTUARY_ENV_DIR (
+    if defined BELLDANDY_ENV_DIR (
+        set "STAR_SANCTUARY_ENV_DIR=%BELLDANDY_ENV_DIR%"
+    ) else if exist "%PARENT_DIR%\install-info.json" (
+        set "STAR_SANCTUARY_ENV_DIR=%PARENT_DIR%"
+    )
+)
+if not defined BELLDANDY_ENV_DIR if defined STAR_SANCTUARY_ENV_DIR set "BELLDANDY_ENV_DIR=%STAR_SANCTUARY_ENV_DIR%"
 
 echo [Star Sanctuary Launcher] Initialization...
 

@@ -17,7 +17,7 @@ export type GatewayRuntimePaths = {
   bundledSkillsDir: string;
 };
 
-export type EnvDirSource = "explicit" | "legacy_root" | "state_dir";
+export type EnvDirSource = "explicit" | "installed_source" | "legacy_root" | "state_dir";
 
 export type ResolveGatewayRuntimePathsOptions = {
   env?: NodeJS.ProcessEnv;
@@ -36,6 +36,7 @@ export type ResolvePreferredEnvDirOptions = {
   cwd?: string;
   stateDir?: string;
   envDir?: string;
+  runtimeDir?: string;
   exists?: (filePath: string) => boolean;
 };
 
@@ -129,6 +130,7 @@ export function resolvePreferredEnvDirInfo(
   options: ResolvePreferredEnvDirOptions = {},
 ): ResolvePreferredEnvDirResult {
   const env = options.env ?? process.env;
+  const exists = options.exists ?? fileExists;
   const explicitEnvDir = options.envDir
     ?? readTrimmedEnv(env, "STAR_SANCTUARY_ENV_DIR", "BELLDANDY_ENV_DIR");
   if (explicitEnvDir) {
@@ -138,8 +140,31 @@ export function resolvePreferredEnvDirInfo(
     };
   }
 
+  const explicitRuntimeDir = options.runtimeDir ?? resolveRuntimeDir(env);
+  if (explicitRuntimeDir) {
+    const normalizedRuntimeDir = path.resolve(explicitRuntimeDir);
+    const installRootCandidates = [
+      normalizedRuntimeDir,
+      path.dirname(normalizedRuntimeDir),
+    ];
+
+    for (const candidateRoot of installRootCandidates) {
+      const installInfoPath = path.join(candidateRoot, "install-info.json");
+      if (!exists(installInfoPath)) {
+        continue;
+      }
+
+      const currentDirPath = path.join(candidateRoot, "current");
+      if (normalizedRuntimeDir === candidateRoot || normalizedRuntimeDir === currentDirPath) {
+        return {
+          envDir: candidateRoot,
+          source: "installed_source",
+        };
+      }
+    }
+  }
+
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const exists = options.exists ?? fileExists;
   const cwdEnvFiles = resolveEnvFilePaths({ envDir: cwd });
   if (exists(cwdEnvFiles.envPath) || exists(cwdEnvFiles.envLocalPath)) {
     return {
@@ -171,6 +196,7 @@ export function resolveGatewayRuntimePaths(
     cwd,
     stateDir,
     envDir: options.envDir,
+    runtimeDir,
   });
   const envDir = envSelection.envDir;
 

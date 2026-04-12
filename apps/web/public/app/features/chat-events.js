@@ -1,5 +1,6 @@
 export function createChatEventsFeature({
   appendMessage,
+  onPairingRequired,
   showRestartCountdown,
   setTokenUsageRunning,
   updateTokenUsage,
@@ -87,8 +88,17 @@ export function createChatEventsFeature({
   function handleEvent(event, payload) {
     if (event === "pairing.required") {
       const code = payload && payload.code ? String(payload.code) : "";
-      const safeCode = escapeHtml?.(code) || code;
       const target = ensureBotMessage();
+      if (typeof onPairingRequired === "function") {
+        onPairingRequired({
+          target,
+          code,
+          clientId: payload && payload.clientId ? String(payload.clientId) : "",
+          message: payload && payload.message ? String(payload.message) : "",
+        });
+        return true;
+      }
+      const safeCode = escapeHtml?.(code) || code;
       target.innerHTML = `
         <div style="line-height: 1.6;">
           需要配对（Pairing）。配对码：<b>${safeCode}</b><br><br>

@@ -9,56 +9,79 @@ import fs from "node:fs";
 import pc from "picocolors";
 import { createCLIContext } from "../shared/context.js";
 import {
+  parseEnvFile,
+  removeEnvValue,
+  resolveEnvPath,
   resolveEnvLocalPath,
   updateEnvValue,
 } from "../shared/env-loader.js";
-import type { OnboardAnswers } from "../wizard/onboard.js";
+import type { OnboardAnswers, SetupFlow, SetupScenario } from "../wizard/onboard-shared.js";
+import { answersToEnvPairs, buildAnswersFromFlags, isLocalHost } from "../wizard/onboard-shared.js";
+import type { AdvancedModule } from "../wizard/advanced-modules-shared.js";
 
-/** Map OnboardAnswers to env key-value pairs. */
-function answersToEnvPairs(a: OnboardAnswers): Array<[string, string]> {
-  const pairs: Array<[string, string]> = [];
+const NON_INTERACTIVE_INPUT_KEYS = [
+  "provider",
+  "base-url",
+  "api-key",
+  "model",
+  "host",
+  "port",
+  "auth-mode",
+  "auth-secret",
+] as const;
 
-  pairs.push(["BELLDANDY_AGENT_PROVIDER", a.provider]);
-
-  if (a.provider === "openai") {
-    if (a.baseUrl) pairs.push(["BELLDANDY_OPENAI_BASE_URL", a.baseUrl]);
-    if (a.apiKey) pairs.push(["BELLDANDY_OPENAI_API_KEY", a.apiKey]);
-    if (a.model) pairs.push(["BELLDANDY_OPENAI_MODEL", a.model]);
-  }
-
-  if (a.host !== "127.0.0.1") pairs.push(["BELLDANDY_HOST", a.host]);
-  if (a.port !== 28889) pairs.push(["BELLDANDY_PORT", String(a.port)]);
-
-  pairs.push(["BELLDANDY_AUTH_MODE", a.authMode]);
-  if (a.authMode === "token" && a.authSecret) {
-    pairs.push(["BELLDANDY_AUTH_TOKEN", a.authSecret]);
-  } else if (a.authMode === "password" && a.authSecret) {
-    pairs.push(["BELLDANDY_AUTH_PASSWORD", a.authSecret]);
-  }
-
-  return pairs;
-}
+const MANAGED_ENV_KEYS = [
+  "BELLDANDY_AGENT_PROVIDER",
+  "BELLDANDY_OPENAI_BASE_URL",
+  "BELLDANDY_OPENAI_API_KEY",
+  "BELLDANDY_OPENAI_MODEL",
+  "BELLDANDY_HOST",
+  "BELLDANDY_PORT",
+  "BELLDANDY_AUTH_MODE",
+  "BELLDANDY_AUTH_TOKEN",
+  "BELLDANDY_AUTH_PASSWORD",
+] as const;
 
 function hasNonInteractiveFlags(args: Record<string, unknown>): boolean {
-  return !!(args.provider);
+  return NON_INTERACTIVE_INPUT_KEYS.some((key) => {
+    const value = args[key];
+    return value !== undefined && value !== false && value !== "";
+  });
 }
 
-function buildAnswersFromFlags(args: Record<string, unknown>): OnboardAnswers {
-  const provider = (args.provider as string) === "openai" ? "openai" : "mock";
-  const host = (args.host as string) ?? "127.0.0.1";
-  const port = args.port ? Number(args.port) : 28889;
-  const authMode = (args["auth-mode"] as string) ?? "none";
+function readMergedEnvValues(envPath: string, envLocalPath: string): Map<string, string> {
+  const merged = new Map<string, string>();
+  for (const entry of parseEnvFile(envPath)) {
+    merged.set(entry.key, entry.value);
+  }
+  for (const entry of parseEnvFile(envLocalPath)) {
+    merged.set(entry.key, entry.value);
+  }
+  return merged;
+}
 
-  return {
-    provider,
-    baseUrl: args["base-url"] as string | undefined,
-    apiKey: args["api-key"] as string | undefined,
-    model: args.model as string | undefined,
-    host,
-    port,
-    authMode: authMode as OnboardAnswers["authMode"],
-    authSecret: (args["auth-secret"] as string) ?? undefined,
-  };
+export function reconcileSetupCommunityApiConflict(params: {
+  envPath: string;
+  envLocalPath: string;
+  authMode: OnboardAnswers["authMode"];
+}): string[] {
+  if (params.authMode !== "none") {
+    return [];
+  }
+
+  const mergedValues = readMergedEnvValues(params.envPath, params.envLocalPath);
+  const communityApiEnabled = String(mergedValues.get("BELLDANDY_COMMUNITY_API_ENABLED") ?? "false")
+    .trim()
+    .toLowerCase() === "true";
+  if (!communityApiEnabled) {
+    return [];
+  }
+
+  updateEnvValue(params.envLocalPath, "BELLDANDY_COMMUNITY_API_ENABLED", "false");
+  removeEnvValue(params.envLocalPath, "BELLDANDY_COMMUNITY_API_TOKEN");
+  return [
+    "Detected AUTH_MODE=none during setup; disabled Community HTTP API in .env.local to avoid an invalid auth/community combination.",
+  ];
 }
 
 export default defineCommand({
@@ -66,6 +89,8 @@ export default defineCommand({
   args: {
     json: { type: "boolean", description: "JSON output" },
     "state-dir": { type: "string", description: "Override state directory" },
+    flow: { type: "string", description: "Setup flow: quickstart | advanced" },
+    scenario: { type: "string", description: "Run scenario: local | lan | remote" },
     // Non-interactive flags
     provider: { type: "string", description: "Agent provider: openai | mock" },
     "base-url": { type: "string", description: "OpenAI-compatible API base URL" },
@@ -78,9 +103,12 @@ export default defineCommand({
   },
   async run({ args }) {
     const ctx = createCLIContext({ json: args.json, stateDir: args["state-dir"] });
+    const projectEnvPath = resolveEnvPath(ctx.envDir);
     const envPath = resolveEnvLocalPath(ctx.envDir);
 
     let answers: OnboardAnswers;
+    let configuredModules: AdvancedModule[] = [];
+    let moduleNotes: string[] = [];
 
     if (hasNonInteractiveFlags(args)) {
       // Non-interactive mode
@@ -101,8 +129,8 @@ export default defineCommand({
       }
 
       // Validate LAN + auth
-      if (answers.host === "0.0.0.0" && answers.authMode === "none") {
-        const msg = "LAN access (0.0.0.0) requires auth-mode token or password";
+      if (!isLocalHost(answers.host) && answers.authMode === "none") {
+        const msg = "Non-local access requires auth-mode token or password";
         if (ctx.json) ctx.output({ error: msg });
         else ctx.error(msg);
         process.exit(1);
@@ -110,7 +138,11 @@ export default defineCommand({
     } else {
       // Interactive mode
       const { runOnboardWizard } = await import("../wizard/onboard.js");
-      const result = await runOnboardWizard();
+      const result = await runOnboardWizard({
+        envPath,
+        flow: (args.flow as SetupFlow | undefined),
+        scenario: (args.scenario as SetupScenario | undefined),
+      });
       if (!result) {
         process.exit(0);
       }
@@ -118,9 +150,32 @@ export default defineCommand({
     }
 
     // Write to .env.local
+    const existedBefore = fs.existsSync(envPath);
+    const setupNotes = reconcileSetupCommunityApiConflict({
+      envPath: projectEnvPath,
+      envLocalPath: envPath,
+      authMode: answers.authMode,
+    });
     const pairs = answersToEnvPairs(answers);
+    const nextKeys = new Set(pairs.map(([key]) => key));
+    for (const key of MANAGED_ENV_KEYS) {
+      if (!nextKeys.has(key)) {
+        removeEnvValue(envPath, key);
+      }
+    }
     for (const [key, value] of pairs) {
       updateEnvValue(envPath, key, value);
+    }
+
+    if (!hasNonInteractiveFlags(args) && answers.flow === "advanced") {
+      const { runAdvancedModulesWizard } = await import("../wizard/advanced-modules.js");
+      const advancedResult = await runAdvancedModulesWizard({
+        envPath,
+        stateDir: ctx.stateDir,
+        authMode: answers.authMode,
+      });
+      configuredModules = advancedResult.configuredModules;
+      moduleNotes = advancedResult.notes;
     }
 
     if (ctx.json) {
@@ -131,14 +186,39 @@ export default defineCommand({
           ? "***"
           : v;
       }
-      ctx.output({ path: envPath, config: written });
+      ctx.output({
+        path: envPath,
+        flow: answers.flow,
+        scenario: answers.scenario,
+        configuredModules,
+        notes: [...setupNotes, ...moduleNotes],
+        config: written,
+      });
     } else {
-      const existedBefore = fs.existsSync(envPath);
       console.log(pc.green(`\n✓ Configuration saved to ${envPath}`));
       console.log(`  ${pairs.length} value(s) written.\n`);
+      console.log(pc.dim(`  Flow: ${answers.flow}`));
+      console.log(pc.dim(`  Scenario: ${answers.scenario}`));
+      console.log(pc.dim(`  Bind: ${answers.host}:${answers.port}`));
+      console.log(pc.dim(`  Auth: ${answers.authMode}\n`));
+      if (configuredModules.length > 0) {
+        console.log(pc.dim(`  Advanced modules: ${configuredModules.join(", ")}\n`));
+      }
+      for (const note of setupNotes) {
+        console.log(pc.dim(`  ${note}`));
+      }
+      for (const note of moduleNotes) {
+        console.log(pc.dim(`  ${note}`));
+      }
+      if (setupNotes.length > 0 || moduleNotes.length > 0) {
+        console.log("");
+      }
       if (!existedBefore) {
         console.log(pc.dim("  Run 'bdd doctor' to verify your setup."));
         console.log(pc.dim("  Run 'bdd start' to launch Belldandy.\n"));
+      } else {
+        console.log(pc.dim("  Run 'bdd doctor' to verify the updated setup."));
+        console.log(pc.dim("  Run 'bdd start' to relaunch Belldandy with the new config.\n"));
       }
     }
   },

@@ -792,8 +792,12 @@ function handleHelloOk(frame) {
 
   if (frame.configOk === false) {
     setTimeout(() => {
-      toggleSettings(true);
-      const guideMsg = appendMessage("bot", "👋 欢迎使用 Star Sanctuary！\n\n检测到 AI 模型尚未配置。请在右侧设置面板填入你的 API Key，然后点击 Save 保存。");
+      if (settingsRuntimeFeature?.hasPendingPairing?.()) {
+        void settingsRuntimeFeature.openPairingPending?.({ skipLoad: true });
+      } else {
+        toggleSettings(true);
+      }
+      const guideMsg = appendMessage("bot", "👋 欢迎使用 Star Sanctuary！\n\n检测到默认模型配置尚未完成。请继续使用当前设置弹窗补齐 API Key 与默认模型，然后点击 Save 保存。");
       if (guideMsg) guideMsg.style.whiteSpace = "pre-wrap";
     }, 500);
   }
@@ -1640,6 +1644,86 @@ function restorePromptText(text) {
   promptController.restoreText(text);
 }
 
+async function approvePairingFromWebchat(code) {
+  if (!code || !ws || !isReady) {
+    return { ok: false, message: "当前连接不可用，请先重新连接后再试。" };
+  }
+  const response = await sendReq({
+    type: "req",
+    id: makeId(),
+    method: "pairing.approve",
+    params: { code },
+  });
+  if (!response) {
+    return { ok: false, message: "配对批准请求未返回结果。" };
+  }
+  if (!response.ok) {
+    return { ok: false, message: response.error?.message || "配对批准失败。" };
+  }
+  return {
+    ok: true,
+    clientId: typeof response.payload?.clientId === "string" ? response.payload.clientId : "",
+  };
+}
+
+function renderPairingRequiredPrompt(target, payload = {}) {
+  if (!target) return;
+  const code = typeof payload.code === "string" ? payload.code.trim().toUpperCase() : "";
+  const safeCode = escapeHtml(code);
+  const message = typeof payload.message === "string" && payload.message.trim()
+    ? payload.message.trim()
+    : `需要配对（Pairing）。配对码：${code || "未知"}`;
+  const safeMessage = escapeHtml(message);
+  const clientId = typeof payload.clientId === "string" ? payload.clientId.trim() : "";
+  const safeClientId = escapeHtml(clientId);
+  target.innerHTML = `
+    <div class="pairing-required-card" style="line-height: 1.6;">
+      <div>${safeMessage}</div>
+      <div style="margin-top: 8px;">配对码：<b>${safeCode || "未知"}</b></div>
+      <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+        <button type="button" class="btn pairing-approve-btn">在 WebChat 内批准</button>
+        <button type="button" class="btn pairing-open-settings-btn">打开设置页</button>
+        <span class="pairing-status-text" style="color: var(--text-secondary); font-size: 12px;"></span>
+      </div>
+      <div style="margin-top: 10px; color: var(--text-secondary); font-size: 12px;">
+        默认流程不需要命令行。若页面按钮不可用，再使用 CLI 诊断路径：
+        <code>bdd pairing approve ${safeCode || "&lt;CODE&gt;"}</code>
+      </div>
+      ${safeClientId ? `<div style="margin-top: 6px; color: var(--text-secondary); font-size: 12px;">clientId: <code>${safeClientId}</code></div>` : ""}
+    </div>
+  `;
+
+  const approveBtn = target.querySelector(".pairing-approve-btn");
+  const openSettingsBtn = target.querySelector(".pairing-open-settings-btn");
+  const statusEl = target.querySelector(".pairing-status-text");
+  if (!approveBtn || !statusEl) return;
+  openSettingsBtn?.addEventListener("click", () => {
+    void settingsRuntimeFeature?.openPairingPending?.();
+  });
+
+  approveBtn.addEventListener("click", async () => {
+    if (!code) {
+      statusEl.textContent = "缺少配对码，无法批准。";
+      return;
+    }
+    approveBtn.disabled = true;
+    if (openSettingsBtn) openSettingsBtn.disabled = true;
+    statusEl.textContent = "正在批准配对…";
+    const approved = settingsRuntimeFeature?.approvePairingPending
+      ? await settingsRuntimeFeature.approvePairingPending(code, { showSuccessNotice: false })
+      : await approvePairingFromWebchat(code);
+    if (!approved.ok) {
+      statusEl.textContent = approved.message || "配对批准失败。";
+      approveBtn.disabled = false;
+      if (openSettingsBtn) openSettingsBtn.disabled = false;
+      return;
+    }
+    statusEl.textContent = "配对已批准。现在可以直接重发刚才的消息。";
+    approveBtn.textContent = "已批准";
+    showNotice?.("配对已批准", "可直接在当前 WebChat 继续发送消息。", "success", 3200);
+  }, { once: true });
+}
+
 function buildConversationHistoryActionPrompt(actionId, conversationId) {
   switch (actionId) {
     case "list_recent":
@@ -1912,8 +1996,25 @@ async function sendMessage(options = {}) {
   if (payload && payload.ok === false) {
     if (payload.error && payload.error.code === "pairing_required") {
       const msg = payload.error.message ? String(payload.error.message) : "Pairing required.";
+      if (!hasTextOverride) {
+        restorePromptText(text);
+      }
+      if (!Array.isArray(options.pendingAttachmentsOverride) && Array.isArray(pendingAttachments) && pendingAttachments.length > 0) {
+        for (const attachment of pendingAttachments) {
+          attachmentsFeature?.addAttachment?.(attachment);
+        }
+        attachmentsFeature?.renderAttachmentsPreview?.();
+      }
       if (botMsgEl) {
-        botMsgEl.innerHTML = `\n        <div style="line-height: 1.6;">\n          ${escapeHtml(msg)}<br><br>\n          <b>新手操作指南：</b><br>\n          1. 不要关闭当前网页。<br>\n          2. <b>保持那个运行着服务的黑色窗口不要关</b>，然后在项目目录下重新打开一个<b>新的黑色终端窗口</b>。<br>\n          3. 在这个新窗口里，复制并粘贴下面的完整命令，然后按回车键：<br>\n          <div style="background: var(--bg-secondary); padding: 8px; border-radius: 4px; margin: 8px 0; font-family: monospace;">\n            corepack pnpm bdd pairing approve &lt;CODE&gt;\n          </div>\n          <i style="color: var(--text-tertiary); font-size: 0.9em;">（注意：请把 <code>&lt;CODE&gt;</code> 换成上方实际给你的配对码）</i><br><br>\n          4. 终端提示成功后，在这个网页再发一次消息即可。\n        </div>\n      `;
+        const codeMatch = msg.match(/Code:\s*([A-Z0-9-]+)/i);
+        settingsRuntimeFeature?.handlePairingRequired?.({
+          code: codeMatch ? codeMatch[1] : "",
+          message: msg,
+        });
+        renderPairingRequiredPrompt(botMsgEl, {
+          code: codeMatch ? codeMatch[1] : "",
+          message: msg,
+        });
       }
       return;
     }
@@ -1978,6 +2079,7 @@ settingsRuntimeFeature = createSettingsRuntimeFeature({
   voiceFeature,
   localeController,
   chatNetworkFeature,
+  approvePairing: approvePairingFromWebchat,
   onOpenCommunityConfig: () => {
     void openFile("community.json");
   },
@@ -1999,6 +2101,10 @@ function toggleSettings(show) {
 
 chatEventsFeature = createChatEventsFeature({
   appendMessage,
+  onPairingRequired: ({ target, code, clientId, message }) => {
+    settingsRuntimeFeature?.handlePairingRequired?.({ code, clientId, message });
+    renderPairingRequiredPrompt(target, { code, clientId, message });
+  },
   showRestartCountdown,
   setTokenUsageRunning: (running) => {
     if (!tokenUsageEl) return;

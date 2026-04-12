@@ -1320,6 +1320,10 @@ body::before {
   box-shadow: var(--chat-bot-bubble-shadow);
 }
 
+.msg-body {
+  min-width: 0;
+}
+
 /* Markdown 元素内部样式限制 */
 .msg p {
   margin: 0.08em 0;

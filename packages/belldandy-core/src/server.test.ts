@@ -63,17 +63,28 @@ test("gateway handshake and message.send streams chat", async () => {
   await waitFor(() => frames.some((f) => f.type === "hello-ok"));
   const hello = frames.find((f) => f.type === "hello-ok");
   expect(hello?.version).toBe(BELLDANDY_VERSION);
-
-  const reqId = "req-1";
-  ws.send(JSON.stringify({ type: "req", id: reqId, method: "message.send", params: { text: "你好" } }));
+  expect(hello?.methods).toContain("pairing.approve");
 
   await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
   const pairing = frames.find((f) => f.type === "event" && f.event === "pairing.required");
   const code = pairing?.payload?.code ? String(pairing.payload.code) : "";
   expect(code.length).toBeGreaterThan(0);
 
-  const approved = await approvePairingCode({ code, stateDir });
-  expect(approved.ok).toBe(true);
+  const approveReqId = "req-pairing-approve";
+  ws.send(JSON.stringify({
+    type: "req",
+    id: approveReqId,
+    method: "pairing.approve",
+    params: { code },
+  }));
+
+  await waitFor(() => frames.some((f) => f.type === "res" && f.id === approveReqId));
+  const approved = frames.find((f) => f.type === "res" && f.id === approveReqId);
+  expect(approved?.ok).toBe(true);
+  expect(approved?.payload?.clientId).toBeTruthy();
+
+  const reqId = "req-1";
+  ws.send(JSON.stringify({ type: "req", id: reqId, method: "message.send", params: { text: "你好" } }));
 
   const reqId2 = "req-2";
   ws.send(JSON.stringify({ type: "req", id: reqId2, method: "message.send", params: { text: "你好" } }));

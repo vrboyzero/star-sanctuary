@@ -168,6 +168,48 @@ export function updateEnvValue(
   fs.writeFileSync(filePath, content, "utf-8");
 }
 
+/**
+ * Remove a key from an .env file.
+ * Preserves comments, blank lines, and ordering of other entries.
+ */
+export function removeEnvValue(
+  filePath: string,
+  key: string,
+): void {
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  } catch {
+    return;
+  }
+
+  let removed = false;
+  const updated = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) return true;
+
+    const normalized = trimmed.startsWith("export ")
+      ? trimmed.slice("export ".length).trim()
+      : trimmed;
+    const eq = normalized.indexOf("=");
+    if (eq <= 0) return true;
+
+    const lineKey = normalized.slice(0, eq).trim();
+    if (lineKey === key) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+
+  if (!removed) {
+    return;
+  }
+
+  const content = updated.join("\n").replace(/\n*$/, "\n");
+  fs.writeFileSync(filePath, content, "utf-8");
+}
+
 /** Resolve the .env.local path for a given env dir or cwd. */
 export function resolveEnvLocalPath(envDir?: string): string {
   return resolveEnvFilePaths({ envDir }).envLocalPath;

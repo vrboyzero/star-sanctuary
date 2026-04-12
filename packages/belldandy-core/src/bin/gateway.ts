@@ -2743,7 +2743,7 @@ const serverOptions = buildGatewayServerOptions({
   ttsEnabled: isTtsEnabledFn,
   ttsSynthesize,
   sttTranscribe,
-  isConfigured: () => agentProvider === "openai" && !!openaiApiKey,
+  isConfigured: () => agentProvider === "mock" || (agentProvider === "openai" && !!openaiApiKey && !!openaiModel),
   webhookConfig,
   webhookIdempotency,
 });

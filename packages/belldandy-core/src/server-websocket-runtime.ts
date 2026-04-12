@@ -14,6 +14,7 @@ import type {
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { BELLDANDY_VERSION } from "./version.generated.js";
+import { ensurePairingCode, isClientAllowed } from "./security/store.js";
 
 type GatewayAuthConfig = {
   mode: "none" | "token" | "password";
@@ -65,6 +66,7 @@ type ConnectionState = {
 
 const DEFAULT_METHODS = [
   "message.send",
+  "pairing.approve",
   "tool_settings.confirm",
   "external_outbound.confirm",
   "external_outbound.audit.list",
@@ -279,6 +281,25 @@ export function createGatewayWebSocketRuntime(
           supportsUuid: true,
           configOk: options.isConfigured ? options.isConfigured() : true,
         });
+        const allowed = await isClientAllowed({
+          clientId: state.clientId ?? state.sessionId,
+          stateDir: options.stateDir,
+        });
+        if (!allowed) {
+          const pairing = await ensurePairingCode({
+            clientId: state.clientId ?? state.sessionId,
+            stateDir: options.stateDir,
+          });
+          sendGatewayFrame(ws, {
+            type: "event",
+            event: "pairing.required",
+            payload: {
+              clientId: state.clientId ?? state.sessionId,
+              code: pairing.code,
+              message: "pairing required: approve this code to allow messages",
+            },
+          });
+        }
         return;
       }
 

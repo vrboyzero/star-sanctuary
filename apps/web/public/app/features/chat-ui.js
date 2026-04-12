@@ -142,8 +142,44 @@ export function createChatUiFeature({
     const strippedText = stripThinkBlocks(rawText || "");
     configureMarkedOnce();
     const parsedHtml = window.marked ? window.marked.parse(strippedText) : strippedText;
-    bubble.innerHTML = sanitizeAssistantHtml(parsedHtml);
-    processMediaInMessage(bubble);
+    const sanitizedHtml = sanitizeAssistantHtml(parsedHtml);
+    const body = ensureAssistantMessageBody(bubble);
+    if (!(body instanceof HTMLElement)) return;
+    body.innerHTML = sanitizedHtml;
+    processMediaInMessage(body);
+    updateAssistantMessageAccessibility(bubble, body, strippedText);
+  }
+
+  function ensureAssistantMessageBody(bubble) {
+    if (!(bubble instanceof HTMLElement)) return null;
+    let body = bubble.querySelector(":scope > .msg-body");
+    if (!(body instanceof HTMLElement)) {
+      bubble.replaceChildren();
+      body = document.createElement("div");
+      body.className = "msg-body";
+      body.setAttribute("role", "article");
+      body.setAttribute("aria-live", "polite");
+      body.setAttribute("aria-atomic", "true");
+      bubble.appendChild(body);
+    }
+    return body;
+  }
+
+  function normalizeMessageText(value) {
+    if (typeof value !== "string") return "";
+    return value.replace(/\s+/g, " ").trim();
+  }
+
+  function updateAssistantMessageAccessibility(bubble, body, fallbackText = "") {
+    if (!(bubble instanceof HTMLElement) || !(body instanceof HTMLElement)) return;
+    const normalizedText = normalizeMessageText(body.textContent || fallbackText);
+    bubble.dataset.messageText = normalizedText;
+    body.dataset.messageText = normalizedText;
+    if (normalizedText) {
+      body.setAttribute("aria-label", normalizedText);
+    } else {
+      body.removeAttribute("aria-label");
+    }
   }
 
   function isImagePath(value) {
@@ -314,6 +350,9 @@ export function createChatUiFeature({
     const bubble = document.createElement("div");
     bubble.className = `msg ${kind}`;
     bubble.textContent = text;
+    if (kind === "bot") {
+      bubble.dataset.messageText = "";
+    }
 
     contentWrapper.appendChild(nameEl);
     contentWrapper.appendChild(bubble);
@@ -573,7 +612,8 @@ export function createChatUiFeature({
         const wrapper = msgBtn.closest(".msg-content-wrapper");
         const bubble = wrapper?.querySelector(".msg");
         if (bubble) {
-          await copyTextWithFeedback(msgBtn, bubble.textContent || "");
+          const messageText = bubble.dataset.messageText || bubble.querySelector(".msg-body")?.dataset.messageText || bubble.textContent || "";
+          await copyTextWithFeedback(msgBtn, messageText);
         }
       }
     });

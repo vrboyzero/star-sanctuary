@@ -84,6 +84,16 @@ const BUILTIN_CLI_COMMANDS: readonly CommandDescriptor[] = [
     handler: async () => (await import("./commands/config.js")).default,
   },
   {
+    name: "configure",
+    type: "group",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["privileged"],
+    description: "Configure advanced setup modules",
+    handler: async () => (await import("./commands/configure.js")).default,
+  },
+  {
     name: "conversation",
     type: "group",
     source: "builtin",

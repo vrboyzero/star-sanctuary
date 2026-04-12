@@ -184,6 +184,7 @@ export const APP_DOM_REFS = {
   cfgInjectMemory: byId("cfgInjectMemory"),
   cfgMaxSystemPromptChars: byId("cfgMaxSystemPromptChars"),
   cfgMaxHistory: byId("cfgMaxHistory"),
+  pairingPendingList: byId("pairingPendingList"),
   cfgConversationKindMain: byId("cfgConversationKindMain"),
   cfgConversationKindSubtask: byId("cfgConversationKindSubtask"),
   cfgConversationKindGoal: byId("cfgConversationKindGoal"),
