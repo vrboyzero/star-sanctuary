@@ -54,6 +54,16 @@ const BUILTIN_CLI_COMMANDS: readonly CommandDescriptor[] = [
     handler: async () => (await import("./commands/doctor.js")).default,
   },
   {
+    name: "console",
+    type: "command",
+    source: "builtin",
+    visibility: "public",
+    channels: ["cli"],
+    safeScopes: ["local-safe"],
+    description: "Show a lightweight terminal runtime console",
+    handler: async () => (await import("./commands/console.js")).default,
+  },
+  {
     name: "setup",
     type: "command",
     source: "builtin",

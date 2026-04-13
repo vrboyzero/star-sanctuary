@@ -109,4 +109,16 @@ describe("CommandRegistry", () => {
     expect(Object.keys(subCommands)).toContain("conversation");
     expect(meta?.name).toBe("conversation");
   });
+
+  it("exposes builtin console command", async () => {
+    const subCommands = getRootCLICommands();
+    const consoleLoader = subCommands.console as () => Promise<ReturnType<typeof defineCommand>>;
+    const loadedConsoleCommand = await consoleLoader();
+    const meta = typeof loadedConsoleCommand.meta === "function"
+      ? await loadedConsoleCommand.meta()
+      : await loadedConsoleCommand.meta;
+
+    expect(Object.keys(subCommands)).toContain("console");
+    expect(meta?.name).toBe("console");
+  });
 });

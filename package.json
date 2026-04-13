@@ -32,6 +32,7 @@
     "smoke:install-script-rollback:real": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-rollback-real.mjs",
     "smoke:install-script-lifecycle": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-lifecycle.mjs",
     "smoke:install-script-upgrade-handoff": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-upgrade-handoff.mjs",
+    "smoke:console-watch": "node scripts/smoke-console-watch.mjs",
     "smoke:install-script-build:wsl": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-build-wsl.mjs",
     "smoke:install-script-lifecycle:wsl": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-lifecycle-wsl.mjs",
     "smoke:install-script-rollback:wsl": "node packages/star-sanctuary-distribution/scripts/smoke-install-script-rollback-wsl.mjs",

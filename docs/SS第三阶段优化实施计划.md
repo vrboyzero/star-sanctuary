@@ -2898,3 +2898,190 @@
 | 已完成（第一阶段收口） | `D0` 一行命令安装器 / bootstrap installer | 已完成源码包 installer 主链与“安装到启动”第一阶段收口：`install.ps1 / install.sh` 已覆盖 install/start/health/lifecycle/rollback/build/upgrade-handoff 主链，`install-state / install-journey / install-lifecycle / install-script-lifecycle / install-script-rollback / install-script-build / install-script-upgrade-handoff` 等 smoke 已在 Windows / WSL 形成闭环；`pnpm approve-builds` install/build 口径、`start/install/build` 缺能力提示、`bdd doctor / system.doctor` optional capability 摘要，以及升级后首次启动一次性 notice 也已补齐。后续默认只保留观察与补盲，不继续扩 installer 功能面；`macOS` 仍维持“未验证”标记，但不再作为当前阶段阻塞项。 |
 | 进行中 | `D1` 安装与配置向导 2.0 | 已完成第一版 CLI setup 主流程、`Advanced` 模块化入口、四个模块第一轮增强、第二轮更强诊断/模板校验推进与第一版 WebChat 闭环：`bdd setup` 已支持 `QuickStart / Advanced`、`local / lan / remote`、已有配置 `reuse / modify / reset`，`bdd configure <module>` 已支持 `community / models / webhook / cron` 并补显式 completion banner；其中 `models` 已继续补到批量高级字段编辑、更强 provider/protocol 诊断与轻量 preferred provider 入口，当前整体按“可用主链已成立，转入观察与小修”口径推进 |
 | 未开始 | `D2` 独立 TUI 控制面 | 后置产品化收口项，本文尚未记录明确开工进展 |
+
+## 12. 剩余未完成项短执行表
+
+说明：
+
+- 本表只保留“仍未完成或仍需观察”的项，不再重复已完成主线。
+- 用途是帮助后续快速判断：现在还要不要做、应不应该延期、还是只保留观察。
+
+| 分类 | 项目 | 当前判断 | 建议动作 |
+|---|---|---|---|
+| 现在还值得做 | `D1` 安装与配置向导 2.0 | 主链已成立，但仍有真实使用侧的小量收口需求；当前更适合作为“观察与小修”持续推进，而不是再开大面功能 | 继续只做高频真实问题的小修；优先 `community` 风险提示与 reconnect/office 诊断细化，`models`/前端富文本保持观察 |
+| 现在还值得做 | `H4` 定向 runtime resilience 增强 | 第一轮诊断闭环已完成；后续若真实 fallback/degrade 信号仍有噪音或误判，仍值得做最小修补 | 仅围绕真实 degrade/failure 信号质量、doctor / explainability 文案、runtime 证据闭环做小修，不进入 provider runtime 重构 |
+| 可以延期 | `D2` 独立 TUI 控制面 | 仍未开始，但对当前第三阶段交付不构成阻塞 | 保持后置，等 `D1` 观察稳定且确有独立控制面需求时再开 |
+| 可以延期 | `D1` 中的增强 backlog | 主要是 `webhook` 内建样例集、`cron` 更细策略建议、`models` 更深 runtime/primary 配置面 | 不作为当前主线；只有在真实使用反复碰到缺口时再单独拆任务 |
+| 可以延期 | `A5-4 / A5-5 / A5-6` continuation 深水区增强 | 已被明确降级为后置增强，继续推进的扩面风险大于当前收益 | 不 reopen；如后续出现明确 recovery/takeover 场景，再单独评估 |
+| 只保留观察 | `D0` 安装器后续补盲 | 第一阶段已收口；当前剩余主要是 `macOS` 未验证与个别平台差异 | 不扩功能面；仅保留真实安装反馈、平台补盲与回归修补 |
+| 只保留观察 | `P2-5` 附件理解 / 媒体能力 | `v1` 已收口；当前主要风险转为真实附件场景下的 capability 误判 | 只在真实场景出现误判、降级提示不清或回归时修补 |
+| 只保留观察 | `P2-3 / P2-4` 会话连续性主线 | 主线已收口；剩余主要是多渠道真实手测观察 | 仅做回归修补，不再主动扩新的 binding / session 产品面 |
+| 只保留观察 | `H1 / H2 / H3 / H5` | 都已完成当前阶段收口；继续扩面收益低 | 默认不再作为主线推进，只保留真实使用下的最小修补 |
+
+一句话结论：
+
+- 当前第三阶段真正还需要持续投入的，只剩 `D1` 观察与小修、`H4` 观察与小修两条。
+- 其余未完成项要么应延期，要么只保留观察，不建议再把它们重新拉回主线。
+
+## 13. D2-MVP 收口定义与执行清单
+
+### 13.1 决策更新
+
+- `D2` 不再按“独立终端版产品面”推进。
+- 当前明确收口为一个很小的 `D2-MVP`：
+  - 定位是“终端运行控制台”
+  - 不是“第二套 WebChat”
+  - 不是“新的完整配置中心”
+
+### 13.2 明确边界
+
+`D2-MVP` 当前只做：
+
+1. Gateway / daemon 基本状态查看
+2. resident agent roster 摘要查看
+3. 最近 subtask / background runtime / doctor 摘要查看
+4. 终端内的只读刷新视图
+
+`D2-MVP` 当前不做：
+
+1. 富文本聊天主界面
+2. 配置向导或完整模块编辑
+3. webhook / cron / models / community 的完整交互式管理面
+4. 媒体预览、复杂键盘交互、独立 TUI 框架重构
+5. 新后端协议或新的 runtime surface
+
+补充边界：
+
+- `D2-MVP` 当前明确不支持“在 TUI 中与 Agent 持续聊天”
+- 后续若真实需求明确，也只考虑一个极简 `D2-MVP+ quick ask`：
+  - 仅支持向当前选中的 agent 发送单条纯文本消息
+  - 仅显示纯文本回复
+  - 不扩成终端版 WebChat，不补富文本、附件、完整会话面板或复杂消息历史
+
+一句话约束：
+
+- `D2-MVP` 只能复用现有 `doctor / roster / subtask / daemon status` 能力做轻量终端控制台，不得扩成第二套产品面。
+- `quick ask` 若后续进入评估，也必须作为单独后置增强处理，不并入当前 `D2-MVP` 第一版范围。
+
+### 13.3 第一版信息架构
+
+第一版终端运行台建议固定为四块：
+
+1. `Gateway`
+   - running / stopped
+   - pid / uptime / port / stateDir
+2. `Agents`
+   - resident agent 列表
+   - status / model / conversation / warnings 摘要
+3. `Runtime`
+   - recent subtask 摘要
+   - background / cron / resilience 的 headline 级摘要
+4. `Hints`
+   - 当前最需要用户注意的 warn/fail 项
+
+### 13.4 第一版命令形态
+
+- 第一版命令统一命名为 `bdd console`
+- 默认输出一次快照
+- `--watch` 时按固定间隔刷新
+- 第一版保持只读，不支持在 console 内直接改配置或发消息
+
+### 13.5 可执行任务清单
+
+1. 新增 `bdd console` 命令入口
+   - 复用现有 CLI command registry
+2. 新增最小 gateway websocket 请求 helper
+   - 仅覆盖 `system.doctor / agents.roster.get / subtask.list`
+   - 沿用现有 pairing / auth 规则
+3. 新增 console snapshot builder
+   - 统一拼装 daemon status + doctor + roster + subtasks
+4. 新增 console text renderer
+   - 输出稳定的四块只读视图
+5. 新增 `--watch`
+   - 第一版只做定时清屏刷新
+6. 新增最小自动化验证
+   - 命令输出 smoke
+   - 至少覆盖 gateway 不可用与最小成功快照
+
+### 13.6 第一版完成标志
+
+- `bdd console` 在 gateway 运行时可稳定输出一次完整终端快照
+- `bdd console --watch` 可稳定刷新，不出现明显刷屏错乱
+- 不引入新的产品面、配置面或复杂交互依赖
+- 不破坏现有 `bdd doctor / status / setup / configure` 主链
+
+### 13.7 当前进展
+
+当前 `D2-MVP` 已落地的内容：
+
+1. 已新增 `bdd console` 命令入口，并接入现有 CLI command registry
+2. 已新增最小 gateway websocket helper，复用现有 pairing / auth 规则
+3. 已完成第一版 console snapshot builder，接入：
+   - daemon status
+   - `system.doctor`
+   - `agents.roster.get`
+   - `subtask.list`
+4. 已完成第一版只读终端 renderer，固定输出四块：
+   - `Gateway`
+   - `Agents`
+   - `Runtime`
+   - `Hints`
+5. 已补第二刀摘要增强：
+   - `Gateway` 增加 `stateDir / port / ws endpoint / log / checks summary`
+   - `Agents` 增加 resident summary 行
+   - `Runtime` 增加 subtask summary 行
+   - recent subtask 列表按更新时间稳定排序
+   - 当 `doctor / roster / subtasks` 某一路请求失败时，console 会显式提示来源错误，避免静默显示成“空数据”
+6. 已支持 `--watch` 的定时刷新头部提示
+7. 已补最小 gateway live 成功路径验证
+   - 起临时 gateway server
+   - 通过 `buildConsoleSnapshot` 真实走 `system.doctor / agents.roster.get / subtask.list`
+   - 断言成功快照可见 resident agents、subtask summary 与渲染输出
+8. 已补 `--watch` 的独立 smoke 验证
+   - 新增 `smoke:console-watch`
+   - 真实执行 `bdd console --watch --interval 1`
+   - 校验至少两轮刷新、清屏序列，以及四块结构和关键 summary 保持稳定
+9. 已补 `--watch` 顶部轻状态栏
+   - 显示 gateway 连接状态、刷新间隔、快照时间
+   - 显示 `doctor / roster / subtasks` 数据来源健康度
+   - 保持为单行提示，不扩成新面板
+
+当前仍需收口的剩余项：
+
+1. 补一条更稳定的成功路径验证
+   - 当前已补最小 live 成功快照、独立 watch smoke 与 runtime headline 定向测试；后续若需要，再补更细的退出提示或 watch 文案微调
+2. 视真实使用反馈，再决定是否微调：
+   - `--watch` 的刷新观感
+   - summary 文案压缩
+   - 成功/失败态的噪音控制
+
+### 13.8 第一版收口结论
+
+`D2-MVP` 现阶段可以按“第一版已收口”处理。
+
+收口依据：
+
+1. `bdd console` 的只读主链已经成立
+2. `Gateway / Agents / Runtime / Hints` 四块信息架构已经稳定
+3. `--watch` 已具备：
+   - 多轮刷新
+   - 轻状态栏
+   - 独立 smoke 验证
+4. 已补最小 live 成功路径与 runtime headline 定向测试
+5. 当前剩余事项仅属于观察期 polish，不再构成 `D2-MVP` 第一版阻塞
+
+当前阶段结论：
+
+1. `D2-MVP` 不再继续扩功能面
+2. `quick ask` 不并入当前收口范围，若后续重开，只能作为独立后置增强评估
+3. 后续默认只保留：
+   - 真实使用反馈下的小修
+   - 文案/噪音/刷新体验微调
+   - 必要的回归修补
+
+当前明确不进入的范围仍保持不变：
+
+1. 不做终端聊天主界面
+2. 不做复杂交互式 TUI 框架
+3. 不做配置编辑、cron/webhook/models/community 完整管理面
+4. 不把 `D2-MVP` 扩成第二套 WebChat

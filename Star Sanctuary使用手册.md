@@ -2129,6 +2129,91 @@ Get-Content ~/.star_sanctuary/logs/gateway.log -Wait
 
 > **💡 提示**：如果你使用 Docker 部署，容器本身就是后台运行的，无需使用 Daemon 模式。详见 [3.5 Docker 部署](#35-docker-部署推荐用于生产环境)。
 
+#### 8.1.2 轻量终端控制台（`bdd console`）
+
+如果你想在终端里快速查看 Gateway、resident agents、最近 subtasks 和运行时提示，而不是打开 WebChat，可以使用：
+
+```bash
+# 输出一次当前快照
+corepack pnpm bdd console
+
+# 持续刷新（默认每 5 秒）
+corepack pnpm bdd console --watch
+
+# 指定刷新间隔（秒）
+corepack pnpm bdd console --watch --interval 1
+```
+
+当前 `bdd console` 会固定输出四块：
+
+1. `Gateway`
+   - daemon / pid / uptime / stateDir / port / ws / log
+2. `Agents`
+   - resident agent 摘要、状态、主会话 ID
+3. `Runtime`
+   - recent subtasks、runtime headline、关键摘要
+4. `Hints`
+   - 当前最需要注意的 warn / fail / 来源错误
+
+`--watch` 模式下，顶部还会显示一行轻状态栏，内容包括：
+
+1. gateway 连接状态
+2. 刷新间隔
+3. 当前快照时间
+4. `doctor / roster / subtasks` 数据来源健康度
+5. `Ctrl+C to exit`
+
+使用建议：
+
+1. 想确认服务是不是活着：优先 `bdd console`
+2. 想持续盯运行状态：使用 `bdd console --watch`
+3. 想看静态配置和环境问题：优先 `bdd doctor`
+4. 想完整聊天、看富文本消息或做配置编辑：仍然使用 WebChat
+
+当前边界：
+
+1. `bdd console` 是只读控制台，不支持在终端内直接改配置
+2. 当前不支持在 TUI 中与 Agent 持续聊天
+3. 它不是第二套 WebChat，也不是完整管理后台
+
+#### 8.1.3 云服务器上的推荐搭配
+
+如果你把 Star Sanctuary 部署在云服务器、家庭 NAS 或其他长期运行环境中，推荐把下面三类命令分开使用：
+
+```bash
+# 1. 先看服务是否活着
+corepack pnpm bdd status
+
+# 2. 再持续观察运行态摘要
+corepack pnpm bdd console --watch
+
+# 3. 需要明细时再看日志
+tail -f ~/.star_sanctuary/logs/gateway.log
+```
+
+推荐分工：
+
+1. `bdd status`
+   - 用来确认 gateway 进程是否还在
+   - 适合看 `running / stopped`、`pid`、`uptime`、日志路径
+   - 适合作为“第一眼体检”
+2. `bdd console --watch`
+   - 用来持续看运行态摘要
+   - 适合观察 resident agents、recent subtasks、runtime hints、来源健康度
+   - 适合作为 SSH 会话里的日常值守视图
+3. `logs`
+   - 用来查细节
+   - 当 `bdd console` 只告诉你“哪里不对”时，再进日志看具体报错、堆栈或外部依赖失败原因
+   - 适合作为“第二层排障入口”
+
+一个简单判断方式：
+
+1. 想知道“服务是不是挂了”：看 `bdd status`
+2. 想知道“现在系统整体在干嘛”：看 `bdd console --watch`
+3. 想知道“为什么会这样”：看 `gateway.log`
+
+因此，在云服务器上更推荐把 `bdd console --watch` 当作轻量运维控制台，而不是把它当作聊天界面或完整后台。
+
 ### 8.2 Setup 向导
 
 首次使用或需要重新配置时，运行交互式向导：
