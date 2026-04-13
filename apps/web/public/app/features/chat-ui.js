@@ -63,6 +63,10 @@ export function createChatUiFeature({
     if (!messagesEl) return;
     messagesEl.querySelectorAll(".msg-wrapper[data-latest='true']").forEach((node) => {
       node.setAttribute("data-latest", "false");
+      const bubble = node.querySelector(".msg[data-latest='true']");
+      if (bubble instanceof HTMLElement) {
+        bubble.setAttribute("data-latest", "false");
+      }
       const badge = node.querySelector(".msg-latest-badge");
       if (badge) {
         badge.classList.add("hidden");

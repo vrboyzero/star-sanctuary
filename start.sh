@@ -28,11 +28,19 @@ if [[ -z "${BELLDANDY_ENV_DIR:-}" && -n "${STAR_SANCTUARY_ENV_DIR:-}" ]]; then
     export BELLDANDY_ENV_DIR="${STAR_SANCTUARY_ENV_DIR}"
 fi
 
+print_capability_hints() {
+    echo "[HINT] Default startup does not require optional native features like node-pty, fastembed, protobufjs, or onnxruntime-node."
+    echo "[HINT] A plain \"pnpm approve-builds\" reminder is not a blocker for the default install/start path."
+    echo "[HINT] If the log mentions better-sqlite3, native bindings, ABI, or postinstall failures, switch to Node.js v22.12+ LTS and rerun install/build."
+    echo "[HINT] If the log mentions registry, tarball, ECONNRESET, ETIMEDOUT, or proxy access, fix network/registry access and rerun."
+}
+
 echo "[Star Sanctuary Launcher] Initialization..."
 
 # Check Node
 if ! command -v node &> /dev/null; then
     echo "[ERROR] Node.js not found. Please install Node.js v22 LTS"
+    echo "[HINT] After installing Node.js, reopen the terminal so node/corepack are available on PATH, then rerun ./start.sh."
     exit 1
 fi
 
@@ -42,8 +50,17 @@ node -e 'const v=parseInt(process.version.slice(1),10);if(v<22){console.log("[ER
 # Check PNPM
 if ! command -v pnpm &> /dev/null; then
     echo "[INFO] pnpm not found. Enabling via corepack..."
-    corepack enable
-    corepack prepare pnpm@latest --activate
+    if ! corepack enable; then
+        echo "[ERROR] corepack enable failed."
+        echo "[HINT] Install a Node.js distribution that includes corepack, or repair the current Node.js installation, then rerun ./start.sh."
+        exit 1
+    fi
+    if ! corepack prepare pnpm@latest --activate; then
+        echo "[ERROR] corepack prepare pnpm@latest failed."
+        echo "[HINT] pnpm activation failed before install/build started."
+        print_capability_hints
+        exit 1
+    fi
 fi
 
 # A copied or stale node_modules directory may exist without usable workspace binaries.
@@ -60,7 +77,11 @@ fi
 
 if [ "$NEED_INSTALL" -eq 1 ]; then
     echo "[INFO] Installing dependencies..."
-    corepack pnpm install
+    if ! corepack pnpm install; then
+        echo "[ERROR] Dependency installation failed. Please check the error above."
+        print_capability_hints
+        exit 1
+    fi
 fi
 
 # 检查所有 workspace 包是否已编译（任何一个 dist 缺失都需要构建）
@@ -74,7 +95,11 @@ NEED_BUILD=0
 
 if [ "$NEED_BUILD" -eq 1 ]; then
     echo "[INFO] Building project (compiling TypeScript...)"
-    corepack pnpm build
+    if ! corepack pnpm build; then
+        echo "[ERROR] Build failed. Please check the error above."
+        print_capability_hints
+        exit 1
+    fi
     echo "[INFO] Build complete."
 fi
 

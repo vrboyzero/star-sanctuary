@@ -9,6 +9,7 @@ import {
   parseManualModelValue,
   resolvePreferredAgentSelection,
   resolvePreferredModelSelection,
+  syncAgentSelectOptions,
 } from "./chat-network.js";
 
 describe("chat network agent selection", () => {
@@ -28,6 +29,19 @@ describe("chat network agent selection", () => {
 
   it("falls back to the first roster entry when no selection can be restored", () => {
     expect(resolvePreferredAgentSelection(agents, "missing", "also-missing")).toBe("coder");
+  });
+
+  it("keeps a single-agent roster selectable even when the native select stays hidden", () => {
+    document.body.innerHTML = `<select id="agentSelect" class="hidden"></select>`;
+    const selectEl = document.getElementById("agentSelect");
+    const singleAgentRoster = [{ id: "coder", displayName: "代码专家" }];
+
+    syncAgentSelectOptions(selectEl, singleAgentRoster);
+    selectEl.value = resolvePreferredAgentSelection(singleAgentRoster, "", "");
+
+    expect(selectEl.options).toHaveLength(1);
+    expect(selectEl.options[0].value).toBe("coder");
+    expect(selectEl.value).toBe("coder");
   });
 });
 

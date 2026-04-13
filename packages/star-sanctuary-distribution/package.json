@@ -17,8 +17,19 @@
   ],
   "scripts": {
     "build": "tsc -b",
+    "smoke:install-lifecycle": "node ./scripts/smoke-install-lifecycle.mjs",
+    "smoke:install-script-build": "node ./scripts/smoke-install-script-build.mjs",
+    "smoke:install-script-rollback": "node ./scripts/smoke-install-script-rollback.mjs",
+    "smoke:install-script-rollback:real": "node ./scripts/smoke-install-script-rollback-real.mjs",
+    "smoke:install-script-lifecycle": "node ./scripts/smoke-install-script-lifecycle.mjs",
+    "smoke:install-script-upgrade-handoff": "node ./scripts/smoke-install-script-upgrade-handoff.mjs",
+    "smoke:install-script-build:wsl": "node ./scripts/smoke-install-script-build-wsl.mjs",
+    "smoke:install-script-lifecycle:wsl": "node ./scripts/smoke-install-script-lifecycle-wsl.mjs",
+    "smoke:install-script-rollback:wsl": "node ./scripts/smoke-install-script-rollback-wsl.mjs",
     "build:portable": "node ./scripts/build-portable.mjs",
+    "smoke:install-journey": "node ./scripts/smoke-install-journey.mjs",
     "smoke:portable": "node ./scripts/smoke-portable.mjs",
+    "smoke:install-state": "node ./scripts/smoke-install-state.mjs",
     "verify:portable-deps": "node ./scripts/verify-portable-deps.mjs"
   },
   "dependencies": {

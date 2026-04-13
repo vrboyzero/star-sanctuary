@@ -53,6 +53,11 @@ export type ResolveWorkspaceTemplateDirOptions = {
   mode?: RuntimeMode;
 };
 
+type InstalledSourceLayout = {
+  currentDir: string;
+  envDir: string;
+};
+
 function readTrimmedEnv(
   env: NodeJS.ProcessEnv,
   ...keys: string[]
@@ -90,6 +95,47 @@ function fileExists(filePath: string): boolean {
 
 function resolveFromModuleUrl(moduleUrl: string, relativePath: string): string {
   return path.resolve(path.dirname(fileURLToPath(moduleUrl)), relativePath);
+}
+
+function resolveInstallRelativePath(rootDir: string, relativePath: string | undefined, fallback: string): string {
+  const trimmed = relativePath?.trim();
+  if (!trimmed) {
+    return path.resolve(rootDir, fallback);
+  }
+  if (path.isAbsolute(trimmed)) {
+    return path.resolve(rootDir, fallback);
+  }
+
+  const resolved = path.resolve(rootDir, trimmed);
+  const relativeToRoot = path.relative(rootDir, resolved);
+  if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
+    return path.resolve(rootDir, fallback);
+  }
+  return resolved;
+}
+
+function readInstalledSourceLayout(installInfoPath: string, installRoot: string): InstalledSourceLayout {
+  try {
+    const raw = fs.readFileSync(installInfoPath, "utf-8");
+    const parsed = JSON.parse(raw) as { currentDir?: unknown; envDir?: unknown };
+    return {
+      currentDir: resolveInstallRelativePath(
+        installRoot,
+        typeof parsed.currentDir === "string" ? parsed.currentDir : undefined,
+        "current",
+      ),
+      envDir: resolveInstallRelativePath(
+        installRoot,
+        typeof parsed.envDir === "string" ? parsed.envDir : undefined,
+        ".",
+      ),
+    };
+  } catch {
+    return {
+      currentDir: path.resolve(installRoot, "current"),
+      envDir: path.resolve(installRoot, "."),
+    };
+  }
 }
 
 export function resolveRuntimeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -154,10 +200,10 @@ export function resolvePreferredEnvDirInfo(
         continue;
       }
 
-      const currentDirPath = path.join(candidateRoot, "current");
-      if (normalizedRuntimeDir === candidateRoot || normalizedRuntimeDir === currentDirPath) {
+      const installedLayout = readInstalledSourceLayout(installInfoPath, candidateRoot);
+      if (normalizedRuntimeDir === candidateRoot || normalizedRuntimeDir === installedLayout.currentDir) {
         return {
-          envDir: candidateRoot,
+          envDir: installedLayout.envDir,
           source: "installed_source",
         };
       }

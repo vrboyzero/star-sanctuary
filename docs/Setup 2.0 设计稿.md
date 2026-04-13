@@ -761,9 +761,9 @@ shim 的职责应尽量薄，只做：
 - skills/plugins 配置入口
 - 更强的自动化探测与修复提示
 
-### 8.4 当前进度（2026-04-12）
+### 8.4 当前进度（2026-04-13）
 
-- `D0` 已完成第一版源码包 bootstrap installer，并已补上安装目录固定 `envDir` 与跨平台启动入口对齐；`D1` 已完成 `bdd setup` 第一版 `QuickStart / Advanced` 主流程与第一版 WebChat 配对闭环。
+- `D0` 已完成第一阶段收口：源码包 bootstrap installer、安装到启动闭环稳定性、升级交接与安装诊断口径已形成可交付主链；主线已从 `D0` 切走，后续只保留观察与补盲。`D1` 已完成 `bdd setup` 第一版 `QuickStart / Advanced` 主流程与第一版 WebChat 配对闭环。
 - 当前已完成：
   - 已新增仓库级 `install.ps1 / install.sh`，默认协议改为“GitHub release 源码包 + 本地 `Node/corepack/pnpm/build` bootstrap + 进入 `bdd setup`”。
   - `install.ps1` 已完成一轮真实 Windows 手测：
@@ -775,6 +775,66 @@ shim 的职责应尽量薄，只做：
   - 安装器生成的 `bdd.cmd / bdd / start.bat / start.sh / start.ps1` 现已直接执行安装态 `current/packages/belldandy-core/dist/bin/bdd.js`，不再回退到仓库根 `start.*` 或 `corepack pnpm ... bdd` 开发链。
   - distribution runtime 已补“`install-info.json` + `current/`”安装态识别；即使当前工作目录里存在 `.env.local`，安装形态下的 `bdd setup` 也会优先写回安装根 `envDir`，而不是误命中源码仓库 `legacy_root`。
   - `start.bat / start.sh` 已完成跨平台启动上下文对齐：保留源码态可用性，同时在安装态下自动回推安装根 `envDir`。
+  - 已补一轮 `install-state` smoke：
+    - 会在隔离安装根下生成 `start.bat / start.sh / bdd.cmd / bdd / install-info.json`
+    - 会校验四个 wrapper 的安装态 `runtimeDir/envDir` contract
+    - 会验证重复启动后 `/health` 可达，且安装根 `.env` 会自动生成
+    - Windows 当前已原生覆盖 `start.bat / bdd.cmd`；`start.sh / bdd` 在 Windows 宿主下先走 contract 级语义执行，待后续真实 Unix 环境继续补原生 smoke
+  - 已补一轮 `install-journey` smoke：
+    - 已覆盖 `setup -> doctor -> start -> /health` 一条龙主链
+    - 会在隔离安装根下执行非交互 `bdd setup --json --flow quickstart --scenario local --provider mock`
+    - 会额外校验 `doctor` 看到的 `Environment directory` 与 `.env.local` 都指向安装根，而不是源码仓库
+    - Windows 当前已原生覆盖 `bdd.cmd + start.bat`；Unix wrapper 在 Windows 宿主下先走 semantic 路径，避免把宿主差异误判为安装态回归
+  - 已补一轮 `install-lifecycle` smoke：
+    - 已覆盖“初次 setup/start 成功 -> 重复安装刷新 wrapper/current -> 升级后再次启动”最小 lifecycle
+    - 重复安装与升级阶段都会保留安装根 `.env / .env.local` 与隔离 `stateDir`，并再次通过 `doctor` 与 `/health`
+    - 当前会额外校验自定义 `.env.local` marker、state marker 与 `install-info.json version/tag` 升级语义，避免刷新安装态时误清用户配置
+  - 已补一轮真实 installer script rerun smoke：
+    - 当前会真实调用 `install.ps1` 两次，而不只是刷新安装态 fixture
+    - installer 已补本地测试入口：`-SourceDir + -SkipInstallBuild`，用于在不走 GitHub 下载与真实依赖安装的前提下验证 rerun 语义
+    - 当前已确认第二次安装时会创建 `backups/current-*`、重写 `install-info.json`，并保留安装根 `.env.local` 与隔离 `stateDir`
+  - 已补一轮真实 installer rollback smoke：
+    - 已新增 `install-script-rollback` smoke，覆盖 `after_backup / after_promote / before_install_build / before_setup`
+    - 当前会真实调用 `install.ps1`，并在 failpoint 触发后验证 `current/`、`install-info.json` 与安装根 wrapper 会一起回滚
+    - 当前已确认 rollback 后可继续 `start -> /health -> doctor`，且安装根 `.env.local` 与隔离 `stateDir` 不丢失
+  - 已补一轮 WSL 下真实 `install.sh` rerun / rollback smoke：
+    - 已新增 `install-script-lifecycle:wsl` 与 `install-script-rollback:wsl`
+    - 当前会通过 `wsl.exe -d Ubuntu bash -lc ...` 真实调用 `install.sh`
+    - 为避免宿主 Windows `node_modules` 的原生模块污染 Linux 运行时，当前改用最小 fake source fixture 验证 `install.sh` 的 rerun / rollback 语义本身
+  - 已补一轮 WSL 下真实 `install.sh` staging source build smoke：
+    - 已新增 `install-script-build:wsl`
+    - `install.sh` 现已支持：`--source-dir` 在 `--skip-install-build` 下继续走 symlink 语义，在真实 install/build 时改为复制 source 到 `current/`，避免污染原 source
+    - 当前会先准备 Linux-safe staging source，再由 `WSL Ubuntu` 真实完成 `pnpm install / pnpm build -> bdd setup --json -> start -> /health -> doctor`
+    - 当前已额外确认 `packages/belldandy-memory` 下的 `better-sqlite3` 可在 Linux 安装产物中成功加载
+  - 已补一轮 Windows 下真实 `install.ps1` staging source build smoke：
+    - 已新增 `install-script-build`
+    - 当前会先准备 Windows staging source，再由 `install.ps1` 真实完成 `pnpm install / pnpm build -> bdd setup --json -> start.bat -> /health -> doctor`
+    - 当前已额外确认 `packages/belldandy-memory` 下的 `better-sqlite3` 可在 Windows 安装产物中成功加载
+    - `@belldandy/browser` 已补稳定 `bin/relay.mjs` shim，当前 Windows build smoke 中已不再出现 `Failed to create bin ... belldandy-relay` 的 install warn
+  - 已补一轮更接近真实外部故障的 Windows rollback smoke：
+    - 已新增 `install-script-rollback:real`
+    - 当前已覆盖四类非 failpoint 样本：复制后 source 缺 `package.json`、`corepack prepare` 失败、`pnpm install` 直连 tarball 依赖获取失败、以及 registry 不可达导致的依赖元数据获取失败；另有 source 缺 `packages/belldandy-core/dist/bin/bdd.js` 导致 `bdd setup` 启动失败
+    - 当前已确认上述真实异常后都会恢复 `current/`、`install-info.json`、安装根 wrapper、`.env.local` 与 `stateDir`
+  - 已补一轮升级后 `setup / skip-setup` 交接策略：
+    - fresh install 在未显式 `NoSetup` / `--no-setup` 时仍默认进入 `bdd setup`
+    - 升级时若安装根已存在 `.env.local`，当前会默认跳过 `bdd setup`，保留既有配置并给出显式 rerun setup 提示
+    - 已新增 `-ForceSetup / --force-setup`，用于升级后显式重跑 `bdd setup`
+    - 已新增 `install-script-upgrade-handoff` smoke，当前已验证“升级自动 skip setup”与“force-setup 失败后 rollback 恢复”两条路径
+  - 已收一轮 `pnpm approve-builds` 的 install/build 口径：
+    - `pnpm-workspace.yaml` 已显式沉淀 `ignoredBuiltDependencies: node-pty / onnxruntime-node / protobufjs`
+    - 当前默认安装主链不再出现 `Run "pnpm approve-builds"` 噪音提示
+    - 当前保留的语义是：`node-pty` 继续走 `child_process` fallback，local embedding 继续维持 optional 口径，飞书 SDK 相关 build script 不作为默认 install/build 阻塞项
+    - Windows / WSL 两条真实 build smoke 当前都已确认安装日志中不再出现该 warning
+  - 已收一轮 `start/install/build` 缺能力提示：
+    - `start.bat / start.sh` 在安装产物缺失、尚未构建或核心入口不存在时，当前会直接给出更明确的 install/build 指引
+    - `install.ps1 / install.sh` 在 `Node / corepack / pnpm` 等前置能力缺失时，当前会优先返回更干净的缺能力提示，而不是直接抛底层错误
+  - 已补 `doctor` optional capability 摘要：
+    - `bdd doctor`、`system.doctor` 当前会统一汇总 optional capability 的 `ok / warn / missing`
+    - 当前可直接看到 `node-pty / onnxruntime-node / protobufjs` 等 optional 依赖的缺失是否仅属可降级能力，而不是主链阻塞
+  - 已补“升级后首次启动提醒 / setup 指引”最小版：
+    - 升级 handoff 在默认 skip setup 时，安装总结当前会显式输出 `First start:` 提示
+    - 安装根会生成一次性 `first-start-notice`，首次执行 `start.bat / start.sh` 时会打印 `Post-install note` 后自动清理
+    - `install-script-upgrade-handoff` smoke 当前已额外确认上述一次性提示链路成立
   - `bdd setup` 已完成第一版 2.0 主流程收口：
     - 已支持 `QuickStart / Advanced`
     - 已支持 `local / lan / remote`
@@ -793,6 +853,128 @@ shim 的职责应尽量薄，只做：
     - `models` 已支持显式选择已有 fallback 进行编辑，也已支持删除单个 fallback，而不再只能“清空全部”
     - `webhook` 已支持显式选择已有 rule 进行编辑，也已支持删除单个 rule，而不再只能“清空全部”
     - `cron` 在关闭 heartbeat 时会自动清理旧的 `BELLDANDY_HEARTBEAT_INTERVAL`，避免残留半旧配置
+    - `models` 已完成第一轮更完整编辑能力收口：
+      - `protocol / wireApi` 已从自由文本改为受限选择，降低误填率
+      - 已补高级字段：`requestTimeoutMs / maxRetries / retryBackoffMs / proxyUrl`
+      - 已补第一版 `Organize fallbacks`：
+        - 支持按 `id / displayName / model` 排序
+        - 支持批量删除多个 fallback
+        - 支持批量编辑多个 fallback 的高级字段：`protocol / wireApi / requestTimeoutMs / maxRetries / retryBackoffMs / proxyUrl`
+      - 已补更强的 provider / protocol 维度诊断摘要：
+        - 可汇总 provider bucket 分布、同 provider 重复 fallback、generic provider bucket
+        - 可提示继承全局 `protocol`、`protocol=anthropic + wireApi` 无效组合、`wireApi=responses` 兼容性提醒
+        - 可提示 auth/runtime 缺失与 provider/model 路由重复
+      - 已补轻量 `preferred provider` 配置入口：
+        - 可直接在 `bdd configure models` 中编辑 `BELLDANDY_MODEL_PREFERRED_PROVIDERS`
+        - 确认前会预览当前顺序、下一次生效顺序、命中/未命中的 fallback provider bucket 与 picker grouping 变化
+      - 编辑已有 fallback 时，若修改 `id`，当前已按“重命名”语义处理，不再残留旧条目
+      - 已补重复 `fallback id` 校验，避免静默覆盖其他 profile
+    - `community` 已完成第一轮高级字段接线：
+      - 已补 `reconnect.enabled / maxRetries / backoffMs`
+      - 已补 agent 级 `office.downloadDir / uploadRoots`
+      - 当前配置摘要已可直接看到 `reconnect` 与 `office` 概况
+      - 编辑已有 agent 时，若调整名称，当前已按“重命名”语义处理，不再残留旧 agent
+      - 已补第一版 `Organize agents`：
+        - 支持按 `agent name / room name / office readiness` 排序
+        - 支持批量删除多个 agent
+        - 支持批量编辑多个 agent 的 `room`
+        - 支持批量编辑或清空多个 agent 的 `office`
+      - 已补一轮更完整 Community API / auth 风险提示：
+        - 当前会结合 `BELLDANDY_HOST / BELLDANDY_AUTH_MODE / BELLDANDY_COMMUNITY_API_ENABLED / BELLDANDY_COMMUNITY_API_TOKEN`
+        - 可提示公网暴露、HTTP 明文、gateway token 复用、password 模式下的独立 token 要求、无 agent、遗留 token 等场景
+      - 已补一轮更强 reconnect / office 诊断反馈：
+        - 可提示 `maxRetries=0`、过小/过大的 `backoffMs`
+        - 可提示缺少 `room`、缺少 `office`、仅 `downloadDir`、仅 `uploadRoots`
+        - 可提示多个 agent 共享同一 room
+    - `webhook` 已完成第一轮增强：
+      - 已补 `promptTemplate` 编辑 / 清空
+      - 当前配置摘要已可标记某条 rule 是否使用自定义 `promptTemplate`
+      - 编辑已有 rule 时，若修改 `id`，当前已按“重命名”语义处理，不再残留旧 rule
+      - 已补重复 `webhook id` 校验
+      - 已补样例驱动的 payload schema / 请求预览：
+        - 输入 `Preview payload JSON` 后，当前会额外显示 `Webhook payload schema`
+        - 当前会显示更细的 `Webhook payload schema`，展开顶层字段与一层嵌套字段路径，并附基础样例值 / array item 数量
+        - 当前会显示更细的 `Webhook request preview`，包含 route / agent / conversation handling / payload keys / template coverage / request body preview / resolved prompt preview
+        - 当前支持直接输入 `JSON[]` 做多样例对比预览，会显示 common/union keys、各 sample schema highlights 与逐 sample request preview
+      - 已补一轮更细的批量整理能力：
+        - organize 时当前可先按 `enabled / disabled / custom template / JSON fallback` 过滤
+        - 当前可直接 `Apply to all matched webhooks`
+      - 已补内建批量策略预设：
+          - `Disable enabled JSON fallback webhooks`
+          - `Enable disabled custom-template webhooks`
+        - `Remove disabled JSON fallback webhooks`
+        - 当前可将命中结果命名保存为自定义策略，并支持再次应用
+        - 保存策略时当前会额外显示命中摘要与风险提示（例如当前命中数量、template mix、fallback / nested placeholder 风险）
+        - 当前可管理已保存策略：`rename / remove / clear all`
+        - 执行前当前会额外显示 `Webhook organize preview`，汇总命中数量、变更影响、template mix 与 agent coverage
+        - 当前会自动保存最近一次 `Webhook organize preview`
+        - 当前可选择 `Save matched webhooks as selection`
+        - 当前可直接 `Reuse last preview result / Reuse last selected webhooks`
+    - `cron` 已完成第一轮增强：
+      - 已补 `BELLDANDY_HEARTBEAT_ACTIVE_HOURS`
+      - 已补 `cron-jobs.json` 的最小单条 job 编辑入口：
+        - 支持 add/update/remove one job
+        - 已覆盖 `every / dailyAt / weeklyAt / at`
+        - 已覆盖 `systemEvent / goalApprovalScan`
+      - 当前配置摘要已可看到已有 cron jobs 的最小概况
+    - `community / webhook / cron` 已进入第二轮体验收口：
+      - `community` 已补第一版风险提示与诊断 note：
+        - `http://` 非本地 endpoint 风险
+        - 已有 agent 但关闭 reconnect 的风险
+        - Community API 复用 gateway auth 的风险
+      - `webhook` 已补第一版批量整理与诊断反馈：
+        - 支持批量 enable/disable/remove
+        - 已补 enabled/disabled/custom template 统计
+        - 已补“空白 `promptTemplate` 将回退到 `JSON.stringify(payload)`”提示
+        - 已补模板 `{{placeholder}}` 摘要、字段来源说明、preview 缺字段提示与不支持嵌套字段 warning
+      - `cron` 已补第一版批量整理与诊断反馈：
+      - 支持批量 enable/disable/remove jobs
+      - 已补批量整理前的常用 filter：
+        - `enabled / disabled / failed / skipped / ok`
+        - `silent / goalApprovalScan / systemEvent / missing next run`
+      - 已补组合条件筛选：
+        - 可叠加 `enabled state / last status / payload kind`
+        - 可叠加 `silent / missing next run / failure delivery off / one-shot`
+      - 已补批量策略预设：
+        - `Disable silent failed jobs`
+        - `Disable jobs missing next run`
+        - `Disable silent goal scans`
+        - `Enable disabled goal scans`
+        - `Remove disabled one-shot jobs`
+      - 已补命中结果复用与策略沉淀：
+        - 当前可直接复用上一次选中的 job 集继续做下一轮 organize
+        - 组合条件现已可保存为自定义 strategy，并持久化到 `cron-organize-state.json`
+        - 后续可直接从 saved custom strategy 重新命中并执行同类批量动作
+      - 已补 saved strategy 管理：
+        - 已支持 rename / remove one / clear all
+        - 可直接在 `bdd configure cron -> organize` 内维护 `cron-organize-state.json`
+      - 已补批量策略建议：
+        - 会根据当前 `cron-jobs.json` 自动给出可命中的预设策略与命中数
+        - 当前会在进入 `cron` 模块时直接显示 `Cron organize suggestions`
+        - 建议文案现已带运行历史摘要，例如 failures / skips / missing next run / slow runs / examples
+      - 已补批量命中预览 / dry-run：
+        - 在真正写入前会先显示 `Cron organize preview`
+        - 当前可直接选择 `Review and pick jobs / Apply to all matched jobs / Dry-run only`
+        - dry-run 不会写回 `cron-jobs.json`，只返回本轮命中与影响摘要
+      - 已补 preview 结果复用：
+        - 上一轮 preview / dry-run 的命中结果会持久化到 `cron-organize-state.json`
+        - 下一轮可直接选择 `Reuse last preview result`，复用上一轮 action + matched jobs
+      - 已补 preview 结果复用后的更细编排：
+        - 复用上一轮 preview 结果时，当前可直接保留原 action
+        - 也可直接切换为 `enable / disable / remove` 后继续 apply 或 dry-run
+      - 已补 preview / selection 之间的桥接沉淀：
+        - preview 阶段当前可直接选择 `Save matched jobs as selection`
+        - 保存后无需重走 filter / conditions，下一轮可直接走 `Reuse last selected jobs`
+      - 已补 enabled/disabled job 统计
+      - 已补 `next run missing`、runtime disabled、heartbeat 全天运行等诊断提示
+      - 已补 earliest next run、recent failures、delivery summary 与“一次性 job 保留 / silent job / goalApprovalScan failure 无通知”风险提示
+        - 已补单 job `run now`：
+          - gateway runtime 可达时，直接走真实 `cron.run_now`
+          - runtime 不可达时，回退为写回 `nextRunAtMs=now` 的排队模式
+        - 已补单 job `recovery hint`，可针对 failed/skipped/silent/one-shot job 给出定向恢复建议
+        - 已补单 job `recovery run / replay`：
+          - 可通过真实 `cron.recovery.run` 对最近 failed cron run 触发 targeted recovery
+          - 可回放 background continuation ledger 中的最近失败 / recovery outcome / recovery replay 摘要
     - 已补第一轮输入校验收口：
       - `community endpoint / fallback base URL` 必须为合法 `http(s)` URL
       - `webhook id` 限制为安全 path segment
@@ -818,6 +1000,13 @@ shim 的职责应尽量薄，只做：
     - 已额外完成一轮真实 `PTY` 驱动的安装态 `bdd setup` 冒烟，确认配置写入安装根后可自然 `exit 0`
   - 已补对应定向测试，并已通过 `runtime-paths` 与 `setup` 共享逻辑测试。
   - 已完成 `corepack pnpm build`。
+  - 已完成：
+    - `node .\\packages\\star-sanctuary-distribution\\scripts\\smoke-install-journey.mjs`
+    - `node .\\packages\\star-sanctuary-distribution\\scripts\\smoke-install-lifecycle.mjs`
+    - `node .\\packages\\star-sanctuary-distribution\\scripts\\smoke-install-script-lifecycle.mjs`
+    - `node .\\packages\\star-sanctuary-distribution\\scripts\\smoke-install-script-rollback.mjs`
+    - `node .\\packages\\star-sanctuary-distribution\\scripts\\smoke-install-script-lifecycle-wsl.mjs`
+    - `node .\\packages\\star-sanctuary-distribution\\scripts\\smoke-install-script-rollback-wsl.mjs`
   - 已完成一轮真实 CLI 冒烟，确认“仅显式提供安装态 `runtimeDir`、不显式提供 `envDir`”时，`bdd setup` 仍会写入安装根而不是源码仓库目录。
   - 已完成一轮隔离 `envDir / stateDir` 的真实交互冒烟，确认：
     - `bdd setup --flow advanced --scenario local`
@@ -828,6 +1017,29 @@ shim 的职责应尽量薄，只做：
   - 已完成一轮补 banner 后的真实交互 smoke，确认 `bdd configure community|webhook|cron` 可被固定成功文案稳定命中。
   - 已完成一轮 `configuration unchanged` 的真实交互 smoke，确认 `bdd configure community|models|webhook|cron` 在一路 `Skip` 时都会稳定输出 `configuration unchanged`，且不会误写隔离配置文件。
   - 已补 `Advanced` 校验与 `configure` completion 的定向自动化测试，并通过对应 `vitest`。
+  - 已补 `models` 第一轮增强的定向 helper 测试：
+    - fallback 批量删除
+    - fallback 排序
+    - 可选整数 / URL 高级字段校验
+    - fallback 批量高级字段编辑
+    - provider / protocol 诊断摘要
+    - preferred provider 轻量配置预览与摘要
+    - 已通过精确 `vitest` 文件级验证
+  - 已补 `Advanced` 定向交互 smoke 自动化测试，并通过：
+    - `community`：`reconnect + office` 更新落盘
+    - `community`：Community API 复用 gateway auth 风险提示
+    - `models`：批量编辑 fallback 高级字段
+    - `models`：轻量更新 preferred provider 顺序
+    - `webhook`：`promptTemplate` 编辑、rule 重命名、模板字段来源/缺字段/不支持嵌套字段提示
+    - `webhook`：批量 disable
+    - `cron`：`HEARTBEAT_ACTIVE_HOURS` 与最小 job add/update 落盘
+    - `cron`：批量 disable jobs + organize filter / combined conditions / strategy preset / last hit reuse + automation diagnostics 摘要
+    - `cron`：单 job `run now`
+    - `cron`：单 job `recovery run / replay`
+    - `cron`：单 job `recovery hint`
+  - 已补一轮 runtime 级 `cron.run_now` 定向验证，并通过：
+    - `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/server.doctor.test.ts`
+  - 已补一轮 runtime 级 `cron.recovery.run` 与 recovery replay 定向验证，并复用同一组 `server.doctor / advanced-modules.smoke` 自动化通过
   - 已完成一轮 `Advanced UX` 隔离真实交互 smoke，确认新分支已跑通：
     - `bdd configure community` 已命中“选择已有 agent 更新”与“删除单个 agent”
     - `bdd configure models` 已命中“删除单个 fallback”
@@ -846,22 +1058,51 @@ shim 的职责应尽量薄，只做：
     - 真实 smoke 中已确认最新 assistant 回复可直接在快照中呈现为 `article "Belldandy(MVP) 收到：只回复：E2E smoke ok"`
 - 当前仍未完成：
   - `Linux / WSL` 侧当前剩余边界主要是“非 TTY 自动化驱动 `bdd setup`”的交互兼容性；真实 `PTY`/手工终端主链已确认可自然退出。
+  - `install.sh` 的“真实仓库源码 + Linux 侧依赖安装/构建”版本闭环当前也已在 `WSL Ubuntu` 下完成，但仍不能直接复用宿主 Windows 工作区的 `node_modules`。
+  - 当前若直接在 WSL 里复用宿主 Windows 工作区的 `node_modules`，仍会遇到 `better-sqlite3 invalid ELF header` 这类跨平台原生模块污染问题；现阶段口径是先 staging source，再在 Linux 安装根内独立 `pnpm install/build`。
   - `macOS` 当前暂无验证环境，仍应标记为“未验证”，但不再作为本阶段阻塞项。
-  - assistant 正文的基础自动化可观测性已修补，但长 Markdown、代码块、图片/视频缩略图等富文本回复仍只做了基础回归，后续应继续观察快照稳定性。
-  - `D1` 的 `Advanced` 当前已完成第一轮“摘要 + 已有项选择 + 单条删除”体验收口，但 `models / community / webhook / cron` 仍未进入更完整编辑器、批量操作或更细诊断反馈阶段。
+  - 前端侧 assistant 富文本消息的自动化稳定性覆盖已完成一轮更完整收口：
+    - 已补 `chat-ui` 定向自动化，覆盖长 Markdown、代码块、表格、图片/视频缩略图、复制反馈、media modal、流式增量渲染、完成态音频播放与基础安全清洗
+    - 当前剩余更适合作为观察与补充项，而不是继续作为当前主优先级：
+      - 更接近真实浏览器的 smoke
+      - 更长流式消息下的滚动/重排稳定性
+      - 富媒体快照稳定性持续观察
+  - `models` 已完成第一轮“更完整 fallback 编辑 / 整理”收口，但仍未进入：
+    - primary model / compaction / memory summary 等更完整模型配置面
+    - 更深的 provider 探测 / 连通性校验 / runtime 级失败诊断
+    - 如后续继续增强，优先应围绕现有 picker / catalog / doctor 的轻量联动，而不是扩成新的完整模型控制台
+  - `community / webhook / cron` 的第二轮 CLI 收口已推进到“暂不阻塞主线”的状态；后续若继续补，优先视作增强项，而不是 `D1 Advanced` 第一版必须完成项
+  - `community` 当前剩余更适合放入观察与小修：
+    - Community API / auth 风险文案继续打磨
+    - reconnect / office 诊断继续细化
+  - `webhook` 当前剩余更适合放入增强 backlog：
+    - 内建样例集 / 常见 webhook 场景模板
+  - `cron` 当前剩余更适合放入增强 backlog：
+    - 更细的策略建议演进与组合
 
 ### 8.5 后续计划
 
-1. 当前主优先级仍是继续收口 `D1 Advanced` 第一版模块体验：
-   - `community` 补更完整编辑能力与提示文案，例如更多字段的就地修改
-   - `models` 补更完整 fallback 编辑 / 清理体验，例如批量整理与排序
-   - `webhook / cron` 补更完整编辑体验，而不只是当前的基础开关、单条编辑与单条删除
-2. 前端侧下一条不是继续改基础文本消息链路，而是补 assistant 富文本消息的自动化稳定性覆盖：
-   - 长 Markdown
-   - 代码块 / 表格
-   - 图片 / 视频缩略图
-3. `Linux / WSL` 侧“非 TTY 自动化驱动 bdd setup”暂时降为观察项；若后续真的要做脚本化首装，再单独补自动化兼容层，而不是继续改动真实终端主链。
-4. `macOS` 保持未验证标记，待未来有真实环境时再补，不作为当前阶段继续推进的前置条件。
+1. `D0` 第一阶段已收口，主线正式从 `D0` 切走：
+  - 当前已形成相对完整的“`install -> setup -> start -> /health -> doctor`”可交付主链
+  - installer 主链、install/start/health/lifecycle/rollback/build/upgrade-handoff、`pnpm approve-builds` 口径、`start/install/build` 缺能力提示，以及 `doctor` optional capability 摘要都已补齐
+  - 升级后首次启动的一次性提醒链路也已落地：安装总结 `First start:`、安装根 `first-start-notice`、首次 `start.*` 的 `Post-install note`
+  - 后续不再继续扩 `D0` 功能面；默认仅保留：
+    - `macOS` 有真实环境时再做实机验证
+    - 真实外部失败样本驱动的小修
+    - 安装日志 / 文案 / warning 级别的收口补盲
+2. 前端侧 assistant 富文本消息的自动化稳定性覆盖已完成一轮更完整推进，当前转入观察与补充：
+   - 已覆盖长 Markdown、代码块 / 表格、图片 / 视频缩略图、复制反馈、media modal、流式增量渲染、完成态音频播放与基础安全清洗
+   - 后续若继续补，优先是更接近真实浏览器的 smoke、长流式消息滚动稳定性与富媒体快照稳定性观察
+3. `D1 Advanced` 第一版模块体验暂时收口，转入观察与小修：
+   - `models`：批量高级字段编辑、更强诊断摘要与轻量 preferred provider 配置入口已补齐，后续继续保持观察，不扩成完整模型配置中心
+   - `community`：后续若再补，优先是 Community API / auth 风险文案与 reconnect / office 诊断细化
+   - `webhook`：后续若再补，优先是内建样例集 / 常见 webhook 场景模板
+   - `cron`：后续若再补，优先是更细的策略建议演进与组合
+4. `Linux / WSL` 侧“非 TTY 自动化驱动 bdd setup”暂时降为观察项；若后续真的要做脚本化首装，再单独补自动化兼容层，而不是继续改动真实终端主链。
+5. `macOS` 保持未验证标记，待未来有真实环境时再补，不作为当前阶段继续推进的前置条件。
+6. `H4` 当前改为观察与小修项，不再作为本轮主线：
+   - `H4-1` 与 `H4-2` 的最小可观测闭环和统一 diagnostics 口径已成立
+   - 后续默认只观察真实 fallback / degrade 信号质量、告警文案与 runtime 证据闭环，不继续向更深 provider runtime 重构扩面
 
 ### 8.6 当前可用安装命令
 

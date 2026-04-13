@@ -27,6 +27,25 @@ describe("doctor observability formatting", () => {
             maxToolRiskLevel: "high",
             handoffStyle: "summary",
           },
+          runtimeResilience: {
+            configuredFallbackCount: 1,
+            alertLevel: "warn",
+            alertCode: "recent_degrade",
+            alertMessage: "Latest runtime required retry/fallback to recover.",
+            dominantReason: "server_error",
+            reasonClusterSummary: "server_error + timeout",
+            mixedSignalHint: "Mixed 5xx + timeout signals suggest upstream instability; verify provider health and network latency before widening retries.",
+            recoveryHint: "5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.",
+            latestStatus: "success",
+            latestSignal: "openai_chat/primary_chat",
+            latestRoute: "backup/kimi-k2",
+            latestRouteBehavior: "switched primary/gpt-4.1 -> backup/kimi-k2",
+            latestReasonSummary: "server_error=1, timeout=1",
+            overallReasonSummary: "server_error=1, timeout=1, rate_limit=1",
+            totalsSummary: "observed=3, degraded=1, failed=0, retry=1, switch=1, cooldown=0",
+            compactionRoute: "openai.com/gpt-4.1-mini",
+            latestHeadline: "Latest run recovered via fallback (backup/kimi-k2); retry=1, switch=1, cooldown=0.",
+          },
           delegationReason: null,
         },
         summary: {
@@ -539,6 +558,20 @@ describe("doctor observability formatting", () => {
         ],
         headline: "records=5; sent=3; failed=2; resolve_failed=1; delivery_failed=1; confirm=required",
       },
+      runtimeResilienceDiagnostics: {
+        alertLevel: "warn",
+        alertCode: "recent_degrade",
+        alertMessage: "Latest runtime required retry/fallback to recover.",
+        dominantReason: "server_error",
+        reasonClusterSummary: "server_error + timeout",
+        mixedSignalHint: "Mixed 5xx + timeout signals suggest upstream instability; verify provider health and network latency before widening retries.",
+        recoveryHint: "5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.",
+        latestSignal: "openai_chat/primary_chat | agent=default | conv=conv-1",
+        latestRouteBehavior: "switched primary/gpt-4.1 -> backup/kimi-k2",
+        latestReasonSummary: "server_error=1, timeout=1",
+        overallReasonSummary: "server_error=1, timeout=1, rate_limit=1",
+        totalsSummary: "observed=3, degraded=1, failed=0, retry=1, switch=1, cooldown=0",
+      },
       runtimeResilience: {
         version: 1,
         updatedAt: 1712736000000,
@@ -658,6 +691,21 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("runtime triggered");
     expect(lines.join("\n")).toContain("session goal_node");
     expect(lines.join("\n")).toContain("sources: explicit_user_intent, goal_review_pressure");
+    expect(lines.join("\n")).toContain("latest signal: openai_chat/primary_chat");
+    expect(lines.join("\n")).toContain("route: switched primary/gpt-4.1 -> backup/kimi-k2");
+    expect(lines.join("\n")).toContain("totals: observed=3, degraded=1, failed=0, retry=1, switch=1, cooldown=0");
+    expect(lines.join("\n")).toContain("reasons: server_error=1, timeout=1, rate_limit=1");
+    expect(lines.join("\n")).toContain("reason focus: server_error");
+    expect(lines.join("\n")).toContain("reason cluster: server_error + timeout");
+    expect(lines.join("\n")).toContain("mixed signal: Mixed 5xx + timeout signals suggest upstream instability; verify provider health and network latency before widening retries.");
+    expect(lines.join("\n")).toContain("recovery hint: 5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.");
+    expect(lines.join("\n")).toContain("alert warn/recent_degrade");
+    expect(lines.join("\n")).toContain("Latest runtime required retry/fallback to recover.");
+    expect(lines.join("\n")).toContain("runtime resilience: alert=warn/recent_degrade");
+    expect(lines.join("\n")).toContain("reason_focus=server_error");
+    expect(lines.join("\n")).toContain("reason_cluster=server_error + timeout");
+    expect(lines.join("\n")).toContain("mixed_hint=Mixed 5xx + timeout signals suggest upstream instability; verify provider health and network latency before widening retries.");
+    expect(lines.join("\n")).toContain("hint=5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.");
     expect(lines.join("\n")).toContain("signals: candidate, review");
     expect(lines.join("\n")).toContain("Latest turn: 请帮我整理这轮长期任务的经验候选");
     expect(lines.join("\n")).toContain("Nudge: 当前输入已具备最小 learning/review 条件，可继续进入 candidate / governance 审阅。");

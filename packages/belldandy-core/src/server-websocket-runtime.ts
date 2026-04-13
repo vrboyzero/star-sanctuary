@@ -162,6 +162,8 @@ const DEFAULT_METHODS = [
   "goal.checkpoint.expire",
   "goal.checkpoint.reopen",
   "goal.checkpoint.escalate",
+  "cron.run_now",
+  "cron.recovery.run",
   "goal.task_graph.read",
   "goal.task_graph.create",
   "goal.task_graph.update",

@@ -119,7 +119,22 @@ test("system.doctor exposes tool behavior observability summary", async () => {
       fallbackStrategy: expect.any(Array),
     });
     expect(response.payload?.toolBehaviorObservability?.summary).toContain("## run_command");
+    expect(response.payload?.optionalCapabilities).toMatchObject({
+      summary: {
+        totalCount: 3,
+        headline: expect.any(String),
+      },
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: "pty" }),
+        expect.objectContaining({ id: "local_embedding" }),
+        expect.objectContaining({ id: "build_scripts" }),
+      ]),
+    });
     expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "optional_capabilities",
+        status: expect.stringMatching(/pass|warn/),
+      }),
       expect.objectContaining({
         id: "tool_behavior_observability",
         status: "pass",
@@ -1495,17 +1510,42 @@ test("system.doctor exposes runtime resilience summary and launch explainability
         degraded: true,
       },
     });
+    expect(response.payload?.runtimeResilienceDiagnostics).toMatchObject({
+      alertLevel: "warn",
+      alertCode: "recent_degrade",
+      alertMessage: "Latest runtime required retry/fallback to recover.",
+      dominantReason: "server_error",
+      reasonClusterSummary: "server_error",
+      mixedSignalHint: null,
+      recoveryHint: "5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.",
+      latestSignal: "openai_chat/primary_chat | agent=default | conv=conv-runtime-resilience",
+      latestRouteBehavior: "switched primary/gpt-4.1 -> backup/kimi-k2",
+      latestReasonSummary: "server_error=1",
+      totalsSummary: "observed=1, degraded=1, failed=0, retry=1, switch=1, cooldown=0",
+    });
     expect(response.payload?.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "runtime_resilience",
         status: "warn",
+        message: "recent_degrade: Latest runtime required retry/fallback to recover.",
       }),
     ]));
     expect(response.payload?.promptObservability?.launchExplainability).toMatchObject({
       runtimeResilience: {
+        alertLevel: "warn",
+        alertCode: "recent_degrade",
+        alertMessage: "Latest runtime required retry/fallback to recover.",
+        dominantReason: "server_error",
+        reasonClusterSummary: "server_error",
+        mixedSignalHint: null,
+        recoveryHint: "5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.",
         configuredFallbackCount: 1,
         latestStatus: "success",
         latestRoute: "backup/kimi-k2",
+        latestSignal: "openai_chat/primary_chat | agent=default | conv=conv-runtime-resilience",
+        latestRouteBehavior: "switched primary/gpt-4.1 -> backup/kimi-k2",
+        latestReasonSummary: "server_error=1",
+        totalsSummary: "observed=1, degraded=1, failed=0, retry=1, switch=1, cooldown=0",
       },
     });
   } finally {
@@ -1905,6 +1945,104 @@ test("system.doctor exposes background continuation runtime summary when provide
         status: "warn",
       }),
     ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("cron.run_now executes immediate cron runtime requests when provided", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const runCronJobNow = vi.fn(async (jobId: string) => ({
+    status: "ok" as const,
+    runId: `cron-run-${jobId}`,
+    summary: "cron job executed immediately",
+  }));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    runCronJobNow,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "cron-run-now",
+      method: "cron.run_now",
+      params: { jobId: "job-live" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "cron-run-now"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "cron-run-now");
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      jobId: "job-live",
+      status: "ok",
+      runId: "cron-run-job-live",
+      summary: "cron job executed immediately",
+    });
+    expect(runCronJobNow).toHaveBeenCalledWith("job-live");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("cron.recovery.run executes targeted cron recovery requests when provided", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const runCronRecovery = vi.fn(async (jobId: string) => ({
+    outcome: "succeeded" as const,
+    sourceRunId: `cron-failed-${jobId}`,
+    recoveryRunId: `cron-recovered-${jobId}`,
+    reason: "recovered from latest failure",
+  }));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    runCronRecovery,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "cron-recovery-run",
+      method: "cron.recovery.run",
+      params: { jobId: "job-live" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "cron-recovery-run"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "cron-recovery-run");
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      jobId: "job-live",
+      outcome: "succeeded",
+      sourceRunId: "cron-failed-job-live",
+      recoveryRunId: "cron-recovered-job-live",
+      reason: "recovered from latest failure",
+    });
+    expect(runCronRecovery).toHaveBeenCalledWith("job-live");
   } finally {
     ws.close();
     await closeP;

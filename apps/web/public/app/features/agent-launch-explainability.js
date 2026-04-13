@@ -98,9 +98,20 @@ function formatRuntimeResilience(value, t) {
   const item = normalizeObject(value);
   if (!item) return "";
   const parts = [
+    normalizeString(item.alertLevel) ? `alert=${normalizeString(item.alertLevel)}/${normalizeString(item.alertCode) || "-"}` : "",
+    normalizeString(item.alertMessage) ? `alert_note=${normalizeString(item.alertMessage)}` : "",
+    normalizeString(item.dominantReason) ? `reason_focus=${normalizeString(item.dominantReason)}` : "",
+    normalizeString(item.reasonClusterSummary) ? `reason_cluster=${normalizeString(item.reasonClusterSummary)}` : "",
+    normalizeString(item.mixedSignalHint) ? `mixed_hint=${normalizeString(item.mixedSignalHint)}` : "",
+    normalizeString(item.recoveryHint) ? `hint=${normalizeString(item.recoveryHint)}` : "",
     typeof item.configuredFallbackCount === "number" ? `fallbacks=${item.configuredFallbackCount}` : "",
     normalizeString(item.latestStatus) ? `latest=${normalizeString(item.latestStatus)}` : "",
+    normalizeString(item.latestSignal) ? `signal=${normalizeString(item.latestSignal)}` : "",
     normalizeString(item.latestRoute) ? `route=${normalizeString(item.latestRoute)}` : "",
+    normalizeString(item.latestRouteBehavior) ? `route_note=${normalizeString(item.latestRouteBehavior)}` : "",
+    normalizeString(item.latestReasonSummary) ? `latest_reasons=${normalizeString(item.latestReasonSummary)}` : "",
+    normalizeString(item.overallReasonSummary) ? `reasons=${normalizeString(item.overallReasonSummary)}` : "",
+    normalizeString(item.totalsSummary) ? `totals=${normalizeString(item.totalsSummary)}` : "",
     normalizeString(item.compactionRoute) ? `compaction=${normalizeString(item.compactionRoute)}` : "",
     normalizeString(item.latestHeadline) ? `note=${normalizeString(item.latestHeadline)}` : "",
   ];

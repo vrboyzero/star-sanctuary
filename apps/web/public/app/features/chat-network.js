@@ -39,6 +39,19 @@ export function resolvePreferredAgentSelection(agents, currentValue = "", savedV
   return typeof items[0]?.id === "string" ? items[0].id : "";
 }
 
+export function syncAgentSelectOptions(agentSelectEl, agents) {
+  if (!agentSelectEl) return;
+  const items = Array.isArray(agents) ? agents : [];
+  agentSelectEl.innerHTML = "";
+  for (const agent of items) {
+    if (!agent || typeof agent !== "object" || !agent.id) continue;
+    const opt = document.createElement("option");
+    opt.value = agent.id;
+    opt.textContent = agent.displayName || agent.id;
+    agentSelectEl.appendChild(opt);
+  }
+}
+
 export const MANUAL_MODEL_SENTINEL = "__manual_model__";
 export const MANUAL_MODEL_PREFIX = "manual:";
 
@@ -412,6 +425,7 @@ export function createChatNetworkFeature({
 
     const agents = res.payload.agents;
     lastAgentListState = agents;
+    syncAgentSelectOptions(agentSelectEl, agents);
     if (agents.length <= 1) {
       agentSelectEl.classList.add("hidden");
       const selectedAgentId = resolvePreferredAgentSelection(
@@ -425,14 +439,6 @@ export function createChatNetworkFeature({
       }
       onAgentListLoaded?.(agents, selectedAgentId || agentSelectEl.value || agents[0]?.id || "");
       return;
-    }
-
-    agentSelectEl.innerHTML = "";
-    for (const agent of agents) {
-      const opt = document.createElement("option");
-      opt.value = agent.id;
-      opt.textContent = agent.displayName;
-      agentSelectEl.appendChild(opt);
     }
 
     const selectedAgentId = resolvePreferredAgentSelection(

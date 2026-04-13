@@ -133,6 +133,10 @@ function normalizeStringArray(value: unknown): string[] | undefined {
   return items.length > 0 ? [...new Set(items)] : undefined;
 }
 
+function stripUtf8Bom(raw: string): string {
+  return raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+}
+
 const ROLE_DEFAULT_ALLOWED_TOOL_FAMILIES: Partial<Record<AgentProfileDefaultRole, ToolContractFamily[]>> = {
   coder: ["workspace-read", "workspace-write", "patch", "command-exec", "memory", "goal-governance"],
   researcher: ["network-read", "workspace-read", "browser", "memory", "goal-governance"],
@@ -281,7 +285,7 @@ export function resolveAgentProfileMetadata(
 export async function loadAgentProfiles(filePath: string): Promise<AgentProfile[]> {
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
-    const data = JSON.parse(raw) as unknown;
+    const data = JSON.parse(stripUtf8Bom(raw)) as unknown;
 
     if (!data || typeof data !== "object") return [];
 

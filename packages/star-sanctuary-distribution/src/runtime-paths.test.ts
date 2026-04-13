@@ -51,6 +51,58 @@ test("resolvePreferredEnvDirInfo prefers install root when runtime dir points to
   expect(result.source).toBe("installed_source");
 });
 
+test("resolvePreferredEnvDirInfo honors install-info currentDir and envDir metadata", () => {
+  const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "star-sanctuary-install-layout-"));
+  const runtimeDir = path.join(installRoot, "runtime");
+  const envDir = path.join(installRoot, "config");
+
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.mkdirSync(envDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(installRoot, "install-info.json"),
+    JSON.stringify({ currentDir: "runtime", envDir: "config" }, null, 2) + "\n",
+    "utf-8",
+  );
+
+  try {
+    const result = resolvePreferredEnvDirInfo({
+      cwd: "E:/project/star-sanctuary",
+      runtimeDir,
+      stateDir: "C:/Users/test/.star_sanctuary",
+    });
+
+    expect(result.envDir).toBe(path.resolve(envDir));
+    expect(result.source).toBe("installed_source");
+  } finally {
+    fs.rmSync(installRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolvePreferredEnvDirInfo ignores install-info paths that escape install root", () => {
+  const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "star-sanctuary-install-escape-"));
+  const runtimeDir = path.join(installRoot, "current");
+
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(installRoot, "install-info.json"),
+    JSON.stringify({ currentDir: "../runtime", envDir: "../config" }, null, 2) + "\n",
+    "utf-8",
+  );
+
+  try {
+    const result = resolvePreferredEnvDirInfo({
+      cwd: "E:/project/star-sanctuary",
+      runtimeDir,
+      stateDir: "C:/Users/test/.star_sanctuary",
+    });
+
+    expect(result.envDir).toBe(path.resolve(installRoot));
+    expect(result.source).toBe("installed_source");
+  } finally {
+    fs.rmSync(installRoot, { recursive: true, force: true });
+  }
+});
+
 test("resolveGatewayRuntimePaths uses state-dir env fallback when project root has no env", () => {
   const cwd = "E:/fresh-install/star-sanctuary";
   const runtimePaths = resolveGatewayRuntimePaths({
@@ -80,6 +132,34 @@ test("resolveGatewayRuntimePaths prefers installed-source env over cwd legacy en
     });
 
     expect(runtimePaths.envDir).toBe(path.resolve(installRoot));
+    expect(runtimePaths.envSource).toBe("installed_source");
+  } finally {
+    fs.rmSync(installRoot, { recursive: true, force: true });
+  }
+});
+
+test("resolveGatewayRuntimePaths reuses install-info envDir metadata for installed runtime", () => {
+  const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "star-sanctuary-install-runtime-"));
+  const runtimeDir = path.join(installRoot, "runtime");
+  const envDir = path.join(installRoot, "env");
+
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.mkdirSync(envDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(installRoot, "install-info.json"),
+    JSON.stringify({ currentDir: "runtime", envDir: "env" }, null, 2) + "\n",
+    "utf-8",
+  );
+
+  try {
+    const runtimePaths = resolveGatewayRuntimePaths({
+      cwd: "E:/project/star-sanctuary",
+      runtimeDir,
+      stateDir: "C:/Users/test/.star_sanctuary",
+      env: {},
+    });
+
+    expect(runtimePaths.envDir).toBe(path.resolve(envDir));
     expect(runtimePaths.envSource).toBe("installed_source");
   } finally {
     fs.rmSync(installRoot, { recursive: true, force: true });

@@ -104,6 +104,7 @@ import type { WebhookConfig, IdempotencyManager } from "./webhook/index.js";
 import type { GoalManager } from "./goals/manager.js";
 import { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
 import { handleAgentsSystemMethod } from "./server-methods/agents-system.js";
+import { handleCronRuntimeMethod } from "./server-methods/cron-runtime.js";
 import { handleModelsConfigMethod } from "./server-methods/models-config.js";
 import { handleQueryRuntimeDomainsMethod } from "./server-methods/query-runtime-domains.js";
 import { handleConfigChannelMethod } from "./server-methods/config-channel.js";
@@ -253,6 +254,20 @@ export type GatewayServerOptions = {
   getCronRuntimeDoctorReport?: () => Promise<CronRuntimeDoctorReport | undefined>;
   /** Background continuation runtime 摘要 */
   getBackgroundContinuationRuntimeDoctorReport?: () => Promise<BackgroundContinuationRuntimeDoctorReport | undefined>;
+  /** Cron runtime immediate run */
+  runCronJobNow?: (jobId: string) => Promise<{
+    runId?: string;
+    status: "ok" | "error" | "skipped";
+    summary?: string;
+    reason?: string;
+  }>;
+  /** Cron runtime targeted recovery */
+  runCronRecovery?: (jobId: string) => Promise<{
+    outcome: "succeeded" | "failed" | "throttled" | "skipped_not_eligible";
+    sourceRunId?: string;
+    recoveryRunId?: string;
+    reason?: string;
+  }>;
   /** 当 community/http 等入口命中 DM allowlist 阻断时记录待审批 sender */
   onChannelSecurityApprovalRequired?: (input: ChannelSecurityApprovalRequestInput) => void | Promise<void>;
 };
@@ -945,6 +960,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     residentMemoryManagers: opts.residentMemoryManagers,
     getCronRuntimeDoctorReport: opts.getCronRuntimeDoctorReport,
     getBackgroundContinuationRuntimeDoctorReport: opts.getBackgroundContinuationRuntimeDoctorReport,
+    runCronJobNow: opts.runCronJobNow,
+    runCronRecovery: opts.runCronRecovery,
     handleReq,
   });
   const websocketRuntime = createGatewayWebSocketRuntime({
@@ -1302,10 +1319,12 @@ async function handleReq(
       "goal.checkpoint.list",
       "goal.checkpoint.request",
       "goal.checkpoint.approve",
-      "goal.checkpoint.reject",
-      "goal.checkpoint.expire",
-      "goal.checkpoint.reopen",
-      "goal.checkpoint.escalate",
+    "goal.checkpoint.reject",
+    "goal.checkpoint.expire",
+    "goal.checkpoint.reopen",
+    "goal.checkpoint.escalate",
+    "cron.run_now",
+    "cron.recovery.run",
   ];
   if (secureMethods.includes(req.method)) {
     const allowed = await isClientAllowed({ clientId: ctx.clientId, stateDir: ctx.stateDir });
@@ -1555,6 +1574,13 @@ async function handleReq(
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
       });
     }
+
+    case "cron.run_now":
+    case "cron.recovery.run":
+      return handleCronRuntimeMethod(req, {
+        runCronJobNow: ctx.runCronJobNow,
+        runCronRecovery: ctx.runCronRecovery,
+      });
 
     case "goal.create":
     case "goal.list":

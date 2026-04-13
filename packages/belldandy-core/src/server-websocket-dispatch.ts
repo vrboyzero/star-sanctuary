@@ -95,6 +95,18 @@ export type GatewayWebSocketRequestContext = {
   residentMemoryManagers?: ScopedMemoryManagerRecord[];
   getCronRuntimeDoctorReport?: () => Promise<CronRuntimeDoctorReport | undefined>;
   getBackgroundContinuationRuntimeDoctorReport?: () => Promise<BackgroundContinuationRuntimeDoctorReport | undefined>;
+  runCronJobNow?: (jobId: string) => Promise<{
+    runId?: string;
+    status: "ok" | "error" | "skipped";
+    summary?: string;
+    reason?: string;
+  }>;
+  runCronRecovery?: (jobId: string) => Promise<{
+    outcome: "succeeded" | "failed" | "throttled" | "skipped_not_eligible";
+    sourceRunId?: string;
+    recoveryRunId?: string;
+    reason?: string;
+  }>;
 };
 
 type CreateGatewayWebSocketRequestHandlerOptions = Omit<
@@ -163,6 +175,8 @@ export function buildGatewayWebSocketRequestContext(
     residentMemoryManagers: options.residentMemoryManagers,
     getCronRuntimeDoctorReport: options.getCronRuntimeDoctorReport,
     getBackgroundContinuationRuntimeDoctorReport: options.getBackgroundContinuationRuntimeDoctorReport,
+    runCronJobNow: options.runCronJobNow,
+    runCronRecovery: options.runCronRecovery,
   };
 }
 

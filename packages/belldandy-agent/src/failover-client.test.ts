@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FailoverClient, type ModelProfile } from "./failover-client.js";
+import { FailoverClient, loadModelFallbacks, type ModelProfile } from "./failover-client.js";
 
 function createProfile(overrides?: Partial<ModelProfile>): ModelProfile {
   return {
@@ -198,6 +202,37 @@ describe("FailoverClient", () => {
         crossProfileFallbacks: 0,
       },
     });
+  });
+
+  it("loads UTF-8 BOM fallback config files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-fallback-bom-"));
+    const configPath = path.join(tempDir, "models.json");
+    await fs.writeFile(configPath, "\uFEFF" + JSON.stringify({
+      fallbacks: [
+        {
+          id: "backup",
+          baseUrl: "https://backup.example.com",
+          apiKey: "sk-backup",
+          model: "backup-model",
+        },
+      ],
+    }), "utf-8");
+
+    await expect(loadModelFallbacks(configPath)).resolves.toEqual([
+      {
+        id: "backup",
+        displayName: undefined,
+        baseUrl: "https://backup.example.com",
+        apiKey: "sk-backup",
+        model: "backup-model",
+        protocol: undefined,
+        wireApi: undefined,
+        requestTimeoutMs: undefined,
+        maxRetries: undefined,
+        retryBackoffMs: undefined,
+        proxyUrl: undefined,
+      },
+    ]);
   });
 
   it("surfaces exhausted summaries when all profiles fail", async () => {

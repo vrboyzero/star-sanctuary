@@ -2728,6 +2728,43 @@ const serverOptions = buildGatewayServerOptions({
     store: cronStore,
     scheduler: cronSchedulerHandle,
   }),
+  runCronJobNow: async (jobId) => {
+    if (!cronSchedulerHandle) {
+      return {
+        status: "skipped" as const,
+        reason: "Cron scheduler is not running.",
+      };
+    }
+    return cronSchedulerHandle.runJobNow(jobId);
+  },
+  runCronRecovery: async (jobId) => {
+    const candidate = (await backgroundContinuationLedger.listRecent(40)).find((item) => {
+      return item.kind === "cron"
+        && item.sourceId === jobId
+        && item.status === "failed"
+        && item.latestRecoveryOutcome !== "succeeded";
+    });
+    if (!candidate) {
+      return {
+        outcome: "skipped_not_eligible" as const,
+        reason: `No recoverable failed cron run was found for ${jobId}.`,
+      };
+    }
+    if (!backgroundRecoveryRuntime) {
+      return {
+        outcome: "skipped_not_eligible" as const,
+        sourceRunId: candidate.runId,
+        reason: "Background recovery runtime is not available.",
+      };
+    }
+    const result = await backgroundRecoveryRuntime.maybeRecover(candidate);
+    return {
+      outcome: result.outcome,
+      sourceRunId: candidate.runId,
+      ...(result.recoveryRunId ? { recoveryRunId: result.recoveryRunId } : {}),
+      ...(result.reason ? { reason: result.reason } : {}),
+    };
+  },
   getBackgroundContinuationRuntimeDoctorReport: async () => buildBackgroundContinuationRuntimeDoctorReport({
     ledger: backgroundContinuationLedger,
   }),

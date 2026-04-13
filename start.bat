@@ -28,12 +28,24 @@ if not defined STAR_SANCTUARY_ENV_DIR (
 )
 if not defined BELLDANDY_ENV_DIR if defined STAR_SANCTUARY_ENV_DIR set "BELLDANDY_ENV_DIR=%STAR_SANCTUARY_ENV_DIR%"
 
+goto :after_helpers
+
+:print_capability_hints
+echo [HINT] Default startup does not require optional native features like node-pty, fastembed, protobufjs, or onnxruntime-node.
+echo [HINT] A plain "pnpm approve-builds" reminder is not a blocker for the default install/start path.
+echo [HINT] If the log mentions better-sqlite3, native bindings, ABI, or postinstall failures, switch to Node.js v22.12+ LTS and rerun install/build.
+echo [HINT] If the log mentions registry, tarball, ECONNRESET, ETIMEDOUT, or proxy access, fix network/registry access and rerun.
+goto :eof
+
+:after_helpers
+
 echo [Star Sanctuary Launcher] Initialization...
 
 REM Check whether Node.js is installed.
 node -v >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Node.js not found. Please install Node.js v22 LTS from https://nodejs.org/
+    echo [HINT] After installing Node.js, reopen the terminal so node/corepack are available on PATH, then rerun start.bat.
     pause
     exit /b 1
 )
@@ -50,7 +62,20 @@ call pnpm -v >nul 2>nul
 if %errorlevel% neq 0 (
     echo [INFO] pnpm not found. Enabling via corepack...
     call corepack enable
+    if %errorlevel% neq 0 (
+        echo [ERROR] corepack enable failed.
+        echo [HINT] Install a Node.js distribution that includes corepack, or repair the current Node.js installation, then rerun start.bat.
+        pause
+        exit /b 1
+    )
     call corepack prepare pnpm@latest --activate
+    if %errorlevel% neq 0 (
+        echo [ERROR] corepack prepare pnpm@latest failed.
+        echo [HINT] pnpm activation failed before install/build started.
+        call :print_capability_hints
+        pause
+        exit /b 1
+    )
 )
 
 REM A copied or stale node_modules directory may exist without usable workspace binaries.
@@ -69,6 +94,7 @@ if "%NEED_INSTALL%"=="1" (
     call corepack pnpm install
     if %errorlevel% neq 0 (
         echo [ERROR] Dependency installation failed. Please check the error above.
+        call :print_capability_hints
         pause
         exit /b 1
     )
@@ -88,6 +114,7 @@ echo [INFO] Building project (compiling TypeScript...)
 call corepack pnpm build
 if %errorlevel% neq 0 (
     echo [ERROR] Build failed. Please check the error above.
+    call :print_capability_hints
     pause
     exit /b 1
 )

@@ -125,6 +125,28 @@ test("loadAgentProfiles accepts resident metadata extensions and ignores invalid
   });
 });
 
+test("loadAgentProfiles accepts UTF-8 BOM config files", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-agent-profile-bom-"));
+  const configPath = path.join(tempDir, "agents.json");
+  await fs.writeFile(configPath, "\uFEFF" + JSON.stringify({
+    agents: [
+      {
+        id: "coder",
+        displayName: "Coder",
+        model: "primary",
+      },
+    ],
+  }), "utf-8");
+
+  const profiles = await loadAgentProfiles(configPath);
+  expect(profiles).toHaveLength(1);
+  expect(profiles[0]).toMatchObject({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+  });
+});
+
 test("resolveModelConfig accepts manual model override without falling back to named profiles", () => {
   const resolved = resolveModelConfig(
     "manual:gpt-5.1-mini",

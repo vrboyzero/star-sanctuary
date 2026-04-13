@@ -58,6 +58,23 @@ test("bdd doctor json output includes tool behavior observability", async () => 
       useWhen: expect.any(Array),
       preflightChecks: expect.any(Array),
     });
+    expect(parsed.optionalCapabilities).toMatchObject({
+      summary: {
+        totalCount: 3,
+        headline: expect.any(String),
+      },
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: "pty" }),
+        expect.objectContaining({ id: "local_embedding" }),
+        expect.objectContaining({ id: "build_scripts" }),
+      ]),
+    });
+    expect(parsed.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "Optional Capabilities",
+        message: expect.any(String),
+      }),
+    ]));
     expect(parsed.toolContractV2Observability).toMatchObject({
       summary: {
         totalCount: expect.any(Number),
@@ -279,6 +296,7 @@ test("bdd doctor json output includes runtime resilience summary when available"
 
     const output = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
     const parsed = JSON.parse(output);
+    const runtimeCheck = parsed.checks.find((item: { name: string }) => item.name === "Runtime Resilience");
     expect(parsed.runtimeResilience).toMatchObject({
       routing: {
         primary: {
@@ -291,6 +309,22 @@ test("bdd doctor json output includes runtime resilience summary when available"
         finalProfileId: "backup",
         degraded: true,
       },
+    });
+    expect(parsed.runtimeResilienceDiagnostics).toMatchObject({
+      alertLevel: "warn",
+      alertCode: "recent_degrade",
+      alertMessage: "Latest runtime required retry/fallback to recover.",
+      dominantReason: "server_error",
+      reasonClusterSummary: "server_error",
+      mixedSignalHint: null,
+      recoveryHint: "5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.",
+      latestRouteBehavior: "switched primary/gpt-4.1 -> backup/kimi-k2",
+      latestReasonSummary: "server_error=1",
+      totalsSummary: "observed=1, degraded=1, failed=0, retry=1, switch=1, cooldown=0",
+    });
+    expect(runtimeCheck).toMatchObject({
+      status: "warn",
+      message: "recent_degrade: Latest runtime required retry/fallback to recover.",
     });
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});

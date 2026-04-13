@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "webhooks": [
+    {
+      "id": "build-failed-coder",
+      "enabled": true,
+      "token": "replace-with-a-long-random-token-for-build-failed-coder",
+      "defaultAgentId": "coder",
+      "conversationIdPrefix": "webhook:build-failed-coder",
+      "promptTemplate": "你收到一次构建失败告警，请先判断是否属于代码/依赖/配置问题，并给出最小修复建议。\n\n项目: {{project}}\n分支: {{branch}}\n提交: {{commit}}\n构建任务: {{job}}\n失败阶段: {{stage}}\n失败摘要: {{summary}}\n日志链接: {{logUrl}}"
+    },
+    {
+      "id": "manual-coder-task",
+      "enabled": true,
+      "token": "replace-with-a-long-random-token-for-manual-coder-task",
+      "defaultAgentId": "coder",
+      "conversationIdPrefix": "webhook:manual-coder-task",
+      "promptTemplate": "请以代码专家身份处理这项外部任务。\n\n项目: {{project}}\n任务标题: {{title}}\n目标: {{goal}}\n约束: {{constraints}}\n相关文件: {{files}}\n补充说明: {{notes}}"
+    },
+    {
+      "id": "manual-researcher-task",
+      "enabled": true,
+      "token": "replace-with-a-long-random-token-for-manual-researcher-task",
+      "defaultAgentId": "researcher",
+      "conversationIdPrefix": "webhook:manual-researcher-task",
+      "promptTemplate": "请以调研助手身份处理这项外部任务，并优先输出结论、依据和风险。\n\n项目: {{project}}\n任务标题: {{title}}\n调研目标: {{goal}}\n关注范围: {{scope}}\n输出要求: {{deliverable}}\n补充说明: {{notes}}"
+    }
+  ]
+}

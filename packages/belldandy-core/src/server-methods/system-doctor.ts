@@ -59,7 +59,9 @@ import type { ScopedMemoryManagerRecord } from "../resident-memory-managers.js";
 import { buildResidentAgentObservabilitySnapshot } from "../resident-agent-observability.js";
 import { ResidentAgentRuntimeRegistry } from "../resident-agent-runtime.js";
 import { resolveResidentStateBindingViewForAgent } from "../resident-state-binding.js";
+import { buildOptionalCapabilitiesDoctorReport } from "../optional-capabilities-doctor.js";
 import type { RuntimeResilienceDoctorReport } from "../runtime-resilience.js";
+import { buildRuntimeResilienceDiagnosticSummary } from "../runtime-resilience-diagnostics.js";
 import {
   buildSkillFreshnessSnapshot,
 } from "../skill-freshness.js";
@@ -304,7 +306,11 @@ export async function handleSystemDoctorMethod(
   const deploymentBackends = buildDeploymentBackendsDoctorReport({
     stateDir: ctx.stateDir,
   });
+  const optionalCapabilities = await buildOptionalCapabilitiesDoctorReport();
   const runtimeResilience = ctx.getRuntimeResilienceReport?.();
+  const runtimeResilienceDiagnostics = runtimeResilience
+    ? buildRuntimeResilienceDiagnosticSummary(runtimeResilience)
+    : undefined;
   const extensionRuntime = ctx.extensionHost
     ? {
       ...extensionRuntimeBase,
@@ -484,16 +490,18 @@ export async function handleSystemDoctorMethod(
       : "pass",
     message: deploymentBackends.headline,
   });
-  if (runtimeResilience) {
+  checks.push({
+    id: "optional_capabilities",
+    name: "Optional Capabilities",
+    status: optionalCapabilities.summary.warnCount > 0 ? "warn" : "pass",
+    message: optionalCapabilities.summary.headline,
+  });
+  if (runtimeResilienceDiagnostics) {
     checks.push({
       id: "runtime_resilience",
       name: "Runtime Resilience",
-      status: runtimeResilience.latest && runtimeResilience.latest.finalStatus !== "success"
-        ? "warn"
-        : runtimeResilience.latest?.degraded
-          ? "warn"
-          : "pass",
-      message: runtimeResilience.summary.headline,
+      status: runtimeResilienceDiagnostics.alertLevel,
+      message: `${runtimeResilienceDiagnostics.alertCode}: ${runtimeResilienceDiagnostics.alertMessage}`,
     });
   }
   checks.push({
@@ -964,7 +972,9 @@ export async function handleSystemDoctorMethod(
       checks,
       memoryRuntime,
       deploymentBackends,
+      optionalCapabilities,
       ...(runtimeResilience ? { runtimeResilience } : {}),
+      ...(runtimeResilienceDiagnostics ? { runtimeResilienceDiagnostics } : {}),
       extensionRuntime,
       extensionMarketplace,
       extensionGovernance,

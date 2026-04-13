@@ -141,6 +141,10 @@ export type FailoverLogger = {
     error(module: string, msg: string): void;
 };
 
+function stripUtf8Bom(raw: string): string {
+    return raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
+}
+
 // ─── 错误分类函数 ─────────────────────────────────────────────────────────
 
 /**
@@ -892,7 +896,7 @@ export async function loadModelFallbacks(filePath: string): Promise<ModelProfile
 
     try {
         const raw = await readFile(filePath, "utf-8");
-        const parsed = JSON.parse(raw) as ModelConfigFile;
+        const parsed = JSON.parse(stripUtf8Bom(raw)) as ModelConfigFile;
 
         if (!parsed.fallbacks || !Array.isArray(parsed.fallbacks)) {
             return [];

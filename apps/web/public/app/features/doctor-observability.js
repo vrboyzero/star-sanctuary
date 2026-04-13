@@ -1165,6 +1165,7 @@ function buildRuntimeResilienceCard(payload, t) {
   }
 
   const latest = runtime.latest;
+  const diagnostics = resolveRuntimeResilienceDiagnostics(payload, runtime);
   const badges = [
     tr(
       t,
@@ -1177,6 +1178,12 @@ function buildRuntimeResilienceCard(payload, t) {
       "settings.doctorRuntimeResilienceFallbacks",
       { count: formatNumber(runtime.routing.fallbacks?.length) },
       `${formatNumber(runtime.routing.fallbacks?.length)} fallbacks`,
+    ),
+    tr(
+      t,
+      "settings.doctorRuntimeResilienceAlert",
+      { level: diagnostics.alertLevel, code: diagnostics.alertCode },
+      `alert ${diagnostics.alertLevel}/${diagnostics.alertCode}`,
     ),
   ];
   if (latest) {
@@ -1201,6 +1208,12 @@ function buildRuntimeResilienceCard(payload, t) {
   const notes = [
     tr(
       t,
+      "settings.doctorRuntimeResilienceAlertMessage",
+      { message: diagnostics.alertMessage },
+      diagnostics.alertMessage,
+    ),
+    tr(
+      t,
       "settings.doctorRuntimeResilienceHeadline",
       { headline: runtime.summary.headline || "-" },
       runtime.summary.headline || "-",
@@ -1221,17 +1234,362 @@ function buildRuntimeResilienceCard(payload, t) {
   if (latest?.headline) {
     notes.push(latest.headline);
   }
-  const reasonSummary = formatKeyCountSummary(runtime.reasonCounts);
-  if (reasonSummary) {
-    notes.push(`reasons: ${reasonSummary}`);
+  if (diagnostics.overallReasonSummary) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceOverallReasons",
+      { summary: diagnostics.overallReasonSummary },
+      `reasons: ${diagnostics.overallReasonSummary}`,
+    ));
+  }
+  if (diagnostics.dominantReason) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceReasonFocus",
+      { reason: diagnostics.dominantReason },
+      `reason focus: ${diagnostics.dominantReason}`,
+    ));
+  }
+  if (diagnostics.reasonClusterSummary) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceReasonCluster",
+      { summary: diagnostics.reasonClusterSummary },
+      `reason cluster: ${diagnostics.reasonClusterSummary}`,
+    ));
+  }
+  if (diagnostics.latestSignal) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceLatestSignal",
+      { summary: diagnostics.latestSignal },
+      `latest signal: ${diagnostics.latestSignal}`,
+    ));
+  }
+  if (diagnostics.latestRouteBehavior) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceRouteBehavior",
+      { summary: diagnostics.latestRouteBehavior },
+      `route: ${diagnostics.latestRouteBehavior}`,
+    ));
+  }
+  notes.push(tr(
+    t,
+    "settings.doctorRuntimeResilienceTotals",
+    {
+      summary: diagnostics.totalsSummary,
+    },
+    `totals: ${diagnostics.totalsSummary}`,
+  ));
+  if (diagnostics.latestReasonSummary) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceLatestReasons",
+      { summary: diagnostics.latestReasonSummary },
+      `latest reasons: ${diagnostics.latestReasonSummary}`,
+    ));
+  }
+  if (diagnostics.recoveryHint) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceRecoveryHint",
+      { hint: diagnostics.recoveryHint },
+      `recovery hint: ${diagnostics.recoveryHint}`,
+    ));
+  }
+  if (diagnostics.mixedSignalHint) {
+    notes.push(tr(
+      t,
+      "settings.doctorRuntimeResilienceMixedSignal",
+      { hint: diagnostics.mixedSignalHint },
+      `mixed signal: ${diagnostics.mixedSignalHint}`,
+    ));
   }
 
   return {
     title: tr(t, "settings.doctorRuntimeResilienceTitle", {}, "Runtime Resilience"),
     badges,
     notes,
-    status: latest && (latest.finalStatus !== "success" || latest.degraded) ? "warn" : "pass",
+    status: diagnostics.alertLevel,
   };
+}
+
+function resolveRuntimeResilienceDiagnostics(payload, runtime) {
+  const launchView = payload?.promptObservability?.launchExplainability?.runtimeResilience;
+  if (
+    payload?.runtimeResilienceDiagnostics?.alertLevel
+    && payload?.runtimeResilienceDiagnostics?.alertCode
+    && payload?.runtimeResilienceDiagnostics?.alertMessage
+  ) {
+    return payload.runtimeResilienceDiagnostics;
+  }
+  if (
+    launchView?.alertLevel
+    && launchView?.alertCode
+    && launchView?.alertMessage
+    && launchView?.totalsSummary
+  ) {
+    return {
+      alertLevel: launchView.alertLevel,
+      alertCode: launchView.alertCode,
+      alertMessage: launchView.alertMessage,
+      dominantReason: launchView.dominantReason || null,
+      reasonClusterSummary: launchView.reasonClusterSummary || null,
+      mixedSignalHint: launchView.mixedSignalHint || null,
+      recoveryHint: launchView.recoveryHint || null,
+      latestSignal: launchView.latestSignal || null,
+      latestRouteBehavior: launchView.latestRouteBehavior || null,
+      latestReasonSummary: launchView.latestReasonSummary || null,
+      overallReasonSummary: launchView.overallReasonSummary || null,
+      totalsSummary: launchView.totalsSummary,
+    };
+  }
+  return buildLegacyRuntimeResilienceDiagnostics(runtime);
+}
+
+function buildLegacyRuntimeResilienceDiagnostics(runtime) {
+  const latest = runtime?.latest;
+  const observedRuns = Number(runtime?.totals?.observedRuns) || 0;
+  const degradedRuns = Number(runtime?.totals?.degradedRuns) || 0;
+  const failedRuns = Number(runtime?.totals?.failedRuns) || 0;
+  const updatedAt = Number(runtime?.updatedAt) || 0;
+  const ageMs = Math.max(0, Date.now() - updatedAt);
+  const staleAfterMs = 6 * 60 * 60 * 1000;
+  const failureRate = observedRuns > 0 ? failedRuns / observedRuns : 0;
+  const degradeRate = observedRuns > 0 ? degradedRuns / observedRuns : 0;
+  const summary = buildLegacyRuntimeResilienceSummary(runtime, latest);
+  const reasonSignal = buildLegacyRuntimeResilienceReasonSignal(summary);
+
+  if (!latest || observedRuns <= 0) {
+    return {
+      ...summary,
+      alertLevel: "warn",
+      alertCode: "no_signal",
+      alertMessage: "No runtime resilience signal has been observed yet.",
+      dominantReason: null,
+      reasonClusterSummary: null,
+      mixedSignalHint: null,
+      recoveryHint: "Run one real chat/tool request first so runtime resilience can capture a signal.",
+      latestSignal: null,
+      latestRouteBehavior: null,
+    };
+  }
+  if (ageMs >= staleAfterMs) {
+    return {
+      ...summary,
+      alertLevel: "warn",
+      alertCode: "stale",
+      alertMessage: `Latest runtime resilience signal is stale (${formatRuntimeAge(ageMs)} old).`,
+      dominantReason: reasonSignal.dominantReason,
+      reasonClusterSummary: reasonSignal.reasonClusterSummary,
+      mixedSignalHint: null,
+      recoveryHint: "Exercise the runtime again before trusting this signal; current diagnostics are too old.",
+    };
+  }
+  if (failedRuns >= 2 && failureRate >= 0.5) {
+    return {
+      ...summary,
+      alertLevel: "fail",
+      alertCode: "repeated_failure",
+      alertMessage: `Repeated runtime failures observed (${failedRuns}/${observedRuns} runs failed).`,
+      dominantReason: reasonSignal.dominantReason,
+      reasonClusterSummary: reasonSignal.reasonClusterSummary,
+      mixedSignalHint: buildLegacyRuntimeResilienceMixedSignalHint("repeated_failure", reasonSignal.clusterReasons),
+      recoveryHint: buildLegacyRuntimeResilienceRecoveryHint("repeated_failure", reasonSignal.clusterReasons),
+    };
+  }
+  if (latest.finalStatus !== "success") {
+    return {
+      ...summary,
+      alertLevel: "warn",
+      alertCode: "recent_failure",
+      alertMessage: `Latest runtime ended as ${latest.finalStatus || "unknown"}.`,
+      dominantReason: reasonSignal.dominantReason,
+      reasonClusterSummary: reasonSignal.reasonClusterSummary,
+      mixedSignalHint: buildLegacyRuntimeResilienceMixedSignalHint("recent_failure", reasonSignal.clusterReasons),
+      recoveryHint: buildLegacyRuntimeResilienceRecoveryHint("recent_failure", reasonSignal.clusterReasons),
+    };
+  }
+  if (degradedRuns >= 3 && degradeRate >= 0.5) {
+    return {
+      ...summary,
+      alertLevel: "warn",
+      alertCode: "repeated_degrade",
+      alertMessage: `Repeated runtime degrade observed (${degradedRuns}/${observedRuns} runs degraded).`,
+      dominantReason: reasonSignal.dominantReason,
+      reasonClusterSummary: reasonSignal.reasonClusterSummary,
+      mixedSignalHint: buildLegacyRuntimeResilienceMixedSignalHint("repeated_degrade", reasonSignal.clusterReasons),
+      recoveryHint: buildLegacyRuntimeResilienceRecoveryHint("repeated_degrade", reasonSignal.clusterReasons),
+    };
+  }
+  if (latest.degraded) {
+    return {
+      ...summary,
+      alertLevel: "warn",
+      alertCode: "recent_degrade",
+      alertMessage: "Latest runtime required retry/fallback to recover.",
+      dominantReason: reasonSignal.dominantReason,
+      reasonClusterSummary: reasonSignal.reasonClusterSummary,
+      mixedSignalHint: buildLegacyRuntimeResilienceMixedSignalHint("recent_degrade", reasonSignal.clusterReasons),
+      recoveryHint: buildLegacyRuntimeResilienceRecoveryHint("recent_degrade", reasonSignal.clusterReasons),
+    };
+  }
+  return {
+    ...summary,
+    alertLevel: "pass",
+    alertCode: "healthy",
+    alertMessage: "Runtime resilience looks healthy.",
+    dominantReason: reasonSignal.dominantReason,
+    reasonClusterSummary: reasonSignal.reasonClusterSummary,
+    mixedSignalHint: null,
+    recoveryHint: null,
+  };
+}
+
+function buildLegacyRuntimeResilienceSummary(runtime, latest) {
+  return {
+    latestSignal: buildRuntimeResilienceSignalSummary(latest),
+    latestRouteBehavior: buildRuntimeResilienceRouteBehavior(runtime, latest),
+    latestReasonSummary: formatKeyCountSummary(latest?.reasonCounts),
+    overallReasonSummary: formatKeyCountSummary(runtime?.reasonCounts),
+    totalsSummary: buildRuntimeResilienceTotalsSummary(runtime),
+  };
+}
+
+function buildLegacyRuntimeResilienceReasonSignal(summary) {
+  const entries = buildLegacyReasonEntries(summary.latestReasonSummary || summary.overallReasonSummary || "");
+  if (entries.length === 0) {
+    return {
+      dominantReason: null,
+      reasonClusterSummary: null,
+      clusterReasons: [],
+    };
+  }
+  const primary = entries[0];
+  const cluster = [primary];
+  for (const entry of entries.slice(1, 3)) {
+    if (entry.count >= Math.max(1, Math.ceil(primary.count * 0.5))) {
+      cluster.push(entry);
+    }
+  }
+  return {
+    dominantReason: cluster[0]?.reason ?? null,
+    reasonClusterSummary: cluster.length <= 1
+      ? cluster[0]?.reason ?? null
+      : cluster.map((entry) => entry.reason).join(" + "),
+    clusterReasons: cluster.map((entry) => entry.reason),
+  };
+}
+
+function buildLegacyReasonEntries(summary) {
+  return String(summary)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [reason, count] = item.split("=");
+      return {
+        reason: reason?.trim() || "",
+        count: Number(count) || 0,
+      };
+    })
+    .filter((entry) => entry.reason && entry.count > 0);
+}
+
+function buildLegacyRuntimeResilienceRecoveryHint(alertCode, clusterReasons) {
+  if (alertCode === "healthy") {
+    return null;
+  }
+  const dominantReason = clusterReasons[0] || null;
+  switch (dominantReason) {
+    case "rate_limit":
+      return "Rate limits dominate; lower concurrency or move quota-sensitive traffic to a preferred fallback/provider.";
+    case "timeout":
+      return "Timeouts dominate; check baseUrl/proxy latency and raise requestTimeoutMs for the affected profiles if needed.";
+    case "server_error":
+      return "5xx instability dominates; keep fallback ready and verify provider health before trusting the primary route.";
+    case "auth":
+      return "Auth failures dominate; verify API keys, token scopes, and profile selection for primary/fallback routes.";
+    case "billing":
+      return "Billing/quota failures dominate; verify provider balance or quota before retrying this route.";
+    case "format":
+      return "Request format mismatches dominate; verify protocol, wireApi, and model pairing instead of retrying.";
+    case "unknown":
+      return "Unclassified failures dominate; inspect the latest provider error payload before widening retries.";
+    default:
+      return alertCode === "recent_failure" || alertCode === "repeated_failure"
+        ? "Recent runtime failures need manual inspection; review the latest provider response before retrying."
+        : "Repeated degrade suggests this route is unstable; review provider health and fallback ordering.";
+  }
+}
+
+function buildLegacyRuntimeResilienceMixedSignalHint(alertCode, clusterReasons) {
+  if (alertCode === "healthy" || clusterReasons.length < 2) {
+    return null;
+  }
+  const key = [...clusterReasons.slice(0, 2)].sort().join("+");
+  switch (key) {
+    case "rate_limit+timeout":
+      return "Mixed rate-limit + timeout signals suggest both quota pressure and latency; reduce burstiness and check network/proxy latency together.";
+    case "rate_limit+server_error":
+      return "Mixed rate-limit + 5xx signals suggest provider saturation; shift traffic to fallback routes and reduce bursty retry patterns.";
+    case "server_error+timeout":
+      return "Mixed 5xx + timeout signals suggest upstream instability; verify provider health and network latency before widening retries.";
+    case "auth+billing":
+      return "Mixed auth + billing signals suggest the route may be both under-scoped and out of quota; verify keys, scopes, and provider balance together.";
+    default:
+      return `Mixed signals (${clusterReasons.slice(0, 2).join(" + ")}) detected; inspect the latest provider errors before tuning retry/fallback policy.`;
+  }
+}
+
+function buildRuntimeResilienceSignalSummary(latest) {
+  if (!latest?.source && !latest?.phase && !latest?.agentId && !latest?.conversationId) {
+    return null;
+  }
+  return [
+    latest?.source && latest?.phase ? `${latest.source}/${latest.phase}` : latest?.source || latest?.phase || "",
+    latest?.agentId ? `agent=${latest.agentId}` : "",
+    latest?.conversationId ? `conv=${latest.conversationId}` : "",
+  ].filter(Boolean).join(" | ");
+}
+
+function buildRuntimeResilienceRouteBehavior(runtime, latest) {
+  if (!latest) return null;
+  const primaryRoute = `${runtime?.routing?.primary?.profileId || "-"}/${runtime?.routing?.primary?.model || "-"}`;
+  const finalRoute = latest.finalProfileId
+    ? `${latest.finalProfileId}/${latest.finalModel || "-"}`
+    : "";
+  if (latest.degraded && finalRoute && latest.finalProfileId !== runtime?.routing?.primary?.profileId) {
+    return `switched ${primaryRoute} -> ${finalRoute}`;
+  }
+  if (latest.degraded && finalRoute) {
+    return `stayed on ${finalRoute} after retry`;
+  }
+  if (latest.finalStatus !== "success" && finalRoute) {
+    return `stopped on ${finalRoute}`;
+  }
+  if (latest.finalStatus !== "success") {
+    return `ended without a usable route after ${primaryRoute}`;
+  }
+  if (finalRoute) {
+    return `stayed on ${finalRoute}`;
+  }
+  return null;
+}
+
+function buildRuntimeResilienceTotalsSummary(runtime) {
+  return `observed=${formatNumber(runtime?.totals?.observedRuns)}, degraded=${formatNumber(runtime?.totals?.degradedRuns)}, failed=${formatNumber(runtime?.totals?.failedRuns)}, retry=${formatNumber(runtime?.totals?.sameProfileRetries)}, switch=${formatNumber(runtime?.totals?.crossProfileFallbacks)}, cooldown=${formatNumber(runtime?.totals?.cooldownSkips)}`;
+}
+
+function formatRuntimeAge(ageMs) {
+  const minutes = Math.floor(ageMs / 60000);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
 function createDoctorCard(card, handlers = {}) {

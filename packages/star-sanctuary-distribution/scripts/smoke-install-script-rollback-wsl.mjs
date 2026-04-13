@@ -1,0 +1,493 @@
+import fs from "node:fs";
+import path from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+
+const workspaceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, "$1")), "..", "..", "..");
+const smokeRoot = path.join(workspaceRoot, "artifacts", "install-script-rollback-wsl-smoke");
+const reportPath = path.join(workspaceRoot, "artifacts", "install-script-rollback-wsl-smoke-report.json");
+const installShPath = path.join(workspaceRoot, "install.sh");
+const builtBddEntryPath = path.join(workspaceRoot, "packages", "belldandy-core", "dist", "bin", "bdd.js");
+
+const FAILPOINTS = [
+  { id: "after-backup", failAt: "after_backup", useSetup: false },
+  { id: "after-promote", failAt: "after_promote", useSetup: false },
+  { id: "before-install-build", failAt: "before_install_build", useSetup: false },
+  { id: "before-setup", failAt: "before_setup", useSetup: true },
+];
+
+function ensureBuildExists() {
+  if (!fs.existsSync(builtBddEntryPath)) {
+    throw new Error(`Built CLI entry is missing at ${builtBddEntryPath}. Run 'corepack pnpm build' first.`);
+  }
+  if (process.platform !== "win32") {
+    throw new Error("smoke-install-script-rollback-wsl currently expects Windows host + WSL.");
+  }
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function checkHealth(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function removePath(targetPath) {
+  if (!fs.existsSync(targetPath)) {
+    return;
+  }
+
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isDirectory() && !stat.isSymbolicLink()) {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    return;
+  }
+
+  fs.rmSync(targetPath, { force: true, recursive: false });
+}
+
+function resetDir(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+    return;
+  }
+
+  for (const entry of fs.readdirSync(dirPath)) {
+    removePath(path.join(dirPath, entry));
+  }
+}
+
+function writeFile(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf-8");
+}
+
+function sanitizeEnv(extraEnv = {}) {
+  const env = { ...process.env };
+  delete env.STAR_SANCTUARY_RUNTIME_DIR;
+  delete env.BELLDANDY_RUNTIME_DIR;
+  delete env.STAR_SANCTUARY_ENV_DIR;
+  delete env.BELLDANDY_ENV_DIR;
+  delete env.STAR_SANCTUARY_RUNTIME_MODE;
+  delete env.BELLDANDY_RUNTIME_MODE;
+  delete env.STAR_SANCTUARY_INSTALL_TEST_FAIL_AT;
+  return { ...env, ...extraEnv };
+}
+
+function decodeMaybeUtf16(buffer) {
+  if (!buffer || buffer.length === 0) {
+    return "";
+  }
+  for (let i = 1; i < buffer.length; i += 2) {
+    if (buffer[i] === 0) {
+      return buffer.toString("utf16le");
+    }
+  }
+  return buffer.toString("utf8");
+}
+
+function detectWslDistro() {
+  const result = spawnSync("wsl.exe", ["-l", "-q"], {
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) {
+    throw new Error(`Failed to list WSL distros.\n${decodeMaybeUtf16(result.stderr)}`);
+  }
+
+  const distros = decodeMaybeUtf16(result.stdout)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\0/g, "").trim())
+    .filter(Boolean)
+    .filter((line) => !line.toLowerCase().includes("docker-desktop"));
+  const ubuntu = distros.find((line) => line.toLowerCase().includes("ubuntu"));
+  if (ubuntu) {
+    return ubuntu;
+  }
+  if (distros.length > 0) {
+    return distros[0];
+  }
+  throw new Error("No usable WSL distro found.");
+}
+
+function toWslPath(windowsPath) {
+  const normalized = path.resolve(windowsPath).replace(/\\/g, "/");
+  const match = normalized.match(/^([A-Za-z]):(.*)$/);
+  if (!match) {
+    throw new Error(`Cannot convert path to WSL form: ${windowsPath}`);
+  }
+  return `/mnt/${match[1].toLowerCase()}${match[2]}`;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function createFakeUnixSource(sourceRoot) {
+  resetDir(sourceRoot);
+  writeFile(
+    path.join(sourceRoot, "package.json"),
+    `${JSON.stringify({
+      name: "star-sanctuary-install-script-wsl-fixture",
+      private: true,
+      packageManager: "pnpm@10.23.0",
+      type: "module",
+    }, null, 2)}\n`,
+  );
+
+  const fakeBdd = [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import http from 'node:http';",
+    "",
+    "const command = process.argv[2] ?? '';",
+    "const args = process.argv.slice(3);",
+    "const envDir = process.env.STAR_SANCTUARY_ENV_DIR || process.cwd();",
+    "const envPath = path.join(envDir, '.env');",
+    "const envLocalPath = path.join(envDir, '.env.local');",
+    "",
+    "function ensureDefaultEnv() {",
+    "  fs.mkdirSync(envDir, { recursive: true });",
+    "  if (!fs.existsSync(envPath)) {",
+    "    fs.writeFileSync(envPath, '# generated by fake unix installer smoke\\n', 'utf-8');",
+    "  }",
+    "}",
+    "",
+    "if (command === 'doctor') {",
+    "  ensureDefaultEnv();",
+    "  const report = {",
+    "    checks: [",
+    "      { name: 'Environment directory', status: 'pass', message: envDir },",
+    "      { name: '.env.local', status: fs.existsSync(envLocalPath) ? 'pass' : 'warn', message: fs.existsSync(envLocalPath) ? envLocalPath : 'not found' },",
+    "    ],",
+    "    stateDir: (() => {",
+    "      const index = args.indexOf('--state-dir');",
+    "      return index >= 0 ? args[index + 1] ?? null : null;",
+    "    })(),",
+    "  };",
+    "  process.stdout.write(JSON.stringify(report, null, 2) + '\\n');",
+    "  process.exit(0);",
+    "}",
+    "",
+    "if (command === 'start') {",
+    "  ensureDefaultEnv();",
+    "  const port = Number(process.env.BELLDANDY_PORT || '29589');",
+    "  const server = http.createServer((req, res) => {",
+    "    if (req.url === '/health') {",
+    "      res.writeHead(200, { 'content-type': 'application/json' });",
+    "      res.end(JSON.stringify({ ok: true }));",
+    "      return;",
+    "    }",
+    "    res.writeHead(404, { 'content-type': 'text/plain' });",
+    "    res.end('not found');",
+    "  });",
+    "  server.listen(port, '127.0.0.1');",
+    "  await new Promise(() => {});",
+    "}",
+    "",
+    "process.stderr.write(`Unsupported fake bdd command: ${command}\\n`);",
+    "process.exit(1);",
+    "",
+  ].join("\n");
+
+  writeFile(path.join(sourceRoot, "packages", "belldandy-core", "dist", "bin", "bdd.js"), `${fakeBdd}\n`);
+}
+
+async function terminateChild(child) {
+  if (child.exitCode != null) {
+    return;
+  }
+
+  if (child.pid) {
+    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    await wait(1000);
+  }
+}
+
+async function runCommandToCompletion(params) {
+  const { command, args, cwd, env, stdoutPath, stderrPath } = params;
+  fs.rmSync(stdoutPath, { force: true });
+  fs.rmSync(stderrPath, { force: true });
+
+  const stdout = fs.openSync(stdoutPath, "w");
+  const stderr = fs.openSync(stderrPath, "w");
+  const child = spawn(command, args, {
+    cwd,
+    env,
+    stdio: ["ignore", stdout, stderr],
+    windowsHide: true,
+  });
+
+  const exitCode = await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code ?? 0));
+  });
+
+  fs.closeSync(stdout);
+  fs.closeSync(stderr);
+
+  return {
+    exitCode,
+    stdoutText: fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, "utf-8") : "",
+    stderrText: fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, "utf-8") : "",
+  };
+}
+
+async function runStartUntilHealthy(params) {
+  const { command, args, cwd, env, port, stdoutPath, stderrPath } = params;
+  fs.rmSync(stdoutPath, { force: true });
+  fs.rmSync(stderrPath, { force: true });
+
+  const stdout = fs.openSync(stdoutPath, "w");
+  const stderr = fs.openSync(stderrPath, "w");
+  const child = spawn(command, args, {
+    cwd,
+    env,
+    stdio: ["ignore", stdout, stderr],
+    windowsHide: true,
+  });
+
+  let healthy = false;
+  try {
+    for (let i = 0; i < 30; i += 1) {
+      await wait(1000);
+      if (child.exitCode != null) {
+        break;
+      }
+      if (await checkHealth(port)) {
+        healthy = true;
+        break;
+      }
+    }
+  } finally {
+    await terminateChild(child);
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+  }
+
+  return {
+    healthy,
+    stdoutText: fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, "utf-8") : "",
+    stderrText: fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, "utf-8") : "",
+  };
+}
+
+function parseJsonOrThrow(text, label) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} did not return valid JSON.\n--- stdout ---\n${text}\n--- parse ---\n${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function runScenario(distro, scenario, index) {
+  const installRoot = path.join(smokeRoot, scenario.id);
+  const stateDir = path.join(smokeRoot, `${scenario.id}-state`);
+  const brokenSourceDir = path.join(smokeRoot, `${scenario.id}-broken-source`);
+  const envPath = path.join(installRoot, ".env");
+  const envLocalPath = path.join(installRoot, ".env.local");
+  const installInfoPath = path.join(installRoot, "install-info.json");
+  const backupRoot = path.join(installRoot, "backups");
+  const port = 29589 + (index * 2);
+  const relayPort = port + 1;
+  const envMarkerLine = `INSTALL_SCRIPT_ROLLBACK_${scenario.failAt}=preserved`;
+  const stateMarkerPath = path.join(stateDir, "workspace", `${scenario.id}-marker.txt`);
+  const fakeSourceRoot = path.join(smokeRoot, `${scenario.id}-fake-unix-source`);
+  createFakeUnixSource(fakeSourceRoot);
+  const fakeSourceRootWsl = toWslPath(fakeSourceRoot);
+  const installRootWsl = toWslPath(installRoot);
+  const stateDirWsl = toWslPath(stateDir);
+  const brokenSourceDirWsl = toWslPath(brokenSourceDir);
+  const installShWsl = toWslPath(installShPath);
+
+  fs.rmSync(installRoot, { recursive: true, force: true });
+  fs.rmSync(stateDir, { recursive: true, force: true });
+  fs.rmSync(brokenSourceDir, { recursive: true, force: true });
+  fs.mkdirSync(brokenSourceDir, { recursive: true });
+
+  const initialInstallScript = `${shellQuote(installShWsl)} --install-dir ${shellQuote(installRootWsl)} --source-dir ${shellQuote(fakeSourceRootWsl)} --skip-install-build --no-setup --version v1.0.0-smoke`;
+  const failedInstallScriptParts = [
+    `STAR_SANCTUARY_INSTALL_TEST_FAIL_AT=${shellQuote(scenario.failAt)}`,
+    shellQuote(installShWsl),
+    "--install-dir", shellQuote(installRootWsl),
+    "--source-dir", shellQuote(fakeSourceRootWsl),
+    "--skip-install-build",
+    "--version", "v2.0.0-smoke",
+  ];
+  if (!scenario.useSetup) {
+    failedInstallScriptParts.splice(failedInstallScriptParts.length - 2, 0, "--no-setup");
+  }
+  const failedInstallScript = failedInstallScriptParts.join(" ");
+  const startScript = [
+    `cd ${shellQuote(installRootWsl)} &&`,
+    `BELLDANDY_PORT=${shellQuote(String(port))}`,
+    `BELLDANDY_RELAY_PORT=${shellQuote(String(relayPort))}`,
+    `BELLDANDY_STATE_DIR=${shellQuote(stateDirWsl)}`,
+    `AUTO_OPEN_BROWSER='false'`,
+    `CI='true'`,
+    `${shellQuote(path.posix.join(installRootWsl, "start.sh"))}`,
+  ].join(" ");
+  const doctorScript = [
+    `cd ${shellQuote(installRootWsl)} &&`,
+    `CI='true'`,
+    `${shellQuote(path.posix.join(installRootWsl, "bdd"))} doctor --json --state-dir ${shellQuote(stateDirWsl)}`,
+  ].join(" ");
+
+  const initialInstall = await runCommandToCompletion({
+    command: "wsl.exe",
+    args: ["-d", distro, "bash", "-lc", initialInstallScript],
+    cwd: workspaceRoot,
+    env: sanitizeEnv({ CI: "true" }),
+    stdoutPath: path.join(smokeRoot, `${scenario.id}-install-initial.stdout.log`),
+    stderrPath: path.join(smokeRoot, `${scenario.id}-install-initial.stderr.log`),
+  });
+  if (initialInstall.exitCode !== 0) {
+    throw new Error(`${scenario.id} initial install.sh failed.\n--- stdout ---\n${initialInstall.stdoutText}\n--- stderr ---\n${initialInstall.stderrText}`);
+  }
+
+  const initialStart = await runStartUntilHealthy({
+    command: "wsl.exe",
+    args: ["-d", distro, "bash", "-lc", startScript],
+    cwd: workspaceRoot,
+    env: sanitizeEnv({ CI: "true" }),
+    port,
+    stdoutPath: path.join(smokeRoot, `${scenario.id}-start-initial.stdout.log`),
+    stderrPath: path.join(smokeRoot, `${scenario.id}-start-initial.stderr.log`),
+  });
+  if (!initialStart.healthy) {
+    throw new Error(`${scenario.id} initial start.sh failed.\n--- stdout ---\n${initialStart.stdoutText}\n--- stderr ---\n${initialStart.stderrText}`);
+  }
+  if (!fs.existsSync(envPath)) {
+    throw new Error(`${scenario.id} expected generated .env at ${envPath}`);
+  }
+
+  fs.writeFileSync(envLocalPath, `${envMarkerLine}\n`, "utf-8");
+  fs.mkdirSync(path.dirname(stateMarkerPath), { recursive: true });
+  fs.writeFileSync(stateMarkerPath, `${scenario.id}-state\n`, "utf-8");
+
+  const failedInstall = await runCommandToCompletion({
+    command: "wsl.exe",
+    args: ["-d", distro, "bash", "-lc", failedInstallScript],
+    cwd: workspaceRoot,
+    env: sanitizeEnv({ CI: "true" }),
+    stdoutPath: path.join(smokeRoot, `${scenario.id}-install-fail.stdout.log`),
+    stderrPath: path.join(smokeRoot, `${scenario.id}-install-fail.stderr.log`),
+  });
+  if (failedInstall.exitCode === 0) {
+    throw new Error(`${scenario.id} expected install.sh to fail at ${scenario.failAt}, but it exited 0.`);
+  }
+
+  const rollbackStart = await runStartUntilHealthy({
+    command: "wsl.exe",
+    args: ["-d", distro, "bash", "-lc", startScript],
+    cwd: workspaceRoot,
+    env: sanitizeEnv({ CI: "true" }),
+    port,
+    stdoutPath: path.join(smokeRoot, `${scenario.id}-start-rollback.stdout.log`),
+    stderrPath: path.join(smokeRoot, `${scenario.id}-start-rollback.stderr.log`),
+  });
+
+  const doctor = await runCommandToCompletion({
+    command: "wsl.exe",
+    args: ["-d", distro, "bash", "-lc", doctorScript],
+    cwd: workspaceRoot,
+    env: sanitizeEnv({ CI: "true" }),
+    stdoutPath: path.join(smokeRoot, `${scenario.id}-doctor.stdout.log`),
+    stderrPath: path.join(smokeRoot, `${scenario.id}-doctor.stderr.log`),
+  });
+  if (doctor.exitCode !== 0) {
+    throw new Error(`${scenario.id} doctor failed after rollback.\n--- stdout ---\n${doctor.stdoutText}\n--- stderr ---\n${doctor.stderrText}`);
+  }
+
+  const symlinkCheck = await runCommandToCompletion({
+    command: "wsl.exe",
+    args: ["-d", distro, "bash", "-lc", `test -L ${shellQuote(path.posix.join(installRootWsl, "current"))}`],
+    cwd: workspaceRoot,
+    env: sanitizeEnv({ CI: "true" }),
+    stdoutPath: path.join(smokeRoot, `${scenario.id}-symlink.stdout.log`),
+    stderrPath: path.join(smokeRoot, `${scenario.id}-symlink.stderr.log`),
+  });
+
+  const doctorJson = parseJsonOrThrow(doctor.stdoutText, `${scenario.id} doctor`);
+  const checks = Array.isArray(doctorJson.checks) ? doctorJson.checks : [];
+  const environmentCheck = checks.find((item) => item?.name === "Environment directory");
+  const envLocalCheck = checks.find((item) => item?.name === ".env.local");
+  const installInfo = parseJsonOrThrow(fs.readFileSync(installInfoPath, "utf-8"), `${scenario.id} install-info`);
+  const envLocalText = fs.readFileSync(envLocalPath, "utf-8");
+  const stateMarkerText = fs.readFileSync(stateMarkerPath, "utf-8");
+  const backupEntries = fs.existsSync(backupRoot) ? fs.readdirSync(backupRoot).filter((name) => name.startsWith("current-")) : [];
+
+  const ok = failedInstall.stderrText.includes(`Installer test failpoint triggered at ${scenario.failAt}`)
+    && rollbackStart.healthy
+    && symlinkCheck.exitCode === 0
+    && installInfo.tag === "v1.0.0-smoke"
+    && installInfo.version === "v1.0.0-smoke"
+    && environmentCheck?.message === installRootWsl
+    && envLocalCheck?.status === "pass"
+    && envLocalCheck?.message === path.posix.join(installRootWsl, ".env.local")
+    && envLocalText.includes(envMarkerLine)
+    && stateMarkerText.includes(`${scenario.id}-state`)
+    && backupEntries.length === 0;
+
+  return {
+    id: scenario.id,
+    failAt: scenario.failAt,
+    useSetup: scenario.useSetup,
+    backupEntries,
+    installInfo,
+    doctorEnvironmentDir: environmentCheck?.message ?? null,
+    doctorEnvLocalPath: envLocalCheck?.message ?? null,
+    doctorEnvLocalStatus: envLocalCheck?.status ?? null,
+    rollbackHealthy: rollbackStart.healthy,
+    currentIsSymlink: symlinkCheck.exitCode === 0,
+    preservedEnvMarker: envLocalText.includes(envMarkerLine),
+    preservedStateMarker: stateMarkerText.includes(`${scenario.id}-state`),
+    ok,
+    failedInstallStdoutTail: failedInstall.stdoutText.slice(-2500),
+    failedInstallStderrTail: failedInstall.stderrText.slice(-2500),
+    rollbackStartStdoutTail: rollbackStart.stdoutText.slice(-2500),
+    rollbackStartStderrTail: rollbackStart.stderrText.slice(-2500),
+    doctorStdoutTail: doctor.stdoutText.slice(-2500),
+    doctorStderrTail: doctor.stderrText.slice(-2500),
+  };
+}
+
+async function main() {
+  ensureBuildExists();
+  resetDir(smokeRoot);
+  fs.rmSync(reportPath, { force: true });
+
+  const distro = detectWslDistro();
+  const scenarios = [];
+  for (const [index, scenario] of FAILPOINTS.entries()) {
+    scenarios.push(await runScenario(distro, scenario, index));
+  }
+
+  const report = {
+    productName: "Star Sanctuary",
+    smoke: "install-script-rollback-wsl",
+    generatedAt: new Date().toISOString(),
+    distro,
+    scenarios,
+  };
+
+  fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf-8");
+
+  const failures = scenarios.filter((scenario) => !scenario.ok);
+  if (failures.length > 0) {
+    throw new Error(`Install-script rollback WSL smoke failed for: ${failures.map((scenario) => scenario.id).join(", ")}.\n${JSON.stringify(report, null, 2)}`);
+  }
+
+  console.log(`[install-script-rollback-wsl-smoke] install.sh rollback passed for ${scenarios.length} failpoints.`);
+  console.log(JSON.stringify(report, null, 2));
+}
+
+main();

@@ -685,8 +685,8 @@ export function createAgentRuntimeFeature({
 
     const agents = [...agentCatalog.values()];
     agentRightPanelEl.textContent = "";
-    agentRightPanelEl.classList.toggle("hidden", agents.length <= 1);
-    if (agents.length <= 1) return;
+    agentRightPanelEl.classList.toggle("hidden", agents.length === 0);
+    if (agents.length === 0) return;
 
     const fragment = document.createDocumentFragment();
     const activeAgentId = getCurrentAgentSelection();

@@ -30,7 +30,9 @@ import {
 import { buildResidentAgentObservabilitySnapshot } from "../../resident-agent-observability.js";
 import { resolveResidentMemoryPolicy } from "../../resident-memory-policy.js";
 import { buildDeploymentBackendsDoctorReport } from "../../deployment-backends.js";
+import { buildOptionalCapabilitiesDoctorReport } from "../../optional-capabilities-doctor.js";
 import { readRuntimeResilienceDoctorReport } from "../../runtime-resilience.js";
+import { buildRuntimeResilienceDiagnosticSummary } from "../../runtime-resilience-diagnostics.js";
 
 interface CheckResult {
   name: string;
@@ -407,16 +409,24 @@ export default defineCommand({
           ? `Update selectedProfileId in ${deploymentBackends.configPath}`
           : undefined,
     });
+    const optionalCapabilities = await buildOptionalCapabilitiesDoctorReport();
+    results.push({
+      name: "Optional Capabilities",
+      status: optionalCapabilities.summary.warnCount > 0 ? "warn" : "pass",
+      message: optionalCapabilities.summary.headline,
+      fix: optionalCapabilities.summary.fix,
+    });
     const runtimeResilience = await readRuntimeResilienceDoctorReport(stateDir);
+    const runtimeResilienceDiagnostics = runtimeResilience
+      ? buildRuntimeResilienceDiagnosticSummary(runtimeResilience)
+      : undefined;
     if (runtimeResilience) {
       results.push({
         name: "Runtime Resilience",
-        status: runtimeResilience.latest && runtimeResilience.latest.finalStatus !== "success"
-          ? "warn"
-          : runtimeResilience.latest?.degraded
-            ? "warn"
-            : "pass",
-        message: runtimeResilience.summary.headline,
+        status: runtimeResilienceDiagnostics?.alertLevel ?? "warn",
+        message: runtimeResilienceDiagnostics
+          ? `${runtimeResilienceDiagnostics.alertCode}: ${runtimeResilienceDiagnostics.alertMessage}`
+          : "runtime diagnostics unavailable",
       });
     }
 
@@ -434,7 +444,9 @@ export default defineCommand({
         toolContractV2Observability,
         residentAgents,
         deploymentBackends,
+        optionalCapabilities,
         ...(runtimeResilience ? { runtimeResilience } : {}),
+        ...(runtimeResilienceDiagnostics ? { runtimeResilienceDiagnostics } : {}),
       });
       return;
     }
@@ -483,7 +495,18 @@ export default defineCommand({
     for (const item of deploymentBackends.items.slice(0, 3)) {
       ctx.log(`  - ${item.label}: ${item.message}`);
     }
+    ctx.log("");
+    ctx.log("Optional Capabilities");
+    ctx.log(`  headline: ${optionalCapabilities.summary.headline}`);
+    for (const item of optionalCapabilities.items) {
+      ctx.log(`  - ${item.name}: ${item.message}`);
+      ctx.log(`    impact: ${item.impact}`);
+      if (item.fix) {
+        ctx.log(`    fix: ${item.fix}`);
+      }
+    }
     if (runtimeResilience) {
+      const runtimeDiagnostics = buildRuntimeResilienceDiagnosticSummary(runtimeResilience);
       ctx.log("");
       ctx.log("Runtime Resilience");
       ctx.log(`  routing: primary ${runtimeResilience.routing.primary.provider}/${runtimeResilience.routing.primary.model}`);
@@ -492,6 +515,31 @@ export default defineCommand({
         ctx.log(`  compaction: ${runtimeResilience.routing.compaction.route?.provider ?? "-"} / ${runtimeResilience.routing.compaction.route?.model ?? "-"}`);
       }
       ctx.log(`  headline: ${runtimeResilience.summary.headline}`);
+      ctx.log(`  totals: ${runtimeDiagnostics.totalsSummary}`);
+      if (runtimeDiagnostics.latestSignal) {
+        ctx.log(`  latest signal: ${runtimeDiagnostics.latestSignal}`);
+      }
+      if (runtimeDiagnostics.latestRouteBehavior) {
+        ctx.log(`  latest route: ${runtimeDiagnostics.latestRouteBehavior}`);
+      }
+      if (runtimeDiagnostics.latestReasonSummary) {
+        ctx.log(`  latest reasons: ${runtimeDiagnostics.latestReasonSummary}`);
+      }
+      if (runtimeDiagnostics.overallReasonSummary) {
+        ctx.log(`  reasons: ${runtimeDiagnostics.overallReasonSummary}`);
+      }
+      if (runtimeDiagnostics.dominantReason) {
+        ctx.log(`  reason focus: ${runtimeDiagnostics.dominantReason}`);
+      }
+      if (runtimeDiagnostics.reasonClusterSummary) {
+        ctx.log(`  reason cluster: ${runtimeDiagnostics.reasonClusterSummary}`);
+      }
+      if (runtimeDiagnostics.recoveryHint) {
+        ctx.log(`  recovery hint: ${runtimeDiagnostics.recoveryHint}`);
+      }
+      if (runtimeDiagnostics.mixedSignalHint) {
+        ctx.log(`  mixed signal: ${runtimeDiagnostics.mixedSignalHint}`);
+      }
     }
 
     ctx.log("");

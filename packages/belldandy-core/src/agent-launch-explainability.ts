@@ -4,6 +4,7 @@ import {
   type AgentRegistry,
 } from "@belldandy/agent";
 import type { RuntimeResilienceDoctorReport } from "./runtime-resilience.js";
+import { buildRuntimeResilienceDiagnosticSummary } from "./runtime-resilience-diagnostics.js";
 
 type LaunchRole = "default" | "coder" | "researcher" | "verifier";
 type LaunchRiskLevel = "low" | "medium" | "high" | "critical";
@@ -82,11 +83,23 @@ export type AgentLaunchExplainability = {
     sourceAgentIds: string[];
   } | null;
   runtimeResilience: {
+    alertLevel: string | null;
+    alertCode: string | null;
+    alertMessage: string | null;
+    dominantReason: string | null;
+    reasonClusterSummary: string | null;
+    mixedSignalHint: string | null;
+    recoveryHint: string | null;
     configuredFallbackCount: number;
     latestStatus: string | null;
     latestHeadline: string | null;
     latestRoute: string | null;
     compactionRoute: string | null;
+    latestSignal: string | null;
+    latestRouteBehavior: string | null;
+    latestReasonSummary: string | null;
+    overallReasonSummary: string | null;
+    totalsSummary: string | null;
   } | null;
 };
 
@@ -185,6 +198,7 @@ function buildDelegationReasonView(source: DelegationReasonLike | undefined) {
 
 function buildRuntimeResilienceView(source: RuntimeResilienceDoctorReport | undefined) {
   if (!source) return null;
+  const diagnostics = buildRuntimeResilienceDiagnosticSummary(source);
   const latestRoute = source.latest?.finalProfileId
     ? `${source.latest.finalProfileId}/${source.latest.finalModel ?? "-"}`
     : null;
@@ -192,18 +206,42 @@ function buildRuntimeResilienceView(source: RuntimeResilienceDoctorReport | unde
     ? `${source.routing.compaction.route.provider}/${source.routing.compaction.route.model}`
     : null;
   const view = {
+    alertLevel: diagnostics.alertLevel,
+    alertCode: diagnostics.alertCode,
+    alertMessage: diagnostics.alertMessage,
+    dominantReason: diagnostics.dominantReason,
+    reasonClusterSummary: diagnostics.reasonClusterSummary,
+    mixedSignalHint: diagnostics.mixedSignalHint,
+    recoveryHint: diagnostics.recoveryHint,
     configuredFallbackCount: source.routing.fallbacks.length,
     latestStatus: normalizeOptionalString(source.latest?.finalStatus),
     latestHeadline: normalizeOptionalString(source.latest?.headline),
     latestRoute,
     compactionRoute,
+    latestSignal: diagnostics.latestSignal,
+    latestRouteBehavior: diagnostics.latestRouteBehavior,
+    latestReasonSummary: diagnostics.latestReasonSummary,
+    overallReasonSummary: diagnostics.overallReasonSummary,
+    totalsSummary: diagnostics.totalsSummary,
   };
   if (
-    view.configuredFallbackCount <= 0
+    !view.alertLevel
+    && !view.alertCode
+    && !view.alertMessage
+    && !view.dominantReason
+    && !view.reasonClusterSummary
+    && !view.mixedSignalHint
+    && !view.recoveryHint
+    && view.configuredFallbackCount <= 0
     && !view.latestStatus
     && !view.latestHeadline
     && !view.latestRoute
     && !view.compactionRoute
+    && !view.latestSignal
+    && !view.latestRouteBehavior
+    && !view.latestReasonSummary
+    && !view.overallReasonSummary
+    && !view.totalsSummary
   ) {
     return null;
   }

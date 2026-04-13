@@ -89,6 +89,8 @@ export function buildGatewayServerOptions(input: GatewayServerRuntimeInput): Gat
     onChannelSecurityApprovalRequired: input.onChannelSecurityApprovalRequired,
     getCronRuntimeDoctorReport: input.getCronRuntimeDoctorReport,
     getBackgroundContinuationRuntimeDoctorReport: input.getBackgroundContinuationRuntimeDoctorReport,
+    runCronJobNow: input.runCronJobNow,
+    runCronRecovery: input.runCronRecovery,
     inspectAgentPrompt: input.inspectAgentPrompt,
     getConversationPromptSnapshot: input.getConversationPromptSnapshot,
     extensionHost: input.extensionHost,
