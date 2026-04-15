@@ -615,3 +615,289 @@ test("external_outbound.audit.list returns recent audit records via websocket rp
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test("email_outbound.audit.list returns recent audit records via websocket rpc", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    emailOutboundAuditStore: {
+      async append() {},
+      async listRecent(limit: number) {
+        expect(limit).toBe(2);
+        return [
+          {
+            timestamp: 1710000002000,
+            sourceConversationId: "conv-email-2",
+            sourceChannel: "webchat" as const,
+            requestedByAgentId: "default",
+            providerId: "smtp",
+            accountId: "default",
+            to: ["alice@example.com"],
+            subject: "Status",
+            bodyPreview: "preview",
+            attachmentCount: 1,
+            threadId: "<thread-001@example.com>",
+            replyToMessageId: "<reply-001@example.com>",
+            decision: "confirmed" as const,
+            delivery: "sent" as const,
+            providerMessageId: "<msg-001@example.com>",
+          },
+          {
+            timestamp: 1710000004000,
+            sourceConversationId: "conv-email-3",
+            sourceChannel: "webchat" as const,
+            requestedByAgentId: "default",
+            providerId: "smtp",
+            accountId: "default",
+            to: ["bob@example.com"],
+            subject: "Send fail",
+            bodyPreview: "send fail",
+            decision: "auto_approved" as const,
+            delivery: "failed" as const,
+            errorCode: "send_failed",
+            error: "smtp timeout",
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "email-outbound-audit-list",
+      method: "email_outbound.audit.list",
+      params: { limit: 2 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "email-outbound-audit-list"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "email-outbound-audit-list");
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      limit: 2,
+      items: [
+        expect.objectContaining({
+          sourceConversationId: "conv-email-2",
+          providerId: "smtp",
+          attachmentCount: 1,
+        }),
+        expect.objectContaining({
+          sourceConversationId: "conv-email-3",
+          providerId: "smtp",
+          errorCode: "send_failed",
+        }),
+      ],
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("email_inbound.audit.list returns recent audit records via websocket rpc", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    emailInboundAuditStore: {
+      async append() {},
+      async listRecent(limit: number) {
+        expect(limit).toBe(2);
+        return [
+          {
+            timestamp: 1710000005000,
+            providerId: "imap",
+            accountId: "primary",
+            mailbox: "INBOX",
+            status: "processed" as const,
+            messageId: "<msg-100@example.com>",
+            threadId: "<thread-100@example.com>",
+            subject: "Inbound ok",
+            from: ["alice@example.com"],
+            to: ["team@example.com"],
+            bodyPreview: "hello",
+            attachmentCount: 1,
+            conversationId: "channel=email:scope=per-account-thread:provider=imap:account=primary:thread=%3Cthread-100%40example.com%3E",
+            sessionKey: "channel=email:scope=per-account-thread:provider=imap:account=primary:thread=%3Cthread-100%40example.com%3E",
+            requestedAgentId: "default",
+            checkpointUid: 42,
+            createdBinding: true,
+          },
+          {
+            timestamp: 1710000006000,
+            providerId: "imap",
+            accountId: "primary",
+            mailbox: "INBOX",
+            status: "failed" as const,
+            messageId: "<msg-101@example.com>",
+            threadId: "<thread-101@example.com>",
+            subject: "Inbound failed",
+            from: ["bob@example.com"],
+            to: ["team@example.com"],
+            bodyPreview: "fail",
+            errorCode: "ingest_failed",
+            error: "agent unavailable",
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "email-inbound-audit-list",
+      method: "email_inbound.audit.list",
+      params: { limit: 2 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "email-inbound-audit-list"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "email-inbound-audit-list");
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      limit: 2,
+      items: [
+        expect.objectContaining({
+          providerId: "imap",
+          status: "processed",
+          checkpointUid: 42,
+        }),
+        expect.objectContaining({
+          providerId: "imap",
+          status: "failed",
+          errorCode: "ingest_failed",
+        }),
+      ],
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("email_followup.list returns recent reminder records via websocket rpc", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    emailFollowUpReminderStore: {
+      async upsert() {
+        throw new Error("not implemented in test");
+      },
+      async markDelivered() {
+        return undefined;
+      },
+      async resolveByThread() {
+        return undefined;
+      },
+      async listDue() {
+        return [];
+      },
+      async listRecent(limit: number) {
+        expect(limit).toBe(2);
+        return [
+          {
+            id: "provider=imap:account=primary:thread=%3Cthread-200%40example.com%3E",
+            providerId: "imap",
+            accountId: "primary",
+            threadId: "<thread-200@example.com>",
+            conversationId: "channel=email:scope=per-account-thread:provider=imap:account=primary:thread=%3Cthread-200%40example.com%3E",
+            requestedAgentId: "default",
+            messageId: "<msg-200@example.com>",
+            subject: "Reminder pending",
+            triageSummary: "needs a reply",
+            followUpWindowHours: 24,
+            dueAt: 1710000010000,
+            status: "pending" as const,
+            createdAt: 1710000000000,
+            updatedAt: 1710000000000,
+            deliveryCount: 0,
+          },
+          {
+            id: "provider=imap:account=primary:thread=%3Cthread-201%40example.com%3E",
+            providerId: "imap",
+            accountId: "primary",
+            threadId: "<thread-201@example.com>",
+            conversationId: "channel=email:scope=per-account-thread:provider=imap:account=primary:thread=%3Cthread-201%40example.com%3E",
+            requestedAgentId: "default",
+            messageId: "<msg-201@example.com>",
+            subject: "Reminder delivered",
+            triageSummary: "follow up tomorrow",
+            followUpWindowHours: 48,
+            dueAt: 1710000020000,
+            status: "delivered" as const,
+            createdAt: 1710000001000,
+            updatedAt: 1710000005000,
+            deliveryCount: 1,
+            lastDeliveredAt: 1710000005000,
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "email-followup-list",
+      method: "email_followup.list",
+      params: { limit: 2 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "email-followup-list"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "email-followup-list");
+    expect(res.ok).toBe(true);
+    expect(res.payload).toMatchObject({
+      limit: 2,
+      items: [
+        expect.objectContaining({
+          providerId: "imap",
+          status: "pending",
+          subject: "Reminder pending",
+        }),
+        expect.objectContaining({
+          providerId: "imap",
+          status: "delivered",
+          deliveryCount: 1,
+        }),
+      ],
+    });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});

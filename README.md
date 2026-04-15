@@ -339,6 +339,12 @@ cd star-sanctuary
 2. 否则，如果仓库根目录已存在 `.env` 或 `.env.local`，则继续兼容使用仓库根目录
 3. 否则，默认使用 `stateDir`（通常是 `~/.star_sanctuary`）
 
+补充说明：
+
+- 这里是“择一生效”，不是“多处合并”
+- 只要第 2 条命中，Gateway 就会继续从仓库根目录读取 `.env` / `.env.local`
+- 此时 `stateDir` 下的配置文件不会同时参与加载，直到你迁移配置或显式指定 `ENV_DIR`
+
 如果你是老用户，并且仓库根目录仍保留旧配置，系统会继续兼容旧路径；准备切换到状态目录时，可使用：
 
 ```bash
@@ -560,6 +566,42 @@ BELLDANDY_COMPACTION_TRIGGER_FRACTION=0.75
 BELLDANDY_COMPACTION_ARCHIVAL_THRESHOLD=2000
 ```
 
+### Assistant Mode（统一主动工作入口）
+
+当前推荐把主动工作相关能力统一理解成一个 `Assistant Mode`，而不是分别记忆多条旧开关。
+
+最关键的环境变量是：
+
+```env
+BELLDANDY_ASSISTANT_MODE_ENABLED=true
+BELLDANDY_HEARTBEAT_ENABLED=true
+BELLDANDY_HEARTBEAT_INTERVAL=30m
+BELLDANDY_CRON_ENABLED=true
+BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION=true
+BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE=feishu,qq,community,discord
+```
+
+只需要记住两点：
+
+- `Assistant Mode` 是“主动工作统一解释层”，不是“所有任务统一执行层”
+- 运行状态优先看 `系统检查 -> Assistant Mode`
+
+在这张卡里，你现在可以直接看到：
+
+- 当前主开关状态
+- `heartbeat / cron` 概况
+- 外发策略
+- resident 摘要
+- 长期任务摘要
+- goal 摘要
+- `next action`
+- `focus`
+- `attention items`
+
+如果你想看更详细的使用说明，直接看：
+
+- [Star Sanctuary使用手册.md](./Star%20Sanctuary%E4%BD%BF%E7%94%A8%E6%89%8B%E5%86%8C.md)
+
 ### 浏览器自动化
 
 ```env
@@ -570,6 +612,57 @@ BELLDANDY_RELAY_PORT=28892
 # BELLDANDY_BROWSER_ALLOWED_DOMAINS=github.com,developer.mozilla.org,docs.example.com
 # BELLDANDY_BROWSER_DENIED_DOMAINS=mail.google.com,drive.google.com,onedrive.live.com
 ```
+
+### 邮件收发（SMTP / IMAP）
+
+当前邮件链路已经拆成两部分：
+
+- 发信：`SMTP`
+- 收信：`IMAP polling fallback`
+
+IMAP 收信的最小可用配置如下，建议写入当前实际 `envDir/.env.local`：
+
+```env
+BELLDANDY_EMAIL_INBOUND_AGENT_ID=default
+BELLDANDY_EMAIL_IMAP_ENABLED=true
+BELLDANDY_EMAIL_IMAP_ACCOUNT_ID=default
+BELLDANDY_EMAIL_IMAP_HOST=imap.example.com
+BELLDANDY_EMAIL_IMAP_PORT=993
+BELLDANDY_EMAIL_IMAP_SECURE=true
+BELLDANDY_EMAIL_IMAP_USER=mailer@example.com
+BELLDANDY_EMAIL_IMAP_PASS=your-imap-password-or-app-password
+BELLDANDY_EMAIL_IMAP_MAILBOX=INBOX
+BELLDANDY_EMAIL_IMAP_POLL_INTERVAL_MS=60000
+BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE=latest
+BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT=50
+```
+
+要点只记三条：
+
+- `BELLDANDY_EMAIL_IMAP_ENABLED=true` 只表示“尝试开启”，不代表 runtime 一定会启动
+- `HOST / USER / PASS` 缺任意一个，IMAP runtime 都会跳过启动
+- 这些配置只会从当前实际 `envDir` 读取；如果当前仍是 `legacy project-root env`，那就继续以仓库根目录 `.env/.env.local` 为准
+
+如果你接的是一个历史邮件很多的老邮箱，再额外记住：
+
+- `BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE=latest`
+  表示首次接入时优先从最新位置建基线，而不是追整箱历史邮件
+- `BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT=50`
+  表示即使 backlog 很大，也只先追最近 `50` 封窗口，再继续接后续新邮件
+
+排障时优先看 WebChat：
+
+- `系统检查 -> Config Source`
+  确认当前到底从哪个目录读取 `.env/.env.local`
+- `系统检查 -> Email Inbound Runtime`
+  确认 IMAP 是 `disabled`、`blocked` 还是已经 `running`，并直接看缺失字段与下一步提示
+- `记忆查看 -> 消息审计`
+  查看逐条收信记录、失败、重复跳过、thread / message / checkpoint 信息
+
+如果你刚改了 `.env.local`，但 `Email Inbound Runtime` 没变化，通常先检查两件事：
+
+1. `Config Source` 显示的生效目录是不是你刚改的那个目录
+2. 启动日志里有没有出现 `.env.local` 变更并触发 Gateway 重启
 
 ### 配置建议文档
 
@@ -586,6 +679,12 @@ BELLDANDY_RELAY_PORT=28892
 ### 老用户迁移到状态目录
 
 如果你之前一直在仓库根目录维护 `.env` / `.env.local`，当前版本会继续兼容旧路径。
+
+需要特别注意：
+
+- 只要仓库根目录里的 `.env` 或 `.env.local` 仍然存在，它们就会优先生效
+- 同名配置不会再从 `stateDir` 里补一层
+- 启动日志或 `bdd doctor` / `system.doctor` 里如果看到 `legacy project-root env files`，就表示当前真正生效的是仓库根目录配置
 
 当你准备切换到状态目录时，推荐按以下顺序操作：
 

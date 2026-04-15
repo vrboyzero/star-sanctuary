@@ -1,3 +1,4 @@
+import { createEmailOutboundController } from "./email-outbound.js";
 import { createExternalOutboundController } from "./external-outbound.js";
 import { createSettingsController } from "./settings.js";
 import { createToolSettingsController } from "./tool-settings.js";
@@ -42,7 +43,9 @@ export function createSettingsRuntimeFeature({
     refreshModelFallbackConfigBtn,
     modelFallbackConfigMeta,
     cfgModelFallbackContent,
+    cfgAssistantModeEnabled,
     cfgExternalOutboundRequireConfirmation,
+    cfgAssistantExternalDeliveryPreference,
     cfgHeartbeat,
     cfgHeartbeatEnabled,
     cfgHeartbeatActiveHours,
@@ -95,6 +98,9 @@ export function createSettingsRuntimeFeature({
     channelReplyChunkingConfigMeta,
     cfgChannelReplyChunkingContent,
     channelSecurityPendingList,
+    assistantModeConfigTitleEl,
+    assistantModeConfigHelpEl,
+    assistantModeConfigHintEl,
     toolSettingsConfirmModal,
     toolSettingsConfirmImpactEl,
     toolSettingsConfirmSummaryEl,
@@ -113,6 +119,12 @@ export function createSettingsRuntimeFeature({
     externalOutboundConfirmExpiryEl,
     externalOutboundConfirmApproveBtn,
     externalOutboundConfirmRejectBtn,
+    emailOutboundConfirmModal,
+    emailOutboundConfirmPreviewEl,
+    emailOutboundConfirmTargetEl,
+    emailOutboundConfirmExpiryEl,
+    emailOutboundConfirmApproveBtn,
+    emailOutboundConfirmRejectBtn,
   } = refs;
 
   const t = localeController?.t || ((_key, _params, fallback) => fallback ?? "");
@@ -141,7 +153,9 @@ export function createSettingsRuntimeFeature({
       refreshModelFallbackConfigBtn,
       modelFallbackConfigMeta,
       cfgModelFallbackContent,
+      cfgAssistantModeEnabled,
       cfgExternalOutboundRequireConfirmation,
+      cfgAssistantExternalDeliveryPreference,
       cfgHeartbeat,
       cfgHeartbeatEnabled,
       cfgHeartbeatActiveHours,
@@ -190,6 +204,9 @@ export function createSettingsRuntimeFeature({
       channelReplyChunkingConfigMeta,
       cfgChannelReplyChunkingContent,
       channelSecurityPendingList,
+      assistantModeConfigTitleEl,
+      assistantModeConfigHelpEl,
+      assistantModeConfigHintEl,
     },
     isConnected,
     sendReq,
@@ -201,6 +218,7 @@ export function createSettingsRuntimeFeature({
     onToggle: (show) => voiceFeature?.onSettingsToggle?.(show),
     getConnectionAuthMode,
     onApprovePairing: (code) => approvePairingPending(code, { showSuccessNotice: true }),
+    onPairingRequired: (payload) => handlePairingRequired(payload),
     onOpenCommunityConfig,
     onModelCatalogChanged: async () => {
       await chatNetworkFeature?.loadModelList?.();
@@ -248,6 +266,23 @@ export function createSettingsRuntimeFeature({
       externalOutboundConfirmExpiryEl,
       externalOutboundConfirmApproveBtn,
       externalOutboundConfirmRejectBtn,
+    },
+    isConnected,
+    sendReq,
+    makeId,
+    clientId,
+    escapeHtml,
+    showNotice,
+    t,
+  });
+  const emailOutboundController = createEmailOutboundController({
+    refs: {
+      emailOutboundConfirmModal,
+      emailOutboundConfirmPreviewEl,
+      emailOutboundConfirmTargetEl,
+      emailOutboundConfirmExpiryEl,
+      emailOutboundConfirmApproveBtn,
+      emailOutboundConfirmRejectBtn,
     },
     isConnected,
     sendReq,
@@ -329,6 +364,7 @@ export function createSettingsRuntimeFeature({
       clientId: clientIdValue,
       updatedAt: new Date().toISOString(),
     });
+    settingsController.markPairingRequired?.();
     syncPairingPendingSurface();
     showNotice(
       t("settings.pairingPendingNoticeTitle", {}, "待批准配对"),
@@ -405,6 +441,12 @@ export function createSettingsRuntimeFeature({
     },
     handleExternalOutboundConfirmResolved(payload) {
       externalOutboundController.handleConfirmResolved(payload);
+    },
+    handleEmailOutboundConfirmRequired(payload) {
+      emailOutboundController.handleConfirmRequired(payload);
+    },
+    handleEmailOutboundConfirmResolved(payload) {
+      emailOutboundController.handleConfirmResolved(payload);
     },
     handleToolsConfigUpdated(payload) {
       toolSettingsController.handleToolsConfigUpdated(payload);

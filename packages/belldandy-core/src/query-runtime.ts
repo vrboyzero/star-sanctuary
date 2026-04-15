@@ -7,6 +7,8 @@ export type QueryRuntimeMethod =
   | "webhook.receive"
   | "tool_settings.confirm"
   | "external_outbound.confirm"
+  | "email_outbound.confirm"
+  | "email_followup.list"
   | "conversation.restore"
   | "conversation.transcript.export"
   | "conversation.timeline.get"

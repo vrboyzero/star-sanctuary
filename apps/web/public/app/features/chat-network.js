@@ -69,6 +69,27 @@ export function buildManualModelValue(value) {
   return normalized ? `${MANUAL_MODEL_PREFIX}${normalized}` : "";
 }
 
+export function normalizeRequestFrame(frame, makeId = null) {
+  if (!frame || typeof frame !== "object" || Array.isArray(frame)) {
+    return null;
+  }
+
+  const normalized = { ...frame };
+  if (typeof normalized.type !== "string" || !normalized.type.trim()) {
+    normalized.type = "req";
+  }
+  if ((typeof normalized.id !== "string" || !normalized.id.trim()) && typeof makeId === "function") {
+    normalized.id = makeId();
+  }
+  if (normalized.type === "req" && (typeof normalized.method !== "string" || !normalized.method.trim())) {
+    return null;
+  }
+  if (typeof normalized.id !== "string" || !normalized.id.trim()) {
+    return null;
+  }
+  return normalized;
+}
+
 export function formatModelOptionLabel(model, t = (_key, _params, fallback) => fallback ?? "") {
   if (!model || typeof model !== "object") return "";
   const baseLabel = model.displayName || model.model || model.id || t("composer.defaultModel", {}, "Default Model");
@@ -390,13 +411,18 @@ export function createChatNetworkFeature({
   function sendReq(frame) {
     const socket = getSocket();
     if (!socket) return Promise.resolve(null);
+    const normalizedFrame = normalizeRequestFrame(frame, makeId);
+    if (!normalizedFrame) {
+      debugLog?.("[ws] dropped invalid request frame", frame);
+      return Promise.resolve(null);
+    }
 
-    socket.send(JSON.stringify(frame));
+    socket.send(JSON.stringify(normalizedFrame));
     return new Promise((resolve) => {
-      pendingReq.set(frame.id, { resolve });
+      pendingReq.set(normalizedFrame.id, { resolve });
       setTimeout(() => {
-        if (pendingReq.has(frame.id)) {
-          pendingReq.delete(frame.id);
+        if (pendingReq.has(normalizedFrame.id)) {
+          pendingReq.delete(normalizedFrame.id);
           resolve(null);
         }
       }, 30_000);

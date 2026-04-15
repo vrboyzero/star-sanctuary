@@ -6,6 +6,7 @@ import type {
   ModelProfile,
 } from "@belldandy/agent";
 import type { GatewayEventFrame, GatewayReqFrame, GatewayResFrame, TokenUsageUploadConfig } from "@belldandy/protocol";
+import type { EnvDirSource } from "@star-sanctuary/distribution";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { SkillRegistry, ToolExecutor, TranscribeOptions, TranscribeResult } from "@belldandy/skills";
 import type { WebSocket } from "ws";
@@ -17,6 +18,11 @@ import type { ExtensionHostState } from "./extension-host.js";
 import type { ExternalOutboundAuditStore } from "./external-outbound-audit-store.js";
 import type { ExternalOutboundConfirmationStore } from "./external-outbound-confirmation-store.js";
 import type { ExternalOutboundSenderRegistry } from "./external-outbound-sender-registry.js";
+import type { EmailOutboundAuditStore } from "./email-outbound-audit-store.js";
+import type { EmailOutboundConfirmationStore } from "./email-outbound-confirmation-store.js";
+import type { EmailOutboundProviderRegistry } from "./email-outbound-provider-registry.js";
+import type { EmailInboundAuditStore } from "./email-inbound-audit-store.js";
+import type { EmailFollowUpReminderStore } from "./email-follow-up-reminder-store.js";
 import type { GoalManager } from "./goals/manager.js";
 import type {
   MemoryRuntimeBudgetGuard,
@@ -46,6 +52,7 @@ export type GatewayWebSocketRequestContext = {
   stateDir: string;
   additionalWorkspaceRoots: string[];
   envDir?: string;
+  envSource?: EnvDirSource;
   auth: GatewayServerOptions["auth"];
   log: GatewayLog;
   agentFactory: () => BelldandyAgent;
@@ -74,6 +81,11 @@ export type GatewayWebSocketRequestContext = {
   externalOutboundConfirmationStore?: ExternalOutboundConfirmationStore;
   externalOutboundSenderRegistry?: ExternalOutboundSenderRegistry;
   externalOutboundAuditStore?: ExternalOutboundAuditStore;
+  emailOutboundConfirmationStore?: EmailOutboundConfirmationStore;
+  emailOutboundProviderRegistry?: EmailOutboundProviderRegistry;
+  emailOutboundAuditStore?: EmailOutboundAuditStore;
+  emailInboundAuditStore?: EmailInboundAuditStore;
+  emailFollowUpReminderStore?: EmailFollowUpReminderStore;
   getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
   getAgentToolControlConfirmPassword?: () => string | undefined;
   sttTranscribe?: (opts: TranscribeOptions) => Promise<TranscribeResult | null>;
@@ -130,6 +142,7 @@ export function buildGatewayWebSocketRequestContext(
     stateDir: options.stateDir,
     additionalWorkspaceRoots: options.additionalWorkspaceRoots,
     envDir: options.envDir,
+    envSource: options.envSource,
     auth: options.auth,
     log: options.log,
     agentFactory: options.agentFactory,
@@ -154,6 +167,11 @@ export function buildGatewayWebSocketRequestContext(
     externalOutboundConfirmationStore: options.externalOutboundConfirmationStore,
     externalOutboundSenderRegistry: options.externalOutboundSenderRegistry,
     externalOutboundAuditStore: options.externalOutboundAuditStore,
+    emailOutboundConfirmationStore: options.emailOutboundConfirmationStore,
+    emailOutboundProviderRegistry: options.emailOutboundProviderRegistry,
+    emailOutboundAuditStore: options.emailOutboundAuditStore,
+    emailInboundAuditStore: options.emailInboundAuditStore,
+    emailFollowUpReminderStore: options.emailFollowUpReminderStore,
     getAgentToolControlMode: options.getAgentToolControlMode,
     getAgentToolControlConfirmPassword: options.getAgentToolControlConfirmPassword,
     sttTranscribe: options.sttTranscribe,

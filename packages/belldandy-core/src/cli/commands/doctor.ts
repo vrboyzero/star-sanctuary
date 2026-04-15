@@ -350,7 +350,7 @@ export default defineCommand({
       results.push({
         name: "Legacy root env mode",
         status: "warn",
-        message: `Using project-root env files; state-dir config at ${ctx.stateDir} is currently inactive`,
+        message: `Using project-root env files; state-dir config at ${ctx.stateDir} is currently inactive and not merged`,
         fix: "Run 'bdd config migrate-to-state-dir' to switch to state-dir config",
       });
     }

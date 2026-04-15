@@ -3,6 +3,7 @@ import { buildLaunchExplainabilityLines } from "./agent-launch-explainability.js
 import { buildResidentStateBindingLines } from "./resident-state-binding-lines.js";
 import { buildContinuationAction } from "./continuation-targets.js";
 import { buildExternalOutboundDiagnosis } from "./external-outbound-diagnosis.js";
+import { buildAgentWorkSummary } from "./agent-work-summary.js";
 
 function tr(t, key, params, fallback) {
   return typeof t === "function" ? t(key, params ?? {}, fallback) : fallback;
@@ -987,6 +988,502 @@ function buildBackgroundContinuationRuntimeCard(payload, t) {
   };
 }
 
+function buildAssistantModeRuntimeCard(payload, t) {
+  const runtime = payload?.assistantModeRuntime;
+  if (!runtime?.controls || !runtime?.sources || !runtime?.delivery) {
+    return undefined;
+  }
+
+  const statusLabel = runtime.status || "unknown";
+  const masterSource = runtime.controls.assistantModeSource || "derived";
+  const notifySummary = Array.isArray(runtime.delivery.externalDeliveryPreference) && runtime.delivery.externalDeliveryPreference.length > 0
+    ? `resident + ${runtime.delivery.externalDeliveryPreference.join(" > ")}`
+    : "resident only";
+  const badges = [
+    tr(
+      t,
+      "settings.doctorAssistantModeMaster",
+      {
+        enabled: runtime.controls.assistantModeEnabled ? "on" : "off",
+        source: masterSource,
+      },
+      `mode ${runtime.controls.assistantModeEnabled ? "on" : "off"} / ${masterSource}`,
+    ),
+    tr(
+      t,
+      "settings.doctorAssistantModeStatus",
+      { status: statusLabel },
+      `status ${statusLabel}`,
+    ),
+    tr(
+      t,
+      "settings.doctorAssistantModeHeartbeat",
+      {
+        enabled: runtime.controls.heartbeatEnabled ? "on" : "off",
+        interval: runtime.controls.heartbeatInterval || "-",
+      },
+      `heartbeat ${runtime.controls.heartbeatEnabled ? "on" : "off"} / ${runtime.controls.heartbeatInterval || "-"}`,
+    ),
+    tr(
+      t,
+      "settings.doctorAssistantModeCron",
+      {
+        enabled: runtime.controls.cronEnabled ? "on" : "off",
+        jobs: formatNumber(runtime.sources.cron?.enabledJobs),
+        total: formatNumber(runtime.sources.cron?.totalJobs),
+      },
+      `cron ${runtime.controls.cronEnabled ? "on" : "off"} / jobs ${formatNumber(runtime.sources.cron?.enabledJobs)}/${formatNumber(runtime.sources.cron?.totalJobs)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorAssistantModeNotify",
+      { summary: notifySummary },
+      `notify ${notifySummary}`,
+    ),
+    tr(
+      t,
+      "settings.doctorAssistantModeConfirm",
+      { mode: runtime.delivery.confirmationRequired ? "required" : "disabled" },
+      runtime.delivery.confirmationRequired ? "confirm required" : "confirm disabled",
+    ),
+  ];
+  if (runtime.resident?.totalCount > 0) {
+    badges.push(
+      tr(
+        t,
+        "settings.doctorAssistantModeResident",
+        {
+          running: formatNumber(runtime.resident.runningCount),
+          idle: formatNumber(runtime.resident.idleCount),
+          total: formatNumber(runtime.resident.totalCount),
+        },
+        `resident running ${formatNumber(runtime.resident.runningCount)} / idle ${formatNumber(runtime.resident.idleCount)} / total ${formatNumber(runtime.resident.totalCount)}`,
+      ),
+    );
+  }
+
+  const notes = [{
+    text: tr(
+      t,
+      "settings.doctorAssistantModeHeadline",
+      { headline: runtime.headline || "-" },
+      runtime.headline || "-",
+    ),
+  }];
+
+  notes.push({
+    text: tr(
+      t,
+      "settings.doctorAssistantModeStrategy",
+      {
+        heartbeat: runtime.sources.heartbeat?.lastStatus || (runtime.controls.heartbeatEnabled ? "idle" : "off"),
+        cron: runtime.sources.cron?.lastStatus || (runtime.controls.cronEnabled ? "idle" : "off"),
+        activeHours: runtime.controls.activeHours || "all day",
+      },
+      `strategy: heartbeat=${runtime.sources.heartbeat?.lastStatus || (runtime.controls.heartbeatEnabled ? "idle" : "off")}, cron=${runtime.sources.cron?.lastStatus || (runtime.controls.cronEnabled ? "idle" : "off")}, activeHours=${runtime.controls.activeHours || "all day"}`,
+    ),
+  });
+  notes.push({
+    text: tr(
+      t,
+      "settings.doctorAssistantModeDriverPolicy",
+      {
+        drivers: [
+          runtime.controls.heartbeatEnabled ? "heartbeat" : "",
+          runtime.controls.cronEnabled ? "cron" : "",
+        ].filter(Boolean).join(" + ") || "none",
+        source: masterSource,
+      },
+      `driver policy: ${
+        [
+          runtime.controls.heartbeatEnabled ? "heartbeat" : "",
+          runtime.controls.cronEnabled ? "cron" : "",
+        ].filter(Boolean).join(" + ") || "none"
+      } / source ${masterSource}`,
+    ),
+  });
+  notes.push({
+    text: tr(
+      t,
+      "settings.doctorAssistantModeSchedulePolicy",
+      {
+        interval: runtime.controls.heartbeatInterval || "-",
+        activeHours: runtime.controls.activeHours || "all day",
+        jobs: formatNumber(runtime.sources.cron?.enabledJobs),
+        total: formatNumber(runtime.sources.cron?.totalJobs),
+      },
+      `schedule policy: heartbeat ${runtime.controls.heartbeatInterval || "-"} / ${runtime.controls.activeHours || "all day"} / cron jobs ${formatNumber(runtime.sources.cron?.enabledJobs)}/${formatNumber(runtime.sources.cron?.totalJobs)}`,
+    ),
+  });
+  notes.push({
+    text: tr(
+      t,
+      "settings.doctorAssistantModeDelivery",
+      {
+        resident: "resident",
+        external: notifySummary,
+      },
+      `delivery: resident channel always available; external preference ${notifySummary}`,
+    ),
+  });
+  notes.push({
+    text: tr(
+      t,
+      "settings.doctorAssistantModeOutboundPolicy",
+      {
+        summary: notifySummary,
+        confirm: runtime.delivery.confirmationRequired ? "required" : "disabled",
+      },
+      `outbound policy: ${notifySummary}, confirm ${runtime.delivery.confirmationRequired ? "required" : "disabled"}`,
+    ),
+  });
+  if (runtime.resident?.headline) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeResidentHeadline",
+        { headline: runtime.resident.headline },
+        `resident summary: ${runtime.resident.headline}`,
+      ),
+    });
+  }
+  if (runtime.resident?.primary?.displayName) {
+    const primary = runtime.resident.primary;
+    const residentParts = [
+      primary.displayName,
+      primary.status ? `status=${primary.status}` : "",
+      primary.digestStatus
+        ? `digest=${primary.digestStatus}${Number(primary.pendingMessageCount) > 0 ? `/${Number(primary.pendingMessageCount)}` : ""}`
+        : "",
+      primary.nextAction ? `continue=${primary.nextAction}` : "",
+    ].filter(Boolean);
+    const action = primary.recommendedTargetId
+      ? buildContinuationAction({
+        recommendedTargetId: primary.recommendedTargetId,
+        targetType: primary.targetType || "conversation",
+      })
+      : null;
+    const text = tr(
+      t,
+      "settings.doctorAssistantModeResidentPrimary",
+      { summary: residentParts.join(", ") },
+      `resident focus: ${residentParts.join(", ")}`,
+    );
+    notes.push(action ? { text, action } : { text });
+  }
+  if (runtime.longTasks?.headline) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeLongTasksHeadline",
+        { headline: runtime.longTasks.headline },
+        `long task summary: ${runtime.longTasks.headline}`,
+      ),
+    });
+  }
+  if (runtime.longTasks?.primary?.taskId) {
+    const primary = runtime.longTasks.primary;
+    const parts = [
+      primary.taskId,
+      primary.status ? `status=${primary.status}` : "",
+      primary.agentId ? `agent=${primary.agentId}` : "",
+      primary.intentSummary ? `intent=${primary.intentSummary}` : "",
+      primary.expectedDeliverableSummary ? `deliverable=${primary.expectedDeliverableSummary}` : "",
+    ].filter(Boolean);
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeLongTasksPrimary",
+        { summary: parts.join(", ") },
+        `long task focus: ${parts.join(", ")}`,
+      ),
+    });
+  }
+  if (runtime.goals?.headline) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeGoalsHeadline",
+        { headline: runtime.goals.headline },
+        `goal summary: ${runtime.goals.headline}`,
+      ),
+    });
+  }
+  if (runtime.goals?.primary?.goalId) {
+    const primary = runtime.goals.primary;
+    const parts = [
+      primary.title || primary.goalId,
+      primary.status ? `status=${primary.status}` : "",
+      primary.nextAction ? `next=${primary.nextAction}` : "",
+      primary.blockerSummary ? `blocked=${primary.blockerSummary}` : "",
+      primary.checkpointSummary ? `checkpoint=${primary.checkpointSummary}` : "",
+    ].filter(Boolean);
+    const action = primary.targetId
+      ? buildContinuationAction({
+        recommendedTargetId: primary.targetId,
+        targetType: primary.targetType || "conversation",
+      })
+      : null;
+    const text = tr(
+      t,
+      "settings.doctorAssistantModeGoalsPrimary",
+      { summary: parts.join(", ") },
+      `goal focus: ${parts.join(", ")}`,
+    );
+    notes.push(action ? { text, action } : { text });
+  }
+  if (runtime.explanation?.nextAction?.summary) {
+    const nextAction = runtime.explanation.nextAction;
+    const nextTargetId = typeof nextAction?.targetId === "string" ? nextAction.targetId.trim() : "";
+    const nextTargetType = typeof nextAction?.targetType === "string" ? nextAction.targetType.trim() : "";
+    const nextParts = [
+      nextAction.summary,
+      nextTargetId ? `target=${nextTargetType || "conversation"}:${nextTargetId}` : "",
+      typeof nextAction?.nextRunAtMs === "number" ? `at=${formatTimestamp(nextAction.nextRunAtMs)}` : "",
+    ].filter(Boolean);
+    const action = nextTargetId
+      ? buildContinuationAction({
+        recommendedTargetId: nextTargetId,
+        targetType: nextTargetType || "conversation",
+      })
+      : null;
+    const text = tr(
+      t,
+      "settings.doctorAssistantModeNextAction",
+      { summary: nextParts.join(", ") },
+      `next action: ${nextParts.join(", ")}`,
+    );
+    notes.push(action ? { text, action } : { text });
+  }
+  if (runtime.focus?.summary) {
+    const focus = runtime.focus;
+    const focusTargetId = typeof focus?.targetId === "string" ? focus.targetId.trim() : "";
+    const focusTargetType = typeof focus?.targetType === "string" ? focus.targetType.trim() : "";
+    const focusParts = [
+      focus.summary,
+      focusTargetId ? `target=${focusTargetType || "conversation"}:${focusTargetId}` : "",
+    ].filter(Boolean);
+    const action = focusTargetId
+      ? buildContinuationAction({
+        recommendedTargetId: focusTargetId,
+        targetType: focusTargetType || "conversation",
+      })
+      : null;
+    const text = tr(
+      t,
+      "settings.doctorAssistantModeFocus",
+      { summary: focusParts.join(", ") },
+      `focus: ${focusParts.join(", ")}`,
+    );
+    notes.push(action ? { text, action } : { text });
+  }
+  if (runtime.explanation?.blockedReason) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeBlockedReason",
+        { reason: runtime.explanation.blockedReason },
+        `blocked reason: ${runtime.explanation.blockedReason}`,
+      ),
+    });
+  }
+  if (runtime.explanation?.attentionReason) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeAttentionReason",
+        { reason: runtime.explanation.attentionReason },
+        `attention reason: ${runtime.explanation.attentionReason}`,
+      ),
+    });
+  }
+  if (runtime.controls.assistantModeMismatch) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeMismatch",
+        {},
+        "assistant mode 主开关与当前 heartbeat / cron 实际组合不一致；下次保存配置时会按主开关语义重新收口。",
+      ),
+    });
+  }
+  const attentionItems = Array.isArray(runtime.attentionItems) ? runtime.attentionItems : [];
+  for (const item of attentionItems.slice(0, 4)) {
+    const targetId = typeof item?.targetId === "string" ? item.targetId.trim() : "";
+    const targetType = typeof item?.targetType === "string" ? item.targetType.trim() : "";
+    const parts = [
+      item.summary || "-",
+      targetId ? `target=${targetType || "conversation"}:${targetId}` : "",
+    ].filter(Boolean);
+    const action = targetId
+      ? buildContinuationAction({
+        recommendedTargetId: targetId,
+        targetType: targetType || "conversation",
+      })
+      : null;
+    const text = tr(
+      t,
+      "settings.doctorAssistantModeAttentionItem",
+      { summary: parts.join(", ") },
+      `attention item: ${parts.join(", ")}`,
+    );
+    notes.push(action ? { text, action } : { text });
+  }
+
+  const recentActions = Array.isArray(runtime.recentActions) ? runtime.recentActions : [];
+  for (const item of recentActions.slice(0, 4)) {
+    const targetId = typeof item?.recommendedTargetId === "string" ? item.recommendedTargetId.trim() : "";
+    const targetType = typeof item?.targetType === "string" ? item.targetType.trim() : "";
+    const parts = [
+      item.status || "unknown",
+      item.kind || "assistant",
+      item.sessionTarget ? `session=${item.sessionTarget}` : "",
+      targetId ? `target=${targetType || "conversation"}:${targetId}` : "",
+      item.summary ? `summary=${item.summary}` : "",
+      item.reason ? `reason=${item.reason}` : "",
+      item.latestRecoveryOutcome ? `recovery=${item.latestRecoveryOutcome}` : "",
+      `started=${formatTimestamp(item.startedAt)}`,
+      typeof item.finishedAt === "number" ? `finished=${formatTimestamp(item.finishedAt)}` : "",
+      typeof item.nextRunAtMs === "number" ? `next=${formatTimestamp(item.nextRunAtMs)}` : "",
+    ].filter(Boolean);
+    const text = `${item.label || item.sourceId}: ${parts.join(", ")}`;
+    const action = targetId
+      ? buildContinuationAction({
+        recommendedTargetId: targetId,
+        targetType: targetType || "conversation",
+      })
+      : null;
+    notes.push(action ? { text, action } : { text });
+  }
+
+  const residentAgents = Array.isArray(payload?.residentAgents?.agents) ? payload.residentAgents.agents : [];
+  if (residentAgents.length > 0) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorAssistantModeAgentSnapshots",
+        {},
+        "agent snapshots:",
+      ),
+    });
+    for (const agent of residentAgents.slice(0, 4)) {
+      const summary = buildAgentWorkSummary(agent, t);
+      const status = summary.lines.find((line) => line.key === "status")?.value || "-";
+      const focus = summary.lines.find((line) => line.key === "focus")?.value || "-";
+      const text = tr(
+        t,
+        "settings.doctorAssistantModeAgentSnapshotItem",
+        {
+          agent: agent.displayName || agent.id || "-",
+          status,
+          focus,
+          attention: formatNumber(summary.attentionCount),
+        },
+        `${agent.displayName || agent.id || "-"} · ${status} · ${focus} · attention ${formatNumber(summary.attentionCount)}`,
+      );
+      notes.push(summary.action ? { text, action: summary.action } : { text });
+    }
+  }
+
+  return {
+    title: tr(t, "settings.doctorAssistantModeTitle", {}, "Assistant Mode"),
+    badges,
+    notes,
+    status: runtime.status === "attention" || runtime.status === "disabled" ? "warn" : "pass",
+  };
+}
+
+function buildConfigSourceCard(payload, t) {
+  const summary = payload?.configSource;
+  if (!summary?.source || !summary?.envDir || !summary?.stateDir) {
+    return undefined;
+  }
+
+  const sourceLabel = summary.sourceLabel || summary.source;
+  const badges = [
+    tr(
+      t,
+      "settings.doctorConfigSourceCurrent",
+      { source: sourceLabel },
+      `current ${sourceLabel}`,
+    ),
+    tr(
+      t,
+      "settings.doctorConfigSourceStateDir",
+      { mode: summary.stateDirActive ? "active" : "inactive" },
+      `state-dir ${summary.stateDirActive ? "active" : "inactive"}`,
+    ),
+  ];
+
+  const notes = [
+    {
+      text: tr(
+        t,
+        "settings.doctorConfigSourceHeadline",
+        { headline: summary.headline || "-" },
+        summary.headline || "-",
+      ),
+    },
+    {
+      text: tr(
+        t,
+        "settings.doctorConfigSourceEnvDirPath",
+        { path: summary.envDir },
+        `envDir: ${summary.envDir}`,
+      ),
+    },
+    {
+      text: tr(
+        t,
+        "settings.doctorConfigSourceStateDirPath",
+        { path: summary.stateDir },
+        `stateDir: ${summary.stateDir}`,
+      ),
+    },
+  ];
+
+  const resolutionOrder = Array.isArray(summary.resolutionOrder)
+    ? summary.resolutionOrder.filter((item) => typeof item === "string" && item.trim())
+    : [];
+  if (resolutionOrder.length > 0) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorConfigSourceResolutionOrder",
+        { summary: resolutionOrder.join(" -> ") },
+        `resolution order: ${resolutionOrder.join(" -> ")}`,
+      ),
+    });
+  }
+  if (summary.source === "legacy_root") {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorConfigSourceLegacyExplain",
+        {},
+        "当仓库根目录已存在 .env 或 .env.local 时，Gateway 会优先使用它们，不会再同时合并 state-dir 配置。",
+      ),
+    });
+  }
+  if (summary.migrationHint) {
+    notes.push({
+      text: tr(
+        t,
+        "settings.doctorConfigSourceMigrationHint",
+        { hint: summary.migrationHint },
+        summary.migrationHint,
+      ),
+    });
+  }
+
+  return {
+    title: tr(t, "settings.doctorConfigSourceTitle", {}, "Config Source"),
+    badges,
+    notes,
+    status: summary.source === "legacy_root" ? "warn" : "pass",
+  };
+}
+
 function buildExternalOutboundRuntimeCard(payload, t) {
   const runtime = payload?.externalOutboundRuntime;
   if (!runtime?.totals) {
@@ -1077,7 +1574,7 @@ function buildExternalOutboundRuntimeCard(payload, t) {
     t,
     "settings.doctorExternalOutboundAuditHint",
     {},
-    "详细逐条记录仍可在 记忆查看 -> 外发审计 中查看。",
+    "详细逐条记录仍可在 记忆查看 -> 消息审计 中查看。",
   ));
 
   return {
@@ -1085,6 +1582,285 @@ function buildExternalOutboundRuntimeCard(payload, t) {
     badges,
     notes,
     status: Number(runtime.totals.failedCount) > 0 || runtime.requireConfirmation !== true ? "warn" : "pass",
+  };
+}
+
+function buildEmailOutboundRuntimeCard(payload, t) {
+  const runtime = payload?.emailOutboundRuntime;
+  if (!runtime?.totals) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorEmailOutboundTotal",
+      {
+        total: formatNumber(runtime.totals.totalRecords),
+        sent: formatNumber(runtime.totals.sentCount),
+        failed: formatNumber(runtime.totals.failedCount),
+      },
+      `${formatNumber(runtime.totals.totalRecords)} records / sent ${formatNumber(runtime.totals.sentCount)} / failed ${formatNumber(runtime.totals.failedCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailOutboundDecision",
+      {
+        confirmed: formatNumber(runtime.totals.confirmedCount),
+        autoApproved: formatNumber(runtime.totals.autoApprovedCount),
+        rejected: formatNumber(runtime.totals.rejectedCount),
+      },
+      `confirmed ${formatNumber(runtime.totals.confirmedCount)} / auto ${formatNumber(runtime.totals.autoApprovedCount)} / rejected ${formatNumber(runtime.totals.rejectedCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailOutboundAttachments",
+      {
+        records: formatNumber(runtime.totals.attachmentRecordCount),
+      },
+      `attachments ${formatNumber(runtime.totals.attachmentRecordCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailOutboundConfirmMode",
+      { mode: runtime.requireConfirmation ? "required" : "disabled" },
+      runtime.requireConfirmation ? "confirm required" : "confirm disabled",
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorEmailOutboundHeadline",
+      { headline: runtime.headline || "-" },
+      runtime.headline || "-",
+    ),
+    tr(
+      t,
+      "settings.doctorEmailOutboundProviders",
+      { summary: formatKeyCountSummary(runtime.providerCounts) },
+      `providers ${formatKeyCountSummary(runtime.providerCounts)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailOutboundAccounts",
+      { summary: formatKeyCountSummary(runtime.accountCounts) },
+      `accounts ${formatKeyCountSummary(runtime.accountCounts)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailOutboundErrorCodes",
+      { summary: formatKeyCountSummary(runtime.errorCodeCounts) },
+      `error codes ${formatKeyCountSummary(runtime.errorCodeCounts)}`,
+    ),
+  ];
+
+  const recentFailures = Array.isArray(runtime.recentFailures) ? runtime.recentFailures : [];
+  for (const item of recentFailures.slice(0, 4)) {
+    const parts = [
+      item.providerId || "email",
+      item.accountId ? `account=${item.accountId}` : "",
+      item.subject ? `subject=${item.subject}` : "",
+      item.errorCode ? `code=${item.errorCode}` : "",
+      item.replyToMessageId ? `reply=${item.replyToMessageId}` : "",
+      item.threadId ? `thread=${item.threadId}` : "",
+      item.bodyPreview ? `preview=${item.bodyPreview}` : "",
+      `time=${formatTimestamp(item.timestamp)}`,
+    ].filter(Boolean);
+    notes.push(parts.join(", "));
+    if (item.error) {
+      notes.push(`error=${item.error}`);
+    }
+  }
+
+  notes.push(tr(
+    t,
+    "settings.doctorEmailOutboundAuditHint",
+    {},
+    "详细逐条记录仍可在 记忆查看 -> 消息审计 中查看。",
+  ));
+
+  return {
+    title: tr(t, "settings.doctorEmailOutboundTitle", {}, "Email Outbound Runtime"),
+    badges,
+    notes,
+    status: Number(runtime.totals.failedCount) > 0 || runtime.requireConfirmation !== true ? "warn" : "pass",
+  };
+}
+
+function buildEmailInboundRuntimeCard(payload, t) {
+  const runtime = payload?.emailInboundRuntime;
+  if (!runtime?.totals) {
+    return undefined;
+  }
+  const setup = runtime?.setup && typeof runtime.setup === "object" ? runtime.setup : {};
+  const runtimeMode = setup.runtimeExpected
+    ? "running"
+    : runtime.enabled
+      ? "blocked"
+      : "disabled";
+  const missingFields = Array.isArray(setup.missingFields) ? setup.missingFields.filter(Boolean) : [];
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorEmailInboundTotal",
+      {
+        total: formatNumber(runtime.totals.totalRecords),
+        processed: formatNumber(runtime.totals.processedCount),
+        failed: formatNumber(runtime.totals.failedCount),
+      },
+      `${formatNumber(runtime.totals.totalRecords)} records / processed ${formatNumber(runtime.totals.processedCount)} / failed ${formatNumber(runtime.totals.failedCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundQuality",
+      {
+        invalid: formatNumber(runtime.totals.invalidEventCount),
+        duplicate: formatNumber(runtime.totals.duplicateCount),
+      },
+      `invalid ${formatNumber(runtime.totals.invalidEventCount)} / duplicates ${formatNumber(runtime.totals.duplicateCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundAttachments",
+      {
+        records: formatNumber(runtime.totals.attachmentRecordCount),
+        bindings: formatNumber(runtime.totals.createdBindingCount),
+      },
+      `attachments ${formatNumber(runtime.totals.attachmentRecordCount)} / new threads ${formatNumber(runtime.totals.createdBindingCount)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundRuntimeMode",
+      { mode: runtimeMode },
+      runtimeMode === "running" ? "polling running" : runtimeMode === "blocked" ? "polling blocked" : "polling disabled",
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundSetupStatus",
+      { state: setup.configured ? "configured" : "incomplete" },
+      setup.configured ? "setup configured" : "setup incomplete",
+    ),
+  ];
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorEmailInboundSetupHeadline",
+      { headline: setup.headline || "-" },
+      setup.headline || "-",
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundSetupTarget",
+      {
+        accountId: setup.accountId || "default",
+        host: setup.host || "-",
+        port: formatNumber(setup.port),
+        secure: setup.secure === false ? "false" : "true",
+        mailbox: setup.mailbox || "INBOX",
+        agentId: setup.requestedAgentId || "default",
+        intervalMs: formatNumber(setup.pollIntervalMs),
+        bootstrapMode: setup.bootstrapMode || "latest",
+        recentWindowLimit: formatNumber(setup.recentWindowLimit),
+      },
+      `account ${setup.accountId || "default"} / ${setup.host || "-"}:${formatNumber(setup.port)} / secure=${setup.secure === false ? "false" : "true"} / mailbox ${setup.mailbox || "INBOX"} / agent ${setup.requestedAgentId || "default"} / interval ${formatNumber(setup.pollIntervalMs)}ms / bootstrap ${setup.bootstrapMode || "latest"} / recent window ${formatNumber(setup.recentWindowLimit)}`,
+    ),
+    missingFields.length > 0
+      ? tr(
+        t,
+        "settings.doctorEmailInboundSetupMissing",
+        { fields: missingFields.join(", ") },
+        `missing ${missingFields.join(", ")}`,
+      )
+      : tr(
+        t,
+        "settings.doctorEmailInboundSetupMissing",
+        { fields: "-" },
+        "missing -",
+      ),
+    tr(
+      t,
+      "settings.doctorEmailInboundSetupNext",
+      { hint: setup.nextStep || "-" },
+      setup.nextStep || "-",
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundConfigSourceHint",
+      {},
+      "如果你刚改过 .env/.env.local 但这里没变化，先去看 Config Source 卡片确认当前生效目录。",
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundHeadline",
+      { headline: runtime.headline || "-" },
+      runtime.headline || "-",
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundProviders",
+      { summary: formatKeyCountSummary(runtime.providerCounts) },
+      `providers ${formatKeyCountSummary(runtime.providerCounts)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundAccounts",
+      { summary: formatKeyCountSummary(runtime.accountCounts) },
+      `accounts ${formatKeyCountSummary(runtime.accountCounts)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundMailboxes",
+      { summary: formatKeyCountSummary(runtime.mailboxCounts) },
+      `mailboxes ${formatKeyCountSummary(runtime.mailboxCounts)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundStatuses",
+      { summary: formatKeyCountSummary(runtime.statusCounts) },
+      `statuses ${formatKeyCountSummary(runtime.statusCounts)}`,
+    ),
+    tr(
+      t,
+      "settings.doctorEmailInboundErrorCodes",
+      { summary: formatKeyCountSummary(runtime.errorCodeCounts) },
+      `error codes ${formatKeyCountSummary(runtime.errorCodeCounts)}`,
+    ),
+  ];
+
+  const recentFailures = Array.isArray(runtime.recentFailures) ? runtime.recentFailures : [];
+  for (const item of recentFailures.slice(0, 4)) {
+    const parts = [
+      item.providerId || "imap",
+      item.accountId ? `account=${item.accountId}` : "",
+      item.mailbox ? `mailbox=${item.mailbox}` : "",
+      item.subject ? `subject=${item.subject}` : "",
+      item.errorCode ? `code=${item.errorCode}` : "",
+      item.messageId ? `message=${item.messageId}` : "",
+      item.threadId ? `thread=${item.threadId}` : "",
+      item.bodyPreview ? `preview=${item.bodyPreview}` : "",
+      `time=${formatTimestamp(item.timestamp)}`,
+    ].filter(Boolean);
+    notes.push(parts.join(", "));
+    if (item.error) {
+      notes.push(`error=${item.error}`);
+    }
+  }
+
+  notes.push(tr(
+    t,
+    "settings.doctorEmailInboundAuditHint",
+    {},
+    "详细逐条记录仍可在 记忆查看 -> 消息审计 中查看。",
+  ));
+
+  return {
+    title: tr(t, "settings.doctorEmailInboundTitle", {}, "Email Inbound Runtime"),
+    badges,
+    notes,
+    status: Number(runtime.totals.failedCount) > 0 || runtime.enabled !== true ? "warn" : "pass",
   };
 }
 
@@ -1654,6 +2430,8 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     return;
   }
   const cards = [
+    buildAssistantModeRuntimeCard(payload, t),
+    buildConfigSourceCard(payload, t),
     buildPromptObservabilityCard(payload, t),
     buildToolBehaviorCard(payload, t),
     buildToolContractV2Card(payload, t),
@@ -1666,6 +2444,8 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildCronRuntimeCard(payload, t),
     buildBackgroundContinuationRuntimeCard(payload, t),
     buildExternalOutboundRuntimeCard(payload, t),
+    buildEmailOutboundRuntimeCard(payload, t),
+    buildEmailInboundRuntimeCard(payload, t),
     buildDeploymentBackendsCard(payload, t),
     buildRuntimeResilienceCard(payload, t),
   ].filter(Boolean);
@@ -1750,6 +2530,22 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(...delegationCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
+  const assistantModeCard = buildAssistantModeRuntimeCard(payload, t);
+  if (assistantModeCard) {
+    lines.push(``);
+    lines.push(`${assistantModeCard.title}:`);
+    lines.push(...assistantModeCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...assistantModeCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const configSourceCard = buildConfigSourceCard(payload, t);
+  if (configSourceCard) {
+    lines.push(``);
+    lines.push(`${configSourceCard.title}:`);
+    lines.push(...configSourceCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...configSourceCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
   const cronCard = buildCronRuntimeCard(payload, t);
   if (cronCard) {
     lines.push(``);
@@ -1772,6 +2568,22 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${externalOutboundCard.title}:`);
     lines.push(...externalOutboundCard.badges.map((badge) => `- ${badge}`));
     lines.push(...externalOutboundCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const emailOutboundCard = buildEmailOutboundRuntimeCard(payload, t);
+  if (emailOutboundCard) {
+    lines.push(``);
+    lines.push(`${emailOutboundCard.title}:`);
+    lines.push(...emailOutboundCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...emailOutboundCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const emailInboundCard = buildEmailInboundRuntimeCard(payload, t);
+  if (emailInboundCard) {
+    lines.push(``);
+    lines.push(`${emailInboundCard.title}:`);
+    lines.push(...emailInboundCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...emailInboundCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const deploymentBackendsCard = buildDeploymentBackendsCard(payload, t);

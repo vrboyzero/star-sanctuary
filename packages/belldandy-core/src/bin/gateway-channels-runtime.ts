@@ -23,6 +23,10 @@ import {
 } from "@belldandy/channels";
 import type { BelldandyLogger } from "../logger/index.js";
 import type { ResidentConversationStore } from "../resident-conversation-store.js";
+import {
+  DEFAULT_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE,
+  parseAssistantExternalDeliveryPreference,
+} from "../assistant-mode-runtime.js";
 import { upsertChannelSecurityApprovalRequest } from "../channel-security-store.js";
 import type { ExternalOutboundSenderRegistry } from "../external-outbound-sender-registry.js";
 
@@ -68,14 +72,17 @@ export function createGatewayChannelsRuntime(input: GatewayChannelsRuntimeInput)
     },
   });
   const channelReplyChunkingConfig = loadReplyChunkingConfig(input.channelReplyChunkingConfigPath);
-  const residentExternalDeliveryPreference = ["feishu", "qq", "community", "discord"] as const;
+  const assistantExternalDeliveryPreference = parseAssistantExternalDeliveryPreference(
+    input.readEnv("BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE")
+      ?? DEFAULT_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE,
+  );
 
   const deliverToLatestBoundExternalChannel = async (
     source: "heartbeat" | "cron",
     message: string,
   ): Promise<boolean> => {
     const resolved = await input.externalOutboundSenderRegistry.resolvePreferredLatestTarget([
-      ...residentExternalDeliveryPreference,
+      ...assistantExternalDeliveryPreference,
     ]);
     if (!resolved.ok) {
       input.logger.warn(

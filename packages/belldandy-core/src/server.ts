@@ -6,6 +6,7 @@ import path from "node:path";
 
 import express from "express";
 import { type WebSocket } from "ws";
+import type { EnvDirSource } from "@star-sanctuary/distribution";
 import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
 
 import {
@@ -34,6 +35,11 @@ import type { ToolControlConfirmationStore } from "./tool-control-confirmation-s
 import type { ExternalOutboundAuditStore } from "./external-outbound-audit-store.js";
 import type { ExternalOutboundConfirmationStore } from "./external-outbound-confirmation-store.js";
 import type { ExternalOutboundSenderRegistry } from "./external-outbound-sender-registry.js";
+import type { EmailOutboundAuditStore } from "./email-outbound-audit-store.js";
+import type { EmailOutboundConfirmationStore } from "./email-outbound-confirmation-store.js";
+import type { EmailOutboundProviderRegistry } from "./email-outbound-provider-registry.js";
+import type { EmailInboundAuditStore } from "./email-inbound-audit-store.js";
+import type { EmailFollowUpReminderStore } from "./email-follow-up-reminder-store.js";
 import {
   buildPromptObservabilitySummary,
   formatPromptObservabilityHeadline,
@@ -153,6 +159,7 @@ export type GatewayServerOptions = {
   };
   webRoot: string;
   envDir?: string;
+  envSource?: EnvDirSource;
   stateDir?: string;
   additionalWorkspaceRoots?: string[];
   agentFactory?: () => BelldandyAgent;
@@ -189,6 +196,16 @@ export type GatewayServerOptions = {
   externalOutboundSenderRegistry?: ExternalOutboundSenderRegistry;
   /** 外部渠道外发审计存储 */
   externalOutboundAuditStore?: ExternalOutboundAuditStore;
+  /** 邮件外发确认存储 */
+  emailOutboundConfirmationStore?: EmailOutboundConfirmationStore;
+  /** 邮件外发 provider registry */
+  emailOutboundProviderRegistry?: EmailOutboundProviderRegistry;
+  /** 邮件外发审计存储 */
+  emailOutboundAuditStore?: EmailOutboundAuditStore;
+  /** 邮件收信审计存储 */
+  emailInboundAuditStore?: EmailInboundAuditStore;
+  /** 邮件跟进提醒存储 */
+  emailFollowUpReminderStore?: EmailFollowUpReminderStore;
   /** 获取 Agent 工具控制模式 */
   getAgentToolControlMode?: () => "disabled" | "confirm" | "auto";
   /** 获取 Agent 工具控制确认密码 */
@@ -915,6 +932,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     stateDir,
     additionalWorkspaceRoots: opts.additionalWorkspaceRoots ?? [],
     envDir: opts.envDir,
+    envSource: opts.envSource,
     auth: opts.auth,
     log,
     agentFactory: opts.agentFactory ?? (() => new MockAgent()),
@@ -939,6 +957,11 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     externalOutboundConfirmationStore: opts.externalOutboundConfirmationStore,
     externalOutboundSenderRegistry: opts.externalOutboundSenderRegistry,
     externalOutboundAuditStore: opts.externalOutboundAuditStore,
+    emailOutboundConfirmationStore: opts.emailOutboundConfirmationStore,
+    emailOutboundProviderRegistry: opts.emailOutboundProviderRegistry,
+    emailOutboundAuditStore: opts.emailOutboundAuditStore,
+    emailInboundAuditStore: opts.emailInboundAuditStore,
+    emailFollowUpReminderStore: opts.emailFollowUpReminderStore,
     getAgentToolControlMode: opts.getAgentToolControlMode,
     getAgentToolControlConfirmPassword: opts.getAgentToolControlConfirmPassword,
     sttTranscribe: opts.sttTranscribe,
@@ -1235,6 +1258,10 @@ async function handleReq(
     "tool_settings.confirm",
     "external_outbound.confirm",
     "external_outbound.audit.list",
+    "email_outbound.confirm",
+    "email_outbound.audit.list",
+    "email_inbound.audit.list",
+    "email_followup.list",
     "models.config.get",
     "models.config.update",
     "config.read",
@@ -1371,6 +1398,11 @@ async function handleReq(
     externalOutboundConfirmationStore: ctx.externalOutboundConfirmationStore,
     externalOutboundSenderRegistry: ctx.externalOutboundSenderRegistry,
     externalOutboundAuditStore: ctx.externalOutboundAuditStore,
+    emailOutboundConfirmationStore: ctx.emailOutboundConfirmationStore,
+    emailOutboundProviderRegistry: ctx.emailOutboundProviderRegistry,
+    emailOutboundAuditStore: ctx.emailOutboundAuditStore,
+    emailInboundAuditStore: ctx.emailInboundAuditStore,
+    emailFollowUpReminderStore: ctx.emailFollowUpReminderStore,
     emitEvent: (frame: GatewayEventFrame) => {
       if (ctx.broadcastEvent) {
         ctx.broadcastEvent(frame);
@@ -1380,6 +1412,7 @@ async function handleReq(
     },
     parseToolSettingsConfirmParams,
     parseExternalOutboundConfirmParams,
+    parseEmailOutboundConfirmParams,
     resolvePendingToolControlRequest,
     applyToolControlChanges: (
       disabled: {
@@ -1506,7 +1539,11 @@ async function handleReq(
 
     case "tool_settings.confirm":
     case "external_outbound.confirm":
-    case "external_outbound.audit.list": {
+    case "external_outbound.audit.list":
+    case "email_outbound.confirm":
+    case "email_outbound.audit.list":
+    case "email_inbound.audit.list":
+    case "email_followup.list": {
       return handleQueryRuntimeDomainsMethod(req, queryRuntimeDomainsContext);
     }
 
@@ -1551,6 +1588,8 @@ async function handleReq(
     case "system.doctor": {
       return handleSystemDoctorMethod(req, {
         stateDir: ctx.stateDir,
+        envDir: ctx.envDir,
+        envSource: ctx.envSource,
         agentFactory: ctx.agentFactory,
         agentRegistry: ctx.agentRegistry,
         conversationStore: ctx.conversationStore,
@@ -1560,6 +1599,10 @@ async function handleReq(
         toolsConfigManager: ctx.toolsConfigManager,
         toolExecutor: ctx.toolExecutor,
         externalOutboundAuditStore: ctx.externalOutboundAuditStore,
+        externalOutboundConfirmationStore: ctx.externalOutboundConfirmationStore,
+        emailOutboundAuditStore: ctx.emailOutboundAuditStore,
+        emailInboundAuditStore: ctx.emailInboundAuditStore,
+        emailFollowUpReminderStore: ctx.emailFollowUpReminderStore,
         pluginRegistry: ctx.pluginRegistry,
         extensionHost: ctx.extensionHost,
         skillRegistry: ctx.skillRegistry,
@@ -1572,6 +1615,7 @@ async function handleReq(
         getBackgroundContinuationRuntimeDoctorReport: ctx.getBackgroundContinuationRuntimeDoctorReport,
         inspectAgentPrompt: ctx.inspectAgentPrompt,
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
+        goalManager: ctx.goalManager,
       });
     }
 
@@ -1806,6 +1850,12 @@ function parsePairingApproveParams(
 }
 
 function parseExternalOutboundConfirmParams(
+  value: unknown,
+): { ok: true; value: { requestId: string; decision: "approve" | "reject"; conversationId?: string } } | { ok: false; message: string } {
+  return parseToolSettingsConfirmParams(value);
+}
+
+function parseEmailOutboundConfirmParams(
   value: unknown,
 ): { ok: true; value: { requestId: string; decision: "approve" | "reject"; conversationId?: string } } | { ok: false; message: string } {
   return parseToolSettingsConfirmParams(value);

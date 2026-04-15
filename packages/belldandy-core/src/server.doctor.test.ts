@@ -576,6 +576,62 @@ test("system.doctor reads memory db status without blocking sync fs path", async
   }
 });
 
+test("system.doctor exposes config source summary for legacy project-root env mode", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-state-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-env-"));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+    envSource: "legacy_root",
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-config-source", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-config-source"));
+
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-config-source");
+    expect(response.ok).toBe(true);
+    expect(response.payload?.configSource).toMatchObject({
+      source: "legacy_root",
+      sourceLabel: "legacy project-root env",
+      envDir: path.resolve(envDir),
+      stateDir: path.resolve(stateDir),
+      stateDirActive: false,
+      projectRootWins: true,
+      resolutionOrder: expect.arrayContaining([
+        "explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR)",
+        "installed runtime env dir from install-info.json",
+        "legacy project-root .env / .env.local",
+        "state-dir config",
+      ]),
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "config_source",
+        name: "Config Source",
+        status: "warn",
+        message: expect.stringContaining("state-dir config"),
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("system.doctor includes MCP recovery and persisted-result summary when MCP diagnostics are available", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const previousMcpEnabled = process.env.BELLDANDY_MCP_ENABLED;
@@ -1953,6 +2009,254 @@ test("system.doctor exposes background continuation runtime summary when provide
   }
 });
 
+test("system.doctor exposes assistant mode runtime summary from proactive runtime inputs", async () => {
+  await withEnv({
+    BELLDANDY_ASSISTANT_MODE_ENABLED: "true",
+    BELLDANDY_HEARTBEAT_ENABLED: "true",
+    BELLDANDY_HEARTBEAT_INTERVAL: "45m",
+    BELLDANDY_HEARTBEAT_ACTIVE_HOURS: "08:00-23:00",
+    BELLDANDY_CRON_ENABLED: "true",
+    BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
+    BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE: "qq,feishu,community,discord",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      getCronRuntimeDoctorReport: async () => ({
+        scheduler: {
+          enabled: true,
+          running: true,
+          activeRuns: 1,
+        },
+        totals: {
+          totalJobs: 3,
+          enabledJobs: 2,
+          disabledJobs: 1,
+          staggeredJobs: 1,
+          invalidNextRunJobs: 0,
+        },
+        sessionTargetCounts: {
+          main: 1,
+          isolated: 2,
+        },
+        deliveryModeCounts: {
+          user: 2,
+          none: 1,
+        },
+        failureDestinationModeCounts: {
+          user: 1,
+          none: 2,
+        },
+        recentJobs: [
+          {
+            id: "cron-job-1",
+            name: "Digest",
+            enabled: true,
+            scheduleSummary: "every 60000ms",
+            sessionTarget: "main",
+            deliveryMode: "user",
+            failureDestinationMode: "user",
+            lastStatus: "ok",
+          },
+        ],
+        headline: "enabled",
+      }),
+      getBackgroundContinuationRuntimeDoctorReport: async () => ({
+        totals: {
+          totalRuns: 3,
+          runningRuns: 1,
+          failedRuns: 1,
+          skippedRuns: 0,
+          conversationLinkedRuns: 2,
+          recoverableFailedRuns: 1,
+          recoveryAttemptedRuns: 1,
+          recoverySucceededRuns: 0,
+        },
+        kindCounts: {
+          cron: 1,
+          heartbeat: 1,
+          subtask: 1,
+        },
+        sessionTargetCounts: {
+          main: 1,
+          isolated: 1,
+        },
+        recentEntries: [
+          {
+            runId: "heartbeat-run-1",
+            kind: "heartbeat",
+            sourceId: "heartbeat",
+            label: "Heartbeat",
+            status: "running",
+            startedAt: 1_710_000_000_000,
+            updatedAt: 1_710_000_000_100,
+            conversationId: "heartbeat-1",
+            continuationState: {
+              version: 1,
+              scope: "background",
+              targetId: "heartbeat",
+              recommendedTargetId: "heartbeat-1",
+              targetType: "conversation",
+              resumeMode: "heartbeat_conversation",
+              summary: "Heartbeat follow-up",
+              nextAction: "Open heartbeat conversation.",
+              checkpoints: {
+                openCount: 0,
+                blockerCount: 0,
+                labels: [],
+              },
+              progress: {
+                current: "heartbeat:running",
+                recent: ["heartbeat:running"],
+              },
+            },
+          },
+          {
+            runId: "subtask-run-1",
+            kind: "subtask",
+            sourceId: "task-1",
+            label: "Subtask",
+            status: "failed",
+            startedAt: 1_710_000_000_200,
+            updatedAt: 1_710_000_000_300,
+            continuationState: {
+              version: 1,
+              scope: "subtask",
+              targetId: "task-1",
+              recommendedTargetId: "task-1",
+              targetType: "conversation",
+              resumeMode: "subtask_resume",
+              summary: "Subtask failed",
+              nextAction: "Resume subtask.",
+              checkpoints: {
+                openCount: 0,
+                blockerCount: 1,
+                labels: ["blocked"],
+              },
+              progress: {
+                current: "subtask:failed",
+                recent: ["subtask:failed"],
+              },
+            },
+          },
+          {
+            runId: "cron-run-1",
+            kind: "cron",
+            sourceId: "cron-job-1",
+            label: "Digest",
+            status: "ran",
+            startedAt: 1_710_000_000_400,
+            updatedAt: 1_710_000_000_500,
+            finishedAt: 1_710_000_000_500,
+            sessionTarget: "main",
+            summary: "Digest delivered.",
+            nextRunAtMs: 1_710_000_600_000,
+            continuationState: {
+              version: 1,
+              scope: "background",
+              targetId: "cron-job-1",
+              recommendedTargetId: "cron-main:cron-job-1",
+              targetType: "conversation",
+              resumeMode: "cron_main_conversation",
+              summary: "Digest delivered.",
+              nextAction: "Open cron conversation.",
+              checkpoints: {
+                openCount: 0,
+                blockerCount: 0,
+                labels: ["scope:cron"],
+              },
+              progress: {
+                current: "cron:ran",
+                recent: ["cron:ran"],
+              },
+            },
+          },
+        ],
+        headline: "runs=3",
+      }),
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "system-doctor-assistant-mode-runtime",
+        method: "system.doctor",
+        params: {},
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-assistant-mode-runtime"));
+
+      const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-assistant-mode-runtime");
+      expect(res.ok).toBe(true);
+      expect(res.payload?.assistantModeRuntime).toMatchObject({
+        available: true,
+        enabled: true,
+        status: "running",
+        controls: {
+          assistantModeEnabled: true,
+          assistantModeSource: "explicit",
+          assistantModeMismatch: false,
+          heartbeatEnabled: true,
+          heartbeatInterval: "45m",
+          activeHours: "08:00-23:00",
+          cronEnabled: true,
+        },
+        sources: {
+          heartbeat: {
+            enabled: true,
+            interval: "45m",
+            lastStatus: "running",
+          },
+          cron: {
+            enabled: true,
+            schedulerRunning: true,
+            activeRuns: 1,
+            totalJobs: 3,
+            enabledJobs: 2,
+            userDeliveryJobs: 2,
+            lastStatus: "ran",
+          },
+        },
+        delivery: {
+          residentChannel: true,
+          externalDeliveryPreference: ["qq", "feishu", "community", "discord"],
+          confirmationRequired: true,
+        },
+        explanation: {
+          nextAction: {
+            summary: "Continue Heartbeat",
+            targetId: "heartbeat-1",
+            targetType: "conversation",
+          },
+        },
+      });
+      expect(res.payload?.assistantModeRuntime?.recentActions).toHaveLength(2);
+      expect(res.payload?.assistantModeRuntime?.recentActions?.map((item: any) => item.kind)).toEqual(["heartbeat", "cron"]);
+      expect(res.payload?.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "assistant_mode",
+          name: "Assistant Mode",
+          status: "pass",
+        }),
+      ]));
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 test("cron.run_now executes immediate cron runtime requests when provided", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const runCronJobNow = vi.fn(async (jobId: string) => ({
@@ -2155,6 +2459,319 @@ test("system.doctor exposes external outbound runtime summary when audit data is
       process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = previousConfirm;
     } else {
       delete process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+    }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes email outbound runtime summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const previousConfirm = process.env.BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION;
+  process.env.BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION = "true";
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    emailOutboundAuditStore: {
+      async append() {},
+      async listRecent() {
+        return [
+          {
+            timestamp: 1710000001000,
+            sourceConversationId: "conv-email-1",
+            sourceChannel: "webchat" as const,
+            requestedByAgentId: "default",
+            providerId: "smtp",
+            accountId: "default",
+            to: ["alice@example.com"],
+            subject: "Status",
+            bodyPreview: "hello",
+            attachmentCount: 1,
+            threadId: "<thread-001@example.com>",
+            replyToMessageId: "<reply-001@example.com>",
+            decision: "confirmed" as const,
+            delivery: "sent" as const,
+            providerMessageId: "<msg-001@example.com>",
+            providerThreadId: "<thread-001@example.com>",
+          },
+          {
+            timestamp: 1710000002000,
+            sourceConversationId: "conv-email-2",
+            sourceChannel: "webchat" as const,
+            requestedByAgentId: "default",
+            providerId: "smtp",
+            accountId: "default",
+            to: ["bob@example.com"],
+            subject: "Failed",
+            bodyPreview: "delivery fail",
+            decision: "auto_approved" as const,
+            delivery: "failed" as const,
+            errorCode: "send_failed",
+            error: "smtp timeout",
+          },
+          {
+            timestamp: 1710000003000,
+            sourceConversationId: "conv-email-3",
+            sourceChannel: "webchat" as const,
+            requestedByAgentId: "default",
+            providerId: "smtp",
+            accountId: "default",
+            to: ["carol@example.com"],
+            subject: "Rejected",
+            bodyPreview: "not sent",
+            decision: "rejected" as const,
+            delivery: "rejected" as const,
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-email-outbound-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-email-outbound-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-email-outbound-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.emailOutboundRuntime).toMatchObject({
+      requireConfirmation: true,
+      totals: {
+        totalRecords: 3,
+        sentCount: 1,
+        failedCount: 1,
+        rejectedCount: 1,
+        attachmentRecordCount: 1,
+      },
+      providerCounts: {
+        smtp: 3,
+      },
+      accountCounts: {
+        default: 3,
+      },
+      errorCodeCounts: {
+        send_failed: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "email_outbound_runtime",
+        name: "Email Outbound Runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    if (typeof previousConfirm === "string") {
+      process.env.BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION = previousConfirm;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION;
+    }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes email inbound runtime summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const previousImapEnabled = process.env.BELLDANDY_EMAIL_IMAP_ENABLED;
+  const previousImapHost = process.env.BELLDANDY_EMAIL_IMAP_HOST;
+  const previousImapUser = process.env.BELLDANDY_EMAIL_IMAP_USER;
+  const previousImapPass = process.env.BELLDANDY_EMAIL_IMAP_PASS;
+  const previousImapAccountId = process.env.BELLDANDY_EMAIL_IMAP_ACCOUNT_ID;
+  const previousImapMailbox = process.env.BELLDANDY_EMAIL_IMAP_MAILBOX;
+  const previousInboundAgentId = process.env.BELLDANDY_EMAIL_INBOUND_AGENT_ID;
+  process.env.BELLDANDY_EMAIL_IMAP_ENABLED = "true";
+  process.env.BELLDANDY_EMAIL_IMAP_HOST = "imap.example.com";
+  process.env.BELLDANDY_EMAIL_IMAP_USER = "mailer@example.com";
+  process.env.BELLDANDY_EMAIL_IMAP_PASS = "secret";
+  process.env.BELLDANDY_EMAIL_IMAP_ACCOUNT_ID = "primary";
+  process.env.BELLDANDY_EMAIL_IMAP_MAILBOX = "INBOX";
+  process.env.BELLDANDY_EMAIL_INBOUND_AGENT_ID = "default";
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    emailInboundAuditStore: {
+      async append() {},
+      async listRecent() {
+        return [
+          {
+            timestamp: 1710000001000,
+            providerId: "imap",
+            accountId: "primary",
+            mailbox: "INBOX",
+            status: "processed" as const,
+            messageId: "<msg-001@example.com>",
+            threadId: "<thread-001@example.com>",
+            subject: "Inbound ok",
+            from: ["alice@example.com"],
+            to: ["team@example.com"],
+            bodyPreview: "hello",
+            attachmentCount: 1,
+            conversationId: "conv-email-inbound-1",
+            sessionKey: "channel=email:scope=per-account-thread:provider=imap:account=primary:thread=%3Cthread-001%40example.com%3E",
+            requestedAgentId: "default",
+            checkpointUid: 7,
+            createdBinding: true,
+          },
+          {
+            timestamp: 1710000002000,
+            providerId: "imap",
+            accountId: "primary",
+            mailbox: "INBOX",
+            status: "failed" as const,
+            messageId: "<msg-002@example.com>",
+            threadId: "<thread-002@example.com>",
+            subject: "Inbound failed",
+            from: ["bob@example.com"],
+            to: ["team@example.com"],
+            bodyPreview: "fail",
+            errorCode: "ingest_failed",
+            error: "agent unavailable",
+          },
+          {
+            timestamp: 1710000003000,
+            providerId: "imap",
+            accountId: "primary",
+            mailbox: "INBOX",
+            status: "skipped_duplicate" as const,
+            messageId: "<msg-003@example.com>",
+            threadId: "<thread-003@example.com>",
+            subject: "Inbound duplicate",
+            from: ["carol@example.com"],
+            to: ["team@example.com"],
+            bodyPreview: "dup",
+          },
+          {
+            timestamp: 1710000004000,
+            providerId: "imap",
+            accountId: "primary",
+            mailbox: "INBOX",
+            status: "invalid_event" as const,
+            subject: "Inbound invalid",
+            bodyPreview: "",
+            errorCode: "invalid_event",
+            error: "messageId is required",
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-email-inbound-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-email-inbound-runtime"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-email-inbound-runtime");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.emailInboundRuntime).toMatchObject({
+      enabled: true,
+      setup: {
+        configured: true,
+        runtimeExpected: true,
+        accountId: "primary",
+        host: "imap.example.com",
+        mailbox: "INBOX",
+        requestedAgentId: "default",
+        missingFields: [],
+      },
+      totals: {
+        totalRecords: 4,
+        processedCount: 1,
+        failedCount: 1,
+        invalidEventCount: 1,
+        duplicateCount: 1,
+        attachmentRecordCount: 1,
+        createdBindingCount: 1,
+      },
+      providerCounts: {
+        imap: 4,
+      },
+      accountCounts: {
+        primary: 4,
+      },
+      mailboxCounts: {
+        INBOX: 4,
+      },
+      errorCodeCounts: {
+        ingest_failed: 1,
+        invalid_event: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "email_inbound_runtime",
+        name: "Email Inbound Runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    if (typeof previousImapEnabled === "string") {
+      process.env.BELLDANDY_EMAIL_IMAP_ENABLED = previousImapEnabled;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_IMAP_ENABLED;
+    }
+    if (typeof previousImapHost === "string") {
+      process.env.BELLDANDY_EMAIL_IMAP_HOST = previousImapHost;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_IMAP_HOST;
+    }
+    if (typeof previousImapUser === "string") {
+      process.env.BELLDANDY_EMAIL_IMAP_USER = previousImapUser;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_IMAP_USER;
+    }
+    if (typeof previousImapPass === "string") {
+      process.env.BELLDANDY_EMAIL_IMAP_PASS = previousImapPass;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_IMAP_PASS;
+    }
+    if (typeof previousImapAccountId === "string") {
+      process.env.BELLDANDY_EMAIL_IMAP_ACCOUNT_ID = previousImapAccountId;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_IMAP_ACCOUNT_ID;
+    }
+    if (typeof previousImapMailbox === "string") {
+      process.env.BELLDANDY_EMAIL_IMAP_MAILBOX = previousImapMailbox;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_IMAP_MAILBOX;
+    }
+    if (typeof previousInboundAgentId === "string") {
+      process.env.BELLDANDY_EMAIL_INBOUND_AGENT_ID = previousInboundAgentId;
+    } else {
+      delete process.env.BELLDANDY_EMAIL_INBOUND_AGENT_ID;
     }
     ws.close();
     await closeP;

@@ -8,6 +8,12 @@ export default defineConfig({
       "**/artifacts/**",
       "**/openclaw/**",
       "**/UI-TARS-desktop-main/**",
+      // Root-level temp/reference mirrors can contain tens of thousands of files
+      // and make targeted discovery time out on Windows before test execution starts.
+      "tmp/**",
+      ".tmp/**",
+      ".tmp-codex/**",
+      ".playwright-mcp/**",
     ],
     // 使用 Node 环境以支持 node:sqlite 等内置模块
     environment: "node",

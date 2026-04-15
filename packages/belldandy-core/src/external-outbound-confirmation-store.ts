@@ -47,6 +47,14 @@ export class ExternalOutboundConfirmationStore {
     return this.requests.get(requestId);
   }
 
+  listPending(limit = 20): PendingExternalOutboundRequest[] {
+    this.cleanupExpired();
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
+    return Array.from(this.requests.values())
+      .sort((left, right) => right.createdAt - left.createdAt)
+      .slice(0, safeLimit);
+  }
+
   delete(requestId: string): void {
     this.requests.delete(requestId);
   }

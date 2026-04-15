@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import type { EnvDirSource } from "@star-sanctuary/distribution";
 
 import type {
   AgentRegistry,
@@ -21,6 +22,12 @@ import { listToolContractsV2, TOOL_SETTINGS_CONTROL_NAME } from "@belldandy/skil
 import type { PluginRegistry } from "@belldandy/plugins";
 
 import type { BackgroundContinuationRuntimeDoctorReport } from "../background-continuation-runtime.js";
+import {
+  buildAssistantModeRuntimeReport,
+  type AssistantModeRuntimeReport,
+  DEFAULT_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE,
+  parseAssistantExternalDeliveryPreference,
+} from "../assistant-mode-runtime.js";
 import { buildChannelSecurityDoctorReport } from "../channel-security-doctor.js";
 import {
   applyTimelineProjectionFilter,
@@ -33,6 +40,7 @@ import {
 } from "../conversation-debug-projection.js";
 import { listRecentConversationExports } from "../conversation-export-index.js";
 import type { CronRuntimeDoctorReport } from "../cron/observability.js";
+import { buildAssistantModeGoalRuntimeSummary } from "../assistant-mode-goals.js";
 import { buildDeploymentBackendsDoctorReport } from "../deployment-backends.js";
 import { buildExtensionGovernanceReport } from "../extension-governance.js";
 import { loadExtensionMarketplaceState } from "../extension-marketplace-state.js";
@@ -43,6 +51,18 @@ import {
   type ExternalOutboundDoctorReport,
 } from "../external-outbound-doctor.js";
 import type { ExternalOutboundAuditStore } from "../external-outbound-audit-store.js";
+import type { ExternalOutboundConfirmationStore } from "../external-outbound-confirmation-store.js";
+import {
+  buildEmailOutboundDoctorReport,
+  type EmailOutboundDoctorReport,
+} from "../email-outbound-doctor.js";
+import type { EmailOutboundAuditStore } from "../email-outbound-audit-store.js";
+import {
+  buildEmailInboundDoctorReport,
+  type EmailInboundDoctorReport,
+} from "../email-inbound-doctor.js";
+import type { EmailInboundAuditStore } from "../email-inbound-audit-store.js";
+import type { EmailFollowUpReminderStore } from "../email-follow-up-reminder-store.js";
 import { buildLearningReviewInput } from "../learning-review-input.js";
 import { buildLearningReviewNudgeRuntimeReport } from "../learning-review-nudge-runtime.js";
 import type {
@@ -71,9 +91,12 @@ import { buildToolBehaviorObservability, readConfiguredPromptExperimentToolContr
 import { buildToolContractV2Observability } from "../tool-contract-v2-observability.js";
 import type { ToolsConfigManager } from "../tools-config.js";
 import { buildAgentLaunchExplainability } from "../agent-launch-explainability.js";
+import type { GoalManager } from "../goals/manager.js";
 
 type SystemDoctorMethodContext = {
   stateDir: string;
+  envDir?: string;
+  envSource?: EnvDirSource;
   agentFactory: () => unknown;
   agentRegistry?: AgentRegistry;
   conversationStore: ConversationStore;
@@ -83,6 +106,10 @@ type SystemDoctorMethodContext = {
   toolsConfigManager?: ToolsConfigManager;
   toolExecutor?: ToolExecutor;
   externalOutboundAuditStore?: ExternalOutboundAuditStore;
+  externalOutboundConfirmationStore?: ExternalOutboundConfirmationStore;
+  emailOutboundAuditStore?: EmailOutboundAuditStore;
+  emailInboundAuditStore?: EmailInboundAuditStore;
+  emailFollowUpReminderStore?: EmailFollowUpReminderStore;
   pluginRegistry?: PluginRegistry;
   extensionHost?: Pick<ExtensionHostState, "extensionRuntime" | "lifecycle">;
   skillRegistry?: SkillRegistry;
@@ -99,6 +126,7 @@ type SystemDoctorMethodContext = {
     runId?: string;
   }) => Promise<any>;
   subTaskRuntimeStore?: SubTaskRuntimeStore;
+  goalManager?: GoalManager;
 };
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -141,6 +169,75 @@ function hasTimelineArtifacts(timeline: SessionTimelineProjection | undefined): 
   return timeline.summary.eventCount > 0
     || timeline.summary.messageCount > 0
     || timeline.items.some((item) => item.kind !== "restore_result");
+}
+
+function resolveDoctorEnvSource(
+  envDir: string,
+  stateDir: string,
+  envSource?: EnvDirSource,
+): EnvDirSource {
+  if (
+    envSource === "explicit"
+    || envSource === "installed_source"
+    || envSource === "legacy_root"
+    || envSource === "state_dir"
+  ) {
+    return envSource;
+  }
+  return path.resolve(envDir) === path.resolve(stateDir) ? "state_dir" : "legacy_root";
+}
+
+function buildConfigSourceDoctorReport(ctx: Pick<SystemDoctorMethodContext, "envDir" | "envSource" | "stateDir">) {
+  const envDir = path.resolve(ctx.envDir ?? ctx.stateDir);
+  const stateDir = path.resolve(ctx.stateDir);
+  const source = resolveDoctorEnvSource(envDir, stateDir, ctx.envSource);
+  const stateDirActive = source === "state_dir";
+  const projectRootWins = source === "legacy_root";
+  const sourceLabel = (() => {
+    switch (source) {
+      case "explicit":
+        return "explicit env dir";
+      case "installed_source":
+        return "installed runtime env";
+      case "legacy_root":
+        return "legacy project-root env";
+      case "state_dir":
+      default:
+        return "state-dir config";
+    }
+  })();
+  const headline = (() => {
+    switch (source) {
+      case "explicit":
+        return `Using explicit env dir ${envDir}; it overrides both project-root and state-dir config.`;
+      case "installed_source":
+        return `Using installed runtime env dir ${envDir}; this packaged runtime config takes precedence over project-root and state-dir defaults.`;
+      case "legacy_root":
+        return `Using legacy project-root env files from ${envDir}; state-dir config at ${stateDir} is currently inactive.`;
+      case "state_dir":
+      default:
+        return `Using state-dir config from ${stateDir}; no higher-priority env dir is currently active.`;
+    }
+  })();
+
+  return {
+    envDir,
+    stateDir,
+    source,
+    sourceLabel,
+    stateDirActive,
+    projectRootWins,
+    resolutionOrder: [
+      "explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR)",
+      "installed runtime env dir from install-info.json",
+      "legacy project-root .env / .env.local",
+      "state-dir config",
+    ],
+    headline,
+    migrationHint: source === "legacy_root"
+      ? "Run 'bdd config migrate-to-state-dir' when you are ready to switch away from project-root env files."
+      : undefined,
+  };
 }
 
 function extractScopedMemoryAgentId(params: Record<string, unknown>): string | undefined {
@@ -232,6 +329,14 @@ export async function handleSystemDoctorMethod(
   } catch {
     checks.push({ id: "agent_config", name: "Agent Configuration", status: "fail", message: "Missing API Keys" });
   }
+
+  const configSource = buildConfigSourceDoctorReport(ctx);
+  checks.push({
+    id: "config_source",
+    name: "Config Source",
+    status: configSource.source === "legacy_root" ? "warn" : "pass",
+    message: configSource.headline,
+  });
 
   const channelSecurity = buildChannelSecurityDoctorReport({
     stateDir: ctx.stateDir,
@@ -361,6 +466,10 @@ export async function handleSystemDoctorMethod(
   let cronRuntime: CronRuntimeDoctorReport | undefined;
   let backgroundContinuationRuntime: BackgroundContinuationRuntimeDoctorReport | undefined;
   let externalOutboundRuntime: ExternalOutboundDoctorReport | undefined;
+  let emailOutboundRuntime: EmailOutboundDoctorReport | undefined;
+  let emailInboundRuntime: EmailInboundDoctorReport | undefined;
+  let assistantModeRuntime: AssistantModeRuntimeReport | undefined;
+  let goalRuntimeSummary: Awaited<ReturnType<typeof buildAssistantModeGoalRuntimeSummary>> | undefined;
   try {
     cronRuntime = await ctx.getCronRuntimeDoctorReport?.();
   } catch (error) {
@@ -382,16 +491,62 @@ export async function handleSystemDoctorMethod(
     });
   }
   try {
-    if (ctx.externalOutboundAuditStore) {
-      externalOutboundRuntime = await buildExternalOutboundDoctorReport({
-        auditStore: ctx.externalOutboundAuditStore,
-        requireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
-      });
-    }
+      if (ctx.externalOutboundAuditStore) {
+        externalOutboundRuntime = await buildExternalOutboundDoctorReport({
+          auditStore: ctx.externalOutboundAuditStore,
+          confirmationStore: ctx.externalOutboundConfirmationStore,
+          requireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
+        });
+      }
   } catch (error) {
     checks.push({
       id: "external_outbound_runtime",
       name: "External Outbound Runtime",
+      status: "warn",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    if (ctx.emailOutboundAuditStore) {
+      emailOutboundRuntime = await buildEmailOutboundDoctorReport({
+        auditStore: ctx.emailOutboundAuditStore,
+        requireConfirmation: String(process.env.BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
+      });
+    }
+  } catch (error) {
+    checks.push({
+      id: "email_outbound_runtime",
+      name: "Email Outbound Runtime",
+      status: "warn",
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    if (ctx.emailInboundAuditStore) {
+      emailInboundRuntime = await buildEmailInboundDoctorReport({
+        auditStore: ctx.emailInboundAuditStore,
+        enabled: String(process.env.BELLDANDY_EMAIL_IMAP_ENABLED ?? "false").trim().toLowerCase() === "true",
+        host: process.env.BELLDANDY_EMAIL_IMAP_HOST,
+        username: process.env.BELLDANDY_EMAIL_IMAP_USER,
+        password: process.env.BELLDANDY_EMAIL_IMAP_PASS,
+        accountId: process.env.BELLDANDY_EMAIL_IMAP_ACCOUNT_ID,
+        mailbox: process.env.BELLDANDY_EMAIL_IMAP_MAILBOX,
+        requestedAgentId: process.env.BELLDANDY_EMAIL_INBOUND_AGENT_ID,
+        port: Number(process.env.BELLDANDY_EMAIL_IMAP_PORT ?? "993"),
+        secure: String(process.env.BELLDANDY_EMAIL_IMAP_SECURE ?? "true").trim().toLowerCase() !== "false",
+        pollIntervalMs: Number(process.env.BELLDANDY_EMAIL_IMAP_POLL_INTERVAL_MS ?? "60000"),
+        connectTimeoutMs: Number(process.env.BELLDANDY_EMAIL_IMAP_CONNECT_TIMEOUT_MS ?? "10000"),
+        socketTimeoutMs: Number(process.env.BELLDANDY_EMAIL_IMAP_SOCKET_TIMEOUT_MS ?? "20000"),
+        bootstrapMode: String(process.env.BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE ?? "latest").trim().toLowerCase() === "all"
+          ? "all"
+          : "latest",
+        recentWindowLimit: Number(process.env.BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT ?? "0"),
+      });
+    }
+  } catch (error) {
+    checks.push({
+      id: "email_inbound_runtime",
+      name: "Email Inbound Runtime",
       status: "warn",
       message: error instanceof Error ? error.message : String(error),
     });
@@ -540,6 +695,26 @@ export async function handleSystemDoctorMethod(
         ? "warn"
         : "pass",
       message: externalOutboundRuntime.headline,
+    });
+  }
+  if (emailOutboundRuntime) {
+    checks.push({
+      id: "email_outbound_runtime",
+      name: "Email Outbound Runtime",
+      status: emailOutboundRuntime.totals.failedCount > 0 || !emailOutboundRuntime.requireConfirmation
+        ? "warn"
+        : "pass",
+      message: emailOutboundRuntime.headline,
+    });
+  }
+  if (emailInboundRuntime) {
+    checks.push({
+      id: "email_inbound_runtime",
+      name: "Email Inbound Runtime",
+      status: emailInboundRuntime.totals.failedCount > 0 || !emailInboundRuntime.setup.runtimeExpected
+        ? "warn"
+        : "pass",
+      message: emailInboundRuntime.headline,
     });
   }
   const hookBridgeSummary = ctx.extensionHost?.lifecycle.hookBridge;
@@ -819,7 +994,7 @@ export async function handleSystemDoctorMethod(
     learningReviewInput = buildLearningReviewInput({
       mindProfileSnapshot,
     });
-    learningReviewNudgeRuntime = await buildLearningReviewNudgeRuntimeReport({
+  learningReviewNudgeRuntime = await buildLearningReviewNudgeRuntimeReport({
       stateDir: ctx.stateDir,
     });
     checks.push({
@@ -829,6 +1004,49 @@ export async function handleSystemDoctorMethod(
       message: learningReviewNudgeRuntime.summary.available
         ? learningReviewNudgeRuntime.summary.headline
         : learningReviewInput.summary.headline,
+    });
+  }
+
+  if (ctx.subTaskRuntimeStore) {
+    const subtaskItems = await ctx.subTaskRuntimeStore.listTasks(undefined, { includeArchived: true });
+    delegationObservability = buildDelegationObservabilitySnapshot(subtaskItems);
+  }
+  goalRuntimeSummary = await buildAssistantModeGoalRuntimeSummary({
+    goalReader: ctx.goalManager,
+  });
+
+  assistantModeRuntime = buildAssistantModeRuntimeReport({
+    assistantModeEnabled: (() => {
+      const raw = process.env.BELLDANDY_ASSISTANT_MODE_ENABLED;
+      if (typeof raw !== "string" || !raw.trim()) return undefined;
+      return raw.trim().toLowerCase() === "true";
+    })(),
+    assistantModeConfigured: typeof process.env.BELLDANDY_ASSISTANT_MODE_ENABLED === "string"
+      && Boolean(process.env.BELLDANDY_ASSISTANT_MODE_ENABLED.trim()),
+    heartbeatEnabled: String(process.env.BELLDANDY_HEARTBEAT_ENABLED ?? "false").trim().toLowerCase() === "true",
+    heartbeatInterval: process.env.BELLDANDY_HEARTBEAT_INTERVAL,
+    heartbeatActiveHours: process.env.BELLDANDY_HEARTBEAT_ACTIVE_HOURS,
+    cronEnabled: String(process.env.BELLDANDY_CRON_ENABLED ?? "false").trim().toLowerCase() === "true",
+    cronRuntime,
+    backgroundContinuationRuntime,
+    externalOutboundRuntime,
+    residentAgents,
+    delegationObservability,
+    goals: goalRuntimeSummary,
+    externalOutboundRequireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
+    externalDeliveryPreference: parseAssistantExternalDeliveryPreference(
+      process.env.BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE
+        ?? DEFAULT_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE,
+    ),
+  });
+  if (assistantModeRuntime) {
+    checks.push({
+      id: "assistant_mode",
+      name: "Assistant Mode",
+      status: assistantModeRuntime.status === "attention" || assistantModeRuntime.status === "disabled"
+        ? "warn"
+        : "pass",
+      message: assistantModeRuntime.headline,
     });
   }
 
@@ -847,9 +1065,7 @@ export async function handleSystemDoctorMethod(
     message: skillFreshness.summary.headline,
   });
 
-  if (ctx.subTaskRuntimeStore) {
-    const subtaskItems = await ctx.subTaskRuntimeStore.listTasks(undefined, { includeArchived: true });
-    delegationObservability = buildDelegationObservabilitySnapshot(subtaskItems);
+  if (delegationObservability) {
     const delegationHasProtocolGap = delegationObservability.summary.activeCount > delegationObservability.summary.protocolBackedCount;
     checks.push({
       id: "delegation_protocol",
@@ -970,6 +1186,7 @@ export async function handleSystemDoctorMethod(
     ok: true,
     payload: {
       checks,
+      configSource,
       memoryRuntime,
       deploymentBackends,
       optionalCapabilities,
@@ -982,6 +1199,9 @@ export async function handleSystemDoctorMethod(
       ...(cronRuntime ? { cronRuntime } : {}),
       ...(backgroundContinuationRuntime ? { backgroundContinuationRuntime } : {}),
       ...(externalOutboundRuntime ? { externalOutboundRuntime } : {}),
+      ...(emailOutboundRuntime ? { emailOutboundRuntime } : {}),
+      ...(emailInboundRuntime ? { emailInboundRuntime } : {}),
+      ...(assistantModeRuntime ? { assistantModeRuntime } : {}),
       mcpRuntime,
       ...(channelSecurity.items.length ? { channelSecurity } : {}),
       ...(promptObservability ? { promptObservability } : {}),

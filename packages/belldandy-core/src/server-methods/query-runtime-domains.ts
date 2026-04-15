@@ -6,6 +6,23 @@ import type { SkillRegistry, ToolExecutor } from "@belldandy/skills";
 import type { ExternalOutboundAuditStore } from "../external-outbound-audit-store.js";
 import type { ExternalOutboundConfirmationStore } from "../external-outbound-confirmation-store.js";
 import type { ExternalOutboundSenderRegistry } from "../external-outbound-sender-registry.js";
+import type { EmailOutboundAuditStore } from "../email-outbound-audit-store.js";
+import type { EmailOutboundConfirmationStore } from "../email-outbound-confirmation-store.js";
+import type { EmailOutboundProviderRegistry } from "../email-outbound-provider-registry.js";
+import type { EmailInboundAuditStore } from "../email-inbound-audit-store.js";
+import type { EmailFollowUpReminderStore } from "../email-follow-up-reminder-store.js";
+import {
+  createFileEmailOutboundAuditStore,
+  resolveEmailOutboundAuditStorePath,
+} from "../email-outbound-audit-store.js";
+import {
+  createFileEmailInboundAuditStore,
+  resolveEmailInboundAuditStorePath,
+} from "../email-inbound-audit-store.js";
+import {
+  createFileEmailFollowUpReminderStore,
+  resolveEmailFollowUpReminderStorePath,
+} from "../email-follow-up-reminder-store.js";
 import {
   createFileExternalOutboundAuditStore,
   resolveExternalOutboundAuditStorePath,
@@ -15,6 +32,7 @@ import { handleAgentCatalogGetWithQueryRuntime } from "../query-runtime-agent-ca
 import { handleAgentContractsGetWithQueryRuntime } from "../query-runtime-agent-contracts.js";
 import { handleDelegationInspectGetWithQueryRuntime } from "../query-runtime-delegation.js";
 import { handleExternalOutboundConfirmWithQueryRuntime } from "../query-runtime-external-outbound.js";
+import { handleEmailOutboundConfirmWithQueryRuntime } from "../query-runtime-email-outbound.js";
 import type { ConversationPromptSnapshotArtifact } from "../conversation-prompt-snapshot.js";
 import type { QueryRuntimeTraceStore } from "../query-runtime-trace.js";
 import {
@@ -67,9 +85,15 @@ type QueryRuntimeDomainsMethodContext = {
   externalOutboundConfirmationStore?: ExternalOutboundConfirmationStore;
   externalOutboundSenderRegistry?: ExternalOutboundSenderRegistry;
   externalOutboundAuditStore?: ExternalOutboundAuditStore;
+  emailOutboundConfirmationStore?: EmailOutboundConfirmationStore;
+  emailOutboundProviderRegistry?: EmailOutboundProviderRegistry;
+  emailOutboundAuditStore?: EmailOutboundAuditStore;
+  emailInboundAuditStore?: EmailInboundAuditStore;
+  emailFollowUpReminderStore?: EmailFollowUpReminderStore;
   emitEvent: NonNullable<QueryRuntimeToolsContext["emitEvent"]>;
   parseToolSettingsConfirmParams: (value: unknown) => ToolSettingsConfirmParseResult;
   parseExternalOutboundConfirmParams: (value: unknown) => ToolSettingsConfirmParseResult;
+  parseEmailOutboundConfirmParams: (value: unknown) => ToolSettingsConfirmParseResult;
   resolvePendingToolControlRequest: NonNullable<QueryRuntimeToolsContext["resolvePendingToolControlRequest"]>;
   applyToolControlChanges: NonNullable<QueryRuntimeToolsContext["applyToolControlChanges"]>;
   buildToolControlDisabledPayload: NonNullable<QueryRuntimeToolsContext["buildToolControlDisabledPayload"]>;
@@ -176,6 +200,77 @@ export async function handleQueryRuntimeDomainsMethod(
         ok: true,
         payload: {
           items: await auditStore.listRecent(limit),
+          limit,
+        },
+      };
+    }
+
+    case "email_outbound.confirm": {
+      const parsed = ctx.parseEmailOutboundConfirmParams(req.params);
+      if (!parsed.ok) {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
+      }
+      return handleEmailOutboundConfirmWithQueryRuntime({
+        requestId: req.id,
+        clientId: ctx.clientId,
+        confirmationStore: ctx.emailOutboundConfirmationStore,
+        providerRegistry: ctx.emailOutboundProviderRegistry,
+        auditStore: ctx.emailOutboundAuditStore,
+        reminderStore: ctx.emailFollowUpReminderStore,
+        emitEvent: ctx.emitEvent,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"email_outbound.confirm">(),
+      }, parsed.value);
+    }
+
+    case "email_outbound.audit.list": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = typeof params.limit === "number" && Number.isFinite(params.limit)
+        ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+        : 20;
+      const auditStore = ctx.emailOutboundAuditStore
+        ?? createFileEmailOutboundAuditStore(resolveEmailOutboundAuditStorePath(ctx.stateDir));
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: await auditStore.listRecent(limit),
+          limit,
+        },
+      };
+    }
+
+    case "email_inbound.audit.list": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = typeof params.limit === "number" && Number.isFinite(params.limit)
+        ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+        : 20;
+      const auditStore = ctx.emailInboundAuditStore
+        ?? createFileEmailInboundAuditStore(resolveEmailInboundAuditStorePath(ctx.stateDir));
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: await auditStore.listRecent(limit),
+          limit,
+        },
+      };
+    }
+
+    case "email_followup.list": {
+      const params = isObjectRecord(req.params) ? req.params : {};
+      const limit = typeof params.limit === "number" && Number.isFinite(params.limit)
+        ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+        : 20;
+      const reminderStore = ctx.emailFollowUpReminderStore
+        ?? createFileEmailFollowUpReminderStore(resolveEmailFollowUpReminderStorePath(ctx.stateDir));
+      return {
+        type: "res",
+        id: req.id,
+        ok: true,
+        payload: {
+          items: await reminderStore.listRecent(limit),
           limit,
         },
       };

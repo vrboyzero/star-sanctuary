@@ -1,4 +1,5 @@
 import type { ExternalOutboundAuditRecord, ExternalOutboundAuditStore } from "./external-outbound-audit-store.js";
+import type { ExternalOutboundConfirmationStore } from "./external-outbound-confirmation-store.js";
 import type { ExternalOutboundChannel } from "./external-outbound-sender-registry.js";
 import { detectExternalOutboundFailureStage, type ExternalOutboundFailureStage } from "./external-outbound-diagnosis.js";
 
@@ -7,6 +8,7 @@ export type ExternalOutboundDoctorReport = {
   requireConfirmation: boolean;
   totals: {
     totalRecords: number;
+    pendingConfirmationCount: number;
     confirmedCount: number;
     autoApprovedCount: number;
     rejectedCount: number;
@@ -30,18 +32,33 @@ export type ExternalOutboundDoctorReport = {
     targetSessionKey?: string;
     contentPreview: string;
   }>;
+  recentPending: Array<{
+    requestId: string;
+    createdAt: number;
+    expiresAt: number;
+    conversationId: string;
+    requestedByAgentId?: string;
+    targetChannel: ExternalOutboundChannel;
+    requestedSessionKey?: string;
+    targetSessionKey: string;
+    contentPreview: string;
+  }>;
   headline: string;
 };
 
 export async function buildExternalOutboundDoctorReport(input: {
   auditStore: ExternalOutboundAuditStore;
+  confirmationStore?: ExternalOutboundConfirmationStore;
   requireConfirmation: boolean;
   recentLimit?: number;
   recentFailureLimit?: number;
+  recentPendingLimit?: number;
 }): Promise<ExternalOutboundDoctorReport> {
   const recentLimit = Number.isFinite(input.recentLimit) ? Math.max(1, Math.min(100, Math.floor(input.recentLimit as number))) : 50;
   const recentFailureLimit = Number.isFinite(input.recentFailureLimit) ? Math.max(1, Math.min(20, Math.floor(input.recentFailureLimit as number))) : 5;
+  const recentPendingLimit = Number.isFinite(input.recentPendingLimit) ? Math.max(1, Math.min(20, Math.floor(input.recentPendingLimit as number))) : 5;
   const items = await input.auditStore.listRecent(recentLimit);
+  const pendingItems = input.confirmationStore?.listPending(recentPendingLimit) ?? [];
 
   const channelCounts: Partial<Record<ExternalOutboundChannel, number>> = {};
   const errorCodeCounts = new Map<string, number>();
@@ -107,8 +124,25 @@ export async function buildExternalOutboundDoctorReport(input: {
     Array.from(errorCodeCounts.entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])),
   );
 
+  const recentPending: ExternalOutboundDoctorReport["recentPending"] = pendingItems.map((item) => ({
+    requestId: item.requestId,
+    createdAt: item.createdAt,
+    expiresAt: item.expiresAt,
+    conversationId: item.conversationId,
+    ...(typeof item.requestedByAgentId === "string" && item.requestedByAgentId.trim()
+      ? { requestedByAgentId: item.requestedByAgentId.trim() }
+      : {}),
+    targetChannel: item.channel,
+    ...(typeof item.sessionKey === "string" && item.sessionKey.trim()
+      ? { requestedSessionKey: item.sessionKey.trim() }
+      : {}),
+    targetSessionKey: item.resolvedSessionKey,
+    contentPreview: item.content.replace(/\s+/g, " ").trim().slice(0, 160),
+  }));
+
   const headlineParts = [
     `records=${items.length}`,
+    `pending=${pendingItems.length}`,
     `sent=${sentCount}`,
     `failed=${failedCount}`,
     `resolve_failed=${resolveFailedCount}`,
@@ -121,6 +155,7 @@ export async function buildExternalOutboundDoctorReport(input: {
     requireConfirmation: input.requireConfirmation,
     totals: {
       totalRecords: items.length,
+      pendingConfirmationCount: pendingItems.length,
       confirmedCount,
       autoApprovedCount,
       rejectedCount,
@@ -133,6 +168,7 @@ export async function buildExternalOutboundDoctorReport(input: {
     errorCodeCounts: errorCodeSummary,
     failureStageCounts,
     recentFailures,
+    recentPending,
     headline: headlineParts.join("; "),
   };
 }

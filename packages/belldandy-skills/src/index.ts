@@ -204,6 +204,11 @@ export {
   type SendChannelMessageDeps,
 } from "./builtin/send-channel-message.js";
 export {
+  createSendEmailTool,
+  SEND_EMAIL_TOOL_NAME,
+  type SendEmailDeps,
+} from "./builtin/send-email.js";
+export {
   checkAndConsumeRestartCooldown,
   formatRestartCooldownMessage,
   getRestartCommandCooldownSeconds,

@@ -6,6 +6,7 @@ import {
   formatModelOptionLabel,
   formatModelProviderGroupLabel,
   modelMatchesCatalogFilter,
+  normalizeRequestFrame,
   parseManualModelValue,
   resolvePreferredAgentSelection,
   resolvePreferredModelSelection,
@@ -113,5 +114,33 @@ describe("chat network model selection", () => {
     expect(modelMatchesCatalogFilter(models[1], "anth")).toBe(true);
     expect(modelMatchesCatalogFilter(models[2], "kimi")).toBe(true);
     expect(modelMatchesCatalogFilter(models[0], "moonshot")).toBe(false);
+  });
+});
+
+describe("chat network request frame normalization", () => {
+  it("defaults websocket requests to req frames", () => {
+    expect(normalizeRequestFrame({ id: "req-1", method: "email_inbound.audit.list" })).toEqual({
+      type: "req",
+      id: "req-1",
+      method: "email_inbound.audit.list",
+    });
+  });
+
+  it("fills a missing request id when makeId is available", () => {
+    expect(normalizeRequestFrame(
+      { method: "conversation.meta", params: { conversationId: "channel=email:123" } },
+      () => "generated-id",
+    )).toEqual({
+      type: "req",
+      id: "generated-id",
+      method: "conversation.meta",
+      params: { conversationId: "channel=email:123" },
+    });
+  });
+
+  it("drops malformed request frames before they reach the websocket", () => {
+    expect(normalizeRequestFrame({ id: "req-2" })).toBeNull();
+    expect(normalizeRequestFrame(null)).toBeNull();
+    expect(normalizeRequestFrame("bad-frame")).toBeNull();
   });
 });

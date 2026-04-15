@@ -506,10 +506,173 @@ describe("doctor observability formatting", () => {
         ],
         headline: "runs=4; running=1; failed=1; skipped=1; cron=2; heartbeat=1; subtask=1; linked=3; main=1; isolated=1",
       },
+      assistantModeRuntime: {
+        available: true,
+        enabled: true,
+        status: "running",
+        controls: {
+          assistantModeEnabled: true,
+          assistantModeSource: "explicit",
+          assistantModeMismatch: false,
+          heartbeatEnabled: true,
+          heartbeatInterval: "45m",
+          activeHours: "08:00-23:00",
+          cronEnabled: true,
+        },
+        sources: {
+          heartbeat: {
+            enabled: true,
+            interval: "45m",
+            activeHours: "08:00-23:00",
+            lastStatus: "running",
+            lastSummary: "Heartbeat follow-up",
+          },
+          cron: {
+            enabled: true,
+            schedulerRunning: true,
+            activeRuns: 2,
+            totalJobs: 3,
+            enabledJobs: 2,
+            userDeliveryJobs: 2,
+            lastStatus: "ran",
+          },
+        },
+        delivery: {
+          residentChannel: true,
+          externalDeliveryPreference: ["feishu", "qq", "community", "discord"],
+          confirmationRequired: true,
+        },
+        resident: {
+          totalCount: 2,
+          activeCount: 1,
+          runningCount: 1,
+          idleCount: 1,
+          errorCount: 0,
+          headline: "2 residents, active 1, running 1, digest ready 1, updated 1, shared review pending 1",
+          primary: {
+            id: "default",
+            displayName: "Belldandy",
+            status: "running",
+            digestStatus: "updated",
+            pendingMessageCount: 3,
+            recommendedTargetId: "agent:default:main",
+            targetType: "conversation",
+            nextAction: "Continue resident follow-up",
+          },
+        },
+        longTasks: {
+          totalCount: 2,
+          activeCount: 1,
+          protocolBackedCount: 1,
+          headline: "delegation protocol=1/2; active=1; completed=1; sources=goal_subtask:1",
+          primary: {
+            taskId: "subtask-1",
+            agentId: "coder",
+            status: "running",
+            source: "goal_subtask",
+            aggregationMode: "main_agent_summary",
+            intentSummary: "整理工具治理摘要",
+            expectedDeliverableSummary: "返回治理摘要",
+          },
+        },
+        goals: {
+          totalCount: 2,
+          activeCount: 2,
+          blockedCount: 1,
+          pendingApprovalCount: 0,
+          reviewingCount: 0,
+          headline: "goals=2; active=2; blocked=1; pendingApproval=0; reviewing=0",
+          primary: {
+            goalId: "goal_review",
+            title: "Review Flow",
+            status: "blocked",
+            summary: "当前 goal 处于阻塞态，优先解除关键节点阻塞。",
+            nextAction: "先解除 review 节点的阻塞，再继续推进。",
+            blockerSummary: "等待用户确认策略",
+            checkpointSummary: "等待用户确认当前评审策略",
+            targetId: "goal:review",
+            targetType: "conversation",
+          },
+        },
+        explanation: {
+          nextAction: {
+            summary: "Continue Heartbeat",
+            targetId: "heartbeat-1",
+            targetType: "conversation",
+          },
+          blockedReason: "waiting for the next eligible heartbeat or cron run",
+          attentionReason: "Heartbeat: provider unavailable",
+        },
+        focus: {
+          summary: "Continue Heartbeat",
+          targetId: "heartbeat-1",
+          targetType: "conversation",
+        },
+        attentionItems: [
+          {
+            kind: "failed_action",
+            summary: "Heartbeat: provider unavailable",
+            targetId: "heartbeat-1",
+            targetType: "conversation",
+          },
+          {
+            kind: "pending_confirmation",
+            summary: "1 outbound confirmation(s) pending; latest qq request confirm-qq-1",
+            targetId: "conv-pending-qq",
+            targetType: "conversation",
+          },
+          {
+            kind: "cron_invalid_next_run",
+            summary: "1 enabled cron job(s) currently have no nextRunAtMs",
+          },
+        ],
+        recentActions: [
+          {
+            kind: "heartbeat",
+            sourceId: "heartbeat",
+            label: "Heartbeat",
+            status: "running",
+            startedAt: 1710000200000,
+            recommendedTargetId: "heartbeat-1",
+            targetType: "conversation",
+            summary: "Heartbeat follow-up",
+          },
+          {
+            kind: "cron",
+            sourceId: "cron-job-1",
+            label: "Digest",
+            status: "ran",
+            startedAt: 1710000210000,
+            finishedAt: 1710000210300,
+            sessionTarget: "main",
+            recommendedTargetId: "cron-main:cron-job-1",
+            targetType: "conversation",
+            summary: "Digest delivered",
+            nextRunAtMs: 1710003810000,
+          },
+        ],
+        headline: "enabled; status=running; heartbeat=on; interval=45m; activeHours=08:00-23:00; cron=on; jobs=2/3; recent=2; notify=resident+feishu>qq>community>discord; confirm=required",
+      },
+      configSource: {
+        source: "legacy_root",
+        sourceLabel: "legacy project-root env",
+        envDir: "E:/project/star-sanctuary",
+        stateDir: "C:/Users/admin/.star_sanctuary",
+        stateDirActive: false,
+        resolutionOrder: [
+          "explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR)",
+          "installed runtime env dir from install-info.json",
+          "legacy project-root .env / .env.local",
+          "state-dir config",
+        ],
+        headline: "Using legacy project-root env files from E:/project/star-sanctuary; state-dir config at C:/Users/admin/.star_sanctuary is currently inactive.",
+        migrationHint: "Run 'bdd config migrate-to-state-dir' when you are ready to switch away from project-root env files.",
+      },
       externalOutboundRuntime: {
         requireConfirmation: true,
         totals: {
           totalRecords: 5,
+          pendingConfirmationCount: 1,
           confirmedCount: 2,
           autoApprovedCount: 2,
           rejectedCount: 1,
@@ -556,7 +719,119 @@ describe("doctor observability formatting", () => {
             contentPreview: "请去 Discord 提醒我",
           },
         ],
+        recentPending: [
+          {
+            requestId: "confirm-qq-1",
+            createdAt: 1710000135000,
+            expiresAt: 1710000735000,
+            conversationId: "conv-pending-qq",
+            requestedByAgentId: "default",
+            targetChannel: "qq",
+            requestedSessionKey: "channel=qq:chat=chat-2",
+            targetSessionKey: "channel=qq:chat=chat-2",
+            contentPreview: "请去 QQ 提醒我",
+          },
+        ],
         headline: "records=5; sent=3; failed=2; resolve_failed=1; delivery_failed=1; confirm=required",
+      },
+      emailOutboundRuntime: {
+        requireConfirmation: true,
+        totals: {
+          totalRecords: 3,
+          confirmedCount: 1,
+          autoApprovedCount: 1,
+          rejectedCount: 1,
+          sentCount: 2,
+          failedCount: 1,
+          attachmentRecordCount: 1,
+        },
+        providerCounts: {
+          smtp: 3,
+        },
+        accountCounts: {
+          default: 3,
+        },
+        errorCodeCounts: {
+          send_failed: 1,
+        },
+        recentFailures: [
+          {
+            timestamp: 1710000140000,
+            providerId: "smtp",
+            accountId: "default",
+            subject: "Weekly status",
+            errorCode: "send_failed",
+            error: "smtp timeout",
+            threadId: "<thread-001@example.com>",
+            replyToMessageId: "<reply-001@example.com>",
+            bodyPreview: "Here is the weekly status update.",
+          },
+        ],
+        headline: "records=3; sent=2; failed=1; providers=1; attachments=1; confirm=required",
+      },
+      emailInboundRuntime: {
+        enabled: true,
+        setup: {
+          configured: true,
+          runtimeExpected: true,
+          missingFields: [],
+          accountId: "primary",
+          host: "imap.example.com",
+          port: 993,
+          secure: true,
+          mailbox: "INBOX",
+          requestedAgentId: "default",
+          pollIntervalMs: 60000,
+          connectTimeoutMs: 10000,
+          socketTimeoutMs: 20000,
+          bootstrapMode: "latest",
+          recentWindowLimit: 50,
+          headline: "IMAP polling is configured for primary@imap.example.com:993/INBOX -> agent default. First attach bootstrap=latest. Recent window limit=50.",
+          nextStep: "If inbound mail still does not start, verify the Config Source card and confirm your latest .env/.env.local change has triggered a Gateway restart.",
+        },
+        totals: {
+          totalRecords: 4,
+          processedCount: 2,
+          failedCount: 1,
+          invalidEventCount: 1,
+          duplicateCount: 1,
+          attachmentRecordCount: 1,
+          createdBindingCount: 1,
+        },
+        providerCounts: {
+          imap: 4,
+        },
+        accountCounts: {
+          primary: 4,
+        },
+        mailboxCounts: {
+          INBOX: 4,
+        },
+        statusCounts: {
+          processed: 2,
+          failed: 1,
+          invalid_event: 1,
+          skipped_duplicate: 1,
+        },
+        errorCodeCounts: {
+          ingest_failed: 1,
+          invalid_event: 1,
+        },
+        recentFailures: [
+          {
+            timestamp: 1710000150000,
+            providerId: "imap",
+            accountId: "primary",
+            mailbox: "INBOX",
+            subject: "Need help",
+            messageId: "<msg-900@example.com>",
+            threadId: "<thread-900@example.com>",
+            errorCode: "ingest_failed",
+            error: "agent unavailable",
+            bodyPreview: "Please help with the latest patch.",
+          },
+        ],
+        headline: "records=4; processed=2; failed=1; invalid=1; duplicates=1; providers=1; attachments=1; runtime=enabled",
       },
       runtimeResilienceDiagnostics: {
         alertLevel: "warn",
@@ -718,6 +993,45 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("1/2 protocol-backed");
     expect(lines.join("\n")).toContain("aggregation main_agent_summary:1");
     expect(lines.join("\n")).toContain("subtask-1: status=running, source=goal_subtask, aggregation=main_agent_summary, deliverable=patch, deliverable-summary=返回治理摘要, intent=整理工具治理摘要");
+    expect(lines.join("\n")).toContain("Assistant Mode");
+    expect(lines.join("\n")).toContain("mode on / explicit");
+    expect(lines.join("\n")).toContain("status running");
+    expect(lines.join("\n")).toContain("heartbeat on / 45m");
+    expect(lines.join("\n")).toContain("cron on / jobs 2/3");
+    expect(lines.join("\n")).toContain("notify resident + feishu > qq > community > discord");
+    expect(lines.join("\n")).toContain("confirm required");
+    expect(lines.join("\n")).toContain("resident running 1 / idle 1 / total 2");
+    expect(lines.join("\n")).toContain("strategy: heartbeat=running, cron=ran, activeHours=08:00-23:00");
+    expect(lines.join("\n")).toContain("driver policy: heartbeat + cron / source explicit");
+    expect(lines.join("\n")).toContain("schedule policy: heartbeat 45m / 08:00-23:00 / cron jobs 2/3");
+    expect(lines.join("\n")).toContain("delivery: resident channel always available; external preference resident + feishu > qq > community > discord");
+    expect(lines.join("\n")).toContain("outbound policy: resident + feishu > qq > community > discord, confirm required");
+    expect(lines.join("\n")).toContain("resident summary: 2 residents, active 1, running 1, digest ready 1, updated 1, shared review pending 1");
+    expect(lines.join("\n")).toContain("resident focus: Belldandy, status=running, digest=updated/3, continue=Continue resident follow-up");
+    expect(lines.join("\n")).toContain("long task summary: delegation protocol=1/2; active=1; completed=1; sources=goal_subtask:1");
+    expect(lines.join("\n")).toContain("long task focus: subtask-1, status=running, agent=coder, intent=整理工具治理摘要, deliverable=返回治理摘要");
+    expect(lines.join("\n")).toContain("goal summary: goals=2; active=2; blocked=1; pendingApproval=0; reviewing=0");
+    expect(lines.join("\n")).toContain("goal focus: Review Flow, status=blocked, next=先解除 review 节点的阻塞，再继续推进。, blocked=等待用户确认策略, checkpoint=等待用户确认当前评审策略");
+    expect(lines.join("\n")).toContain("next action: Continue Heartbeat, target=conversation:heartbeat-1");
+    expect(lines.join("\n")).toContain("focus: Continue Heartbeat, target=conversation:heartbeat-1");
+    expect(lines.join("\n")).toContain("blocked reason: waiting for the next eligible heartbeat or cron run");
+    expect(lines.join("\n")).toContain("attention reason: Heartbeat: provider unavailable");
+    expect(lines.join("\n")).toContain("attention item: Heartbeat: provider unavailable, target=conversation:heartbeat-1");
+    expect(lines.join("\n")).toContain("attention item: 1 outbound confirmation(s) pending; latest qq request confirm-qq-1, target=conversation:conv-pending-qq");
+    expect(lines.join("\n")).toContain("attention item: 1 enabled cron job(s) currently have no nextRunAtMs");
+    expect(lines.join("\n")).toContain("agent snapshots:");
+    expect(lines.join("\n")).toContain("Belldandy · 运行中");
+    expect(lines.join("\n")).toContain("Coder · 空闲");
+    expect(lines.join("\n")).toContain("Heartbeat: running, heartbeat, target=conversation:heartbeat-1, summary=Heartbeat follow-up");
+    expect(lines.join("\n")).toContain("Digest: ran, cron, session=main, target=conversation:cron-main:cron-job-1, summary=Digest delivered");
+    expect(lines.join("\n")).toContain("Config Source");
+    expect(lines.join("\n")).toContain("current legacy project-root env");
+    expect(lines.join("\n")).toContain("state-dir inactive");
+    expect(lines.join("\n")).toContain("envDir: E:/project/star-sanctuary");
+    expect(lines.join("\n")).toContain("stateDir: C:/Users/admin/.star_sanctuary");
+    expect(lines.join("\n")).toContain("resolution order: explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR) -> installed runtime env dir from install-info.json -> legacy project-root .env / .env.local -> state-dir config");
+    expect(lines.join("\n")).toContain("不会再同时合并 state-dir 配置");
+    expect(lines.join("\n")).toContain("bdd config migrate-to-state-dir");
     expect(lines.join("\n")).toContain("Cron Runtime");
     expect(lines.join("\n")).toContain("2/3 jobs enabled");
     expect(lines.join("\n")).toContain("delivery user 2 / none 1");
@@ -736,7 +1050,25 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("error codes binding_not_found:1, send_failed:1");
     expect(lines.join("\n")).toContain("qq, 目标解析失败 · binding_not_found / 没有可用 binding");
     expect(lines.join("\n")).toContain("discord, 渠道投递失败 · send_failed / 渠道发送失败 · discord send failed");
-    expect(lines.join("\n")).toContain("详细逐条记录仍可在 记忆查看 -> 外发审计 中查看。");
+    expect(lines.join("\n")).toContain("详细逐条记录仍可在 记忆查看 -> 消息审计 中查看。");
+    expect(lines.join("\n")).toContain("Email Outbound Runtime");
+    expect(lines.join("\n")).toContain("3 records / sent 2 / failed 1");
+    expect(lines.join("\n")).toContain("attachments 1");
+    expect(lines.join("\n")).toContain("providers smtp:3");
+    expect(lines.join("\n")).toContain("accounts default:3");
+    expect(lines.join("\n")).toContain("code=send_failed");
+    expect(lines.join("\n")).toContain("reply=<reply-001@example.com>");
+    expect(lines.join("\n")).toContain("thread=<thread-001@example.com>");
+      expect(lines.join("\n")).toContain("Email Inbound Runtime");
+      expect(lines.join("\n")).toContain("setup configured");
+      expect(lines.join("\n")).toContain("IMAP polling is configured for primary@imap.example.com:993/INBOX -> agent default. First attach bootstrap=latest. Recent window limit=50.");
+      expect(lines.join("\n")).toContain("account primary / imap.example.com:993 / secure=true / mailbox INBOX / agent default / interval 60000ms / bootstrap latest / recent window 50");
+      expect(lines.join("\n")).toContain("如果你刚改过 .env/.env.local 但这里没变化，先去看 Config Source 卡片确认当前生效目录。");
+      expect(lines.join("\n")).toContain("4 records / processed 2 / failed 1");
+    expect(lines.join("\n")).toContain("invalid 1 / duplicates 1");
+    expect(lines.join("\n")).toContain("mailboxes INBOX:4");
+    expect(lines.join("\n")).toContain("statuses processed:2, failed:1, invalid_event:1, skipped_duplicate:1");
+    expect(lines.join("\n")).toContain("message=<msg-900@example.com>");
     expect(lines.join("\n")).toContain("Runtime Resilience");
     expect(lines.join("\n")).toContain("primary openai.com/gpt-4.1");
     expect(lines.join("\n")).toContain("1 fallbacks");

@@ -22,6 +22,7 @@ function createFeatureHarness() {
   };
   const agentCatalog = new Map();
   const noopAsync = vi.fn(async () => {});
+  const openConversationSession = vi.fn();
   const sessionCacheFeature = {
     bindAgentConversation: vi.fn(),
     getAgentConversation: vi.fn(() => ""),
@@ -60,7 +61,7 @@ function createFeatureHarness() {
     switchMemoryViewerTab: vi.fn(),
     loadMemoryViewer: noopAsync,
     openTaskFromAudit: noopAsync,
-    openConversationSession: vi.fn(),
+    openConversationSession,
     appendMessage: vi.fn(),
     getChatUiFeature: () => ({ refreshAvatar: vi.fn() }),
     onAgentIdentityChanged: vi.fn(),
@@ -69,7 +70,7 @@ function createFeatureHarness() {
     localeController: { t: (_key, _params, fallback) => fallback ?? "" },
   });
 
-  return { feature, refs };
+  return { feature, refs, openConversationSession };
 }
 
 describe("agent runtime panel", () => {
@@ -90,5 +91,42 @@ describe("agent runtime panel", () => {
     expect(refs.agentRightPanelEl.classList.contains("hidden")).toBe(false);
     expect(refs.agentRightPanelEl.querySelectorAll(".agent-card")).toHaveLength(1);
     expect(refs.agentRightPanelEl.textContent).toContain("代码专家");
+  });
+
+  it("renders a compact work summary card and reuses lightweight jump actions", async () => {
+    const { feature, refs, openConversationSession } = createFeatureHarness();
+
+    feature.syncAgentCatalog([
+      {
+        id: "coder",
+        displayName: "代码专家",
+        name: "代码专家",
+        avatar: "",
+        model: "gpt-5",
+        status: "running",
+        continuationState: {
+          targetType: "conversation",
+          recommendedTargetId: "conv-42",
+          summary: "继续跟进多 Agent 观察性改造",
+        },
+        sharedGovernance: {
+          pendingCount: 1,
+          claimedCount: 0,
+        },
+      },
+    ], "coder");
+
+    const summaryBtn = refs.agentRightPanelEl.querySelector(".agent-card-work-summary");
+    expect(summaryBtn).not.toBeNull();
+    expect(summaryBtn.textContent).toContain("继续跟进多 Agent 观察性改造");
+    expect(summaryBtn.disabled).toBe(false);
+
+    summaryBtn.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(openConversationSession).toHaveBeenCalledWith(
+      "conv-42",
+      expect.stringContaining("conv-42"),
+    );
   });
 });

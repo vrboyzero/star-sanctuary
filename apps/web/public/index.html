@@ -278,7 +278,7 @@
                 <button id="memoryTabTasks" class="memory-tab-btn active" data-i18n="memory.tabs.tasks">任务记录</button>
                 <button id="memoryTabMemories" class="memory-tab-btn" data-i18n="memory.tabs.memories">记忆</button>
                 <button id="memoryTabSharedReview" class="memory-tab-btn" data-i18n="memory.tabs.sharedReview">共享审批</button>
-                <button id="memoryTabOutboundAudit" class="memory-tab-btn" data-i18n="memory.tabs.outboundAudit">外发审计</button>
+                <button id="memoryTabOutboundAudit" class="memory-tab-btn" data-i18n="memory.tabs.outboundAudit">消息审计</button>
               </div>
               <div class="memory-viewer-filters">
                 <input id="memorySearchInput" class="input input-sm memory-search-input" data-i18n-placeholder="memory.searchPlaceholder" placeholder="搜索 task 标题、总结或 memory 内容" />
@@ -345,6 +345,10 @@
                     <option value="" data-i18n="memory.sharedReviewClaimedByAll">全部认领人</option>
                   </select>
                   <button id="memorySharedReviewClearFilters" class="button" data-i18n="memory.sharedReviewClearFilters">清空筛选</button>
+                </div>
+                <div id="memoryOutboundAuditFilters" class="memory-viewer-tabs hidden">
+                  <button id="memoryOutboundAuditFocusAll" class="memory-tab-btn active" data-i18n="memory.outboundAuditFocusAll">全部消息</button>
+                  <button id="memoryOutboundAuditFocusThreads" class="memory-tab-btn" data-i18n="memory.outboundAuditFocusThreads">邮件线程整理</button>
                 </div>
                 <button id="memorySearchBtn" class="button" data-i18n="memory.search">查询</button>
               </div>
@@ -532,30 +536,63 @@
           <label class="form-label" for="cfgModelFallbackContent" data-i18n="settings.modelFallbackConfigContentLabel">Model Fallback JSON</label>
           <textarea id="cfgModelFallbackContent" class="input" rows="12" spellcheck="false" placeholder="{&#10;  &quot;fallbacks&quot;: [&#10;    {&#10;      &quot;id&quot;: &quot;openrouter-main&quot;,&#10;      &quot;displayName&quot;: &quot;OpenRouter Main&quot;,&#10;      &quot;baseUrl&quot;: &quot;https://openrouter.ai/api/v1&quot;,&#10;      &quot;apiKey&quot;: &quot;sk-or-v1-...&quot;,&#10;      &quot;model&quot;: &quot;openai/gpt-4o-mini&quot;,&#10;      &quot;protocol&quot;: &quot;openai&quot;,&#10;      &quot;wireApi&quot;: &quot;responses&quot;&#10;    }&#10;  ]&#10;}"></textarea>
         </div>
-        <div class="form-group">
-          <label class="form-label" for="cfgExternalOutboundRequireConfirmation">
-            <input id="cfgExternalOutboundRequireConfirmation" type="checkbox" style="margin-right: 8px;" checked />
-            <span data-i18n="settings.externalOutboundRequireConfirmationLabel">外部渠道外发需要确认</span>
-          </label>
-          <div class="form-help" data-i18n="settings.externalOutboundRequireConfirmationHelp">控制 WebChat 请求 Agent 向飞书 / QQ / Community / Discord 外发文本时，是否必须先经过页面确认弹窗。默认开启；保存后需重启 Gateway 生效。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.heartbeatLabel">Heartbeat Interval</label>
-          <input id="cfgHeartbeat" class="input" placeholder="30m" />
-          <div class="form-help" data-i18n="settings.heartbeatHelp">心跳任务执行间隔，支持 `30m`、`1h`、`300s` 这类格式。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="cfgHeartbeatEnabled">
-            <input id="cfgHeartbeatEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.heartbeatEnabledLabel">Enable Heartbeat</span>
-          </label>
-          <div class="form-help" data-i18n="settings.heartbeatEnabledHelp">启用后，Agent 会按心跳配置检查 `HEARTBEAT.md` 并主动联系你。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.heartbeatActiveHoursLabel">Heartbeat Active Hours</label>
-          <input id="cfgHeartbeatActiveHours" class="input" placeholder="08:00-23:00" />
-          <div class="form-help" data-i18n="settings.heartbeatActiveHoursHelp">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
-        </div>
+        <section class="settings-subsection" id="assistantModeConfigSection">
+          <div class="settings-subsection-header" style="margin-top: 16px;">
+            <div>
+              <div id="assistantModeConfigTitle" class="settings-subsection-title" data-i18n="settings.assistantModeConfigTitle">Assistant Mode 配置</div>
+              <div id="assistantModeConfigHelp" class="form-help" data-i18n="settings.assistantModeConfigHelp">统一收口主动工作相关配置，包括通知确认、heartbeat 活跃时段和 cron 自动调度。底层仍复用现有 runtime。</div>
+              <div id="assistantModeConfigHint" class="form-help" data-i18n="settings.assistantModeConfigHint">配置入口已收口在下方 Assistant Mode 配置；当前仍复用原有 heartbeat / cron / 外部确认 runtime。</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgAssistantModeEnabled">
+              <input id="cfgAssistantModeEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.assistantModeEnabledLabel">启用 Assistant Mode</span>
+            </label>
+            <div class="form-help" data-i18n="settings.assistantModeEnabledHelp">产品层总开关。关闭时 heartbeat 与 cron 都不会主动运行；重新开启时会优先恢复为 heartbeat + cron 的默认主动组合，随后仍可在下方细调。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgAssistantModePreset" data-i18n="settings.assistantModePresetLabel">Assistant 策略预设</label>
+            <select id="cfgAssistantModePreset" class="input"></select>
+            <div class="form-help" data-i18n="settings.assistantModePresetHelp">快捷填充下方 Assistant Mode 配置；它不是长期模式切换。选择后仍可继续手工细调，细调后会自动回到“自定义”。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgExternalOutboundRequireConfirmation">
+              <input id="cfgExternalOutboundRequireConfirmation" type="checkbox" style="margin-right: 8px;" checked />
+              <span data-i18n="settings.externalOutboundRequireConfirmationLabel">外部渠道外发需要确认</span>
+            </label>
+            <div class="form-help" data-i18n="settings.externalOutboundRequireConfirmationHelp">控制 WebChat 请求 Agent 向飞书 / QQ / Community / Discord 外发文本时，是否必须先经过页面确认弹窗。默认开启；保存后需重启 Gateway 生效。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.assistantExternalDeliveryPreferenceLabel">Assistant 外发优先级</label>
+            <input id="cfgAssistantExternalDeliveryPreference" class="input" placeholder="feishu,qq,community,discord" />
+            <div class="form-help" data-i18n="settings.assistantExternalDeliveryPreferenceHelp">控制 assistant mode 主动外发时，外部渠道的优先尝试顺序。使用逗号分隔，支持 `feishu,qq,community,discord`；resident 通道始终保留。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.heartbeatLabel">Heartbeat Interval</label>
+            <input id="cfgHeartbeat" class="input" placeholder="30m" />
+            <div class="form-help" data-i18n="settings.heartbeatHelp">心跳任务执行间隔，支持 `30m`、`1h`、`300s` 这类格式。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgHeartbeatEnabled">
+              <input id="cfgHeartbeatEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.heartbeatEnabledLabel">Enable Heartbeat</span>
+            </label>
+            <div class="form-help" data-i18n="settings.heartbeatEnabledHelp">启用后，Agent 会按心跳配置检查 `HEARTBEAT.md` 并主动联系你。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" data-i18n="settings.heartbeatActiveHoursLabel">Heartbeat Active Hours</label>
+            <input id="cfgHeartbeatActiveHours" class="input" placeholder="08:00-23:00" />
+            <div class="form-help" data-i18n="settings.heartbeatActiveHoursHelp">限定心跳活跃时段，避免深夜打扰。留空则全天可触发。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgCronEnabled">
+              <input id="cfgCronEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.cronEnabledLabel">Enable Cron Scheduler</span>
+            </label>
+            <div class="form-help" data-i18n="settings.cronEnabledHelp">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
+          </div>
+        </section>
         <hr class="theme-divider">
 
         <div class="form-group">
@@ -578,14 +615,6 @@
           </label>
           <div class="form-help" data-i18n="settings.mcpEnabledHelp">启用 MCP 协议支持。通常需要同时打开工具系统。</div>
         </div>
-        <div class="form-group">
-          <label class="form-label" for="cfgCronEnabled">
-            <input id="cfgCronEnabled" type="checkbox" style="margin-right: 8px;" />
-            <span data-i18n="settings.cronEnabledLabel">Enable Cron Scheduler</span>
-          </label>
-          <div class="form-help" data-i18n="settings.cronEnabledHelp">控制自动调度引擎。关闭后 `cron` 工具仍存在，但不会自动调度执行。</div>
-        </div>
-
         <hr class="theme-divider">
 
         <div class="form-group">
@@ -1043,6 +1072,32 @@
       <div class="modal-footer">
         <button id="externalOutboundConfirmReject" class="button" data-i18n="externalOutbound.reject">取消</button>
         <button id="externalOutboundConfirmApprove" class="button" data-i18n="externalOutbound.approve" style="background: var(--button-primary-bg); color: var(--button-primary-text);">确认发送</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="emailOutboundConfirmModal" class="modal-overlay hidden">
+    <div class="modal tool-settings-confirm-modal">
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <span data-i18n="emailOutbound.confirmTitle">确认邮件发送</span>
+      </div>
+      <div class="modal-body">
+        <p class="tool-settings-confirm-copy" data-i18n="emailOutbound.confirmCopy">
+          这封邮件将从当前 WebChat 会话通过已配置的邮件 provider 发出。请确认收件人、主题和正文预览无误后再继续。
+        </p>
+        <div class="tool-settings-confirm-impact">
+          <div class="tool-settings-confirm-label" data-i18n="emailOutbound.previewLabel">正文预览</div>
+          <div id="emailOutboundConfirmPreview" class="tool-settings-policy-note"></div>
+        </div>
+        <div class="tool-settings-confirm-impact">
+          <div class="tool-settings-confirm-label" data-i18n="emailOutbound.targetLabel">邮件信息</div>
+          <div id="emailOutboundConfirmTarget" class="tool-settings-policy-note"></div>
+        </div>
+        <div id="emailOutboundConfirmExpiry" class="tool-settings-confirm-expiry"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="emailOutboundConfirmReject" class="button" data-i18n="emailOutbound.reject">取消</button>
+        <button id="emailOutboundConfirmApprove" class="button" data-i18n="emailOutbound.approve" style="background: var(--button-primary-bg); color: var(--button-primary-text);">确认发送</button>
       </div>
     </div>
   </div>

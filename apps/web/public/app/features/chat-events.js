@@ -12,6 +12,8 @@ export function createChatEventsFeature({
   onToolSettingsConfirmResolved,
   onExternalOutboundConfirmRequired,
   onExternalOutboundConfirmResolved,
+  onEmailOutboundConfirmRequired,
+  onEmailOutboundConfirmResolved,
   onToolsConfigUpdated,
   onConversationDigestUpdated,
   stripThinkBlocks,
@@ -168,6 +170,16 @@ export function createChatEventsFeature({
 
     if (event === "external_outbound.confirm.resolved") {
       onExternalOutboundConfirmResolved?.(payload);
+      return true;
+    }
+
+    if (event === "email_outbound.confirm.required") {
+      onEmailOutboundConfirmRequired?.(payload);
+      return true;
+    }
+
+    if (event === "email_outbound.confirm.resolved") {
+      onEmailOutboundConfirmResolved?.(payload);
       return true;
     }
 

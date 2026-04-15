@@ -1,4 +1,13 @@
 import { renderDoctorObservabilityCards } from "./doctor-observability.js";
+import {
+  ASSISTANT_MODE_PRESET_CUSTOM,
+  applyAssistantModePreset,
+  applyAssistantModeSettingsConfig,
+  collectAssistantModeSettingsUpdates,
+  readAssistantModeSettingsFromRefs,
+  resolveAssistantModePreset,
+} from "./assistant-mode-settings-config.js";
+import { applyAssistantModeSettingsViewModel } from "./assistant-mode-settings-view-model.js";
 
 export function createSettingsController({
   refs,
@@ -12,6 +21,7 @@ export function createSettingsController({
   onToggle,
   getConnectionAuthMode,
   onApprovePairing,
+  onPairingRequired,
   onOpenCommunityConfig,
   onModelCatalogChanged,
   onOpenContinuationAction,
@@ -32,7 +42,10 @@ export function createSettingsController({
     refreshModelFallbackConfigBtn,
     modelFallbackConfigMeta,
     cfgModelFallbackContent,
+    cfgAssistantModeEnabled,
+    cfgAssistantModePreset,
     cfgExternalOutboundRequireConfirmation,
+    cfgAssistantExternalDeliveryPreference,
     cfgHeartbeat,
     cfgHeartbeatEnabled,
     cfgHeartbeatActiveHours,
@@ -81,7 +94,19 @@ export function createSettingsController({
     channelReplyChunkingConfigMeta,
     cfgChannelReplyChunkingContent,
     channelSecurityPendingList,
+    assistantModeConfigTitleEl,
+    assistantModeConfigHelpEl,
+    assistantModeConfigHintEl,
   } = refs;
+  const assistantModeRefs = {
+    cfgAssistantModeEnabled,
+    cfgExternalOutboundRequireConfirmation,
+    cfgAssistantExternalDeliveryPreference,
+    cfgHeartbeat,
+    cfgHeartbeatEnabled,
+    cfgHeartbeatActiveHours,
+    cfgCronEnabled,
+  };
   let lastLoadedConfig = null;
   let lastLoadedChannelSecurityContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
   let lastLoadedChannelReplyChunkingContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
@@ -91,6 +116,104 @@ export function createSettingsController({
     goal: cfgConversationKindGoal,
     heartbeat: cfgConversationKindHeartbeat,
   };
+  function readCurrentAssistantModeSettings() {
+    return readAssistantModeSettingsFromRefs(assistantModeRefs);
+  }
+
+  function applyAssistantModeCopy(options = {}) {
+    return applyAssistantModeSettingsViewModel({
+      assistantModeConfigTitleEl,
+      assistantModeConfigHelpEl,
+      assistantModeConfigHintEl,
+      cfgAssistantModePreset,
+    }, t, options);
+  }
+
+  function syncAssistantModeForm(options = {}) {
+    const settings = applyAssistantModeSettingsConfig(
+      assistantModeRefs,
+      collectAssistantModeSettingsUpdates(assistantModeRefs, options),
+    );
+    applyAssistantModeCopy({ settings });
+    return settings;
+  }
+
+  function extractPairingRequiredPayload(res) {
+    if (!res || res.ok !== false || res.error?.code !== "pairing_required") {
+      return null;
+    }
+    const message = typeof res.error?.message === "string" && res.error.message.trim()
+      ? res.error.message.trim()
+      : "Pairing required.";
+    const codeMatch = message.match(/Code:\s*([A-Z0-9-]+)/i);
+    return {
+      code: codeMatch ? codeMatch[1] : "",
+      message,
+    };
+  }
+
+  function handlePairingRequiredResponse(res) {
+    const payload = extractPairingRequiredPayload(res);
+    if (!payload) return false;
+    onPairingRequired?.(payload);
+    applyAssistantModeCopy({
+      pairingRequired: true,
+      settings: readCurrentAssistantModeSettings(),
+    });
+    return true;
+  }
+
+  applyAssistantModeCopy();
+  if (cfgAssistantModePreset && typeof cfgAssistantModePreset.addEventListener === "function") {
+    cfgAssistantModePreset.addEventListener("change", () => {
+      const presetKey = cfgAssistantModePreset.value || ASSISTANT_MODE_PRESET_CUSTOM;
+      if (presetKey !== ASSISTANT_MODE_PRESET_CUSTOM) {
+        const settings = applyAssistantModePreset(assistantModeRefs, presetKey);
+        applyAssistantModeCopy({
+          settings,
+          currentPreset: presetKey,
+        });
+        return;
+      }
+      applyAssistantModeCopy({
+        settings: readCurrentAssistantModeSettings(),
+        currentPreset: resolveAssistantModePreset(readCurrentAssistantModeSettings()),
+      });
+    });
+  }
+  if (cfgAssistantModeEnabled && typeof cfgAssistantModeEnabled.addEventListener === "function") {
+    cfgAssistantModeEnabled.addEventListener("change", () => {
+      syncAssistantModeForm({
+        applyEnabledDefaults: cfgAssistantModeEnabled.checked === true,
+      });
+    });
+  }
+  for (const inputEl of [cfgHeartbeatEnabled, cfgCronEnabled]) {
+    if (!inputEl || typeof inputEl.addEventListener !== "function") continue;
+    inputEl.addEventListener("change", () => {
+      const settings = applyAssistantModeSettingsConfig(
+        assistantModeRefs,
+        collectAssistantModeSettingsUpdates(assistantModeRefs, {
+          useDriverState: true,
+          applyEnabledDefaults: false,
+        }),
+      );
+      applyAssistantModeCopy({ settings });
+    });
+  }
+  for (const inputEl of [
+    cfgExternalOutboundRequireConfirmation,
+    cfgAssistantExternalDeliveryPreference,
+    cfgHeartbeat,
+    cfgHeartbeatActiveHours,
+  ]) {
+    if (!inputEl || typeof inputEl.addEventListener !== "function") continue;
+    inputEl.addEventListener("change", () => {
+      applyAssistantModeCopy({
+        settings: readCurrentAssistantModeSettings(),
+      });
+    });
+  }
 
   function loadConversationAllowedKinds(rawValue) {
     const defaultKinds = ["main", "subtask", "goal", "heartbeat"];
@@ -205,16 +328,20 @@ export function createSettingsController({
     if (cfgModelPreferredProviders) {
       cfgModelPreferredProviders.value = c["BELLDANDY_MODEL_PREFERRED_PROVIDERS"] || "";
     }
-    if (cfgExternalOutboundRequireConfirmation) {
-      cfgExternalOutboundRequireConfirmation.checked = c["BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION"] !== "false";
-    }
-    cfgHeartbeat.value = c["BELLDANDY_HEARTBEAT_INTERVAL"] || "";
-    cfgHeartbeatEnabled.checked = c["BELLDANDY_HEARTBEAT_ENABLED"] === "true";
-    cfgHeartbeatActiveHours.value = c["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] || "";
+    const assistantModeSettings = applyAssistantModeSettingsConfig({
+      cfgAssistantModeEnabled,
+      cfgAssistantModePreset,
+      cfgExternalOutboundRequireConfirmation,
+      cfgAssistantExternalDeliveryPreference,
+      cfgHeartbeat,
+      cfgHeartbeatEnabled,
+      cfgHeartbeatActiveHours,
+      cfgCronEnabled,
+    }, c);
+    applyAssistantModeCopy({ settings: assistantModeSettings });
     cfgBrowserRelayEnabled.checked = c["BELLDANDY_BROWSER_RELAY_ENABLED"] === "true";
     cfgRelayPort.value = c["BELLDANDY_RELAY_PORT"] || "";
     cfgMcpEnabled.checked = c["BELLDANDY_MCP_ENABLED"] === "true";
-    cfgCronEnabled.checked = c["BELLDANDY_CRON_ENABLED"] === "true";
     cfgEmbeddingEnabled.checked = c["BELLDANDY_EMBEDDING_ENABLED"] === "true";
     cfgEmbeddingApiKey.value = c["BELLDANDY_EMBEDDING_OPENAI_API_KEY"] || "";
     cfgEmbeddingBaseUrl.value = c["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] || "";
@@ -262,6 +389,12 @@ export function createSettingsController({
           "settings.modelFallbackConfigMeta",
           { path: configRes.payload?.path || "models.json" },
           `配置文件：${configRes.payload?.path || "models.json"}`,
+        );
+      } else if (handlePairingRequiredResponse(configRes)) {
+        modelFallbackConfigMeta.textContent = t(
+          "settings.modelFallbackConfigPairingRequired",
+          {},
+          "当前会话尚未完成 Pairing，完成批准后再读取模型 fallback 配置。",
         );
       } else {
         modelFallbackConfigMeta.textContent = t(
@@ -352,6 +485,12 @@ export function createSettingsController({
           { path: configRes.payload?.path || "channel-security.json" },
           `配置文件：${configRes.payload?.path || "channel-security.json"}`,
         );
+      } else if (handlePairingRequiredResponse(configRes)) {
+        channelSecurityConfigMeta.textContent = t(
+          "settings.channelSecurityPairingRequired",
+          {},
+          "当前会话尚未完成 Pairing，完成批准后再读取渠道安全配置。",
+        );
       } else {
         channelSecurityConfigMeta.textContent = t("settings.channelSecurityLoadFailed", {}, "读取渠道安全配置失败");
       }
@@ -375,6 +514,12 @@ export function createSettingsController({
           "settings.channelReplyChunkingMeta",
           { path: configRes.payload?.path || "channel-reply-chunking.json" },
           `配置文件：${configRes.payload?.path || "channel-reply-chunking.json"}`,
+        );
+      } else if (handlePairingRequiredResponse(configRes)) {
+        channelReplyChunkingConfigMeta.textContent = t(
+          "settings.channelReplyChunkingPairingRequired",
+          {},
+          "当前会话尚未完成 Pairing，完成批准后再读取渠道回复分段配置。",
         );
       } else {
         channelReplyChunkingConfigMeta.textContent = t("settings.channelReplyChunkingLoadFailed", {}, "读取渠道回复分段配置失败");
@@ -572,6 +717,19 @@ export function createSettingsController({
       }
       return;
     }
+    if (handlePairingRequiredResponse(res)) {
+      doctorToggleBtn.className = "button badge warn";
+      doctorToggleBtn.textContent = t("settings.doctorPairingRequired", {}, "等待配对批准");
+      const badge = document.createElement("span");
+      badge.className = "badge warn";
+      badge.textContent = t(
+        "settings.doctorPairingRequiredHelp",
+        {},
+        "系统检查依赖已完成 Pairing 的当前 WebChat 会话；请先批准配对码后再重试。",
+      );
+      doctorStatusEl.appendChild(badge);
+      return;
+    }
     doctorToggleBtn.className = "button badge fail";
     doctorToggleBtn.innerHTML = `<span data-i18n="settings.doctorCheckFailed">${t("settings.doctorCheckFailed", {}, "Check Failed")}</span>`;
   }
@@ -594,16 +752,20 @@ export function createSettingsController({
     if (cfgModelPreferredProviders) {
       updates["BELLDANDY_MODEL_PREFERRED_PROVIDERS"] = cfgModelPreferredProviders.value.trim();
     }
-    if (cfgExternalOutboundRequireConfirmation) {
-      updates["BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION"] = cfgExternalOutboundRequireConfirmation.checked ? "true" : "false";
-    }
-    updates["BELLDANDY_HEARTBEAT_ENABLED"] = cfgHeartbeatEnabled.checked ? "true" : "false";
-    updates["BELLDANDY_HEARTBEAT_INTERVAL"] = cfgHeartbeat.value.trim();
-    updates["BELLDANDY_HEARTBEAT_ACTIVE_HOURS"] = cfgHeartbeatActiveHours.value.trim();
+    Object.assign(updates, collectAssistantModeSettingsUpdates({
+      cfgAssistantModeEnabled,
+      cfgExternalOutboundRequireConfirmation,
+      cfgAssistantExternalDeliveryPreference,
+      cfgHeartbeat,
+      cfgHeartbeatEnabled,
+      cfgHeartbeatActiveHours,
+      cfgCronEnabled,
+    }, {
+      applyEnabledDefaults: true,
+    }));
     updates["BELLDANDY_BROWSER_RELAY_ENABLED"] = cfgBrowserRelayEnabled.checked ? "true" : "false";
     updates["BELLDANDY_RELAY_PORT"] = cfgRelayPort.value.trim();
     updates["BELLDANDY_MCP_ENABLED"] = cfgMcpEnabled.checked ? "true" : "false";
-    updates["BELLDANDY_CRON_ENABLED"] = cfgCronEnabled.checked ? "true" : "false";
     updates["BELLDANDY_EMBEDDING_ENABLED"] = cfgEmbeddingEnabled.checked ? "true" : "false";
     assignSecretUpdate(updates, "BELLDANDY_EMBEDDING_OPENAI_API_KEY", cfgEmbeddingApiKey);
     updates["BELLDANDY_EMBEDDING_OPENAI_BASE_URL"] = cfgEmbeddingBaseUrl.value.trim();
@@ -746,6 +908,14 @@ export function createSettingsController({
   return {
     toggle,
     renderPairingPending,
+    loadConfig,
+    saveConfig,
+    markPairingRequired() {
+      applyAssistantModeCopy({
+        pairingRequired: true,
+        settings: readCurrentAssistantModeSettings(),
+      });
+    },
     openPairingPending(options = {}) {
       return toggle(true, { section: "pairing-pending", skipLoad: options.skipLoad === true });
     },

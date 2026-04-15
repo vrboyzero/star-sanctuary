@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest";
 
+import { ExternalOutboundConfirmationStore } from "./external-outbound-confirmation-store.js";
 import { buildExternalOutboundDoctorReport } from "./external-outbound-doctor.js";
 
 describe("external outbound doctor", () => {
   it("summarizes recent failures by stage and error code", async () => {
+    const confirmationStore = new ExternalOutboundConfirmationStore(1000);
+    confirmationStore.create({
+      requestId: "confirm-1",
+      conversationId: "conv-9",
+      requestedByAgentId: "default",
+      channel: "qq",
+      content: "please follow up",
+      sessionKey: "channel=qq:chat=chat-2",
+      resolvedSessionKey: "channel=qq:chat=chat-2",
+      resolution: "explicit_session_key",
+    });
+
     const report = await buildExternalOutboundDoctorReport({
       auditStore: {
         async append() {},
@@ -49,10 +62,13 @@ describe("external outbound doctor", () => {
           ];
         },
       },
+      confirmationStore,
       requireConfirmation: true,
     });
 
     expect(report.headline).toContain("records=3");
+    expect(report.headline).toContain("pending=1");
+    expect(report.totals.pendingConfirmationCount).toBe(1);
     expect(report.totals.sentCount).toBe(1);
     expect(report.totals.failedCount).toBe(2);
     expect(report.totals.resolveFailedCount).toBe(1);
@@ -70,6 +86,14 @@ describe("external outbound doctor", () => {
       resolve: 1,
       delivery: 1,
       confirmation: 0,
+    });
+    expect(report.recentPending[0]).toMatchObject({
+      requestId: "confirm-1",
+      conversationId: "conv-9",
+      requestedByAgentId: "default",
+      targetChannel: "qq",
+      requestedSessionKey: "channel=qq:chat=chat-2",
+      targetSessionKey: "channel=qq:chat=chat-2",
     });
   });
 });

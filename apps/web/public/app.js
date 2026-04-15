@@ -35,6 +35,7 @@ import { createChatUiFeature } from "./app/features/chat-ui.js";
 import { createCanvasContextFeature } from "./app/features/canvas-context.js";
 import { buildDoctorChatSummary } from "./app/features/doctor-observability.js";
 import { createAppShellFeature } from "./app/features/app-shell.js";
+import { createEmailInboundSessionBannerFeature } from "./app/features/email-inbound-session-banner.js";
 import { createGoalsDetailFeature } from "./app/features/goals-detail.js";
 import { createGoalsGovernancePanelFeature } from "./app/features/goals-governance-panel.js";
 import { createGoalsCapabilityPanelFeature } from "./app/features/goals-capability-panel.js";
@@ -111,6 +112,9 @@ const {
   memoryTabMemoriesBtn,
   memoryTabSharedReviewBtn,
   memoryTabOutboundAuditBtn,
+  memoryOutboundAuditFiltersEl,
+  memoryOutboundAuditFocusAllBtn,
+  memoryOutboundAuditFocusThreadsBtn,
   memorySearchInputEl,
   memorySearchBtn,
   memoryTaskFiltersEl,
@@ -269,6 +273,12 @@ const {
   externalOutboundConfirmExpiryEl,
   externalOutboundConfirmApproveBtn,
   externalOutboundConfirmRejectBtn,
+  emailOutboundConfirmModal,
+  emailOutboundConfirmPreviewEl,
+  emailOutboundConfirmTargetEl,
+  emailOutboundConfirmExpiryEl,
+  emailOutboundConfirmApproveBtn,
+  emailOutboundConfirmRejectBtn,
   toolSettingsModal,
   openToolSettingsBtn,
   closeToolSettingsBtn,
@@ -342,6 +352,7 @@ let goalsTrackingPanelFeature = null;
 let memoryDetailRenderFeature = null;
 let memoryRuntimeFeature = null;
 let memoryViewerFeature = null;
+let emailInboundSessionBannerFeature = null;
 let sessionDigestFeature = null;
 let settingsRuntimeFeature = null;
 let subtasksOverviewFeature = null;
@@ -397,6 +408,11 @@ sessionNavigationFeature = createSessionNavigationFeature({
   t: localeController.t,
 });
 const openConversationSession = (...args) => sessionNavigationFeature.openConversationSession(...args);
+
+emailInboundSessionBannerFeature = createEmailInboundSessionBannerFeature({
+  sendReq: (...args) => sendReq(...args),
+  t: localeController.t,
+});
 
 const voiceFeature = createVoiceFeature({
   storageKey: VOICE_SHORTCUT_KEY,
@@ -572,6 +588,12 @@ if (memoryTabSharedReviewBtn) {
 if (memoryTabOutboundAuditBtn) {
   memoryTabOutboundAuditBtn.addEventListener("click", () => switchMemoryViewerTab("outboundAudit"));
 }
+if (memoryOutboundAuditFocusAllBtn) {
+  memoryOutboundAuditFocusAllBtn.addEventListener("click", () => memoryViewerFeature?.switchOutboundAuditFocus("all"));
+}
+if (memoryOutboundAuditFocusThreadsBtn) {
+  memoryOutboundAuditFocusThreadsBtn.addEventListener("click", () => memoryViewerFeature?.switchOutboundAuditFocus("threads"));
+}
 if (memorySearchBtn) {
   memorySearchBtn.addEventListener("click", () => loadMemoryViewer(true));
 }
@@ -726,6 +748,15 @@ async function loadServerConfig(options = {}) {
 
   const promise = (async () => {
     const res = await sendReq({ type: "req", id: makeId(), method: "config.read" });
+    if (res?.ok === false && res.error?.code === "pairing_required") {
+      const message = typeof res.error?.message === "string" ? res.error.message : "Pairing required.";
+      const codeMatch = message.match(/Code:\s*([A-Z0-9-]+)/i);
+      settingsRuntimeFeature?.handlePairingRequired?.({
+        code: codeMatch ? codeMatch[1] : "",
+        message,
+      });
+      return null;
+    }
     if (!(res && res.ok && res.payload && res.payload.config)) {
       return null;
     }
@@ -1240,6 +1271,9 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
     memoryTabOutboundAuditBtn,
+    memoryOutboundAuditFiltersEl,
+    memoryOutboundAuditFocusAllBtn,
+    memoryOutboundAuditFocusThreadsBtn,
     memorySharedReviewBatchBarEl,
     memoryTaskFiltersEl,
     memoryChunkFiltersEl,
@@ -1286,6 +1320,7 @@ memoryViewerFeature = createMemoryViewerFeature({
   bindStatsAuditJumpLinks: () => memoryDetailRenderFeature.bindStatsAuditJumpLinks(),
   bindMemoryPathLinks: () => memoryDetailRenderFeature.bindMemoryPathLinks(),
   bindTaskAuditJumpLinks: () => memoryDetailRenderFeature.bindTaskAuditJumpLinks(),
+  openConversationSession,
   showNotice,
   t: localeController.t,
 });
@@ -2119,6 +2154,8 @@ chatEventsFeature = createChatEventsFeature({
   onToolSettingsConfirmResolved: (payload) => settingsRuntimeFeature?.handleToolSettingsConfirmResolved(payload),
   onExternalOutboundConfirmRequired: (payload) => settingsRuntimeFeature?.handleExternalOutboundConfirmRequired(payload),
   onExternalOutboundConfirmResolved: (payload) => settingsRuntimeFeature?.handleExternalOutboundConfirmResolved(payload),
+  onEmailOutboundConfirmRequired: (payload) => settingsRuntimeFeature?.handleEmailOutboundConfirmRequired(payload),
+  onEmailOutboundConfirmResolved: (payload) => settingsRuntimeFeature?.handleEmailOutboundConfirmResolved(payload),
   onToolsConfigUpdated: (payload) => settingsRuntimeFeature?.handleToolsConfigUpdated(payload),
   onConversationDigestUpdated: (payload) => sessionDigestFeature?.handleDigestUpdated(payload),
   stripThinkBlocks,
@@ -2272,6 +2309,11 @@ async function loadConversationMeta(conversationId, options = {}) {
     }
     if (renderMessages && Array.isArray(res.payload.messages) && conversationId === activeConversationId) {
       renderConversationMessages(res.payload.messages);
+      const emailInboundSessionBanner = await emailInboundSessionBannerFeature?.loadBannerText?.(conversationId);
+      emailInboundSessionBannerFeature?.renderBanner?.(
+        messagesEl,
+        conversationId === activeConversationId ? emailInboundSessionBanner : "",
+      );
       if (showGoalEntryBanner && parseGoalSessionReference(conversationId)) {
         const goalSessionEntryBanner = typeof res.payload.goalSessionEntryBanner === "string"
           ? res.payload.goalSessionEntryBanner.trim()

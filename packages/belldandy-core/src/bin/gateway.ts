@@ -35,6 +35,25 @@ import {
 } from "../task-runtime.js";
 import { createSubTaskTakeoverDispatcher } from "../subtask-takeover-runtime.js";
 import { SubTaskWorktreeRuntime } from "../worktree-runtime.js";
+import { normalizeEmailOutboundDraft } from "../email-outbound-contract.js";
+import { createFileEmailOutboundAuditStore, resolveEmailOutboundAuditStorePath } from "../email-outbound-audit-store.js";
+import { EmailOutboundConfirmationStore } from "../email-outbound-confirmation-store.js";
+import { EmailOutboundProviderRegistry } from "../email-outbound-provider-registry.js";
+import { SmtpEmailOutboundProvider } from "../email-outbound-smtp-provider.js";
+import { createFileEmailInboundAuditStore, resolveEmailInboundAuditStorePath } from "../email-inbound-audit-store.js";
+import {
+  createFileEmailFollowUpReminderStore,
+  resolveEmailFollowUpReminderStorePath,
+} from "../email-follow-up-reminder-store.js";
+import {
+  createFileEmailThreadBindingStore,
+  resolveEmailThreadBindingStorePath,
+} from "../email-thread-binding-store.js";
+import {
+  createFileEmailInboundCheckpointStore,
+  resolveEmailInboundCheckpointStorePath,
+} from "../email-inbound-checkpoint-store.js";
+import { startImapPollingEmailInboundRuntime } from "../email-inbound-imap-runtime.js";
 
 import {
   OpenAIChatAgent,
@@ -76,6 +95,7 @@ import {
   TOOL_SETTINGS_CONTROL_NAME,
   createToolSettingsControlTool,
   createSendChannelMessageTool,
+  createSendEmailTool,
   type AgentToolControlMode,
   fetchTool,
   applyPatchTool,
@@ -390,7 +410,7 @@ if (ensuredDefaultEnv.created) {
   logger.info("gateway", `Generated default .env at ${ensuredDefaultEnv.envPath}`);
 }
 if (runtimePaths.envSource === "legacy_root") {
-  logger.warn("gateway", `Using legacy project-root env files from ${runtimePaths.envDir}; state-dir config at ${stateDir} is currently inactive`);
+  logger.warn("gateway", `Using legacy project-root env files from ${runtimePaths.envDir}; state-dir config at ${stateDir} is currently inactive and will not be merged`);
   logger.warn("gateway", "Run 'bdd config migrate-to-state-dir' when you are ready to switch to state-dir config");
 }
 
@@ -604,6 +624,49 @@ if (embeddingEnabled && !openaiApiKey) {
 // [SECURITY] 危险工具需显式启用
 const dangerousToolsEnabled = readEnv("BELLDANDY_DANGEROUS_TOOLS_ENABLED") === "true";
 const externalOutboundRequireConfirmation = readEnv("BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false";
+const emailOutboundRequireConfirmation = readEnv("BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION")
+  ? readEnv("BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false"
+  : externalOutboundRequireConfirmation;
+const emailDefaultProviderId = readEnv("BELLDANDY_EMAIL_DEFAULT_PROVIDER")?.trim() || "smtp";
+const emailSmtpEnabled = readEnv("BELLDANDY_EMAIL_SMTP_ENABLED") === "true";
+const emailSmtpAccountId = readEnv("BELLDANDY_EMAIL_SMTP_ACCOUNT_ID")?.trim() || "default";
+const emailSmtpHost = readEnv("BELLDANDY_EMAIL_SMTP_HOST")?.trim() || "";
+const emailSmtpPortRaw = Number(readEnv("BELLDANDY_EMAIL_SMTP_PORT") || "587");
+const emailSmtpPort = Number.isFinite(emailSmtpPortRaw) && emailSmtpPortRaw > 0 ? Math.floor(emailSmtpPortRaw) : 587;
+const emailSmtpSecure = readEnv("BELLDANDY_EMAIL_SMTP_SECURE") === "true";
+const emailSmtpUser = readEnv("BELLDANDY_EMAIL_SMTP_USER")?.trim() || "";
+const emailSmtpPass = readEnv("BELLDANDY_EMAIL_SMTP_PASS")?.trim() || "";
+const emailSmtpFromAddress = readEnv("BELLDANDY_EMAIL_SMTP_FROM_ADDRESS")?.trim() || "";
+const emailSmtpFromName = readEnv("BELLDANDY_EMAIL_SMTP_FROM_NAME")?.trim() || "";
+const emailInboundAgentId = readEnv("BELLDANDY_EMAIL_INBOUND_AGENT_ID")?.trim() || "default";
+const emailImapEnabled = readEnv("BELLDANDY_EMAIL_IMAP_ENABLED") === "true";
+const emailImapAccountId = readEnv("BELLDANDY_EMAIL_IMAP_ACCOUNT_ID")?.trim() || "default";
+const emailImapHost = readEnv("BELLDANDY_EMAIL_IMAP_HOST")?.trim() || "";
+const emailImapPortRaw = Number(readEnv("BELLDANDY_EMAIL_IMAP_PORT") || "993");
+const emailImapPort = Number.isFinite(emailImapPortRaw) && emailImapPortRaw > 0 ? Math.floor(emailImapPortRaw) : 993;
+const emailImapSecure = (readEnv("BELLDANDY_EMAIL_IMAP_SECURE") ?? "true") !== "false";
+const emailImapUser = readEnv("BELLDANDY_EMAIL_IMAP_USER")?.trim() || "";
+const emailImapPass = readEnv("BELLDANDY_EMAIL_IMAP_PASS")?.trim() || "";
+const emailImapMailbox = readEnv("BELLDANDY_EMAIL_IMAP_MAILBOX")?.trim() || "INBOX";
+const emailImapPollIntervalMsRaw = Number(readEnv("BELLDANDY_EMAIL_IMAP_POLL_INTERVAL_MS") || "60000");
+const emailImapPollIntervalMs = Number.isFinite(emailImapPollIntervalMsRaw) && emailImapPollIntervalMsRaw > 0
+  ? Math.floor(emailImapPollIntervalMsRaw)
+  : 60_000;
+const emailImapConnectTimeoutMsRaw = Number(readEnv("BELLDANDY_EMAIL_IMAP_CONNECT_TIMEOUT_MS") || "10000");
+const emailImapConnectTimeoutMs = Number.isFinite(emailImapConnectTimeoutMsRaw) && emailImapConnectTimeoutMsRaw > 0
+  ? Math.floor(emailImapConnectTimeoutMsRaw)
+  : 10_000;
+const emailImapSocketTimeoutMsRaw = Number(readEnv("BELLDANDY_EMAIL_IMAP_SOCKET_TIMEOUT_MS") || "20000");
+const emailImapSocketTimeoutMs = Number.isFinite(emailImapSocketTimeoutMsRaw) && emailImapSocketTimeoutMsRaw > 0
+  ? Math.floor(emailImapSocketTimeoutMsRaw)
+  : 20_000;
+const emailImapBootstrapMode = readEnv("BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE")?.trim().toLowerCase() === "all"
+  ? "all"
+  : "latest";
+const emailImapRecentWindowLimitRaw = Number(readEnv("BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT") || "0");
+const emailImapRecentWindowLimit = Number.isFinite(emailImapRecentWindowLimitRaw) && emailImapRecentWindowLimitRaw > 0
+  ? Math.floor(emailImapRecentWindowLimitRaw)
+  : 0;
 
 // Cron Store（无论是否启用调度器，工具都可以管理任务）
 const cronStore = new CronStore(stateDir);
@@ -611,6 +674,7 @@ const backgroundContinuationLedger = new BackgroundContinuationLedger(stateDir);
 let backgroundRecoveryRuntime: BackgroundRecoveryRuntime | undefined;
 let heartbeatRunner: HeartbeatRunnerHandle | undefined;
 let cronSchedulerHandle: CronSchedulerHandle | undefined;
+let emailInboundRuntimeHandle: Awaited<ReturnType<typeof startImapPollingEmailInboundRuntime>> | undefined;
 
 // 延迟绑定 broadcast：工具注册时 server 尚未创建，执行时才调用
 let serverBroadcast: ((msg: unknown) => void) | undefined;
@@ -623,6 +687,7 @@ const toolsConfigManager = new ToolsConfigManager(stateDir, {
 await toolsConfigManager.load();
 const toolControlConfirmationStore = new ToolControlConfirmationStore();
 const externalOutboundConfirmationStore = new ExternalOutboundConfirmationStore();
+const emailOutboundConfirmationStore = new EmailOutboundConfirmationStore();
 const currentConversationBindingStore = createFileCurrentConversationBindingStore(
   resolveCurrentConversationBindingStorePath(stateDir),
 );
@@ -932,6 +997,43 @@ const externalOutboundSenderRegistry = new ExternalOutboundSenderRegistry(curren
 const externalOutboundAuditStore = createFileExternalOutboundAuditStore(
   resolveExternalOutboundAuditStorePath(stateDir),
 );
+const emailOutboundProviderRegistry = new EmailOutboundProviderRegistry();
+const emailOutboundAuditStore = createFileEmailOutboundAuditStore(
+  resolveEmailOutboundAuditStorePath(stateDir),
+);
+const emailInboundAuditStore = createFileEmailInboundAuditStore(
+  resolveEmailInboundAuditStorePath(stateDir),
+);
+const emailFollowUpReminderStore = createFileEmailFollowUpReminderStore(
+  resolveEmailFollowUpReminderStorePath(stateDir),
+);
+const emailThreadBindingStore = createFileEmailThreadBindingStore(
+  resolveEmailThreadBindingStorePath(stateDir),
+);
+const emailInboundCheckpointStore = createFileEmailInboundCheckpointStore(
+  resolveEmailInboundCheckpointStorePath(stateDir),
+);
+
+if (emailSmtpEnabled) {
+  if (!emailSmtpHost || !emailSmtpFromAddress) {
+    logger.warn("email", "BELLDANDY_EMAIL_SMTP_ENABLED=true but host/from address is incomplete, skipping SMTP provider registration");
+  } else {
+    emailOutboundProviderRegistry.register(new SmtpEmailOutboundProvider({
+      providerId: "smtp",
+      accountId: emailSmtpAccountId,
+      host: emailSmtpHost,
+      port: emailSmtpPort,
+      secure: emailSmtpSecure,
+      ...(emailSmtpUser ? { username: emailSmtpUser } : {}),
+      ...(emailSmtpPass ? { password: emailSmtpPass } : {}),
+      fromAddress: emailSmtpFromAddress,
+      ...(emailSmtpFromName ? { fromName: emailSmtpFromName } : {}),
+    }), {
+      makeDefault: emailDefaultProviderId === "smtp",
+    });
+    logger.info("email", `registered SMTP outbound provider (account=${emailSmtpAccountId}, host=${emailSmtpHost}, port=${emailSmtpPort}, secure=${emailSmtpSecure})`);
+  }
+}
 
 if (toolsEnabled) {
   toolExecutor.registerTool(createToolSearchTool({
@@ -1035,6 +1137,17 @@ if (toolsEnabled) {
     getRequireConfirmation: () => externalOutboundRequireConfirmation,
   }));
   logger.info("tools", `registered send_channel_message (confirm=${externalOutboundRequireConfirmation ? "required" : "auto"})`);
+  toolExecutor.registerTool(createSendEmailTool({
+    providerRegistry: emailOutboundProviderRegistry,
+    confirmationStore: emailOutboundConfirmationStore,
+    auditStore: emailOutboundAuditStore,
+    reminderStore: emailFollowUpReminderStore,
+    normalizeDraft: (draft) => normalizeEmailOutboundDraft(draft as any),
+    getRequireConfirmation: () => emailOutboundRequireConfirmation,
+    getDefaultAccountId: () => emailSmtpAccountId,
+    getDefaultProviderId: () => emailOutboundProviderRegistry.getDefaultProviderId() || emailDefaultProviderId,
+  }));
+  logger.info("tools", `registered send_email (confirm=${emailOutboundRequireConfirmation ? "required" : "auto"}, providers=${emailOutboundProviderRegistry.listProviderIds().join(",") || "none"})`);
 }
 
 // 4.4 Bridge plugin hooks → HookRegistry (deferred to after hookRegistry init, see section 7.5)
@@ -1420,6 +1533,7 @@ const promptSnapshotStore = new PromptSnapshotStore({
 });
 const promptSnapshotMaxPersistedRuns = Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS") || "20", 10) || 20);
 const promptSnapshotHeartbeatMaxRuns = Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS") || "5", 10) || 5);
+const promptSnapshotEmailThreadMaxRuns = Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_EMAIL_THREAD_MAX_RUNS") || "10", 10) || 10);
 const promptSnapshotRetentionDays = (() => {
   const raw = readEnv("BELLDANDY_PROMPT_SNAPSHOT_RETENTION_DAYS");
   if (typeof raw !== "string" || raw.trim().length === 0) {
@@ -1437,6 +1551,7 @@ const gatewayPromptInspectionRuntime = createGatewayPromptInspectionRuntime({
   promptSnapshotStore,
   promptSnapshotMaxPersistedRuns,
   promptSnapshotHeartbeatMaxRuns,
+  promptSnapshotEmailThreadMaxRuns,
   promptSnapshotRetentionDays,
   agentWorkspaceCache,
   dynamicSystemPromptBuild,
@@ -2698,6 +2813,7 @@ const serverOptions = buildGatewayServerOptions({
   auth: { mode: authMode, token: authToken, password: authPassword },
   webRoot,
   envDir: runtimePaths.envDir,
+  envSource: runtimePaths.envSource,
   stateDir,
   additionalWorkspaceRoots: extraWorkspaceRoots,
   agentFactory: createAgent,
@@ -2718,6 +2834,11 @@ const serverOptions = buildGatewayServerOptions({
   externalOutboundConfirmationStore,
   externalOutboundSenderRegistry,
   externalOutboundAuditStore,
+  emailOutboundConfirmationStore,
+  emailOutboundProviderRegistry,
+  emailOutboundAuditStore,
+  emailInboundAuditStore,
+  emailFollowUpReminderStore,
   getAgentToolControlMode: () => agentToolControlMode,
   getAgentToolControlConfirmPassword: () => agentToolControlConfirmPassword,
   pluginRegistry,
@@ -2917,6 +3038,32 @@ cronSchedulerHandle = await startCronRuntime({
   backgroundRecoveryRuntime,
   goalManager,
   isBusy,
+  logger,
+});
+
+emailInboundRuntimeHandle = await startImapPollingEmailInboundRuntime({
+  enabled: emailImapEnabled,
+  host: emailImapHost,
+  port: emailImapPort,
+  secure: emailImapSecure,
+  username: emailImapUser,
+  password: emailImapPass,
+  accountId: emailImapAccountId,
+  mailbox: emailImapMailbox,
+  pollIntervalMs: emailImapPollIntervalMs,
+  requestedAgentId: emailInboundAgentId,
+  connectTimeoutMs: emailImapConnectTimeoutMs,
+  socketTimeoutMs: emailImapSocketTimeoutMs,
+  bootstrapMode: emailImapBootstrapMode,
+  recentWindowLimit: emailImapRecentWindowLimit,
+  agentFactory: createAgent,
+  agentRegistry,
+  conversationStore,
+  threadBindingStore: emailThreadBindingStore,
+  checkpointStore: emailInboundCheckpointStore,
+  auditStore: emailInboundAuditStore,
+  reminderStore: emailFollowUpReminderStore,
+  broadcastEvent: (frame) => server.broadcast(frame),
   logger,
 });
 

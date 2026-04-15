@@ -246,6 +246,39 @@ test("persistConversationPromptSnapshot removes aged prompt snapshots based on r
   }
 });
 
+test("persistConversationPromptSnapshot uses email-thread specific retention limit", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-email-thread-"));
+  const conversationId = "channel=email:scope=per-account-thread:provider=imap:account=default:thread=%3Cthread-001%40example.com%3E";
+
+  try {
+    for (let index = 1; index <= 4; index += 1) {
+      await persistConversationPromptSnapshot({
+        stateDir,
+        snapshot: buildSnapshot({
+          conversationId,
+          runId: `run-email-${index}`,
+          createdAt: index,
+        }),
+        retention: {
+          defaultMaxRunsPerConversation: 20,
+          heartbeatMaxRuns: 5,
+          emailThreadMaxRuns: 2,
+          maxAgeDays: 7,
+        },
+      });
+    }
+
+    const files = await fs.readdir(getConversationPromptSnapshotDirectory(stateDir, conversationId));
+    expect(files).toHaveLength(2);
+    expect(files.sort()).toEqual([
+      "run-run-email-3.prompt-snapshot.json",
+      "run-run-email-4.prompt-snapshot.json",
+    ]);
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("persistConversationPromptSnapshot writes a human-readable index for latest prompt snapshots", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-snapshot-index-"));
 

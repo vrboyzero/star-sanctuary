@@ -1,4 +1,5 @@
 import { buildResidentPanelSummary } from "./resident-observability-summary.js";
+import { buildAgentWorkSummary } from "./agent-work-summary.js";
 
 function getElementsByDataValue(root, attribute, expectedValue) {
   if (!root || !attribute || !expectedValue) return [];
@@ -760,6 +761,42 @@ export function createAgentRuntimeFeature({
       ) {
         const summaryWrap = document.createElement("div");
         summaryWrap.className = "agent-card-observability";
+
+        const workSummary = buildAgentWorkSummary(agent, t);
+        const workSummaryBtn = document.createElement("button");
+        workSummaryBtn.type = "button";
+        workSummaryBtn.className = "agent-card-work-summary";
+        if (!workSummary.actionable) {
+          workSummaryBtn.disabled = true;
+        }
+        workSummaryBtn.title = workSummary.tooltip || workSummary.title;
+        workSummaryBtn.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!workSummary.action) return;
+          void openAgentObservabilityAction(agent.id, workSummary.action);
+        });
+
+        const workSummaryLines = document.createElement("div");
+        workSummaryLines.className = "agent-card-work-summary-lines";
+        for (const line of workSummary.lines) {
+          const lineEl = document.createElement("div");
+          lineEl.className = "agent-card-work-summary-line";
+
+          const labelEl = document.createElement("span");
+          labelEl.className = "agent-card-work-summary-label";
+          labelEl.textContent = line.label;
+          lineEl.appendChild(labelEl);
+
+          const valueEl = document.createElement("span");
+          valueEl.className = "agent-card-work-summary-value";
+          valueEl.textContent = line.value;
+          valueEl.title = line.value;
+          lineEl.appendChild(valueEl);
+
+          workSummaryLines.appendChild(lineEl);
+        }
+        workSummaryBtn.appendChild(workSummaryLines);
+        summaryWrap.appendChild(workSummaryBtn);
 
         const detailBtn = document.createElement("button");
         detailBtn.type = "button";

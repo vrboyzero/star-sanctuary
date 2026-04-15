@@ -135,6 +135,9 @@ importers:
       express:
         specifier: ^5.1.0
         version: 5.2.1
+      nodemailer:
+        specifier: ^6.10.1
+        version: 6.10.1
       open:
         specifier: ^11.0.0
         version: 11.0.0
@@ -2099,6 +2102,10 @@ packages:
 
   node-pty@1.1.0:
     resolution: {integrity: sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==}
+
+  nodemailer@6.10.1:
+    resolution: {integrity: sha512-Z+iLaBGVaSjbIzQ4pX6XV41HrooLsQ10ZWPUehGmuantvzWoDVBnmsdUcOIDM1t+yPor5pDhVlDESgOMEGxhHA==}
+    engines: {node: '>=6.0.0'}
 
   nwsapi@2.2.23:
     resolution: {integrity: sha512-7wfH4sLbt4M0gCDzGE6vzQBo0bfTKjU7Sfpqy/7gs1qBfYz2vEJH6vXcBKpO3+6Yu1telwd0t9HpyOoLEQQbIQ==}
@@ -4491,6 +4498,8 @@ snapshots:
     dependencies:
       node-addon-api: 7.1.1
     optional: true
+
+  nodemailer@6.10.1: {}
 
   nwsapi@2.2.23: {}
 

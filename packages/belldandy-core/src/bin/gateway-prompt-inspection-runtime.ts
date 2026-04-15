@@ -46,6 +46,7 @@ export function createGatewayPromptInspectionRuntime({
   promptSnapshotStore,
   promptSnapshotMaxPersistedRuns,
   promptSnapshotHeartbeatMaxRuns,
+  promptSnapshotEmailThreadMaxRuns,
   promptSnapshotRetentionDays,
   agentWorkspaceCache,
   dynamicSystemPromptBuild,
@@ -58,6 +59,7 @@ export function createGatewayPromptInspectionRuntime({
   promptSnapshotStore: PromptSnapshotStore;
   promptSnapshotMaxPersistedRuns: number;
   promptSnapshotHeartbeatMaxRuns: number;
+  promptSnapshotEmailThreadMaxRuns: number;
   promptSnapshotRetentionDays: number;
   agentWorkspaceCache: Map<string, { build: SystemPromptBuildResult }>;
   dynamicSystemPromptBuild: SystemPromptBuildResult;
@@ -73,6 +75,7 @@ export function createGatewayPromptInspectionRuntime({
       retention: {
         defaultMaxRunsPerConversation: promptSnapshotMaxPersistedRuns,
         heartbeatMaxRuns: promptSnapshotHeartbeatMaxRuns,
+        emailThreadMaxRuns: promptSnapshotEmailThreadMaxRuns,
         maxAgeDays: promptSnapshotRetentionDays,
       },
     }).catch((error) => {

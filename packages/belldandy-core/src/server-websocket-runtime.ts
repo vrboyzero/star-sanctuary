@@ -70,6 +70,9 @@ const DEFAULT_METHODS = [
   "tool_settings.confirm",
   "external_outbound.confirm",
   "external_outbound.audit.list",
+  "email_outbound.confirm",
+  "email_outbound.audit.list",
+  "email_followup.list",
   "models.list",
   "models.config.get",
   "models.config.update",
@@ -193,6 +196,8 @@ const DEFAULT_EVENTS = [
   "tool_settings.confirm.resolved",
   "external_outbound.confirm.required",
   "external_outbound.confirm.resolved",
+  "email_outbound.confirm.required",
+  "email_outbound.confirm.resolved",
 ];
 
 export function createGatewayWebSocketRuntime(

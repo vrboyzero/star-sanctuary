@@ -182,6 +182,7 @@ describe("memory viewer shared review filters", () => {
   it("creates a clean default memory viewer view state for a resident agent", () => {
     expect(createDefaultMemoryViewerAgentViewState("outboundAudit")).toEqual({
       tab: "outboundAudit",
+      outboundAuditFocus: "all",
       searchQuery: "",
       taskStatus: "",
       taskSource: "",
@@ -202,6 +203,7 @@ describe("memory viewer shared review filters", () => {
   it("normalizes persisted memory viewer agent view state before restoring filters", () => {
     expect(normalizeMemoryViewerAgentViewState({
       tab: " outboundAudit ",
+      outboundAuditFocus: " threads ",
       searchQuery: " note ",
       taskStatus: " done ",
       taskSource: " cron ",
@@ -218,6 +220,7 @@ describe("memory viewer shared review filters", () => {
       goalIdFilter: " goal_demo ",
     }, "tasks")).toEqual({
       tab: "outboundAudit",
+      outboundAuditFocus: "threads",
       searchQuery: "note",
       taskStatus: "done",
       taskSource: "cron",

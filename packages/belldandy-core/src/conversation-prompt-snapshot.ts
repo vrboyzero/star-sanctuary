@@ -30,14 +30,18 @@ const PROMPT_SNAPSHOT_SYSTEM_PROMPT_BLOBS_DIRNAME = "system-prompts";
 export const CONVERSATION_PROMPT_SNAPSHOT_SCHEMA_VERSION = 2 as const;
 const DEFAULT_PROMPT_SNAPSHOT_MAX_PERSISTED_RUNS = 20;
 const DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS = 5;
+const DEFAULT_PROMPT_SNAPSHOT_EMAIL_THREAD_MAX_RUNS = 10;
 const DEFAULT_PROMPT_SNAPSHOT_MAX_AGE_DAYS = 7;
 const DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_PREFIX = "heartbeat-";
+const DEFAULT_PROMPT_SNAPSHOT_EMAIL_THREAD_PREFIX = "channel=email:scope=per-account-thread:";
 
 export type ConversationPromptSnapshotRetentionPolicy = {
   defaultMaxRunsPerConversation?: number;
   heartbeatMaxRuns?: number;
+  emailThreadMaxRuns?: number;
   maxAgeDays?: number;
   heartbeatConversationPrefix?: string;
+  emailThreadConversationPrefix?: string;
   now?: number;
 };
 
@@ -706,10 +710,13 @@ async function prunePersistedConversationPromptSnapshots(input: {
 }): Promise<void> {
   const retention = resolveConversationPromptSnapshotRetentionPolicy(input.retention);
   const isHeartbeatConversation = isHeartbeatConversationId(input.conversationId, retention.heartbeatConversationPrefix);
+  const isEmailThreadConversation = isEmailThreadConversationId(input.conversationId, retention.emailThreadConversationPrefix);
   if (!isHeartbeatConversation) {
     await prunePromptSnapshotDirectoryByLimit({
       directory: getConversationPromptSnapshotDirectory(input.stateDir, input.conversationId),
-      maxSnapshots: retention.defaultMaxRunsPerConversation,
+      maxSnapshots: isEmailThreadConversation
+        ? retention.emailThreadMaxRuns
+        : retention.defaultMaxRunsPerConversation,
       newestPath: input.outputPath,
     });
   }
@@ -743,8 +750,13 @@ function resolveConversationPromptSnapshotRetentionPolicy(
       policy?.heartbeatMaxRuns,
       DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_MAX_RUNS,
     ),
+    emailThreadMaxRuns: clampPositiveInteger(
+      policy?.emailThreadMaxRuns,
+      DEFAULT_PROMPT_SNAPSHOT_EMAIL_THREAD_MAX_RUNS,
+    ),
     maxAgeDays: clampNonNegativeInteger(policy?.maxAgeDays, DEFAULT_PROMPT_SNAPSHOT_MAX_AGE_DAYS),
     heartbeatConversationPrefix: normalizeHeartbeatConversationPrefix(policy?.heartbeatConversationPrefix),
+    emailThreadConversationPrefix: normalizeEmailThreadConversationPrefix(policy?.emailThreadConversationPrefix),
     now: typeof policy?.now === "number" && Number.isFinite(policy.now) ? policy.now : Date.now(),
   };
 }
@@ -988,9 +1000,18 @@ function isHeartbeatConversationId(conversationId: string, heartbeatConversation
   return conversationId.startsWith(heartbeatConversationPrefix);
 }
 
+function isEmailThreadConversationId(conversationId: string, emailThreadConversationPrefix: string): boolean {
+  return conversationId.startsWith(emailThreadConversationPrefix);
+}
+
 function normalizeHeartbeatConversationPrefix(value: string | undefined): string {
   const normalized = value?.trim();
   return normalized || DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_PREFIX;
+}
+
+function normalizeEmailThreadConversationPrefix(value: string | undefined): string {
+  const normalized = value?.trim();
+  return normalized || DEFAULT_PROMPT_SNAPSHOT_EMAIL_THREAD_PREFIX;
 }
 
 function clampPositiveInteger(value: number | undefined, fallback: number): number {
