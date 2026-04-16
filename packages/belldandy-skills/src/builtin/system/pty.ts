@@ -137,6 +137,9 @@ export class PtyManager {
                 rows: opt.rows || 24,
                 cwd,
                 env,
+                // On Windows, the bundled conpty.dll path avoids the noisy
+                // AttachConsole race in node-pty's default console-list helper.
+                ...(os.platform() === "win32" ? { useConptyDll: true } : {}),
             }) as IPty;
         } else {
             // Fallback

@@ -29,6 +29,75 @@ export function createGoalsGovernancePanelFeature({
     return targetType;
   }
 
+  function formatBridgeRuntimeState(runtimeState) {
+    const normalized = typeof runtimeState === "string" ? runtimeState.trim().toLowerCase() : "";
+    if (!normalized) return "未知";
+    if (normalized === "active") return "活跃";
+    if (normalized === "runtime-lost") return "运行态丢失";
+    if (normalized === "orphaned") return "孤儿清理";
+    if (normalized === "closed") return "已关闭";
+    return runtimeState;
+  }
+
+  function formatBridgeCloseReason(closeReason) {
+    const normalized = typeof closeReason === "string" ? closeReason.trim().toLowerCase() : "";
+    if (!normalized) return "未记录";
+    if (normalized === "manual") return "手动关闭";
+    if (normalized === "idle-timeout") return "空闲超时";
+    if (normalized === "runtime-lost") return "运行态丢失";
+    if (normalized === "orphan") return "孤儿清理";
+    return closeReason;
+  }
+
+  function renderGoalBridgeGovernanceSection(summary) {
+    if (!summary || typeof summary !== "object") return "";
+    const items = Array.isArray(summary.items) ? summary.items : [];
+    return `
+      <div class="memory-detail-card" style="margin-bottom:12px;">
+        <div class="goal-summary-title">Bridge 治理摘要</div>
+        <div class="goal-summary-text">汇总最近 bridge 运行任务的运行态归因、阻塞原因与产物入口，便于在 Goal 治理层直接判断是否需要恢复或重拉起。</div>
+        <div class="goal-summary-grid" style="margin-top:10px;">
+          <div class="goal-summary-item"><span class="goal-summary-label">Bridge 节点</span><strong class="goal-summary-value">${escapeHtml(String(summary.bridgeNodeCount || 0))}</strong></div>
+          <div class="goal-summary-item"><span class="goal-summary-label">活跃会话</span><strong class="goal-summary-value">${escapeHtml(String(summary.activeCount || 0))}</strong></div>
+          <div class="goal-summary-item"><span class="goal-summary-label">运行态丢失</span><strong class="goal-summary-value">${escapeHtml(String(summary.runtimeLostCount || 0))}</strong></div>
+          <div class="goal-summary-item"><span class="goal-summary-label">孤儿清理</span><strong class="goal-summary-value">${escapeHtml(String(summary.orphanedCount || 0))}</strong></div>
+          <div class="goal-summary-item"><span class="goal-summary-label">结构化阻塞</span><strong class="goal-summary-value">${escapeHtml(String(summary.blockedCount || 0))}</strong></div>
+          <div class="goal-summary-item"><span class="goal-summary-label">产物 / 转录</span><strong class="goal-summary-value">${escapeHtml(`${summary.artifactCount || 0} / ${summary.transcriptCount || 0}`)}</strong></div>
+        </div>
+        ${items.length ? `
+          <div class="goal-tracking-list" style="margin-top:12px;">
+            ${items.map((item) => `
+              <div class="goal-tracking-item">
+                <div class="goal-tracking-item-head">
+                  <span class="goal-tracking-item-title">${escapeHtml(item.title || item.nodeId || "-")}</span>
+                  ${item.runtimeState ? `<span class="memory-badge ${item.runtimeState === "active" ? "memory-badge-shared" : ""}">${escapeHtml(formatBridgeRuntimeState(item.runtimeState))}</span>` : ""}
+                </div>
+                <div class="memory-list-item-meta">
+                  <span>${escapeHtml(item.nodeId || "-")}</span>
+                  ${item.taskId ? `<span>${escapeHtml(item.taskId)}</span>` : ""}
+                  ${item.closeReason ? `<span>${escapeHtml(formatBridgeCloseReason(item.closeReason))}</span>` : ""}
+                </div>
+                ${(Array.isArray(item.summaryLines) ? item.summaryLines : []).length || item.blockReason ? `
+                  <div class="tool-settings-policy-note">
+                    ${(Array.isArray(item.summaryLines) ? item.summaryLines : []).map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+                    ${item.blockReason ? `<div>阻塞归因: ${escapeHtml(item.blockReason)}</div>` : ""}
+                  </div>
+                ` : ""}
+                ${item.artifactPath ? `<div class="memory-list-item-meta"><span>Bridge 产物</span><span>${escapeHtml(item.artifactPath)}</span></div>` : ""}
+                ${item.transcriptPath ? `<div class="memory-list-item-meta"><span>Bridge Transcript</span><span>${escapeHtml(item.transcriptPath)}</span></div>` : ""}
+                <div class="goal-detail-actions">
+                  ${item.taskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(item.taskId)}">打开运行任务</button>` : ""}
+                  ${item.artifactPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(item.artifactPath)}">打开 bridge 产物</button>` : ""}
+                  ${item.transcriptPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(item.transcriptPath)}">打开 bridge transcript</button>` : ""}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : '<div class="memory-viewer-empty" style="margin-top:12px;">当前没有 bridge 治理摘要项。</div>'}
+      </div>
+    `;
+  }
+
   function renderGoalReviewGovernancePanelLoading() {
     const panel = goalsDetailEl?.querySelector("#goalGovernancePanel");
     if (!panel) return;
@@ -70,6 +139,7 @@ export function createGoalsGovernancePanelFeature({
         <div class="goal-summary-item"><span class="goal-summary-label">模板</span><strong class="goal-summary-value">${escapeHtml(String(data.templates.length))}</strong></div>
         <div class="goal-summary-item"><span class="goal-summary-label">分发记录</span><strong class="goal-summary-value">${escapeHtml(String(data.notificationDispatchCounts?.total || data.notificationDispatches.length || 0))}</strong></div>
       </div>
+      ${renderGoalBridgeGovernanceSection(data.bridgeGovernanceSummary)}
       ${data.learningReviewInput ? `
         <div class="memory-detail-card" style="margin-bottom:12px;">
           <div class="goal-summary-title">Learning / Review Input</div>

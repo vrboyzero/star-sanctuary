@@ -211,6 +211,14 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
           maxToolRiskLevel: "medium",
         },
       },
+      bridgeSubtask: {
+        kind: "review",
+        targetId: "codex_exec",
+        action: "review",
+        goalId: "goal_bridge_1",
+        goalNodeId: "node_bridge_review",
+        summary: "Review the bridge patch output before returning the result.",
+      },
     },
   });
   await subTaskRuntimeStore.markQueued(targetTask.id, 1);
@@ -290,6 +298,14 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
           channel: "goal",
           timeoutMs: 90_000,
           toolSet: ["read", "edit"],
+          bridgeSubtask: {
+            kind: "review",
+            targetId: "codex_exec",
+            action: "review",
+            goalId: "goal_bridge_1",
+            goalNodeId: "node_bridge_review",
+            summary: "Review the bridge patch output before returning the result.",
+          },
           delegation: expect.objectContaining({
             source: "delegate_task",
             intentKind: "ad_hoc",
@@ -298,6 +314,22 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
             sourceAgentIds: ["planner", "reviewer"],
           }),
         }),
+        bridgeSubtaskView: {
+          kind: "review",
+          label: "Bridge review",
+          badge: "bridge/review",
+          targetRef: "codex_exec.review",
+          summaryLine: "Bridge review via codex_exec.review: Review the bridge patch output before returning the result.",
+        },
+        bridgeSubtaskIndex: {
+          badge: "bridge/review",
+          kind: "review",
+          targetId: "codex_exec",
+          action: "review",
+          targetRef: "codex_exec.review",
+          goalId: "goal_bridge_1",
+          goalNodeId: "node_bridge_review",
+        },
       }),
     ]);
 
@@ -319,6 +351,14 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
       launchSpec: expect.objectContaining({
         profileId: "coder",
         channel: "goal",
+        bridgeSubtask: {
+          kind: "review",
+          targetId: "codex_exec",
+          action: "review",
+          goalId: "goal_bridge_1",
+          goalNodeId: "node_bridge_review",
+          summary: "Review the bridge patch output before returning the result.",
+        },
         delegation: expect.objectContaining({
           source: "delegate_task",
           intentSummary: "Implement structured task runtime",
@@ -326,6 +366,38 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
           contextKeys: ["taskId", "workspace"],
         }),
       }),
+      bridgeSubtaskView: {
+        kind: "review",
+        label: "Bridge review",
+        badge: "bridge/review",
+        targetRef: "codex_exec.review",
+        summaryLine: "Bridge review via codex_exec.review: Review the bridge patch output before returning the result.",
+      },
+      bridgeSubtaskIndex: {
+        badge: "bridge/review",
+        kind: "review",
+        targetId: "codex_exec",
+        action: "review",
+        targetRef: "codex_exec.review",
+        goalId: "goal_bridge_1",
+        goalNodeId: "node_bridge_review",
+      },
+    });
+    expect(getRes.payload?.bridgeSubtaskView).toMatchObject({
+      kind: "review",
+      label: "Bridge review",
+      badge: "bridge/review",
+      targetRef: "codex_exec.review",
+      summaryLine: "Bridge review via codex_exec.review: Review the bridge patch output before returning the result.",
+    });
+    expect(getRes.payload?.bridgeSubtaskIndex).toMatchObject({
+      badge: "bridge/review",
+      kind: "review",
+      targetId: "codex_exec",
+      action: "review",
+      targetRef: "codex_exec.review",
+      goalId: "goal_bridge_1",
+      goalNodeId: "node_bridge_review",
     });
     expect(getRes.payload?.continuationState).toMatchObject({
       version: 1,
@@ -394,6 +466,200 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
       outputPreview: "structured runtime finished",
     });
     expect(getRes.payload?.outputContent).toBe("structured runtime finished");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("subtask.list and subtask.get expose bridge session runtime visibility", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const artifactPath = path.join(
+    stateDir,
+    "generated",
+    "agent-bridge",
+    "sessions",
+    "bridge_runtime_query_1",
+    "summary.json",
+  );
+  const transcriptPath = path.join(
+    stateDir,
+    "generated",
+    "agent-bridge",
+    "sessions",
+    "bridge_runtime_query_1",
+    "transcript.json",
+  );
+
+  const task = await subTaskRuntimeStore.createBridgeSessionTask({
+    parentConversationId: "conv-bridge-query",
+    agentId: "coder",
+    profileId: "coder",
+    instruction: "Recover the runtime-lost bridge session.",
+    summary: "Recover runtime-lost bridge session.",
+    bridgeSession: {
+      targetId: "codex_session",
+      action: "interactive",
+      transport: "pty",
+      cwd: stateDir,
+      commandPreview: "codex interactive",
+      firstTurnStrategy: "start-args-prompt",
+      recommendedReadWaitMs: 10_000,
+      summary: "Recover runtime-lost bridge session.",
+    },
+  });
+  await subTaskRuntimeStore.attachSession(task.id, "bridge_runtime_query_1", "coder", "coder");
+  await subTaskRuntimeStore.completeTask(task.id, {
+    status: "error",
+    sessionId: "bridge_runtime_query_1",
+    output: `Bridge session closed (runtime-lost). Audit artifact: ${artifactPath}`,
+    error: "Bridge session runtime lost before the session could be resumed.",
+    bridgeSessionRuntime: {
+      state: "runtime-lost",
+      closeReason: "runtime-lost",
+      artifactPath,
+      transcriptPath,
+      blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+    },
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "bridge-subtask-list",
+      method: "subtask.list",
+      params: { conversationId: "conv-bridge-query" },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "bridge-subtask-list"));
+
+    const listRes = frames.find((f) => f.type === "res" && f.id === "bridge-subtask-list");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.items).toEqual([
+      expect.objectContaining({
+        id: task.id,
+        kind: "bridge_session",
+        status: "error",
+        sessionId: "bridge_runtime_query_1",
+        bridgeSessionRuntime: {
+          state: "runtime-lost",
+          closeReason: "runtime-lost",
+          artifactPath,
+          transcriptPath,
+          blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+        },
+        bridgeSessionView: {
+          label: "Bridge session",
+          badge: "bridge/session",
+          targetRef: "codex_session.interactive",
+          transport: "pty",
+          cwd: stateDir,
+          commandPreview: "codex interactive",
+          runtimeState: "runtime-lost",
+          closeReason: "runtime-lost",
+          artifactPath,
+          transcriptPath,
+          blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+          summaryLine: "Bridge session runtime-lost via codex_session.interactive: Recover runtime-lost bridge session.",
+        },
+        bridgeSessionIndex: {
+          badge: "bridge/session",
+          targetId: "codex_session",
+          action: "interactive",
+          targetRef: "codex_session.interactive",
+          transport: "pty",
+          runtimeState: "runtime-lost",
+          closeReason: "runtime-lost",
+          artifactPath,
+          transcriptPath,
+          blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+        },
+      }),
+    ]);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "bridge-subtask-get",
+      method: "subtask.get",
+      params: { taskId: task.id },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "bridge-subtask-get"));
+
+    const getRes = frames.find((f) => f.type === "res" && f.id === "bridge-subtask-get");
+    expect(getRes.ok).toBe(true);
+    expect(getRes.payload?.item).toMatchObject({
+      id: task.id,
+      kind: "bridge_session",
+      bridgeSessionRuntime: {
+        state: "runtime-lost",
+        closeReason: "runtime-lost",
+        artifactPath,
+        transcriptPath,
+        blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+      },
+      bridgeSessionView: {
+        label: "Bridge session",
+        badge: "bridge/session",
+        targetRef: "codex_session.interactive",
+        runtimeState: "runtime-lost",
+        closeReason: "runtime-lost",
+        artifactPath,
+        transcriptPath,
+        blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+      },
+      bridgeSessionIndex: {
+        badge: "bridge/session",
+        targetId: "codex_session",
+        action: "interactive",
+        runtimeState: "runtime-lost",
+        closeReason: "runtime-lost",
+        artifactPath,
+        transcriptPath,
+        blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+      },
+    });
+    expect(getRes.payload?.bridgeSessionView).toMatchObject({
+      label: "Bridge session",
+      badge: "bridge/session",
+      targetRef: "codex_session.interactive",
+      runtimeState: "runtime-lost",
+      closeReason: "runtime-lost",
+      artifactPath,
+      transcriptPath,
+      blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+      summaryLine: "Bridge session runtime-lost via codex_session.interactive: Recover runtime-lost bridge session.",
+    });
+    expect(getRes.payload?.bridgeSessionIndex).toMatchObject({
+      badge: "bridge/session",
+      targetId: "codex_session",
+      action: "interactive",
+      targetRef: "codex_session.interactive",
+      transport: "pty",
+      runtimeState: "runtime-lost",
+      closeReason: "runtime-lost",
+      artifactPath,
+      transcriptPath,
+      blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+    });
   } finally {
     ws.close();
     await closeP;

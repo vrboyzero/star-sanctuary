@@ -8,6 +8,7 @@ import { buildSubTaskContinuationState } from "./continuation-state.js";
 import type { ConversationPromptSnapshotArtifact } from "./conversation-prompt-snapshot.js";
 import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
+import { attachSubTaskBridgeProjection, getSubTaskBridgeProjection } from "./subtask-bridge-view.js";
 import { buildSubTaskLaunchExplainability } from "./subtask-launch-explainability.js";
 import { buildSubTaskResultEnvelope } from "./subtask-result-envelope.js";
 import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
@@ -87,31 +88,32 @@ export async function handleSubTaskListWithQueryRuntime(
       params.conversationId,
       { includeArchived: params.includeArchived },
     );
+    const itemsWithBridgeProjection = items.map((item) => attachSubTaskBridgeProjection(item));
 
     queryRuntime.mark("task_listed", {
-      conversationId: params.conversationId,
-      detail: {
-        count: items.length,
-        includeArchived: params.includeArchived,
-      },
-    });
+        conversationId: params.conversationId,
+        detail: {
+          count: itemsWithBridgeProjection.length,
+          includeArchived: params.includeArchived,
+        },
+      });
     queryRuntime.mark("completed", {
       conversationId: params.conversationId,
-      detail: {
-        count: items.length,
-      },
-    });
+        detail: {
+          count: itemsWithBridgeProjection.length,
+        },
+      });
 
     return {
       type: "res",
       id: ctx.requestId,
       ok: true,
-      payload: {
-        conversationId: params.conversationId ?? null,
-        includeArchived: params.includeArchived,
-        items,
-      },
-    };
+        payload: {
+          conversationId: params.conversationId ?? null,
+          includeArchived: params.includeArchived,
+          items: itemsWithBridgeProjection,
+        },
+      };
   });
 }
 
@@ -197,6 +199,7 @@ export async function handleSubTaskGetWithQueryRuntime(
 
     const launchExplainability = buildSubTaskLaunchExplainability(item, ctx.agentRegistry);
     const promptSnapshotView = await loadSubTaskPromptSnapshotView(ctx, item, queryRuntime);
+    const bridgeProjection = getSubTaskBridgeProjection(item);
 
     queryRuntime.mark("completed", {
       conversationId: item.parentConversationId,
@@ -204,6 +207,8 @@ export async function handleSubTaskGetWithQueryRuntime(
         taskId: item.id,
         hasLaunchExplainability: Boolean(launchExplainability),
         hasPromptSnapshot: Boolean(promptSnapshotView),
+        hasBridgeSubtask: Boolean(bridgeProjection.bridgeSubtaskView),
+        hasBridgeSession: Boolean(bridgeProjection.bridgeSessionView),
       },
     });
 
@@ -212,9 +217,11 @@ export async function handleSubTaskGetWithQueryRuntime(
       id: ctx.requestId,
       ok: true,
       payload: {
-        item: {
-          ...item,
-        },
+        item: attachSubTaskBridgeProjection(item),
+        bridgeSubtaskView: bridgeProjection.bridgeSubtaskView,
+        bridgeSubtaskIndex: bridgeProjection.bridgeSubtaskIndex,
+        bridgeSessionView: bridgeProjection.bridgeSessionView,
+        bridgeSessionIndex: bridgeProjection.bridgeSessionIndex,
         continuationState: buildSubTaskContinuationState(item),
         launchExplainability: launchExplainability ?? null,
         promptSnapshotView,

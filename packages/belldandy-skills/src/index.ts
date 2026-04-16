@@ -17,10 +17,16 @@ export type {
   SubAgentResult,
   SessionInfo,
   SpawnSubAgentOptions,
+  BridgeSubtaskKind,
+  BridgeSubtaskSemantics,
+  BridgeSessionLaunchSemantics,
+  BridgeSessionGovernanceCapabilities,
   AgentCapabilities,
   ToolRuntimeLaunchSpec,
   ToolExecutionRuntimeContext,
   ConversationAccessKind,
+  MCPRuntimeCapabilities,
+  MCPRuntimeToolCallRequest,
 } from "./types.js";
 export {
   buildDelegationProtocol,
@@ -118,9 +124,28 @@ export { applyPatchTool } from "./builtin/apply-patch/index.js";
 export { webSearchTool } from "./builtin/web-search/index.js";
 export { createToolSearchTool, TOOL_SEARCH_NAME } from "./builtin/tool-search.js";
 export { runCommandTool, processManagerTool, terminalTool } from "./builtin/system/index.js";
+export {
+  bridgeTargetListTool,
+  bridgeTargetDiagnoseTool,
+  bridgeRunTool,
+  bridgeSessionStartTool,
+  bridgeSessionWriteTool,
+  bridgeSessionReadTool,
+  bridgeSessionStatusTool,
+  bridgeSessionCloseTool,
+  bridgeSessionListTool,
+  loadRuntimeLostBridgeSessions,
+} from "./builtin/agent-bridge/index.js";
 export { codeInterpreterTool } from "./builtin/code-interpreter/index.js";
 export { ptcRuntimeTool } from "./builtin/ptc-runtime/index.js";
-export { imageGenerateTool, textToSpeechTool, cameraSnapTool, synthesizeSpeech, transcribeSpeech } from "./builtin/multimedia/index.js";
+export {
+  imageGenerateTool,
+  textToSpeechTool,
+  cameraListTool,
+  cameraSnapTool,
+  synthesizeSpeech,
+  transcribeSpeech,
+} from "./builtin/multimedia/index.js";
 export type { SynthesizeResult, SynthesizeOptions, TranscribeResult, TranscribeOptions } from "./builtin/multimedia/index.js";
 export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";
 export { conversationListTool, conversationReadTool } from "./builtin/conversation/index.js";

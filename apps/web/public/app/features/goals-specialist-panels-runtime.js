@@ -224,6 +224,132 @@ function parseGoalGraphNodes(rawGraph) {
   });
 }
 
+function normalizeGoalTrackingTaskId(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+export function collectGoalTrackingRuntimeTaskIds(nodes, focusNodeId = "", limit = 6) {
+  const allNodes = Array.isArray(nodes) ? nodes : [];
+  const normalizedFocusNodeId = typeof focusNodeId === "string" && focusNodeId.trim() ? focusNodeId.trim() : "";
+  const recentNodes = allNodes.slice(0, Math.max(limit, 0));
+
+  if (normalizedFocusNodeId && !recentNodes.some((node) => normalizeGoalBoardId(node?.id) === normalizedFocusNodeId)) {
+    const focusNode = allNodes.find((node) => normalizeGoalBoardId(node?.id) === normalizedFocusNodeId);
+    if (focusNode) {
+      recentNodes.push(focusNode);
+    }
+  }
+
+  return [...new Set(
+    recentNodes
+      .map((node) => normalizeGoalTrackingTaskId(node?.lastRunId))
+      .filter(Boolean),
+  )];
+}
+
+export function mergeGoalTrackingRuntimeIndex(nodes, runtimeIndex) {
+  const runtimeMap = runtimeIndex && typeof runtimeIndex === "object" ? runtimeIndex : {};
+  return (Array.isArray(nodes) ? nodes : []).map((node) => {
+    const taskId = normalizeGoalTrackingTaskId(node?.lastRunId);
+    const runtime = taskId ? runtimeMap[taskId] : null;
+    if (!runtime || typeof runtime !== "object") return node;
+    const bridgeSubtaskView = runtime.bridgeSubtaskView && typeof runtime.bridgeSubtaskView === "object"
+      ? runtime.bridgeSubtaskView
+      : null;
+    const bridgeSessionView = runtime.bridgeSessionView && typeof runtime.bridgeSessionView === "object"
+      ? runtime.bridgeSessionView
+      : null;
+    if (!bridgeSubtaskView && !bridgeSessionView) return node;
+    return {
+      ...node,
+      ...(bridgeSubtaskView ? { bridgeSubtaskView } : {}),
+      ...(bridgeSessionView ? { bridgeSessionView } : {}),
+    };
+  });
+}
+
+function buildGoalBridgeGovernanceItemLines(node) {
+  const bridgeSubtaskView = node?.bridgeSubtaskView && typeof node.bridgeSubtaskView === "object"
+    ? node.bridgeSubtaskView
+    : null;
+  const bridgeSessionView = node?.bridgeSessionView && typeof node.bridgeSessionView === "object"
+    ? node.bridgeSessionView
+    : null;
+  const lines = [];
+  if (bridgeSubtaskView?.summaryLine) {
+    lines.push(bridgeSubtaskView.summaryLine);
+  }
+  if (bridgeSessionView?.summaryLine && bridgeSessionView.summaryLine !== bridgeSubtaskView?.summaryLine) {
+    lines.push(bridgeSessionView.summaryLine);
+  }
+  return lines;
+}
+
+function getGoalBridgeGovernanceSeverity(runtimeState, blockReason) {
+  if (runtimeState === "runtime-lost") return 0;
+  if (runtimeState === "orphaned") return 1;
+  if (blockReason) return 2;
+  if (runtimeState === "active") return 3;
+  if (runtimeState === "closed") return 4;
+  return 5;
+}
+
+export function buildGoalBridgeGovernanceSummary(nodes, itemLimit = 4) {
+  const mergedNodes = Array.isArray(nodes) ? nodes : [];
+  const bridgeNodes = mergedNodes
+    .map((node, index) => {
+      const bridgeSubtaskView = node?.bridgeSubtaskView && typeof node.bridgeSubtaskView === "object"
+        ? node.bridgeSubtaskView
+        : null;
+      const bridgeSessionView = node?.bridgeSessionView && typeof node.bridgeSessionView === "object"
+        ? node.bridgeSessionView
+        : null;
+      if (!bridgeSubtaskView && !bridgeSessionView) return null;
+      const runtimeState = typeof bridgeSessionView?.runtimeState === "string" ? bridgeSessionView.runtimeState.trim() : "";
+      const blockReason = typeof bridgeSessionView?.blockReason === "string" ? bridgeSessionView.blockReason.trim() : "";
+      const artifactPath = typeof bridgeSessionView?.artifactPath === "string" ? bridgeSessionView.artifactPath.trim() : "";
+      const transcriptPath = typeof bridgeSessionView?.transcriptPath === "string" ? bridgeSessionView.transcriptPath.trim() : "";
+      return {
+        order: index,
+        nodeId: normalizeGoalBoardId(node?.id) || `node-${index + 1}`,
+        title: typeof node?.title === "string" && node.title.trim() ? node.title.trim() : normalizeGoalBoardId(node?.id) || `node-${index + 1}`,
+        taskId: normalizeGoalTrackingTaskId(node?.lastRunId),
+        runtimeState,
+        closeReason: typeof bridgeSessionView?.closeReason === "string" ? bridgeSessionView.closeReason.trim() : "",
+        blockReason,
+        artifactPath,
+        transcriptPath,
+        summaryLines: buildGoalBridgeGovernanceItemLines(node),
+      };
+    })
+    .filter(Boolean);
+
+  if (!bridgeNodes.length) return null;
+
+  const items = bridgeNodes
+    .slice()
+    .sort((left, right) => {
+      const severity = getGoalBridgeGovernanceSeverity(left.runtimeState, left.blockReason)
+        - getGoalBridgeGovernanceSeverity(right.runtimeState, right.blockReason);
+      if (severity !== 0) return severity;
+      return left.order - right.order;
+    })
+    .slice(0, Math.max(itemLimit, 0))
+    .map(({ order, ...item }) => item);
+
+  return {
+    bridgeNodeCount: bridgeNodes.length,
+    activeCount: bridgeNodes.filter((item) => item.runtimeState === "active").length,
+    runtimeLostCount: bridgeNodes.filter((item) => item.runtimeState === "runtime-lost").length,
+    orphanedCount: bridgeNodes.filter((item) => item.runtimeState === "orphaned").length,
+    closedCount: bridgeNodes.filter((item) => item.runtimeState === "closed").length,
+    blockedCount: bridgeNodes.filter((item) => Boolean(item.blockReason)).length,
+    artifactCount: bridgeNodes.filter((item) => Boolean(item.artifactPath)).length,
+    transcriptCount: bridgeNodes.filter((item) => Boolean(item.transcriptPath)).length,
+    items,
+  };
+}
+
 function parseGoalCheckpoints(rawCheckpoints) {
   if (!rawCheckpoints || typeof rawCheckpoints !== "object") return [];
   const items = Array.isArray(rawCheckpoints.items) ? rawCheckpoints.items : [];
@@ -627,6 +753,57 @@ export function createGoalsSpecialistPanelsRuntimeFeature({
     return getGoalsTrackingPanelFeature?.()?.renderGoalTrackingPanelError(message);
   }
 
+  async function loadGoalTrackingRuntimeIndex(taskIds) {
+    const normalizedTaskIds = [...new Set(
+      (Array.isArray(taskIds) ? taskIds : [])
+        .map((taskId) => normalizeGoalTrackingTaskId(taskId))
+        .filter(Boolean),
+    )];
+    if (!normalizedTaskIds.length || typeof sendReq !== "function" || typeof makeId !== "function") {
+      return {};
+    }
+
+    const entries = await Promise.all(normalizedTaskIds.map(async (taskId) => {
+      try {
+        const res = await sendReq({
+          type: "req",
+          id: makeId(),
+          method: "subtask.get",
+          params: { taskId },
+        });
+        if (!res?.ok || !res.payload?.item) {
+          return null;
+        }
+
+        const bridgeSubtaskView = res.payload?.bridgeSubtaskView && typeof res.payload.bridgeSubtaskView === "object"
+          ? res.payload.bridgeSubtaskView
+          : res.payload?.item?.bridgeSubtaskView && typeof res.payload.item.bridgeSubtaskView === "object"
+            ? res.payload.item.bridgeSubtaskView
+            : null;
+        const bridgeSessionView = res.payload?.bridgeSessionView && typeof res.payload.bridgeSessionView === "object"
+          ? res.payload.bridgeSessionView
+          : res.payload?.item?.bridgeSessionView && typeof res.payload.item.bridgeSessionView === "object"
+            ? res.payload.item.bridgeSessionView
+            : null;
+        if (!bridgeSubtaskView && !bridgeSessionView) {
+          return null;
+        }
+
+        return [
+          taskId,
+          {
+            ...(bridgeSubtaskView ? { bridgeSubtaskView } : {}),
+            ...(bridgeSessionView ? { bridgeSessionView } : {}),
+          },
+        ];
+      } catch {
+        return null;
+      }
+    }));
+
+    return Object.fromEntries(entries.filter(Boolean));
+  }
+
   async function loadGoalTrackingData(goal) {
     if (!goal || !goalsDetailEl) return;
     const goalsState = getGoalsState();
@@ -652,18 +829,25 @@ export function createGoalsSpecialistPanelsRuntimeFeature({
       return;
     }
 
+    const focusNodeId = goalsState.continuationFocusNode?.goalId === trackingGoalId
+      ? goalsState.continuationFocusNode?.nodeId || ""
+      : "";
+    const parsedNodes = parseGoalGraphNodes(rawGraph);
+    const trackingRuntimeIndex = await loadGoalTrackingRuntimeIndex(
+      collectGoalTrackingRuntimeTaskIds(parsedNodes, focusNodeId),
+    );
+    if (goalsState.trackingSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+
     const parsedCheckpoints = parseGoalCheckpoints(rawCheckpoints).map((item) => ({
       ...item,
       goalId: item.goalId || trackingGoalId,
     }));
     goalsState.trackingCheckpoints = parsedCheckpoints;
     renderGoalTrackingPanel(goal, {
-      nodes: parseGoalGraphNodes(rawGraph),
+      nodes: mergeGoalTrackingRuntimeIndex(parsedNodes, trackingRuntimeIndex),
       checkpoints: parsedCheckpoints,
       capabilityPlans: capabilityEntry?.plans || [],
-      focusNodeId: goalsState.continuationFocusNode?.goalId === trackingGoalId
-        ? goalsState.continuationFocusNode?.nodeId || ""
-        : "",
+      focusNodeId,
     });
     applyGoalContinuationFocus?.(goal.id);
   }
@@ -819,20 +1003,39 @@ export function createGoalsSpecialistPanelsRuntimeFeature({
     const seq = (goalsState.governanceSeq || 0) + 1;
     goalsState.governanceSeq = seq;
     renderGoalReviewGovernancePanelLoading();
-    const res = await sendReq({
-      type: "req",
-      id: makeId(),
-      method: "goal.review_governance.summary",
-      params: { goalId: goal.id },
-    });
+    const [res, tasksFile] = await Promise.all([
+      sendReq({
+        type: "req",
+        id: makeId(),
+        method: "goal.review_governance.summary",
+        params: { goalId: goal.id },
+      }),
+      readSourceFile(goal.tasksPath),
+    ]);
     if (goalsState.governanceSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
     if (!res?.ok || !res.payload?.summary) {
       renderGoalReviewGovernancePanelError(res?.error?.message || "无法读取 review governance summary。");
       return;
     }
     const parsed = parseGoalReviewGovernanceSummary(res.payload.summary, parseGoalCheckpoints);
-    goalsState.governanceCache[goal.id] = parsed;
-    renderGoalReviewGovernancePanel(goal, parsed);
+    const rawGraph = tasksFile?.content ? safeJsonParse(tasksFile.content) : null;
+    const focusNodeId = goalsState.continuationFocusNode?.goalId === trackingGoalId
+      ? goalsState.continuationFocusNode?.nodeId || ""
+      : "";
+    const parsedNodes = parseGoalGraphNodes(rawGraph);
+    const trackingRuntimeIndex = await loadGoalTrackingRuntimeIndex(
+      collectGoalTrackingRuntimeTaskIds(parsedNodes, focusNodeId),
+    );
+    if (goalsState.governanceSeq !== seq || goalsState.selectedId !== trackingGoalId) return;
+    const bridgeGovernanceSummary = buildGoalBridgeGovernanceSummary(
+      mergeGoalTrackingRuntimeIndex(parsedNodes, trackingRuntimeIndex),
+    );
+    const merged = {
+      ...parsed,
+      ...(bridgeGovernanceSummary ? { bridgeGovernanceSummary } : {}),
+    };
+    goalsState.governanceCache[goal.id] = merged;
+    renderGoalReviewGovernancePanel(goal, merged);
     bindGoalReviewGovernanceActions(goal);
   }
 

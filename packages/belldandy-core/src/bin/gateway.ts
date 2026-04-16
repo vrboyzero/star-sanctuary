@@ -11,7 +11,6 @@ import { parseConversationAllowedKinds, readEnv } from "./gateway-config.js";
 import { createGatewayPromptInspectionRuntime } from "./gateway-prompt-inspection-runtime.js";
 import {
   buildGatewayServerOptions,
-  createGatewayStopSubTaskHandler,
 } from "./gateway-server-runtime.js";
 import { loadToolsPolicy, mergePolicy } from "./gateway-tool-policy.js";
 import { startGatewayConfigWatcher } from "./gateway-watch-runtime.js";
@@ -33,7 +32,15 @@ import {
   type SubTaskRecord,
   SubTaskRuntimeStore,
 } from "../task-runtime.js";
-import { createSubTaskTakeoverDispatcher } from "../subtask-takeover-runtime.js";
+import {
+  createBridgeAwareStopSubTaskHandler,
+  createBridgeSessionGovernanceCapabilities,
+  createBridgeSessionResumeController,
+  createBridgeSessionTakeoverController,
+  createGatewaySubTaskResumeDispatcher,
+  createGatewaySubTaskTakeoverDispatcher,
+  reconcileRuntimeLostBridgeSubtasks,
+} from "../bridge-subtask-runtime.js";
 import { SubTaskWorktreeRuntime } from "../worktree-runtime.js";
 import { normalizeEmailOutboundDraft } from "../email-outbound-contract.js";
 import { createFileEmailOutboundAuditStore, resolveEmailOutboundAuditStorePath } from "../email-outbound-audit-store.js";
@@ -127,12 +134,22 @@ import {
   browserTypeTool,
   browserScreenshotTool,
   browserGetContentTool,
+  cameraListTool,
   cameraSnapTool,
   imageGenerateTool,
   textToSpeechTool,
   synthesizeSpeech,
   transcribeSpeech,
   runCommandTool,
+  bridgeTargetListTool,
+  bridgeTargetDiagnoseTool,
+  bridgeRunTool,
+  bridgeSessionStartTool,
+  bridgeSessionWriteTool,
+  bridgeSessionReadTool,
+  bridgeSessionStatusTool,
+  bridgeSessionCloseTool,
+  bridgeSessionListTool,
   ptcRuntimeTool,
   methodListTool,
   methodReadTool,
@@ -290,6 +307,7 @@ import {
   getMCPManagerIfInitialized,
   getMCPDiagnostics,
   printMCPStatus,
+  createBridgeMcpCapabilities,
 } from "../mcp/index.js";
 import { createLoggerFromEnv } from "../logger/index.js";
 import { ToolsConfigManager } from "../tools-config.js";
@@ -623,6 +641,7 @@ if (embeddingEnabled && !openaiApiKey) {
 
 // [SECURITY] 危险工具需显式启用
 const dangerousToolsEnabled = readEnv("BELLDANDY_DANGEROUS_TOOLS_ENABLED") === "true";
+const agentBridgeEnabled = readEnv("BELLDANDY_AGENT_BRIDGE_ENABLED") === "true";
 const externalOutboundRequireConfirmation = readEnv("BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false";
 const emailOutboundRequireConfirmation = readEnv("BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION")
   ? readEnv("BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION") !== "false"
@@ -795,6 +814,17 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
       delegateParallelTool,
       conversationListTool,
       conversationReadTool,
+      ...(agentBridgeEnabled ? [
+        bridgeTargetListTool,
+        bridgeTargetDiagnoseTool,
+        bridgeRunTool,
+        bridgeSessionStartTool,
+        bridgeSessionWriteTool,
+        bridgeSessionReadTool,
+        bridgeSessionStatusTool,
+        bridgeSessionCloseTool,
+        bridgeSessionListTool,
+      ] : []),
     ],
   },
   {
@@ -814,6 +844,7 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
   {
     group: "multimedia",
     tools: [
+      cameraListTool,
       cameraSnapTool,
       imageGenerateTool,
       textToSpeechTool,
@@ -1070,6 +1101,7 @@ if (mcpEnabled && toolsEnabled) {
   try {
     logger.info("mcp", "正在初始化 MCP 支持...");
     await initMCPIntegration(logger);
+    toolExecutor.setMcpCapabilities(createBridgeMcpCapabilities(() => getMCPManagerIfInitialized()));
     const registeredCount = registerMCPToolsToExecutor(toolExecutor);
     const mcpManager = getMCPManagerIfInitialized();
     if (mcpManager) {
@@ -1861,9 +1893,6 @@ let subAgentOrchestrator: SubAgentOrchestrator | undefined;
 let resumeSubTask:
   | ((taskId: string, message?: string, options?: { takeoverAgentId?: string }) => Promise<SubTaskRecord | undefined>)
   | undefined;
-let takeoverSubTaskController:
-  | ((taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>)
-  | undefined;
 let takeoverSubTask:
   | ((taskId: string, agentId: string, message?: string) => Promise<SubTaskRecord | undefined>)
   | undefined;
@@ -1880,6 +1909,13 @@ if (agentRegistry && toolsEnabled) {
     debug: (m, d) => logger.debug("task-runtime", m, d),
   });
   await subTaskRuntimeStore.load();
+  await reconcileRuntimeLostBridgeSubtasks({
+    workspaceRoot: stateDir,
+    runtimeStore: subTaskRuntimeStore,
+    logger: {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    },
+  });
   subTaskWorktreeRuntime = new SubTaskWorktreeRuntime(stateDir, {
     info: (m, d) => logger.info("task-worktree", m, d),
     warn: (m, d) => logger.warn("task-worktree", m, d),
@@ -1991,6 +2027,9 @@ if (agentRegistry && toolsEnabled) {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
   }));
+  toolExecutor.setBridgeSessionGovernance(createBridgeSessionGovernanceCapabilities({
+    runtimeStore: subTaskRuntimeStore,
+  }));
 
   updateSubTask = createSubTaskUpdateController({
     runtimeStore: subTaskRuntimeStore,
@@ -2000,7 +2039,7 @@ if (agentRegistry && toolsEnabled) {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
   });
-  resumeSubTask = createSubTaskResumeController({
+  const resumeAgentSubTask = createSubTaskResumeController({
     runtimeStore: subTaskRuntimeStore,
     orchestrator: subAgentOrchestrator,
     agentRegistry,
@@ -2009,7 +2048,17 @@ if (agentRegistry && toolsEnabled) {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
   });
-  takeoverSubTaskController = createSubTaskTakeoverController({
+  const resumeBridgeSessionSubTask = createBridgeSessionResumeController({
+    runtimeStore: subTaskRuntimeStore,
+    bridgeRuntimeStore: subTaskRuntimeStore,
+    toolExecutor,
+  });
+  resumeSubTask = createGatewaySubTaskResumeDispatcher({
+    runtimeStore: subTaskRuntimeStore,
+    resumeBridgeSessionSubTask,
+    resumeAgentSubTask,
+  });
+  const takeoverAgentSubTaskController = createSubTaskTakeoverController({
     runtimeStore: subTaskRuntimeStore,
     orchestrator: subAgentOrchestrator,
     agentRegistry,
@@ -2018,10 +2067,18 @@ if (agentRegistry && toolsEnabled) {
       warn: (m, d) => logger.warn("task-runtime", m, d),
     },
   });
-  takeoverSubTask = createSubTaskTakeoverDispatcher({
+  const takeoverBridgeSessionSubTask = createBridgeSessionTakeoverController({
     runtimeStore: subTaskRuntimeStore,
-    takeoverRunningSubTask: takeoverSubTaskController,
-    takeoverFinishedSubTask: takeoverSubTaskController,
+    bridgeRuntimeStore: subTaskRuntimeStore,
+    toolExecutor,
+    logger: {
+      warn: (m, d) => logger.warn("task-runtime", m, d),
+    },
+  });
+  takeoverSubTask = createGatewaySubTaskTakeoverDispatcher({
+    runtimeStore: subTaskRuntimeStore,
+    takeoverBridgeSessionSubTask,
+    takeoverAgentSubTask: takeoverAgentSubTaskController,
   });
 
   logger.info("orchestrator", `Sub-agent orchestrator initialized (maxConcurrent=${subAgentMaxConcurrent}, queue=${subAgentMaxQueueSize}, timeout=${subAgentTimeoutMs}ms, maxDepth=${subAgentMaxDepth})`);
@@ -2756,9 +2813,13 @@ const getConversationPromptSnapshot = async ({ conversationId, runId }: {
   conversationId,
   runId,
 });
-const stopSubTask = createGatewayStopSubTaskHandler({
+const stopSubTask = createBridgeAwareStopSubTaskHandler({
   subTaskRuntimeStore,
   subAgentOrchestrator,
+  toolExecutor: toolsEnabled ? toolExecutor : undefined,
+  logger: {
+    warn: (m, d) => logger.warn("task-runtime", m, d),
+  },
 });
 const ttsSynthesize = async (text: string) => {
   const result = await synthesizeSpeech({ text, stateDir });

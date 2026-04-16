@@ -326,3 +326,4 @@ export function printMCPStatus(logger?: { info: (m: string, msg: string) => void
 // ============================================================================
 
 export type { MCPManager };
+export { createBridgeMcpCapabilities } from "./bridge-runtime.js";

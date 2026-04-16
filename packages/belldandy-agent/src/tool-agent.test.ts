@@ -873,6 +873,13 @@ describe("ToolEnabledAgent hook timeouts", () => {
           cwd: "/tmp/worktree",
           toolSet: ["echo"],
           permissionMode: "confirm",
+          bridgeSubtask: {
+            kind: "patch",
+            targetId: "codex_exec",
+            action: "patch",
+            goalId: "goal-launch-spec",
+            goalNodeId: "node-patch",
+          },
         },
       },
     }));
@@ -884,6 +891,13 @@ describe("ToolEnabledAgent hook timeouts", () => {
         cwd: "/tmp/worktree",
         toolSet: ["echo"],
         permissionMode: "confirm",
+        bridgeSubtask: {
+          kind: "patch",
+          targetId: "codex_exec",
+          action: "patch",
+          goalId: "goal-launch-spec",
+          goalNodeId: "node-patch",
+        },
       },
     });
     expect(execute).toHaveBeenCalledWith(
@@ -898,6 +912,13 @@ describe("ToolEnabledAgent hook timeouts", () => {
           cwd: "/tmp/worktree",
           toolSet: ["echo"],
           permissionMode: "confirm",
+          bridgeSubtask: {
+            kind: "patch",
+            targetId: "codex_exec",
+            action: "patch",
+            goalId: "goal-launch-spec",
+            goalNodeId: "node-patch",
+          },
         },
       },
     );

@@ -176,7 +176,7 @@ function validateBrowserUrl(urlStr: string): { ok: true } | { ok: false; error: 
     return { ok: true };
 }
 
-class BrowserManager {
+export class BrowserManager {
     private static instance: BrowserManager;
     private browser: Browser | null = null;
     private activePage: Page | null = null;

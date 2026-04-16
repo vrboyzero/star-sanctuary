@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "完成统一assistant mode，完成邮件收发 MVP版本"
+git commit -m "实现了CLI桥接功能与相应的mcp服务"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

@@ -9,6 +9,8 @@ import type {
   ToolAuditLog,
   AgentCapabilities,
   GoalCapabilities,
+  BridgeSubtaskSemantics,
+  BridgeSessionGovernanceCapabilities,
   ConversationAccessKind,
   ConversationStoreInterface,
   ITokenCounterService,
@@ -19,6 +21,7 @@ import type {
   ToolDiscoveryEntry,
   ToolDiscoveryEntriesOptions,
   ToolDiscoveryFamilyDefinition,
+  MCPRuntimeCapabilities,
 } from "./types.js";
 import { getToolContract, type ToolContract } from "./tool-contract.js";
 import {
@@ -83,6 +86,10 @@ export type ToolExecutorOptions = {
   allowedConversationKinds?: ConversationAccessKind[];
   /** 可选：事件广播回调（用于工具主动推送事件到前端） */
   broadcast?: (event: string, payload: Record<string, unknown>) => void;
+  /** 可选：MCP 调用能力（由 Gateway 注入，供 bridge mcp transport 复用现有 MCP runtime） */
+  mcp?: MCPRuntimeCapabilities;
+  /** 可选：bridge session 与 subtask runtime 的治理接线能力 */
+  bridgeSessionGovernance?: BridgeSessionGovernanceCapabilities;
   /** 可选：仅用于运行时观测的工具广播观察器 */
   broadcastObserver?: (event: string, payload: Record<string, unknown>, meta: {
     conversationId: string;
@@ -113,10 +120,30 @@ function normalizeStringList(value: unknown): string[] | undefined {
   return items.length > 0 ? [...new Set(items)] : undefined;
 }
 
+function normalizeBridgeSubtaskSemantics(value: unknown): BridgeSubtaskSemantics | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = normalizeOptionalString(record.kind);
+  if (kind !== "analyze" && kind !== "review" && kind !== "patch") {
+    return undefined;
+  }
+  const normalized: BridgeSubtaskSemantics = {
+    kind,
+    targetId: normalizeOptionalString(record.targetId),
+    action: normalizeOptionalString(record.action),
+    goalId: normalizeOptionalString(record.goalId),
+    goalNodeId: normalizeOptionalString(record.goalNodeId),
+    summary: normalizeOptionalString(record.summary),
+  };
+  return normalized;
+}
+
 function normalizeRuntimeLaunchSpec(value: ToolRuntimeLaunchSpec | undefined): ToolRuntimeLaunchSpec | undefined {
   if (!value) return undefined;
   const normalized: ToolRuntimeLaunchSpec = {
+    agentId: normalizeOptionalString(value.agentId),
     profileId: normalizeOptionalString(value.profileId),
+    instruction: normalizeOptionalString(value.instruction),
     channel: normalizeOptionalString(value.channel),
     background: typeof value.background === "boolean" ? value.background : undefined,
     timeoutMs: Number.isFinite(Number(value.timeoutMs)) && Number(value.timeoutMs) > 0 ? Number(value.timeoutMs) : undefined,
@@ -129,8 +156,41 @@ function normalizeRuntimeLaunchSpec(value: ToolRuntimeLaunchSpec | undefined): T
     allowedToolFamilies: normalizeLaunchAllowedToolFamilies(value.allowedToolFamilies),
     maxToolRiskLevel: normalizeLaunchMaxToolRiskLevel(value.maxToolRiskLevel),
     policySummary: normalizeOptionalString(value.policySummary),
+    bridgeSubtask: normalizeBridgeSubtaskSemantics(value.bridgeSubtask),
   };
   return Object.values(normalized).some((item) => item !== undefined) ? normalized : undefined;
+}
+
+const GOVERNED_BRIDGE_INTERNAL_TOOL_NAMES = new Set([
+  "bridge_session_start",
+  "bridge_session_write",
+  "bridge_session_close",
+]);
+
+function normalizeAgentWhitelistMode(
+  value: unknown,
+): "default" | "governed_bridge_internal" | undefined {
+  if (value !== "default" && value !== "governed_bridge_internal") {
+    return undefined;
+  }
+  return value;
+}
+
+function shouldBypassAgentWhitelist(
+  toolName: string,
+  launchSpec: ToolRuntimeLaunchSpec | undefined,
+  runtimeContext?: ToolExecutionRuntimeContext,
+): boolean {
+  if (normalizeAgentWhitelistMode(runtimeContext?.agentWhitelistMode) !== "governed_bridge_internal") {
+    return false;
+  }
+  if (!normalizeOptionalString(runtimeContext?.bridgeGovernanceTaskId)) {
+    return false;
+  }
+  if (!launchSpec?.bridgeSubtask) {
+    return false;
+  }
+  return GOVERNED_BRIDGE_INTERNAL_TOOL_NAMES.has(toolName);
 }
 
 export type ToolAvailabilityReasonCode =
@@ -175,6 +235,8 @@ export class ToolExecutor {
   private readonly deferredToolNames: Set<string>;
   private readonly loadedDeferredToolNames = new Map<string, Set<string>>();
   private broadcast?: (event: string, payload: Record<string, unknown>) => void;
+  private mcp?: MCPRuntimeCapabilities;
+  private bridgeSessionGovernance?: BridgeSessionGovernanceCapabilities;
   private broadcastObserver?: (event: string, payload: Record<string, unknown>, meta: {
     conversationId: string;
     agentId?: string;
@@ -199,6 +261,8 @@ export class ToolExecutor {
     this.conversationStore = options.conversationStore;
     this.allowedConversationKinds = options.allowedConversationKinds;
     this.broadcast = options.broadcast;
+    this.mcp = options.mcp;
+    this.bridgeSessionGovernance = options.bridgeSessionGovernance;
     this.broadcastObserver = options.broadcastObserver;
   }
 
@@ -228,6 +292,16 @@ export class ToolExecutor {
     broadcast?: (event: string, payload: Record<string, unknown>) => void,
   ): void {
     this.broadcast = broadcast;
+  }
+
+  setMcpCapabilities(mcp?: MCPRuntimeCapabilities): void {
+    this.mcp = mcp;
+  }
+
+  setBridgeSessionGovernance(
+    governance?: BridgeSessionGovernanceCapabilities,
+  ): void {
+    this.bridgeSessionGovernance = governance;
   }
 
   setBroadcastObserver(
@@ -638,6 +712,8 @@ export class ToolExecutor {
       roomContext, // 传递房间上下文
       conversationStore: this.conversationStore, // 传递会话存储（用于缓存）
       allowedConversationKinds: this.allowedConversationKinds,
+      bridgeSessionGovernance: this.bridgeSessionGovernance,
+      bridgeGovernanceTaskId: normalizeOptionalString(runtimeContext?.bridgeGovernanceTaskId),
       tokenCounter: this.tokenCounters.get(conversationId), // 传递 token 计数器（任务级统计）
       broadcast: this.broadcast
         ? (event, payload) => {
@@ -660,6 +736,7 @@ export class ToolExecutor {
         debug: this.logger!.debug ? (m) => this.logger!.debug!(m) : () => {},
         trace: () => {},
       } : undefined,
+      mcp: this.mcp,
     };
 
     try {
@@ -727,6 +804,7 @@ export class ToolExecutor {
     const toolName = tool.definition.name;
     const alwaysEnabled = this.alwaysEnabledTools.has(toolName);
     const launchSpec = normalizeRuntimeLaunchSpec(runtimeContext?.launchSpec);
+    const bypassAgentWhitelist = shouldBypassAgentWhitelist(toolName, launchSpec, runtimeContext);
 
     if (this.contractAccessPolicy) {
       const contractDecision = evaluateToolContractAccess(tool, this.contractAccessPolicy);
@@ -782,7 +860,7 @@ export class ToolExecutor {
       };
     }
 
-    if (this.isToolAllowedForAgent && !this.isToolAllowedForAgent(toolName, agentId)) {
+    if (!bypassAgentWhitelist && this.isToolAllowedForAgent && !this.isToolAllowedForAgent(toolName, agentId)) {
       return {
         ...this.buildAvailabilityState(toolName, alwaysEnabled, false, "not-in-agent-whitelist"),
         allowed: false,

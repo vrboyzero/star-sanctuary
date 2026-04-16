@@ -165,6 +165,59 @@ export type SessionInfo = {
   notificationCount?: number;
 };
 
+export type BridgeSubtaskKind = "analyze" | "review" | "patch";
+
+export type BridgeSubtaskSemantics = {
+  kind: BridgeSubtaskKind;
+  targetId?: string;
+  action?: string;
+  goalId?: string;
+  goalNodeId?: string;
+  summary?: string;
+};
+
+export type BridgeSessionLaunchSemantics = {
+  targetId: string;
+  action: string;
+  transport: "pty";
+  cwd: string;
+  commandPreview: string;
+  firstTurnStrategy?: "start-args-prompt" | "write";
+  firstTurnHint?: string;
+  recommendedReadWaitMs?: number;
+  bridgeSubtask?: BridgeSubtaskSemantics;
+  summary?: string;
+};
+
+export type BridgeSessionGovernanceCapabilities = {
+  ensureSessionTask(input: {
+    conversationId: string;
+    agentId?: string;
+    launchSpec?: ToolRuntimeLaunchSpec;
+    taskId?: string;
+    session: BridgeSessionLaunchSemantics;
+  }): Promise<{ taskId: string } | undefined>;
+  attachSession(input: {
+    taskId: string;
+    sessionId: string;
+    agentId?: string;
+  }): Promise<void>;
+  recordOutput(input: {
+    sessionId: string;
+    output: string;
+  }): Promise<void>;
+  completeSession(input: {
+    taskId?: string;
+    sessionId?: string;
+    status: "done" | "error" | "timeout" | "stopped";
+    output?: string;
+    error?: string;
+    closeReason?: "manual" | "idle-timeout" | "runtime-lost" | "orphan";
+    artifactPath?: string;
+    transcriptPath?: string;
+  }): Promise<void>;
+};
+
 export type SpawnSubAgentOptions = {
   instruction: string;
   agentId?: string;
@@ -184,10 +237,13 @@ export type SpawnSubAgentOptions = {
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
   delegationProtocol?: DelegationProtocol;
+  bridgeSubtask?: BridgeSubtaskSemantics;
 };
 
 export type ToolRuntimeLaunchSpec = {
+  agentId?: string;
   profileId?: string;
+  instruction?: string;
   channel?: string;
   background?: boolean;
   timeoutMs?: number;
@@ -200,10 +256,48 @@ export type ToolRuntimeLaunchSpec = {
   allowedToolFamilies?: string[];
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
+  bridgeSubtask?: BridgeSubtaskSemantics;
 };
 
 export type ToolExecutionRuntimeContext = {
   launchSpec?: ToolRuntimeLaunchSpec;
+  bridgeGovernanceTaskId?: string;
+  agentWhitelistMode?: "default" | "governed_bridge_internal";
+};
+
+export type MCPRuntimeToolCallRequest = {
+  serverId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+};
+
+export type MCPRuntimeToolInfoSnapshot = {
+  serverId: string;
+  toolName: string;
+  bridgedName: string;
+};
+
+export type MCPRuntimeServerDiagnosticsSnapshot = {
+  id: string;
+  name: string;
+  status: string;
+  error?: string;
+  toolCount: number;
+  resourceCount: number;
+};
+
+export type MCPRuntimeDiagnosticsSnapshot = {
+  initialized: boolean;
+  toolCount: number;
+  serverCount: number;
+  connectedCount: number;
+  servers: MCPRuntimeServerDiagnosticsSnapshot[];
+  tools: MCPRuntimeToolInfoSnapshot[];
+};
+
+export type MCPRuntimeCapabilities = {
+  callTool(request: MCPRuntimeToolCallRequest): Promise<unknown>;
+  getDiagnostics?(): MCPRuntimeDiagnosticsSnapshot | null;
 };
 
 export type AgentCapabilities = {
@@ -618,12 +712,45 @@ export type GoalHandoffCheckpointSummaryRecord = {
 };
 
 export type GoalHandoffBlockerRecord = {
-  kind: "node" | "checkpoint";
+  kind: "node" | "checkpoint" | "bridge";
   id: string;
   title: string;
   status: string;
   nodeId?: string;
   reason?: string;
+};
+
+export type GoalHandoffBridgeItemRecord = {
+  nodeId: string;
+  title: string;
+  taskId?: string;
+  runtimeState?: "active" | "closed" | "runtime-lost" | "orphaned";
+  closeReason?: "manual" | "idle-timeout" | "runtime-lost" | "orphan";
+  blockReason?: string;
+  artifactPath?: string;
+  transcriptPath?: string;
+  summaryLines: string[];
+};
+
+export type GoalHandoffBridgeSummaryRecord = {
+  bridgeNodeCount: number;
+  activeCount: number;
+  runtimeLostCount: number;
+  orphanedCount: number;
+  closedCount: number;
+  blockedCount: number;
+  artifactCount: number;
+  transcriptCount: number;
+  items: GoalHandoffBridgeItemRecord[];
+};
+
+export type GoalCheckpointReplayDescriptorRecord = {
+  checkpointId: string;
+  nodeId: string;
+  runId?: string;
+  title: string;
+  summary?: string;
+  reason: string;
 };
 
 export type GoalHandoffTimelineEntryRecord = {
@@ -676,7 +803,9 @@ export type GoalHandoffRecord = {
   nextAction: string;
   tracking: GoalHandoffTrackingRecord;
   openCheckpoints: GoalHandoffCheckpointSummaryRecord[];
+  checkpointReplay?: GoalCheckpointReplayDescriptorRecord;
   blockers: GoalHandoffBlockerRecord[];
+  bridgeGovernance?: GoalHandoffBridgeSummaryRecord;
   focusCapability?: GoalHandoffCapabilityFocusRecord;
   recentProgress: GoalHandoffTimelineEntryRecord[];
 };
@@ -1670,6 +1799,10 @@ export type ToolContext = {
   conversationStore?: ConversationStoreInterface;
   /** 当前运行时允许读取的会话类别白名单；未提供时表示不额外限制 */
   allowedConversationKinds?: ConversationAccessKind[];
+  /** bridge session 与 subtask runtime 的治理接线能力 */
+  bridgeSessionGovernance?: BridgeSessionGovernanceCapabilities;
+  /** bridge session 运行时若需复用已有治理 taskId，会在这里透传 */
+  bridgeGovernanceTaskId?: string;
   policy: ToolPolicy;
   agentCapabilities?: AgentCapabilities;
   goalCapabilities?: GoalCapabilities;
@@ -1684,6 +1817,7 @@ export type ToolContext = {
     debug(message: string): void;
     trace(message: string): void;
   };
+  mcp?: MCPRuntimeCapabilities;
 };
 
 export type ConversationAccessKind = "main" | "subtask" | "goal" | "heartbeat";

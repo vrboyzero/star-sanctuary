@@ -44,6 +44,22 @@ describe("run_command (Platform-aware Safelist)", () => {
         }
     });
 
+    it("should close stdin so commands waiting for EOF can finish", async () => {
+        const result = await runCommandTool.execute({
+            command: 'node -e "process.stdin.resume(); process.stdin.on(\\"end\\", () => process.stdout.write(\\"stdin-closed\\"))"',
+        }, {
+            ...mockContext,
+            workspaceRoot: process.cwd(),
+            policy: {
+                ...mockContext.policy,
+                maxTimeoutMs: 5_000,
+            },
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.output).toContain("stdin-closed");
+    });
+
     it("should allow common 'git' command on all platforms", async () => {
         const result = await runCommandTool.execute({ command: "git --version" }, mockContext);
         if (!result.success) {

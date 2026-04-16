@@ -533,12 +533,36 @@ export type GoalHandoffCheckpointSummary = {
 };
 
 export type GoalHandoffBlocker = {
-  kind: "node" | "checkpoint";
+  kind: "node" | "checkpoint" | "bridge";
   id: string;
   title: string;
   status: string;
   nodeId?: string;
   reason?: string;
+};
+
+export type GoalHandoffBridgeItem = {
+  nodeId: string;
+  title: string;
+  taskId?: string;
+  runtimeState?: "active" | "closed" | "runtime-lost" | "orphaned";
+  closeReason?: "manual" | "idle-timeout" | "runtime-lost" | "orphan";
+  blockReason?: string;
+  artifactPath?: string;
+  transcriptPath?: string;
+  summaryLines: string[];
+};
+
+export type GoalHandoffBridgeSummary = {
+  bridgeNodeCount: number;
+  activeCount: number;
+  runtimeLostCount: number;
+  orphanedCount: number;
+  closedCount: number;
+  blockedCount: number;
+  artifactCount: number;
+  transcriptCount: number;
+  items: GoalHandoffBridgeItem[];
 };
 
 export type GoalHandoffTimelineEntry = {
@@ -602,6 +626,7 @@ export type GoalHandoffSnapshot = {
   openCheckpoints: GoalHandoffCheckpointSummary[];
   checkpointReplay?: GoalCheckpointReplayDescriptor;
   blockers: GoalHandoffBlocker[];
+  bridgeGovernance?: GoalHandoffBridgeSummary;
   focusCapability?: GoalHandoffCapabilityFocus;
   recentProgress: GoalHandoffTimelineEntry[];
 };

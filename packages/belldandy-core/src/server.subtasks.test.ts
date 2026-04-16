@@ -199,6 +199,121 @@ test("tools.list resolves launch runtime visibility from subtask taskId", async 
   }
 });
 
+test("tools.list exposes bridge recovery diagnostics for a governed bridge subtask", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  await toolsConfigManager.updateConfig({
+    builtin: ["bridge_session_close"],
+  });
+
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+  const task = await subTaskRuntimeStore.createBridgeSessionTask({
+    parentConversationId: "conv-bridge-runtime",
+    agentId: "coder",
+    profileId: "coder",
+    instruction: "Inspect bridge recovery diagnostics.",
+    bridgeSubtask: {
+      kind: "review",
+      targetId: "codex_session",
+      action: "interactive",
+      summary: "Inspect bridge recovery diagnostics.",
+    },
+    bridgeSession: {
+      targetId: "codex_session",
+      action: "interactive",
+      transport: "pty",
+      cwd: stateDir,
+      commandPreview: "codex interactive",
+      summary: "Inspect bridge recovery diagnostics.",
+    },
+  });
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createWriteContractedTestTool("bridge_session_start"),
+      createWriteContractedTestTool("bridge_session_write"),
+      createWriteContractedTestTool("bridge_session_close"),
+    ],
+    workspaceRoot: process.cwd(),
+    isToolDisabled: (name) => toolsConfigManager.isToolDisabled(name),
+    isToolAllowedForAgent: (toolName, agentId) => !(agentId === "coder" && toolName.startsWith("bridge_session_")),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "tools-list-bridge-recovery",
+      method: "tools.list",
+      params: {
+        taskId: task.id,
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-bridge-recovery"));
+
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-bridge-recovery");
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.visibilityContext?.bridgeRecoveryDiagnostics).toMatchObject({
+      applicable: true,
+      status: "blocked",
+      taskId: task.id,
+      blockedTools: ["bridge_session_close"],
+      whitelistBypassedTools: [
+        "bridge_session_start",
+        "bridge_session_write",
+      ],
+      runtimeContext: {
+        bridgeGovernanceTaskId: task.id,
+        agentWhitelistMode: "governed_bridge_internal",
+      },
+    });
+    expect(listRes.payload?.visibilityContext?.bridgeRecoveryDiagnostics?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "bridge_session_start",
+        defaultVisibility: expect.objectContaining({
+          available: false,
+          reasonCode: "not-in-agent-whitelist",
+        }),
+        governedVisibility: expect.objectContaining({
+          available: true,
+          reasonCode: "available",
+        }),
+      }),
+      expect.objectContaining({
+        name: "bridge_session_close",
+        governedVisibility: expect.objectContaining({
+          available: false,
+          reasonCode: "disabled-by-settings",
+        }),
+        effectiveDecision: "blocked",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("subtask.stop and subtask.archive manage task runtime visibility", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);

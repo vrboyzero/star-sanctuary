@@ -48,6 +48,27 @@ function buildSubTaskLedgerSignature(record: SubTaskRecord): string {
   });
 }
 
+function buildSubTaskFailureDispatchSignature(record: SubTaskRecord): string {
+  return JSON.stringify({
+    status: record.status,
+    sessionId: record.sessionId || "",
+    archivedAt: record.archivedAt || 0,
+    finishedAt: record.finishedAt || 0,
+    stopReason: record.stopReason || "",
+    summary: record.summary || "",
+    error: record.error || "",
+    outputPreview: record.outputPreview || "",
+    progressMessage: record.progress.message || "",
+    bridgeSessionRuntime: record.bridgeSessionRuntime ? {
+      state: record.bridgeSessionRuntime.state,
+      closeReason: record.bridgeSessionRuntime.closeReason || "",
+      artifactPath: record.bridgeSessionRuntime.artifactPath || "",
+      transcriptPath: record.bridgeSessionRuntime.transcriptPath || "",
+      blockReason: record.bridgeSessionRuntime.blockReason || "",
+    } : undefined,
+  });
+}
+
 export function createSubTaskBackgroundContinuationLedgerHandler(input: {
   ledger: Pick<BackgroundContinuationLedger, "startRun" | "finishRun">;
   onFailedRecord?: (record: BackgroundContinuationRecord) => void | Promise<void>;
@@ -56,6 +77,7 @@ export function createSubTaskBackgroundContinuationLedgerHandler(input: {
   };
 }): (event: SubTaskChangeEvent) => void {
   const signatures = new Map<string, string>();
+  const failureDispatchSignatures = new Map<string, string>();
 
   return (event) => {
     const record = event.item;
@@ -82,6 +104,7 @@ export function createSubTaskBackgroundContinuationLedgerHandler(input: {
     };
 
     if (record.status === "pending" || record.status === "running") {
+      failureDispatchSignatures.delete(record.id);
       void input.ledger.startRun(ledgerInput).catch((error) => {
         input.logger?.warn?.("Failed to sync subtask shared ledger entry.", {
           taskId: record.id,
@@ -97,8 +120,14 @@ export function createSubTaskBackgroundContinuationLedgerHandler(input: {
       finishedAt: record.finishedAt || record.updatedAt || Date.now(),
     }).then((finalized) => {
       if (finalized.status === "failed") {
+        const failureSignature = buildSubTaskFailureDispatchSignature(record);
+        if (failureDispatchSignatures.get(record.id) === failureSignature) {
+          return undefined;
+        }
+        failureDispatchSignatures.set(record.id, failureSignature);
         return input.onFailedRecord?.(finalized);
       }
+      failureDispatchSignatures.delete(record.id);
       return undefined;
     }).catch((error) => {
       input.logger?.warn?.("Failed to finalize subtask shared ledger entry.", {

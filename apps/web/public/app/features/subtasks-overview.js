@@ -161,6 +161,56 @@ function formatNotificationKindLabel(kind, t) {
   }
 }
 
+export function formatBridgeRuntimeState(runtimeState, t = (_key, _params, fallback) => fallback ?? "") {
+  switch (runtimeState) {
+    case "active":
+      return t("subtasks.bridgeRuntimeActive", {}, "active");
+    case "runtime-lost":
+      return t("subtasks.bridgeRuntimeRuntimeLost", {}, "runtime-lost");
+    case "orphaned":
+      return t("subtasks.bridgeRuntimeOrphaned", {}, "orphaned");
+    case "closed":
+      return t("subtasks.bridgeRuntimeClosed", {}, "closed");
+    default:
+      return runtimeState || "-";
+  }
+}
+
+export function formatBridgeCloseReason(closeReason, t = (_key, _params, fallback) => fallback ?? "") {
+  switch (closeReason) {
+    case "manual":
+      return t("subtasks.bridgeCloseReasonManual", {}, "manual");
+    case "idle-timeout":
+      return t("subtasks.bridgeCloseReasonIdleTimeout", {}, "idle-timeout");
+    case "runtime-lost":
+      return t("subtasks.bridgeCloseReasonRuntimeLost", {}, "runtime-lost");
+    case "orphan":
+      return t("subtasks.bridgeCloseReasonOrphan", {}, "orphan");
+    default:
+      return closeReason || "-";
+  }
+}
+
+export function buildBridgeGovernanceSummaryLines(item, t = (_key, _params, fallback) => fallback ?? "") {
+  const bridgeSubtaskView = item?.bridgeSubtaskView && typeof item.bridgeSubtaskView === "object"
+    ? item.bridgeSubtaskView
+    : null;
+  const bridgeSessionView = item?.bridgeSessionView && typeof item.bridgeSessionView === "object"
+    ? item.bridgeSessionView
+    : null;
+  const lines = [];
+  if (bridgeSubtaskView?.summaryLine) {
+    lines.push(bridgeSubtaskView.summaryLine);
+  }
+  if (bridgeSessionView?.summaryLine && bridgeSessionView.summaryLine !== bridgeSubtaskView?.summaryLine) {
+    lines.push(bridgeSessionView.summaryLine);
+  }
+  if (bridgeSessionView?.blockReason) {
+    lines.push(`${t("subtasks.detailBridgeBlockReason", {}, "Block Reason")}: ${bridgeSessionView.blockReason}`);
+  }
+  return lines;
+}
+
 export function buildSubtaskExecutionExplainabilityLines({
   launchExplainability,
   resultEnvelope,
@@ -204,6 +254,53 @@ export function buildSubtaskExecutionExplainabilityLines({
   }
 
   return lines;
+}
+
+function renderBridgeGovernanceSection(item, escapeHtml, summarizeSourcePath, t) {
+  const bridgeSubtaskView = item?.bridgeSubtaskView && typeof item.bridgeSubtaskView === "object"
+    ? item.bridgeSubtaskView
+    : null;
+  const bridgeSessionView = item?.bridgeSessionView && typeof item.bridgeSessionView === "object"
+    ? item.bridgeSessionView
+    : null;
+  if (!bridgeSubtaskView && !bridgeSessionView) {
+    return "";
+  }
+
+  const summaryLines = buildBridgeGovernanceSummaryLines(item, t);
+  const actions = [];
+  if (bridgeSessionView?.artifactPath) {
+    actions.push(`
+      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(bridgeSessionView.artifactPath)}">
+        ${escapeHtml(t("subtasks.openBridgeArtifact", {}, "Open bridge artifact"))}
+      </button>
+    `);
+  }
+  if (bridgeSessionView?.transcriptPath) {
+    actions.push(`
+      <button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(bridgeSessionView.transcriptPath)}">
+        ${escapeHtml(t("subtasks.openBridgeTranscript", {}, "Open bridge transcript"))}
+      </button>
+    `);
+  }
+
+  return `
+    <section class="memory-detail-card">
+      <span class="memory-detail-label">${escapeHtml(t("subtasks.detailBridgeGovernance", {}, "Bridge Governance"))}</span>
+      <div class="memory-detail-grid">
+        ${bridgeSubtaskView ? renderDetailCard(t("subtasks.detailBridgeKind", {}, "Bridge Semantic"), bridgeSubtaskView.label || "-", escapeHtml) : ""}
+        ${bridgeSessionView ? renderDetailCard(t("subtasks.detailBridgeTarget", {}, "Bridge Target"), bridgeSessionView.targetRef || "-", escapeHtml) : ""}
+        ${bridgeSessionView ? renderDetailCard(t("subtasks.detailBridgeState", {}, "Runtime State"), formatBridgeRuntimeState(bridgeSessionView.runtimeState, t), escapeHtml) : ""}
+        ${bridgeSessionView ? renderDetailCard(t("subtasks.detailBridgeCloseReason", {}, "Close Reason"), formatBridgeCloseReason(bridgeSessionView.closeReason, t), escapeHtml) : ""}
+        ${bridgeSessionView ? renderDetailCard(t("subtasks.detailBridgeCwd", {}, "Bridge CWD"), bridgeSessionView.cwd || "-", escapeHtml) : ""}
+        ${bridgeSessionView ? renderDetailCard(t("subtasks.detailBridgeCommand", {}, "Command Preview"), bridgeSessionView.commandPreview || "-", escapeHtml) : ""}
+      </div>
+      ${summaryLines.length ? renderExplainabilityNote(summaryLines, escapeHtml) : ""}
+      ${bridgeSessionView?.artifactPath ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailBridgeArtifact", {}, "Bridge Artifact"))}</span><span>${escapeHtml(summarizeSourcePath(bridgeSessionView.artifactPath))}</span></div>` : ""}
+      ${bridgeSessionView?.transcriptPath ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailBridgeTranscript", {}, "Bridge Transcript"))}</span><span>${escapeHtml(summarizeSourcePath(bridgeSessionView.transcriptPath))}</span></div>` : ""}
+      ${actions.length ? `<div class="subtask-detail-actions">${actions.join("")}</div>` : ""}
+    </section>
+  `;
 }
 
 function describeWorktreeRuntimeStatus(status, t) {
@@ -804,6 +901,8 @@ export function createSubtasksOverviewFeature({
             <span class="memory-detail-label">${escapeHtml(t("subtasks.detailProgress", {}, "Progress"))}</span>
             <div class="memory-detail-text">${escapeHtml(item?.progress?.message || "-")}</div>
           </section>
+
+          ${renderBridgeGovernanceSection(item, escapeHtml, summarizeSourcePath, t)}
 
           ${renderContinuationState(continuationState)}
 

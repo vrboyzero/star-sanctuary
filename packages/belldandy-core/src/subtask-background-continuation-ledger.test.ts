@@ -200,6 +200,96 @@ describe("subtask background continuation ledger handler", () => {
     }));
   });
 
+  it("does not re-dispatch failed recovery for resume metadata churn on the same terminal failure", async () => {
+    const startRun = vi.fn();
+    const finishRun = vi.fn(async (input): Promise<BackgroundContinuationRecord> => ({
+      runId: input.runId,
+      kind: input.kind,
+      sourceId: input.sourceId,
+      label: input.label,
+      status: input.status,
+      startedAt: input.startedAt ?? 0,
+      updatedAt: input.finishedAt ?? input.startedAt ?? 0,
+      finishedAt: input.finishedAt,
+      summary: input.summary,
+      reason: input.reason,
+      continuationState: input.continuationState,
+    }));
+    const onFailedRecord = vi.fn();
+    const handler = createSubTaskBackgroundContinuationLedgerHandler({
+      ledger: { startRun, finishRun },
+      onFailedRecord,
+    });
+
+    const baseFailedRecord = createSubTaskRecord({
+      kind: "bridge_session",
+      status: "error",
+      sessionId: "bridge-session-1",
+      error: "Bridge session runtime lost before the session could be resumed.",
+      summary: "Bridge session closed (runtime-lost).",
+      outputPreview: "Bridge session closed (runtime-lost).",
+      updatedAt: 1_710_000_000_400,
+      finishedAt: 1_710_000_000_400,
+      progress: {
+        phase: "error",
+        message: "Bridge session runtime lost before the session could be resumed.",
+        lastActivityAt: 1_710_000_000_400,
+      },
+      bridgeSessionRuntime: {
+        state: "runtime-lost",
+        closeReason: "runtime-lost",
+        artifactPath: "artifact.json",
+        transcriptPath: "transcript.json",
+      },
+    });
+
+    handler({
+      kind: "completed",
+      item: baseFailedRecord,
+    });
+    handler({
+      kind: "updated",
+      item: createSubTaskRecord({
+        ...baseFailedRecord,
+        updatedAt: 1_710_000_000_500,
+        resume: [
+          {
+            id: "task_resume_1",
+            message: "Recover this failed background subtask from the latest recorded failure state.",
+            status: "failed",
+            requestedAt: 1_710_000_000_450,
+            requestedSessionId: "bridge-session-1",
+            error: "工具 bridge_session_start 不在当前 Agent 白名单内",
+          },
+        ],
+        notifications: [
+          {
+            id: "task_notification_1",
+            kind: "resume_requested",
+            message: "Resume accepted.",
+            createdAt: 1_710_000_000_451,
+          },
+          {
+            id: "task_notification_2",
+            kind: "resume_failed",
+            message: "Resume failed: 工具 bridge_session_start 不在当前 Agent 白名单内",
+            createdAt: 1_710_000_000_452,
+          },
+        ],
+      }),
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(finishRun).toHaveBeenCalledTimes(2);
+    expect(onFailedRecord).toHaveBeenCalledTimes(1);
+    expect(onFailedRecord).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "subtask:task_sub_1",
+      status: "failed",
+    }));
+  });
+
   it("treats takeover changes as meaningful ledger signature updates", async () => {
     const startRun = vi.fn(async (input): Promise<BackgroundContinuationRecord> => ({
       runId: input.runId ?? "subtask:task_sub_1",

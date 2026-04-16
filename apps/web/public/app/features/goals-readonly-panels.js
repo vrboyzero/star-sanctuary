@@ -168,6 +168,39 @@ export function createGoalsReadonlyPanelsFeature({
     return [label, nodeId, title && title !== label ? title : "", detail].filter(Boolean).join(" | ");
   }
 
+  function renderHandoffBridgeGovernanceSection(handoff) {
+    const bridgeGovernance = handoff?.bridgeGovernance && typeof handoff.bridgeGovernance === "object"
+      ? handoff.bridgeGovernance
+      : null;
+    const items = Array.isArray(bridgeGovernance?.items) ? bridgeGovernance.items : [];
+    if (!bridgeGovernance || !items.length) return "";
+    return `
+      <div class="goal-summary-title">Bridge 引用摘要</div>
+      <div class="memory-list-item-meta">
+        <span>Bridge 节点 ${escapeHtml(String(bridgeGovernance.bridgeNodeCount || 0))}</span>
+        <span>运行态丢失 ${escapeHtml(String(bridgeGovernance.runtimeLostCount || 0))}</span>
+        <span>孤儿清理 ${escapeHtml(String(bridgeGovernance.orphanedCount || 0))}</span>
+        <span>阻塞归因 ${escapeHtml(String(bridgeGovernance.blockedCount || 0))}</span>
+      </div>
+      <div class="goal-tracking-list">
+        ${items.map((item) => {
+          const summaryLines = Array.isArray(item?.summaryLines)
+            ? item.summaryLines.filter((line) => typeof line === "string" && line.trim())
+            : [];
+          return `
+            <div class="goal-tracking-item">
+              <div class="memory-list-item-snippet">${escapeHtml([item?.title || item?.nodeId || "bridge", item?.runtimeState ? `[${item.runtimeState}]` : "", item?.nodeId ? `node=${item.nodeId}` : ""].filter(Boolean).join(" | "))}</div>
+              ${summaryLines.map((line) => `<div class="memory-list-item-snippet">${escapeHtml(line)}</div>`).join("")}
+              ${item?.blockReason ? `<div class="memory-list-item-snippet">${escapeHtml(`阻塞归因: ${item.blockReason}`)}</div>` : ""}
+              ${item?.artifactPath ? `<div class="memory-list-item-meta"><span>Bridge 产物</span><span>${escapeHtml(item.artifactPath)}</span></div>` : ""}
+              ${item?.transcriptPath ? `<div class="memory-list-item-meta"><span>Bridge Transcript</span><span>${escapeHtml(item.transcriptPath)}</span></div>` : ""}
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `;
+  }
+
   function formatTimelineEntry(entry) {
     if (typeof entry === "string") return entry;
     if (!entry || typeof entry !== "object") return "";
@@ -437,6 +470,7 @@ export function createGoalsReadonlyPanelsFeature({
             <div class="memory-list-item-snippet">${escapeHtml(focusPlan)}</div>
             ${focusSummary ? `<div class="memory-list-item-snippet">${escapeHtml(focusSummary)}</div>` : ""}
           ` : ""}
+          ${renderHandoffBridgeGovernanceSection(handoff)}
           ${renderGoalContinuationSection(effectiveContinuationState)}
         </div>
         <div class="goal-tracking-column">

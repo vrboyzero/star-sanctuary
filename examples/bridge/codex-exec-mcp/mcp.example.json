@@ -1,0 +1,33 @@
+{
+  "version": "1.0.0",
+  "servers": [
+    {
+      "id": "codex-bridge",
+      "name": "codex-bridge",
+      "description": "Codex 一次性执行的最小 MCP wrapper 示例",
+      "transport": {
+        "type": "stdio",
+        "command": "node",
+        "args": [
+          "__REPLACE_WITH_REPO_ROOT__\\packages\\belldandy-mcp\\scripts\\codex-bridge-server.mjs",
+          "--workspace-root",
+          "__REPLACE_WITH_WORKSPACE_ROOT__",
+          "--default-cwd",
+          "__REPLACE_WITH_WORKSPACE_ROOT__",
+          "--codex-command",
+          "__CODEX_COMMAND__"
+        ]
+      },
+      "autoConnect": true,
+      "enabled": true,
+      "timeout": 900000,
+      "retryCount": 1,
+      "retryDelay": 1000
+    }
+  ],
+  "settings": {
+    "defaultTimeout": 30000,
+    "debug": false,
+    "toolPrefix": true
+  }
+}

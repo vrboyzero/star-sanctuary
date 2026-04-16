@@ -126,6 +126,14 @@ test("task runtime agent capabilities wrap spawn results into structured task re
     parentConversationId: "conv-caps",
     agentId: "coder",
     instruction: "Implement task bridge",
+    bridgeSubtask: {
+      kind: "review",
+      targetId: "codex_exec",
+      action: "review",
+      goalId: "goal-task-runtime",
+      goalNodeId: "node-review",
+      summary: "把 bridge review 语义写进长期任务子任务记录",
+    },
   });
 
   expect(result).toMatchObject({
@@ -145,6 +153,16 @@ test("task runtime agent capabilities wrap spawn results into structured task re
       outputPath: result.outputPath,
     }),
   ]);
+
+  const persisted = await store.getTask(String(result.taskId));
+  expect(persisted?.launchSpec.bridgeSubtask).toEqual({
+    kind: "review",
+    targetId: "codex_exec",
+    action: "review",
+    goalId: "goal-task-runtime",
+    goalNodeId: "node-review",
+    summary: "把 bridge review 语义写进长期任务子任务记录",
+  });
 
   await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });

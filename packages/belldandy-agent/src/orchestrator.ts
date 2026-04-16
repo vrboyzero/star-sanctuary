@@ -614,6 +614,7 @@ export class SubAgentOrchestrator {
             isolationMode: launchSpec.isolationMode,
             parentTaskId: launchSpec.parentTaskId,
             delegationProtocol: launchSpec.delegationProtocol,
+            bridgeSubtask: launchSpec.bridgeSubtask,
           },
         },
       });

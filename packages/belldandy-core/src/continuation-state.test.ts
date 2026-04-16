@@ -83,6 +83,54 @@ test("buildSubTaskContinuationState summarizes minimal recovery state", () => {
   });
 });
 
+test("buildSubTaskContinuationState falls back to bridge summary for bridge subtasks", () => {
+  const record: SubTaskRecord = {
+    id: "task_bridge_1",
+    kind: "sub_agent",
+    parentConversationId: "conv-bridge",
+    sessionId: "sub_bridge_1",
+    agentId: "coder",
+    launchSpec: {
+      agentId: "coder",
+      profileId: "coder",
+      background: true,
+      timeoutMs: 60_000,
+      channel: "subtask",
+      bridgeSubtask: {
+        kind: "review",
+        targetId: "codex_exec",
+        action: "review",
+        goalId: "goal_bridge_1",
+        goalNodeId: "node_bridge_review",
+        summary: "Inspect the bridge patch output before approval.",
+      },
+    },
+    background: true,
+    status: "done",
+    instruction: "Bridge review follow-up",
+    summary: "",
+    progress: {
+      phase: "done",
+      lastActivityAt: 1712000000700,
+    },
+    createdAt: 1712000000000,
+    updatedAt: 1712000000700,
+    finishedAt: 1712000000700,
+    steering: [],
+    takeover: [],
+    resume: [],
+    notifications: [],
+  };
+
+  expect(buildSubTaskContinuationState(record)).toMatchObject({
+    summary: "Bridge review via codex_exec.review: Inspect the bridge patch output before approval.",
+    progress: {
+      current: "Bridge review via codex_exec.review: Inspect the bridge patch output before approval.",
+      recent: [],
+    },
+  });
+});
+
 test("buildGoalContinuationState normalizes goal handoff into shared shape", () => {
   const handoff: GoalHandoffSnapshot = {
     version: 1,
@@ -150,6 +198,29 @@ test("buildGoalContinuationState normalizes goal handoff into shared shape", () 
         summary: "Implementation resumed.",
       },
     ],
+    bridgeGovernance: {
+      bridgeNodeCount: 1,
+      activeCount: 0,
+      runtimeLostCount: 1,
+      orphanedCount: 0,
+      closedCount: 0,
+      blockedCount: 1,
+      artifactCount: 1,
+      transcriptCount: 1,
+      items: [
+        {
+          nodeId: "node_impl",
+          title: "Implement rollout",
+          taskId: "task_bridge_1",
+          runtimeState: "runtime-lost",
+          closeReason: "runtime-lost",
+          blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+          artifactPath: "artifacts/bridge.md",
+          transcriptPath: "logs/bridge.jsonl",
+          summaryLines: ["Bridge review via codex_session.interactive: recover the rollout runtime."],
+        },
+      ],
+    },
   };
 
   expect(buildGoalContinuationState(handoff)).toMatchObject({
@@ -172,11 +243,20 @@ test("buildGoalContinuationState normalizes goal handoff into shared shape", () 
     checkpoints: {
       openCount: 1,
       blockerCount: 1,
-      labels: ["Need producer review", "Need producer review"],
+      labels: [
+        "Need producer review",
+        "Need producer review",
+        "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+        "Bridge review via codex_session.interactive: recover the rollout runtime.",
+      ],
     },
     progress: {
       current: "implementation",
-      recent: ["Checkpoint requested for rollout.", "Implementation resumed."],
+      recent: [
+        "Checkpoint requested for rollout.",
+        "Implementation resumed.",
+        "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+      ],
     },
   });
 });

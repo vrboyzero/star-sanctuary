@@ -12,7 +12,13 @@ import {
   type SubAgentEvent,
   type SubAgentOrchestrator,
 } from "@belldandy/agent";
-import type { AgentCapabilities, SessionInfo, SpawnSubAgentOptions, SubAgentResult } from "@belldandy/skills";
+import type {
+  AgentCapabilities,
+  BridgeSubtaskSemantics,
+  SessionInfo,
+  SpawnSubAgentOptions,
+  SubAgentResult,
+} from "@belldandy/skills";
 import {
   summarizeDelegationProtocol,
   type SubTaskDelegationSummary,
@@ -45,6 +51,27 @@ export type SubTaskSteeringStatus = "accepted" | "delivered" | "failed";
 export type SubTaskTakeoverStatus = "accepted" | "delivered" | "failed";
 export type SubTaskResumeStatus = "accepted" | "delivered" | "failed";
 export type SubTaskTakeoverMode = "safe_point" | "resume_relaunch";
+export type SubTaskKind = "sub_agent" | "bridge_session";
+
+export type SubTaskBridgeSessionLaunch = {
+  targetId: string;
+  action: string;
+  transport: "pty";
+  cwd: string;
+  commandPreview: string;
+  firstTurnStrategy?: "start-args-prompt" | "write";
+  firstTurnHint?: string;
+  recommendedReadWaitMs?: number;
+  summary?: string;
+};
+
+export type SubTaskBridgeSessionRuntimeState = {
+  state: "active" | "closed" | "runtime-lost" | "orphaned";
+  closeReason?: "manual" | "idle-timeout" | "runtime-lost" | "orphan";
+  artifactPath?: string;
+  transcriptPath?: string;
+  blockReason?: string;
+};
 
 export type SubTaskProgress = {
   phase: SubTaskStatus;
@@ -112,6 +139,8 @@ export type SubTaskLaunchSpec = {
   permissionMode?: string;
   isolationMode?: string;
   parentTaskId?: string;
+  bridgeSubtask?: BridgeSubtaskSemantics;
+  bridgeSession?: SubTaskBridgeSessionLaunch;
   contextKeys?: string[];
   delegation?: SubTaskDelegationSummary;
   worktreePath?: string;
@@ -123,7 +152,7 @@ export type SubTaskLaunchSpec = {
 
 export type SubTaskRecord = {
   id: string;
-  kind: "sub_agent";
+  kind: SubTaskKind;
   parentConversationId: string;
   sessionId?: string;
   agentId: string;
@@ -143,6 +172,7 @@ export type SubTaskRecord = {
   outputPath?: string;
   outputPreview?: string;
   error?: string;
+  bridgeSessionRuntime?: SubTaskBridgeSessionRuntimeState;
   steering: SubTaskSteeringRecord[];
   takeover: SubTaskTakeoverRecord[];
   resume: SubTaskResumeRecord[];
@@ -163,11 +193,23 @@ type CreateSubTaskInput = {
   launchSpec: AgentLaunchSpecInput;
 };
 
+type CreateBridgeSessionTaskInput = {
+  parentConversationId: string;
+  agentId: string;
+  profileId: string;
+  instruction: string;
+  summary?: string;
+  parentTaskId?: string;
+  bridgeSubtask?: BridgeSubtaskSemantics;
+  bridgeSession: SubTaskBridgeSessionLaunch;
+};
+
 type CompleteSubTaskInput = {
   status: Extract<SubTaskStatus, "done" | "error" | "timeout" | "stopped">;
   sessionId?: string;
   output?: string;
   error?: string;
+  bridgeSessionRuntime?: Partial<SubTaskBridgeSessionRuntimeState>;
 };
 
 type RuntimeLogger = {
@@ -205,6 +247,89 @@ function inferSummary(record: SubTaskRecord, fallback = ""): string {
   return truncateText(record.outputPreview || record.error || fallback || record.instruction, 200);
 }
 
+function normalizeBridgeSubtaskSemantics(value: unknown): BridgeSubtaskSemantics | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = typeof record.kind === "string" ? record.kind.trim() : "";
+  if (kind !== "analyze" && kind !== "review" && kind !== "patch") {
+    return undefined;
+  }
+  return {
+    kind,
+    targetId: typeof record.targetId === "string" && record.targetId.trim() ? record.targetId.trim() : undefined,
+    action: typeof record.action === "string" && record.action.trim() ? record.action.trim() : undefined,
+    goalId: typeof record.goalId === "string" && record.goalId.trim() ? record.goalId.trim() : undefined,
+    goalNodeId: typeof record.goalNodeId === "string" && record.goalNodeId.trim() ? record.goalNodeId.trim() : undefined,
+    summary: typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined,
+  };
+}
+
+function normalizeBridgeSessionLaunch(value: unknown): SubTaskBridgeSessionLaunch | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const targetId = typeof record.targetId === "string" ? record.targetId.trim() : "";
+  const action = typeof record.action === "string" ? record.action.trim() : "";
+  const cwd = typeof record.cwd === "string" ? record.cwd.trim() : "";
+  const commandPreview = typeof record.commandPreview === "string" ? record.commandPreview.trim() : "";
+  if (!targetId || !action || !cwd || !commandPreview) {
+    return undefined;
+  }
+  return {
+    targetId,
+    action,
+    transport: "pty",
+    cwd,
+    commandPreview,
+    firstTurnStrategy: record.firstTurnStrategy === "write"
+      ? "write"
+      : record.firstTurnStrategy === "start-args-prompt"
+        ? "start-args-prompt"
+        : undefined,
+    firstTurnHint: typeof record.firstTurnHint === "string" && record.firstTurnHint.trim()
+      ? record.firstTurnHint.trim()
+      : undefined,
+    recommendedReadWaitMs: typeof record.recommendedReadWaitMs === "number" && Number.isFinite(record.recommendedReadWaitMs)
+      ? Math.max(0, Math.trunc(record.recommendedReadWaitMs))
+      : undefined,
+    summary: typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined,
+  };
+}
+
+function normalizeBridgeSessionRuntimeState(value: unknown): SubTaskBridgeSessionRuntimeState | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const state = record.state === "active"
+    ? "active"
+    : record.state === "orphaned"
+      ? "orphaned"
+    : record.state === "runtime-lost"
+      ? "runtime-lost"
+      : record.state === "closed"
+        ? "closed"
+        : undefined;
+  if (!state) {
+    return undefined;
+  }
+  return {
+    state,
+    closeReason: record.closeReason === "manual"
+      || record.closeReason === "idle-timeout"
+      || record.closeReason === "runtime-lost"
+      || record.closeReason === "orphan"
+      ? record.closeReason
+      : undefined,
+    artifactPath: typeof record.artifactPath === "string" && record.artifactPath.trim()
+      ? record.artifactPath.trim()
+      : undefined,
+    transcriptPath: typeof record.transcriptPath === "string" && record.transcriptPath.trim()
+      ? record.transcriptPath.trim()
+      : undefined,
+    blockReason: typeof record.blockReason === "string" && record.blockReason.trim()
+      ? record.blockReason.trim()
+      : undefined,
+  };
+}
+
 function createLaunchSpecSummary(
   spec: AgentLaunchSpec,
   runtimeSummary: Partial<SubTaskWorktreeRuntimeSummary> = {},
@@ -225,6 +350,8 @@ function createLaunchSpecSummary(
     permissionMode: spec.permissionMode,
     isolationMode: spec.isolationMode,
     parentTaskId: spec.parentTaskId,
+    bridgeSubtask: spec.bridgeSubtask ? { ...spec.bridgeSubtask } : undefined,
+    bridgeSession: undefined,
     contextKeys: spec.context ? Object.keys(spec.context).sort() : undefined,
     delegation: summarizeDelegationProtocol(spec.delegationProtocol),
     worktreePath: runtimeSummary.worktreePath,
@@ -245,29 +372,32 @@ async function atomicWriteText(targetPath: string, content: string): Promise<voi
 function cloneRecord(record: SubTaskRecord): SubTaskRecord {
   return {
     ...record,
-      launchSpec: {
-        ...record.launchSpec,
-        toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
-        allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
-        contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
-        delegation: record.launchSpec.delegation
-          ? {
-            ...record.launchSpec.delegation,
-            contextKeys: [...record.launchSpec.delegation.contextKeys],
-            sourceAgentIds: record.launchSpec.delegation.sourceAgentIds
-              ? [...record.launchSpec.delegation.sourceAgentIds]
-              : undefined,
-            launchDefaults: record.launchSpec.delegation.launchDefaults
-              ? {
-                ...record.launchSpec.delegation.launchDefaults,
-                allowedToolFamilies: record.launchSpec.delegation.launchDefaults.allowedToolFamilies
-                  ? [...record.launchSpec.delegation.launchDefaults.allowedToolFamilies]
-                  : undefined,
-              }
-              : undefined,
-          }
-          : undefined,
-      },
+    launchSpec: {
+      ...record.launchSpec,
+      toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
+      allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
+      bridgeSubtask: record.launchSpec.bridgeSubtask ? { ...record.launchSpec.bridgeSubtask } : undefined,
+      bridgeSession: record.launchSpec.bridgeSession ? { ...record.launchSpec.bridgeSession } : undefined,
+      contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
+      delegation: record.launchSpec.delegation
+        ? {
+          ...record.launchSpec.delegation,
+          contextKeys: [...record.launchSpec.delegation.contextKeys],
+          sourceAgentIds: record.launchSpec.delegation.sourceAgentIds
+            ? [...record.launchSpec.delegation.sourceAgentIds]
+            : undefined,
+          launchDefaults: record.launchSpec.delegation.launchDefaults
+            ? {
+              ...record.launchSpec.delegation.launchDefaults,
+              allowedToolFamilies: record.launchSpec.delegation.launchDefaults.allowedToolFamilies
+                ? [...record.launchSpec.delegation.launchDefaults.allowedToolFamilies]
+                : undefined,
+            }
+            : undefined,
+        }
+        : undefined,
+    },
+    bridgeSessionRuntime: record.bridgeSessionRuntime ? { ...record.bridgeSessionRuntime } : undefined,
     progress: { ...record.progress },
     steering: record.steering.map((item) => ({ ...item })),
     takeover: record.takeover.map((item) => ({ ...item })),
@@ -392,6 +522,92 @@ export class SubTaskRuntimeStore {
       this.pushNotification(record, "queued", "Task created and waiting for orchestration.");
       this.records.set(record.id, record);
       this.emitChange("created", record);
+      return cloneRecord(record);
+    });
+  }
+
+  async createBridgeSessionTask(input: CreateBridgeSessionTaskInput): Promise<SubTaskRecord> {
+    await this.load();
+    return this.mutate(async () => {
+      const now = Date.now();
+      const record: SubTaskRecord = {
+        id: `task_${crypto.randomUUID().slice(0, 8)}`,
+        kind: "bridge_session",
+        parentConversationId: input.parentConversationId,
+        agentId: input.agentId,
+        launchSpec: {
+          agentId: input.agentId,
+          profileId: input.profileId,
+          background: true,
+          timeoutMs: 120_000,
+          channel: "bridge_session",
+          parentTaskId: input.parentTaskId,
+          bridgeSubtask: input.bridgeSubtask ? { ...input.bridgeSubtask } : undefined,
+          bridgeSession: { ...input.bridgeSession },
+        },
+        background: true,
+        status: "pending",
+        instruction: input.instruction,
+        summary: truncateText(input.summary || input.bridgeSession.summary || input.instruction, 200),
+        progress: {
+          phase: "pending",
+          message: "Bridge session task created and waiting to start.",
+          lastActivityAt: now,
+        },
+        createdAt: now,
+        updatedAt: now,
+        steering: [],
+        takeover: [],
+        resume: [],
+        notifications: [],
+      };
+      this.pushNotification(record, "queued", `Bridge session task created for ${input.bridgeSession.targetId}.${input.bridgeSession.action}.`);
+      this.records.set(record.id, record);
+      this.emitChange("created", record);
+      return cloneRecord(record);
+    });
+  }
+
+  async updateBridgeSessionTask(
+    taskId: string,
+    input: {
+      agentId?: string;
+      profileId?: string;
+      instruction?: string;
+      summary?: string;
+      bridgeSubtask?: BridgeSubtaskSemantics;
+      bridgeSession: SubTaskBridgeSessionLaunch;
+    },
+  ): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    return this.mutate(async () => {
+      const record = this.records.get(taskId);
+      if (!record) return undefined;
+      const now = Date.now();
+      record.kind = "bridge_session";
+      if (input.agentId?.trim()) {
+        record.agentId = input.agentId.trim();
+        record.launchSpec.agentId = input.agentId.trim();
+      }
+      if (input.profileId?.trim()) {
+        record.launchSpec.profileId = input.profileId.trim();
+      }
+      if (input.instruction?.trim()) {
+        record.instruction = input.instruction.trim();
+      }
+      if (input.summary?.trim()) {
+        record.summary = truncateText(input.summary.trim(), 200);
+      } else if (!record.summary) {
+        record.summary = truncateText(
+          input.bridgeSession.summary || input.instruction || record.instruction,
+          200,
+        );
+      }
+      record.launchSpec.channel = "bridge_session";
+      record.launchSpec.bridgeSession = { ...input.bridgeSession };
+      record.launchSpec.bridgeSubtask = input.bridgeSubtask ? { ...input.bridgeSubtask } : undefined;
+      record.updatedAt = now;
+      this.emitChange("updated", record);
       return cloneRecord(record);
     });
   }
@@ -563,6 +779,11 @@ export class SubTaskRuntimeStore {
         message: "Task is running.",
         lastActivityAt: now,
       };
+      if (record.kind === "bridge_session") {
+        record.bridgeSessionRuntime = {
+          state: "active",
+        };
+      }
       record.summary = inferSummary(record, "Task is running.");
       this.sessionToTask.set(sessionId, taskId);
       this.pushNotification(record, "started", `Task started in session ${sessionId}.`);
@@ -622,6 +843,23 @@ export class SubTaskRuntimeStore {
         const outputPath = path.join(this.outputsDir, taskId, OUTPUT_FILENAME);
         await atomicWriteText(outputPath, input.output);
         record.outputPath = outputPath;
+      }
+      if (record.kind === "bridge_session" && (input.bridgeSessionRuntime || record.bridgeSessionRuntime)) {
+        const runtimeState = input.bridgeSessionRuntime?.state
+          ?? (record.bridgeSessionRuntime?.state === "runtime-lost" || record.bridgeSessionRuntime?.state === "orphaned"
+            ? record.bridgeSessionRuntime.state
+            : record.bridgeSessionRuntime
+              ? "closed"
+              : undefined);
+        if (runtimeState) {
+          record.bridgeSessionRuntime = {
+            state: runtimeState,
+            closeReason: input.bridgeSessionRuntime?.closeReason,
+            artifactPath: input.bridgeSessionRuntime?.artifactPath,
+            transcriptPath: input.bridgeSessionRuntime?.transcriptPath,
+            blockReason: input.bridgeSessionRuntime?.blockReason,
+          };
+        }
       }
       record.progress = {
         phase: input.status,
@@ -901,6 +1139,14 @@ export class SubTaskRuntimeStore {
     return record ? cloneRecord(record) : undefined;
   }
 
+  async getTaskBySession(sessionId: string): Promise<SubTaskRecord | undefined> {
+    await this.load();
+    const taskId = this.sessionToTask.get(sessionId);
+    if (!taskId) return undefined;
+    const record = this.records.get(taskId);
+    return record ? cloneRecord(record) : undefined;
+  }
+
   async listTasks(parentConversationId?: string, options: { includeArchived?: boolean } = {}): Promise<SubTaskRecord[]> {
     await this.load();
     return [...this.records.values()]
@@ -1040,9 +1286,10 @@ export class SubTaskRuntimeStore {
         })
         .slice(-MAX_TAKEOVER_RECORDS)
       : [];
+    const kind = value.kind === "bridge_session" ? "bridge_session" : "sub_agent";
     return {
       id,
-      kind: "sub_agent",
+      kind,
       parentConversationId: typeof value.parentConversationId === "string" ? value.parentConversationId : "system",
       sessionId: typeof value.sessionId === "string" && value.sessionId.trim() ? value.sessionId : undefined,
       agentId: typeof value.agentId === "string" && value.agentId.trim() ? value.agentId : "default",
@@ -1100,6 +1347,9 @@ export class SubTaskRuntimeStore {
             parentTaskId: typeof launchSpecSource.parentTaskId === "string" && String(launchSpecSource.parentTaskId).trim()
               ? String(launchSpecSource.parentTaskId).trim()
               : fallbackLaunchSpec.parentTaskId,
+            bridgeSubtask: normalizeBridgeSubtaskSemantics(launchSpecSource.bridgeSubtask)
+              ?? createLaunchSpecSummary(fallbackLaunchSpec).bridgeSubtask,
+            bridgeSession: normalizeBridgeSessionLaunch(launchSpecSource.bridgeSession),
             contextKeys: Array.isArray(rawContextKeys)
               ? rawContextKeys
                   .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
@@ -1202,6 +1452,7 @@ export class SubTaskRuntimeStore {
       outputPath: typeof value.outputPath === "string" && value.outputPath.trim() ? value.outputPath : undefined,
       outputPreview: typeof value.outputPreview === "string" ? value.outputPreview : undefined,
       error: typeof value.error === "string" ? value.error : undefined,
+      bridgeSessionRuntime: normalizeBridgeSessionRuntimeState(value.bridgeSessionRuntime),
       steering,
       takeover,
       resume,
@@ -1461,6 +1712,7 @@ export function createSubTaskAgentCapabilities(input: {
         maxToolRiskLevel: opts.maxToolRiskLevel,
         policySummary: opts.policySummary,
         delegationProtocol: opts.delegationProtocol,
+        bridgeSubtask: opts.bridgeSubtask,
       }, {
         agentRegistry: input.agentRegistry,
       });
@@ -1685,6 +1937,7 @@ function buildResumeLaunchSpec(
     permissionMode: record.launchSpec.permissionMode,
     isolationMode: record.launchSpec.isolationMode,
     parentTaskId: record.launchSpec.parentTaskId,
+    bridgeSubtask: record.launchSpec.bridgeSubtask ? { ...record.launchSpec.bridgeSubtask } : undefined,
   };
 }
 

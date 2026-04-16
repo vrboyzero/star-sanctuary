@@ -41,6 +41,7 @@ import {
 import { listRecentConversationExports } from "../conversation-export-index.js";
 import type { CronRuntimeDoctorReport } from "../cron/observability.js";
 import { buildAssistantModeGoalRuntimeSummary } from "../assistant-mode-goals.js";
+import { buildBridgeRecoveryDiagnostics } from "../bridge-recovery-diagnostics.js";
 import { buildDeploymentBackendsDoctorReport } from "../deployment-backends.js";
 import { buildExtensionGovernanceReport } from "../extension-governance.js";
 import { loadExtensionMarketplaceState } from "../extension-marketplace-state.js";
@@ -793,6 +794,7 @@ export async function handleSystemDoctorMethod(
   let learningReviewNudgeRuntime: any;
   let skillFreshness: any;
   let delegationObservability: any;
+  let bridgeRecoveryDiagnostics: any;
 
   if (conversationId) {
     const conversationSnapshot = ctx.conversationStore.get(conversationId);
@@ -1105,6 +1107,14 @@ export async function handleSystemDoctorMethod(
     const runtimeContext: ToolExecutionRuntimeContext | undefined = visibilityTask
       ? { launchSpec: visibilityTask.launchSpec }
       : undefined;
+    bridgeRecoveryDiagnostics = visibilityTask
+      ? buildBridgeRecoveryDiagnostics({
+          toolExecutor: ctx.toolExecutor,
+          task: visibilityTask,
+          agentId: visibilityAgentId,
+          conversationId: visibilityConversationId,
+        })
+      : undefined;
     const visibleContracts = ctx.toolExecutor.getContracts(
       visibilityAgentId,
       visibilityConversationId,
@@ -1129,6 +1139,14 @@ export async function handleSystemDoctorMethod(
         ? `${observability.included.length} behavior contract(s) visible for ${visibilityAgentId ?? "default"}`
         : `No behavior contracts visible for ${visibilityAgentId ?? "default"}`,
     });
+    if (bridgeRecoveryDiagnostics) {
+      checks.push({
+        id: "bridge_recovery_diagnostics",
+        name: "Bridge Recovery",
+        status: bridgeRecoveryDiagnostics.status === "allowed" ? "pass" : "warn",
+        message: bridgeRecoveryDiagnostics.headline,
+      });
+    }
     toolBehaviorObservability = {
       requested: {
         ...(toolAgentId ? { agentId: toolAgentId } : {}),
@@ -1138,6 +1156,7 @@ export async function handleSystemDoctorMethod(
       visibilityContext: {
         agentId: visibilityAgentId ?? "default",
         conversationId: visibilityConversationId ?? null,
+        ...(bridgeRecoveryDiagnostics ? { bridgeRecoveryDiagnostics } : {}),
         ...(launchExplainability ? { launchExplainability } : {}),
         ...(residentStateBinding ? { residentStateBinding } : {}),
         ...(visibilityTask
@@ -1166,6 +1185,7 @@ export async function handleSystemDoctorMethod(
       visibilityContext: {
         agentId: visibilityAgentId ?? "default",
         conversationId: visibilityConversationId ?? null,
+        ...(bridgeRecoveryDiagnostics ? { bridgeRecoveryDiagnostics } : {}),
         ...(launchExplainability ? { launchExplainability } : {}),
         ...(residentStateBinding ? { residentStateBinding } : {}),
         ...(visibilityTask
@@ -1207,6 +1227,7 @@ export async function handleSystemDoctorMethod(
       ...(promptObservability ? { promptObservability } : {}),
       ...(toolBehaviorObservability ? { toolBehaviorObservability } : {}),
       ...(toolContractV2Observability ? { toolContractV2Observability } : {}),
+      ...(bridgeRecoveryDiagnostics ? { bridgeRecoveryDiagnostics } : {}),
       ...(residentAgents ? { residentAgents } : {}),
       ...(mindProfileSnapshot ? { mindProfileSnapshot } : {}),
       ...(learningReviewInput ? { learningReviewInput } : {}),

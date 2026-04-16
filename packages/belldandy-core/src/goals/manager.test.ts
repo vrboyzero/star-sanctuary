@@ -6,6 +6,7 @@ import { MemoryManager, registerGlobalMemoryManager } from "@belldandy/memory";
 import { getGoalUpdateAreas } from "./goal-events.js";
 import { GoalManager } from "./manager.js";
 import { readGoalLearningReviewRefreshState } from "./learning-review-refresh.js";
+import { SubTaskRuntimeStore } from "../task-runtime.js";
 import {
   getGoalReviewNotificationDispatchesPath,
   getGoalReviewNotificationsPath,
@@ -870,6 +871,114 @@ describe("GoalManager", () => {
     expect(handoffAfter).toBe(handoffBefore);
     expect(progressAfter).toBe(progressBefore);
     expect(progressAfter).not.toContain("handoff_generated");
+  });
+
+  it("injects bridge governance summary into handoff and continuation guidance", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+    const goal = await manager.createGoal({
+      title: "Bridge Handoff Goal",
+      objective: "Surface bridge recovery context in handoff",
+    });
+
+    await manager.createTaskNode(goal.id, {
+      id: "node_bridge_review",
+      title: "Review bridge recovery",
+      status: "ready",
+      checkpointRequired: true,
+    });
+    const bridgeTask = await subTaskRuntimeStore.createBridgeSessionTask({
+      parentConversationId: `goal:${goal.id}`,
+      agentId: "agent_bridge",
+      profileId: "bridge_profile",
+      instruction: "Recover runtime-lost bridge session.",
+      summary: "Recover runtime-lost bridge session.",
+      bridgeSubtask: {
+        kind: "review",
+        targetId: "codex_session",
+        action: "interactive",
+        goalId: goal.id,
+        goalNodeId: "node_bridge_review",
+        summary: "Recover runtime-lost bridge session.",
+      },
+      bridgeSession: {
+        targetId: "codex_session",
+        action: "interactive",
+        transport: "pty",
+        cwd: stateDir,
+        commandPreview: "codex --interactive",
+        summary: "Recover runtime-lost bridge session.",
+      },
+    });
+    await subTaskRuntimeStore.attachSession(bridgeTask.id, "bridge_session_runtime_lost");
+    await subTaskRuntimeStore.completeTask(bridgeTask.id, {
+      status: "error",
+      error: "Bridge runtime was lost during startup recovery.",
+      bridgeSessionRuntime: {
+        state: "runtime-lost",
+        closeReason: "runtime-lost",
+        blockReason: "Bridge session runtime lost during startup recovery and must be resumed or relaunched before work can continue.",
+        artifactPath: "artifacts/bridge-recovery.md",
+        transcriptPath: "logs/bridge-recovery.jsonl",
+      },
+    });
+
+    await manager.claimTaskNode(goal.id, "node_bridge_review", {
+      runId: bridgeTask.id,
+      summary: "Bridge review started",
+    });
+    await manager.requestCheckpoint(goal.id, "node_bridge_review", {
+      title: "Need bridge recovery review",
+      summary: "Waiting for reviewer sign-off",
+      reviewer: "reviewer",
+      requestedBy: "main-agent",
+      runId: bridgeTask.id,
+    });
+
+    const result = await manager.generateHandoff(goal.id);
+    expect(result.handoff.bridgeGovernance).toMatchObject({
+      bridgeNodeCount: 1,
+      runtimeLostCount: 1,
+      blockedCount: 1,
+      items: [
+        expect.objectContaining({
+          nodeId: "node_bridge_review",
+          taskId: bridgeTask.id,
+          runtimeState: "runtime-lost",
+          closeReason: "runtime-lost",
+          artifactPath: "artifacts/bridge-recovery.md",
+          transcriptPath: "logs/bridge-recovery.jsonl",
+        }),
+      ],
+    });
+    expect(result.handoff.summary).toContain("关联 bridge 运行态已丢失");
+    expect(result.handoff.nextAction).toContain("恢复前先查看关联 bridge 产物 / transcript");
+    expect(result.handoff.openCheckpoints[0]?.summary).toContain("Bridge：bridge 运行态丢失");
+    expect(result.handoff.checkpointReplay?.reason).toContain("Bridge：bridge 运行态丢失");
+    expect(result.handoff.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "bridge",
+        nodeId: "node_bridge_review",
+        status: "runtime-lost",
+      }),
+    ]));
+    expect(result.continuationState).toMatchObject({
+      summary: expect.stringContaining("bridge 运行态已丢失"),
+      nextAction: expect.stringContaining("bridge 产物 / transcript"),
+      checkpoints: {
+        openCount: 1,
+        blockerCount: expect.any(Number),
+        labels: expect.arrayContaining([
+          expect.stringContaining("Bridge session runtime lost during startup recovery"),
+        ]),
+      },
+    });
+
+    const handoffContent = await fs.readFile(goal.handoffPath, "utf-8");
+    expect(handoffContent).toContain("## Bridge Governance");
+    expect(handoffContent).toContain("artifacts/bridge-recovery.md");
+    expect(handoffContent).toContain("logs/bridge-recovery.jsonl");
   });
 
   it("generates retrospective artifacts from current goal runtime", async () => {

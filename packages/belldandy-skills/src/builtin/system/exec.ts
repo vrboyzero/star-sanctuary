@@ -947,6 +947,9 @@ export const runCommandTool: Tool = withToolContract({
                 shell: true,
                 env: { ...process.env, FORCE_COLOR: "0" }, // 禁用颜色代码
             });
+            // run_command 当前不支持向子进程写入 stdin；显式结束 stdin，
+            // 避免非交互 CLI 在拿到参数后继续等待 EOF。
+            child.stdin?.end();
 
             let stdout = "";
             let stderr = "";

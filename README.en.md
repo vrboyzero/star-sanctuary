@@ -32,7 +32,8 @@ Star Sanctuary is a **local-first** personal AI assistant project. It is built a
 
 This repository is no longer just a WebChat demo. It is now a full Agent infrastructure stack:
 
-- **Local-first**: the default state directory is `~/.star_sanctuary`, with compatibility for the legacy `~/.belldandy`
+- **Local-first**: the default state directory is the `.star_sanctuary` folder under your user home directory, with compatibility for the legacy `.belldandy` folder  
+  On Windows, the common path is: `C:\Users\YourName\.star_sanctuary`
 - **Unified entrypoints**: WebChat, `bdd` CLI, chat channels, webhooks, and community APIs share the same Agent and tool system
 - **Long-term workspace**: built-in workspace files such as `SOUL.md`, `IDENTITY.md`, `USER.md`, `TOOLS.md`, `HEARTBEAT.md`, and `AGENTS.md`
 - **Extensible by design**: supports Skills, Methods, Plugins, MCP, Browser Relay, Channels Router, and multi-Agent Profiles
@@ -73,7 +74,8 @@ Current standard package policy:
   - `README-single-exe.md`
   - `README-single-exe-zh.md`
   - `.env.example`
-- On first launch, `Single-Exe` extracts its runtime to `%LOCALAPPDATA%\\StarSanctuary\\runtime\\<version>-win32-x64`
+- On first launch, `Single-Exe` extracts its runtime into the Windows local app data directory under `StarSanctuary\runtime\<version>-win32-x64`  
+  On Windows, the common path is: `C:\Users\YourName\AppData\Local\StarSanctuary\runtime\<version>-win32-x64`
 
 > **The community website is more than just a download page; it features a rich ecosystem of modules:**
 > - **Co-Lab**: A hub for publishing tasks and accepting assignments
@@ -204,12 +206,13 @@ star-sanctuary/
 
 ### Default State Directory
 
-The default state directory is `~/.star_sanctuary`. If that does not exist but the legacy `~/.belldandy` does, the system will automatically use the legacy directory for compatibility.
+The default state directory is the `.star_sanctuary` folder under your user home directory. On Windows, the common path is: `C:\Users\YourName\.star_sanctuary`.  
+If that does not exist but the legacy `.belldandy` folder does, the system will automatically use the legacy directory for compatibility.
 
 Typical contents:
 
 ```text
-~/.star_sanctuary/
+your-home/.star_sanctuary/
 ├── AGENTS.md
 ├── SOUL.md
 ├── TOOLS.md
@@ -240,7 +243,8 @@ Typical contents:
 
 FACET is the persona / role module system in Belldandy. Instead of putting every behavior rule into a single `SOUL.md`, you can split different styles and responsibilities into dedicated modules and switch when needed.
 
-- Module files live under `~/.star_sanctuary/facets/`
+- Module files live under the `.star_sanctuary\facets` folder in your user home directory  
+  On Windows, the common path is: `C:\Users\YourName\.star_sanctuary\facets`
 - Useful for roles such as coder, researcher, translator, or writer
 - Switch with the `switch_facet` tool; the change then applies under the current workspace rules
 - In multi-Agent setups, FACET can also work together with `agents/{agentId}` sub-workspaces
@@ -251,7 +255,8 @@ For examples, see [`examples/facets`](./examples/facets).
 
 Methods are not just a tool list. They are the SOPs that the Agent gradually accumulates for how similar work should be done next time.
 
-- Method documents live under `~/.star_sanctuary/methods/`
+- Method documents live under the `.star_sanctuary\methods` folder in your user home directory  
+  On Windows, the common path is: `C:\Users\YourName\.star_sanctuary\methods`
 - The Agent can read and write them via `method_list`, `method_read`, `method_create`, and `method_search`
 - Methods can work together with logs, memory, Heartbeat, and Cron to form a loop of execution -> review -> distillation -> reuse
 - Good for deployment flows, channel integrations, operational SOPs, troubleshooting procedures, and content production workflows
@@ -305,15 +310,21 @@ For source-mode installs, **new users usually do not need to copy `.env.example`
 
 Current default behavior:
 
-- on first launch, the Gateway auto-generates a default `.env` in the current effective `envDir`
+- on first launch, the Gateway auto-generates a default `.env` in the current effective configuration directory
 - sensitive values and personal overrides continue to live in `.env.local`
 - `.env` and `.env.local` are local-only and must not be committed
+
+To make the rest of this README easier to follow:
+
+- **configuration directory**: the directory that actually provides the active `.env` / `.env.local`; some places call this `envDir`
+- **state directory**: the main directory where the app keeps configs, logs, sessions, skills, and JSON state files; some places call this `stateDir`
+- **`.star_sanctuary` under your home directory**: on Windows, this is usually `C:\Users\YourName\.star_sanctuary`
 
 `envDir` is resolved in this order:
 
 1. explicit `STAR_SANCTUARY_ENV_DIR` or `BELLDANDY_ENV_DIR`
 2. otherwise, if the project root already contains `.env` or `.env.local`, keep using the project root for legacy compatibility
-3. otherwise, fall back to `stateDir` (usually `~/.star_sanctuary`)
+3. otherwise, fall back to the state directory, which is usually the `.star_sanctuary` folder under your home directory
 
 If you are an existing user with legacy project-root config and want to switch later, use:
 
@@ -343,7 +354,7 @@ The launcher script will automatically:
 - check Node.js and pnpm
 - run `corepack pnpm install` if dependencies are missing
 - run `corepack pnpm build` if `dist/` is missing
-- auto-generate a default `.env` in the effective `envDir` when it is missing
+- auto-generate a default `.env` in the effective configuration directory when it is missing
 - generate a one-time WebChat token when needed
 - start the Gateway and open the browser
 
@@ -384,7 +395,7 @@ If sensitive config is not set yet, start with:
 corepack pnpm bdd setup
 ```
 
-`bdd setup` writes into the current effective `envDir/.env.local`. You can confirm the active path with:
+`bdd setup` writes into `.env.local` inside the current effective configuration directory. You can confirm the active path with:
 
 ```bash
 corepack pnpm bdd config path
@@ -428,13 +439,13 @@ corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
 
 ## Configuration
 
-The configuration directory is no longer assumed to be the project root. The runtime now uses the current effective `envDir`.
+The configuration directory is no longer assumed to be the project root. The runtime now uses the current effective configuration directory.
 
 Resolution order:
 
 1. explicit `BELLDANDY_ENV_DIR` / `STAR_SANCTUARY_ENV_DIR`
 2. otherwise, existing project-root `.env` / `.env.local` for legacy compatibility
-3. otherwise, `stateDir`
+3. otherwise, the state directory
 
 Recommended mental model:
 
@@ -452,7 +463,7 @@ If `bdd doctor` reports `Legacy root env mode`, you are still using legacy proje
 
 ### Minimal Configuration
 
-These values are typically written into the current effective `envDir/.env.local`:
+These values are typically written into `.env.local` inside the current effective configuration directory:
 
 ```env
 BELLDANDY_AGENT_PROVIDER=openai
@@ -463,7 +474,7 @@ BELLDANDY_OPENAI_MODEL=gpt-4o
 
 ### Common Base Configuration
 
-These values can live in `.env.local`, or in the current effective `envDir/.env` as overrides:
+These values can live in `.env.local`, or in `.env` inside the current effective configuration directory as overrides:
 
 ```env
 # Host and port
@@ -474,7 +485,7 @@ BELLDANDY_PORT=28889
 BELLDANDY_AUTH_MODE=token
 BELLDANDY_AUTH_TOKEN=your-secure-token
 
-# State dir (default: ~/.star_sanctuary)
+# State dir (default: the .star_sanctuary folder under your home directory)
 # BELLDANDY_STATE_DIR=E:/star_sanctuary
 # Split Windows / WSL runtime state (optional, higher priority than BELLDANDY_STATE_DIR)
 # BELLDANDY_STATE_DIR_WINDOWS=C:/Users/your-name/.star_sanctuary
@@ -575,7 +586,7 @@ corepack pnpm bdd doctor
 
 The migration command:
 
-- moves project-root `.env` / `.env.local` into `stateDir`
+- moves project-root `.env` / `.env.local` into the state directory
 - aborts on conflicting target files instead of overwriting them
 - keeps backups as `*.migrated-to-state-dir.<timestamp>.bak`
 
@@ -602,19 +613,20 @@ BELLDANDY_DISCORD_BOT_TOKEN=
 
 ```env
 BELLDANDY_CHANNEL_ROUTER_ENABLED=true
-BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH=~/.star_sanctuary/channels-routing.json
+BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH=C:/Users/your-name/.star_sanctuary/channels-routing.json
 BELLDANDY_CHANNEL_ROUTER_DEFAULT_AGENT_ID=default
 
 BELLDANDY_COMMUNITY_API_ENABLED=false
 BELLDANDY_COMMUNITY_API_TOKEN=your-community-token
 
-BELLDANDY_WEBHOOK_CONFIG_PATH=~/.star_sanctuary/webhooks.json
+BELLDANDY_WEBHOOK_CONFIG_PATH=C:/Users/your-name/.star_sanctuary/webhooks.json
 BELLDANDY_WEBHOOK_IDEMPOTENCY_WINDOW_MS=600000
 ```
 
 ### Fallback Model Config: `models.json`
 
-`models.json` lives at `~/.star_sanctuary/models.json` by default and defines fallback models:
+`models.json` lives at `.star_sanctuary\models.json` under your user home directory by default and defines fallback models.  
+On Windows, the common path is: `C:\Users\YourName\.star_sanctuary\models.json`
 
 ```json
 {
@@ -687,7 +699,9 @@ This is mainly for community or external-service integration with the Gateway, u
 
 ### Webhook API
 
-Webhooks use a dedicated config file at `~/.star_sanctuary/webhooks.json` and support:
+Webhooks use a dedicated `webhooks.json` file under the `.star_sanctuary` folder in your user home directory.  
+On Windows, the common path is: `C:\Users\YourName\.star_sanctuary\webhooks.json`  
+It supports:
 
 - per-webhook tokens
 - explicit `agentId`
@@ -790,7 +804,7 @@ cp .env.example .env
 docker compose up -d belldandy-gateway
 ```
 
-The project-root `.env` here is the Docker / Compose deployment file used by `docker compose` and container startup. It is separate from the runtime `envDir/.env` that source-mode / desktop-mode launches auto-bootstrap.
+The project-root `.env` here is the Docker / Compose deployment file used by `docker compose` and container startup. It is separate from the `.env` inside the runtime configuration directory that source-mode / desktop-mode launches auto-bootstrap.
 
 Full deployment, images, persistence paths, and Tailscale sidecar docs:
 
@@ -868,7 +882,8 @@ If you plan to use the built-in Long-term Goals system, start with:
 
 2. Optionally but strongly recommended, create an org-level governance config:
 
-   - `~/.star_sanctuary/governance/review-governance.json`
+   - `.star_sanctuary\governance\review-governance.json` under your user home directory  
+     On Windows, the common path is: `C:\Users\YourName\.star_sanctuary\governance\review-governance.json`
 
    Minimal example:
 
@@ -936,7 +951,7 @@ If you plan to use the built-in Long-term Goals system, start with:
 
 10. You do not need to manually create these runtime files; they are auto-generated:
 
-   - `~/.star_sanctuary/cron-jobs.json`
+   - `.star_sanctuary\cron-jobs.json` under your user home directory
    - `<goal.runtimeRoot>/suggestion-reviews.json`
    - `<goal.runtimeRoot>/publish-records.json`
    - `<goal.runtimeRoot>/review-notifications.json`
@@ -1007,7 +1022,7 @@ Check:
 
 - whether the feature is enabled
 - whether the Bearer Token is correct
-- whether the current effective `envDir` is the one you expect
+- whether the current effective configuration directory is the one you expect
 - whether legacy project-root config is still active
 - whether the Gateway has been restarted
 

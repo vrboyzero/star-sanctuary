@@ -23,14 +23,18 @@
       "yarn",
       "cmake",
       "cargo",
-      "go"
+      "go",
+      "codex",
+      "claude"
     ],
     "extraSafelist": [
       "terraform",
       "docker",
       "podman",
       "kubectl",
-      "helm"
+      "helm",
+      "codex",
+      "claude"
     ],
     "extraBlocklist": [],
     "nonInteractive": {

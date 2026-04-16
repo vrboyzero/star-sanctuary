@@ -6,7 +6,10 @@ import { synthesizeSpeech } from "./tts-synthesize.js";
 import type { SynthesizeResult, SynthesizeOptions } from "./tts-synthesize.js";
 import { transcribeSpeech } from "./stt-transcribe.js";
 import type { TranscribeResult, TranscribeOptions } from "./stt-transcribe.js";
-import { cameraSnapTool as baseCameraSnapTool } from "./camera.js";
+import {
+  cameraListTool as baseCameraListTool,
+  cameraSnapTool as baseCameraSnapTool,
+} from "./camera.js";
 
 function withMultimediaContract(
   tool: Tool,
@@ -46,6 +49,11 @@ export { synthesizeSpeech };
 export type { SynthesizeResult, SynthesizeOptions };
 export { transcribeSpeech };
 export type { TranscribeResult, TranscribeOptions };
+export const cameraListTool = withMultimediaContract(baseCameraListTool, {
+  activityDescription: "List available camera devices through the connected browser",
+  safeScopes: ["bridge-safe"],
+  riskLevel: "high",
+});
 export const cameraSnapTool = withMultimediaContract(baseCameraSnapTool, {
   activityDescription: "Capture a camera snapshot through the connected browser",
   safeScopes: ["bridge-safe"],

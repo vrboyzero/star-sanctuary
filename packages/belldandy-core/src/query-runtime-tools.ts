@@ -10,6 +10,7 @@ import type { GatewayEventFrame, GatewayResFrame } from "@belldandy/protocol";
 
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
 import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
+import { buildBridgeRecoveryDiagnostics } from "./bridge-recovery-diagnostics.js";
 import { buildExtensionGovernanceReport } from "./extension-governance.js";
 import { loadExtensionMarketplaceState } from "./extension-marketplace-state.js";
 import { buildExtensionRuntimeReport } from "./extension-runtime.js";
@@ -203,6 +204,14 @@ export async function handleToolsListWithQueryRuntime(
     });
     const runtimeContext: ToolExecutionRuntimeContext | undefined = visibilityTask
       ? { launchSpec: visibilityTask.launchSpec }
+      : undefined;
+    const bridgeRecoveryDiagnostics = visibilityTask
+      ? buildBridgeRecoveryDiagnostics({
+          toolExecutor: ctx.toolExecutor,
+          task: visibilityTask,
+          agentId: visibilityAgentId,
+          conversationId: visibilityConversationId,
+        })
       : undefined;
 
     const allNames = ctx.toolExecutor.getRegisteredToolNames().filter((name) => name !== TOOL_SETTINGS_CONTROL_NAME);
@@ -426,6 +435,7 @@ export async function handleToolsListWithQueryRuntime(
           agentId: visibilityAgentId ?? "default",
           conversationId: visibilityConversationId ?? null,
           loadedDeferredTools,
+          ...(bridgeRecoveryDiagnostics ? { bridgeRecoveryDiagnostics } : {}),
           ...(launchExplainability ? { launchExplainability } : {}),
           ...(residentStateBinding ? { residentStateBinding } : {}),
           ...(visibilityTask

@@ -1,4 +1,5 @@
 import type { GoalCheckpointReplayDescriptor, GoalHandoffSnapshot } from "./goals/types.js";
+import { getSubTaskBridgeProjection } from "./subtask-bridge-view.js";
 import type { SubTaskRecord } from "./task-runtime.js";
 
 export type ContinuationTargetType = "conversation" | "session" | "node" | "goal";
@@ -191,6 +192,8 @@ function resolveSubTaskResumeMode(record: SubTaskRecord): string {
 }
 
 export function buildSubTaskContinuationState(record: SubTaskRecord): ContinuationStateSnapshot {
+  const bridgeProjection = getSubTaskBridgeProjection(record);
+  const bridgeSummary = bridgeProjection.bridgeSubtaskView?.summaryLine || bridgeProjection.bridgeSessionView?.summaryLine;
   const recent = compactStrings(
     (record.notifications ?? [])
       .slice(-3)
@@ -199,7 +202,12 @@ export function buildSubTaskContinuationState(record: SubTaskRecord): Continuati
     3,
   );
   const blockerLabels = record.status === "error" || record.status === "timeout" || record.status === "stopped"
-    ? compactStrings([record.error, record.stopReason, record.progress?.message], 2)
+    ? compactStrings([
+        record.bridgeSessionRuntime?.blockReason,
+        record.error,
+        record.stopReason,
+        record.progress?.message,
+      ], 2)
     : [];
 
   return {
@@ -209,7 +217,7 @@ export function buildSubTaskContinuationState(record: SubTaskRecord): Continuati
     recommendedTargetId: record.sessionId || record.parentConversationId || undefined,
     targetType: record.sessionId ? "session" : record.parentConversationId ? "conversation" : undefined,
     resumeMode: resolveSubTaskResumeMode(record),
-    summary: String(record.summary || record.outputPreview || record.error || record.instruction || "").trim(),
+    summary: String(record.summary || bridgeSummary || record.outputPreview || record.error || record.instruction || "").trim(),
     nextAction: buildSubTaskNextAction(record),
     checkpoints: {
       openCount: 0,
@@ -217,7 +225,7 @@ export function buildSubTaskContinuationState(record: SubTaskRecord): Continuati
       labels: blockerLabels,
     },
     progress: {
-      current: record.progress?.message,
+      current: record.progress?.message || bridgeSummary,
       recent,
     },
   };
@@ -230,6 +238,13 @@ export function buildGoalContinuationState(handoff: GoalHandoffSnapshot): Contin
     : handoff.activeConversationId
       ? "conversation"
       : "goal";
+  const bridgeLabels = compactStrings(
+    (handoff.bridgeGovernance?.items ?? []).flatMap((item) => [
+      item.blockReason,
+      item.summaryLines?.[0],
+    ]),
+    2,
+  );
   return {
     version: 1,
     scope: "goal",
@@ -246,12 +261,16 @@ export function buildGoalContinuationState(handoff: GoalHandoffSnapshot): Contin
       labels: compactStrings([
         ...handoff.openCheckpoints.map((item) => item.title),
         ...handoff.blockers.map((item) => item.title),
+        ...bridgeLabels,
       ]),
     },
     progress: {
-      current: handoff.currentPhase,
+      current: handoff.currentPhase || bridgeLabels[0],
       recent: compactStrings(
-        handoff.recentProgress.map((entry) => entry.summary || entry.note || entry.title),
+        [
+          ...handoff.recentProgress.map((entry) => entry.summary || entry.note || entry.title),
+          ...bridgeLabels,
+        ],
         3,
       ),
     },

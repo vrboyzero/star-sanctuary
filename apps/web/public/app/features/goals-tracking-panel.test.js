@@ -12,9 +12,15 @@ describe("goal tracking linkage helpers", () => {
     expect(getGoalTrackingNodeActionTargets({
       lastRunId: "run_goal_1",
       artifacts: [" docs/goal.md ", "", "artifacts/out.md"],
+      bridgeSessionView: {
+        artifactPath: "artifacts/out.md",
+        transcriptPath: "logs/bridge.jsonl",
+      },
     })).toEqual({
       taskId: "run_goal_1",
       artifactPaths: ["docs/goal.md", "artifacts/out.md"],
+      bridgeArtifactPath: "",
+      bridgeTranscriptPath: "logs/bridge.jsonl",
     });
   });
 
@@ -22,6 +28,8 @@ describe("goal tracking linkage helpers", () => {
     expect(getGoalTrackingNodeActionTargets({})).toEqual({
       taskId: "",
       artifactPaths: [],
+      bridgeArtifactPath: "",
+      bridgeTranscriptPath: "",
     });
   });
 

@@ -1,4 +1,4 @@
-import type { DelegationProtocol } from "@belldandy/skills";
+import type { BridgeSubtaskSemantics, DelegationProtocol } from "@belldandy/skills";
 import type { AgentRegistry } from "./agent-registry.js";
 import { resolveAgentProfileCatalogMetadata, type AgentProfileCatalogMetadata } from "./agent-profile.js";
 
@@ -25,6 +25,7 @@ export type AgentLaunchSpec = {
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
   delegationProtocol?: DelegationProtocol;
+  bridgeSubtask?: BridgeSubtaskSemantics;
 };
 
 export type AgentLaunchSpecInput = {
@@ -46,6 +47,7 @@ export type AgentLaunchSpecInput = {
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
   delegationProtocol?: DelegationProtocol;
+  bridgeSubtask?: BridgeSubtaskSemantics;
 };
 
 function patchDelegationProtocolLaunchDefaults(
@@ -117,6 +119,23 @@ function normalizeContext(value: unknown): Record<string, unknown> | undefined {
   return Object.fromEntries(entries);
 }
 
+function normalizeBridgeSubtask(value: unknown): BridgeSubtaskSemantics | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = normalizeOptionalString(record.kind);
+  if (kind !== "analyze" && kind !== "review" && kind !== "patch") {
+    return undefined;
+  }
+  return {
+    kind,
+    targetId: normalizeOptionalString(record.targetId),
+    action: normalizeOptionalString(record.action),
+    goalId: normalizeOptionalString(record.goalId),
+    goalNodeId: normalizeOptionalString(record.goalNodeId),
+    summary: normalizeOptionalString(record.summary),
+  };
+}
+
 export function normalizeAgentLaunchSpec(
   input: AgentLaunchSpecInput,
   defaults: Partial<Omit<AgentLaunchSpec, "instruction" | "parentConversationId">> = {},
@@ -154,6 +173,7 @@ export function normalizeAgentLaunchSpec(
     maxToolRiskLevel: normalizeRiskLevel(input.maxToolRiskLevel) ?? normalizeRiskLevel(defaults.maxToolRiskLevel),
     policySummary: normalizeOptionalString(input.policySummary) ?? normalizeOptionalString(defaults.policySummary),
     delegationProtocol: input.delegationProtocol ?? defaults.delegationProtocol,
+    bridgeSubtask: normalizeBridgeSubtask(input.bridgeSubtask) ?? normalizeBridgeSubtask(defaults.bridgeSubtask),
   };
 }
 

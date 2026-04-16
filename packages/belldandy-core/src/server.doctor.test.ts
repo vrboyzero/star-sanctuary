@@ -25,6 +25,7 @@ import {
   cleanupGlobalMemoryManagersForTest,
   createContractedTestTool,
   createTestTool,
+  createWriteContractedTestTool,
   pairWebSocketClient,
   resolveWebRoot,
   waitFor,
@@ -147,6 +148,123 @@ test("system.doctor exposes tool behavior observability summary", async () => {
         governedTools: expect.arrayContaining(["run_command", "apply_patch", "delegate_task"]),
       },
     });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes bridge recovery diagnostics for a governed bridge subtask", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+
+  const bridgeTask = await subTaskRuntimeStore.createBridgeSessionTask({
+    parentConversationId: "conv-bridge-doctor",
+    agentId: "coder",
+    profileId: "coder",
+    instruction: "Recover the governed bridge task.",
+    bridgeSubtask: {
+      kind: "review",
+      targetId: "codex_session",
+      action: "interactive",
+      summary: "Review bridge recovery diagnostics.",
+    },
+    bridgeSession: {
+      targetId: "codex_session",
+      action: "interactive",
+      transport: "pty",
+      cwd: stateDir,
+      commandPreview: "codex interactive",
+      summary: "Review bridge recovery diagnostics.",
+    },
+  });
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createWriteContractedTestTool("bridge_session_start"),
+      createWriteContractedTestTool("bridge_session_write"),
+      createWriteContractedTestTool("bridge_session_close"),
+    ],
+    workspaceRoot: process.cwd(),
+    isToolAllowedForAgent: (toolName, agentId) => !(agentId === "coder" && toolName.startsWith("bridge_session_")),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-bridge-recovery",
+      method: "system.doctor",
+      params: {
+        toolTaskId: bridgeTask.id,
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-bridge-recovery" && f.ok === true));
+
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-bridge-recovery");
+    expect(response.payload?.bridgeRecoveryDiagnostics).toMatchObject({
+      applicable: true,
+      status: "allowed",
+      taskId: bridgeTask.id,
+      agentId: "coder",
+      conversationId: "conv-bridge-doctor",
+      whitelistBypassedTools: [
+        "bridge_session_start",
+        "bridge_session_write",
+        "bridge_session_close",
+      ],
+      runtimeContext: {
+        bridgeGovernanceTaskId: bridgeTask.id,
+        agentWhitelistMode: "governed_bridge_internal",
+        hasBridgeSessionLaunch: true,
+        hasBridgeSubtask: true,
+      },
+    });
+    expect(response.payload?.bridgeRecoveryDiagnostics?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "bridge_session_start",
+        defaultVisibility: expect.objectContaining({
+          available: false,
+          reasonCode: "not-in-agent-whitelist",
+        }),
+        governedVisibility: expect.objectContaining({
+          available: true,
+          reasonCode: "available",
+        }),
+        effectiveDecision: "allowed-by-governed-bridge-whitelist-bypass",
+      }),
+    ]));
+    expect(response.payload?.toolBehaviorObservability?.visibilityContext?.bridgeRecoveryDiagnostics).toMatchObject({
+      taskId: bridgeTask.id,
+      status: "allowed",
+    });
+    expect(response.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "bridge_recovery_diagnostics",
+        status: "pass",
+      }),
+    ]));
   } finally {
     ws.close();
     await closeP;

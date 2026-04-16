@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildBridgeGovernanceSummaryLines,
   buildSubtaskExecutionExplainabilityLines,
   findSubtaskBySessionId,
+  formatBridgeCloseReason,
+  formatBridgeRuntimeState,
   parseGoalSessionReference,
 } from "./subtasks-overview.js";
 
@@ -92,5 +95,26 @@ describe("subtasks overview linkage helpers", () => {
     });
 
     expect(lines).toContain("prompt snapshot: missing for session=sub_task_missing");
+  });
+
+  it("formats bridge governance runtime state and close reason for orphaned sessions", () => {
+    expect(formatBridgeRuntimeState("orphaned")).toBe("orphaned");
+    expect(formatBridgeCloseReason("orphan")).toBe("orphan");
+  });
+
+  it("builds bridge governance summary lines with structured block reason", () => {
+    const lines = buildBridgeGovernanceSummaryLines({
+      bridgeSubtaskView: {
+        summaryLine: "Bridge review via codex_session.interactive: Inspect the recovery path.",
+      },
+      bridgeSessionView: {
+        summaryLine: "Bridge session orphaned via codex_session.interactive: Inspect the recovery path.",
+        blockReason: "Bridge session lost its governed subtask binding and was cleaned up as an orphan session.",
+      },
+    });
+
+    expect(lines).toContain("Bridge review via codex_session.interactive: Inspect the recovery path.");
+    expect(lines).toContain("Bridge session orphaned via codex_session.interactive: Inspect the recovery path.");
+    expect(lines).toContain("Block Reason: Bridge session lost its governed subtask binding and was cleaned up as an orphan session.");
   });
 });

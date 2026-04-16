@@ -472,6 +472,77 @@ describe("ToolExecutor", () => {
     expect(result.error).toContain("当前 Agent 白名单");
   });
 
+  it("should allow governed bridge internal runtime to bypass agent whitelist for bridge control tools", async () => {
+    const bridgeSessionStartTool: Tool = {
+      definition: {
+        name: "bridge_session_start",
+        description: "start governed bridge session",
+        parameters: { type: "object", properties: {} },
+      },
+      async execute(): Promise<ToolCallResult> {
+        return {
+          id: "",
+          name: "bridge_session_start",
+          success: true,
+          output: "started",
+          durationMs: 0,
+        };
+      },
+    };
+
+    const executor = new ToolExecutor({
+      tools: [bridgeSessionStartTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedForAgent: () => false,
+    });
+
+    const result = await executor.execute(
+      { id: "req-6b", name: "bridge_session_start", arguments: {} },
+      "conv-1",
+      "coder",
+      undefined,
+      undefined,
+      undefined,
+      {
+        bridgeGovernanceTaskId: "task_bridge_1",
+        agentWhitelistMode: "governed_bridge_internal",
+        launchSpec: {
+          bridgeSubtask: { kind: "review" },
+        },
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("started");
+  });
+
+  it("should keep non-bridge tools blocked under governed bridge internal whitelist bypass", async () => {
+    const executor = new ToolExecutor({
+      tools: [echoTool],
+      workspaceRoot: "/tmp/test",
+      isToolAllowedForAgent: () => false,
+    });
+
+    const result = await executor.execute(
+      { id: "req-6c", name: "echo", arguments: { message: "denied" } },
+      "conv-1",
+      "coder",
+      undefined,
+      undefined,
+      undefined,
+      {
+        bridgeGovernanceTaskId: "task_bridge_1",
+        agentWhitelistMode: "governed_bridge_internal",
+        launchSpec: {
+          bridgeSubtask: { kind: "review" },
+        },
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("当前 Agent 白名单");
+  });
+
   it("should keep default behavior when no whitelist is configured", () => {
     const executor = new ToolExecutor({
       tools: [echoTool, failTool],

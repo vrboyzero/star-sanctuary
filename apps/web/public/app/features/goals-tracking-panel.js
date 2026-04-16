@@ -1,4 +1,9 @@
 import { buildGoalCheckpointExplainabilityEntry } from "./goal-launch-explainability.js";
+import {
+  buildBridgeGovernanceSummaryLines,
+  formatBridgeCloseReason,
+  formatBridgeRuntimeState,
+} from "./subtasks-overview.js";
 
 export function getGoalTrackingNodeActionTargets(node) {
   const taskId = typeof node?.lastRunId === "string" && node.lastRunId.trim()
@@ -10,11 +15,67 @@ export function getGoalTrackingNodeActionTargets(node) {
       .filter(Boolean)
       .slice(0, 2)
     : [];
-  return { taskId, artifactPaths };
+  const bridgeSessionView = node?.bridgeSessionView && typeof node.bridgeSessionView === "object"
+    ? node.bridgeSessionView
+    : null;
+  const artifactPathSet = new Set(artifactPaths);
+  const bridgeArtifactPath = typeof bridgeSessionView?.artifactPath === "string" && bridgeSessionView.artifactPath.trim()
+    && !artifactPathSet.has(bridgeSessionView.artifactPath.trim())
+    ? bridgeSessionView.artifactPath.trim()
+    : "";
+  if (bridgeArtifactPath) {
+    artifactPathSet.add(bridgeArtifactPath);
+  }
+  const bridgeTranscriptPath = typeof bridgeSessionView?.transcriptPath === "string" && bridgeSessionView.transcriptPath.trim()
+    && !artifactPathSet.has(bridgeSessionView.transcriptPath.trim())
+    ? bridgeSessionView.transcriptPath.trim()
+    : "";
+  return {
+    taskId,
+    artifactPaths,
+    bridgeArtifactPath,
+    bridgeTranscriptPath,
+  };
 }
 
 function normalizeString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function renderGoalTrackingNodeBridgeGovernance(node, escapeHtml, summarizeSourcePath, t) {
+  const bridgeSubtaskView = node?.bridgeSubtaskView && typeof node.bridgeSubtaskView === "object"
+    ? node.bridgeSubtaskView
+    : null;
+  const bridgeSessionView = node?.bridgeSessionView && typeof node.bridgeSessionView === "object"
+    ? node.bridgeSessionView
+    : null;
+  if (!bridgeSubtaskView && !bridgeSessionView) return "";
+
+  const summaryLines = buildBridgeGovernanceSummaryLines(node, t);
+  return `
+    <div class="goal-checkpoint-meta">
+      <span class="memory-badge">${escapeHtml(t("goals.trackingBridgeGovernance", {}, "Bridge Governance"))}</span>
+      ${bridgeSessionView?.runtimeState ? `<span class="memory-badge">${escapeHtml(formatBridgeRuntimeState(bridgeSessionView.runtimeState, t))}</span>` : ""}
+      ${bridgeSessionView?.closeReason ? `<span class="memory-badge">${escapeHtml(formatBridgeCloseReason(bridgeSessionView.closeReason, t))}</span>` : ""}
+    </div>
+    ${summaryLines.length ? `
+      <div class="tool-settings-policy-note">
+        ${summaryLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}
+      </div>
+    ` : ""}
+    ${bridgeSessionView?.artifactPath ? `
+      <div class="memory-list-item-meta">
+        <span>${escapeHtml(t("goals.trackingBridgeArtifact", {}, "Bridge Artifact"))}</span>
+        <span>${escapeHtml(summarizeSourcePath(bridgeSessionView.artifactPath))}</span>
+      </div>
+    ` : ""}
+    ${bridgeSessionView?.transcriptPath ? `
+      <div class="memory-list-item-meta">
+        <span>${escapeHtml(t("goals.trackingBridgeTranscript", {}, "Bridge Transcript"))}</span>
+        <span>${escapeHtml(summarizeSourcePath(bridgeSessionView.transcriptPath))}</span>
+      </div>
+    ` : ""}
+  `;
 }
 
 function getGoalTrackingPlanUpdatedAt(plan) {
@@ -172,13 +233,16 @@ export function createGoalsTrackingPanelFeature({
                     ${node.phase ? `<span>${escapeHtml(node.phase)}</span>` : ""}
                     ${node.owner ? `<span>${escapeHtml(node.owner)}</span>` : ""}
                   </div>
+                  ${renderGoalTrackingNodeBridgeGovernance(node, escapeHtml, summarizeSourcePath, t)}
                   ${(() => {
                     const targets = getGoalTrackingNodeActionTargets(node);
-                    if (!targets.taskId && !targets.artifactPaths.length) return "";
+                    if (!targets.taskId && !targets.artifactPaths.length && !targets.bridgeArtifactPath && !targets.bridgeTranscriptPath) return "";
                     return `
                       <div class="goal-detail-actions goal-checkpoint-actions">
                         ${targets.taskId ? `<button class="button goal-inline-action-secondary" data-open-task-id="${escapeHtml(targets.taskId)}">打开运行任务</button>` : ""}
                         ${targets.artifactPaths.map((artifactPath) => `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(summarizeSourcePath(artifactPath))}</button>`).join("")}
+                        ${targets.bridgeArtifactPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(targets.bridgeArtifactPath)}">${escapeHtml(t("goals.trackingOpenBridgeArtifact", {}, "Open bridge artifact"))}</button>` : ""}
+                        ${targets.bridgeTranscriptPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(targets.bridgeTranscriptPath)}">${escapeHtml(t("goals.trackingOpenBridgeTranscript", {}, "Open bridge transcript"))}</button>` : ""}
                       </div>
                     `;
                   })()}

@@ -1,80 +1,298 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Star Sanctuary Vision Mirror</title>
   <style>
+    :root {
+      color-scheme: dark;
+    }
+
     body {
       margin: 0;
       padding: 0;
-      background-color: #000;
+      background:
+        radial-gradient(circle at top, rgba(42, 82, 152, 0.35), transparent 55%),
+        linear-gradient(180deg, #04070d 0%, #020305 100%);
       display: flex;
       justify-content: center;
       align-items: center;
       height: 100vh;
       overflow: hidden;
+      font-family: "Segoe UI", system-ui, sans-serif;
     }
+
     video {
       width: 100%;
       height: 100%;
-      object-fit: cover; /* Fill the screen */
-      transform: scaleX(-1); /* Mirror effect */
+      object-fit: cover;
+      background: #000;
+      transition: opacity 180ms ease;
     }
-    #error-msg {
-      color: red;
-      font-family: monospace;
-      display: none;
+
+    body[data-fit="contain"] video {
+      object-fit: contain;
+    }
+
+    body[data-mirror="0"] video {
+      transform: none;
+    }
+
+    body[data-mirror="1"] video {
+      transform: scaleX(-1);
+    }
+
+    #error-msg,
+    #status-pill {
       position: absolute;
       z-index: 10;
-      background: rgba(0,0,0,0.7);
-      padding: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(8px);
+    }
+
+    #error-msg {
+      color: #ffd5d5;
+      font-family: Consolas, monospace;
+      display: none;
+      padding: 16px 18px;
+      max-width: min(720px, 92vw);
+      border-radius: 14px;
+      line-height: 1.45;
+    }
+
+    #status-pill {
+      top: 18px;
+      left: 18px;
+      color: #d7e9ff;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 13px;
+      letter-spacing: 0.02em;
+    }
+
+    #status-pill[data-status="ready"] {
+      color: #d6ffe5;
+    }
+
+    #status-pill[data-status="error"] {
+      color: #ffd5d5;
     }
   </style>
 </head>
-<body>
+<body data-fit="cover" data-mirror="1">
+  <div id="status-pill" data-status="booting">camera: booting</div>
   <div id="error-msg"></div>
-  <video id="webcam" autoplay playsinline></video>
+  <video id="webcam" autoplay playsinline muted></video>
 
   <script>
-    const video = document.getElementById('webcam');
-    const errorMsg = document.getElementById('error-msg');
+    const video = document.getElementById("webcam");
+    const errorMsg = document.getElementById("error-msg");
+    const statusPill = document.getElementById("status-pill");
 
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: false, 
-          video: { 
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            facingMode: "user"
-          } 
-        });
-        video.srcObject = stream;
-        console.log("Camera started");
-      } catch (err) {
-        console.error("Error accessing camera:", err);
-        errorMsg.textContent = `Error accessing camera: ${err.name} - ${err.message}`;
-        errorMsg.style.display = 'block';
+    const params = new URLSearchParams(window.location.search);
+
+    const state = {
+      status: "booting",
+      selectedFacing: "front",
+      selectedDeviceId: undefined,
+      devices: [],
+      videoWidth: 0,
+      videoHeight: 0,
+      settings: {},
+      error: undefined,
+      startedAt: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+
+    let activeStream = null;
+
+    function nowIso() {
+      return new Date().toISOString();
+    }
+
+    function snapshotState() {
+      return JSON.parse(JSON.stringify(state));
+    }
+
+    function setStatus(status, message, error) {
+      state.status = status;
+      state.updatedAt = nowIso();
+      state.error = error || undefined;
+
+      statusPill.dataset.status = status;
+      statusPill.textContent = message || `camera: ${status}`;
+
+      if (error) {
+        errorMsg.textContent = `${error.name || "Error"}: ${error.message || "Unknown error"}`;
+        errorMsg.style.display = "block";
+      } else {
+        errorMsg.style.display = "none";
+        errorMsg.textContent = "";
       }
     }
 
-    // Start immediately
-    startCamera();
+    function normalizeFacing(value) {
+      return value === "environment" || value === "back" ? "back" : "front";
+    }
 
-    // Click to toggle fullscreen
-    video.addEventListener('click', () => {
+    function readConfig() {
+      const width = Number(params.get("width"));
+      const height = Number(params.get("height"));
+      const fit = params.get("fit") === "contain" ? "contain" : "cover";
+      const mirror = params.get("mirror") === "0" ? "0" : "1";
+      const deviceId = (params.get("deviceId") || "").trim() || undefined;
+      const facing = normalizeFacing(params.get("facing"));
+      return {
+        width: Number.isFinite(width) && width > 0 ? Math.trunc(width) : 1920,
+        height: Number.isFinite(height) && height > 0 ? Math.trunc(height) : 1080,
+        fit,
+        mirror,
+        deviceId,
+        facing,
+      };
+    }
+
+    async function refreshDevices() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        state.devices = [];
+        state.updatedAt = nowIso();
+        return [];
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      state.devices = devices
+        .filter((device) => device.kind === "videoinput")
+        .map((device) => ({
+          deviceId: device.deviceId,
+          label: device.label || "",
+          groupId: device.groupId || undefined,
+          kind: "videoinput",
+          active: device.deviceId && device.deviceId === state.selectedDeviceId,
+        }));
+      state.updatedAt = nowIso();
+      return state.devices;
+    }
+
+    function stopActiveStream() {
+      if (!activeStream) return;
+      activeStream.getTracks().forEach((track) => track.stop());
+      activeStream = null;
+      video.srcObject = null;
+    }
+
+    async function startCamera() {
+      const config = readConfig();
+      state.selectedFacing = config.facing;
+      state.selectedDeviceId = config.deviceId;
+      document.body.dataset.fit = config.fit;
+      document.body.dataset.mirror = config.mirror;
+
+      stopActiveStream();
+      setStatus("requesting-permission", "camera: requesting permission");
+
+      try {
+        const videoConstraints = {
+          width: { ideal: config.width },
+          height: { ideal: config.height },
+          ...(config.deviceId
+            ? { deviceId: { exact: config.deviceId } }
+            : { facingMode: config.facing === "back" ? "environment" : "user" }),
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: videoConstraints,
+        });
+
+        activeStream = stream;
+        video.srcObject = stream;
+        await video.play().catch(() => undefined);
+
+        const track = stream.getVideoTracks()[0];
+        const settings = track && typeof track.getSettings === "function"
+          ? track.getSettings()
+          : {};
+        state.settings = {
+          width: settings.width,
+          height: settings.height,
+          frameRate: settings.frameRate,
+          deviceId: settings.deviceId,
+        };
+        state.selectedDeviceId = settings.deviceId || config.deviceId;
+        state.startedAt = state.startedAt || nowIso();
+        state.videoWidth = video.videoWidth || settings.width || 0;
+        state.videoHeight = video.videoHeight || settings.height || 0;
+
+        await refreshDevices();
+        setStatus("ready", "camera: ready");
+      } catch (err) {
+        console.error("Error accessing camera:", err);
+        await refreshDevices().catch(() => undefined);
+        setStatus("error", "camera: error", {
+          name: err && err.name ? err.name : "Error",
+          message: err && err.message ? err.message : String(err),
+        });
+      }
+    }
+
+    video.addEventListener("loadedmetadata", () => {
+      state.videoWidth = video.videoWidth || 0;
+      state.videoHeight = video.videoHeight || 0;
+      state.updatedAt = nowIso();
+    });
+
+    video.addEventListener("click", () => {
       if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(err => {
+        document.documentElement.requestFullscreen().catch((err) => {
           console.log(`Error attempting to enable fullscreen: ${err.message}`);
         });
-      } else {
-        if (document.exitFullscreen) {
-          document.exitFullscreen();
-        }
+      } else if (document.exitFullscreen) {
+        document.exitFullscreen();
       }
     });
+
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener("devicechange", () => {
+        refreshDevices().catch((err) => {
+          console.warn("Failed to refresh camera device list:", err);
+        });
+      });
+    }
+
+    window.__BELLDANDY_CAMERA_MIRROR__ = {
+      getState: snapshotState,
+      refreshDevices: async () => {
+        await refreshDevices();
+        return snapshotState();
+      },
+      restart: async () => {
+        await startCamera();
+        return snapshotState();
+      },
+      stop: () => {
+        stopActiveStream();
+        setStatus("booting", "camera: stopped");
+        return snapshotState();
+      },
+      captureFrameDataUrl: () => {
+        if (!state.videoWidth || !state.videoHeight) {
+          return null;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = state.videoWidth;
+        canvas.height = state.videoHeight;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          return null;
+        }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL("image/png");
+      },
+    };
+
+    startCamera();
+    refreshDevices().catch(() => undefined);
   </script>
 </body>
 </html>
-

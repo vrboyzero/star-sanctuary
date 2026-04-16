@@ -7,6 +7,7 @@ import { publishSkillCandidate, getGlobalSkillRegistry, getUserSkillsDir } from 
 import { getGoalUpdateAreas } from "./goal-events.js";
 import { normalizeGoalId, normalizeGoalSlug, resolveGoalPaths } from "./paths.js";
 import { buildGoalHandoffResult, generateGoalHandoff } from "./handoff.js";
+import { loadGoalHandoffBridgeGovernanceSummary } from "./handoff-bridge.js";
 import { generateGoalMethodCandidates } from "./method-candidates.js";
 import { appendGoalProgressEntry } from "./progress.js";
 import { generateGoalRetrospective } from "./retrospective.js";
@@ -1117,6 +1118,10 @@ export class GoalManager {
       readGoalCapabilityPlans(goal),
       this.readProgressContent(goal),
     ]);
+    const bridgeGovernanceSummary = await loadGoalHandoffBridgeGovernanceSummary({
+      stateDir: this.stateDir,
+      graph,
+    });
     const handoff = buildGoalHandoffResult({
       goal,
       runtime,
@@ -1124,6 +1129,7 @@ export class GoalManager {
       checkpoints,
       plans: plansState.items,
       progressContent,
+      bridgeGovernanceSummary,
     });
     return generateGoalRetrospective({
       goal,
@@ -2579,6 +2585,10 @@ export class GoalManager {
         throw err;
       }),
     ]);
+    const bridgeGovernanceSummary = await loadGoalHandoffBridgeGovernanceSummary({
+      stateDir: this.stateDir,
+      graph,
+    });
     return buildGoalHandoffResult({
       goal,
       runtime,
@@ -2586,6 +2596,7 @@ export class GoalManager {
       checkpoints,
       plans: plansState.items,
       progressContent,
+      bridgeGovernanceSummary,
     });
   }
 
@@ -2600,6 +2611,10 @@ export class GoalManager {
         throw err;
       }),
     ]);
+    const bridgeGovernanceSummary = await loadGoalHandoffBridgeGovernanceSummary({
+      stateDir: this.stateDir,
+      graph,
+    });
     return generateGoalHandoff({
       goal,
       runtime,
@@ -2607,6 +2622,7 @@ export class GoalManager {
       checkpoints,
       plans: plansState.items,
       progressContent,
+      bridgeGovernanceSummary,
     });
   }
 

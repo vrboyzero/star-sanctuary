@@ -1,0 +1,105 @@
+{
+  "version": "1.0.0",
+  "targets": [
+    {
+      "id": "codex_exec",
+      "category": "agent-cli",
+      "transport": "mcp",
+      "enabled": true,
+      "entry": {
+        "mcp": {
+          "serverId": "codex-bridge",
+          "toolName": "task_once"
+        }
+      },
+      "cwdPolicy": "workspace-only",
+      "sessionMode": "oneshot",
+      "defaultTimeoutMs": 900000,
+      "maxOutputBytes": 262144,
+      "defaultCwd": "__REPLACE_WITH_WORKSPACE_ROOT__",
+      "actions": {
+        "analyze": {
+          "template": [],
+          "allowStructuredArgs": [
+            "objective",
+            "scope",
+            "constraints",
+            "expectedOutput",
+            "model",
+            "cwd"
+          ],
+          "description": "通过 MCP wrapper 调用 Codex 做只读分析",
+          "mcpToolName": "analyze_once"
+        },
+        "review": {
+          "template": [],
+          "allowStructuredArgs": [
+            "objective",
+            "scope",
+            "constraints",
+            "expectedOutput",
+            "model",
+            "cwd"
+          ],
+          "description": "通过 MCP wrapper 调用 Codex 做一次性代码审查",
+          "mcpToolName": "review_once"
+        },
+        "patch": {
+          "template": [],
+          "allowStructuredArgs": [
+            "objective",
+            "scope",
+            "constraints",
+            "expectedOutput",
+            "model",
+            "cwd"
+          ],
+          "description": "通过 MCP wrapper 调用 Codex 做小范围一次性改动",
+          "mcpToolName": "patch_once"
+        },
+        "exec": {
+          "template": [],
+          "allowStructuredArgs": [
+            "mode",
+            "objective",
+            "scope",
+            "constraints",
+            "expectedOutput",
+            "model",
+            "cwd"
+          ],
+          "description": "通过 MCP wrapper 调用 Codex 做结构化一次性执行（兼容入口）",
+          "mcpToolName": "task_once"
+        }
+      }
+    },
+    {
+      "id": "codex_exec_cli",
+      "category": "agent-cli",
+      "transport": "exec",
+      "enabled": true,
+      "entry": {
+        "binary": "codex"
+      },
+      "cwdPolicy": "workspace-only",
+      "sessionMode": "oneshot",
+      "defaultTimeoutMs": 900000,
+      "maxOutputBytes": 262144,
+      "defaultCwd": "__REPLACE_WITH_WORKSPACE_ROOT__",
+      "actions": {
+        "exec": {
+          "template": [
+            "exec",
+            "--sandbox",
+            "workspace-write"
+          ],
+          "allowStructuredArgs": [
+            "prompt",
+            "model"
+          ],
+          "description": "Codex CLI 回退路径，仅在 MCP 路径不可用时使用"
+        }
+      }
+    }
+  ]
+}
