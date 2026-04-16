@@ -179,7 +179,7 @@ export type Conversation = {
 export type ConversationStoreOptions = {
     /** 最大历史消息数（默认 20） */
     maxHistory?: number;
-    /** 会话过期时间（秒，默认 3600） */
+    /** 内存会话过期时间（秒，默认 3600）；已持久化会话仍可从磁盘恢复 */
     ttlSeconds?: number;
     /** 持久化存储目录 (可选) */
     dataDir?: string;
@@ -599,14 +599,20 @@ export class ConversationStore {
      * 优先从内存获取，若无则尝试从文件加载
      */
     get(id: string): Conversation | undefined {
-        let conv = this.conversations.get(id);
-
-        // 如果内存没有，尝试从磁盘加载
-        if (!conv && this.dataDir) {
-            conv = this.loadFromFile(id);
+        const cached = this.conversations.get(id);
+        if (cached) {
+            const validatedCached = this.cacheAndValidateConversation(id, cached);
+            if (validatedCached) {
+                return validatedCached;
+            }
         }
 
-        return this.cacheAndValidateConversation(id, conv);
+        if (this.dataDir) {
+            const restored = this.loadFromFile(id);
+            return this.cacheAndValidateConversation(id, restored, { allowExpiredPersistedConversation: true });
+        }
+
+        return undefined;
     }
 
     /**
@@ -704,19 +710,35 @@ export class ConversationStore {
     }
 
     private async getAsync(id: string): Promise<Conversation | undefined> {
-        let conv = this.conversations.get(id);
-        if (!conv && this.dataDir) {
-            conv = await this.loadFromFileAsync(id);
+        const cached = this.conversations.get(id);
+        if (cached) {
+            const validatedCached = this.cacheAndValidateConversation(id, cached);
+            if (validatedCached) {
+                return validatedCached;
+            }
         }
-        return this.cacheAndValidateConversation(id, conv);
+        if (this.dataDir) {
+            const restored = await this.loadFromFileAsync(id);
+            return this.cacheAndValidateConversation(id, restored, { allowExpiredPersistedConversation: true });
+        }
+        return undefined;
     }
 
-    private cacheAndValidateConversation(id: string, conv: Conversation | undefined): Conversation | undefined {
+    private cacheAndValidateConversation(
+        id: string,
+        conv: Conversation | undefined,
+        options: {
+            allowExpiredPersistedConversation?: boolean;
+        } = {},
+    ): Conversation | undefined {
         if (!conv) return undefined;
 
         const now = Date.now();
         if (now - conv.updatedAt > this.ttlSeconds * 1000) {
             this.conversations.delete(id);
+            if (options.allowExpiredPersistedConversation === true) {
+                return conv;
+            }
             return undefined;
         }
 

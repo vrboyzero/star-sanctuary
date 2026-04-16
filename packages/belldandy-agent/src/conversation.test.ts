@@ -51,6 +51,25 @@ describe("ConversationStore", () => {
         expect(history).toHaveLength(0);
     });
 
+    it("should restore persisted conversations from disk even after in-memory TTL expiry", async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "belldandy-conversation-"));
+        const dataDir = path.join(tempDir, "sessions");
+        const id = "persisted-email-thread";
+
+        const writer = new ConversationStore({ dataDir, ttlSeconds: 0.01 });
+        writer.addMessage(id, "user", "Inbound email content");
+        await writer.waitForPendingPersistence(id);
+
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        const reloaded = new ConversationStore({ dataDir, ttlSeconds: 0.01 });
+        expect(reloaded.getHistory(id)).toEqual([
+            { role: "user", content: "Inbound email content" },
+        ]);
+
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
     it("should return conversation snapshot together with compacted history", async () => {
         const store = new ConversationStore();
         const id = "test-snapshot";
