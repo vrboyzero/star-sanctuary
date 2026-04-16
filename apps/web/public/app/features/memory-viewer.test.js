@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildEmailThreadConversationAdvicePrompt,
+  buildEmailThreadConversationOpenNote,
   buildSharedReviewBatchActionState,
   buildSharedReviewQueueParams,
   collectActionableSharedReviewIds,
@@ -11,6 +13,53 @@ import {
 } from "./memory-viewer.js";
 
 describe("memory viewer shared review filters", () => {
+  it("builds an explicit advice request prompt for opened email thread conversations", () => {
+    const prompt = buildEmailThreadConversationAdvicePrompt({
+      latestSubject: "Re: Kickoff",
+      latestTriageSummary: "需要尽快回复并确认时间",
+      latestSuggestedReplyStarter: "Hi Alice,",
+      latestSuggestedReplyQuality: "review_required",
+    });
+
+    expect(prompt).toContain("我刚从邮件线程整理打开了这个线程");
+    expect(prompt).toContain("线程整理摘要: 需要尽快回复并确认时间");
+    expect(prompt).toContain("建议回复 starter: Hi Alice,");
+  });
+
+  it("builds a compact organizer note for opening email thread conversations", () => {
+    expect(buildEmailThreadConversationOpenNote({
+      latestTriageSummary: "需要尽快回复并确认时间",
+      latestSuggestedReplySubject: "Re: Kickoff",
+      latestSuggestedReplyStarter: "Hi Alice,",
+      latestSuggestedReplyQuality: "review_required",
+      latestSuggestedReplyConfidence: "medium",
+      latestSuggestedReplyWarnings: ["先核对日期。"],
+      latestSuggestedReplyDraft: [
+        "Hi Alice,",
+        "",
+        "Thanks for following up.",
+        "I am checking the schedule now.",
+        "Will confirm the final time by tomorrow.",
+      ].join("\n"),
+    })).toContain("线程整理摘要: 需要尽快回复并确认时间");
+
+    expect(buildEmailThreadConversationOpenNote({
+      latestTriageSummary: "需要尽快回复并确认时间",
+      latestSuggestedReplySubject: "Re: Kickoff",
+      latestSuggestedReplyStarter: "Hi Alice,",
+      latestSuggestedReplyQuality: "review_required",
+      latestSuggestedReplyConfidence: "medium",
+      latestSuggestedReplyWarnings: ["先核对日期。"],
+      latestSuggestedReplyDraft: [
+        "Hi Alice,",
+        "",
+        "Thanks for following up.",
+        "I am checking the schedule now.",
+        "Will confirm the final time by tomorrow.",
+      ].join("\n"),
+    })).toContain("建议回复草稿摘录");
+  });
+
   it("defaults shared review queue to pending status", () => {
     expect(buildSharedReviewQueueParams({
       reviewerAgentId: "coder",

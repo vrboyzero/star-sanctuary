@@ -400,6 +400,7 @@ sessionNavigationFeature = createSessionNavigationFeature({
   setActiveConversationId: (conversationId) => {
     activeConversationId = conversationId;
   },
+  getActiveConversationId: () => activeConversationId,
   renderCanvasGoalContext: () => renderCanvasGoalContext(),
   switchMode,
   getChatEventsFeature: () => chatEventsFeature,

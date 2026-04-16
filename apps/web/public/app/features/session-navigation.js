@@ -1,6 +1,7 @@
 export function createSessionNavigationFeature({
   refs,
   setActiveConversationId,
+  getActiveConversationId,
   renderCanvasGoalContext,
   switchMode,
   getChatEventsFeature,
@@ -9,11 +10,33 @@ export function createSessionNavigationFeature({
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { messagesEl } = refs;
+  const SESSION_OPEN_NOTE_SELECTOR = "[data-session-open-note]";
+
+  function renderSessionOpenNote(text) {
+    if (!(messagesEl instanceof Element)) return null;
+    messagesEl.querySelectorAll(SESSION_OPEN_NOTE_SELECTOR).forEach((node) => node.remove());
+    const normalizedText = typeof text === "string" ? text.trim() : "";
+    if (!normalizedText) return null;
+    const note = document.createElement("div");
+    note.className = "system-msg";
+    note.setAttribute("data-session-open-note", "true");
+    note.textContent = normalizedText;
+    const emailBanner = messagesEl.querySelector("[data-email-inbound-session-banner]");
+    if (emailBanner instanceof Element) {
+      emailBanner.insertAdjacentElement("afterend", note);
+    } else {
+      messagesEl.insertBefore(note, messagesEl.firstChild);
+    }
+    return note;
+  }
 
   function openConversationSession(conversationId, hintText, options = {}) {
     if (!conversationId) return;
     const switchToChat = options.switchToChat !== false;
     const renderHint = options.renderHint !== false;
+    const systemNoticeText = typeof options.systemNoticeText === "string"
+      ? options.systemNoticeText.trim()
+      : "";
     setActiveConversationId(conversationId);
     renderCanvasGoalContext?.();
     if (switchToChat) {
@@ -31,7 +54,14 @@ export function createSessionNavigationFeature({
       );
       messagesEl.appendChild(hint);
     }
-    void loadConversationMeta(conversationId, { showGoalEntryBanner: true });
+    void Promise.resolve(loadConversationMeta(conversationId, { showGoalEntryBanner: true }))
+      .finally(() => {
+        if (!systemNoticeText) return;
+        if (typeof getActiveConversationId === "function" && getActiveConversationId() !== conversationId) {
+          return;
+        }
+        renderSessionOpenNote(systemNoticeText);
+      });
     void getSessionDigestFeature?.()?.loadSessionDigest(conversationId);
   }
 

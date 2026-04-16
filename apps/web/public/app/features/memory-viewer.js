@@ -24,6 +24,77 @@ function normalizeSharedReviewFocus(value) {
   return "";
 }
 
+function normalizeEmailThreadOpenNoteText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function truncateEmailThreadOpenNoteText(value, { maxLines = 6, maxChars = 480 } = {}) {
+  const normalized = normalizeEmailThreadOpenNoteText(value);
+  if (!normalized) return "";
+  const lines = normalized.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const limitedLines = lines.slice(0, maxLines);
+  let joined = limitedLines.join("\n");
+  if (joined.length > maxChars) {
+    joined = `${joined.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+  } else if (lines.length > limitedLines.length || normalized.length > joined.length) {
+    joined = `${joined}\n…`;
+  }
+  return joined;
+}
+
+export function buildEmailThreadConversationOpenNote(item, t = (_key, _params, fallback) => fallback ?? "") {
+  if (!item || typeof item !== "object") return "";
+  const triageSummary = normalizeEmailThreadOpenNoteText(item.latestTriageSummary);
+  const replySubject = normalizeEmailThreadOpenNoteText(item.latestSuggestedReplySubject);
+  const replyStarter = normalizeEmailThreadOpenNoteText(item.latestSuggestedReplyStarter);
+  const replyQuality = normalizeEmailThreadOpenNoteText(item.latestSuggestedReplyQuality);
+  const replyConfidence = normalizeEmailThreadOpenNoteText(item.latestSuggestedReplyConfidence);
+  const firstWarning = Array.isArray(item.latestSuggestedReplyWarnings)
+    ? normalizeEmailThreadOpenNoteText(item.latestSuggestedReplyWarnings[0])
+    : "";
+  const draftExcerpt = truncateEmailThreadOpenNoteText(item.latestSuggestedReplyDraft, {
+    maxLines: 8,
+    maxChars: 640,
+  });
+  const lines = [
+    triageSummary ? `${t("memory.emailThreadOrganizerOpenNoteSummary", {}, "线程整理摘要")}: ${triageSummary}` : "",
+    replySubject ? `${t("memory.emailThreadOrganizerOpenNoteSubject", {}, "建议回复主题")}: ${replySubject}` : "",
+    replyStarter ? `${t("memory.emailThreadOrganizerOpenNoteStarter", {}, "建议回复 starter")}: ${replyStarter}` : "",
+    replyQuality
+      ? `${t("memory.emailThreadOrganizerOpenNoteQuality", {}, "回复建议质量")}: ${replyQuality}${replyConfidence ? ` · ${replyConfidence}` : ""}`
+      : "",
+    firstWarning ? `${t("memory.emailThreadOrganizerOpenNoteWarning", {}, "回复建议注意")}: ${firstWarning}` : "",
+    draftExcerpt ? `${t("memory.emailThreadOrganizerOpenNoteDraft", {}, "建议回复草稿摘录")}:\n${draftExcerpt}` : "",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+export function buildEmailThreadConversationAdvicePrompt(item, t = (_key, _params, fallback) => fallback ?? "") {
+  if (!item || typeof item !== "object") {
+    return t(
+      "memory.emailThreadOrganizerAdvicePromptDefault",
+      {},
+      "我刚从邮件线程整理打开了这个线程。请基于当前邮件线程，给出处理建议，并在需要时提供一版可直接发送的回复草稿。",
+    );
+  }
+  const subject = normalizeEmailThreadOpenNoteText(item.latestSubject);
+  const triageSummary = normalizeEmailThreadOpenNoteText(item.latestTriageSummary);
+  const replyStarter = normalizeEmailThreadOpenNoteText(item.latestSuggestedReplyStarter);
+  const replyQuality = normalizeEmailThreadOpenNoteText(item.latestSuggestedReplyQuality);
+  const lines = [
+    t(
+      "memory.emailThreadOrganizerAdvicePromptDefault",
+      {},
+      "我刚从邮件线程整理打开了这个线程。请基于当前邮件线程，给出处理建议，并在需要时提供一版可直接发送的回复草稿。",
+    ),
+    subject ? `${t("memory.emailThreadOrganizerOpenNoteSubject", {}, "建议回复主题")}: ${subject}` : "",
+    triageSummary ? `${t("memory.emailThreadOrganizerOpenNoteSummary", {}, "线程整理摘要")}: ${triageSummary}` : "",
+    replyStarter ? `${t("memory.emailThreadOrganizerOpenNoteStarter", {}, "建议回复 starter")}: ${replyStarter}` : "",
+    replyQuality ? `${t("memory.emailThreadOrganizerOpenNoteQuality", {}, "回复建议质量")}: ${replyQuality}` : "",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
 export function buildSharedReviewQueueParams({
   reviewerAgentId,
   limit = 50,
@@ -332,10 +403,62 @@ export function createMemoryViewerFeature({
     memorySharedReviewTargetFilterEl,
     memorySharedReviewClaimedByFilterEl,
   } = refs;
+  const autoRequestedEmailThreadAdvice = new Set();
 
   function getActiveAgentId() {
     const agentId = typeof getSelectedAgentId === "function" ? String(getSelectedAgentId() || "").trim() : "";
     return agentId || "default";
+  }
+
+  async function requestEmailThreadConversationAdvice(conversationId, item) {
+    const normalizedConversationId = typeof conversationId === "string" ? conversationId.trim() : "";
+    if (!normalizedConversationId || autoRequestedEmailThreadAdvice.has(normalizedConversationId)) {
+      return;
+    }
+    if (typeof isConnected === "function" && !isConnected()) {
+      showNotice?.(
+        t("memory.emailThreadOrganizerAdviceRequestOfflineTitle", {}, "未连接到服务器"),
+        t("memory.emailThreadOrganizerAdviceRequestOfflineMessage", {}, "已打开线程会话，但当前没有自动请求新的处理建议。请先连接后重试。"),
+        "error",
+      );
+      return;
+    }
+    autoRequestedEmailThreadAdvice.add(normalizedConversationId);
+    try {
+      const res = await sendReq({
+        type: "req",
+        id: makeId(),
+        method: "message.send",
+        params: {
+          conversationId: normalizedConversationId,
+          text: buildEmailThreadConversationAdvicePrompt(item, t),
+          from: "web",
+          clientContext: {
+            sentAtMs: Date.now(),
+            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+            locale: typeof navigator !== "undefined" ? navigator.language : undefined,
+          },
+          roomContext: { environment: "local" },
+          agentId: getActiveAgentId(),
+          attachments: [],
+        },
+      });
+      if (res?.ok === false) {
+        autoRequestedEmailThreadAdvice.delete(normalizedConversationId);
+        showNotice?.(
+          t("memory.emailThreadOrganizerAdviceRequestFailedTitle", {}, "线程建议请求失败"),
+          res?.error?.message || t("memory.emailThreadOrganizerAdviceRequestFailedMessage", {}, "message.send 调用失败。"),
+          "error",
+        );
+      }
+    } catch (error) {
+      autoRequestedEmailThreadAdvice.delete(normalizedConversationId);
+      showNotice?.(
+        t("memory.emailThreadOrganizerAdviceRequestFailedTitle", {}, "线程建议请求失败"),
+        error instanceof Error ? error.message : String(error),
+        "error",
+      );
+    }
   }
 
   function ensureAgentViewStates() {
@@ -2315,7 +2438,11 @@ export function createMemoryViewerFeature({
           openConversationSession?.(
             conversationId,
             t("memory.emailThreadOrganizerSwitchedConversation", { conversationId }, `Switched to email thread conversation: ${conversationId}`),
+            {
+              systemNoticeText: buildEmailThreadConversationOpenNote(item, t),
+            },
           );
+          void requestEmailThreadConversationAdvice(conversationId, item);
         });
       });
       return;
