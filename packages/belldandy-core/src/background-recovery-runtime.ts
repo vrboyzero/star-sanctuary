@@ -64,6 +64,10 @@ export function buildBackgroundRecoveryFingerprint(record: Pick<
   });
 }
 
+function buildRecoveryScopeKey(record: Pick<BackgroundContinuationRecord, "kind" | "sourceId">): string {
+  return `${String(record.kind || "").trim()}:${String(record.sourceId || "").trim()}`;
+}
+
 function findRecentRecoveryAttempt(
   records: BackgroundContinuationRecord[],
   record: BackgroundContinuationRecord,
@@ -96,6 +100,7 @@ function buildIneligibleReason(kind: BackgroundContinuationKind): string {
 
 export class BackgroundRecoveryRuntime {
   private readonly throttleMs: number;
+  private readonly inFlightRecoveries = new Map<string, Promise<BackgroundRecoveryAttemptResult>>();
 
   constructor(private readonly options: BackgroundRecoveryRuntimeOptions) {
     this.throttleMs = Number.isFinite(options.throttleMs)
@@ -105,6 +110,25 @@ export class BackgroundRecoveryRuntime {
 
   async maybeRecover(record: BackgroundContinuationRecord): Promise<BackgroundRecoveryAttemptResult> {
     const fingerprint = buildBackgroundRecoveryFingerprint(record);
+    const scopeKey = buildRecoveryScopeKey(record);
+    const inFlight = this.inFlightRecoveries.get(scopeKey);
+    if (inFlight) {
+      return inFlight;
+    }
+    const attempt = this.maybeRecoverInternal(record, fingerprint)
+      .finally(() => {
+        if (this.inFlightRecoveries.get(scopeKey) === attempt) {
+          this.inFlightRecoveries.delete(scopeKey);
+        }
+      });
+    this.inFlightRecoveries.set(scopeKey, attempt);
+    return attempt;
+  }
+
+  private async maybeRecoverInternal(
+    record: BackgroundContinuationRecord,
+    fingerprint: string,
+  ): Promise<BackgroundRecoveryAttemptResult> {
     if (record.status !== "failed") {
       return this.recordSkipped(record, fingerprint, "Background recovery only handles failed runs.");
     }

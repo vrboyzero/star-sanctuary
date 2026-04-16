@@ -232,6 +232,10 @@ function truncateText(value: string, maxLength = 240): string {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
 }
 
+function stripUtf8Bom(raw: string): string {
+  return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
+
 function inferNotificationKind(status: Extract<SubTaskStatus, "done" | "error" | "timeout" | "stopped">): SubTaskNotificationKind {
   if (status === "done") return "completed";
   if (status === "timeout") return "timeout";
@@ -467,7 +471,7 @@ export class SubTaskRuntimeStore {
       this.sessionToTask.clear();
       try {
         const raw = await fs.readFile(this.statePath, "utf-8");
-        const parsed = JSON.parse(raw) as Partial<SubTaskRuntimeState>;
+        const parsed = JSON.parse(stripUtf8Bom(raw)) as Partial<SubTaskRuntimeState>;
         for (const item of Array.isArray(parsed.items) ? parsed.items : []) {
           const record = this.normalizeRecord(item);
           if (!record) continue;

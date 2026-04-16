@@ -17,6 +17,10 @@ const DEFAULT_BRIDGE_CONFIG: BridgeConfig = {
   targets: [],
 };
 
+function stripUtf8Bom(raw: string): string {
+  return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
+
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -233,7 +237,7 @@ export async function loadBridgeConfig(
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(stripUtf8Bom(raw));
   } catch (error) {
     throw new Error(`Bridge 配置 JSON 解析失败: ${error instanceof Error ? error.message : String(error)}`);
   }

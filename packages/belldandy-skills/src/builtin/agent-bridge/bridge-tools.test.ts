@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ToolContext } from "../../types.js";
+import { loadBridgeConfig } from "./config.js";
 import { bridgeTargetListTool } from "./tool-bridge-targets.js";
 import { bridgeTargetDiagnoseTool } from "./tool-bridge-diagnose.js";
 import { bridgeRunTool } from "./tool-bridge-run.js";
@@ -125,6 +126,50 @@ describe("agent bridge P0 tools", () => {
     };
     await fs.writeFile(path.join(tempDir, "agent-bridge.json"), JSON.stringify(config, null, 2), "utf-8");
   }
+
+  it("loads bridge config files with UTF-8 BOM", async () => {
+    const config = {
+      version: "1.0.0",
+      targets: [
+        {
+          id: "node-inline",
+          category: "agent-cli",
+          transport: "exec",
+          enabled: true,
+          entry: { binary: "node" },
+          cwdPolicy: "workspace-only",
+          sessionMode: "oneshot",
+          actions: {
+            inline: {
+              template: ["-e"],
+              allowStructuredArgs: ["script"],
+            },
+          },
+        },
+      ],
+    };
+    await fs.writeFile(
+      path.join(tempDir, "agent-bridge.json"),
+      `\uFEFF${JSON.stringify(config, null, 2)}`,
+      "utf-8",
+    );
+
+    await expect(loadBridgeConfig(baseContext)).resolves.toMatchObject({
+      version: "1.0.0",
+      targets: [
+        {
+          id: "node-inline",
+          transport: "exec",
+          actions: {
+            inline: {
+              template: ["-e"],
+              allowStructuredArgs: ["script"],
+            },
+          },
+        },
+      ],
+    });
+  });
 
   it("lists configured bridge targets", async () => {
     await writeBridgeConfig();

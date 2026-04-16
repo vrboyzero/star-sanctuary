@@ -85,6 +85,44 @@ test("subtask runtime store persists lifecycle, progress, and output artifacts",
   await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
 
+test("subtask runtime store loads persisted state with UTF-8 BOM", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-runtime-bom-"));
+  const store = new SubTaskRuntimeStore(stateDir);
+  await store.load();
+
+  const task = await store.createTask({
+    launchSpec: {
+      parentConversationId: "conv-bom",
+      agentId: "default",
+      instruction: "Validate BOM-compatible state restore",
+      channel: "test",
+      timeoutMs: 30_000,
+    },
+  });
+  await store.attachSession(task.id, "sub_bom_1");
+  await store.completeTask(task.id, {
+    status: "done",
+    sessionId: "sub_bom_1",
+    output: "BOM restore works.",
+  });
+
+  const registryPath = path.join(stateDir, "subtasks", "registry.json");
+  const raw = await fs.readFile(registryPath, "utf-8");
+  await fs.writeFile(registryPath, `\uFEFF${raw}`, "utf-8");
+
+  const reloaded = new SubTaskRuntimeStore(stateDir);
+  await reloaded.load();
+  const persisted = await reloaded.getTask(task.id);
+  expect(persisted).toMatchObject({
+    id: task.id,
+    status: "done",
+    sessionId: "sub_bom_1",
+    outputPreview: "BOM restore works.",
+  });
+
+  await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
 test("task runtime agent capabilities wrap spawn results into structured task records", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-caps-"));
   const store = new SubTaskRuntimeStore(stateDir);

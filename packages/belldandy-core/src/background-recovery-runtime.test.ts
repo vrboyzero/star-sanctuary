@@ -135,4 +135,69 @@ describe("background recovery runtime", () => {
       latestRecoveryFingerprint: fingerprint,
     });
   });
+
+  it("deduplicates concurrent recovery attempts for the same failed source", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-background-recovery-"));
+    tempDirs.push(stateDir);
+    const ledger = new BackgroundContinuationLedger(stateDir);
+    const failed = await ledger.finishRun({
+      runId: "subtask-run-1",
+      kind: "subtask",
+      sourceId: "task-1",
+      label: "Bridge patch task",
+      status: "failed",
+      reason: "Bridge cwd 不存在: E:\\missing",
+      startedAt: Date.now() - 1_000,
+      finishedAt: Date.now() - 500,
+    });
+
+    let resolveRecovery: ((value: {
+      accepted: boolean;
+      runId?: string;
+      reason?: string;
+    }) => void) | undefined;
+    let markRecoverCalled: (() => void) | undefined;
+    const recoverCalled = new Promise<void>((resolve) => {
+      markRecoverCalled = resolve;
+    });
+    const recoverSubtask = vi.fn(async () => new Promise<{
+      accepted: boolean;
+      runId?: string;
+      reason?: string;
+    }>((resolve) => {
+      markRecoverCalled?.();
+      resolveRecovery = resolve;
+    }));
+    const runtime = new BackgroundRecoveryRuntime({
+      ledger,
+      recoverSubtask,
+      throttleMs: 60_000,
+    });
+
+    const first = runtime.maybeRecover(failed);
+    const second = runtime.maybeRecover(failed);
+
+    await recoverCalled;
+    expect(recoverSubtask).toHaveBeenCalledTimes(1);
+
+    resolveRecovery?.({
+      accepted: true,
+      runId: "subtask-run-2",
+      reason: "Subtask recovery accepted.",
+    });
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toMatchObject({
+      outcome: "succeeded",
+      recoveryRunId: "subtask-run-2",
+    });
+    expect(secondResult).toEqual(firstResult);
+
+    const entries = await ledger.listRecent(4);
+    expect(entries.find((item) => item.runId === "subtask-run-1")).toMatchObject({
+      latestRecoveryOutcome: "succeeded",
+      latestRecoveryRunId: "subtask-run-2",
+      recoveryAttemptCount: 1,
+    });
+  });
 });

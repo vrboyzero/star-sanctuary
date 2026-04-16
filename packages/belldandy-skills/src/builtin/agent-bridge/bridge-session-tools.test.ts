@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { ToolContext } from "../../types.js";
 import { PtyManager } from "../system/pty.js";
 import { BridgeSessionStore } from "./sessions.js";
+import { BRIDGE_ARTIFACTS_DIR } from "./types.js";
 import {
   bridgeSessionCloseTool,
   bridgeSessionListTool,
@@ -177,6 +178,17 @@ describe("agent bridge P1 session tools", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("越界");
+  });
+
+  it("returns a clear error when bridge cwd does not exist", async () => {
+    const result = await bridgeSessionStartTool.execute({
+      targetId: "node-repl",
+      action: "interactive",
+      cwd: path.join(tempDir, "missing-cwd"),
+    }, baseContext);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Bridge cwd 不存在");
   });
 
   it("auto closes an idle bridge session after idleTimeoutMs", async () => {
@@ -494,6 +506,56 @@ describe("agent bridge P1 session tools", () => {
     expect(restoredPayload.closeReason).toBe("manual");
     expect(restoredPayload.artifactPath).toBeTruthy();
     expect(restoredPayload.transcriptPath).toBeTruthy();
+  });
+
+  it("restores bridge session registry and live transcript snapshots with UTF-8 BOM", async () => {
+    const startResult = await bridgeSessionStartTool.execute({
+      targetId: "node-repl",
+      action: "interactive",
+    }, baseContext);
+    expect(startResult.success).toBe(true);
+    const started = JSON.parse(startResult.output) as { sessionId: string };
+
+    await bridgeSessionReadTool.execute({
+      sessionId: started.sessionId,
+      waitMs: INITIAL_SESSION_READ_WAIT_MS,
+    }, baseContext);
+
+    const writeResult = await bridgeSessionWriteTool.execute({
+      sessionId: started.sessionId,
+      data: "process.stdout.write('bom-session-ok\\n')\n",
+      waitMs: SESSION_WRITE_WAIT_MS,
+    }, baseContext);
+    expect(writeResult.success).toBe(true);
+
+    const closeResult = await bridgeSessionCloseTool.execute({
+      sessionId: started.sessionId,
+    }, baseContext);
+    expect(closeResult.success).toBe(true);
+
+    const registryPath = path.join(tempDir, BRIDGE_ARTIFACTS_DIR, "sessions", "registry.json");
+    const transcriptSnapshotPath = path.join(
+      tempDir,
+      BRIDGE_ARTIFACTS_DIR,
+      "sessions",
+      started.sessionId,
+      "transcript.live.json",
+    );
+    const registryRaw = await fs.readFile(registryPath, "utf-8");
+    await fs.writeFile(registryPath, `\uFEFF${registryRaw}`, "utf-8");
+    const transcriptRaw = await fs.readFile(transcriptSnapshotPath, "utf-8");
+    await fs.writeFile(transcriptSnapshotPath, `\uFEFF${transcriptRaw}`, "utf-8");
+
+    BridgeSessionStore.resetInstanceForTests();
+
+    const restoredStatus = await bridgeSessionStatusTool.execute({
+      sessionId: started.sessionId,
+    }, baseContext);
+    expect(restoredStatus.success).toBe(true);
+
+    await BridgeSessionStore.getInstance().ensureLoaded(tempDir);
+    const restoredTranscript = BridgeSessionStore.getInstance().getTranscript(started.sessionId);
+    expect(restoredTranscript.some((event) => event.direction === "output" && event.content.includes("bom-session-ok"))).toBe(true);
   });
 
   it("recovers an active ungoverned session as orphan after in-memory reset", async () => {

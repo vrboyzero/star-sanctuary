@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { ToolCallResult, ToolContext } from "../../types.js";
 import { PtyManager } from "../system/pty.js";
 import {
@@ -29,6 +30,21 @@ function normalizeWaitMs(value: unknown): number {
 function delay(ms: number): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureExistingWorkingDirectory(cwd: string): Promise<void> {
+  try {
+    const stat = await fs.stat(cwd);
+    if (!stat.isDirectory()) {
+      throw new Error(`Bridge cwd 不是目录: ${cwd}`);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw new Error(`Bridge cwd 不存在: ${cwd}`);
+    }
+    throw error;
+  }
 }
 
 async function runStartupSequence(
@@ -282,6 +298,7 @@ export async function startBridgeSession(
         ? firstTurnPrompt.trim()
         : undefined,
     });
+    await ensureExistingWorkingDirectory(resolvedCwd);
     const ptyManager = PtyManager.getInstance();
     const runtimeSessionId = await ptyManager.createSession(cmd, cmdArgs, {
       cwd: resolvedCwd,

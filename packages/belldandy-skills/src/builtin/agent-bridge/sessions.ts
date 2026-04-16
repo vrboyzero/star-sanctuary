@@ -9,6 +9,10 @@ import type { BridgeSessionRecord, BridgeSessionTranscriptEvent } from "./types.
 const MAX_TRANSCRIPT_EVENT_CHARS = 16_000;
 const MAX_TRANSCRIPT_EVENTS = 400;
 
+function stripUtf8Bom(raw: string): string {
+  return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
+
 function normalizeTaskId(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
@@ -244,7 +248,7 @@ export class BridgeSessionStore {
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(raw);
+      parsed = JSON.parse(stripUtf8Bom(raw));
     } catch {
       return;
     }
@@ -310,7 +314,7 @@ export class BridgeSessionStore {
       return [];
     }
     try {
-      const parsed = JSON.parse(raw) as { events?: BridgeSessionTranscriptEvent[] };
+      const parsed = JSON.parse(stripUtf8Bom(raw)) as { events?: BridgeSessionTranscriptEvent[] };
       return Array.isArray(parsed.events) ? parsed.events : [];
     } catch {
       return [];
