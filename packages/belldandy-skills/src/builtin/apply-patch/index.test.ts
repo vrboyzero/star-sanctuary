@@ -134,4 +134,28 @@ describe("apply_patch tool", () => {
       await fs.rm(extraRoot, { recursive: true, force: true });
     }
   });
+
+  it("should stop before applying any writes when abortSignal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort("Stopped by user.");
+
+    const result = await applyPatchTool.execute(
+      {
+        input: [
+          "*** Begin Patch",
+          "*** Add File: STOPPED.md",
+          "+should not be written",
+          "*** End Patch",
+        ].join("\n"),
+      },
+      {
+        ...baseContext,
+        abortSignal: controller.signal,
+      },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Stopped by user.");
+    await expect(fs.access(path.join(tempDir, "STOPPED.md"))).rejects.toBeDefined();
+  });
 });

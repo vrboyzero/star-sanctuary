@@ -2,6 +2,7 @@ import type { Tool, ToolCallResult } from "../../types.js";
 import { PtyManager } from "./pty.js";
 import crypto from "node:crypto";
 import { withToolContract } from "../../tool-contract.js";
+import { isAbortError, readAbortReason, sleepWithAbort, throwIfAborted } from "../../abort-utils.js";
 
 export const terminalTool: Tool = withToolContract({
     definition: {
@@ -56,6 +57,7 @@ export const terminalTool: Tool = withToolContract({
         const manager = PtyManager.getInstance();
 
         try {
+            throwIfAborted(context.abortSignal);
             if (action === "start") {
                 const sessionId = await manager.createSession(
                     (args.cmd as string) || "",
@@ -91,7 +93,7 @@ export const terminalTool: Tool = withToolContract({
                 manager.write(sessionId, data);
 
                 // Auto-read after write to verify feedback, wait small delay
-                await new Promise(r => setTimeout(r, 100));
+                await sleepWithAbort(100, context.abortSignal);
                 const output = manager.read(sessionId);
 
                 return {
@@ -144,7 +146,9 @@ export const terminalTool: Tool = withToolContract({
                 name,
                 success: false,
                 output: "",
-                error: err instanceof Error ? err.message : String(err),
+                error: isAbortError(err) || context.abortSignal?.aborted
+                    ? readAbortReason(context.abortSignal)
+                    : (err instanceof Error ? err.message : String(err)),
                 durationMs: Date.now() - start,
             };
         }

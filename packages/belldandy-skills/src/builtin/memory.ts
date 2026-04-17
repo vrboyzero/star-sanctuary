@@ -1,5 +1,5 @@
 import type { Tool, ToolCallResult } from "../types.js";
-import { MemoryManager, getGlobalMemoryManager } from "@belldandy/memory";
+import { createTaskWorkSurface, MemoryManager, getGlobalMemoryManager } from "@belldandy/memory";
 import type {
     ExperienceCandidate,
     ExperienceCandidateListFilter,
@@ -11,6 +11,7 @@ import type {
     TaskExperienceDetail,
     TaskRecord,
     TaskSearchFilter,
+    TaskWorkShortcutItem,
 } from "@belldandy/memory";
 import { appendToTodayMemory, readMemoryFile, writeMemoryFile } from "@belldandy/memory";
 import { getGlobalSkillRegistry } from "../skill-registry.js";
@@ -43,6 +44,10 @@ function getMemoryManager(workspaceRoot: string): MemoryManager {
         console.log("[memory_search] Created fallback MemoryManager (no global instance found)");
     }
     return memoryManager;
+}
+
+function getTaskWorkSurface(workspaceRoot: string) {
+    return createTaskWorkSurface(getMemoryManager(workspaceRoot));
 }
 
 function withMemoryReadContract(
@@ -679,6 +684,266 @@ export const taskRecentTool: Tool = withToolContract({
     resultSchema: {
         kind: "text",
         description: "Formatted recent task list text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
+
+export const recentWorkTool: Tool = withToolContract({
+    definition: {
+        name: "recent_work",
+        description: "Return the most recent historical work Belldandy has already done. Prefer this over broad task_search when you want a fast answer to 'what did we just do?' or 'what was recently touched?'.",
+        parameters: {
+            type: "object",
+            properties: {
+                query: {
+                    type: "string",
+                    description: "Optional narrowing query, such as a module, bug, or file keyword.",
+                },
+                limit: {
+                    type: "number",
+                    description: "Max number of results to return (default: 5).",
+                },
+                status: {
+                    type: "string",
+                    description: "Optional task status filter: success, failed, partial, running. Can be comma-separated.",
+                },
+                source: {
+                    type: "string",
+                    description: "Optional task source filter: chat, sub_agent, cron, heartbeat, manual. Can be comma-separated.",
+                },
+                date_from: {
+                    type: "string",
+                    description: "Optional lower date bound (YYYY-MM-DD).",
+                },
+                date_to: {
+                    type: "string",
+                    description: "Optional upper date bound (YYYY-MM-DD).",
+                },
+                detail_level: {
+                    type: "string",
+                    enum: ["summary", "full"],
+                    description: "Progressive disclosure level. Default 'summary' only returns一级摘要；'full' returns matched reasons and recent activity.",
+                },
+            },
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const taskWorkSurface = getTaskWorkSurface(context.workspaceRoot);
+            const query = typeof args.query === "string" ? args.query.trim() : undefined;
+            const limit = (args.limit as number) || 5;
+            const filter = buildTaskFilter(args, context.agentId);
+            const detailLevel = parseTaskShortcutDetailLevel(args);
+            const items = taskWorkSurface.recentWork({ query, limit, filter });
+
+            return {
+                id: "recent_work",
+                name: "recent_work",
+                success: true,
+                output: formatTaskWorkShortcutList(items, detailLevel) || "No recent work found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "recent_work",
+                name: "recent_work",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Read recent completed or in-progress historical work shortcuts",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted recent work summary text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
+
+export const resumeContextTool: Tool = withToolContract({
+    definition: {
+        name: "resume_context",
+        description: "Return where a historical task last stopped and what the next step should be. Use this for '上次做到哪了' or '从哪继续'.",
+        parameters: {
+            type: "object",
+            properties: {
+                task_id: {
+                    type: "string",
+                    description: "Optional exact task ID to resume from.",
+                },
+                conversation_id: {
+                    type: "string",
+                    description: "Optional conversation ID whose latest task should be used.",
+                },
+                query: {
+                    type: "string",
+                    description: "Optional narrowing query, such as a feature name, module, or bug description.",
+                },
+                status: {
+                    type: "string",
+                    description: "Optional task status filter: success, failed, partial, running. Can be comma-separated.",
+                },
+                source: {
+                    type: "string",
+                    description: "Optional task source filter: chat, sub_agent, cron, heartbeat, manual. Can be comma-separated.",
+                },
+                date_from: {
+                    type: "string",
+                    description: "Optional lower date bound (YYYY-MM-DD).",
+                },
+                date_to: {
+                    type: "string",
+                    description: "Optional upper date bound (YYYY-MM-DD).",
+                },
+                detail_level: {
+                    type: "string",
+                    enum: ["summary", "full"],
+                    description: "Progressive disclosure level. Default 'summary' only returns stop/next摘要；'full' returns facts, blockers, and recent activity.",
+                },
+            },
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const taskWorkSurface = getTaskWorkSurface(context.workspaceRoot);
+            const filter = buildTaskFilter(args, context.agentId);
+            const detailLevel = parseTaskShortcutDetailLevel(args);
+            const item = taskWorkSurface.resumeContext({
+                taskId: typeof args.task_id === "string" ? args.task_id.trim() : undefined,
+                conversationId: typeof args.conversation_id === "string" ? args.conversation_id.trim() : undefined,
+                query: typeof args.query === "string" ? args.query.trim() : undefined,
+                filter,
+            });
+
+            return {
+                id: "resume_context",
+                name: "resume_context",
+                success: true,
+                output: item ? formatResumeContextShortcut(item, detailLevel) : "No resumable context found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "resume_context",
+                name: "resume_context",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Read resumable stop point and next-step context from recent task history",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted resumable context text.",
+    },
+    outputPersistencePolicy: "conversation",
+});
+
+export const similarPastWorkTool: Tool = withToolContract({
+    definition: {
+        name: "similar_past_work",
+        description: "Find similar historical implementation or fix work from task memory. Use this before broad memory_search when the question is 'have we done something like this before?'.",
+        parameters: {
+            type: "object",
+            properties: {
+                query: {
+                    type: "string",
+                    description: "Required query describing the similar past work to find.",
+                },
+                limit: {
+                    type: "number",
+                    description: "Max number of results to return (default: 5).",
+                },
+                status: {
+                    type: "string",
+                    description: "Optional task status filter: success, failed, partial, running. Can be comma-separated.",
+                },
+                source: {
+                    type: "string",
+                    description: "Optional task source filter: chat, sub_agent, cron, heartbeat, manual. Can be comma-separated.",
+                },
+                date_from: {
+                    type: "string",
+                    description: "Optional lower date bound (YYYY-MM-DD).",
+                },
+                date_to: {
+                    type: "string",
+                    description: "Optional upper date bound (YYYY-MM-DD).",
+                },
+                detail_level: {
+                    type: "string",
+                    enum: ["summary", "full"],
+                    description: "Progressive disclosure level. Default 'summary' only returns一级摘要；'full' returns matched reasons and recent activity.",
+                },
+            },
+            required: ["query"],
+        },
+    },
+
+    async execute(args, context): Promise<ToolCallResult> {
+        const start = Date.now();
+        try {
+            const taskWorkSurface = getTaskWorkSurface(context.workspaceRoot);
+            const query = String(args.query ?? "").trim();
+            const limit = (args.limit as number) || 5;
+            const filter = buildTaskFilter(args, context.agentId);
+            const detailLevel = parseTaskShortcutDetailLevel(args);
+            const items = taskWorkSurface.findSimilarWork({ query, limit, filter });
+
+            return {
+                id: "similar_past_work",
+                name: "similar_past_work",
+                success: true,
+                output: formatTaskWorkShortcutList(items, detailLevel) || "No similar past work found.",
+                durationMs: Date.now() - start,
+            };
+        } catch (err) {
+            return {
+                id: "similar_past_work",
+                name: "similar_past_work",
+                success: false,
+                output: "",
+                error: err instanceof Error ? err.message : String(err),
+                durationMs: Date.now() - start,
+            };
+        }
+    },
+}, {
+    family: "memory",
+    isReadOnly: true,
+    isConcurrencySafe: true,
+    needsPermission: false,
+    riskLevel: "low",
+    channels: ["gateway", "web"],
+    safeScopes: ["local-safe", "web-safe"],
+    activityDescription: "Find similar historical work shortcuts from task memory",
+    resultSchema: {
+        kind: "text",
+        description: "Formatted similar past work summary text.",
     },
     outputPersistencePolicy: "conversation",
 });
@@ -1491,6 +1756,10 @@ function buildTaskFilter(args: Record<string, unknown>, agentId?: string): TaskS
     return Object.keys(filter).length > 0 ? filter : undefined;
 }
 
+function parseTaskShortcutDetailLevel(args: Record<string, unknown>): "summary" | "full" {
+    return args.detail_level === "full" ? "full" : "summary";
+}
+
 function buildExperienceCandidateFilter(args: Record<string, unknown>, agentId?: string): ExperienceCandidateListFilter | undefined {
     const filter: ExperienceCandidateListFilter = {};
 
@@ -1545,6 +1814,80 @@ function formatTaskList(tasks: TaskRecord[]): string {
     }).join("\n\n---\n\n");
 }
 
+function formatTaskWorkShortcutList(items: TaskWorkShortcutItem[], detailLevel: "summary" | "full" = "summary"): string {
+    return items.map((item) => {
+        const title = item.title || item.objective || item.taskId;
+        const meta = [
+            item.taskId,
+            item.status,
+            item.source,
+            item.finishedAt || item.updatedAt,
+        ].filter(Boolean).join(" | ");
+        const lines = [`[${meta}]`, title];
+        if (item.workRecap?.headline) {
+            lines.push(`Recap: ${truncateForSummary(item.workRecap.headline, 220)}`);
+        } else if (item.summary) {
+            lines.push(truncateForSummary(item.summary, 220));
+        }
+        if (item.resumeContext?.currentStopPoint) {
+            lines.push(`Stop: ${truncateForSummary(item.resumeContext.currentStopPoint, 180)}`);
+        }
+        if (item.resumeContext?.nextStep) {
+            lines.push(`Next: ${truncateForSummary(item.resumeContext.nextStep, 180)}`);
+        }
+        if (detailLevel === "full" && item.recentActivityTitles.length > 0) {
+            lines.push(`Recent Activity: ${item.recentActivityTitles.map((activity) => truncateForSummary(activity, 80)).join(" | ")}`);
+        }
+        if (detailLevel === "full" && item.matchReasons?.length) {
+            lines.push(`Matched By: ${item.matchReasons.join(", ")}`);
+        }
+        return lines.join("\n");
+    }).join("\n\n---\n\n");
+}
+
+function formatResumeContextShortcut(item: TaskWorkShortcutItem, detailLevel: "summary" | "full" = "summary"): string {
+    const title = item.title || item.objective || item.taskId;
+    const lines = [
+        `Task: ${title}`,
+        `ID: ${item.taskId}`,
+        `Status: ${item.status}`,
+        `Source: ${item.source}`,
+        `Conversation: ${item.conversationId}`,
+        `Updated: ${item.finishedAt || item.updatedAt}`,
+    ];
+    if (item.workRecap?.headline) {
+        lines.push("", `Recap: ${item.workRecap.headline}`);
+    }
+    if (item.resumeContext?.currentStopPoint) {
+        lines.push("", `Stop: ${item.resumeContext.currentStopPoint}`);
+    }
+    if (item.resumeContext?.nextStep) {
+        lines.push(`Next: ${item.resumeContext.nextStep}`);
+    }
+    if (detailLevel === "full" && item.resumeContext?.blockers?.length) {
+        lines.push("Blockers:");
+        for (const blocker of item.resumeContext.blockers) {
+            lines.push(`- ${truncateForSummary(blocker, 180)}`);
+        }
+    }
+    if (detailLevel === "full" && item.workRecap?.confirmedFacts?.length) {
+        lines.push("Confirmed Facts:");
+        for (const fact of item.workRecap.confirmedFacts.slice(0, 5)) {
+            lines.push(`- ${truncateForSummary(fact, 180)}`);
+        }
+    }
+    if (detailLevel === "full" && item.recentActivityTitles.length > 0) {
+        lines.push("Recent Activity:");
+        for (const activity of item.recentActivityTitles) {
+            lines.push(`- ${truncateForSummary(activity, 160)}`);
+        }
+    }
+    if (detailLevel === "full" && item.matchReasons?.length) {
+        lines.push(`Matched By: ${item.matchReasons.join(", ")}`);
+    }
+    return lines.join("\n");
+}
+
 function formatTaskDetail(task: TaskExperienceDetail): string {
     const lines: string[] = [];
     lines.push(`Task: ${task.title || task.objective || task.id}`);
@@ -1575,6 +1918,47 @@ function formatTaskDetail(task: TaskExperienceDetail): string {
         lines.push(task.summary);
     }
 
+    if (task.workRecap) {
+        lines.push("");
+        lines.push("Work Recap:");
+        lines.push(`Headline: ${task.workRecap.headline}`);
+        if (task.workRecap.confirmedFacts?.length) {
+            lines.push("Confirmed:");
+            for (const item of task.workRecap.confirmedFacts) {
+                lines.push(`- ${item}`);
+            }
+        }
+        if (task.workRecap.pendingActions?.length) {
+            lines.push("Pending:");
+            for (const item of task.workRecap.pendingActions) {
+                lines.push(`- ${item}`);
+            }
+        }
+        if (task.workRecap.blockers?.length) {
+            lines.push("Blockers:");
+            for (const item of task.workRecap.blockers) {
+                lines.push(`- ${truncateForSummary(item, 180)}`);
+            }
+        }
+    }
+
+    if (task.resumeContext) {
+        lines.push("");
+        lines.push("Resume Context:");
+        if (task.resumeContext.currentStopPoint) {
+            lines.push(`Stop: ${task.resumeContext.currentStopPoint}`);
+        }
+        if (task.resumeContext.nextStep) {
+            lines.push(`Next: ${task.resumeContext.nextStep}`);
+        }
+        if (task.resumeContext.blockers?.length) {
+            lines.push("Resume Blockers:");
+            for (const item of task.resumeContext.blockers) {
+                lines.push(`- ${truncateForSummary(item, 180)}`);
+            }
+        }
+    }
+
     if (task.reflection) {
         lines.push("");
         lines.push("Reflection:");
@@ -1603,6 +1987,34 @@ function formatTaskDetail(task: TaskExperienceDetail): string {
             }
             if (item.artifactPaths?.length) {
                 lines.push(`  artifacts: ${item.artifactPaths.join(", ")}`);
+            }
+        }
+    }
+
+    if (Array.isArray(task.activities) && task.activities.length > 0) {
+        lines.push("");
+        lines.push("Activity / Worklog:");
+        for (const item of task.activities) {
+            const meta = [
+                item.state,
+                item.kind,
+                item.happenedAt,
+            ].filter(Boolean).join(" | ");
+            lines.push(`- ${item.title}${meta ? ` (${meta})` : ""}`);
+            if (item.summary) {
+                lines.push(`  summary: ${truncateForSummary(item.summary, 220)}`);
+            }
+            if (item.files?.length) {
+                lines.push(`  files: ${item.files.join(", ")}`);
+            }
+            if (item.artifactPaths?.length) {
+                lines.push(`  artifacts: ${item.artifactPaths.join(", ")}`);
+            }
+            if (item.memoryChunkIds?.length) {
+                lines.push(`  memories: ${item.memoryChunkIds.join(", ")}`);
+            }
+            if (item.error) {
+                lines.push(`  error: ${truncateForSummary(item.error, 180)}`);
             }
         }
     }

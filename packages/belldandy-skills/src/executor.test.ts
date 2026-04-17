@@ -186,6 +186,77 @@ describe("ToolExecutor", () => {
     expect(result.name).toBe("echo");
   });
 
+  it("should pass abortSignal into tool context", async () => {
+    const seenSignals: AbortSignal[] = [];
+    const signalAwareTool: Tool = {
+      definition: {
+        name: "signal_aware",
+        description: "记录传入的 abortSignal",
+        parameters: { type: "object", properties: {} },
+      },
+      async execute(_args, context): Promise<ToolCallResult> {
+        if (context.abortSignal) {
+          seenSignals.push(context.abortSignal);
+        }
+        return {
+          id: "",
+          name: "signal_aware",
+          success: true,
+          output: "ok",
+          durationMs: 0,
+        };
+      },
+    };
+    const executor = new ToolExecutor({
+      tools: [signalAwareTool],
+      workspaceRoot: "/tmp/test",
+    });
+    const controller = new AbortController();
+
+    const result = await executor.execute({
+      id: "req-signal-1",
+      name: "signal_aware",
+      arguments: {},
+    }, "conv-1", undefined, undefined, undefined, undefined, undefined, controller.signal);
+
+    expect(result.success).toBe(true);
+    expect(seenSignals).toHaveLength(1);
+    expect(seenSignals[0]).toBe(controller.signal);
+  });
+
+  it("should stop before running the tool when abortSignal is already aborted", async () => {
+    const execute = vi.fn(async (): Promise<ToolCallResult> => ({
+      id: "",
+      name: "never_runs",
+      success: true,
+      output: "ok",
+      durationMs: 0,
+    }));
+    const executor = new ToolExecutor({
+      tools: [{
+        definition: {
+          name: "never_runs",
+          description: "不应被执行",
+          parameters: { type: "object", properties: {} },
+        },
+        execute,
+      }],
+      workspaceRoot: "/tmp/test",
+    });
+    const controller = new AbortController();
+    controller.abort("Stopped by user.");
+
+    const result = await executor.execute({
+      id: "req-signal-2",
+      name: "never_runs",
+      arguments: {},
+    }, "conv-1", undefined, undefined, undefined, undefined, undefined, controller.signal);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Stopped by user.");
+  });
+
   it("should return error for unknown tool", async () => {
     const executor = new ToolExecutor({
       tools: [echoTool],

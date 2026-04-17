@@ -217,8 +217,8 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
     }
   }
 
-  // Windows 上 rename 常因占用/权限报 EPERM，降级为直接写目标文件
-  if (process.platform === "win32" && lastErr && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")) {
+  // 小型 JSON store 在少数环境中会在 rename 时遇到瞬时竞态，降级为直接写目标文件。
+  if (lastErr && (lastErr.code === "ENOENT" || (process.platform === "win32" && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")))) {
     try {
       await fs.promises.writeFile(filePath, content, "utf-8");
       await fs.promises.unlink(tmp).catch(() => {});

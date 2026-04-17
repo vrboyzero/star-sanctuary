@@ -112,6 +112,41 @@ describe("office tools", () => {
     expect((init.headers as Record<string, string>)["X-Agent-ID"]).toBe(encodeURIComponent("贝露丹蒂"));
   });
 
+  it("should abort an in-flight office request when abortSignal is triggered", async () => {
+    fetchMock.mockImplementationOnce(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (signal?.aborted) {
+          const error = new Error("Stopped by user.");
+          error.name = "AbortError";
+          reject(error);
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          const error = new Error("Stopped by user.");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      });
+    });
+    const controller = new AbortController();
+
+    const resultPromise = officeWorkshopSearchTool.execute(
+      { agent_name: "贝露丹蒂", category: "技能", limit: 5 },
+      {
+        ...context,
+        abortSignal: controller.signal,
+      },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    controller.abort("Stopped by user.");
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Stopped by user.");
+  });
+
   it("should resolve default Belldandy alias to 贝露丹蒂 config", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       items: [{ id: "item-1", title: "测试技能" }],

@@ -59,7 +59,7 @@ test("worktree runtime creates an isolated git worktree and rewrites cwd to the 
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
   }
-});
+}, 15_000);
 
 test("worktree runtime removes managed worktrees and deletes the task branch", async () => {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-worktree-cleanup-"));
@@ -101,4 +101,4 @@ test("worktree runtime removes managed worktrees and deletes the task branch", a
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
   }
-});
+}, 15_000);

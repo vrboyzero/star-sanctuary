@@ -135,7 +135,9 @@ export {
   bridgeSessionCloseTool,
   bridgeSessionListTool,
   loadRuntimeLostBridgeSessions,
+  loadRecoveredBridgeSessions,
 } from "./builtin/agent-bridge/index.js";
+export type { BridgeSessionRecord } from "./builtin/agent-bridge/index.js";
 export { codeInterpreterTool } from "./builtin/code-interpreter/index.js";
 export { ptcRuntimeTool } from "./builtin/ptc-runtime/index.js";
 export {
@@ -143,10 +145,16 @@ export {
   textToSpeechTool,
   cameraListTool,
   cameraSnapTool,
+  buildCameraRuntimeDoctorReport,
   synthesizeSpeech,
   transcribeSpeech,
 } from "./builtin/multimedia/index.js";
 export type { SynthesizeResult, SynthesizeOptions, TranscribeResult, TranscribeOptions } from "./builtin/multimedia/index.js";
+export type {
+  BuildCameraRuntimeDoctorReportOptions,
+  CameraRuntimeDoctorReport,
+  CameraRuntimeDoctorProvider,
+} from "./builtin/multimedia/index.js";
 export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";
 export { conversationListTool, conversationReadTool } from "./builtin/conversation/index.js";
 export {
@@ -264,6 +272,9 @@ export {
   taskSearchTool,
   taskGetTool,
   taskRecentTool,
+  recentWorkTool,
+  resumeContextTool,
+  similarPastWorkTool,
   taskPromoteMethodTool,
   taskPromoteSkillDraftTool,
   experienceCandidateGetTool,

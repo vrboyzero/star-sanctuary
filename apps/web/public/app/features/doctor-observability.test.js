@@ -833,6 +833,38 @@ describe("doctor observability formatting", () => {
         ],
         headline: "records=4; processed=2; failed=1; invalid=1; duplicates=1; providers=1; attachments=1; runtime=enabled",
       },
+      cameraRuntime: {
+        summary: {
+          available: true,
+          defaultProviderId: "browser_loopback",
+          registeredProviderIds: ["browser_loopback", "native_desktop"],
+          warningCount: 1,
+          errorCount: 0,
+          headline: "native_desktop; status=degraded; helper=ready; devices 1/1 available, busy=1; issues error=0, warning=1",
+        },
+        providers: [
+          {
+            id: "browser_loopback",
+            headline: "browser_loopback 已注册；doctor 当前不主动拉起浏览器，会在真实浏览器会话中补充运行时状态。",
+            recoveryHints: [],
+          },
+          {
+            id: "native_desktop",
+            headline: "native_desktop; status=degraded; helper=ready; devices 1/1 available, busy=1; issues error=0, warning=1",
+            launchConfig: {
+              command: "C:/Program Files/nodejs/node.exe",
+              helperEntry: "packages/belldandy-skills/dist/builtin/multimedia/camera-native-desktop-helper.js",
+              cwd: "E:/project/star-sanctuary",
+            },
+            sampleDevices: [
+              "OBSBOT Tiny 2 StreamCamera [available, external, busy, stable=usb-3564-fef8-453a4b75]",
+            ],
+            recoveryHints: [
+              "关闭正在占用摄像头的会议或录制软件后重试。",
+            ],
+          },
+        ],
+      },
       runtimeResilienceDiagnostics: {
         alertLevel: "warn",
         alertCode: "recent_degrade",
@@ -846,6 +878,42 @@ describe("doctor observability formatting", () => {
         latestReasonSummary: "server_error=1, timeout=1",
         overallReasonSummary: "server_error=1, timeout=1, rate_limit=1",
         totalsSummary: "observed=3, degraded=1, failed=0, retry=1, switch=1, cooldown=0",
+      },
+      queryRuntime: {
+        stopDiagnostics: {
+          available: true,
+          totalRequests: 2,
+          acceptedRequests: 2,
+          stoppedRuns: 1,
+          runningAfterStopCount: 1,
+          completedAfterStopCount: 0,
+          failedAfterStopCount: 0,
+          notFoundCount: 0,
+          runMismatchCount: 0,
+          recent: [
+            {
+              stopTraceId: "stop-trace-1",
+              conversationId: "conv-1",
+              runId: "run-1",
+              requestedAt: 1710000160000,
+              outcome: "running_after_stop",
+              reason: "Stopped by user.",
+              messageStatus: "running",
+              messageLatestStage: "tool_result_emitted",
+            },
+            {
+              stopTraceId: "stop-trace-2",
+              conversationId: "conv-2",
+              runId: "run-2",
+              requestedAt: 1710000165000,
+              outcome: "stopped",
+              reason: "Stopped by user.",
+              messageStatus: "completed",
+              messageLatestStage: "completed",
+              messageResponse: "stopped",
+            },
+          ],
+        },
       },
       runtimeResilience: {
         version: 1,
@@ -1063,12 +1131,25 @@ describe("doctor observability formatting", () => {
       expect(lines.join("\n")).toContain("setup configured");
       expect(lines.join("\n")).toContain("IMAP polling is configured for primary@imap.example.com:993/INBOX -> agent default. First attach bootstrap=latest. Recent window limit=50.");
       expect(lines.join("\n")).toContain("account primary / imap.example.com:993 / secure=true / mailbox INBOX / agent default / interval 60000ms / bootstrap latest / recent window 50");
-      expect(lines.join("\n")).toContain("如果你刚改过 .env/.env.local 但这里没变化，先去看 Config Source 卡片确认当前生效目录。");
-      expect(lines.join("\n")).toContain("4 records / processed 2 / failed 1");
+    expect(lines.join("\n")).toContain("如果你刚改过 .env/.env.local 但这里没变化，先去看 Config Source 卡片确认当前生效目录。");
+    expect(lines.join("\n")).toContain("4 records / processed 2 / failed 1");
     expect(lines.join("\n")).toContain("invalid 1 / duplicates 1");
     expect(lines.join("\n")).toContain("mailboxes INBOX:4");
     expect(lines.join("\n")).toContain("statuses processed:2, failed:1, invalid_event:1, skipped_duplicate:1");
     expect(lines.join("\n")).toContain("message=<msg-900@example.com>");
+    expect(lines.join("\n")).toContain("Camera Runtime");
+    expect(lines.join("\n")).toContain("2 provider(s)");
+    expect(lines.join("\n")).toContain("default browser_loopback");
+    expect(lines.join("\n")).toContain("native_desktop; status=degraded; helper=ready; devices 1/1 available, busy=1; issues error=0, warning=1");
+    expect(lines.join("\n")).toContain("launch: command=C:/Program Files/nodejs/node.exe, entry=packages/belldandy-skills/dist/builtin/multimedia/camera-native-desktop-helper.js, cwd=E:/project/star-sanctuary");
+    expect(lines.join("\n")).toContain("device: OBSBOT Tiny 2 StreamCamera [available, external, busy, stable=usb-3564-fef8-453a4b75]");
+    expect(lines.join("\n")).toContain("recovery: 关闭正在占用摄像头的会议或录制软件后重试。");
+    expect(lines.join("\n")).toContain("Agent Stop Runtime");
+    expect(lines.join("\n")).toContain("2 stop requests");
+    expect(lines.join("\n")).toContain("1 still running after stop");
+    expect(lines.join("\n")).toContain("running_after_stop 1 / completed_after_stop 0 / failed_after_stop 0 / not_found 0 / run_mismatch 0");
+    expect(lines.join("\n")).toContain("conv-1 / run-1: outcome=running_after_stop, reason=Stopped by user., message=running/tool_result_emitted");
+    expect(lines.join("\n")).toContain("conv-2 / run-2: outcome=stopped, reason=Stopped by user., message=completed/completed / response=stopped");
     expect(lines.join("\n")).toContain("Runtime Resilience");
     expect(lines.join("\n")).toContain("primary openai.com/gpt-4.1");
     expect(lines.join("\n")).toContain("1 fallbacks");

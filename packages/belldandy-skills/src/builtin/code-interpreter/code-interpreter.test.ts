@@ -80,4 +80,23 @@ describe("Code Interpreter Tool", () => {
         expect(result.success).toBe(false);
         expect(result.output).toContain("SyntaxError");
     });
+
+    it("should abort a running javascript script when abortSignal is triggered", async () => {
+        const controller = new AbortController();
+        const resultPromise = codeInterpreterTool.execute({
+            language: "javascript",
+            code: 'setTimeout(() => console.log("too-late"), 5000);'
+        }, {
+            ...context,
+            abortSignal: controller.signal,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        controller.abort("Stopped by user.");
+        const result = await resultPromise;
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe("Stopped by user.");
+        expect(result.output).toBe("");
+    });
 });

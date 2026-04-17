@@ -63,6 +63,8 @@ export function createSettingsController({
     cfgTtsEnabled,
     cfgTtsProvider,
     cfgTtsVoice,
+    cfgTtsOpenAIBaseUrl,
+    cfgTtsOpenAIApiKey,
     cfgDashScopeApiKey,
     cfgFacetAnchor,
     cfgInjectAgents,
@@ -352,6 +354,8 @@ export function createSettingsController({
     cfgTtsEnabled.checked = c["BELLDANDY_TTS_ENABLED"] === "true";
     cfgTtsProvider.value = c["BELLDANDY_TTS_PROVIDER"] || "edge";
     cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
+    cfgTtsOpenAIBaseUrl.value = c["BELLDANDY_TTS_OPENAI_BASE_URL"] || "";
+    cfgTtsOpenAIApiKey.value = c["BELLDANDY_TTS_OPENAI_API_KEY"] || "";
     cfgDashScopeApiKey.value = c["DASHSCOPE_API_KEY"] || "";
     cfgFacetAnchor.value = c["BELLDANDY_FACET_ANCHOR"] || "";
     cfgInjectAgents.checked = c["BELLDANDY_INJECT_AGENTS"] === "true";
@@ -776,6 +780,8 @@ export function createSettingsController({
     updates["BELLDANDY_TTS_ENABLED"] = cfgTtsEnabled.checked ? "true" : "false";
     updates["BELLDANDY_TTS_PROVIDER"] = cfgTtsProvider.value.trim() || "edge";
     updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
+    updates["BELLDANDY_TTS_OPENAI_BASE_URL"] = cfgTtsOpenAIBaseUrl.value.trim();
+    assignSecretUpdate(updates, "BELLDANDY_TTS_OPENAI_API_KEY", cfgTtsOpenAIApiKey);
     assignSecretUpdate(updates, "DASHSCOPE_API_KEY", cfgDashScopeApiKey);
     updates["BELLDANDY_FACET_ANCHOR"] = cfgFacetAnchor.value.trim();
     updates["BELLDANDY_INJECT_AGENTS"] = cfgInjectAgents.checked ? "true" : "false";

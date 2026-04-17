@@ -109,4 +109,55 @@ describe("OpenAIChatAgent prompt snapshot", () => {
       ],
     });
   });
+
+  it("maps caller aborts to stopped without emitting a final message", async () => {
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        const signal = (init as RequestInit | undefined)?.signal;
+        markFetchStarted();
+        if (signal?.aborted) {
+          reject(createAbortError("Stopped by user."));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          reject(createAbortError("Stopped by user."));
+        }, { once: true });
+      });
+    });
+
+    const controller = new AbortController();
+    const agent = new OpenAIChatAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      stream: false,
+    });
+
+    const itemsPromise = collectItems(agent.run({
+      conversationId: "conv-openai-stop",
+      text: "hello",
+      abortSignal: controller.signal,
+    }));
+
+    await fetchStarted;
+    controller.abort("Stopped by user.");
+
+    const items = await itemsPromise;
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(items).toEqual([
+      { type: "status", status: "running" },
+      { type: "status", status: "stopped" },
+    ]);
+  });
 });
+
+function createAbortError(message: string): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}

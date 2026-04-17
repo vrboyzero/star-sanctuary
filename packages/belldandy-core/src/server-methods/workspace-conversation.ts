@@ -18,6 +18,10 @@ import type {
   DurableExtractionRecord,
   DurableExtractionRuntime,
 } from "@belldandy/memory";
+import {
+  createTaskWorkSurface,
+  getGlobalMemoryManager,
+} from "@belldandy/memory";
 
 import { buildConversationContinuationState } from "../continuation-state.js";
 import type { ConversationPromptSnapshotArtifact } from "../conversation-prompt-snapshot.js";
@@ -349,6 +353,12 @@ export async function handleWorkspaceConversationMethod(
       const taskTokenResults = ctx.conversationStore.getTaskTokenResults(conversationId, limit);
       const loadedDeferredTools = ctx.conversationStore.getLoadedToolNames(conversationId);
       const compactBoundaries = ctx.conversationStore.getCompactBoundaries(conversationId, limit);
+      const digest = await ctx.conversationStore.getSessionDigest(conversationId);
+      const sessionMemory = await ctx.conversationStore.getSessionMemory(conversationId);
+      const memoryManager = getGlobalMemoryManager({ conversationId });
+      const resumeItem = memoryManager
+        ? createTaskWorkSurface(memoryManager).resumeContext({ conversationId })
+        : null;
       const goalSessionEntryBanner = ctx.goalManager
         ? await buildGoalSessionStartBanner({
           sessionKey: conversationId,
@@ -373,6 +383,9 @@ export async function handleWorkspaceConversationMethod(
             taskTokenResults,
             loadedDeferredTools,
             compactBoundaries,
+            sessionDigest: digest,
+            sessionMemory,
+            resumeContext: resumeItem?.resumeContext,
           }),
           goalSessionEntryBanner,
         },

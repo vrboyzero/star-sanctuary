@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import dns from "node:dns/promises";
 import type { Tool, ToolContext, ToolCallResult } from "../types.js";
 import { withToolContract } from "../tool-contract.js";
+import {
+  createLinkedAbortController,
+  isAbortError,
+  readAbortReason,
+  throwIfAborted,
+} from "../abort-utils.js";
 
 export const fetchTool: Tool = withToolContract({
   definition: {
@@ -44,6 +50,12 @@ export const fetchTool: Tool = withToolContract({
     });
 
     // 参数校验
+    try {
+      throwIfAborted(context.abortSignal);
+    } catch {
+      return makeError(readAbortReason(context.abortSignal));
+    }
+
     const urlStr = args.url;
     if (typeof urlStr !== "string" || !urlStr.trim()) {
       return makeError("参数错误：url 必须是非空字符串");
@@ -101,6 +113,7 @@ export const fetchTool: Tool = withToolContract({
 
     // [SECURITY] DNS 解析后二次校验（防 DNS Rebinding）
     try {
+      throwIfAborted(context.abortSignal);
       const { address } = await dns.lookup(hostname);
       if (isPrivateIP(address)) {
         return makeError(`SSRF 防护：DNS 解析到内网地址 ${address}`);
@@ -110,19 +123,20 @@ export const fetchTool: Tool = withToolContract({
     }
 
     // 执行请求
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), maxTimeoutMs);
+    const linkedAbort = createLinkedAbortController({
+      signal: context.abortSignal,
+      timeoutMs: maxTimeoutMs,
+      timeoutReason: `Timeout after ${maxTimeoutMs}ms`,
+    });
 
     try {
       const response = await fetch(url.toString(), {
         method,
         headers,
         body,
-        signal: controller.signal,
+        signal: linkedAbort.controller.signal,
         redirect: "manual", // 禁止自动重定向（防 SSRF）
       });
-
-      clearTimeout(timeout);
 
       // 读取响应（限制大小）
       const reader = response.body?.getReader();
@@ -188,13 +202,19 @@ export const fetchTool: Tool = withToolContract({
         durationMs: Date.now() - start,
       };
     } catch (err) {
-      clearTimeout(timeout);
-
-      if (err instanceof Error && err.name === "AbortError") {
+      if (isAbortError(err)) {
+        if (context.abortSignal?.aborted) {
+          return makeError(readAbortReason(context.abortSignal));
+        }
+        if (linkedAbort.wasTimedOut()) {
+          return makeError(`请求超时（${maxTimeoutMs}ms）`);
+        }
         return makeError(`请求超时（${maxTimeoutMs}ms）`);
       }
 
       return makeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      linkedAbort.cleanup();
     }
   },
 }, {

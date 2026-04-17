@@ -1864,6 +1864,92 @@ function buildEmailInboundRuntimeCard(payload, t) {
   };
 }
 
+function buildCameraRuntimeCard(payload, t) {
+  const runtime = payload?.cameraRuntime;
+  const summary = runtime?.summary;
+  if (!summary) {
+    return undefined;
+  }
+
+  const providerCount = Array.isArray(summary.registeredProviderIds) ? summary.registeredProviderIds.length : 0;
+  const badges = [
+    tr(
+      t,
+      "settings.doctorCameraProviders",
+      { count: formatNumber(providerCount) },
+      `${formatNumber(providerCount)} provider(s)`,
+    ),
+    tr(
+      t,
+      "settings.doctorCameraWarnings",
+      {
+        warn: formatNumber(summary.warningCount),
+        error: formatNumber(summary.errorCount),
+      },
+      `warn ${formatNumber(summary.warningCount)} / error ${formatNumber(summary.errorCount)}`,
+    ),
+  ];
+  if (summary.defaultProviderId) {
+    badges.push(tr(
+      t,
+      "settings.doctorCameraDefaultProvider",
+      { provider: summary.defaultProviderId },
+      `default ${summary.defaultProviderId}`,
+    ));
+  }
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorCameraHeadline",
+      { headline: summary.headline || "-" },
+      summary.headline || "-",
+    ),
+  ];
+
+  const providers = Array.isArray(runtime?.providers) ? runtime.providers : [];
+  for (const provider of providers.slice(0, 3)) {
+    notes.push(`${provider.id}: ${provider.headline}`);
+    if (provider.launchConfig?.command) {
+      const launchBits = [
+        `command=${provider.launchConfig.command}`,
+        provider.launchConfig.resolvedCommand ? `resolvedCommand=${provider.launchConfig.resolvedCommand}` : "",
+        provider.launchConfig.helperEntry ? `entry=${provider.launchConfig.helperEntry}` : "",
+        provider.launchConfig.resolvedHelperEntry ? `resolvedEntry=${provider.launchConfig.resolvedHelperEntry}` : "",
+        provider.launchConfig.cwd ? `cwd=${provider.launchConfig.cwd}` : "",
+        provider.launchConfig.runtimeDir ? `runtimeDir=${provider.launchConfig.runtimeDir}` : "",
+      ].filter(Boolean);
+      if (launchBits.length) {
+        notes.push(`launch: ${launchBits.join(", ")}`);
+      }
+    }
+    const sampleDevices = Array.isArray(provider.sampleDevices) ? provider.sampleDevices : [];
+    for (const device of sampleDevices.slice(0, 3)) {
+      notes.push(`device: ${device}`);
+    }
+    const hints = Array.isArray(provider.recoveryHints) ? provider.recoveryHints : [];
+    for (const hint of hints.slice(0, 2)) {
+      notes.push(`recovery: ${hint}`);
+    }
+  }
+
+  if (!providers.length) {
+    notes.push(tr(
+      t,
+      "settings.doctorCameraNoProviders",
+      {},
+      "当前没有可展示的摄像头 provider 诊断。",
+    ));
+  }
+
+  return {
+    title: tr(t, "settings.doctorCameraRuntimeTitle", {}, "Camera Runtime"),
+    badges,
+    notes,
+    status: summary.errorCount > 0 || summary.warningCount > 0 ? "warn" : "pass",
+  };
+}
+
 function buildDeploymentBackendsCard(payload, t) {
   const runtime = payload?.deploymentBackends;
   if (!runtime?.summary || !Array.isArray(runtime?.items)) {
@@ -2088,6 +2174,100 @@ function buildRuntimeResilienceCard(payload, t) {
     badges,
     notes,
     status: diagnostics.alertLevel,
+  };
+}
+
+function buildAgentStopRuntimeCard(payload, t) {
+  const diagnostics = payload?.queryRuntime?.stopDiagnostics;
+  if (!diagnostics?.available) {
+    return undefined;
+  }
+
+  const badges = [
+    tr(
+      t,
+      "settings.doctorAgentStopRequests",
+      { count: formatNumber(diagnostics.totalRequests) },
+      `${formatNumber(diagnostics.totalRequests)} stop requests`,
+    ),
+    tr(
+      t,
+      "settings.doctorAgentStopAccepted",
+      { count: formatNumber(diagnostics.acceptedRequests) },
+      `${formatNumber(diagnostics.acceptedRequests)} accepted`,
+    ),
+    tr(
+      t,
+      "settings.doctorAgentStopStopped",
+      { count: formatNumber(diagnostics.stoppedRuns) },
+      `${formatNumber(diagnostics.stoppedRuns)} stopped`,
+    ),
+  ];
+
+  if (
+    Number(diagnostics.runningAfterStopCount) > 0
+    || Number(diagnostics.completedAfterStopCount) > 0
+    || Number(diagnostics.failedAfterStopCount) > 0
+  ) {
+    badges.push(tr(
+      t,
+      "settings.doctorAgentStopRunning",
+      { count: formatNumber(diagnostics.runningAfterStopCount) },
+      `${formatNumber(diagnostics.runningAfterStopCount)} still running after stop`,
+    ));
+  }
+
+  const notes = [
+    tr(
+      t,
+      "settings.doctorAgentStopHeadline",
+      {
+        running: formatNumber(diagnostics.runningAfterStopCount),
+        completed: formatNumber(diagnostics.completedAfterStopCount),
+        failed: formatNumber(diagnostics.failedAfterStopCount),
+        missing: formatNumber(diagnostics.notFoundCount),
+        mismatch: formatNumber(diagnostics.runMismatchCount),
+      },
+      `running_after_stop ${formatNumber(diagnostics.runningAfterStopCount)} / completed_after_stop ${formatNumber(diagnostics.completedAfterStopCount)} / failed_after_stop ${formatNumber(diagnostics.failedAfterStopCount)} / not_found ${formatNumber(diagnostics.notFoundCount)} / run_mismatch ${formatNumber(diagnostics.runMismatchCount)}`,
+    ),
+  ];
+
+  const recent = Array.isArray(diagnostics.recent) ? diagnostics.recent : [];
+  for (const item of recent.slice(0, 4)) {
+    const conversationId = item?.conversationId || "-";
+    const runId = item?.runId || "-";
+    const stage = item?.messageLatestStage || "-";
+    const messageState = item?.messageStatus
+      ? `${item.messageStatus}/${stage}`
+      : stage;
+    const response = item?.messageResponse ? ` / response=${item.messageResponse}` : "";
+    notes.push(tr(
+      t,
+      "settings.doctorAgentStopLatest",
+      {
+        timestamp: formatTimestamp(item?.requestedAt),
+        conversationId,
+        runId,
+        outcome: item?.outcome || "stop_requested",
+        reason: item?.reason || "-",
+        message: `${messageState}${response}`,
+      },
+      `${formatTimestamp(item?.requestedAt)} · ${conversationId} / ${runId}: outcome=${item?.outcome || "stop_requested"}, reason=${item?.reason || "-"}, message=${messageState}${response}`,
+    ));
+  }
+
+  return {
+    title: tr(t, "settings.doctorAgentStopTitle", {}, "Agent Stop Runtime"),
+    badges,
+    notes,
+    status:
+      Number(diagnostics.runningAfterStopCount) > 0
+      || Number(diagnostics.completedAfterStopCount) > 0
+      || Number(diagnostics.failedAfterStopCount) > 0
+      || Number(diagnostics.notFoundCount) > 0
+      || Number(diagnostics.runMismatchCount) > 0
+        ? "warn"
+        : "pass",
   };
 }
 
@@ -2446,7 +2626,9 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildExternalOutboundRuntimeCard(payload, t),
     buildEmailOutboundRuntimeCard(payload, t),
     buildEmailInboundRuntimeCard(payload, t),
+    buildCameraRuntimeCard(payload, t),
     buildDeploymentBackendsCard(payload, t),
+    buildAgentStopRuntimeCard(payload, t),
     buildRuntimeResilienceCard(payload, t),
   ].filter(Boolean);
 
@@ -2586,12 +2768,28 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(...emailInboundCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
+  const cameraRuntimeCard = buildCameraRuntimeCard(payload, t);
+  if (cameraRuntimeCard) {
+    lines.push(``);
+    lines.push(`${cameraRuntimeCard.title}:`);
+    lines.push(...cameraRuntimeCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...cameraRuntimeCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
   const deploymentBackendsCard = buildDeploymentBackendsCard(payload, t);
   if (deploymentBackendsCard) {
     lines.push(``);
     lines.push(`${deploymentBackendsCard.title}:`);
     lines.push(...deploymentBackendsCard.badges.map((badge) => `- ${badge}`));
     lines.push(...deploymentBackendsCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const agentStopRuntimeCard = buildAgentStopRuntimeCard(payload, t);
+  if (agentStopRuntimeCard) {
+    lines.push(``);
+    lines.push(`${agentStopRuntimeCard.title}:`);
+    lines.push(...agentStopRuntimeCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...agentStopRuntimeCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const runtimeResilienceCard = buildRuntimeResilienceCard(payload, t);

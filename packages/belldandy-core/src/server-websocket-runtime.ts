@@ -66,6 +66,7 @@ type ConnectionState = {
 
 const DEFAULT_METHODS = [
   "message.send",
+  "conversation.run.stop",
   "pairing.approve",
   "tool_settings.confirm",
   "external_outbound.confirm",
@@ -128,6 +129,10 @@ const DEFAULT_METHODS = [
   "memory.share.review",
   "memory.task.list",
   "memory.task.get",
+  "memory.recent_work",
+  "memory.resume_context",
+  "memory.similar_past_work",
+  "memory.explain_sources",
   "experience.candidate.get",
   "experience.candidate.list",
   "experience.candidate.accept",
@@ -182,6 +187,7 @@ const DEFAULT_METHODS = [
 const DEFAULT_EVENTS = [
   "chat.delta",
   "chat.final",
+  "conversation.run.stopped",
   "agent.status",
   "token.usage",
   "token.counter.result",

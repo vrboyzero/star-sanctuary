@@ -241,6 +241,7 @@ export function createChatNetworkFeature({
   onHelloOk,
   onAgentListLoaded,
   onEvent,
+  onConnectionStateChanged,
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
@@ -584,6 +585,7 @@ export function createChatNetworkFeature({
     const socket = new WebSocket(buildWebSocketUrl());
     setSocket(socket);
     setReady(false);
+    onConnectionStateChanged?.({ connected: false, ready: false });
 
     if (sendBtn) {
       sendBtn.disabled = true;
@@ -596,6 +598,7 @@ export function createChatNetworkFeature({
 
     socket.addEventListener("close", (event) => {
       setReady(false);
+      onConnectionStateChanged?.({ connected: false, ready: false });
       if (sendBtn) {
         sendBtn.disabled = true;
       }
@@ -632,6 +635,7 @@ export function createChatNetworkFeature({
 
       if (frame.type === "hello-ok") {
         setReady(true);
+        onConnectionStateChanged?.({ connected: true, ready: true });
         if (sendBtn) {
           sendBtn.disabled = false;
         }

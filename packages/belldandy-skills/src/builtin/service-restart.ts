@@ -15,15 +15,12 @@ import {
   getRestartCommandCooldownSeconds,
 } from "./restart-cooldown.js";
 import { withToolContract } from "../tool-contract.js";
+import { isAbortError, readAbortReason, sleepWithAbort, throwIfAborted } from "../abort-utils.js";
 
 /** 广播函数接口，由 gateway 注入 */
 export type BroadcastFn = (msg: unknown) => void;
 
 const COUNTDOWN_SECONDS = 3;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
   return withToolContract({
@@ -69,33 +66,53 @@ export function createServiceRestartTool(broadcast?: BroadcastFn): Tool {
 
       context.logger?.info(`Service restart requested: ${reason}`);
 
-      // 倒计时广播：3, 2, 1
-      for (let i = COUNTDOWN_SECONDS; i >= 1; i--) {
+      try {
+        throwIfAborted(context.abortSignal);
+
+        // 倒计时广播：3, 2, 1
+        for (let i = COUNTDOWN_SECONDS; i >= 1; i--) {
+          broadcast?.({
+            type: "event",
+            event: "agent.status",
+            payload: { status: "restarting", reason, countdown: i },
+          });
+          await sleepWithAbort(1000, context.abortSignal);
+        }
+
+        throwIfAborted(context.abortSignal);
+
+        // 倒计时结束，发送最终重启通知
         broadcast?.({
           type: "event",
           event: "agent.status",
-          payload: { status: "restarting", reason, countdown: i },
+          payload: { status: "restarting", reason, countdown: 0 },
         });
-        await sleep(1000);
+
+        // 延迟 300ms 让最后一帧广播发出
+        setTimeout(() => process.exit(100), 300);
+
+        return {
+          id: "",
+          name: "service_restart",
+          success: true,
+          output: `Service restart initiated (after ${COUNTDOWN_SECONDS}s countdown, cooldown ${getRestartCommandCooldownSeconds()}s). Reason: ${reason}`,
+          durationMs: Date.now() - startMs,
+        };
+      } catch (error) {
+        if (isAbortError(error)) {
+          const abortReason = readAbortReason(context.abortSignal);
+          context.logger?.warn(`Service restart aborted before exit: ${abortReason}`);
+          return {
+            id: "",
+            name: "service_restart",
+            success: false,
+            output: "",
+            error: abortReason,
+            durationMs: Date.now() - startMs,
+          };
+        }
+        throw error;
       }
-
-      // 倒计时结束，发送最终重启通知
-      broadcast?.({
-        type: "event",
-        event: "agent.status",
-        payload: { status: "restarting", reason, countdown: 0 },
-      });
-
-      // 延迟 300ms 让最后一帧广播发出
-      setTimeout(() => process.exit(100), 300);
-
-      return {
-        id: "",
-        name: "service_restart",
-        success: true,
-        output: `Service restart initiated (after ${COUNTDOWN_SECONDS}s countdown, cooldown ${getRestartCommandCooldownSeconds()}s). Reason: ${reason}`,
-        durationMs: Date.now() - startMs,
-      };
     },
   }, {
     family: "service-admin",

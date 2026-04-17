@@ -187,6 +187,8 @@ export type AgentRunInput = {
   senderInfo?: SenderInfo;
   /** 房间上下文信息（用于多人聊天场景） */
   roomContext?: RoomContext;
+  /** 外部中断信号（用于停止当前 run） */
+  abortSignal?: AbortSignal;
 };
 
 export type AgentDelta = {
@@ -201,7 +203,7 @@ export type AgentFinal = {
 
 export type AgentStatus = {
   type: "status";
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "stopped";
 };
 
 export type AgentToolCall = {
@@ -257,8 +259,16 @@ export class MockAgent implements BelldandyAgent {
     const chunks = splitText(response, 6);
     let out = "";
     for (const delta of chunks) {
+      if (input.abortSignal?.aborted) {
+        yield { type: "status", status: "stopped" };
+        return;
+      }
       out += delta;
       await sleep(60);
+      if (input.abortSignal?.aborted) {
+        yield { type: "status", status: "stopped" };
+        return;
+      }
       yield { type: "delta", delta };
     }
     yield { type: "final", text: out };

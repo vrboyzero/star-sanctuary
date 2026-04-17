@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import dns from "node:dns/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchTool } from "./fetch.js";
 import type { ToolContext } from "../types.js";
 
@@ -16,6 +17,10 @@ const baseContext: ToolContext = {
 };
 
 describe("web_fetch tool", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("security checks", () => {
     it("should block non-http protocols", async () => {
       const result = await fetchTool.execute({ url: "file:///etc/passwd" }, baseContext);
@@ -122,6 +127,49 @@ describe("web_fetch tool", () => {
       const methodParam = fetchTool.definition.parameters.properties.method;
       expect(methodParam.enum).toContain("GET");
       expect(methodParam.enum).toContain("POST");
+    });
+  });
+
+  describe("abort handling", () => {
+    it("should stop an in-flight fetch when abortSignal is aborted", async () => {
+      vi.spyOn(dns, "lookup").mockResolvedValue({
+        address: "93.184.216.34",
+        family: 4,
+      } as Awaited<ReturnType<typeof dns.lookup>>);
+      const controller = new AbortController();
+      let markFetchStarted!: () => void;
+      const fetchStarted = new Promise<void>((resolve) => {
+        markFetchStarted = resolve;
+      });
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+        markFetchStarted();
+        return await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal | undefined;
+          if (signal?.aborted) {
+            const error = new Error("Stopped by user.");
+            error.name = "AbortError";
+            reject(error);
+            return;
+          }
+          signal?.addEventListener("abort", () => {
+            const error = new Error("Stopped by user.");
+            error.name = "AbortError";
+            reject(error);
+          }, { once: true });
+        });
+      });
+
+      const resultPromise = fetchTool.execute({ url: "https://example.com/api" }, {
+        ...baseContext,
+        abortSignal: controller.signal,
+      });
+
+      await fetchStarted;
+      controller.abort("Stopped by user.");
+      const result = await resultPromise;
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe("Stopped by user.");
     });
   });
 });

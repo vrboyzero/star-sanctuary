@@ -613,22 +613,40 @@ test("memory viewer rpc returns task and memory data", async () => {
     expect(usageListAfterRevokeRes.payload.items.length).toBe(1);
     const revokedAssetType = usageRevokeRes.payload.usage.assetType;
 
-    const taskId = taskListRes.payload.items[0].id;
+    const taskId = completedTaskId!;
     const chunkId = memoryRecentCategoryRes.payload.items[0].id;
 
     ws.send(JSON.stringify({ type: "req", id: "task-get", method: "memory.task.get", params: { taskId } }));
+    ws.send(JSON.stringify({ type: "req", id: "recent-work", method: "memory.recent_work", params: { limit: 3, query: "viewer" } }));
+    ws.send(JSON.stringify({ type: "req", id: "resume-context", method: "memory.resume_context", params: { query: "viewer" } }));
+    ws.send(JSON.stringify({ type: "req", id: "similar-past-work", method: "memory.similar_past_work", params: { query: "viewer", limit: 3 } }));
+    ws.send(JSON.stringify({ type: "req", id: "explain-sources", method: "memory.explain_sources", params: { taskId } }));
     ws.send(JSON.stringify({ type: "req", id: "memory-get", method: "memory.get", params: { chunkId } }));
     ws.send(JSON.stringify({ type: "req", id: "source-read", method: "workspace.readSource", params: { path: recentChunk.sourcePath } }));
 
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "task-get"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "recent-work"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resume-context"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "similar-past-work"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "explain-sources"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "memory-get"));
     await waitFor(() => frames.some((f) => f.type === "res" && f.id === "source-read"));
 
     const taskGetRes = frames.find((f) => f.type === "res" && f.id === "task-get");
+    const recentWorkRes = frames.find((f) => f.type === "res" && f.id === "recent-work");
+    const resumeContextRes = frames.find((f) => f.type === "res" && f.id === "resume-context");
+    const similarPastWorkRes = frames.find((f) => f.type === "res" && f.id === "similar-past-work");
+    const explainSourcesRes = frames.find((f) => f.type === "res" && f.id === "explain-sources");
     const memoryGetRes = frames.find((f) => f.type === "res" && f.id === "memory-get");
     const sourceReadRes = frames.find((f) => f.type === "res" && f.id === "source-read");
 
     expect(taskGetRes.ok).toBe(true);
+    expect(Array.isArray(taskGetRes.payload.task.activities)).toBe(true);
+    expect(taskGetRes.payload.task.activities.some((item: any) => item.kind === "task_started")).toBe(true);
+    expect(taskGetRes.payload.task.activities.some((item: any) => item.kind === "memory_recalled")).toBe(true);
+    expect(taskGetRes.payload.task.activities.every((item: any) => !Object.prototype.hasOwnProperty.call(item, "nextStep"))).toBe(true);
+    expect(taskGetRes.payload.task.workRecap?.headline).toContain("任务已完成");
+    expect(taskGetRes.payload.task.resumeContext?.currentStopPoint).toBe("任务已完成。");
     expect(taskGetRes.payload.task.memoryLinks.length).toBeGreaterThan(0);
     expect(taskGetRes.payload.task.memoryLinks.some((item: any) => item.sourceView.scope === "shared")).toBe(true);
     expect(taskGetRes.payload.task.usedMethods.length + taskGetRes.payload.task.usedSkills.length).toBe(1);
@@ -643,6 +661,21 @@ test("memory viewer rpc returns task and memory data", async () => {
       expect(taskGetRes.payload.task.usedMethods[0].sourceCandidatePublishedPath).toBe(acceptedMethodCandidate!.publishedPath);
       expect(taskGetRes.payload.task.usedSkills.length).toBe(0);
     }
+    expect(recentWorkRes.ok).toBe(true);
+    expect(Array.isArray(recentWorkRes.payload.items)).toBe(true);
+    expect(recentWorkRes.payload.items[0].taskId).toBe(taskId);
+    expect(recentWorkRes.payload.items[0].workRecap?.headline).toContain("任务已完成");
+    expect(resumeContextRes.ok).toBe(true);
+    expect(resumeContextRes.payload.item.taskId).toBe(taskId);
+    expect(resumeContextRes.payload.item.resumeContext?.currentStopPoint).toBe("任务已完成。");
+    expect(similarPastWorkRes.ok).toBe(true);
+    expect(similarPastWorkRes.payload.items.some((item: any) => item.taskId === taskId)).toBe(true);
+    expect(similarPastWorkRes.payload.items[0].matchReasons?.length).toBeGreaterThan(0);
+    expect(explainSourcesRes.ok).toBe(true);
+    expect(explainSourcesRes.payload.explanation.taskId).toBe(taskId);
+    expect(explainSourcesRes.payload.explanation.sourceRefs.some((item: any) => item.kind === "work_recap")).toBe(true);
+    expect(explainSourcesRes.payload.explanation.sourceRefs.some((item: any) => item.kind === "resume_context")).toBe(true);
+    expect(explainSourcesRes.payload.explanation.sourceRefs.some((item: any) => item.kind === "activity_worklog")).toBe(true);
     expect(memoryGetRes.ok).toBe(true);
     expect(memoryGetRes.payload.item.category).toBe("decision");
     expect(memoryGetRes.payload.item.content).toContain("phase4decision");

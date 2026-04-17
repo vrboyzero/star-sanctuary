@@ -294,6 +294,53 @@ test("buildConversationContinuationState summarizes main conversation recovery s
   });
 });
 
+test("buildConversationContinuationState prefers session memory and resume context over latest raw message", () => {
+  expect(buildConversationContinuationState({
+    conversationId: "conv-multi-round-resume",
+    messages: [
+      { role: "user", content: "继续核对多轮续做一致性。", timestampMs: 1712000000000 },
+      { role: "assistant", content: "收到，我继续。", timestampMs: 1712000000500 },
+    ],
+    loadedDeferredTools: ["memory_recent_work"],
+    compactBoundaries: [{ createdAt: 1712000000200 }],
+    taskTokenResults: [{ name: "resume-check", totalTokens: 42, createdAt: 1712000000300 }],
+    sessionDigest: {
+      status: "ready",
+      rollingSummary: "已确认 prompt artifact 与请求体都带上续做注入，正在核对多轮一致性。",
+    },
+    sessionMemory: {
+      summary: "已确认 prompt artifact 与请求体都带上续做注入，正在核对多轮一致性。",
+      currentWork: "已确认 prompt artifact 与请求体都带上续做注入，待继续核对多轮一致性。",
+      nextStep: "继续检查 digest / continuation / resume_context 是否仍一致。",
+    },
+    resumeContext: {
+      currentStopPoint: "已确认 prompt artifact 与请求体都带上续做注入，待继续核对多轮一致性。",
+      nextStep: "继续检查 digest / continuation / resume_context 是否仍一致。",
+      blockers: ["inspect.text 仍主要是系统 prompt 视角。"],
+    },
+  })).toMatchObject({
+    summary: "已确认 prompt artifact 与请求体都带上续做注入，待继续核对多轮一致性。",
+    nextAction: "继续检查 digest / continuation / resume_context 是否仍一致。",
+    checkpoints: {
+      openCount: 1,
+      blockerCount: 1,
+      labels: [
+        "tool:memory_recent_work",
+        "compact:1",
+        "task:resume-check",
+        "inspect.text 仍主要是系统 prompt 视角。",
+      ],
+    },
+    progress: {
+      current: "已确认 prompt artifact 与请求体都带上续做注入，待继续核对多轮一致性。",
+      recent: [
+        "assistant: 收到，我继续。",
+        "user: 继续核对多轮续做一致性。",
+      ],
+    },
+  });
+});
+
 test("buildResidentContinuationState summarizes resident recovery state", () => {
   expect(buildResidentContinuationState({
     agentId: "coder",

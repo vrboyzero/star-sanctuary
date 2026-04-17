@@ -921,6 +921,7 @@ describe("ToolEnabledAgent hook timeouts", () => {
           },
         },
       },
+      undefined,
     );
   });
 
@@ -969,6 +970,86 @@ describe("ToolEnabledAgent hook timeouts", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(items1).toContainEqual({ type: "final", text: "first done" });
     expect(items2).toContainEqual({ type: "final", text: "second done" });
+  });
+
+  it("stops after tool execution at the next safe point without making another model call", async () => {
+    const controller = new AbortController();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(createJsonResponse({
+      choices: [{
+        message: {
+          content: "",
+          tool_calls: [{
+            id: "call-1",
+            type: "function",
+            function: {
+              name: "echo",
+              arguments: "{}",
+            },
+          }],
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    const execute = vi.fn(async () => {
+      controller.abort("Stopped by user.");
+      return {
+        id: "call-1",
+        name: "echo",
+        success: true,
+        output: "tool-output",
+        durationMs: 0,
+      };
+    });
+
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      toolExecutor: createToolExecutor({
+        getDefinitions: () => [{
+          type: "function" as const,
+          function: {
+            name: "echo",
+            description: "echo",
+            parameters: { type: "object", properties: {} },
+          },
+        }],
+        execute,
+      }),
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-stop-after-tool",
+      text: "use tool",
+      abortSignal: controller.signal,
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(items).toContainEqual({
+      type: "tool_call",
+      id: "call-1",
+      name: "echo",
+      arguments: {},
+    });
+    expect(items).toContainEqual({
+      type: "tool_result",
+      id: "call-1",
+      name: "echo",
+      success: true,
+      output: "tool-output",
+      error: undefined,
+    });
+    expect(items).toContainEqual({
+      type: "status",
+      status: "stopped",
+    });
+    expect(items.some((item) => item.type === "final")).toBe(false);
+    expect(items[items.length - 1]).toEqual({
+      type: "status",
+      status: "stopped",
+    });
   });
 });
 

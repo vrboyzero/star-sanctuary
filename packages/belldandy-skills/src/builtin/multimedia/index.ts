@@ -10,6 +10,14 @@ import {
   cameraListTool as baseCameraListTool,
   cameraSnapTool as baseCameraSnapTool,
 } from "./camera.js";
+export {
+  buildCameraRuntimeDoctorReport,
+} from "./camera-doctor.js";
+export type {
+  BuildCameraRuntimeDoctorReportOptions,
+  CameraRuntimeDoctorReport,
+  CameraRuntimeDoctorProvider,
+} from "./camera-doctor.js";
 
 function withMultimediaContract(
   tool: Tool,

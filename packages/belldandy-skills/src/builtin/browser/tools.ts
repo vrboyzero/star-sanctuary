@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import WebSocket from "ws";
 import { withToolContract } from "../../tool-contract.js";
+import { raceWithAbort, sleepWithAbort, throwIfAborted, toAbortError } from "../../abort-utils.js";
 
 // Logger interface to avoid circular dependency
 interface Logger {
@@ -35,10 +36,6 @@ type PageSelectionOptions = {
     preferredTargetId?: string;
     preferredUrl?: string;
 };
-
-function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 function getComparablePageUrl(url: string | undefined): string {
     if (!url) return "";
@@ -98,16 +95,24 @@ export function selectPreferredPage<T extends PageLike>(pages: T[], options: Pag
 async function sendCdpCommand(
     method: string,
     params: Record<string, unknown> = {},
-    timeout = 15000
+    timeout = 15000,
+    signal?: AbortSignal,
 ): Promise<unknown> {
+    throwIfAborted(signal);
     return new Promise((resolve, reject) => {
         const ws = new WebSocket(RELAY_WS_ENDPOINT);
         const timeoutId = setTimeout(() => {
             ws.close();
             reject(new Error(`CDP command ${method} timed out after ${timeout}ms`));
         }, timeout);
+        const onAbort = () => {
+            clearTimeout(timeoutId);
+            ws.close();
+            reject(toAbortError(signal?.reason));
+        };
 
         const id = Date.now();
+        signal?.addEventListener("abort", onAbort, { once: true });
 
         ws.on("open", () => {
             ws.send(JSON.stringify({ id, method, params }));
@@ -118,6 +123,7 @@ async function sendCdpCommand(
                 const msg = JSON.parse(data.toString());
                 if (msg.id === id) {
                     clearTimeout(timeoutId);
+                    signal?.removeEventListener("abort", onAbort);
                     ws.close();
                     if (msg.error) {
                         reject(new Error(msg.error.message || msg.error));
@@ -132,13 +138,36 @@ async function sendCdpCommand(
 
         ws.on("error", (err) => {
             clearTimeout(timeoutId);
+            signal?.removeEventListener("abort", onAbort);
             reject(err);
         });
 
         ws.on("close", () => {
             clearTimeout(timeoutId);
+            signal?.removeEventListener("abort", onAbort);
         });
     });
+}
+
+export async function waitForPreferredPageSelection<T extends PageLike>(input: {
+    listPages: () => Promise<T[]>;
+    preferred: PageSelectionOptions;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+}): Promise<T | undefined> {
+    const timeoutMs = input.timeoutMs ?? 5000;
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() <= deadline) {
+        throwIfAborted(input.signal);
+        const selected = selectPreferredPage(await input.listPages(), input.preferred);
+        if (selected) {
+            return selected;
+        }
+        await sleepWithAbort(100, input.signal);
+    }
+
+    return undefined;
 }
 
 // [SECURITY] 域名控制（双模式）
@@ -193,7 +222,8 @@ export class BrowserManager {
         return BrowserManager.instance;
     }
 
-    public async connect(): Promise<Browser> {
+    public async connect(signal?: AbortSignal): Promise<Browser> {
+        throwIfAborted(signal);
         if (this.browser && this.browser.isConnected()) {
             return this.browser;
         }
@@ -201,7 +231,7 @@ export class BrowserManager {
         if (this.connecting) {
             // Wait for existing connection attempt
             while (this.connecting) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+                await sleepWithAbort(100, signal);
             }
             if (this.browser && this.browser.isConnected()) {
                 return this.browser;
@@ -211,10 +241,10 @@ export class BrowserManager {
         this.connecting = true;
         try {
             // Connect to Belldandy Relay
-            this.browser = await puppeteer.connect({
+            this.browser = await raceWithAbort(puppeteer.connect({
                 browserWSEndpoint: RELAY_WS_ENDPOINT,
                 defaultViewport: null, // Let browser handle viewport
-            });
+            }), signal);
             browserLogger?.debug("Connected to relay");
 
             this.browser.on("disconnected", () => {
@@ -239,7 +269,7 @@ export class BrowserManager {
         return page;
     }
 
-    public async bindToPage(preferred: PageSelectionOptions & { timeoutMs?: number }): Promise<Page | null> {
+    public async bindToPage(preferred: PageSelectionOptions & { timeoutMs?: number; signal?: AbortSignal }): Promise<Page | null> {
         if (preferred.preferredTargetId) {
             this.preferredTargetId = preferred.preferredTargetId;
         }
@@ -247,19 +277,18 @@ export class BrowserManager {
             this.preferredUrl = preferred.preferredUrl;
         }
 
-        const browser = await this.connect();
-        const timeoutMs = preferred.timeoutMs ?? 5000;
-        const deadline = Date.now() + timeoutMs;
-
-        while (Date.now() <= deadline) {
-            const selected = selectPreferredPage(await browser.pages(), {
+        const browser = await this.connect(preferred.signal);
+        const selected = await waitForPreferredPageSelection({
+            listPages: () => browser.pages(),
+            preferred: {
                 preferredTargetId: this.preferredTargetId,
                 preferredUrl: this.preferredUrl,
-            });
-            if (selected) {
-                return this.rememberPage(selected);
-            }
-            await sleep(100);
+            },
+            timeoutMs: preferred.timeoutMs,
+            signal: preferred.signal,
+        });
+        if (selected) {
+            return this.rememberPage(selected);
         }
 
         browserLogger?.warn("Unable to bind preferred page", {
@@ -269,8 +298,8 @@ export class BrowserManager {
         return null;
     }
 
-    public async getPage(): Promise<Page> {
-        const browser = await this.connect();
+    public async getPage(signal?: AbortSignal): Promise<Page> {
+        const browser = await this.connect(signal);
         if (this.activePage && !this.activePage.isClosed()) {
             return this.activePage;
         }
@@ -287,7 +316,10 @@ export class BrowserManager {
 
         browserLogger?.debug("Waiting for targets...");
         try {
-            const target = await browser.waitForTarget(t => t.type() === 'page', { timeout: 5000 });
+            const target = await raceWithAbort(
+                browser.waitForTarget(t => t.type() === 'page', { timeout: 5000 }),
+                signal,
+            );
             const page = await target.page();
             if (!page) throw new Error("Target found but no page attached");
             return this.rememberPage(page);
@@ -347,6 +379,7 @@ export const browserOpenTool: Tool = withToolContract({
     execute: async (args, context) => {
         const start = Date.now();
         try {
+            throwIfAborted(context.abortSignal);
             const url = args.url as string;
 
             // [SECURITY] 域名校验
@@ -359,12 +392,13 @@ export const browserOpenTool: Tool = withToolContract({
 
             // 使用直接 CDP 命令创建标签页（绕过 Puppeteer 的 session 管理）
             // 扩展的 Target.createTarget 会直接创建带 URL 的标签页
-            const result = await sendCdpCommand("Target.createTarget", { url }) as { targetId: string };
+            const result = await sendCdpCommand("Target.createTarget", { url }, 15000, context.abortSignal) as { targetId: string };
             const manager = BrowserManager.getInstance();
             await manager.bindToPage({
                 preferredTargetId: result.targetId,
                 preferredUrl: url,
                 timeoutMs: 5000,
+                signal: context.abortSignal,
             });
 
             browserLogger?.debug(`Successfully created tab with targetId: ${result.targetId}`);
@@ -411,6 +445,7 @@ export const browserNavigateTool: Tool = withToolContract({
     execute: async (args, context) => {
         const start = Date.now();
         try {
+            throwIfAborted(context.abortSignal);
             const url = args.url as string;
 
             // [SECURITY] 域名校验
@@ -420,13 +455,14 @@ export const browserNavigateTool: Tool = withToolContract({
             }
 
             const manager = BrowserManager.getInstance();
-            const page = await manager.getPage();
+            const page = await manager.getPage(context.abortSignal);
 
-            await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+            await raceWithAbort(page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }), context.abortSignal);
             await manager.bindToPage({
                 preferredTargetId: getTargetId(page.target()),
                 preferredUrl: page.url(),
                 timeoutMs: 1000,
+                signal: context.abortSignal,
             });
 
             return success("unknown", "browser_navigate", `Navigated to ${url}`, start);
@@ -465,9 +501,10 @@ export const browserClickTool: Tool = withToolContract({
     execute: async (args, context) => {
         const start = Date.now();
         try {
+            throwIfAborted(context.abortSignal);
             const { selector, id } = args as { selector?: string; id?: number };
             const manager = BrowserManager.getInstance();
-            const page = await manager.getPage();
+            const page = await manager.getPage(context.abortSignal);
 
             let targetSelector = selector;
             if (id !== undefined) {
@@ -476,7 +513,8 @@ export const browserClickTool: Tool = withToolContract({
 
             if (!targetSelector) throw new Error("Either selector or id must be provided");
 
-            await page.waitForSelector(targetSelector, { timeout: 5000 });
+            await raceWithAbort(page.waitForSelector(targetSelector, { timeout: 5000 }), context.abortSignal);
+            throwIfAborted(context.abortSignal);
             await page.click(targetSelector);
 
             return success("unknown", "browser_click", `Clicked element: ${targetSelector}`, start);
@@ -517,9 +555,10 @@ export const browserTypeTool: Tool = withToolContract({
     execute: async (args, context) => {
         const start = Date.now();
         try {
+            throwIfAborted(context.abortSignal);
             const { selector, id, text } = args as { selector?: string; id?: number; text: string };
             const manager = BrowserManager.getInstance();
-            const page = await manager.getPage();
+            const page = await manager.getPage(context.abortSignal);
 
             let targetSelector = selector;
             if (id !== undefined) {
@@ -528,7 +567,8 @@ export const browserTypeTool: Tool = withToolContract({
 
             if (!targetSelector) throw new Error("Either selector or id must be provided");
 
-            await page.waitForSelector(targetSelector, { timeout: 5000 });
+            await raceWithAbort(page.waitForSelector(targetSelector, { timeout: 5000 }), context.abortSignal);
+            throwIfAborted(context.abortSignal);
             await page.type(targetSelector, text);
 
             return success("unknown", "browser_type", `Typed "${text}" into ${targetSelector}`, start);
@@ -567,9 +607,10 @@ export const browserScreenshotTool: Tool = withToolContract({
     execute: async (args, context) => {
         const start = Date.now();
         try {
+            throwIfAborted(context.abortSignal);
             const name = (args.name as string) || `screenshot-${Date.now()}`;
             const manager = BrowserManager.getInstance();
-            const page = await manager.getPage();
+            const page = await manager.getPage(context.abortSignal);
 
             // Store in 'screenshots' directory in workspace root
             const workspaceRoot = context.workspaceRoot || process.cwd();
@@ -583,6 +624,7 @@ export const browserScreenshotTool: Tool = withToolContract({
             const filename = `${name}_${timestamp}.png`;
             const filepath = path.join(targetDir, filename);
 
+            throwIfAborted(context.abortSignal);
             await page.screenshot({ path: filepath });
 
             return success("unknown", "browser_screenshot", `Screenshot saved to ${filepath}`, start);
@@ -624,23 +666,33 @@ export const browserGetContentTool: Tool = withToolContract({
     execute: async (args, context) => {
         const start = Date.now();
         try {
+            throwIfAborted(context.abortSignal);
             const format = (args.format as string) || "markdown";
             const manager = BrowserManager.getInstance();
-            const page = await manager.getPage();
+            const page = await manager.getPage(context.abortSignal);
 
             let content = "";
 
-            await page.waitForFunction(
-                () => (document.body?.innerText ?? "").trim().length > 120,
-                { timeout: 1500 }
-            ).catch(() => undefined);
+            try {
+                await raceWithAbort(page.waitForFunction(
+                    () => (document.body?.innerText ?? "").trim().length > 120,
+                    { timeout: 1500 }
+                ), context.abortSignal);
+            } catch (error) {
+                if (context.abortSignal?.aborted) {
+                    throw error;
+                }
+            }
 
             if (format === "html") {
+                throwIfAborted(context.abortSignal);
                 content = await page.content();
             } else if (format === "text") {
+                throwIfAborted(context.abortSignal);
                 content = await page.evaluate(() => document.body.innerText);
             } else {
                 // Markdown (Readability)
+                throwIfAborted(context.abortSignal);
                 const html = await page.content();
                 const url = page.url();
                 const pageInfo = await page.evaluate(() => ({
@@ -712,10 +764,12 @@ export const browserSnapshotTool: Tool = withToolContract({
     execute: async (args, context) => {
         const start = Date.now();
         try {
+            throwIfAborted(context.abortSignal);
             const manager = BrowserManager.getInstance();
-            const page = await manager.getPage();
+            const page = await manager.getPage(context.abortSignal);
 
             // Inject and execute the snapshot script
+            throwIfAborted(context.abortSignal);
             const snapshot = await page.evaluate((script) => {
                 // Execute the script string
                 return eval(script);

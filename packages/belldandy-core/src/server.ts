@@ -25,6 +25,7 @@ import type {
   GatewayReqFrame,
   GatewayResFrame,
   GatewayEventFrame,
+  ConversationRunStopParams,
   MessageSendParams,
   ChatMessageMeta,
 } from "@belldandy/protocol";
@@ -148,6 +149,7 @@ import { normalizePreferredProviderIds } from "./provider-model-catalog.js";
 import type { ChannelSecurityApprovalRequestInput } from "@belldandy/channels";
 import type { BackgroundContinuationRuntimeDoctorReport } from "./background-continuation-runtime.js";
 import type { CronRuntimeDoctorReport } from "./cron/observability.js";
+import { ConversationRunRegistry } from "./conversation-run-registry.js";
 
 export type GatewayServerOptions = {
   port: number;
@@ -175,6 +177,7 @@ export type GatewayServerOptions = {
   modelConfigPath?: string;
   conversationStoreOptions?: { maxHistory?: number; ttlSeconds?: number };
   conversationStore?: ConversationStore; // [NEW] Allow passing shared instance
+  conversationRunRegistry?: ConversationRunRegistry;
   getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
   getRuntimeResilienceReport?: () => RuntimeResilienceDoctorReport | undefined;
   onActivity?: () => void;
@@ -712,6 +715,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   const residentAgentRuntime = new ResidentAgentRuntimeRegistry(
     opts.agentRegistry?.list().filter((profile) => isResidentAgentProfile(profile)).map((profile) => profile.id) ?? ["default"],
   );
+  const conversationRunRegistry = opts.conversationRunRegistry ?? new ConversationRunRegistry();
   const memoryUsageAccounting = new MemoryRuntimeUsageAccounting({
     stateDir,
     logger: {
@@ -944,6 +948,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     preferredProviderIds: runtimePreferredProviderIds,
     modelConfigPath: opts.modelConfigPath,
     conversationStore,
+    conversationRunRegistry,
     durableExtractionRuntime,
     requestDurableExtraction,
     memoryUsageAccounting,
@@ -1255,6 +1260,7 @@ async function handleReq(
 ): Promise<GatewayResFrame | null> {
   const secureMethods = [
     "message.send",
+    "conversation.run.stop",
     "tool_settings.confirm",
     "external_outbound.confirm",
     "external_outbound.audit.list",
@@ -1313,6 +1319,10 @@ async function handleReq(
     "memory.share.review",
     "memory.task.list",
     "memory.task.get",
+    "memory.recent_work",
+    "memory.resume_context",
+    "memory.similar_past_work",
+    "memory.explain_sources",
     "experience.candidate.get",
     "experience.candidate.list",
     "experience.candidate.accept",
@@ -1502,7 +1512,8 @@ async function handleReq(
     case "models.config.update":
       return handleModelsConfigMethod(req, modelsConfigMethodContext);
 
-    case "message.send": {
+    case "message.send":
+    case "conversation.run.stop": {
       return handleMessageSendMethod(req, ws, {
         clientId: ctx.clientId,
         userUuid: ctx.userUuid,
@@ -1513,6 +1524,7 @@ async function handleReq(
         primaryModelConfig: ctx.primaryModelConfig,
         modelFallbacks: ctx.modelFallbacks,
         conversationStore: ctx.conversationStore,
+        conversationRunRegistry: ctx.conversationRunRegistry,
         durableExtractionRuntime: ctx.durableExtractionRuntime,
         requestDurableExtraction: ctx.requestDurableExtraction,
         memoryUsageAccounting: ctx.memoryUsageAccounting,
@@ -1528,6 +1540,7 @@ async function handleReq(
         queryRuntimeTraceStore: ctx.queryRuntimeTraceStore,
         residentAgentRuntime: ctx.residentAgentRuntime,
         parseMessageSendParams,
+        parseConversationRunStopParams,
         getAttachmentPromptLimits,
         truncateTextForPrompt,
         formatLocalMessageTime,
@@ -1682,6 +1695,10 @@ async function handleReq(
     case "memory.share.claim":
     case "memory.task.list":
     case "memory.task.get":
+    case "memory.recent_work":
+    case "memory.resume_context":
+    case "memory.similar_past_work":
+    case "memory.explain_sources":
     case "experience.candidate.get":
     case "experience.candidate.list":
     case "experience.candidate.accept":
@@ -1821,6 +1838,27 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
   return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext, clientContext } };
+}
+
+function parseConversationRunStopParams(
+  value: unknown,
+): { ok: true; value: ConversationRunStopParams } | { ok: false; message: string } {
+  if (!value || typeof value !== "object") return { ok: false, message: "params must be an object" };
+  const obj = value as Record<string, unknown>;
+  const conversationId = typeof obj.conversationId === "string" ? obj.conversationId.trim() : "";
+  const runId = typeof obj.runId === "string" && obj.runId.trim() ? obj.runId.trim() : undefined;
+  const reason = typeof obj.reason === "string" && obj.reason.trim() ? obj.reason.trim() : undefined;
+  if (!conversationId) {
+    return { ok: false, message: "conversationId is required" };
+  }
+  return {
+    ok: true,
+    value: {
+      conversationId,
+      runId,
+      reason,
+    },
+  };
 }
 
 function parseToolSettingsConfirmParams(

@@ -16,16 +16,8 @@ export async function pairWebSocketClient(ws: WebSocket, frames: any[], stateDir
   await waitFor(() => frames.some((f) => f.type === "connect.challenge"));
   ws.send(JSON.stringify({ type: "connect", role: "web", auth: { mode: "none" } }));
   await waitFor(() => frames.some((f) => f.type === "hello-ok"));
-
-  const reqId = `pairing-${Date.now()}`;
-  ws.send(JSON.stringify({ type: "req", id: reqId, method: "message.send", params: { text: "pairing-init" } }));
   await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
-  const pairingEvents = frames.filter((f) => f.type === "event" && f.event === "pairing.required");
-  const pairing = pairingEvents[pairingEvents.length - 1];
-  const code = pairing?.payload?.code ? String(pairing.payload.code) : "";
-  expect(code.length).toBeGreaterThan(0);
-  const approved = await approvePairingCode({ code, stateDir });
-  expect(approved.ok).toBe(true);
+  await approveLatestPairingCode(frames, stateDir);
 }
 
 export function toSafeConversationFileIdForTest(id: string): string {
@@ -168,4 +160,34 @@ export async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promi
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function approveLatestPairingCode(frames: any[], stateDir: string, timeoutMs = 5000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const pairingEvents = frames.filter((frame) => frame.type === "event" && frame.event === "pairing.required");
+    const candidateCodes: string[] = [];
+    const seen = new Set<string>();
+
+    for (const frame of pairingEvents.slice().reverse()) {
+      const code = frame?.payload?.code ? String(frame.payload.code) : "";
+      if (!code || seen.has(code)) {
+        continue;
+      }
+      seen.add(code);
+      candidateCodes.push(code);
+    }
+
+    for (const code of candidateCodes) {
+      const approved = await approvePairingCode({ code, stateDir });
+      if (approved.ok) {
+        expect(code.length).toBeGreaterThan(0);
+        return;
+      }
+    }
+
+    await sleep(20);
+  }
+
+  throw new Error(`timeout approving pairing code after ${timeoutMs}ms`);
 }

@@ -37,6 +37,7 @@ import {
   type ToolContractAccessDecision,
   type ToolContractAccessPolicy,
 } from "./security-matrix.js";
+import { isAbortError, readAbortReason } from "./abort-utils.js";
 
 /** 默认策略（最小权限） */
 export const DEFAULT_POLICY: ToolPolicy = {
@@ -669,6 +670,7 @@ export class ToolExecutor {
   ): Promise<ToolCallResult> {
     const start = Date.now();
     const launchSpec = normalizeRuntimeLaunchSpec(runtimeContext?.launchSpec);
+    const abortSignal = runtimeContext?.abortSignal;
 
     const tool = this.tools.get(request.name);
 
@@ -703,6 +705,7 @@ export class ToolExecutor {
     const context: ToolContext = {
       conversationId,
       workspaceRoot: this.workspaceRoot,
+      abortSignal,
       extraWorkspaceRoots: this.extraWorkspaceRoots.length > 0 ? this.extraWorkspaceRoots : undefined,
       defaultCwd: launchSpec?.cwd,
       agentId,
@@ -739,6 +742,19 @@ export class ToolExecutor {
       mcp: this.mcp,
     };
 
+    if (abortSignal?.aborted) {
+      const result: ToolCallResult = {
+        id: request.id,
+        name: request.name,
+        success: false,
+        output: "",
+        error: readAbortReason(abortSignal),
+        durationMs: Date.now() - start,
+      };
+      this.audit(result, conversationId, request.arguments);
+      return result;
+    }
+
     try {
       const result = await tool.execute(request.arguments, context);
       // 确保 id 匹配请求
@@ -752,7 +768,9 @@ export class ToolExecutor {
         name: request.name,
         success: false,
         output: "",
-        error: err instanceof Error ? err.message : String(err),
+        error: isAbortError(err)
+          ? readAbortReason(abortSignal)
+          : (err instanceof Error ? err.message : String(err)),
         durationMs: Date.now() - start,
       };
       this.audit(result, conversationId, request.arguments);
@@ -770,7 +788,15 @@ export class ToolExecutor {
     roomContext?: any,
     runtimeContext?: ToolExecutionRuntimeContext,
   ): Promise<ToolCallResult[]> {
-    return Promise.all(requests.map(req => this.execute(req, conversationId, agentId, userUuid, senderInfo, roomContext, runtimeContext)));
+    return Promise.all(requests.map((req) => this.execute(
+      req,
+      conversationId,
+      agentId,
+      userUuid,
+      senderInfo,
+      roomContext,
+      runtimeContext,
+    )));
   }
 
   private audit(result: ToolCallResult, conversationId: string, args: JsonObject): void {

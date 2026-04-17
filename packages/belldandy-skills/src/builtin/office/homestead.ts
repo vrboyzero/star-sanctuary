@@ -26,7 +26,7 @@ export const officeHomesteadGetTool: Tool = {
       required: ["agent_name"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_get";
     try {
@@ -35,7 +35,7 @@ export const officeHomesteadGetTool: Tool = {
       const mine = input.mine !== false;
       if (!agentName) return makeResult(name, start, false, null, "agent_name 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = mine && !homesteadId
         ? await client.getJson<Record<string, unknown>>("/api/town-square/my-homestead")
         : await client.getJson<Record<string, unknown>>(`/api/town-square/homestead/${encodeURIComponent(homesteadId)}`);
@@ -59,14 +59,14 @@ export const officeHomesteadInventoryTool: Tool = {
       required: ["agent_name"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_inventory";
     try {
       const agentName = String(input.agent_name || "").trim();
       if (!agentName) return makeResult(name, start, false, null, "agent_name 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.getJson<Record<string, unknown>>("/api/town-square/inventory");
       return makeResult(name, start, true, { success: true, ...payload });
     } catch (error) {
@@ -87,14 +87,14 @@ export const officeHomesteadClaimTool: Tool = {
       required: ["agent_name"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_claim";
     try {
       const agentName = String(input.agent_name || "").trim();
       if (!agentName) return makeResult(name, start, false, null, "agent_name 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.postJson<Record<string, unknown>>("/api/town-square/claim", {});
       return makeResult(name, start, true, { success: true, ...payload });
     } catch (error) {
@@ -118,7 +118,7 @@ export const officeHomesteadPlaceTool: Tool = {
       required: ["agent_name", "inventory_id", "x", "y"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_place";
     try {
@@ -130,7 +130,7 @@ export const officeHomesteadPlaceTool: Tool = {
         return makeResult(name, start, false, null, "agent_name、inventory_id、x、y 参数必填且必须为整数");
       }
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.postJson<Record<string, unknown>>("/api/town-square/place", {
         inventoryId,
         x,
@@ -156,7 +156,7 @@ export const officeHomesteadRecallTool: Tool = {
       required: ["agent_name", "inventory_id"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_recall";
     try {
@@ -166,7 +166,7 @@ export const officeHomesteadRecallTool: Tool = {
         return makeResult(name, start, false, null, "agent_name 和 inventory_id 参数必填且 inventory_id 必须为整数");
       }
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.postJson<Record<string, unknown>>("/api/town-square/recall", {
         inventoryId,
       });
@@ -193,7 +193,7 @@ export const officeHomesteadMountTool: Tool = {
       required: ["agent_name", "inventory_id", "host_inventory_id", "offset_x", "offset_y"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_mount";
     try {
@@ -206,7 +206,7 @@ export const officeHomesteadMountTool: Tool = {
         return makeResult(name, start, false, null, "agent_name、inventory_id、host_inventory_id、offset_x、offset_y 参数必填且必须为整数");
       }
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.postJson<Record<string, unknown>>("/api/town-square/mount", {
         inventoryId,
         hostInventoryId,
@@ -233,7 +233,7 @@ export const officeHomesteadUnmountTool: Tool = {
       required: ["agent_name", "inventory_id"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_unmount";
     try {
@@ -243,7 +243,7 @@ export const officeHomesteadUnmountTool: Tool = {
         return makeResult(name, start, false, null, "agent_name 和 inventory_id 参数必填且 inventory_id 必须为整数");
       }
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.postJson<Record<string, unknown>>("/api/town-square/unmount", {
         inventoryId,
       });
@@ -267,7 +267,7 @@ export const officeHomesteadOpenBlindBoxTool: Tool = {
       required: ["agent_name", "inventory_id"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_homestead_open_blind_box";
     try {
@@ -277,7 +277,7 @@ export const officeHomesteadOpenBlindBoxTool: Tool = {
         return makeResult(name, start, false, null, "agent_name 和 inventory_id 参数必填且 inventory_id 必须为整数");
       }
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.postJson<Record<string, unknown>>("/api/town-square/open-blind-box", {
         inventoryId,
       });

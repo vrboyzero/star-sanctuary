@@ -1,4 +1,5 @@
 import type { SearchProvider, SearchResult, WebSearchOptions } from "./types.js";
+import { createLinkedAbortController, isAbortError, readAbortReason, throwIfAborted } from "../../abort-utils.js";
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 
@@ -32,8 +33,12 @@ export class BraveSearchProvider implements SearchProvider {
             url.searchParams.set("country", options.country);
         }
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+        throwIfAborted(options.abortSignal);
+        const linkedAbort = createLinkedAbortController({
+            signal: options.abortSignal,
+            timeoutMs: 10000,
+            timeoutReason: "Brave Search timed out after 10000ms.",
+        });
 
         try {
             const res = await fetch(url.toString(), {
@@ -42,7 +47,7 @@ export class BraveSearchProvider implements SearchProvider {
                     "Accept-Encoding": "gzip",
                     "X-Subscription-Token": apiKey,
                 },
-                signal: controller.signal,
+                signal: linkedAbort.controller.signal,
             });
 
             if (!res.ok) {
@@ -59,8 +64,16 @@ export class BraveSearchProvider implements SearchProvider {
                 published: item.age,
                 source: item.profile?.name,
             }));
+        } catch (error) {
+            if (isAbortError(error)) {
+                if (options.abortSignal?.aborted) {
+                    throw new Error(readAbortReason(options.abortSignal));
+                }
+                throw new Error("Brave Search timed out after 10000ms.");
+            }
+            throw error;
         } finally {
-            clearTimeout(timeout);
+            linkedAbort.cleanup();
         }
     }
 }

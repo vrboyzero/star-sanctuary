@@ -6,6 +6,7 @@ import { parsePatchText } from "./dsl.js";
 import { applyUpdateChunks } from "./match.js";
 import { withToolContract } from "../../tool-contract.js";
 import { resolveRuntimeFilesystemScope } from "../../runtime-policy.js";
+import { readAbortReason, throwIfAborted } from "../../abort-utils.js";
 
 // ============ Helper Functions ============
 
@@ -125,6 +126,11 @@ async function ensureDir(filePath: string) {
     await fs.mkdir(parent, { recursive: true });
 }
 
+type PreparedPatchOperation =
+    | { kind: "add"; absolute: string; relative: string; contents: string }
+    | { kind: "delete"; absolute: string; relative: string }
+    | { kind: "update"; absolute: string; relative: string; newContent: string; move?: { absolute: string; relative: string } };
+
 // ============ apply_patch Tool ============
 
 export const applyPatchTool: Tool = withToolContract({
@@ -165,6 +171,7 @@ export const applyPatchTool: Tool = withToolContract({
         }
 
         try {
+            throwIfAborted(context.abortSignal);
             // 1. 解析 Patch DSL
             const parsed = parsePatchText(inputArg);
             if (parsed.hunks.length === 0) {
@@ -188,45 +195,88 @@ export const applyPatchTool: Tool = withToolContract({
                 summary[bucket].push(file);
             };
 
-            // 2. 依次应用 Hunks
-            // 注意：这里没有像 Moltbot 一样支持 AbortSignal，因为 execute 本身是原子的
+            // 2. 先完成所有预计算；只有在真正提交前才允许 stop，
+            // 这样可以避免写了一半文件后因为中断留下不一致状态。
+            const operations: PreparedPatchOperation[] = [];
             for (const hunk of parsed.hunks) {
+                throwIfAborted(context.abortSignal);
                 const pathCheck = validateWritablePath(hunk.path, context);
                 if (!pathCheck.ok) throw new Error(pathCheck.error);
                 const { absolute, relative } = pathCheck;
 
                 if (hunk.kind === "add") {
-                    await ensureDir(absolute);
-                    await fs.writeFile(absolute, hunk.contents, "utf8");
-                    recordSummary("added", relative);
+                    operations.push({
+                        kind: "add",
+                        absolute,
+                        relative,
+                        contents: hunk.contents,
+                    });
                     continue;
                 }
 
                 if (hunk.kind === "delete") {
-                    await fs.rm(absolute, { force: true });
-                    recordSummary("deleted", relative);
+                    operations.push({
+                        kind: "delete",
+                        absolute,
+                        relative,
+                    });
                     continue;
                 }
 
                 if (hunk.kind === "update") {
-                    // 应用 Update Chunks
                     const newContent = await applyUpdateChunks(absolute, hunk.chunks);
 
                     if (hunk.movePath) {
-                        // 移动文件逻辑
                         const moveCheck = validateWritablePath(hunk.movePath, context);
                         if (!moveCheck.ok) throw new Error(moveCheck.error);
-
-                        await ensureDir(moveCheck.absolute);
-                        await fs.writeFile(moveCheck.absolute, newContent, "utf8");
-                        await fs.rm(absolute, { force: true }); // 删除旧文件
-                        recordSummary("modified", `${relative} -> ${moveCheck.relative}`);
+                        operations.push({
+                            kind: "update",
+                            absolute,
+                            relative,
+                            newContent,
+                            move: {
+                                absolute: moveCheck.absolute,
+                                relative: moveCheck.relative,
+                            },
+                        });
                     } else {
-                        // 原地更新
-                        await fs.writeFile(absolute, newContent, "utf8");
-                        recordSummary("modified", relative);
+                        operations.push({
+                            kind: "update",
+                            absolute,
+                            relative,
+                            newContent,
+                        });
                     }
                 }
+            }
+
+            throwIfAborted(context.abortSignal);
+
+            // 3. 进入提交阶段后不再响应 stop，优先保证补丁整体一致性。
+            for (const operation of operations) {
+                if (operation.kind === "add") {
+                    await ensureDir(operation.absolute);
+                    await fs.writeFile(operation.absolute, operation.contents, "utf8");
+                    recordSummary("added", operation.relative);
+                    continue;
+                }
+
+                if (operation.kind === "delete") {
+                    await fs.rm(operation.absolute, { force: true });
+                    recordSummary("deleted", operation.relative);
+                    continue;
+                }
+
+                if (operation.move) {
+                    await ensureDir(operation.move.absolute);
+                    await fs.writeFile(operation.move.absolute, operation.newContent, "utf8");
+                    await fs.rm(operation.absolute, { force: true });
+                    recordSummary("modified", `${operation.relative} -> ${operation.move.relative}`);
+                    continue;
+                }
+
+                await fs.writeFile(operation.absolute, operation.newContent, "utf8");
+                recordSummary("modified", operation.relative);
             }
 
             return {
@@ -241,6 +291,9 @@ export const applyPatchTool: Tool = withToolContract({
             };
 
         } catch (err) {
+            if (context.abortSignal?.aborted) {
+                return makeError(readAbortReason(context.abortSignal));
+            }
             return makeError(err instanceof Error ? err.message : String(err));
         }
     },

@@ -263,6 +263,8 @@ export type ToolExecutionRuntimeContext = {
   launchSpec?: ToolRuntimeLaunchSpec;
   bridgeGovernanceTaskId?: string;
   agentWhitelistMode?: "default" | "governed_bridge_internal";
+  /** 执行链协作式中断信号 */
+  abortSignal?: AbortSignal;
 };
 
 export type MCPRuntimeToolCallRequest = {
@@ -1781,6 +1783,8 @@ export interface ITokenCounterService {
 export type ToolContext = {
   conversationId: string;
   workspaceRoot: string;
+  /** 当前运行的协作式中断信号；第一版只保证工具在安全点响应 */
+  abortSignal?: AbortSignal;
   /** 额外允许的文件操作根目录（如其他盘符下的目录），路径必须落在 workspaceRoot 或其一内 */
   extraWorkspaceRoots?: string[];
   /** 当前运行的默认工作目录（来自 launchSpec.cwd） */

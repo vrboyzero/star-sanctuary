@@ -169,6 +169,31 @@ describe("agent bridge P1 session tools", () => {
     expect(readAfterClose.error).toContain("已关闭");
   });
 
+  it("aborts bridge_session_read while waiting for output", async () => {
+    const startResult = await bridgeSessionStartTool.execute({
+      targetId: "node-repl",
+      action: "interactive",
+    }, baseContext);
+    expect(startResult.success).toBe(true);
+    const started = JSON.parse(startResult.output) as { sessionId: string };
+    const controller = new AbortController();
+
+    const readPromise = bridgeSessionReadTool.execute({
+      sessionId: started.sessionId,
+      waitMs: 5_000,
+    }, {
+      ...baseContext,
+      abortSignal: controller.signal,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    controller.abort("Stopped by user.");
+    const result = await readPromise;
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Stopped by user.");
+  });
+
   it("rejects bridge session start when target cwd escapes workspace scope", async () => {
     const result = await bridgeSessionStartTool.execute({
       targetId: "node-repl",

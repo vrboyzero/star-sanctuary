@@ -60,14 +60,14 @@ export const officeWorkshopSearchTool: Tool = {
       required: ["agent_name"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_workshop_search";
     try {
       const agentName = String(input.agent_name || "").trim();
       if (!agentName) return makeResult(name, start, false, null, "agent_name 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const qs = new URLSearchParams();
       if (input.category) qs.set("category", normalizeWorkshopCategory(String(input.category)));
       if (input.keyword) qs.set("q", String(input.keyword).trim());
@@ -105,7 +105,7 @@ export const officeWorkshopGetItemTool: Tool = {
       required: ["agent_name", "item_id"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_workshop_get_item";
     try {
@@ -113,7 +113,7 @@ export const officeWorkshopGetItemTool: Tool = {
       const itemId = String(input.item_id || "").trim();
       if (!agentName || !itemId) return makeResult(name, start, false, null, "agent_name 和 item_id 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.getJson<WorkshopItemDetail>(`/api/workshop/items/${encodeURIComponent(itemId)}`);
       return makeResult(name, start, true, { success: true, item: payload });
     } catch (error) {
@@ -146,7 +146,7 @@ export const officeWorkshopDownloadTool: Tool = {
       const overwrite = input.overwrite === true;
       if (!agentName || !itemId) return makeResult(name, start, false, null, "agent_name 和 item_id 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const item = await client.getJson<WorkshopItemDetail>(`/api/workshop/items/${encodeURIComponent(itemId)}`);
       const targetDir = input.target_dir
         ? resolveWritableDir(String(input.target_dir), context).absolute
@@ -221,7 +221,7 @@ export const officeWorkshopPublishTool: Tool = {
         return makeResult(name, start, false, null, "agent_name、category、title、summary、description、file_path 参数必填");
       }
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const filePath = client.resolveUploadPath(filePathArg, context).absolute;
       const fileBuffer = await fs.readFile(filePath);
       const fileName = path.basename(filePath);
@@ -270,14 +270,14 @@ export const officeWorkshopMineTool: Tool = {
       required: ["agent_name"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_workshop_mine";
     try {
       const agentName = String(input.agent_name || "").trim();
       if (!agentName) return makeResult(name, start, false, null, "agent_name 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.getJson<Record<string, unknown>>("/api/workshop/mine");
       return makeResult(name, start, true, { success: true, ...payload });
     } catch (error) {
@@ -306,7 +306,7 @@ export const officeWorkshopUpdateTool: Tool = {
       required: ["agent_name", "item_id"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_workshop_update";
     try {
@@ -327,7 +327,7 @@ export const officeWorkshopUpdateTool: Tool = {
         return makeResult(name, start, false, null, "至少提供一个要更新的字段");
       }
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.putJson<Record<string, unknown>>(`/api/workshop/items/${encodeURIComponent(itemId)}`, body);
       return makeResult(name, start, true, { success: true, ...payload });
     } catch (error) {
@@ -349,7 +349,7 @@ export const officeWorkshopDeleteTool: Tool = {
       required: ["agent_name", "item_id"],
     },
   },
-  async execute(input): Promise<ToolCallResult> {
+  async execute(input, context): Promise<ToolCallResult> {
     const start = Date.now();
     const name = "office_workshop_delete";
     try {
@@ -357,7 +357,7 @@ export const officeWorkshopDeleteTool: Tool = {
       const itemId = String(input.item_id || "").trim();
       if (!agentName || !itemId) return makeResult(name, start, false, null, "agent_name 和 item_id 参数必填");
 
-      const client = new OfficeSiteClient(agentName);
+      const client = new OfficeSiteClient(agentName, context.abortSignal);
       const payload = await client.deleteJson<Record<string, unknown>>(`/api/workshop/items/${encodeURIComponent(itemId)}`);
       return makeResult(name, start, true, { success: true, ...payload });
     } catch (error) {

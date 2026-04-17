@@ -1,6 +1,7 @@
 import type { Tool, ToolCallResult } from "../../types.js";
 import crypto from "node:crypto";
 import { synthesizeSpeech } from "./tts-synthesize.js";
+import { isAbortError, readAbortReason, throwIfAborted } from "../../abort-utils.js";
 
 export const textToSpeechTool: Tool = {
     definition: {
@@ -38,12 +39,14 @@ export const textToSpeechTool: Tool = {
         const name = "text_to_speech";
 
         try {
+            throwIfAborted(context.abortSignal);
             const result = await synthesizeSpeech({
                 text: args.input as string,
                 stateDir: context.workspaceRoot,
                 provider: args.provider as string | undefined,
                 voice: args.voice as string | undefined,
                 model: args.model as string | undefined,
+                abortSignal: context.abortSignal,
             });
 
             if (!result) {
@@ -63,7 +66,9 @@ export const textToSpeechTool: Tool = {
         } catch (err) {
             return {
                 id, name, success: false, output: "",
-                error: err instanceof Error ? err.message : String(err),
+                error: isAbortError(err) || context.abortSignal?.aborted
+                    ? readAbortReason(context.abortSignal)
+                    : (err instanceof Error ? err.message : String(err)),
                 durationMs: Date.now() - start,
             };
         }

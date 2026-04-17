@@ -226,6 +226,8 @@ const {
   cfgTtsEnabled,
   cfgTtsProvider,
   cfgTtsVoice,
+  cfgTtsOpenAIBaseUrl,
+  cfgTtsOpenAIApiKey,
   cfgDashScopeApiKey,
   cfgVoiceShortcut,
   cfgVoiceShortcutStatus,
@@ -300,6 +302,7 @@ const TASK_TOKEN_HISTORY_LIMIT = 1;
 let transientUrlToken = null;
 const clientId = resolveClientId();
 let queuedText = null;
+let composerRunState = { phase: "idle", conversationId: "", runId: "" };
 
 const webchatDebugEnabled = (() => {
   try {
@@ -314,7 +317,7 @@ const webchatDebugEnabled = (() => {
 
 const promptController = initPromptController({
   promptEl,
-  onSubmit: () => sendMessage(),
+  onSubmit: () => handleComposerPrimaryAction(),
 });
 
 const localeController = createLocaleController({
@@ -323,6 +326,152 @@ const localeController = createLocaleController({
   dictionaries: LOCALE_DICTIONARIES,
   localeMeta: LOCALE_META,
 });
+
+function isComposerRunVisible() {
+  if (composerRunState.phase === "idle") return false;
+  if (!activeConversationId) return true;
+  return composerRunState.conversationId === activeConversationId;
+}
+
+function matchesComposerRunPayload(payload = {}) {
+  if (composerRunState.phase === "idle") return false;
+  const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : "";
+  const runId = typeof payload.runId === "string" ? payload.runId : "";
+  if (!conversationId || conversationId !== composerRunState.conversationId) {
+    return false;
+  }
+  if (runId && composerRunState.runId && runId !== composerRunState.runId) {
+    return false;
+  }
+  return true;
+}
+
+function setComposerRunState(nextState) {
+  composerRunState = nextState;
+  renderComposerPrimaryAction();
+}
+
+function clearComposerRunState() {
+  composerRunState = { phase: "idle", conversationId: "", runId: "" };
+  renderComposerPrimaryAction();
+}
+
+function renderComposerPrimaryAction() {
+  if (!sendBtn) return;
+  const socketReady = Boolean(ws && isReady);
+  const runVisible = isComposerRunVisible();
+
+  if (!runVisible || composerRunState.phase === "idle") {
+    sendBtn.textContent = localeController.t("common.send", {}, "Send");
+    sendBtn.disabled = !socketReady;
+    return;
+  }
+
+  if (composerRunState.phase === "running") {
+    sendBtn.textContent = localeController.t("subtasks.actionStop", {}, "Stop");
+    sendBtn.disabled = !socketReady;
+    return;
+  }
+
+  sendBtn.textContent = localeController.t("subtasks.actionStopping", {}, "Stopping...");
+  sendBtn.disabled = true;
+}
+
+function bindComposerRun(payload = {}) {
+  const conversationId = typeof payload.conversationId === "string" ? payload.conversationId : "";
+  const runId = typeof payload.runId === "string" ? payload.runId : "";
+  if (!conversationId || !runId) return;
+  setComposerRunState({
+    phase: "running",
+    conversationId,
+    runId,
+  });
+}
+
+function handleComposerRunFinal(payload = {}) {
+  if (!matchesComposerRunPayload(payload)) return;
+  clearComposerRunState();
+}
+
+function handleComposerRunStopped(payload = {}) {
+  if (!matchesComposerRunPayload(payload)) return;
+  clearComposerRunState();
+}
+
+function handleComposerAgentStatus(payload = {}) {
+  if (!matchesComposerRunPayload(payload)) return;
+  if (payload?.status === "error" || payload?.status === "stopped") {
+    clearComposerRunState();
+  } else {
+    renderComposerPrimaryAction();
+  }
+}
+
+async function requestActiveConversationRunStop() {
+  if (composerRunState.phase !== "running") {
+    return;
+  }
+  const nextState = {
+    phase: "stop_requested",
+    conversationId: composerRunState.conversationId,
+    runId: composerRunState.runId,
+  };
+  setComposerRunState(nextState);
+
+  try {
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "conversation.run.stop",
+      params: {
+        conversationId: nextState.conversationId,
+        runId: nextState.runId,
+        reason: "Stopped by user.",
+      },
+    });
+    if (!res || res.ok === false) {
+      setComposerRunState({
+        phase: "running",
+        conversationId: nextState.conversationId,
+        runId: nextState.runId,
+      });
+      const message = res?.error?.message || localeController.t("settings.failed", {}, "Failed");
+      showNotice?.(
+        localeController.t("subtasks.stopFailedTitle", {}, "Stop failed"),
+        message,
+        "error",
+        2600,
+      );
+      return;
+    }
+    if (!res.payload?.accepted) {
+      clearComposerRunState();
+    }
+  } catch (error) {
+    setComposerRunState({
+      phase: "running",
+      conversationId: nextState.conversationId,
+      runId: nextState.runId,
+    });
+    showNotice?.(
+      localeController.t("subtasks.stopFailedTitle", {}, "Stop failed"),
+      error instanceof Error ? error.message : String(error),
+      "error",
+      2600,
+    );
+  }
+}
+
+function handleComposerPrimaryAction() {
+  if (composerRunState.phase === "running" && isComposerRunVisible()) {
+    void requestActiveConversationRunStop();
+    return;
+  }
+  if (composerRunState.phase === "stop_requested" && isComposerRunVisible()) {
+    return;
+  }
+  void sendMessage();
+}
 
 const themeController = createThemeController({
   storageKey: "ss-webchat-theme",
@@ -399,6 +548,7 @@ sessionNavigationFeature = createSessionNavigationFeature({
   },
   setActiveConversationId: (conversationId) => {
     activeConversationId = conversationId;
+    renderComposerPrimaryAction();
   },
   getActiveConversationId: () => activeConversationId,
   renderCanvasGoalContext: () => renderCanvasGoalContext(),
@@ -438,7 +588,7 @@ const voiceFeature = createVoiceFeature({
   renderAttachmentsPreview: (hintMessage) => {
     attachmentsFeature?.renderAttachmentsPreview(hintMessage);
   },
-  onSendMessage: () => sendMessage(),
+  onSendMessage: () => handleComposerPrimaryAction(),
   t: localeController.t,
   getSpeechRecognitionLocale: () => localeController.getSpeechRecognitionLocale(),
 });
@@ -459,6 +609,7 @@ localeController.subscribe(() => {
   agentRuntimeFeature?.refreshLocale?.();
   syncSaveWorkspaceRootsButton();
   renderTaskTokenHistory();
+  renderComposerPrimaryAction();
 });
 
 // 身份信息（从 hello-ok 获取）
@@ -573,7 +724,7 @@ setStatus(localeController.t("status.disconnected", {}, "disconnected"));
 attachmentsFeature.renderAttachmentsPreview();
 
 connectBtn.addEventListener("click", () => connect());
-sendBtn.addEventListener("click", () => sendMessage());
+sendBtn.addEventListener("click", () => handleComposerPrimaryAction());
 if (memoryViewerRefreshBtn) {
   memoryViewerRefreshBtn.addEventListener("click", () => loadMemoryViewer(true));
 }
@@ -915,6 +1066,13 @@ chatNetworkFeature = createChatNetworkFeature({
   onHelloOk: (frame) => handleHelloOk(frame),
   onAgentListLoaded: (agents, selectedAgentId) => syncAgentCatalog(agents, selectedAgentId),
   onEvent: (event, payload) => handleEvent(event, payload),
+  onConnectionStateChanged: ({ ready }) => {
+    if (!ready) {
+      clearComposerRunState();
+    } else {
+      renderComposerPrimaryAction();
+    }
+  },
   t: localeController.t,
 });
 
@@ -1147,6 +1305,7 @@ goalsActionsRuntimeFeature = createGoalsActionsRuntimeFeature({
   getActiveConversationId: () => activeConversationId,
   setActiveConversationId: (conversationId) => {
     activeConversationId = conversationId;
+    renderComposerPrimaryAction();
   },
   renderCanvasGoalContext,
   getChatEventsFeature: () => chatEventsFeature,
@@ -1404,6 +1563,7 @@ agentRuntimeFeature = createAgentRuntimeFeature({
   getActiveConversationId: () => activeConversationId,
   setActiveConversationId: (conversationId) => {
     activeConversationId = conversationId;
+    renderComposerPrimaryAction();
   },
   renderCanvasGoalContext,
   switchMode,
@@ -2065,6 +2225,7 @@ async function sendMessage(options = {}) {
 
   if (payload && payload.ok && payload.payload && payload.payload.conversationId) {
     activeConversationId = String(payload.payload.conversationId);
+    bindComposerRun(payload.payload);
     agentRuntimeFeature?.handleMessageSendConversationBound({
       conversationId: activeConversationId,
       agentId: getCurrentAgentSelection(),
@@ -2166,9 +2327,20 @@ chatEventsFeature = createChatEventsFeature({
   forceScrollToBottom,
   getCanvasApp: () => window._canvasApp,
   getActiveConversationId: () => activeConversationId,
-  onAgentStatusEvent: (payload) => agentRuntimeFeature?.handleAgentStatusPayload(payload),
+  onAgentStatusEvent: (payload) => {
+    agentRuntimeFeature?.handleAgentStatusPayload(payload);
+    handleComposerAgentStatus(payload);
+  },
   onConversationDelta: (payload) => agentRuntimeFeature?.handleConversationDeltaPayload(payload),
-  onConversationFinal: (payload) => agentRuntimeFeature?.handleConversationFinalPayload(payload),
+  onConversationFinal: (payload) => {
+    agentRuntimeFeature?.handleConversationFinalPayload(payload);
+    handleComposerRunFinal(payload);
+  },
+  onConversationStopped: (payload) => {
+    agentRuntimeFeature?.handleConversationStoppedPayload(payload);
+    handleComposerRunStopped(payload);
+  },
+  getStoppedMessageText: () => localeController.t("common.interrupted", {}, "Interrupted"),
   escapeHtml,
 });
 

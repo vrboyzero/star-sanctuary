@@ -67,6 +67,21 @@ export type ConversationContinuationStateInput = {
     totalTokens?: number;
     createdAt?: number | string;
   }>;
+  sessionDigest?: {
+    status?: string;
+    rollingSummary?: string;
+  };
+  sessionMemory?: {
+    summary?: string;
+    currentWork?: string;
+    nextStep?: string;
+    pendingTasks?: string[];
+  };
+  resumeContext?: {
+    currentStopPoint?: string;
+    nextStep?: string;
+    blockers?: string[];
+  };
 };
 
 export type ResidentContinuationStateInput = {
@@ -288,6 +303,13 @@ export function buildConversationContinuationState(input: ConversationContinuati
   const lastTaskToken = taskTokenResults
     .slice()
     .sort((left, right) => toTimestamp(right.createdAt) - toTimestamp(left.createdAt))[0];
+  const sessionSummary = summarizeText(input.sessionMemory?.summary || input.sessionDigest?.rollingSummary, 180);
+  const resumeStopPoint = summarizeText(input.resumeContext?.currentStopPoint, 180);
+  const sessionCurrentWork = summarizeText(input.sessionMemory?.currentWork, 180);
+  const currentWork = resumeStopPoint || sessionCurrentWork;
+  const resumeNextStep = summarizeText(input.resumeContext?.nextStep, 180);
+  const sessionNextStep = summarizeText(input.sessionMemory?.nextStep, 180);
+  const blockerLabels = compactStrings(input.resumeContext?.blockers ?? [], 2);
   const recentMessages = messages
     .slice(-3)
     .reverse()
@@ -296,8 +318,15 @@ export function buildConversationContinuationState(input: ConversationContinuati
       const content = summarizeText(item.content, 96);
       return content ? `${role}: ${content}` : "";
     });
-  const summary = summarizeText(latestMessage?.content, 180)
+  const summary = currentWork
+    || sessionSummary
+    || summarizeText(latestMessage?.content, 180)
     || (messages.length > 0 ? `Conversation has ${messages.length} persisted message(s).` : "No persisted messages yet.");
+  const nextAction = resumeNextStep
+    || sessionNextStep
+    || (loadedDeferredTools.length > 0
+      ? "Continue in this conversation and only reuse already loaded tools if they are still relevant."
+      : "Continue in this conversation or refresh the digest before resuming a longer thread.");
 
   return {
     version: 1,
@@ -307,20 +336,19 @@ export function buildConversationContinuationState(input: ConversationContinuati
     targetType: "conversation",
     resumeMode: loadedDeferredTools.length > 0 ? "conversation_context" : "conversation_thread",
     summary,
-    nextAction: loadedDeferredTools.length > 0
-      ? "Continue in this conversation and only reuse already loaded tools if they are still relevant."
-      : "Continue in this conversation or refresh the digest before resuming a longer thread.",
+    nextAction,
     checkpoints: {
       openCount: compactBoundaries.length,
-      blockerCount: 0,
+      blockerCount: blockerLabels.length,
       labels: compactStrings([
         ...loadedDeferredTools.map((item) => `tool:${item}`),
         compactBoundaries.length > 0 ? `compact:${compactBoundaries.length}` : "",
         lastTaskToken?.name ? `task:${lastTaskToken.name}` : "",
+        ...blockerLabels,
       ], 4),
     },
     progress: {
-      current: messages.length > 0 ? `${messages.length} messages` : "No active transcript yet",
+      current: currentWork || (messages.length > 0 ? `${messages.length} messages` : "No active transcript yet"),
       recent: compactStrings(recentMessages, 3),
     },
   };

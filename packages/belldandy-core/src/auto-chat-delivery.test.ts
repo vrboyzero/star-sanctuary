@@ -5,7 +5,10 @@ import { deliverAutoMessageToResidentChannel } from "./auto-chat-delivery.js";
 
 describe("deliverAutoMessageToResidentChannel", () => {
   it("persists and broadcasts auto messages to the resident main channel", () => {
-    const conversationStore = new ConversationStore();
+    const conversationStore = new ConversationStore({
+      // Keep the fixed timestamp below from being treated as an expired conversation.
+      ttlSeconds: Number.MAX_SAFE_INTEGER,
+    });
     const frames: Array<{
       type: "event";
       event: "chat.final";

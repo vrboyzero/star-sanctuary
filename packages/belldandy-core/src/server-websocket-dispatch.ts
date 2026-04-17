@@ -12,6 +12,7 @@ import type { SkillRegistry, ToolExecutor, TranscribeOptions, TranscribeResult }
 import type { WebSocket } from "ws";
 
 import type { BackgroundContinuationRuntimeDoctorReport } from "./background-continuation-runtime.js";
+import type { ConversationRunRegistry } from "./conversation-run-registry.js";
 import type { CronRuntimeDoctorReport } from "./cron/observability.js";
 import type { DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
 import type { ExtensionHostState } from "./extension-host.js";
@@ -64,6 +65,7 @@ export type GatewayWebSocketRequestContext = {
   preferredProviderIds: string[];
   modelConfigPath?: string;
   conversationStore: ConversationStore;
+  conversationRunRegistry: ConversationRunRegistry;
   durableExtractionRuntime?: DurableExtractionRuntime;
   requestDurableExtraction?: (input: {
     conversationId: string;
@@ -154,6 +156,7 @@ export function buildGatewayWebSocketRequestContext(
     preferredProviderIds: options.preferredProviderIds,
     modelConfigPath: options.modelConfigPath,
     conversationStore: options.conversationStore,
+    conversationRunRegistry: options.conversationRunRegistry,
     durableExtractionRuntime: options.durableExtractionRuntime,
     requestDurableExtraction: options.requestDurableExtraction,
     memoryUsageAccounting: options.memoryUsageAccounting,

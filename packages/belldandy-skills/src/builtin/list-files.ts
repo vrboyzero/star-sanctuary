@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { Tool, ToolContext, ToolCallResult } from "../types.js";
 import { withToolContract } from "../tool-contract.js";
 import { resolveRuntimeFilesystemScope } from "../runtime-policy.js";
+import { isAbortError, readAbortReason, throwIfAborted } from "../abort-utils.js";
 
 /** 检查路径是否在黑名单中 */
 function isDeniedPath(relativePath: string, deniedPaths: string[]): string | null {
@@ -78,14 +79,17 @@ async function listDirectory(
     recursive: boolean,
     maxDepth: number,
     currentDepth: number,
-    entries: FileEntry[]
+    entries: FileEntry[],
+    signal?: AbortSignal,
 ): Promise<void> {
     if (currentDepth > maxDepth) return;
+    throwIfAborted(signal);
 
     try {
         const items = await fs.readdir(dir, { withFileTypes: true });
 
         for (const item of items) {
+            throwIfAborted(signal);
             const fullPath = path.join(dir, item.name);
             const relativePath = path.relative(workspaceRoot, fullPath).replace(/\\/g, "/");
 
@@ -103,7 +107,8 @@ async function listDirectory(
                         recursive,
                         maxDepth,
                         currentDepth + 1,
-                        entries
+                        entries,
+                        signal,
                     );
                 }
             } else if (item.isFile()) {
@@ -125,7 +130,10 @@ async function listDirectory(
                 }
             }
         }
-    } catch {
+    } catch (error) {
+        if (isAbortError(error)) {
+            throw error;
+        }
         // 忽略无法访问的目录
     }
 }
@@ -192,6 +200,7 @@ export const listFilesTool: Tool = withToolContract({
         }
 
         try {
+            throwIfAborted(context.abortSignal);
             const stat = await fs.stat(absolute);
 
             if (!stat.isDirectory()) {
@@ -205,7 +214,8 @@ export const listFilesTool: Tool = withToolContract({
                 recursive,
                 depth,
                 1,
-                entries
+                entries,
+                context.abortSignal,
             );
 
             // 按类型和名称排序
@@ -230,6 +240,9 @@ export const listFilesTool: Tool = withToolContract({
                 durationMs: Date.now() - start,
             };
         } catch (err) {
+            if (isAbortError(err)) {
+                return makeError(readAbortReason(context.abortSignal));
+            }
             const code = (err as NodeJS.ErrnoException).code;
             if (code === "ENOENT") {
                 return makeError(`目录不存在：${relative}`);

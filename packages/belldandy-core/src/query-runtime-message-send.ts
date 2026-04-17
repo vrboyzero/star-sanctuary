@@ -3,9 +3,18 @@ import crypto from "node:crypto";
 import type { WebSocket } from "ws";
 import type { AgentPromptDelta, AgentRegistry, BelldandyAgent, ConversationStore } from "@belldandy/agent";
 import type { DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
-import { uploadTokenUsage, type ChatMessageMeta, type GatewayEventFrame, type GatewayResFrame, type MessageSendParams, type TokenUsageUploadConfig } from "@belldandy/protocol";
+import {
+  uploadTokenUsage,
+  type ChatMessageMeta,
+  type ConversationRunStopParams,
+  type GatewayEventFrame,
+  type GatewayResFrame,
+  type MessageSendParams,
+  type TokenUsageUploadConfig,
+} from "@belldandy/protocol";
 import type { MemoryRuntimeBudgetGuard, MemoryRuntimeUsageAccounting } from "./memory-runtime-budget.js";
 import { preparePromptWithAttachments, type AttachmentPromptLimits } from "./attachment-understanding-runner.js";
+import { ConversationRunRegistry } from "./conversation-run-registry.js";
 import { runAgentWithLifecycle } from "./query-runtime-agent-run.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
@@ -38,6 +47,7 @@ export type MessageSendQueryRuntimeContext = {
     agentFactory: () => BelldandyAgent;
     agentRegistry?: AgentRegistry;
     conversationStore: ConversationStore;
+    conversationRunRegistry: ConversationRunRegistry;
     runtimeObserver?: QueryRuntimeObserver<"message.send">;
     residentAgentRuntime?: ResidentAgentRuntimeRegistry;
   };
@@ -108,6 +118,17 @@ export type MessageSendQueryRuntimeContext = {
       memoryUsageAccounting?: MemoryRuntimeUsageAccounting,
       memoryBudgetGuard?: MemoryRuntimeBudgetGuard,
     ) => Promise<unknown>;
+  };
+};
+
+export type ConversationRunStopQueryRuntimeContext = {
+  request: {
+    requestId: string;
+    params: ConversationRunStopParams;
+  };
+  runtime: {
+    conversationRunRegistry: ConversationRunRegistry;
+    runtimeObserver?: QueryRuntimeObserver<"conversation.run.stop">;
   };
 };
 
@@ -245,10 +266,27 @@ export async function handleMessageSendWithQueryRuntime(
       }),
     });
 
+    const abortController = new AbortController();
+    runtimeDeps.conversationRunRegistry.register({
+      conversationId,
+      runId,
+      agentId: requestedAgentId ?? "default",
+      startedAt: Date.now(),
+      state: "running",
+      stop: (reason?: string) => {
+        if (abortController.signal.aborted) {
+          return false;
+        }
+        abortController.abort(readMessageSendStopReason(undefined, reason));
+        return true;
+      },
+    });
+
     void runAgentInBackground({
       ctx,
       queryRuntime,
       agent,
+      abortController,
       conversationId,
       requestedAgentId,
       effectiveUserUuid,
@@ -278,6 +316,74 @@ export async function handleMessageSendWithQueryRuntime(
         conversationId,
         runId,
         messageMeta: io.toChatMessageMeta(userMessage.timestamp, true),
+      },
+    };
+  });
+}
+
+export async function handleConversationRunStopWithQueryRuntime(
+  ctx: ConversationRunStopQueryRuntimeContext,
+): Promise<GatewayResFrame> {
+  const runtime = new QueryRuntime({
+    method: "conversation.run.stop" as const,
+    traceId: ctx.request.requestId,
+    observer: ctx.runtime.runtimeObserver,
+  });
+
+  return runtime.run(async (queryRuntime) => {
+    const conversationId = typeof ctx.request.params.conversationId === "string"
+      ? ctx.request.params.conversationId.trim()
+      : "";
+    const runId = typeof ctx.request.params.runId === "string" && ctx.request.params.runId.trim()
+      ? ctx.request.params.runId.trim()
+      : undefined;
+    const reason = typeof ctx.request.params.reason === "string" && ctx.request.params.reason.trim()
+      ? ctx.request.params.reason.trim()
+      : "Stopped by user.";
+
+    queryRuntime.mark("request_validated", {
+      conversationId,
+      detail: {
+        runId,
+        hasReason: Boolean(reason),
+        reason,
+      },
+    });
+
+    const result = await ctx.runtime.conversationRunRegistry.requestStop({
+      conversationId,
+      runId,
+      reason,
+    });
+
+    if (result.accepted) {
+      queryRuntime.mark("task_stopped", {
+        conversationId,
+        detail: {
+          runId: result.runId,
+          state: result.state,
+          reason,
+        },
+      });
+    }
+    queryRuntime.mark("completed", {
+      conversationId,
+      detail: {
+        accepted: result.accepted,
+        state: result.state,
+        runId: result.runId,
+        reason,
+      },
+    });
+
+    return {
+      type: "res",
+      id: ctx.request.requestId,
+      ok: true,
+      payload: {
+        accepted: result.accepted,
+        state: result.state,
+        runId: result.runId,
       },
     };
   });
@@ -316,6 +422,7 @@ type MessageSendBackgroundInput = {
   ctx: MessageSendQueryRuntimeContext;
   queryRuntime: QueryRuntime<"message.send">;
   agent: BelldandyAgent;
+  abortController: AbortController;
   conversationId: string;
   requestedAgentId?: string;
   effectiveUserUuid?: string;
@@ -381,6 +488,7 @@ function buildMessageSendAgentRunInput(
     conversationId: input.conversationId,
     text: input.promptText,
     userInput: input.userText,
+    abortSignal: input.abortController.signal,
     history: input.history,
     agentId: input.requestedAgentId,
     userUuid: input.effectiveUserUuid,
@@ -742,6 +850,52 @@ function emitMessageSendFinalFrame(input: {
   });
 }
 
+function emitMessageSendStoppedFrame(input: {
+  ctx: MessageSendQueryRuntimeContext;
+  conversationId: string;
+  runId: string;
+  agentId: string;
+  reason: string;
+  hadPartialResponse: boolean;
+}): void {
+  input.ctx.io.sendEvent(input.ctx.request.ws, {
+    type: "event",
+    event: "conversation.run.stopped",
+    payload: {
+      agentId: input.agentId,
+      conversationId: input.conversationId,
+      runId: input.runId,
+      reason: input.reason,
+      hadPartialResponse: input.hadPartialResponse,
+    },
+  });
+}
+
+function readMessageSendStopReason(signal?: AbortSignal, fallback?: unknown): string {
+  if (typeof signal?.reason === "string" && signal.reason.trim()) {
+    return signal.reason.trim();
+  }
+  if (typeof fallback === "string" && fallback.trim()) {
+    return fallback.trim();
+  }
+  if (fallback instanceof Error && fallback.message.trim()) {
+    return fallback.message.trim();
+  }
+  return "Stopped by user.";
+}
+
+function wasMessageSendStopped(input: {
+  abortSignal?: AbortSignal;
+  runResult?: MessageSendRunResult;
+  error?: unknown;
+}): boolean {
+  return Boolean(
+    input.abortSignal?.aborted
+    || input.runResult?.latestStatus === "stopped"
+    || (input.error instanceof Error && input.error.name === "AbortError"),
+  );
+}
+
 function applyMessageSendCompletionPolicy(input: {
   ctx: MessageSendQueryRuntimeContext;
   queryRuntime: QueryRuntime<"message.send">;
@@ -796,11 +950,27 @@ async function finalizeMessageSendSuccess(input: {
   queryRuntime: QueryRuntime<"message.send">;
   conversationId: string;
   runId: string;
+  abortController: AbortController;
   requestedAgentId?: string;
   runResult: MessageSendRunResult;
   state: MessageSendBackgroundRunState;
 }): Promise<void> {
   const { ctx, queryRuntime, runResult } = input;
+  if (wasMessageSendStopped({
+    abortSignal: input.abortController.signal,
+    runResult,
+  })) {
+    finalizeMessageSendStopped({
+      ctx,
+      queryRuntime,
+      conversationId: input.conversationId,
+      runId: input.runId,
+      requestedAgentId: input.requestedAgentId,
+      partialText: runResult.fullText,
+      reason: readMessageSendStopReason(input.abortController.signal),
+    });
+    return;
+  }
   let finalEventText = runResult.fullText;
 
   if ((ctx.media.ttsEnabled?.() ?? false) && runResult.fullText && ctx.media.ttsSynthesize) {
@@ -869,6 +1039,59 @@ async function finalizeMessageSendSuccess(input: {
       digestSource: "message.send",
       digestWarningMessage: "Auto refresh after message.send failed",
     },
+  });
+}
+
+function finalizeMessageSendStopped(input: {
+  ctx: MessageSendQueryRuntimeContext;
+  queryRuntime: QueryRuntime<"message.send">;
+  conversationId: string;
+  runId: string;
+  requestedAgentId?: string;
+  partialText?: string;
+  reason?: string;
+}): void {
+  const stopReason = readMessageSendStopReason(undefined, input.reason);
+  input.ctx.runtime.conversationRunRegistry.markStopped(input.conversationId, input.runId, stopReason);
+  input.queryRuntime.mark("task_stopped", {
+    conversationId: input.conversationId,
+    detail: {
+      runId: input.runId,
+      hadPartialResponse: Boolean(input.partialText),
+      reason: stopReason,
+    },
+  });
+  input.queryRuntime.mark("completed", {
+    conversationId: input.conversationId,
+    detail: {
+      runId: input.runId,
+      response: "stopped",
+      hadPartialResponse: Boolean(input.partialText),
+    },
+  });
+  input.ctx.io.sendEvent(input.ctx.request.ws, {
+    type: "event",
+    event: "agent.status",
+    payload: {
+      agentId: input.requestedAgentId ?? "default",
+      conversationId: input.conversationId,
+      runId: input.runId,
+      status: "stopped",
+    },
+  });
+  emitMessageSendStoppedFrame({
+    ctx: input.ctx,
+    conversationId: input.conversationId,
+    runId: input.runId,
+    agentId: input.requestedAgentId ?? "default",
+    reason: stopReason,
+    hadPartialResponse: Boolean(input.partialText),
+  });
+  scheduleMessageSendDigestRefresh({
+    ctx: input.ctx,
+    conversationId: input.conversationId,
+    source: "message.stop",
+    warningMessage: "Auto refresh after message stop failed",
   });
 }
 
@@ -969,20 +1192,38 @@ async function runAgentInBackground(input: MessageSendBackgroundInput): Promise<
       queryRuntime,
       conversationId: input.conversationId,
       runId: input.runId,
+      abortController: input.abortController,
       requestedAgentId: input.requestedAgentId,
       runResult,
       state,
     });
     ctx.runtime.residentAgentRuntime?.markStatus(input.requestedAgentId ?? "default", "idle");
   } catch (error) {
-    ctx.runtime.residentAgentRuntime?.markStatus(input.requestedAgentId ?? "default", "error");
-    finalizeMessageSendFailure({
-      ctx,
-      queryRuntime,
-      conversationId: input.conversationId,
-      runId: input.runId,
-      requestedAgentId: input.requestedAgentId,
+    if (wasMessageSendStopped({
+      abortSignal: input.abortController.signal,
       error,
-    });
+    })) {
+      finalizeMessageSendStopped({
+        ctx,
+        queryRuntime,
+        conversationId: input.conversationId,
+        runId: input.runId,
+        requestedAgentId: input.requestedAgentId,
+        reason: readMessageSendStopReason(input.abortController.signal, error),
+      });
+      ctx.runtime.residentAgentRuntime?.markStatus(input.requestedAgentId ?? "default", "idle");
+    } else {
+      ctx.runtime.residentAgentRuntime?.markStatus(input.requestedAgentId ?? "default", "error");
+      finalizeMessageSendFailure({
+        ctx,
+        queryRuntime,
+        conversationId: input.conversationId,
+        runId: input.runId,
+        requestedAgentId: input.requestedAgentId,
+        error,
+      });
+    }
+  } finally {
+    ctx.runtime.conversationRunRegistry.clear(input.conversationId, input.runId);
   }
 }

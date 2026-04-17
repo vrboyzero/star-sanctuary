@@ -3,6 +3,7 @@ import { PythonRunner } from "./python.js";
 import { NodeRunner } from "./js.js";
 import crypto from "node:crypto";
 import { withToolContract } from "../../tool-contract.js";
+import { isAbortError, readAbortReason, throwIfAborted, toAbortError } from "../../abort-utils.js";
 
 export const codeInterpreterTool: Tool = withToolContract({
     definition: {
@@ -34,16 +35,21 @@ export const codeInterpreterTool: Tool = withToolContract({
         const code = args.code as string;
 
         try {
+            throwIfAborted(context.abortSignal);
             let result: { stdout: string; stderr: string };
 
             if (lang === "python") {
                 const runner = new PythonRunner(context.workspaceRoot);
-                result = await runner.run(code);
+                result = await runner.run(code, context.abortSignal);
             } else if (lang === "javascript") {
                 const runner = new NodeRunner(context.workspaceRoot);
-                result = await runner.run(code);
+                result = await runner.run(code, context.abortSignal);
             } else {
                 throw new Error(`Unsupported language: ${lang}`);
+            }
+
+            if (context.abortSignal?.aborted) {
+                throw toAbortError(context.abortSignal.reason);
             }
 
             return {
@@ -60,7 +66,9 @@ export const codeInterpreterTool: Tool = withToolContract({
                 name,
                 success: false,
                 output: "",
-                error: err instanceof Error ? err.message : String(err),
+                error: isAbortError(err) || context.abortSignal?.aborted
+                    ? readAbortReason(context.abortSignal)
+                    : (err instanceof Error ? err.message : String(err)),
                 durationMs: Date.now() - start,
             };
         }

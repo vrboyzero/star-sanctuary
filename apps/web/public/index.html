@@ -688,6 +688,16 @@
           <div class="form-help" data-i18n="settings.ttsVoiceHelp">音色名称。留空时按当前 Provider 自动选择默认音色。</div>
         </div>
         <div class="form-group">
+          <label class="form-label" data-i18n="settings.ttsOpenAiBaseUrlLabel">TTS OpenAI Base URL</label>
+          <input id="cfgTtsOpenAIBaseUrl" class="input" data-i18n-placeholder="settings.ttsOpenAiBaseUrlPlaceholder" placeholder="留空则复用主模型 Base URL" />
+          <div class="form-help" data-i18n="settings.ttsOpenAiBaseUrlHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_BASE_URL`，再回退旧的 `OPENAI_BASE_URL`。</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="settings.ttsOpenAiApiKeyLabel">TTS OpenAI API Key</label>
+          <input id="cfgTtsOpenAIApiKey" class="input" type="password" data-i18n-placeholder="settings.ttsOpenAiApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
+          <div class="form-help" data-i18n="settings.ttsOpenAiApiKeyHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_API_KEY`，再回退旧的 `OPENAI_API_KEY`。</div>
+        </div>
+        <div class="form-group">
           <label class="form-label" data-i18n="settings.dashScopeApiKeyLabel">DashScope API Key</label>
           <input id="cfgDashScopeApiKey" class="input" type="password" data-i18n-placeholder="settings.dashScopeApiKeyPlaceholder" placeholder="仅 dashscope provider 需要" />
           <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>

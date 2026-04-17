@@ -120,6 +120,9 @@ export function createMemoryRuntimeFeature({
 
   async function loadTaskDetail(taskId, requestContext = null) {
     const memoryViewerState = getMemoryViewerState();
+    const previousSelectedTask = memoryViewerState.selectedTask?.id === taskId
+      ? memoryViewerState.selectedTask
+      : null;
     if (!taskId) {
       memoryViewerState.selectedTask = null;
       memoryViewerState.selectedCandidate = null;
@@ -149,7 +152,13 @@ export function createMemoryRuntimeFeature({
       return;
     }
 
-    memoryViewerState.selectedTask = res.payload?.task ?? null;
+    const nextTask = res.payload?.task ? { ...res.payload.task } : null;
+    if (nextTask && previousSelectedTask?.sourceExplanation?.taskId === nextTask.id) {
+      nextTask.sourceExplanation = previousSelectedTask.sourceExplanation;
+      nextTask.sourceExplanationError = previousSelectedTask.sourceExplanationError || "";
+      nextTask.sourceExplanationLoading = false;
+    }
+    memoryViewerState.selectedTask = nextTask;
     memoryViewerState.experienceQueryView = res.payload?.queryView ?? memoryViewerState.experienceQueryView ?? null;
     if (
       memoryViewerState.selectedCandidate?.taskId

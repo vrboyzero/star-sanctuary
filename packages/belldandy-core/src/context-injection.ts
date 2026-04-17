@@ -1,5 +1,6 @@
 import type { AgentPromptDelta, BeforeAgentStartEvent, BeforeAgentStartResult, HookAgentContext } from "@belldandy/agent";
-import type { MemoryCategory } from "@belldandy/memory";
+import { createTaskWorkSurface } from "@belldandy/memory";
+import type { MemoryCategory, TaskWorkShortcutItem } from "@belldandy/memory";
 
 import { createContextInjectionDeduper } from "./context-injection-dedupe.js";
 
@@ -16,14 +17,30 @@ type ContextInjectionMemoryLike = {
 
 type RecentTaskSummaryLike = {
   taskId?: string;
+  conversationId?: string;
   title?: string;
   objective?: string;
   summary?: string;
   status?: string;
   toolNames?: string[];
   artifactPaths?: string[];
+  startedAt?: string;
   finishedAt?: string;
   updatedAt?: string;
+  workRecap?: {
+    headline?: string;
+    confirmedFacts?: string[];
+    pendingActions?: string[];
+    blockers?: string[];
+  };
+  resumeContext?: {
+    currentStopPoint?: string;
+    nextStep?: string;
+    blockers?: string[];
+    updatedAt?: string;
+  };
+  recentActivityTitles?: string[];
+  matchReasons?: string[];
 };
 
 type AutoRecallMemoryLike = {
@@ -52,6 +69,13 @@ function formatLocalTimeLabel(value?: string | number | Date): string | undefine
     ? `GMT${sign}${hours}:${pad2(minutes)}`
     : `GMT${sign}${hours}`;
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())} ${offsetText}`;
+}
+
+function truncateTaskContextPart(value: string | undefined, maxLength: number): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  if (!trimmed) return undefined;
+  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength)}...` : trimmed;
 }
 
 function buildTaggedLine(input: {
@@ -113,6 +137,22 @@ export type ContextInjectionMemoryProvider = {
     allowedCategories: MemoryCategory[];
   }): ContextInjectionMemoryLike[];
   getRecentTaskSummaries(limit: number, filter?: { agentId?: string }): RecentTaskSummaryLike[];
+  getRecentWork?(input: {
+    query?: string;
+    limit: number;
+    filter?: { agentId?: string };
+  }): TaskWorkShortcutItem[];
+  getResumeContext?(input: {
+    taskId?: string;
+    conversationId?: string;
+    query?: string;
+    filter?: { agentId?: string };
+  }): TaskWorkShortcutItem | null;
+  findSimilarPastWork?(input: {
+    query: string;
+    limit: number;
+    filter?: { agentId?: string };
+  }): TaskWorkShortcutItem[];
   search(
     query: string,
     input: {
@@ -141,6 +181,8 @@ export async function buildContextInjectionPrelude(
   ctx: HookAgentContext,
   config: ContextInjectionConfig,
 ): Promise<BeforeAgentStartResult | undefined> {
+  const queryText = event.userInput?.trim() || event.prompt?.trim();
+  const resumeMode = isResumeModeQuery(queryText);
   const implicitFilter = { agentId: ctx.agentId ?? null };
   const deduper = createContextInjectionDeduper(event.messages);
   const blocks: string[] = [];
@@ -156,6 +198,7 @@ export async function buildContextInjectionPrelude(
   }
 
   if (config.contextInjectionEnabled) {
+    const taskWorkSurface = createTaskWorkSurface(memoryManager);
     const recent = memoryManager.getContextInjectionMemories({
       limit: config.contextInjectionLimit,
       agentId: ctx.agentId ?? null,
@@ -197,57 +240,78 @@ export async function buildContextInjectionPrelude(
     }
 
     if (config.contextInjectionTaskLimit > 0) {
-      const recentTasks = memoryManager.getRecentTaskSummaries(config.contextInjectionTaskLimit, {
-        agentId: ctx.agentId,
-      });
-      if (recentTasks.length > 0) {
-        const latestFinishedAt = recentTasks.reduce((latest, task) => {
-          const finishedAt = task.finishedAt ? Date.parse(task.finishedAt) : Number.NaN;
-          const updatedAt = task.updatedAt ? Date.parse(task.updatedAt) : Number.NaN;
-          const candidate = Number.isFinite(finishedAt) ? finishedAt : updatedAt;
-          if (!Number.isFinite(candidate)) return latest;
-          return candidate > latest ? candidate : latest;
-        }, Number.NEGATIVE_INFINITY);
-        const taskLines = recentTasks.flatMap((task) => {
-          if (!deduper.shouldIncludeTask(task)) {
-            return [];
-          }
-          const title = task.title ?? task.objective ?? task.summary ?? task.taskId ?? "task";
-          const tools = (task.toolNames ?? []).slice(0, 3).join(", ");
-          const artifacts = (task.artifactPaths ?? []).slice(0, 2).join(", ");
-          const extras = [
-            tools ? `tools=${tools}` : "",
-            artifacts ? `artifacts=${artifacts}` : "",
-          ].filter(Boolean).join("; ");
-          const body = extras
-            ? `${title} (${extras})`
-            : title;
-          const timeSource = task.finishedAt ?? task.updatedAt;
-          const time = formatLocalTimeLabel(timeSource);
-          const latest = Number.isFinite(latestFinishedAt) && timeSource ? Date.parse(timeSource) === latestFinishedAt : false;
-          const tagged = buildTaggedLine({
-            time,
-            latest,
-            source: "task",
-            body,
-          });
-          return tagged ? [tagged] : [];
+      const taskFilter = { agentId: ctx.agentId };
+      let recentWork = taskWorkSurface.recentWork({
+          query: queryText || undefined,
+          limit: config.contextInjectionTaskLimit,
+          filter: taskFilter,
         });
-        if (taskLines.length > 0) {
-          const block = `<recent-tasks hint="以下是最近已完成或部分完成的任务摘要。若当前目标与其相同，优先复用结果，不要重复执行已成功完成的工具动作，除非用户明确要求重试。">\n${taskLines.join("\n")}\n</recent-tasks>`;
+      if (recentWork.length === 0 && queryText) {
+        recentWork = taskWorkSurface.recentWork({
+          limit: config.contextInjectionTaskLimit,
+          filter: taskFilter,
+        });
+      }
+      let resumeContext = taskWorkSurface.resumeContext({
+          query: queryText || undefined,
+          filter: taskFilter,
+        });
+      if (!resumeContext && queryText) {
+        resumeContext = taskWorkSurface.resumeContext({ filter: taskFilter });
+      }
+
+      if (recentWork.length > 0 || resumeContext) {
+        const overviewLines = buildWorkOverviewLines(recentWork, resumeContext, deduper);
+        if (overviewLines.length > 0) {
+          const block = `<work-overview hint="以下是任务记忆的一级摘要。默认先用它判断最近做过什么、当前停点和下一步；只有在需要追溯细节时，再展开任务详情、活动轨迹或关联记忆。">\n${overviewLines.join("\n")}\n</work-overview>`;
           blocks.push(block);
           deltas.push(createContextPreludeDelta({
-            id: "recent-tasks",
+            id: "work-overview",
             text: block,
-            metadata: { blockTag: "recent-tasks", lineCount: taskLines.length },
+            metadata: { blockTag: "work-overview", lineCount: overviewLines.length },
           }));
+        }
+
+        if (resumeMode) {
+          const similarItems = queryText
+            ? taskWorkSurface.findSimilarWork({
+              query: queryText,
+              limit: Math.min(config.contextInjectionTaskLimit, 3),
+              filter: taskFilter,
+            })
+            : [];
+          const detailLines = buildResumeDetailLines(resumeContext, similarItems, deduper);
+          if (detailLines.length > 0) {
+            const block = `<resume-details hint="以下是续做模式下的二级展开，仅在当前输入明显是在继续/恢复历史工作时提供。">\n${detailLines.join("\n")}\n</resume-details>`;
+            blocks.push(block);
+            deltas.push(createContextPreludeDelta({
+              id: "resume-details",
+              text: block,
+              metadata: { blockTag: "resume-details", lineCount: detailLines.length },
+            }));
+          }
+        }
+      } else {
+        const recentTasks = memoryManager.getRecentTaskSummaries(config.contextInjectionTaskLimit, {
+          agentId: ctx.agentId,
+        });
+        if (recentTasks.length > 0) {
+          const fallbackLines = buildLegacyRecentTaskLines(recentTasks, deduper);
+          if (fallbackLines.length > 0) {
+            const block = `<recent-tasks hint="以下是最近已完成或部分完成的任务摘要。若当前目标与其相同，优先复用结果，不要重复执行已成功完成的工具动作，除非用户明确要求重试。">\n${fallbackLines.join("\n")}\n</recent-tasks>`;
+            blocks.push(block);
+            deltas.push(createContextPreludeDelta({
+              id: "recent-tasks",
+              text: block,
+              metadata: { blockTag: "recent-tasks", lineCount: fallbackLines.length },
+            }));
+          }
         }
       }
     }
   }
 
   if (config.autoRecallEnabled) {
-    const queryText = event.userInput?.trim() || event.prompt?.trim();
     if (queryText) {
       const results = await Promise.race([
         memoryManager.search(queryText, {
@@ -299,4 +363,162 @@ export async function buildContextInjectionPrelude(
   return blocks.length > 0
     ? { prependContext: blocks.join("\n\n"), deltas }
     : undefined;
+}
+
+function buildWorkOverviewLines(
+  recentWork: TaskWorkShortcutItem[],
+  resumeContext: TaskWorkShortcutItem | null,
+  deduper: ReturnType<typeof createContextInjectionDeduper>,
+): string[] {
+  const lines: string[] = [];
+  const recentWorkItems = recentWork
+    .filter((item) => deduper.shouldIncludeTask(item))
+    .slice(0, 5);
+
+  for (const item of recentWorkItems) {
+    const title = item.title ?? item.objective ?? item.summary ?? item.taskId ?? "task";
+    const recap = truncateTaskContextPart(item.workRecap?.headline, 100);
+    const body = recap ? `${title} (recap=${recap})` : title;
+    const timeSource = item.finishedAt ?? item.updatedAt ?? item.startedAt;
+    const tagged = buildTaggedLine({
+      time: formatLocalTimeLabel(timeSource),
+      source: "recent-work",
+      body,
+    });
+    if (tagged) {
+      lines.push(tagged);
+    }
+  }
+
+  if (resumeContext) {
+    const title = resumeContext.title ?? resumeContext.objective ?? resumeContext.summary ?? resumeContext.taskId ?? "task";
+    const stopPoint = truncateTaskContextPart(resumeContext.resumeContext?.currentStopPoint, 100);
+    const nextStep = truncateTaskContextPart(resumeContext.resumeContext?.nextStep, 100);
+    const bodyParts = [
+      `task=${title}`,
+      stopPoint ? `stop=${stopPoint}` : "",
+      nextStep ? `next=${nextStep}` : "",
+    ].filter(Boolean).join("; ");
+    const tagged = buildTaggedLine({
+      time: formatLocalTimeLabel(resumeContext.finishedAt ?? resumeContext.updatedAt ?? resumeContext.startedAt),
+      latest: true,
+      source: "resume",
+      body: bodyParts,
+    });
+    if (tagged) {
+      lines.push(tagged);
+    }
+  }
+
+  return lines;
+}
+
+function buildResumeDetailLines(
+  resumeContext: TaskWorkShortcutItem | null,
+  similarItems: TaskWorkShortcutItem[],
+  deduper: ReturnType<typeof createContextInjectionDeduper>,
+): string[] {
+  const lines: string[] = [];
+
+  if (resumeContext) {
+    for (const fact of (resumeContext.workRecap?.confirmedFacts ?? []).slice(0, 3)) {
+      const tagged = buildTaggedLine({
+        source: "resume-fact",
+        body: truncateTaskContextPart(fact, 160) ?? fact,
+      });
+      if (tagged) lines.push(tagged);
+    }
+    for (const activity of (resumeContext.recentActivityTitles ?? []).slice(0, 3)) {
+      const tagged = buildTaggedLine({
+        source: "resume-activity",
+        body: truncateTaskContextPart(activity, 160) ?? activity,
+      });
+      if (tagged) lines.push(tagged);
+    }
+  }
+
+  for (const item of similarItems) {
+    if (resumeContext?.taskId && item.taskId === resumeContext.taskId) continue;
+    if (!deduper.shouldIncludeTask(item)) continue;
+    const title = item.title ?? item.objective ?? item.summary ?? item.taskId ?? "task";
+    const recap = truncateTaskContextPart(item.workRecap?.headline ?? item.summary, 100);
+    const matchedBy = Array.isArray(item.matchReasons) && item.matchReasons.length
+      ? `matched=${item.matchReasons.slice(0, 2).join(", ")}`
+      : "";
+    const body = [
+      title,
+      recap ? `recap=${recap}` : "",
+      matchedBy,
+    ].filter(Boolean).join("; ");
+    const tagged = buildTaggedLine({
+      time: formatLocalTimeLabel(item.finishedAt ?? item.updatedAt ?? item.startedAt),
+      source: "similar-work",
+      body,
+    });
+    if (tagged) lines.push(tagged);
+  }
+
+  return lines;
+}
+
+function buildLegacyRecentTaskLines(
+  recentTasks: RecentTaskSummaryLike[],
+  deduper: ReturnType<typeof createContextInjectionDeduper>,
+): string[] {
+  const latestFinishedAt = recentTasks.reduce((latest, task) => {
+    const finishedAt = task.finishedAt ? Date.parse(task.finishedAt) : Number.NaN;
+    const updatedAt = task.updatedAt ? Date.parse(task.updatedAt) : Number.NaN;
+    const candidate = Number.isFinite(finishedAt) ? finishedAt : updatedAt;
+    if (!Number.isFinite(candidate)) return latest;
+    return candidate > latest ? candidate : latest;
+  }, Number.NEGATIVE_INFINITY);
+
+  return recentTasks.flatMap((task) => {
+    if (!deduper.shouldIncludeTask(task)) {
+      return [];
+    }
+    const title = task.title ?? task.objective ?? task.summary ?? task.taskId ?? "task";
+    const tools = (task.toolNames ?? []).slice(0, 3).join(", ");
+    const artifacts = (task.artifactPaths ?? []).slice(0, 2).join(", ");
+    const recap = truncateTaskContextPart(task.workRecap?.headline, 120);
+    const stopPoint = truncateTaskContextPart(task.resumeContext?.currentStopPoint, 100);
+    const nextStep = truncateTaskContextPart(task.resumeContext?.nextStep, 100);
+    const extras = [
+      tools ? `tools=${tools}` : "",
+      artifacts ? `artifacts=${artifacts}` : "",
+      recap ? `recap=${recap}` : "",
+      stopPoint ? `stop=${stopPoint}` : "",
+      nextStep ? `next=${nextStep}` : "",
+    ].filter(Boolean).join("; ");
+    const body = extras
+      ? `${title} (${extras})`
+      : title;
+    const timeSource = task.finishedAt ?? task.updatedAt;
+    const time = formatLocalTimeLabel(timeSource);
+    const latest = Number.isFinite(latestFinishedAt) && timeSource ? Date.parse(timeSource) === latestFinishedAt : false;
+    const tagged = buildTaggedLine({
+      time,
+      latest,
+      source: "task",
+      body,
+    });
+    return tagged ? [tagged] : [];
+  });
+}
+
+function isResumeModeQuery(value?: string): boolean {
+  if (!value) return false;
+  const normalized = value.toLowerCase();
+  return [
+    "继续",
+    "接着",
+    "恢复",
+    "resume",
+    "上次",
+    "做到哪",
+    "从哪继续",
+    "继续推进",
+    "继续做",
+    "继续处理",
+  ].some((marker) => normalized.includes(marker.toLowerCase()));
 }

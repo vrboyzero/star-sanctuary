@@ -9,6 +9,73 @@ import {
   getSkillFreshnessBadgeClass,
 } from "./skill-freshness-view.js";
 
+export function buildTaskSourceExplanationItems(
+  explanation,
+  t = (_key, _params, fallback) => fallback ?? "",
+) {
+  const refs = Array.isArray(explanation?.sourceRefs) ? explanation.sourceRefs : [];
+  return refs
+    .map((item) => {
+      const label = formatTaskSourceReferenceLabel(item?.kind, item?.label, t);
+      const previews = Array.isArray(item?.previews)
+        ? item.previews
+          .map((value) => typeof value === "string" ? value.trim() : "")
+          .filter(Boolean)
+        : [];
+      const activityIds = Array.isArray(item?.activityIds)
+        ? item.activityIds
+          .map((value) => typeof value === "string" ? value.trim() : "")
+          .filter(Boolean)
+        : [];
+      if (!label && !previews.length && !activityIds.length) {
+        return null;
+      }
+      return {
+        kind: typeof item?.kind === "string" ? item.kind : "",
+        label,
+        previews,
+        activityIds,
+      };
+    })
+    .filter(Boolean);
+}
+
+export function buildTaskSourceActivityReference(
+  activityIds,
+  t = (_key, _params, fallback) => fallback ?? "",
+) {
+  const normalized = Array.isArray(activityIds)
+    ? activityIds
+      .map((value) => typeof value === "string" ? value.trim() : "")
+      .filter(Boolean)
+    : [];
+  if (!normalized.length) return null;
+  return {
+    activityIds: normalized,
+    badgeLabel: t("memory.taskSourceRefActivities", { count: String(normalized.length) }, `活动 ${normalized.length}`),
+    title: t("memory.taskSourceActivityIds", { ids: normalized.join(", ") }, `Activity IDs: ${normalized.join(", ")}`),
+  };
+}
+
+function formatTaskSourceReferenceLabel(
+  kind,
+  fallbackLabel,
+  t = (_key, _params, fallback) => fallback ?? "",
+) {
+  switch (kind) {
+    case "task_summary":
+      return t("memory.taskSourceRefTaskSummary", {}, "任务摘要");
+    case "work_recap":
+      return t("memory.taskSourceRefWorkRecap", {}, "Work Recap");
+    case "resume_context":
+      return t("memory.taskSourceRefResumeContext", {}, "Resume Context");
+    case "activity_worklog":
+      return t("memory.taskSourceRefActivityWorklog", {}, "Activity / Worklog");
+    default:
+      return typeof fallbackLabel === "string" && fallbackLabel.trim() ? fallbackLabel.trim() : "";
+  }
+}
+
 export function createMemoryDetailRenderFeature({
   refs,
   isConnected,
@@ -376,6 +443,74 @@ export function createMemoryDetailRenderFeature({
     return getMemoryViewerFeatureValue()?.renderCandidateDetailPanel(candidate) || "";
   }
 
+  async function loadTaskSourceExplanation(taskId, conversationId = "") {
+    const normalizedTaskId = typeof taskId === "string" ? taskId.trim() : "";
+    const normalizedConversationId = typeof conversationId === "string" ? conversationId.trim() : "";
+    const memoryViewerState = getMemoryViewerStateValue();
+    const selectedTask = memoryViewerState.selectedTask;
+    if (!selectedTask || (!normalizedTaskId && !normalizedConversationId)) return;
+    if (!isConnected?.()) {
+      showNotice(
+        t("memory.taskSourceExplanationLoadFailedTitle", {}, "来源解释加载失败"),
+        t("memory.disconnectedDetail", {}, "连接完成后可查看任务与记忆。"),
+        "error",
+      );
+      return;
+    }
+
+    const sameTask = normalizedTaskId
+      ? selectedTask.id === normalizedTaskId
+      : selectedTask.conversationId === normalizedConversationId;
+    if (!sameTask || selectedTask.sourceExplanationLoading) return;
+
+    selectedTask.sourceExplanationLoading = true;
+    selectedTask.sourceExplanationError = "";
+    renderTaskDetail(selectedTask);
+
+    try {
+      const requestAgentId = String(memoryViewerState.activeAgentId || getCurrentAgentSelection()).trim() || "default";
+      const id = makeId();
+      const res = await sendReq({
+        type: "req",
+        id,
+        method: "memory.explain_sources",
+        params: {
+          ...(normalizedTaskId ? { taskId: normalizedTaskId } : {}),
+          ...(normalizedConversationId ? { conversationId: normalizedConversationId } : {}),
+          agentId: requestAgentId,
+        },
+      });
+      const latestTask = getMemoryViewerStateValue().selectedTask;
+      if (!latestTask) return;
+      const stillSameTask = normalizedTaskId
+        ? latestTask.id === normalizedTaskId
+        : latestTask.conversationId === normalizedConversationId;
+      if (!stillSameTask) return;
+      if (!res || !res.ok) {
+        latestTask.sourceExplanation = null;
+        latestTask.sourceExplanationError = res?.error?.message
+          || t("memory.taskSourceExplanationLoadFailed", {}, "来源解释加载失败。");
+        return;
+      }
+      latestTask.sourceExplanation = res.payload?.explanation ?? null;
+      latestTask.sourceExplanationError = "";
+    } catch (error) {
+      const latestTask = getMemoryViewerStateValue().selectedTask;
+      if (latestTask && (latestTask.id === normalizedTaskId || latestTask.conversationId === normalizedConversationId)) {
+        latestTask.sourceExplanation = null;
+        latestTask.sourceExplanationError = error instanceof Error
+          ? error.message
+          : String(error);
+      }
+    } finally {
+      const latestTask = getMemoryViewerStateValue().selectedTask;
+      if (latestTask && (latestTask.id === normalizedTaskId || latestTask.conversationId === normalizedConversationId)) {
+        latestTask.sourceExplanationLoading = false;
+        renderTaskDetail(latestTask);
+      }
+    }
+  }
+
   function renderTaskDetail(task) {
     if (!memoryViewerDetailEl) return;
     const memoryViewerState = getMemoryViewerStateValue();
@@ -385,15 +520,24 @@ export function createMemoryDetailRenderFeature({
     }
 
     const title = task.title || task.objective || task.summary || task.id;
+    const activities = Array.isArray(task.activities) ? task.activities : [];
     const toolCalls = Array.isArray(task.toolCalls) ? task.toolCalls : [];
     const memoryLinks = Array.isArray(task.memoryLinks) ? task.memoryLinks : [];
     const artifactPaths = Array.isArray(task.artifactPaths) ? task.artifactPaths : [];
+    const workRecap = task.workRecap || null;
+    const resumeContext = task.resumeContext || null;
     const usedMethods = Array.isArray(task.usedMethods) ? task.usedMethods : [];
     const usedSkills = Array.isArray(task.usedSkills) ? task.usedSkills : [];
     const lastUsageAt = getLatestExperienceUsageTimestamp(usedMethods, usedSkills);
     const candidatePanel = renderCandidateDetailPanel(memoryViewerState.selectedCandidate);
     const goalId = getTaskGoalId(task);
     const contextTargets = extractTaskContextTargets(task);
+    const sourceExplanation = task.sourceExplanation || null;
+    const sourceExplanationItems = buildTaskSourceExplanationItems(sourceExplanation, t);
+    const sourceExplanationLoading = task.sourceExplanationLoading === true;
+    const sourceExplanationError = typeof task.sourceExplanationError === "string" ? task.sourceExplanationError.trim() : "";
+    const sourceExplanationUpdatedAt = sourceExplanation?.updatedAt ? formatDateTime(sourceExplanation.updatedAt) : "";
+    const hasLoadedSourceExplanation = Boolean(sourceExplanation && sourceExplanation.taskId === task.id);
 
     memoryViewerDetailEl.innerHTML = `
       <div class="memory-detail-shell">
@@ -454,7 +598,142 @@ export function createMemoryDetailRenderFeature({
         ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">目标说明</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
         ${task.summary ? `<div class="memory-detail-card"><span class="memory-detail-label">摘要</span><div class="memory-detail-text">${escapeHtml(task.summary)}</div></div>` : ""}
         ${task.outcome ? `<div class="memory-detail-card"><span class="memory-detail-label">结果</span><div class="memory-detail-text">${escapeHtml(task.outcome)}</div></div>` : ""}
+        ${workRecap ? `
+          <div class="memory-detail-card">
+            <span class="memory-detail-label">Work Recap</span>
+            <div class="memory-detail-text">${escapeHtml(workRecap.headline || "-")}</div>
+            ${Array.isArray(workRecap.confirmedFacts) && workRecap.confirmedFacts.length ? `
+              <div class="memory-inline-list">
+                ${workRecap.confirmedFacts.map((item) => `
+                  <div class="memory-inline-item">
+                    <div class="memory-detail-text">${escapeHtml(item)}</div>
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+            ${Array.isArray(workRecap.pendingActions) && workRecap.pendingActions.length ? `
+              <div class="memory-detail-label">待继续 / 下一步</div>
+              <div class="memory-inline-list">
+                ${workRecap.pendingActions.map((item) => `
+                  <div class="memory-inline-item">
+                    <div class="memory-detail-text">${escapeHtml(item)}</div>
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+            ${Array.isArray(workRecap.blockers) && workRecap.blockers.length ? `
+              <div class="memory-detail-label">Blockers</div>
+              <div class="memory-inline-list">
+                ${workRecap.blockers.map((item) => `
+                  <div class="memory-inline-item">
+                    <div class="memory-detail-text">${escapeHtml(item)}</div>
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+          </div>
+        ` : ""}
+        ${resumeContext ? `
+          <div class="memory-detail-card">
+            <span class="memory-detail-label">Resume Context</span>
+            ${resumeContext.currentStopPoint ? `<div class="memory-detail-text">${escapeHtml(`当前停点：${resumeContext.currentStopPoint}`)}</div>` : ""}
+            ${resumeContext.nextStep ? `<div class="memory-detail-text">${escapeHtml(`下一步：${resumeContext.nextStep}`)}</div>` : ""}
+            ${Array.isArray(resumeContext.blockers) && resumeContext.blockers.length ? `
+              <div class="memory-inline-list">
+                ${resumeContext.blockers.map((item) => `
+                  <div class="memory-inline-item">
+                    <div class="memory-detail-text">${escapeHtml(item)}</div>
+                  </div>
+                `).join("")}
+              </div>
+            ` : ""}
+          </div>
+        ` : ""}
+        <div class="memory-detail-card">
+          <div class="goal-summary-header">
+            <div>
+              <div class="goal-summary-title">${escapeHtml(t("memory.taskSourceExplanationTitle", {}, "来源解释"))}</div>
+              <div class="goal-summary-text">${escapeHtml(t("memory.taskSourceExplanationHint", {}, "按需查看当前 stop / recap / recent activity 分别来自哪一层任务记忆。"))}</div>
+            </div>
+            <div class="memory-detail-badges">
+              ${hasLoadedSourceExplanation ? `<span class="memory-badge">${escapeHtml(t("memory.taskSourceExplanationSourceCount", { count: String(sourceExplanationItems.length) }, `来源 ${sourceExplanationItems.length}`))}</span>` : ""}
+              ${sourceExplanationUpdatedAt ? `<span class="memory-badge">${escapeHtml(t("memory.taskSourceExplanationUpdatedAt", { time: sourceExplanationUpdatedAt }, `更新于 ${sourceExplanationUpdatedAt}`))}</span>` : ""}
+            </div>
+          </div>
+          <div class="goal-detail-actions">
+            <button
+              class="button goal-inline-action-secondary"
+              data-load-task-source-explanation="${escapeHtml(task.id || "")}"
+              data-load-task-conversation-id="${escapeHtml(task.conversationId || "")}"
+              ${sourceExplanationLoading ? "disabled" : ""}
+            >${escapeHtml(sourceExplanationLoading
+              ? t("memory.taskSourceExplanationLoadingShort", {}, "正在读取来源…")
+              : hasLoadedSourceExplanation
+                ? t("memory.taskSourceExplanationReload", {}, "刷新来源解释")
+                : t("memory.taskSourceExplanationLoad", {}, "查看来源解释"))}</button>
+          </div>
+          ${sourceExplanationError ? `<div class="memory-detail-text">${escapeHtml(sourceExplanationError)}</div>` : ""}
+          ${sourceExplanationItems.length ? `
+            <div class="memory-inline-list">
+              ${sourceExplanationItems.map((item) => {
+                const activityRef = buildTaskSourceActivityReference(item.activityIds, t);
+                return `
+                  <div class="memory-inline-item">
+                    <div class="memory-inline-item-head">
+                      ${item.label ? `<span class="memory-badge">${escapeHtml(item.label)}</span>` : ""}
+                      ${activityRef
+                        ? `<span class="memory-badge" title="${escapeHtml(activityRef.title)}">${escapeHtml(activityRef.badgeLabel)}</span>`
+                        : ""}
+                    </div>
+                    ${item.previews.map((preview) => `<div class="memory-detail-text">${escapeHtml(preview)}</div>`).join("")}
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          ` : `
+            <div class="memory-detail-text">${escapeHtml(sourceExplanationLoading
+              ? t("memory.taskSourceExplanationLoading", {}, "正在读取 stop / recap 的来源…")
+              : hasLoadedSourceExplanation
+                ? t("memory.taskSourceExplanationEmpty", {}, "当前没有可展示的来源解释。")
+                : t("memory.taskSourceExplanationEmptyIdle", {}, "需要时再点击查看来源解释。"))}</div>
+          `}
+        </div>
         ${task.reflection ? `<div class="memory-detail-card"><span class="memory-detail-label">复盘</span><div class="memory-detail-text">${escapeHtml(task.reflection)}</div></div>` : ""}
+
+        <div class="memory-detail-card">
+          <span class="memory-detail-label">Activity / Worklog (${activities.length})</span>
+          ${activities.length ? `
+            <div class="memory-inline-list">
+              ${activities.map((activity) => `
+                <div class="memory-inline-item">
+                  <div class="memory-inline-item-head">
+                    <span class="memory-badge">${escapeHtml(activity.state || "completed")}</span>
+                    <span class="memory-badge">${escapeHtml(activity.kind || "activity")}</span>
+                    <span class="memory-badge">${escapeHtml(formatDateTime(activity.happenedAt || activity.recordedAt))}</span>
+                  </div>
+                  <div class="memory-detail-text">${escapeHtml(activity.title || "-")}</div>
+                  ${activity.summary ? `<div class="memory-detail-text">${escapeHtml(activity.summary)}</div>` : ""}
+                  ${Array.isArray(activity.files) && activity.files.length ? `
+                    <div class="memory-detail-text">
+                      ${activity.files.map((filePath) => `<button class="memory-path-link" data-open-source="${escapeHtml(filePath)}">${escapeHtml(filePath)}</button>`).join("")}
+                    </div>
+                  ` : ""}
+                  ${Array.isArray(activity.artifactPaths) && activity.artifactPaths.length ? `
+                    <div class="memory-detail-text">
+                      ${activity.artifactPaths.map((artifactPath) => `<button class="memory-path-link" data-open-source="${escapeHtml(artifactPath)}">${escapeHtml(artifactPath)}</button>`).join("")}
+                    </div>
+                  ` : ""}
+                  ${Array.isArray(activity.memoryChunkIds) && activity.memoryChunkIds.length ? `
+                    <div class="memory-detail-text">
+                      ${activity.memoryChunkIds.map((chunkId) => `<button class="memory-path-link" data-open-memory-id="${escapeHtml(chunkId)}">${escapeHtml(chunkId)}</button>`).join("")}
+                    </div>
+                  ` : ""}
+                  ${activity.error ? `<div class="memory-detail-text">${escapeHtml(activity.error)}</div>` : ""}
+                </div>
+              `).join("")}
+            </div>
+          ` : `<div class="memory-detail-text">No activity records.</div>`}
+        </div>
 
         <div class="memory-detail-card">
           <span class="memory-detail-label">${escapeHtml(t("memory.methodUsageTitle", {}, "Method Usage"))} (${usedMethods.length})</span>
@@ -611,6 +890,13 @@ export function createMemoryDetailRenderFeature({
         await openMemoryFromAudit(chunkId);
       });
     });
+    memoryViewerDetailEl.querySelectorAll("[data-load-task-source-explanation]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const taskId = node.getAttribute("data-load-task-source-explanation");
+        const conversationId = node.getAttribute("data-load-task-conversation-id");
+        await loadTaskSourceExplanation(taskId, conversationId);
+      });
+    });
   }
 
   function bindTaskUsageRevokeButtons(task) {
@@ -718,5 +1004,6 @@ export function createMemoryDetailRenderFeature({
     renderTaskUsageOverviewCard,
     revokeTaskUsage,
     summarizeSourcePath,
+    buildTaskSourceExplanationItems,
   };
 }

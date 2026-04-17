@@ -119,6 +119,8 @@ function createSettingsRefs(overrides = {}) {
     cfgTtsEnabled: overrides.cfgTtsEnabled || createCheckbox(false),
     cfgTtsProvider: overrides.cfgTtsProvider || createInput("edge"),
     cfgTtsVoice: overrides.cfgTtsVoice || createInput(""),
+    cfgTtsOpenAIBaseUrl: overrides.cfgTtsOpenAIBaseUrl || createInput(""),
+    cfgTtsOpenAIApiKey: overrides.cfgTtsOpenAIApiKey || createInput(""),
     cfgDashScopeApiKey: overrides.cfgDashScopeApiKey || createInput(""),
     cfgFacetAnchor: overrides.cfgFacetAnchor || createInput(""),
     cfgInjectAgents: overrides.cfgInjectAgents || createCheckbox(false),
@@ -230,6 +232,7 @@ describe("settings controller", () => {
     const loadServerConfig = vi.fn().mockResolvedValue({
       BELLDANDY_OPENAI_BASE_URL: "https://api.example.com/v1",
       BELLDANDY_OPENAI_MODEL: "gpt-test",
+      BELLDANDY_TTS_OPENAI_BASE_URL: "https://tts.example.com/v1",
       BELLDANDY_MODEL_PREFERRED_PROVIDERS: "moonshot,openrouter",
       BELLDANDY_ASSISTANT_MODE_ENABLED: "true",
       BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "false",
@@ -249,6 +252,7 @@ describe("settings controller", () => {
     expect(refs.assistantModeConfigHintEl.textContent).toContain("主开关已显式配置");
     expect(refs.cfgBaseUrl.value).toBe("https://api.example.com/v1");
     expect(refs.cfgModel.value).toBe("gpt-test");
+    expect(refs.cfgTtsOpenAIBaseUrl.value).toBe("https://tts.example.com/v1");
     expect(refs.cfgModelPreferredProviders.value).toBe("moonshot,openrouter");
     expect(refs.cfgAssistantModeEnabled.checked).toBe(true);
     expect(refs.cfgAssistantModePreset.value).toBe("custom");
@@ -264,6 +268,8 @@ describe("settings controller", () => {
     const refs = createSettingsRefs({
       cfgBaseUrl: createInput("https://api.example.com/v1"),
       cfgModel: createInput("gpt-test"),
+      cfgTtsOpenAIBaseUrl: createInput("https://tts.example.com/v1"),
+      cfgTtsOpenAIApiKey: createInput("tts-openai-key"),
       cfgAssistantModeEnabled: createCheckbox(true),
       cfgAssistantModePreset: createInput("custom"),
       cfgExternalOutboundRequireConfirmation: createCheckbox(true),
@@ -296,6 +302,8 @@ describe("settings controller", () => {
     expect(updateCall?.[0]?.params?.updates).toMatchObject({
       BELLDANDY_OPENAI_BASE_URL: "https://api.example.com/v1",
       BELLDANDY_OPENAI_MODEL: "gpt-test",
+      BELLDANDY_TTS_OPENAI_BASE_URL: "https://tts.example.com/v1",
+      BELLDANDY_TTS_OPENAI_API_KEY: "tts-openai-key",
       BELLDANDY_ASSISTANT_MODE_ENABLED: "true",
       BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
       BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE: "community,discord",

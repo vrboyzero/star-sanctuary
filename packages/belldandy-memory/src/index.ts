@@ -13,6 +13,7 @@ export {
   type ExtractConversationMemoriesResult,
   type GlobalMemoryManagerRegistrationOptions,
   type GlobalMemoryManagerScope,
+  type TaskWorkShortcutItem,
   registerGlobalMemoryManager,
   getGlobalMemoryManager,
   listGlobalMemoryManagers,
@@ -46,6 +47,14 @@ export {
   type DurableExtractionSurfaceDelegate,
   type DurableExtractionSurfacePolicy,
 } from "./durable-extraction-surface.js";
+export {
+  createTaskWorkSurface,
+  type TaskWorkSourceExplanation,
+  type TaskWorkSourceReference,
+  type TaskWorkSourceReferenceKind,
+  type TaskWorkSurface,
+  type TaskWorkSurfaceDelegate,
+} from "./task-work-surface.js";
 export { ExperiencePromoter } from "./experience-promoter.js";
 export { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 export { isNoise, filterNoise, type NoiseFilterOptions } from "./noise-filter.js";

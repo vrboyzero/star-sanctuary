@@ -1,10 +1,22 @@
-import type { MessageSendParams, GatewayReqFrame, GatewayResFrame, GatewayEventFrame, ChatMessageMeta, TokenUsageUploadConfig } from "@belldandy/protocol";
+import type {
+  ChatMessageMeta,
+  ConversationRunStopParams,
+  GatewayEventFrame,
+  GatewayReqFrame,
+  GatewayResFrame,
+  MessageSendParams,
+  TokenUsageUploadConfig,
+} from "@belldandy/protocol";
 import type { WebSocket } from "ws";
 
 import type { DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
 import type { ConversationStore } from "@belldandy/agent";
 import type { MemoryRuntimeBudgetGuard, MemoryRuntimeUsageAccounting } from "../memory-runtime-budget.js";
-import { MessageSendConfigurationError, handleMessageSendWithQueryRuntime } from "../query-runtime-message-send.js";
+import {
+  MessageSendConfigurationError,
+  handleConversationRunStopWithQueryRuntime,
+  handleMessageSendWithQueryRuntime,
+} from "../query-runtime-message-send.js";
 import { ensureResidentAgentSession } from "../query-runtime-agent-sessions.js";
 import { resolveModelMediaCapabilities } from "../media-capability-registry.js";
 import { tryApproveToolControlPasswordInput } from "../tool-control-policy.js";
@@ -22,6 +34,7 @@ type MessageSendMethodContext = Pick<
   | "primaryModelConfig"
   | "modelFallbacks"
   | "conversationStore"
+  | "conversationRunRegistry"
   | "durableExtractionRuntime"
   | "requestDurableExtraction"
   | "memoryUsageAccounting"
@@ -38,6 +51,9 @@ type MessageSendMethodContext = Pick<
   | "residentAgentRuntime"
 > & {
   parseMessageSendParams: (value: unknown) => { ok: true; value: MessageSendParams } | { ok: false; message: string };
+  parseConversationRunStopParams: (
+    value: unknown,
+  ) => { ok: true; value: ConversationRunStopParams } | { ok: false; message: string };
   getAttachmentPromptLimits: () => {
     textCharLimit: number;
     totalTextCharLimit: number;
@@ -89,6 +105,23 @@ export async function handleMessageSendMethod(
   ws: WebSocket,
   ctx: MessageSendMethodContext,
 ): Promise<GatewayResFrame | null> {
+  if (req.method === "conversation.run.stop") {
+    const parsed = ctx.parseConversationRunStopParams(req.params);
+    if (!parsed.ok) {
+      return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: parsed.message } };
+    }
+    return handleConversationRunStopWithQueryRuntime({
+      request: {
+        requestId: req.id,
+        params: parsed.value,
+      },
+      runtime: {
+        conversationRunRegistry: ctx.conversationRunRegistry,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"conversation.run.stop">(),
+      },
+    });
+  }
+
   if (req.method !== "message.send") {
     return null;
   }
@@ -131,6 +164,7 @@ export async function handleMessageSendMethod(
         agentFactory: ctx.agentFactory,
         agentRegistry: ctx.agentRegistry,
         conversationStore: ctx.conversationStore,
+        conversationRunRegistry: ctx.conversationRunRegistry,
         runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"message.send">(),
         residentAgentRuntime: ctx.residentAgentRuntime,
       },

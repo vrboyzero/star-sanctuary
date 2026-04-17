@@ -1,4 +1,5 @@
 import type { SearchProvider, SearchResult, WebSearchOptions } from "./types.js";
+import { createLinkedAbortController, isAbortError, readAbortReason, throwIfAborted } from "../../abort-utils.js";
 
 const SERPAPI_ENDPOINT = "https://serpapi.com/search.json";
 
@@ -33,12 +34,16 @@ export class SerpApiProvider implements SearchProvider {
             url.searchParams.set("gl", options.country); // Google uses 'gl' for country
         }
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+        throwIfAborted(options.abortSignal);
+        const linkedAbort = createLinkedAbortController({
+            signal: options.abortSignal,
+            timeoutMs: 15000,
+            timeoutReason: "SerpAPI timed out after 15000ms.",
+        });
 
         try {
             const res = await fetch(url.toString(), {
-                signal: controller.signal,
+                signal: linkedAbort.controller.signal,
             });
 
             if (!res.ok) {
@@ -60,8 +65,16 @@ export class SerpApiProvider implements SearchProvider {
                 published: item.date,
                 source: item.source,
             }));
+        } catch (error) {
+            if (isAbortError(error)) {
+                if (options.abortSignal?.aborted) {
+                    throw new Error(readAbortReason(options.abortSignal));
+                }
+                throw new Error("SerpAPI timed out after 15000ms.");
+            }
+            throw error;
         } finally {
-            clearTimeout(timeout);
+            linkedAbort.cleanup();
         }
     }
 }

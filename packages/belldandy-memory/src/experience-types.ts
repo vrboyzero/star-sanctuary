@@ -1,5 +1,12 @@
 import type { MemoryVisibility } from "./types.js";
-import type { TaskMemoryRelation, TaskRecord, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
+import type {
+  TaskActivityRecord,
+  TaskMemoryRelation,
+  TaskRecord,
+  TaskSource,
+  TaskStatus,
+  TaskToolCallSummary,
+} from "./task-types.js";
 
 export type ExperienceCandidateType = "method" | "skill";
 export type ExperienceCandidateStatus = "draft" | "reviewed" | "accepted" | "rejected";
@@ -115,6 +122,7 @@ export interface ExperienceSourceTaskDetail extends TaskRecord {
 }
 
 export interface TaskExperienceDetail extends TaskRecord {
+  activities: TaskActivityRecord[];
   memoryLinks: ExperienceTaskMemoryLink[];
   usedMethods: ExperienceUsageSummary[];
   usedSkills: ExperienceUsageSummary[];

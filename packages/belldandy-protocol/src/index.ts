@@ -125,6 +125,12 @@ export type MessageSendParams = {
   }>;
 };
 
+export type ConversationRunStopParams = {
+  conversationId: string;
+  runId?: string;
+  reason?: string;
+};
+
 export type ToolSettingsConfirmDecision = "approve" | "reject";
 
 export type ToolSettingsConfirmParams = {
@@ -190,7 +196,17 @@ export type ConversationMetaMessage = {
 
 export type AgentStatusEvent = {
   conversationId: string;
-  status: "running" | "done" | "error";
+  runId?: string;
+  agentId?: string;
+  status: "running" | "done" | "error" | "stopped";
+};
+
+export type ConversationRunStoppedEvent = {
+  conversationId: string;
+  runId: string;
+  agentId?: string;
+  reason?: string;
+  hadPartialResponse?: boolean;
 };
 
 

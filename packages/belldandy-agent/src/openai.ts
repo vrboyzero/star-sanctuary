@@ -214,6 +214,7 @@ export class OpenAIChatAgent implements BelldandyAgent {
 
       // 使用容灾客户端发送请求
       const { response: res, profile: usedProfile } = await this.failoverClient.fetchWithFailover({
+        signal: input.abortSignal,
         timeoutMs: requestTimeoutMs,
         minimumTimeoutMs: minimumAdaptiveTimeoutMs,
         maxRetries: this.opts.maxRetries,
@@ -276,6 +277,10 @@ export class OpenAIChatAgent implements BelldandyAgent {
       yield { type: "final", text: out };
       yield { type: "status", status: "done" };
     } catch (err) {
+      if (wasExternallyAborted(err, input.abortSignal)) {
+        yield { type: "status", status: "stopped" };
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       yield { type: "final", text: `模型调用异常：${msg}` };
       yield { type: "status", status: "error" };
@@ -455,6 +460,10 @@ function splitText(text: string, size: number): string[] {
     i += Math.max(1, size);
   }
   return out;
+}
+
+function wasExternallyAborted(_error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
 }
 
 type ParsedSseItem =

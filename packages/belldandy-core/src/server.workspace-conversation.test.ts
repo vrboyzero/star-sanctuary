@@ -877,6 +877,244 @@ test("conversation.digest.get and conversation.digest.refresh expose session dig
   }
 });
 
+test("conversation.meta stays aligned with digest and resume_context across multi-round continuation", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-multi-round-workspace-"));
+  const conversationId = "conv-multi-round-resume";
+  const taskId = "task-multi-round-resume";
+  const round1StopPoint = "已补来源解释卡片初版，待继续接 explain_sources 与 viewer 懒加载。";
+  const round2StopPoint = "已确认 prompt artifact 与请求体都带上续做注入，待继续核对多轮一致性。";
+  const sharedNextStep = "先验证最近变更或产物，再继续后续动作。";
+  let refreshCount = 0;
+
+  const conversationStore = new ConversationStore({
+    dataDir: path.join(stateDir, "sessions"),
+    compaction: {
+      enabled: true,
+      tokenThreshold: 10,
+      keepRecentCount: 1,
+    },
+    summarizer: async () => {
+      refreshCount += 1;
+      if (refreshCount === 1) {
+        return JSON.stringify({
+          summary: round1StopPoint,
+          currentGoal: "继续修 memory viewer 来源解释入口",
+          keyResults: ["已补来源解释卡片初版"],
+          currentWork: round1StopPoint,
+          nextStep: sharedNextStep,
+        });
+      }
+      return JSON.stringify({
+        summary: round2StopPoint,
+        currentGoal: "继续核对多轮续做一致性",
+        keyResults: ["已确认 prompt artifact 与请求体都带上续做注入"],
+        currentWork: round2StopPoint,
+        nextStep: sharedNextStep,
+      });
+    },
+  });
+
+  conversationStore.addMessage(conversationId, "user", "先补来源解释入口。");
+  conversationStore.addMessage(conversationId, "assistant", "我先把 explain_sources 与 viewer 详情接起来。");
+
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+    openaiApiKey: "test-memory-key",
+  });
+  registerGlobalMemoryManager(memoryManager);
+
+  const store = (memoryManager as any).store as {
+    createTask(task: any): void;
+    createTaskActivity(activity: any): void;
+    updateTask(taskId: string, patch: Record<string, unknown>): void;
+  };
+
+  const createActivity = (input: {
+    id: string;
+    sequence: number;
+    kind: string;
+    title: string;
+    happenedAt: string;
+    files?: string[];
+  }) => ({
+    id: input.id,
+    taskId,
+    conversationId,
+    sessionKey: conversationId,
+    source: "chat",
+    kind: input.kind,
+    state: "completed",
+    sequence: input.sequence,
+    happenedAt: input.happenedAt,
+    recordedAt: input.happenedAt,
+    title: input.title,
+    files: input.files,
+  });
+
+  store.createTask({
+    id: taskId,
+    conversationId,
+    sessionKey: conversationId,
+    source: "chat",
+    status: "partial",
+    objective: "继续修 memory viewer 来源解释入口",
+    summary: round1StopPoint,
+    startedAt: "2026-04-17T14:10:00.000Z",
+    createdAt: "2026-04-17T14:10:00.000Z",
+    updatedAt: "2026-04-17T14:10:00.000Z",
+    workRecap: {
+      taskId,
+      conversationId,
+      sessionKey: conversationId,
+      headline: `已确认 1 条执行事实；当前停在：${round1StopPoint}`,
+      confirmedFacts: ["已补来源解释卡片初版"],
+      pendingActions: [sharedNextStep],
+      derivedFromActivityIds: ["activity-round-1"],
+      updatedAt: "2026-04-17T14:10:00.000Z",
+    },
+    resumeContext: {
+      taskId,
+      conversationId,
+      sessionKey: conversationId,
+      currentStopPoint: round1StopPoint,
+      nextStep: sharedNextStep,
+      derivedFromActivityIds: ["activity-round-1"],
+      updatedAt: "2026-04-17T14:10:00.000Z",
+    },
+  });
+  store.createTaskActivity(createActivity({
+    id: "activity-round-1",
+    sequence: 0,
+    kind: "file_changed",
+    title: "已补来源解释卡片初版",
+    happenedAt: "2026-04-17T14:10:00.000Z",
+    files: ["apps/web/public/app/features/memory-detail-render.js"],
+  }));
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    conversationStore,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "digest-refresh-round-1",
+      method: "conversation.digest.refresh",
+      params: { conversationId, force: true, threshold: 1 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-refresh-round-1" && f.ok === true));
+
+    conversationStore.addMessage(conversationId, "user", "现在继续核对多轮续做一致性。");
+    conversationStore.addMessage(conversationId, "assistant", "收到，我继续。");
+    store.createTaskActivity(createActivity({
+      id: "activity-round-2",
+      sequence: 1,
+      kind: "file_changed",
+      title: "已确认 prompt artifact 与请求体都带上续做注入",
+      happenedAt: "2026-04-17T14:20:00.000Z",
+      files: ["packages/belldandy-core/src/gateway-prompt-snapshot.e2e.test.ts"],
+    }));
+    store.updateTask(taskId, {
+      summary: round2StopPoint,
+      updatedAt: "2026-04-17T14:20:00.000Z",
+    });
+
+    frames.length = 0;
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "digest-refresh-round-2",
+      method: "conversation.digest.refresh",
+      params: { conversationId, force: true, threshold: 1 },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "digest-refresh-round-2" && f.ok === true));
+
+    frames.length = 0;
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-digest-get-multi",
+      method: "conversation.digest.get",
+      params: { conversationId, threshold: 1 },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "conversation-meta-multi",
+      method: "conversation.meta",
+      params: { conversationId },
+    }));
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "resume-context-multi",
+      method: "memory.resume_context",
+      params: { conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-digest-get-multi"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "conversation-meta-multi"));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "resume-context-multi"));
+
+    const digestRes = frames.find((f) => f.type === "res" && f.id === "conversation-digest-get-multi");
+    const metaRes = frames.find((f) => f.type === "res" && f.id === "conversation-meta-multi");
+    const resumeRes = frames.find((f) => f.type === "res" && f.id === "resume-context-multi");
+
+    expect(digestRes.ok).toBe(true);
+    expect(digestRes.payload.digest).toMatchObject({
+      conversationId,
+      status: "ready",
+      rollingSummary: round2StopPoint,
+    });
+
+    expect(resumeRes.ok).toBe(true);
+    expect(resumeRes.payload.item.resumeContext).toMatchObject({
+      currentStopPoint: round2StopPoint,
+      nextStep: sharedNextStep,
+    });
+
+    expect(metaRes.ok).toBe(true);
+    expect(metaRes.payload.continuationState).toMatchObject({
+      targetId: conversationId,
+      recommendedTargetId: conversationId,
+      targetType: "conversation",
+      summary: round2StopPoint,
+      nextAction: sharedNextStep,
+      progress: {
+        current: round2StopPoint,
+      },
+    });
+    expect(metaRes.payload.continuationState.summary).not.toBe("收到，我继续。");
+    expect(metaRes.payload.continuationState.summary).toBe(resumeRes.payload.item.resumeContext.currentStopPoint);
+    expect(metaRes.payload.continuationState.nextAction).toBe(resumeRes.payload.item.resumeContext.nextStep);
+    expect(metaRes.payload.continuationState.summary).toContain(digestRes.payload.digest.rollingSummary);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("conversation.memory.extraction.get and conversation.memory.extract expose durable extraction runtime", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-extraction-"));

@@ -14,7 +14,9 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "camera:helper:native-desktop": "node ./dist/builtin/multimedia/camera-native-desktop-helper.js",
+    "smoke:tts:real": "node ./smoke-tts-synthesize-real.mjs"
   },
   "dependencies": {
     "@belldandy/memory": "workspace:*",

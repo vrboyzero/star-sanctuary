@@ -60,6 +60,29 @@ describe("run_command (Platform-aware Safelist)", () => {
         expect(result.output).toContain("stdin-closed");
     });
 
+    it("should abort a running command when abortSignal is triggered", async () => {
+        const controller = new AbortController();
+        const resultPromise = runCommandTool.execute({
+            command: 'node -e "setTimeout(() => process.stdout.write(\\"late-output\\"), 5000)"',
+        }, {
+            ...mockContext,
+            workspaceRoot: process.cwd(),
+            policy: {
+                ...mockContext.policy,
+                maxTimeoutMs: 10_000,
+            },
+            abortSignal: controller.signal,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        controller.abort("Stopped by user.");
+        const result = await resultPromise;
+
+        expect(result.success).toBe(false);
+        expect(result.error).toBe("Stopped by user.");
+        expect(result.output).not.toContain("late-output");
+    });
+
     it("should allow common 'git' command on all platforms", async () => {
         const result = await runCommandTool.execute({ command: "git --version" }, mockContext);
         if (!result.success) {

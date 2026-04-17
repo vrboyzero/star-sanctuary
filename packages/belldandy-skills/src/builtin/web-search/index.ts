@@ -4,6 +4,7 @@ import { BraveSearchProvider } from "./brave.js";
 import { SerpApiProvider } from "./serpapi.js";
 import type { SearchProvider } from "./types.js";
 import { withToolContract } from "../../tool-contract.js";
+import { isAbortError, readAbortReason, throwIfAborted } from "../../abort-utils.js";
 
 // Factory to get configured provider
 function getProvider(): SearchProvider | null {
@@ -69,12 +70,14 @@ export const webSearchTool: Tool = withToolContract({
         }
 
         try {
+            throwIfAborted(context.abortSignal);
             context.logger?.info(`[${name}] Searching via ${provider.name}: ${query}`);
 
             const results = await provider.search({
                 query,
                 count: typeof args.count === "number" ? args.count : 5,
                 country: typeof args.country === "string" ? args.country : undefined,
+                abortSignal: context.abortSignal,
             });
 
             // 格式化输出为 Markdown
@@ -94,6 +97,9 @@ export const webSearchTool: Tool = withToolContract({
                 durationMs: Date.now() - start,
             };
         } catch (err) {
+            if (isAbortError(err) || context.abortSignal?.aborted) {
+                return makeError(readAbortReason(context.abortSignal));
+            }
             const msg = err instanceof Error ? err.message : String(err);
             context.logger?.error(`[${name}] Failed: ${msg}`);
             return makeError(msg);

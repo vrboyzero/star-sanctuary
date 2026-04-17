@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolveStateDir } from "@belldandy/protocol";
+import { resolveStateDir } from "./state-dir.js";
 
 export type RuntimeMode = "source" | "portable" | "single-exe";
 

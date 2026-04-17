@@ -9,7 +9,7 @@ export {
   bridgeSessionCloseTool,
   bridgeSessionListTool,
 } from "./tool-bridge-session.js";
-export { loadRuntimeLostBridgeSessions } from "./sessions.js";
+export { loadRuntimeLostBridgeSessions, loadRecoveredBridgeSessions } from "./sessions.js";
 export type {
   BridgeActionConfig,
   BridgeCategory,

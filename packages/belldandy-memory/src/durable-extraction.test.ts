@@ -147,6 +147,7 @@ test("durable extraction runtime waits for idle window and persists completed st
   paused = false;
   await waitFor(() => calls.length === 1);
   await waitFor(async () => (await runtime.getRecord("conv-persist")).status === "completed");
+  await runtime.close();
 
   const reloaded = new DurableExtractionRuntime({
     stateDir,

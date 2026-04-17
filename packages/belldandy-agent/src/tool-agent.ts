@@ -45,6 +45,7 @@ const DATA_URI_BASE64_PREFIX_RE = /^data:([^;]+);base64,/i;
 const BASE64_FIELD_KEY_RE = /^(base64|data)$/i;
 const DEFAULT_REASONING_TRANSCRIPT_CHAR_LIMIT = 4_000;
 const MIN_REASONING_DEDUPE_CHARS = 96;
+const STOP_REQUESTED_ERROR = "__BELLDANDY_STOP_REQUESTED__";
 
 export type ToolEnabledAgentOptions = {
   baseUrl: string;
@@ -425,6 +426,18 @@ function resolveMinimumAdaptiveTimeoutMs(messages: Message[], textAttachmentChar
   return minimumTimeoutMs > 0 ? minimumTimeoutMs : undefined;
 }
 
+function isRunStopRequested(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
+}
+
+function readRunStopReason(signal?: AbortSignal): string {
+  const reason = signal?.reason;
+  if (typeof reason === "string" && reason.trim()) {
+    return reason.trim();
+  }
+  return "Stopped by user.";
+}
+
 export class ToolEnabledAgent implements BelldandyAgent {
   private conversationRunChains = new Map<string, Promise<void>>();
   private readonly opts: Required<Pick<ToolEnabledAgentOptions, "timeoutMs" | "maxToolCalls" | "wireApi" | "maxRetries" | "retryBackoffMs" | "sanitizeResponsesToolSchema">> &
@@ -615,6 +628,11 @@ export class ToolEnabledAgent implements BelldandyAgent {
         }
       }
 
+      if (isRunStopRequested(input.abortSignal)) {
+        yield { type: "status", status: "stopped" };
+        return;
+      }
+
       yield { type: "status", status: "running" };
 
       let content: string | Array<any> = input.content || input.text;
@@ -736,6 +754,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
       yield item;
     };
 
+    const emitStopped = async function* () {
+      runSuccess = false;
+      runError = readRunStopReason(input.abortSignal);
+      yield* yieldItem(buildUsageItem());
+      yield* yieldItem({ type: "status", status: "stopped" });
+    };
+
     const logDebug = (msg: string, data?: unknown) => {
       this.opts.logger?.debug?.("agent", msg, data);
     };
@@ -749,6 +774,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
       try {
       while (true) {
+        if (isRunStopRequested(input.abortSignal)) {
+          yield* emitStopped();
+          return;
+        }
         const microcompactCandidate = messages.some((message) => message.role === "tool");
         const microcompactOriginalTokens = microcompactCandidate ? estimateMessagesTotal(messages) : 0;
         if (microcompactCandidate) {
@@ -811,9 +840,15 @@ export class ToolEnabledAgent implements BelldandyAgent {
             agentId: resolvedAgentId,
             conversationId: input.conversationId,
           },
+          input.abortSignal,
           !promptSnapshotCaptured ? capturePromptSnapshot : undefined,
           providerNativeSystemBlocks,
         );
+
+        if (isRunStopRequested(input.abortSignal)) {
+          yield* emitStopped();
+          return;
+        }
 
         // 记录并累加 usage 信息
         if (response.ok && response.usage) {
@@ -833,6 +868,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
         }
 
         if (!response.ok) {
+          if (response.error === STOP_REQUESTED_ERROR) {
+            yield* emitStopped();
+            return;
+          }
           runSuccess = false;
           runError = response.error;
           yield* yieldItem(buildUsageItem());
@@ -890,6 +929,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
         // 执行工具调用
         for (const tc of toolCalls) {
+          if (isRunStopRequested(input.abortSignal)) {
+            yield* emitStopped();
+            return;
+          }
           const request: ToolCallRequest = {
             id: tc.id,
             name: tc.function.name,
@@ -1143,6 +1186,9 @@ export class ToolEnabledAgent implements BelldandyAgent {
           });
 
           // 执行工具
+          const toolRuntimeContext = input.abortSignal
+            ? { ...runtimeContext, abortSignal: input.abortSignal }
+            : runtimeContext;
           const result = await this.opts.toolExecutor.execute(
             request,
             input.conversationId,
@@ -1150,7 +1196,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
             input.userUuid,
             input.senderInfo,
             input.roomContext,
-            runtimeContext,
+            toolRuntimeContext,
           );
           const toolDurationMs = Date.now() - toolStartTime;
 
@@ -1225,6 +1271,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
             error: result.error,
             toolCallId: tc.id,
           }));
+          if (isRunStopRequested(input.abortSignal)) {
+            yield* emitStopped();
+            return;
+          }
         }
 
         // 继续循环，让模型处理工具结果
@@ -1286,6 +1336,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
     tools?: { type: "function"; function: { name: string; description: string; parameters: object } }[],
     textAttachmentChars?: number,
     runtimeScope?: { conversationId?: string; agentId?: string },
+    abortSignal?: AbortSignal,
     onBeforeRequest?: (messages: Message[]) => void,
     providerNativeSystemBlocks?: ProviderNativeSystemBlock[],
   ): Promise<{ ok: true; content: string; toolCalls?: OpenAIToolCall[]; reasoning_content?: string; usage?: AnthropicUsage } | { ok: false; error: string }> {
@@ -1308,6 +1359,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       effectiveTimeoutMs = requestTimeoutMs;
 
       const { response: res } = await this.failoverClient.fetchWithFailover({
+        signal: abortSignal,
         timeoutMs: requestTimeoutMs,
         minimumTimeoutMs: minimumAdaptiveTimeoutMs,
         maxRetries: this.opts.maxRetries,
@@ -1454,6 +1506,9 @@ export class ToolEnabledAgent implements BelldandyAgent {
       return { ok: true, content, toolCalls, reasoning_content, usage };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
+        if (abortSignal?.aborted) {
+          return { ok: false, error: STOP_REQUESTED_ERROR };
+        }
         return { ok: false, error: `模型调用超时（${effectiveTimeoutMs}ms）` };
       }
       return { ok: false, error: err instanceof Error ? err.message : String(err) };

@@ -7,12 +7,15 @@ import { once } from "node:events";
 
 import { expect, test } from "vitest";
 import WebSocket from "ws";
+import { buildDefaultProfile } from "@belldandy/agent";
+import { MemoryManager, type TaskActivityRecord, type TaskRecord } from "@belldandy/memory";
 
 import {
   loadConversationPromptSnapshotArtifact,
   getConversationPromptSnapshotArtifactPath,
   persistConversationPromptSnapshot,
 } from "./conversation-prompt-snapshot.js";
+import { resolveResidentMemoryPolicy } from "./resident-memory-policy.js";
 import { approvePairingCode } from "./security/store.js";
 
 function resolveWebRoot() {
@@ -319,6 +322,149 @@ test("gateway applies prompt section disable experiments to agent inspect", asyn
       disabledSectionIdsConfigured: ["methodology"],
       disabledSectionIdsApplied: ["methodology"],
     });
+  } finally {
+    if (wsHandle) {
+      await wsHandle.close().catch(() => {});
+    }
+    if (gateway) {
+      await stopGatewayProcess(gateway).catch(() => {});
+    }
+    await fakeOpenAI.close().catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, 60000);
+
+test("gateway injects work overview and resume details into non-mock continuation prompts", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-prompt-resume-context-e2e-"));
+  const conversationId = "conv-real-resume-current";
+  const promptMarker = "PROMPT_RESUME_CONTEXT_E2E_MARKER";
+  const continuationText = "继续修 memory viewer 来源解释入口，上次做到哪了？";
+  const fakeOpenAI = await startFakeOpenAIServer();
+  let gateway: GatewayProcessHandle | undefined;
+  let wsHandle: GatewayWebSocketHandle | undefined;
+
+  try {
+    await seedResumePromptTasks(stateDir);
+
+    gateway = await startGatewayProcess({
+      stateDir,
+      openaiBaseUrl: `${fakeOpenAI.baseUrl}/v1`,
+      promptMarker,
+      extraEnv: {
+        BELLDANDY_TASK_MEMORY_ENABLED: "true",
+        BELLDANDY_CONTEXT_INJECTION: "true",
+        BELLDANDY_CONTEXT_INJECTION_TASK_LIMIT: "3",
+        BELLDANDY_AUTO_RECALL_ENABLED: "false",
+      },
+    });
+    wsHandle = await connectGatewayWebSocket(gateway.port);
+
+    const sendBeforePairingReqId = "message-send-resume-context-before-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: sendBeforePairingReqId,
+      method: "message.send",
+      params: {
+        conversationId,
+        text: continuationText,
+      },
+    }));
+    await approveLatestPairingCode(wsHandle.frames, stateDir);
+
+    const sendReqId = "message-send-resume-context-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: sendReqId,
+      method: "message.send",
+      params: {
+        conversationId,
+        text: continuationText,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === sendReqId && frame.ok === true));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "event" && frame.event === "chat.final" && frame.payload?.conversationId === conversationId));
+    await waitFor(() => fakeOpenAI.requests.length > 0);
+
+    const sendRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === sendReqId && frame.ok === true);
+    const runId = typeof sendRes?.payload?.runId === "string" ? sendRes.payload.runId : "";
+    expect(runId).toBeTruthy();
+
+    const modelPromptText = extractFakeOpenAIRequestText(fakeOpenAI.requests.at(-1)?.body);
+    expect(modelPromptText).toContain("<work-overview");
+    expect(modelPromptText).toContain("<resume-details");
+    expect(modelPromptText).toContain("继续修 memory viewer 来源解释入口");
+    expect(modelPromptText).toContain("stop=已补来源解释卡片初版，待继续接 explain_sources 与 viewer 懒加载。");
+    expect(modelPromptText).toContain("next=先验证最近变更或产物，再继续后续动作。");
+    expect(modelPromptText).toContain("resume-activity");
+    expect(modelPromptText).toContain("修复 memory viewer 来源解释渲染");
+    expect(modelPromptText).not.toContain("similar-work");
+    expect(modelPromptText).not.toContain("<recent-tasks");
+
+    const artifactPath = getConversationPromptSnapshotArtifactPath({
+      stateDir,
+      conversationId,
+      runId,
+    });
+    await waitFor(async () => {
+      try {
+        await fs.access(artifactPath);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+    const persisted = await loadConversationPromptSnapshotArtifact({
+      stateDir,
+      conversationId,
+      runId,
+    });
+    expect(persisted?.snapshot.prependContext).toContain("<work-overview");
+    expect(persisted?.snapshot.prependContext).toContain("<resume-details");
+    expect(persisted?.snapshot.prependContext).toContain("stop=已补来源解释卡片初版，待继续接 explain_sources 与 viewer 懒加载。");
+    expect(persisted?.snapshot.prependContext).toContain("next=先验证最近变更或产物，再继续后续动作。");
+    expect(persisted?.snapshot.prependContext).toContain("resume-activity");
+    expect(persisted?.snapshot.prependContext).not.toContain("similar-work");
+    expect(persisted?.snapshot.prependContext).not.toContain("<recent-tasks");
+    expect(persisted?.snapshot.deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "work-overview",
+        deltaType: "user-prelude",
+        text: expect.stringContaining("<work-overview"),
+      }),
+      expect.objectContaining({
+        id: "resume-details",
+        deltaType: "user-prelude",
+        text: expect.stringContaining("<resume-details"),
+      }),
+    ]));
+
+    const inspectReqId = "agents-prompt-inspect-resume-context-after-pairing";
+    wsHandle.ws.send(JSON.stringify({
+      type: "req",
+      id: inspectReqId,
+      method: "agents.prompt.inspect",
+      params: {
+        conversationId,
+        runId,
+      },
+    }));
+    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === inspectReqId && frame.ok === true));
+
+    const inspectRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === inspectReqId);
+    expect(inspectRes?.payload?.deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "work-overview",
+        deltaType: "user-prelude",
+        text: expect.stringContaining("stop=已补来源解释卡片初版，待继续接 explain_sources 与 viewer 懒加载。"),
+      }),
+      expect.objectContaining({
+        id: "resume-details",
+        deltaType: "user-prelude",
+        text: expect.stringContaining("resume-activity"),
+      }),
+    ]));
+    expect(fakeOpenAI.requests).toHaveLength(1);
   } finally {
     if (wsHandle) {
       await wsHandle.close().catch(() => {});
@@ -1052,12 +1198,221 @@ async function connectGatewayWebSocket(port: number): Promise<GatewayWebSocketHa
 
 async function approveLatestPairingCode(frames: any[], stateDir: string): Promise<void> {
   await waitFor(() => frames.some((frame) => frame.type === "event" && frame.event === "pairing.required"));
-  const pairingEvents = frames.filter((frame) => frame.type === "event" && frame.event === "pairing.required");
-  const latest = pairingEvents[pairingEvents.length - 1];
-  const code = latest?.payload?.code ? String(latest.payload.code) : "";
-  expect(code.length).toBeGreaterThan(0);
-  const approved = await approvePairingCode({ code, stateDir });
-  expect(approved.ok).toBe(true);
+  const approved = await waitFor(async () => {
+    const pairingEvents = frames.filter((frame) => frame.type === "event" && frame.event === "pairing.required");
+    const candidateCodes = [];
+    const seen = new Set<string>();
+
+    for (const frame of pairingEvents.slice().reverse()) {
+      const code = frame?.payload?.code ? String(frame.payload.code) : "";
+      if (!code || seen.has(code)) {
+        continue;
+      }
+      seen.add(code);
+      candidateCodes.push(code);
+    }
+
+    for (const code of candidateCodes) {
+      const result = await approvePairingCode({ code, stateDir });
+      if (result.ok) {
+        return result;
+      }
+    }
+
+    return undefined;
+  }, 5000);
+
+  expect(approved?.ok).toBe(true);
+}
+
+async function seedResumePromptTasks(stateDir: string): Promise<void> {
+  const memoryPolicy = resolveResidentMemoryPolicy(stateDir, buildDefaultProfile());
+  await fs.mkdir(memoryPolicy.managerStateDir, { recursive: true });
+
+  const memoryManager = new MemoryManager({
+    workspaceRoot: memoryPolicy.managerStateDir,
+    stateDir: memoryPolicy.managerStateDir,
+    storePath: path.join(memoryPolicy.managerStateDir, "memory.sqlite"),
+    taskMemoryEnabled: true,
+    openaiApiKey: "test-memory-seed-key",
+  });
+
+  try {
+    const store = (memoryManager as any).store as {
+      createTask(task: TaskRecord): void;
+      createTaskActivity(activity: TaskActivityRecord): void;
+    };
+
+    seedTaskForPrompt(store, {
+      taskId: "task-real-resume-current",
+      conversationId: "conv-real-resume-current",
+      agentId: "default",
+      status: "partial",
+      objective: "继续修 memory viewer 来源解释入口",
+      summary: "已补来源解释卡片初版，待继续接 explain_sources 与 viewer 懒加载。",
+      updatedAt: "2026-04-17T13:20:00.000Z",
+      workRecapHeadline: "已确认 2 条执行事实；当前停在：已补来源解释卡片初版，待继续接 explain_sources 与 viewer 懒加载。",
+      nextStep: "先验证最近变更或产物，再继续后续动作。",
+      activities: [
+        createPromptContextActivity({
+          id: "activity-real-current-1",
+          taskId: "task-real-resume-current",
+          conversationId: "conv-real-resume-current",
+          sequence: 0,
+          kind: "tool_called",
+          state: "completed",
+          happenedAt: "2026-04-17T13:05:00.000Z",
+          title: "已执行工具 apply_patch",
+        }),
+        createPromptContextActivity({
+          id: "activity-real-current-2",
+          taskId: "task-real-resume-current",
+          conversationId: "conv-real-resume-current",
+          sequence: 1,
+          kind: "file_changed",
+          state: "completed",
+          happenedAt: "2026-04-17T13:10:00.000Z",
+          title: "已变更文件：apps/web/public/app/features/memory-detail-render.js",
+          files: ["apps/web/public/app/features/memory-detail-render.js"],
+        }),
+      ],
+    });
+
+    seedTaskForPrompt(store, {
+      taskId: "task-real-resume-similar",
+      conversationId: "conv-real-resume-similar",
+      agentId: "default",
+      status: "success",
+      objective: "修复 memory viewer 来源解释渲染",
+      summary: "已补 viewer 中 explain_sources 来源说明与任务详情展示。",
+      updatedAt: "2026-04-16T17:00:00.000Z",
+      workRecapHeadline: "任务已完成；已确认 1 条执行事实。",
+      activities: [
+        createPromptContextActivity({
+          id: "activity-real-similar-1",
+          taskId: "task-real-resume-similar",
+          conversationId: "conv-real-resume-similar",
+          sequence: 0,
+          kind: "file_changed",
+          state: "completed",
+          happenedAt: "2026-04-16T16:55:00.000Z",
+          title: "已变更文件：apps/web/public/app/features/memory-detail-render.js",
+          files: ["apps/web/public/app/features/memory-detail-render.js"],
+        }),
+      ],
+    });
+  } finally {
+    memoryManager.close();
+  }
+}
+
+function seedTaskForPrompt(store: {
+  createTask(task: TaskRecord): void;
+  createTaskActivity(activity: TaskActivityRecord): void;
+}, input: {
+  taskId: string;
+  conversationId: string;
+  agentId?: string;
+  status: TaskRecord["status"];
+  objective?: string;
+  summary?: string;
+  updatedAt: string;
+  workRecapHeadline: string;
+  nextStep?: string;
+  activities: TaskActivityRecord[];
+}): void {
+  const derivedFromActivityIds = input.activities.map((activity) => activity.id);
+  const confirmedFacts = input.activities.map((activity) => activity.title);
+  const task: TaskRecord = {
+    id: input.taskId,
+    conversationId: input.conversationId,
+    sessionKey: input.conversationId,
+    agentId: input.agentId,
+    source: "chat",
+    status: input.status,
+    objective: input.objective,
+    summary: input.summary,
+    startedAt: input.updatedAt,
+    finishedAt: input.status === "success" ? input.updatedAt : undefined,
+    createdAt: input.updatedAt,
+    updatedAt: input.updatedAt,
+    workRecap: {
+      taskId: input.taskId,
+      conversationId: input.conversationId,
+      sessionKey: input.conversationId,
+      agentId: input.agentId,
+      headline: input.workRecapHeadline,
+      confirmedFacts,
+      pendingActions: input.nextStep ? [input.nextStep] : undefined,
+      derivedFromActivityIds,
+      updatedAt: input.updatedAt,
+    },
+    resumeContext: {
+      taskId: input.taskId,
+      conversationId: input.conversationId,
+      sessionKey: input.conversationId,
+      agentId: input.agentId,
+      currentStopPoint: input.status === "success" ? "任务已完成。" : input.summary,
+      nextStep: input.nextStep,
+      derivedFromActivityIds,
+      updatedAt: input.updatedAt,
+    },
+  };
+
+  store.createTask(task);
+  for (const activity of input.activities) {
+    store.createTaskActivity(activity);
+  }
+}
+
+function createPromptContextActivity(input: {
+  id: string;
+  taskId: string;
+  conversationId: string;
+  sequence: number;
+  kind: TaskActivityRecord["kind"];
+  state: TaskActivityRecord["state"];
+  happenedAt: string;
+  title: string;
+  files?: string[];
+}): TaskActivityRecord {
+  return {
+    id: input.id,
+    taskId: input.taskId,
+    conversationId: input.conversationId,
+    sessionKey: input.conversationId,
+    source: "chat",
+    kind: input.kind,
+    state: input.state,
+    sequence: input.sequence,
+    happenedAt: input.happenedAt,
+    recordedAt: input.happenedAt,
+    title: input.title,
+    files: input.files,
+  };
+}
+
+function extractFakeOpenAIRequestText(body?: Record<string, unknown>): string {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  return messages
+    .flatMap((message) => extractOpenAIMessageContent((message as Record<string, unknown>)?.content))
+    .join("\n\n");
+}
+
+function extractOpenAIMessageContent(content: unknown): string[] {
+  if (typeof content === "string") {
+    return [content];
+  }
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.flatMap((part) => {
+    if (!part || typeof part !== "object") {
+      return [];
+    }
+    const text = (part as Record<string, unknown>).text;
+    return typeof text === "string" ? [text] : [];
+  });
 }
 
 async function readRequestBody(req: http.IncomingMessage): Promise<string> {

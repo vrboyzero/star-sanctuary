@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现CLI桥接功能与相应的mcp服务，修复了bom文件编码问题，修复了Agent无法看到邮件内容问题"
+git commit -m "实现了做过什么等记忆功能优化，实现了中断Agent当前操作功能，摄像头功能改造进行中，实现了外接摄像头调用"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

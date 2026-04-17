@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { withToolContract } from "../../tool-contract.js";
 import { resolveRuntimeFilesystemScope } from "../../runtime-policy.js";
+import { readAbortReason, throwIfAborted } from "../../abort-utils.js";
 
 // 安全策略配置
 const BLOCKLIST = new Set([
@@ -940,6 +941,11 @@ export const runCommandTool: Tool = withToolContract({
         const timeoutMs = determineTimeoutMs(command, args.timeoutMs as number | undefined, execPolicy);
 
         context.logger?.info(`[exec] Run: ${command} in ${cwd}`);
+        try {
+            throwIfAborted(context.abortSignal);
+        } catch {
+            return makeResult(false, "", readAbortReason(context.abortSignal));
+        }
 
         return new Promise((resolve) => {
             const child = spawn(command, {
@@ -953,11 +959,28 @@ export const runCommandTool: Tool = withToolContract({
 
             let stdout = "";
             let stderr = "";
+            let settled = false;
+
+            const finalize = (result: ToolCallResult) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(timeoutTimer);
+                context.abortSignal?.removeEventListener("abort", onAbort);
+                resolve(result);
+            };
+
+            const onAbort = () => {
+                killChildProcess(child);
+                finalize(makeResult(false, stdout, readAbortReason(context.abortSignal)));
+            };
 
             const timeoutTimer = setTimeout(() => {
                 killChildProcess(child);
-                resolve(makeResult(false, stdout, `Timeout after ${timeoutMs}ms\nStderr: ${stderr}`));
+                finalize(makeResult(false, stdout, `Timeout after ${timeoutMs}ms\nStderr: ${stderr}`));
             }, timeoutMs);
+            context.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
             child.stdout.on("data", (data) => {
                 stdout += data.toString();
@@ -968,17 +991,15 @@ export const runCommandTool: Tool = withToolContract({
             });
 
             child.on("close", (code) => {
-                clearTimeout(timeoutTimer);
                 if (code === 0) {
-                    resolve(makeResult(true, stdout));
+                    finalize(makeResult(true, stdout));
                 } else {
-                    resolve(makeResult(false, stdout, `Process exited with code ${code}\nStderr: ${stderr}`));
+                    finalize(makeResult(false, stdout, `Process exited with code ${code}\nStderr: ${stderr}`));
                 }
             });
 
             child.on("error", (err) => {
-                clearTimeout(timeoutTimer);
-                resolve(makeResult(false, stdout, `Spawn error: ${err.message}`));
+                finalize(makeResult(false, stdout, `Spawn error: ${err.message}`));
             });
         });
     },

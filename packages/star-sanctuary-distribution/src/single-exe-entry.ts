@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import { resolveStateDir } from "@belldandy/protocol";
-
 import { loadRuntimeEnvFiles, readTrimmedEnv, resolveRuntimeEnvDir } from "./env.js";
 import { startGatewaySupervisor } from "./gateway-supervisor.js";
 import {
@@ -17,6 +15,7 @@ import {
   SINGLE_EXE_NODE_RUNTIME_FILE_NAME,
 } from "./runtime-extract.js";
 import { isSeaRuntime } from "./sea.js";
+import { resolveStateDir } from "./state-dir.js";
 
 function ensureSingleExeEnv(params: {
   baseEnv: NodeJS.ProcessEnv;

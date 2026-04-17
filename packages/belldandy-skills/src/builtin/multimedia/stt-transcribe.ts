@@ -15,6 +15,13 @@
  */
 
 import OpenAI, { toFile } from "openai";
+import {
+    isAbortError,
+    raceWithAbort,
+    sleepWithAbort,
+    throwIfAborted,
+    toAbortError,
+} from "../../abort-utils.js";
 
 // ─── 类型定义 ───────────────────────────────────────────────
 
@@ -31,6 +38,8 @@ export type TranscribeOptions = {
     language?: string;
     /** 上下文提示词，帮助提高识别准确率 */
     prompt?: string;
+    /** 协作式中断信号 */
+    abortSignal?: AbortSignal;
 };
 
 export type TranscribeResult = {
@@ -41,6 +50,11 @@ export type TranscribeResult = {
     /** 实际使用的模型 */
     model: string;
     /** 音频时长（秒），部分 Provider 可能不返回 */
+    durationSec?: number;
+};
+
+type TranscriptionResponse = {
+    text: string;
     durationSec?: number;
 };
 
@@ -59,6 +73,7 @@ export async function transcribeSpeech(
         console.warn("[STT] 空音频 buffer，跳过转录");
         return null;
     }
+    throwIfAborted(opts.abortSignal);
 
     const envProvider = process.env.BELLDANDY_STT_PROVIDER?.trim().toLowerCase();
     const provider = opts.provider?.trim().toLowerCase() || envProvider || "openai";
@@ -70,14 +85,17 @@ export async function transcribeSpeech(
     try {
         switch (provider) {
             case "groq":
-                return await transcribeGroq(opts.buffer, opts.fileName, language, opts.prompt);
+                return await transcribeGroq(opts.buffer, opts.fileName, language, opts.prompt, opts.abortSignal);
             case "dashscope":
-                return await transcribeDashScope(opts.buffer, opts.fileName, language, opts.prompt);
+                return await transcribeDashScope(opts.buffer, opts.fileName, language, opts.prompt, opts.abortSignal);
             case "openai":
             default:
-                return await transcribeOpenAI(opts.buffer, opts.fileName, language, opts.prompt);
+                return await transcribeOpenAI(opts.buffer, opts.fileName, language, opts.prompt, opts.abortSignal);
         }
     } catch (err) {
+        if (isAbortError(err) || opts.abortSignal?.aborted) {
+            throw toAbortError(opts.abortSignal?.reason);
+        }
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[STT] Provider "${provider}" 转录失败:`, msg);
         return null;
@@ -91,30 +109,38 @@ async function transcribeOpenAI(
     fileName: string,
     language: string,
     prompt?: string,
+    abortSignal?: AbortSignal,
 ): Promise<TranscribeResult> {
     const apiKey = process.env.OPENAI_API_KEY;
     const baseURL = process.env.OPENAI_BASE_URL;
     if (!apiKey) throw new Error("OPENAI_API_KEY 未设置，无法使用 OpenAI STT");
 
+    throwIfAborted(abortSignal);
     const model = "whisper-1";
     const openai = new OpenAI({ apiKey, baseURL });
 
     // OpenAI SDK 接受 File 对象用于 multipart/form-data 上传
     const file = await bufferToUploadable(buffer, fileName);
 
-    const response = await openai.audio.transcriptions.create({
-        model,
-        file,
-        language,
-        prompt: prompt || undefined,
-        response_format: "verbose_json",
-    });
+    const response = await raceWithAbort(
+        (openai.audio.transcriptions.create as any)({
+            model,
+            file,
+            language,
+            prompt: prompt || undefined,
+            response_format: "verbose_json",
+        }, {
+            signal: abortSignal,
+        }),
+        abortSignal,
+    );
+    const parsed = parseTranscriptionResponse(response);
 
     return {
-        text: response.text?.trim() || "",
+        text: parsed.text,
         provider: "openai",
         model,
-        durationSec: (response as any).duration,
+        durationSec: parsed.durationSec,
     };
 }
 
@@ -125,6 +151,7 @@ async function transcribeGroq(
     fileName: string,
     language: string,
     prompt?: string,
+    abortSignal?: AbortSignal,
 ): Promise<TranscribeResult> {
     // Groq 使用 OpenAI 兼容接口，只需换 apiKey 和 baseURL
     const apiKey =
@@ -136,24 +163,31 @@ async function transcribeGroq(
 
     if (!apiKey) throw new Error("BELLDANDY_STT_GROQ_API_KEY 或 GROQ_API_KEY 未设置");
 
+    throwIfAborted(abortSignal);
     const model = "whisper-large-v3-turbo";
     const openai = new OpenAI({ apiKey, baseURL });
 
     const file = await bufferToUploadable(buffer, fileName);
 
-    const response = await openai.audio.transcriptions.create({
-        model,
-        file,
-        language,
-        prompt: prompt || undefined,
-        response_format: "verbose_json",
-    });
+    const response = await raceWithAbort(
+        (openai.audio.transcriptions.create as any)({
+            model,
+            file,
+            language,
+            prompt: prompt || undefined,
+            response_format: "verbose_json",
+        }, {
+            signal: abortSignal,
+        }),
+        abortSignal,
+    );
+    const parsed = parseTranscriptionResponse(response);
 
     return {
-        text: response.text?.trim() || "",
+        text: parsed.text,
         provider: "groq",
         model,
-        durationSec: (response as any).duration,
+        durationSec: parsed.durationSec,
     };
 }
 
@@ -164,10 +198,12 @@ async function transcribeDashScope(
     fileName: string,
     language: string,
     prompt?: string,
+    abortSignal?: AbortSignal,
 ): Promise<TranscribeResult> {
     const apiKey = process.env.DASHSCOPE_API_KEY?.trim();
     if (!apiKey) throw new Error("DASHSCOPE_API_KEY 未设置，无法使用 DashScope STT");
 
+    throwIfAborted(abortSignal);
     const model = "paraformer-v2";
     const submitUrl =
         "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription";
@@ -191,6 +227,7 @@ async function transcribeDashScope(
                 language_hints: [language === "zh" ? "zh" : language],
             },
         }),
+        signal: abortSignal,
     });
 
     if (!submitRes.ok) {
@@ -207,7 +244,7 @@ async function transcribeDashScope(
         );
     }
 
-    const text = await pollDashScopeResult(apiKey, taskId);
+    const text = await pollDashScopeResult(apiKey, taskId, abortSignal);
 
     return {
         text: text.trim(),
@@ -223,6 +260,7 @@ async function transcribeDashScope(
 async function pollDashScopeResult(
     apiKey: string,
     taskId: string,
+    abortSignal?: AbortSignal,
 ): Promise<string> {
     const pollUrl = `https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`;
     const maxWaitMs = 60_000;
@@ -230,10 +268,11 @@ async function pollDashScopeResult(
     const startTime = Date.now();
 
     while (Date.now() - startTime < maxWaitMs) {
-        await new Promise((r) => setTimeout(r, pollIntervalMs));
+        await sleepWithAbort(pollIntervalMs, abortSignal);
 
         const res = await fetch(pollUrl, {
             headers: { Authorization: `Bearer ${apiKey}` },
+            signal: abortSignal,
         });
 
         if (!res.ok) {
@@ -248,7 +287,7 @@ async function pollDashScopeResult(
             if (Array.isArray(results) && results.length > 0) {
                 const transcriptionUrl = results[0]?.transcription_url;
                 if (transcriptionUrl) {
-                    const trRes = await fetch(transcriptionUrl);
+                    const trRes = await fetch(transcriptionUrl, { signal: abortSignal });
                     if (trRes.ok) {
                         const trData: any = await trRes.json();
                         const transcripts = trData?.transcripts || trData?.result?.transcripts;
@@ -304,4 +343,15 @@ function guessMime(fileName: string): string {
         mp4: "audio/mp4",
     };
     return map[ext] || "audio/webm";
+}
+
+function parseTranscriptionResponse(response: unknown): TranscriptionResponse {
+    if (!response || typeof response !== "object") {
+        return { text: "" };
+    }
+    const candidate = response as { text?: unknown; duration?: unknown };
+    return {
+        text: typeof candidate.text === "string" ? candidate.text.trim() : "",
+        durationSec: typeof candidate.duration === "number" ? candidate.duration : undefined,
+    };
 }

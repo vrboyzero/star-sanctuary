@@ -2,6 +2,13 @@ import OpenAI from "openai";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { EdgeTTS } from "node-edge-tts";
+import {
+  isAbortError,
+  raceWithAbort,
+  sleepWithAbort,
+  throwIfAborted,
+  toAbortError,
+} from "../../abort-utils.js";
 
 export type SynthesizeResult = {
   webPath: string;
@@ -14,6 +21,7 @@ export type SynthesizeOptions = {
   provider?: string;
   voice?: string;
   model?: string;
+  abortSignal?: AbortSignal;
 };
 
 /**
@@ -23,17 +31,23 @@ export type SynthesizeOptions = {
 export async function synthesizeSpeech(opts: SynthesizeOptions): Promise<SynthesizeResult | null> {
   const { text, stateDir } = opts;
   if (!text?.trim()) return null;
+  throwIfAborted(opts.abortSignal);
 
-  const envProvider = process.env.BELLDANDY_TTS_PROVIDER;
-  const provider = opts.provider || envProvider || "edge";
+  const envProvider = process.env.BELLDANDY_TTS_PROVIDER?.trim().toLowerCase();
+  const provider = (opts.provider?.trim() || envProvider || "edge").toLowerCase();
+  const shouldUseEnvVoice = !opts.provider || envProvider === provider;
 
   let voice = opts.voice;
   if (!voice) {
-    const envVoice = process.env.BELLDANDY_TTS_VOICE;
+    const envVoice = shouldUseEnvVoice ? process.env.BELLDANDY_TTS_VOICE : undefined;
     if (envVoice?.trim()) {
       voice = envVoice.trim();
+    } else if (provider === "openai") {
+      voice = "alloy";
+    } else if (provider === "dashscope") {
+      voice = "Cherry";
     } else {
-      voice = provider === "openai" ? "alloy" : "zh-CN-XiaoxiaoNeural";
+      voice = "zh-CN-XiaoxiaoNeural";
     }
   }
 
@@ -42,43 +56,62 @@ export async function synthesizeSpeech(opts: SynthesizeOptions): Promise<Synthes
     await fs.mkdir(generatedDir, { recursive: true });
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const isDs = provider === "dashscope";
-    const filename = `speech-${timestamp}.${isDs ? "wav" : "mp3"}`;
+    const filename = `speech-${timestamp}.mp3`;
     const filepath = path.join(generatedDir, filename);
 
     if (provider === "openai") {
-      await synthesizeOpenAI(filepath, text, voice!, opts.model);
+      await synthesizeOpenAI(filepath, text, voice!, opts.model, opts.abortSignal);
     } else if (provider === "dashscope") {
-      await synthesizeDashScope(filepath, text, voice || "Cherry");
+      await synthesizeDashScope(filepath, text, voice!, opts.abortSignal);
     } else {
-      await synthesizeEdge(filepath, text, voice!);
+      await synthesizeEdge(filepath, text, voice!, opts.abortSignal);
     }
 
     const webPath = `/generated/${filename}`;
     const htmlAudio = `<audio controls autoplay src="${webPath}" preload="auto"></audio>`;
     return { webPath, htmlAudio };
   } catch (err) {
+    if (isAbortError(err) || opts.abortSignal?.aborted) {
+      throw toAbortError(opts.abortSignal?.reason);
+    }
     console.error(`[TTS-Auto] synthesizeSpeech failed:`, err instanceof Error ? err.message : err);
     return null;
   }
 }
 
-async function synthesizeOpenAI(filepath: string, text: string, voice: string, model?: string): Promise<void> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const baseURL = process.env.OPENAI_BASE_URL;
-  if (!apiKey) throw new Error("OPENAI_API_KEY required for OpenAI provider.");
+async function synthesizeOpenAI(filepath: string, text: string, voice: string, model?: string, abortSignal?: AbortSignal): Promise<void> {
+  const apiKey = readOptionalEnv(
+    "BELLDANDY_TTS_OPENAI_API_KEY",
+    "BELLDANDY_OPENAI_API_KEY",
+    "OPENAI_API_KEY",
+  );
+  const baseURL = readOptionalEnv(
+    "BELLDANDY_TTS_OPENAI_BASE_URL",
+    "BELLDANDY_OPENAI_BASE_URL",
+    "OPENAI_BASE_URL",
+  );
+  if (!apiKey) {
+    throw new Error("BELLDANDY_TTS_OPENAI_API_KEY, BELLDANDY_OPENAI_API_KEY, or OPENAI_API_KEY required for OpenAI provider.");
+  }
 
+  throwIfAborted(abortSignal);
   const openai = new OpenAI({ apiKey, baseURL });
-  const mp3 = await openai.audio.speech.create({
-    model: (model as any) || "tts-1",
-    voice: voice as any,
-    input: text,
-  });
-  const buffer = Buffer.from(await mp3.arrayBuffer());
+  const mp3 = await raceWithAbort(
+    (openai.audio.speech.create as any)({
+      model: (model as any) || "tts-1",
+      voice: voice as any,
+      input: text,
+    }, {
+      signal: abortSignal,
+    }),
+    abortSignal,
+  );
+  const buffer = Buffer.from(await readAudioResponseBuffer(mp3));
+  throwIfAborted(abortSignal);
   await fs.writeFile(filepath, buffer);
 }
 
-async function synthesizeDashScope(filepath: string, text: string, voice: string): Promise<void> {
+async function synthesizeDashScope(filepath: string, text: string, voice: string, abortSignal?: AbortSignal): Promise<void> {
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) throw new Error("DASHSCOPE_API_KEY required for DashScope provider.");
 
@@ -88,6 +121,7 @@ async function synthesizeDashScope(filepath: string, text: string, voice: string
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      throwIfAborted(abortSignal);
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -99,6 +133,7 @@ async function synthesizeDashScope(filepath: string, text: string, voice: string
           input: { text, voice },
           parameters: { format: "mp3" },
         }),
+        signal: abortSignal,
       });
 
       if (!response.ok) {
@@ -115,47 +150,77 @@ async function synthesizeDashScope(filepath: string, text: string, voice: string
         throw new Error(`DashScope response missing audio URL. keys: ${Object.keys(data?.output || {}).join(",")}`);
       }
 
-      const audioRes = await fetch(audioUrl);
+      const audioRes = await fetch(audioUrl, { signal: abortSignal });
       if (!audioRes.ok) throw new Error(`Failed to download audio (${audioRes.status})`);
 
       const buffer = Buffer.from(await audioRes.arrayBuffer());
       if (buffer.length < 100) throw new Error(`Audio too small (${buffer.length} bytes)`);
 
+      throwIfAborted(abortSignal);
       await fs.writeFile(filepath, buffer);
       return; // success
     } catch (err) {
+      if (isAbortError(err) || abortSignal?.aborted) {
+        throw toAbortError(abortSignal?.reason);
+      }
       lastError = err;
       const msg = err instanceof Error ? err.message : String(err);
       const cause = err instanceof Error && err.cause ? ` | cause: ${(err.cause as Error).message ?? err.cause}` : "";
       console.warn(`[TTS-Auto] DashScope attempt ${attempt}/${maxRetries} failed: ${msg}${cause}`);
       if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, attempt === 1 ? 3000 : 8000));
+        await sleepWithAbort(attempt === 1 ? 3000 : 8000, abortSignal);
       }
     }
   }
   throw new Error(`DashScope failed after ${maxRetries} attempts. Last: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
-async function synthesizeEdge(filepath: string, text: string, voice: string): Promise<void> {
+async function synthesizeEdge(filepath: string, text: string, voice: string, abortSignal?: AbortSignal): Promise<void> {
   const maxRetries = 3;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      throwIfAborted(abortSignal);
       const tts = new EdgeTTS({ voice });
       if (!text?.trim()) throw new Error("Input text is empty");
-      await tts.ttsPromise(text, filepath);
+      await raceWithAbort(tts.ttsPromise(text, filepath), abortSignal);
 
+      throwIfAborted(abortSignal);
       const stats = await fs.stat(filepath);
       if (stats.size === 0) throw new Error("Generated audio file is empty (0 bytes)");
       return; // success
     } catch (err) {
+      if (isAbortError(err) || abortSignal?.aborted) {
+        throw toAbortError(abortSignal?.reason);
+      }
       lastError = err;
       console.warn(`[TTS-Auto] EdgeTTS attempt ${attempt}/${maxRetries} failed: ${err instanceof Error ? err.message : String(err)}`);
       if (attempt < maxRetries) {
-        await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt - 1)));
+        await sleepWithAbort(500 * Math.pow(2, attempt - 1), abortSignal);
       }
     }
   }
   throw new Error(`EdgeTTS failed after ${maxRetries} attempts. Last: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+}
+
+async function readAudioResponseBuffer(value: unknown): Promise<ArrayBuffer> {
+  if (!value || typeof value !== "object") {
+    throw new Error("OpenAI TTS response missing arrayBuffer()");
+  }
+  const candidate = value as { arrayBuffer?: unknown };
+  if (typeof candidate.arrayBuffer !== "function") {
+    throw new Error("OpenAI TTS response missing arrayBuffer()");
+  }
+  return await candidate.arrayBuffer.call(value) as ArrayBuffer;
+}
+
+function readOptionalEnv(...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }

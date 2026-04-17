@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 export type QueryRuntimeMethod =
   | "models.list"
   | "message.send"
+  | "conversation.run.stop"
   | "api.message"
   | "webhook.receive"
   | "tool_settings.confirm"

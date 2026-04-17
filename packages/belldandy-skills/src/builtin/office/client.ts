@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveStateDir } from "@belldandy/protocol";
 import type { ToolContext } from "../../types.js";
+import { throwIfAborted, toAbortError } from "../../abort-utils.js";
 
 export type OfficeCommunityAgentConfig = {
   name: string;
@@ -212,14 +213,16 @@ export async function sha256File(filePath: string): Promise<string> {
 export class OfficeSiteClient {
   private readonly endpoint: string;
   private readonly agentConfig: OfficeCommunityAgentConfig;
+  private readonly abortSignal?: AbortSignal;
 
-  constructor(agentName: string) {
+  constructor(agentName: string, abortSignal?: AbortSignal) {
     const config = this.loadConfig();
     this.endpoint = config.endpoint.replace(/\/+$/, "");
     this.agentConfig = findAgentConfig(config.agents, agentName)
       ?? (() => {
         throw new Error(`community.json 未找到 Agent 配置: ${agentName}`);
       })();
+    this.abortSignal = abortSignal;
 
     if (!this.agentConfig.apiKey) {
       throw new Error(`Agent ${agentName} 缺少 apiKey 配置`);
@@ -280,15 +283,26 @@ export class OfficeSiteClient {
   }
 
   async download(apiPath: string): Promise<{ buffer: Buffer; contentType: string | null }> {
-    const res = await fetch(this.buildUrl(apiPath), {
-      method: "GET",
-      headers: this.buildHeaders(),
-    });
+    throwIfAborted(this.abortSignal);
+    let res: Response;
+    try {
+      res = await fetch(this.buildUrl(apiPath), {
+        method: "GET",
+        headers: this.buildHeaders(),
+        signal: this.abortSignal,
+      });
+    } catch (error) {
+      if (this.abortSignal?.aborted) {
+        throw toAbortError(this.abortSignal.reason);
+      }
+      throw error;
+    }
 
     if (!res.ok) {
       throw await this.buildResponseError(res);
     }
 
+    throwIfAborted(this.abortSignal);
     const arrayBuffer = await res.arrayBuffer();
     return {
       buffer: Buffer.from(arrayBuffer),
@@ -319,20 +333,31 @@ export class OfficeSiteClient {
   }
 
   private async requestJson<T>(apiPath: string, init: RequestInit): Promise<T> {
+    throwIfAborted(this.abortSignal);
     const headers = {
       ...this.buildHeaders(),
       ...(init.headers ?? {}),
     };
 
-    const res = await fetch(this.buildUrl(apiPath), {
-      ...init,
-      headers,
-    });
+    let res: Response;
+    try {
+      res = await fetch(this.buildUrl(apiPath), {
+        ...init,
+        headers,
+        signal: this.abortSignal,
+      });
+    } catch (error) {
+      if (this.abortSignal?.aborted) {
+        throw toAbortError(this.abortSignal.reason);
+      }
+      throw error;
+    }
 
     if (!res.ok) {
       throw await this.buildResponseError(res);
     }
 
+    throwIfAborted(this.abortSignal);
     return res.json() as Promise<T>;
   }
 

@@ -1,6 +1,6 @@
 import type { AgentRegistry } from "@belldandy/agent";
 import type { GatewayReqFrame, GatewayResFrame } from "@belldandy/protocol";
-import { getGlobalMemoryManager } from "@belldandy/memory";
+import { createTaskWorkSurface, getGlobalMemoryManager } from "@belldandy/memory";
 import type { SkillRegistry } from "@belldandy/skills";
 import { publishSkillCandidate } from "@belldandy/skills";
 
@@ -364,6 +364,96 @@ export async function handleMemoryExperienceMethod(
       });
     }
 
+    case "memory.recent_work": {
+      const taskWorkSurface = resolveScopedTaskWorkSurface(params);
+      if (!taskWorkSurface) return notAvailable(req.id);
+
+      const query = readOptionalString(params, "query") ?? "";
+      const limit = clampListLimit(params.limit, 10);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = taskWorkSurface.recentWork({
+        query: query || undefined,
+        limit,
+        filter: filter as any,
+      });
+
+      return ok(req.id, {
+        items,
+        query,
+        limit,
+      });
+    }
+
+    case "memory.resume_context": {
+      const taskWorkSurface = resolveScopedTaskWorkSurface(params);
+      if (!taskWorkSurface) return notAvailable(req.id);
+
+      const query = readOptionalString(params, "query") ?? "";
+      const taskId = readOptionalString(params, "taskId") ?? "";
+      const conversationId = readOptionalString(params, "conversationId") ?? "";
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const item = taskWorkSurface.resumeContext({
+        taskId: taskId || undefined,
+        conversationId: conversationId || undefined,
+        query: query || undefined,
+        filter: filter as any,
+      });
+
+      return ok(req.id, {
+        item,
+        query,
+        taskId: taskId || undefined,
+        conversationId: conversationId || undefined,
+      });
+    }
+
+    case "memory.similar_past_work": {
+      const taskWorkSurface = resolveScopedTaskWorkSurface(params);
+      if (!taskWorkSurface) return notAvailable(req.id);
+
+      const query = readRequiredString(params, "query");
+      if (!query) return invalid(req.id, "query is required");
+
+      const limit = clampListLimit(params.limit, 10);
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      const items = taskWorkSurface.findSimilarWork({
+        query,
+        limit,
+        filter: filter as any,
+      });
+
+      return ok(req.id, {
+        items,
+        query,
+        limit,
+      });
+    }
+
+    case "memory.explain_sources": {
+      const taskWorkSurface = resolveScopedTaskWorkSurface(params);
+      if (!taskWorkSurface) return notAvailable(req.id);
+
+      const taskId = readOptionalString(params, "taskId") ?? "";
+      const conversationId = readOptionalString(params, "conversationId") ?? "";
+      if (!taskId && !conversationId) {
+        return invalid(req.id, "taskId or conversationId is required");
+      }
+
+      const explanation = taskWorkSurface.explainSources({
+        taskId: taskId || undefined,
+        conversationId: conversationId || undefined,
+      });
+      if (!explanation) {
+        return notFound(req.id, "Task work source explanation not found.");
+      }
+
+      return ok(req.id, {
+        explanation,
+        taskId: explanation.taskId,
+        conversationId: explanation.conversationId,
+      });
+    }
+
     case "experience.candidate.get": {
       const manager = resolveScopedMemoryManager(params);
       const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
@@ -654,6 +744,11 @@ function resolveScopedMemoryManager(params: Record<string, unknown> = {}) {
     agentId,
     conversationId,
   });
+}
+
+function resolveScopedTaskWorkSurface(params: Record<string, unknown> = {}) {
+  const manager = resolveScopedMemoryManager(params);
+  return manager ? createTaskWorkSurface(manager) : null;
 }
 
 function resolveScopedResidentMemoryPolicy(

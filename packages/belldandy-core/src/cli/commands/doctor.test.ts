@@ -6,10 +6,13 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import doctorCommand from "./doctor.js";
 import { RuntimeResilienceTracker } from "../../runtime-resilience.js";
+import { withEnv } from "../../server-testkit.js";
 
 const { execFileSyncMock } = vi.hoisted(() => ({
   execFileSyncMock: vi.fn(),
 }));
+
+const CLI_DOCTOR_TEST_TIMEOUT_MS = 15_000;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -23,6 +26,107 @@ afterEach(() => {
   vi.restoreAllMocks();
   execFileSyncMock.mockReset();
 });
+
+async function createFakeCameraDoctorHelperScript(): Promise<string> {
+  const helperDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-camera-doctor-helper-"));
+  const helperPath = path.join(helperDir, "fake-camera-helper.mjs");
+  await fs.writeFile(helperPath, `
+import readline from "node:readline";
+
+const protocol = "camera-native-desktop/v1";
+const capabilities = {
+  diagnose: true,
+  list: true,
+  snapshot: true,
+  clip: false,
+  audio: false,
+  hotplug: true,
+  background: true,
+  stillFormats: ["png"],
+  clipFormats: [],
+  selectionByStableKey: true,
+  deviceChangeEvents: true,
+};
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  crlfDelay: Infinity,
+});
+
+rl.on("line", (line) => {
+  const request = JSON.parse(line);
+  if (!request || request.kind !== "request") {
+    return;
+  }
+  let result;
+  switch (request.method) {
+    case "hello":
+      result = {
+        protocol,
+        helperVersion: "cli-doctor-helper",
+        platform: "windows",
+        transport: "stdio",
+        helperStatus: "ready",
+        capabilities,
+      };
+      break;
+    case "diagnose":
+      result = {
+        status: "degraded",
+        helperStatus: "ready",
+        permissionState: "granted",
+        observedAt: "2026-04-17T10:20:00.000Z",
+        issues: [
+          {
+            code: "device_busy",
+            severity: "warning",
+            message: "OBSBOT Tiny 2 StreamCamera is currently busy.",
+            retryable: true,
+          },
+        ],
+        devices: [
+          {
+            deviceId: "obspot-main",
+            stableKey: "usb-3564-fef8-453a4b75",
+            label: "OBSBOT Tiny 2 StreamCamera",
+            source: "external",
+            transport: "native",
+            external: true,
+            available: true,
+            kind: "videoinput",
+            busy: true,
+          },
+        ],
+        capabilities,
+        helperVersion: "cli-doctor-helper",
+      };
+      break;
+    default:
+      process.stdout.write(JSON.stringify({
+        kind: "response",
+        protocol,
+        id: request.id,
+        method: request.method,
+        ok: false,
+        error: {
+          code: "unsupported_method",
+          message: "unsupported",
+        },
+      }) + "\\n");
+      return;
+  }
+  process.stdout.write(JSON.stringify({
+    kind: "response",
+    protocol,
+    id: request.id,
+    method: request.method,
+    ok: true,
+    result,
+  }) + "\\n");
+});
+`, "utf-8");
+  return helperPath;
+}
 
 test("bdd doctor json output includes tool behavior observability", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-doctor-"));
@@ -111,7 +215,7 @@ test("bdd doctor json output includes tool behavior observability", async () => 
     }
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
-});
+}, CLI_DOCTOR_TEST_TIMEOUT_MS);
 
 test("bdd doctor accepts pnpm resolved via corepack", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-doctor-corepack-"));
@@ -144,7 +248,7 @@ test("bdd doctor accepts pnpm resolved via corepack", async () => {
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
-});
+}, CLI_DOCTOR_TEST_TIMEOUT_MS);
 
 test("bdd doctor json output includes deployment backend summary", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-doctor-deployment-"));
@@ -222,7 +326,55 @@ test("bdd doctor json output includes deployment backend summary", async () => {
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
-});
+}, CLI_DOCTOR_TEST_TIMEOUT_MS);
+
+test("bdd doctor json output includes camera runtime summary when native_desktop helper is configured", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-doctor-camera-"));
+  const helperPath = await createFakeCameraDoctorHelperScript();
+  const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+  try {
+    await withEnv({
+      BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND: process.execPath,
+      BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON: JSON.stringify([helperPath]),
+    }, async () => {
+      await doctorCommand.run?.({
+        args: {
+          json: true,
+          "state-dir": stateDir,
+        },
+      } as never);
+    });
+
+    const output = String(logSpy.mock.calls.at(-1)?.[0] ?? "");
+    const parsed = JSON.parse(output);
+    expect(parsed.cameraRuntime).toMatchObject({
+      summary: {
+        defaultProviderId: "browser_loopback",
+        warningCount: 1,
+        errorCount: 0,
+      },
+      providers: expect.arrayContaining([
+        expect.objectContaining({
+          id: "native_desktop",
+          status: "degraded",
+          sampleDevices: expect.arrayContaining([
+            "OBSBOT Tiny 2 StreamCamera [available, external, busy, stable=usb-3564-fef8-453a4b75]",
+          ]),
+        }),
+      ]),
+    });
+    expect(parsed.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "Camera Runtime",
+        status: "warn",
+      }),
+    ]));
+  } finally {
+    await fs.rm(path.dirname(helperPath), { recursive: true, force: true }).catch(() => {});
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+}, CLI_DOCTOR_TEST_TIMEOUT_MS);
 
 test("bdd doctor json output includes runtime resilience summary when available", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-cli-doctor-runtime-"));
@@ -329,4 +481,4 @@ test("bdd doctor json output includes runtime resilience summary when available"
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
-});
+}, CLI_DOCTOR_TEST_TIMEOUT_MS);

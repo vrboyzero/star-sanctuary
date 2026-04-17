@@ -48,7 +48,8 @@ describe("stt-transcribe", () => {
             durationSec: 1.5,
         });
         expect(mockOpenAI.audio.transcriptions.create).toHaveBeenCalledWith(
-            expect.objectContaining({ model: "whisper-1" })
+            expect.objectContaining({ model: "whisper-1" }),
+            expect.objectContaining({ signal: undefined }),
         );
     });
 
@@ -112,5 +113,43 @@ describe("stt-transcribe", () => {
             fileName: "empty.mp3",
         });
         expect(result).toBeNull();
+    });
+
+    it("should abort DashScope polling when abortSignal is triggered", async () => {
+        process.env.BELLDANDY_STT_PROVIDER = "dashscope";
+
+        (fetch as any).mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ output: { task_id: "task-abort" } }),
+        });
+
+        (fetch as any).mockImplementationOnce(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            return await new Promise<Response>((_resolve, reject) => {
+                const signal = init?.signal as AbortSignal | undefined;
+                if (signal?.aborted) {
+                    const error = new Error("Stopped by user.");
+                    error.name = "AbortError";
+                    reject(error);
+                    return;
+                }
+                signal?.addEventListener("abort", () => {
+                    const error = new Error("Stopped by user.");
+                    error.name = "AbortError";
+                    reject(error);
+                }, { once: true });
+            });
+        });
+
+        const controller = new AbortController();
+        const promise = transcribeSpeech({
+            buffer: mockBuffer,
+            fileName: "test.wav",
+            abortSignal: controller.signal,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        controller.abort("Stopped by user.");
+
+        await expect(promise).rejects.toThrow("Stopped by user.");
     });
 });

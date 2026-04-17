@@ -14,6 +14,9 @@ const manager = {
   getRecentTasks: vi.fn(),
   getTaskDetail: vi.fn(),
   getTaskByConversation: vi.fn(),
+  getRecentWork: vi.fn(),
+  getResumeContext: vi.fn(),
+  findSimilarPastWork: vi.fn(),
   promoteTaskToMethodCandidate: vi.fn(),
   promoteTaskToSkillCandidate: vi.fn(),
   listExperienceCandidates: vi.fn(),
@@ -35,6 +38,12 @@ const getGlobalSkillRegistry = vi.fn(() => null);
 vi.mock("@belldandy/memory", () => ({
   MemoryManager: vi.fn(),
   getGlobalMemoryManager: () => manager,
+  createTaskWorkSurface: (delegate: any) => ({
+    recentWork: (input: any) => delegate.getRecentWork?.(input) ?? [],
+    resumeContext: (input: any) => delegate.getResumeContext?.(input) ?? null,
+    findSimilarWork: (input: any) => delegate.findSimilarPastWork?.(input) ?? [],
+    explainSources: (input: any) => delegate.getTaskDetail?.(input?.taskId) ?? null,
+  }),
   appendToTodayMemory,
   readMemoryFile,
   writeMemoryFile,
@@ -328,6 +337,195 @@ describe("memory tools", () => {
     expect(result.success).toBe(true);
     expect(result.output).toContain("修复任务");
     expect(result.output).toContain("task_1");
+  });
+
+  it("recent_work should render specialized recent work shortcuts", async () => {
+    manager.getRecentWork.mockReturnValue([
+      {
+        taskId: "task_recent_work_1",
+        conversationId: "conv-recent-work-1",
+        status: "partial",
+        source: "chat",
+        startedAt: "2026-04-17T09:00:00.000Z",
+        updatedAt: "2026-04-17T09:10:00.000Z",
+        title: "补 Step 3 检索短路径",
+        workRecap: {
+          headline: "已确认 4 条执行事实；当前停在：正在补 recent_work 与 resume_context 的 manager 接口。",
+        },
+        resumeContext: {
+          currentStopPoint: "正在补 recent_work 与 resume_context 的 manager 接口。",
+          nextStep: "继续接 skill 与 Gateway RPC。",
+        },
+        recentActivityTitles: ["已执行工具 apply_patch", "已变更文件：packages/belldandy-memory/src/manager.ts"],
+        matchReasons: ["标题/目标", "当前停点"],
+        toolNames: ["apply_patch"],
+        artifactPaths: ["packages/belldandy-memory/src/manager.ts"],
+      },
+    ]);
+
+    const result = await mod.recentWorkTool.execute({
+      query: "Step 3",
+      limit: 3,
+    }, agentContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.getRecentWork).toHaveBeenCalledWith({
+      query: "Step 3",
+      limit: 3,
+      filter: {
+        agentId: "agent-belldandy",
+      },
+    });
+    expect(result.output).toContain("补 Step 3 检索短路径");
+    expect(result.output).toContain("Recap:");
+    expect(result.output).not.toContain("Matched By:");
+    expect(result.output).not.toContain("Recent Activity:");
+  });
+
+  it("resume_context should render stop point and next step", async () => {
+    manager.getResumeContext.mockReturnValue({
+      taskId: "task_resume_1",
+      conversationId: "conv-resume-1",
+      status: "partial",
+      source: "chat",
+      startedAt: "2026-04-17T08:00:00.000Z",
+      updatedAt: "2026-04-17T08:30:00.000Z",
+      title: "继续整理 Step 3",
+      workRecap: {
+        headline: "已确认 3 条执行事实；当前停在：已经落完 manager 接口，待补 RPC。",
+        confirmedFacts: ["已新增 recent_work manager 方法"],
+      },
+      resumeContext: {
+        currentStopPoint: "已经落完 manager 接口，待补 RPC。",
+        nextStep: "继续补 Gateway RPC 与定向测试。",
+        blockers: ["尚未接线到 WebSocket 方法表。"],
+      },
+      recentActivityTitles: ["已变更文件：packages/belldandy-memory/src/manager.ts"],
+      toolNames: ["apply_patch"],
+      artifactPaths: ["packages/belldandy-memory/src/manager.ts"],
+    });
+
+    const result = await mod.resumeContextTool.execute({
+      query: "Step 3",
+    }, agentContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.getResumeContext).toHaveBeenCalledWith({
+      taskId: undefined,
+      conversationId: undefined,
+      query: "Step 3",
+      filter: {
+        agentId: "agent-belldandy",
+      },
+    });
+    expect(result.output).toContain("Stop: 已经落完 manager 接口，待补 RPC。");
+    expect(result.output).toContain("Next: 继续补 Gateway RPC 与定向测试。");
+    expect(result.output).not.toContain("Blockers:");
+  });
+
+  it("similar_past_work should query specialized similar task path", async () => {
+    manager.findSimilarPastWork.mockReturnValue([
+      {
+        taskId: "task_similar_1",
+        conversationId: "conv-similar-1",
+        status: "success",
+        source: "chat",
+        startedAt: "2026-04-16T10:00:00.000Z",
+        finishedAt: "2026-04-16T10:05:00.000Z",
+        updatedAt: "2026-04-16T10:05:00.000Z",
+        title: "修复 memory viewer task detail 渲染",
+        summary: "已补 task detail 的 work recap 展示。",
+        workRecap: {
+          headline: "任务已完成；已确认 5 条执行事实。",
+        },
+        resumeContext: {
+          currentStopPoint: "任务已完成。",
+        },
+        recentActivityTitles: ["已变更文件：apps/web/public/app/features/memory-detail-render.js"],
+        matchReasons: ["标题/目标", "摘要/复盘", "工具/产物"],
+        toolNames: ["apply_patch"],
+        artifactPaths: ["apps/web/public/app/features/memory-detail-render.js"],
+      },
+    ]);
+
+    const result = await mod.similarPastWorkTool.execute({
+      query: "memory viewer task detail",
+      limit: 2,
+    }, agentContext);
+
+    expect(result.success).toBe(true);
+    expect(manager.findSimilarPastWork).toHaveBeenCalledWith({
+      query: "memory viewer task detail",
+      limit: 2,
+      filter: {
+        agentId: "agent-belldandy",
+      },
+    });
+    expect(result.output).toContain("修复 memory viewer task detail 渲染");
+    expect(result.output).not.toContain("Matched By:");
+  });
+
+  it("recent_work and resume_context should support full detail expansion", async () => {
+    manager.getRecentWork.mockReturnValue([
+      {
+        taskId: "task_recent_work_expand_1",
+        conversationId: "conv-recent-work-expand-1",
+        status: "partial",
+        source: "chat",
+        startedAt: "2026-04-17T09:00:00.000Z",
+        updatedAt: "2026-04-17T09:10:00.000Z",
+        title: "展开 recent_work 摘要",
+        workRecap: {
+          headline: "已确认 3 条执行事实；当前停在：待补 full detail 输出。",
+        },
+        resumeContext: {
+          currentStopPoint: "待补 full detail 输出。",
+          nextStep: "继续补 detail_level=full。",
+        },
+        recentActivityTitles: ["已执行工具 apply_patch"],
+        matchReasons: ["标题/目标", "当前停点"],
+        toolNames: ["apply_patch"],
+        artifactPaths: ["packages/belldandy-skills/src/builtin/memory.ts"],
+      },
+    ]);
+    manager.getResumeContext.mockReturnValue({
+      taskId: "task_resume_expand_1",
+      conversationId: "conv-resume-expand-1",
+      status: "partial",
+      source: "chat",
+      startedAt: "2026-04-17T08:00:00.000Z",
+      updatedAt: "2026-04-17T08:30:00.000Z",
+      title: "展开 resume_context 摘要",
+      workRecap: {
+        headline: "已确认 2 条执行事实；当前停在：待补 full detail。",
+        confirmedFacts: ["已新增 detail_level 参数"],
+      },
+      resumeContext: {
+        currentStopPoint: "待补 full detail。",
+        nextStep: "继续补 tests。",
+        blockers: ["还没覆盖 expanded output。"],
+      },
+      recentActivityTitles: ["已变更文件：packages/belldandy-skills/src/builtin/memory.ts"],
+      toolNames: ["apply_patch"],
+      artifactPaths: ["packages/belldandy-skills/src/builtin/memory.ts"],
+    });
+
+    const recentWorkRes = await mod.recentWorkTool.execute({
+      query: "detail",
+      detail_level: "full",
+    }, agentContext);
+    const resumeContextRes = await mod.resumeContextTool.execute({
+      query: "detail",
+      detail_level: "full",
+    }, agentContext);
+
+    expect(recentWorkRes.success).toBe(true);
+    expect(recentWorkRes.output).toContain("Matched By: 标题/目标, 当前停点");
+    expect(recentWorkRes.output).toContain("Recent Activity:");
+    expect(resumeContextRes.success).toBe(true);
+    expect(resumeContextRes.output).toContain("Confirmed Facts:");
+    expect(resumeContextRes.output).toContain("Blockers:");
+    expect(resumeContextRes.output).toContain("Recent Activity:");
   });
 
   it("task_search should reject unsupported scope parameter", async () => {

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { MemoryManager } from "./manager.js";
+import { buildTaskRecapArtifacts } from "./task-recap.js";
+import type { TaskActivityRecord, TaskRecord } from "./task-types.js";
 
 describe("MemoryManager guardrails", () => {
   let rootDir: string;
@@ -272,6 +274,216 @@ describe("MemoryManager guardrails", () => {
     });
   });
 
+  it("returns task activity facts in task detail", () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      taskMemoryEnabled: true,
+    });
+
+    const taskId = manager.startTaskCapture({
+      conversationId: "conv-activity-1",
+      sessionKey: "session-activity-1",
+      source: "chat",
+      objective: "record factual execution activity",
+    });
+    expect(taskId).toBeTruthy();
+
+    manager.linkTaskMemories("conv-activity-1", ["chunk-activity-1"], "used");
+    manager.recordTaskToolCall("conv-activity-1", {
+      toolName: "apply_patch",
+      success: true,
+      durationMs: 90,
+      artifactPaths: ["packages/belldandy-memory/src/task-processor.ts"],
+    });
+    manager.completeTaskCapture({
+      conversationId: "conv-activity-1",
+      success: true,
+      durationMs: 1800,
+    });
+
+    const detail = manager.getTaskDetail(taskId!);
+
+    expect(detail?.activities.map((item) => item.kind)).toEqual([
+      "task_started",
+      "memory_recalled",
+      "tool_called",
+      "file_changed",
+      "task_completed",
+    ]);
+    expect(detail?.workRecap?.headline).toContain("任务已完成");
+    expect(detail?.workRecap?.confirmedFacts).toEqual(expect.arrayContaining([
+      "已关联 1 条召回记忆",
+      "已变更文件：packages/belldandy-memory/src/task-processor.ts",
+    ]));
+    expect(detail?.resumeContext?.currentStopPoint).toBe("任务已完成。");
+    expect(detail?.resumeContext?.nextStep).toBeUndefined();
+    expect(detail?.activities.every((item) => !("nextStep" in item))).toBe(true);
+    expect(detail?.activities.find((item) => item.kind === "file_changed")?.files).toEqual([
+      "packages/belldandy-memory/src/task-processor.ts",
+    ]);
+  });
+
+  it("builds recent_work shortcuts with recap and recent activity", () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      taskMemoryEnabled: true,
+    });
+
+    const store = (manager as any).store;
+    seedTaskShortcut(store, {
+      taskId: "task-shortcut-recent-1",
+      conversationId: "conv-shortcut-recent-1",
+      status: "partial",
+      objective: "补 recent_work 检索短路径",
+      summary: "已开始补 recent_work 与 resume_context 的 manager 检索接口。",
+      updatedAt: "2026-04-17T09:10:00.000Z",
+      activities: [
+        createShortcutActivity({
+          id: "activity-shortcut-recent-1",
+          taskId: "task-shortcut-recent-1",
+          conversationId: "conv-shortcut-recent-1",
+          sequence: 0,
+          kind: "tool_called",
+          state: "completed",
+          happenedAt: "2026-04-17T09:05:00.000Z",
+          title: "已执行工具 apply_patch",
+        }),
+        createShortcutActivity({
+          id: "activity-shortcut-recent-2",
+          taskId: "task-shortcut-recent-1",
+          conversationId: "conv-shortcut-recent-1",
+          sequence: 1,
+          kind: "file_changed",
+          state: "completed",
+          happenedAt: "2026-04-17T09:06:00.000Z",
+          title: "已变更文件：packages/belldandy-memory/src/manager.ts",
+          files: ["packages/belldandy-memory/src/manager.ts"],
+        }),
+      ],
+    });
+
+    const items = manager.getRecentWork({ limit: 3, query: "recent_work" });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      taskId: "task-shortcut-recent-1",
+      status: "partial",
+    });
+    expect(items[0].workRecap?.headline).toContain("当前停在");
+    expect(items[0].recentActivityTitles).toEqual(expect.arrayContaining([
+      "已变更文件：packages/belldandy-memory/src/manager.ts",
+      "已执行工具 apply_patch",
+    ]));
+    expect(items[0].matchReasons).toEqual(expect.arrayContaining(["标题/目标", "摘要/复盘"]));
+  });
+
+  it("prefers resumable partial task when reading resume_context", () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      taskMemoryEnabled: true,
+    });
+
+    const store = (manager as any).store;
+    seedTaskShortcut(store, {
+      taskId: "task-resume-old-success",
+      conversationId: "conv-resume-old-success",
+      status: "success",
+      objective: "完成旧的 viewer task 详情优化",
+      summary: "旧任务已完成。",
+      updatedAt: "2026-04-16T08:00:00.000Z",
+      activities: [
+        createShortcutActivity({
+          id: "activity-resume-old-success",
+          taskId: "task-resume-old-success",
+          conversationId: "conv-resume-old-success",
+          sequence: 0,
+          kind: "task_completed",
+          state: "completed",
+          happenedAt: "2026-04-16T08:00:00.000Z",
+          title: "任务已完成。",
+        }),
+      ],
+    });
+    seedTaskShortcut(store, {
+      taskId: "task-resume-current",
+      conversationId: "conv-resume-current",
+      status: "partial",
+      objective: "继续补 recent_work / resume_context RPC",
+      summary: "已停在 RPC 接线前，待继续补 memory.recent_work 与 memory.resume_context。",
+      updatedAt: "2026-04-17T10:00:00.000Z",
+      activities: [
+        createShortcutActivity({
+          id: "activity-resume-current-1",
+          taskId: "task-resume-current",
+          conversationId: "conv-resume-current",
+          sequence: 0,
+          kind: "tool_called",
+          state: "completed",
+          happenedAt: "2026-04-17T09:55:00.000Z",
+          title: "已执行工具 apply_patch",
+        }),
+      ],
+    });
+
+    const item = manager.getResumeContext({ query: "resume_context RPC" });
+
+    expect(item?.taskId).toBe("task-resume-current");
+    expect(item?.resumeContext?.currentStopPoint).toContain("已停在 RPC 接线前");
+    expect(item?.resumeContext?.nextStep).toBeTruthy();
+  });
+
+  it("finds similar past work from task recap and activity fields", () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      taskMemoryEnabled: true,
+    });
+
+    const store = (manager as any).store;
+    seedTaskShortcut(store, {
+      taskId: "task-similar-viewer-1",
+      conversationId: "conv-similar-viewer-1",
+      status: "success",
+      objective: "修复 memory viewer task detail 渲染",
+      summary: "已补 task detail 的 Work Recap 与 Resume Context 展示。",
+      updatedAt: "2026-04-16T11:00:00.000Z",
+      activities: [
+        createShortcutActivity({
+          id: "activity-similar-viewer-1",
+          taskId: "task-similar-viewer-1",
+          conversationId: "conv-similar-viewer-1",
+          sequence: 0,
+          kind: "file_changed",
+          state: "completed",
+          happenedAt: "2026-04-16T10:58:00.000Z",
+          title: "已变更文件：apps/web/public/app/features/memory-detail-render.js",
+          files: ["apps/web/public/app/features/memory-detail-render.js"],
+        }),
+      ],
+    });
+    seedTaskShortcut(store, {
+      taskId: "task-similar-other-1",
+      conversationId: "conv-similar-other-1",
+      status: "success",
+      objective: "重启邮件服务",
+      summary: "与 viewer 无关。",
+      updatedAt: "2026-04-16T09:00:00.000Z",
+      activities: [],
+    });
+
+    const items = manager.findSimilarPastWork({
+      query: "memory viewer task detail",
+      limit: 3,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0].taskId).toBe("task-similar-viewer-1");
+    expect(items[0].matchReasons).toEqual(expect.arrayContaining(["标题/目标", "摘要/复盘", "最近活动"]));
+  });
+
   it("returns durable memory guidance with accepted and rejected policy summary", () => {
     manager = createManager({
       workspaceRoot: docsDir,
@@ -387,6 +599,70 @@ describe("MemoryManager guardrails", () => {
     extractionSpy.mockRestore();
   });
 });
+
+function seedTaskShortcut(store: any, input: {
+  taskId: string;
+  conversationId: string;
+  status: TaskRecord["status"];
+  objective?: string;
+  summary?: string;
+  updatedAt: string;
+  activities: TaskActivityRecord[];
+}): void {
+  const task: TaskRecord = {
+    id: input.taskId,
+    conversationId: input.conversationId,
+    sessionKey: input.conversationId,
+    source: "chat",
+    status: input.status,
+    objective: input.objective,
+    summary: input.summary,
+    startedAt: input.updatedAt,
+    finishedAt: input.status === "success" ? input.updatedAt : undefined,
+    createdAt: input.updatedAt,
+    updatedAt: input.updatedAt,
+  };
+  const recap = buildTaskRecapArtifacts({
+    task,
+    activities: input.activities,
+    updatedAt: input.updatedAt,
+  });
+  store.createTask({
+    ...task,
+    workRecap: recap.workRecap,
+    resumeContext: recap.resumeContext,
+  });
+  for (const activity of input.activities) {
+    store.createTaskActivity(activity);
+  }
+}
+
+function createShortcutActivity(input: {
+  id: string;
+  taskId: string;
+  conversationId: string;
+  sequence: number;
+  kind: TaskActivityRecord["kind"];
+  state: TaskActivityRecord["state"];
+  happenedAt: string;
+  title: string;
+  files?: string[];
+}): TaskActivityRecord {
+  return {
+    id: input.id,
+    taskId: input.taskId,
+    conversationId: input.conversationId,
+    sessionKey: input.conversationId,
+    source: "chat",
+    kind: input.kind,
+    state: input.state,
+    sequence: input.sequence,
+    happenedAt: input.happenedAt,
+    recordedAt: input.happenedAt,
+    title: input.title,
+    files: input.files,
+  };
+}
 
 function createManager(options: ConstructorParameters<typeof MemoryManager>[0]): MemoryManager {
   const manager = new MemoryManager(options);

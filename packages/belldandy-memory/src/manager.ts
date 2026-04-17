@@ -18,7 +18,16 @@ import { ExperiencePromoter } from "./experience-promoter.js";
 import { TaskProcessor } from "./task-processor.js";
 import { TaskSummarizer } from "./task-summarizer.js";
 import { buildOpenAIChatCompletionsUrl } from "./openai-url.js";
-import type { TaskConversationStore, TaskMemoryRelation, TaskRecord, TaskSearchFilter, TaskSearchOptions, TaskSource, TaskToolCallSummary } from "./task-types.js";
+import type {
+    TaskActivityRecord,
+    TaskConversationStore,
+    TaskMemoryRelation,
+    TaskRecord,
+    TaskSearchFilter,
+    TaskSearchOptions,
+    TaskSource,
+    TaskToolCallSummary,
+} from "./task-types.js";
 import type {
     ExperienceAssetType,
     ExperienceCandidate,
@@ -392,9 +401,32 @@ export type RecentTaskSummary = {
     status: TaskRecord["status"];
     source: TaskRecord["source"];
     finishedAt?: string;
+    updatedAt?: string;
     agentId?: string;
     toolNames: string[];
     artifactPaths: string[];
+    workRecap?: TaskRecord["workRecap"];
+    resumeContext?: TaskRecord["resumeContext"];
+};
+
+export type TaskWorkShortcutItem = {
+    taskId: string;
+    conversationId: string;
+    title?: string;
+    objective?: string;
+    summary?: string;
+    status: TaskRecord["status"];
+    source: TaskRecord["source"];
+    startedAt: string;
+    finishedAt?: string;
+    updatedAt: string;
+    agentId?: string;
+    toolNames: string[];
+    artifactPaths: string[];
+    workRecap?: TaskRecord["workRecap"];
+    resumeContext?: TaskRecord["resumeContext"];
+    recentActivityTitles: string[];
+    matchReasons?: string[];
 };
 
 function toRecentTaskSummary(task: TaskSummaryRecord): RecentTaskSummary {
@@ -406,9 +438,12 @@ function toRecentTaskSummary(task: TaskSummaryRecord): RecentTaskSummary {
         status: task.status,
         source: task.source,
         finishedAt: task.finishedAt,
+        updatedAt: task.updatedAt,
         agentId: task.agentId,
         toolNames: task.toolNames,
         artifactPaths: task.artifactPaths,
+        workRecap: task.workRecap,
+        resumeContext: task.resumeContext,
     };
 }
 
@@ -680,6 +715,108 @@ export class MemoryManager {
             .map((task) => toRecentTaskSummary(task));
     }
 
+    getRecentWork(input: {
+        query?: string;
+        limit?: number;
+        filter?: TaskSearchFilter;
+    } = {}): TaskWorkShortcutItem[] {
+        const limit = clampTaskLookupLimit(input.limit);
+        const query = normalizeTaskLookupQuery(input.query);
+        const recentCandidates = this.collectTaskShortcutCandidates(Math.max(limit * 6, 24), input.filter);
+
+        if (!query) {
+            return recentCandidates
+                .sort(compareTaskShortcutRecency)
+                .slice(0, limit)
+                .map((task) => toTaskWorkShortcutItem(task));
+        }
+
+        const fallbackCandidates = this.searchTasks(query, {
+            limit: Math.max(limit * 4, 12),
+            filter: input.filter,
+        })
+            .map((task) => this.getTaskDetail(task.id))
+            .filter((task): task is TaskExperienceDetail => Boolean(task));
+
+        return rankTaskShortcutCandidates([
+            ...recentCandidates,
+            ...fallbackCandidates,
+        ], query)
+            .slice(0, limit)
+            .map((item) => toTaskWorkShortcutItem(item.task, item.matchReasons));
+    }
+
+    getResumeContext(input: {
+        taskId?: string;
+        conversationId?: string;
+        query?: string;
+        filter?: TaskSearchFilter;
+    } = {}): TaskWorkShortcutItem | null {
+        const directTaskId = typeof input.taskId === "string" ? input.taskId.trim() : "";
+        if (directTaskId) {
+            const task = this.getTaskDetail(directTaskId);
+            return task ? toTaskWorkShortcutItem(task) : null;
+        }
+
+        const directConversationId = typeof input.conversationId === "string" ? input.conversationId.trim() : "";
+        if (directConversationId) {
+            const task = this.getTaskByConversation(directConversationId);
+            if (!task) return null;
+            const detail = this.getTaskDetail(task.id);
+            return detail ? toTaskWorkShortcutItem(detail) : null;
+        }
+
+        const limit = clampTaskLookupLimit(input.filter?.status ? 8 : 6);
+        const query = normalizeTaskLookupQuery(input.query);
+        const recentCandidates = this.collectTaskShortcutCandidates(Math.max(limit * 6, 24), input.filter);
+        const fallbackCandidates = query
+            ? this.searchTasks(query, {
+                limit: Math.max(limit * 4, 12),
+                filter: input.filter,
+            })
+                .map((task) => this.getTaskDetail(task.id))
+                .filter((task): task is TaskExperienceDetail => Boolean(task))
+            : [];
+
+        const ranked = rankTaskShortcutCandidates([
+            ...recentCandidates,
+            ...fallbackCandidates,
+        ], query, { resumeMode: true });
+
+        return ranked.length > 0
+            ? toTaskWorkShortcutItem(ranked[0].task, ranked[0].matchReasons)
+            : null;
+    }
+
+    findSimilarPastWork(input: {
+        query: string;
+        limit?: number;
+        filter?: TaskSearchFilter;
+    }): TaskWorkShortcutItem[] {
+        const query = normalizeTaskLookupQuery(input.query);
+        if (!query) return [];
+
+        const limit = clampTaskLookupLimit(input.limit);
+        const searchCandidates = this.searchTasks(query, {
+            limit: Math.max(limit * 5, 15),
+            filter: input.filter,
+        })
+            .map((task) => this.getTaskDetail(task.id))
+            .filter((task): task is TaskExperienceDetail => Boolean(task));
+        const recentCandidates = this.collectTaskShortcutCandidates(Math.max(limit * 4, 16), input.filter);
+
+        return rankTaskShortcutCandidates([
+            ...searchCandidates,
+            ...recentCandidates,
+        ], query)
+            .slice(0, limit)
+            .map((item) => toTaskWorkShortcutItem(item.task, item.matchReasons));
+    }
+
+    getTaskActivities(taskId: string, limit = 200): TaskActivityRecord[] {
+        return this.store.listTaskActivities(taskId, limit);
+    }
+
     findRecentDuplicateToolAction(input: {
         toolName: string;
         actionKey?: string;
@@ -826,6 +963,7 @@ export class MemoryManager {
             .map((item) => this.toExperienceUsageSummary(item));
         return {
             ...task,
+            activities: this.store.listTaskActivities(taskId, 200),
             memoryLinks: this.store.listTaskMemoryLinks(taskId),
             usedMethods,
             usedSkills,
@@ -1831,6 +1969,16 @@ candidateType 必须是以下之一：user / feedback / project / reference
         this.store.close();
     }
 
+    private collectTaskShortcutCandidates(limit: number, filter?: TaskSearchFilter): TaskExperienceDetail[] {
+        return dedupeTaskShortcutCandidates(
+            this.store
+                .listTaskSummaries(limit, filter)
+                .filter((task) => task.status !== "running")
+                .map((task) => this.getTaskDetail(task.id))
+                .filter((task): task is TaskExperienceDetail => Boolean(task)),
+        );
+    }
+
     private shouldAutoPromoteTask(task: TaskRecord): boolean {
         if (task.status !== "success" && task.status !== "partial") {
             return false;
@@ -1999,4 +2147,226 @@ function classifyImportance(score: number): MemoryImportance {
     if (score >= 11) return "high";
     if (score >= 7) return "medium";
     return "low";
+}
+
+type RankedTaskShortcutCandidate = {
+    task: TaskExperienceDetail;
+    score: number;
+    resumePriority: number;
+    matchReasons: string[];
+};
+
+function clampTaskLookupLimit(limit?: number): number {
+    if (typeof limit !== "number" || !Number.isFinite(limit)) return 5;
+    return Math.min(Math.max(Math.floor(limit), 1), 10);
+}
+
+function normalizeTaskLookupQuery(value?: string): string | undefined {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value.replace(/\s+/g, " ").trim();
+    return trimmed ? trimmed : undefined;
+}
+
+function toTaskWorkShortcutItem(task: TaskExperienceDetail, matchReasons?: string[]): TaskWorkShortcutItem {
+    return {
+        taskId: task.id,
+        conversationId: task.conversationId,
+        title: task.title,
+        objective: task.objective,
+        summary: task.summary,
+        status: task.status,
+        source: task.source,
+        startedAt: task.startedAt,
+        finishedAt: task.finishedAt,
+        updatedAt: task.updatedAt,
+        agentId: task.agentId,
+        toolNames: (task.toolCalls ?? []).map((item) => item.toolName),
+        artifactPaths: task.artifactPaths ?? [],
+        workRecap: task.workRecap,
+        resumeContext: task.resumeContext,
+        recentActivityTitles: collectRecentActivityTitles(task),
+        matchReasons: matchReasons?.length ? matchReasons : undefined,
+    };
+}
+
+function dedupeTaskShortcutCandidates(items: TaskExperienceDetail[]): TaskExperienceDetail[] {
+    const seen = new Set<string>();
+    const result: TaskExperienceDetail[] = [];
+    for (const item of items) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        result.push(item);
+    }
+    return result;
+}
+
+function rankTaskShortcutCandidates(
+    candidates: TaskExperienceDetail[],
+    query?: string,
+    options: {
+        resumeMode?: boolean;
+    } = {},
+): RankedTaskShortcutCandidate[] {
+    const deduped = dedupeTaskShortcutCandidates(candidates).filter((task) => task.status !== "running");
+    const ranked = deduped.map((task) => {
+        const match = scoreTaskShortcut(task, query);
+        return {
+            task,
+            score: match.score,
+            resumePriority: computeResumePriority(task),
+            matchReasons: match.matchReasons,
+        };
+    });
+
+    const filtered = query
+        ? ranked.filter((item) => item.score > 0)
+        : ranked;
+
+    return filtered.sort((a, b) => {
+        if (options.resumeMode) {
+            if (query) {
+                if (b.score !== a.score) return b.score - a.score;
+                if (b.resumePriority !== a.resumePriority) return b.resumePriority - a.resumePriority;
+                return compareTaskShortcutRecency(a.task, b.task);
+            }
+            if (b.resumePriority !== a.resumePriority) return b.resumePriority - a.resumePriority;
+            if (b.score !== a.score) return b.score - a.score;
+            return compareTaskShortcutRecency(a.task, b.task);
+        }
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.resumePriority !== a.resumePriority) return b.resumePriority - a.resumePriority;
+        return compareTaskShortcutRecency(a.task, b.task);
+    });
+}
+
+function compareTaskShortcutRecency(a: Pick<TaskRecord, "finishedAt" | "updatedAt" | "startedAt">, b: Pick<TaskRecord, "finishedAt" | "updatedAt" | "startedAt">): number {
+    return resolveTaskShortcutTimestamp(b) - resolveTaskShortcutTimestamp(a);
+}
+
+function resolveTaskShortcutTimestamp(task: Pick<TaskRecord, "finishedAt" | "updatedAt" | "startedAt">): number {
+    const timestamp = Date.parse(task.finishedAt ?? task.updatedAt ?? task.startedAt);
+    return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+}
+
+function computeResumePriority(task: TaskExperienceDetail): number {
+    let priority = 0;
+    switch (task.status) {
+        case "partial":
+            priority += 6;
+            break;
+        case "failed":
+            priority += 5;
+            break;
+        case "success":
+            priority += 2;
+            break;
+        default:
+            break;
+    }
+    if (task.resumeContext?.currentStopPoint) priority += 3;
+    if (task.resumeContext?.nextStep) priority += 4;
+    if ((task.resumeContext?.blockers?.length ?? 0) > 0) priority += 2;
+    if ((task.workRecap?.pendingActions?.length ?? 0) > 0) priority += 1;
+    return priority;
+}
+
+function collectRecentActivityTitles(task: TaskExperienceDetail, limit = 3): string[] {
+    const collected: string[] = [];
+    for (const activity of [...(task.activities ?? [])].reverse()) {
+        if (activity.kind === "task_completed") continue;
+        const text = sanitizeTaskShortcutText(activity.title || activity.summary);
+        if (!text) continue;
+        collected.push(text);
+        if (collected.length >= limit) break;
+    }
+    return collected;
+}
+
+function scoreTaskShortcut(task: TaskExperienceDetail, query?: string): { score: number; matchReasons: string[] } {
+    const normalizedQuery = normalizeTaskShortcutText(query);
+    if (!normalizedQuery) {
+        return { score: 0, matchReasons: [] };
+    }
+
+    const queryTokens = tokenizeTaskShortcutQuery(normalizedQuery);
+    let matchScore = 0;
+    const reasons = new Set<string>();
+
+    const fields: Array<{ label: string; values: Array<string | undefined> }> = [
+        { label: "标题/目标", values: [task.title, task.objective] },
+        { label: "摘要/复盘", values: [task.summary, task.reflection, task.workRecap?.headline] },
+        { label: "已确认事实", values: task.workRecap?.confirmedFacts ?? [] },
+        { label: "当前停点", values: [task.resumeContext?.currentStopPoint, task.resumeContext?.nextStep, ...(task.resumeContext?.blockers ?? [])] },
+        { label: "最近活动", values: collectRecentActivityTitles(task, 5) },
+        { label: "工具/产物", values: [...(task.toolCalls?.map((item) => item.toolName) ?? []), ...(task.artifactPaths ?? [])] },
+    ];
+
+    for (const field of fields) {
+        const fieldScore = scoreTaskShortcutField(field.values, normalizedQuery, queryTokens);
+        if (fieldScore <= 0) continue;
+        matchScore += fieldScore;
+        reasons.add(field.label);
+    }
+
+    if (matchScore <= 0) {
+        return { score: 0, matchReasons: [] };
+    }
+
+    return {
+        score: matchScore + computeTaskShortcutRecencyBoost(task),
+        matchReasons: [...reasons],
+    };
+}
+
+function scoreTaskShortcutField(values: Array<string | undefined>, normalizedQuery: string, queryTokens: string[]): number {
+    let best = 0;
+    for (const value of values) {
+        const normalizedValue = normalizeTaskShortcutText(value);
+        if (!normalizedValue) continue;
+        let score = 0;
+        if (normalizedValue.includes(normalizedQuery)) {
+            score += 8;
+        }
+        const tokenMatches = queryTokens.filter((token) => normalizedValue.includes(token)).length;
+        const minTokenMatches = queryTokens.length >= 3 ? 2 : 1;
+        if (tokenMatches >= minTokenMatches) {
+            score += tokenMatches * 2;
+        }
+        if (score > best) {
+            best = score;
+        }
+    }
+    return best;
+}
+
+function tokenizeTaskShortcutQuery(value: string): string[] {
+    return [...new Set(value
+        .toLowerCase()
+        .split(/[\s,.;:!?/\\()[\]{}<>|"'`~\-_=+]+/)
+        .map((item) => item.trim())
+        .filter((item) => item.length >= 2))];
+}
+
+function normalizeTaskShortcutText(value?: string): string | undefined {
+    const sanitized = sanitizeTaskShortcutText(value);
+    if (!sanitized) return undefined;
+    return sanitized.toLowerCase();
+}
+
+function sanitizeTaskShortcutText(value?: string): string | undefined {
+    if (typeof value !== "string") return undefined;
+    const trimmed = value
+        .replace(/\s+/g, " ")
+        .trim();
+    return trimmed ? trimmed : undefined;
+}
+
+function computeTaskShortcutRecencyBoost(task: TaskExperienceDetail): number {
+    const timestamp = resolveTaskShortcutTimestamp(task);
+    if (!Number.isFinite(timestamp)) return 0;
+    const ageHours = (Date.now() - timestamp) / (1000 * 60 * 60);
+    if (ageHours <= 24) return 3;
+    if (ageHours <= 24 * 7) return 2;
+    if (ageHours <= 24 * 30) return 1;
+    return 0;
 }

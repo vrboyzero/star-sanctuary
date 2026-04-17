@@ -48,6 +48,107 @@ afterEach(() => {
   cleanupGlobalMemoryManagersForTest();
 });
 
+async function createFakeCameraDoctorHelperScript(): Promise<string> {
+  const helperDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-camera-doctor-helper-"));
+  const helperPath = path.join(helperDir, "fake-camera-helper.mjs");
+  await fs.promises.writeFile(helperPath, `
+import readline from "node:readline";
+
+const protocol = "camera-native-desktop/v1";
+const capabilities = {
+  diagnose: true,
+  list: true,
+  snapshot: true,
+  clip: false,
+  audio: false,
+  hotplug: true,
+  background: true,
+  stillFormats: ["png"],
+  clipFormats: [],
+  selectionByStableKey: true,
+  deviceChangeEvents: true,
+};
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  crlfDelay: Infinity,
+});
+
+rl.on("line", (line) => {
+  const request = JSON.parse(line);
+  if (!request || request.kind !== "request") {
+    return;
+  }
+  let result;
+  switch (request.method) {
+    case "hello":
+      result = {
+        protocol,
+        helperVersion: "server-doctor-helper",
+        platform: "windows",
+        transport: "stdio",
+        helperStatus: "ready",
+        capabilities,
+      };
+      break;
+    case "diagnose":
+      result = {
+        status: "degraded",
+        helperStatus: "ready",
+        permissionState: "granted",
+        observedAt: "2026-04-17T10:10:00.000Z",
+        issues: [
+          {
+            code: "device_busy",
+            severity: "warning",
+            message: "OBSBOT Tiny 2 StreamCamera is currently busy.",
+            retryable: true,
+          },
+        ],
+        devices: [
+          {
+            deviceId: "obspot-main",
+            stableKey: "usb-3564-fef8-453a4b75",
+            label: "OBSBOT Tiny 2 StreamCamera",
+            source: "external",
+            transport: "native",
+            external: true,
+            available: true,
+            kind: "videoinput",
+            busy: true,
+          },
+        ],
+        capabilities,
+        helperVersion: "server-doctor-helper",
+      };
+      break;
+    default:
+      process.stdout.write(JSON.stringify({
+        kind: "response",
+        protocol,
+        id: request.id,
+        method: request.method,
+        ok: false,
+        error: {
+          code: "unsupported_method",
+          message: "unsupported",
+        },
+      }) + "\\n");
+      return;
+  }
+  process.stdout.write(JSON.stringify({
+    kind: "response",
+    protocol,
+    id: request.id,
+    method: request.method,
+    ok: true,
+    result,
+  }) + "\\n");
+});
+`, "utf-8");
+  return helperPath;
+}
+
 test("system.doctor exposes tool behavior observability summary", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const toolsConfigManager = new ToolsConfigManager(stateDir);
@@ -154,6 +255,78 @@ test("system.doctor exposes tool behavior observability summary", async () => {
     await server.close();
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("system.doctor exposes camera runtime summary when native_desktop helper is configured", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const helperPath = await createFakeCameraDoctorHelperScript();
+
+  await withEnv({
+    BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND: process.execPath,
+    BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON: JSON.stringify([helperPath]),
+  }, async () => {
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "system-doctor-camera-runtime",
+        method: "system.doctor",
+        params: {},
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-camera-runtime"));
+
+      const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-camera-runtime");
+      expect(response.ok).toBe(true);
+      expect(response.payload?.cameraRuntime).toMatchObject({
+        summary: {
+          defaultProviderId: "browser_loopback",
+          warningCount: 1,
+          errorCount: 0,
+        },
+        providers: expect.arrayContaining([
+          expect.objectContaining({
+            id: "native_desktop",
+            status: "degraded",
+            helperStatus: "ready",
+            launchConfig: expect.objectContaining({
+              command: process.execPath,
+              helperEntry: helperPath,
+            }),
+            sampleDevices: expect.arrayContaining([
+              "OBSBOT Tiny 2 StreamCamera [available, external, busy, stable=usb-3564-fef8-453a4b75]",
+            ]),
+          }),
+        ]),
+      });
+      expect(response.payload?.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "camera_runtime",
+          name: "Camera Runtime",
+          status: "warn",
+        }),
+      ]));
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+    }
+  });
+
+  await fs.promises.rm(path.dirname(helperPath), { recursive: true, force: true }).catch(() => {});
+  await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
 });
 
 test("system.doctor exposes bridge recovery diagnostics for a governed bridge subtask", async () => {
@@ -1789,6 +1962,99 @@ test("system.doctor exposes recent query runtime lifecycle traces", async () => 
       "completed",
     ]));
     expect(stages[stages.length - 1]?.stage).toBe("completed");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes agent stop diagnostics from recent query runtime traces", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-stop-runtime-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        await new Promise((resolve) => setTimeout(resolve, 180));
+        if (input.abortSignal?.aborted) {
+          yield { type: "status" as const, status: "stopped" };
+          return;
+        }
+        yield { type: "final" as const, text: `done:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "doctor-stop-message-send",
+      method: "message.send",
+      params: {
+        conversationId: "conv-doctor-stop-runtime",
+        text: "请停止这轮运行",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "doctor-stop-message-send" && f.ok === true));
+    const sendRes = frames.find((f) => f.type === "res" && f.id === "doctor-stop-message-send");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "doctor-stop-run",
+      method: "conversation.run.stop",
+      params: {
+        conversationId: "conv-doctor-stop-runtime",
+        runId: sendRes?.payload?.runId,
+        reason: "Stopped by user.",
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "doctor-stop-run" && f.ok === true));
+
+    ws.send(JSON.stringify({ type: "req", id: "system-doctor-stop-runtime", method: "system.doctor", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-stop-runtime"));
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-stop-runtime");
+
+    expect(response.ok).toBe(true);
+    expect(response.payload?.queryRuntime?.stopDiagnostics).toMatchObject({
+      available: true,
+      totalRequests: 1,
+      acceptedRequests: 1,
+      stoppedRuns: 0,
+      runningAfterStopCount: 1,
+      completedAfterStopCount: 0,
+      failedAfterStopCount: 0,
+      notFoundCount: 0,
+      runMismatchCount: 0,
+    });
+    expect(response.payload?.queryRuntime?.stopDiagnostics?.recent).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        conversationId: "conv-doctor-stop-runtime",
+        runId: sendRes?.payload?.runId,
+        reason: "Stopped by user.",
+        outcome: "running_after_stop",
+        messageStatus: "running",
+      }),
+    ]));
+
+    await waitFor(() => frames.some((f) =>
+      f.type === "event"
+      && f.event === "conversation.run.stopped"
+      && f.payload?.conversationId === "conv-doctor-stop-runtime"
+    ));
   } finally {
     ws.close();
     await closeP;

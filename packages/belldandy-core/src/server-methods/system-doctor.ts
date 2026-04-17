@@ -17,8 +17,16 @@ import {
   getGlobalMemoryManager,
   type DurableExtractionRuntime,
 } from "@belldandy/memory";
-import type { ToolExecutionRuntimeContext, ToolExecutor, SkillRegistry } from "@belldandy/skills";
-import { listToolContractsV2, TOOL_SETTINGS_CONTROL_NAME } from "@belldandy/skills";
+import type {
+  ToolExecutionRuntimeContext,
+  ToolExecutor,
+  SkillRegistry,
+} from "@belldandy/skills";
+import {
+  buildCameraRuntimeDoctorReport,
+  listToolContractsV2,
+  TOOL_SETTINGS_CONTROL_NAME,
+} from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 
 import type { BackgroundContinuationRuntimeDoctorReport } from "../background-continuation-runtime.js";
@@ -413,6 +421,12 @@ export async function handleSystemDoctorMethod(
     stateDir: ctx.stateDir,
   });
   const optionalCapabilities = await buildOptionalCapabilitiesDoctorReport();
+  const cameraRuntime = await buildCameraRuntimeDoctorReport({
+    context: {
+      conversationId: "system.doctor",
+      workspaceRoot: process.cwd(),
+    },
+  });
   const runtimeResilience = ctx.getRuntimeResilienceReport?.();
   const runtimeResilienceDiagnostics = runtimeResilience
     ? buildRuntimeResilienceDiagnosticSummary(runtimeResilience)
@@ -652,6 +666,18 @@ export async function handleSystemDoctorMethod(
     status: optionalCapabilities.summary.warnCount > 0 ? "warn" : "pass",
     message: optionalCapabilities.summary.headline,
   });
+  if (cameraRuntime) {
+    checks.push({
+      id: "camera_runtime",
+      name: "Camera Runtime",
+      status: cameraRuntime.summary.errorCount > 0
+        ? "warn"
+        : cameraRuntime.summary.warningCount > 0
+          ? "warn"
+          : "pass",
+      message: cameraRuntime.summary.headline,
+    });
+  }
   if (runtimeResilienceDiagnostics) {
     checks.push({
       id: "runtime_resilience",
@@ -1210,6 +1236,7 @@ export async function handleSystemDoctorMethod(
       memoryRuntime,
       deploymentBackends,
       optionalCapabilities,
+      ...(cameraRuntime ? { cameraRuntime } : {}),
       ...(runtimeResilience ? { runtimeResilience } : {}),
       ...(runtimeResilienceDiagnostics ? { runtimeResilienceDiagnostics } : {}),
       extensionRuntime,

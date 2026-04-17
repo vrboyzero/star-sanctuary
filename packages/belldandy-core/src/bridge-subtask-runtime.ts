@@ -1,14 +1,14 @@
 import crypto from "node:crypto";
 
 import type {
+  BridgeSessionRecord,
   BridgeSessionGovernanceCapabilities,
   BridgeSessionLaunchSemantics,
   ToolExecutionRuntimeContext,
   ToolExecutor,
   ToolRuntimeLaunchSpec,
 } from "@belldandy/skills";
-import { loadRecoveredBridgeSessions } from "../../belldandy-skills/src/builtin/agent-bridge/sessions.js";
-import type { BridgeSessionRecord } from "../../belldandy-skills/src/builtin/agent-bridge/types.js";
+import { loadRecoveredBridgeSessions } from "@belldandy/skills";
 
 import type {
   SubTaskBridgeSessionLaunch,

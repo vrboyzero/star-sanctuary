@@ -86,6 +86,95 @@ test("query runtime trace store retains recent lifecycle summary for diagnostics
   expect(summary.traces[0]?.stages[1]?.detail).toMatchObject({ updated: true });
 });
 
+test("query runtime trace store derives stop diagnostics for runs that are still active after stop", async () => {
+  const traceStore = new QueryRuntimeTraceStore({
+    maxTraces: 8,
+    maxStagesPerTrace: 8,
+  });
+
+  const messageRuntime = new QueryRuntime({
+    method: "message.send",
+    traceId: "trace-message-stop-runtime",
+    observer: traceStore.createObserver<"message.send">(),
+  });
+  const stopRuntime = new QueryRuntime({
+    method: "conversation.run.stop",
+    traceId: "trace-conversation-stop-runtime",
+    observer: traceStore.createObserver<"conversation.run.stop">(),
+  });
+
+  await messageRuntime.run(async (instance) => {
+    instance.mark("request_validated", {
+      conversationId: "conv-stop-runtime",
+      detail: {
+        runId: "run-stop-runtime",
+      },
+    });
+    instance.mark("agent_running", {
+      conversationId: "conv-stop-runtime",
+    });
+    instance.mark("tool_result_emitted", {
+      conversationId: "conv-stop-runtime",
+      detail: {
+        toolName: "inspect_tools",
+      },
+    });
+  });
+
+  await stopRuntime.run(async (instance) => {
+    instance.mark("request_validated", {
+      conversationId: "conv-stop-runtime",
+      detail: {
+        runId: "run-stop-runtime",
+        reason: "Stopped by user.",
+        hasReason: true,
+      },
+    });
+    instance.mark("task_stopped", {
+      conversationId: "conv-stop-runtime",
+      detail: {
+        runId: "run-stop-runtime",
+        state: "stop_requested",
+        reason: "Stopped by user.",
+      },
+    });
+    instance.mark("completed", {
+      conversationId: "conv-stop-runtime",
+      detail: {
+        accepted: true,
+        state: "stop_requested",
+        runId: "run-stop-runtime",
+        reason: "Stopped by user.",
+      },
+    });
+  });
+
+  const summary = traceStore.getSummary();
+  expect(summary.stopDiagnostics).toMatchObject({
+    available: true,
+    totalRequests: 1,
+    acceptedRequests: 1,
+    stoppedRuns: 0,
+    runningAfterStopCount: 1,
+    completedAfterStopCount: 0,
+    failedAfterStopCount: 0,
+    notFoundCount: 0,
+    runMismatchCount: 0,
+  });
+  expect(summary.stopDiagnostics.recent).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      stopTraceId: "trace-conversation-stop-runtime",
+      conversationId: "conv-stop-runtime",
+      runId: "run-stop-runtime",
+      reason: "Stopped by user.",
+      outcome: "running_after_stop",
+      messageTraceId: "trace-message-stop-runtime",
+      messageStatus: "running",
+      messageLatestStage: "tool_result_emitted",
+    }),
+  ]));
+});
+
 test("agent run helper captures tool lifecycle and usage summary", async () => {
   const toolCalls: string[] = [];
   const toolResults: Array<{ name: string; success: boolean }> = [];

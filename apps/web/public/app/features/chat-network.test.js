@@ -33,12 +33,44 @@ describe("chat network agent selection", () => {
   });
 
   it("keeps a single-agent roster selectable even when the native select stays hidden", () => {
-    document.body.innerHTML = `<select id="agentSelect" class="hidden"></select>`;
-    const selectEl = document.getElementById("agentSelect");
+    const createdOptions = [];
+    const selectEl = {
+      innerHTML: "existing",
+      options: createdOptions,
+      value: "",
+      appendChild(option) {
+        this.options.push(option);
+      },
+    };
     const singleAgentRoster = [{ id: "coder", displayName: "代码专家" }];
+    const previousDocument = globalThis.document;
 
-    syncAgentSelectOptions(selectEl, singleAgentRoster);
-    selectEl.value = resolvePreferredAgentSelection(singleAgentRoster, "", "");
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: {
+        createElement(tag) {
+          expect(tag).toBe("option");
+          return {
+            value: "",
+            textContent: "",
+          };
+        },
+      },
+    });
+
+    try {
+      syncAgentSelectOptions(selectEl, singleAgentRoster);
+      selectEl.value = resolvePreferredAgentSelection(singleAgentRoster, "", "");
+    } finally {
+      if (previousDocument === undefined) {
+        delete globalThis.document;
+      } else {
+        Object.defineProperty(globalThis, "document", {
+          configurable: true,
+          value: previousDocument,
+        });
+      }
+    }
 
     expect(selectEl.options).toHaveLength(1);
     expect(selectEl.options[0].value).toBe("coder");

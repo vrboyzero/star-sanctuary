@@ -8,6 +8,12 @@ import {
 import { BridgeSessionStore } from "./sessions.js";
 import { resolveBridgeSubtaskSemantics } from "./governance.js";
 import type { BridgeActionConfig, BridgeSessionRecord, BridgeTargetConfig } from "./types.js";
+import {
+  isAbortError,
+  readAbortReason,
+  sleepWithAbort,
+  throwIfAborted,
+} from "../../abort-utils.js";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -27,9 +33,8 @@ function normalizeWaitMs(value: unknown): number {
   return Math.min(normalized, MAX_IO_WAIT_MS);
 }
 
-function delay(ms: number): Promise<void> {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return sleepWithAbort(ms, signal);
 }
 
 async function ensureExistingWorkingDirectory(cwd: string): Promise<void> {
@@ -52,10 +57,12 @@ async function runStartupSequence(
   action: BridgeActionConfig,
   store: BridgeSessionStore,
   ptyManager: PtyManager,
+  signal?: AbortSignal,
 ): Promise<void> {
   for (const step of action.startupSequence ?? []) {
+    throwIfAborted(signal);
     if (step.waitMs) {
-      await delay(step.waitMs);
+      await delay(step.waitMs, signal);
     }
     const record = store.get(sessionId);
     if (!record || record.status !== "active") {
@@ -73,10 +80,11 @@ async function captureStartupOutput(
   action: BridgeActionConfig,
   store: BridgeSessionStore,
   ptyManager: PtyManager,
+  signal?: AbortSignal,
 ): Promise<string> {
   const waitMs = action.startupReadWaitMs;
   if (!waitMs) return "";
-  await delay(waitMs);
+  await delay(waitMs, signal);
   const record = store.get(sessionId);
   if (!record || record.status !== "active") {
     return "";
@@ -258,8 +266,11 @@ export async function startBridgeSession(
   const start = Date.now();
   const name = "bridge_session_start";
   let governanceTaskId: string | undefined;
+  let createdSessionId: string | undefined;
+  let createdRuntimeSessionId: string | undefined;
 
   try {
+    throwIfAborted(context.abortSignal);
     if (!target.enabled) {
       throw new Error(`Bridge target "${target.id}" 未启用。`);
     }
@@ -305,6 +316,7 @@ export async function startBridgeSession(
       cols: resolvedCols,
       rows: resolvedRows,
     });
+    createdRuntimeSessionId = runtimeSessionId;
     const backend = await ptyManager.inspectBackend();
     const store = BridgeSessionStore.getInstance();
     const record = store.create({
@@ -324,6 +336,7 @@ export async function startBridgeSession(
       firstTurnPromptProvided,
       idleTimeoutMs: target.idleTimeoutMs,
     });
+    createdSessionId = record.id;
     if (governanceTaskId && context.bridgeSessionGovernance) {
       await context.bridgeSessionGovernance.attachSession({
         taskId: governanceTaskId,
@@ -332,8 +345,8 @@ export async function startBridgeSession(
       });
     }
     await store.persistSessionState(record.id);
-    await runStartupSequence(record.id, action, store, ptyManager);
-    const startupOutput = await captureStartupOutput(record.id, action, store, ptyManager);
+    await runStartupSequence(record.id, action, store, ptyManager, context.abortSignal);
+    const startupOutput = await captureStartupOutput(record.id, action, store, ptyManager, context.abortSignal);
     const hydratedRecord = store.get(record.id) ?? record;
     const firstTurnGuidance = buildFirstTurnGuidance(hydratedRecord);
 
@@ -350,10 +363,28 @@ export async function startBridgeSession(
       durationMs: Date.now() - start,
     };
   } catch (error) {
+    if (isAbortError(error)) {
+      if (createdRuntimeSessionId) {
+        try {
+          PtyManager.getInstance().kill(createdRuntimeSessionId);
+        } catch {
+          // ignore cleanup race
+        }
+      }
+      if (createdSessionId) {
+        try {
+          const closed = await BridgeSessionStore.getInstance().close(createdSessionId, "manual");
+          await completeGovernedBridgeSession(context, closed);
+          governanceTaskId = undefined;
+        } catch {
+          // ignore cleanup race
+        }
+      }
+    }
     if (governanceTaskId && context.bridgeSessionGovernance) {
       await context.bridgeSessionGovernance.completeSession({
         taskId: governanceTaskId,
-        status: "error",
+        status: isAbortError(error) ? "stopped" : "error",
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -362,7 +393,9 @@ export async function startBridgeSession(
       name,
       success: false,
       output: "",
-      error: error instanceof Error ? error.message : String(error),
+      error: isAbortError(error)
+        ? readAbortReason(context.abortSignal)
+        : (error instanceof Error ? error.message : String(error)),
       durationMs: Date.now() - start,
     };
   }
@@ -372,12 +405,13 @@ export async function writeBridgeSession(
   sessionId: string,
   data: unknown,
   waitMs: unknown,
-  context: Pick<ToolContext, "workspaceRoot" | "bridgeSessionGovernance">,
+  context: Pick<ToolContext, "workspaceRoot" | "bridgeSessionGovernance" | "abortSignal">,
 ): Promise<ToolCallResult> {
   const start = Date.now();
   const name = "bridge_session_write";
 
   try {
+    throwIfAborted(context.abortSignal);
     if (typeof data !== "string") {
       throw new Error("bridge_session_write.data 必须是字符串。");
     }
@@ -396,7 +430,7 @@ export async function writeBridgeSession(
     ptyManager.write(record.runtimeSessionId, data);
     store.appendTranscript(sessionId, "input", data);
     const resolvedWaitMs = normalizeWaitMs(waitMs);
-    await delay(resolvedWaitMs);
+    await delay(resolvedWaitMs, context.abortSignal);
     const output = ptyManager.read(record.runtimeSessionId);
     store.appendTranscript(sessionId, "output", output);
     await recordBridgeSessionOutput(context, sessionId, output);
@@ -432,7 +466,9 @@ export async function writeBridgeSession(
       name,
       success: false,
       output: "",
-      error: error instanceof Error ? error.message : String(error),
+      error: isAbortError(error)
+        ? readAbortReason(context.abortSignal)
+        : (error instanceof Error ? error.message : String(error)),
       durationMs: Date.now() - start,
     };
   }
@@ -441,12 +477,13 @@ export async function writeBridgeSession(
 export async function readBridgeSession(
   sessionId: string,
   waitMs: unknown,
-  context: Pick<ToolContext, "workspaceRoot" | "bridgeSessionGovernance">,
+  context: Pick<ToolContext, "workspaceRoot" | "bridgeSessionGovernance" | "abortSignal">,
 ): Promise<ToolCallResult> {
   const start = Date.now();
   const name = "bridge_session_read";
 
   try {
+    throwIfAborted(context.abortSignal);
     const store = BridgeSessionStore.getInstance();
     await store.ensureLoaded(context.workspaceRoot);
     const record = store.get(sessionId);
@@ -458,7 +495,7 @@ export async function readBridgeSession(
     }
 
     const resolvedWaitMs = normalizeWaitMs(waitMs);
-    await delay(resolvedWaitMs);
+    await delay(resolvedWaitMs, context.abortSignal);
     const ptyManager = PtyManager.getInstance();
     const output = ptyManager.read(record.runtimeSessionId);
     store.appendTranscript(sessionId, "output", output);
@@ -483,7 +520,9 @@ export async function readBridgeSession(
       name,
       success: false,
       output: "",
-      error: error instanceof Error ? error.message : String(error),
+      error: isAbortError(error)
+        ? readAbortReason(context.abortSignal)
+        : (error instanceof Error ? error.message : String(error)),
       durationMs: Date.now() - start,
     };
   }

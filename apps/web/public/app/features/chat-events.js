@@ -26,6 +26,8 @@ export function createChatEventsFeature({
   onAgentStatusEvent,
   onConversationDelta,
   onConversationFinal,
+  onConversationStopped,
+  getStoppedMessageText,
   escapeHtml,
 }) {
   let botMessageEl = null;
@@ -64,6 +66,15 @@ export function createChatEventsFeature({
       updateMessageMeta?.(target, { ...botMessageMeta, isLatest: true });
     }
     return target;
+  }
+
+  function discardStreamingBubbleIfEmpty() {
+    if (!botMessageEl) return false;
+    const hasPartialText = typeof botRawHtmlBuffer === "string" && botRawHtmlBuffer.trim().length > 0;
+    if (hasPartialText) return false;
+    const wrapper = botMessageEl.closest(".msg-wrapper");
+    wrapper?.remove();
+    return true;
   }
 
   function autoplayAssistantAudio(target) {
@@ -228,6 +239,20 @@ export function createChatEventsFeature({
       autoplayAssistantAudio(target);
       forceScrollToBottom();
       getCanvasApp()?.handleReactFinal(text);
+      return true;
+    }
+
+    if (event === "conversation.run.stopped") {
+      onConversationStopped?.(payload);
+      if (!isActiveConversationPayload(payload)) {
+        return true;
+      }
+      const removedEmptyBubble = discardStreamingBubbleIfEmpty();
+      if (removedEmptyBubble) {
+        appendMessage("system", getStoppedMessageText?.(payload) || "已中断");
+      }
+      resetStreamingState();
+      forceScrollToBottom();
       return true;
     }
 

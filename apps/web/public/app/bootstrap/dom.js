@@ -179,6 +179,8 @@ export const APP_DOM_REFS = {
   cfgTtsEnabled: byId("cfgTtsEnabled"),
   cfgTtsProvider: byId("cfgTtsProvider"),
   cfgTtsVoice: byId("cfgTtsVoice"),
+  cfgTtsOpenAIBaseUrl: byId("cfgTtsOpenAIBaseUrl"),
+  cfgTtsOpenAIApiKey: byId("cfgTtsOpenAIApiKey"),
   cfgDashScopeApiKey: byId("cfgDashScopeApiKey"),
   cfgVoiceShortcut: byId("cfgVoiceShortcut"),
   cfgVoiceShortcutStatus: byId("cfgVoiceShortcutStatus"),

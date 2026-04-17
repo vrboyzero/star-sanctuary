@@ -24,6 +24,7 @@ import {
   readConfiguredPromptExperimentToolContracts,
 } from "../../tool-behavior-observability.js";
 import {
+  buildCameraRuntimeDoctorReport,
   buildToolContractV2Summary,
   listToolContractsV2,
 } from "@belldandy/skills";
@@ -416,6 +417,24 @@ export default defineCommand({
       message: optionalCapabilities.summary.headline,
       fix: optionalCapabilities.summary.fix,
     });
+    const cameraRuntime = await buildCameraRuntimeDoctorReport({
+      context: {
+        conversationId: "bdd.doctor",
+        workspaceRoot: process.cwd(),
+      },
+    });
+    if (cameraRuntime) {
+      results.push({
+        name: "Camera Runtime",
+        status: cameraRuntime.summary.errorCount > 0
+          ? "warn"
+          : cameraRuntime.summary.warningCount > 0
+            ? "warn"
+            : "pass",
+        message: cameraRuntime.summary.headline,
+        fix: cameraRuntime.summary.fix,
+      });
+    }
     const runtimeResilience = await readRuntimeResilienceDoctorReport(stateDir);
     const runtimeResilienceDiagnostics = runtimeResilience
       ? buildRuntimeResilienceDiagnosticSummary(runtimeResilience)
@@ -445,6 +464,7 @@ export default defineCommand({
         residentAgents,
         deploymentBackends,
         optionalCapabilities,
+        ...(cameraRuntime ? { cameraRuntime } : {}),
         ...(runtimeResilience ? { runtimeResilience } : {}),
         ...(runtimeResilienceDiagnostics ? { runtimeResilienceDiagnostics } : {}),
       });
@@ -503,6 +523,44 @@ export default defineCommand({
       ctx.log(`    impact: ${item.impact}`);
       if (item.fix) {
         ctx.log(`    fix: ${item.fix}`);
+      }
+    }
+    if (cameraRuntime) {
+      ctx.log("");
+      ctx.log("Camera Runtime");
+      ctx.log(`  headline: ${cameraRuntime.summary.headline}`);
+      ctx.log(`  providers: ${cameraRuntime.summary.registeredProviderIds.join(", ") || "(none)"}`);
+      if (cameraRuntime.summary.defaultProviderId) {
+        ctx.log(`  default: ${cameraRuntime.summary.defaultProviderId}`);
+      }
+      for (const provider of cameraRuntime.providers) {
+        ctx.log(`  - ${provider.id}: ${provider.headline}`);
+        if (provider.launchConfig) {
+          ctx.log(`    launch: ${provider.launchConfig.command}`);
+          if (provider.launchConfig.resolvedCommand) {
+            ctx.log(`    resolved command: ${provider.launchConfig.resolvedCommand}`);
+          }
+          if (provider.launchConfig.helperEntry) {
+            ctx.log(`    entry: ${provider.launchConfig.helperEntry}`);
+          }
+          if (provider.launchConfig.resolvedHelperEntry) {
+            ctx.log(`    resolved entry: ${provider.launchConfig.resolvedHelperEntry}`);
+          }
+          if (provider.launchConfig.cwd) {
+            ctx.log(`    cwd: ${provider.launchConfig.cwd}`);
+          }
+          if (provider.launchConfig.runtimeDir) {
+            ctx.log(`    runtimeDir: ${provider.launchConfig.runtimeDir}`);
+          }
+        }
+        if (provider.sampleDevices?.length) {
+          for (const device of provider.sampleDevices) {
+            ctx.log(`    device: ${device}`);
+          }
+        }
+        if (provider.fix) {
+          ctx.log(`    fix: ${provider.fix}`);
+        }
       }
     }
     if (runtimeResilience) {

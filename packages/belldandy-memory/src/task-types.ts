@@ -1,6 +1,89 @@
 export type TaskSource = "chat" | "sub_agent" | "cron" | "heartbeat" | "manual";
 export type TaskStatus = "running" | "success" | "failed" | "partial";
 export type TaskMemoryRelation = "used" | "generated" | "referenced";
+export type TaskActivityState = "completed" | "attempted" | "failed" | "blocked" | "decided";
+export type TaskActivityKind =
+  | "task_started"
+  | "task_switched"
+  | "tool_called"
+  | "command_executed"
+  | "file_changed"
+  | "artifact_generated"
+  | "memory_recalled"
+  | "error_observed"
+  | "decision_made"
+  | "task_paused"
+  | "task_completed";
+
+export interface TaskActivitySourceRef {
+  type: "tool_call" | "artifact" | "memory_chunk" | "runtime_event";
+  id: string;
+}
+
+export interface TaskActivityMetadata {
+  durationMs?: number;
+  exitCode?: number;
+  decisionType?: "approach" | "constraint" | "rollback" | "handoff" | "other";
+  blockReason?: string;
+  diffStats?: {
+    filesChanged?: number;
+    additions?: number;
+    deletions?: number;
+  };
+  relation?: TaskMemoryRelation;
+  sourceRefs?: TaskActivitySourceRef[];
+}
+
+export interface TaskActivityRecord {
+  id: string;
+  taskId: string;
+  conversationId: string;
+  sessionKey: string;
+  agentId?: string;
+  source: TaskSource;
+  kind: TaskActivityKind;
+  state: TaskActivityState;
+  sequence: number;
+  happenedAt: string;
+  recordedAt: string;
+  title: string;
+  summary?: string;
+  toolName?: string;
+  actionKey?: string;
+  command?: string;
+  files?: string[];
+  artifactPaths?: string[];
+  memoryChunkIds?: string[];
+  note?: string;
+  error?: string;
+  metadata?: TaskActivityMetadata;
+}
+
+export interface TaskWorkRecapSnapshot {
+  taskId: string;
+  conversationId: string;
+  sessionKey: string;
+  agentId?: string;
+  headline: string;
+  confirmedFacts: string[];
+  pendingActions?: string[];
+  blockers?: string[];
+  derivedFromActivityIds: string[];
+  updatedAt: string;
+}
+
+export interface ResumeContextSnapshot {
+  taskId: string;
+  conversationId: string;
+  sessionKey: string;
+  agentId?: string;
+  currentStopPoint?: string;
+  nextStep?: string;
+  openQuestions?: string[];
+  blockers?: string[];
+  derivedFromActivityIds: string[];
+  updatedAt: string;
+}
 
 export interface TaskToolCallSummary {
   toolName: string;
@@ -35,6 +118,8 @@ export interface TaskRecord {
   finishedAt?: string;
   summaryModel?: string;
   summaryVersion?: string;
+  workRecap?: TaskWorkRecapSnapshot;
+  resumeContext?: ResumeContextSnapshot;
   /**
    * 预留扩展字段。
    * 长期任务 Phase 1 会在此写入：

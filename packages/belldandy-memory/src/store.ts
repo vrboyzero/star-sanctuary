@@ -1,7 +1,19 @@
 
 import Database from "better-sqlite3";
 import type { MemoryCategory, MemoryChunk, MemorySearchResult, MemoryIndexStatus, MemoryType, MemorySearchFilter, MemorySharedPromotionStatus, MemoryVisibility } from "./types.js";
-import type { TaskMemoryRelation, TaskRecord, TaskSearchFilter, TaskSource, TaskStatus, TaskToolCallSummary } from "./task-types.js";
+import type {
+  ResumeContextSnapshot,
+  TaskActivityKind,
+  TaskActivityRecord,
+  TaskActivityState,
+  TaskMemoryRelation,
+  TaskRecord,
+  TaskSearchFilter,
+  TaskSource,
+  TaskStatus,
+  TaskToolCallSummary,
+  TaskWorkRecapSnapshot,
+} from "./task-types.js";
 import type {
   ExperienceAssetType,
   ExperienceCandidate,
@@ -14,6 +26,7 @@ import type {
   ExperienceUsageStats,
   ExperienceUsageVia,
 } from "./experience-types.js";
+import { buildTaskRecapArtifacts } from "./task-recap.js";
 import { cosineSimilarity, vectorToBuffer, vectorFromBuffer, type EmbeddingVector } from "./embeddings/index.js";
 import { loadSqliteVec } from "./sqlite-vec.js";
 
@@ -30,6 +43,9 @@ export type TaskSummaryRecord = {
   agentId?: string;
   toolNames: string[];
   artifactPaths: string[];
+  updatedAt?: string;
+  workRecap?: TaskWorkRecapSnapshot;
+  resumeContext?: ResumeContextSnapshot;
 };
 
 // 基础表结构。
@@ -92,6 +108,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   finished_at TEXT DEFAULT NULL,
   summary_model TEXT DEFAULT NULL,
   summary_version TEXT DEFAULT NULL,
+  work_recap_json TEXT DEFAULT NULL,
+  resume_context_json TEXT DEFAULT NULL,
   metadata TEXT DEFAULT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -114,6 +132,41 @@ CREATE TABLE IF NOT EXISTS task_memory_links (
 
 CREATE INDEX IF NOT EXISTS idx_task_memory_links_task_id ON task_memory_links(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_memory_links_chunk_id ON task_memory_links(chunk_id);
+`;
+
+const SCHEMA_TASK_ACTIVITIES = `
+CREATE TABLE IF NOT EXISTS task_activities (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  agent_id TEXT DEFAULT NULL,
+  source TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  state TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  happened_at TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  title TEXT NOT NULL,
+  summary TEXT DEFAULT NULL,
+  tool_name TEXT DEFAULT NULL,
+  action_key TEXT DEFAULT NULL,
+  command_text TEXT DEFAULT NULL,
+  files_json TEXT DEFAULT NULL,
+  artifact_paths_json TEXT DEFAULT NULL,
+  memory_chunk_ids_json TEXT DEFAULT NULL,
+  note TEXT DEFAULT NULL,
+  error TEXT DEFAULT NULL,
+  metadata_json TEXT DEFAULT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_activities_task_id ON task_activities(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_activities_conversation_id ON task_activities(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_task_activities_agent_id ON task_activities(agent_id);
+CREATE INDEX IF NOT EXISTS idx_task_activities_happened_at ON task_activities(happened_at);
+CREATE INDEX IF NOT EXISTS idx_task_activities_kind ON task_activities(kind);
+CREATE INDEX IF NOT EXISTS idx_task_activities_state ON task_activities(state);
+CREATE INDEX IF NOT EXISTS idx_task_activities_sequence ON task_activities(task_id, sequence);
 `;
 
 const SCHEMA_EXPERIENCE = `
@@ -238,6 +291,11 @@ const SCHEMA_VISIBILITY_COLUMNS = [
   "ALTER TABLE chunks ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'",
 ];
 
+const SCHEMA_TASK_RECAP_COLUMNS = [
+  "ALTER TABLE tasks ADD COLUMN work_recap_json TEXT DEFAULT NULL",
+  "ALTER TABLE tasks ADD COLUMN resume_context_json TEXT DEFAULT NULL",
+];
+
 const SCHEMA_METADATA_INDEXES = `
 CREATE INDEX IF NOT EXISTS idx_chunks_channel ON chunks(channel);
 CREATE INDEX IF NOT EXISTS idx_chunks_topic ON chunks(topic);
@@ -260,6 +318,7 @@ export class MemoryStore {
     loadSqliteVec(this.db);
     this.db.exec(SCHEMA_BASE);
     this.db.exec(SCHEMA_TASKS);
+    this.db.exec(SCHEMA_TASK_ACTIVITIES);
     this.db.exec(SCHEMA_EXPERIENCE);
 
     // Phase M-1: 元数据列迁移（对已有列 ALTER TABLE ADD COLUMN 会报 duplicate，安全忽略）
@@ -280,6 +339,9 @@ export class MemoryStore {
     }
     // P3-1: 共享可见性列迁移
     for (const sql of SCHEMA_VISIBILITY_COLUMNS) {
+      try { this.db.exec(sql); } catch { /* column already exists */ }
+    }
+    for (const sql of SCHEMA_TASK_RECAP_COLUMNS) {
       try { this.db.exec(sql); } catch { /* column already exists */ }
     }
     this.db.exec(SCHEMA_METADATA_INDEXES);
@@ -436,9 +498,10 @@ export class MemoryStore {
         id, conversation_id, session_key, parent_conversation_id, parent_task_id, agent_id,
         source, title, objective, status, outcome, summary, reflection, tool_calls_json,
         artifact_paths_json, token_input, token_output, token_total, duration_ms,
-        started_at, finished_at, summary_model, summary_version, metadata, created_at, updated_at
+        started_at, finished_at, summary_model, summary_version, work_recap_json, resume_context_json,
+        metadata, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         conversation_id = excluded.conversation_id,
         session_key = excluded.session_key,
@@ -462,6 +525,8 @@ export class MemoryStore {
         finished_at = excluded.finished_at,
         summary_model = excluded.summary_model,
         summary_version = excluded.summary_version,
+        work_recap_json = excluded.work_recap_json,
+        resume_context_json = excluded.resume_context_json,
         metadata = excluded.metadata,
         updated_at = excluded.updated_at
     `);
@@ -490,6 +555,8 @@ export class MemoryStore {
       task.finishedAt ?? null,
       task.summaryModel ?? null,
       task.summaryVersion ?? null,
+      JSON.stringify(task.workRecap ?? null),
+      JSON.stringify(task.resumeContext ?? null),
       JSON.stringify(task.metadata ?? {}),
       task.createdAt,
       task.updatedAt
@@ -653,6 +720,42 @@ export class MemoryStore {
     this.upsertTask(task);
   }
 
+  createTaskActivity(activity: TaskActivityRecord): void {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO task_activities (
+        id, task_id, conversation_id, session_key, agent_id, source, kind, state, sequence,
+        happened_at, recorded_at, title, summary, tool_name, action_key, command_text,
+        files_json, artifact_paths_json, memory_chunk_ids_json, note, error, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      activity.id,
+      activity.taskId,
+      activity.conversationId,
+      activity.sessionKey,
+      activity.agentId ?? null,
+      activity.source,
+      activity.kind,
+      activity.state,
+      activity.sequence,
+      activity.happenedAt,
+      activity.recordedAt,
+      activity.title,
+      activity.summary ?? null,
+      activity.toolName ?? null,
+      activity.actionKey ?? null,
+      activity.command ?? null,
+      JSON.stringify(activity.files ?? []),
+      JSON.stringify(activity.artifactPaths ?? []),
+      JSON.stringify(activity.memoryChunkIds ?? []),
+      activity.note ?? null,
+      activity.error ?? null,
+      JSON.stringify(activity.metadata ?? {}),
+    );
+  }
+
   updateTask(taskId: string, patch: Partial<TaskRecord>): void {
     const existing = this.getTask(taskId);
     if (!existing) return;
@@ -664,6 +767,24 @@ export class MemoryStore {
       createdAt: existing.createdAt,
       updatedAt: new Date().toISOString(),
     };
+
+    if (patch.workRecap === undefined || patch.resumeContext === undefined) {
+      const activities = this.listTaskActivities(taskId);
+      if (activities.length > 0) {
+        const recapArtifacts = buildTaskRecapArtifacts({
+          task: updated,
+          activities,
+          updatedAt: updated.updatedAt,
+        });
+        if (patch.workRecap === undefined) {
+          updated.workRecap = recapArtifacts.workRecap;
+        }
+        if (patch.resumeContext === undefined) {
+          updated.resumeContext = recapArtifacts.resumeContext;
+        }
+      }
+    }
+
     this.upsertTask(updated);
   }
 
@@ -701,6 +822,18 @@ export class MemoryStore {
     return rows.map(rowToTaskRecord);
   }
 
+  listTaskActivities(taskId: string, limit = 200): TaskActivityRecord[] {
+    this.ensureOpen();
+    const stmt = this.db.prepare(`
+      SELECT * FROM task_activities
+      WHERE task_id = ?
+      ORDER BY sequence ASC, happened_at ASC, recorded_at ASC
+      LIMIT ?
+    `);
+    const rows = stmt.all(taskId, limit) as Record<string, unknown>[];
+    return rows.map(rowToTaskActivityRecord);
+  }
+
   listTaskSummaries(limit = 10, filter?: TaskSearchFilter): TaskSummaryRecord[] {
     this.ensureOpen();
     const { clause, params } = this.buildTaskFilterClause(filter);
@@ -715,7 +848,10 @@ export class MemoryStore {
         t.finished_at,
         t.agent_id,
         t.tool_calls_json,
-        t.artifact_paths_json
+        t.artifact_paths_json,
+        t.updated_at,
+        t.work_recap_json,
+        t.resume_context_json
       FROM tasks t
       WHERE 1 = 1${clause}
       ORDER BY COALESCE(t.finished_at, t.started_at) DESC, t.created_at DESC
@@ -2112,6 +2248,33 @@ function chunkVisibilityMetaKey(chunkId: string): string {
   return `chunk_visibility:${chunkId}`;
 }
 
+function rowToTaskActivityRecord(row: Record<string, unknown>): TaskActivityRecord {
+  return {
+    id: String(row.id),
+    taskId: String(row.task_id),
+    conversationId: String(row.conversation_id),
+    sessionKey: String(row.session_key),
+    agentId: optionalString(row.agent_id),
+    source: String(row.source) as TaskSource,
+    kind: normalizeTaskActivityKind(row.kind),
+    state: normalizeTaskActivityState(row.state),
+    sequence: optionalNumber(row.sequence) ?? 0,
+    happenedAt: String(row.happened_at),
+    recordedAt: String(row.recorded_at),
+    title: String(row.title),
+    summary: optionalString(row.summary),
+    toolName: optionalString(row.tool_name),
+    actionKey: optionalString(row.action_key),
+    command: optionalString(row.command_text),
+    files: safeParseStringArray(row.files_json),
+    artifactPaths: safeParseStringArray(row.artifact_paths_json),
+    memoryChunkIds: safeParseStringArray(row.memory_chunk_ids_json),
+    note: optionalString(row.note),
+    error: optionalString(row.error),
+    metadata: safeParseTaskActivityMetadata(row.metadata_json),
+  };
+}
+
 function rowToTaskRecord(row: Record<string, unknown>): TaskRecord {
   return {
     id: String(row.id),
@@ -2137,6 +2300,8 @@ function rowToTaskRecord(row: Record<string, unknown>): TaskRecord {
     finishedAt: optionalString(row.finished_at),
     summaryModel: optionalString(row.summary_model),
     summaryVersion: optionalString(row.summary_version),
+    workRecap: safeParseTaskWorkRecap(asNullableString(row.work_recap_json)),
+    resumeContext: safeParseResumeContext(asNullableString(row.resume_context_json)),
     metadata: safeParseJson(asNullableString(row.metadata)),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -2157,6 +2322,9 @@ function rowToTaskSummaryRecord(row: Record<string, unknown>): TaskSummaryRecord
     agentId: optionalString(row.agent_id),
     toolNames: toolCalls.map((item) => item.toolName),
     artifactPaths,
+    updatedAt: optionalString(row.updated_at),
+    workRecap: safeParseTaskWorkRecap(asNullableString(row.work_recap_json)),
+    resumeContext: safeParseResumeContext(asNullableString(row.resume_context_json)),
   };
 }
 
@@ -2261,6 +2429,54 @@ function safeParseToolCalls(value: unknown): TaskToolCallSummary[] | undefined {
       }));
   } catch {
     return undefined;
+  }
+}
+
+function safeParseTaskActivityMetadata(value: unknown): TaskActivityRecord["metadata"] {
+  const parsed = safeParseJson(asNullableString(value));
+  if (!parsed) return undefined;
+  return parsed as TaskActivityRecord["metadata"];
+}
+
+function safeParseTaskWorkRecap(value: string | null): TaskWorkRecapSnapshot | undefined {
+  const parsed = safeParseJson(value) as TaskWorkRecapSnapshot | undefined;
+  return parsed && typeof parsed === "object" ? parsed : undefined;
+}
+
+function safeParseResumeContext(value: string | null): ResumeContextSnapshot | undefined {
+  const parsed = safeParseJson(value) as ResumeContextSnapshot | undefined;
+  return parsed && typeof parsed === "object" ? parsed : undefined;
+}
+
+function normalizeTaskActivityKind(value: unknown): TaskActivityKind {
+  switch (value) {
+    case "task_started":
+    case "task_switched":
+    case "tool_called":
+    case "command_executed":
+    case "file_changed":
+    case "artifact_generated":
+    case "memory_recalled":
+    case "error_observed":
+    case "decision_made":
+    case "task_paused":
+    case "task_completed":
+      return value;
+    default:
+      return "tool_called";
+  }
+}
+
+function normalizeTaskActivityState(value: unknown): TaskActivityState {
+  switch (value) {
+    case "completed":
+    case "attempted":
+    case "failed":
+    case "blocked":
+    case "decided":
+      return value;
+    default:
+      return "attempted";
   }
 }
 

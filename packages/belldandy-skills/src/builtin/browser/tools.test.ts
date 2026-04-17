@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectPreferredPage } from "./tools.js";
+import { selectPreferredPage, waitForPreferredPageSelection } from "./tools.js";
 
 function createPage(url: string, targetId: string) {
   return {
@@ -32,5 +32,19 @@ describe("browser page selection", () => {
     const selected = selectPreferredPage(pages, {});
 
     expect(selected?.url()).toBe("https://example.com/newer");
+  });
+
+  it("aborts preferred page polling when abortSignal is triggered", async () => {
+    const controller = new AbortController();
+    const waitPromise = waitForPreferredPageSelection({
+      listPages: async () => [],
+      preferred: {},
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    });
+
+    setTimeout(() => controller.abort("Stopped by user."), 50);
+
+    await expect(waitPromise).rejects.toThrow("Stopped by user.");
   });
 });

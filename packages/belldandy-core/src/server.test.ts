@@ -64,6 +64,7 @@ test("gateway handshake and message.send streams chat", async () => {
   const hello = frames.find((f) => f.type === "hello-ok");
   expect(hello?.version).toBe(BELLDANDY_VERSION);
   expect(hello?.methods).toContain("pairing.approve");
+  expect(hello?.methods).toContain("conversation.run.stop");
 
   await waitFor(() => frames.some((f) => f.type === "event" && f.event === "pairing.required"));
   const pairing = frames.find((f) => f.type === "event" && f.event === "pairing.required");
@@ -186,6 +187,113 @@ test("message.send persists accepted user transcript before assistant finalizes"
         },
       },
     });
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("conversation.run.stop stops the active message.send run and allows the next run in the same conversation", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-stop-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        await sleep(120);
+        if (input.abortSignal?.aborted) {
+          yield { type: "status" as const, status: "stopped" };
+          return;
+        }
+        yield { type: "delta" as const, delta: `partial:${input.text}` };
+        await sleep(30);
+        if (input.abortSignal?.aborted) {
+          yield { type: "status" as const, status: "stopped" };
+          return;
+        }
+        yield { type: "final" as const, text: `done:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-stop-run-1",
+      method: "message.send",
+      params: {
+        conversationId: "conv-stop-main",
+        text: "第一轮",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-stop-run-1" && f.ok === true));
+    const sendRes = frames.find((f) => f.type === "res" && f.id === "message-stop-run-1");
+    expect(sendRes?.payload?.runId).toBeTruthy();
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-stop-run-1-stop",
+      method: "conversation.run.stop",
+      params: {
+        conversationId: "conv-stop-main",
+        runId: sendRes.payload.runId,
+        reason: "Stopped by user.",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-stop-run-1-stop" && f.ok === true));
+    const stopRes = frames.find((f) => f.type === "res" && f.id === "message-stop-run-1-stop");
+    expect(stopRes?.payload).toMatchObject({
+      accepted: true,
+      state: "stop_requested",
+      runId: sendRes.payload.runId,
+    });
+
+    await waitFor(() => frames.some((f) =>
+      f.type === "event"
+      && f.event === "conversation.run.stopped"
+      && f.payload?.conversationId === "conv-stop-main"
+      && f.payload?.runId === sendRes.payload.runId
+    ));
+
+    expect(frames.some((f) =>
+      f.type === "event"
+      && f.event === "chat.final"
+      && f.payload?.runId === sendRes.payload.runId
+    )).toBe(false);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-stop-run-2",
+      method: "message.send",
+      params: {
+        conversationId: "conv-stop-main",
+        text: "第二轮",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-stop-run-2" && f.ok === true));
+    await waitFor(() => frames.some((f) =>
+      f.type === "event"
+      && f.event === "chat.final"
+      && f.payload?.conversationId === "conv-stop-main"
+      && f.payload?.text === "done:第二轮"
+    ));
   } finally {
     ws.close();
     await closeP;

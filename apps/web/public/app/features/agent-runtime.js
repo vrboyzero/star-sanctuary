@@ -912,6 +912,24 @@ export function createAgentRuntimeFeature({
     });
   }
 
+  function handleConversationStoppedPayload(payload) {
+    const conversationId = typeof payload?.conversationId === "string" ? payload.conversationId : "";
+    if (!conversationId) return;
+    const currentMessages = agentSessionCacheFeature.getConversationMessages(conversationId);
+    const latest = currentMessages[currentMessages.length - 1];
+    if (!latest || latest.role !== "assistant" || latest.__streaming !== true) {
+      return;
+    }
+    const partialText = typeof latest.content === "string" ? latest.content : String(latest.content ?? "");
+    if (!partialText.trim()) {
+      return;
+    }
+    agentSessionCacheFeature.finalizeAssistantMessage(conversationId, partialText, {
+      timestampMs: Date.now(),
+      agentId: typeof payload?.agentId === "string" ? payload.agentId : undefined,
+    });
+  }
+
   function setConversationMessages(conversationId, messages) {
     if (!conversationId || !Array.isArray(messages)) return;
     agentSessionCacheFeature.setConversationMessages(conversationId, messages);
@@ -948,6 +966,7 @@ export function createAgentRuntimeFeature({
     handleAgentStatusPayload,
     handleConversationDeltaPayload,
     handleConversationFinalPayload,
+    handleConversationStoppedPayload,
     setConversationMessages,
     refreshLocale() {
       renderAgentRightPanel();
