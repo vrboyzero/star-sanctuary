@@ -65,6 +65,8 @@ export type ToolExecutorLogger = {
 export type ToolExecutorOptions = {
   tools: Tool[];
   workspaceRoot: string;
+  /** 当前 Gateway / CLI 运行时的 stateDir；未提供时回退为 workspaceRoot */
+  stateDir?: string;
   /** 额外允许的文件操作根目录（Agent 可读写这些目录下的文件） */
   extraWorkspaceRoots?: string[];
   /** 始终可用的保留工具名（不受 disabled 开关影响） */
@@ -219,6 +221,7 @@ export interface ToolAvailabilityState {
 export class ToolExecutor {
   private readonly tools: Map<string, Tool>;
   private readonly workspaceRoot: string;
+  private readonly stateDir: string;
   private readonly extraWorkspaceRoots: string[];
   private readonly alwaysEnabledTools: Set<string>;
   private readonly policy: ToolPolicy;
@@ -247,6 +250,7 @@ export class ToolExecutor {
   constructor(options: ToolExecutorOptions) {
     this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
     this.workspaceRoot = options.workspaceRoot;
+    this.stateDir = options.stateDir ?? options.workspaceRoot;
     this.extraWorkspaceRoots = options.extraWorkspaceRoots ?? [];
     this.alwaysEnabledTools = new Set(options.alwaysEnabledTools ?? []);
     this.policy = { ...DEFAULT_POLICY, ...options.policy };
@@ -705,6 +709,7 @@ export class ToolExecutor {
     const context: ToolContext = {
       conversationId,
       workspaceRoot: this.workspaceRoot,
+      stateDir: this.stateDir,
       abortSignal,
       extraWorkspaceRoots: this.extraWorkspaceRoots.length > 0 ? this.extraWorkspaceRoots : undefined,
       defaultCwd: launchSpec?.cwd,

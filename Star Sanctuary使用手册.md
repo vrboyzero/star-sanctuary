@@ -627,8 +627,10 @@ corepack pnpm bdd start
 | 需求 | WebChat 入口 |
 | --- | --- |
 | 正常聊天 | 中间聊天区 |
+| 停止当前这一轮运行 | 中间聊天区主按钮（运行中会切换为 `Stop`） |
 | 改模型 / 改 API Key | `⚙️ 设置` |
 | 看记忆命中与任务记录 | `🧠 记忆查看` |
+| 回来继续之前做到一半的工作 | `🧠 记忆查看 -> 任务详情 -> Work Recap / Resume Context` |
 | 管长期任务 | `🎯 长期任务` |
 | 看子任务、续跑、接管 | `子任务` 面板 |
 | 临时禁用工具 / MCP / 扩展 | `🛠️ 工具设置` |
@@ -657,6 +659,80 @@ BELLDANDY_AGENT_TOOL_CONTROL_CONFIRM_PASSWORD=
 - `confirm` 模式下，变更工具开关时需要确认
 - 不填确认密码时，可使用系统给出的 `requestId` 完成批准
 
+这里最容易混淆的是：**Tool Settings 管的不是同一类配置文件**。
+
+当前和工具可用性最相关的 3 层分别是：
+
+1. 全局工具总开关
+   - `.env` 里的 `BELLDANDY_TOOLS_ENABLED`
+   - 作用：工具系统是否整体启用
+2. 运行时禁用列表
+   - 你用户目录下 `.star_sanctuary` 文件夹里的 `tools-config.json`
+   - Windows 常见路径是：`C:\Users\你的用户名\.star_sanctuary\tools-config.json`
+   - 作用：某个 builtin / MCP server / plugin / skill 当前是否被直接禁用
+   - `Tool Settings` 页面改的主要就是这份文件对应的运行时状态
+3. Agent 白名单
+   - 你用户目录下 `.star_sanctuary` 文件夹里的 `agents.json`
+   - 作用：某个 Agent 能不能看到并调用某个工具
+
+也就是说：
+
+- 如果 `BELLDANDY_TOOLS_ENABLED=false`
+  - 所有工具都不可用
+- 如果全局工具开关是开的，但某个工具在 `tools-config.json` 的 disabled 列表里
+  - 这个工具仍然不可用
+- 如果工具本身没被 disabled，但当前 Agent 的 `toolWhitelist` 没放行
+  - 这个 Agent 仍然调用不到它
+
+一个很常见的真实例子就是摄像头：
+
+- `camera_snap` 已注册
+- `.env` 里 `BELLDANDY_TOOLS_ENABLED=true`
+- 但如果 `tools-config.json` 里写了 `"camera_snap"`
+- 日志里就会直接看到：`工具 camera_snap 已被禁用`
+
+最小 `tools-config.json` 模板可以这样理解。下面为了说明方便用了中文注释；**真正写入文件时请去掉注释，保持合法 JSON**：
+
+```jsonc
+{
+  "version": 1,
+  "disabled": {
+    "builtin": [
+      // 这里放当前要临时禁用的内置工具名
+      // 例如：
+      // "camera_snap",
+      // "run_command"
+    ],
+    "mcp_servers": [
+      // 这里放要整体禁用的 MCP server id
+      // 例如：
+      // "filesystem"
+    ],
+    "plugins": [
+      // 这里放要禁用的插件 id
+    ],
+    "skills": [
+      // 这里放要禁用的 skill 名
+    ]
+  }
+}
+```
+
+最实用的用法是：
+
+- 想临时关闭某个工具
+  - 优先在 `Tool Settings` 里关
+- 想手工排查为什么某个工具被禁用
+  - 直接看 `tools-config.json`
+- 想重新启用某个工具
+  - 从对应的 disabled 列表里删掉它
+
+要注意：
+
+- 通过页面上的 `Tool Settings` 改，运行时会立即知道这次变更
+- 直接手改 `tools-config.json` 文件，通常要重启 Gateway 才稳妥
+- 如果你已经把工具从 `tools-config.json` 里解禁了，但某个 Agent 还是用不了，再去检查 `agents.json` 里的 `toolWhitelist`
+
 ### 5.4 会话复盘
 
 当前会话复盘已经是独立能力，不需要再只靠日志猜。
@@ -676,6 +752,40 @@ corepack pnpm bdd conversation exports
 - 这轮 prompt 到底注入了什么
 - 为什么触发了某个工具
 - 历史摘要、压缩和边界信息
+
+### 5.5 停止当前运行
+
+当前 `WebChat` 主聊天已经支持停止**当前这一次运行**。
+
+你在页面上的实际体验会是：
+
+- 当前会话正在 streaming / running 时，主发送按钮会从 `Send` 切换成 `Stop`
+- 你点下去后，按钮会短暂进入 `Stopping...`
+- 后端接受请求后，会给当前 run 发出 `conversation.run.stop`
+- 收到停止终态后，前端会退出 streaming 状态
+- 如果这一轮还没有产生可保留的 partial 文本，界面会直接显示“已中断”
+
+这项能力当前更适合这样理解：
+
+- 模型调用层会尽快响应停止
+- 已接入 stop 的工具会在安全点停止
+- 已经发生的外部副作用不会自动回滚
+
+所以它的语义更接近：
+
+- 停止后续执行
+- 尽量停止当前调用
+
+而不是：
+
+- 无条件抢断并自动回滚已经发生的动作
+
+当前这轮 stop 能力已经覆盖了主聊天链路，也已经补了浏览器 / 摄像头等第一批高耗时工具的协作式 stop；但它还不是“所有入口、所有工具、所有副作用都统一强中断”的最终版。
+
+如果你想排查“为什么刚才点了 Stop 以后表现不对”，当前最直接的入口是：
+
+- `Doctor -> Agent Stop Runtime`
+- `system.doctor`
 
 ---
 
@@ -772,6 +882,47 @@ WebChat 的 `🧠 记忆查看` 当前适合做这些事：
 
 - “它为什么会这么答？”
 - “它之前到底做过什么？”
+
+当前和“续做之前做过的工作”最相关的已落地入口有 3 层：
+
+- `Work Recap`
+  看这条任务已经做过什么
+- `Resume Context`
+  看当前停点和下一步继续项
+- `查看来源解释`
+  看这些 recap / stop / next 分别来自哪一层任务事实
+
+如果你是隔了一段时间回来继续做事，当前最推荐的查看顺序是：
+
+1. 先在 `🧠 记忆查看` 里打开最近相关任务
+2. 先看 `Work Recap`，快速恢复“之前已经做过什么”
+3. 再看 `Resume Context`，确认“当前停在哪、下一步该继续什么”
+4. 如果你怀疑系统为什么会这么总结，再点 `查看来源解释`
+
+如果你是直接回到旧会话继续聊，而不是先打开 `记忆查看`，当前页面顶部的：
+
+- `会话摘要`
+- `续跑状态`
+
+也会尽量和任务详情里的 `Resume Context` 保持同一口径，优先表达：
+
+- 当前停点
+- 下一步继续项
+
+而不是只把“最后一条消息说了什么”重新复述一遍。
+
+这条链路现在已经不是概念层规划，而是实际可用的页面能力；背后也已经有专门的短路径能力：
+
+- `memory.recent_work`
+- `memory.resume_context`
+- `memory.similar_past_work`
+- `memory.explain_sources`
+
+普通用户不需要硬记这些方法名。更实用的理解是：
+
+- `记忆查看` 负责给你看“之前做过什么”
+- `Resume Context` 负责给你看“现在应该从哪继续”
+- `来源解释` 负责回答“这条结论是怎么来的”
 
 ### 7.3 长期任务（Goals）
 
@@ -2253,7 +2404,56 @@ BELLDANDY_TTS_VOICE=zh-CN-XiaoxiaoNeural
 - `BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES`
 - `BELLDANDY_ATTACHMENT_TEXT_CHAR_LIMIT`
 
-### 11.4 Canvas
+### 11.4 摄像头
+
+当前摄像头能力已经是可用功能，不再只是设计稿。
+
+最常见的使用方式是：
+
+1. 先让 Agent 执行 `camera_list`
+2. 确认当前选中的设备、provider 和运行时状态
+3. 再执行 `camera_snap`
+
+对普通用户来说，最实用的理解是：
+
+- `camera_list`
+  先看当前有哪些摄像头、系统准备选哪一个、有没有 fallback
+- `camera_snap`
+  真正拍一张照片并返回落盘路径
+- `camera_device_memory`
+  给设备记别名、标记常用设备，方便后续继续用同一台摄像头
+
+当前默认 provider 选择不是写死浏览器路径，而是：
+
+- 优先 `native_desktop`
+  适合当前这台机器上这类 Windows 外接摄像头 / 原生设备路径
+- 再回退 `browser_loopback`
+  适合浏览器已授权、镜像页可用的路径
+
+如果你只是正常拍照，通常不需要手动指定 `provider`。只有在这些场景下，才建议显式指定：
+
+- 你明确知道要固定走某个 provider
+- 你要复用某个 `deviceRef`
+- 你在排查“为什么这次选的是 A 而不是 B”
+
+如果你要启用 Windows 原生外接摄像头路径，需要按 `.env.example` 中 `BELLDANDY_CAMERA_NATIVE_HELPER_*` 这一组示例配置 helper；如果不配，系统仍可以继续走浏览器回环路径。
+
+当前摄像头出问题时，最常见的排查顺序是：
+
+1. 先执行一次 `camera_list`
+2. 看返回里的 provider、selected device、why fallback
+3. 再到 `Doctor` / `bdd doctor` / `system.doctor` 看 `Camera Runtime`
+
+常见现象可以先这样理解：
+
+- `device_busy`
+  通常是会议软件、录屏软件或其他程序正在占用摄像头
+- `helper_unavailable`
+  通常是 Windows helper、PowerShell、ffmpeg 或相关环境变量没准备好
+- 自动 fallback 到 `browser_loopback`
+  说明当前高优先 provider 不健康，系统已临时回退到浏览器路径继续完成拍照
+
+### 11.5 Canvas
 
 Canvas 当前定位是“复杂任务的可视化工作区”，适合：
 
@@ -2286,6 +2486,65 @@ Canvas 当前定位是“复杂任务的可视化工作区”，适合：
 
 ```env
 BELLDANDY_TOOLS_ENABLED=true
+```
+
+#### 记忆续做短路径
+
+当前与“之前做过什么 / 现在该从哪继续”最相关的记忆工具，已经不是只有笼统检索，而是有专门短路径：
+
+- `memory.recent_work`
+  快速看最近做过的相关工作
+- `memory.resume_context`
+  快速看当前停点和下一步
+- `memory.similar_past_work`
+  看更早之前做过的相似工作
+- `memory.explain_sources`
+  解释 `Work Recap / Resume Context / 来源解释` 背后的来源层级
+
+对普通用户来说，更推荐在 `🧠 记忆查看` 页面直接使用这些能力；这些方法名更适合：
+
+- 调试记忆链路
+- 做 RPC 排查
+- 明确要求 Agent 优先走某条记忆短路径
+
+可直接照着说的话术示例：
+
+```text
+请先看一下我最近和这件事相关的工作，再告诉我上次停在哪里、下一步最应该继续什么。
+```
+
+```text
+请优先用 resume context 判断这件事现在该从哪里继续；如果来源不明确，再把来源解释给我。
+```
+
+#### 摄像头工具
+
+当前摄像头相关工具已经是统一 contract 下的正式工具，不再只是一条浏览器临时链路。
+
+当前可直接用的工具包括：
+
+- `camera_list`
+- `camera_snap`
+- `camera_device_memory`
+
+推荐的日常用法是：
+
+1. 先 `camera_list`
+2. 再 `camera_snap`
+3. 如果你长期固定用同一台设备，再用 `camera_device_memory` 记别名或标记 favorite
+
+可直接照着说的话术示例：
+
+```text
+请先用 camera_list 看当前可用摄像头和默认会选哪一个，再告诉我是否需要指定设备。
+```
+
+```text
+请用 camera_snap 拍一张当前摄像头画面；如果默认 provider 不可用，告诉我是否发生了 fallback。
+```
+
+```text
+请把当前这台摄像头记成“桌面主摄”，并标记为常用设备。
 ```
 
 #### CLI / IDE 桥接
@@ -2577,7 +2836,7 @@ BELLDANDY_TOOLS_ENABLED=true
 如果你要进一步收紧风险边界，可用：
 
 ```env
-BELLDANDY_TOOLS_POLICY_FILE=E:\project\star-sanctuary\config\tools-policy.balanced.json
+BELLDANDY_TOOLS_POLICY_FILE=E:\project\star-sanctuary\config\tools-policy.json
 ```
 
 也可以按需加载工具分组：
@@ -2590,6 +2849,119 @@ BELLDANDY_TOOLS_POLICY_FILE=E:\project\star-sanctuary\config\tools-policy.balanc
 更多建议见：
 
 - [docs/工具分级指南.md](E:\project\star-sanctuary\docs\工具分级指南.md)
+
+这里要特别区分两份名字很像、但职能不同的文件：
+
+1. `BELLDANDY_TOOLS_POLICY_FILE` 指向的 `tools-policy.json`
+   - 作用：**定义全局执行边界**
+   - 典型内容：
+     - `allowedPaths`
+     - `deniedPaths`
+     - `exec` 超时 / safelist / blocklist
+     - `fileWrite` 扩展名、二进制写入限制
+   - 适合回答的问题：
+     - “命令执行最多能跑多久？”
+     - “哪些目录默认不允许写？”
+     - “哪些命令默认算快命令 / 长命令？”
+
+2. 状态目录里的 `tools-config.json`
+   - 作用：**定义当前运行时禁用列表**
+   - 典型内容：
+     - `disabled.builtin`
+     - `disabled.mcp_servers`
+     - `disabled.plugins`
+     - `disabled.skills`
+   - 适合回答的问题：
+     - “为什么 `camera_snap` 明明注册了却提示已被禁用？”
+     - “为什么某个 MCP server 明明配置了却当前不可用？”
+
+它们不是二选一，而是**同时生效**：
+
+- `tools-policy.json` 管边界
+- `tools-config.json` 管开关
+
+对当前仓库这台机器来说，常见实际路径会是：
+
+- 全局工具策略文件：  
+  [tools-policy.json](/E:/project/star-sanctuary/config/tools-policy.json)
+- 运行时禁用列表：  
+  [tools-config.json](</C:/Users/admin/.star_sanctuary/tools-config.json>)
+
+最小 `tools-policy.json` 模板可以这样理解。下面为了说明方便用了中文注释；**真正写入文件时请去掉注释，保持合法 JSON**：
+
+```jsonc
+{
+  // 允许工具默认访问的根路径
+  "allowedPaths": [
+    "."
+  ],
+  // 默认拒绝的路径
+  "deniedPaths": [
+    ".git",
+    "node_modules",
+    ".env"
+  ],
+  // 单次工具执行的全局最大超时
+  "maxTimeoutMs": 30000,
+  // 单次响应的最大字节数
+  "maxResponseBytes": 512000,
+  "exec": {
+    // 快命令默认超时
+    "quickTimeoutMs": 5000,
+    // 长命令默认超时
+    "longTimeoutMs": 300000,
+    // 直接当作快命令处理的程序名
+    "quickCommands": ["git", "ls", "dir"],
+    // 直接当作长命令处理的程序名
+    "longCommands": ["npm", "pnpm", "yarn", "cmake", "cargo", "go"],
+    // 额外允许的程序
+    "extraSafelist": ["terraform", "docker", "kubectl"],
+    // 额外禁止的程序
+    "extraBlocklist": [],
+    "nonInteractive": {
+      // 是否自动补非交互参数
+      "enabled": true,
+      "rules": {
+        "npm init": "-y",
+        "pnpm dlx": "--yes",
+        "conda install": "-y"
+      }
+    }
+  },
+  "fileWrite": {
+    // 允许写入的扩展名
+    "allowedExtensions": [".js", ".ts", ".md", ".json", ".txt"],
+    // 是否允许点文件
+    "allowDotFiles": true,
+    // 是否允许二进制
+    "allowBinary": true
+  }
+}
+```
+
+怎么选用这两份文件，可以直接按这个判断：
+
+- 想临时禁掉某个具体工具
+  - 改 `Tool Settings`
+  - 或改状态目录里的 `tools-config.json`
+- 想长期收紧命令、写文件、路径访问边界
+  - 改 `tools-policy.json`
+- 想让某个特定 Agent 能用或不能用某些工具
+  - 改 `agents.json` 里的 `toolWhitelist`
+
+最常见的 3 类排查顺序是：
+
+1. 某个工具完全不可用
+   - 先看 `BELLDANDY_TOOLS_ENABLED`
+2. 工具提示“已被禁用”
+   - 再看状态目录里的 `tools-config.json`
+3. 工具对某个 Agent 可用、对另一个 Agent 不可用
+   - 最后看 `agents.json -> toolWhitelist`
+
+补充说明：
+
+- `tools-policy.json` 主要在 Gateway 启动时加载；手工修改后，通常要重启服务
+- `tools-config.json` 由 `Tool Settings` 所对应的运行时配置管理器消费；通过页面修改时运行时会立即同步，手工改文件时也建议重启后再验证
 
 ### 12.3 MCP
 
@@ -2859,6 +3231,23 @@ corepack pnpm bdd configure cron
   Windows 常见路径是：`C:\Users\你的用户名\.star_sanctuary\deployment-backends.json`
 
 这个文件用于描述 `local / docker / ssh` 三类部署 profile。它目前更偏高级运行配置，一般用户不需要手写；但如果你在 `doctor` 里看到了 `Deployment Backends` 摘要，数据来源就是这里。
+
+如果是摄像头问题，当前建议这样看：
+
+- `bdd doctor`
+  - 更适合看 camera helper 配置、provider 注册与环境是否齐
+- `system.doctor`
+  - 更适合看 `Camera Runtime` 的运行时摘要
+  - 当前能看到 provider 选择、why fallback、runtime health、permission、failure stats、device memory、recommended action
+- WebChat `Doctor`
+  - 更适合在真实页面里快速判断“现在卡在哪里、下一步该做什么”
+
+如果是“点了 Stop 之后为什么表现不对”，当前建议直接看：
+
+- `Doctor -> Agent Stop Runtime`
+  - 看最近 stop 请求、停止结果、是否有 `run_mismatch / not_found`
+- `system.doctor`
+  - 看 stop 运行态摘要是否显示最近一次停止请求和收尾结果
 
 ### 13.4 `diagnostics/prompt-snapshots` 是什么，会不会一直涨
 

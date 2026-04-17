@@ -4,32 +4,54 @@ import type {
   CameraProviderCapabilities,
   CameraProviderContext,
   CameraProviderDiagnostic,
+  CameraProviderHealthCheck,
   CameraProviderDiagnosticIssue,
   CameraProviderId,
+  CameraProviderSelectionTrace,
+  CameraProviderRuntimeHealth,
   CameraProviderStatus,
 } from "./camera-contract.js";
 import { browserLoopbackCameraProvider } from "./camera-browser-loopback-provider.js";
+import { observeCameraDeviceAliasMemory } from "./camera-device-alias-state.js";
+import { buildCameraProviderHealthCheck, buildCameraRecoveryActions } from "./camera-governance.js";
 import type { CameraNativeDesktopHelperConfig } from "./camera-native-desktop-contract.js";
 import { NativeDesktopCameraProvider } from "./camera-native-desktop-provider.js";
-import { CameraProviderRegistry } from "./camera-provider-registry.js";
+import { CameraProviderRegistry, getDefaultCameraProviderRegistry } from "./camera-provider-registry.js";
 import {
-  BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON_ENV,
   BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND_ENV,
-  BELLDANDY_CAMERA_NATIVE_HELPER_CWD_ENV,
   BELLDANDY_CAMERA_NATIVE_HELPER_IDLE_SHUTDOWN_MS_ENV,
-  BELLDANDY_CAMERA_NATIVE_HELPER_REQUEST_TIMEOUT_MS_ENV,
-  BELLDANDY_CAMERA_NATIVE_HELPER_STARTUP_TIMEOUT_MS_ENV,
   readNativeDesktopHelperConfigFromEnv,
 } from "./camera-native-desktop-stdio-client.js";
 import {
   isLikelyNodeCommand,
   resolveNativeDesktopHelperLaunch,
 } from "./camera-native-desktop-launch.js";
+import {
+  DEFAULT_CAMERA_RUNTIME_HEALTH_RETENTION_POLICY,
+  inspectCameraRuntimeHealthSnapshot,
+  type CameraRuntimeHealthSnapshot,
+  type CameraRuntimeHealthRetentionPolicy,
+  type CameraRuntimeHealthSnapshotIssue,
+} from "./camera-runtime-health-state.js";
 
 type CameraRuntimeDoctorProviderStatus =
   | CameraProviderStatus
   | "not_checked"
   | "not_configured";
+
+export type CameraRuntimeDoctorRuntimeHealthFreshness = {
+  source: "memory" | "snapshot" | "memory+snapshot" | "none";
+  level: "fresh" | "aging" | "stale" | "unavailable";
+  stale: boolean;
+  staleAfterMs: number;
+  retention: CameraRuntimeHealthRetentionPolicy;
+  evaluatedAt: string;
+  ageMs?: number;
+  referenceAt?: string;
+  snapshotSavedAt?: string;
+  snapshotPath?: string;
+  snapshotIssue?: CameraRuntimeHealthSnapshotIssue;
+};
 
 export type CameraRuntimeDoctorLaunchConfig = {
   transport: string;
@@ -69,6 +91,7 @@ export type CameraRuntimeDoctorProvider = {
     warning: number;
     error: number;
   };
+  healthCheck?: CameraProviderHealthCheck;
   issues: CameraProviderDiagnosticIssue[];
   recoveryHints: string[];
   headline: string;
@@ -77,7 +100,25 @@ export type CameraRuntimeDoctorProvider = {
   deviceCounts?: CameraRuntimeDoctorDeviceCounts;
   sampleDevices?: string[];
   launchConfig?: CameraRuntimeDoctorLaunchConfig;
+  runtimeHealth?: CameraProviderRuntimeHealth;
+  runtimeHealthFreshness?: CameraRuntimeDoctorRuntimeHealthFreshness;
   metadata?: Record<string, unknown>;
+};
+
+export type CameraRuntimeDoctorGovernanceSummary = {
+  headline: string;
+  blockedProviderCount: number;
+  permissionBlockedProviderCount: number;
+  permissionPromptProviderCount: number;
+  fallbackActiveProviderCount: number;
+  recentFailureCount: number;
+  recentRecoveredCount: number;
+  failureProviderCount: number;
+  repeatedFallback: boolean;
+  dominantFailureCode?: string;
+  whyUnhealthy?: string;
+  whyFallback?: string;
+  recommendedAction?: string;
 };
 
 export type CameraRuntimeDoctorReport = {
@@ -85,10 +126,12 @@ export type CameraRuntimeDoctorReport = {
   summary: {
     available: boolean;
     defaultProviderId?: CameraProviderId;
+    defaultSelection?: CameraProviderSelectionTrace;
     registeredProviderIds: CameraProviderId[];
     warningCount: number;
     errorCount: number;
     headline: string;
+    governance?: CameraRuntimeDoctorGovernanceSummary;
     fix?: string;
   };
   providers: CameraRuntimeDoctorProvider[];
@@ -98,6 +141,9 @@ export type BuildCameraRuntimeDoctorReportOptions = {
   env?: NodeJS.ProcessEnv;
   includeBrowserLoopbackOnly?: boolean;
   context?: Partial<CameraProviderContext>;
+  runtimeHealthRegistry?: CameraProviderRegistry;
+  runtimeHealthStaleAfterMs?: number;
+  now?: string | number | Date;
 };
 
 type CountSummary = {
@@ -106,8 +152,177 @@ type CountSummary = {
   error: number;
 };
 
+type ResolvedRuntimeHealth = {
+  runtimeHealth?: CameraProviderRuntimeHealth;
+  runtimeHealthFreshness?: CameraRuntimeDoctorRuntimeHealthFreshness;
+};
+
+const DEFAULT_RUNTIME_HEALTH_STALE_AFTER_MS = 30 * 60 * 1_000;
+const GOVERNANCE_BLOCKING_REASON_CODES = new Set([
+  "device_busy",
+  "permission_denied",
+  "helper_not_configured",
+  "helper_unavailable",
+  "protocol_mismatch",
+  "device_not_found",
+  "driver_error",
+  "capture_failed",
+]);
+const GOVERNANCE_NON_FAILURE_REASON_CODES = new Set([
+  "fallback_active",
+  "not_checked",
+]);
+
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeDate(value: string | number | Date | undefined): Date {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? new Date() : value;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    const normalized = new Date(value);
+    return Number.isNaN(normalized.getTime()) ? new Date() : normalized;
+  }
+  return new Date();
+}
+
+function incrementDoctorReasonCount(record: Record<string, number>, code: string | undefined, count = 1): void {
+  const normalizedCode = normalizeString(code);
+  if (!normalizedCode || !Number.isFinite(count) || count <= 0) {
+    return;
+  }
+  record[normalizedCode] = (record[normalizedCode] ?? 0) + count;
+}
+
+function resolveDoctorDominantFailureCode(record: Record<string, number>): string | undefined {
+  const entries = Object.entries(record)
+    .filter(([code, count]) => !GOVERNANCE_NON_FAILURE_REASON_CODES.has(code) && Number.isFinite(count) && count > 0)
+    .sort((left, right) => {
+      if (right[1] !== left[1]) {
+        return right[1] - left[1];
+      }
+      return left[0].localeCompare(right[0]);
+    });
+  return entries[0]?.[0];
+}
+
+function isGovernanceBlockedProvider(provider: CameraRuntimeDoctorProvider): boolean {
+  const healthCheck = provider.healthCheck;
+  if (!healthCheck) {
+    return false;
+  }
+  if (healthCheck.permission.gating === "blocked") {
+    return true;
+  }
+  if (healthCheck.primaryReasonCode && GOVERNANCE_BLOCKING_REASON_CODES.has(healthCheck.primaryReasonCode)) {
+    return true;
+  }
+  return healthCheck.status === "fail";
+}
+
+function buildGovernanceWhyFallback(
+  defaultSelection: CameraProviderSelectionTrace | undefined,
+): string | undefined {
+  if (!defaultSelection?.fallbackApplied) {
+    return undefined;
+  }
+  const skippedAttempts = defaultSelection.attempts.filter((attempt) => attempt.outcome === "skipped");
+  if (!skippedAttempts.length) {
+    return `默认 provider 已回退到 ${defaultSelection.selectedProvider}。`;
+  }
+  const firstAttempt = skippedAttempts[0];
+  return `默认 provider 已从 ${skippedAttempts.map((attempt) => attempt.provider).join(", ")} 回退到 ${defaultSelection.selectedProvider}；首个跳过原因=${firstAttempt.reason}${firstAttempt.detail ? ` (${firstAttempt.detail})` : ""}。`;
+}
+
+function buildGovernanceSummary(
+  providers: readonly CameraRuntimeDoctorProvider[],
+  defaultSelection: CameraProviderSelectionTrace | undefined,
+): CameraRuntimeDoctorGovernanceSummary | undefined {
+  if (!providers.length) {
+    return undefined;
+  }
+
+  const blockedProviders = providers.filter((provider) => isGovernanceBlockedProvider(provider));
+  const permissionBlockedProviderCount = providers.filter((provider) => provider.healthCheck?.permission.gating === "blocked").length;
+  const permissionPromptProviderCount = providers.filter((provider) => provider.healthCheck?.permission.gating === "needs_prompt").length;
+  const fallbackActiveProviderCount = providers.filter((provider) => provider.healthCheck?.fallbackApplied).length;
+  const aggregatedReasonCounts: Record<string, number> = {};
+  let recentFailureCount = 0;
+  let recentRecoveredCount = 0;
+  let failureProviderCount = 0;
+
+  for (const provider of providers) {
+    const failureStats = provider.healthCheck?.failureStats;
+    if (failureStats) {
+      for (const [code, count] of Object.entries(failureStats.reasonCodeCounts)) {
+        incrementDoctorReasonCount(aggregatedReasonCounts, code, count);
+      }
+    }
+    const runtimeWindow = failureStats?.runtimeWindow;
+    if (runtimeWindow) {
+      recentFailureCount += runtimeWindow.failureCount;
+      recentRecoveredCount += runtimeWindow.recoveredSuccessCount;
+      if (runtimeWindow.failureCount > 0) {
+        failureProviderCount += 1;
+      }
+    }
+  }
+
+  const dominantFailureCode = resolveDoctorDominantFailureCode(aggregatedReasonCounts);
+  const repeatedFallback = fallbackActiveProviderCount > 0 && recentFailureCount > 1;
+  const prioritizedProviders = [...providers].sort((left, right) => {
+    const leftBlocked = isGovernanceBlockedProvider(left) ? 1 : 0;
+    const rightBlocked = isGovernanceBlockedProvider(right) ? 1 : 0;
+    if (leftBlocked !== rightBlocked) {
+      return rightBlocked - leftBlocked;
+    }
+    const leftActionable = left.healthCheck?.actionable ? 1 : 0;
+    const rightActionable = right.healthCheck?.actionable ? 1 : 0;
+    if (leftActionable !== rightActionable) {
+      return rightActionable - leftActionable;
+    }
+    const leftDefault = left.defaultSelected ? 1 : 0;
+    const rightDefault = right.defaultSelected ? 1 : 0;
+    if (leftDefault !== rightDefault) {
+      return rightDefault - leftDefault;
+    }
+    return left.id.localeCompare(right.id);
+  });
+  const primaryProvider = prioritizedProviders[0];
+  const recommendedAction = primaryProvider?.healthCheck?.recoveryActions[0]?.label ?? primaryProvider?.fix;
+  const whyUnhealthy = blockedProviders.length > 0
+    ? `${blockedProviders[0].id} 当前需要优先处理；依据=${blockedProviders[0].healthCheck?.sources.join(" + ") || "-"}；主因=${blockedProviders[0].healthCheck?.primaryReasonCode ?? "-"}` + "。"
+    : undefined;
+  const whyFallback = buildGovernanceWhyFallback(defaultSelection);
+
+  let headline: string;
+  if (blockedProviders.length > 0) {
+    headline = `${blockedProviders.length} 个 provider 需要优先处理；主失败码=${dominantFailureCode ?? "-"}。`;
+  } else if (fallbackActiveProviderCount > 0) {
+    headline = `当前存在 fallback provider；近期失败=${recentFailureCount}，恢复=${recentRecoveredCount}。`;
+  } else if (permissionPromptProviderCount > 0) {
+    headline = `${permissionPromptProviderCount} 个 provider 正等待摄像头授权。`;
+  } else {
+    headline = "当前没有需要立即处理的 camera governance 告警。";
+  }
+
+  return {
+    headline,
+    blockedProviderCount: blockedProviders.length,
+    permissionBlockedProviderCount,
+    permissionPromptProviderCount,
+    fallbackActiveProviderCount,
+    recentFailureCount,
+    recentRecoveredCount,
+    failureProviderCount,
+    repeatedFallback,
+    ...(dominantFailureCode ? { dominantFailureCode } : {}),
+    ...(whyUnhealthy ? { whyUnhealthy } : {}),
+    ...(whyFallback ? { whyFallback } : {}),
+    ...(recommendedAction ? { recommendedAction } : {}),
+  };
 }
 
 function summarizeIssueCounts(issues: readonly CameraProviderDiagnosticIssue[]): CountSummary {
@@ -182,9 +397,13 @@ function summarizeDevices(
       device.available ? "available" : "unavailable",
       device.external ? "external" : device.source,
       device.metadata?.busy === true ? "busy" : "",
+      device.favorite === true ? "favorite" : "",
       device.stableKey ? `stable=${device.stableKey}` : "",
     ].filter(Boolean);
-    samples.push(`${device.label} [${tags.join(", ")}]`);
+    const displayLabel = device.alias && device.alias !== device.label
+      ? `${device.alias} => ${device.label}`
+      : device.label;
+    samples.push(`${displayLabel} [${tags.join(", ")}]`);
   }
   return {
     counts,
@@ -223,57 +442,30 @@ function buildFailureIssue(error: unknown): CameraProviderDiagnosticIssue {
 function buildRecoveryHints(
   providerId: CameraProviderId,
   issues: readonly CameraProviderDiagnosticIssue[],
-  launchConfig?: CameraRuntimeDoctorLaunchConfig,
+  options: {
+    launchConfig?: CameraRuntimeDoctorLaunchConfig;
+    permissionState?: CameraPermissionState;
+    runtimeHealth?: CameraProviderRuntimeHealth;
+    selection?: CameraProviderSelectionTrace;
+    source?: "diagnostic" | "selection" | "not_checked";
+  } = {},
 ): string[] {
-  const hints: string[] = [];
-  const seen = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = normalizeString(value);
-    if (!normalized || seen.has(normalized)) {
-      return;
-    }
-    seen.add(normalized);
-    hints.push(normalized);
-  };
+  const reasonCodes = [
+    ...issues.map((issue) => issue.code),
+    ...(options.runtimeHealth?.lastFailure?.code ? [options.runtimeHealth.lastFailure.code] : []),
+  ];
+  const actionLabels = buildCameraRecoveryActions({
+    reasonCodes,
+    selection: options.selection,
+    permissionState: options.permissionState,
+  }).map((action) => action.label);
 
-  for (const issue of issues) {
-    switch (issue.code) {
-      case "helper_not_configured":
-        push(`配置 ${BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND_ENV} 与 ${BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON_ENV} 后再重试。`);
-        break;
-      case "helper_unavailable":
-      case "protocol_mismatch":
-        push(`确认 helper 启动命令、cwd 和 helper 入口可执行；必要时检查 ${BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND_ENV}、${BELLDANDY_CAMERA_NATIVE_HELPER_ARGS_JSON_ENV}、${BELLDANDY_CAMERA_NATIVE_HELPER_CWD_ENV}。`);
-        break;
-      case "permission_denied":
-        push("确认 Windows 摄像头权限允许当前应用访问。");
-        break;
-      case "device_busy":
-        push("关闭正在占用摄像头的会议或录制软件后重试。");
-        break;
-      case "device_not_found":
-        push("确认摄像头已连接，并重新执行 camera_list 获取当前 deviceRef。");
-        break;
-      case "timeout":
-        push(`重试一次；如果持续超时，检查 helper 启动时间以及 ${BELLDANDY_CAMERA_NATIVE_HELPER_STARTUP_TIMEOUT_MS_ENV} / ${BELLDANDY_CAMERA_NATIVE_HELPER_REQUEST_TIMEOUT_MS_ENV} 是否需要放宽。`);
-        break;
-      case "driver_error":
-      case "capture_failed":
-        push("检查 ffmpeg / DirectShow 是否能看到目标设备，必要时重新插拔摄像头或重启 helper。");
-        break;
-      default:
-        break;
-    }
-    if (issue.retryable) {
-      push("该问题标记为可重试；在环境无改动时建议最多重试一次，再看 helper stderr / doctor 输出。");
-    }
+  if (providerId === "native_desktop" && actionLabels.length === 0 && options.launchConfig) {
+    actionLabels.push(
+      `当前 helper 由 ${options.launchConfig.command} 拉起；若改过部署方式，请同时核对 cwd、helper entry、runtimeDir 和 ${BELLDANDY_CAMERA_NATIVE_HELPER_IDLE_SHUTDOWN_MS_ENV}。`,
+    );
   }
-
-  if (!hints.length && providerId === "native_desktop" && launchConfig) {
-    push(`当前 helper 由 ${launchConfig.command} 拉起；若改过部署方式，请同时核对 cwd、helper entry、runtimeDir 和 ${BELLDANDY_CAMERA_NATIVE_HELPER_IDLE_SHUTDOWN_MS_ENV}。`);
-  }
-
-  return hints;
+  return actionLabels;
 }
 
 async function buildLaunchConfigSummary(
@@ -336,8 +528,18 @@ function buildProviderHeadline(input: {
 
 function createBrowserLoopbackDoctorProvider(
   defaultProviderId: CameraProviderId | undefined,
+  defaultSelection: CameraProviderSelectionTrace | undefined,
 ): CameraRuntimeDoctorProvider {
   const issueCounts = summarizeIssueCounts([]);
+  const selection = defaultSelection?.selectedProvider === "browser_loopback"
+    ? defaultSelection
+    : undefined;
+  const healthCheck = buildCameraProviderHealthCheck({
+    providerId: "browser_loopback",
+    source: selection ? "selection" : "not_checked",
+    checkedAt: new Date().toISOString(),
+    selection,
+  });
   return {
     id: "browser_loopback",
     registered: true,
@@ -346,8 +548,9 @@ function createBrowserLoopbackDoctorProvider(
     diagnoseSupported: false,
     status: "not_checked",
     issueCounts,
+    healthCheck,
     issues: [],
-    recoveryHints: [],
+    recoveryHints: healthCheck.recoveryActions.map((action) => action.label),
     headline: buildProviderHeadline({
       providerId: "browser_loopback",
       status: "not_checked",
@@ -357,14 +560,118 @@ function createBrowserLoopbackDoctorProvider(
   };
 }
 
+function readRuntimeHealthFromRegistry(
+  registry: CameraProviderRegistry | undefined,
+  providerId: CameraProviderId,
+): CameraProviderRuntimeHealth | undefined {
+  const provider = registry?.get(providerId);
+  if (!provider || typeof provider.getRuntimeHealth !== "function") {
+    return undefined;
+  }
+  return provider.getRuntimeHealth();
+}
+
+async function readPersistedRuntimeHealth(
+  stateDir: string | undefined,
+  providerId: CameraProviderId,
+): Promise<{
+  snapshot?: CameraRuntimeHealthSnapshot;
+  snapshotPath?: string;
+  retention: CameraRuntimeHealthRetentionPolicy;
+  issue?: CameraRuntimeHealthSnapshotIssue;
+}> {
+  const normalizedStateDir = normalizeString(stateDir);
+  if (!normalizedStateDir) {
+    return {
+      retention: DEFAULT_CAMERA_RUNTIME_HEALTH_RETENTION_POLICY,
+    };
+  }
+  const inspected = await inspectCameraRuntimeHealthSnapshot(normalizedStateDir, providerId);
+  return {
+    retention: inspected?.retention ?? DEFAULT_CAMERA_RUNTIME_HEALTH_RETENTION_POLICY,
+    snapshotPath: inspected?.snapshotPath,
+    ...(inspected?.snapshot ? { snapshot: inspected.snapshot } : {}),
+    ...(inspected?.issue ? { issue: inspected.issue } : {}),
+  };
+}
+
+function resolveRuntimeHealthFreshnessLevel(
+  ageMs: number | undefined,
+  staleAfterMs: number,
+): CameraRuntimeDoctorRuntimeHealthFreshness["level"] {
+  if (typeof ageMs !== "number") {
+    return "fresh";
+  }
+  if (ageMs > staleAfterMs) {
+    return "stale";
+  }
+  if (ageMs > Math.floor(staleAfterMs / 2)) {
+    return "aging";
+  }
+  return "fresh";
+}
+
+function resolveRuntimeHealth(input: {
+  runtimeHealth?: CameraProviderRuntimeHealth;
+  snapshot?: CameraRuntimeHealthSnapshot;
+  snapshotPath?: string;
+  snapshotIssue?: CameraRuntimeHealthSnapshotIssue;
+  retention: CameraRuntimeHealthRetentionPolicy;
+  now: Date;
+  staleAfterMs: number;
+}): ResolvedRuntimeHealth {
+  const runtimeHealth = input.runtimeHealth ?? input.snapshot?.runtimeHealth;
+  if (!runtimeHealth && !input.snapshotIssue) {
+    return {};
+  }
+  const referenceAt = normalizeString(input.snapshot?.savedAt) || normalizeString(runtimeHealth?.observedAt);
+  const referenceDate = referenceAt ? new Date(referenceAt) : undefined;
+  const ageMs = referenceDate && !Number.isNaN(referenceDate.getTime())
+    ? Math.max(0, input.now.getTime() - referenceDate.getTime())
+    : undefined;
+  const level = runtimeHealth
+    ? resolveRuntimeHealthFreshnessLevel(ageMs, input.staleAfterMs)
+    : "unavailable";
+  return {
+    runtimeHealth,
+    runtimeHealthFreshness: {
+      source: runtimeHealth
+        ? (input.runtimeHealth
+          ? (input.snapshot ? "memory+snapshot" : "memory")
+          : "snapshot")
+        : "none",
+      level,
+      stale: level === "stale" || level === "unavailable",
+      staleAfterMs: input.staleAfterMs,
+      retention: input.retention,
+      evaluatedAt: input.now.toISOString(),
+      ...(typeof ageMs === "number" ? { ageMs } : {}),
+      ...(referenceAt ? { referenceAt } : {}),
+      ...(input.snapshot?.savedAt ? { snapshotSavedAt: input.snapshot.savedAt } : {}),
+      ...(input.snapshotPath ? { snapshotPath: input.snapshotPath } : {}),
+      ...(input.snapshotIssue ? { snapshotIssue: input.snapshotIssue } : {}),
+    },
+  };
+}
+
 function createNativeDesktopConfigErrorProvider(
   error: unknown,
   defaultProviderId: CameraProviderId | undefined,
+  runtimeHealth?: CameraProviderRuntimeHealth,
+  runtimeHealthFreshness?: CameraRuntimeDoctorRuntimeHealthFreshness,
 ): CameraRuntimeDoctorProvider {
   const issue = buildFailureIssue(error);
   const issues = [issue];
   const issueCounts = summarizeIssueCounts(issues);
-  const recoveryHints = buildRecoveryHints("native_desktop", issues);
+  const healthCheck = buildCameraProviderHealthCheck({
+    providerId: "native_desktop",
+    source: "diagnostic",
+    checkedAt: runtimeHealth?.observedAt,
+    providerStatus: "unavailable",
+    issues,
+    runtimeHealth,
+  });
+  const recoveryHints = healthCheck.recoveryActions.map((action) => action.label);
   return {
     id: "native_desktop",
     registered: false,
@@ -374,7 +681,10 @@ function createNativeDesktopConfigErrorProvider(
     status: "unavailable",
     issueCounts,
     issues,
+    healthCheck,
     recoveryHints,
+    ...(runtimeHealth ? { runtimeHealth } : {}),
+    ...(runtimeHealthFreshness ? { runtimeHealthFreshness } : {}),
     fix: recoveryHints[0],
     headline: `native_desktop helper 配置无效: ${issue.message}`,
   };
@@ -387,13 +697,29 @@ function mapDiagnosticToDoctorProvider(
     defaultProviderId?: CameraProviderId;
     configured: boolean;
     launchConfig?: CameraRuntimeDoctorLaunchConfig;
+    runtimeHealth?: CameraProviderRuntimeHealth;
+    runtimeHealthFreshness?: CameraRuntimeDoctorRuntimeHealthFreshness;
   },
 ): CameraRuntimeDoctorProvider {
   const issues = diagnostic.issues ?? [];
   const issueCounts = summarizeIssueCounts(issues);
   const deviceSummary = summarizeDevices(diagnostic);
   const helperStatus = normalizeString(diagnostic.metadata?.helperStatus);
-  const recoveryHints = buildRecoveryHints(providerId, issues, options.launchConfig);
+  const runtimeHealth = options.runtimeHealth ?? diagnostic.runtimeHealth;
+  const healthCheck = buildCameraProviderHealthCheck({
+    providerId,
+    source: "diagnostic",
+    checkedAt: diagnostic.observedAt,
+    providerStatus: diagnostic.status,
+    permissionState: diagnostic.permissionState,
+    issues,
+    runtimeHealth,
+  });
+  const recoveryHints = buildRecoveryHints(providerId, issues, {
+    launchConfig: options.launchConfig,
+    permissionState: diagnostic.permissionState,
+    runtimeHealth,
+  });
   return {
     id: providerId,
     registered: true,
@@ -404,6 +730,7 @@ function mapDiagnosticToDoctorProvider(
     permissionState: diagnostic.permissionState,
     ...(helperStatus ? { helperStatus } : {}),
     issueCounts,
+    healthCheck,
     issues,
     recoveryHints,
     ...(recoveryHints[0] ? { fix: recoveryHints[0] } : {}),
@@ -418,6 +745,8 @@ function mapDiagnosticToDoctorProvider(
     capabilities: diagnostic.capabilities,
     ...(deviceSummary ? { deviceCounts: deviceSummary.counts, sampleDevices: deviceSummary.samples } : {}),
     ...(options.launchConfig ? { launchConfig: options.launchConfig } : {}),
+    ...(runtimeHealth ? { runtimeHealth } : {}),
+    ...(options.runtimeHealthFreshness ? { runtimeHealthFreshness: options.runtimeHealthFreshness } : {}),
     ...(diagnostic.metadata ? { metadata: diagnostic.metadata } : {}),
   };
 }
@@ -429,11 +758,24 @@ function mapFailureToDoctorProvider(
     defaultProviderId?: CameraProviderId;
     configured: boolean;
     launchConfig?: CameraRuntimeDoctorLaunchConfig;
+    runtimeHealth?: CameraProviderRuntimeHealth;
+    runtimeHealthFreshness?: CameraRuntimeDoctorRuntimeHealthFreshness;
   },
 ): CameraRuntimeDoctorProvider {
   const issues = [buildFailureIssue(error)];
   const issueCounts = summarizeIssueCounts(issues);
-  const recoveryHints = buildRecoveryHints(providerId, issues, options.launchConfig);
+  const healthCheck = buildCameraProviderHealthCheck({
+    providerId,
+    source: "diagnostic",
+    checkedAt: options.runtimeHealth?.observedAt,
+    providerStatus: "unavailable",
+    issues,
+    runtimeHealth: options.runtimeHealth,
+  });
+  const recoveryHints = buildRecoveryHints(providerId, issues, {
+    launchConfig: options.launchConfig,
+    runtimeHealth: options.runtimeHealth,
+  });
   return {
     id: providerId,
     registered: true,
@@ -443,32 +785,39 @@ function mapFailureToDoctorProvider(
     status: "unavailable",
     permissionState: "unknown",
     issueCounts,
+    healthCheck,
     issues,
     recoveryHints,
     ...(recoveryHints[0] ? { fix: recoveryHints[0] } : {}),
     headline: `${providerId} doctor 诊断失败: ${issues[0].message}`,
     ...(options.launchConfig ? { launchConfig: options.launchConfig } : {}),
+    ...(options.runtimeHealth ? { runtimeHealth: options.runtimeHealth } : {}),
+    ...(options.runtimeHealthFreshness ? { runtimeHealthFreshness: options.runtimeHealthFreshness } : {}),
   };
 }
 
 function buildReportSummary(
   providers: readonly CameraRuntimeDoctorProvider[],
-  defaultProviderId: CameraProviderId | undefined,
+  defaultSelection: CameraProviderSelectionTrace | undefined,
 ): CameraRuntimeDoctorReport["summary"] {
   const registeredProviderIds = providers.filter((item) => item.registered).map((item) => item.id);
   const warningCount = providers.reduce((total, item) => total + item.issueCounts.warning, 0);
   const errorCount = providers.reduce((total, item) => total + item.issueCounts.error, 0);
   const nativeDesktop = providers.find((item) => item.id === "native_desktop");
+  const defaultProviderId = defaultSelection?.selectedProvider;
   const headline = nativeDesktop?.headline
     ?? `${registeredProviderIds.length} camera provider(s) registered; default=${defaultProviderId ?? "-"}.`;
+  const governance = buildGovernanceSummary(providers, defaultSelection);
   const fix = providers.find((item) => item.fix)?.fix;
   return {
     available: registeredProviderIds.length > 0,
     ...(defaultProviderId ? { defaultProviderId } : {}),
+    ...(defaultSelection ? { defaultSelection } : {}),
     registeredProviderIds,
     warningCount,
     errorCount,
     headline,
+    ...(governance ? { governance } : {}),
     ...(fix ? { fix } : {}),
   };
 }
@@ -479,6 +828,7 @@ function buildProviderContext(
   return {
     conversationId: context?.conversationId ?? "doctor-camera-runtime",
     workspaceRoot: context?.workspaceRoot ?? process.cwd(),
+    stateDir: context?.stateDir,
     logger: context?.logger,
     policy: context?.policy ?? DEFAULT_POLICY,
     abortSignal: context?.abortSignal,
@@ -489,7 +839,12 @@ export async function buildCameraRuntimeDoctorReport(
   options: BuildCameraRuntimeDoctorReportOptions = {},
 ): Promise<CameraRuntimeDoctorReport | null> {
   const env = options.env ?? process.env;
-  const observedAt = new Date().toISOString();
+  const now = normalizeDate(options.now);
+  const observedAt = now.toISOString();
+  const runtimeHealthStaleAfterMs = Number.isFinite(options.runtimeHealthStaleAfterMs)
+    && Number(options.runtimeHealthStaleAfterMs) > 0
+    ? Number(options.runtimeHealthStaleAfterMs)
+    : DEFAULT_RUNTIME_HEALTH_STALE_AFTER_MS;
   const registry = new CameraProviderRegistry();
   registry.register(browserLoopbackCameraProvider, { makeDefault: true });
 
@@ -507,19 +862,39 @@ export async function buildCameraRuntimeDoctorReport(
     }));
   }
 
-  const defaultProviderId = registry.getDefaultProviderId();
+  const runtimeHealthRegistry = options.runtimeHealthRegistry ?? getDefaultCameraProviderRegistry();
+  const defaultSelection = registry.resolveProviderSelection({}, {
+    healthSourceRegistry: runtimeHealthRegistry,
+    now,
+  });
+  const defaultProviderId = defaultSelection?.selectedProvider;
   const hasNativeDesktopSurface = Boolean(nativeDesktopConfig || nativeDesktopConfigError || registry.has("native_desktop"));
   if (!hasNativeDesktopSurface && !options.includeBrowserLoopbackOnly) {
     return null;
   }
 
   const providerContext = buildProviderContext(options.context);
+  const nativeDesktopPersistedHealth = await readPersistedRuntimeHealth(providerContext.stateDir, "native_desktop");
   const providers: CameraRuntimeDoctorProvider[] = [
-    createBrowserLoopbackDoctorProvider(defaultProviderId),
+    createBrowserLoopbackDoctorProvider(defaultProviderId, defaultSelection),
   ];
 
   if (nativeDesktopConfigError) {
-    const provider = createNativeDesktopConfigErrorProvider(nativeDesktopConfigError, defaultProviderId);
+    const resolvedRuntimeHealth = resolveRuntimeHealth({
+      runtimeHealth: readRuntimeHealthFromRegistry(runtimeHealthRegistry, "native_desktop"),
+      snapshot: nativeDesktopPersistedHealth.snapshot,
+      snapshotPath: nativeDesktopPersistedHealth.snapshotPath,
+      snapshotIssue: nativeDesktopPersistedHealth.issue,
+      retention: nativeDesktopPersistedHealth.retention,
+      now,
+      staleAfterMs: runtimeHealthStaleAfterMs,
+    });
+    const provider = createNativeDesktopConfigErrorProvider(
+      nativeDesktopConfigError,
+      defaultProviderId,
+      resolvedRuntimeHealth.runtimeHealth,
+      resolvedRuntimeHealth.runtimeHealthFreshness,
+    );
     const nativeDesktopLaunchConfig = await buildLaunchConfigSummary(nativeDesktopConfig, env);
     if (nativeDesktopLaunchConfig) {
       provider.launchConfig = nativeDesktopLaunchConfig;
@@ -541,6 +916,16 @@ export async function buildCameraRuntimeDoctorReport(
           warning: 0,
           error: 1,
         },
+        healthCheck: buildCameraProviderHealthCheck({
+          providerId: "native_desktop",
+          source: "diagnostic",
+          providerStatus: "unavailable",
+          issues: [{
+            code: "helper_unavailable",
+            severity: "error",
+            message: "native_desktop provider 未注册成功。",
+          }],
+        }),
         issues: [{
           code: "helper_unavailable",
           severity: "error",
@@ -551,21 +936,66 @@ export async function buildCameraRuntimeDoctorReport(
         ],
         fix: `确认 ${BELLDANDY_CAMERA_NATIVE_HELPER_COMMAND_ENV} 与 helper entry 配置有效后重试。`,
         headline: "native_desktop provider 未注册成功。",
+        ...(resolveRuntimeHealth({
+          runtimeHealth: readRuntimeHealthFromRegistry(runtimeHealthRegistry, "native_desktop"),
+          snapshot: nativeDesktopPersistedHealth.snapshot,
+          snapshotPath: nativeDesktopPersistedHealth.snapshotPath,
+          snapshotIssue: nativeDesktopPersistedHealth.issue,
+          retention: nativeDesktopPersistedHealth.retention,
+          now,
+          staleAfterMs: runtimeHealthStaleAfterMs,
+        })),
         ...(nativeDesktopLaunchConfig ? { launchConfig: nativeDesktopLaunchConfig } : {}),
       });
     } else if (typeof nativeDesktopProvider.diagnose === "function") {
       try {
         const diagnostic = await nativeDesktopProvider.diagnose(providerContext);
-        providers.push(mapDiagnosticToDoctorProvider("native_desktop", diagnostic, {
+        const aliasObservation = diagnostic.devices?.length
+          ? await observeCameraDeviceAliasMemory(providerContext.stateDir, diagnostic.devices, { now })
+          : null;
+        const diagnosticWithAliases = aliasObservation
+          ? {
+            ...diagnostic,
+            devices: aliasObservation.devices,
+            metadata: {
+              ...(diagnostic.metadata ?? {}),
+              aliasMemory: aliasObservation.summary,
+            },
+          }
+          : diagnostic;
+        const refreshedPersistedHealth = await readPersistedRuntimeHealth(providerContext.stateDir, "native_desktop");
+        const resolvedRuntimeHealth = resolveRuntimeHealth({
+          runtimeHealth: readRuntimeHealthFromRegistry(runtimeHealthRegistry, "native_desktop") ?? diagnostic.runtimeHealth,
+          snapshot: refreshedPersistedHealth.snapshot,
+          snapshotPath: refreshedPersistedHealth.snapshotPath,
+          snapshotIssue: refreshedPersistedHealth.issue,
+          retention: refreshedPersistedHealth.retention,
+          now,
+          staleAfterMs: runtimeHealthStaleAfterMs,
+        });
+        providers.push(mapDiagnosticToDoctorProvider("native_desktop", diagnosticWithAliases, {
           defaultProviderId,
           configured: true,
           launchConfig: nativeDesktopLaunchConfig,
+          runtimeHealth: resolvedRuntimeHealth.runtimeHealth,
+          runtimeHealthFreshness: resolvedRuntimeHealth.runtimeHealthFreshness,
         }));
       } catch (error) {
+        const resolvedRuntimeHealth = resolveRuntimeHealth({
+          runtimeHealth: readRuntimeHealthFromRegistry(runtimeHealthRegistry, "native_desktop"),
+          snapshot: nativeDesktopPersistedHealth.snapshot,
+          snapshotPath: nativeDesktopPersistedHealth.snapshotPath,
+          snapshotIssue: nativeDesktopPersistedHealth.issue,
+          retention: nativeDesktopPersistedHealth.retention,
+          now,
+          staleAfterMs: runtimeHealthStaleAfterMs,
+        });
         providers.push(mapFailureToDoctorProvider("native_desktop", error, {
           defaultProviderId,
           configured: true,
           launchConfig: nativeDesktopLaunchConfig,
+          runtimeHealth: resolvedRuntimeHealth.runtimeHealth,
+          runtimeHealthFreshness: resolvedRuntimeHealth.runtimeHealthFreshness,
         }));
       }
     }
@@ -573,7 +1003,7 @@ export async function buildCameraRuntimeDoctorReport(
 
   return {
     observedAt,
-    summary: buildReportSummary(providers, defaultProviderId),
+    summary: buildReportSummary(providers, defaultSelection),
     providers,
   };
 }

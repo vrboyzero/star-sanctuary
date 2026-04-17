@@ -2,6 +2,11 @@ import type { Tool, ToolCallResult } from "../../types.js";
 import { isAbortError, readAbortReason } from "../../abort-utils.js";
 import { CAMERA_PROVIDER_IDS } from "./camera-contract.js";
 import {
+  listCameraDeviceAliasMemoryEntries,
+  removeCameraDeviceAliasMemoryEntry,
+  upsertCameraDeviceAliasMemoryEntry,
+} from "./camera-device-alias-state.js";
+import {
   captureCameraSnapshot,
   listCameraDevices,
 } from "./camera-provider-registry.js";
@@ -10,6 +15,7 @@ import {
   normalizeCameraCaptureOptions,
   normalizeCameraListOptions,
 } from "./camera-runtime.js";
+import { getCameraRecoveryHintText } from "./camera-governance.js";
 
 function success(name: string, output: unknown, startedAt: number): ToolCallResult {
   return {
@@ -61,22 +67,30 @@ function formatCameraOperationError(
 ): string {
   const rawMessage = error instanceof Error ? error.message : String(error);
   const { code, detail } = parseCameraErrorCode(rawMessage);
+  const recoveryHint = getCameraRecoveryHintText(code);
   switch (code) {
     case "device_busy":
-      return `摄像头当前被其他应用占用: ${detail}。请先关闭正在使用该摄像头的会议或录制软件后重试。`;
+      return `摄像头当前被其他应用占用: ${detail}。${recoveryHint ?? "请先关闭正在使用该摄像头的会议或录制软件后重试。"}`;
     case "device_not_found":
       return operation === "list"
         ? `未找到匹配的摄像头设备: ${detail}。`
         : `无法找到可用于拍照的摄像头设备: ${detail}。`;
     case "helper_unavailable":
-      return `当前摄像头 provider 环境未就绪: ${detail}。请确认 helper、PowerShell、ffmpeg 与相关环境变量配置正确。`;
+      return `当前摄像头 provider 环境未就绪: ${detail}。${recoveryHint ?? "请确认 helper、PowerShell、ffmpeg 与相关环境变量配置正确。"}`;
     case "capture_failed":
-      return `摄像头拍摄失败: ${detail}。`;
+      return `摄像头拍摄失败: ${detail}。${recoveryHint ? `建议：${recoveryHint}` : ""}`.trim();
     default:
       return operation === "list"
-        ? `无法列出摄像头设备: ${rawMessage}。请确认所选 provider 已注册，且当前 provider 所需环境已就绪。`
-        : `无法捕获摄像头画面: ${rawMessage}。请确认所选 provider 已注册，且当前 provider 所需环境已就绪。`;
+        ? `无法列出摄像头设备: ${rawMessage}。${recoveryHint ?? "请确认所选 provider 已注册，且当前 provider 所需环境已就绪。"}`
+        : `无法捕获摄像头画面: ${rawMessage}。${recoveryHint ?? "请确认所选 provider 已注册，且当前 provider 所需环境已就绪。"}`;
   }
+}
+
+function requireCameraStateDir(stateDir: string | undefined): string {
+  if (typeof stateDir === "string" && stateDir.trim()) {
+    return stateDir;
+  }
+  throw new Error("camera_device_memory requires stateDir.");
 }
 
 export const cameraSnapTool: Tool = {
@@ -88,7 +102,7 @@ export const cameraSnapTool: Tool = {
       properties: {
         provider: {
           type: "string",
-          description: "显式指定摄像头 provider；Phase 3A 当前默认可用 browser_loopback。",
+          description: "显式指定摄像头 provider；不传时按 registry 默认选择策略路由，当前优先 native_desktop，其次 browser_loopback。",
           enum: [...CAMERA_PROVIDER_IDS],
         },
         delay: {
@@ -170,7 +184,7 @@ export const cameraListTool: Tool = {
       properties: {
         provider: {
           type: "string",
-          description: "显式指定摄像头 provider；Phase 3A 当前默认可用 browser_loopback。",
+          description: "显式指定摄像头 provider；不传时按 registry 默认选择策略路由，当前优先 native_desktop，其次 browser_loopback。",
           enum: [...CAMERA_PROVIDER_IDS],
         },
         facing: {
@@ -226,6 +240,91 @@ export const cameraListTool: Tool = {
         formatCameraOperationError("list", error),
         startedAt,
       );
+    }
+  },
+};
+
+export const cameraDeviceMemoryTool: Tool = {
+  definition: {
+    name: "camera_device_memory",
+    description: "管理摄像头设备别名与常用设备记忆；支持列出、设置和移除 state-dir 中的持久化设备记忆。",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: "要执行的记忆管理动作。",
+          enum: ["list", "upsert", "remove"],
+        },
+        provider: {
+          type: "string",
+          description: "可选 provider 过滤；upsert/remove 不传时会尝试从 deviceRef 前缀解析。",
+          enum: [...CAMERA_PROVIDER_IDS],
+        },
+        deviceRef: {
+          type: "string",
+          description: "provider-aware 设备引用；upsert/remove 必填。",
+        },
+        stableKey: {
+          type: "string",
+          description: "可选稳定设备键；提供后会优先用于跨重插槽/重枚举保持同一记忆条目。",
+        },
+        alias: {
+          type: "string",
+          description: "手动别名；upsert 时传空字符串可清除手动别名并回退到 learned alias。",
+        },
+        favorite: {
+          type: "boolean",
+          description: "是否标记为常用设备；仅 upsert 使用。",
+        },
+        label: {
+          type: "string",
+          description: "可选设备标签；仅在 upsert 新建条目时用作 learned alias 候选。",
+        },
+      },
+      required: ["action"],
+    },
+  },
+  execute: async (args, context) => {
+    const startedAt = Date.now();
+    try {
+      const input = args as Record<string, unknown>;
+      const action = typeof input.action === "string" ? input.action.trim().toLowerCase() : "";
+      const stateDir = requireCameraStateDir(context.stateDir);
+      switch (action) {
+        case "list":
+          return success("camera_device_memory", {
+            action,
+            ...await listCameraDeviceAliasMemoryEntries(stateDir, {
+              ...(typeof input.provider === "string" ? { provider: input.provider as typeof CAMERA_PROVIDER_IDS[number] } : {}),
+            }),
+          }, startedAt);
+        case "upsert":
+          return success("camera_device_memory", {
+            action,
+            ...await upsertCameraDeviceAliasMemoryEntry(stateDir, {
+              ...(typeof input.provider === "string" ? { provider: input.provider as typeof CAMERA_PROVIDER_IDS[number] } : {}),
+              deviceRef: typeof input.deviceRef === "string" ? input.deviceRef : "",
+              ...(typeof input.stableKey === "string" ? { stableKey: input.stableKey } : {}),
+              ...(typeof input.label === "string" ? { label: input.label } : {}),
+              ...(Object.prototype.hasOwnProperty.call(input, "alias") ? { alias: typeof input.alias === "string" ? input.alias : null } : {}),
+              ...(typeof input.favorite === "boolean" ? { favorite: input.favorite } : {}),
+            }),
+          }, startedAt);
+        case "remove":
+          return success("camera_device_memory", {
+            action,
+            ...await removeCameraDeviceAliasMemoryEntry(stateDir, {
+              ...(typeof input.provider === "string" ? { provider: input.provider as typeof CAMERA_PROVIDER_IDS[number] } : {}),
+              deviceRef: typeof input.deviceRef === "string" ? input.deviceRef : "",
+              ...(typeof input.stableKey === "string" ? { stableKey: input.stableKey } : {}),
+            }),
+          }, startedAt);
+        default:
+          throw new Error("camera_device_memory requires action=list|upsert|remove.");
+      }
+    } catch (error) {
+      return failure("camera_device_memory", error, startedAt);
     }
   },
 };

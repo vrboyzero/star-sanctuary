@@ -1906,6 +1906,49 @@ function buildCameraRuntimeCard(payload, t) {
       summary.headline || "-",
     ),
   ];
+  if (summary.defaultSelection) {
+    notes.push(
+      `default selection: policy=${summary.defaultSelection.policy}, selected=${summary.defaultSelection.selectedProvider}, reason=${summary.defaultSelection.reason}, fallback=${summary.defaultSelection.fallbackApplied ? "yes" : "no"}`,
+    );
+    notes.push(`provider order: ${summary.defaultSelection.preferredOrder.join(" -> ")}`);
+    notes.push(`registered providers: ${summary.defaultSelection.registeredProviders.join(", ") || "(none)"}`);
+    notes.push(`fallback ready: ${summary.defaultSelection.availableFallbackProviders.join(", ") || "(none)"}`);
+    notes.push(`missing fallbacks: ${summary.defaultSelection.missingFallbackProviders.join(", ") || "(none)"}`);
+    if (Array.isArray(summary.defaultSelection.skippedPreferredProviders) && summary.defaultSelection.skippedPreferredProviders.length) {
+      notes.push(`skipped preferred: ${summary.defaultSelection.skippedPreferredProviders.join(", ")}`);
+    }
+    if (summary.defaultSelection.configuredDefaultProvider) {
+      notes.push(`configured default: ${summary.defaultSelection.configuredDefaultProvider}`);
+    }
+    const attempts = Array.isArray(summary.defaultSelection.attempts) ? summary.defaultSelection.attempts : [];
+    if (attempts.length) {
+      notes.push(`selection trace: ${attempts.map((attempt) => {
+        const bits = [attempt.provider, attempt.outcome, attempt.reason];
+        if (attempt.detail) {
+          bits.push(attempt.detail);
+        }
+        return bits.join(":");
+      }).join(" -> ")}`);
+    }
+  }
+  if (summary.governance) {
+    notes.push(`governance: ${summary.governance.headline}`);
+    notes.push(
+      `governance counts: blocked=${formatNumber(summary.governance.blockedProviderCount)}, permission_blocked=${formatNumber(summary.governance.permissionBlockedProviderCount)}, permission_prompt=${formatNumber(summary.governance.permissionPromptProviderCount)}, fallback_active=${formatNumber(summary.governance.fallbackActiveProviderCount)}`,
+    );
+    notes.push(
+      `recent trend: failures=${formatNumber(summary.governance.recentFailureCount)}, recovered=${formatNumber(summary.governance.recentRecoveredCount)}, failureProviders=${formatNumber(summary.governance.failureProviderCount)}, repeatedFallback=${summary.governance.repeatedFallback ? "yes" : "no"}, dominant=${summary.governance.dominantFailureCode || "-"}`,
+    );
+    if (summary.governance.whyUnhealthy) {
+      notes.push(`why unhealthy: ${summary.governance.whyUnhealthy}`);
+    }
+    if (summary.governance.whyFallback) {
+      notes.push(`why fallback: ${summary.governance.whyFallback}`);
+    }
+    if (summary.governance.recommendedAction) {
+      notes.push(`next action: ${summary.governance.recommendedAction}`);
+    }
+  }
 
   const providers = Array.isArray(runtime?.providers) ? runtime.providers : [];
   for (const provider of providers.slice(0, 3)) {
@@ -1926,6 +1969,92 @@ function buildCameraRuntimeCard(payload, t) {
     const sampleDevices = Array.isArray(provider.sampleDevices) ? provider.sampleDevices : [];
     for (const device of sampleDevices.slice(0, 3)) {
       notes.push(`device: ${device}`);
+    }
+    const aliasMemory = provider.metadata && typeof provider.metadata === "object"
+      ? provider.metadata.aliasMemory
+      : undefined;
+    if (aliasMemory && typeof aliasMemory === "object") {
+      notes.push(
+        `alias memory: entries=${formatNumber(aliasMemory.entryCount)}, observed=${formatNumber(aliasMemory.observedCount)}`
+        + `, manual=${formatNumber(aliasMemory.manualAliasCount)}, favorite=${formatNumber(aliasMemory.favoriteCount)}`
+        + (typeof aliasMemory.snapshotPath === "string" ? `, snapshot=${aliasMemory.snapshotPath}` : ""),
+      );
+    }
+    if (provider.runtimeHealth) {
+      const historyWindow = provider.runtimeHealth.historyWindow;
+      notes.push(
+        `runtime health: status=${provider.runtimeHealth.status}, failures=${formatNumber(provider.runtimeHealth.consecutiveFailures)}, lastSuccess=${provider.runtimeHealth.lastSuccessAt || "-"}`,
+      );
+      if (historyWindow) {
+        const failureCodes = formatKeyCountSummary(historyWindow.failureCodeCounts || {});
+        notes.push(
+          `runtime window: events=${formatNumber(historyWindow.eventCount)}, success=${formatNumber(historyWindow.successCount)}, failure=${formatNumber(historyWindow.failureCount)}, recovered=${formatNumber(historyWindow.recoveredSuccessCount)}, codes=${failureCodes}`,
+        );
+        const lastEvents = Array.isArray(historyWindow.lastEvents) ? historyWindow.lastEvents.slice(-3) : [];
+        if (lastEvents.length) {
+          notes.push(`recent events: ${lastEvents.map((event) => {
+            const outcomeBits = [event.outcome];
+            if (event.code) {
+              outcomeBits.push(event.code);
+            }
+            if (event.recovered) {
+              outcomeBits.push("recovered");
+            }
+            return `${event.operation}/${outcomeBits.join(":")}`;
+          }).join(" -> ")}`);
+        }
+      }
+      if (provider.runtimeHealth.lastFailure) {
+        notes.push(
+          `last failure: ${provider.runtimeHealth.lastFailure.code || "unknown"} @ ${provider.runtimeHealth.lastFailure.at} (${provider.runtimeHealth.lastFailure.operation}) ${provider.runtimeHealth.lastFailure.message}`,
+        );
+        if (provider.runtimeHealth.lastFailure.recoveryHint) {
+          notes.push(`recent recovery hint: ${provider.runtimeHealth.lastFailure.recoveryHint}`);
+        }
+      }
+      if (provider.runtimeHealth.lastRecoveryAt) {
+        notes.push(`recovered at: ${provider.runtimeHealth.lastRecoveryAt}`);
+      }
+    }
+    if (provider.healthCheck) {
+      notes.push(
+        `health check: status=${provider.healthCheck.status}, source=${provider.healthCheck.source}, sources=${provider.healthCheck.sources.join(", ") || "(none)"}, actionable=${provider.healthCheck.actionable ? "yes" : "no"}, codes=${provider.healthCheck.reasonCodes.join(", ") || "(none)"}`,
+      );
+      notes.push(`governance: ${provider.healthCheck.headline}`);
+      notes.push(
+        `permission: state=${provider.healthCheck.permission.state}, gating=${provider.healthCheck.permission.gating}, actionable=${provider.healthCheck.permission.actionable ? "yes" : "no"}`,
+      );
+      notes.push(
+        `failure stats: total=${formatNumber(provider.healthCheck.failureStats.issueCounts.total)}, info=${formatNumber(provider.healthCheck.failureStats.issueCounts.info)}, warning=${formatNumber(provider.healthCheck.failureStats.issueCounts.warning)}, error=${formatNumber(provider.healthCheck.failureStats.issueCounts.error)}, retryable=${formatNumber(provider.healthCheck.failureStats.issueCounts.retryable)}, dominant=${provider.healthCheck.failureStats.dominantReasonCode || "-"}`,
+      );
+      if (provider.healthCheck.failureStats.runtimeWindow) {
+        notes.push(
+          `failure window: events=${formatNumber(provider.healthCheck.failureStats.runtimeWindow.eventCount)}, success=${formatNumber(provider.healthCheck.failureStats.runtimeWindow.successCount)}, failure=${formatNumber(provider.healthCheck.failureStats.runtimeWindow.failureCount)}, recovered=${formatNumber(provider.healthCheck.failureStats.runtimeWindow.recoveredSuccessCount)}, dominant=${provider.healthCheck.failureStats.runtimeWindow.dominantFailureCode || "-"}, last=${provider.healthCheck.failureStats.runtimeWindow.lastFailureCode || "-"}`,
+        );
+      }
+      if (provider.healthCheck.failureStats.reasonCodeCounts && Object.keys(provider.healthCheck.failureStats.reasonCodeCounts).length) {
+        notes.push(`failure codes: ${formatKeyCountSummary(provider.healthCheck.failureStats.reasonCodeCounts)}`);
+      }
+      if (Array.isArray(provider.healthCheck.recoveryActions) && provider.healthCheck.recoveryActions.length) {
+        notes.push(
+          `recovery actions: ${provider.healthCheck.recoveryActions.slice(0, 3).map((action) => `${action.priority}/${action.kind}:${action.label}`).join(" | ")}`,
+        );
+      }
+    }
+    if (provider.runtimeHealthFreshness) {
+      notes.push(
+        `runtime freshness: source=${provider.runtimeHealthFreshness.source}, level=${provider.runtimeHealthFreshness.level}, stale=${provider.runtimeHealthFreshness.stale ? "yes" : "no"}, ageMs=${typeof provider.runtimeHealthFreshness.ageMs === "number" ? provider.runtimeHealthFreshness.ageMs : "-"}, ref=${provider.runtimeHealthFreshness.referenceAt || "-"}`,
+      );
+      if (provider.runtimeHealthFreshness.retention) {
+        notes.push(
+          `runtime retention: events<=${formatNumber(provider.runtimeHealthFreshness.retention.eventLimit)}, horizonMs=${formatNumber(provider.runtimeHealthFreshness.retention.horizonMs)}`,
+        );
+      }
+      if (provider.runtimeHealthFreshness.snapshotIssue) {
+        notes.push(
+          `runtime snapshot issue: ${provider.runtimeHealthFreshness.snapshotIssue.code} ${provider.runtimeHealthFreshness.snapshotIssue.message}`,
+        );
+      }
     }
     const hints = Array.isArray(provider.recoveryHints) ? provider.recoveryHints : [];
     for (const hint of hints.slice(0, 2)) {

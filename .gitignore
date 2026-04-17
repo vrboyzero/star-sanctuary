@@ -19,6 +19,7 @@ artifacts/
 .stylelintcache
 .turbo/
 .codex-tmp/
+.tmp-codex/
 .playwright-mcp/
 
 # Logs

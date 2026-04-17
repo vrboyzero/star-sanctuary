@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -109,6 +110,41 @@ test("gateway handshake and message.send streams chat", async () => {
   await server.close();
   // Windows: SQLite 文件可能仍被锁定，忽略清理错误（由 OS 最终回收）
   await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("server.close force closes lingering raw sockets", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-close-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+  const socket = net.connect(server.port, "127.0.0.1");
+  const socketConnected = new Promise<void>((resolve, reject) => {
+    socket.once("connect", () => resolve());
+    socket.once("error", reject);
+  });
+  const socketClosed = new Promise<void>((resolve) => {
+    socket.once("close", () => resolve());
+  });
+
+  try {
+    await socketConnected;
+    await expect(Promise.race([
+      server.close().then(() => "closed"),
+      sleep(2_000).then(() => "timeout"),
+    ])).resolves.toBe("closed");
+    await expect(Promise.race([
+      socketClosed.then(() => "closed"),
+      sleep(2_000).then(() => "timeout"),
+    ])).resolves.toBe("closed");
+  } finally {
+    if (!socket.destroyed) {
+      socket.destroy();
+    }
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("message.send persists accepted user transcript before assistant finalizes", async () => {

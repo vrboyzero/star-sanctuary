@@ -1783,6 +1783,8 @@ export interface ITokenCounterService {
 export type ToolContext = {
   conversationId: string;
   workspaceRoot: string;
+  /** 当前运行时的 stateDir；工具若需跨进程持久化轻量状态，应优先使用这里 */
+  stateDir?: string;
   /** 当前运行的协作式中断信号；第一版只保证工具在安全点响应 */
   abortSignal?: AbortSignal;
   /** 额外允许的文件操作根目录（如其他盘符下的目录），路径必须落在 workspaceRoot 或其一内 */

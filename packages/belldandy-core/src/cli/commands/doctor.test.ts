@@ -350,7 +350,22 @@ test("bdd doctor json output includes camera runtime summary when native_desktop
     const parsed = JSON.parse(output);
     expect(parsed.cameraRuntime).toMatchObject({
       summary: {
-        defaultProviderId: "browser_loopback",
+        defaultProviderId: "native_desktop",
+        defaultSelection: {
+          policy: "prefer_native_desktop",
+          selectedProvider: "native_desktop",
+          reason: "policy_preferred_provider",
+          fallbackApplied: false,
+          configuredDefaultProvider: "browser_loopback",
+        },
+        governance: {
+          blockedProviderCount: 1,
+          permissionBlockedProviderCount: 0,
+          permissionPromptProviderCount: 0,
+          fallbackActiveProviderCount: 0,
+          dominantFailureCode: "device_busy",
+          recommendedAction: "关闭正在占用摄像头的会议或录制软件后重试。",
+        },
         warningCount: 1,
         errorCount: 0,
       },
@@ -358,6 +373,29 @@ test("bdd doctor json output includes camera runtime summary when native_desktop
         expect.objectContaining({
           id: "native_desktop",
           status: "degraded",
+          healthCheck: expect.objectContaining({
+            status: "warn",
+            source: "diagnostic",
+            primaryReasonCode: "device_busy",
+            recoveryActions: expect.arrayContaining([
+              expect.objectContaining({
+                kind: "close_competing_app",
+              }),
+            ]),
+          }),
+          runtimeHealth: expect.objectContaining({
+            status: "degraded",
+            historyWindow: expect.objectContaining({
+              eventCount: 1,
+              successCount: 1,
+              failureCount: 0,
+            }),
+          }),
+          runtimeHealthFreshness: expect.objectContaining({
+            source: "memory+snapshot",
+            stale: false,
+            snapshotPath: expect.stringContaining("native_desktop-runtime-health.json"),
+          }),
           sampleDevices: expect.arrayContaining([
             "OBSBOT Tiny 2 StreamCamera [available, external, busy, stable=usb-3564-fef8-453a4b75]",
           ]),

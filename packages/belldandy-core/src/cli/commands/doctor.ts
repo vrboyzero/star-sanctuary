@@ -274,6 +274,14 @@ function checkMcpConfig(stateDir: string): CheckResult {
   }
 }
 
+function formatDoctorKeyCountSummary(value: Record<string, number> | undefined): string {
+  const entries = Object.entries(value ?? {}).filter(([, count]) => Number.isFinite(count) && Number(count) > 0);
+  if (!entries.length) {
+    return "-";
+  }
+  return entries.map(([key, count]) => `${key}:${count}`).join(", ");
+}
+
 async function checkModelConnectivity(): Promise<CheckResult> {
   const baseUrl = process.env.BELLDANDY_OPENAI_BASE_URL;
   const apiKey = process.env.BELLDANDY_OPENAI_API_KEY;
@@ -421,6 +429,7 @@ export default defineCommand({
       context: {
         conversationId: "bdd.doctor",
         workspaceRoot: process.cwd(),
+        stateDir,
       },
     });
     if (cameraRuntime) {
@@ -533,6 +542,51 @@ export default defineCommand({
       if (cameraRuntime.summary.defaultProviderId) {
         ctx.log(`  default: ${cameraRuntime.summary.defaultProviderId}`);
       }
+      if (cameraRuntime.summary.defaultSelection) {
+        const attempts = Array.isArray(cameraRuntime.summary.defaultSelection.attempts)
+          ? cameraRuntime.summary.defaultSelection.attempts.map((attempt) => {
+            const bits: string[] = [attempt.provider, attempt.outcome, attempt.reason];
+            if (attempt.detail) {
+              bits.push(attempt.detail);
+            }
+            return bits.join(":");
+          })
+          : [];
+        ctx.log(
+          `  default selection: policy=${cameraRuntime.summary.defaultSelection.policy}, selected=${cameraRuntime.summary.defaultSelection.selectedProvider}, reason=${cameraRuntime.summary.defaultSelection.reason}, fallback=${cameraRuntime.summary.defaultSelection.fallbackApplied ? "yes" : "no"}`,
+        );
+        ctx.log(`  provider order: ${cameraRuntime.summary.defaultSelection.preferredOrder.join(" -> ")}`);
+        ctx.log(`  registered providers: ${cameraRuntime.summary.defaultSelection.registeredProviders.join(", ") || "(none)"}`);
+        ctx.log(`  fallback ready: ${cameraRuntime.summary.defaultSelection.availableFallbackProviders.join(", ") || "(none)"}`);
+        ctx.log(`  missing fallbacks: ${cameraRuntime.summary.defaultSelection.missingFallbackProviders.join(", ") || "(none)"}`);
+        if (cameraRuntime.summary.defaultSelection.skippedPreferredProviders.length) {
+          ctx.log(`  skipped preferred: ${cameraRuntime.summary.defaultSelection.skippedPreferredProviders.join(", ")}`);
+        }
+        if (cameraRuntime.summary.defaultSelection.configuredDefaultProvider) {
+          ctx.log(`  configured default: ${cameraRuntime.summary.defaultSelection.configuredDefaultProvider}`);
+        }
+        if (attempts.length) {
+          ctx.log(`  selection trace: ${attempts.join(" -> ")}`);
+        }
+      }
+      if (cameraRuntime.summary.governance) {
+        ctx.log(`  governance: ${cameraRuntime.summary.governance.headline}`);
+        ctx.log(
+          `  governance counts: blocked=${cameraRuntime.summary.governance.blockedProviderCount}, permission_blocked=${cameraRuntime.summary.governance.permissionBlockedProviderCount}, permission_prompt=${cameraRuntime.summary.governance.permissionPromptProviderCount}, fallback_active=${cameraRuntime.summary.governance.fallbackActiveProviderCount}`,
+        );
+        ctx.log(
+          `  recent trend: failures=${cameraRuntime.summary.governance.recentFailureCount}, recovered=${cameraRuntime.summary.governance.recentRecoveredCount}, failureProviders=${cameraRuntime.summary.governance.failureProviderCount}, repeatedFallback=${cameraRuntime.summary.governance.repeatedFallback ? "yes" : "no"}, dominant=${cameraRuntime.summary.governance.dominantFailureCode ?? "-"}`,
+        );
+        if (cameraRuntime.summary.governance.whyUnhealthy) {
+          ctx.log(`  why unhealthy: ${cameraRuntime.summary.governance.whyUnhealthy}`);
+        }
+        if (cameraRuntime.summary.governance.whyFallback) {
+          ctx.log(`  why fallback: ${cameraRuntime.summary.governance.whyFallback}`);
+        }
+        if (cameraRuntime.summary.governance.recommendedAction) {
+          ctx.log(`  next action: ${cameraRuntime.summary.governance.recommendedAction}`);
+        }
+      }
       for (const provider of cameraRuntime.providers) {
         ctx.log(`  - ${provider.id}: ${provider.headline}`);
         if (provider.launchConfig) {
@@ -556,6 +610,95 @@ export default defineCommand({
         if (provider.sampleDevices?.length) {
           for (const device of provider.sampleDevices) {
             ctx.log(`    device: ${device}`);
+          }
+        }
+        const aliasMemory = provider.metadata && typeof provider.metadata === "object"
+          ? (provider.metadata as Record<string, unknown>).aliasMemory as Record<string, unknown> | undefined
+          : undefined;
+        if (aliasMemory) {
+          ctx.log(
+            `    alias memory: entries=${aliasMemory.entryCount ?? "-"}, observed=${aliasMemory.observedCount ?? "-"}`
+            + `, manual=${aliasMemory.manualAliasCount ?? "-"}, favorite=${aliasMemory.favoriteCount ?? "-"}`
+            + (typeof aliasMemory.snapshotPath === "string" ? `, snapshot=${aliasMemory.snapshotPath}` : ""),
+          );
+        }
+        if (provider.runtimeHealth) {
+          ctx.log(
+            `    runtime health: status=${provider.runtimeHealth.status}, failures=${provider.runtimeHealth.consecutiveFailures}, lastSuccess=${provider.runtimeHealth.lastSuccessAt ?? "-"}`,
+          );
+          const historyWindow = provider.runtimeHealth.historyWindow;
+          if (historyWindow) {
+            ctx.log(
+              `    runtime window: events=${historyWindow.eventCount}, success=${historyWindow.successCount}, failure=${historyWindow.failureCount}, recovered=${historyWindow.recoveredSuccessCount}, codes=${formatDoctorKeyCountSummary(historyWindow.failureCodeCounts)}`,
+            );
+            const lastEvents = Array.isArray(historyWindow.lastEvents) ? historyWindow.lastEvents.slice(-3) : [];
+            if (lastEvents.length) {
+              ctx.log(
+                `    recent events: ${lastEvents.map((event) => {
+                  const outcomeBits: string[] = [event.outcome];
+                  if (event.code) {
+                    outcomeBits.push(event.code);
+                  }
+                  if (event.recovered) {
+                    outcomeBits.push("recovered");
+                  }
+                  return `${event.operation}/${outcomeBits.join(":")}`;
+                }).join(" -> ")}`,
+              );
+            }
+          }
+          if (provider.runtimeHealth.lastFailure) {
+            ctx.log(
+              `    last failure: ${provider.runtimeHealth.lastFailure.code ?? "unknown"} @ ${provider.runtimeHealth.lastFailure.at} (${provider.runtimeHealth.lastFailure.operation}) ${provider.runtimeHealth.lastFailure.message}`,
+            );
+            if (provider.runtimeHealth.lastFailure.recoveryHint) {
+              ctx.log(`    recovery: ${provider.runtimeHealth.lastFailure.recoveryHint}`);
+            }
+          }
+          if (provider.runtimeHealth.lastRecoveryAt) {
+            ctx.log(`    recovered at: ${provider.runtimeHealth.lastRecoveryAt}`);
+          }
+        }
+        if (provider.healthCheck) {
+          ctx.log(
+            `    health check: status=${provider.healthCheck.status}, source=${provider.healthCheck.source}, sources=${provider.healthCheck.sources.join(", ") || "(none)"}, actionable=${provider.healthCheck.actionable ? "yes" : "no"}, codes=${provider.healthCheck.reasonCodes.join(", ") || "(none)"}`,
+          );
+          ctx.log(`    governance: ${provider.healthCheck.headline}`);
+          ctx.log(
+            `    permission: state=${provider.healthCheck.permission.state}, gating=${provider.healthCheck.permission.gating}, actionable=${provider.healthCheck.permission.actionable ? "yes" : "no"}`,
+          );
+          ctx.log(
+            `    failure stats: total=${provider.healthCheck.failureStats.issueCounts.total}, info=${provider.healthCheck.failureStats.issueCounts.info}, warning=${provider.healthCheck.failureStats.issueCounts.warning}, error=${provider.healthCheck.failureStats.issueCounts.error}, retryable=${provider.healthCheck.failureStats.issueCounts.retryable}, dominant=${provider.healthCheck.failureStats.dominantReasonCode ?? "-"}`,
+          );
+          if (provider.healthCheck.failureStats.runtimeWindow) {
+            ctx.log(
+              `    failure window: events=${provider.healthCheck.failureStats.runtimeWindow.eventCount}, success=${provider.healthCheck.failureStats.runtimeWindow.successCount}, failure=${provider.healthCheck.failureStats.runtimeWindow.failureCount}, recovered=${provider.healthCheck.failureStats.runtimeWindow.recoveredSuccessCount}, dominant=${provider.healthCheck.failureStats.runtimeWindow.dominantFailureCode ?? "-"}, last=${provider.healthCheck.failureStats.runtimeWindow.lastFailureCode ?? "-"}`,
+            );
+          }
+          if (Object.keys(provider.healthCheck.failureStats.reasonCodeCounts).length) {
+            ctx.log(`    failure codes: ${formatDoctorKeyCountSummary(provider.healthCheck.failureStats.reasonCodeCounts)}`);
+          }
+          if (provider.healthCheck.recoveryActions.length) {
+            ctx.log(
+              `    recovery actions: ${provider.healthCheck.recoveryActions.slice(0, 3).map((action) => `${action.priority}/${action.kind}:${action.label}`).join(" | ")}`,
+            );
+          }
+        }
+        if (provider.runtimeHealthFreshness) {
+          ctx.log(
+            `    runtime freshness: source=${provider.runtimeHealthFreshness.source}, level=${provider.runtimeHealthFreshness.level}, stale=${provider.runtimeHealthFreshness.stale ? "yes" : "no"}, ageMs=${provider.runtimeHealthFreshness.ageMs ?? "-"}, ref=${provider.runtimeHealthFreshness.referenceAt ?? "-"}` 
+            + (provider.runtimeHealthFreshness.snapshotPath ? `, snapshot=${provider.runtimeHealthFreshness.snapshotPath}` : ""),
+          );
+          ctx.log(
+            `    runtime retention: events<=${provider.runtimeHealthFreshness.retention.eventLimit}, horizonMs=${provider.runtimeHealthFreshness.retention.horizonMs}`,
+          );
+          if (provider.runtimeHealthFreshness.snapshotIssue) {
+            ctx.log(
+              `    runtime snapshot issue: ${provider.runtimeHealthFreshness.snapshotIssue.code} ${provider.runtimeHealthFreshness.snapshotIssue.message}`,
+            );
+            if (provider.runtimeHealthFreshness.snapshotIssue.quarantinePath) {
+              ctx.log(`    runtime snapshot quarantine: ${provider.runtimeHealthFreshness.snapshotIssue.quarantinePath}`);
+            }
           }
         }
         if (provider.fix) {

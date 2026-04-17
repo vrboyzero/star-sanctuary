@@ -134,6 +134,7 @@ import {
   browserTypeTool,
   browserScreenshotTool,
   browserGetContentTool,
+  cameraDeviceMemoryTool,
   cameraListTool,
   cameraSnapTool,
   imageGenerateTool,
@@ -844,6 +845,7 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
   {
     group: "multimedia",
     tools: [
+      cameraDeviceMemoryTool,
       cameraListTool,
       cameraSnapTool,
       imageGenerateTool,
@@ -982,6 +984,7 @@ let agentRegistry: AgentRegistry | undefined;
 const toolExecutor = new ToolExecutor({
   tools: runtimeToolsToRegister,
   workspaceRoot: stateDir, // Use the resolved state directory as the workspace root for file operations
+  stateDir,
   extraWorkspaceRoots, // 额外允许 file_read/file_write/file_delete 的根目录（如其他盘符）
   alwaysEnabledTools: toolsEnabled ? [TOOL_SETTINGS_CONTROL_NAME, TOOL_SEARCH_NAME] : [],
   policy: toolsPolicy,

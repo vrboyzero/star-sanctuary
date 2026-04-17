@@ -7,6 +7,7 @@ import type { SynthesizeResult, SynthesizeOptions } from "./tts-synthesize.js";
 import { transcribeSpeech } from "./stt-transcribe.js";
 import type { TranscribeResult, TranscribeOptions } from "./stt-transcribe.js";
 import {
+  cameraDeviceMemoryTool as baseCameraDeviceMemoryTool,
   cameraListTool as baseCameraListTool,
   cameraSnapTool as baseCameraSnapTool,
 } from "./camera.js";
@@ -61,6 +62,11 @@ export const cameraListTool = withMultimediaContract(baseCameraListTool, {
   activityDescription: "List available camera devices through the connected browser",
   safeScopes: ["bridge-safe"],
   riskLevel: "high",
+});
+export const cameraDeviceMemoryTool = withMultimediaContract(baseCameraDeviceMemoryTool, {
+  activityDescription: "Manage remembered camera aliases and favorite devices in local state",
+  safeScopes: ["local-safe"],
+  riskLevel: "medium",
 });
 export const cameraSnapTool = withMultimediaContract(baseCameraSnapTool, {
   activityDescription: "Capture a camera snapshot through the connected browser",

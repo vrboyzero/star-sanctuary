@@ -292,7 +292,22 @@ test("system.doctor exposes camera runtime summary when native_desktop helper is
       expect(response.ok).toBe(true);
       expect(response.payload?.cameraRuntime).toMatchObject({
         summary: {
-          defaultProviderId: "browser_loopback",
+          defaultProviderId: "native_desktop",
+          defaultSelection: {
+            policy: "prefer_native_desktop",
+            selectedProvider: "native_desktop",
+            reason: "policy_preferred_provider",
+            fallbackApplied: false,
+            configuredDefaultProvider: "browser_loopback",
+          },
+          governance: {
+            blockedProviderCount: 1,
+            permissionBlockedProviderCount: 0,
+            permissionPromptProviderCount: 0,
+            fallbackActiveProviderCount: 0,
+            dominantFailureCode: "device_busy",
+            recommendedAction: "关闭正在占用摄像头的会议或录制软件后重试。",
+          },
           warningCount: 1,
           errorCount: 0,
         },
@@ -301,6 +316,29 @@ test("system.doctor exposes camera runtime summary when native_desktop helper is
             id: "native_desktop",
             status: "degraded",
             helperStatus: "ready",
+            healthCheck: expect.objectContaining({
+              status: "warn",
+              source: "diagnostic",
+              primaryReasonCode: "device_busy",
+              recoveryActions: expect.arrayContaining([
+                expect.objectContaining({
+                  kind: "close_competing_app",
+                }),
+              ]),
+            }),
+            runtimeHealth: expect.objectContaining({
+              status: "degraded",
+              historyWindow: expect.objectContaining({
+                eventCount: 1,
+                successCount: 1,
+                failureCount: 0,
+              }),
+            }),
+            runtimeHealthFreshness: expect.objectContaining({
+              source: "memory+snapshot",
+              stale: false,
+              snapshotPath: expect.stringContaining("native_desktop-runtime-health.json"),
+            }),
             launchConfig: expect.objectContaining({
               command: process.execPath,
               helperEntry: helperPath,

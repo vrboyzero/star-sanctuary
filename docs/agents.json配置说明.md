@@ -150,6 +150,38 @@
 - `researcher`
   - 适合保留网页抓取、搜索、记忆检索、文档查询等工具。
 
+如果你希望某个 Agent 能直接使用摄像头，白名单里至少建议放这 3 个：
+
+- `camera_list`
+  - 先列出当前可用设备、默认 provider 选择和运行时状态
+- `camera_snap`
+  - 真正拍一张照片
+- `camera_device_memory`
+  - 给设备记别名、标记常用设备
+
+一个最小摄像头白名单片段示例如下：
+
+```jsonc
+{
+  "id": "coder",
+  "toolsEnabled": true,
+  "toolWhitelist": [
+    "file_read",
+    "file_write",
+    "run_command",
+    "camera_list",
+    "camera_snap",
+    "camera_device_memory"
+  ]
+}
+```
+
+如果只放了 `camera_snap`，但没放 `camera_list`，实际使用时通常不够顺手，因为你很难先确认：
+
+- 当前选中了哪台摄像头
+- 这次走的是哪个 provider
+- 是否发生了 fallback
+
 注意：
 
 - 即使 `toolsEnabled: true`，如果全局 `BELLDANDY_TOOLS_ENABLED=false`，该 Agent 仍然无法真正使用工具。
@@ -233,7 +265,10 @@
         "apply_patch", // 补丁式改文件
         "log_read", // 读日志
         "log_search", // 搜日志
-        "memory_search" // 搜记忆
+        "memory_search", // 搜记忆
+        "camera_list", // 列出当前摄像头、provider 和默认选择
+        "camera_snap", // 调用摄像头拍照
+        "camera_device_memory" // 管理摄像头别名与常用设备记忆
       ],
       "maxOutputTokens": 16384 // 覆盖默认最大输出 token，避免长输出被截断
     },
@@ -261,7 +296,7 @@
 这个配置的效果是：
 
 - `default` 作为默认入口 Agent，保留通用能力，不对工具做额外白名单限制。
-- `coder` 聚焦代码实现、排障、补丁和日志分析。
+- `coder` 聚焦代码实现、排障、补丁和日志分析；同时也允许它直接做摄像头列举、拍照和设备记忆管理。
 - `researcher` 聚焦搜索、资料整理、文档查询和总结。
 - 三者都使用 `resident`，因此可以作为常驻 Agent 长期存在，不要求系统只有一个“主 Agent”。
 
@@ -309,6 +344,6 @@
   - 路由或渠道绑定引用了不存在的 `agentId`
 - Agent 理论上能用工具，但实际没法调用
   - 可能是全局 `BELLDANDY_TOOLS_ENABLED=false`
-  - 也可能是该工具未注册或被全局禁用
+  - 也可能是该工具未注册、被全局禁用，或根本没放进当前 Agent 的 `toolWhitelist`
 - 自定义了 `default` 后行为和之前不同
   - 这是预期行为；显式 `id: "default"` 会覆盖内建隐式默认配置

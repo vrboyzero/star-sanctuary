@@ -425,6 +425,7 @@ export async function handleSystemDoctorMethod(
     context: {
       conversationId: "system.doctor",
       workspaceRoot: process.cwd(),
+      stateDir: ctx.stateDir,
     },
   });
   const runtimeResilience = ctx.getRuntimeResilienceReport?.();

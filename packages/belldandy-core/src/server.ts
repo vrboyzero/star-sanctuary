@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
 
 import express from "express";
@@ -694,6 +695,13 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
   }));
 
   const server = http.createServer(app);
+  const trackedSockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    trackedSockets.add(socket);
+    socket.on("close", () => {
+      trackedSockets.delete(socket);
+    });
+  });
   const host = opts.host ?? "127.0.0.1"; // Default to localhost for security
 
   // 初始化会话存储
@@ -1102,7 +1110,28 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       detachSubTaskBroadcast?.();
       detachDurableExtractionBroadcast?.();
       await websocketRuntime.close();
-      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+      await new Promise<void>((resolve, reject) => {
+        const forceCloseTimer = setTimeout(() => {
+          server.closeIdleConnections?.();
+          server.closeAllConnections?.();
+          for (const socket of trackedSockets) {
+            if (!socket.destroyed) {
+              socket.destroy();
+            }
+          }
+        }, 200);
+        forceCloseTimer.unref?.();
+
+        server.close((err) => {
+          clearTimeout(forceCloseTimer);
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        });
+        server.closeIdleConnections?.();
+      });
       await durableExtractionRuntime?.close();
       await memoryUsageAccounting.flush();
     },

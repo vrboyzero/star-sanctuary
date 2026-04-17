@@ -836,11 +836,55 @@ describe("doctor observability formatting", () => {
       cameraRuntime: {
         summary: {
           available: true,
-          defaultProviderId: "browser_loopback",
+          defaultProviderId: "native_desktop",
+          defaultSelection: {
+            policy: "prefer_native_desktop",
+            preferredOrder: [
+              "native_desktop",
+              "browser_loopback",
+              "node_device",
+            ],
+            registeredProviders: [
+              "native_desktop",
+              "browser_loopback",
+            ],
+            skippedPreferredProviders: [],
+            availableFallbackProviders: [
+              "browser_loopback",
+            ],
+            missingFallbackProviders: [
+              "node_device",
+            ],
+            configuredDefaultProvider: "browser_loopback",
+            selectedProvider: "native_desktop",
+            reason: "policy_preferred_provider",
+            fallbackApplied: false,
+            attempts: [
+              {
+                provider: "native_desktop",
+                outcome: "selected",
+                reason: "policy_preferred",
+              },
+            ],
+          },
           registeredProviderIds: ["browser_loopback", "native_desktop"],
           warningCount: 1,
           errorCount: 0,
           headline: "native_desktop; status=degraded; helper=ready; devices 1/1 available, busy=1; issues error=0, warning=1",
+          governance: {
+            headline: "1 个 provider 需要优先处理；主失败码=device_busy。",
+            blockedProviderCount: 1,
+            permissionBlockedProviderCount: 0,
+            permissionPromptProviderCount: 0,
+            fallbackActiveProviderCount: 0,
+            recentFailureCount: 0,
+            recentRecoveredCount: 0,
+            failureProviderCount: 0,
+            repeatedFallback: false,
+            dominantFailureCode: "device_busy",
+            whyUnhealthy: "native_desktop 当前需要优先处理；依据=permission_state + diagnostic_issue + runtime_health；主因=device_busy。",
+            recommendedAction: "关闭正在占用摄像头的会议或录制软件后重试。",
+          },
         },
         providers: [
           {
@@ -856,8 +900,117 @@ describe("doctor observability formatting", () => {
               helperEntry: "packages/belldandy-skills/dist/builtin/multimedia/camera-native-desktop-helper.js",
               cwd: "E:/project/star-sanctuary",
             },
+            healthCheck: {
+              provider: "native_desktop",
+              status: "warn",
+              source: "diagnostic",
+              sources: ["permission_state", "diagnostic_issue", "runtime_health"],
+              checkedAt: "2026-04-17T11:20:05.000Z",
+              headline: "native_desktop 当前不可用：摄像头正在被其他应用占用。",
+              summary: "status=warn, sources=permission_state+diagnostic_issue+runtime_health, provider=degraded, permission=granted/clear, reason=device_busy, dominant=device_busy, actions=2",
+              actionable: true,
+              fallbackApplied: false,
+              primaryReasonCode: "device_busy",
+              reasonCodes: ["device_busy"],
+              permission: {
+                state: "granted",
+                gating: "clear",
+                actionable: false,
+              },
+              failureStats: {
+                issueCounts: {
+                  total: 1,
+                  info: 0,
+                  warning: 1,
+                  error: 0,
+                  retryable: 1,
+                },
+                reasonCodeCounts: {
+                  device_busy: 2,
+                },
+                dominantReasonCode: "device_busy",
+                runtimeWindow: {
+                  eventCount: 2,
+                  successCount: 1,
+                  failureCount: 1,
+                  recoveredSuccessCount: 1,
+                  dominantFailureCode: "device_busy",
+                  lastFailureCode: "device_busy",
+                },
+              },
+              recoveryActions: [
+                {
+                  kind: "close_competing_app",
+                  priority: "now",
+                  label: "关闭正在占用摄像头的会议或录制软件后重试。",
+                },
+                {
+                  kind: "retry",
+                  priority: "next",
+                  label: "释放占用后最多重试一次，再观察 camera runtime 状态。",
+                },
+              ],
+            },
+            metadata: {
+              aliasMemory: {
+                entryCount: 1,
+                observedCount: 1,
+                manualAliasCount: 1,
+                favoriteCount: 1,
+                snapshotPath: "C:/Users/admin/.star_sanctuary/diagnostics/camera-runtime/device-aliases.json",
+              },
+            },
+            runtimeHealth: {
+              status: "error",
+              consecutiveFailures: 1,
+              lastSuccessAt: "2026-04-17T11:20:00.000Z",
+              historyWindow: {
+                size: 32,
+                eventCount: 2,
+                successCount: 1,
+                failureCount: 1,
+                recoveredSuccessCount: 1,
+                failureCodeCounts: {
+                  device_busy: 1,
+                },
+                lastEvents: [
+                  {
+                    at: "2026-04-17T11:19:00.000Z",
+                    operation: "capture_snapshot",
+                    outcome: "failure",
+                    code: "device_busy",
+                    message: "OBSBOT Tiny 2 StreamCamera is currently busy.",
+                  },
+                  {
+                    at: "2026-04-17T11:20:00.000Z",
+                    operation: "capture_snapshot",
+                    outcome: "success",
+                    recovered: true,
+                  },
+                ],
+              },
+              lastFailure: {
+                at: "2026-04-17T11:19:00.000Z",
+                operation: "capture_snapshot",
+                code: "device_busy",
+                message: "OBSBOT Tiny 2 StreamCamera is currently busy.",
+                recoveryHint: "关闭正在占用摄像头的会议或录制软件后重试。",
+              },
+            },
+            runtimeHealthFreshness: {
+              source: "memory+snapshot",
+              level: "fresh",
+              stale: false,
+              ageMs: 4200,
+              referenceAt: "2026-04-17T11:20:05.000Z",
+              retention: {
+                eventLimit: 32,
+                horizonMs: 604800000,
+              },
+              snapshotPath: "C:/Users/admin/.star_sanctuary/diagnostics/camera-runtime/native_desktop-runtime-health.json",
+            },
             sampleDevices: [
-              "OBSBOT Tiny 2 StreamCamera [available, external, busy, stable=usb-3564-fef8-453a4b75]",
+              "Studio Cam => OBSBOT Tiny 2 StreamCamera [available, external, busy, favorite, stable=usb-3564-fef8-453a4b75]",
             ],
             recoveryHints: [
               "关闭正在占用摄像头的会议或录制软件后重试。",
@@ -1139,10 +1292,37 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("message=<msg-900@example.com>");
     expect(lines.join("\n")).toContain("Camera Runtime");
     expect(lines.join("\n")).toContain("2 provider(s)");
-    expect(lines.join("\n")).toContain("default browser_loopback");
+    expect(lines.join("\n")).toContain("default native_desktop");
+    expect(lines.join("\n")).toContain("default selection: policy=prefer_native_desktop, selected=native_desktop, reason=policy_preferred_provider, fallback=no");
+    expect(lines.join("\n")).toContain("provider order: native_desktop -> browser_loopback -> node_device");
+    expect(lines.join("\n")).toContain("registered providers: native_desktop, browser_loopback");
+    expect(lines.join("\n")).toContain("fallback ready: browser_loopback");
+    expect(lines.join("\n")).toContain("missing fallbacks: node_device");
+    expect(lines.join("\n")).toContain("configured default: browser_loopback");
+    expect(lines.join("\n")).toContain("selection trace: native_desktop:selected:policy_preferred");
+    expect(lines.join("\n")).toContain("governance: 1 个 provider 需要优先处理；主失败码=device_busy。");
+    expect(lines.join("\n")).toContain("governance counts: blocked=1, permission_blocked=0, permission_prompt=0, fallback_active=0");
+    expect(lines.join("\n")).toContain("recent trend: failures=0, recovered=0, failureProviders=0, repeatedFallback=no, dominant=device_busy");
+    expect(lines.join("\n")).toContain("why unhealthy: native_desktop 当前需要优先处理；依据=permission_state + diagnostic_issue + runtime_health；主因=device_busy。");
+    expect(lines.join("\n")).toContain("next action: 关闭正在占用摄像头的会议或录制软件后重试。");
     expect(lines.join("\n")).toContain("native_desktop; status=degraded; helper=ready; devices 1/1 available, busy=1; issues error=0, warning=1");
     expect(lines.join("\n")).toContain("launch: command=C:/Program Files/nodejs/node.exe, entry=packages/belldandy-skills/dist/builtin/multimedia/camera-native-desktop-helper.js, cwd=E:/project/star-sanctuary");
-    expect(lines.join("\n")).toContain("device: OBSBOT Tiny 2 StreamCamera [available, external, busy, stable=usb-3564-fef8-453a4b75]");
+    expect(lines.join("\n")).toContain("device: Studio Cam => OBSBOT Tiny 2 StreamCamera [available, external, busy, favorite, stable=usb-3564-fef8-453a4b75]");
+    expect(lines.join("\n")).toContain("alias memory: entries=1, observed=1, manual=1, favorite=1, snapshot=C:/Users/admin/.star_sanctuary/diagnostics/camera-runtime/device-aliases.json");
+    expect(lines.join("\n")).toContain("runtime health: status=error, failures=1, lastSuccess=2026-04-17T11:20:00.000Z");
+    expect(lines.join("\n")).toContain("runtime freshness: source=memory+snapshot, level=fresh, stale=no, ageMs=4200, ref=2026-04-17T11:20:05.000Z");
+    expect(lines.join("\n")).toContain("runtime retention: events<=32, horizonMs=604800000");
+    expect(lines.join("\n")).toContain("runtime window: events=2, success=1, failure=1, recovered=1, codes=device_busy:1");
+    expect(lines.join("\n")).toContain("recent events: capture_snapshot/failure:device_busy -> capture_snapshot/success:recovered");
+    expect(lines.join("\n")).toContain("last failure: device_busy @ 2026-04-17T11:19:00.000Z (capture_snapshot) OBSBOT Tiny 2 StreamCamera is currently busy.");
+    expect(lines.join("\n")).toContain("recent recovery hint: 关闭正在占用摄像头的会议或录制软件后重试。");
+    expect(lines.join("\n")).toContain("health check: status=warn, source=diagnostic, sources=permission_state, diagnostic_issue, runtime_health, actionable=yes, codes=device_busy");
+    expect(lines.join("\n")).toContain("governance: native_desktop 当前不可用：摄像头正在被其他应用占用。");
+    expect(lines.join("\n")).toContain("permission: state=granted, gating=clear, actionable=no");
+    expect(lines.join("\n")).toContain("failure stats: total=1, info=0, warning=1, error=0, retryable=1, dominant=device_busy");
+    expect(lines.join("\n")).toContain("failure window: events=2, success=1, failure=1, recovered=1, dominant=device_busy, last=device_busy");
+    expect(lines.join("\n")).toContain("failure codes: device_busy:2");
+    expect(lines.join("\n")).toContain("recovery actions: now/close_competing_app:关闭正在占用摄像头的会议或录制软件后重试。 | next/retry:释放占用后最多重试一次，再观察 camera runtime 状态。");
     expect(lines.join("\n")).toContain("recovery: 关闭正在占用摄像头的会议或录制软件后重试。");
     expect(lines.join("\n")).toContain("Agent Stop Runtime");
     expect(lines.join("\n")).toContain("2 stop requests");

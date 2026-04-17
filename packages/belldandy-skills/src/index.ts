@@ -143,6 +143,7 @@ export { ptcRuntimeTool } from "./builtin/ptc-runtime/index.js";
 export {
   imageGenerateTool,
   textToSpeechTool,
+  cameraDeviceMemoryTool,
   cameraListTool,
   cameraSnapTool,
   buildCameraRuntimeDoctorReport,
