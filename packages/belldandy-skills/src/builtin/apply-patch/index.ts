@@ -7,6 +7,7 @@ import { applyUpdateChunks } from "./match.js";
 import { withToolContract } from "../../tool-contract.js";
 import { resolveRuntimeFilesystemScope } from "../../runtime-policy.js";
 import { readAbortReason, throwIfAborted } from "../../abort-utils.js";
+import { buildFailureToolCallResult } from "../../failure-kind.js";
 
 // ============ Helper Functions ============
 
@@ -155,19 +156,20 @@ export const applyPatchTool: Tool = withToolContract({
         const id = crypto.randomUUID();
         const name = "apply_patch";
 
-        const makeError = (error: string): ToolCallResult => ({
-            id,
-            name,
-            success: false,
-            output: "",
-            error,
-            durationMs: Date.now() - start,
-        });
+        const makeError = (error: string, failureKind?: ToolCallResult["failureKind"]): ToolCallResult => (
+            buildFailureToolCallResult({
+                id,
+                name,
+                start,
+                error,
+                ...(failureKind ? { failureKind } : {}),
+            })
+        );
 
         // 参数校验
         const inputArg = args.input;
         if (typeof inputArg !== "string" || !inputArg.trim()) {
-            return makeError("参数错误：input 必须是非空字符串");
+            return makeError("参数错误：input 必须是非空字符串", "input_error");
         }
 
         try {
@@ -175,7 +177,7 @@ export const applyPatchTool: Tool = withToolContract({
             // 1. 解析 Patch DSL
             const parsed = parsePatchText(inputArg);
             if (parsed.hunks.length === 0) {
-                return makeError("未找到任何修改（No Hunks found）");
+                return makeError("未找到任何修改（No Hunks found）", "input_error");
             }
 
             const summary = {
@@ -292,7 +294,7 @@ export const applyPatchTool: Tool = withToolContract({
 
         } catch (err) {
             if (context.abortSignal?.aborted) {
-                return makeError(readAbortReason(context.abortSignal));
+                return makeError(readAbortReason(context.abortSignal), "environment_error");
             }
             return makeError(err instanceof Error ? err.message : String(err));
         }

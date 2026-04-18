@@ -68,6 +68,7 @@ describe("web_fetch tool", () => {
       const result = await fetchTool.execute({ url: "https://evil.com/api" }, baseContext);
       expect(result.success).toBe(false);
       expect(result.error).toContain("域名被禁止");
+      expect(result.failureKind).toBe("permission_or_policy");
     });
 
     it("should block subdomains of denied domains", async () => {
@@ -105,6 +106,7 @@ describe("web_fetch tool", () => {
       const result = await fetchTool.execute({ url: "not-a-valid-url" }, baseContext);
       expect(result.success).toBe(false);
       expect(result.error).toContain("无效的 URL");
+      expect(result.failureKind).toBe("input_error");
     });
 
     it("should reject missing url", async () => {
@@ -170,6 +172,7 @@ describe("web_fetch tool", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe("Stopped by user.");
+      expect(result.failureKind).toBe("environment_error");
     });
   });
 });

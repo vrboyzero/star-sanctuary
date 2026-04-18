@@ -728,6 +728,7 @@ describe("GoalManager", () => {
     expect(orchestrated.orchestration?.delegated).toBe(false);
     expect(orchestrated.orchestration?.coordinationPlan?.rolePolicy.fanInStrategy).toBe("verifier_handoff");
     expect(orchestrated.orchestration?.verifierHandoff?.status).toBe("pending");
+    expect(orchestrated.orchestration?.acceptanceGate?.status).toBe("pending");
     expect(orchestrated.analysis.status).toBe("diverged");
     expect(orchestrated.analysis.deviations.some((item) => item.kind === "unplanned_but_used" && item.area === "method")).toBe(true);
     expect(orchestrated.analysis.deviations.some((item) => item.kind === "delegation_gap")).toBe(true);
@@ -740,6 +741,79 @@ describe("GoalManager", () => {
     const progress = await fs.readFile(goal.progressPath, "utf-8");
     expect(progress).toContain("capability_plan_generated");
     expect(progress).toContain("node_orchestrated");
+  });
+
+  it("persists verifier fan-in acceptance gate results on capability plans", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-goal-state-"));
+    const manager = new GoalManager(stateDir);
+    const goal = await manager.createGoal({
+      title: "Verifier Gate Goal",
+      objective: "Persist verifier gate state",
+    });
+    await manager.createTaskNode(goal.id, {
+      id: "node_verify",
+      title: "Verify fan-in",
+      status: "ready",
+    });
+
+    const saved = await manager.saveCapabilityPlan(goal.id, "node_verify", {
+      executionMode: "multi_agent",
+      objective: "Verify fan-in",
+      summary: "Need verifier to approve fan-in",
+      status: "orchestrated",
+      subAgents: [{ agentId: "coder", role: "coder", objective: "Ship patch", handoffToVerifier: true }],
+      orchestration: {
+        delegated: true,
+        delegationCount: 1,
+        coordinationPlan: {
+          summary: "Fan in through verifier.",
+          plannedDelegationCount: 1,
+          rolePolicy: {
+            selectedRoles: ["coder", "verifier"],
+            selectionReasons: ["need verification"],
+            verifierRole: "verifier",
+            fanInStrategy: "verifier_handoff",
+          },
+        },
+        delegationResults: [{
+          agentId: "coder",
+          role: "coder",
+          status: "success",
+          summary: "Patch delivered",
+          taskId: "task_coder",
+        }],
+        verifierHandoff: {
+          status: "completed",
+          verifierRole: "verifier",
+          verifierAgentId: "verifier",
+          verifierTaskId: "task_verifier",
+          summary: "Verifier reviewed coder output.",
+          sourceAgentIds: ["coder"],
+          sourceTaskIds: ["task_coder"],
+        },
+        verifierResult: {
+          status: "completed",
+          summary: "Verifier checks passed.",
+          findings: [],
+          recommendation: "approve",
+          evidenceTaskIds: ["task_coder"],
+          generatedAt: "2026-04-18T10:00:00.000Z",
+        },
+      },
+    });
+
+    expect(saved.orchestration?.acceptanceGate).toMatchObject({
+      status: "accepted",
+      requiredSourceTaskIds: ["task_coder"],
+      requiredEvidenceTaskIds: ["task_coder"],
+    });
+
+    const fetched = await manager.getCapabilityPlan(goal.id, "node_verify");
+    expect(fetched?.orchestration?.acceptanceGate).toMatchObject({
+      status: "accepted",
+      requiredSourceTaskIds: ["task_coder"],
+      requiredEvidenceTaskIds: ["task_coder"],
+    });
   });
 
   it("generates handoff markdown from current goal runtime", async () => {

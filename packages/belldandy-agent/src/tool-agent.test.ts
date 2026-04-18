@@ -14,6 +14,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const MULTI_PROVIDER_RUNTIME_CASES = [
+  {
+    label: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    responseBody: {
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    },
+    extractSystemPrompt: (payload: any) => String(payload.messages?.[0]?.content ?? ""),
+  },
+  {
+    label: "Anthropic",
+    baseUrl: "https://api.anthropic.com",
+    responseBody: {
+      content: [{ type: "text", text: "done" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+      stop_reason: "end_turn",
+    },
+    extractSystemPrompt: (payload: any) => Array.isArray(payload.system)
+      ? payload.system.map((block: any) => String(block?.text ?? "")).join("\n\n")
+      : "",
+  },
+] as const;
+
 describe("sanitizeResponsesToolDefinitions", () => {
   it("should remove unsupported schema keywords for responses tools", () => {
     const tools = [
@@ -318,6 +346,139 @@ describe("before_agent_start system prompt overrides", () => {
       }),
     ]);
   });
+
+  it("injects launch-spec role and tool-selection deltas into the effective system prompt", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    const snapshots: any[] = [];
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      systemPrompt: "base-system-prompt",
+      toolExecutor: createToolExecutor(),
+      onPromptSnapshot: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-launch-spec-deltas",
+      text: "hello",
+      meta: {
+        _agentLaunchSpec: {
+          profileId: "coder",
+          role: "verifier",
+          permissionMode: "confirm",
+          allowedToolFamilies: ["workspace-read", "command-exec"],
+          maxToolRiskLevel: "high",
+          policySummary: "Verification-first run.",
+        },
+      },
+    }));
+
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const payload = JSON.parse(String(requestInit?.body ?? "{}"));
+    expect(payload.messages[0]?.content).toContain("## Run Role Override");
+    expect(payload.messages[0]?.content).toContain("operate as `verifier`");
+    expect(payload.messages[0]?.content).toContain("## Run Tool Selection Constraints");
+    expect(payload.messages[0]?.content).toContain("Allowed tool families: workspace-read, command-exec");
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].agentId).toBe("coder");
+    expect(snapshots[0].deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        deltaType: "role-execution-policy",
+        role: "system",
+      }),
+      expect.objectContaining({
+        deltaType: "tool-selection-policy",
+        role: "system",
+      }),
+    ]));
+  });
+
+  it.each(MULTI_PROVIDER_RUNTIME_CASES)(
+    "keeps run-level prompt deltas consistent in $label requests and prompt snapshots",
+    async ({ baseUrl, responseBody, extractSystemPrompt }) => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(createJsonResponse(responseBody));
+
+      const snapshots: any[] = [];
+      const agent = new ToolEnabledAgent({
+        baseUrl,
+        apiKey: "test-key",
+        model: "gpt-test",
+        systemPrompt: "base-system-prompt",
+        toolExecutor: createToolExecutor(),
+        onPromptSnapshot: (snapshot) => {
+          snapshots.push(snapshot);
+        },
+      });
+
+      const items = await collectItems(agent.run({
+        conversationId: "conv-multi-provider-launch-spec-deltas",
+        text: "hello",
+        meta: {
+          _agentLaunchSpec: {
+            profileId: "coder",
+            role: "verifier",
+            permissionMode: "confirm",
+            allowedToolFamilies: ["workspace-read", "command-exec"],
+            maxToolRiskLevel: "high",
+            policySummary: "Verification-first run.",
+          },
+        },
+      }));
+
+      expect(items).toContainEqual({ type: "final", text: "done" });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+      const payload = JSON.parse(String(requestInit?.body ?? "{}"));
+      const promptText = extractSystemPrompt(payload);
+      expect(promptText).toContain("## Run Role Override");
+      expect(promptText).toContain("operate as `verifier`");
+      expect(promptText).toContain("## Run Tool Selection Constraints");
+      expect(promptText).toContain("Allowed tool families: workspace-read, command-exec");
+
+      if (baseUrl.includes("anthropic.com")) {
+        expect(Array.isArray(payload.system)).toBe(true);
+        expect(payload.messages.some((message: any) => message.role === "system")).toBe(false);
+      }
+
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0].agentId).toBe("coder");
+      expect(snapshots[0].deltas).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          deltaType: "role-execution-policy",
+          role: "system",
+        }),
+        expect.objectContaining({
+          deltaType: "tool-selection-policy",
+          role: "system",
+        }),
+      ]));
+      expect(snapshots[0].providerNativeSystemBlocks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          blockType: "dynamic-runtime",
+          sourceDeltaIds: expect.arrayContaining([
+            "launch-role-verifier",
+            "launch-tool-selection-policy",
+          ]),
+          cacheControlEligible: false,
+        }),
+      ]));
+    },
+  );
 });
 
 describe("tool transcript compaction", () => {
@@ -886,7 +1047,7 @@ describe("ToolEnabledAgent hook timeouts", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(items).toContainEqual({ type: "final", text: "done" });
-    expect(getDefinitions).toHaveBeenCalledWith(undefined, "conv-launch-spec", {
+    expect(getDefinitions).toHaveBeenCalledWith("tool-agent", "conv-launch-spec", {
       launchSpec: {
         cwd: "/tmp/worktree",
         toolSet: ["echo"],
@@ -903,7 +1064,7 @@ describe("ToolEnabledAgent hook timeouts", () => {
     expect(execute).toHaveBeenCalledWith(
       expect.anything(),
       "conv-launch-spec",
-      undefined,
+      "tool-agent",
       undefined,
       undefined,
       undefined,
@@ -921,8 +1082,633 @@ describe("ToolEnabledAgent hook timeouts", () => {
           },
         },
       },
-      undefined,
     );
+  });
+
+  it("injects tool failure recovery guidance into the next model call", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "echo",
+                arguments: "{}",
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "recovered",
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }));
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "echo",
+          description: "echo",
+          parameters: { type: "object", properties: {} },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "echo",
+        success: false,
+        output: "",
+        error: "Permission denied by launch policy",
+        durationMs: 0,
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      toolExecutor,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-tool-failure-recovery",
+      text: "use tool",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "recovered" });
+
+    const firstPayload = JSON.parse(String((fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    const secondPayload = JSON.parse(String((fetchSpy.mock.calls[1]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+
+    expect(firstPayload.messages[0]?.content).not.toContain("## Tool Failure Recovery");
+    expect(secondPayload.messages[0]?.content).toContain("## Tool Failure Recovery");
+    expect(secondPayload.messages[0]?.content).toContain("Failed tool: `echo`");
+    expect(secondPayload.messages[0]?.content).toContain("Failure class: permission_or_policy");
+  });
+
+  it("injects post-action verification guidance after successful write tools", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "file_write",
+                arguments: "{\"path\":\"notes.txt\",\"content\":\"hello\"}",
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "write complete",
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }));
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "file_write",
+          description: "write file",
+          parameters: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              content: { type: "string" },
+            },
+          },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "file_write",
+        success: true,
+        output: "wrote notes.txt",
+        durationMs: 0,
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      toolExecutor,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-tool-post-verification",
+      text: "write the file",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "write complete" });
+
+    const secondPayload = JSON.parse(String((fetchSpy.mock.calls[1]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    expect(secondPayload.messages[0]?.content).toContain("## Tool Post-Action Verification");
+    expect(secondPayload.messages[0]?.content).toContain("Tool: `file_write`");
+    expect(secondPayload.messages[0]?.content).toContain("Verify the effect before claiming success");
+  });
+
+  it("injects delegation result review guidance after delegated work returns", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "delegate_task",
+                arguments: JSON.stringify({
+                  agent_id: "verifier",
+                  instruction: "Review the runtime prompt changes.",
+                  ownership: {
+                    scope_summary: "Review the runtime prompt changes only.",
+                    out_of_scope: ["Implement fixes"],
+                  },
+                  acceptance: {
+                    done_definition: "Returned result states whether the prompt changes are acceptable.",
+                    verification_hints: ["Check findings", "Check missing tests"],
+                  },
+                  deliverable_contract: {
+                    format: "verification_report",
+                    required_sections: ["Findings", "Recommendation"],
+                  },
+                }),
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "delegation reviewed",
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }));
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "delegate_task",
+          description: "delegate",
+          parameters: { type: "object", properties: {} },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "delegate_task",
+        success: true,
+        output: "worker finished",
+        durationMs: 0,
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      toolExecutor,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-delegation-review",
+      text: "delegate and review",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "delegation reviewed" });
+
+    const secondPayload = JSON.parse(String((fetchSpy.mock.calls[1]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    expect(secondPayload.messages[0]?.content).toContain("## Delegation Result Review");
+    expect(secondPayload.messages[0]?.content).toContain("Owned scope: Review the runtime prompt changes only.");
+    expect(secondPayload.messages[0]?.content).toContain("Done definition: Returned result states whether the prompt changes are acceptable.");
+    expect(secondPayload.messages[0]?.content).toContain("Deliverable contract: verification_report | sections: Findings | Recommendation");
+  });
+
+  it("captures the latest prompt snapshot with structured delegation gate metadata after a gate rejection", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "delegate_task",
+                arguments: JSON.stringify({
+                  agent_id: "verifier",
+                  instruction: "Review the runtime prompt changes.",
+                  deliverable_contract: {
+                    format: "verification_report",
+                  },
+                }),
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "delegation follow-up ready",
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }));
+    const snapshots: any[] = [];
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "delegate_task",
+          description: "delegate",
+          parameters: { type: "object", properties: {} },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "delegate_task",
+        success: false,
+        output: "worker finished",
+        error: "Delegation acceptance gate rejected the sub-agent result. Verification report is missing a recommendation or verdict section.",
+        durationMs: 0,
+        metadata: {
+          delegationResults: [{
+            label: "Agent verifier",
+            workerSuccess: true,
+            accepted: false,
+            acceptanceGate: {
+              enforced: true,
+              accepted: false,
+              summary: "Delegated result failed the structured acceptance gate: Verification report is missing a recommendation or verdict section.",
+              reasons: ["Verification report is missing a recommendation or verdict section."],
+              deliverableFormat: "verification_report",
+              acceptanceCheckStatus: "not_requested",
+              rejectionConfidence: "high",
+              managerActionHint: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
+              contractSpecificChecks: [
+                {
+                  id: "verification_report_findings",
+                  label: "Verification report is missing a findings section.",
+                  status: "passed",
+                  enforced: true,
+                  evidence: "Findings",
+                },
+                {
+                  id: "verification_report_recommendation",
+                  label: "Verification report is missing a recommendation or verdict section.",
+                  status: "failed",
+                  enforced: true,
+                },
+              ],
+            },
+          }],
+          acceptedCount: 0,
+          gateRejectedCount: 1,
+          workerSuccessCount: 1,
+          followUpStrategy: {
+            mode: "single",
+            summary: "Suggested next step: retry with follow-up delegation: Agent verifier.",
+            recommendedRuntimeAction: "retry_delegation",
+            retryLabels: ["Agent verifier"],
+            highPriorityLabels: ["Agent verifier"],
+            verifierHandoffLabels: ["Agent verifier"],
+            items: [
+              {
+                label: "Agent verifier",
+                action: "retry",
+                reason: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
+                recommendedRuntimeAction: "retry_delegation",
+                priority: "high",
+                template: {
+                  toolName: "delegate_task",
+                  agentId: "verifier",
+                  instruction: "Review the runtime prompt changes.\n\nFollow-up requirement: Delegated result failed the structured acceptance gate: Verification report is missing a recommendation or verdict section.",
+                  acceptance: {
+                    verificationHints: ["Check findings", "Check missing tests"],
+                  },
+                  deliverableContract: {
+                    format: "verification_report",
+                    requiredSections: ["Findings", "Recommendation"],
+                  },
+                },
+                verifierTemplate: {
+                  toolName: "delegate_task",
+                  agentId: "verifier",
+                  instruction: "Verify whether the delegated runtime prompt review is safe to accept.",
+                  acceptance: {
+                    verificationHints: ["Check findings", "Check missing tests"],
+                  },
+                  deliverableContract: {
+                    format: "verification_report",
+                    requiredSections: ["Findings", "Recommendation"],
+                  },
+                },
+                verificationHints: ["Check findings", "Check missing tests"],
+              },
+            ],
+          },
+        },
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      toolExecutor,
+      onPromptSnapshot: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-gate-metadata-snapshot",
+      text: "delegate and check",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "delegation follow-up ready" });
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[1].systemPrompt).toContain("## Delegation Result Review");
+    expect(snapshots[1].systemPrompt).toContain("## Suggested Follow-Up Strategy");
+    expect(snapshots[1].systemPrompt).toContain("Recommended runtime action: retry_delegation");
+    expect(snapshots[1].systemPrompt).toContain("High-priority follow-up: Agent verifier");
+    expect(snapshots[1].systemPrompt).toContain("Optional verifier handoff: delegate_task; agent_id=verifier");
+    expect(snapshots[1].deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        deltaType: "tool-failure-recovery",
+        metadata: expect.objectContaining({
+          delegationResult: expect.objectContaining({
+            delegationResults: [
+              expect.objectContaining({
+                acceptanceGate: expect.objectContaining({
+                  accepted: false,
+                  deliverableFormat: "verification_report",
+                  rejectionConfidence: "high",
+                }),
+              }),
+            ],
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        deltaType: "tool-post-verification",
+        metadata: expect.objectContaining({
+          reviewMode: "delegation-result",
+          delegationResult: expect.objectContaining({
+            delegationResults: [
+              expect.objectContaining({
+                acceptanceGate: expect.objectContaining({
+                  managerActionHint: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
+                }),
+              }),
+            ],
+            followUpStrategy: expect.objectContaining({
+              mode: "single",
+              recommendedRuntimeAction: "retry_delegation",
+              retryLabels: ["Agent verifier"],
+              highPriorityLabels: ["Agent verifier"],
+              verifierHandoffLabels: ["Agent verifier"],
+            }),
+          }),
+        }),
+      }),
+    ]));
+  });
+
+  it("injects tool failure recovery guidance into the next Anthropic model call", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        content: [{
+          type: "tool_use",
+          id: "call-1",
+          name: "echo",
+          input: {},
+        }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "tool_use",
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        content: [{
+          type: "text",
+          text: "recovered",
+        }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "end_turn",
+      }));
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "echo",
+          description: "echo",
+          parameters: { type: "object", properties: {} },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "echo",
+        success: false,
+        output: "",
+        error: "Permission denied by launch policy",
+        durationMs: 0,
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "test-key",
+      model: "claude-test",
+      toolExecutor,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-anthropic-tool-failure-recovery",
+      text: "use tool",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "recovered" });
+
+    const firstPayload = JSON.parse(String((fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    const secondPayload = JSON.parse(String((fetchSpy.mock.calls[1]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    const firstSystemText = Array.isArray(firstPayload.system)
+      ? firstPayload.system.map((block: any) => String(block?.text ?? "")).join("\n\n")
+      : "";
+    const secondSystemText = Array.isArray(secondPayload.system)
+      ? secondPayload.system.map((block: any) => String(block?.text ?? "")).join("\n\n")
+      : "";
+
+    expect(firstSystemText).not.toContain("## Tool Failure Recovery");
+    expect(secondSystemText).toContain("## Tool Failure Recovery");
+    expect(secondSystemText).toContain("Failed tool: `echo`");
+    expect(secondSystemText).toContain("Failure class: permission_or_policy");
+    expect(secondPayload.messages.some((message: any) => message.role === "system")).toBe(false);
+  });
+
+  it("injects post-action verification guidance into the next Anthropic model call", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        content: [{
+          type: "tool_use",
+          id: "call-1",
+          name: "file_write",
+          input: { path: "notes.txt", content: "hello" },
+        }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "tool_use",
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        content: [{
+          type: "text",
+          text: "write complete",
+        }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "end_turn",
+      }));
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "file_write",
+          description: "write file",
+          parameters: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              content: { type: "string" },
+            },
+          },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "file_write",
+        success: true,
+        output: "wrote notes.txt",
+        durationMs: 0,
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "test-key",
+      model: "claude-test",
+      toolExecutor,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-anthropic-tool-post-verification",
+      text: "write the file",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "write complete" });
+
+    const secondPayload = JSON.parse(String((fetchSpy.mock.calls[1]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    const secondSystemText = Array.isArray(secondPayload.system)
+      ? secondPayload.system.map((block: any) => String(block?.text ?? "")).join("\n\n")
+      : "";
+
+    expect(secondSystemText).toContain("## Tool Post-Action Verification");
+    expect(secondSystemText).toContain("Tool: `file_write`");
+    expect(secondSystemText).toContain("Verify the effect before claiming success");
+  });
+
+  it("injects delegation result review guidance into the next Anthropic model call", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        content: [{
+          type: "tool_use",
+          id: "call-1",
+          name: "delegate_task",
+          input: {
+            agent_id: "verifier",
+            instruction: "Review the runtime prompt changes.",
+            ownership: {
+              scope_summary: "Review the runtime prompt changes only.",
+              out_of_scope: ["Implement fixes"],
+            },
+            acceptance: {
+              done_definition: "Returned result states whether the prompt changes are acceptable.",
+              verification_hints: ["Check findings", "Check missing tests"],
+            },
+            deliverable_contract: {
+              format: "verification_report",
+              required_sections: ["Findings", "Recommendation"],
+            },
+          },
+        }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "tool_use",
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        content: [{
+          type: "text",
+          text: "delegation reviewed",
+        }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+        stop_reason: "end_turn",
+      }));
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "delegate_task",
+          description: "delegate",
+          parameters: { type: "object", properties: {} },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "delegate_task",
+        success: true,
+        output: "worker finished",
+        durationMs: 0,
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "test-key",
+      model: "claude-test",
+      toolExecutor,
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-anthropic-delegation-review",
+      text: "delegate and review",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "delegation reviewed" });
+
+    const secondPayload = JSON.parse(String((fetchSpy.mock.calls[1]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    const secondSystemText = Array.isArray(secondPayload.system)
+      ? secondPayload.system.map((block: any) => String(block?.text ?? "")).join("\n\n")
+      : "";
+
+    expect(secondSystemText).toContain("## Delegation Result Review");
+    expect(secondSystemText).toContain("Owned scope: Review the runtime prompt changes only.");
+    expect(secondSystemText).toContain("Done definition: Returned result states whether the prompt changes are acceptable.");
+    expect(secondSystemText).toContain("Deliverable contract: verification_report | sections: Findings | Recommendation");
   });
 
   it("serializes concurrent runs for the same conversation", async () => {

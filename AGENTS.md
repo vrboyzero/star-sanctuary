@@ -15,6 +15,13 @@ Important entrypoints:
 - WebChat bootstrap: `apps/web/public/app.js`
 - WebChat features: `apps/web/public/app/features/`
 
+Detailed project navigation lives in [docs/project-map.md](docs/project-map.md). Keep the overview in this file short, and use the map for module lookup, entrypoints, and feature locations.
+
+## Project Map Maintenance
+- When project structure, module ownership, common entrypoints, or key feature locations change, update `docs/project-map.md` in the same change.
+- Keep the map focused on source files and maintained directories; exclude generated or disposable trees such as `node_modules/`, `dist/`, `artifacts/`, `tmp/`, `.tmp*/`, and other runtime mirrors.
+- Prefer documenting each area with both responsibility and the main entry file instead of listing directories without context.
+
 ## Build, Test, and Development Commands
 - `corepack pnpm install`: install workspace dependencies.
 - `corepack pnpm build`: generate version metadata, build all packages, and verify workspace output.

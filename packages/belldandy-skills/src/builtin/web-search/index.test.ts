@@ -60,5 +60,16 @@ describe("web_search tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe("Stopped by user.");
+    expect(result.failureKind).toBe("environment_error");
+  });
+
+  it("classifies missing query as input_error", async () => {
+    const result = await webSearchTool.execute({
+      query: "",
+    }, context);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("query 必须是非空字符串");
+    expect(result.failureKind).toBe("input_error");
   });
 });

@@ -39,6 +39,8 @@ export type SystemPromptParams = {
     supportsUuid?: boolean;
     /** 用户UUID（如果有） */
     userUuid?: string;
+    /** 运行时动态拼装的 prompt sections */
+    runtimeSections?: SystemPromptSection[];
     /** 可选：覆盖指定 section 的 priority，影响排序与截断顺序 */
     sectionPriorityOverrides?: Record<string, number>;
 };
@@ -454,6 +456,13 @@ export function buildSystemPromptResult(params: SystemPromptParams): SystemPromp
             ].join("\n"),
             ...getSectionMetadataFromWorkspaceFile(toolsFile),
         }));
+    }
+
+    for (const runtimeSection of params.runtimeSections ?? []) {
+        if (!runtimeSection.text.trim()) {
+            continue;
+        }
+        sections.push(createSection(runtimeSection));
     }
 
     // P6: MEMORY.md

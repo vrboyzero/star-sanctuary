@@ -217,7 +217,9 @@ describe("ToolExecutor", () => {
       id: "req-signal-1",
       name: "signal_aware",
       arguments: {},
-    }, "conv-1", undefined, undefined, undefined, undefined, undefined, controller.signal);
+    }, "conv-1", undefined, undefined, undefined, undefined, {
+      abortSignal: controller.signal,
+    });
 
     expect(result.success).toBe(true);
     expect(seenSignals).toHaveLength(1);
@@ -250,11 +252,14 @@ describe("ToolExecutor", () => {
       id: "req-signal-2",
       name: "never_runs",
       arguments: {},
-    }, "conv-1", undefined, undefined, undefined, undefined, undefined, controller.signal);
+    }, "conv-1", undefined, undefined, undefined, undefined, {
+      abortSignal: controller.signal,
+    });
 
     expect(execute).not.toHaveBeenCalled();
     expect(result.success).toBe(false);
     expect(result.error).toBe("Stopped by user.");
+    expect(result.failureKind).toBe("environment_error");
   });
 
   it("should return error for unknown tool", async () => {
@@ -273,6 +278,7 @@ describe("ToolExecutor", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("未知工具");
+    expect(result.failureKind).toBe("input_error");
   });
 
   it("should catch and report tool execution errors", async () => {
@@ -291,6 +297,7 @@ describe("ToolExecutor", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe("故意失败");
+    expect(result.failureKind).toBe("unknown");
   });
 
   it("should return tool definitions for model", () => {
@@ -541,6 +548,7 @@ describe("ToolExecutor", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("当前 Agent 白名单");
+    expect(result.failureKind).toBe("permission_or_policy");
   });
 
   it("should allow governed bridge internal runtime to bypass agent whitelist for bridge control tools", async () => {

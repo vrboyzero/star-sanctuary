@@ -366,6 +366,156 @@ function createLaunchSpecSummary(
   };
 }
 
+function cloneDelegationSummary(
+  delegation: SubTaskDelegationSummary | undefined,
+): SubTaskDelegationSummary | undefined {
+  if (!delegation) {
+    return undefined;
+  }
+  return {
+    ...delegation,
+    contextKeys: [...delegation.contextKeys],
+    sourceAgentIds: delegation.sourceAgentIds
+      ? [...delegation.sourceAgentIds]
+      : undefined,
+    ownership: delegation.ownership
+      ? {
+        ...delegation.ownership,
+        outOfScope: delegation.ownership.outOfScope
+          ? [...delegation.ownership.outOfScope]
+          : undefined,
+        writeScope: delegation.ownership.writeScope
+          ? [...delegation.ownership.writeScope]
+          : undefined,
+      }
+      : undefined,
+    acceptance: delegation.acceptance
+      ? {
+        ...delegation.acceptance,
+        verificationHints: delegation.acceptance.verificationHints
+          ? [...delegation.acceptance.verificationHints]
+          : undefined,
+      }
+      : undefined,
+    deliverableContract: delegation.deliverableContract
+      ? {
+        ...delegation.deliverableContract,
+        requiredSections: delegation.deliverableContract.requiredSections
+          ? [...delegation.deliverableContract.requiredSections]
+          : undefined,
+      }
+      : undefined,
+    launchDefaults: delegation.launchDefaults
+      ? {
+        ...delegation.launchDefaults,
+        allowedToolFamilies: delegation.launchDefaults.allowedToolFamilies
+          ? [...delegation.launchDefaults.allowedToolFamilies]
+          : undefined,
+      }
+      : undefined,
+  };
+}
+
+function normalizeOptionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value
+    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    .map((item) => item.trim());
+  return items.length > 0 ? items : undefined;
+}
+
+function normalizeDelegationSummary(value: unknown): SubTaskDelegationSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const delegationSource = value as Record<string, unknown>;
+  return {
+    source: typeof delegationSource.source === "string" ? delegationSource.source as SubTaskDelegationSummary["source"] : "session_spawn",
+    intentKind: typeof delegationSource.intentKind === "string" ? delegationSource.intentKind as SubTaskDelegationSummary["intentKind"] : "ad_hoc",
+    intentSummary: typeof delegationSource.intentSummary === "string" ? delegationSource.intentSummary : "-",
+    role: delegationSource.role === "default"
+      || delegationSource.role === "coder"
+      || delegationSource.role === "researcher"
+      || delegationSource.role === "verifier"
+      ? delegationSource.role
+      : undefined,
+    expectedDeliverableFormat: typeof delegationSource.expectedDeliverableFormat === "string"
+      ? delegationSource.expectedDeliverableFormat as SubTaskDelegationSummary["expectedDeliverableFormat"]
+      : "summary",
+    expectedDeliverableSummary: typeof delegationSource.expectedDeliverableSummary === "string"
+      ? delegationSource.expectedDeliverableSummary
+      : "-",
+    aggregationMode: typeof delegationSource.aggregationMode === "string"
+      ? delegationSource.aggregationMode as SubTaskDelegationSummary["aggregationMode"]
+      : "single",
+    contextKeys: Array.isArray(delegationSource.contextKeys)
+      ? delegationSource.contextKeys
+        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        .map((item) => item.trim())
+      : [],
+    sourceAgentIds: normalizeOptionalStringArray(delegationSource.sourceAgentIds),
+    goalId: typeof delegationSource.goalId === "string" && delegationSource.goalId.trim()
+      ? delegationSource.goalId.trim()
+      : undefined,
+    nodeId: typeof delegationSource.nodeId === "string" && delegationSource.nodeId.trim()
+      ? delegationSource.nodeId.trim()
+      : undefined,
+    planId: typeof delegationSource.planId === "string" && delegationSource.planId.trim()
+      ? delegationSource.planId.trim()
+      : undefined,
+    ownership: delegationSource.ownership && typeof delegationSource.ownership === "object" && !Array.isArray(delegationSource.ownership)
+      ? {
+        scopeSummary: typeof (delegationSource.ownership as Record<string, unknown>).scopeSummary === "string"
+          ? String((delegationSource.ownership as Record<string, unknown>).scopeSummary).trim()
+          : "-",
+        outOfScope: normalizeOptionalStringArray((delegationSource.ownership as Record<string, unknown>).outOfScope),
+        writeScope: normalizeOptionalStringArray((delegationSource.ownership as Record<string, unknown>).writeScope),
+      }
+      : undefined,
+    acceptance: delegationSource.acceptance && typeof delegationSource.acceptance === "object" && !Array.isArray(delegationSource.acceptance)
+      ? {
+        doneDefinition: typeof (delegationSource.acceptance as Record<string, unknown>).doneDefinition === "string"
+          ? String((delegationSource.acceptance as Record<string, unknown>).doneDefinition).trim()
+          : "-",
+        verificationHints: normalizeOptionalStringArray((delegationSource.acceptance as Record<string, unknown>).verificationHints),
+      }
+      : undefined,
+    deliverableContract: delegationSource.deliverableContract && typeof delegationSource.deliverableContract === "object" && !Array.isArray(delegationSource.deliverableContract)
+      ? {
+        format: typeof (delegationSource.deliverableContract as Record<string, unknown>).format === "string"
+          ? (delegationSource.deliverableContract as Record<string, unknown>).format as SubTaskDelegationSummary["expectedDeliverableFormat"]
+          : "summary",
+        summary: typeof (delegationSource.deliverableContract as Record<string, unknown>).summary === "string"
+          && String((delegationSource.deliverableContract as Record<string, unknown>).summary).trim()
+          ? String((delegationSource.deliverableContract as Record<string, unknown>).summary).trim()
+          : undefined,
+        requiredSections: normalizeOptionalStringArray((delegationSource.deliverableContract as Record<string, unknown>).requiredSections),
+      }
+      : undefined,
+    launchDefaults: delegationSource.launchDefaults && typeof delegationSource.launchDefaults === "object" && !Array.isArray(delegationSource.launchDefaults)
+      ? {
+        permissionMode: typeof (delegationSource.launchDefaults as Record<string, unknown>).permissionMode === "string"
+          && String((delegationSource.launchDefaults as Record<string, unknown>).permissionMode).trim()
+          ? String((delegationSource.launchDefaults as Record<string, unknown>).permissionMode).trim()
+          : undefined,
+        allowedToolFamilies: Array.isArray((delegationSource.launchDefaults as Record<string, unknown>).allowedToolFamilies)
+          ? ((delegationSource.launchDefaults as Record<string, unknown>).allowedToolFamilies as unknown[])
+            .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+            .map((item) => item.trim())
+          : undefined,
+        maxToolRiskLevel: (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "low"
+          || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "medium"
+          || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "high"
+          || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "critical"
+          ? (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel as "low" | "medium" | "high" | "critical"
+          : undefined,
+      }
+      : undefined,
+  };
+}
+
 async function atomicWriteText(targetPath: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const tmpPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
@@ -383,23 +533,7 @@ function cloneRecord(record: SubTaskRecord): SubTaskRecord {
       bridgeSubtask: record.launchSpec.bridgeSubtask ? { ...record.launchSpec.bridgeSubtask } : undefined,
       bridgeSession: record.launchSpec.bridgeSession ? { ...record.launchSpec.bridgeSession } : undefined,
       contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
-      delegation: record.launchSpec.delegation
-        ? {
-          ...record.launchSpec.delegation,
-          contextKeys: [...record.launchSpec.delegation.contextKeys],
-          sourceAgentIds: record.launchSpec.delegation.sourceAgentIds
-            ? [...record.launchSpec.delegation.sourceAgentIds]
-            : undefined,
-          launchDefaults: record.launchSpec.delegation.launchDefaults
-            ? {
-              ...record.launchSpec.delegation.launchDefaults,
-              allowedToolFamilies: record.launchSpec.delegation.launchDefaults.allowedToolFamilies
-                ? [...record.launchSpec.delegation.launchDefaults.allowedToolFamilies]
-                : undefined,
-            }
-            : undefined,
-        }
-        : undefined,
+      delegation: cloneDelegationSummary(record.launchSpec.delegation),
     },
     bridgeSessionRuntime: record.bridgeSessionRuntime ? { ...record.bridgeSessionRuntime } : undefined,
     progress: { ...record.progress },
@@ -1359,66 +1493,7 @@ export class SubTaskRuntimeStore {
                   .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
                   .map((item) => item.trim())
               : createLaunchSpecSummary(fallbackLaunchSpec).contextKeys,
-            delegation: delegationSource
-              ? {
-                source: typeof delegationSource.source === "string" ? delegationSource.source as SubTaskDelegationSummary["source"] : "session_spawn",
-                intentKind: typeof delegationSource.intentKind === "string" ? delegationSource.intentKind as SubTaskDelegationSummary["intentKind"] : "ad_hoc",
-                intentSummary: typeof delegationSource.intentSummary === "string" ? delegationSource.intentSummary : "-",
-                role: delegationSource.role === "default"
-                  || delegationSource.role === "coder"
-                  || delegationSource.role === "researcher"
-                  || delegationSource.role === "verifier"
-                  ? delegationSource.role
-                  : undefined,
-                expectedDeliverableFormat: typeof delegationSource.expectedDeliverableFormat === "string"
-                  ? delegationSource.expectedDeliverableFormat as SubTaskDelegationSummary["expectedDeliverableFormat"]
-                  : "summary",
-                expectedDeliverableSummary: typeof delegationSource.expectedDeliverableSummary === "string"
-                  ? delegationSource.expectedDeliverableSummary
-                  : "-",
-                aggregationMode: typeof delegationSource.aggregationMode === "string"
-                  ? delegationSource.aggregationMode as SubTaskDelegationSummary["aggregationMode"]
-                  : "single",
-                contextKeys: Array.isArray(delegationSource.contextKeys)
-                  ? delegationSource.contextKeys
-                    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-                    .map((item) => item.trim())
-                  : [],
-                sourceAgentIds: Array.isArray(delegationSource.sourceAgentIds)
-                  ? delegationSource.sourceAgentIds
-                    .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-                    .map((item) => item.trim())
-                  : undefined,
-                goalId: typeof delegationSource.goalId === "string" && delegationSource.goalId.trim()
-                  ? delegationSource.goalId.trim()
-                  : undefined,
-                nodeId: typeof delegationSource.nodeId === "string" && delegationSource.nodeId.trim()
-                  ? delegationSource.nodeId.trim()
-                  : undefined,
-                planId: typeof delegationSource.planId === "string" && delegationSource.planId.trim()
-                  ? delegationSource.planId.trim()
-                  : undefined,
-                launchDefaults: delegationSource.launchDefaults && typeof delegationSource.launchDefaults === "object" && !Array.isArray(delegationSource.launchDefaults)
-                  ? {
-                    permissionMode: typeof (delegationSource.launchDefaults as Record<string, unknown>).permissionMode === "string"
-                      && String((delegationSource.launchDefaults as Record<string, unknown>).permissionMode).trim()
-                      ? String((delegationSource.launchDefaults as Record<string, unknown>).permissionMode).trim()
-                      : undefined,
-                    allowedToolFamilies: Array.isArray((delegationSource.launchDefaults as Record<string, unknown>).allowedToolFamilies)
-                      ? ((delegationSource.launchDefaults as Record<string, unknown>).allowedToolFamilies as unknown[])
-                        .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-                        .map((item) => item.trim())
-                      : undefined,
-                    maxToolRiskLevel: (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "low"
-                      || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "medium"
-                      || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "high"
-                      || (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel === "critical"
-                      ? (delegationSource.launchDefaults as Record<string, unknown>).maxToolRiskLevel as "low" | "medium" | "high" | "critical"
-                      : undefined,
-                  }
-                  : undefined,
-              }
-              : undefined,
+            delegation: normalizeDelegationSummary(delegationSource),
             worktreePath: typeof launchSpecSource.worktreePath === "string" && String(launchSpecSource.worktreePath).trim()
               ? String(launchSpecSource.worktreePath).trim()
               : undefined,
@@ -1539,23 +1614,7 @@ export class SubTaskRuntimeStore {
               toolSet: record.launchSpec.toolSet ? [...record.launchSpec.toolSet] : undefined,
               allowedToolFamilies: record.launchSpec.allowedToolFamilies ? [...record.launchSpec.allowedToolFamilies] : undefined,
               contextKeys: record.launchSpec.contextKeys ? [...record.launchSpec.contextKeys] : undefined,
-                delegation: record.launchSpec.delegation
-                  ? {
-                    ...record.launchSpec.delegation,
-                    contextKeys: [...record.launchSpec.delegation.contextKeys],
-                    sourceAgentIds: record.launchSpec.delegation.sourceAgentIds
-                      ? [...record.launchSpec.delegation.sourceAgentIds]
-                      : undefined,
-                    launchDefaults: record.launchSpec.delegation.launchDefaults
-                      ? {
-                        ...record.launchSpec.delegation.launchDefaults,
-                        allowedToolFamilies: record.launchSpec.delegation.launchDefaults.allowedToolFamilies
-                          ? [...record.launchSpec.delegation.launchDefaults.allowedToolFamilies]
-                          : undefined,
-                      }
-                      : undefined,
-                  }
-                  : undefined,
+              delegation: cloneDelegationSummary(record.launchSpec.delegation),
             },
           progress: { ...record.progress },
           steering: record.steering.map((item) => ({ ...item })),

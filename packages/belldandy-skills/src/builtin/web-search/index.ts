@@ -5,6 +5,7 @@ import { SerpApiProvider } from "./serpapi.js";
 import type { SearchProvider } from "./types.js";
 import { withToolContract } from "../../tool-contract.js";
 import { isAbortError, readAbortReason, throwIfAborted } from "../../abort-utils.js";
+import { buildFailureToolCallResult } from "../../failure-kind.js";
 
 // Factory to get configured provider
 function getProvider(): SearchProvider | null {
@@ -47,26 +48,28 @@ export const webSearchTool: Tool = withToolContract({
         const id = crypto.randomUUID();
         const name = "web_search";
 
-        const makeError = (error: string): ToolCallResult => ({
-            id,
-            name,
-            success: false,
-            output: "",
-            error,
-            durationMs: Date.now() - start,
-        });
+        const makeError = (error: string, failureKind?: ToolCallResult["failureKind"]): ToolCallResult => (
+            buildFailureToolCallResult({
+                id,
+                name,
+                start,
+                error,
+                ...(failureKind ? { failureKind } : {}),
+            })
+        );
 
         const provider = getProvider();
         if (!provider) {
             return makeError(
-                "Web search is not configured. Please set BRAVE_API_KEY or SERPAPI_API_KEY environment variable."
+                "Web search is not configured. Please set BRAVE_API_KEY or SERPAPI_API_KEY environment variable.",
+                "environment_error",
             );
         }
 
         // 参数校验
         const query = args.query;
         if (typeof query !== "string" || !query.trim()) {
-            return makeError("参数错误：query 必须是非空字符串");
+            return makeError("参数错误：query 必须是非空字符串", "input_error");
         }
 
         try {
@@ -98,7 +101,7 @@ export const webSearchTool: Tool = withToolContract({
             };
         } catch (err) {
             if (isAbortError(err) || context.abortSignal?.aborted) {
-                return makeError(readAbortReason(context.abortSignal));
+                return makeError(readAbortReason(context.abortSignal), "environment_error");
             }
             const msg = err instanceof Error ? err.message : String(err);
             context.logger?.error(`[${name}] Failed: ${msg}`);

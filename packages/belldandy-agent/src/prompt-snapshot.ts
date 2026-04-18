@@ -12,7 +12,11 @@ export type AgentPromptDeltaType =
   | "user-prelude"
   | "runtime-identity"
   | "attachment"
-  | "audio-transcript";
+  | "audio-transcript"
+  | "tool-selection-policy"
+  | "role-execution-policy"
+  | "tool-failure-recovery"
+  | "tool-post-verification";
 
 export type AgentPromptDeltaRole = "system" | "user-prelude" | "attachment";
 
@@ -271,6 +275,10 @@ function normalizePromptSnapshotDeltaType(value: unknown): AgentPromptDeltaType 
     case "runtime-identity":
     case "attachment":
     case "audio-transcript":
+    case "tool-selection-policy":
+    case "role-execution-policy":
+    case "tool-failure-recovery":
+    case "tool-post-verification":
       return value;
     default:
       return undefined;

@@ -6,6 +6,7 @@ import { getGlobalMemoryManager } from "@belldandy/memory";
 import { parseSkillMd } from "../skill-loader.js";
 import { withToolContract } from "../tool-contract.js";
 import { resolveRuntimeFilesystemScope } from "../runtime-policy.js";
+import { buildFailureToolCallResult } from "../failure-kind.js";
 
 /** 敏感文件模式（禁止读取） */
 const SENSITIVE_PATTERNS = [
@@ -232,19 +233,20 @@ export const fileReadTool: Tool = withToolContract({
     const id = crypto.randomUUID();
     const name = "file_read";
 
-    const makeError = (error: string): ToolCallResult => ({
-      id,
-      name,
-      success: false,
-      output: "",
-      error,
-      durationMs: Date.now() - start,
-    });
+    const makeError = (error: string, failureKind?: ToolCallResult["failureKind"]): ToolCallResult => (
+      buildFailureToolCallResult({
+        id,
+        name,
+        start,
+        error,
+        ...(failureKind ? { failureKind } : {}),
+      })
+    );
 
     // 参数校验
     const pathArg = args.path;
     if (typeof pathArg !== "string" || !pathArg.trim()) {
-      return makeError("参数错误：path 必须是非空字符串");
+      return makeError("参数错误：path 必须是非空字符串", "input_error");
     }
 
     // 路径验证（主工作区或 extraWorkspaceRoots）
@@ -259,12 +261,12 @@ export const fileReadTool: Tool = withToolContract({
     // 黑名单检查
     const denied = isDeniedPath(relative, context.policy.deniedPaths);
     if (denied) {
-      return makeError(`禁止访问路径：${denied}`);
+      return makeError(`禁止访问路径：${denied}`, "permission_or_policy");
     }
 
     // 敏感文件检查
     if (isSensitivePath(relative)) {
-      return makeError("禁止读取敏感文件（如 .env、密钥、凭证等）");
+      return makeError("禁止读取敏感文件（如 .env、密钥、凭证等）", "permission_or_policy");
     }
 
     // 读取文件
@@ -328,10 +330,10 @@ export const fileReadTool: Tool = withToolContract({
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        return makeError(`文件不存在：${relative}`);
+        return makeError(`文件不存在：${relative}`, "input_error");
       }
       if (code === "EACCES") {
-        return makeError(`无权访问文件：${relative}`);
+        return makeError(`无权访问文件：${relative}`, "permission_or_policy");
       }
       return makeError(err instanceof Error ? err.message : String(err));
     }
@@ -418,24 +420,25 @@ export const fileWriteTool: Tool = withToolContract({
     const id = crypto.randomUUID();
     const name = "file_write";
 
-    const makeError = (error: string): ToolCallResult => ({
-      id,
-      name,
-      success: false,
-      output: "",
-      error,
-      durationMs: Date.now() - start,
-    });
+    const makeError = (error: string, failureKind?: ToolCallResult["failureKind"]): ToolCallResult => (
+      buildFailureToolCallResult({
+        id,
+        name,
+        start,
+        error,
+        ...(failureKind ? { failureKind } : {}),
+      })
+    );
 
     // 参数校验
     const pathArg = args.path;
     if (typeof pathArg !== "string" || !pathArg.trim()) {
-      return makeError("参数错误：path 必须是非空字符串");
+      return makeError("参数错误：path 必须是非空字符串", "input_error");
     }
 
     const content = args.content;
     if (typeof content !== "string") {
-      return makeError("参数错误：content 必须是字符串");
+      return makeError("参数错误：content 必须是字符串", "input_error");
     }
 
     // 路径验证（主工作区或 extraWorkspaceRoots）
@@ -449,24 +452,24 @@ export const fileWriteTool: Tool = withToolContract({
 
     // 受保护文件（优先拦截）
     if (isProtectedFile(relative)) {
-      return makeError("禁止修改 SOUL.md");
+      return makeError("禁止修改 SOUL.md", "permission_or_policy");
     }
 
     // 黑名单检查
     const denied = isDeniedPath(relative, context.policy.deniedPaths);
     if (denied) {
-      return makeError(`禁止写入路径：${denied}`);
+      return makeError(`禁止写入路径：${denied}`, "permission_or_policy");
     }
 
     // 敏感文件检查（禁止写入敏感文件）
     if (isSensitivePath(relative)) {
-      return makeError("禁止写入敏感文件路径");
+      return makeError("禁止写入敏感文件路径", "permission_or_policy");
     }
 
     // 白名单检查（如果配置了白名单，则只能写入白名单内的目录）
     const { allowedPaths } = context.policy;
     if (!isAllowedPath(relative, allowedPaths)) {
-        return makeError(`路径不在写入白名单中。允许的路径：${allowedPaths.join(", ")}`);
+        return makeError(`路径不在写入白名单中。允许的路径：${allowedPaths.join(", ")}`, "permission_or_policy");
     }
 
     const fileWritePolicy = context.policy.fileWrite ?? {};
@@ -474,16 +477,16 @@ export const fileWriteTool: Tool = withToolContract({
     const allowedExtensions = normalizeExtensions(fileWritePolicy.allowedExtensions);
 
     if (!allowDotFiles && isDotFile(relative)) {
-      return makeError("禁止写入点文件");
+      return makeError("禁止写入点文件", "permission_or_policy");
     }
 
     if (!isExtensionAllowed(relative, allowedExtensions)) {
-      return makeError(`文件扩展名不在允许列表中：${allowedExtensions.join(", ")}`);
+      return makeError(`文件扩展名不在允许列表中：${allowedExtensions.join(", ")}`, "permission_or_policy");
     }
 
     const encoding = (args.encoding as "utf-8" | "base64") || "utf-8";
     if (encoding === "base64" && fileWritePolicy.allowBinary !== true) {
-      return makeError("禁止写入二进制内容（base64）");
+      return makeError("禁止写入二进制内容（base64）", "permission_or_policy");
     }
 
     // 写入文件
@@ -620,10 +623,10 @@ export const fileWriteTool: Tool = withToolContract({
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EACCES") {
-        return makeError(`无权写入文件：${relative}`);
+        return makeError(`无权写入文件：${relative}`, "permission_or_policy");
       }
       if (code === "ENOENT" && !createDirs) {
-        return makeError(`父目录不存在：${path.dirname(relative)}`);
+        return makeError(`父目录不存在：${path.dirname(relative)}`, "input_error");
       }
       return makeError(err instanceof Error ? err.message : String(err));
     }
@@ -667,19 +670,20 @@ export const fileDeleteTool: Tool = withToolContract({
     const id = crypto.randomUUID();
     const name = "file_delete";
 
-    const makeError = (error: string): ToolCallResult => ({
-      id,
-      name,
-      success: false,
-      output: "",
-      error,
-      durationMs: Date.now() - start,
-    });
+    const makeError = (error: string, failureKind?: ToolCallResult["failureKind"]): ToolCallResult => (
+      buildFailureToolCallResult({
+        id,
+        name,
+        start,
+        error,
+        ...(failureKind ? { failureKind } : {}),
+      })
+    );
 
     // 参数校验
     const pathArg = args.path;
     if (typeof pathArg !== "string" || !pathArg.trim()) {
-      return makeError("参数错误：path 必须是非空字符串");
+      return makeError("参数错误：path 必须是非空字符串", "input_error");
     }
 
     // 路径验证（主工作区或 extraWorkspaceRoots）
@@ -693,23 +697,23 @@ export const fileDeleteTool: Tool = withToolContract({
 
     // 受保护文件（优先拦截）
     if (isProtectedFile(relative)) {
-      return makeError("禁止删除 SOUL.md");
+      return makeError("禁止删除 SOUL.md", "permission_or_policy");
     }
 
     // 黑名单检查
     const denied = isDeniedPath(relative, context.policy.deniedPaths);
     if (denied) {
-      return makeError(`禁止删除路径：${denied}`);
+      return makeError(`禁止删除路径：${denied}`, "permission_or_policy");
     }
 
     // 敏感文件检查
     if (isSensitivePath(relative)) {
-      return makeError("禁止删除敏感文件");
+      return makeError("禁止删除敏感文件", "permission_or_policy");
     }
 
     const { allowedPaths } = context.policy;
     if (!isAllowedPath(relative, allowedPaths)) {
-      return makeError(`路径不在写入白名单中。允许的路径：${allowedPaths.join(", ")}`);
+      return makeError(`路径不在写入白名单中。允许的路径：${allowedPaths.join(", ")}`, "permission_or_policy");
     }
 
     try {
@@ -728,10 +732,10 @@ export const fileDeleteTool: Tool = withToolContract({
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        return makeError(`文件不存在：${relative}`);
+        return makeError(`文件不存在：${relative}`, "input_error");
       }
       if (code === "EACCES" || code === "EPERM") {
-        return makeError(`无权删除文件：${relative}`);
+        return makeError(`无权删除文件：${relative}`, "permission_or_policy");
       }
       return makeError(err instanceof Error ? err.message : String(err));
     }

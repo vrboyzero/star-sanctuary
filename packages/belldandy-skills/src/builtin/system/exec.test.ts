@@ -80,6 +80,7 @@ describe("run_command (Platform-aware Safelist)", () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toBe("Stopped by user.");
+        expect(result.failureKind).toBe("environment_error");
         expect(result.output).not.toContain("late-output");
     });
 
@@ -160,6 +161,7 @@ describe("run_command (Platform-aware Safelist)", () => {
             const result = await runCommandTool.execute({ command: "rm -rf /tmp" }, mockContext);
             expect(result.success).toBe(false);
             expect(result.error).toContain("Recursive/Force deletion");
+            expect(result.failureKind).toBe("permission_or_policy");
         });
 
         it("should validate chained commands segment-by-segment", async () => {

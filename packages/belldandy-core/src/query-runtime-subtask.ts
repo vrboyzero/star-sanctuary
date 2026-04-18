@@ -200,6 +200,7 @@ export async function handleSubTaskGetWithQueryRuntime(
     const launchExplainability = buildSubTaskLaunchExplainability(item, ctx.agentRegistry);
     const promptSnapshotView = await loadSubTaskPromptSnapshotView(ctx, item, queryRuntime);
     const bridgeProjection = getSubTaskBridgeProjection(item);
+    const acceptanceGate = buildSubTaskAcceptanceGateView(item, outputContent);
 
     queryRuntime.mark("completed", {
       conversationId: item.parentConversationId,
@@ -207,6 +208,7 @@ export async function handleSubTaskGetWithQueryRuntime(
         taskId: item.id,
         hasLaunchExplainability: Boolean(launchExplainability),
         hasPromptSnapshot: Boolean(promptSnapshotView),
+        hasAcceptanceGate: Boolean(acceptanceGate),
         hasBridgeSubtask: Boolean(bridgeProjection.bridgeSubtaskView),
         hasBridgeSession: Boolean(bridgeProjection.bridgeSessionView),
       },
@@ -225,6 +227,7 @@ export async function handleSubTaskGetWithQueryRuntime(
         continuationState: buildSubTaskContinuationState(item),
         launchExplainability: launchExplainability ?? null,
         promptSnapshotView,
+        acceptanceGate,
         resultEnvelope: buildSubTaskResultEnvelope(item),
         outputContent,
       },
@@ -289,6 +292,429 @@ async function loadSubTaskPromptSnapshotView(
     launchExplainability: launchExplainability ?? null,
     residentStateBinding: residentStateBinding ?? null,
   };
+}
+
+type SubTaskAcceptanceGateView = {
+  status: "pending" | "accepted" | "rejected" | "not_applicable";
+  enforced: boolean;
+  summary: string;
+  reasons: string[];
+  deliverableFormat?: string;
+  requiredSections?: string[];
+  missingRequiredSections?: string[];
+  doneDefinition?: string;
+  doneDefinitionCheck?: AcceptanceCheckStatus;
+  acceptanceEvidence?: string;
+  verificationHints?: string[];
+  contractSpecificChecks?: Array<{
+    id: string;
+    label: string;
+    status: "passed" | "failed";
+  }>;
+  rejectionConfidence?: "low" | "medium" | "high";
+  managerActionHint?: string;
+};
+
+function buildSubTaskAcceptanceGateView(
+  item: SubTaskRecord,
+  outputContent?: string,
+): SubTaskAcceptanceGateView | null {
+  const contract = item.launchSpec?.delegation;
+  const hasStructuredGate = Boolean(
+    contract?.acceptance?.doneDefinition
+    || (contract?.acceptance?.verificationHints && contract.acceptance.verificationHints.length > 0)
+    || (contract?.deliverableContract?.requiredSections && contract.deliverableContract.requiredSections.length > 0)
+    || contract?.deliverableContract?.format === "verification_report",
+  );
+  if (!hasStructuredGate) {
+    return null;
+  }
+
+  const terminal = item.status === "done" || item.status === "error" || item.status === "timeout" || item.status === "stopped";
+  if (!terminal) {
+    return {
+      status: "pending",
+      enforced: true,
+      summary: "Acceptance gate will be evaluated after the delegated task reaches a terminal state.",
+      reasons: [],
+      ...(contract?.deliverableContract?.format ? { deliverableFormat: contract.deliverableContract.format } : {}),
+      ...(contract?.deliverableContract?.requiredSections?.length
+        ? { requiredSections: [...contract.deliverableContract.requiredSections] }
+        : {}),
+      ...(contract?.acceptance?.doneDefinition ? { doneDefinition: contract.acceptance.doneDefinition } : {}),
+      ...(contract?.acceptance?.verificationHints?.length
+        ? { verificationHints: [...contract.acceptance.verificationHints] }
+        : {}),
+    };
+  }
+
+  const gate = evaluateSubTaskAcceptanceGate({
+    output: outputContent ?? item.outputPreview ?? "",
+    doneDefinition: contract?.acceptance?.doneDefinition,
+    verificationHints: contract?.acceptance?.verificationHints,
+    deliverableFormat: contract?.deliverableContract?.format,
+    requiredSections: contract?.deliverableContract?.requiredSections,
+  });
+  return {
+    status: gate.accepted ? "accepted" : "rejected",
+    enforced: gate.enforced,
+    summary: gate.summary,
+    reasons: [...gate.reasons],
+    ...(gate.deliverableFormat ? { deliverableFormat: gate.deliverableFormat } : {}),
+    ...(gate.requiredSections?.length ? { requiredSections: [...gate.requiredSections] } : {}),
+    ...(gate.missingRequiredSections?.length ? { missingRequiredSections: [...gate.missingRequiredSections] } : {}),
+    ...(gate.doneDefinition ? { doneDefinition: gate.doneDefinition } : {}),
+    doneDefinitionCheck: gate.acceptanceCheckStatus,
+    ...(gate.acceptanceCheckEvidence ? { acceptanceEvidence: gate.acceptanceCheckEvidence } : {}),
+    ...(gate.verificationHints?.length ? { verificationHints: [...gate.verificationHints] } : {}),
+    ...(gate.contractSpecificChecks?.length ? { contractSpecificChecks: gate.contractSpecificChecks.map((check) => ({ ...check })) } : {}),
+    ...(gate.rejectionConfidence ? { rejectionConfidence: gate.rejectionConfidence } : {}),
+    ...(gate.managerActionHint ? { managerActionHint: gate.managerActionHint } : {}),
+  };
+}
+
+type AcceptanceCheckStatus = "not_requested" | "passed" | "missing" | "failed" | "unclear";
+
+function evaluateSubTaskAcceptanceGate(input: {
+  output: string;
+  doneDefinition?: string;
+  verificationHints?: string[];
+  deliverableFormat?: string;
+  requiredSections?: string[];
+}): {
+  enforced: boolean;
+  accepted: boolean;
+  summary: string;
+  reasons: string[];
+  deliverableFormat?: string;
+  requiredSections?: string[];
+  missingRequiredSections?: string[];
+  doneDefinition?: string;
+  acceptanceCheckStatus: AcceptanceCheckStatus;
+  acceptanceCheckEvidence?: string;
+  verificationHints?: string[];
+  contractSpecificChecks?: Array<{
+    id: string;
+    label: string;
+    status: "passed" | "failed";
+  }>;
+  rejectionConfidence?: "low" | "medium" | "high";
+  managerActionHint?: string;
+} {
+  const requiredSections = normalizeStringArray(input.requiredSections);
+  const doneDefinition = typeof input.doneDefinition === "string" && input.doneDefinition.trim()
+    ? input.doneDefinition.trim()
+    : undefined;
+  const verificationHints = normalizeStringArray(input.verificationHints);
+  const missingRequiredSections = findMissingRequiredSections(input.output, requiredSections);
+  const contractSpecificChecks = evaluateFormatSpecificGateChecks(input.output, input.deliverableFormat);
+  const acceptanceCheckEvidence = doneDefinition
+    ? extractAcceptanceCheckEvidence(input.output)
+    : undefined;
+  const acceptanceCheckStatus = doneDefinition
+    ? classifyAcceptanceCheck(acceptanceCheckEvidence)
+    : "not_requested";
+  const reasons: string[] = [];
+
+  if (!input.output.trim()) {
+    reasons.push("Delegated result is empty.");
+  }
+  if (missingRequiredSections.length > 0) {
+    reasons.push(`Missing required sections: ${missingRequiredSections.join(", ")}`);
+  }
+  for (const check of contractSpecificChecks) {
+    if (check.status === "failed") {
+      reasons.push(check.label);
+    }
+  }
+  if (doneDefinition) {
+    if (acceptanceCheckStatus === "missing") {
+      reasons.push("Missing explicit `Done Definition Check` section or verdict.");
+    } else if (acceptanceCheckStatus === "failed") {
+      reasons.push("The delegated result explicitly says the done definition is not satisfied.");
+    } else if (acceptanceCheckStatus === "unclear") {
+      reasons.push("The delegated result does not provide a clear pass/fail verdict for the done definition.");
+    }
+  }
+
+  const enforced = Boolean(requiredSections.length > 0 || doneDefinition || verificationHints.length > 0 || contractSpecificChecks.length > 0);
+  const accepted = enforced ? reasons.length === 0 : true;
+  const summary = accepted
+    ? "Delegated result passed the structured acceptance gate."
+    : `Delegated result failed the structured acceptance gate: ${reasons.join(" | ")}`;
+  const rejectionConfidence = accepted
+    ? undefined
+    : classifyAcceptanceGateRejectionConfidence({
+        missingRequiredSections,
+        acceptanceCheckStatus,
+        contractSpecificChecks,
+      });
+  const managerActionHint = buildAcceptanceGateManagerActionHint({
+    accepted,
+    missingRequiredSections,
+    acceptanceCheckStatus,
+    contractSpecificChecks,
+  });
+
+  return {
+    enforced,
+    accepted,
+    summary,
+    reasons,
+    ...(typeof input.deliverableFormat === "string" && input.deliverableFormat.trim()
+      ? { deliverableFormat: input.deliverableFormat.trim() }
+      : {}),
+    ...(requiredSections.length > 0 ? { requiredSections } : {}),
+    ...(missingRequiredSections.length > 0 ? { missingRequiredSections } : {}),
+    ...(doneDefinition ? { doneDefinition } : {}),
+    acceptanceCheckStatus,
+    ...(acceptanceCheckEvidence ? { acceptanceCheckEvidence } : {}),
+    ...(verificationHints.length > 0 ? { verificationHints } : {}),
+    ...(contractSpecificChecks.length > 0 ? { contractSpecificChecks } : {}),
+    ...(rejectionConfidence ? { rejectionConfidence } : {}),
+    ...(managerActionHint ? { managerActionHint } : {}),
+  };
+}
+
+const VERIFICATION_REPORT_FINDINGS_SECTION_LABELS = [
+  "Findings",
+  "Issues",
+  "Risks",
+  "Observations",
+];
+
+const VERIFICATION_REPORT_RECOMMENDATION_SECTION_LABELS = [
+  "Recommendation",
+  "Recommendations",
+  "Decision",
+  "Verdict",
+  "Conclusion",
+  "Merge recommendation",
+];
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(
+    value
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .map((item) => item.trim()),
+  )];
+}
+
+function findMissingRequiredSections(output: string, requiredSections: readonly string[]): string[] {
+  if (requiredSections.length === 0) {
+    return [];
+  }
+  return requiredSections.filter((section) => !hasSectionLabel(output, section));
+}
+
+function evaluateFormatSpecificGateChecks(
+  output: string,
+  deliverableFormat?: string,
+): Array<{
+  id: string;
+  label: string;
+  status: "passed" | "failed";
+}> {
+  if (deliverableFormat !== "verification_report") {
+    return [];
+  }
+  const findingsSection = findFirstMatchingSectionLabel(output, VERIFICATION_REPORT_FINDINGS_SECTION_LABELS);
+  const recommendationSection = findFirstMatchingSectionLabel(output, VERIFICATION_REPORT_RECOMMENDATION_SECTION_LABELS);
+  return [
+    {
+      id: "verification_report_findings",
+      label: "Verification report is missing a findings section.",
+      status: findingsSection ? "passed" : "failed",
+    },
+    {
+      id: "verification_report_recommendation",
+      label: "Verification report is missing a recommendation or verdict section.",
+      status: recommendationSection ? "passed" : "failed",
+    },
+  ];
+}
+
+function findFirstMatchingSectionLabel(output: string, labels: readonly string[]): string | undefined {
+  for (const line of output.split(/\r?\n/u)) {
+    const normalizedLine = normalizeSectionLabel(line);
+    if (!normalizedLine) {
+      continue;
+    }
+    for (const label of labels) {
+      if (normalizedLine === normalizeSectionLabel(label)) {
+        return line.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+function classifyAcceptanceGateRejectionConfidence(input: {
+  missingRequiredSections: string[];
+  acceptanceCheckStatus: AcceptanceCheckStatus;
+  contractSpecificChecks: Array<{ status: "passed" | "failed" }>;
+}): "low" | "medium" | "high" {
+  if (input.missingRequiredSections.length > 0
+    || input.acceptanceCheckStatus === "failed"
+    || input.acceptanceCheckStatus === "missing"
+    || input.contractSpecificChecks.some((check) => check.status === "failed")) {
+    return "high";
+  }
+  if (input.acceptanceCheckStatus === "unclear") {
+    return "medium";
+  }
+  return "low";
+}
+
+function buildAcceptanceGateManagerActionHint(input: {
+  accepted: boolean;
+  missingRequiredSections: string[];
+  acceptanceCheckStatus: AcceptanceCheckStatus;
+  contractSpecificChecks: Array<{ status: "passed" | "failed" }>;
+}): string {
+  if (input.accepted) {
+    return "the delegated result is structured enough to integrate or verify further.";
+  }
+  if (input.missingRequiredSections.length > 0 || input.contractSpecificChecks.some((check) => check.status === "failed")) {
+    return "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.";
+  }
+  if (input.acceptanceCheckStatus === "missing" || input.acceptanceCheckStatus === "unclear") {
+    return "reject or follow up until the worker provides an explicit done-definition verdict with supporting evidence.";
+  }
+  if (input.acceptanceCheckStatus === "failed") {
+    return "do not integrate this result as complete. Escalate, reject, or hand off to a verifier before proceeding.";
+  }
+  return "do not integrate this result as complete. Follow up, reject, or hand off to a verifier.";
+}
+
+function hasSectionLabel(output: string, sectionName: string): boolean {
+  const normalizedSection = normalizeSectionLabel(sectionName);
+  if (!normalizedSection) {
+    return false;
+  }
+  return output
+    .split(/\r?\n/u)
+    .some((line) => normalizeSectionLabel(line) === normalizedSection);
+}
+
+function extractAcceptanceCheckEvidence(output: string): string | undefined {
+  const lines = output.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index += 1) {
+    const matched = matchAcceptanceCheckLabel(lines[index] ?? "");
+    if (!matched.matched) {
+      continue;
+    }
+    if (matched.inlineRemainder) {
+      return matched.inlineRemainder;
+    }
+
+    const collected: string[] = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const nextLine = lines[cursor]?.trim() ?? "";
+      if (!nextLine) {
+        if (collected.length > 0) break;
+        continue;
+      }
+      if (looksLikeSectionBoundary(nextLine)) {
+        break;
+      }
+      collected.push(nextLine);
+      if (collected.length >= 4) {
+        break;
+      }
+    }
+
+    const evidence = collected.join(" ").trim();
+    return evidence || undefined;
+  }
+  return undefined;
+}
+
+function classifyAcceptanceCheck(value: string | undefined): AcceptanceCheckStatus {
+  if (!value) {
+    return "missing";
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return "missing";
+  }
+  if (/(not satisfied|does not satisfy|doesn't satisfy|not ready|blocked|fail(?:ed|s)?|missing|incomplete|cannot|can't|no\b)/u.test(normalized)) {
+    return "failed";
+  }
+  if (/(satisfied|satisfies|meets?|met|ready|complete(?:d)?|done|pass(?:ed|es)?|acceptable|accepted|yes\b)/u.test(normalized)) {
+    return "passed";
+  }
+  return "unclear";
+}
+
+function matchAcceptanceCheckLabel(line: string): {
+  matched: boolean;
+  inlineRemainder?: string;
+} {
+  const labels = [
+    "Done Definition Check",
+    "Acceptance Check",
+    "Completion Check",
+    "Completion Status",
+    "Done Definition Status",
+  ];
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return { matched: false };
+  }
+  const colonMatch = trimmed.match(/^(.+?)[:：]\s*(.+)$/u);
+  if (colonMatch) {
+    const label = normalizeSectionLabel(colonMatch[1] ?? "");
+    const inlineRemainder = typeof colonMatch[2] === "string" && colonMatch[2].trim()
+      ? colonMatch[2].trim()
+      : undefined;
+    if (label && labels.some((candidate) => normalizeSectionLabel(candidate) === label)) {
+      return {
+        matched: true,
+        ...(inlineRemainder ? { inlineRemainder } : {}),
+      };
+    }
+  }
+
+  const normalizedLine = normalizeSectionLabel(trimmed);
+  if (normalizedLine && labels.some((candidate) => normalizeSectionLabel(candidate) === normalizedLine)) {
+    return { matched: true };
+  }
+  return { matched: false };
+}
+
+function looksLikeSectionBoundary(line: string): boolean {
+  if (/^#{1,6}\s+/u.test(line)) {
+    return true;
+  }
+  if (/^\*\*.+\*\*:?\s*$/u.test(line)) {
+    return true;
+  }
+  if (/^[A-Za-z0-9][A-Za-z0-9 /&()_.-]{0,78}[:：]\s*$/u.test(line)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeSectionLabel(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed
+    .replace(/^#{1,6}\s+/u, "")
+    .replace(/^\*\*(.+)\*\*:?\s*$/u, "$1")
+    .replace(/^[-*]\s+/u, "")
+    .replace(/[:：]\s*$/u, "")
+    .replace(/^[0-9]+[.)]\s+/u, "")
+    .replace(/[`*_]/gu, "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .toLowerCase();
+  return normalized || undefined;
 }
 
 export async function handleSubTaskStopWithQueryRuntime(

@@ -4,6 +4,8 @@ import crypto from "node:crypto";
 import { mkdirSync } from "node:fs";
 import type {
   GoalCapabilityPlan,
+  GoalCapabilityPlanAcceptanceGate,
+  GoalCapabilityPlanAcceptanceGateCheck,
   GoalCapabilityPlanAnalysis,
   GoalCapabilityPlanCoordinationPlan,
   GoalCapabilityPlanDelegationResult,
@@ -554,6 +556,57 @@ function normalizeCapabilityPlanVerifierResult(value: unknown): GoalCapabilityPl
   };
 }
 
+function normalizeCapabilityPlanAcceptanceGateCheck(value: unknown): GoalCapabilityPlanAcceptanceGateCheck | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const id = normalizeString(source.id);
+  const label = normalizeString(source.label);
+  const status = normalizeString(source.status);
+  if (!id || !label || (status !== "passed" && status !== "failed")) return null;
+  return {
+    id,
+    label,
+    status,
+    enforced: source.enforced === true,
+    evidence: normalizeString(source.evidence),
+  };
+}
+
+function normalizeCapabilityPlanAcceptanceGate(value: unknown): GoalCapabilityPlanAcceptanceGate | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const status = normalizeString(source.status);
+  const summary = normalizeString(source.summary);
+  if (!summary || (status !== "pending" && status !== "accepted" && status !== "rejected")) return undefined;
+  const reasons = Array.isArray(source.reasons)
+    ? source.reasons.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+    : [];
+  const normalizeList = (input: unknown) => Array.isArray(input)
+    ? input.map((item) => normalizeString(item)).filter((item): item is string => Boolean(item))
+    : [];
+  const rejectionConfidence = normalizeString(source.rejectionConfidence);
+  return {
+    status,
+    summary,
+    reasons,
+    requiredSourceAgentIds: normalizeList(source.requiredSourceAgentIds),
+    missingSourceAgentIds: normalizeList(source.missingSourceAgentIds),
+    requiredSourceTaskIds: normalizeList(source.requiredSourceTaskIds),
+    missingSourceTaskIds: normalizeList(source.missingSourceTaskIds),
+    requiredEvidenceTaskIds: normalizeList(source.requiredEvidenceTaskIds),
+    missingEvidenceTaskIds: normalizeList(source.missingEvidenceTaskIds),
+    contractSpecificChecks: Array.isArray(source.contractSpecificChecks)
+      ? source.contractSpecificChecks
+        .map((item) => normalizeCapabilityPlanAcceptanceGateCheck(item))
+        .filter((item): item is GoalCapabilityPlanAcceptanceGateCheck => Boolean(item))
+      : undefined,
+    rejectionConfidence: rejectionConfidence === "low" || rejectionConfidence === "medium" || rejectionConfidence === "high"
+      ? rejectionConfidence
+      : undefined,
+    managerActionHint: normalizeString(source.managerActionHint),
+  };
+}
+
 function normalizeCapabilityPlanOrchestration(value: unknown): GoalCapabilityPlanOrchestration | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
@@ -576,6 +629,7 @@ function normalizeCapabilityPlanOrchestration(value: unknown): GoalCapabilityPla
       : undefined,
     verifierHandoff: normalizeCapabilityPlanVerifierHandoff(source.verifierHandoff),
     verifierResult: normalizeCapabilityPlanVerifierResult(source.verifierResult),
+    acceptanceGate: normalizeCapabilityPlanAcceptanceGate(source.acceptanceGate),
     notes: notes.length > 0 ? notes : undefined,
   };
 }

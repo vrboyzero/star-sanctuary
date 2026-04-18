@@ -1,4 +1,4 @@
-import type { BridgeSubtaskSemantics, DelegationProtocol } from "@belldandy/skills";
+import type { BridgeSubtaskSemantics, DelegationProtocol, ToolContractFamily } from "@belldandy/skills";
 import type { AgentRegistry } from "./agent-registry.js";
 import { resolveAgentProfileCatalogMetadata, type AgentProfileCatalogMetadata } from "./agent-profile.js";
 
@@ -136,6 +136,83 @@ function normalizeBridgeSubtask(value: unknown): BridgeSubtaskSemantics | undefi
   };
 }
 
+function normalizeDelegationStringArray(value: unknown): string[] | undefined {
+  return normalizeToolSet(value);
+}
+
+function normalizeDelegationToolFamilies(
+  value: unknown,
+): DelegationProtocol["launchDefaults"]["allowedToolFamilies"] | undefined {
+  return normalizeDelegationStringArray(value) as ToolContractFamily[] | undefined;
+}
+
+function normalizeDelegationProtocol(
+  protocol: DelegationProtocol | undefined,
+): DelegationProtocol | undefined {
+  if (!protocol) return undefined;
+
+  const expectedDeliverableSummary = normalizeOptionalString(protocol.expectedDeliverable?.summary)
+    ?? normalizeOptionalString(protocol.intent?.summary)
+    ?? "Execute delegated work.";
+  const ownershipOutOfScope = normalizeDelegationStringArray(protocol.ownership?.outOfScope);
+  const ownershipWriteScope = normalizeDelegationStringArray(protocol.ownership?.writeScope);
+  const acceptanceVerificationHints = normalizeDelegationStringArray(protocol.acceptance?.verificationHints);
+  const deliverableRequiredSections = normalizeDelegationStringArray(protocol.deliverableContract?.requiredSections);
+  const ownershipScopeSummary = normalizeOptionalString(protocol.ownership?.scopeSummary)
+    ?? normalizeOptionalString(protocol.intent?.summary)
+    ?? expectedDeliverableSummary;
+  const doneDefinition = normalizeOptionalString(protocol.acceptance?.doneDefinition)
+    ?? expectedDeliverableSummary;
+  const deliverableSummary = normalizeOptionalString(protocol.deliverableContract?.summary)
+    ?? expectedDeliverableSummary;
+
+  return {
+    ...protocol,
+    intent: {
+      ...protocol.intent,
+      summary: normalizeOptionalString(protocol.intent.summary) ?? expectedDeliverableSummary,
+    },
+    contextPolicy: {
+      ...protocol.contextPolicy,
+      contextKeys: normalizeDelegationStringArray(protocol.contextPolicy?.contextKeys) ?? [],
+    },
+    expectedDeliverable: {
+      ...protocol.expectedDeliverable,
+      summary: expectedDeliverableSummary,
+    },
+    aggregationPolicy: {
+      ...protocol.aggregationPolicy,
+      sourceAgentIds: normalizeDelegationStringArray(protocol.aggregationPolicy?.sourceAgentIds),
+    },
+    launchDefaults: {
+      ...protocol.launchDefaults,
+      permissionMode: normalizeOptionalString(protocol.launchDefaults?.permissionMode),
+      allowedToolFamilies: normalizeDelegationToolFamilies(protocol.launchDefaults?.allowedToolFamilies),
+      maxToolRiskLevel: normalizeRiskLevel(protocol.launchDefaults?.maxToolRiskLevel),
+    },
+    ...(protocol.ownership || ownershipOutOfScope || ownershipWriteScope ? {
+      ownership: {
+        scopeSummary: ownershipScopeSummary,
+        ...(ownershipOutOfScope ? { outOfScope: ownershipOutOfScope } : {}),
+        ...(ownershipWriteScope ? { writeScope: ownershipWriteScope } : {}),
+      },
+    } : {}),
+    ...(protocol.acceptance || acceptanceVerificationHints ? {
+      acceptance: {
+        doneDefinition,
+        ...(acceptanceVerificationHints ? { verificationHints: acceptanceVerificationHints } : {}),
+      },
+    } : {}),
+    ...(protocol.deliverableContract || deliverableRequiredSections ? {
+      deliverableContract: {
+        format: protocol.deliverableContract?.format ?? protocol.expectedDeliverable.format,
+        summary: deliverableSummary,
+        ...(deliverableRequiredSections ? { requiredSections: deliverableRequiredSections } : {}),
+      },
+    } : {}),
+  };
+}
+
 export function normalizeAgentLaunchSpec(
   input: AgentLaunchSpecInput,
   defaults: Partial<Omit<AgentLaunchSpec, "instruction" | "parentConversationId">> = {},
@@ -172,7 +249,8 @@ export function normalizeAgentLaunchSpec(
     allowedToolFamilies: normalizeToolSet(input.allowedToolFamilies) ?? normalizeToolSet(defaults.allowedToolFamilies),
     maxToolRiskLevel: normalizeRiskLevel(input.maxToolRiskLevel) ?? normalizeRiskLevel(defaults.maxToolRiskLevel),
     policySummary: normalizeOptionalString(input.policySummary) ?? normalizeOptionalString(defaults.policySummary),
-    delegationProtocol: input.delegationProtocol ?? defaults.delegationProtocol,
+    delegationProtocol: normalizeDelegationProtocol(input.delegationProtocol)
+      ?? normalizeDelegationProtocol(defaults.delegationProtocol),
     bridgeSubtask: normalizeBridgeSubtask(input.bridgeSubtask) ?? normalizeBridgeSubtask(defaults.bridgeSubtask),
   };
 }

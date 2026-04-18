@@ -2,6 +2,15 @@ import type { Tool, ToolCallResult } from "../../types.js";
 import crypto from "node:crypto";
 import { withToolContract } from "../../tool-contract.js";
 import { buildSubAgentLaunchSpec } from "../../subagent-launch.js";
+import { buildFailureToolCallResult } from "../../failure-kind.js";
+import {
+    buildDelegationResultFollowUpStrategy,
+    DELEGATION_CONTRACT_PARAMETER_PROPERTIES,
+    buildDelegationResultToolMetadata,
+    evaluateDelegationResultGate,
+    renderDelegationResultGateReport,
+    readStructuredDelegationContractArgs,
+} from "./delegation-contract.js";
 
 export const sessionsSpawnTool: Tool = withToolContract({
     definition: {
@@ -22,6 +31,7 @@ export const sessionsSpawnTool: Tool = withToolContract({
                     type: "object",
                     description: "Optional structured context to pass to the sub-agent.",
                 },
+                ...DELEGATION_CONTRACT_PARAMETER_PROPERTIES,
             },
             required: ["instruction"],
         },
@@ -31,25 +41,50 @@ export const sessionsSpawnTool: Tool = withToolContract({
         const start = Date.now();
         const id = crypto.randomUUID();
         const name = "sessions_spawn";
+        const makeError = (
+            error: string,
+            output: string = "",
+            failureKind?: ToolCallResult["failureKind"],
+        ): ToolCallResult => buildFailureToolCallResult({
+            id,
+            name,
+            start,
+            error,
+            output,
+            ...(failureKind ? { failureKind } : {}),
+        });
 
         if (!context.agentCapabilities?.spawnSubAgent) {
-            return {
-                id,
-                name,
-                success: false,
-                output: "Error: Host agent does not support spawning sub-agents (capability missing).",
-                durationMs: Date.now() - start,
-            };
+            return makeError(
+                "Error: Host agent does not support spawning sub-agents (capability missing).",
+                "Error: Host agent does not support spawning sub-agents (capability missing).",
+                "environment_error",
+            );
         }
 
         try {
+            const delegationContract = readStructuredDelegationContractArgs(args as Record<string, unknown>);
             const launchSpec = buildSubAgentLaunchSpec(context, {
                 instruction: args.instruction as string,
                 agentId: args.agent_id as string | undefined,
                 context: args.context as Record<string, unknown> | undefined,
                 channel: "subtask",
+                ownership: delegationContract.ownership,
+                acceptance: delegationContract.acceptance,
+                deliverableContract: delegationContract.deliverableContract,
             });
             const result = await context.agentCapabilities.spawnSubAgent(launchSpec);
+            const gate = result.success
+                ? evaluateDelegationResultGate({
+                    output: result.output,
+                    contract: launchSpec.delegationProtocol,
+                })
+                : undefined;
+            const gateReport = gate ? renderDelegationResultGateReport(gate) : undefined;
+            const accepted = result.success && (!gate || !gate.enforced || gate.accepted);
+            const gateError = gate?.enforced && !gate.accepted
+                ? `Delegation acceptance gate rejected the sub-agent result. ${gate.summary}`
+                : undefined;
             const taskDetails = [
                 result.taskId ? `Task ID: ${result.taskId}` : "",
                 result.sessionId ? `Session ID: ${result.sessionId}` : "",
@@ -59,24 +94,53 @@ export const sessionsSpawnTool: Tool = withToolContract({
             return {
                 id,
                 name,
-                success: result.success,
+                success: accepted,
                 output: [
-                    result.output || (result.success ? "Sub-agent finished successfully." : "Sub-agent failed."),
+                    gateError ?? "",
+                    result.output || (accepted ? "Sub-agent finished successfully." : "Sub-agent failed."),
+                    gateReport ?? "",
                     taskDetails,
                 ].filter(Boolean).join("\n\n"),
-                error: result.error,
+                error: gateError ?? result.error,
+                ...(!accepted
+                    ? {
+                        failureKind: gateError
+                            ? "business_logic_error"
+                            : (result.error ? "environment_error" : "unknown"),
+                    }
+                    : {}),
                 durationMs: Date.now() - start,
+                metadata: buildDelegationResultToolMetadata({
+                    delegationResults: [{
+                        workerSuccess: result.success,
+                        accepted,
+                        error: result.error,
+                        taskId: result.taskId,
+                        sessionId: result.sessionId,
+                        outputPath: result.outputPath,
+                        acceptanceGate: gate,
+                    }],
+                    acceptedCount: accepted ? 1 : 0,
+                    gateRejectedCount: result.success && gate?.enforced && !gate.accepted ? 1 : 0,
+                    workerSuccessCount: result.success ? 1 : 0,
+                    followUpStrategy: buildDelegationResultFollowUpStrategy({
+                        toolName: "sessions_spawn",
+                        requestArguments: args as Record<string, unknown>,
+                        delegationResults: [{
+                            workerSuccess: result.success,
+                            accepted,
+                            error: result.error,
+                            taskId: result.taskId,
+                            sessionId: result.sessionId,
+                            outputPath: result.outputPath,
+                            acceptanceGate: gate,
+                        }],
+                    }),
+                }),
             };
 
         } catch (err) {
-            return {
-                id,
-                name,
-                success: false,
-                output: "",
-                error: err instanceof Error ? err.message : String(err),
-                durationMs: Date.now() - start,
-            };
+            return makeError(err instanceof Error ? err.message : String(err), "", "environment_error");
         }
     },
 }, {

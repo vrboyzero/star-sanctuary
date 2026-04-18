@@ -60,6 +60,7 @@ describe("file tools", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("不存在");
+      expect(result.failureKind).toBe("input_error");
     });
 
     it("should block path traversal", async () => {
@@ -84,6 +85,7 @@ describe("file tools", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("敏感文件");
+      expect(result.failureKind).toBe("permission_or_policy");
     });
 
     it("should block sensitive files (credentials)", async () => {
@@ -371,6 +373,7 @@ description: 通过额外根目录读取
       );
       expect(result1.success).toBe(false);
       expect(result1.error).toContain("白名单");
+      expect(result1.failureKind).toBe("permission_or_policy");
 
       // 在白名单中
       const result2 = await fileWriteTool.execute(
@@ -434,6 +437,7 @@ description: 通过额外根目录读取
       );
       expect(blockedResult.success).toBe(false);
       expect(blockedResult.error).toContain("白名单");
+      expect(blockedResult.failureKind).toBe("permission_or_policy");
 
       const allowedResult = await fileDeleteTool.execute(
         { path: "allowed/ok.txt" },

@@ -1,7 +1,10 @@
 import type {
+  DelegationAcceptance,
   DelegationAggregationMode,
+  DelegationDeliverableContract,
   DelegationDeliverableFormat,
   DelegationIntentKind,
+  DelegationOwnership,
   DelegationProtocol,
   DelegationSource,
 } from "@belldandy/skills";
@@ -19,6 +22,20 @@ export type SubTaskDelegationSummary = {
   goalId?: string;
   nodeId?: string;
   planId?: string;
+  ownership?: {
+    scopeSummary: string;
+    outOfScope?: string[];
+    writeScope?: string[];
+  };
+  acceptance?: {
+    doneDefinition: string;
+    verificationHints?: string[];
+  };
+  deliverableContract?: {
+    format: DelegationDeliverableFormat;
+    summary?: string;
+    requiredSections?: string[];
+  };
   launchDefaults?: {
     permissionMode?: string;
     allowedToolFamilies?: string[];
@@ -77,6 +94,9 @@ export function summarizeDelegationProtocol(protocol: DelegationProtocol | undef
     goalId: protocol.intent.goalId,
     nodeId: protocol.intent.nodeId,
     planId: protocol.intent.planId,
+    ownership: cloneDelegationOwnership(protocol.ownership),
+    acceptance: cloneDelegationAcceptance(protocol.acceptance),
+    deliverableContract: cloneDelegationDeliverableContract(protocol.deliverableContract),
     launchDefaults: {
       permissionMode: protocol.launchDefaults.permissionMode,
       allowedToolFamilies: protocol.launchDefaults.allowedToolFamilies
@@ -84,6 +104,38 @@ export function summarizeDelegationProtocol(protocol: DelegationProtocol | undef
         : undefined,
       maxToolRiskLevel: protocol.launchDefaults.maxToolRiskLevel,
     },
+  };
+}
+
+function cloneDelegationOwnership(value: DelegationOwnership | undefined): SubTaskDelegationSummary["ownership"] {
+  if (!value) return undefined;
+  return {
+    scopeSummary: value.scopeSummary,
+    ...(value.outOfScope && value.outOfScope.length > 0 ? { outOfScope: [...value.outOfScope] } : {}),
+    ...(value.writeScope && value.writeScope.length > 0 ? { writeScope: [...value.writeScope] } : {}),
+  };
+}
+
+function cloneDelegationAcceptance(value: DelegationAcceptance | undefined): SubTaskDelegationSummary["acceptance"] {
+  if (!value) return undefined;
+  return {
+    doneDefinition: value.doneDefinition,
+    ...(value.verificationHints && value.verificationHints.length > 0
+      ? { verificationHints: [...value.verificationHints] }
+      : {}),
+  };
+}
+
+function cloneDelegationDeliverableContract(
+  value: DelegationDeliverableContract | undefined,
+): SubTaskDelegationSummary["deliverableContract"] {
+  if (!value) return undefined;
+  return {
+    format: value.format,
+    ...(value.summary ? { summary: value.summary } : {}),
+    ...(value.requiredSections && value.requiredSections.length > 0
+      ? { requiredSections: [...value.requiredSections] }
+      : {}),
   };
 }
 

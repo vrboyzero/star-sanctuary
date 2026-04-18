@@ -77,13 +77,22 @@ export type ToolCallRequest = {
 };
 
 /** 工具调用结果 */
+export type ToolFailureKind =
+  | "input_error"
+  | "permission_or_policy"
+  | "environment_error"
+  | "business_logic_error"
+  | "unknown";
+
 export type ToolCallResult = {
   id: string;
   name: string;
   success: boolean;
   output: string;
   error?: string;
+  failureKind?: ToolFailureKind;
   durationMs: number;
+  metadata?: JsonObject;
 };
 
 /** 运行命令策略 */
@@ -256,6 +265,7 @@ export type ToolRuntimeLaunchSpec = {
   allowedToolFamilies?: string[];
   maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
   policySummary?: string;
+  delegationProtocol?: DelegationProtocol;
   bridgeSubtask?: BridgeSubtaskSemantics;
 };
 
@@ -2018,5 +2028,6 @@ export type ToolAuditLog = {
   success: boolean;
   output?: string;
   error?: string;
+  failureKind?: ToolFailureKind;
   durationMs: number;
 };

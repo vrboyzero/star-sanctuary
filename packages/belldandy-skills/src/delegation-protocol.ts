@@ -28,6 +28,23 @@ export type DelegationAggregationMode =
   | "main_agent_summary"
   | "verifier_fan_in";
 
+export type DelegationOwnership = {
+  scopeSummary: string;
+  outOfScope?: string[];
+  writeScope?: string[];
+};
+
+export type DelegationAcceptance = {
+  doneDefinition: string;
+  verificationHints?: string[];
+};
+
+export type DelegationDeliverableContract = {
+  format: DelegationDeliverableFormat;
+  summary?: string;
+  requiredSections?: string[];
+};
+
 export type DelegationProtocol = {
   source: DelegationSource;
   intent: {
@@ -57,6 +74,9 @@ export type DelegationProtocol = {
     allowedToolFamilies?: ToolContractFamily[];
     maxToolRiskLevel?: ToolContractRiskLevel;
   };
+  ownership?: DelegationOwnership;
+  acceptance?: DelegationAcceptance;
+  deliverableContract?: DelegationDeliverableContract;
 };
 
 export type BuildDelegationProtocolOptions = {
@@ -73,6 +93,9 @@ export type BuildDelegationProtocolOptions = {
   permissionMode?: SpawnSubAgentOptions["permissionMode"];
   allowedToolFamilies?: ToolContractFamily[];
   maxToolRiskLevel?: ToolContractRiskLevel;
+  ownership?: Partial<DelegationOwnership>;
+  acceptance?: Partial<DelegationAcceptance>;
+  deliverableContract?: Partial<DelegationDeliverableContract>;
 };
 
 function normalizeStringArray(value: readonly string[] | undefined): string[] | undefined {
@@ -127,6 +150,13 @@ function inferAggregationMode(source: DelegationSource): DelegationAggregationMo
 
 export function buildDelegationProtocol(options: BuildDelegationProtocolOptions): DelegationProtocol {
   const sourceAgentIds = normalizeStringArray(options.sourceAgentIds);
+  const deliverableFormat = options.deliverableContract?.format ?? inferDeliverableFormat(options.source, options.role);
+  const deliverableSummary = options.expectedDeliverableSummary?.trim()
+    || options.deliverableContract?.summary?.trim()
+    || summarizeInstruction(options.instruction);
+  const ownership = buildDelegationOwnership(options, deliverableSummary);
+  const acceptance = buildDelegationAcceptance(options, deliverableSummary);
+  const deliverableContract = buildDelegationDeliverableContract(options, deliverableFormat, deliverableSummary);
   return {
     source: options.source,
     intent: {
@@ -143,8 +173,8 @@ export function buildDelegationProtocol(options: BuildDelegationProtocolOptions)
       contextKeys: options.context ? Object.keys(options.context).sort() : [],
     },
     expectedDeliverable: {
-      format: inferDeliverableFormat(options.source, options.role),
-      summary: options.expectedDeliverableSummary?.trim() || summarizeInstruction(options.instruction),
+      format: deliverableFormat,
+      summary: deliverableSummary,
     },
     aggregationPolicy: {
       mode: options.aggregationMode ?? inferAggregationMode(options.source),
@@ -156,5 +186,57 @@ export function buildDelegationProtocol(options: BuildDelegationProtocolOptions)
       allowedToolFamilies: normalizeStringArray(options.allowedToolFamilies) as ToolContractFamily[] | undefined,
       maxToolRiskLevel: options.maxToolRiskLevel,
     },
+    ...(ownership ? { ownership } : {}),
+    ...(acceptance ? { acceptance } : {}),
+    ...(deliverableContract ? { deliverableContract } : {}),
+  };
+}
+
+function buildDelegationOwnership(
+  options: BuildDelegationProtocolOptions,
+  fallbackSummary: string,
+): DelegationOwnership | undefined {
+  const scopeSummary = options.ownership?.scopeSummary?.trim() || "";
+  const outOfScope = normalizeStringArray(options.ownership?.outOfScope);
+  const writeScope = normalizeStringArray(options.ownership?.writeScope);
+  if (!scopeSummary && !outOfScope && !writeScope) {
+    return undefined;
+  }
+  return {
+    scopeSummary: scopeSummary || fallbackSummary,
+    ...(outOfScope ? { outOfScope } : {}),
+    ...(writeScope ? { writeScope } : {}),
+  };
+}
+
+function buildDelegationAcceptance(
+  options: BuildDelegationProtocolOptions,
+  fallbackSummary: string,
+): DelegationAcceptance | undefined {
+  const doneDefinition = options.acceptance?.doneDefinition?.trim() || "";
+  const verificationHints = normalizeStringArray(options.acceptance?.verificationHints);
+  if (!doneDefinition && !verificationHints) {
+    return undefined;
+  }
+  return {
+    doneDefinition: doneDefinition || fallbackSummary,
+    ...(verificationHints ? { verificationHints } : {}),
+  };
+}
+
+function buildDelegationDeliverableContract(
+  options: BuildDelegationProtocolOptions,
+  format: DelegationDeliverableFormat,
+  summary: string,
+): DelegationDeliverableContract | undefined {
+  const requiredSections = normalizeStringArray(options.deliverableContract?.requiredSections);
+  const contractSummary = options.deliverableContract?.summary?.trim() || "";
+  if (!requiredSections && !contractSummary && !options.deliverableContract?.format) {
+    return undefined;
+  }
+  return {
+    format,
+    ...(contractSummary || summary ? { summary: contractSummary || summary } : {}),
+    ...(requiredSections ? { requiredSections } : {}),
   };
 }

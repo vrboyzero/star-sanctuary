@@ -165,6 +165,64 @@ describe("FailoverClient", () => {
     });
   });
 
+  it("treats unsupported-model errors as cross-profile fallback without same-profile retry", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        type: "error",
+        error: {
+          type: "server_error",
+          message: "your current token plan not support model, MiniMax-M2.7-highspeed (2061)",
+        },
+      }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new FailoverClient({
+      primary: createProfile({
+        model: "MiniMax-M2.7-highspeed",
+      }),
+      fallbacks: [createProfile({
+        id: "backup",
+        baseUrl: "https://backup.example.com",
+        model: "backup-model",
+      })],
+    });
+
+    const result = await client.fetchWithFailover({
+      maxRetries: 1,
+      retryBackoffMs: 100,
+      buildRequest: () => ({
+        url: "https://api.openai.com/chat/completions",
+        init: {
+          method: "POST",
+        },
+      }),
+    });
+
+    expect(result.profile.id).toBe("backup");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]).toMatchObject({
+      profileId: "primary",
+      reason: "unsupported_model",
+      attempt: 1,
+      maxAttempts: 2,
+      status: 500,
+    });
+    expect(result.summary).toMatchObject({
+      finalStatus: "success",
+      finalProfileId: "backup",
+      requestCount: 2,
+      stepCounts: {
+        sameProfileRetries: 0,
+        crossProfileFallbacks: 1,
+      },
+      reasonCounts: {
+        unsupported_model: 1,
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("records cooldown skips before using a fallback profile", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }));
@@ -202,6 +260,47 @@ describe("FailoverClient", () => {
         crossProfileFallbacks: 0,
       },
     });
+  });
+
+  it("deduplicates repeated cooldown skip logs within the same cooldown window", async () => {
+    const info = vi.fn();
+    const fetchMock = vi.fn()
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new FailoverClient({
+      primary: createProfile(),
+      fallbacks: [createProfile({
+        id: "backup",
+        baseUrl: "https://backup.example.com",
+        model: "backup-model",
+      })],
+      bootstrapCooldowns: {
+        primary: 60_000,
+      },
+      logger: {
+        info,
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    const run = () => client.fetchWithFailover({
+      buildRequest: () => ({
+        url: "https://backup.example.com/chat/completions",
+        init: {
+          method: "POST",
+        },
+      }),
+    });
+
+    await run();
+    await run();
+
+    const cooldownSkipLogs = info.mock.calls
+      .filter((call) => call[0] === "failover" && String(call[1]).includes("跳过冷却中的 Profile"));
+    expect(cooldownSkipLogs).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("loads UTF-8 BOM fallback config files", async () => {

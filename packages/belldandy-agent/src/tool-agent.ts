@@ -34,6 +34,11 @@ import {
   type AgentPromptDelta,
   type AgentPromptSnapshot,
 } from "./prompt-snapshot.js";
+import {
+  buildLaunchSpecPromptDeltas,
+  buildToolResultPromptDeltas,
+  collectSystemPromptDeltaTexts,
+} from "./runtime-prompt-deltas.js";
 
 type ApiProtocol = "openai" | "anthropic";
 const MIN_MULTIMODAL_REQUEST_TIMEOUT_MS = 300_000;
@@ -564,7 +569,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
   async *run(input: AgentRunInput): AsyncIterable<AgentStreamItem> {
     const startTime = Date.now();
-    const resolvedAgentId = input.agentId ?? "tool-agent";
+    const runtimeContext = readToolExecutionRuntimeContext(input.meta);
+    const resolvedAgentId = input.agentId ?? runtimeContext?.launchSpec?.agentId ?? runtimeContext?.launchSpec?.profileId ?? "tool-agent";
     let runSystemPrompt = this.opts.systemPrompt;
     let hookSystemPromptUsed = false;
     let prependContext: string | undefined;
@@ -655,28 +661,47 @@ export class ToolEnabledAgent implements BelldandyAgent {
       senderInfo: input.senderInfo,
       roomContext: input.roomContext,
     });
+    const launchSpecPromptDeltas = buildLaunchSpecPromptDeltas(runtimeContext?.launchSpec);
     const metaPromptDeltas = readPromptSnapshotDeltas(input.meta);
-    const providerNativeSystemBlocks = buildProviderNativeSystemBlocks({
-      sections: hookSystemPromptUsed ? undefined : this.opts.systemPromptSections,
-      deltas: collectRunPromptDeltas({
-        hookPromptDeltas,
-        runtimeIdentityDelta,
-        metaPromptDeltas,
-      }),
-      fallbackText: runSystemPrompt,
+    const baseRunPromptDeltas = collectRunPromptDeltas({
+      hookPromptDeltas,
+      runtimeIdentityDelta,
+      launchSpecPromptDeltas,
+      metaPromptDeltas,
     });
     const messages: Message[] = buildInitialMessages(
       runSystemPrompt,
       content,
       input.history,
-      runtimeIdentityDelta?.text,
+      baseRunPromptDeltas,
     );
-    let promptSnapshotCaptured = false;
+    let pendingToolFollowupDeltas: AgentPromptDelta[] = [];
+    let currentRunPromptDeltas = baseRunPromptDeltas.map((delta) => ({ ...delta }));
+    let providerNativeSystemBlocks = buildProviderNativeSystemBlocks({
+      sections: hookSystemPromptUsed ? undefined : this.opts.systemPromptSections,
+      deltas: currentRunPromptDeltas,
+      fallbackText: runSystemPrompt,
+    });
+    const refreshModelPromptState = () => {
+      currentRunPromptDeltas = collectRunPromptDeltas({
+        hookPromptDeltas,
+        runtimeIdentityDelta,
+        launchSpecPromptDeltas,
+        metaPromptDeltas,
+        transientPromptDeltas: pendingToolFollowupDeltas,
+      });
+      setSystemPromptMessage(messages, buildEffectiveSystemPrompt(runSystemPrompt, currentRunPromptDeltas));
+      providerNativeSystemBlocks = buildProviderNativeSystemBlocks({
+        sections: hookSystemPromptUsed ? undefined : this.opts.systemPromptSections,
+        deltas: currentRunPromptDeltas,
+        fallbackText: runSystemPrompt,
+      });
+      pendingToolFollowupDeltas = [];
+    };
     const capturePromptSnapshot = (messagesForSnapshot: Message[]) => {
-      if (promptSnapshotCaptured || !this.opts.onPromptSnapshot) {
+      if (!this.opts.onPromptSnapshot) {
         return;
       }
-      promptSnapshotCaptured = true;
       const snapshotDeltas: AgentPromptDelta[] = [];
       if (hookPromptDeltas && hookPromptDeltas.length > 0) {
         snapshotDeltas.push(...hookPromptDeltas.map((delta) => ({ ...delta })));
@@ -689,11 +714,11 @@ export class ToolEnabledAgent implements BelldandyAgent {
           text: prependContext.trim(),
         });
       }
-      if (runtimeIdentityDelta) {
-        snapshotDeltas.push({ ...runtimeIdentityDelta });
-      }
-      if (metaPromptDeltas && metaPromptDeltas.length > 0) {
-        snapshotDeltas.push(...metaPromptDeltas.map((delta) => ({ ...delta })));
+      for (const delta of currentRunPromptDeltas) {
+        const alreadyPresent = snapshotDeltas.some((entry) => entry.id === delta.id);
+        if (!alreadyPresent) {
+          snapshotDeltas.push({ ...delta });
+        }
       }
       this.opts.onPromptSnapshot(
         createAgentPromptSnapshot({
@@ -710,7 +735,6 @@ export class ToolEnabledAgent implements BelldandyAgent {
       );
     };
     const textAttachmentChars = readTextAttachmentChars(input.meta);
-    const runtimeContext = readToolExecutionRuntimeContext(input.meta);
     let toolCallCount = 0;
     const generatedItems: AgentStreamItem[] = [];
     let runSuccess = true;
@@ -778,6 +802,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           yield* emitStopped();
           return;
         }
+        refreshModelPromptState();
         const microcompactCandidate = messages.some((message) => message.role === "tool");
         const microcompactOriginalTokens = microcompactCandidate ? estimateMessagesTotal(messages) : 0;
         if (microcompactCandidate) {
@@ -829,7 +854,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           }
         }
 
-        const tools = this.opts.toolExecutor.getDefinitions(input.agentId, input.conversationId, runtimeContext);
+        const tools = this.opts.toolExecutor.getDefinitions(resolvedAgentId, input.conversationId, runtimeContext);
 
         // 调用模型
         const response = await this.callModel(
@@ -841,7 +866,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
             conversationId: input.conversationId,
           },
           input.abortSignal,
-          !promptSnapshotCaptured ? capturePromptSnapshot : undefined,
+          capturePromptSnapshot,
           providerNativeSystemBlocks,
         );
 
@@ -997,6 +1022,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
                   error: blockedError,
                   toolCallId: tc.id,
                 }));
+                pendingToolFollowupDeltas.push(...buildToolResultPromptDeltas({
+                  result: {
+                    id: request.id,
+                    name: request.name,
+                    success: false,
+                    output: "",
+                    error: blockedError,
+                  },
+                  requestArguments: request.arguments,
+                }));
                 continue;
               }
               if (hookRes?.skipExecution) {
@@ -1078,6 +1113,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
                 error: hookError,
                 toolCallId: tc.id,
               }));
+              pendingToolFollowupDeltas.push(...buildToolResultPromptDeltas({
+                result: {
+                  id: request.id,
+                  name: request.name,
+                  success: false,
+                  output: "",
+                  error: hookError,
+                },
+                requestArguments: request.arguments,
+              }));
               continue;
             }
           } else if (this.opts.hooks?.beforeToolCall) {
@@ -1130,6 +1175,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
                   error: blockedError,
                   toolCallId: tc.id,
                 }));
+                pendingToolFollowupDeltas.push(...buildToolResultPromptDeltas({
+                  result: {
+                    id: request.id,
+                    name: request.name,
+                    success: false,
+                    output: "",
+                    error: blockedError,
+                  },
+                  requestArguments: request.arguments,
+                }));
                 continue;
               }
               if (hookRes && typeof hookRes === "object") {
@@ -1173,6 +1228,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
                 error: hookError,
                 toolCallId: tc.id,
               }));
+              pendingToolFollowupDeltas.push(...buildToolResultPromptDeltas({
+                result: {
+                  id: request.id,
+                  name: request.name,
+                  success: false,
+                  output: "",
+                  error: hookError,
+                },
+                requestArguments: request.arguments,
+              }));
               continue;
             }
           }
@@ -1192,7 +1257,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
           const result = await this.opts.toolExecutor.execute(
             request,
             input.conversationId,
-            input.agentId,
+            resolvedAgentId,
             input.userUuid,
             input.senderInfo,
             input.roomContext,
@@ -1246,6 +1311,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
             success: result.success,
             output: result.output,
             error: result.error,
+            failureKind: result.failureKind,
+            metadata: result.metadata,
           });
 
           // 将工具结果加入消息历史
@@ -1270,6 +1337,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
             output: result.output,
             error: result.error,
             toolCallId: tc.id,
+          }));
+          pendingToolFollowupDeltas.push(...buildToolResultPromptDeltas({
+            result,
+            requestArguments: request.arguments,
           }));
           if (isRunStopRequested(input.abortSignal)) {
             yield* emitStopped();
@@ -1763,7 +1834,9 @@ function buildRuntimeIdentityPromptDelta(input: {
 function collectRunPromptDeltas(input: {
   hookPromptDeltas?: AgentPromptDelta[];
   runtimeIdentityDelta?: AgentPromptDelta;
+  launchSpecPromptDeltas?: AgentPromptDelta[];
   metaPromptDeltas?: AgentPromptDelta[];
+  transientPromptDeltas?: AgentPromptDelta[];
 }): AgentPromptDelta[] {
   const deltas: AgentPromptDelta[] = [];
 
@@ -1773,8 +1846,14 @@ function collectRunPromptDeltas(input: {
   if (input.runtimeIdentityDelta) {
     deltas.push({ ...input.runtimeIdentityDelta });
   }
+  if (input.launchSpecPromptDeltas && input.launchSpecPromptDeltas.length > 0) {
+    deltas.push(...input.launchSpecPromptDeltas.map((delta) => ({ ...delta })));
+  }
   if (input.metaPromptDeltas && input.metaPromptDeltas.length > 0) {
     deltas.push(...input.metaPromptDeltas.map((delta) => ({ ...delta })));
+  }
+  if (input.transientPromptDeltas && input.transientPromptDeltas.length > 0) {
+    deltas.push(...input.transientPromptDeltas.map((delta) => ({ ...delta })));
   }
 
   return deltas;
@@ -1784,18 +1863,12 @@ function buildInitialMessages(
   systemPrompt: string | undefined,
   userContent: string | Array<any>,
   history?: Array<{ role: "user" | "assistant"; content: string | Array<any> }>,
-  runtimeIdentityText?: string,
+  runtimePromptDeltas?: AgentPromptDelta[],
 ): Message[] {
   const messages: Message[] = [];
 
   // Layer 1: System
-  let finalSystemPrompt = systemPrompt?.trim() || "";
-
-  if (runtimeIdentityText?.trim()) {
-    finalSystemPrompt = finalSystemPrompt
-      ? `${finalSystemPrompt}\n${runtimeIdentityText.trim()}`
-      : runtimeIdentityText.trim();
-  }
+  const finalSystemPrompt = buildEffectiveSystemPrompt(systemPrompt, runtimePromptDeltas);
 
   if (finalSystemPrompt) {
     messages.push({ role: "system", content: finalSystemPrompt });
@@ -1816,6 +1889,37 @@ function buildInitialMessages(
   messages.push({ role: "user", content: userContent });
 
   return messages;
+}
+
+function buildEffectiveSystemPrompt(
+  systemPrompt: string | undefined,
+  runtimePromptDeltas?: readonly AgentPromptDelta[],
+): string {
+  let finalSystemPrompt = systemPrompt?.trim() || "";
+  const systemDeltaTexts = collectSystemPromptDeltaTexts(runtimePromptDeltas);
+  if (systemDeltaTexts.length === 0) {
+    return finalSystemPrompt;
+  }
+
+  const deltaText = systemDeltaTexts.join("\n").trim();
+  return finalSystemPrompt
+    ? `${finalSystemPrompt}\n${deltaText}`
+    : deltaText;
+}
+
+function setSystemPromptMessage(messages: Message[], content: string): void {
+  if (messages[0]?.role === "system") {
+    if (content) {
+      messages[0] = { role: "system", content };
+    } else {
+      messages.shift();
+    }
+    return;
+  }
+
+  if (content) {
+    messages.unshift({ role: "system", content });
+  }
 }
 
 /**

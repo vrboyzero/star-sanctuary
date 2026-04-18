@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { MemoryManager } from "./manager.js";
 import { buildTaskRecapArtifacts } from "./task-recap.js";
@@ -597,6 +598,60 @@ describe("MemoryManager guardrails", () => {
     expect(result.rejectedReasons).toEqual(expect.arrayContaining(["code_pattern", "file_path"]));
 
     extractionSpy.mockRestore();
+  });
+
+  it("aggregates embedding cache and API logs into a single summary per sync run", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      embeddingBatchSize: 2,
+    });
+
+    const store = (manager as any).store;
+    const signature = (manager as any).computeEmbeddingSignature(1);
+    (manager as any).store.prepareVectorStore(1);
+    (manager as any).ensureEmbeddingSignature(signature);
+
+    const contents = [
+      "cached memory chunk one",
+      "cached memory chunk two",
+      "uncached memory chunk three",
+    ];
+
+    contents.forEach((content, index) => {
+      store.upsertChunk({
+        id: `chunk-log-${index + 1}`,
+        sourcePath: path.join(docsDir, `chunk-${index + 1}.md`),
+        sourceType: "file",
+        memoryType: "working",
+        content,
+      });
+    });
+
+    const cachedContents = contents.slice(0, 2);
+    for (const content of cachedContents) {
+      const normalized = content.replace(/\n+/g, " ").slice(0, 8000);
+      const hash = createHash("sha256").update(signature).update("\n").update(normalized).digest("hex");
+      store.cacheEmbedding(hash, [0.1], "test-memory-manager");
+    }
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await (manager as any).processPendingEmbeddings();
+
+    const summaryLogs = logSpy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes("Embedding sync processed"));
+    const legacyLogs = logSpy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes("Embedding cache:") || line.includes("chunks via API"));
+
+    expect(summaryLogs).toHaveLength(1);
+    expect(summaryLogs[0]).toContain("cacheHits=2");
+    expect(summaryLogs[0]).toContain("cacheMisses=1");
+    expect(summaryLogs[0]).toContain("apiRequests=1");
+    expect(summaryLogs[0]).toContain("apiChunks=1");
+    expect(legacyLogs).toHaveLength(0);
   });
 });
 

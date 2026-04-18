@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "摄像头功能改造第一阶段完成，实现了外接摄像头调用"
+git commit -m "完善加强Agent工具调用与Agent指挥调用提示词机制"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

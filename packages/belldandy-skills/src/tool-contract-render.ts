@@ -55,6 +55,116 @@ export function buildToolContractV2PromptSummary(contracts: readonly ToolContrac
   ].join("\n\n").trim();
 }
 
+function takeCompactItems(values: readonly string[], maxItems: number): string[] {
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, Math.max(0, maxItems));
+}
+
+function formatCompactField(label: string, values: readonly string[], maxItems: number): string | undefined {
+  const items = takeCompactItems(values, maxItems);
+  if (items.length === 0) {
+    return undefined;
+  }
+  return `  ${label}: ${items.join(" | ")}`;
+}
+
+function getCompactRiskScore(contract: ToolContractV2): number {
+  let score = 0;
+  switch (contract.riskLevel) {
+    case "critical":
+      score += 40;
+      break;
+    case "high":
+      score += 30;
+      break;
+    case "medium":
+      score += 20;
+      break;
+    case "low":
+      score += 10;
+      break;
+    default:
+      break;
+  }
+  if (!contract.isReadOnly) score += 8;
+  if (contract.needsPermission) score += 6;
+  if (contract.confirmWhen.length > 0) score += 4;
+  if (contract.preflightChecks.length > 0) score += 3;
+  if (contract.fallbackStrategy.length > 0) score += 2;
+  return score;
+}
+
+function renderToolContractV2CompactSummary(
+  contract: ToolContractV2,
+  options: {
+    maxBulletsPerField: number;
+  },
+): string {
+  const meta: string[] = [];
+  if (contract.family) meta.push(`family=${contract.family}`);
+  if (contract.riskLevel) meta.push(`risk=${contract.riskLevel}`);
+  meta.push(`readonly=${contract.isReadOnly ? "yes" : "no"}`);
+  meta.push(`permission=${contract.needsPermission ? "required" : "not_required"}`);
+
+  const lines = [
+    `- \`${contract.name}\`${meta.length > 0 ? ` | ${meta.join(" | ")}` : ""}`,
+  ];
+
+  const compactFields = [
+    formatCompactField("Use when", contract.recommendedWhen, options.maxBulletsPerField),
+    formatCompactField("Avoid when", contract.avoidWhen, options.maxBulletsPerField),
+    formatCompactField("Preflight", contract.preflightChecks, options.maxBulletsPerField),
+    formatCompactField("Fallback", contract.fallbackStrategy, options.maxBulletsPerField),
+  ].filter(Boolean) as string[];
+
+  if (compactFields.length > 0) {
+    lines.push(...compactFields);
+  }
+
+  return lines.join("\n");
+}
+
+export function buildToolContractV2CompactPromptSummary(
+  contracts: readonly ToolContractV2[],
+  options?: {
+    maxTools?: number;
+    maxBulletsPerField?: number;
+  },
+): string {
+  if (contracts.length === 0) {
+    return "";
+  }
+
+  const maxTools = Math.max(1, options?.maxTools ?? 8);
+  const maxBulletsPerField = Math.max(1, options?.maxBulletsPerField ?? 1);
+  const ordered = [...contracts].sort((left, right) => {
+    const scoreDiff = getCompactRiskScore(right) - getCompactRiskScore(left);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+    return left.name.localeCompare(right.name);
+  });
+  const selected = ordered.slice(0, maxTools);
+  const omittedCount = Math.max(0, ordered.length - selected.length);
+
+  const lines = [
+    "## Tool Contract Governance",
+    "",
+    "These are the most important governance notes for the currently visible tools.",
+    "Prefer lower-risk tools first and follow the per-tool checks before execution.",
+    "",
+    ...selected.map((contract) => renderToolContractV2CompactSummary(contract, { maxBulletsPerField })),
+  ];
+
+  if (omittedCount > 0) {
+    lines.push("", `- ${omittedCount} additional visible tools omitted to keep this summary compact.`);
+  }
+
+  return lines.join("\n").trim();
+}
+
 export function buildLaunchPermissionDeniedReason(input: {
   toolName: string;
   mode: string;

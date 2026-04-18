@@ -40,6 +40,7 @@ export type FailoverReason =
     | "server_error" // 5xx
     | "auth"         // 401 / 403
     | "billing"      // 402
+    | "unsupported_model" // 当前账户 / 套餐 / 路由不支持该模型
     | "format"       // 400（请求格式错误，不可重试）
     | "unknown";
 
@@ -145,15 +146,37 @@ function stripUtf8Bom(raw: string): string {
     return raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw;
 }
 
+const UNSUPPORTED_MODEL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const UNSUPPORTED_MODEL_PATTERNS = [
+    /token\s*plan\s*not\s*support\s*model/i,
+    /plan\s*not\s*support\s*model/i,
+    /not\s*support\s*model/i,
+    /unsupported\s*model/i,
+    /model\s+.+\s+not\s+(?:supported|available)/i,
+    /does\s+not\s+support\s+model/i,
+    /当前.*不支持.*模型/u,
+    /套餐.*不支持.*模型/u,
+    /模型.*不可用/u,
+];
+
+export function isUnsupportedModelErrorText(errorText?: string): boolean {
+    if (typeof errorText !== "string") return false;
+    const normalized = errorText.trim();
+    if (!normalized) return false;
+    return UNSUPPORTED_MODEL_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
 // ─── 错误分类函数 ─────────────────────────────────────────────────────────
 
 /**
  * 根据 HTTP 状态码判断错误是否可重试（应触发 failover）。
+ * - unsupported model / unsupported plan → 切换到下一个 profile，但不重试同 profile
  * - 429 / 5xx / 408 → 可重试
  * - 401 / 402 / 403 → 可重试（换 Key / Provider 可能解决）
  * - 400 → 不可重试（请求格式问题，换 Provider 也没用）
  */
-export function classifyFailoverReason(status: number): FailoverReason {
+export function classifyFailoverReason(status: number, errorText?: string): FailoverReason {
+    if (isUnsupportedModelErrorText(errorText)) return "unsupported_model";
     if (status === 429) return "rate_limit";
     if (status === 408) return "timeout";
     if (status === 401 || status === 403) return "auth";
@@ -167,6 +190,25 @@ export function classifyFailoverReason(status: number): FailoverReason {
 export function isRetryableReason(reason: FailoverReason): boolean {
     // 400 (format) 不可重试——请求本身有问题，换 Provider 也无效
     return reason !== "format";
+}
+
+export function resolveFailoverCooldownMs(
+    reason: FailoverReason,
+    opts?: {
+        retryAfterMs?: number;
+        defaultCooldownMs?: number;
+    },
+): number | undefined {
+    if (reason === "rate_limit") {
+        return opts?.retryAfterMs ?? opts?.defaultCooldownMs;
+    }
+    if (reason === "billing") {
+        return Math.max(opts?.defaultCooldownMs ?? 0, 600_000);
+    }
+    if (reason === "unsupported_model") {
+        return Math.max(opts?.defaultCooldownMs ?? 0, UNSUPPORTED_MODEL_COOLDOWN_MS);
+    }
+    return opts?.defaultCooldownMs;
 }
 
 // ─── Cooldown 管理 ────────────────────────────────────────────────────────
@@ -222,13 +264,17 @@ class CooldownManager {
 
     /** 检查 profile 是否在冷却中 */
     isInCooldown(profileId: string): boolean {
+        return this.peekUntil(profileId) !== undefined;
+    }
+
+    peekUntil(profileId: string): number | undefined {
         const until = this.cooldowns.get(profileId);
-        if (until === undefined) return false;
+        if (until === undefined) return undefined;
         if (Date.now() >= until) {
             this.cooldowns.delete(profileId);
-            return false;
+            return undefined;
         }
-        return true;
+        return until;
     }
 
     /** 标记 profile 成功，重置错误计数 */
@@ -255,6 +301,7 @@ export class FailoverClient {
     private readonly profiles: ModelProfile[];
     private readonly cooldown: CooldownManager;
     private readonly logger?: FailoverLogger;
+    private readonly cooldownSkipLogUntil = new Map<string, number>();
 
     constructor(params: {
         /** 主 Profile（必填） */
@@ -410,8 +457,14 @@ export class FailoverClient {
                 const maxAttempts = resolvedMaxRetries + 1;
                 const hasNextProfile = profileIndex < this.profiles.length - 1;
 
-                if (this.cooldown.isInCooldown(profileId)) {
-                    this.logger?.info("failover", `跳过冷却中的 Profile: ${profileId}`);
+                const cooldownUntil = this.cooldown.peekUntil(profileId);
+                if (cooldownUntil !== undefined) {
+                    const lastLoggedUntil = this.cooldownSkipLogUntil.get(profileId);
+                    if (lastLoggedUntil !== cooldownUntil) {
+                        const remainingMs = Math.max(0, cooldownUntil - Date.now());
+                        this.logger?.info("failover", `跳过冷却中的 Profile: ${profileId}（remaining=${remainingMs}ms）`);
+                        this.cooldownSkipLogUntil.set(profileId, cooldownUntil);
+                    }
                     const skippedAttempt: FailoverAttempt = {
                         profileId,
                         provider,
@@ -474,6 +527,7 @@ export class FailoverClient {
 
                         if (response.ok) {
                             this.cooldown.markSuccess(profileId);
+                            this.cooldownSkipLogUntil.delete(profileId);
                             if (attempts.length > 0) {
                                 this.logger?.info(
                                     "failover",
@@ -487,8 +541,8 @@ export class FailoverClient {
                             return { response, profile, attempts, summary };
                         }
 
-                        const reason = classifyFailoverReason(response.status);
                         const errorText = await safeReadText(response);
+                        const reason = classifyFailoverReason(response.status, errorText);
                         const errorMsg = `HTTP ${response.status}: ${errorText}`;
                         const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
                         incrementReason(reason);
@@ -580,14 +634,8 @@ export class FailoverClient {
                             `⚠️ Profile "${profileId}" (${profile.model}) 失败: ${errorMsg}（attempt ${attempt}/${maxAttempts}, wire_api=${profile.wireApi ?? "-"}, timeout=${resolvedTimeoutMs}ms），尝试下一个...`,
                         );
 
-                        if (reason === "rate_limit") {
-                            const retryAfterMs = parseRetryAfter(response);
-                            this.cooldown.mark(profileId, retryAfterMs);
-                        } else if (reason === "billing") {
-                            this.cooldown.mark(profileId, 600_000);
-                        } else {
-                            this.cooldown.mark(profileId);
-                        }
+                        const retryAfterMs = reason === "rate_limit" ? parseRetryAfter(response) : undefined;
+                        this.cooldown.mark(profileId, resolveFailoverCooldownMs(reason, { retryAfterMs }));
                         break;
                     } catch (err) {
                         const isAbort = err instanceof Error && err.name === "AbortError";

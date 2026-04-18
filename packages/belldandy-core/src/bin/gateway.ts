@@ -66,6 +66,7 @@ import {
   OpenAIChatAgent,
   ToolEnabledAgent,
   type BelldandyAgent,
+  classifyFailoverReason,
   ensureWorkspace,
   loadWorkspaceFiles,
   ensureAgentWorkspace,
@@ -81,6 +82,7 @@ import {
   SubAgentOrchestrator,
   loadAgentProfiles,
   buildDefaultProfile,
+  resolveAgentProfileCatalogMetadata,
   resolveModelConfig,
   type AgentProfile,
   type SystemPromptBuildResult,
@@ -88,6 +90,7 @@ import {
   createHookRunner,
   type HookRunner,
   CompactionRuntimeTracker,
+  resolveFailoverCooldownMs,
 } from "@belldandy/agent";
 import {
   ToolExecutor,
@@ -230,6 +233,7 @@ import {
   timerTool,
   tokenCounterStartTool,
   tokenCounterStopTool,
+  listToolContractsV2,
 } from "@belldandy/skills";
 import { listMemoryFiles, ensureMemoryDir, getGlobalMemoryManager, listGlobalMemoryManagers, type MemoryCategory } from "@belldandy/memory";
 import {
@@ -243,6 +247,7 @@ import { parseGoalSessionKey } from "../goals/session.js";
 import { buildContextInjectionPrelude } from "../context-injection.js";
 import { bridgeLegacyPluginHooks, initializeExtensionHost } from "../extension-host.js";
 import { truncateToolTranscriptContent } from "../tool-transcript.js";
+import { buildAgentRuntimePromptSections } from "./gateway-prompt-sections.js";
 
 const GOAL_TOOL_NAMES = new Set([
   "goal_init",
@@ -882,6 +887,12 @@ const gatewayToolPoolAssembler = new ToolPoolAssembler([
   },
 ]);
 
+const DELEGATION_TOOL_NAMES = new Set([
+  "sessions_spawn",
+  "delegate_task",
+  "delegate_parallel",
+]);
+
 const gatewayContractAccessPolicy: ToolContractAccessPolicy = {
   channel: "gateway",
   allowedSafeScopes: resolveSafeScopesForChannel("gateway"),
@@ -1209,6 +1220,20 @@ logger.info("workspace", `SOUL=${workspace.hasSoul}, IDENTITY=${workspace.hasIde
 // 7. Build dynamic system prompt
 const skillInstructions = promptSkills.map(s => ({ name: s.name, instructions: s.instructions }));
 const hasSearchableSkills = searchableSkills.length > 0;
+const defaultPromptProfile = agentProfiles.find((profile) => profile.id === "default") ?? buildDefaultProfile();
+
+const buildRuntimeSectionsForProfile = (profile: AgentProfile) => {
+  const visibleContracts = toolExecutor.getContracts(profile.id);
+  const visibleToolContracts = listToolContractsV2(visibleContracts);
+  const canDelegate = visibleContracts.some((contract) => DELEGATION_TOOL_NAMES.has(contract.name));
+  const catalog = resolveAgentProfileCatalogMetadata(profile);
+  return buildAgentRuntimePromptSections({
+    hasAvailableTools: visibleContracts.length > 0,
+    visibleContracts: visibleToolContracts,
+    canDelegate,
+    role: catalog.defaultRole,
+  });
+};
 
 const dynamicSystemPromptBuild = buildSystemPromptResult({
   workspace,
@@ -1221,6 +1246,7 @@ const dynamicSystemPromptBuild = buildSystemPromptResult({
   maxChars: maxSystemPromptChars,
   skillInstructions,
   hasSearchableSkills,
+  runtimeSections: buildRuntimeSectionsForProfile(defaultPromptProfile),
   sectionPriorityOverrides: promptExperimentConfig?.sectionPriorityOverrides,
 });
 const dynamicSystemPrompt = dynamicSystemPromptBuild.text;
@@ -1473,10 +1499,14 @@ async function runPrimaryWarmupProbe(): Promise<void> {
     }
 
     const text = await res.text().catch(() => "");
-    primaryBootstrapCooldownUntil = Date.now() + primaryWarmupCooldownMs;
+    const reason = classifyFailoverReason(res.status, text);
+    const cooldownMs = resolveFailoverCooldownMs(reason, {
+      defaultCooldownMs: primaryWarmupCooldownMs,
+    }) ?? primaryWarmupCooldownMs;
+    primaryBootstrapCooldownUntil = Date.now() + cooldownMs;
     logger.warn(
       "warmup",
-      `primary probe failed: HTTP ${res.status} (wire_api=${openaiWireApi}, model=${openaiModel}), apply ${primaryWarmupCooldownMs}ms cooldown. body=${text.slice(0, 200)}`,
+      `primary probe failed: HTTP ${res.status} (reason=${reason}, wire_api=${openaiWireApi}, model=${openaiModel}), apply ${cooldownMs}ms cooldown. body=${text.slice(0, 200)}`,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1620,6 +1650,7 @@ for (const profile of agentProfiles) {
       maxChars: maxSystemPromptChars,
       skillInstructions,
       hasSearchableSkills,
+      runtimeSections: buildRuntimeSectionsForProfile(profile),
       sectionPriorityOverrides: promptExperimentConfig?.sectionPriorityOverrides,
     });
     agentWorkspaceCache.set(profile.id, { build: agentPromptBuild });

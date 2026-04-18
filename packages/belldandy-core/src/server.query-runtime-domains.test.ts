@@ -205,6 +205,18 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
           summarizeFailures: true,
           sourceAgentIds: ["planner", "reviewer"],
         },
+        ownership: {
+          scopeSummary: "Own the task runtime implementation only.",
+          outOfScope: ["UI rewrites"],
+        },
+        acceptance: {
+          doneDefinition: "Return whether the runtime change is ready to merge.",
+          verificationHints: ["Check the diff", "Check targeted tests"],
+        },
+        deliverableContract: {
+          format: "patch",
+          requiredSections: ["Changes made", "Verification"],
+        },
         launchDefaults: {
           permissionMode: "workspace_write",
           allowedToolFamilies: ["workspace-read", "workspace-write"],
@@ -431,6 +443,20 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
         sourceAgentIds: ["planner", "reviewer"],
       },
     });
+    expect(getRes.payload?.item?.launchSpec?.delegation).toMatchObject({
+      ownership: {
+        scopeSummary: "Own the task runtime implementation only.",
+        outOfScope: ["UI rewrites"],
+      },
+      acceptance: {
+        doneDefinition: "Return whether the runtime change is ready to merge.",
+        verificationHints: ["Check the diff", "Check targeted tests"],
+      },
+      deliverableContract: {
+        format: "patch",
+        requiredSections: ["Changes made", "Verification"],
+      },
+    });
     expect(getRes.payload?.promptSnapshotView).toMatchObject({
       snapshot: {
         manifest: {
@@ -455,6 +481,16 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
           profileId: "coder",
         },
       },
+    });
+    expect(getRes.payload?.acceptanceGate).toMatchObject({
+      status: "rejected",
+      enforced: true,
+      deliverableFormat: "patch",
+      doneDefinitionCheck: "missing",
+      requiredSections: ["Changes made", "Verification"],
+      missingRequiredSections: ["Changes made", "Verification"],
+      rejectionConfidence: "high",
+      managerActionHint: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
     });
     expect(getRes.payload?.resultEnvelope).toMatchObject({
       taskId: targetTask.id,

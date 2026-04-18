@@ -5,6 +5,7 @@ import path from "node:path";
 import { withToolContract } from "../../tool-contract.js";
 import { resolveRuntimeFilesystemScope } from "../../runtime-policy.js";
 import { readAbortReason, throwIfAborted } from "../../abort-utils.js";
+import { buildFailureToolCallResult, inferToolFailureKindFromError } from "../../failure-kind.js";
 
 // 安全策略配置
 const BLOCKLIST = new Set([
@@ -862,32 +863,47 @@ export const runCommandTool: Tool = withToolContract({
         const id = crypto.randomUUID();
         const name = "run_command";
 
-        const makeResult = (success: boolean, output: string, error?: string): ToolCallResult => ({
-            id,
-            name,
-            success,
-            output,
-            error,
-            durationMs: Date.now() - start,
-        });
+        const makeResult = (
+            success: boolean,
+            output: string,
+            error?: string,
+            failureKind?: ToolCallResult["failureKind"],
+        ): ToolCallResult => (
+            success
+                ? {
+                    id,
+                    name,
+                    success,
+                    output,
+                    durationMs: Date.now() - start,
+                }
+                : buildFailureToolCallResult({
+                    id,
+                    name,
+                    start,
+                    output,
+                    error: error ?? "",
+                    ...(failureKind ? { failureKind } : {}),
+                })
+        );
 
         const commandRaw = args.command as string;
         if (!commandRaw || typeof commandRaw !== "string") {
-            return makeResult(false, "", "Command is required");
+            return makeResult(false, "", "Command is required", "input_error");
         }
 
         // 路径拦截优先：禁止触达 SOUL.md
         if (containsProtectedPath(commandRaw)) {
             const reason = "Access to protected file 'SOUL.md' is blocked.";
             context.logger?.warn(`[Security Block] ${commandRaw} -> ${reason}`);
-            return makeResult(false, "", `Security Error: ${reason}`);
+            return makeResult(false, "", `Security Error: ${reason}`, "permission_or_policy");
         }
 
         // 环境变量保护：禁止通过 exec 读取 .env
         if (isEnvReadAttempt(commandRaw)) {
             const reason = "Reading .env via exec is forbidden.";
             context.logger?.warn(`[Security Block] ${commandRaw} -> ${reason}`);
-            return makeResult(false, "", `Security Error: ${reason}`);
+            return makeResult(false, "", `Security Error: ${reason}`, "permission_or_policy");
         }
 
         const execPolicy = normalizeExecPolicy(context.policy.exec);
@@ -900,14 +916,14 @@ export const runCommandTool: Tool = withToolContract({
         const segmented = splitCommandSegments(command);
         if (!segmented.ok) {
             context.logger?.warn(`[Security Block] ${command} -> ${segmented.reason}`);
-            return makeResult(false, "", `Security Error: ${segmented.reason}`);
+            return makeResult(false, "", `Security Error: ${segmented.reason}`, "permission_or_policy");
         }
 
         for (const segment of segmented.segments) {
             const validation = validateCommand(segment, safelist, blocklist);
             if (!validation.valid) {
                 context.logger?.warn(`[Security Block] ${segment} -> ${validation.reason}`);
-                return makeResult(false, "", `Security Error: ${validation.reason}`);
+                return makeResult(false, "", `Security Error: ${validation.reason}`, "permission_or_policy");
             }
         }
 
@@ -921,7 +937,7 @@ export const runCommandTool: Tool = withToolContract({
         if (!cwdResult.ok) {
             const reason = cwdResult.reason;
             context.logger?.warn(`[Security Block] cwd=${cwdArg ?? scope.workspaceRoot} -> ${reason}`);
-            return makeResult(false, "", `Security Error: ${reason}`);
+            return makeResult(false, "", `Security Error: ${reason}`, "permission_or_policy");
         }
         const cwd = cwdResult.cwd;
 
@@ -934,7 +950,7 @@ export const runCommandTool: Tool = withToolContract({
             );
             if (!pathValidation.valid) {
                 context.logger?.warn(`[Security Block] ${segment} -> ${pathValidation.reason}`);
-                return makeResult(false, "", `Security Error: ${pathValidation.reason}`);
+                return makeResult(false, "", `Security Error: ${pathValidation.reason}`, "permission_or_policy");
             }
         }
 
@@ -944,7 +960,7 @@ export const runCommandTool: Tool = withToolContract({
         try {
             throwIfAborted(context.abortSignal);
         } catch {
-            return makeResult(false, "", readAbortReason(context.abortSignal));
+            return makeResult(false, "", readAbortReason(context.abortSignal), "environment_error");
         }
 
         return new Promise((resolve) => {
@@ -973,12 +989,12 @@ export const runCommandTool: Tool = withToolContract({
 
             const onAbort = () => {
                 killChildProcess(child);
-                finalize(makeResult(false, stdout, readAbortReason(context.abortSignal)));
+                finalize(makeResult(false, stdout, readAbortReason(context.abortSignal), "environment_error"));
             };
 
             const timeoutTimer = setTimeout(() => {
                 killChildProcess(child);
-                finalize(makeResult(false, stdout, `Timeout after ${timeoutMs}ms\nStderr: ${stderr}`));
+                finalize(makeResult(false, stdout, `Timeout after ${timeoutMs}ms\nStderr: ${stderr}`, "environment_error"));
             }, timeoutMs);
             context.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
@@ -994,12 +1010,17 @@ export const runCommandTool: Tool = withToolContract({
                 if (code === 0) {
                     finalize(makeResult(true, stdout));
                 } else {
-                    finalize(makeResult(false, stdout, `Process exited with code ${code}\nStderr: ${stderr}`));
+                    finalize(makeResult(
+                        false,
+                        stdout,
+                        `Process exited with code ${code}\nStderr: ${stderr}`,
+                        inferToolFailureKindFromError(stderr || `Process exited with code ${code}`),
+                    ));
                 }
             });
 
             child.on("error", (err) => {
-                finalize(makeResult(false, stdout, `Spawn error: ${err.message}`));
+                finalize(makeResult(false, stdout, `Spawn error: ${err.message}`, "environment_error"));
             });
         });
     },

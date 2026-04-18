@@ -19,6 +19,7 @@ import { getGoalRegistryEntry, listGoalRegistryEntries, upsertGoalRegistryEntry 
 import { scaffoldGoalFiles } from "./scaffold.js";
 import { createGoalConversationId, createGoalNodeConversationId, createGoalRunId } from "./session.js";
 import { analyzeGoalCapabilityPlan, getDefaultCapabilityPlanAnalysis } from "./capability-analysis.js";
+import { enrichGoalCapabilityPlanOrchestration } from "./capability-acceptance-gate.js";
 import {
   buildGoalLearningReviewRefreshFingerprint,
   readGoalLearningReviewRefreshState,
@@ -1017,12 +1018,20 @@ export class GoalManager {
         ? plans.items.find((item) => item.id === input.id)
         : this.resolveCapabilityPlanForNode(plans, nodeId);
       const now = new Date().toISOString();
+      const status = input.status ?? existing?.status ?? "planned";
+      const subAgents = input.subAgents ?? existing?.subAgents ?? [];
+      const orchestration = enrichGoalCapabilityPlanOrchestration({
+        status,
+        executionMode: input.executionMode,
+        subAgents,
+        orchestration: input.orchestration ?? existing?.orchestration,
+      });
       const nextPlanBase: GoalCapabilityPlan = {
         id: existing?.id ?? (input.id?.trim() || `plan_${crypto.randomUUID().slice(0, 8)}`),
         goalId: goal.id,
         nodeId,
         runId: input.runId?.trim() || existing?.runId || node.lastRunId,
-        status: input.status ?? existing?.status ?? "planned",
+        status,
         executionMode: input.executionMode,
         riskLevel: input.riskLevel ?? existing?.riskLevel ?? "low",
         objective: input.objective.trim(),
@@ -1032,7 +1041,7 @@ export class GoalManager {
         methods: input.methods ?? existing?.methods ?? [],
         skills: input.skills ?? existing?.skills ?? [],
         mcpServers: input.mcpServers ?? existing?.mcpServers ?? [],
-        subAgents: input.subAgents ?? existing?.subAgents ?? [],
+        subAgents,
         gaps: input.gaps?.map((item) => item.trim()).filter(Boolean) ?? existing?.gaps ?? [],
         checkpoint: input.checkpoint ?? existing?.checkpoint ?? {
           required: false,
@@ -1047,7 +1056,7 @@ export class GoalManager {
         generatedAt: existing?.generatedAt ?? now,
         updatedAt: now,
         orchestratedAt: input.orchestratedAt ?? existing?.orchestratedAt,
-        orchestration: input.orchestration ?? existing?.orchestration,
+        orchestration,
       };
       const nextPlan: GoalCapabilityPlan = {
         ...nextPlanBase,

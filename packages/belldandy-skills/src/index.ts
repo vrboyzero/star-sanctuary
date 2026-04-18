@@ -5,6 +5,7 @@ export type {
   ToolParameterSchema,
   ToolCallRequest,
   ToolCallResult,
+  ToolFailureKind,
   ToolContext,
   ToolPolicy,
   ToolAuditLog,
@@ -33,8 +34,11 @@ export {
 } from "./delegation-protocol.js";
 export type {
   DelegationAggregationMode,
+  DelegationAcceptance,
+  DelegationDeliverableContract,
   DelegationDeliverableFormat,
   DelegationIntentKind,
+  DelegationOwnership,
   DelegationProtocol,
   DelegationSource,
 } from "./delegation-protocol.js";
@@ -54,6 +58,13 @@ export { SkillRegistry, registerGlobalSkillRegistry, getGlobalSkillRegistry } fr
 export { publishSkillCandidate, getUserSkillsDir } from "./skill-publisher.js";
 
 export { ToolExecutor, DEFAULT_POLICY } from "./executor.js";
+export {
+  buildFailureToolCallResult,
+  inferToolFailureKindFromError,
+  normalizeToolCallResultFailureKind,
+  readToolFailureKind,
+  resolveToolFailureKind,
+} from "./failure-kind.js";
 export type {
   ToolAvailabilityReasonCode,
   ToolAvailabilityState,
@@ -76,6 +87,7 @@ export {
   listToolContractsV2,
 } from "./tool-contract-v2.js";
 export {
+  buildToolContractV2CompactPromptSummary,
   buildLaunchPermissionDeniedReason,
   buildLaunchRolePolicyDeniedReason,
   buildToolContractV2PromptSummary,
@@ -157,6 +169,27 @@ export type {
   CameraRuntimeDoctorProvider,
 } from "./builtin/multimedia/index.js";
 export { sessionsSpawnTool, sessionsHistoryTool, delegateTaskTool, delegateParallelTool } from "./builtin/session/index.js";
+export {
+  buildDelegationResultFollowUpStrategy,
+  buildDelegationResultToolMetadata,
+  cloneDelegationResultGate,
+  evaluateDelegationResultGate,
+  readDelegationResultToolMetadata,
+  renderDelegationResultGateReport,
+} from "./builtin/session/delegation-contract.js";
+export type {
+  DelegationAcceptanceGateContract,
+  DelegationResultFollowUpAction,
+  DelegationResultFollowUpItem,
+  DelegationResultRuntimeAction,
+  DelegationResultRuntimeActionPriority,
+  DelegationResultFollowUpStrategy,
+  DelegationResultFollowUpTemplate,
+  DelegationResultGateContractCheck,
+  DelegationResultGate,
+  DelegationResultToolMetadata,
+  DelegationResultToolReview,
+} from "./builtin/session/delegation-contract.js";
 export { conversationListTool, conversationReadTool } from "./builtin/conversation/index.js";
 export {
   methodListTool,

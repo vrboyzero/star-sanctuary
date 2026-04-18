@@ -60,6 +60,7 @@ export const subtasksState = {
   selectedItem: null,
   selectedOutputContent: "",
   selectedContinuationState: null,
+  selectedAcceptanceGate: null,
   selectedPromptSnapshot: null,
   conversationId: null,
   includeArchived: false,

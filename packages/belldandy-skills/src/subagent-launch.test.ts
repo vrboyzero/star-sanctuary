@@ -114,4 +114,72 @@ describe("buildSubAgentLaunchSpec delegation protocol", () => {
       maxToolRiskLevel: undefined,
     });
   });
+
+  it("wraps worker instructions with role and launch constraints", () => {
+    const spec = buildSubAgentLaunchSpec(createContext(), {
+      instruction: "Review the changed files and report the top risks.",
+      agentId: "verifier",
+      channel: "subtask",
+      role: "verifier",
+      expectedDeliverableSummary: "A short finding list with validation notes.",
+      policySummary: "Prefer read-only checks.",
+    });
+
+    expect(spec.instruction).toContain("## Worker Base");
+    expect(spec.instruction).toContain("## Worker Role (verifier)");
+    expect(spec.instruction).toContain("## Task Envelope");
+    expect(spec.instruction).toContain("Review the changed files and report the top risks.");
+    expect(spec.instruction).toContain("Expected deliverable: A short finding list with validation notes.");
+    expect(spec.instruction).toContain("## Launch Constraints");
+    expect(spec.instruction).toContain("Permission mode: confirm");
+    expect(spec.instruction).toContain("Policy summary: Prefer read-only checks.");
+  });
+
+  it("threads structured ownership, acceptance, and deliverable constraints into protocol and worker envelope", () => {
+    const spec = buildSubAgentLaunchSpec(createContext(), {
+      instruction: "Patch the server bootstrap and report what changed.",
+      agentId: "coder",
+      channel: "subtask",
+      role: "coder",
+      expectedDeliverableSummary: "Patch summary with verification notes.",
+      ownership: {
+        scopeSummary: "Own the gateway bootstrap wiring only.",
+        outOfScope: ["UI polish", "database migrations"],
+        writeScope: ["packages/belldandy-core/src/bin/gateway.ts"],
+      },
+      acceptance: {
+        doneDefinition: "Gateway bootstrap change is implemented and build remains green.",
+        verificationHints: ["Run targeted tests", "Run workspace build"],
+      },
+      deliverableContract: {
+        format: "patch",
+        requiredSections: ["Changes made", "Verification", "Residual risk"],
+      },
+    });
+
+    expect(spec.delegationProtocol).toMatchObject({
+      ownership: {
+        scopeSummary: "Own the gateway bootstrap wiring only.",
+        outOfScope: ["UI polish", "database migrations"],
+        writeScope: ["packages/belldandy-core/src/bin/gateway.ts"],
+      },
+      acceptance: {
+        doneDefinition: "Gateway bootstrap change is implemented and build remains green.",
+        verificationHints: ["Run targeted tests", "Run workspace build"],
+      },
+      deliverableContract: {
+        format: "patch",
+        requiredSections: ["Changes made", "Verification", "Residual risk"],
+      },
+    });
+    expect(spec.instruction).toContain("Owned scope: Own the gateway bootstrap wiring only.");
+    expect(spec.instruction).toContain("Write scope: packages/belldandy-core/src/bin/gateway.ts");
+    expect(spec.instruction).toContain("Out of scope: UI polish, database migrations");
+    expect(spec.instruction).toContain("Done definition: Gateway bootstrap change is implemented and build remains green.");
+    expect(spec.instruction).toContain("Final handoff must include a `Done Definition Check` section");
+    expect(spec.instruction).toContain("Verification hints: Run targeted tests | Run workspace build");
+    expect(spec.instruction).toContain("Deliverable format: patch");
+    expect(spec.instruction).toContain("Required sections: Changes made | Verification | Residual risk");
+    expect(spec.instruction).toContain("Use the required section names verbatim in the final handoff whenever practical");
+  });
 });

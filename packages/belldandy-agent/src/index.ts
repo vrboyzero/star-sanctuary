@@ -9,7 +9,9 @@ export {
   FailoverClient,
   loadModelFallbacks,
   classifyFailoverReason,
+  isUnsupportedModelErrorText,
   isRetryableReason,
+  resolveFailoverCooldownMs,
   type ModelProfile,
   type FailoverReason,
   type FailoverAttempt,
@@ -220,6 +222,8 @@ export type AgentToolResult = {
   success: boolean;
   output: string;
   error?: string;
+  failureKind?: string;
+  metadata?: JsonObject;
 };
 
 export type AgentUsage = {

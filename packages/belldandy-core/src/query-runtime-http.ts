@@ -311,6 +311,7 @@ export async function handleCommunityMessageWithQueryRuntime(
               toolName: item.name,
               success: item.success,
               hasError: Boolean(item.error),
+              ...(item.failureKind ? { failureKind: item.failureKind } : {}),
             },
           });
         },
@@ -667,6 +668,7 @@ export async function handleWebhookReceiveWithQueryRuntime(
               toolName: item.name,
               success: item.success,
               hasError: Boolean(item.error),
+              ...(item.failureKind ? { failureKind: item.failureKind } : {}),
             },
           });
         },

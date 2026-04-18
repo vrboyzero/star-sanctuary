@@ -15,6 +15,8 @@ export type QueryRuntimeAgentToolResult = {
   success: boolean;
   output?: unknown;
   error?: string;
+  failureKind?: string;
+  metadata?: unknown;
 };
 
 export type QueryRuntimeAgentUsage = {
@@ -119,6 +121,8 @@ export async function runAgentWithLifecycle(
           success: item.success,
           output: item.output,
           error: item.error,
+          failureKind: item.failureKind,
+          metadata: item.metadata,
         });
         continue;
       }

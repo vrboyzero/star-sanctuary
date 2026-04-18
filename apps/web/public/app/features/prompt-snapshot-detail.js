@@ -41,6 +41,131 @@ function extractMessagePreview(message) {
     : "-";
 }
 
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((item) => typeof item === "string" && item.trim())
+    .map((item) => item.trim()))];
+}
+
+function normalizeInlineString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function collectActiveSectionIds(snapshotArtifact) {
+  const blocks = Array.isArray(snapshotArtifact?.providerNativeSystemBlocks)
+    ? snapshotArtifact.providerNativeSystemBlocks
+    : [];
+  return [...new Set(blocks.flatMap((block) => normalizeStringArray(block?.sourceSectionIds)))];
+}
+
+function collectDeltaSummaries(snapshotArtifact) {
+  const deltas = Array.isArray(snapshotArtifact?.deltas) ? snapshotArtifact.deltas : [];
+  return deltas
+    .map((delta) => {
+      if (!delta || typeof delta !== "object") return "";
+      const deltaType = typeof delta.deltaType === "string" && delta.deltaType.trim()
+        ? delta.deltaType.trim()
+        : "delta";
+      const deltaId = typeof delta.id === "string" && delta.id.trim()
+        ? delta.id.trim()
+        : "";
+      return deltaId ? `${deltaType} (${deltaId})` : deltaType;
+    })
+    .filter(Boolean);
+}
+
+function collectProviderBlockSummaries(snapshotArtifact) {
+  const blocks = Array.isArray(snapshotArtifact?.providerNativeSystemBlocks)
+    ? snapshotArtifact.providerNativeSystemBlocks
+    : [];
+  return blocks
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const blockType = typeof block.blockType === "string" && block.blockType.trim()
+        ? block.blockType.trim()
+        : "provider-block";
+      const sectionIds = normalizeStringArray(block.sourceSectionIds);
+      const deltaIds = normalizeStringArray(block.sourceDeltaIds);
+      const parts = [
+        blockType,
+        sectionIds.length ? `sections=${sectionIds.join("+")}` : "",
+        deltaIds.length ? `deltas=${deltaIds.join("+")}` : "",
+      ].filter(Boolean);
+      return parts.join(", ");
+    })
+    .filter(Boolean);
+}
+
+function collectFollowUpStrategySummaries(snapshotArtifact) {
+  const deltas = Array.isArray(snapshotArtifact?.deltas) ? snapshotArtifact.deltas : [];
+  const summaries = [];
+  const seen = new Set();
+  const pushSummary = (value) => {
+    const normalized = normalizeInlineString(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    summaries.push(normalized);
+  };
+
+  for (const delta of deltas) {
+    if (!delta || typeof delta !== "object") continue;
+    const deltaType = normalizeInlineString(delta.deltaType) || "delta";
+    const metadata = delta.metadata && typeof delta.metadata === "object" ? delta.metadata : null;
+    const delegationResult = metadata?.delegationResult && typeof metadata.delegationResult === "object"
+      ? metadata.delegationResult
+      : null;
+    const followUpStrategy = delegationResult?.followUpStrategy && typeof delegationResult.followUpStrategy === "object"
+      ? delegationResult.followUpStrategy
+      : null;
+    if (!followUpStrategy) continue;
+
+    const summary = normalizeInlineString(followUpStrategy.summary);
+    if (summary) {
+      pushSummary(`${deltaType}: ${summary}`);
+    }
+
+    const detailParts = [];
+    const recommendedRuntimeAction = normalizeInlineString(followUpStrategy.recommendedRuntimeAction);
+    const highPriorityLabels = normalizeStringArray(followUpStrategy.highPriorityLabels);
+    const verifierHandoffLabels = normalizeStringArray(followUpStrategy.verifierHandoffLabels);
+    if (recommendedRuntimeAction) detailParts.push(`runtime=${recommendedRuntimeAction}`);
+    if (highPriorityLabels.length) detailParts.push(`high=${highPriorityLabels.join(" | ")}`);
+    if (verifierHandoffLabels.length) detailParts.push(`verifier_handoff=${verifierHandoffLabels.join(" | ")}`);
+    if (detailParts.length) {
+      pushSummary(`${deltaType}: ${detailParts.join("; ")}`);
+    }
+
+    const items = Array.isArray(followUpStrategy.items) ? followUpStrategy.items : [];
+    for (const item of items.slice(0, 3)) {
+      if (!item || typeof item !== "object") continue;
+      const label = normalizeInlineString(item.label);
+      const action = normalizeInlineString(item.action);
+      if (!label || !action) continue;
+      const runtimeAction = normalizeInlineString(item.recommendedRuntimeAction);
+      const priority = normalizeInlineString(item.priority);
+      const itemSummary = `${label}: ${action}${runtimeAction ? ` -> ${runtimeAction}` : ""}${priority ? ` [${priority}]` : ""}`;
+      pushSummary(itemSummary);
+    }
+
+    if (items.length > 3) {
+      pushSummary(`${deltaType}: +${items.length - 3} more follow-up items`);
+    }
+  }
+
+  return summaries;
+}
+
+function renderSummaryListBlock(title, items, escapeHtml) {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  return `
+    <div class="memory-detail-text"><strong>${escapeHtml(title)}</strong></div>
+    <div class="tool-settings-policy-note">
+      ${items.map((item) => `<div>${escapeHtml(item)}</div>`).join("")}
+    </div>
+  `;
+}
+
 export function renderPromptSnapshotDetail(view, helpers) {
   const {
     escapeHtml,
@@ -65,6 +190,10 @@ export function renderPromptSnapshotDetail(view, helpers) {
   const residentStateBindingLines = buildResidentStateBindingLines(view?.residentStateBinding, t);
   const launchExplainabilityLines = buildLaunchExplainabilityLines(view?.launchExplainability, t);
   const messages = Array.isArray(artifact.messages) ? artifact.messages : [];
+  const activeSectionIds = collectActiveSectionIds(artifact);
+  const deltaSummaries = collectDeltaSummaries(artifact);
+  const providerBlockSummaries = collectProviderBlockSummaries(artifact);
+  const followUpStrategySummaries = collectFollowUpStrategySummaries(artifact);
   const messagePreviews = messages.slice(0, 3).map((message, index) => ({
     index,
     role: typeof message?.role === "string" ? message.role : "unknown",
@@ -92,6 +221,26 @@ export function renderPromptSnapshotDetail(view, helpers) {
         <div class="memory-detail-text"><strong>${escapeHtml(t("subtasks.detailPromptSnapshotExplainability", {}, "Launch Explainability"))}</strong></div>
         ${renderExplainabilityBlock(launchExplainabilityLines, escapeHtml)}
       ` : ""}
+      ${renderSummaryListBlock(
+        t("subtasks.detailPromptSnapshotActiveSections", {}, "Active Prompt Sections"),
+        activeSectionIds,
+        escapeHtml,
+      )}
+      ${renderSummaryListBlock(
+        t("subtasks.detailPromptSnapshotActiveDeltas", {}, "Active Prompt Deltas"),
+        deltaSummaries,
+        escapeHtml,
+      )}
+      ${renderSummaryListBlock(
+        t("subtasks.detailPromptSnapshotProviderBlocks", {}, "Provider Block Routing"),
+        providerBlockSummaries,
+        escapeHtml,
+      )}
+      ${renderSummaryListBlock(
+        t("subtasks.detailPromptSnapshotFollowUpStrategy", {}, "Follow-Up Strategy"),
+        followUpStrategySummaries,
+        escapeHtml,
+      )}
       <div class="memory-detail-text"><strong>${escapeHtml(t("subtasks.detailPromptSnapshotSystemPrompt", {}, "System Prompt"))}</strong></div>
       <pre class="memory-detail-pre">${escapeHtml(typeof artifact.systemPrompt === "string" ? artifact.systemPrompt : "-")}</pre>
       ${messagePreviews.length ? `

@@ -8,6 +8,7 @@ import {
   readAbortReason,
   throwIfAborted,
 } from "../abort-utils.js";
+import { buildFailureToolCallResult } from "../failure-kind.js";
 
 export const fetchTool: Tool = withToolContract({
   definition: {
@@ -40,44 +41,45 @@ export const fetchTool: Tool = withToolContract({
     const id = crypto.randomUUID();
     const name = "web_fetch";
 
-    const makeError = (error: string): ToolCallResult => ({
-      id,
-      name,
-      success: false,
-      output: "",
-      error,
-      durationMs: Date.now() - start,
-    });
+    const makeError = (error: string, failureKind?: ToolCallResult["failureKind"]): ToolCallResult => (
+      buildFailureToolCallResult({
+        id,
+        name,
+        start,
+        error,
+        ...(failureKind ? { failureKind } : {}),
+      })
+    );
 
     // 参数校验
     try {
       throwIfAborted(context.abortSignal);
     } catch {
-      return makeError(readAbortReason(context.abortSignal));
+      return makeError(readAbortReason(context.abortSignal), "environment_error");
     }
 
     const urlStr = args.url;
     if (typeof urlStr !== "string" || !urlStr.trim()) {
-      return makeError("参数错误：url 必须是非空字符串");
+      return makeError("参数错误：url 必须是非空字符串", "input_error");
     }
 
     let url: URL;
     try {
       url = new URL(urlStr);
     } catch {
-      return makeError(`无效的 URL：${urlStr}`);
+      return makeError(`无效的 URL：${urlStr}`, "input_error");
     }
 
     // 安全检查 1：协议限制
     if (!["http:", "https:"].includes(url.protocol)) {
-      return makeError(`不支持的协议：${url.protocol}（仅支持 http/https）`);
+      return makeError(`不支持的协议：${url.protocol}（仅支持 http/https）`, "input_error");
     }
 
     const hostname = url.hostname.toLowerCase();
 
     // 安全检查 2：禁止内网地址
     if (isPrivateHost(hostname)) {
-      return makeError(`禁止访问内网地址：${hostname}`);
+      return makeError(`禁止访问内网地址：${hostname}`, "permission_or_policy");
     }
 
     // 安全检查 3：域名黑名单
@@ -85,7 +87,7 @@ export const fetchTool: Tool = withToolContract({
     if (deniedDomains.length > 0) {
       const denied = deniedDomains.find(d => hostname === d || hostname.endsWith(`.${d}`));
       if (denied) {
-        return makeError(`域名被禁止：${hostname}`);
+        return makeError(`域名被禁止：${hostname}`, "permission_or_policy");
       }
     }
 
@@ -93,7 +95,7 @@ export const fetchTool: Tool = withToolContract({
     if (allowedDomains.length > 0) {
       const allowed = allowedDomains.some(d => hostname === d || hostname.endsWith(`.${d}`));
       if (!allowed) {
-        return makeError(`域名不在白名单中：${hostname}`);
+        return makeError(`域名不在白名单中：${hostname}`, "permission_or_policy");
       }
     }
 
@@ -116,7 +118,7 @@ export const fetchTool: Tool = withToolContract({
       throwIfAborted(context.abortSignal);
       const { address } = await dns.lookup(hostname);
       if (isPrivateIP(address)) {
-        return makeError(`SSRF 防护：DNS 解析到内网地址 ${address}`);
+          return makeError(`SSRF 防护：DNS 解析到内网地址 ${address}`, "permission_or_policy");
       }
     } catch (dnsErr) {
       // DNS 解析失败，允许继续（fetch 会自己处理）
@@ -204,12 +206,12 @@ export const fetchTool: Tool = withToolContract({
     } catch (err) {
       if (isAbortError(err)) {
         if (context.abortSignal?.aborted) {
-          return makeError(readAbortReason(context.abortSignal));
+          return makeError(readAbortReason(context.abortSignal), "environment_error");
         }
         if (linkedAbort.wasTimedOut()) {
-          return makeError(`请求超时（${maxTimeoutMs}ms）`);
+          return makeError(`请求超时（${maxTimeoutMs}ms）`, "environment_error");
         }
-        return makeError(`请求超时（${maxTimeoutMs}ms）`);
+        return makeError(`请求超时（${maxTimeoutMs}ms）`, "environment_error");
       }
 
       return makeError(err instanceof Error ? err.message : String(err));

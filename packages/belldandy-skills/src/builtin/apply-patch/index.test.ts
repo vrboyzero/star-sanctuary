@@ -156,6 +156,7 @@ describe("apply_patch tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe("Stopped by user.");
+    expect(result.failureKind).toBe("environment_error");
     await expect(fs.access(path.join(tempDir, "STOPPED.md"))).rejects.toBeDefined();
   });
 });

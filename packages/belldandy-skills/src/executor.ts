@@ -38,6 +38,10 @@ import {
   type ToolContractAccessPolicy,
 } from "./security-matrix.js";
 import { isAbortError, readAbortReason } from "./abort-utils.js";
+import {
+  buildFailureToolCallResult,
+  normalizeToolCallResultFailureKind,
+} from "./failure-kind.js";
 
 /** 默认策略（最小权限） */
 export const DEFAULT_POLICY: ToolPolicy = {
@@ -679,14 +683,13 @@ export class ToolExecutor {
     const tool = this.tools.get(request.name);
 
     if (!tool) {
-      const result: ToolCallResult = {
+      const result = buildFailureToolCallResult({
         id: request.id,
         name: request.name,
-        success: false,
-        output: "",
+        start,
         error: `未知工具：${request.name}`,
-        durationMs: Date.now() - start,
-      };
+        failureKind: "input_error",
+      });
       this.audit(result, conversationId, request.arguments);
       return result;
     }
@@ -694,14 +697,13 @@ export class ToolExecutor {
     // 防御性检查：拒绝已禁用或不在 Agent 白名单中的工具调用
     const availability = this.evaluateToolAvailability(tool, agentId, conversationId, runtimeContext);
     if (!availability.allowed) {
-      const result: ToolCallResult = {
+      const result = buildFailureToolCallResult({
         id: request.id,
         name: request.name,
-        success: false,
-        output: "",
+        start,
         error: availability.reasonMessage,
-        durationMs: Date.now() - start,
-      };
+        failureKind: "permission_or_policy",
+      });
       this.audit(result, conversationId, request.arguments);
       return result;
     }
@@ -748,36 +750,34 @@ export class ToolExecutor {
     };
 
     if (abortSignal?.aborted) {
-      const result: ToolCallResult = {
+      const result = buildFailureToolCallResult({
         id: request.id,
         name: request.name,
-        success: false,
-        output: "",
+        start,
         error: readAbortReason(abortSignal),
-        durationMs: Date.now() - start,
-      };
+        failureKind: "environment_error",
+      });
       this.audit(result, conversationId, request.arguments);
       return result;
     }
 
     try {
-      const result = await tool.execute(request.arguments, context);
+      const result = normalizeToolCallResultFailureKind(await tool.execute(request.arguments, context));
       // 确保 id 匹配请求
       result.id = request.id;
       result.durationMs = Date.now() - start;
       this.audit(result, conversationId, request.arguments);
       return result;
     } catch (err) {
-      const result: ToolCallResult = {
+      const result = buildFailureToolCallResult({
         id: request.id,
         name: request.name,
-        success: false,
-        output: "",
+        start,
         error: isAbortError(err)
           ? readAbortReason(abortSignal)
           : (err instanceof Error ? err.message : String(err)),
-        durationMs: Date.now() - start,
-      };
+        ...(isAbortError(err) ? { failureKind: "environment_error" as const } : {}),
+      });
       this.audit(result, conversationId, request.arguments);
       return result;
     }
@@ -820,6 +820,7 @@ export class ToolExecutor {
       success: result.success,
       output: safeOutput,
       error: result.error,
+      failureKind: result.failureKind,
       durationMs: result.durationMs,
     });
   }

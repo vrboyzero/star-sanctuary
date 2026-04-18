@@ -297,4 +297,57 @@ describe("system prompt sections", () => {
     expect(blocks[2]?.text).toContain("## runtime identity");
     expect(blocks[2]?.text).not.toContain("<recent-memory>");
   });
+
+  it("inserts runtime sections between workspace tools and memory", () => {
+    const result = buildSystemPromptResult({
+      workspace: {
+        files: [
+          createWorkspaceFile("AGENTS.md", "# agents"),
+          createWorkspaceFile("SOUL.md", "# soul"),
+          createWorkspaceFile("TOOLS.md", "# tools"),
+          createWorkspaceFile("IDENTITY.md", "# identity"),
+          createWorkspaceFile("USER.md", "# user"),
+          createMissingWorkspaceFile("HEARTBEAT.md"),
+          createMissingWorkspaceFile("BOOTSTRAP.md"),
+          createWorkspaceFile("MEMORY.md", "# memory"),
+        ],
+        ...baseWorkspace,
+        hasMemory: true,
+      },
+      runtimeSections: [
+        {
+          id: "tool-use-policy",
+          label: "tool-use-policy",
+          source: "runtime",
+          priority: 55,
+          text: "## Tool Use Operating Policy",
+        },
+        {
+          id: "role-execution-policy",
+          label: "role-execution-policy",
+          source: "profile",
+          priority: 58,
+          text: "## Role Execution Policy (coder)",
+        },
+      ],
+    });
+
+    expect(result.sections.map((section) => section.id)).toEqual(expect.arrayContaining([
+      "workspace-tools",
+      "tool-use-policy",
+      "role-execution-policy",
+      "workspace-memory",
+    ]));
+    expect(result.sections.findIndex((section) => section.id === "workspace-tools"))
+      .toBeLessThan(result.sections.findIndex((section) => section.id === "tool-use-policy"));
+    expect(result.sections.findIndex((section) => section.id === "role-execution-policy"))
+      .toBeLessThan(result.sections.findIndex((section) => section.id === "workspace-memory"));
+
+    const blocks = buildProviderNativeSystemBlocks({
+      sections: result.sections,
+    });
+    expect(blocks.find((block) => block.blockType === "dynamic-runtime")?.sourceSectionIds).toEqual(
+      expect.arrayContaining(["tool-use-policy", "role-execution-policy"]),
+    );
+  });
 });

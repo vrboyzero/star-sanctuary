@@ -593,6 +593,76 @@ function createMessageSendBackgroundRunState(): MessageSendBackgroundRunState {
   };
 }
 
+function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readToolResultAcceptanceGateStatus(metadata: unknown): string | undefined {
+  const firstGate = readFirstDelegationAcceptanceGate(metadata);
+  if (!firstGate || typeof firstGate.accepted !== "boolean") {
+    return undefined;
+  }
+  return firstGate.accepted ? "accepted" : "rejected";
+}
+
+function readToolResultAcceptanceGateConfidence(metadata: unknown): string | undefined {
+  const firstGate = readFirstDelegationAcceptanceGate(metadata);
+  return typeof firstGate?.rejectionConfidence === "string" && firstGate.rejectionConfidence.trim()
+    ? firstGate.rejectionConfidence.trim()
+    : undefined;
+}
+
+function readToolResultFollowUpRuntimeAction(metadata: unknown): string | undefined {
+  const strategy = readToolResultFollowUpStrategy(metadata);
+  return typeof strategy?.recommendedRuntimeAction === "string" && strategy.recommendedRuntimeAction.trim()
+    ? strategy.recommendedRuntimeAction.trim()
+    : undefined;
+}
+
+function readToolResultFollowUpHighPriorityLabels(metadata: unknown): string | undefined {
+  const strategy = readToolResultFollowUpStrategy(metadata);
+  const labels = Array.isArray(strategy?.highPriorityLabels)
+    ? strategy.highPriorityLabels
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+  return labels.length > 0 ? labels.slice(0, 3).join(", ") : undefined;
+}
+
+function readToolResultVerifierHandoffSuggested(metadata: unknown): boolean | undefined {
+  const strategy = readToolResultFollowUpStrategy(metadata);
+  const labels = Array.isArray(strategy?.verifierHandoffLabels)
+    ? strategy.verifierHandoffLabels
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+  return labels.length > 0 ? true : undefined;
+}
+
+function readToolResultFollowUpStrategy(metadata: unknown): Record<string, unknown> | undefined {
+  if (!isJsonObjectRecord(metadata) || !isJsonObjectRecord(metadata.followUpStrategy)) {
+    return undefined;
+  }
+  return metadata.followUpStrategy;
+}
+
+function readFirstDelegationAcceptanceGate(metadata: unknown): Record<string, unknown> | undefined {
+  if (!isJsonObjectRecord(metadata)) {
+    return undefined;
+  }
+  const results = Array.isArray(metadata.delegationResults) ? metadata.delegationResults : [];
+  for (const result of results) {
+    if (!isJsonObjectRecord(result)) {
+      continue;
+    }
+    const gate = result.acceptanceGate;
+    if (isJsonObjectRecord(gate)) {
+      return gate;
+    }
+  }
+  return undefined;
+}
+
 function emitMessageSendTaskResult(input: {
   ctx: MessageSendQueryRuntimeContext;
   queryRuntime: QueryRuntime<"message.send">;
@@ -699,7 +769,7 @@ function createMessageSendStreamAdapter(input: {
   handlers: {
     onStatus: (item: { status: string }) => void;
     onToolCall: (item: { id: string; name: string; arguments?: unknown }) => void;
-    onToolResult: (item: { id: string; name: string; success: boolean; output?: unknown; error?: string }) => void;
+      onToolResult: (item: { id: string; name: string; success: boolean; output?: unknown; error?: string; failureKind?: string; metadata?: unknown }) => void;
     onDelta: (item: { delta: string }) => void;
     onUsage: (item: {
       systemPromptTokens: number;
@@ -746,12 +816,23 @@ function createMessageSendStreamAdapter(input: {
         });
       },
       onToolResult: (item) => {
+        const acceptanceGateStatus = readToolResultAcceptanceGateStatus(item.metadata);
+        const acceptanceGateConfidence = readToolResultAcceptanceGateConfidence(item.metadata);
+        const followUpRuntimeAction = readToolResultFollowUpRuntimeAction(item.metadata);
+        const followUpHighPriorityLabels = readToolResultFollowUpHighPriorityLabels(item.metadata);
+        const verifierHandoffSuggested = readToolResultVerifierHandoffSuggested(item.metadata);
         input.queryRuntime.mark("tool_result_emitted", {
           conversationId: input.conversationId,
           detail: {
             toolName: item.name,
             success: item.success,
             hasError: Boolean(item.error),
+            ...(item.failureKind ? { failureKind: item.failureKind } : {}),
+            ...(acceptanceGateStatus ? { acceptanceGateStatus } : {}),
+            ...(acceptanceGateConfidence ? { acceptanceGateConfidence } : {}),
+            ...(followUpRuntimeAction ? { followUpRuntimeAction } : {}),
+            ...(followUpHighPriorityLabels ? { followUpHighPriorityLabels } : {}),
+            ...(verifierHandoffSuggested ? { verifierHandoffSuggested } : {}),
           },
         });
         input.ctx.io.sendEvent(input.ctx.request.ws, {
@@ -764,6 +845,9 @@ function createMessageSendStreamAdapter(input: {
             name: item.name,
             success: item.success,
             output: typeof item.output === "string" && item.output.length > 500 ? item.output.slice(0, 500) + "\u2026" : item.output,
+            ...(item.error ? { error: item.error } : {}),
+            ...(item.failureKind ? { failureKind: item.failureKind } : {}),
+            ...(isJsonObjectRecord(item.metadata) ? { metadata: item.metadata } : {}),
           },
         });
       },

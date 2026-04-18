@@ -394,6 +394,29 @@ export type GoalCapabilityPlanVerifierResult = {
   generatedAt: string;
 };
 
+export type GoalCapabilityPlanAcceptanceGateCheck = {
+  id: string;
+  label: string;
+  status: "passed" | "failed";
+  enforced: boolean;
+  evidence?: string;
+};
+
+export type GoalCapabilityPlanAcceptanceGate = {
+  status: "pending" | "accepted" | "rejected";
+  summary: string;
+  reasons: string[];
+  requiredSourceAgentIds?: string[];
+  missingSourceAgentIds?: string[];
+  requiredSourceTaskIds?: string[];
+  missingSourceTaskIds?: string[];
+  requiredEvidenceTaskIds?: string[];
+  missingEvidenceTaskIds?: string[];
+  contractSpecificChecks?: GoalCapabilityPlanAcceptanceGateCheck[];
+  rejectionConfidence?: "low" | "medium" | "high";
+  managerActionHint?: string;
+};
+
 export type GoalCapabilityPlanOrchestration = {
   claimed?: boolean;
   delegated?: boolean;
@@ -402,6 +425,7 @@ export type GoalCapabilityPlanOrchestration = {
   delegationResults?: GoalCapabilityPlanDelegationResult[];
   verifierHandoff?: GoalCapabilityPlanVerifierHandoff;
   verifierResult?: GoalCapabilityPlanVerifierResult;
+  acceptanceGate?: GoalCapabilityPlanAcceptanceGate;
   notes?: string[];
 };
 

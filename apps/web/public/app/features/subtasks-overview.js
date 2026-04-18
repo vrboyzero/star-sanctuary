@@ -780,6 +780,9 @@ export function createSubtasksOverviewFeature({
     const promptSnapshotView = subtasksState.selectedPromptSnapshot?.taskId === item.id
       ? subtasksState.selectedPromptSnapshot.value
       : null;
+    const acceptanceGate = subtasksState.selectedAcceptanceGate?.taskId === item.id
+      ? subtasksState.selectedAcceptanceGate.value
+      : null;
     const continuationState = subtasksState.selectedContinuationState?.taskId === item.id
       ? subtasksState.selectedContinuationState.value
       : null;
@@ -1016,6 +1019,12 @@ export function createSubtasksOverviewFeature({
                 ${renderDetailCard(t("subtasks.detailDelegationAggregation", {}, "Aggregation"), delegation.aggregationMode || "-", escapeHtml)}
                 ${renderDetailCard(t("subtasks.detailDelegationSourceAgents", {}, "Source Agents"), formatJoinedValues(delegation.sourceAgentIds), escapeHtml)}
                 ${renderDetailCard(t("subtasks.detailDelegationContextKeys", {}, "Delegation Context Keys"), formatJoinedValues(delegation.contextKeys), escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationOwnedScope", {}, "Owned Scope"), delegation.ownership?.scopeSummary || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationOutOfScope", {}, "Out of Scope"), formatJoinedValues(delegation.ownership?.outOfScope), escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationWriteScope", {}, "Write Scope"), formatJoinedValues(delegation.ownership?.writeScope), escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationDoneDefinition", {}, "Done Definition"), delegation.acceptance?.doneDefinition || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationVerificationHints", {}, "Verification Hints"), formatJoinedValues(delegation.acceptance?.verificationHints), escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailDelegationRequiredSections", {}, "Required Sections"), formatJoinedValues(delegation.deliverableContract?.requiredSections), escapeHtml)}
               </div>
             </section>
           ` : ""}
@@ -1030,6 +1039,22 @@ export function createSubtasksOverviewFeature({
                 ${renderDetailCard(t("subtasks.detailResultEnvelopeOutputPath", {}, "Envelope Output Path"), resultEnvelope.outputPath || "-", escapeHtml)}
               </div>
               <div class="memory-detail-text">${escapeHtml(resultEnvelope.summary || "-")}</div>
+            </section>
+          ` : ""}
+
+          ${acceptanceGate ? `
+            <section class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("subtasks.detailAcceptanceGate", {}, "Acceptance Gate"))}</span>
+              <div class="memory-detail-grid">
+                ${renderDetailCard(t("subtasks.detailAcceptanceGateStatus", {}, "Gate Status"), acceptanceGate.status || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailAcceptanceGateDoneCheck", {}, "Done Definition Check"), acceptanceGate.doneDefinitionCheck || "-", escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailAcceptanceGateRequiredSections", {}, "Required Sections"), formatJoinedValues(acceptanceGate.requiredSections), escapeHtml)}
+                ${renderDetailCard(t("subtasks.detailAcceptanceGateMissingSections", {}, "Missing Sections"), formatJoinedValues(acceptanceGate.missingRequiredSections), escapeHtml)}
+              </div>
+              <div class="memory-detail-text">${escapeHtml(acceptanceGate.summary || "-")}</div>
+              ${Array.isArray(acceptanceGate.reasons) && acceptanceGate.reasons.length ? `
+                <div class="memory-list-item-meta"><span>${escapeHtml(acceptanceGate.reasons.join(" | "))}</span></div>
+              ` : ""}
             </section>
           ` : ""}
 
@@ -1108,6 +1133,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
+      subtasksState.selectedAcceptanceGate = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -1121,6 +1147,9 @@ export function createSubtasksOverviewFeature({
     subtasksState.selectedOutputContent = typeof res.payload.outputContent === "string" ? res.payload.outputContent : "";
     subtasksState.selectedContinuationState = res.payload?.continuationState && typeof res.payload.continuationState === "object"
       ? { taskId: item.id, value: res.payload.continuationState }
+      : null;
+    subtasksState.selectedAcceptanceGate = res.payload?.acceptanceGate && typeof res.payload.acceptanceGate === "object"
+      ? { taskId: item.id, value: res.payload.acceptanceGate }
       : null;
     subtasksState.selectedResultEnvelope = res.payload?.resultEnvelope && typeof res.payload.resultEnvelope === "object"
       ? res.payload.resultEnvelope
@@ -1395,6 +1424,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
+      subtasksState.selectedAcceptanceGate = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -1412,6 +1442,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
+      subtasksState.selectedAcceptanceGate = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -1499,6 +1530,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedItem = null;
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
+      subtasksState.selectedAcceptanceGate = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;

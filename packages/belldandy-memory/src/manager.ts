@@ -486,6 +486,22 @@ export class MemoryManager {
     private experienceAutoSkillEnabled: boolean;
     private publishStateDir: string;
 
+    private logEmbeddingSyncSummary(stats: {
+        batchCount: number;
+        totalChunks: number;
+        cacheHits: number;
+        cacheMisses: number;
+        apiRequestCount: number;
+        apiChunkCount: number;
+    }): void {
+        if (stats.batchCount <= 0 || stats.totalChunks <= 0) return;
+        console.log(
+            `[MemoryManager] Embedding sync processed ${stats.totalChunks} chunks in ${stats.batchCount} batch(es): `
+            + `cacheHits=${stats.cacheHits}, cacheMisses=${stats.cacheMisses}, `
+            + `apiRequests=${stats.apiRequestCount}, apiChunks=${stats.apiChunkCount}`,
+        );
+    }
+
     constructor(options: MemoryManagerOptions) {
         this.workspaceRoot = options.workspaceRoot;
         this.additionalRoots = options.additionalRoots ?? [];
@@ -1322,11 +1338,21 @@ export class MemoryManager {
         this.ensureEmbeddingSignature(signature);
 
         const providerName = this.embeddingProvider.modelName ?? "unknown";
+        const embeddingStats = {
+            batchCount: 0,
+            totalChunks: 0,
+            cacheHits: 0,
+            cacheMisses: 0,
+            apiRequestCount: 0,
+            apiChunkCount: 0,
+        };
 
         // Loop until no more pending chunks
         while (true) {
             const pending = this.store.getUnembeddedChunks(this.embeddingBatchSize);
             if (pending.length === 0) break;
+            embeddingStats.batchCount += 1;
+            embeddingStats.totalChunks += pending.length;
 
             // Normalize content for embedding and compute content hashes
             const normalized = pending.map(c => c.content.replace(/\n+/g, " ").slice(0, 8000));
@@ -1347,9 +1373,8 @@ export class MemoryManager {
             }
 
             const cacheHits = pending.length - needEmbed.length;
-            if (cacheHits > 0) {
-                console.log(`[MemoryManager] Embedding cache: ${cacheHits} hits, ${needEmbed.length} misses`);
-            }
+            embeddingStats.cacheHits += cacheHits;
+            embeddingStats.cacheMisses += needEmbed.length;
 
             // Store cached vectors immediately
             for (let i = 0; i < pending.length; i++) {
@@ -1360,7 +1385,8 @@ export class MemoryManager {
 
             // Embed uncached texts via API
             if (needEmbed.length > 0) {
-                console.log(`[MemoryManager] Embedding ${needEmbed.length} chunks via API...`);
+                embeddingStats.apiRequestCount += 1;
+                embeddingStats.apiChunkCount += needEmbed.length;
                 try {
                     const texts = needEmbed.map(e => e.text);
                     const vectors = await this.embeddingProvider.embedBatch(texts);
@@ -1379,6 +1405,8 @@ export class MemoryManager {
                 }
             }
         }
+
+        this.logEmbeddingSyncSummary(embeddingStats);
     }
 
     /**
