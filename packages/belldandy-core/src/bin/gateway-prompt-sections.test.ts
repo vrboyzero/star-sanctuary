@@ -45,14 +45,38 @@ describe("buildAgentRuntimePromptSections", () => {
       ],
       canDelegate: true,
       role: "coder",
+      identityAuthorityProfile: {
+        currentLabel: "首席执行官 (CEO)",
+        superiorLabels: ["董事会成员"],
+        subordinateLabels: ["CTO", "项目经理"],
+        ownerUuids: ["vr777"],
+        authorityMode: "verifiable_only",
+        responsePolicy: {
+          ownerOrSuperior: "execute",
+          subordinate: "guide",
+          other: "refuse_or_inform",
+        },
+        source: "identity_md",
+      },
     });
 
     expect(sections.map((section) => section.id)).toEqual([
       "tool-use-policy",
       "tool-contract-governance",
+      "team-operating-model",
+      "team-topology-and-ownership",
+      "team-identity-governance-policy",
       "delegation-operating-policy",
+      "manager-fanout-fanin-policy",
+      "team-shared-state-policy",
       "role-execution-policy",
     ]);
+    expect(sections.find((section) => section.id === "team-operating-model")?.text)
+      .toContain("manager-mediated team mode");
+    expect(sections.find((section) => section.id === "team-topology-and-ownership")?.text)
+      .toContain("make the topology explicit");
+    expect(sections.find((section) => section.id === "team-identity-governance-policy")?.text)
+      .toContain("Only owner or superior-approved instructions");
     expect(sections.find((section) => section.id === "delegation-operating-policy")?.text)
       .toContain("ownership.scope_summary");
     expect(sections.find((section) => section.id === "delegation-operating-policy")?.text)
@@ -61,6 +85,14 @@ describe("buildAgentRuntimePromptSections", () => {
       .toContain("classify it as accept, retry with a follow-up delegation, or report blocker");
     expect(sections.find((section) => section.id === "delegation-operating-policy")?.text)
       .toContain("inherit the existing `acceptance.verification_hints`");
+    expect(sections.find((section) => section.id === "manager-fanout-fanin-policy")?.text)
+      .toContain("plan fan-out, keep local progress moving, then perform selective fan-in");
+    expect(sections.find((section) => section.id === "manager-fanout-fanin-policy")?.text)
+      .toContain("lane-scoped handoff");
+    expect(sections.find((section) => section.id === "manager-fanout-fanin-policy")?.text)
+      .toContain("manager-mediated handoff");
+    expect(sections.find((section) => section.id === "team-shared-state-policy")?.text)
+      .toContain("team completion gate");
     expect(sections.find((section) => section.id === "role-execution-policy")?.text)
       .toContain("Role Execution Policy (coder)");
   });

@@ -51,16 +51,40 @@ describe("buildLaunchSpecPromptDeltas", () => {
         doneDefinition: "State whether the verifier output is ready for handoff.",
         verificationHints: ["Check findings", "Check evidence"],
       },
-      deliverableContract: {
-        format: "verification_report",
-        requiredSections: ["Findings", "Evidence"],
+        deliverableContract: {
+          format: "verification_report",
+          requiredSections: ["Findings", "Evidence"],
+        },
+        team: {
+          id: "team-1",
+          mode: "verify_swarm",
+          sharedGoal: "Verify delegated lanes before manager fan-in.",
+          managerAgentId: "default",
+          currentLaneId: "lane_verifier",
+          memberRoster: [
+            {
+              laneId: "lane_coder",
+              agentId: "coder",
+              role: "coder",
+              scopeSummary: "Implement the patch lane.",
+              handoffTo: ["lane_verifier"],
+            },
+            {
+              laneId: "lane_verifier",
+              agentId: "verifier",
+              role: "verifier",
+              scopeSummary: "Review delegated results before closure.",
+              dependsOn: ["lane_coder"],
+            },
+          ],
+        },
       },
-    },
-  });
+    });
 
     expect(deltas.map((delta) => delta.deltaType)).toEqual([
       "role-execution-policy",
       "tool-selection-policy",
+      "team-topology-and-ownership",
     ]);
     expect(deltas[0]?.text).toContain("operate as `verifier`");
     expect(deltas[1]?.text).toContain("Allowed tool families: workspace-read, command-exec");
@@ -69,10 +93,15 @@ describe("buildLaunchSpecPromptDeltas", () => {
     expect(deltas[1]?.text).toContain("Done definition: State whether the verifier output is ready for handoff.");
     expect(deltas[1]?.text).toContain("Deliverable required sections: Findings, Evidence");
     expect(deltas[1]?.text).toContain("Verifier handoff rule: stay inside verification scope");
+    expect(deltas[2]?.text).toContain("## Team Topology and Ownership");
+    expect(deltas[2]?.text).toContain("Team mode: verify_swarm");
+    expect(deltas[2]?.text).toContain("Current lane: lane_verifier");
+    expect(deltas[2]?.text).toContain("lane_coder | agent=coder | role=coder | owns=Implement the patch lane. | handoff_to=lane_verifier");
 
     expect(collectSystemPromptDeltaTexts(deltas)).toEqual([
       expect.stringContaining("Run Role Override"),
       expect.stringContaining("Run Tool Selection Constraints"),
+      expect.stringContaining("Team Topology and Ownership"),
     ]);
   });
 });
@@ -402,5 +431,130 @@ describe("tool result prompt deltas", () => {
     expect(delta?.text).toContain("Verifier handoff available: Task 2 / default");
     expect(delta?.text).toContain("Task 2 / default: retry");
     expect(delta?.text).toContain("Runtime action: retry_delegation [high]");
+  });
+
+  it("adds team handoff and fan-in deltas for parallel team results", () => {
+    const deltas = buildToolResultPromptDeltas({
+      result: {
+        id: "call-6",
+        name: "delegate_parallel",
+        success: true,
+        output: "parallel done",
+        metadata: {
+          delegationResults: [
+            {
+              label: "Task 1 / coder",
+              laneId: "lane_1",
+              scopeSummary: "Own lane A implementation only.",
+              handoffTo: ["lane_2"],
+              workerSuccess: true,
+              accepted: true,
+              acceptanceGate: {
+                enforced: false,
+                accepted: true,
+                summary: "Delegated result passed the structured acceptance gate.",
+                reasons: [],
+                acceptanceCheckStatus: "not_requested",
+              },
+            },
+            {
+              label: "Task 2 / verifier",
+              laneId: "lane_2",
+              dependsOn: ["lane_1"],
+              workerSuccess: true,
+              accepted: false,
+              acceptanceGate: {
+                enforced: true,
+                accepted: false,
+                summary: "Delegated result failed the structured acceptance gate: Missing required sections: Recommendation",
+                reasons: ["Missing required sections: Recommendation"],
+                acceptanceCheckStatus: "missing",
+                rejectionConfidence: "high",
+                managerActionHint: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
+              },
+            },
+          ],
+          followUpStrategy: {
+            mode: "parallel",
+            summary: "Parallel fan-in strategy: accept now: Task 1 / coder; retry with follow-up delegation: Task 2 / verifier.",
+            recommendedRuntimeAction: "retry_delegation",
+            acceptedLabels: ["Task 1 / coder"],
+            retryLabels: ["Task 2 / verifier"],
+            verifierHandoffLabels: ["Task 2 / verifier"],
+            items: [
+              {
+                label: "Task 1 / coder",
+                action: "accept",
+                reason: "Delegated result passed the acceptance gate.",
+                recommendedRuntimeAction: "accept_result",
+                priority: "normal",
+              },
+              {
+                label: "Task 2 / verifier",
+                action: "retry",
+                reason: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
+                recommendedRuntimeAction: "retry_delegation",
+                priority: "high",
+              },
+            ],
+          },
+          team: {
+            id: "team-12",
+            mode: "parallel_subtasks",
+            sharedGoal: "Implement lane A and verify it before manager fan-in.",
+            managerAgentId: "default",
+            memberRoster: [
+              {
+                laneId: "lane_1",
+                agentId: "coder",
+                role: "coder",
+                scopeSummary: "Own lane A implementation only.",
+                handoffTo: ["lane_2"],
+              },
+              {
+                laneId: "lane_2",
+                agentId: "verifier",
+                role: "verifier",
+                dependsOn: ["lane_1"],
+              },
+            ],
+          },
+        },
+      },
+      requestArguments: {
+        tasks: [
+          { instruction: "Implement lane A" },
+          { instruction: "Verify lane A" },
+        ],
+      },
+    });
+
+    expect(deltas.map((delta) => delta.deltaType)).toEqual([
+      "tool-post-verification",
+      "team-handoff-review",
+      "team-fan-in-triage",
+      "team-completion-gate",
+    ]);
+    expect(deltas[0]?.text).toContain("## Team Result Context");
+    expect(deltas[0]?.text).toContain("Team roster: lane_1 | role=coder | owns=Own lane A implementation only. | handoff_to=lane_2");
+    expect(deltas[1]?.text).toContain("## Team Handoff Review");
+    expect(deltas[1]?.text).toContain("Active handoff lanes: Task 1 / coder -> lane_2");
+    expect(deltas[1]?.text).toContain("Declared dependencies: Task 2 / verifier <= lane_1");
+    expect(deltas[2]?.text).toContain("## Team Fan-In Triage");
+    expect(deltas[2]?.text).toContain("Safe to integrate now: Task 1 / coder");
+    expect(deltas[2]?.text).toContain("Needs retry or re-delegation: Task 2 / verifier");
+    expect(deltas[2]?.text).toContain("Verifier handoff candidates: Task 2 / verifier");
+    expect(deltas[3]?.text).toContain("## Team Completion Gate");
+    expect(deltas[3]?.text).toContain("Status: pending");
+    expect(deltas[3]?.text).toContain("Final fan-in verdict: hold_fan_in");
+    expect(deltas[3]?.text).toContain("Retry lanes: lane_2");
+    expect(deltas[3]?.metadata).toMatchObject({
+      teamId: "team-12",
+      completionGate: {
+        status: "pending",
+        finalFanInVerdict: "hold_fan_in",
+        retryLaneIds: ["lane_2"],
+      },
+    });
   });
 });

@@ -109,6 +109,8 @@ export type ToolExecutorOptions = {
   deferredToolNames?: string[];
 };
 
+const MAX_LEGACY_DEFERRED_TOOL_SELECTIONS = 16;
+
 type RegisterToolOptions = {
   silentReplace?: boolean;
 };
@@ -526,8 +528,9 @@ export class ToolExecutor {
       ...persisted,
       ...(cached ? Array.from(cached) : []),
     ]);
-    this.loadedDeferredToolNames.set(conversationId, merged);
-    return new Set(merged);
+    const normalized = this.normalizeLoadedDeferredToolNames(conversationId, merged);
+    this.loadedDeferredToolNames.set(conversationId, normalized);
+    return new Set(normalized);
   }
 
   getLoadedDeferredToolList(conversationId: string): string[] {
@@ -543,7 +546,8 @@ export class ToolExecutor {
       }
       next.add(name);
     }
-    const normalized = Array.from(next).sort((left, right) => left.localeCompare(right));
+    const normalized = Array.from(this.normalizeLoadedDeferredToolNames(conversationId, next))
+      .sort((left, right) => left.localeCompare(right));
     this.loadedDeferredToolNames.set(conversationId, new Set(normalized));
     await this.conversationStore?.setLoadedToolNames?.(conversationId, normalized);
     return normalized;
@@ -600,6 +604,15 @@ export class ToolExecutor {
 
   async clearLoadedDeferredTools(conversationId: string): Promise<void> {
     await this.persistLoadedDeferredToolNames(conversationId, []);
+  }
+
+  async consumeLoadedDeferredToolsForNextTurn(conversationId: string): Promise<string[]> {
+    const current = this.getLoadedDeferredToolList(conversationId);
+    if (current.length === 0) {
+      return [];
+    }
+    await this.persistLoadedDeferredToolNames(conversationId, []);
+    return current;
   }
 
   /** 获取单个工具在当前上下文下的可见性结果 */
@@ -952,6 +965,79 @@ export class ToolExecutor {
       return false;
     }
     return this.deferredToolNames.has(toolName);
+  }
+
+  private normalizeLoadedDeferredToolNames(
+    conversationId: string,
+    toolNames: Iterable<string>,
+  ): Set<string> {
+    const normalized = Array.from(new Set(
+      Array.from(toolNames)
+        .map((item) => item.trim())
+        .filter((item) => item && this.isDeferredTool(item) && this.tools.has(item)),
+    ));
+    if (normalized.length <= MAX_LEGACY_DEFERRED_TOOL_SELECTIONS) {
+      return new Set(normalized);
+    }
+
+    const recentToolNames = this.readRecentDeferredToolNames(conversationId, normalized);
+    const pruned: string[] = [];
+    const seen = new Set<string>();
+    for (const name of recentToolNames) {
+      if (!seen.has(name)) {
+        pruned.push(name);
+        seen.add(name);
+      }
+    }
+    for (const name of normalized) {
+      if (pruned.length >= MAX_LEGACY_DEFERRED_TOOL_SELECTIONS) {
+        break;
+      }
+      if (!seen.has(name)) {
+        pruned.push(name);
+        seen.add(name);
+      }
+    }
+
+    if (pruned.length < normalized.length) {
+      this.logger?.warn?.(
+        `[tool-search] auto-pruned stale deferred tool selections for ${conversationId}: ${normalized.length} -> ${pruned.length}`,
+      );
+      void this.conversationStore?.setLoadedToolNames?.(conversationId, pruned);
+    }
+
+    return new Set(pruned);
+  }
+
+  private readRecentDeferredToolNames(
+    conversationId: string,
+    candidateNames: string[],
+  ): string[] {
+    const conversationStore = this.conversationStore as (ConversationStoreInterface & {
+      getToolDigests?: (
+        conversationId: string,
+        limit?: number,
+      ) => Array<{ toolName?: string }>;
+    }) | undefined;
+    const digests = conversationStore?.getToolDigests?.(conversationId, 64) ?? [];
+    if (digests.length === 0) {
+      return [];
+    }
+    const candidates = new Set(candidateNames);
+    const recent: string[] = [];
+    const seen = new Set<string>();
+    for (let index = digests.length - 1; index >= 0; index -= 1) {
+      const toolName = normalizeOptionalString(digests[index]?.toolName);
+      if (!toolName || !candidates.has(toolName) || seen.has(toolName)) {
+        continue;
+      }
+      recent.push(toolName);
+      seen.add(toolName);
+      if (recent.length >= MAX_LEGACY_DEFERRED_TOOL_SELECTIONS) {
+        break;
+      }
+    }
+    return recent;
   }
 
   private buildAvailabilityState(

@@ -16,7 +16,22 @@ export {
 
 export type { TokenUsageUploadConfig, TokenUsageUploadLogger } from "./token-usage-upload.js";
 export { uploadTokenUsage } from "./token-usage-upload.js";
-export { extractOwnerUuid } from "./identity.js";
+export {
+  buildIdentityAuthorityMayDirect,
+  buildIdentityAuthorityReportsTo,
+  deriveAuthorityRelationToManager,
+  evaluateRuntimeIdentityAuthority,
+  extractOwnerUuid,
+  loadIdentityAuthorityProfile,
+  parseIdentityAuthorityProfile,
+} from "./identity.js";
+export type {
+  IdentityAuthorityAction,
+  IdentityAuthorityActorRelation,
+  IdentityAuthorityProfile,
+  IdentityAuthorityRelationToManager,
+  RuntimeIdentityAuthorityEvaluation,
+} from "./identity.js";
 
 export type BelldandyRole = "web" | "cli" | "node";
 

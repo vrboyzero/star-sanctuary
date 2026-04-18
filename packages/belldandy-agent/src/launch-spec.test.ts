@@ -48,6 +48,36 @@ describe("normalizeAgentLaunchSpec", () => {
           summary: "  Patch plus verification notes.  ",
           requiredSections: [" Changes ", "Verification", "Changes"],
         },
+        team: {
+          id: " team-1 ",
+          mode: "parallel_patch",
+          sharedGoal: "  Coordinate the patch lanes.  ",
+          managerAgentId: " default ",
+          managerIdentityLabel: " 首席执行官 (CEO) ",
+          currentLaneId: " lane_b ",
+          memberRoster: [
+            {
+              laneId: " lane_a ",
+              agentId: " coder ",
+              role: "coder",
+              identityLabel: " CTO ",
+              authorityRelationToManager: " subordinate " as any,
+              reportsTo: [" 首席执行官 (CEO) ", "首席执行官 (CEO)"],
+              mayDirect: [" 员工 ", "员工"],
+              scopeSummary: "  Own lane A  ",
+              handoffTo: [" lane_b ", "lane_b"],
+            },
+            {
+              laneId: " lane_b ",
+              agentId: " verifier ",
+              role: "verifier",
+              identityLabel: " 项目经理 ",
+              authorityRelationToManager: " subordinate " as any,
+              scopeSummary: "  Review patch lanes  ",
+              dependsOn: [" lane_a ", "lane_a"],
+            },
+          ],
+        },
       },
     });
 
@@ -81,6 +111,36 @@ describe("normalizeAgentLaunchSpec", () => {
         format: "patch",
         summary: "Patch plus verification notes.",
         requiredSections: ["Changes", "Verification"],
+      },
+      team: {
+        id: "team-1",
+        mode: "parallel_patch",
+        sharedGoal: "Coordinate the patch lanes.",
+        managerAgentId: "default",
+        managerIdentityLabel: "首席执行官 (CEO)",
+        currentLaneId: "lane_b",
+        memberRoster: [
+          {
+            laneId: "lane_a",
+            agentId: "coder",
+            role: "coder",
+            identityLabel: "CTO",
+            authorityRelationToManager: "subordinate",
+            reportsTo: ["首席执行官 (CEO)"],
+            mayDirect: ["员工"],
+            scopeSummary: "Own lane A",
+            handoffTo: ["lane_b"],
+          },
+          {
+            laneId: "lane_b",
+            agentId: "verifier",
+            role: "verifier",
+            identityLabel: "项目经理",
+            authorityRelationToManager: "subordinate",
+            scopeSummary: "Review patch lanes",
+            dependsOn: ["lane_a"],
+          },
+        ],
       },
     });
   });

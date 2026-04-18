@@ -11,9 +11,14 @@ export type AgentPromptSnapshotContentPart =
 export type AgentPromptDeltaType =
   | "user-prelude"
   | "runtime-identity"
+  | "runtime-identity-authority"
   | "attachment"
   | "audio-transcript"
   | "tool-selection-policy"
+  | "team-topology-and-ownership"
+  | "team-handoff-review"
+  | "team-fan-in-triage"
+  | "team-completion-gate"
   | "role-execution-policy"
   | "tool-failure-recovery"
   | "tool-post-verification";
@@ -273,9 +278,14 @@ function normalizePromptSnapshotDeltaType(value: unknown): AgentPromptDeltaType 
   switch (value) {
     case "user-prelude":
     case "runtime-identity":
+    case "runtime-identity-authority":
     case "attachment":
     case "audio-transcript":
     case "tool-selection-policy":
+    case "team-topology-and-ownership":
+    case "team-handoff-review":
+    case "team-fan-in-triage":
+    case "team-completion-gate":
     case "role-execution-policy":
     case "tool-failure-recovery":
     case "tool-post-verification":

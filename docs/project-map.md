@@ -64,12 +64,13 @@ star-sanctuary/
 - `pnpm-workspace.yaml`: workspace 范围
 - `tsconfig.json`: 各 package 的 TS 编译依赖顺序
 - `vitest.config.ts`: 测试排除项和 Node/forks 配置
+- `docs/Star Sanctuary使用手册.md`: 当前版用户手册，聚焦 Agent / 工具 / Agent Teams 的使用与配置说明
 
 ### Gateway / CLI
 - `packages/belldandy-core/src/bin/bdd.ts`: CLI 进程入口
 - `packages/belldandy-core/src/cli/main.ts`: CLI 根命令定义
 - `packages/belldandy-core/src/bin/gateway.ts`: Gateway 总装配入口
-- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`: Agent runtime prompt sections 组装
+- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`: Agent runtime prompt sections 组装，包含 Team / identity governance 静态 section
 - `packages/belldandy-core/src/server.ts`: Gateway 主服务与方法分发中心
 - `packages/belldandy-core/src/server-methods/`: RPC 方法分域处理
 
@@ -78,7 +79,7 @@ star-sanctuary/
 - `packages/belldandy-agent/src/openai.ts`: OpenAI chat agent
 - `packages/belldandy-agent/src/system-prompt.ts`: system prompt 组装
 - `packages/belldandy-agent/src/prompt-snapshot.ts`: prompt snapshot / delta / provider-native system blocks
-- `packages/belldandy-agent/src/runtime-prompt-deltas.ts`: run 级 launchSpec prompt delta 构建、tool-result follow-up delta、`failureKind` 恢复策略路由
+- `packages/belldandy-agent/src/runtime-prompt-deltas.ts`: run 级 launchSpec prompt delta 构建、tool-result follow-up delta、`failureKind` 恢复策略路由、Team topology / handoff / fan-in / completion gate delta
 - `packages/belldandy-agent/src/conversation.ts`: 对话、转录、压缩、持久化
 - `packages/belldandy-agent/src/orchestrator.ts`: sub-agent 编排
 - `packages/belldandy-agent/src/agent-registry.ts`: 多 Agent profile 注册表
@@ -114,6 +115,7 @@ star-sanctuary/
 
 ### State / Workspace / Persistence
 - `packages/belldandy-protocol/src/state-dir.ts`: 全局 state dir 解析
+- `packages/belldandy-protocol/src/identity.ts`: `IDENTITY.md` authority profile 解析、owner UUID 读取、运行态 authority relation 评估
 - `packages/belldandy-agent/src/workspace.ts`: `SOUL.md` / `IDENTITY.md` / `USER.md` / `AGENTS.md` 等 workspace 文件加载
 - `apps/web/public/app/features/persistence.js`: 前端 localStorage 持久化
 - `apps/web/public/app/bootstrap/state.js`: goals / memory / subtasks 前端状态
@@ -136,13 +138,20 @@ star-sanctuary/
 
 ### Subtasks / Delegation / Background Continuation
 - `packages/belldandy-agent/src/orchestrator.ts`: sub-agent 编排
-- `packages/belldandy-agent/src/launch-spec.ts`: launch spec 归一化、catalog 默认值补丁、结构化 delegation contract 注入
-- `packages/belldandy-skills/src/subagent-launch.ts`: 子 Agent launch spec 与 worker instruction 包装
-- `packages/belldandy-skills/src/builtin/session/delegation-contract.ts`: delegation tool 结构化 contract schema 与参数归一化
+- `packages/belldandy-agent/src/launch-spec.ts`: launch spec 归一化、catalog 默认值补丁、结构化 delegation contract / team metadata 注入
+- `packages/belldandy-skills/src/subagent-launch.ts`: 子 Agent launch spec、worker instruction 包装、Team topology / teammate handoff / reporting envelope
+- `packages/belldandy-skills/src/builtin/session/delegation-contract.ts`: delegation tool 结构化 contract schema、result metadata、team-aware gate / follow-up serialization
+- `packages/belldandy-skills/src/delegation-protocol.ts`: delegation protocol、ownership/acceptance/deliverable contract、Team metadata
+- `packages/belldandy-skills/src/builtin/session/delegate-parallel.ts`: parallel lane team metadata、manager-mediated handoff / verifier lane 推断
+- `packages/belldandy-agent/src/runtime-prompt-deltas.ts`: run-level role/tool/team delta、delegation result review、team handoff / fan-in triage / completion gate、runtime identity authority
+- `packages/belldandy-core/src/team-identity-governance.ts`: Team metadata identity enrichment，给 roster 派生 authority relation / reportsTo / mayDirect
 - `packages/belldandy-core/src/task-runtime.ts`: subtask runtime、resume/takeover/update
+- `packages/belldandy-core/src/query-runtime-subtask.ts`: `subtask.get` query runtime、acceptance gate、Team shared state / identity authority / fan-in summary / completion gate view
 - `packages/belldandy-core/src/bridge-subtask-runtime.ts`: bridge-aware subtask 治理
 - `packages/belldandy-core/src/background-continuation-runtime.ts`: 后台 continuation 账本
 - `apps/web/public/app/features/subtasks-runtime.js`: subtasks 前端流程
+- `apps/web/public/app/features/subtasks-overview.js`: subtask 详情页、delegation protocol、Team shared state / lane roster / completion gate / identity authority UI
+- `apps/web/public/app/features/prompt-snapshot-detail.js`: prompt snapshot detail、active sections / deltas、Team coordination / Identity Authority 摘要
 
 ### Tools / Skills / Plugins / MCP
 - `packages/belldandy-skills/src/executor.ts`: ToolExecutor

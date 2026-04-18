@@ -7,6 +7,8 @@ import type {
   DelegationOwnership,
   DelegationProtocol,
   DelegationSource,
+  DelegationTeamMember,
+  DelegationTeamMode,
 } from "@belldandy/skills";
 
 export type SubTaskDelegationSummary = {
@@ -40,6 +42,26 @@ export type SubTaskDelegationSummary = {
     permissionMode?: string;
     allowedToolFamilies?: string[];
     maxToolRiskLevel?: "low" | "medium" | "high" | "critical";
+  };
+  team?: {
+    id: string;
+    mode: DelegationTeamMode;
+    sharedGoal?: string;
+    managerAgentId?: string;
+    managerIdentityLabel?: string;
+    currentLaneId?: string;
+    memberRoster: Array<{
+      laneId: string;
+      agentId?: string;
+      role?: DelegationTeamMember["role"];
+      identityLabel?: string;
+      authorityRelationToManager?: DelegationTeamMember["authorityRelationToManager"];
+      reportsTo?: string[];
+      mayDirect?: string[];
+      scopeSummary?: string;
+      dependsOn?: string[];
+      handoffTo?: string[];
+    }>;
   };
 };
 
@@ -104,6 +126,7 @@ export function summarizeDelegationProtocol(protocol: DelegationProtocol | undef
         : undefined,
       maxToolRiskLevel: protocol.launchDefaults.maxToolRiskLevel,
     },
+    team: cloneDelegationTeam(protocol.team),
   };
 }
 
@@ -136,6 +159,32 @@ function cloneDelegationDeliverableContract(
     ...(value.requiredSections && value.requiredSections.length > 0
       ? { requiredSections: [...value.requiredSections] }
       : {}),
+  };
+}
+
+function cloneDelegationTeam(
+  value: DelegationProtocol["team"] | undefined,
+): SubTaskDelegationSummary["team"] {
+  if (!value) return undefined;
+  return {
+    id: value.id,
+    mode: value.mode,
+    ...(value.sharedGoal ? { sharedGoal: value.sharedGoal } : {}),
+    ...(value.managerAgentId ? { managerAgentId: value.managerAgentId } : {}),
+    ...(value.managerIdentityLabel ? { managerIdentityLabel: value.managerIdentityLabel } : {}),
+    ...(value.currentLaneId ? { currentLaneId: value.currentLaneId } : {}),
+    memberRoster: value.memberRoster.map((member) => ({
+      laneId: member.laneId,
+      ...(member.agentId ? { agentId: member.agentId } : {}),
+      ...(member.role ? { role: member.role } : {}),
+      ...(member.identityLabel ? { identityLabel: member.identityLabel } : {}),
+      ...(member.authorityRelationToManager ? { authorityRelationToManager: member.authorityRelationToManager } : {}),
+      ...(member.reportsTo && member.reportsTo.length > 0 ? { reportsTo: [...member.reportsTo] } : {}),
+      ...(member.mayDirect && member.mayDirect.length > 0 ? { mayDirect: [...member.mayDirect] } : {}),
+      ...(member.scopeSummary ? { scopeSummary: member.scopeSummary } : {}),
+      ...(member.dependsOn && member.dependsOn.length > 0 ? { dependsOn: [...member.dependsOn] } : {}),
+      ...(member.handoffTo && member.handoffTo.length > 0 ? { handoffTo: [...member.handoffTo] } : {}),
+    })),
   };
 }
 

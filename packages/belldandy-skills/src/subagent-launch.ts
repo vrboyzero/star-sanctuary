@@ -8,6 +8,7 @@ import {
   type DelegationOwnership,
   type DelegationProtocol,
   type DelegationSource,
+  type DelegationTeamMetadata,
 } from "./delegation-protocol.js";
 import type { SpawnSubAgentOptions, ToolContext } from "./types.js";
 
@@ -36,6 +37,7 @@ type BuildSubAgentLaunchSpecOptions = {
   ownership?: Partial<DelegationOwnership>;
   acceptance?: Partial<DelegationAcceptance>;
   deliverableContract?: Partial<DelegationDeliverableContract>;
+  team?: Partial<DelegationTeamMetadata>;
 };
 
 type WorkerInstructionEnvelopeInput = {
@@ -179,6 +181,160 @@ function buildWorkerTaskEnvelope(input: WorkerInstructionEnvelopeInput): string 
   return lines.join("\n");
 }
 
+function buildWorkerTeamTopology(input: WorkerInstructionEnvelopeInput): string | undefined {
+  const team = input.delegationProtocol?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const currentLane = team.currentLaneId
+    ? team.memberRoster.find((member) => member.laneId === team.currentLaneId)
+    : undefined;
+  const teammateLines = team.memberRoster
+    .map((member) => {
+      const scope = member.scopeSummary?.trim() ? ` | owns=${member.scopeSummary.trim()}` : "";
+      const role = member.role ? ` | role=${member.role}` : "";
+      const agent = member.agentId?.trim() ? ` | agent=${member.agentId.trim()}` : "";
+      const identity = member.identityLabel?.trim() ? ` | identity=${member.identityLabel.trim()}` : "";
+      const relation = member.authorityRelationToManager ? ` | relation=${member.authorityRelationToManager}` : "";
+      const dependsOn = member.dependsOn && member.dependsOn.length > 0
+        ? ` | depends_on=${member.dependsOn.join(", ")}`
+        : "";
+      const handoffTo = member.handoffTo && member.handoffTo.length > 0
+        ? ` | handoff_to=${member.handoffTo.join(", ")}`
+        : "";
+      const currentMarker = currentLane?.laneId === member.laneId ? " (current lane)" : "";
+      return `- ${member.laneId}${currentMarker}${agent}${role}${identity}${relation}${scope}${dependsOn}${handoffTo}`;
+    });
+
+  const lines = [
+    "## Team Topology and Ownership",
+    "",
+    `Team mode: ${team.mode}`,
+    `Team ID: ${team.id}`,
+  ];
+  if (team.sharedGoal?.trim()) {
+    lines.push(`Shared goal: ${team.sharedGoal.trim()}`);
+  }
+  if (team.managerAgentId?.trim()) {
+    lines.push(`Manager agent: ${team.managerAgentId.trim()}`);
+  }
+  if (team.managerIdentityLabel?.trim()) {
+    lines.push(`Manager identity: ${team.managerIdentityLabel.trim()}`);
+  }
+  if (currentLane) {
+    lines.push("");
+    lines.push(`Current lane: ${currentLane.laneId}`);
+    if (currentLane.identityLabel?.trim()) {
+      lines.push(`Current lane identity: ${currentLane.identityLabel.trim()}`);
+    }
+    if (currentLane.authorityRelationToManager) {
+      lines.push(`Authority relation to manager: ${currentLane.authorityRelationToManager}`);
+    }
+    if (currentLane.scopeSummary?.trim()) {
+      lines.push(`Current lane ownership: ${currentLane.scopeSummary.trim()}`);
+    }
+    if (currentLane.dependsOn && currentLane.dependsOn.length > 0) {
+      lines.push(`Current lane depends on: ${currentLane.dependsOn.join(", ")}`);
+    }
+    if (currentLane.handoffTo && currentLane.handoffTo.length > 0) {
+      lines.push(`Current lane handoff target: ${currentLane.handoffTo.join(", ")}`);
+    }
+  }
+  lines.push("", "Roster:", ...teammateLines);
+
+  return lines.join("\n");
+}
+
+function buildWorkerAuthorityChain(input: WorkerInstructionEnvelopeInput): string | undefined {
+  const team = input.delegationProtocol?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const currentLane = team.currentLaneId
+    ? team.memberRoster.find((member) => member.laneId === team.currentLaneId)
+    : undefined;
+  if (!currentLane) {
+    return undefined;
+  }
+
+  const lines = [
+    "## Authority Chain",
+    "",
+    `Your lane: ${currentLane.laneId}`,
+    `Your identity label: ${currentLane.identityLabel?.trim() || "unknown"}`,
+    `Authority relation to manager: ${currentLane.authorityRelationToManager || "unknown"}`,
+    `Reports to: ${currentLane.reportsTo && currentLane.reportsTo.length > 0 ? currentLane.reportsTo.join(" | ") : "unknown"}`,
+    `May direct: ${currentLane.mayDirect && currentLane.mayDirect.length > 0 ? currentLane.mayDirect.join(" | ") : "none"}`,
+    "- Owner or superior-approved contract changes may override lane sequencing or ownership.",
+    "- Requests from subordinate actors should get guidance or escalation, not uncontrolled scope changes.",
+    "- Peer or unrelated actors should not redirect your lane without manager approval.",
+    "- If authority conflicts with the task contract, escalate to the manager instead of silently changing course.",
+  ];
+  if (team.managerIdentityLabel?.trim()) {
+    lines.splice(3, 0, `Manager identity label: ${team.managerIdentityLabel.trim()}`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildWorkerTeammateHandoff(input: WorkerInstructionEnvelopeInput): string | undefined {
+  const team = input.delegationProtocol?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const currentLane = team.currentLaneId
+    ? team.memberRoster.find((member) => member.laneId === team.currentLaneId)
+    : undefined;
+  if (!currentLane) {
+    return undefined;
+  }
+
+  const lines = [
+    "## Teammate Handoff",
+    "",
+    "Treat your output as a lane-scoped handoff for the manager, not as a final merged team conclusion.",
+    "- Route cross-lane coordination back through the manager unless the launch contract explicitly says otherwise.",
+  ];
+  if (currentLane.dependsOn && currentLane.dependsOn.length > 0) {
+    lines.push(`- Upstream dependencies to acknowledge: ${currentLane.dependsOn.join(", ")}`);
+  }
+  if (currentLane.handoffTo && currentLane.handoffTo.length > 0) {
+    lines.push(`- Intended downstream lane(s): ${currentLane.handoffTo.join(", ")}`);
+    lines.push("- Make the next handoff target explicit in your final report so the manager can route fan-in safely.");
+  }
+  lines.push("- If a dependency is missing or stale, report that blocker clearly instead of guessing across lanes.");
+
+  return lines.join("\n");
+}
+
+function buildWorkerReportingExpectations(input: WorkerInstructionEnvelopeInput): string | undefined {
+  const team = input.delegationProtocol?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const currentLane = team.currentLaneId
+    ? team.memberRoster.find((member) => member.laneId === team.currentLaneId)
+    : undefined;
+  const lines = [
+    "## Reporting Expectations",
+    "",
+    "- Keep the final handoff scoped to your lane ownership only.",
+    currentLane?.laneId ? `- Name the lane you covered: ${currentLane.laneId}.` : "- Name the lane you covered.",
+    "- Separate completed work, unresolved blockers, and the manager-facing next step.",
+    "- If you relied on upstream lane output, cite the dependency by lane ID instead of describing it vaguely.",
+  ];
+  if (currentLane?.handoffTo && currentLane.handoffTo.length > 0) {
+    lines.push(`- If the work should flow to another lane next, name that handoff target explicitly: ${currentLane.handoffTo.join(", ")}.`);
+  }
+  lines.push("- Do not claim team-wide completion from a single lane result.");
+
+  return lines.join("\n");
+}
+
 function buildWorkerLaunchConstraintSummary(input: WorkerInstructionEnvelopeInput): string {
   const constraintLines: string[] = [];
 
@@ -221,6 +377,10 @@ export function buildWorkerInstructionEnvelope(input: WorkerInstructionEnvelopeI
     buildWorkerBasePrompt(),
     buildWorkerRolePrompt(input.role),
     buildWorkerTaskEnvelope(input),
+    buildWorkerTeamTopology(input),
+    buildWorkerAuthorityChain(input),
+    buildWorkerTeammateHandoff(input),
+    buildWorkerReportingExpectations(input),
     buildWorkerLaunchConstraintSummary(input),
   ].filter(Boolean);
 
@@ -261,6 +421,7 @@ export function buildSubAgentLaunchSpec(
     ownership: options.ownership,
     acceptance: options.acceptance,
     deliverableContract: options.deliverableContract,
+    team: options.team,
   });
   const instruction = buildWorkerInstructionEnvelope({
     role,

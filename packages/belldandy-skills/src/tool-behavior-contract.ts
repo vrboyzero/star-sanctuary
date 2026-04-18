@@ -22,10 +22,12 @@ const TOOL_BEHAVIOR_CONTRACTS: ToolBehaviorContract[] = [
     preflightChecks: [
       "Confirm cwd, target scope, and whether the command is non-interactive",
       "Check whether the command changes files, processes, or external state",
+      "Do not rely on shell redirection like >, <, or 2>/dev/null because run_command already captures stdout/stderr",
     ],
     fallbackStrategy: [
       "Prefer file_read, list_files, apply_patch, or tools.list when execution is unnecessary",
       "If execution is risky or broad, delegate or ask for confirmation instead of improvising",
+      "Use command-native limit flags or dedicated file/log tools instead of piping to head/tail or redirecting output away",
     ],
   },
   {

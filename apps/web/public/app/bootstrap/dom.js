@@ -129,6 +129,7 @@ export const APP_DOM_REFS = {
     tuCtx: byId("tuCtx"),
     tuIn: byId("tuIn"),
     tuOut: byId("tuOut"),
+    tuCalls: byId("tuCalls"),
     tuAll: byId("tuAll"),
   },
   taskTokenUsagePanelEl: byId("taskTokenUsage"),

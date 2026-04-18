@@ -28,6 +28,11 @@ export function buildLaunchSpecPromptDeltas(
     deltas.push(toolSelectionDelta);
   }
 
+  const teamTopologyDelta = buildLaunchTeamTopologyPromptDelta(launchSpec);
+  if (teamTopologyDelta) {
+    deltas.push(teamTopologyDelta);
+  }
+
   return deltas;
 }
 
@@ -46,6 +51,11 @@ export function buildToolResultPromptDeltas(input: {
 }): AgentPromptDelta[] {
   const contract = getToolContractV2(input.result.name);
   const delegationResultMetadata = readDelegationResultToolMetadataFromUnknown(input.result.metadata);
+  const teamDeltas = buildDelegationTeamFollowUpPromptDeltas({
+    toolCallId: input.result.id,
+    toolName: input.result.name,
+    delegationResultMetadata,
+  });
 
   if (!input.result.success) {
     const deltas: AgentPromptDelta[] = [];
@@ -69,6 +79,7 @@ export function buildToolResultPromptDeltas(input: {
         deltas.push(delegationReviewDelta);
       }
     }
+    deltas.push(...teamDeltas);
     return deltas;
   }
 
@@ -78,7 +89,12 @@ export function buildToolResultPromptDeltas(input: {
     requestArguments: input.requestArguments,
     resultMetadata: input.result.metadata,
   }, contract);
-  return postVerificationDelta ? [postVerificationDelta] : [];
+  const deltas: AgentPromptDelta[] = [];
+  if (postVerificationDelta) {
+    deltas.push(postVerificationDelta);
+  }
+  deltas.push(...teamDeltas);
+  return deltas;
 }
 
 export function buildToolFailureRecoveryPromptDelta(input: {
@@ -340,6 +356,424 @@ function buildLaunchToolSelectionPromptDelta(
   };
 }
 
+function buildLaunchTeamTopologyPromptDelta(
+  launchSpec: ToolRuntimeLaunchSpec,
+): AgentPromptDelta | undefined {
+  const team = launchSpec.delegationProtocol?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const currentLane = team.currentLaneId
+    ? team.memberRoster.find((member) => member.laneId === team.currentLaneId)
+    : undefined;
+  const rosterLines = team.memberRoster.map((member) => {
+    const currentMarker = currentLane?.laneId === member.laneId ? " (current lane)" : "";
+    const detailParts = [
+      member.agentId ? `agent=${member.agentId}` : "",
+      member.role ? `role=${member.role}` : "",
+      member.identityLabel ? `identity=${member.identityLabel}` : "",
+      member.authorityRelationToManager ? `relation=${member.authorityRelationToManager}` : "",
+      member.reportsTo && member.reportsTo.length > 0 ? `reports_to=${member.reportsTo.join(", ")}` : "",
+      member.mayDirect && member.mayDirect.length > 0 ? `may_direct=${member.mayDirect.join(", ")}` : "",
+      member.scopeSummary ? `owns=${member.scopeSummary}` : "",
+      member.dependsOn && member.dependsOn.length > 0 ? `depends_on=${member.dependsOn.join(", ")}` : "",
+      member.handoffTo && member.handoffTo.length > 0 ? `handoff_to=${member.handoffTo.join(", ")}` : "",
+    ].filter(Boolean);
+    return detailParts.length > 0
+      ? `- ${member.laneId}${currentMarker} | ${detailParts.join(" | ")}`
+      : `- ${member.laneId}${currentMarker}`;
+  });
+
+  const lines = [
+    "## Team Topology and Ownership",
+    "",
+    `- Team mode: ${team.mode}`,
+    `- Team ID: ${team.id}`,
+  ];
+
+  if (team.sharedGoal?.trim()) {
+    lines.push(`- Shared goal: ${team.sharedGoal.trim()}`);
+  }
+  if (team.managerAgentId?.trim()) {
+    lines.push(`- Manager agent: ${team.managerAgentId.trim()}`);
+  }
+  if (team.managerIdentityLabel?.trim()) {
+    lines.push(`- Manager identity: ${team.managerIdentityLabel.trim()}`);
+  }
+  if (currentLane?.laneId) {
+    lines.push(`- Current lane: ${currentLane.laneId}`);
+  }
+  if (currentLane?.identityLabel?.trim()) {
+    lines.push(`- Current lane identity: ${currentLane.identityLabel.trim()}`);
+  }
+  if (currentLane?.authorityRelationToManager) {
+    lines.push(`- Authority relation to manager: ${currentLane.authorityRelationToManager}`);
+  }
+  if (currentLane?.scopeSummary?.trim()) {
+    lines.push(`- Current lane ownership: ${currentLane.scopeSummary.trim()}`);
+  }
+  if (currentLane?.dependsOn && currentLane.dependsOn.length > 0) {
+    lines.push(`- Current lane depends on: ${currentLane.dependsOn.join(", ")}`);
+  }
+  if (currentLane?.handoffTo && currentLane.handoffTo.length > 0) {
+    lines.push(`- Current lane handoff target: ${currentLane.handoffTo.join(", ")}`);
+  }
+
+  lines.push("", "Roster:", ...rosterLines);
+  lines.push(
+    "",
+    "Stay inside your lane ownership, respect declared dependencies, and route cross-lane integration back through the manager unless the launch contract explicitly says otherwise.",
+  );
+
+  return {
+    id: `launch-team-topology-${sanitizeDeltaIdSegment(team.currentLaneId ?? team.id)}`,
+    deltaType: "team-topology-and-ownership",
+    role: "system",
+    source: "launch-spec",
+    text: lines.join("\n"),
+    metadata: {
+      teamId: team.id,
+      teamMode: team.mode,
+      currentLaneId: team.currentLaneId,
+      managerAgentId: team.managerAgentId,
+      managerIdentityLabel: team.managerIdentityLabel,
+    },
+  };
+}
+
+function buildDelegationTeamFollowUpPromptDeltas(input: {
+  toolCallId?: string;
+  toolName: string;
+  delegationResultMetadata?: DelegationResultToolMetadata;
+}): AgentPromptDelta[] {
+  const team = input.delegationResultMetadata?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return [];
+  }
+
+  const deltas: AgentPromptDelta[] = [];
+  const handoffReviewDelta = buildTeamHandoffReviewPromptDelta(input);
+  if (handoffReviewDelta) {
+    deltas.push(handoffReviewDelta);
+  }
+  const fanInTriageDelta = buildTeamFanInTriagePromptDelta(input);
+  if (fanInTriageDelta) {
+    deltas.push(fanInTriageDelta);
+  }
+  const completionGateDelta = buildTeamCompletionGatePromptDelta(input);
+  if (completionGateDelta) {
+    deltas.push(completionGateDelta);
+  }
+  return deltas;
+}
+
+function buildTeamHandoffReviewPromptDelta(input: {
+  toolCallId?: string;
+  toolName: string;
+  delegationResultMetadata?: DelegationResultToolMetadata;
+}): AgentPromptDelta | undefined {
+  const team = input.delegationResultMetadata?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const reviewedResults = input.delegationResultMetadata?.delegationResults ?? [];
+  const lanesWithHandoff = reviewedResults.filter((result) => Array.isArray(result.handoffTo) && result.handoffTo.length > 0);
+  const lanesWithDependencies = reviewedResults.filter((result) => Array.isArray(result.dependsOn) && result.dependsOn.length > 0);
+  const lines = [
+    "## Team Handoff Review",
+    "",
+    "The most recent delegated result came from a managed team run. Treat worker outputs as lane handoffs, not as a final merged team answer.",
+    `- Team mode: ${team.mode}`,
+    `- Team ID: ${team.id}`,
+  ];
+  if (team.sharedGoal?.trim()) {
+    lines.push(`- Shared goal: ${team.sharedGoal.trim()}`);
+  }
+  if (team.managerAgentId?.trim()) {
+    lines.push(`- Manager agent: ${team.managerAgentId.trim()}`);
+  }
+  const handoffSummary = lanesWithHandoff
+    .slice(0, 4)
+    .map((result) => `${result.label ?? result.laneId ?? "lane"} -> ${(result.handoffTo ?? []).join(", ")}`)
+    .join(" | ");
+  if (handoffSummary) {
+    lines.push(`- Active handoff lanes: ${handoffSummary}`);
+  }
+  const dependencySummary = lanesWithDependencies
+    .slice(0, 4)
+    .map((result) => `${result.label ?? result.laneId ?? "lane"} <= ${(result.dependsOn ?? []).join(", ")}`)
+    .join(" | ");
+  if (dependencySummary) {
+    lines.push(`- Declared dependencies: ${dependencySummary}`);
+  }
+  lines.push(
+    "",
+    "Review each lane result against its own scope before you reuse it in another lane or in the final manager answer.",
+    "If a lane names downstream handoff targets, make the next routing step explicit instead of silently folding the result into the final answer.",
+    "If a downstream lane or verifier still needs the handoff, keep that dependency manager-mediated rather than inventing peer-to-peer coordination.",
+  );
+
+  return {
+    id: `team-handoff-review-${sanitizeDeltaIdSegment(input.toolCallId ?? team.id)}`,
+    deltaType: "team-handoff-review",
+    role: "system",
+    source: "tool-result",
+    text: lines.join("\n"),
+    metadata: {
+      toolName: input.toolName,
+      teamId: team.id,
+      teamMode: team.mode,
+      managerAgentId: team.managerAgentId,
+    },
+  };
+}
+
+function buildTeamFanInTriagePromptDelta(input: {
+  toolCallId?: string;
+  toolName: string;
+  delegationResultMetadata?: DelegationResultToolMetadata;
+}): AgentPromptDelta | undefined {
+  const team = input.delegationResultMetadata?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const followUpStrategy = input.delegationResultMetadata?.followUpStrategy;
+  const reviewedResults = input.delegationResultMetadata?.delegationResults ?? [];
+  if ((!followUpStrategy || followUpStrategy.mode !== "parallel") && reviewedResults.length <= 1) {
+    return undefined;
+  }
+
+  const pendingDependencyLabels = reviewedResults
+    .filter((result) => Array.isArray(result.dependsOn) && result.dependsOn.length > 0 && !result.accepted)
+    .map((result) => result.label ?? result.laneId ?? "lane");
+  const lines = [
+    "## Team Fan-In Triage",
+    "",
+    "Before integrating team output, reconcile lane status, open dependencies, and the manager's next acceptance step.",
+  ];
+  if (followUpStrategy?.summary) {
+    lines.push(`- Summary: ${followUpStrategy.summary}`);
+  }
+  if (followUpStrategy?.recommendedRuntimeAction) {
+    lines.push(`- Recommended runtime action: ${followUpStrategy.recommendedRuntimeAction}`);
+  }
+  const acceptSummary = summarizeCompactList(followUpStrategy?.acceptedLabels, 4);
+  if (acceptSummary) {
+    lines.push(`- Safe to integrate now: ${acceptSummary}`);
+  }
+  const retrySummary = summarizeCompactList(followUpStrategy?.retryLabels, 4);
+  if (retrySummary) {
+    lines.push(`- Needs retry or re-delegation: ${retrySummary}`);
+  }
+  const blockerSummary = summarizeCompactList(followUpStrategy?.blockerLabels, 4);
+  if (blockerSummary) {
+    lines.push(`- Hard blockers: ${blockerSummary}`);
+  }
+  const verifierSummary = summarizeCompactList(followUpStrategy?.verifierHandoffLabels, 4);
+  if (verifierSummary) {
+    lines.push(`- Verifier handoff candidates: ${verifierSummary}`);
+  }
+  const pendingDependencySummary = summarizeCompactList(pendingDependencyLabels, 4);
+  if (pendingDependencySummary) {
+    lines.push(`- Lanes with unresolved dependencies: ${pendingDependencySummary}`);
+  }
+  lines.push(
+    "",
+    "Integrate only the lanes whose own acceptance gate passed and whose required dependencies are already satisfied.",
+    "Keep retry, verifier handoff, and blocker lanes out of the final merged answer until the manager resolves them explicitly.",
+  );
+
+  return {
+    id: `team-fan-in-triage-${sanitizeDeltaIdSegment(input.toolCallId ?? team.id)}`,
+    deltaType: "team-fan-in-triage",
+    role: "system",
+    source: "tool-result",
+    text: lines.join("\n"),
+    metadata: {
+      toolName: input.toolName,
+      teamId: team.id,
+      teamMode: team.mode,
+      ...(followUpStrategy?.recommendedRuntimeAction ? { recommendedRuntimeAction: followUpStrategy.recommendedRuntimeAction } : {}),
+    },
+  };
+}
+
+function evaluateDelegationTeamCompletionGate(
+  delegationResultMetadata: DelegationResultToolMetadata | undefined,
+): {
+  status: "pending" | "accepted" | "rejected";
+  summary: string;
+  finalFanInVerdict: "safe_to_merge" | "hold_fan_in" | "reject_fan_in";
+  acceptedLaneIds: string[];
+  pendingLaneIds: string[];
+  retryLaneIds: string[];
+  blockerLaneIds: string[];
+  missingLaneIds: string[];
+  unresolvedDependencyLaneIds: string[];
+  overlappingWriteScopes?: Array<{ path: string; laneIds: string[] }>;
+} {
+  const team = delegationResultMetadata?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return {
+      status: "pending",
+      summary: "Team completion gate is unavailable because the team roster is missing.",
+      finalFanInVerdict: "hold_fan_in",
+      acceptedLaneIds: [],
+      pendingLaneIds: [],
+      retryLaneIds: [],
+      blockerLaneIds: [],
+      missingLaneIds: [],
+      unresolvedDependencyLaneIds: [],
+    };
+  }
+
+  const rosterLaneIds = team.memberRoster.map((member) => member.laneId);
+  const resultByLaneId = new Map<string, NonNullable<DelegationResultToolMetadata["delegationResults"]>[number]>();
+  for (const result of delegationResultMetadata?.delegationResults ?? []) {
+    if (!result.laneId || resultByLaneId.has(result.laneId)) {
+      continue;
+    }
+    resultByLaneId.set(result.laneId, result);
+  }
+
+  const acceptedLaneIds = rosterLaneIds.filter((laneId) => resultByLaneId.get(laneId)?.accepted === true);
+  const retryLaneIds = rosterLaneIds.filter((laneId) => {
+    const result = resultByLaneId.get(laneId);
+    return Boolean(result && result.accepted !== true && result.workerSuccess);
+  });
+  const blockerLaneIds = rosterLaneIds.filter((laneId) => {
+    const result = resultByLaneId.get(laneId);
+    return Boolean(result && result.workerSuccess === false);
+  });
+  const missingLaneIds = rosterLaneIds.filter((laneId) => !resultByLaneId.has(laneId));
+  const pendingLaneIds = rosterLaneIds.filter((laneId) => {
+    if (acceptedLaneIds.includes(laneId) || retryLaneIds.includes(laneId) || blockerLaneIds.includes(laneId) || missingLaneIds.includes(laneId)) {
+      return false;
+    }
+    return true;
+  });
+  const unresolvedDependencyLaneIds = team.memberRoster
+    .filter((member) => Array.isArray(member.dependsOn) && member.dependsOn.some((dependencyLaneId) => !acceptedLaneIds.includes(dependencyLaneId)))
+    .map((member) => member.laneId);
+
+  if (blockerLaneIds.length > 0) {
+    return {
+      status: "rejected",
+      summary: `Team completion gate rejected: blocker lanes=${blockerLaneIds.join(", ")}.`,
+      finalFanInVerdict: "reject_fan_in",
+      acceptedLaneIds,
+      pendingLaneIds,
+      retryLaneIds,
+      blockerLaneIds,
+      missingLaneIds,
+      unresolvedDependencyLaneIds,
+    };
+  }
+  if (retryLaneIds.length > 0 || pendingLaneIds.length > 0 || missingLaneIds.length > 0 || unresolvedDependencyLaneIds.length > 0) {
+    const parts = [
+      acceptedLaneIds.length > 0 ? `accepted=${acceptedLaneIds.join(", ")}` : "",
+      retryLaneIds.length > 0 ? `retry=${retryLaneIds.join(", ")}` : "",
+      pendingLaneIds.length > 0 ? `pending=${pendingLaneIds.join(", ")}` : "",
+      missingLaneIds.length > 0 ? `missing=${missingLaneIds.join(", ")}` : "",
+      unresolvedDependencyLaneIds.length > 0 ? `unresolved_deps=${unresolvedDependencyLaneIds.join(", ")}` : "",
+    ].filter(Boolean);
+    return {
+      status: "pending",
+      summary: `Team completion gate pending: ${parts.join("; ")}.`,
+      finalFanInVerdict: "hold_fan_in",
+      acceptedLaneIds,
+      pendingLaneIds,
+      retryLaneIds,
+      blockerLaneIds,
+      missingLaneIds,
+      unresolvedDependencyLaneIds,
+    };
+  }
+  return {
+    status: "accepted",
+    summary: `Team completion gate accepted: all ${acceptedLaneIds.length} lane(s) are ready for manager fan-in.`,
+    finalFanInVerdict: "safe_to_merge",
+    acceptedLaneIds,
+    pendingLaneIds: [],
+    retryLaneIds: [],
+    blockerLaneIds: [],
+    missingLaneIds: [],
+    unresolvedDependencyLaneIds: [],
+  };
+}
+
+function buildTeamCompletionGatePromptDelta(input: {
+  toolCallId?: string;
+  toolName: string;
+  delegationResultMetadata?: DelegationResultToolMetadata;
+}): AgentPromptDelta | undefined {
+  const team = input.delegationResultMetadata?.team;
+  if (!team || !Array.isArray(team.memberRoster) || team.memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const completionGate = evaluateDelegationTeamCompletionGate(input.delegationResultMetadata);
+  const lines = [
+    "## Team Completion Gate",
+    "",
+    `- Status: ${completionGate.status}`,
+    `- Final fan-in verdict: ${completionGate.finalFanInVerdict}`,
+    `- Summary: ${completionGate.summary}`,
+  ];
+  const acceptedSummary = summarizeCompactList(completionGate.acceptedLaneIds, 4);
+  if (acceptedSummary) {
+    lines.push(`- Accepted lanes: ${acceptedSummary}`);
+  }
+  const pendingSummary = summarizeCompactList(completionGate.pendingLaneIds, 4);
+  if (pendingSummary) {
+    lines.push(`- Pending lanes: ${pendingSummary}`);
+  }
+  const retrySummary = summarizeCompactList(completionGate.retryLaneIds, 4);
+  if (retrySummary) {
+    lines.push(`- Retry lanes: ${retrySummary}`);
+  }
+  const blockerSummary = summarizeCompactList(completionGate.blockerLaneIds, 4);
+  if (blockerSummary) {
+    lines.push(`- Blocker lanes: ${blockerSummary}`);
+  }
+  const missingSummary = summarizeCompactList(completionGate.missingLaneIds, 4);
+  if (missingSummary) {
+    lines.push(`- Missing lanes: ${missingSummary}`);
+  }
+  const unresolvedDependencySummary = summarizeCompactList(completionGate.unresolvedDependencyLaneIds, 4);
+  if (unresolvedDependencySummary) {
+    lines.push(`- Unresolved dependency lanes: ${unresolvedDependencySummary}`);
+  }
+  if (completionGate.overlappingWriteScopes?.length) {
+    lines.push(`- Overlapping write scope: ${completionGate.overlappingWriteScopes.map((entry) => `${entry.path} <= ${entry.laneIds.join("+")}`).join(" | ")}`);
+  }
+  lines.push(
+    "",
+    completionGate.finalFanInVerdict === "safe_to_merge"
+      ? "The team run is structurally ready for manager fan-in."
+      : completionGate.finalFanInVerdict === "hold_fan_in"
+        ? "Hold final fan-in until the pending or retry lanes are resolved explicitly."
+        : "Do not claim team completion yet. Resolve blockers or overlapping ownership before integrating the final answer.",
+  );
+
+  return {
+    id: `team-completion-gate-${sanitizeDeltaIdSegment(input.toolCallId ?? team.id)}`,
+    deltaType: "team-completion-gate",
+    role: "system",
+    source: "tool-result",
+    text: lines.join("\n"),
+    metadata: {
+      toolName: input.toolName,
+      teamId: team.id,
+      teamMode: team.mode,
+      completionGate: completionGate as any,
+    },
+  };
+}
+
 function summarizeList(values: readonly string[] | undefined, maxItems: number): string | undefined {
   if (!Array.isArray(values) || values.length === 0) {
     return undefined;
@@ -408,16 +842,6 @@ function buildDelegationResultReviewText(
   }
 
   const taskContracts = readDelegationTaskContracts(toolName, requestArguments);
-  if (taskContracts.length === 0) {
-    return [
-      "## Delegation Result Review",
-      "",
-      "The most recent tool call delegated work to one or more sub-agents.",
-      "Wait immediately only if your next safe local step is blocked on that result or the result is needed to prove safety/completion.",
-      "Reject or follow up if the returned result does not clearly satisfy the delegated scope, completion criteria, or deliverable format.",
-    ].join("\n");
-  }
-
   const lines = [
     "## Delegation Result Review",
     "",
@@ -426,23 +850,30 @@ function buildDelegationResultReviewText(
     "If the result exceeds owned scope, violates out-of-scope limits, misses required sections, or fails the done definition, reject it or issue a follow-up delegation instead of treating it as complete.",
   ];
 
-  for (const task of taskContracts.slice(0, 3)) {
-    const prefix = task.label ? `- ${task.label}:` : "- Delegated task:";
-    lines.push(prefix);
-    if (task.scopeSummary) {
-      lines.push(`  Owned scope: ${task.scopeSummary}`);
-    }
-    if (task.outOfScope) {
-      lines.push(`  Out of scope: ${task.outOfScope}`);
-    }
-    if (task.doneDefinition) {
-      lines.push(`  Done definition: ${task.doneDefinition}`);
-    }
-    if (task.verificationHints) {
-      lines.push(`  Verification hints: ${task.verificationHints}`);
-    }
-    if (task.deliverable) {
-      lines.push(`  Deliverable contract: ${task.deliverable}`);
+  if (taskContracts.length === 0) {
+    lines.push(
+      "",
+      "No explicit structured task contract was recovered from the original request. Rely on the returned gate results, team topology, and follow-up strategy before integrating delegated output.",
+    );
+  } else {
+    for (const task of taskContracts.slice(0, 3)) {
+      const prefix = task.label ? `- ${task.label}:` : "- Delegated task:";
+      lines.push(prefix);
+      if (task.scopeSummary) {
+        lines.push(`  Owned scope: ${task.scopeSummary}`);
+      }
+      if (task.outOfScope) {
+        lines.push(`  Out of scope: ${task.outOfScope}`);
+      }
+      if (task.doneDefinition) {
+        lines.push(`  Done definition: ${task.doneDefinition}`);
+      }
+      if (task.verificationHints) {
+        lines.push(`  Verification hints: ${task.verificationHints}`);
+      }
+      if (task.deliverable) {
+        lines.push(`  Deliverable contract: ${task.deliverable}`);
+      }
     }
   }
 
@@ -474,6 +905,38 @@ function buildDelegationResultReviewText(
   }
   if (reviewedResults.length > 3) {
     lines.push(`- ${reviewedResults.length - 3} additional delegation gate results omitted for brevity.`);
+  }
+
+  const team = delegationResultMetadata?.team;
+  if (team?.memberRoster?.length) {
+    lines.push(
+      "",
+      "## Team Result Context",
+      "",
+      `- Team mode: ${team.mode}`,
+      `- Team ID: ${team.id}`,
+    );
+    if (team.sharedGoal?.trim()) {
+      lines.push(`- Shared goal: ${team.sharedGoal.trim()}`);
+    }
+    if (team.managerAgentId?.trim()) {
+      lines.push(`- Manager agent: ${team.managerAgentId.trim()}`);
+    }
+    const rosterSummary = team.memberRoster
+      .slice(0, 4)
+      .map((member) => {
+        const details = [
+          member.role ? `role=${member.role}` : undefined,
+          member.scopeSummary ? `owns=${member.scopeSummary}` : undefined,
+          member.dependsOn?.length ? `depends_on=${member.dependsOn.join(", ")}` : undefined,
+          member.handoffTo?.length ? `handoff_to=${member.handoffTo.join(", ")}` : undefined,
+        ].filter(Boolean);
+        return details.length > 0 ? `${member.laneId} | ${details.join(" | ")}` : member.laneId;
+      })
+      .join(" || ");
+    if (rosterSummary) {
+      lines.push(`- Team roster: ${rosterSummary}`);
+    }
   }
 
   const followUpStrategy = delegationResultMetadata?.followUpStrategy;
@@ -738,6 +1201,7 @@ function readDelegationResultToolMetadataFromUnknown(value: unknown): Delegation
   const gateRejectedCount = normalizeOptionalNumber(record.gateRejectedCount);
   const workerSuccessCount = normalizeOptionalNumber(record.workerSuccessCount);
   const followUpStrategy = readDelegationResultFollowUpStrategy(record.followUpStrategy);
+  const team = readDelegationTeamMetadata(record.team);
 
   return {
     delegationResults,
@@ -745,6 +1209,7 @@ function readDelegationResultToolMetadataFromUnknown(value: unknown): Delegation
     ...(typeof gateRejectedCount === "number" ? { gateRejectedCount } : {}),
     ...(typeof workerSuccessCount === "number" ? { workerSuccessCount } : {}),
     ...(followUpStrategy ? { followUpStrategy } : {}),
+    ...(team ? { team } : {}),
   };
 }
 
@@ -761,9 +1226,13 @@ function readDelegationResultToolReview(
   }
 
   const label = normalizeInlineString(record.label);
+  const laneId = normalizeInlineString(record.laneId);
+  const scopeSummary = normalizeInlineString(record.scopeSummary);
   const taskId = normalizeInlineString(record.taskId);
   const sessionId = normalizeInlineString(record.sessionId);
   const outputPath = normalizeInlineString(record.outputPath);
+  const dependsOn = normalizeStringList(record.dependsOn);
+  const handoffTo = normalizeStringList(record.handoffTo);
   const acceptanceGate = readDelegationResultGate(record.acceptanceGate);
 
   return {
@@ -771,10 +1240,71 @@ function readDelegationResultToolReview(
     accepted: record.accepted,
     ...(normalizeInlineString(record.error) ? { error: normalizeInlineString(record.error) } : {}),
     ...(label ? { label } : {}),
+    ...(laneId ? { laneId } : {}),
+    ...(scopeSummary ? { scopeSummary } : {}),
     ...(taskId ? { taskId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(outputPath ? { outputPath } : {}),
+    ...(dependsOn ? { dependsOn } : {}),
+    ...(handoffTo ? { handoffTo } : {}),
     ...(acceptanceGate ? { acceptanceGate } : {}),
+  };
+}
+
+function readDelegationTeamMetadata(
+  value: unknown,
+): NonNullable<DelegationResultToolMetadata["team"]> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const id = normalizeInlineString(record.id);
+  const mode = readDelegationTeamMode(record.mode);
+  const memberRoster = Array.isArray(record.memberRoster)
+    ? record.memberRoster
+        .map((entry) => readDelegationTeamMember(entry))
+        .filter((entry): entry is NonNullable<DelegationResultToolMetadata["team"]>["memberRoster"][number] => Boolean(entry))
+    : [];
+  if (!id || !mode || memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const currentLaneId = normalizeInlineString(record.currentLaneId);
+  const normalizedCurrentLaneId = currentLaneId && memberRoster.some((member) => member.laneId === currentLaneId)
+    ? currentLaneId
+    : undefined;
+  return {
+    id,
+    mode,
+    ...(normalizeInlineString(record.sharedGoal) ? { sharedGoal: normalizeInlineString(record.sharedGoal) } : {}),
+    ...(normalizeInlineString(record.managerAgentId) ? { managerAgentId: normalizeInlineString(record.managerAgentId) } : {}),
+    ...(normalizedCurrentLaneId ? { currentLaneId: normalizedCurrentLaneId } : {}),
+    memberRoster,
+  };
+}
+
+function readDelegationTeamMember(
+  value: unknown,
+): NonNullable<DelegationResultToolMetadata["team"]>["memberRoster"][number] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const laneId = normalizeInlineString(record.laneId);
+  if (!laneId) {
+    return undefined;
+  }
+  const dependsOn = normalizeStringList(record.dependsOn);
+  const handoffTo = normalizeStringList(record.handoffTo);
+  return {
+    laneId,
+    ...(normalizeInlineString(record.agentId) ? { agentId: normalizeInlineString(record.agentId) } : {}),
+    ...(readDelegationTeamRole(record.role) ? { role: readDelegationTeamRole(record.role) } : {}),
+    ...(normalizeInlineString(record.scopeSummary) ? { scopeSummary: normalizeInlineString(record.scopeSummary) } : {}),
+    ...(dependsOn ? { dependsOn } : {}),
+    ...(handoffTo ? { handoffTo } : {}),
   };
 }
 
@@ -1030,6 +1560,35 @@ function readDelegationResultRuntimeAction(
 
 function readDelegationResultRuntimeActionPriority(value: unknown): "normal" | "high" | undefined {
   return value === "normal" || value === "high" ? value : undefined;
+}
+
+function readDelegationTeamMode(
+  value: unknown,
+): NonNullable<DelegationResultToolMetadata["team"]>["mode"] | undefined {
+  switch (value) {
+    case "parallel_subtasks":
+    case "parallel_patch":
+    case "research_grid":
+    case "verify_swarm":
+    case "plan_execute_verify":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function readDelegationTeamRole(
+  value: unknown,
+): NonNullable<DelegationResultToolMetadata["team"]>["memberRoster"][number]["role"] | undefined {
+  switch (value) {
+    case "default":
+    case "coder":
+    case "researcher":
+    case "verifier":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function normalizeOptionalNumber(value: unknown): number | undefined {

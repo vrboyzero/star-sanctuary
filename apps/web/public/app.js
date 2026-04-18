@@ -2543,6 +2543,7 @@ function updateTokenUsage(payload) {
   set("tuCtx", payload.contextTokens);
   set("tuIn", payload.inputTokens);
   set("tuOut", payload.outputTokens);
+  set("tuCalls", payload.modelCalls);
   // 会话累计：每次收到 usage 事件，累加 input + output
   sessionTotalTokens += (payload.inputTokens || 0) + (payload.outputTokens || 0);
   set("tuAll", sessionTotalTokens);

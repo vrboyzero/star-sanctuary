@@ -28,6 +28,13 @@ export type DelegationAggregationMode =
   | "main_agent_summary"
   | "verifier_fan_in";
 
+export type DelegationTeamMode =
+  | "parallel_subtasks"
+  | "parallel_patch"
+  | "research_grid"
+  | "verify_swarm"
+  | "plan_execute_verify";
+
 export type DelegationOwnership = {
   scopeSummary: string;
   outOfScope?: string[];
@@ -43,6 +50,29 @@ export type DelegationDeliverableContract = {
   format: DelegationDeliverableFormat;
   summary?: string;
   requiredSections?: string[];
+};
+
+export type DelegationTeamMember = {
+  laneId: string;
+  agentId?: string;
+  role?: NonNullable<SpawnSubAgentOptions["role"]>;
+  identityLabel?: string;
+  authorityRelationToManager?: "self" | "superior" | "peer" | "subordinate" | "unknown";
+  reportsTo?: string[];
+  mayDirect?: string[];
+  scopeSummary?: string;
+  dependsOn?: string[];
+  handoffTo?: string[];
+};
+
+export type DelegationTeamMetadata = {
+  id: string;
+  mode: DelegationTeamMode;
+  sharedGoal?: string;
+  managerAgentId?: string;
+  managerIdentityLabel?: string;
+  currentLaneId?: string;
+  memberRoster: DelegationTeamMember[];
 };
 
 export type DelegationProtocol = {
@@ -77,6 +107,13 @@ export type DelegationProtocol = {
   ownership?: DelegationOwnership;
   acceptance?: DelegationAcceptance;
   deliverableContract?: DelegationDeliverableContract;
+  team?: DelegationTeamMetadata;
+};
+
+export type BuildDelegationTeamMemberOptions = Partial<DelegationTeamMember>;
+
+export type BuildDelegationTeamMetadataOptions = Partial<Omit<DelegationTeamMetadata, "memberRoster">> & {
+  memberRoster?: BuildDelegationTeamMemberOptions[];
 };
 
 export type BuildDelegationProtocolOptions = {
@@ -96,6 +133,7 @@ export type BuildDelegationProtocolOptions = {
   ownership?: Partial<DelegationOwnership>;
   acceptance?: Partial<DelegationAcceptance>;
   deliverableContract?: Partial<DelegationDeliverableContract>;
+  team?: BuildDelegationTeamMetadataOptions;
 };
 
 function normalizeStringArray(value: readonly string[] | undefined): string[] | undefined {
@@ -157,6 +195,7 @@ export function buildDelegationProtocol(options: BuildDelegationProtocolOptions)
   const ownership = buildDelegationOwnership(options, deliverableSummary);
   const acceptance = buildDelegationAcceptance(options, deliverableSummary);
   const deliverableContract = buildDelegationDeliverableContract(options, deliverableFormat, deliverableSummary);
+  const team = buildDelegationTeamMetadata(options, deliverableSummary);
   return {
     source: options.source,
     intent: {
@@ -189,6 +228,7 @@ export function buildDelegationProtocol(options: BuildDelegationProtocolOptions)
     ...(ownership ? { ownership } : {}),
     ...(acceptance ? { acceptance } : {}),
     ...(deliverableContract ? { deliverableContract } : {}),
+    ...(team ? { team } : {}),
   };
 }
 
@@ -239,4 +279,136 @@ function buildDelegationDeliverableContract(
     ...(contractSummary || summary ? { summary: contractSummary || summary } : {}),
     ...(requiredSections ? { requiredSections } : {}),
   };
+}
+
+function buildDelegationTeamMetadata(
+  options: BuildDelegationProtocolOptions,
+  fallbackSummary: string,
+): DelegationTeamMetadata | undefined {
+  const teamId = options.team?.id?.trim() || "";
+  const mode = normalizeDelegationTeamMode(options.team?.mode);
+  const sharedGoal = options.team?.sharedGoal?.trim() || "";
+  const managerAgentId = options.team?.managerAgentId?.trim() || "";
+  const managerIdentityLabel = typeof options.team?.managerIdentityLabel === "string"
+    ? options.team.managerIdentityLabel.trim()
+    : "";
+  const currentLaneId = options.team?.currentLaneId?.trim() || "";
+  const memberRoster = buildDelegationTeamRoster(options.team?.memberRoster);
+
+  if (!teamId && !mode && !sharedGoal && !managerAgentId && !managerIdentityLabel && !currentLaneId && !memberRoster) {
+    return undefined;
+  }
+
+  if (!teamId || !mode || !memberRoster || memberRoster.length === 0) {
+    return undefined;
+  }
+
+  const normalizedCurrentLaneId = memberRoster.some((member) => member.laneId === currentLaneId)
+    ? currentLaneId
+    : undefined;
+
+  return {
+    id: teamId,
+    mode,
+    ...(sharedGoal || fallbackSummary ? { sharedGoal: sharedGoal || fallbackSummary } : {}),
+    ...(managerAgentId ? { managerAgentId } : {}),
+    ...(managerIdentityLabel ? { managerIdentityLabel } : {}),
+    ...(normalizedCurrentLaneId ? { currentLaneId: normalizedCurrentLaneId } : {}),
+    memberRoster,
+  };
+}
+
+function buildDelegationTeamRoster(
+  roster: BuildDelegationTeamMemberOptions[] | undefined,
+): DelegationTeamMember[] | undefined {
+  if (!Array.isArray(roster)) {
+    return undefined;
+  }
+
+  const normalized = roster
+    .map((member) => {
+      const laneId = typeof member?.laneId === "string" ? member.laneId.trim() : "";
+      if (!laneId) {
+        return undefined;
+      }
+      const agentId = typeof member.agentId === "string" ? member.agentId.trim() : "";
+      const role = normalizeDelegationRole(member.role);
+      const identityLabel = typeof member.identityLabel === "string" ? member.identityLabel.trim() : "";
+      const authorityRelationToManager = normalizeDelegationAuthorityRelation(member.authorityRelationToManager);
+      const reportsTo = normalizeStringArray(member.reportsTo);
+      const mayDirect = normalizeStringArray(member.mayDirect);
+      const scopeSummary = typeof member.scopeSummary === "string" ? member.scopeSummary.trim() : "";
+      const dependsOn = normalizeStringArray(member.dependsOn);
+      const handoffTo = normalizeStringArray(member.handoffTo);
+      return {
+        laneId,
+        ...(agentId ? { agentId } : {}),
+        ...(role ? { role } : {}),
+        ...(identityLabel ? { identityLabel } : {}),
+        ...(authorityRelationToManager ? { authorityRelationToManager } : {}),
+        ...(reportsTo ? { reportsTo } : {}),
+        ...(mayDirect ? { mayDirect } : {}),
+        ...(scopeSummary ? { scopeSummary } : {}),
+        ...(dependsOn ? { dependsOn } : {}),
+        ...(handoffTo ? { handoffTo } : {}),
+      } satisfies DelegationTeamMember;
+    })
+    .filter(Boolean) as DelegationTeamMember[];
+
+  if (normalized.length === 0) {
+    return undefined;
+  }
+
+  const deduped = new Map<string, DelegationTeamMember>();
+  for (const member of normalized) {
+    if (!deduped.has(member.laneId)) {
+      deduped.set(member.laneId, member);
+    }
+  }
+  return [...deduped.values()];
+}
+
+function normalizeDelegationTeamMode(
+  value: unknown,
+): DelegationTeamMode | undefined {
+  switch (value) {
+    case "parallel_subtasks":
+    case "parallel_patch":
+    case "research_grid":
+    case "verify_swarm":
+    case "plan_execute_verify":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeDelegationRole(
+  value: unknown,
+): DelegationTeamMember["role"] | undefined {
+  switch (value) {
+    case "default":
+    case "coder":
+    case "researcher":
+    case "verifier":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function normalizeDelegationAuthorityRelation(
+  value: unknown,
+): DelegationTeamMember["authorityRelationToManager"] | undefined {
+  const normalized = typeof value === "string" ? value.trim() : value;
+  switch (normalized) {
+    case "self":
+    case "superior":
+    case "peer":
+    case "subordinate":
+    case "unknown":
+      return normalized;
+    default:
+      return undefined;
+  }
 }

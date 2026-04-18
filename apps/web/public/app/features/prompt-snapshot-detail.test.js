@@ -33,6 +33,30 @@ describe("prompt snapshot detail rendering", () => {
               text: "Operate as verifier.",
             },
             {
+              id: "runtime-identity-authority",
+              deltaType: "runtime-identity-authority",
+              text: "## Runtime Identity Authority",
+              metadata: {
+                authorityMode: "verifiable_only",
+                actorRelation: "subordinate",
+                recommendedAction: "guide_only",
+                currentLabel: "首席执行官 (CEO)",
+                teamId: "team-42",
+              },
+            },
+            {
+              id: "team-completion-gate-call-1",
+              deltaType: "team-completion-gate",
+              text: "## Team Completion Gate",
+              metadata: {
+                completionGate: {
+                  status: "pending",
+                  finalFanInVerdict: "hold_fan_in",
+                  summary: "Team completion gate pending: accepted=lane_1; retry=lane_2.",
+                },
+              },
+            },
+            {
               id: "tool-post-verification-call-1",
               deltaType: "tool-post-verification",
               text: "## Delegation Result Review",
@@ -69,8 +93,8 @@ describe("prompt snapshot detail rendering", () => {
               id: "provider-native-dynamic-runtime",
               blockType: "dynamic-runtime",
               text: "Operate as verifier.",
-              sourceSectionIds: ["role-execution-policy"],
-              sourceDeltaIds: ["role-execution-policy"],
+              sourceSectionIds: ["role-execution-policy", "team-shared-state-policy"],
+              sourceDeltaIds: ["role-execution-policy", "team-completion-gate-call-1"],
             },
           ],
         },
@@ -116,10 +140,19 @@ describe("prompt snapshot detail rendering", () => {
     expect(html).toContain("Active Prompt Deltas");
     expect(html).toContain("role-execution-policy (role-execution-policy)");
     expect(html).toContain("Provider Block Routing");
-    expect(html).toContain("dynamic-runtime, sections=role-execution-policy, deltas=role-execution-policy");
+    expect(html).toContain("dynamic-runtime, sections=role-execution-policy+team-shared-state-policy, deltas=role-execution-policy+team-completion-gate-call-1");
+    expect(html).toContain("Team Coordination");
+    expect(html).toContain("sections=team-shared-state-policy");
+    expect(html).toContain("team-completion-gate (team-completion-gate-call-1)");
+    expect(html).toContain("completion_gate=pending; verdict=hold_fan_in");
     expect(html).toContain("Follow-Up Strategy");
     expect(html).toContain("tool-post-verification: runtime=retry_delegation; high=Agent verifier; verifier_handoff=Agent verifier");
     expect(html).toContain("Agent verifier: retry -> retry_delegation [high]");
+    expect(html).toContain("Identity Authority");
+    expect(html).toContain("runtime-identity-authority");
+    expect(html).toContain("mode=verifiable_only; relation=subordinate; action=guide_only");
+    expect(html).toContain("current_label=首席执行官 (CEO)");
+    expect(html).toContain("team_id=team-42");
     expect(html).toContain("#1 system");
     expect(html).toContain('data-subtask-prompt-snapshot-session="sub_task_1"');
   });

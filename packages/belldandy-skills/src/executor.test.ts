@@ -922,9 +922,11 @@ describe("ToolExecutor", () => {
     );
 
     expect(searchResult.success).toBe(true);
-    expect(searchResult.output).toContain("Loaded tools for next turn");
+    expect(searchResult.output).toContain("Loaded tools for the next model turn only");
     expect(searchResult.output).toContain("web_search_deep");
     expect(executor.getDefinitions("default", "conv-1").map((item) => item.function.name)).toContain("web_search_deep");
+    await executor.consumeLoadedDeferredToolsForNextTurn("conv-1");
+    expect(executor.getDefinitions("default", "conv-1").map((item) => item.function.name)).not.toContain("web_search_deep");
   });
 
   it("should hide heavy discovery family members until the family is expanded", () => {
@@ -1147,6 +1149,57 @@ describe("ToolExecutor", () => {
     }, "conv-ops");
     expect(resetResult.output).toContain("Reset loaded deferred tools");
     expect(executor.getLoadedDeferredToolList("conv-ops")).toEqual([]);
+  });
+
+  it("should auto-prune oversized legacy deferred selections using recent tool digests first", () => {
+    const deferredTools = Array.from({ length: 20 }, (_, index) => {
+      const name = `deferred_${String(index + 1).padStart(2, "0")}`;
+      return {
+        definition: {
+          name,
+          description: `${name} description`,
+          shortDescription: `${name} short`,
+          parameters: { type: "object", properties: {}, required: [] },
+        },
+        async execute(): Promise<ToolCallResult> {
+          return { id: "", name, success: true, output: name, durationMs: 0 };
+        },
+      } satisfies Tool;
+    });
+
+    const loadedState = new Map<string, string[]>();
+    loadedState.set("conv-legacy", deferredTools.map((tool) => tool.definition.name));
+    const persistedSelections: string[][] = [];
+    const executor = new ToolExecutor({
+      tools: [echoTool, ...deferredTools],
+      workspaceRoot: "/tmp/test",
+      deferredToolNames: deferredTools.map((tool) => tool.definition.name),
+      conversationStore: {
+        getHistory: () => [],
+        getLoadedToolNames: (conversationId) => loadedState.get(conversationId) ?? [],
+        setLoadedToolNames: (conversationId, toolNames) => {
+          loadedState.set(conversationId, toolNames);
+          persistedSelections.push([...toolNames]);
+        },
+        getToolDigests: () => [
+          { toolName: "deferred_19" },
+          { toolName: "deferred_20" },
+          { toolName: "echo" },
+        ],
+        setRoomMembersCache: () => {},
+        getRoomMembersCache: () => undefined,
+        clearRoomMembersCache: () => {},
+        recordTaskTokenResult: () => {},
+        getTaskTokenResults: () => [],
+      } as any,
+    });
+
+    const exposedNames = executor.getDefinitions("default", "conv-legacy").map((item) => item.function.name);
+    expect(exposedNames).toContain("deferred_19");
+    expect(exposedNames).toContain("deferred_20");
+    expect(exposedNames).toHaveLength(17);
+    expect(persistedSelections.at(-1)).toHaveLength(16);
+    expect(persistedSelections.at(-1)?.slice(0, 2)).toEqual(["deferred_20", "deferred_19"]);
   });
 });
 

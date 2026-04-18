@@ -182,4 +182,93 @@ describe("buildSubAgentLaunchSpec delegation protocol", () => {
     expect(spec.instruction).toContain("Required sections: Changes made | Verification | Residual risk");
     expect(spec.instruction).toContain("Use the required section names verbatim in the final handoff whenever practical");
   });
+
+  it("threads team metadata into the worker envelope and delegation protocol", () => {
+    const spec = buildSubAgentLaunchSpec(createContext(), {
+      instruction: "Patch lane A and hand the result back to the verifier lane.",
+      agentId: "coder",
+      channel: "subtask",
+      role: "coder",
+      ownership: {
+        scopeSummary: "Own patch lane A only.",
+      },
+      team: {
+        id: "team-42",
+        mode: "parallel_patch",
+        sharedGoal: "Split the patch work and fan in through the verifier.",
+        managerAgentId: "default",
+        managerIdentityLabel: "首席执行官 (CEO)",
+        currentLaneId: "lane_a",
+        memberRoster: [
+          {
+            laneId: "lane_a",
+            agentId: "coder",
+            role: "coder",
+            identityLabel: "CTO",
+            authorityRelationToManager: "subordinate",
+            reportsTo: ["首席执行官 (CEO)"],
+            mayDirect: ["员工"],
+            scopeSummary: "Own patch lane A only.",
+            handoffTo: ["lane_verify"],
+          },
+          {
+            laneId: "lane_verify",
+            agentId: "verifier",
+            role: "verifier",
+            identityLabel: "审计",
+            authorityRelationToManager: "peer",
+            scopeSummary: "Review accepted patch lanes.",
+            dependsOn: ["lane_a"],
+          },
+        ],
+      },
+    });
+
+    expect(spec.delegationProtocol?.team).toMatchObject({
+      id: "team-42",
+      mode: "parallel_patch",
+      sharedGoal: "Split the patch work and fan in through the verifier.",
+      managerAgentId: "default",
+      managerIdentityLabel: "首席执行官 (CEO)",
+      currentLaneId: "lane_a",
+      memberRoster: [
+        {
+          laneId: "lane_a",
+          agentId: "coder",
+          role: "coder",
+          identityLabel: "CTO",
+          authorityRelationToManager: "subordinate",
+          reportsTo: ["首席执行官 (CEO)"],
+          mayDirect: ["员工"],
+          scopeSummary: "Own patch lane A only.",
+          handoffTo: ["lane_verify"],
+        },
+        {
+          laneId: "lane_verify",
+          agentId: "verifier",
+          role: "verifier",
+          identityLabel: "审计",
+          authorityRelationToManager: "peer",
+          scopeSummary: "Review accepted patch lanes.",
+          dependsOn: ["lane_a"],
+        },
+      ],
+    });
+    expect(spec.instruction).toContain("## Team Topology and Ownership");
+    expect(spec.instruction).toContain("## Authority Chain");
+    expect(spec.instruction).toContain("## Teammate Handoff");
+    expect(spec.instruction).toContain("## Reporting Expectations");
+    expect(spec.instruction).toContain("Team mode: parallel_patch");
+    expect(spec.instruction).toContain("Team ID: team-42");
+    expect(spec.instruction).toContain("Manager identity: 首席执行官 (CEO)");
+    expect(spec.instruction).toContain("Current lane: lane_a");
+    expect(spec.instruction).toContain("Current lane identity: CTO");
+    expect(spec.instruction).toContain("Authority relation to manager: subordinate");
+    expect(spec.instruction).toContain("Reports to: 首席执行官 (CEO)");
+    expect(spec.instruction).toContain("May direct: 员工");
+    expect(spec.instruction).toContain("Current lane handoff target: lane_verify");
+    expect(spec.instruction).toContain("Intended downstream lane(s): lane_verify");
+    expect(spec.instruction).toContain("Name the lane you covered: lane_a.");
+    expect(spec.instruction).toContain("lane_verify | agent=verifier | role=verifier | identity=审计 | relation=peer | owns=Review accepted patch lanes. | depends_on=lane_a");
+  });
 });

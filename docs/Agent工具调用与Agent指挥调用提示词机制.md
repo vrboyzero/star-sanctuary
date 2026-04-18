@@ -2195,3 +2195,926 @@ const promptBuild = buildSystemPromptResult({
 - 相关定向 Vitest 与 `corepack pnpm build` 已通过。
 - 因此这份文档对应的“Agent 工具调用与 Agent 指挥调用机制 v1 主线”现在可以视为已收口。
 - 后续若继续推进，原则上应转入增强项或 backlog，而不是继续扩张这条主线章节。
+
+---
+
+## 23. Agent Teams 提示词机制评估（v1 收口后的增强项）
+
+这部分不是把 22.x 主线重新打开，而是基于 Claude Code 的 Team / Swarm 思路，对 Belldandy 当前多 Agent 能力做一次增强评估。
+
+### 23.1 当前结论
+
+先明确结论：
+
+- 现在的 Belldandy 已经支持多 Agent 并行执行任务。
+- 现在的 Belldandy 也已经支持一个主 Agent 指挥多个 Agent，再做 fan-out / fan-in / verifier handoff / acceptance gate。
+- 所以当前缺的不是“能不能多 Agent 协作”，而是“是否已经形成一层更成熟的 Agent Teams prompt 机制”。
+
+代码依据：
+
+- `packages/belldandy-agent/src/orchestrator.ts`
+  - `SubAgentOrchestrator.spawn(...)` 支持单个子 Agent 拉起
+  - `SubAgentOrchestrator.spawnParallel(...)` 支持并行 fan-out
+- `packages/belldandy-skills/src/builtin/session/delegate-parallel.ts`
+  - 已支持 manager 侧并行委派、结果聚合、acceptance gate
+- `packages/belldandy-skills/src/delegation-protocol.ts`
+  - 已有 `ownership / acceptance / deliverableContract / aggregationPolicy`
+- `packages/belldandy-skills/src/subagent-launch.ts`
+  - worker envelope 已有 role、owned scope、done definition、deliverable sections
+- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+  - manager / verifier 侧已经有 delegation operating policy
+
+判断：
+
+- Belldandy 当前更接近“结构化 delegation + acceptance gate + verifier handoff”。
+- 距离 Claude Code 那种更完整的 “Agent Teams / swarm prompt layer”，主要还差 team-level 的提示词与协作语义，而不是基础 runtime 能力。
+
+### 23.2 对比 Claude Code Team / Swarm 思路，还缺什么
+
+结合 `docs/CC提示词文件整理.md` 里的：
+
+- `TeamCreateTool/prompt.ts`
+- `AgentTool/prompt.ts`
+- `SendMessageTool/prompt.ts`
+- `src/utils/swarm/teammatePromptAddendum.ts`
+- built-in `plan / explore / verification` agent
+
+Belldandy 目前最明显的缺口不在“能不能起 worker”，而在下面这些 team-aware prompt 能力：
+
+- 缺少显式的 team topology prompt
+  - 当前 prompt 主要描述“这次委派给某个 worker 的契约”
+  - 但没有稳定描述“当前团队里有哪些成员、谁负责什么、彼此依赖关系是什么”
+- 缺少 teammate communication protocol
+  - 当前 worker 更像“接任务后独立完成并交付最终结果”
+  - 缺少一层明确的“何时向 manager 汇报、何时向 teammate 交接、何时发送 blocker / decision request”的提示词协议
+- 缺少 shared-state / scratchpad discipline
+  - 当前有 deliverable contract，但缺少“哪些中间结论应该沉淀到共享摘要、哪些只放在最终 handoff、如何避免并行 worker 重复探索”的规则
+- 缺少 manager fan-out / poll / fan-in loop prompt
+  - 当前 manager 规则已经覆盖“何时委派、何时等待、何时驳回”
+  - 但还缺一层更强的“先拆分、再本地推进、再选择性 wait、最后做整合”的 team operating loop
+- 缺少动态 ownership / handoff 语义
+  - 当前 ownership 更偏静态 write scope / out-of-scope
+  - 还没有一层显式 prompt 告诉团队如何做 ownership transfer、partial handoff、上游结果未就绪时的等待策略
+- 缺少 team-level completion gate
+  - 当前 gate 主要是单 worker 结果是否满足 contract
+  - 还没有一层团队级提示词要求 manager 判断“是否所有 lane 都已收敛、是否还有 unresolved overlap、是否该进入 synthesize / verify / integrate”
+
+### 23.3 最有价值的增强项（按优先级）
+
+如果后续真的要做 Agent Teams 强化，我认为优先级应该是：
+
+- `P1`：新增 `team-topology-and-ownership` section
+  - 让 manager 和 worker 都能看到团队 roster、职责、依赖、handoff 目标
+- `P1`：新增 `manager-fanout-fanin-policy` section
+  - 把 team 模式下的拆分、并行、本地推进、选择性等待、整合收口写成稳定 prompt 规则
+- `P1`：新增 `teammate-communication-protocol`
+  - 规范 `status update / blocker / decision request / handoff summary` 的最小格式
+- `P2`：新增 `team-shared-state-policy`
+  - 规定哪些内容应该进入共享摘要，如何避免多 worker 重复检索同一上下文
+- `P2`：新增 `integrator / synthesizer / fan-in verifier` prompt
+  - 把“最终整合者”从普通 manager 中抽出来，减少 manager 又调度又集成时的 prompt 混乱
+- `P3`：新增 `adaptive polling cadence`
+  - 根据任务类型和依赖关系，提示 manager 何时继续本地工作、何时 wait、何时中断某条 lane
+
+### 23.4 推荐新增的 Prompt Sections
+
+如果做 v2 / enhancement，推荐新增下面几类 section，而不是继续把所有内容塞进 `delegation-operating-policy`：
+
+- `team-operating-model`
+  - 说明当前 run 是否处于 team mode，以及这是 `parallel_patch / research_grid / verify_swarm / plan_execute_verify` 哪类团队协作模式
+- `team-topology-and-ownership`
+  - 描述 team roster、每个成员的 role、owned scope、depends-on、handoff target
+- `teammate-communication-protocol`
+  - 规定 status / blocker / handoff / decision request 的格式与触发时机
+- `manager-fanout-fanin-policy`
+  - 规定 manager 如何拆分、如何避免过度等待、如何在 fan-in 前做 acceptance triage
+- `team-shared-state-policy`
+  - 规定共享中间结论的边界，减少重复探索和重复摘要
+- `team-completion-gate`
+  - 规定团队级“何时可以宣布收敛”的检查项
+
+建议落点：
+
+- static section 先放在 `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+- run-level delta 可以继续放在 `packages/belldandy-agent/src/runtime-prompt-deltas.ts`
+- worker envelope addendum 继续放在 `packages/belldandy-skills/src/subagent-launch.ts`
+
+### 23.5 推荐补的 Prompt 模板
+
+相对当前文档里已有的 manager / worker / verifier 模板，Agent Teams 更建议再补 4 类模板：
+
+- `manager-team-planner`
+  - 专门用于把大任务拆成 team lanes，并定义 roster / ownership / fan-in checkpoints
+- `teammate-handoff`
+  - 专门用于 worker 到 worker 或 worker 到 manager 的中途交接
+- `team-synthesizer`
+  - 专门用于多 lane 结果整合，不负责继续执行，只负责 reconcile / merge / conflict summary
+- `team-verifier`
+  - 专门用于针对 fan-in 后的整体结论做 team-level verification，而不是只看单个 worker handoff
+
+这些模板的目标不是增加更多角色数量，而是把“团队协作动作”从普通 worker prompt 里拆出来。
+
+### 23.6 推荐代码接点
+
+如果要做 Agent Teams 增强，优先建议在这些位置扩，而不是重写 orchestration runtime：
+
+- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+  - 新增 team sections
+- `packages/belldandy-skills/src/delegation-protocol.ts`
+  - 新增 team metadata
+  - 例如：
+    - `team.id`
+    - `team.mode`
+    - `team.sharedGoal`
+    - `team.memberRoster[]`
+    - `team.dependsOn`
+    - `team.handoffTo`
+- `packages/belldandy-agent/src/launch-spec.ts`
+  - 负责把 team metadata 归一化进 run-level spec
+- `packages/belldandy-skills/src/subagent-launch.ts`
+  - 根据 team metadata 生成 teammate-aware worker addendum
+- `packages/belldandy-agent/src/runtime-prompt-deltas.ts`
+  - 根据当前 team state 注入 fan-in / handoff / completion gate delta
+- `packages/belldandy-core/src/query-runtime-subtask.ts`
+- `apps/web/public/app/features/subtasks-overview.js`
+- `apps/web/public/app/features/prompt-snapshot-detail.js`
+  - 用于把 team roster、lane state、fan-in status、shared summary 暴露到 inspect / UI
+
+### 23.7 收口判断
+
+这部分我建议明确作为“v1 收口后的增强项”，而不是新主线。
+
+原因：
+
+- 当前系统已经具备多 Agent 并行和 manager 指挥多个 Agent 的基础能力
+- 当前缺口主要是 team-aware prompt semantics，不是 runtime 不成立
+- 这类增强价值很高，但也很容易越做越大，最后演变成“重写一套新的 team framework”
+
+所以更合理的收口方式是：
+
+- 现阶段把本节视为 Agent Teams backlog / design notes
+- 只在明确要推进 Team Mode 时，单独开新设计文档或新章节
+- 不把它并回 22.x，也不作为当前 v1 未完成项
+
+一句话结论：
+
+- Belldandy 现在已经“能多 Agent 协作”。
+- 下一阶段如果要继续拉开和普通 delegation 的差距，最值得补的是：
+  - `team topology`
+  - `teammate communication`
+  - `fan-out / fan-in operating loop`
+  - `shared-state discipline`
+  - `team-level completion gate`
+- 这些内容应以 Agent Teams 增强项推进，而不是继续扩张 v1 主线。
+
+### 23.8 IDENTITY「身份标签」接入 Agent Teams 的设计方案
+
+这一节专门回答：如何把 `IDENTITY.md` 里的【IDENTITY | 身份标签】真正接入 Agent Teams，而不是只把它当作一段静态人格文本。
+
+#### 23.8.1 当前代码现状
+
+先看目前代码链路，结论很明确：
+
+- `packages/belldandy-agent/src/system-prompt.ts`
+  - 现在会把 `IDENTITY.md` 整段作为 `workspace-identity` 注入 system prompt
+  - 但这是原始 markdown 注入，不是结构化身份治理数据
+- `packages/belldandy-agent/src/workspace.ts`
+  - `extractIdentityInfo()` 目前只提取：
+    - `名字`
+    - `头像`
+    - `Emoji`
+  - 并不会解析：
+    - `当前身份标签`
+    - `上级身份标签`
+    - `下级身份标签`
+    - `主人UUID`
+- `packages/belldandy-protocol/src/identity.ts`
+  - 目前只提供 `extractOwnerUuid()`
+  - 也就是说只有 `主人UUID` 被结构化了，身份标签层级本身还没有结构化
+- `packages/belldandy-agent/src/tool-agent.ts`
+  - `buildRuntimeIdentityPromptDelta()` 现在只会注入：
+    - 当前用户 UUID
+    - 当前消息发送者信息
+    - 房间成员里的 `identity`
+  - 但不会把“我是谁、谁是我上级、谁是我下级、当前这个 sender 对我是什么关系”解析成团队治理规则
+- `packages/belldandy-skills/src/delegation-protocol.ts`
+  - 当前委派协议已经有 `ownership / acceptance / deliverableContract`
+  - 但还没有 `identity governance / chain-of-command / roster identity relation`
+
+结论：
+
+- 现在的 `IDENTITY.md` 在 runtime 里是“被看见了”，但没有“被结构化消费”。
+- 所以要把身份标签接入 Agent Teams，第一步不是改 team prompt，而是先把身份标签从 markdown 提炼成稳定数据模型。
+
+#### 23.8.2 设计目标
+
+这条线建议只解决 3 个具体问题，不扩成更大的社会模拟系统：
+
+1. 让每个 Agent 的身份标签可以进入 team topology
+   - 例如：`CEO -> CTO -> 员工`
+2. 让 sender / owner / superior / subordinate 关系可以影响 manager 的 team 行为
+   - 例如：上级可改优先级，下级只能请求/汇报，不能直接改派其他 worker
+3. 让 worker handoff 和 team fan-in 时可以显式带上 authority chain
+   - 例如：当前 worker 向谁汇报、谁能 override 它、谁只能收到建议
+
+明确不做：
+
+- 不把身份标签扩成一套通用 ACL / RBAC 系统
+- 不做复杂的多级审批引擎
+- 不做自动替用户判定组织结构的推理系统
+- 不要求一次支持所有渠道和所有自由文本身份写法
+
+#### 23.8.3 Source of Truth
+
+这部分建议明确：
+
+- `IDENTITY.md` 是身份标签的唯一主数据源
+- `SOUL.md` 里的同类内容只保留为人格提示，不再作为团队治理的主解析来源
+
+原因：
+
+- 当前模板里 `SOUL.md` 和 `IDENTITY.md` 都出现了身份标签字段，长期容易漂移
+- Team governance 需要一个稳定、单一、可校验的数据源
+
+建议策略：
+
+- 优先解析 `IDENTITY.md`
+- 仅在迁移兼容阶段允许：
+  - 若 `IDENTITY.md` 缺少身份治理字段，才从 `SOUL.md` 做一次只读 fallback
+- 一旦两边都存在且冲突：
+  - 以 `IDENTITY.md` 为准
+  - 在 inspect / doctor 中给出配置漂移 warning
+
+#### 23.8.4 推荐新增的数据模型
+
+建议先新增一个轻量结构，不要把它塞进现有 `IdentityInfo`：
+
+```ts
+type IdentityAuthorityProfile = {
+  currentLabel?: string;
+  superiorLabels: string[];
+  subordinateLabels: string[];
+  ownerUuids: string[];
+  authorityMode: "verifiable_only" | "disabled";
+  responsePolicy: {
+    ownerOrSuperior: "execute";
+    subordinate: "guide";
+    other: "refuse_or_inform";
+  };
+  source: "identity_md" | "soul_fallback";
+};
+```
+
+推荐落点：
+
+- `packages/belldandy-protocol/src/identity.ts`
+  - 新增：
+    - `parseIdentityAuthorityProfile(content)`
+    - `loadIdentityAuthorityProfile(dir)`
+
+为什么放在 `protocol`：
+
+- 当前 `extractOwnerUuid()` 已经在这里
+- 这层会被 `agent / core / channels / skills` 共用
+- 比放在 `belldandy-agent` 更适合做共享身份语义
+
+#### 23.8.5 Agent Teams 侧推荐新增的数据模型
+
+在 team 机制里，不建议直接把 `IDENTITY.md` 原文塞到 `team-topology-and-ownership`，而是派生一层 team-aware metadata：
+
+```ts
+type TeamIdentityLane = {
+  agentId: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
+  identityLabel?: string;
+  authorityRelationToManager?: "self" | "superior" | "peer" | "subordinate" | "unknown";
+  reportsTo?: string[];
+  mayDirect?: string[];
+  scopeSummary?: string;
+  dependsOn?: string[];
+  handoffTo?: string[];
+};
+
+type TeamIdentityGovernance = {
+  mode: "peer_swarm" | "identity_hierarchy";
+  managerAgentId: string;
+  managerIdentityLabel?: string;
+  ownerUuidVerified: boolean;
+  activeActorRelation?: "owner" | "superior" | "peer" | "subordinate" | "other" | "unknown";
+  roster: TeamIdentityLane[];
+};
+```
+
+推荐接点：
+
+- `packages/belldandy-skills/src/delegation-protocol.ts`
+  - 新增可选 `team` / `identityGovernance`
+- `packages/belldandy-agent/src/launch-spec.ts`
+  - 负责归一化进 run-level spec
+
+#### 23.8.6 推荐的 prompt 接入方式
+
+这一层最适合落在 3 个位置：
+
+1. static section：`team-topology-and-ownership`
+2. static section：`team-identity-governance-policy`
+3. run-level delta：`runtime-identity-authority`
+
+##### A. `team-topology-and-ownership`
+
+扩展为：
+
+- 不只写 worker 的 `owned scope`
+- 还要写：
+  - `identity label`
+  - `authority relation to manager`
+  - `reports to`
+  - `may direct`
+
+示例：
+
+```md
+## Team Topology and Ownership
+
+- Manager: `default` | role=`default` | identity=`CEO`
+- Worker: `coder` | role=`coder` | identity=`CTO` | relation=`subordinate`
+- Worker: `researcher` | role=`researcher` | identity=`项目经理` | relation=`subordinate`
+- Worker: `verifier` | role=`verifier` | identity=`审计` | relation=`peer`
+```
+
+##### B. `team-identity-governance-policy`
+
+新增一段专门规则，告诉 manager / worker：
+
+- 只有 owner / superior 可以直接改 team 目标、重排优先级、改派 ownership
+- subordinate 默认只能：
+  - 提建议
+  - 汇报 blocker
+  - 请求澄清
+  - 请求上级批准
+- peer 不直接覆盖 peer 的 scope，冲突时交给 manager / superior
+- worker 收到与 manager contract 冲突的 peer 指令时，应上报而不是自行改轨
+
+##### C. `runtime-identity-authority`
+
+run 级 delta 不再只告诉模型“现在 sender 是谁”，而是进一步解析：
+
+- 当前 authority 是否可验证
+- 当前 actor 对本 Agent 的关系：
+  - `owner`
+  - `superior`
+  - `subordinate`
+  - `peer`
+  - `other`
+- 当前 team mode 下允许的动作：
+  - `execute`
+  - `guide_only`
+  - `refuse_or_inform`
+  - `escalate`
+
+这部分应基于：
+
+- `userUuid`
+- `senderInfo.identity`
+- `IdentityAuthorityProfile`
+- 当前 team metadata
+
+#### 23.8.7 Worker Envelope 如何补
+
+`packages/belldandy-skills/src/subagent-launch.ts` 建议在现有：
+
+- `Worker Base`
+- `Worker Role`
+- `Task Envelope`
+- `Launch Constraints`
+
+之外，再增加一段：
+
+`Authority Chain`
+
+内容建议包括：
+
+- Your identity label
+- You report to
+- You may direct
+- Requests from subordinate / peer / unrelated actors should be handled how
+- If authority conflicts with task contract, escalate to manager
+
+这样 worker 的行为就不再只受 task contract 约束，也受组织关系约束。
+
+#### 23.8.8 Manager 行为的具体变化
+
+把身份标签接入 Team 后，manager 侧建议新增这些行为规则：
+
+- 如果当前 sender 是 `owner / superior`
+  - 可以接收 team-level 重排、重新委派、紧急 override
+- 如果当前 sender 是 `subordinate`
+  - 默认不直接改 team 拆分
+  - 可以：
+    - 记录建议
+    - 回复指导
+    - 生成 delegation draft
+    - 请求 owner / superior 确认
+- 如果当前 sender 是 `peer / other`
+  - 默认不让其改变其他 worker 的 ownership
+- 如果当前 sender 身份不可验证
+  - 身份标签只作为 persona 文本，不作为 authority rule
+
+这能很好贴合 `IDENTITY.md` 中现有的“主人 / 上级 / 下级 / 其他人”响应策略。
+
+#### 23.8.9 UI / Inspect 建议展示什么
+
+如果后续真的实现，inspect 最有价值的不是展示整段 `IDENTITY.md`，而是展示派生结果：
+
+- 当前 Agent identity label
+- owner UUID 是否已验证
+- 当前 sender relation
+- 当前 team governance mode
+- roster 中每个 lane 的 authority relation
+- 本轮是否因为 authority rule 限制了动作
+  - 例如：`guide_only`
+  - `escalated_to_manager`
+  - `override_allowed`
+
+推荐接点：
+
+- `packages/belldandy-core/src/query-runtime-subtask.ts`
+- `apps/web/public/app/features/subtasks-overview.js`
+- `apps/web/public/app/features/prompt-snapshot-detail.js`
+
+#### 23.8.10 实施顺序与收口目标
+
+为了避免这条线又无止境扩张，建议只分 4 步：
+
+1. `Phase A`：结构化解析
+   - 新增 `IdentityAuthorityProfile`
+   - 打通 `IDENTITY.md -> parsed profile`
+2. `Phase B`：Prompt 接入
+   - `team-topology-and-ownership` 补 identity 信息
+   - 新增 `team-identity-governance-policy`
+3. `Phase C`：Runtime 决策接入
+   - `runtime-identity-authority` 根据 sender / uuid / identity relation 生成动作约束
+4. `Phase D`：Inspect / UI
+   - 暴露 authority relation / governance mode / action limitation
+
+做到下面这些就算收口：
+
+- `IDENTITY.md` 的身份标签字段已结构化，而不再只是原始 markdown
+- manager / worker prompt 都能看到 team identity topology
+- 至少一条 runtime 决策链会消费：
+  - `owner / superior / subordinate / other`
+- authority rule 只在可验证环境中生效
+- inspect 能看见本轮 authority relation 和限制结果
+
+明确不做：
+
+- 不做自动审批工作流
+- 不做自由文本组织图推理
+- 不把每个 channel 的身份系统统一抽象到极复杂层
+
+#### 23.8.11 一句话结论
+
+把 `IDENTITY.md` 接入 Agent Teams，最关键的不是“把身份标签文字拼到 prompt 里”，而是：
+
+- 先把身份标签结构化
+- 再把它变成 team topology 和 authority relation
+- 最后只在可验证环境中让它影响 manager / worker 的团队行为
+
+这样它才会从“人格设定文本”升级成“可治理的 Team 机制数据”。
+
+### 23.9 Agent Teams 实施计划（建议顺序）
+
+这一节给 23.x 的增强项一个明确、有限、可收口的实施计划。
+
+总原则：
+
+- 不重写现有 `delegate_task / delegate_parallel / sessions_spawn` runtime
+- 先做 prompt / metadata / inspect，后做更强治理
+- 先做 manager-mediated team mode，再考虑更重的 teammate transport
+- 默认兼容现有 delegation 流程：没有 team metadata 时，行为应尽量与现在一致
+
+#### 23.9.1 实施目标
+
+本计划只追求一个清晰目标：
+
+- 让 Belldandy 从“结构化 delegation”升级为“最小可用的 Agent Teams mode”
+
+这里的“最小可用”定义为：
+
+- manager 能显式看到 roster / ownership / handoff 关系
+- worker 能收到 teammate-aware 的团队约束
+- fan-out / fan-in 有稳定的 prompt operating loop
+- inspect / UI 能看到 team topology 和 lane state
+- 可选地接入 `IDENTITY.md` 的 authority relation，但仅在可验证环境中生效
+
+#### 23.9.2 明确不做
+
+为了收口，23.x 这条线明确不做下面这些：
+
+- 不做新的实时 teammate message bus
+- 不做 Claude Code 式完整 `SendMessageTool` 平替
+- 不做自动生成复杂组织图
+- 不做通用 RBAC / ACL 系统
+- 不做自动执行器或自动批准流
+- 不把所有 channel 的身份系统一次性统一到底层协议
+
+如果未来要做这些，应该单独开 v3 / backlog，而不是继续扩张 23.x。
+
+#### 23.9.3 里程碑划分
+
+建议按 4 个里程碑推进。
+
+##### M1：Team Metadata + 基础 Team Prompt Layer
+
+目标：
+
+- 先把 team mode 的最小 metadata 接起来
+- 让 manager / worker 都看到 team-aware prompt sections
+
+实现范围：
+
+- `packages/belldandy-skills/src/delegation-protocol.ts`
+  - 新增可选 `team` metadata
+  - 最小字段建议：
+    - `team.id`
+    - `team.mode`
+    - `team.sharedGoal`
+    - `team.memberRoster[]`
+    - `team.dependsOn`
+    - `team.handoffTo`
+- `packages/belldandy-agent/src/launch-spec.ts`
+  - 归一化 team metadata，打进 run-level launch spec
+- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+  - 新增：
+    - `team-operating-model`
+    - `team-topology-and-ownership`
+    - `manager-fanout-fanin-policy`
+- `packages/belldandy-skills/src/subagent-launch.ts`
+  - worker envelope 补 teammate-aware roster / handoff 摘要
+
+当前状态：
+
+- 已完成第一版最小落地：
+  - `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+    - 已新增：
+      - `team-operating-model`
+      - `team-topology-and-ownership`
+      - `manager-fanout-fanin-policy`
+  - `packages/belldandy-skills/src/delegation-protocol.ts`
+    - 已新增 team metadata：
+      - `team.id`
+      - `team.mode`
+      - `team.sharedGoal`
+      - `team.managerAgentId`
+      - `team.currentLaneId`
+      - `team.memberRoster[]`
+  - `packages/belldandy-agent/src/launch-spec.ts`
+    - 已支持 team metadata 归一化
+  - `packages/belldandy-agent/src/runtime-prompt-deltas.ts`
+    - 已新增 run-level `Team Topology and Ownership` delta
+  - `packages/belldandy-skills/src/subagent-launch.ts`
+    - worker envelope 已新增 `## Team Topology and Ownership`
+  - `packages/belldandy-skills/src/builtin/session/delegate-parallel.ts`
+    - 已开始自动为并行 lane 生成 team metadata
+
+验证：
+
+- `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/bin/gateway-prompt-sections.test.ts packages/belldandy-agent/src/runtime-prompt-deltas.test.ts packages/belldandy-agent/src/launch-spec.test.ts packages/belldandy-skills/src/subagent-launch.test.ts packages/belldandy-skills/src/builtin/session/session-tools.test.ts packages/belldandy-agent/src/tool-agent.test.ts --reporter verbose`
+- `corepack pnpm build`
+
+这一阶段不做：
+
+- 不做 identity-aware governance
+- 不做 direct teammate messaging
+- 不做 shared-state persistence
+
+收口条件：
+
+- manager run 的 prompt snapshot 能看到 team sections
+- worker envelope 能看到自身 lane、依赖和 handoff 目标
+- 没有 team metadata 的旧流程不回归
+
+##### M2：Manager-Mediated Handoff + Fan-In Loop
+
+目标：
+
+- 把“团队协作动作”从单纯 contract 补充成稳定的 handoff / fan-in 规则
+
+实现范围：
+
+- `packages/belldandy-skills/src/subagent-launch.ts`
+  - 新增 `Teammate Handoff` / `Reporting Expectations`
+- `packages/belldandy-agent/src/runtime-prompt-deltas.ts`
+  - 新增 team-specific delta
+  - 例如：
+    - `team-handoff-review`
+    - `team-fan-in-triage`
+- `packages/belldandy-agent/src/tool-agent.ts`
+  - 在 delegation result 后，注入 team follow-up delta
+- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+  - 强化 manager 的：
+    - selective wait
+    - local progress while workers run
+    - accept / retry / blocker triage
+
+这一阶段的通信方式：
+
+- 仍然坚持 manager-mediated
+- worker 不直接互发消息
+- handoff 通过 manager 汇总 / 再委派来完成
+
+当前状态：
+
+- 已完成第一版 manager-mediated handoff / fan-in 落地：
+  - `packages/belldandy-skills/src/subagent-launch.ts`
+    - worker envelope 已新增：
+      - `## Teammate Handoff`
+      - `## Reporting Expectations`
+  - `packages/belldandy-skills/src/builtin/session/delegate-parallel.ts`
+    - 并行 lane 结果 metadata 已补齐：
+      - `laneId`
+      - `scopeSummary`
+      - `dependsOn`
+      - `handoffTo`
+      - `team`
+    - 当存在 verifier lane 时，会自动推断实现 lane -> verifier lane 的默认 handoff / dependsOn
+  - `packages/belldandy-skills/src/builtin/session/delegation-contract.ts`
+    - delegation result metadata 已支持 team-aware clone / read / serialization
+  - `packages/belldandy-agent/src/runtime-prompt-deltas.ts`
+    - 已新增：
+      - `team-handoff-review`
+      - `team-fan-in-triage`
+    - delegation review text 也已补上 `Team Result Context`
+  - `packages/belldandy-agent/src/prompt-snapshot.ts`
+    - 已支持新的 team delta type 持久化与归一化
+  - `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+    - `manager-fanout-fanin-policy` 已强化：
+      - lane-scoped handoff
+      - manager-mediated handoff
+      - selective wait / triage
+
+验证：
+
+- `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-core/src/bin/gateway-prompt-sections.test.ts packages/belldandy-agent/src/runtime-prompt-deltas.test.ts packages/belldandy-agent/src/tool-agent.test.ts packages/belldandy-skills/src/subagent-launch.test.ts packages/belldandy-skills/src/builtin/session/session-tools.test.ts --reporter verbose`
+- `corepack pnpm build`
+
+收口条件：
+
+- manager 能稳定产出：
+  - 哪些 lane 可 accept
+  - 哪些 lane 要 retry
+  - 哪些 lane 是 blocker
+- worker handoff 格式在 prompt / inspect 中可观测
+
+##### M3：Team Shared State + Completion Gate + Inspect/UI
+
+目标：
+
+- 让 Team mode 不只是“模型知道自己在组队”，而是真正可以被观测和调试
+
+当前进度：
+
+- 已完成。
+- `packages/belldandy-core/src/query-runtime-subtask.ts`
+  - `subtask.get` 现在会暴露 `teamSharedState`
+  - 包含：
+    - `teamId / mode / sharedGoal / managerAgentId / currentLaneId`
+    - `roster`
+    - `lane status / handoffTo / dependsOn`
+    - `fanInSummary`
+    - `completionGate`
+      - `status`
+      - `finalFanInVerdict`
+      - `accepted / pending / retry / blocker / missing lanes`
+      - `unresolvedDependencyLaneIds`
+      - `overlappingWriteScopes`
+- `apps/web/public/app/features/subtasks-overview.js`
+  - subtask 详情页已展示 `Team Shared State`
+  - 可以直接查看：
+    - team roster
+    - lane 状态
+    - handoff / dependsOn
+    - fan-in verdict
+    - completion gate summary
+    - overlapping write scope
+- `apps/web/public/app/features/prompt-snapshot-detail.js`
+  - 已展示 `Team Coordination`
+  - 可查看 active team sections / team deltas / completion gate 摘要
+- `packages/belldandy-agent/src/runtime-prompt-deltas.ts`
+  - 已新增 `team-completion-gate`
+  - manager 下一轮会拿到结构化的 team completion gate follow-up
+- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+  - 已新增 `team-shared-state-policy`
+  - 静态规则现在会要求 manager 只维护 compact shared state，而不是扩成共享 message bus
+
+共享状态策略：
+
+- 已按“共享摘要”路线落地
+- 仍然不做复杂 shared memory bus
+- 当前只沉淀：
+  - team summary
+  - accepted lanes
+  - pending / retry / blocker / missing lanes
+  - unresolved dependencies
+  - overlapping write scope
+  - final fan-in verdict
+
+验证：
+
+- `node .\\node_modules\\vitest\\vitest.mjs run apps/web/public/app/features/subtasks-overview.test.js apps/web/public/app/features/prompt-snapshot-detail.test.js packages/belldandy-agent/src/runtime-prompt-deltas.test.ts packages/belldandy-agent/src/tool-agent.test.ts packages/belldandy-core/src/bin/gateway-prompt-sections.test.ts packages/belldandy-core/src/server.query-runtime-domains.test.ts --reporter verbose`
+- `corepack pnpm build`
+
+收口条件：
+
+- UI / inspect 能解释当前 team run 为什么这样决策
+- manager 能看到 team completion gate 的结果
+- 发生 lane overlap / unresolved blocker 时，inspect 可见
+
+##### M4：IDENTITY-aware Team Governance
+
+目标：
+
+- 把 `IDENTITY.md` 的 authority chain 接进 Team mode
+- 但只在可验证环境里影响行为
+
+实现范围：
+
+- `packages/belldandy-protocol/src/identity.ts`
+  - 新增 `IdentityAuthorityProfile` 解析 / 读取
+- `packages/belldandy-skills/src/delegation-protocol.ts`
+  - 新增 `identityGovernance`
+- `packages/belldandy-agent/src/launch-spec.ts`
+  - 归一化 identity governance metadata
+- `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+  - 新增 `team-identity-governance-policy`
+- `packages/belldandy-agent/src/runtime-prompt-deltas.ts`
+  - 新增 `runtime-identity-authority`
+- `packages/belldandy-skills/src/subagent-launch.ts`
+  - 新增 `Authority Chain`
+
+限制规则：
+
+- 仅当：
+  - `userUuid` 或 `senderInfo` 可验证
+  - 且 authority profile 存在
+  - 才激活 team authority rule
+- 否则：
+  - 身份标签只作为 persona / roster 注释
+  - 不作为权限决策依据
+
+当前进度：
+
+- 已完成第一版 IDENTITY-aware Team Governance 落地：
+  - `packages/belldandy-protocol/src/identity.ts`
+    - 已新增：
+      - `IdentityAuthorityProfile`
+      - `parseIdentityAuthorityProfile(...)`
+      - `loadIdentityAuthorityProfile(...)`
+      - `evaluateRuntimeIdentityAuthority(...)`
+      - `deriveAuthorityRelationToManager(...)`
+    - `IDENTITY.md` 的：
+      - `当前身份标签`
+      - `上级身份标签`
+      - `下级身份标签`
+      - `主人UUID`
+      已可被结构化解析与运行态消费
+  - `packages/belldandy-core/src/team-identity-governance.ts`
+    - 已新增 team identity enrichment helper
+    - 会把 authority profile 派生到：
+      - `team.managerIdentityLabel`
+      - `member.identityLabel`
+      - `member.authorityRelationToManager`
+      - `member.reportsTo`
+      - `member.mayDirect`
+  - `packages/belldandy-skills/src/delegation-protocol.ts`
+  - `packages/belldandy-agent/src/launch-spec.ts`
+    - 已支持上述 team identity governance metadata 的归一化与透传
+  - `packages/belldandy-core/src/bin/gateway-prompt-sections.ts`
+    - 已新增 `team-identity-governance-policy`
+    - manager prompt 现在会明确：
+      - authority rule 只在可验证环境中生效
+      - subordinate / peer / unrelated actor 不能直接重排 team ownership
+  - `packages/belldandy-agent/src/tool-agent.ts`
+    - 已新增 `runtime-identity-authority` delta
+    - 本轮 prompt snapshot 现在可看到：
+      - authority mode
+      - actor relation
+      - recommended action
+      - current identity label
+      - team authority constraints
+  - `packages/belldandy-skills/src/subagent-launch.ts`
+    - worker envelope 已新增 `## Authority Chain`
+    - worker 现在会收到：
+      - current lane identity
+      - manager identity
+      - authority relation
+      - reportsTo
+      - mayDirect
+  - `packages/belldandy-core/src/query-runtime-subtask.ts`
+  - `apps/web/public/app/features/subtasks-overview.js`
+    - Team shared state 已暴露并展示：
+      - `managerIdentityLabel`
+      - lane `identityLabel`
+      - `authorityRelation`
+      - `reportsTo`
+      - `mayDirect`
+  - `apps/web/public/app/features/prompt-snapshot-detail.js`
+    - inspect 已新增 `Identity Authority` 摘要
+
+验证：
+
+- `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-protocol/src/identity.test.ts packages/belldandy-core/src/team-identity-governance.test.ts packages/belldandy-core/src/bin/gateway-prompt-sections.test.ts packages/belldandy-agent/src/launch-spec.test.ts packages/belldandy-skills/src/subagent-launch.test.ts packages/belldandy-agent/src/tool-agent.test.ts apps/web/public/app/features/prompt-snapshot-detail.test.js --reporter verbose`
+- `node .\\node_modules\\vitest\\vitest.mjs run packages/belldandy-agent/src/runtime-prompt-deltas.test.ts packages/belldandy-core/src/server.query-runtime-domains.test.ts apps/web/public/app/features/subtasks-overview.test.js packages/belldandy-skills/src/builtin/session/session-tools.test.ts --reporter verbose`
+- `corepack pnpm build`
+
+收口条件：
+
+- inspect 可见：
+  - current sender relation
+  - owner UUID verified
+  - active authority mode
+- manager / worker 至少一条 runtime 决策链会消费：
+  - `owner / superior / subordinate / other`
+
+#### 23.9.4 建议实施顺序
+
+建议严格按 `M1 -> M2 -> M3 -> M4` 推进。
+
+原因：
+
+- `M1` 先把 team metadata 和 prompt layer 接稳
+- `M2` 再把 handoff / fan-in loop 做实
+- `M3` 补观测和 completion gate，方便调试
+- `M4` 最后才叠 authority chain，避免在 team 语义还没稳定时把身份治理和团队治理搅在一起
+
+一句话：
+
+- 先把“团队协作”做稳
+- 再把“身份权力”叠上去
+
+#### 23.9.5 测试与验证计划
+
+每个里程碑都建议遵循同一套验证结构：
+
+- Prompt 层
+  - `packages/belldandy-core/src/bin/gateway-prompt-sections.test.ts`
+  - `packages/belldandy-agent/src/runtime-prompt-deltas.test.ts`
+- Worker envelope / launchSpec
+  - `packages/belldandy-skills/src/subagent-launch.test.ts`
+  - `packages/belldandy-agent/src/launch-spec.test.ts`
+- Delegation / orchestration
+  - `packages/belldandy-skills/src/builtin/session/session-tools.test.ts`
+  - `packages/belldandy-agent/src/tool-agent.test.ts`
+- Inspect / UI
+  - `packages/belldandy-core/src/server.query-runtime-domains.test.ts`
+  - `apps/web/public/app/features/subtasks-overview.test.js`
+  - `apps/web/public/app/features/prompt-snapshot-detail.test.js`
+- Identity-aware 阶段再补：
+  - `packages/belldandy-protocol/src/identity.test.ts`
+
+建议的阶段性验证命令模式：
+
+- `node .\\node_modules\\vitest\\vitest.mjs run <targeted tests> --reporter verbose`
+- `corepack pnpm build`
+
+#### 23.9.6 最终收口目标
+
+Agent Teams 这条增强线做到下面这些，就建议收口，不继续膨胀：
+
+1. Team metadata 已 end-to-end 打通
+2. manager / worker prompt 已具备 team-aware sections
+3. fan-out / fan-in / handoff loop 已可稳定观测
+4. inspect / UI 已能展示 team topology 与 lane state
+5. `IDENTITY.md` authority chain 已可选接入，并且仅在可验证环境中生效
+6. 旧的非 team delegation 模式未被破坏
+7. 相关定向测试与 `corepack pnpm build` 通过
+
+满足以上 7 条，就把 23.x 视为：
+
+- “Agent Teams v2 增强项已完成”
+
+当前状态：
+
+- `M1 / M2 / M3 / M4` 已全部完成第一版落地。
+- Team metadata、manager/worker prompt、handoff/fan-in、inspect/UI、IDENTITY-aware governance 已 end-to-end 打通。
+- 相关定向 Vitest 与 `corepack pnpm build` 已通过。
+- 因此 23.x 这条“Agent Teams 增强线”现在也可以视为第一阶段收口。
+
+后续再做的内容，应转入单独 backlog，例如：
+
+- direct teammate messaging
+- 更复杂的 adaptive polling
+- 自动 integrator / synthesizer agent generation
+- 更重的组织治理 / 审批流
+
+#### 23.9.7 一句话执行建议
+
+如果后续真的开始做，我建议从 `M1` 开始，不要直接做 23.8 的 identity 治理。
+
+最稳的路径是：
+
+- 先把 `team-operating-model / team-topology-and-ownership / manager-fanout-fanin-policy` 落地
+- 再补 handoff / fan-in / inspect
+- 最后再把 `IDENTITY.md` authority chain 接进来
+
+这样实现风险最小，回归面也最可控。

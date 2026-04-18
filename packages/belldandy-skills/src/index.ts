@@ -41,6 +41,8 @@ export type {
   DelegationOwnership,
   DelegationProtocol,
   DelegationSource,
+  DelegationTeamMember,
+  DelegationTeamMode,
 } from "./delegation-protocol.js";
 
 // Skill 系统

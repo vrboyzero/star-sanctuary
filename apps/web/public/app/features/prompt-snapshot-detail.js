@@ -156,6 +156,86 @@ function collectFollowUpStrategySummaries(snapshotArtifact) {
   return summaries;
 }
 
+function collectTeamCoordinationSummaries(snapshotArtifact) {
+  const activeSectionIds = collectActiveSectionIds(snapshotArtifact)
+    .filter((sectionId) => sectionId.startsWith("team-") || sectionId === "manager-fanout-fanin-policy");
+  const deltas = Array.isArray(snapshotArtifact?.deltas) ? snapshotArtifact.deltas : [];
+  const summaries = [];
+  const seen = new Set();
+  const pushSummary = (value) => {
+    const normalized = normalizeInlineString(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    summaries.push(normalized);
+  };
+
+  if (activeSectionIds.length) {
+    pushSummary(`sections=${activeSectionIds.join(" | ")}`);
+  }
+
+  for (const delta of deltas) {
+    if (!delta || typeof delta !== "object") continue;
+    const deltaType = normalizeInlineString(delta.deltaType);
+    if (!deltaType || !deltaType.startsWith("team-")) continue;
+    const deltaId = normalizeInlineString(delta.id);
+    pushSummary(deltaId ? `${deltaType} (${deltaId})` : deltaType);
+
+    const metadata = delta.metadata && typeof delta.metadata === "object" ? delta.metadata : null;
+    const completionGate = metadata?.completionGate && typeof metadata.completionGate === "object"
+      ? metadata.completionGate
+      : null;
+    if (completionGate) {
+      const status = normalizeInlineString(completionGate.status);
+      const verdict = normalizeInlineString(completionGate.finalFanInVerdict);
+      const summary = normalizeInlineString(completionGate.summary);
+      if (status || verdict) {
+        pushSummary(`completion_gate=${status || "-"}${verdict ? `; verdict=${verdict}` : ""}`);
+      }
+      if (summary) {
+        pushSummary(`completion_gate_summary=${summary}`);
+      }
+    }
+  }
+
+  return summaries;
+}
+
+function collectIdentityAuthoritySummaries(snapshotArtifact) {
+  const deltas = Array.isArray(snapshotArtifact?.deltas) ? snapshotArtifact.deltas : [];
+  const summaries = [];
+  const seen = new Set();
+  const pushSummary = (value) => {
+    const normalized = normalizeInlineString(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    summaries.push(normalized);
+  };
+
+  for (const delta of deltas) {
+    if (!delta || typeof delta !== "object") continue;
+    const deltaType = normalizeInlineString(delta.deltaType);
+    if (deltaType !== "runtime-identity-authority") continue;
+    const metadata = delta.metadata && typeof delta.metadata === "object" ? delta.metadata : null;
+    pushSummary("runtime-identity-authority");
+    const mode = normalizeInlineString(metadata?.authorityMode);
+    const relation = normalizeInlineString(metadata?.actorRelation);
+    const action = normalizeInlineString(metadata?.recommendedAction);
+    const label = normalizeInlineString(metadata?.currentLabel);
+    const teamId = normalizeInlineString(metadata?.teamId);
+    if (mode || relation || action) {
+      pushSummary(`mode=${mode || "-"}; relation=${relation || "-"}; action=${action || "-"}`);
+    }
+    if (label) {
+      pushSummary(`current_label=${label}`);
+    }
+    if (teamId) {
+      pushSummary(`team_id=${teamId}`);
+    }
+  }
+
+  return summaries;
+}
+
 function renderSummaryListBlock(title, items, escapeHtml) {
   if (!Array.isArray(items) || items.length === 0) return "";
   return `
@@ -194,6 +274,8 @@ export function renderPromptSnapshotDetail(view, helpers) {
   const deltaSummaries = collectDeltaSummaries(artifact);
   const providerBlockSummaries = collectProviderBlockSummaries(artifact);
   const followUpStrategySummaries = collectFollowUpStrategySummaries(artifact);
+  const teamCoordinationSummaries = collectTeamCoordinationSummaries(artifact);
+  const identityAuthoritySummaries = collectIdentityAuthoritySummaries(artifact);
   const messagePreviews = messages.slice(0, 3).map((message, index) => ({
     index,
     role: typeof message?.role === "string" ? message.role : "unknown",
@@ -237,8 +319,18 @@ export function renderPromptSnapshotDetail(view, helpers) {
         escapeHtml,
       )}
       ${renderSummaryListBlock(
+        t("subtasks.detailPromptSnapshotTeamCoordination", {}, "Team Coordination"),
+        teamCoordinationSummaries,
+        escapeHtml,
+      )}
+      ${renderSummaryListBlock(
         t("subtasks.detailPromptSnapshotFollowUpStrategy", {}, "Follow-Up Strategy"),
         followUpStrategySummaries,
+        escapeHtml,
+      )}
+      ${renderSummaryListBlock(
+        t("subtasks.detailPromptSnapshotIdentityAuthority", {}, "Identity Authority"),
+        identityAuthoritySummaries,
         escapeHtml,
       )}
       <div class="memory-detail-text"><strong>${escapeHtml(t("subtasks.detailPromptSnapshotSystemPrompt", {}, "System Prompt"))}</strong></div>

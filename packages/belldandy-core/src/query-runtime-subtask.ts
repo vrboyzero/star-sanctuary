@@ -201,6 +201,7 @@ export async function handleSubTaskGetWithQueryRuntime(
     const promptSnapshotView = await loadSubTaskPromptSnapshotView(ctx, item, queryRuntime);
     const bridgeProjection = getSubTaskBridgeProjection(item);
     const acceptanceGate = buildSubTaskAcceptanceGateView(item, outputContent);
+    const teamSharedState = await buildSubTaskTeamSharedStateView(ctx, item, outputContent, queryRuntime);
 
     queryRuntime.mark("completed", {
       conversationId: item.parentConversationId,
@@ -209,6 +210,8 @@ export async function handleSubTaskGetWithQueryRuntime(
         hasLaunchExplainability: Boolean(launchExplainability),
         hasPromptSnapshot: Boolean(promptSnapshotView),
         hasAcceptanceGate: Boolean(acceptanceGate),
+        hasTeamSharedState: Boolean(teamSharedState),
+        teamCompletionGateStatus: teamSharedState?.completionGate?.status,
         hasBridgeSubtask: Boolean(bridgeProjection.bridgeSubtaskView),
         hasBridgeSession: Boolean(bridgeProjection.bridgeSessionView),
       },
@@ -228,6 +231,7 @@ export async function handleSubTaskGetWithQueryRuntime(
         launchExplainability: launchExplainability ?? null,
         promptSnapshotView,
         acceptanceGate,
+        teamSharedState,
         resultEnvelope: buildSubTaskResultEnvelope(item),
         outputContent,
       },
@@ -315,6 +319,58 @@ type SubTaskAcceptanceGateView = {
   managerActionHint?: string;
 };
 
+type SubTaskTeamLaneStateView = {
+  laneId: string;
+  taskId?: string;
+  sessionId?: string;
+  agentId?: string;
+  role?: "default" | "coder" | "researcher" | "verifier";
+  identityLabel?: string;
+  authorityRelationToManager?: "self" | "superior" | "peer" | "subordinate" | "unknown";
+  reportsTo?: string[];
+  mayDirect?: string[];
+  status: SubTaskRecord["status"] | "missing";
+  laneState: "accepted" | "pending" | "retry" | "blocker" | "missing";
+  scopeSummary?: string;
+  dependsOn?: string[];
+  handoffTo?: string[];
+  writeScope?: string[];
+  acceptanceGateStatus?: SubTaskAcceptanceGateView["status"];
+  acceptanceGateSummary?: string;
+  summary?: string;
+};
+
+type SubTaskTeamCompletionGateView = {
+  status: "pending" | "accepted" | "rejected";
+  summary: string;
+  finalFanInVerdict: "safe_to_merge" | "hold_fan_in" | "reject_fan_in";
+  acceptedLaneIds: string[];
+  pendingLaneIds: string[];
+  retryLaneIds: string[];
+  blockerLaneIds: string[];
+  missingLaneIds: string[];
+  unresolvedDependencyLaneIds: string[];
+  overlappingWriteScopes?: Array<{
+    path: string;
+    laneIds: string[];
+  }>;
+};
+
+type SubTaskTeamSharedStateView = {
+  teamId: string;
+  mode: string;
+  sharedGoal?: string;
+  managerAgentId?: string;
+  managerIdentityLabel?: string;
+  currentLaneId?: string;
+  fanInSummary: string;
+  roster: SubTaskTeamLaneStateView[];
+  completionGate: SubTaskTeamCompletionGateView;
+};
+
+type SubTaskDelegationTeamView = NonNullable<NonNullable<SubTaskRecord["launchSpec"]["delegation"]>["team"]>;
+type SubTaskDelegationTeamMemberView = SubTaskDelegationTeamView["memberRoster"][number];
+
 function buildSubTaskAcceptanceGateView(
   item: SubTaskRecord,
   outputContent?: string,
@@ -371,6 +427,295 @@ function buildSubTaskAcceptanceGateView(
     ...(gate.rejectionConfidence ? { rejectionConfidence: gate.rejectionConfidence } : {}),
     ...(gate.managerActionHint ? { managerActionHint: gate.managerActionHint } : {}),
   };
+}
+
+async function buildSubTaskTeamSharedStateView(
+  ctx: QueryRuntimeSubTaskContext,
+  item: SubTaskRecord,
+  outputContent: string | undefined,
+  queryRuntime: QueryRuntime<"subtask.get">,
+): Promise<SubTaskTeamSharedStateView | null> {
+  const currentTeam = item.launchSpec?.delegation?.team;
+  if (!currentTeam?.id || !Array.isArray(currentTeam.memberRoster) || currentTeam.memberRoster.length === 0 || !ctx.subTaskRuntimeStore) {
+    return null;
+  }
+
+  const siblingItems = await ctx.subTaskRuntimeStore.listTasks(item.parentConversationId, { includeArchived: true });
+  const teamItems = siblingItems.filter((record) => record.launchSpec?.delegation?.team?.id === currentTeam.id);
+  if (teamItems.length === 0) {
+    return null;
+  }
+
+  const mergedRoster = mergeTeamRoster([
+    currentTeam,
+    ...teamItems
+      .map((record) => record.launchSpec?.delegation?.team)
+      .filter((team): team is SubTaskDelegationTeamView => Boolean(team)),
+  ]);
+  if (mergedRoster.length === 0) {
+    return null;
+  }
+
+  const outputByTaskId = new Map<string, string | undefined>();
+  await Promise.all(teamItems.map(async (record) => {
+    outputByTaskId.set(
+      record.id,
+      record.id === item.id ? outputContent : await loadSubTaskOutputContent(record),
+    );
+  }));
+
+  const laneTaskMap = new Map<string, SubTaskRecord>();
+  for (const record of teamItems) {
+    const laneId = record.launchSpec?.delegation?.team?.currentLaneId;
+    if (!laneId || laneTaskMap.has(laneId)) {
+      continue;
+    }
+    laneTaskMap.set(laneId, record);
+  }
+
+  const roster: SubTaskTeamLaneStateView[] = mergedRoster.map((member: SubTaskDelegationTeamMemberView) => {
+    const laneTask = laneTaskMap.get(member.laneId);
+    const acceptanceGate = laneTask
+      ? buildSubTaskAcceptanceGateView(laneTask, outputByTaskId.get(laneTask.id))
+      : null;
+    const laneState = classifyTeamLaneState(laneTask, acceptanceGate);
+    return {
+      laneId: member.laneId,
+      ...(laneTask?.id ? { taskId: laneTask.id } : {}),
+      ...(laneTask?.sessionId ? { sessionId: laneTask.sessionId } : {}),
+      ...(laneTask?.agentId || member.agentId ? { agentId: laneTask?.agentId || member.agentId } : {}),
+      ...(member.role ? { role: member.role } : {}),
+      ...(member.identityLabel ? { identityLabel: member.identityLabel } : {}),
+      ...(member.authorityRelationToManager ? { authorityRelationToManager: member.authorityRelationToManager } : {}),
+      ...(member.reportsTo?.length ? { reportsTo: [...member.reportsTo] } : {}),
+      ...(member.mayDirect?.length ? { mayDirect: [...member.mayDirect] } : {}),
+      status: laneTask?.status ?? "missing",
+      laneState,
+      ...(member.scopeSummary ? { scopeSummary: member.scopeSummary } : {}),
+      ...(member.dependsOn?.length ? { dependsOn: [...member.dependsOn] } : {}),
+      ...(member.handoffTo?.length ? { handoffTo: [...member.handoffTo] } : {}),
+      ...(laneTask?.launchSpec?.delegation?.ownership?.writeScope?.length
+        ? { writeScope: [...laneTask.launchSpec.delegation.ownership.writeScope] }
+        : {}),
+      ...(acceptanceGate?.status ? { acceptanceGateStatus: acceptanceGate.status } : {}),
+      ...(acceptanceGate?.summary ? { acceptanceGateSummary: acceptanceGate.summary } : {}),
+      ...(laneTask?.summary ? { summary: laneTask.summary } : {}),
+    } satisfies SubTaskTeamLaneStateView;
+  });
+
+  const acceptedLaneIds = roster
+    .filter((lane) => lane.laneState === "accepted")
+    .map((lane) => lane.laneId);
+  const pendingLaneIds = roster
+    .filter((lane) => lane.laneState === "pending")
+    .map((lane) => lane.laneId);
+  const retryLaneIds = roster
+    .filter((lane) => lane.laneState === "retry")
+    .map((lane) => lane.laneId);
+  const blockerLaneIds = roster
+    .filter((lane) => lane.laneState === "blocker")
+    .map((lane) => lane.laneId);
+  const missingLaneIds = roster
+    .filter((lane) => lane.laneState === "missing")
+    .map((lane) => lane.laneId);
+  const unresolvedDependencyLaneIds = roster
+    .filter((lane) => Array.isArray(lane.dependsOn) && lane.dependsOn.some((dependencyLaneId) => !acceptedLaneIds.includes(dependencyLaneId)))
+    .map((lane) => lane.laneId);
+  const overlappingWriteScopes = detectOverlappingLaneWriteScopes(roster);
+  const completionGate = buildTeamCompletionGateView({
+    acceptedLaneIds,
+    pendingLaneIds,
+    retryLaneIds,
+    blockerLaneIds,
+    missingLaneIds,
+    unresolvedDependencyLaneIds,
+    overlappingWriteScopes,
+  });
+
+  return {
+    teamId: currentTeam.id,
+    mode: currentTeam.mode,
+    ...(currentTeam.sharedGoal ? { sharedGoal: currentTeam.sharedGoal } : {}),
+    ...(currentTeam.managerAgentId ? { managerAgentId: currentTeam.managerAgentId } : {}),
+    ...(currentTeam.managerIdentityLabel ? { managerIdentityLabel: currentTeam.managerIdentityLabel } : {}),
+    ...(currentTeam.currentLaneId ? { currentLaneId: currentTeam.currentLaneId } : {}),
+    fanInSummary: completionGate.summary,
+    roster,
+    completionGate,
+  };
+}
+
+async function loadSubTaskOutputContent(record: SubTaskRecord): Promise<string | undefined> {
+  if (!record.outputPath) {
+    return record.outputPreview || undefined;
+  }
+  try {
+    return await fs.readFile(record.outputPath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return record.outputPreview || undefined;
+    }
+    throw error;
+  }
+}
+
+function mergeTeamRoster(
+  teams: Array<SubTaskDelegationTeamView | undefined>,
+): SubTaskDelegationTeamMemberView[] {
+  const merged = new Map<string, SubTaskDelegationTeamMemberView>();
+  for (const team of teams) {
+    if (!team?.memberRoster?.length) {
+      continue;
+    }
+    for (const member of team.memberRoster) {
+      const existing = merged.get(member.laneId);
+      if (!existing) {
+        merged.set(member.laneId, {
+          ...member,
+          ...(member.reportsTo?.length ? { reportsTo: [...member.reportsTo] } : {}),
+          ...(member.mayDirect?.length ? { mayDirect: [...member.mayDirect] } : {}),
+          ...(member.dependsOn?.length ? { dependsOn: [...member.dependsOn] } : {}),
+          ...(member.handoffTo?.length ? { handoffTo: [...member.handoffTo] } : {}),
+        });
+        continue;
+      }
+      merged.set(member.laneId, {
+        laneId: member.laneId,
+        agentId: existing.agentId ?? member.agentId,
+        role: existing.role ?? member.role,
+        identityLabel: existing.identityLabel ?? member.identityLabel,
+        authorityRelationToManager: existing.authorityRelationToManager ?? member.authorityRelationToManager,
+        reportsTo: dedupeStrings([...(existing.reportsTo ?? []), ...(member.reportsTo ?? [])]),
+        mayDirect: dedupeStrings([...(existing.mayDirect ?? []), ...(member.mayDirect ?? [])]),
+        scopeSummary: existing.scopeSummary ?? member.scopeSummary,
+        dependsOn: dedupeStrings([...(existing.dependsOn ?? []), ...(member.dependsOn ?? [])]),
+        handoffTo: dedupeStrings([...(existing.handoffTo ?? []), ...(member.handoffTo ?? [])]),
+      });
+    }
+  }
+  return [...merged.values()];
+}
+
+function classifyTeamLaneState(
+  laneTask: SubTaskRecord | undefined,
+  acceptanceGate: SubTaskAcceptanceGateView | null,
+): SubTaskTeamLaneStateView["laneState"] {
+  if (!laneTask) {
+    return "missing";
+  }
+  if (laneTask.status === "running" || laneTask.status === "pending") {
+    return "pending";
+  }
+  if (laneTask.status === "error" || laneTask.status === "timeout" || laneTask.status === "stopped") {
+    return "blocker";
+  }
+  if (acceptanceGate?.status === "rejected") {
+    return "retry";
+  }
+  if (laneTask.status === "done") {
+    return "accepted";
+  }
+  return "pending";
+}
+
+function detectOverlappingLaneWriteScopes(
+  roster: SubTaskTeamLaneStateView[],
+): Array<{ path: string; laneIds: string[] }> | undefined {
+  const pathToLaneIds = new Map<string, Set<string>>();
+  for (const lane of roster) {
+    for (const writeScopePath of lane.writeScope ?? []) {
+      const normalizedPath = writeScopePath.trim();
+      if (!normalizedPath) {
+        continue;
+      }
+      const laneIds = pathToLaneIds.get(normalizedPath) ?? new Set<string>();
+      laneIds.add(lane.laneId);
+      pathToLaneIds.set(normalizedPath, laneIds);
+    }
+  }
+  const overlaps = [...pathToLaneIds.entries()]
+    .filter(([, laneIds]) => laneIds.size > 1)
+    .map(([scopePath, laneIds]) => ({
+      path: scopePath,
+      laneIds: [...laneIds].sort(),
+    }));
+  return overlaps.length > 0 ? overlaps : undefined;
+}
+
+function buildTeamCompletionGateView(input: {
+  acceptedLaneIds: string[];
+  pendingLaneIds: string[];
+  retryLaneIds: string[];
+  blockerLaneIds: string[];
+  missingLaneIds: string[];
+  unresolvedDependencyLaneIds: string[];
+  overlappingWriteScopes?: Array<{ path: string; laneIds: string[] }>;
+}): SubTaskTeamCompletionGateView {
+  const overlapCount = input.overlappingWriteScopes?.length ?? 0;
+  if (input.blockerLaneIds.length > 0 || overlapCount > 0) {
+    const parts: string[] = [];
+    if (input.blockerLaneIds.length > 0) {
+      parts.push(`blocker lanes: ${input.blockerLaneIds.join(", ")}`);
+    }
+    if (overlapCount > 0) {
+      parts.push(`overlapping write scope: ${input.overlappingWriteScopes!.map((entry) => `${entry.path} <= ${entry.laneIds.join("+")}`).join(" | ")}`);
+    }
+    return {
+      status: "rejected",
+      summary: `Team completion gate rejected: ${parts.join("; ")}.`,
+      finalFanInVerdict: "reject_fan_in",
+      acceptedLaneIds: [...input.acceptedLaneIds],
+      pendingLaneIds: [...input.pendingLaneIds],
+      retryLaneIds: [...input.retryLaneIds],
+      blockerLaneIds: [...input.blockerLaneIds],
+      missingLaneIds: [...input.missingLaneIds],
+      unresolvedDependencyLaneIds: [...input.unresolvedDependencyLaneIds],
+      ...(input.overlappingWriteScopes ? { overlappingWriteScopes: input.overlappingWriteScopes.map((entry) => ({ ...entry, laneIds: [...entry.laneIds] })) } : {}),
+    };
+  }
+  if (
+    input.pendingLaneIds.length > 0
+    || input.retryLaneIds.length > 0
+    || input.missingLaneIds.length > 0
+    || input.unresolvedDependencyLaneIds.length > 0
+  ) {
+    const parts = [
+      input.acceptedLaneIds.length > 0 ? `accepted=${input.acceptedLaneIds.join(", ")}` : "",
+      input.pendingLaneIds.length > 0 ? `pending=${input.pendingLaneIds.join(", ")}` : "",
+      input.retryLaneIds.length > 0 ? `retry=${input.retryLaneIds.join(", ")}` : "",
+      input.missingLaneIds.length > 0 ? `missing=${input.missingLaneIds.join(", ")}` : "",
+      input.unresolvedDependencyLaneIds.length > 0 ? `unresolved_deps=${input.unresolvedDependencyLaneIds.join(", ")}` : "",
+    ].filter(Boolean);
+    return {
+      status: "pending",
+      summary: `Team completion gate pending: ${parts.join("; ")}.`,
+      finalFanInVerdict: "hold_fan_in",
+      acceptedLaneIds: [...input.acceptedLaneIds],
+      pendingLaneIds: [...input.pendingLaneIds],
+      retryLaneIds: [...input.retryLaneIds],
+      blockerLaneIds: [...input.blockerLaneIds],
+      missingLaneIds: [...input.missingLaneIds],
+      unresolvedDependencyLaneIds: [...input.unresolvedDependencyLaneIds],
+    };
+  }
+  return {
+    status: "accepted",
+    summary: `Team completion gate accepted: all ${input.acceptedLaneIds.length} lane(s) are terminal and safe for manager fan-in.`,
+    finalFanInVerdict: "safe_to_merge",
+    acceptedLaneIds: [...input.acceptedLaneIds],
+    pendingLaneIds: [],
+    retryLaneIds: [],
+    blockerLaneIds: [],
+    missingLaneIds: [],
+    unresolvedDependencyLaneIds: [],
+  };
+}
+
+function dedupeStrings(values: string[]): string[] | undefined {
+  const normalized = values
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  return normalized.length > 0 ? [...new Set(normalized)] : undefined;
 }
 
 type AcceptanceCheckStatus = "not_requested" | "passed" | "missing" | "failed" | "unclear";

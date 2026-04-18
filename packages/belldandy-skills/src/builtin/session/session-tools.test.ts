@@ -255,19 +255,184 @@ describe("session tools launchSpec wiring", () => {
       expect.objectContaining({
         instruction: expect.stringContaining("Review runtime prompt deltas"),
         delegationProtocol: expect.objectContaining({
+          team: expect.objectContaining({
+            mode: "verify_swarm",
+            currentLaneId: "lane_1",
+            memberRoster: [
+              expect.objectContaining({
+                laneId: "lane_1",
+                agentId: "verifier",
+                scopeSummary: "Review prompt delta behavior only.",
+              }),
+            ],
+          }),
           ownership: {
             scopeSummary: "Review prompt delta behavior only.",
           },
-        acceptance: {
-          doneDefinition: "State whether the delta behavior is acceptable.",
-        },
-        deliverableContract: expect.objectContaining({
-          format: "verification_report",
-          requiredSections: ["Findings", "Recommendation"],
+          acceptance: {
+            doneDefinition: "State whether the delta behavior is acceptable.",
+          },
+          deliverableContract: expect.objectContaining({
+            format: "verification_report",
+            requiredSections: ["Findings", "Recommendation"],
+          }),
         }),
       }),
-    }),
     ]);
+  });
+
+  it("delegate_parallel should auto-generate team metadata for parallel lanes", async () => {
+    const spawnParallel = vi.fn(async (tasks) => tasks.map((_task: unknown, index: number) => ({
+      success: true,
+      output: `done-${index + 1}`,
+      sessionId: `sub_${index + 1}`,
+      taskId: `task_${index + 1}`,
+    })));
+    const context = createContext({
+      agentId: "default",
+      agentCapabilities: {
+        spawnParallel,
+      },
+    });
+
+    const result = await delegateParallelTool.execute({
+      tasks: [
+        {
+          instruction: "Patch lane A",
+          agent_id: "coder",
+          ownership: {
+            scope_summary: "Own lane A only.",
+          },
+        },
+        {
+          instruction: "Patch lane B",
+          agent_id: "coder",
+          ownership: {
+            scope_summary: "Own lane B only.",
+          },
+        },
+      ],
+    }, context);
+
+    expect(result.success).toBe(true);
+    expect(spawnParallel).toHaveBeenCalledWith([
+      expect.objectContaining({
+        delegationProtocol: expect.objectContaining({
+          team: expect.objectContaining({
+            mode: "parallel_patch",
+            managerAgentId: "default",
+            currentLaneId: "lane_1",
+            memberRoster: [
+              expect.objectContaining({
+                laneId: "lane_1",
+                agentId: "coder",
+                scopeSummary: "Own lane A only.",
+              }),
+              expect.objectContaining({
+                laneId: "lane_2",
+                agentId: "coder",
+                scopeSummary: "Own lane B only.",
+              }),
+            ],
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        delegationProtocol: expect.objectContaining({
+          team: expect.objectContaining({
+            mode: "parallel_patch",
+            managerAgentId: "default",
+            currentLaneId: "lane_2",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("delegate_parallel should return lane-aware team metadata for manager fan-in", async () => {
+    const spawnParallel = vi.fn(async () => ([
+      {
+        success: true,
+        output: "patched lane",
+        sessionId: "sub_impl",
+        taskId: "task_impl",
+      },
+      {
+        success: true,
+        output: [
+          "## Findings",
+          "",
+          "Verifier lane reviewed the patch lane.",
+          "",
+          "## Recommendation",
+          "",
+          "Accept after manager fan-in.",
+        ].join("\n"),
+        sessionId: "sub_verify",
+        taskId: "task_verify",
+      },
+    ]));
+    const context = createContext({
+      agentId: "default",
+      agentCapabilities: {
+        spawnParallel,
+      },
+    });
+
+    const result = await delegateParallelTool.execute({
+      tasks: [
+        {
+          instruction: "Implement lane A",
+          agent_id: "coder",
+          ownership: {
+            scope_summary: "Own lane A implementation only.",
+          },
+        },
+        {
+          instruction: "Verify lane A",
+          agent_id: "verifier",
+          acceptance: {
+            done_definition: "State whether lane A is ready for manager fan-in.",
+          },
+          deliverable_contract: {
+            format: "verification_report",
+            required_sections: ["Findings", "Recommendation"],
+          },
+        },
+      ],
+    }, context);
+
+    expect(result.metadata).toMatchObject({
+      team: {
+        managerAgentId: "default",
+        memberRoster: [
+          {
+            laneId: "lane_1",
+            agentId: "coder",
+            role: "coder",
+            scopeSummary: "Own lane A implementation only.",
+            handoffTo: ["lane_2"],
+          },
+          {
+            laneId: "lane_2",
+            agentId: "verifier",
+            role: "verifier",
+            dependsOn: ["lane_1"],
+          },
+        ],
+      },
+      delegationResults: [
+        {
+          laneId: "lane_1",
+          scopeSummary: "Own lane A implementation only.",
+          handoffTo: ["lane_2"],
+        },
+        {
+          laneId: "lane_2",
+          dependsOn: ["lane_1"],
+        },
+      ],
+    });
   });
 
   it("sessions_spawn should reject delegated results that miss the acceptance gate", async () => {

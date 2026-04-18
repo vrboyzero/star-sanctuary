@@ -10,6 +10,7 @@ import {
   type SystemPromptBuildResult,
   type SystemPromptSection,
 } from "@belldandy/agent";
+import type { IdentityAuthorityProfile } from "@belldandy/protocol";
 import type { ToolExecutor } from "@belldandy/skills";
 
 import { persistConversationPromptSnapshot } from "../conversation-prompt-snapshot.js";
@@ -61,7 +62,10 @@ export function createGatewayPromptInspectionRuntime({
   promptSnapshotHeartbeatMaxRuns: number;
   promptSnapshotEmailThreadMaxRuns: number;
   promptSnapshotRetentionDays: number;
-  agentWorkspaceCache: Map<string, { build: SystemPromptBuildResult }>;
+  agentWorkspaceCache: Map<string, {
+    build: SystemPromptBuildResult;
+    authorityProfile?: IdentityAuthorityProfile;
+  }>;
   dynamicSystemPromptBuild: SystemPromptBuildResult;
   toolExecutor: ToolExecutor;
   promptExperimentConfig?: PromptExperimentConfig;

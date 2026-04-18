@@ -740,7 +740,37 @@ function isUnderRoot(absolute: string, root: string): boolean {
     return !(rel.startsWith("..") || path.isAbsolute(rel));
 }
 
-function splitCommandSegments(command: string): { ok: true; segments: string[] } | { ok: false; reason: string } {
+function buildShellSyntaxPolicyReason(
+    reason: string,
+    command: string,
+): string {
+    if (reason !== "Redirection syntax is blocked by security policy.") {
+        return reason;
+    }
+
+    const hints = [
+        "run_command already captures stdout/stderr, so shell redirection is usually unnecessary.",
+        "Prefer command-native flags or dedicated tools like file_read, log_read, and log_search when you need bounded output.",
+    ];
+
+    if (/[<>]/.test(command)) {
+        hints.push("Remove >, <, or 2>/dev/null from the command instead of trying to hide or redirect output.");
+    }
+
+    if (/\|\s*(head|tail)\b/i.test(command)) {
+        hints.push("If you only need a small slice of output, prefer tool-specific limit flags or a bounded read instead of piping to head/tail.");
+    }
+
+    if (process.platform === "win32") {
+        hints.push("On Windows, avoid Unix shell snippets such as 2>/dev/null; if you need shell-specific formatting, use a PowerShell command explicitly and keep it non-interactive.");
+    }
+
+    return `${reason} ${hints.join(" ")}`;
+}
+
+function splitCommandSegments(
+    command: string,
+): { ok: true; segments: string[] } | { ok: false; reason: string; reasonCode?: "subshell" | "redirection" | "syntax" } {
     const segments: string[] = [];
     let current = "";
     let quote: "'" | "\"" | null = null;
@@ -794,11 +824,11 @@ function splitCommandSegments(command: string): { ok: true; segments: string[] }
         }
 
         if (ch === "`" || (ch === "$" && next === "(")) {
-            return { ok: false, reason: "Subshell syntax is blocked by security policy." };
+            return { ok: false, reason: "Subshell syntax is blocked by security policy.", reasonCode: "subshell" };
         }
 
         if (ch === ">" || ch === "<") {
-            return { ok: false, reason: "Redirection syntax is blocked by security policy." };
+            return { ok: false, reason: "Redirection syntax is blocked by security policy.", reasonCode: "redirection" };
         }
 
         if (ch === ";" || ch === "\n") {
@@ -823,12 +853,12 @@ function splitCommandSegments(command: string): { ok: true; segments: string[] }
     }
 
     if (quote) {
-        return { ok: false, reason: "Unterminated quote in command." };
+        return { ok: false, reason: "Unterminated quote in command.", reasonCode: "syntax" };
     }
 
     pushSegment();
     if (segments.length === 0) {
-        return { ok: false, reason: "Empty command" };
+        return { ok: false, reason: "Empty command", reasonCode: "syntax" };
     }
 
     return { ok: true, segments };
@@ -915,8 +945,9 @@ export const runCommandTool: Tool = withToolContract({
         // 安全验证：按 shell 控制符分段，逐段校验，避免拼接绕过
         const segmented = splitCommandSegments(command);
         if (!segmented.ok) {
-            context.logger?.warn(`[Security Block] ${command} -> ${segmented.reason}`);
-            return makeResult(false, "", `Security Error: ${segmented.reason}`, "permission_or_policy");
+            const policyReason = buildShellSyntaxPolicyReason(segmented.reason, command);
+            context.logger?.warn(`[Security Block] ${command} -> ${policyReason}`);
+            return makeResult(false, "", `Security Error: ${policyReason}`, "permission_or_policy");
         }
 
         for (const segment of segmented.segments) {

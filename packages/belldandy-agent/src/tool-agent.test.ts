@@ -293,6 +293,19 @@ describe("before_agent_start system prompt overrides", () => {
       apiKey: "test-key",
       model: "gpt-test",
       systemPrompt: "base-system-prompt",
+      identityAuthorityProfile: {
+        currentLabel: "首席执行官 (CEO)",
+        superiorLabels: ["董事会成员"],
+        subordinateLabels: ["CTO"],
+        ownerUuids: ["user-123"],
+        authorityMode: "verifiable_only",
+        responsePolicy: {
+          ownerOrSuperior: "execute",
+          subordinate: "guide",
+          other: "refuse_or_inform",
+        },
+        source: "identity_md",
+      },
       toolExecutor: createToolExecutor(),
       onPromptSnapshot: (snapshot) => {
         snapshots.push(snapshot);
@@ -319,11 +332,21 @@ describe("before_agent_start system prompt overrides", () => {
     expect(items).toContainEqual({ type: "final", text: "done" });
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].systemPrompt).toContain("## Identity Context (Runtime)");
+    expect(snapshots[0].systemPrompt).toContain("## Runtime Identity Authority");
     expect(snapshots[0].deltas).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "runtime-identity-context",
         deltaType: "runtime-identity",
         role: "system",
+      }),
+      expect.objectContaining({
+        id: "runtime-identity-authority",
+        deltaType: "runtime-identity-authority",
+        role: "system",
+        metadata: expect.objectContaining({
+          actorRelation: "owner",
+          recommendedAction: "execute",
+        }),
       }),
       expect.objectContaining({
         id: "attachment-1",
@@ -341,7 +364,7 @@ describe("before_agent_start system prompt overrides", () => {
       }),
       expect.objectContaining({
         blockType: "dynamic-runtime",
-        sourceDeltaIds: ["runtime-identity-context"],
+        sourceDeltaIds: ["runtime-identity-context", "runtime-identity-authority"],
         cacheControlEligible: false,
       }),
     ]);
@@ -403,6 +426,116 @@ describe("before_agent_start system prompt overrides", () => {
       expect.objectContaining({
         deltaType: "tool-selection-policy",
         role: "system",
+      }),
+    ]));
+  });
+
+  it("injects launch-spec team topology into the effective system prompt", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(createJsonResponse({
+      choices: [{
+        message: {
+          content: "done",
+        },
+      }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+
+    const snapshots: any[] = [];
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      systemPrompt: "base-system-prompt",
+      toolExecutor: createToolExecutor(),
+      onPromptSnapshot: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-launch-spec-team-topology",
+      text: "hello",
+      meta: {
+        _agentLaunchSpec: {
+          profileId: "coder",
+          delegationProtocol: {
+            source: "delegate_parallel",
+            intent: {
+              kind: "parallel_subtasks",
+              summary: "Split the patch work across two lanes.",
+            },
+            contextPolicy: {
+              includeParentConversation: true,
+              includeStructuredContext: false,
+              contextKeys: [],
+            },
+            expectedDeliverable: {
+              format: "patch",
+              summary: "Patch lane handoff.",
+            },
+            aggregationPolicy: {
+              mode: "parallel_collect",
+              summarizeFailures: true,
+            },
+            launchDefaults: {},
+            team: {
+              id: "team-99",
+              mode: "parallel_patch",
+              sharedGoal: "Split the patch work across two lanes.",
+              managerAgentId: "default",
+              managerIdentityLabel: "首席执行官 (CEO)",
+              currentLaneId: "lane_a",
+              memberRoster: [
+                {
+                  laneId: "lane_a",
+                  agentId: "coder",
+                  role: "coder",
+                  identityLabel: "CTO",
+                  authorityRelationToManager: "subordinate",
+                  reportsTo: ["首席执行官 (CEO)"],
+                  scopeSummary: "Patch lane A only.",
+                  handoffTo: ["lane_verify"],
+                },
+                {
+                  laneId: "lane_verify",
+                  agentId: "verifier",
+                  role: "verifier",
+                  identityLabel: "审计",
+                  authorityRelationToManager: "peer",
+                  scopeSummary: "Review accepted patch lanes.",
+                  dependsOn: ["lane_a"],
+                },
+              ],
+            },
+          },
+        },
+      },
+    }));
+
+    expect(items).toContainEqual({ type: "final", text: "done" });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const requestInit = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const payload = JSON.parse(String(requestInit?.body ?? "{}"));
+    expect(payload.messages[0]?.content).toContain("## Team Topology and Ownership");
+    expect(payload.messages[0]?.content).toContain("Team mode: parallel_patch");
+    expect(payload.messages[0]?.content).toContain("Manager identity: 首席执行官 (CEO)");
+    expect(payload.messages[0]?.content).toContain("Current lane: lane_a");
+    expect(payload.messages[0]?.content).toContain("Current lane identity: CTO");
+    expect(payload.messages[0]?.content).toContain("Authority relation to manager: subordinate");
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        deltaType: "team-topology-and-ownership",
+        role: "system",
+      }),
+    ]));
+    expect(snapshots[0].providerNativeSystemBlocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        blockType: "dynamic-runtime",
+        sourceDeltaIds: expect.arrayContaining([
+          "launch-team-topology-lane_a",
+        ]),
       }),
     ]));
   });
@@ -1490,6 +1623,188 @@ describe("ToolEnabledAgent hook timeouts", () => {
               highPriorityLabels: ["Agent verifier"],
               verifierHandoffLabels: ["Agent verifier"],
             }),
+          }),
+        }),
+      }),
+    ]));
+  });
+
+  it("injects team handoff and fan-in guidance into the next model call after parallel delegation", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "",
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "delegate_parallel",
+                arguments: JSON.stringify({
+                  tasks: [
+                    { instruction: "Implement lane A", agent_id: "coder" },
+                    { instruction: "Verify lane A", agent_id: "verifier" },
+                  ],
+                }),
+              },
+            }],
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }))
+      .mockResolvedValueOnce(createJsonResponse({
+        choices: [{
+          message: {
+            content: "team fan-in reviewed",
+          },
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }));
+    const snapshots: any[] = [];
+    const toolExecutor = createToolExecutor({
+      getDefinitions: () => [{
+        type: "function" as const,
+        function: {
+          name: "delegate_parallel",
+          description: "delegate in parallel",
+          parameters: { type: "object", properties: {} },
+        },
+      }],
+      execute: vi.fn(async () => ({
+        id: "call-1",
+        name: "delegate_parallel",
+        success: true,
+        output: "parallel done",
+        durationMs: 0,
+        metadata: {
+          delegationResults: [
+            {
+              label: "Task 1 / coder",
+              laneId: "lane_1",
+              scopeSummary: "Own lane A implementation only.",
+              handoffTo: ["lane_2"],
+              workerSuccess: true,
+              accepted: true,
+              acceptanceGate: {
+                enforced: false,
+                accepted: true,
+                summary: "Delegated result passed the structured acceptance gate.",
+                reasons: [],
+                acceptanceCheckStatus: "not_requested",
+              },
+            },
+            {
+              label: "Task 2 / verifier",
+              laneId: "lane_2",
+              dependsOn: ["lane_1"],
+              workerSuccess: true,
+              accepted: false,
+              acceptanceGate: {
+                enforced: true,
+                accepted: false,
+                summary: "Delegated result failed the structured acceptance gate: Missing required sections: Recommendation",
+                reasons: ["Missing required sections: Recommendation"],
+                acceptanceCheckStatus: "missing",
+                rejectionConfidence: "high",
+                managerActionHint: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
+              },
+            },
+          ],
+          followUpStrategy: {
+            mode: "parallel",
+            summary: "Parallel fan-in strategy: accept now: Task 1 / coder; retry with follow-up delegation: Task 2 / verifier.",
+            recommendedRuntimeAction: "retry_delegation",
+            acceptedLabels: ["Task 1 / coder"],
+            retryLabels: ["Task 2 / verifier"],
+            verifierHandoffLabels: ["Task 2 / verifier"],
+            items: [
+              {
+                label: "Task 1 / coder",
+                action: "accept",
+                reason: "Delegated result passed the acceptance gate.",
+                recommendedRuntimeAction: "accept_result",
+                priority: "normal",
+              },
+              {
+                label: "Task 2 / verifier",
+                action: "retry",
+                reason: "reject this handoff and re-delegate with explicit section requirements or a clearer deliverable contract.",
+                recommendedRuntimeAction: "retry_delegation",
+                priority: "high",
+              },
+            ],
+          },
+          team: {
+            id: "team-22",
+            mode: "parallel_subtasks",
+            sharedGoal: "Implement lane A and verify it before manager fan-in.",
+            managerAgentId: "default",
+            memberRoster: [
+              {
+                laneId: "lane_1",
+                agentId: "coder",
+                role: "coder",
+                scopeSummary: "Own lane A implementation only.",
+                handoffTo: ["lane_2"],
+              },
+              {
+                laneId: "lane_2",
+                agentId: "verifier",
+                role: "verifier",
+                dependsOn: ["lane_1"],
+              },
+            ],
+          },
+        },
+      })),
+    });
+    const agent = new ToolEnabledAgent({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      model: "gpt-test",
+      toolExecutor,
+      onPromptSnapshot: (snapshot) => {
+        snapshots.push(snapshot);
+      },
+    });
+
+    const items = await collectItems(agent.run({
+      conversationId: "conv-team-fan-in-follow-up",
+      text: "delegate parallel work",
+    }));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(items).toContainEqual({ type: "final", text: "team fan-in reviewed" });
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[1].systemPrompt).toContain("## Team Handoff Review");
+    expect(snapshots[1].systemPrompt).toContain("Active handoff lanes: Task 1 / coder -> lane_2");
+    expect(snapshots[1].systemPrompt).toContain("## Team Fan-In Triage");
+    expect(snapshots[1].systemPrompt).toContain("Safe to integrate now: Task 1 / coder");
+    expect(snapshots[1].systemPrompt).toContain("Needs retry or re-delegation: Task 2 / verifier");
+    expect(snapshots[1].systemPrompt).toContain("## Team Completion Gate");
+    expect(snapshots[1].systemPrompt).toContain("Final fan-in verdict: hold_fan_in");
+    expect(snapshots[1].deltas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        deltaType: "team-handoff-review",
+        metadata: expect.objectContaining({
+          teamId: "team-22",
+          teamMode: "parallel_subtasks",
+        }),
+      }),
+      expect.objectContaining({
+        deltaType: "team-fan-in-triage",
+        metadata: expect.objectContaining({
+          teamId: "team-22",
+          recommendedRuntimeAction: "retry_delegation",
+        }),
+      }),
+      expect.objectContaining({
+        deltaType: "team-completion-gate",
+        metadata: expect.objectContaining({
+          teamId: "team-22",
+          completionGate: expect.objectContaining({
+            status: "pending",
+            finalFanInVerdict: "hold_fan_in",
           }),
         }),
       }),

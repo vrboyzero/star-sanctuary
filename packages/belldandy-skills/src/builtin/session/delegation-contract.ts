@@ -4,6 +4,7 @@ import type {
   DelegationDeliverableContract,
   DelegationDeliverableFormat,
   DelegationOwnership,
+  DelegationTeamMetadata,
 } from "../../delegation-protocol.js";
 
 export const DELEGATION_CONTRACT_PARAMETER_PROPERTIES = {
@@ -120,6 +121,10 @@ export type DelegationAcceptanceGateContract = {
 
 export type DelegationResultToolReview = {
   label?: string;
+  laneId?: string;
+  scopeSummary?: string;
+  dependsOn?: string[];
+  handoffTo?: string[];
   workerSuccess: boolean;
   accepted: boolean;
   error?: string;
@@ -181,6 +186,7 @@ export type DelegationResultToolMetadata = {
   gateRejectedCount?: number;
   workerSuccessCount?: number;
   followUpStrategy?: DelegationResultFollowUpStrategy;
+  team?: DelegationTeamMetadata;
 };
 
 export function readStructuredDelegationContractArgs(args: Record<string, unknown>): {
@@ -352,6 +358,7 @@ export function buildDelegationResultToolMetadata(input: {
   gateRejectedCount?: number;
   workerSuccessCount?: number;
   followUpStrategy?: DelegationResultFollowUpStrategy;
+  team?: DelegationTeamMetadata;
 }): JsonObject | undefined {
   const delegationResults = input.delegationResults
     .map((entry) => cloneDelegationResultToolReview(entry))
@@ -365,6 +372,7 @@ export function buildDelegationResultToolMetadata(input: {
     ...(typeof input.gateRejectedCount === "number" ? { gateRejectedCount: input.gateRejectedCount } : {}),
     ...(typeof input.workerSuccessCount === "number" ? { workerSuccessCount: input.workerSuccessCount } : {}),
     ...(input.followUpStrategy ? { followUpStrategy: cloneDelegationResultFollowUpStrategy(input.followUpStrategy) } : {}),
+    ...(input.team ? { team: cloneDelegationTeamMetadata(input.team) } : {}),
   } satisfies JsonObject;
 }
 
@@ -385,12 +393,14 @@ export function readDelegationResultToolMetadata(value: unknown): DelegationResu
   const gateRejectedCount = normalizeOptionalNumber(record.gateRejectedCount);
   const workerSuccessCount = normalizeOptionalNumber(record.workerSuccessCount);
   const followUpStrategy = readDelegationResultFollowUpStrategy(record.followUpStrategy);
+  const team = readDelegationTeamMetadata(record.team);
   return {
     delegationResults,
     ...(typeof acceptedCount === "number" ? { acceptedCount } : {}),
     ...(typeof gateRejectedCount === "number" ? { gateRejectedCount } : {}),
     ...(typeof workerSuccessCount === "number" ? { workerSuccessCount } : {}),
     ...(followUpStrategy ? { followUpStrategy } : {}),
+    ...(team ? { team } : {}),
   };
 }
 
@@ -684,7 +694,33 @@ function cloneDelegationResultToolReview(
   return {
     ...entry,
     ...(entry.error ? { error: entry.error } : {}),
+    ...(entry.laneId ? { laneId: entry.laneId } : {}),
+    ...(entry.scopeSummary ? { scopeSummary: entry.scopeSummary } : {}),
+    ...(entry.dependsOn ? { dependsOn: [...entry.dependsOn] } : {}),
+    ...(entry.handoffTo ? { handoffTo: [...entry.handoffTo] } : {}),
     ...(entry.acceptanceGate ? { acceptanceGate: cloneDelegationResultGate(entry.acceptanceGate) } : {}),
+  };
+}
+
+function cloneDelegationTeamMetadata(
+  team: DelegationTeamMetadata | undefined,
+): DelegationTeamMetadata | undefined {
+  if (!team) {
+    return undefined;
+  }
+  return {
+    ...team,
+    ...(team.sharedGoal ? { sharedGoal: team.sharedGoal } : {}),
+    ...(team.managerAgentId ? { managerAgentId: team.managerAgentId } : {}),
+    ...(team.currentLaneId ? { currentLaneId: team.currentLaneId } : {}),
+    memberRoster: team.memberRoster.map((member) => ({
+      ...member,
+      ...(member.agentId ? { agentId: member.agentId } : {}),
+      ...(member.role ? { role: member.role } : {}),
+      ...(member.scopeSummary ? { scopeSummary: member.scopeSummary } : {}),
+      ...(member.dependsOn ? { dependsOn: [...member.dependsOn] } : {}),
+      ...(member.handoffTo ? { handoffTo: [...member.handoffTo] } : {}),
+    })),
   };
 }
 
@@ -738,16 +774,99 @@ function readDelegationResultToolReview(value: unknown): DelegationResultToolRev
   }
   const acceptanceGate = readDelegationResultGate(record.acceptanceGate);
   const error = normalizeOptionalString(record.error);
+  const dependsOn = normalizeStringArray(record.dependsOn);
+  const handoffTo = normalizeStringArray(record.handoffTo);
   return {
     ...(typeof record.label === "string" && record.label.trim() ? { label: record.label.trim() } : {}),
+    ...(typeof record.laneId === "string" && record.laneId.trim() ? { laneId: record.laneId.trim() } : {}),
+    ...(typeof record.scopeSummary === "string" && record.scopeSummary.trim() ? { scopeSummary: record.scopeSummary.trim() } : {}),
     workerSuccess: record.workerSuccess,
     accepted: record.accepted,
     ...(error ? { error } : {}),
     ...(typeof record.taskId === "string" && record.taskId.trim() ? { taskId: record.taskId.trim() } : {}),
     ...(typeof record.sessionId === "string" && record.sessionId.trim() ? { sessionId: record.sessionId.trim() } : {}),
     ...(typeof record.outputPath === "string" && record.outputPath.trim() ? { outputPath: record.outputPath.trim() } : {}),
+    ...(dependsOn ? { dependsOn } : {}),
+    ...(handoffTo ? { handoffTo } : {}),
     ...(acceptanceGate ? { acceptanceGate } : {}),
   };
+}
+
+function readDelegationTeamMetadata(value: unknown): DelegationTeamMetadata | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const id = normalizeOptionalString(record.id);
+  const mode = readDelegationTeamMode(record.mode);
+  const memberRoster = Array.isArray(record.memberRoster)
+    ? record.memberRoster
+        .map((member) => readDelegationTeamMember(member))
+        .filter((member): member is DelegationTeamMetadata["memberRoster"][number] => Boolean(member))
+    : [];
+  if (!id || !mode || memberRoster.length === 0) {
+    return undefined;
+  }
+  const currentLaneId = normalizeOptionalString(record.currentLaneId);
+  const normalizedCurrentLaneId = currentLaneId && memberRoster.some((member) => member.laneId === currentLaneId)
+    ? currentLaneId
+    : undefined;
+  return {
+    id,
+    mode,
+    ...(normalizeOptionalString(record.sharedGoal) ? { sharedGoal: normalizeOptionalString(record.sharedGoal)! } : {}),
+    ...(normalizeOptionalString(record.managerAgentId) ? { managerAgentId: normalizeOptionalString(record.managerAgentId)! } : {}),
+    ...(normalizedCurrentLaneId ? { currentLaneId: normalizedCurrentLaneId } : {}),
+    memberRoster,
+  };
+}
+
+function readDelegationTeamMember(
+  value: unknown,
+): DelegationTeamMetadata["memberRoster"][number] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const laneId = normalizeOptionalString(record.laneId);
+  if (!laneId) {
+    return undefined;
+  }
+  const dependsOn = normalizeStringArray(record.dependsOn);
+  const handoffTo = normalizeStringArray(record.handoffTo);
+  return {
+    laneId,
+    ...(normalizeOptionalString(record.agentId) ? { agentId: normalizeOptionalString(record.agentId)! } : {}),
+    ...(readDelegationTeamRole(record.role) ? { role: readDelegationTeamRole(record.role)! } : {}),
+    ...(normalizeOptionalString(record.scopeSummary) ? { scopeSummary: normalizeOptionalString(record.scopeSummary)! } : {}),
+    ...(dependsOn ? { dependsOn } : {}),
+    ...(handoffTo ? { handoffTo } : {}),
+  };
+}
+
+function readDelegationTeamMode(value: unknown): DelegationTeamMetadata["mode"] | undefined {
+  switch (value) {
+    case "parallel_subtasks":
+    case "parallel_patch":
+    case "research_grid":
+    case "verify_swarm":
+    case "plan_execute_verify":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+function readDelegationTeamRole(value: unknown): DelegationTeamMetadata["memberRoster"][number]["role"] | undefined {
+  switch (value) {
+    case "default":
+    case "coder":
+    case "researcher":
+    case "verifier":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function readDelegationResultFollowUpStrategy(value: unknown): DelegationResultFollowUpStrategy | undefined {

@@ -189,9 +189,9 @@ export function createToolSearchTool(options: ToolSearchOptions): Tool {
         sections.push(`Unloaded deferred tools:\n${unloaded.map((name) => `- ${name}`).join("\n")}`);
       }
       if (loaded.length > 0) {
-        sections.push(`Loaded tools for next turn:\n${loaded.map((name) => `- ${name}`).join("\n")}`);
+        sections.push(`Loaded tools for the next model turn only:\n${loaded.map((name) => `- ${name}`).join("\n")}`);
       }
-      sections.push(`Currently loaded deferred tools:\n${currentLoaded.length > 0 ? currentLoaded.map((name) => `- ${name}`).join("\n") : "- (none)"}`);
+      sections.push(`Currently queued deferred tools for the next model turn:\n${currentLoaded.length > 0 ? currentLoaded.map((name) => `- ${name}`).join("\n") : "- (none)"}`);
       sections.push(`Matches:\n${formatEntries(matches)}`);
 
       return {

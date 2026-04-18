@@ -510,6 +510,218 @@ test("subtask.list and subtask.get expose persisted task runtime records", async
   }
 });
 
+test("subtask.get exposes team shared state and completion gate summaries", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);
+  await subTaskRuntimeStore.load();
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+  });
+  registry.register({
+    id: "coder",
+    displayName: "Coder",
+    model: "primary",
+    kind: "resident",
+    workspaceBinding: "current",
+    workspaceDir: "coder",
+  });
+  registry.register({
+    id: "verifier",
+    displayName: "Verifier",
+    model: "primary",
+  });
+
+  const teamRoster = [
+    {
+      laneId: "lane_1",
+      agentId: "coder",
+      role: "coder" as const,
+      scopeSummary: "Implement lane A only.",
+      handoffTo: ["lane_2"],
+    },
+    {
+      laneId: "lane_2",
+      agentId: "verifier",
+      role: "verifier" as const,
+      scopeSummary: "Verify lane A and report merge readiness.",
+      dependsOn: ["lane_1"],
+    },
+  ];
+
+  const lane1Task = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-team-subtask",
+      agentId: "coder",
+      instruction: "Implement lane A",
+      delegationProtocol: {
+        source: "delegate_parallel",
+        intent: {
+          kind: "parallel_subtasks",
+          summary: "Implement lane A",
+          role: "coder",
+        },
+        contextPolicy: {
+          includeParentConversation: true,
+          includeStructuredContext: true,
+          contextKeys: ["teamId", "laneId"],
+        },
+        expectedDeliverable: {
+          format: "patch",
+          summary: "Return the lane implementation summary.",
+        },
+        aggregationPolicy: {
+          mode: "parallel_collect",
+          summarizeFailures: true,
+        },
+        ownership: {
+          scopeSummary: "Implement lane A only.",
+          writeScope: ["packages/lane-a.ts"],
+        },
+        team: {
+          id: "team-100",
+          mode: "parallel_subtasks",
+          sharedGoal: "Implement lane A and verify it before manager fan-in.",
+          managerAgentId: "default",
+          currentLaneId: "lane_1",
+          memberRoster: teamRoster,
+        },
+        launchDefaults: {},
+      },
+    },
+  });
+  await subTaskRuntimeStore.attachSession(lane1Task.id, "sub_team_lane_1");
+  await subTaskRuntimeStore.completeTask(lane1Task.id, {
+    status: "done",
+    sessionId: "sub_team_lane_1",
+    output: "Implemented lane A successfully.",
+  });
+
+  const lane2Task = await subTaskRuntimeStore.createTask({
+    launchSpec: {
+      parentConversationId: "conv-team-subtask",
+      agentId: "verifier",
+      instruction: "Verify lane A",
+      delegationProtocol: {
+        source: "delegate_parallel",
+        intent: {
+          kind: "verifier_handoff",
+          summary: "Verify lane A",
+          role: "verifier",
+        },
+        contextPolicy: {
+          includeParentConversation: true,
+          includeStructuredContext: true,
+          contextKeys: ["teamId", "laneId"],
+        },
+        expectedDeliverable: {
+          format: "verification_report",
+          summary: "Return the lane verification verdict.",
+        },
+        aggregationPolicy: {
+          mode: "parallel_collect",
+          summarizeFailures: true,
+        },
+        ownership: {
+          scopeSummary: "Verify lane A and report merge readiness.",
+        },
+        deliverableContract: {
+          format: "verification_report",
+          requiredSections: ["Findings", "Recommendation"],
+        },
+        team: {
+          id: "team-100",
+          mode: "parallel_subtasks",
+          sharedGoal: "Implement lane A and verify it before manager fan-in.",
+          managerAgentId: "default",
+          currentLaneId: "lane_2",
+          memberRoster: teamRoster,
+        },
+        launchDefaults: {},
+      },
+    },
+  });
+  await subTaskRuntimeStore.attachSession(lane2Task.id, "sub_team_lane_2");
+  await subTaskRuntimeStore.completeTask(lane2Task.id, {
+    status: "done",
+    sessionId: "sub_team_lane_2",
+    output: "## Findings\n- Lane A still needs a recommendation section before merge.",
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentRegistry: registry,
+    subTaskRuntimeStore,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "subtask-team-get",
+      method: "subtask.get",
+      params: { taskId: lane2Task.id },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "subtask-team-get"));
+
+    const getRes = frames.find((f) => f.type === "res" && f.id === "subtask-team-get");
+    expect(getRes.ok).toBe(true);
+    expect(getRes.payload?.teamSharedState).toMatchObject({
+      teamId: "team-100",
+      mode: "parallel_subtasks",
+      sharedGoal: "Implement lane A and verify it before manager fan-in.",
+      managerAgentId: "default",
+      currentLaneId: "lane_2",
+      completionGate: {
+        status: "pending",
+        finalFanInVerdict: "hold_fan_in",
+        acceptedLaneIds: ["lane_1"],
+        retryLaneIds: ["lane_2"],
+        blockerLaneIds: [],
+        missingLaneIds: [],
+        unresolvedDependencyLaneIds: [],
+      },
+    });
+    expect(getRes.payload?.teamSharedState?.fanInSummary).toContain("accepted=lane_1");
+    expect(getRes.payload?.teamSharedState?.fanInSummary).toContain("retry=lane_2");
+    expect(getRes.payload?.teamSharedState?.roster).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        laneId: "lane_1",
+        taskId: lane1Task.id,
+        agentId: "coder",
+        role: "coder",
+        laneState: "accepted",
+        handoffTo: ["lane_2"],
+      }),
+      expect.objectContaining({
+        laneId: "lane_2",
+        taskId: lane2Task.id,
+        agentId: "verifier",
+        role: "verifier",
+        laneState: "retry",
+        dependsOn: ["lane_1"],
+        acceptanceGateStatus: "rejected",
+      }),
+    ]));
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("subtask.list and subtask.get expose bridge session runtime visibility", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const subTaskRuntimeStore = new SubTaskRuntimeStore(stateDir);

@@ -43,6 +43,62 @@ const MAX_INLINE_TEXT_CHARS = 12_000;
 const MAX_INLINE_BINARY_CHARS = 4_096;
 const MCP_PERSIST_DIR = "generated";
 const MAX_SESSION_RECOVERY_ATTEMPTS = 1;
+const STDIO_STDERR_IGNORE_PATTERNS: Record<string, RegExp[]> = {
+  "chrome-devtools": [
+    /^No handler registered for issue code PerformanceIssue$/,
+  ],
+};
+
+export function shouldPipeStdioStderr(serverId: string): boolean {
+  return (STDIO_STDERR_IGNORE_PATTERNS[serverId]?.length ?? 0) > 0;
+}
+
+export function classifyStdioStderrLine(serverId: string, rawLine: string): "ignore" | "forward" {
+  const line = rawLine.trim();
+  if (!line) {
+    return "ignore";
+  }
+
+  const ignorePatterns = STDIO_STDERR_IGNORE_PATTERNS[serverId];
+  if (ignorePatterns?.some((pattern) => pattern.test(line))) {
+    return "ignore";
+  }
+
+  return "forward";
+}
+
+function attachStdioStderrRelay(serverId: string, transport: StdioClientTransport): void {
+  const stderrStream = transport.stderr as NodeJS.ReadableStream | null;
+  if (!stderrStream) {
+    return;
+  }
+
+  let pending = "";
+
+  const flushLine = (rawLine: string) => {
+    const line = rawLine.trim();
+    if (classifyStdioStderrLine(serverId, line) === "ignore") {
+      return;
+    }
+    mcpLog(`mcp:${serverId}`, `stdio stderr: ${line}`);
+  };
+
+  stderrStream.on("data", (chunk) => {
+    pending += chunk.toString();
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      flushLine(line);
+    }
+  });
+
+  stderrStream.on("end", () => {
+    if (pending) {
+      flushLine(pending);
+      pending = "";
+    }
+  });
+}
 
 function normalizeComparablePath(input: string): string {
   const resolved = path.resolve(input);
@@ -521,14 +577,17 @@ export class MCPClient {
     }
     mcpLog(`mcp:${this.config.id}`, `创建 stdio 传输: ${config.command} ${(expandedArgs || []).join(" ")}`);
 
-    // 使用 cross-spawn 创建子进程，支持跨平台
+    const stderrMode = shouldPipeStdioStderr(this.config.id) ? "pipe" : "inherit";
     const transport = new StdioClientTransport({
       command: config.command,
       args: expandedArgs,
       env: config.env,
       cwd: config.cwd,
-      stderr: "inherit",
+      stderr: stderrMode,
     });
+    if (stderrMode === "pipe") {
+      attachStdioStderrRelay(this.config.id, transport);
+    }
 
     return transport;
   }

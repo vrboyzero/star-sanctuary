@@ -123,10 +123,12 @@ const TOOL_CONTRACT_V2_PROFILES: Record<string, ToolContractV2Profile> = {
     preflightChecks: [
       "State the intended cwd, expected side effects, and whether stdout/stderr are the only outputs you need",
       "Check safelist, blocklist, and whether the command may touch network, external services, or privileged paths",
+      "Avoid shell redirection like >, <, or 2>/dev/null; run_command already captures stdout/stderr and Unix shell snippets are brittle on Windows",
     ],
     fallbackStrategy: [
       "Prefer workspace and patch tools when you only need repository state or a deterministic file edit",
       "Switch to terminal session tooling only when the workflow truly requires an interactive shell",
+      "Prefer command-native limit/silent flags or dedicated file/log tools instead of piping to head/tail or redirecting output away",
     ],
     expectedOutput: [
       "Primary stdout text, with stderr or validation failures surfaced as tool error metadata when relevant",

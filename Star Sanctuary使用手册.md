@@ -1,6 +1,6 @@
 # Star Sanctuary 使用手册
 
-最后更新时间：2026-04-16  
+最后更新时间：2026-04-18  
 适用版本：当前仓库主干，workspace version `0.2.4`
 
 Star Sanctuary 是一个 **本地优先的个人 AI 助手与 Agent 工作台**。  
@@ -3394,7 +3394,605 @@ BELLDANDY_AUTH_TOKEN=your-secure-token
 
 ---
 
-## 16. 推荐配套文档
+## 16. Agent、工具与 Agent Teams 专题补充
+
+这一章整合自 `docs/Star Sanctuary使用手册.md`，重点收口：
+
+- Agent 的配置与使用
+- 工具系统与 MCP 的配置与使用
+- Agent Teams 的配置、进入条件、触发方式与观测方法
+- `IDENTITY.md` 与 Team Governance 的落点
+
+如果你已经看过前面的总手册章节，这一章可以当作“操作型专题索引”。如果你主要关心多 Agent 协作、工具边界和 Team mode，优先看这一章会更快。
+
+### 16.1 先理解几个核心概念
+
+Agent 是有独立配置边界的运行单元。一个 Agent 可以拥有：
+
+- 独立的模型配置
+- 独立的角色倾向
+- 独立的工具权限边界
+- 独立的工作区文件覆盖
+- 独立的身份标签与 authority profile
+
+当前最常见的角色分工：
+
+- `default`
+  - 通用主 Agent
+  - 最适合做日常对话入口和 manager
+- `coder`
+  - 实现、修复、重构、补测试
+- `researcher`
+  - 调研、搜索、归纳资料
+- `verifier`
+  - 审查、验证、找问题、做 fan-in review
+
+工具解决的是“能不能做”，技能解决的是“怎么做更稳”。当前常见工具来源：
+
+- Builtin tools
+  - 文件读写、补丁、命令、日志、记忆、委派等
+- MCP tools
+  - 通过 `mcp.json` 接入的外部标准工具
+- Plugin tools
+  - 插件注册的工具
+
+Agent Teams 不是单独的“按钮模式”，而是一种运行态协作状态。当当前会话中的主 Agent 开始：
+
+- 委派子 Agent
+- 并行拆分多个 lane
+- 对多个 lane 做 handoff、fan-in、completion gate
+
+系统就会进入 Team-aware 的工作方式。最重要的一点是：
+
+- 没有单独的 “Agent Teams 开关”
+- Agent Teams 是通过多 Agent 配置 + 工具可用 + 委派行为触发出来的
+
+### 16.2 配置文件在哪里，修改后何时生效
+
+先执行：
+
+```bash
+corepack pnpm bdd config path
+corepack pnpm bdd doctor
+```
+
+围绕 Agent / 工具 / Team 最常用的配置位置：
+
+- 当前实际 `envDir/.env.local`
+  - 运行时环境变量
+- `~/.star_sanctuary/agents.json`
+  - 多 Agent Profile
+- `~/.star_sanctuary/models.json`
+  - 模型目录
+- `~/.star_sanctuary/mcp.json`
+  - MCP 服务器配置
+- `~/.star_sanctuary/`
+  - 根工作区文件，如 `SOUL.md`、`IDENTITY.md`、`USER.md`、`AGENTS.md`、`TOOLS.md`、`MEMORY.md`
+- `~/.star_sanctuary/agents/<agentId>/`
+  - 各 Agent 的专属工作区覆盖文件
+
+大多数和 Agent / 工具 / Team 相关的配置，修改后都建议重启 Gateway。尤其是：
+
+- `agents.json`
+- `models.json`
+- `mcp.json`
+- Agent 专属工作区文件
+- `IDENTITY.md`
+
+### 16.3 Agent 配置与使用
+
+最小前置条件：
+
+```env
+BELLDANDY_TOOLS_ENABLED=true
+```
+
+如果还要让 Agent 使用 MCP：
+
+```env
+BELLDANDY_TOOLS_ENABLED=true
+BELLDANDY_MCP_ENABLED=true
+```
+
+如果想让多 Agent 具备共享记忆前置条件：
+
+```env
+BELLDANDY_TEAM_SHARED_MEMORY_ENABLED=true
+```
+
+推荐至少准备一个 manager 和两个以上专项 Agent。`agents.json` 的推荐最小形态可以这样理解：
+
+- `default`
+  - 作为主入口和 manager
+  - 建议 `defaultRole=default`
+- `coder`
+  - 建议 `defaultRole=coder`
+  - 建议拥有 `workspace-read / workspace-write / patch / command-exec / memory`
+- `researcher`
+  - 建议 `defaultRole=researcher`
+  - 建议拥有 `network-read / workspace-read / browser / memory`
+- `verifier`
+  - 建议 `defaultRole=verifier`
+  - 建议拥有 `workspace-read / command-exec / browser / memory`
+
+常用字段的理解方式：
+
+- `id`
+  - Agent 唯一 ID
+- `displayName`
+  - 在 UI 和日志里显示的名称
+- `model`
+  - `primary` 表示走主模型，也可以引用 `models.json` 里的模型 ID
+- `kind`
+  - `resident` 适合直接在 WebChat 中切换和使用
+  - `worker` 更偏委派子 Agent
+- `workspaceDir`
+  - Agent 专属工作区目录名
+- `memoryMode`
+  - 常用 `hybrid`
+- `defaultRole`
+  - 建议值：`default / coder / researcher / verifier`
+- `defaultPermissionMode`
+  - 约束该 Agent 的默认执行风格
+- `defaultAllowedToolFamilies`
+  - 用工具族控制能力面，而不是给所有工具
+- `defaultMaxToolRiskLevel`
+  - 控制该 Agent 默认能碰到多高风险的工具
+- `toolsEnabled`
+  - Agent 层是否允许使用工具
+- `toolWhitelist`
+  - 按工具名进一步收缩
+
+Agent 专属工作区推荐结构：
+
+```text
+~/.star_sanctuary/
+├── SOUL.md
+├── IDENTITY.md
+├── USER.md
+├── AGENTS.md
+├── TOOLS.md
+├── MEMORY.md
+└── agents/
+    ├── coder/
+    │   ├── SOUL.md
+    │   ├── IDENTITY.md
+    │   └── AGENTS.md
+    ├── researcher/
+    │   ├── SOUL.md
+    │   └── IDENTITY.md
+    └── verifier/
+        ├── SOUL.md
+        └── IDENTITY.md
+```
+
+继承规则是：
+
+- 非 `default` Agent 优先读取自己的 `agents/<workspaceDir>/` 文件
+- 如果该文件不存在，则自动回退到根工作区同名文件
+
+推荐使用方式：
+
+- 日常对话、复杂任务入口：`default`
+- 你明确知道任务只属于某个角色：可直接切到 `coder` 或 `researcher`
+- 需要主 Agent 组织分工、委派、整合：仍然优先从 `default` 进入
+
+更细的字段说明见：
+
+- [docs/agents.json配置说明.md](E:\project\star-sanctuary\docs\agents.json配置说明.md)
+
+### 16.4 工具系统、MCP 与 Tool Settings 怎么理解
+
+工具系统的最低启用前提：
+
+```env
+BELLDANDY_TOOLS_ENABLED=true
+```
+
+一个工具是否真正可见、可执行，通常要同时通过这几层：
+
+1. 全局工具系统已开启
+2. 工具已经注册
+3. 工具没有被运行时 Tool Settings 禁掉
+4. 当前 Agent 的 `toolsEnabled` 允许
+5. 如果配置了 `toolWhitelist`，工具名必须在白名单里
+6. 当前 Agent / 当前 run 的权限模式、工具族和风险级别允许
+
+可以把它理解成：
+
+- 全局开关决定“系统里有没有手”
+- Agent 配置决定“这个 Agent 有哪些手”
+- runtime policy 决定“这只手现在让不让用”
+
+如果已经把 Agent 职责分清楚了，强烈建议给专项 Agent 加白名单。例如：
+
+- `coder`
+  - 读写文件、补丁、命令、日志、记忆
+- `researcher`
+  - 搜索、浏览器、网页读取、记忆
+- `verifier`
+  - 读取、测试、日志、浏览器、记忆
+
+MCP 的最小启用条件：
+
+```env
+BELLDANDY_TOOLS_ENABLED=true
+BELLDANDY_MCP_ENABLED=true
+```
+
+然后在 `~/.star_sanctuary/mcp.json` 中定义 MCP 服务器。MCP 接入后，工具通常会以类似下面的名字出现：
+
+- `mcp_filesystem_*`
+- `mcp_chrome-devtools_*`
+
+如果希望某个 Agent 也能使用这些 MCP 工具，需要同时满足：
+
+- 该 Agent 自身 `toolsEnabled=true`
+- 对应工具没有被运行时禁掉
+- 如果用了白名单，对应工具名也必须放进去
+
+Tool Settings 面板更像“运行时开关”和“临时治理面板”，适合：
+
+- 临时禁用某些工具
+- 观察当前工具是否可见
+- 观察 Builtin / MCP / Plugin 的实际注册状态
+
+但它不等于长期配置文件：
+
+- 想做长期 Agent 边界，优先改 `agents.json`
+- 想做长期 MCP 配置，优先改 `mcp.json`
+- 想做全局启停，优先改 `.env.local`
+
+工具策略与分级建议继续参考：
+
+- [docs/工具分级指南.md](E:\project\star-sanctuary\docs\工具分级指南.md)
+- [docs/Agent工具调用与Agent指挥调用提示词机制.md](E:\project\star-sanctuary\docs\Agent工具调用与Agent指挥调用提示词机制.md)
+
+### 16.5 Agent Teams：如何配置、如何进入、如何观察
+
+先说结论：当前版本里，Agent Teams 没有单独的“进入按钮”。
+
+要进入 Agent Teams 状态，通常需要这三件事同时成立：
+
+1. 你已经配置了多个 Agent
+2. 当前会话的主 Agent 可以使用委派工具
+3. 主 Agent 真的发起了委派，尤其是并行委派
+
+最稳定进入 Team 状态的触发方式，是让主 Agent 调用 `delegate_parallel`。因为一旦形成并行 lane，系统就会自动生成：
+
+- `team.id`
+- `team.mode`
+- `team.sharedGoal`
+- `team.memberRoster`
+- `team.currentLaneId`
+
+这时 UI、prompt snapshot、subtask 详情里都会进入可观测的 Team mode。
+
+推荐的 Team 前置条件清单：
+
+1. 全局工具系统开启
+
+```env
+BELLDANDY_TOOLS_ENABLED=true
+```
+
+2. 至少配置 2 个以上专项 Agent
+
+- 推荐：`coder / researcher / verifier`
+
+3. manager Agent 可用
+
+- 通常建议用 `default` 作为 manager
+
+4. 各 worker 有合适的默认角色与工具边界
+
+- `coder -> defaultRole: coder`
+- `researcher -> defaultRole: researcher`
+- `verifier -> defaultRole: verifier`
+
+5. 如果想让 Team 协作有共享记忆前置条件，可选开启：
+
+```env
+BELLDANDY_TEAM_SHARED_MEMORY_ENABLED=true
+```
+
+6. 如果希望启用 IDENTITY-aware Team Governance，再补：
+
+- 根工作区或 Agent 专属工作区中的 `IDENTITY.md`
+- 可验证用户 UUID / sender identity 的运行环境
+
+推荐的 Team 组合：
+
+- `default`
+  - 作为 manager
+  - 不必过度收紧工具面，但要保留 delegation 能力
+- `coder`
+  - 专注实现与改动
+- `researcher`
+  - 专注资料检索、文档、网页、搜索
+- `verifier`
+  - 专注检查、测试、证据、风险、fan-in review
+
+如果想更明确地把任务推入 Team mode，建议在 WebChat 中直接表达：
+
+- 这是一个复杂任务
+- 需要多个角色分工
+- 需要并行
+- 需要最后由主 Agent 整合
+
+推荐说法：
+
+```text
+把这个任务拆成多 Agent 协作：
+让 researcher 先调研方案，
+让 coder 实现改动，
+让 verifier 最后审查风险和验证结果，
+你负责整合最终结论。
+```
+
+更强一点的说法：
+
+```text
+请进入多 Agent 协作方式：
+并行让两个 coder 分别处理不同文件，
+让 verifier 在 fan-in 阶段统一审查，
+你不要自己直接改，先完成拆分、委派、回收和整合。
+```
+
+如果希望逼近结构化 delegation，可以这样说：
+
+```text
+请并行委派：
+1. coder-A 只改 packages/belldandy-core/src 下的运行时逻辑
+2. coder-B 只改 apps/web/public/app/features 下的 UI
+3. verifier 只负责检查回归风险
+完成标准是：输出 Changes、Verification、Open Risks 三段。
+```
+
+更容易触发 Team mode 的任务：
+
+- 跨文件、跨模块的复杂任务
+- 需要“调研 + 实现 + 审查”的链路
+- 明确要求并行处理不同部分
+- 明确要求主 Agent 做 fan-in / 最终整合
+
+不太容易触发 Team mode 的任务：
+
+- 很小的单文件修改
+- 纯聊天问题
+- 主 Agent 自己几步就能完成的操作
+- 你没有明确提出拆分或并行需求
+
+Team mode 一旦开始，主 Agent 通常会通过这些内置工具发起协作：
+
+- `delegate_task`
+  - 单个子 Agent 委派
+- `delegate_parallel`
+  - 并行委派多个 lane
+- `sessions_spawn`
+  - 底层子 Agent 拉起
+
+当前常见自动推断的 team mode：
+
+- `parallel_patch`
+  - 并行编码/改补丁
+- `research_grid`
+  - 并行调研
+- `verify_swarm`
+  - 并行验证/审查
+- `parallel_subtasks`
+  - 混合型并行子任务
+
+判断现在是否已经进入 Team 状态，优先看三个地方：
+
+1. Subtask / Delegation 详情
+
+你会看到：
+
+- `teamId`
+- `mode`
+- `managerAgentId`
+- `currentLaneId`
+- roster
+- `dependsOn`
+- `handoffTo`
+- completion gate
+
+2. Prompt Snapshot Detail
+
+你会看到：
+
+- `Team Coordination`
+- Active Prompt Sections / Deltas
+- `Identity Authority`（如果 authority profile 生效）
+
+3. delegated result 的输出
+
+主 Agent 回收结果后，通常会出现：
+
+- lane-aware 的聚合摘要
+- acceptance gate
+- retry / blocker / accept 的 triage
+
+### 16.6 `IDENTITY.md` 与 Team Governance
+
+当前版本中，`IDENTITY.md` 不只是显示名字和头像。如果填写了这些结构化字段，系统会把它解析成 authority profile：
+
+- `当前身份标签`
+- `上级身份标签`
+- `下级身份标签`
+- `主人UUID`
+
+推荐写法：
+
+```md
+## 【IDENTITY | 身份标签】
+
+- **当前身份标签**：首席执行官 (CEO)
+- **上级身份标签**：董事会成员
+- **下级身份标签**：CTO、项目经理、员工
+- **主人UUID**：a10001
+```
+
+多 Agent 时推荐这样放：
+
+- 根工作区 `IDENTITY.md`
+  - 放默认 Agent / manager 的身份
+- `agents/coder/IDENTITY.md`
+  - 放 coder 的身份
+- `agents/researcher/IDENTITY.md`
+  - 放 researcher 的身份
+- `agents/verifier/IDENTITY.md`
+  - 放 verifier 的身份
+
+例如：
+
+- `default`
+  - `当前身份标签：首席执行官 (CEO)`
+- `coder`
+  - `当前身份标签：CTO`
+- `researcher`
+  - `当前身份标签：项目经理`
+- `verifier`
+  - `当前身份标签：审计官`
+
+只有同时满足下面两个条件，authority rule 才会从“文字设定”升级为“运行态约束”：
+
+1. authority profile 已存在
+2. 当前运行环境能验证用户 UUID 或 sender identity
+
+否则：
+
+- 身份标签仍会出现在 prompt / roster 中
+- 但不会作为真正的 authority decision rule 生效
+
+当它生效后，你会在 Team 协作与 inspect 中看到：
+
+- `managerIdentityLabel`
+- lane 的 `identityLabel`
+- `authorityRelationToManager`
+- `reportsTo`
+- `mayDirect`
+- `Identity Authority`
+
+### 16.7 常见使用配方
+
+调研 + 实现 + 审查：
+
+```text
+请用多 Agent 协作完成这个任务：
+researcher 先调研现有实现和外部资料，
+coder 再完成改动，
+verifier 最后审查风险和验证结果，
+你负责整合结论。
+```
+
+并行编码：
+
+```text
+请并行拆分成两个 coder lane：
+一个只改 core runtime，
+一个只改 web UI，
+最后再由 verifier 汇总检查。
+```
+
+验证群：
+
+```text
+请进入 verify swarm：
+并行让多个 verifier 从测试、风险、回归三个角度审查，
+最后汇总为一份结论。
+```
+
+强化结构化交付：
+
+```text
+请让子 Agent 的输出至少包含：
+Changes
+Verification
+Open Risks
+```
+
+或者：
+
+```text
+请让 verifier 按以下结构交付：
+Findings
+Evidence
+Merge recommendation
+Done Definition Check
+```
+
+### 16.8 常见问题与排查
+
+为什么配了多个 Agent，但看起来没有进入 Team 状态，优先排查：
+
+1. `BELLDANDY_TOOLS_ENABLED` 是否为 `true`
+2. 当前 manager Agent 是否真的可用 delegation 工具
+3. `agents.json` 修改后是否已经重启 Gateway
+4. 任务是否太小，主 Agent 直接自己完成了
+5. 你是否明确提出了并行、拆分、整合需求
+
+为什么只有子 Agent，没有明显 Team UI：
+
+- `delegate_task` 更偏单子任务委派
+- 最容易形成完整 Team roster / lane state 的是 `delegate_parallel`
+
+如果想更稳定看到 Team 视图，建议明确要求：
+
+- 并行
+- 多角色
+- 最终 fan-in
+
+为什么 `IDENTITY.md` 填了，但 authority 没生效，优先排查：
+
+1. `IDENTITY.md` 是否真的放在根目录或 Agent 专属工作区
+2. 是否填写了结构化字段，而不只是自然语言描述
+3. 当前环境是否提供了可验证 UUID 或 sender identity
+4. 你看到的是不是只有人格文本，而不是 `Identity Authority` 观测块
+
+为什么某个 Agent 看不到工具，优先排查：
+
+1. 全局工具系统是否开启
+2. 该 Agent 的 `toolsEnabled` 是否为 `true`
+3. 工具是否被 Tool Settings 临时禁用
+4. 是否被 `toolWhitelist` 挡住
+5. 是否被 `defaultAllowedToolFamilies` / risk level 挡住
+6. MCP 是否真的连接成功
+
+观察 Team 当前状态，推荐顺序：
+
+1. WebChat 的 subtask / delegation 详情
+2. Prompt Snapshot Detail
+3. 启动日志与 doctor
+
+### 16.9 推荐的最小上手顺序
+
+如果想尽快开始正确使用 Agent、工具和 Agent Teams，建议按这个顺序：
+
+1. 配好模型与 `.env.local`
+2. 打开 `BELLDANDY_TOOLS_ENABLED=true`
+3. 配好 `agents.json`
+4. 先保证 `default / coder / researcher / verifier` 四类 Agent 能正常加载
+5. 可选开启 `BELLDANDY_MCP_ENABLED=true`
+6. 可选开启 `BELLDANDY_TEAM_SHARED_MEMORY_ENABLED=true`
+7. 给每个 Agent 补自己的 `SOUL.md` / `IDENTITY.md`
+8. 重启 Gateway
+9. 在 WebChat 中先让 `default` 做一次“调研 + 实现 + 审查”的并行委派
+10. 到 subtask / prompt snapshot 里确认是否真的进入 Team mode
+
+做到这一步，说明你的 Agent、工具系统和 Agent Teams 已经基本打通。
+
+相关专题继续参考：
+
+- [docs/Agent工具调用与Agent指挥调用提示词机制.md](E:\project\star-sanctuary\docs\Agent工具调用与Agent指挥调用提示词机制.md)
+- [docs/agents.json配置说明.md](E:\project\star-sanctuary\docs\agents.json配置说明.md)
+- [docs/工具分级指南.md](E:\project\star-sanctuary\docs\工具分级指南.md)
+- [docs/长期任务使用指南.md](E:\project\star-sanctuary\docs\长期任务使用指南.md)
+
+---
+
+## 17. 推荐配套文档
 
 如果你准备进一步深入，建议按主题查看：
 
@@ -3412,7 +4010,7 @@ BELLDANDY_AUTH_TOKEN=your-secure-token
 
 ---
 
-## 17. 一句话总结
+## 18. 一句话总结
 
 当前最推荐的使用路线是：
 

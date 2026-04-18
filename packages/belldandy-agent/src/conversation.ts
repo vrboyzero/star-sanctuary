@@ -165,7 +165,7 @@ export type Conversation = {
     taskTokenRecords?: TaskTokenRecord[];
     /** 最近工具摘要 */
     toolDigests?: ToolDigestRecord[];
-    /** 当前会话已加载的 deferred tools */
+    /** 当前会话为下一轮模型调用临时排队的 deferred tools */
     loadedToolNames?: string[];
     /** 最近压缩边界元数据 */
     compactBoundaries?: CompactBoundaryRecord[];

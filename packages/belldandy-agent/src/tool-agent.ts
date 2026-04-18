@@ -4,7 +4,11 @@
  * 支持工具调用的 Agent 实现，集成完整的钩子系统。
  */
 
-import type { JsonObject } from "@belldandy/protocol";
+import {
+  evaluateRuntimeIdentityAuthority,
+  type IdentityAuthorityProfile,
+  type JsonObject,
+} from "@belldandy/protocol";
 import type { ToolExecutionRuntimeContext, ToolExecutor, ToolCallRequest } from "@belldandy/skills";
 import type { AgentRunInput, AgentStreamItem, AgentUsage, BelldandyAgent, AgentHooks } from "./index.js";
 import type { HookRunner } from "./hook-runner.js";
@@ -120,6 +124,8 @@ export type ToolEnabledAgentOptions = {
     conversationId?: string;
     summary: FailoverExecutionSummary;
   }) => void;
+  /** 当前 agent workspace 的结构化 authority profile（来自 IDENTITY.md） */
+  identityAuthorityProfile?: IdentityAuthorityProfile;
 };
 
 type Message =
@@ -661,11 +667,19 @@ export class ToolEnabledAgent implements BelldandyAgent {
       senderInfo: input.senderInfo,
       roomContext: input.roomContext,
     });
+    const runtimeIdentityAuthorityDelta = buildRuntimeIdentityAuthorityPromptDelta({
+      authorityProfile: this.opts.identityAuthorityProfile,
+      userUuid: input.userUuid,
+      senderInfo: input.senderInfo,
+      roomContext: input.roomContext,
+      launchSpec: runtimeContext?.launchSpec,
+    });
     const launchSpecPromptDeltas = buildLaunchSpecPromptDeltas(runtimeContext?.launchSpec);
     const metaPromptDeltas = readPromptSnapshotDeltas(input.meta);
     const baseRunPromptDeltas = collectRunPromptDeltas({
       hookPromptDeltas,
       runtimeIdentityDelta,
+      runtimeIdentityAuthorityDelta,
       launchSpecPromptDeltas,
       metaPromptDeltas,
     });
@@ -686,6 +700,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
       currentRunPromptDeltas = collectRunPromptDeltas({
         hookPromptDeltas,
         runtimeIdentityDelta,
+        runtimeIdentityAuthorityDelta,
         launchSpecPromptDeltas,
         metaPromptDeltas,
         transientPromptDeltas: pendingToolFollowupDeltas,
@@ -903,6 +918,10 @@ export class ToolEnabledAgent implements BelldandyAgent {
           yield* yieldItem({ type: "final", text: response.error });
           yield* yieldItem({ type: "status", status: "error" });
           return;
+        }
+
+        if (input.conversationId) {
+          await this.opts.toolExecutor.consumeLoadedDeferredToolsForNextTurn(input.conversationId);
         }
 
         // 输出文本增量（如果有）；先剥离工具调用协议块，避免在对话中展示
@@ -1810,11 +1829,11 @@ function buildRuntimeIdentityPromptDelta(input: {
     contextLines.push("### Identity-Based Authority Rules");
     if (input.roomContext && input.roomContext.environment === "community") {
       contextLines.push("- **Status**: ACTIVE (office.goddess.ai Community environment)");
-      contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
+      contextLines.push("- Identity-based authority rules (from the workspace identity profile) are now in effect.");
       contextLines.push("- You should verify sender identity before executing sensitive commands.");
     } else if (input.userUuid) {
       contextLines.push("- **Status**: ACTIVE (UUID provided)");
-      contextLines.push("- Identity-based authority rules (as defined in SOUL.md) are now in effect.");
+      contextLines.push("- Identity-based authority rules (from the workspace identity profile) are now in effect.");
     } else {
       contextLines.push("- **Status**: PARTIAL (sender info available but not in community environment)");
     }
@@ -1831,9 +1850,100 @@ function buildRuntimeIdentityPromptDelta(input: {
   };
 }
 
+function buildRuntimeIdentityAuthorityPromptDelta(input: {
+  authorityProfile?: IdentityAuthorityProfile;
+  userUuid?: string;
+  senderInfo?: any;
+  roomContext?: any;
+  launchSpec?: ToolExecutionRuntimeContext["launchSpec"];
+}): AgentPromptDelta | undefined {
+  const evaluation = evaluateRuntimeIdentityAuthority(input.authorityProfile, {
+    userUuid: input.userUuid,
+    senderId: input.senderInfo?.id,
+    senderIdentity: input.senderInfo?.identity,
+    senderType: input.senderInfo?.type,
+  });
+  if (!evaluation) {
+    return undefined;
+  }
+
+  const lines = [
+    "## Runtime Identity Authority",
+    "",
+    `- Authority mode: ${evaluation.authorityMode}`,
+    `- Verifiable environment: ${evaluation.verifiableEnvironment ? "yes" : "no"}`,
+    `- Authority active: ${evaluation.authorityActive ? "yes" : "no"}`,
+    `- Current identity label: ${evaluation.currentLabel || "unknown"}`,
+    `- Actor relation: ${evaluation.actorRelation}`,
+    `- Recommended action: ${evaluation.recommendedAction}`,
+    `- Reason: ${evaluation.reason}`,
+  ];
+
+  if (evaluation.matchedOwnerUuid) {
+    lines.push(`- Matched owner UUID: ${evaluation.matchedOwnerUuid}`);
+  }
+  if (evaluation.matchedSuperiorLabel) {
+    lines.push(`- Matched superior label: ${evaluation.matchedSuperiorLabel}`);
+  }
+  if (evaluation.matchedSubordinateLabel) {
+    lines.push(`- Matched subordinate label: ${evaluation.matchedSubordinateLabel}`);
+  }
+
+  const team = input.launchSpec?.delegationProtocol?.team;
+  if (team?.id) {
+    lines.push("");
+    lines.push("### Team Authority Constraints");
+    lines.push(`- Team ID: ${team.id}`);
+    lines.push(`- Team mode: ${team.mode}`);
+    lines.push(`- Manager agent: ${team.managerAgentId || "unknown"}`);
+    lines.push(`- Manager identity: ${team.managerIdentityLabel || "unknown"}`);
+    switch (evaluation.recommendedAction) {
+      case "execute":
+        lines.push("- Team-level reprioritization or lane ownership changes may proceed if they stay inside the manager contract.");
+        break;
+      case "guide_only":
+        lines.push("- Provide guidance, drafts, or escalation only; do not silently reassign other lanes.");
+        break;
+      case "escalate":
+        lines.push("- Escalate peer-level authority conflicts to the manager instead of overriding team topology.");
+        break;
+      case "refuse_or_inform":
+        lines.push("- Refuse or limit team-level changes from unrelated actors; keep the current team contract intact.");
+        break;
+      default:
+        lines.push("- Identity authority is inactive here; do not use identity labels to change the team contract.");
+        break;
+    }
+  }
+
+  return {
+    id: "runtime-identity-authority",
+    deltaType: "runtime-identity-authority",
+    role: "system",
+    source: "tool-agent",
+    text: lines.join("\n").trim(),
+    metadata: {
+      authorityMode: evaluation.authorityMode,
+      authorityActive: evaluation.authorityActive,
+      actorRelation: evaluation.actorRelation,
+      recommendedAction: evaluation.recommendedAction,
+      currentLabel: evaluation.currentLabel,
+      verifiableEnvironment: evaluation.verifiableEnvironment,
+      ownerUuidVerified: evaluation.ownerUuidVerified,
+      senderIdentityVerified: evaluation.senderIdentityVerified,
+      matchedOwnerUuid: evaluation.matchedOwnerUuid,
+      matchedSuperiorLabel: evaluation.matchedSuperiorLabel,
+      matchedSubordinateLabel: evaluation.matchedSubordinateLabel,
+      teamId: input.launchSpec?.delegationProtocol?.team?.id,
+      teamMode: input.launchSpec?.delegationProtocol?.team?.mode,
+    },
+  };
+}
+
 function collectRunPromptDeltas(input: {
   hookPromptDeltas?: AgentPromptDelta[];
   runtimeIdentityDelta?: AgentPromptDelta;
+  runtimeIdentityAuthorityDelta?: AgentPromptDelta;
   launchSpecPromptDeltas?: AgentPromptDelta[];
   metaPromptDeltas?: AgentPromptDelta[];
   transientPromptDeltas?: AgentPromptDelta[];
@@ -1845,6 +1955,9 @@ function collectRunPromptDeltas(input: {
   }
   if (input.runtimeIdentityDelta) {
     deltas.push({ ...input.runtimeIdentityDelta });
+  }
+  if (input.runtimeIdentityAuthorityDelta) {
+    deltas.push({ ...input.runtimeIdentityAuthorityDelta });
   }
   if (input.launchSpecPromptDeltas && input.launchSpecPromptDeltas.length > 0) {
     deltas.push(...input.launchSpecPromptDeltas.map((delta) => ({ ...delta })));

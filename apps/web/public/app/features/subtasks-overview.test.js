@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildBridgeGovernanceSummaryLines,
   buildSubtaskExecutionExplainabilityLines,
+  buildTeamSharedStateSummaryLines,
   findSubtaskBySessionId,
   formatBridgeCloseReason,
   formatBridgeRuntimeState,
+  formatTeamCompletionGateStatus,
+  formatTeamLaneState,
   parseGoalSessionReference,
 } from "./subtasks-overview.js";
 
@@ -116,5 +119,33 @@ describe("subtasks overview linkage helpers", () => {
     expect(lines).toContain("Bridge review via codex_session.interactive: Inspect the recovery path.");
     expect(lines).toContain("Bridge session orphaned via codex_session.interactive: Inspect the recovery path.");
     expect(lines).toContain("Block Reason: Bridge session lost its governed subtask binding and was cleaned up as an orphan session.");
+  });
+
+  it("formats team lane states and completion gate statuses", () => {
+    expect(formatTeamLaneState("accepted")).toBe("accepted");
+    expect(formatTeamLaneState("retry")).toBe("retry");
+    expect(formatTeamCompletionGateStatus("accepted")).toBe("accepted");
+    expect(formatTeamCompletionGateStatus("rejected")).toBe("rejected");
+  });
+
+  it("builds team shared state summary lines", () => {
+    const lines = buildTeamSharedStateSummaryLines({
+      teamId: "team-42",
+      mode: "parallel_subtasks",
+      completionGate: {
+        status: "pending",
+        summary: "Waiting for retry lane lane_2 before manager fan-in.",
+        acceptedLaneIds: ["lane_1"],
+        retryLaneIds: ["lane_2"],
+        blockerLaneIds: [],
+      },
+    });
+
+    expect(lines).toEqual([
+      "team=team-42, mode=parallel_subtasks",
+      "completion gate: Waiting for retry lane lane_2 before manager fan-in.",
+      "accepted lanes: lane_1",
+      "retry lanes: lane_2",
+    ]);
   });
 });

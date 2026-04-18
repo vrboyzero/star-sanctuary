@@ -23,6 +23,7 @@ import {
   summarizeDelegationProtocol,
   type SubTaskDelegationSummary,
 } from "./subtask-result-envelope.js";
+import { enrichDelegationProtocolTeamWithIdentity } from "./team-identity-governance.js";
 import type { SubTaskWorktreeRuntime, SubTaskWorktreeRuntimeSummary, WorktreeRuntimeStatus } from "./worktree-runtime.js";
 
 export type SubTaskStatus = "pending" | "running" | "done" | "error" | "timeout" | "stopped";
@@ -413,6 +414,19 @@ function cloneDelegationSummary(
           : undefined,
       }
       : undefined,
+    team: delegation.team
+      ? {
+        ...delegation.team,
+        managerIdentityLabel: delegation.team.managerIdentityLabel,
+        memberRoster: delegation.team.memberRoster.map((member) => ({
+          ...member,
+          reportsTo: member.reportsTo ? [...member.reportsTo] : undefined,
+          mayDirect: member.mayDirect ? [...member.mayDirect] : undefined,
+          dependsOn: member.dependsOn ? [...member.dependsOn] : undefined,
+          handoffTo: member.handoffTo ? [...member.handoffTo] : undefined,
+        })),
+      }
+      : undefined,
   };
 }
 
@@ -513,6 +527,86 @@ function normalizeDelegationSummary(value: unknown): SubTaskDelegationSummary | 
           : undefined,
       }
       : undefined,
+    team: delegationSource.team && typeof delegationSource.team === "object" && !Array.isArray(delegationSource.team)
+      ? normalizeDelegationTeamSummary(delegationSource.team)
+      : undefined,
+  };
+}
+
+function normalizeDelegationTeamSummary(
+  value: unknown,
+): SubTaskDelegationSummary["team"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const id = typeof source.id === "string" && source.id.trim() ? source.id.trim() : "";
+  const mode = source.mode === "parallel_subtasks"
+    || source.mode === "parallel_patch"
+    || source.mode === "research_grid"
+    || source.mode === "verify_swarm"
+    || source.mode === "plan_execute_verify"
+    ? source.mode
+    : undefined;
+  const memberRoster = Array.isArray(source.memberRoster)
+    ? source.memberRoster
+      .map((entry) => normalizeDelegationTeamMemberSummary(entry))
+      .filter((entry): entry is NonNullable<SubTaskDelegationSummary["team"]>["memberRoster"][number] => Boolean(entry))
+    : [];
+  if (!id || !mode || memberRoster.length === 0) {
+    return undefined;
+  }
+  const currentLaneId = typeof source.currentLaneId === "string" && source.currentLaneId.trim()
+    ? source.currentLaneId.trim()
+    : undefined;
+  return {
+    id,
+    mode,
+    ...(typeof source.sharedGoal === "string" && source.sharedGoal.trim() ? { sharedGoal: source.sharedGoal.trim() } : {}),
+    ...(typeof source.managerAgentId === "string" && source.managerAgentId.trim() ? { managerAgentId: source.managerAgentId.trim() } : {}),
+    ...(typeof source.managerIdentityLabel === "string" && source.managerIdentityLabel.trim()
+      ? { managerIdentityLabel: source.managerIdentityLabel.trim() }
+      : {}),
+    ...(currentLaneId && memberRoster.some((member) => member.laneId === currentLaneId) ? { currentLaneId } : {}),
+    memberRoster,
+  };
+}
+
+function normalizeDelegationTeamMemberSummary(
+  value: unknown,
+): NonNullable<SubTaskDelegationSummary["team"]>["memberRoster"][number] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const source = value as Record<string, unknown>;
+  const laneId = typeof source.laneId === "string" && source.laneId.trim() ? source.laneId.trim() : "";
+  if (!laneId) {
+    return undefined;
+  }
+  const role = source.role === "default"
+    || source.role === "coder"
+    || source.role === "researcher"
+    || source.role === "verifier"
+    ? source.role
+    : undefined;
+  const authorityRelationToManager = source.authorityRelationToManager === "self"
+    || source.authorityRelationToManager === "superior"
+    || source.authorityRelationToManager === "peer"
+    || source.authorityRelationToManager === "subordinate"
+    || source.authorityRelationToManager === "unknown"
+    ? source.authorityRelationToManager
+    : undefined;
+  return {
+    laneId,
+    ...(typeof source.agentId === "string" && source.agentId.trim() ? { agentId: source.agentId.trim() } : {}),
+    ...(role ? { role } : {}),
+    ...(typeof source.identityLabel === "string" && source.identityLabel.trim() ? { identityLabel: source.identityLabel.trim() } : {}),
+    ...(authorityRelationToManager ? { authorityRelationToManager } : {}),
+    ...(normalizeOptionalStringArray(source.reportsTo) ? { reportsTo: normalizeOptionalStringArray(source.reportsTo) } : {}),
+    ...(normalizeOptionalStringArray(source.mayDirect) ? { mayDirect: normalizeOptionalStringArray(source.mayDirect) } : {}),
+    ...(typeof source.scopeSummary === "string" && source.scopeSummary.trim() ? { scopeSummary: source.scopeSummary.trim() } : {}),
+    ...(normalizeOptionalStringArray(source.dependsOn) ? { dependsOn: normalizeOptionalStringArray(source.dependsOn) } : {}),
+    ...(normalizeOptionalStringArray(source.handoffTo) ? { handoffTo: normalizeOptionalStringArray(source.handoffTo) } : {}),
   };
 }
 
@@ -1752,10 +1846,16 @@ export function createSubTaskAgentCapabilities(input: {
   orchestrator: SubAgentSpawner;
   runtimeStore: SubTaskRuntimeStore;
   agentRegistry?: Pick<AgentRegistry, "getProfile">;
+  resolveIdentityAuthorityProfile?: (agentId: string) => import("@belldandy/protocol").IdentityAuthorityProfile | undefined;
   worktreeRuntime?: SubTaskWorktreeRuntime;
   logger?: RuntimeLogger;
 }): AgentCapabilities {
   const spawnOne = async (opts: SpawnSubAgentOptions): Promise<SubAgentResult> => {
+      const enrichedDelegationProtocol = enrichDelegationProtocolTeamWithIdentity({
+        protocol: opts.delegationProtocol,
+        currentAgentId: opts.profileId ?? opts.agentId,
+        resolveAuthorityProfile: (agentId: string) => input.resolveIdentityAuthorityProfile?.(agentId),
+      });
       const launchSpec = normalizeAgentLaunchSpecWithCatalog({
         instruction: opts.instruction,
         parentConversationId: opts.parentConversationId ?? "system",
@@ -1774,7 +1874,7 @@ export function createSubTaskAgentCapabilities(input: {
         allowedToolFamilies: opts.allowedToolFamilies,
         maxToolRiskLevel: opts.maxToolRiskLevel,
         policySummary: opts.policySummary,
-        delegationProtocol: opts.delegationProtocol,
+        delegationProtocol: enrichedDelegationProtocol,
         bridgeSubtask: opts.bridgeSubtask,
       }, {
         agentRegistry: input.agentRegistry,

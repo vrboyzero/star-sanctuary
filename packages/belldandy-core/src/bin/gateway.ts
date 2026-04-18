@@ -241,13 +241,19 @@ import {
   resolveReplyChunkingConfigPath,
   resolveCurrentConversationBindingStorePath,
 } from "@belldandy/channels";
-import { DEFAULT_STATE_DIR_DISPLAY, type JsonObject } from "@belldandy/protocol";
+import {
+  DEFAULT_STATE_DIR_DISPLAY,
+  loadIdentityAuthorityProfile,
+  type IdentityAuthorityProfile,
+  type JsonObject,
+} from "@belldandy/protocol";
 import { GoalManager } from "../goals/manager.js";
 import { parseGoalSessionKey } from "../goals/session.js";
 import { buildContextInjectionPrelude } from "../context-injection.js";
 import { bridgeLegacyPluginHooks, initializeExtensionHost } from "../extension-host.js";
 import { truncateToolTranscriptContent } from "../tool-transcript.js";
 import { buildAgentRuntimePromptSections } from "./gateway-prompt-sections.js";
+import { enrichDelegationProtocolTeamWithIdentity } from "../team-identity-governance.js";
 
 const GOAL_TOOL_NAMES = new Set([
   "goal_init",
@@ -1221,6 +1227,9 @@ logger.info("workspace", `SOUL=${workspace.hasSoul}, IDENTITY=${workspace.hasIde
 const skillInstructions = promptSkills.map(s => ({ name: s.name, instructions: s.instructions }));
 const hasSearchableSkills = searchableSkills.length > 0;
 const defaultPromptProfile = agentProfiles.find((profile) => profile.id === "default") ?? buildDefaultProfile();
+const agentAuthorityProfileCache = new Map<string, IdentityAuthorityProfile | undefined>();
+const defaultIdentityAuthorityProfile = await loadIdentityAuthorityProfile(stateDir);
+agentAuthorityProfileCache.set("default", defaultIdentityAuthorityProfile);
 
 const buildRuntimeSectionsForProfile = (profile: AgentProfile) => {
   const visibleContracts = toolExecutor.getContracts(profile.id);
@@ -1232,6 +1241,7 @@ const buildRuntimeSectionsForProfile = (profile: AgentProfile) => {
     visibleContracts: visibleToolContracts,
     canDelegate,
     role: catalog.defaultRole,
+    identityAuthorityProfile: agentAuthorityProfileCache.get(profile.id),
   });
 };
 
@@ -1592,7 +1602,10 @@ const runtimeResilienceTracker = new RuntimeResilienceTracker({
 });
 
 // 8.1 Pre-load per-agent workspaces (async, before sync factory)
-const agentWorkspaceCache = new Map<string, { build: SystemPromptBuildResult }>();
+const agentWorkspaceCache = new Map<string, {
+  build: SystemPromptBuildResult;
+  authorityProfile?: IdentityAuthorityProfile;
+}>();
 const promptSnapshotStore = new PromptSnapshotStore({
   maxSnapshots: Math.max(1, parseInt(readEnv("BELLDANDY_PROMPT_SNAPSHOT_MAX_RUNS") || "48", 10) || 48),
 });
@@ -1630,7 +1643,10 @@ const gatewayPromptInspectionRuntime = createGatewayPromptInspectionRuntime({
 });
 
 // Default agent uses the root workspace (already loaded above)
-agentWorkspaceCache.set("default", { build: dynamicSystemPromptBuild });
+agentWorkspaceCache.set("default", {
+  build: dynamicSystemPromptBuild,
+  authorityProfile: defaultIdentityAuthorityProfile,
+});
 
 // Non-default agents: ensure workspace dir + load + build system prompt
 for (const profile of agentProfiles) {
@@ -1639,6 +1655,8 @@ for (const profile of agentProfiles) {
   try {
     await ensureAgentWorkspace({ rootDir: stateDir, agentId: wsDir });
     const agentWs = await loadAgentWorkspaceFiles(stateDir, wsDir);
+    const agentAuthorityProfile = await loadIdentityAuthorityProfile(agentWs.dir);
+    agentAuthorityProfileCache.set(profile.id, agentAuthorityProfile);
     const agentPromptBuild = buildSystemPromptResult({
       workspace: agentWs,
       extraSystemPrompt: openaiSystemPrompt,
@@ -1653,14 +1671,27 @@ for (const profile of agentProfiles) {
       runtimeSections: buildRuntimeSectionsForProfile(profile),
       sectionPriorityOverrides: promptExperimentConfig?.sectionPriorityOverrides,
     });
-    agentWorkspaceCache.set(profile.id, { build: agentPromptBuild });
+    agentWorkspaceCache.set(profile.id, {
+      build: agentPromptBuild,
+      authorityProfile: agentAuthorityProfile,
+    });
     logger.info("agent-workspace", `Loaded workspace for agent "${profile.id}" (dir: agents/${wsDir}/), prompt=${agentPromptBuild.text.length} chars`);
   } catch (err) {
     // Fallback to default workspace if agent workspace fails
     logger.warn("agent-workspace", `Failed to load workspace for agent "${profile.id}", falling back to default: ${err instanceof Error ? err.message : String(err)}`);
-    agentWorkspaceCache.set(profile.id, { build: dynamicSystemPromptBuild });
+    agentAuthorityProfileCache.set(profile.id, defaultIdentityAuthorityProfile);
+    agentWorkspaceCache.set(profile.id, {
+      build: dynamicSystemPromptBuild,
+      authorityProfile: defaultIdentityAuthorityProfile,
+    });
   }
 }
+
+const resolveIdentityAuthorityProfileForAgent = (agentId: string): IdentityAuthorityProfile | undefined => {
+  return agentWorkspaceCache.get(agentId)?.authorityProfile
+    ?? agentAuthorityProfileCache.get(agentId)
+    ?? (agentId === "default" ? defaultIdentityAuthorityProfile : undefined);
+};
 
 agentRegistry = agentProvider === "openai"
   ? new AgentRegistry((profile: AgentProfile, opts?: { modelOverride?: string }): BelldandyAgent => {
@@ -1717,6 +1748,7 @@ agentRegistry = agentProvider === "openai"
         systemPrompt: currentSystemPrompt,
         systemPromptSections: promptInspection.sections,
         systemPromptMetadata: promptInspection.metadata as JsonObject,
+        identityAuthorityProfile: agentWorkspaceCache.get(profile.id)?.authorityProfile,
         toolExecutor: toolExecutor,
         logger,
         hookRunner,
@@ -2056,6 +2088,7 @@ if (agentRegistry && toolsEnabled) {
     orchestrator: subAgentOrchestrator,
     runtimeStore: subTaskRuntimeStore,
     agentRegistry,
+    resolveIdentityAuthorityProfile: resolveIdentityAuthorityProfileForAgent,
     worktreeRuntime: subTaskWorktreeRuntime,
     logger: {
       warn: (m, d) => logger.warn("task-runtime", m, d),

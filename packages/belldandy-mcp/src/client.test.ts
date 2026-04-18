@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { MCPClient, expandFilesystemServerArgs, parseExtraWorkspaceRoots } from "./client.js";
+import {
+  MCPClient,
+  classifyStdioStderrLine,
+  expandFilesystemServerArgs,
+  parseExtraWorkspaceRoots,
+  shouldPipeStdioStderr,
+} from "./client.js";
 
 describe("parseExtraWorkspaceRoots", () => {
   it("splits BELLDANDY_EXTRA_WORKSPACE_ROOTS and removes duplicates", () => {
@@ -70,6 +76,19 @@ describe("expandFilesystemServerArgs", () => {
     );
 
     expect(args).toEqual(["-y", "@modelcontextprotocol/server-filesystem", "E:/project/star-sanctuary"]);
+  });
+});
+
+describe("stdio stderr filtering", () => {
+  it("pipes chrome-devtools stderr so noisy known lines can be filtered", () => {
+    expect(shouldPipeStdioStderr("chrome-devtools")).toBe(true);
+    expect(shouldPipeStdioStderr("filesystem")).toBe(false);
+  });
+
+  it("suppresses known chrome-devtools PerformanceIssue noise", () => {
+    expect(classifyStdioStderrLine("chrome-devtools", "No handler registered for issue code PerformanceIssue")).toBe("ignore");
+    expect(classifyStdioStderrLine("chrome-devtools", "Google collects usage statistics to improve Chrome DevTools MCP.")).toBe("forward");
+    expect(classifyStdioStderrLine("filesystem", "No handler registered for issue code PerformanceIssue")).toBe("forward");
   });
 });
 

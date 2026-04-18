@@ -11,6 +11,7 @@ import {
     renderDelegationResultGateReport,
     readStructuredDelegationContractArgs,
 } from "./delegation-contract.js";
+import type { DelegationTeamMetadata, DelegationTeamMode } from "../../delegation-protocol.js";
 
 /**
  * delegate_parallel — 并行委托多个任务给子 Agent
@@ -89,23 +90,42 @@ export const delegateParallelTool: Tool = withToolContract({
             );
         }
 
-        // Validate and normalize tasks
-        const normalized = tasks.map((t, i) => {
+        const preparedTasks = tasks.map((t, i) => {
             const instruction = typeof t.instruction === "string" ? t.instruction.trim() : "";
             if (!instruction) {
                 throw new Error(`Task[${i}]: instruction is required and cannot be empty.`);
             }
             const delegationContract = readStructuredDelegationContractArgs(t);
-            return buildSubAgentLaunchSpec(context, {
+            return {
+                laneId: `lane_${i + 1}`,
                 instruction,
                 agentId: typeof t.agent_id === "string" ? t.agent_id : undefined,
                 context: (typeof t.context === "object" && t.context !== null ? t.context : undefined) as Record<string, unknown> | undefined,
+                delegationContract,
+            };
+        });
+
+        const sharedTeamMetadata = buildParallelTeamMetadata({
+            managerAgentId: context.agentId ?? context.launchSpec?.agentId,
+            tasks: preparedTasks,
+        });
+
+        // Validate and normalize tasks
+        const normalized = preparedTasks.map((prepared) => {
+            return buildSubAgentLaunchSpec(context, {
+                instruction: prepared.instruction,
+                agentId: prepared.agentId,
+                context: prepared.context,
                 channel: "subtask",
                 delegationSource: "delegate_parallel",
                 aggregationMode: "parallel_collect",
-                ownership: delegationContract.ownership,
-                acceptance: delegationContract.acceptance,
-                deliverableContract: delegationContract.deliverableContract,
+                ownership: prepared.delegationContract.ownership,
+                acceptance: prepared.delegationContract.acceptance,
+                deliverableContract: prepared.delegationContract.deliverableContract,
+                team: {
+                    ...sharedTeamMetadata,
+                    currentLaneId: prepared.laneId,
+                },
             });
         });
 
@@ -155,6 +175,11 @@ export const delegateParallelTool: Tool = withToolContract({
             const allSuccess = reviewed.every(({ accepted }) => accepted);
             const delegationResults = reviewed.map(({ result, accepted, gate }, index) => ({
                 label: `Task ${index + 1} / ${normalized[index]?.agentId ?? "default"}`,
+                laneId: preparedTasks[index]?.laneId,
+                scopeSummary: preparedTasks[index]?.delegationContract.ownership?.scopeSummary
+                    ?? sharedTeamMetadata.memberRoster.find((member) => member.laneId === preparedTasks[index]?.laneId)?.scopeSummary,
+                dependsOn: sharedTeamMetadata.memberRoster.find((member) => member.laneId === preparedTasks[index]?.laneId)?.dependsOn,
+                handoffTo: sharedTeamMetadata.memberRoster.find((member) => member.laneId === preparedTasks[index]?.laneId)?.handoffTo,
                 workerSuccess: result.success,
                 accepted,
                 error: result.error,
@@ -183,6 +208,7 @@ export const delegateParallelTool: Tool = withToolContract({
                         requestArguments: args as Record<string, unknown>,
                         delegationResults,
                     }),
+                    team: sharedTeamMetadata,
                 }),
             };
         } catch (err) {
@@ -204,3 +230,97 @@ export const delegateParallelTool: Tool = withToolContract({
     },
     outputPersistencePolicy: "conversation",
 });
+
+function buildParallelTeamMetadata(input: {
+    managerAgentId?: string;
+    tasks: Array<{
+        laneId: string;
+        instruction: string;
+        agentId?: string;
+        delegationContract: ReturnType<typeof readStructuredDelegationContractArgs>;
+    }>;
+}): DelegationTeamMetadata {
+    const mode = inferParallelTeamMode(input.tasks);
+    const sharedGoal = inferParallelSharedGoal(input.tasks);
+    const verifierLaneIds = input.tasks
+        .filter((task) => inferLaneRole(task) === "verifier")
+        .map((task) => task.laneId);
+    const implementationLaneIds = input.tasks
+        .filter((task) => inferLaneRole(task) !== "verifier")
+        .map((task) => task.laneId);
+    return {
+        id: `team_${crypto.randomUUID().slice(0, 8)}`,
+        mode,
+        sharedGoal,
+        ...(input.managerAgentId ? { managerAgentId: input.managerAgentId } : {}),
+        memberRoster: input.tasks.map((task) => ({
+            laneId: task.laneId,
+            ...(task.agentId ? { agentId: task.agentId } : {}),
+            ...(inferLaneRole(task) ? { role: inferLaneRole(task) } : {}),
+            ...(task.delegationContract.ownership?.scopeSummary
+                ? { scopeSummary: task.delegationContract.ownership.scopeSummary }
+                : { scopeSummary: summarizeInstruction(task.instruction) }),
+            ...(inferLaneRole(task) === "verifier" && implementationLaneIds.length > 0
+                ? { dependsOn: implementationLaneIds }
+                : {}),
+            ...(inferLaneRole(task) !== "verifier" && verifierLaneIds.length > 0
+                ? { handoffTo: verifierLaneIds }
+                : {}),
+        })),
+    };
+}
+
+function inferParallelTeamMode(input: Array<{ agentId?: string; instruction: string }>): DelegationTeamMode {
+    const agentIds = input
+        .map((task) => task.agentId?.trim().toLowerCase())
+        .filter(Boolean) as string[];
+
+    if (agentIds.length > 0 && agentIds.every((id) => id.includes("verifier"))) {
+        return "verify_swarm";
+    }
+    if (agentIds.length > 0 && agentIds.every((id) => id.includes("research"))) {
+        return "research_grid";
+    }
+    if (agentIds.length > 0 && agentIds.every((id) => id.includes("coder"))) {
+        return "parallel_patch";
+    }
+    return "parallel_subtasks";
+}
+
+function inferParallelSharedGoal(
+    input: Array<{ instruction: string }>,
+): string {
+    if (input.length === 1) {
+        return summarizeInstruction(input[0]?.instruction ?? "");
+    }
+    const first = summarizeInstruction(input[0]?.instruction ?? "");
+    return `Coordinate ${input.length} delegated lanes and fan the results back into the manager. First lane: ${first}`;
+}
+
+function summarizeInstruction(instruction: string): string {
+    const normalized = instruction.trim().replace(/\s+/g, " ");
+    if (!normalized) {
+        return "Execute delegated work.";
+    }
+    return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function inferLaneRole(task: {
+    agentId?: string;
+    delegationContract: ReturnType<typeof readStructuredDelegationContractArgs>;
+}): "coder" | "researcher" | "verifier" | undefined {
+    const agentId = task.agentId?.trim().toLowerCase();
+    if (agentId?.includes("verifier")) {
+        return "verifier";
+    }
+    if (agentId?.includes("research")) {
+        return "researcher";
+    }
+    if (agentId?.includes("coder")) {
+        return "coder";
+    }
+    if (task.delegationContract.deliverableContract?.format === "verification_report") {
+        return "verifier";
+    }
+    return undefined;
+}

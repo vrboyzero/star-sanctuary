@@ -131,6 +131,8 @@ describe("tool contract v2", () => {
       hasBehaviorContract: true,
     });
     expect(runCommand?.confirmWhen.join("\n")).toContain("shell control operators");
+    expect(runCommand?.preflightChecks.join("\n")).toContain("stdout/stderr");
+    expect(runCommand?.fallbackStrategy.join("\n")).toContain("head/tail");
 
     expect(applyPatch?.preflightChecks.join("\n")).toContain("3000 lines");
     expect(applyPatch?.expectedOutput.join("\n")).toContain("added, modified, and deleted");

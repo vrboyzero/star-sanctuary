@@ -119,6 +119,67 @@ function formatJoinedValues(values) {
   return normalized.length ? normalized.join(", ") : "-";
 }
 
+export function formatTeamLaneState(laneState, t = (_key, _params, fallback) => fallback ?? "") {
+  switch (laneState) {
+    case "accepted":
+      return t("subtasks.teamLaneAccepted", {}, "accepted");
+    case "pending":
+      return t("subtasks.teamLanePending", {}, "pending");
+    case "retry":
+      return t("subtasks.teamLaneRetry", {}, "retry");
+    case "blocker":
+      return t("subtasks.teamLaneBlocker", {}, "blocker");
+    case "missing":
+      return t("subtasks.teamLaneMissing", {}, "missing");
+    default:
+      return laneState || "-";
+  }
+}
+
+export function formatTeamCompletionGateStatus(status, t = (_key, _params, fallback) => fallback ?? "") {
+  switch (status) {
+    case "accepted":
+      return t("subtasks.teamCompletionAccepted", {}, "accepted");
+    case "pending":
+      return t("subtasks.teamCompletionPending", {}, "pending");
+    case "rejected":
+      return t("subtasks.teamCompletionRejected", {}, "rejected");
+    default:
+      return status || "-";
+  }
+}
+
+export function buildTeamSharedStateSummaryLines(teamSharedState, t = (_key, _params, fallback) => fallback ?? "") {
+  if (!teamSharedState || typeof teamSharedState !== "object") {
+    return [];
+  }
+  const completionGate = teamSharedState.completionGate && typeof teamSharedState.completionGate === "object"
+    ? teamSharedState.completionGate
+    : null;
+  const lines = [];
+  if (teamSharedState.teamId || teamSharedState.mode) {
+    lines.push([
+      teamSharedState.teamId ? `team=${teamSharedState.teamId}` : "",
+      teamSharedState.mode ? `mode=${teamSharedState.mode}` : "",
+    ].filter(Boolean).join(", "));
+  }
+  if (completionGate?.summary) {
+    lines.push(`completion gate: ${completionGate.summary}`);
+  } else if (completionGate?.status) {
+    lines.push(`completion gate: ${formatTeamCompletionGateStatus(completionGate.status, t)}`);
+  }
+  if (Array.isArray(completionGate?.acceptedLaneIds) && completionGate.acceptedLaneIds.length) {
+    lines.push(`accepted lanes: ${completionGate.acceptedLaneIds.join(", ")}`);
+  }
+  if (Array.isArray(completionGate?.retryLaneIds) && completionGate.retryLaneIds.length) {
+    lines.push(`retry lanes: ${completionGate.retryLaneIds.join(", ")}`);
+  }
+  if (Array.isArray(completionGate?.blockerLaneIds) && completionGate.blockerLaneIds.length) {
+    lines.push(`blocker lanes: ${completionGate.blockerLaneIds.join(", ")}`);
+  }
+  return lines;
+}
+
 function renderExplainabilityNote(lines, escapeHtml) {
   if (!Array.isArray(lines) || lines.length === 0) return "";
   return `
@@ -299,6 +360,68 @@ function renderBridgeGovernanceSection(item, escapeHtml, summarizeSourcePath, t)
       ${bridgeSessionView?.artifactPath ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailBridgeArtifact", {}, "Bridge Artifact"))}</span><span>${escapeHtml(summarizeSourcePath(bridgeSessionView.artifactPath))}</span></div>` : ""}
       ${bridgeSessionView?.transcriptPath ? `<div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailBridgeTranscript", {}, "Bridge Transcript"))}</span><span>${escapeHtml(summarizeSourcePath(bridgeSessionView.transcriptPath))}</span></div>` : ""}
       ${actions.length ? `<div class="subtask-detail-actions">${actions.join("")}</div>` : ""}
+    </section>
+  `;
+}
+
+function renderTeamSharedStateSection(teamSharedState, escapeHtml, t) {
+  if (!teamSharedState || typeof teamSharedState !== "object") {
+    return "";
+  }
+  const roster = Array.isArray(teamSharedState.roster) ? teamSharedState.roster : [];
+  const completionGate = teamSharedState.completionGate && typeof teamSharedState.completionGate === "object"
+    ? teamSharedState.completionGate
+    : null;
+  const summaryLines = buildTeamSharedStateSummaryLines(teamSharedState, t);
+  return `
+    <section class="memory-detail-card">
+      <span class="memory-detail-label">${escapeHtml(t("subtasks.detailTeamSharedState", {}, "Team Shared State"))}</span>
+      <div class="memory-detail-grid">
+        ${renderDetailCard(t("subtasks.detailTeamId", {}, "Team ID"), teamSharedState.teamId || "-", escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamMode", {}, "Team Mode"), teamSharedState.mode || "-", escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamSharedGoal", {}, "Shared Goal"), teamSharedState.sharedGoal || "-", escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamManager", {}, "Manager Agent"), teamSharedState.managerAgentId || "-", escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamManagerIdentity", {}, "Manager Identity"), teamSharedState.managerIdentityLabel || "-", escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamCurrentLane", {}, "Current Lane"), teamSharedState.currentLaneId || "-", escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamFanInVerdict", {}, "Fan-In Verdict"), completionGate?.finalFanInVerdict || "-", escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamCompletionStatus", {}, "Completion Gate"), formatTeamCompletionGateStatus(completionGate?.status, t), escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamAcceptedLanes", {}, "Accepted Lanes"), formatJoinedValues(completionGate?.acceptedLaneIds), escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamRetryLanes", {}, "Retry Lanes"), formatJoinedValues(completionGate?.retryLaneIds), escapeHtml)}
+        ${renderDetailCard(t("subtasks.detailTeamBlockerLanes", {}, "Blocker Lanes"), formatJoinedValues(completionGate?.blockerLaneIds), escapeHtml)}
+      </div>
+      <div class="memory-detail-text">${escapeHtml(teamSharedState.fanInSummary || completionGate?.summary || "-")}</div>
+      ${summaryLines.length ? renderExplainabilityNote(summaryLines, escapeHtml) : ""}
+      ${Array.isArray(completionGate?.overlappingWriteScopes) && completionGate.overlappingWriteScopes.length ? `
+        <div class="memory-detail-text"><strong>${escapeHtml(t("subtasks.detailTeamOverlap", {}, "Overlapping Write Scope"))}</strong></div>
+        <div class="tool-settings-policy-note">
+          ${completionGate.overlappingWriteScopes.map((entry) => `<div>${escapeHtml(`${entry.path}: ${formatJoinedValues(entry.laneIds)}`)}</div>`).join("")}
+        </div>
+      ` : ""}
+      ${roster.length ? `
+        <div class="memory-detail-text"><strong>${escapeHtml(t("subtasks.detailTeamRoster", {}, "Lane Roster"))}</strong></div>
+        <div class="subtask-notification-list">
+          ${roster.map((lane) => `
+            <div class="subtask-notification-item">
+              <div class="subtask-notification-head">
+                <span class="memory-badge">${escapeHtml(`${lane.laneId} · ${formatTeamLaneState(lane.laneState, t)}`)}</span>
+                ${lane.taskId ? `<button class="button-link" data-open-task-id="${escapeHtml(lane.taskId)}">${escapeHtml(t("subtasks.openLaneTask", {}, "Open lane task"))}</button>` : ""}
+              </div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailAgentId", {}, "Agent"))}</span><span>${escapeHtml(lane.agentId || "-")}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailLaunchRole", {}, "Launch Role"))}</span><span>${escapeHtml(lane.role || "-")}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTeamIdentityLabel", {}, "Identity Label"))}</span><span>${escapeHtml(lane.identityLabel || "-")}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTeamAuthorityRelation", {}, "Authority Relation"))}</span><span>${escapeHtml(lane.authorityRelationToManager || "-")}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTeamReportsTo", {}, "Reports To"))}</span><span>${escapeHtml(formatJoinedValues(lane.reportsTo))}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTeamMayDirect", {}, "May Direct"))}</span><span>${escapeHtml(formatJoinedValues(lane.mayDirect))}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailLaunchStatus", {}, "Status"))}</span><span>${escapeHtml(lane.status || "-")}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailDelegationOwnedScope", {}, "Owned Scope"))}</span><span>${escapeHtml(lane.scopeSummary || "-")}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTeamDependsOn", {}, "Depends On"))}</span><span>${escapeHtml(formatJoinedValues(lane.dependsOn))}</span></div>
+              <div class="memory-list-item-meta"><span>${escapeHtml(t("subtasks.detailTeamHandoffTo", {}, "Handoff To"))}</span><span>${escapeHtml(formatJoinedValues(lane.handoffTo))}</span></div>
+              ${lane.acceptanceGateSummary ? `<div class="memory-detail-text">${escapeHtml(lane.acceptanceGateSummary)}</div>` : ""}
+              ${lane.summary ? `<div class="memory-detail-text">${escapeHtml(lane.summary)}</div>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
     </section>
   `;
 }
@@ -783,6 +906,9 @@ export function createSubtasksOverviewFeature({
     const acceptanceGate = subtasksState.selectedAcceptanceGate?.taskId === item.id
       ? subtasksState.selectedAcceptanceGate.value
       : null;
+    const teamSharedState = subtasksState.selectedTeamSharedState?.taskId === item.id
+      ? subtasksState.selectedTeamSharedState.value
+      : null;
     const continuationState = subtasksState.selectedContinuationState?.taskId === item.id
       ? subtasksState.selectedContinuationState.value
       : null;
@@ -1029,6 +1155,8 @@ export function createSubtasksOverviewFeature({
             </section>
           ` : ""}
 
+          ${renderTeamSharedStateSection(teamSharedState, escapeHtml, t)}
+
           ${resultEnvelope ? `
             <section class="memory-detail-card">
               <span class="memory-detail-label">${escapeHtml(t("subtasks.detailResultEnvelope", {}, "Result Envelope"))}</span>
@@ -1134,6 +1262,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
       subtasksState.selectedAcceptanceGate = null;
+      subtasksState.selectedTeamSharedState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -1150,6 +1279,9 @@ export function createSubtasksOverviewFeature({
       : null;
     subtasksState.selectedAcceptanceGate = res.payload?.acceptanceGate && typeof res.payload.acceptanceGate === "object"
       ? { taskId: item.id, value: res.payload.acceptanceGate }
+      : null;
+    subtasksState.selectedTeamSharedState = res.payload?.teamSharedState && typeof res.payload.teamSharedState === "object"
+      ? { taskId: item.id, value: res.payload.teamSharedState }
       : null;
     subtasksState.selectedResultEnvelope = res.payload?.resultEnvelope && typeof res.payload.resultEnvelope === "object"
       ? res.payload.resultEnvelope
@@ -1425,6 +1557,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
       subtasksState.selectedAcceptanceGate = null;
+      subtasksState.selectedTeamSharedState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -1443,6 +1576,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
       subtasksState.selectedAcceptanceGate = null;
+      subtasksState.selectedTeamSharedState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;
@@ -1531,6 +1665,7 @@ export function createSubtasksOverviewFeature({
       subtasksState.selectedOutputContent = "";
       subtasksState.selectedContinuationState = null;
       subtasksState.selectedAcceptanceGate = null;
+      subtasksState.selectedTeamSharedState = null;
       subtasksState.selectedResultEnvelope = null;
       subtasksState.selectedLaunchExplainability = null;
       subtasksState.selectedPromptSnapshot = null;

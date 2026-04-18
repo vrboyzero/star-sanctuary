@@ -174,6 +174,17 @@ describe("run_command (Platform-aware Safelist)", () => {
             const result = await runCommandTool.execute({ command: "echo test > out.txt" }, mockContext);
             expect(result.success).toBe(false);
             expect(result.error).toContain("Redirection syntax is blocked");
+            expect(result.error).toContain("run_command already captures stdout/stderr");
+        });
+
+        it("should explain Windows-friendly alternatives when Unix-style redirection is blocked", async () => {
+            const result = await runCommandTool.execute({ command: 'curl -s "https://api.github.com" 2>/dev/null | head -100' }, mockContext);
+            expect(result.success).toBe(false);
+            expect(result.error).toContain("2>/dev/null");
+            expect(result.error).toContain("head/tail");
+            if (isWindows) {
+                expect(result.error).toContain("On Windows");
+            }
         });
 
         it("should block cwd outside workspace root", async () => {

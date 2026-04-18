@@ -44,5 +44,7 @@ describe("tool behavior contract registry", () => {
     expect(summary).toContain("## delegate_parallel");
     expect(summary).toContain("Preflight:");
     expect(summary).toContain("Fallback:");
+    expect(summary).toContain("stdout/stderr");
+    expect(summary).toContain("head/tail");
   });
 });

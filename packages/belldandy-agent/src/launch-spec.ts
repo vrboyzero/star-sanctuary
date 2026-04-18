@@ -146,6 +146,85 @@ function normalizeDelegationToolFamilies(
   return normalizeDelegationStringArray(value) as ToolContractFamily[] | undefined;
 }
 
+function normalizeDelegationTeamRole(
+  value: unknown,
+): NonNullable<DelegationProtocol["team"]>["memberRoster"][number]["role"] | undefined {
+  if (value !== "default" && value !== "coder" && value !== "researcher" && value !== "verifier") {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeDelegationAuthorityRelation(
+  value: unknown,
+): NonNullable<DelegationProtocol["team"]>["memberRoster"][number]["authorityRelationToManager"] | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (normalized !== "self" && normalized !== "superior" && normalized !== "peer" && normalized !== "subordinate" && normalized !== "unknown") {
+    return undefined;
+  }
+  return normalized;
+}
+
+function normalizeDelegationTeam(
+  team: DelegationProtocol["team"] | undefined,
+): DelegationProtocol["team"] | undefined {
+  if (!team) {
+    return undefined;
+  }
+
+  const id = normalizeOptionalString(team.id);
+  const mode = team.mode;
+  const sharedGoal = normalizeOptionalString(team.sharedGoal);
+  const managerAgentId = normalizeOptionalString(team.managerAgentId);
+  const managerIdentityLabel = normalizeOptionalString(team.managerIdentityLabel);
+  const currentLaneId = normalizeOptionalString(team.currentLaneId);
+  const memberRoster = Array.isArray(team.memberRoster)
+    ? team.memberRoster
+      .map((member) => {
+        const laneId = normalizeOptionalString(member?.laneId);
+        if (!laneId) {
+          return undefined;
+        }
+        const agentId = normalizeOptionalString(member.agentId);
+        const role = normalizeDelegationTeamRole(member.role);
+        const identityLabel = normalizeOptionalString(member.identityLabel);
+        const authorityRelationToManager = normalizeDelegationAuthorityRelation(member.authorityRelationToManager);
+        const reportsTo = normalizeDelegationStringArray(member.reportsTo);
+        const mayDirect = normalizeDelegationStringArray(member.mayDirect);
+        const scopeSummary = normalizeOptionalString(member.scopeSummary);
+        const dependsOn = normalizeDelegationStringArray(member.dependsOn);
+        const handoffTo = normalizeDelegationStringArray(member.handoffTo);
+        return {
+          laneId,
+          ...(agentId ? { agentId } : {}),
+          ...(role ? { role } : {}),
+          ...(identityLabel ? { identityLabel } : {}),
+          ...(authorityRelationToManager ? { authorityRelationToManager } : {}),
+          ...(reportsTo ? { reportsTo } : {}),
+          ...(mayDirect ? { mayDirect } : {}),
+          ...(scopeSummary ? { scopeSummary } : {}),
+          ...(dependsOn ? { dependsOn } : {}),
+          ...(handoffTo ? { handoffTo } : {}),
+        };
+      })
+      .filter(Boolean) as NonNullable<DelegationProtocol["team"]>["memberRoster"]
+    : [];
+
+  if (!id || memberRoster.length === 0) {
+    return undefined;
+  }
+
+  return {
+    id,
+    mode,
+    ...(sharedGoal ? { sharedGoal } : {}),
+    ...(managerAgentId ? { managerAgentId } : {}),
+    ...(managerIdentityLabel ? { managerIdentityLabel } : {}),
+    ...(currentLaneId && memberRoster.some((member) => member.laneId === currentLaneId) ? { currentLaneId } : {}),
+    memberRoster,
+  };
+}
+
 function normalizeDelegationProtocol(
   protocol: DelegationProtocol | undefined,
 ): DelegationProtocol | undefined {
@@ -165,6 +244,7 @@ function normalizeDelegationProtocol(
     ?? expectedDeliverableSummary;
   const deliverableSummary = normalizeOptionalString(protocol.deliverableContract?.summary)
     ?? expectedDeliverableSummary;
+  const team = normalizeDelegationTeam(protocol.team);
 
   return {
     ...protocol,
@@ -210,6 +290,7 @@ function normalizeDelegationProtocol(
         ...(deliverableRequiredSections ? { requiredSections: deliverableRequiredSections } : {}),
       },
     } : {}),
+    ...(team ? { team } : {}),
   };
 }
 

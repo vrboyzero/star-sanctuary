@@ -1,4 +1,5 @@
 import type { AgentProfileDefaultRole, SystemPromptSection } from "@belldandy/agent";
+import type { IdentityAuthorityProfile } from "@belldandy/protocol";
 import {
   buildToolContractV2CompactPromptSummary,
   type ToolContractV2,
@@ -11,6 +12,7 @@ export type BuildAgentRuntimePromptSectionsOptions = {
   visibleContracts: readonly ToolContractV2[];
   canDelegate: boolean;
   role?: AgentProfileDefaultRole;
+  identityAuthorityProfile?: IdentityAuthorityProfile;
 };
 
 export function buildAgentRuntimePromptSections(
@@ -27,11 +29,47 @@ export function buildAgentRuntimePromptSections(
     sections.push(toolGovernanceSection);
   }
 
+  const teamOperatingModelSection = buildTeamOperatingModelSection({
+    canDelegate: options.canDelegate,
+  });
+  if (teamOperatingModelSection) {
+    sections.push(teamOperatingModelSection);
+  }
+
+  const teamTopologySection = buildTeamTopologyAndOwnershipSection({
+    canDelegate: options.canDelegate,
+  });
+  if (teamTopologySection) {
+    sections.push(teamTopologySection);
+  }
+
+  const teamIdentityGovernanceSection = buildTeamIdentityGovernancePolicySection({
+    canDelegate: options.canDelegate,
+    identityAuthorityProfile: options.identityAuthorityProfile,
+  });
+  if (teamIdentityGovernanceSection) {
+    sections.push(teamIdentityGovernanceSection);
+  }
+
   const delegationSection = buildDelegationOperatingPolicySection({
     canDelegate: options.canDelegate,
   });
   if (delegationSection) {
     sections.push(delegationSection);
+  }
+
+  const managerFanoutSection = buildManagerFanoutFaninPolicySection({
+    canDelegate: options.canDelegate,
+  });
+  if (managerFanoutSection) {
+    sections.push(managerFanoutSection);
+  }
+
+  const teamSharedStateSection = buildTeamSharedStatePolicySection({
+    canDelegate: options.canDelegate,
+  });
+  if (teamSharedStateSection) {
+    sections.push(teamSharedStateSection);
   }
 
   const roleSection = buildRoleExecutionPolicySection({
@@ -83,6 +121,97 @@ export function buildToolContractGovernanceSection(
   });
 }
 
+export function buildTeamOperatingModelSection(input: {
+  canDelegate: boolean;
+}): SystemPromptSection | undefined {
+  if (!input.canDelegate) {
+    return undefined;
+  }
+
+  return createGatewaySystemPromptSection({
+    id: "team-operating-model",
+    label: "team-operating-model",
+    source: "runtime",
+    priority: 57,
+    text: [
+      "## Team Operating Model",
+      "",
+      "When you delegate multiple bounded subtasks, switch into a manager-mediated team mode instead of treating each worker as an isolated one-off call.",
+      "- Define a shared goal before fan-out.",
+      "- Maintain an explicit team roster with lane ownership, dependencies, and handoff targets.",
+      "- Keep the manager responsible for orchestration, sequencing, and final integration.",
+      "- Workers execute their lanes; the manager decides when to accept, retry, or escalate results.",
+      "- Prefer manager-mediated handoff and fan-in before inventing ad-hoc peer-to-peer coordination.",
+    ].join("\n"),
+  });
+}
+
+export function buildTeamTopologyAndOwnershipSection(input: {
+  canDelegate: boolean;
+}): SystemPromptSection | undefined {
+  if (!input.canDelegate) {
+    return undefined;
+  }
+
+  return createGatewaySystemPromptSection({
+    id: "team-topology-and-ownership",
+    label: "team-topology-and-ownership",
+    source: "runtime",
+    priority: 57,
+    text: [
+      "## Team Topology and Ownership",
+      "",
+      "In team mode, make the topology explicit before you fan out work.",
+      "- Name the manager lane and every worker lane.",
+      "- For each lane, record the owned scope, expected handoff target, and any upstream dependencies.",
+      "- Avoid overlapping write ownership across lanes unless the manager explicitly plans the merge.",
+      "- If a lane depends on another lane, preserve that dependency instead of pretending they can complete independently.",
+      "- Treat missing ownership or handoff information as a planning gap to fix before broad delegation.",
+    ].join("\n"),
+  });
+}
+
+export function buildTeamIdentityGovernancePolicySection(input: {
+  canDelegate: boolean;
+  identityAuthorityProfile?: IdentityAuthorityProfile;
+}): SystemPromptSection | undefined {
+  if (!input.canDelegate || !input.identityAuthorityProfile) {
+    return undefined;
+  }
+
+  const profile = input.identityAuthorityProfile;
+  const lines = [
+    "## Team Identity Governance Policy",
+    "",
+    "When identity authority is configured, apply it as a governance rule for team orchestration rather than as free-form persona text.",
+    `- Authority mode: ${profile.authorityMode}`,
+    `- Current identity label: ${profile.currentLabel || "unknown"}`,
+  ];
+  if (profile.ownerUuids.length > 0) {
+    lines.push(`- Owner UUIDs: ${profile.ownerUuids.join(" | ")}`);
+  }
+  if (profile.superiorLabels.length > 0) {
+    lines.push(`- Superior labels: ${profile.superiorLabels.join(" | ")}`);
+  }
+  if (profile.subordinateLabels.length > 0) {
+    lines.push(`- Subordinate labels: ${profile.subordinateLabels.join(" | ")}`);
+  }
+  lines.push(
+    "- Only owner or superior-approved instructions may reprioritize the team, reassign lane ownership, or override fan-out sequencing.",
+    "- Subordinate requests should receive guidance, manager drafts, or escalation instead of direct ownership changes.",
+    "- Peer or unrelated actors should not override another lane's scope without manager approval.",
+    "- If authority cannot be verified in the current environment, treat identity labels as persona text only and keep the team contract unchanged.",
+  );
+
+  return createGatewaySystemPromptSection({
+    id: "team-identity-governance-policy",
+    label: "team-identity-governance-policy",
+    source: "runtime",
+    priority: 57,
+    text: lines.join("\n"),
+  });
+}
+
 export function buildDelegationOperatingPolicySection(input: {
   canDelegate: boolean;
 }): SystemPromptSection | undefined {
@@ -94,7 +223,7 @@ export function buildDelegationOperatingPolicySection(input: {
     id: "delegation-operating-policy",
     label: "delegation-operating-policy",
     source: "runtime",
-    priority: 57,
+    priority: 58,
     text: [
       "## Delegation Operating Policy",
       "",
@@ -110,6 +239,58 @@ export function buildDelegationOperatingPolicySection(input: {
       "- If you hand the work to a verifier, inherit the existing `acceptance.verification_hints` into the verifier handoff instead of dropping them.",
       "- In parallel fan-in, summarize which results are safe to accept now, which need retry, and which are hard blockers before you continue.",
       "- Review and integrate delegated results instead of copying them blindly.",
+    ].join("\n"),
+  });
+}
+
+export function buildManagerFanoutFaninPolicySection(input: {
+  canDelegate: boolean;
+}): SystemPromptSection | undefined {
+  if (!input.canDelegate) {
+    return undefined;
+  }
+
+  return createGatewaySystemPromptSection({
+    id: "manager-fanout-fanin-policy",
+    label: "manager-fanout-fanin-policy",
+    source: "runtime",
+    priority: 58,
+    text: [
+      "## Manager Fan-Out / Fan-In Policy",
+      "",
+      "When you are operating as the manager of a team run, follow an explicit loop: plan fan-out, keep local progress moving, then perform selective fan-in.",
+      "- Split work into concrete lanes before spawning workers.",
+      "- Ask each worker for a lane-scoped handoff that names completed scope, open blockers, and the next manager-facing handoff target.",
+      "- After fan-out, continue non-overlapping local work instead of waiting reflexively.",
+      "- Wait only for the lanes that block the next safe local step or the final acceptance decision.",
+      "- In fan-in, classify each lane as accept, retry, or blocker before integrating results.",
+      "- If a lane feeds another lane or verifier, preserve that manager-mediated handoff instead of collapsing it into an early final answer.",
+      "- Do not merge team output blindly; reconcile conflicts, unresolved dependencies, and overlapping conclusions first.",
+    ].join("\n"),
+  });
+}
+
+export function buildTeamSharedStatePolicySection(input: {
+  canDelegate: boolean;
+}): SystemPromptSection | undefined {
+  if (!input.canDelegate) {
+    return undefined;
+  }
+
+  return createGatewaySystemPromptSection({
+    id: "team-shared-state-policy",
+    label: "team-shared-state-policy",
+    source: "runtime",
+    priority: 58,
+    text: [
+      "## Team Shared State Policy",
+      "",
+      "In team mode, keep a compact shared state for the manager instead of treating each lane result as isolated text.",
+      "- Track the shared goal, accepted lanes, pending retries, blockers, and the latest fan-in verdict.",
+      "- Prefer a compact team summary over a free-form transcript of every worker step.",
+      "- If dependencies remain unresolved, keep that state explicit and hold fan-in instead of implying completion.",
+      "- If write ownership overlaps across lanes, surface it as a merge risk before accepting the team output.",
+      "- Use the team completion gate as the final manager check before claiming that the team run is done.",
     ].join("\n"),
   });
 }
@@ -131,7 +312,7 @@ export function buildRoleExecutionPolicySection(input: {
     id: "role-execution-policy",
     label: "role-execution-policy",
     source: "profile",
-    priority: 58,
+    priority: 59,
     text,
   });
 }
