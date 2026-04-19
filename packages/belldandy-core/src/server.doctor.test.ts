@@ -257,6 +257,140 @@ test("system.doctor exposes tool behavior observability summary", async () => {
   }
 });
 
+test("system.doctor exposes dream runtime summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-doctor-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+  });
+  registerGlobalMemoryManager(memoryManager);
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-dream-runtime",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-dream-runtime"));
+
+    const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-dream-runtime");
+    expect(response?.ok).toBe(true);
+    expect(response?.payload?.dreamRuntime).toMatchObject({
+      requested: {
+        agentId: "default",
+      },
+      availability: {
+        enabled: true,
+        available: false,
+        reason: "missing model/baseUrl/apiKey",
+      },
+      state: {
+        agentId: "default",
+        status: "idle",
+        recentRuns: [],
+      },
+    });
+    expect(typeof response?.payload?.dreamRuntime?.requested?.defaultConversationId).toBe("string");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    memoryManager.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor exposes commons export summary", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-commons-doctor-"));
+  const vaultDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-commons-doctor-vault-"));
+  const registry = new AgentRegistry(() => new MockAgent());
+  registry.register({
+    id: "default",
+    displayName: "Belldandy",
+    model: "primary",
+    memoryMode: "hybrid",
+  });
+
+  const residentMemoryManagers = createScopedMemoryManagers({
+    stateDir,
+    agentRegistry: registry,
+    modelsDir: path.join(stateDir, "models"),
+    conversationStore: new ConversationStore({
+      dataDir: path.join(stateDir, "sessions"),
+    }),
+    indexerOptions: {
+      watch: false,
+    },
+  }).records;
+
+  await withEnv({
+    BELLDANDY_COMMONS_OBSIDIAN_ENABLED: "true",
+    BELLDANDY_COMMONS_OBSIDIAN_VAULT_PATH: vaultDir,
+  }, async () => {
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentRegistry: registry,
+      residentMemoryManagers,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "system-doctor-dream-commons",
+        method: "system.doctor",
+        params: {},
+      }));
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-dream-commons"));
+
+      const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-dream-commons");
+      expect(response?.ok).toBe(true);
+      expect(response?.payload?.dreamCommons).toMatchObject({
+        availability: {
+          enabled: true,
+          available: true,
+          vaultPath: vaultDir,
+        },
+        state: {
+          status: "idle",
+        },
+      });
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+      await fs.promises.rm(vaultDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 test("system.doctor exposes camera runtime summary when native_desktop helper is configured", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const helperPath = await createFakeCameraDoctorHelperScript();

@@ -982,6 +982,8 @@ describe("ToolExecutor", () => {
     });
     expect(expandedEntries.some((entry) => entry.kind === "tool" && entry.name === "goal_checkpoint_request")).toBe(true);
     expect(executor.buildDeferredToolDiscoveryPromptSummary("default", "conv-1")).toContain("goals");
+    expect(executor.buildDeferredToolDiscoveryPromptSummary("default", "conv-1"))
+      .toContain("do not treat `dream` / 梦境 / memory-runtime work as `canvas` by default");
   });
 
   it("tool_search should expand a heavy family before selecting an exact deferred tool", async () => {

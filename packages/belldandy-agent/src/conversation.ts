@@ -211,6 +211,7 @@ export type SessionDigestRecord = {
     rollingSummary: string;
     archivalSummary: string;
     lastDigestAt: number;
+    digestGeneration: number;
 };
 
 export type SessionDigestRefreshOptions = {
@@ -259,6 +260,7 @@ type SessionDigestState = {
     lastSessionMemoryAt: number;
     lastSessionMemoryMessageCount: number;
     lastSessionMemoryToolCursor: number;
+    digestGeneration: number;
 };
 
 type StoredSessionMemory = Omit<SessionMemoryRecord, "conversationId">;
@@ -1939,19 +1941,28 @@ export class ConversationStore {
         }
 
         const sessionMemory = await this.getSessionMemoryAsync(id);
+        const digestContentChanged =
+            previousState.lastDigestAt !== sessionMemory.updatedAt
+            || previousState.lastSessionMemoryAt !== sessionMemory.updatedAt
+            || previousState.lastSessionMemoryMessageCount !== sessionMemory.lastSummarizedMessageCount
+            || previousState.lastSessionMemoryToolCursor !== sessionMemory.lastSummarizedToolCursor;
         const nextDigestState: SessionDigestState = {
             threshold,
             lastDigestAt: sessionMemory.updatedAt,
             lastSessionMemoryAt: sessionMemory.updatedAt,
             lastSessionMemoryMessageCount: sessionMemory.lastSummarizedMessageCount,
             lastSessionMemoryToolCursor: sessionMemory.lastSummarizedToolCursor,
+            digestGeneration: digestContentChanged
+                ? Math.max(0, previousState.digestGeneration) + 1
+                : Math.max(0, previousState.digestGeneration),
         };
         const stateChanged =
             previousState.threshold !== nextDigestState.threshold
             || previousState.lastDigestAt !== nextDigestState.lastDigestAt
             || previousState.lastSessionMemoryAt !== nextDigestState.lastSessionMemoryAt
             || previousState.lastSessionMemoryMessageCount !== nextDigestState.lastSessionMemoryMessageCount
-            || previousState.lastSessionMemoryToolCursor !== nextDigestState.lastSessionMemoryToolCursor;
+            || previousState.lastSessionMemoryToolCursor !== nextDigestState.lastSessionMemoryToolCursor
+            || previousState.digestGeneration !== nextDigestState.digestGeneration;
 
         if (stateChanged) {
             await this.persistSessionDigestState(id, nextDigestState);
@@ -2261,6 +2272,7 @@ export class ConversationStore {
                     lastSessionMemoryAt: typeof parsed.lastSessionMemoryAt === "number" ? parsed.lastSessionMemoryAt : 0,
                     lastSessionMemoryMessageCount: typeof parsed.lastSessionMemoryMessageCount === "number" ? parsed.lastSessionMemoryMessageCount : 0,
                     lastSessionMemoryToolCursor: typeof parsed.lastSessionMemoryToolCursor === "number" ? parsed.lastSessionMemoryToolCursor : 0,
+                    digestGeneration: typeof parsed.digestGeneration === "number" ? Math.max(0, Math.floor(parsed.digestGeneration)) : 0,
                 };
                 this.sessionDigestStates.set(id, state);
                 if (typeof threshold === "number") {
@@ -2284,6 +2296,7 @@ export class ConversationStore {
             lastSessionMemoryAt: 0,
             lastSessionMemoryMessageCount: 0,
             lastSessionMemoryToolCursor: 0,
+            digestGeneration: 0,
         };
         this.sessionDigestStates.set(id, empty);
         return empty;
@@ -2576,6 +2589,7 @@ export class ConversationStore {
             rollingSummary,
             archivalSummary: compactionState.archivalSummary,
             lastDigestAt: Math.max(sessionMemory.updatedAt, compactionState.lastCompactedAt, digestState.lastDigestAt),
+            digestGeneration: Math.max(0, digestState.digestGeneration),
         };
     }
 

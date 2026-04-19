@@ -14,7 +14,7 @@ import type { WebSocket } from "ws";
 import type { BackgroundContinuationRuntimeDoctorReport } from "./background-continuation-runtime.js";
 import type { ConversationRunRegistry } from "./conversation-run-registry.js";
 import type { CronRuntimeDoctorReport } from "./cron/observability.js";
-import type { DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
+import type { DreamRuntime, DurableExtractionDigestSnapshot, DurableExtractionRecord, DurableExtractionRuntime } from "@belldandy/memory";
 import type { ExtensionHostState } from "./extension-host.js";
 import type { ExternalOutboundAuditStore } from "./external-outbound-audit-store.js";
 import type { ExternalOutboundConfirmationStore } from "./external-outbound-confirmation-store.js";
@@ -35,6 +35,7 @@ import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
 import type { ResidentAgentRuntimeRegistry } from "./resident-agent-runtime.js";
 import type { RuntimeResilienceDoctorReport } from "./runtime-resilience.js";
 import type { GatewayServerOptions } from "./server.js";
+import type { ObsidianCommonsRuntime } from "./obsidian-commons-runtime.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import type { ToolsConfigManager } from "./tools-config.js";
 import type { SubTaskRecord, SubTaskRuntimeStore } from "./task-runtime.js";
@@ -67,6 +68,9 @@ export type GatewayWebSocketRequestContext = {
   conversationStore: ConversationStore;
   conversationRunRegistry: ConversationRunRegistry;
   durableExtractionRuntime?: DurableExtractionRuntime;
+  resolveDreamRuntime?: (agentId?: string) => DreamRuntime | null;
+  resolveDreamDefaultConversationId?: (agentId?: string) => string;
+  resolveCommonsExportRuntime?: () => ObsidianCommonsRuntime | null;
   requestDurableExtraction?: (input: {
     conversationId: string;
     source: string;
@@ -158,6 +162,9 @@ export function buildGatewayWebSocketRequestContext(
     conversationStore: options.conversationStore,
     conversationRunRegistry: options.conversationRunRegistry,
     durableExtractionRuntime: options.durableExtractionRuntime,
+    resolveDreamRuntime: options.resolveDreamRuntime,
+    resolveDreamDefaultConversationId: options.resolveDreamDefaultConversationId,
+    resolveCommonsExportRuntime: options.resolveCommonsExportRuntime,
     requestDurableExtraction: options.requestDurableExtraction,
     memoryUsageAccounting: options.memoryUsageAccounting,
     memoryBudgetGuard: options.memoryBudgetGuard,

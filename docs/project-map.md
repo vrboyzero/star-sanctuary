@@ -101,7 +101,7 @@ star-sanctuary/
 
 ### API / RPC / HTTP
 - `packages/belldandy-core/src/server.ts`: RPC 请求分发总入口
-- `packages/belldandy-core/src/server-methods/`: `models` / `goal` / `memory` / `tools` / `workspace` / `subtask`
+- `packages/belldandy-core/src/server-methods/`: `models` / `goal` / `memory` / `dream` / `tools` / `workspace` / `subtask`
 - `packages/belldandy-core/src/server-http-routes.ts`: `/health`、`/api/message`、webhook、静态资源
 - `packages/belldandy-core/src/query-runtime-message-send.ts`: `message.send` 主执行链、tool result metadata / `failureKind` / follow-up runtime marks 透传
 
@@ -111,7 +111,7 @@ star-sanctuary/
 - `apps/web/public/app/features/chat-network.js`: WebSocket 请求/响应、模型/Agent 选择
 - `apps/web/public/app/features/settings-runtime.js`: 设置面板
 - `apps/web/public/app/features/workspace.js`: 文件树和编辑器
-- `apps/web/public/app/features/doctor-observability.js`: doctor / observability UI
+- `apps/web/public/app/features/doctor-observability.js`: doctor / observability UI（含 Dream Runtime 卡片）
 
 ### State / Workspace / Persistence
 - `packages/belldandy-protocol/src/state-dir.ts`: 全局 state dir 解析
@@ -125,8 +125,12 @@ star-sanctuary/
 - `packages/belldandy-memory/src/manager.ts`: MemoryManager、global registry、durable extraction 策略
 - `packages/belldandy-memory/src/indexer.ts`: 索引构建
 - `packages/belldandy-memory/src/task-processor.ts`: 任务沉淀处理
+- `packages/belldandy-memory/src/dream-store.ts` / `dream-input.ts` / `dream-prompt.ts` / `dream-writer.ts` / `dream-runtime.ts` / `dream-obsidian-sync.ts` / `obsidian-sync-paths.ts` / `commons-exporter.ts`: dream 状态层、输入聚合、模型提示、SS 内部写回、Obsidian 私有镜像、Commons Markdown 导出、sync 路径解析
+- `packages/belldandy-core/src/obsidian-commons-runtime.ts`: Commons 导出运行时，负责扫描已审批 shared memory 并写入 Obsidian 公共租界
+- `packages/belldandy-core/src/dream-automation-runtime.ts`: automatic dream 触发桥，承接 heartbeat / cron 完成事件并把触发请求送入 dream gate
+- `packages/belldandy-core/src/server-methods/dreams.ts`: `dream.run` / `dream.status.get` / `dream.history.list` / `dream.get` / `dream.commons.export_now` RPC
 - `apps/web/public/app/features/memory-runtime.js`: 前端 memory 主流程
-- `apps/web/public/app/features/memory-viewer.js`: memory viewer UI
+- `apps/web/public/app/features/memory-viewer.js`: memory viewer UI（含 dream 状态条、手动触发最小接线）
 
 ### Goals / Long-running Work
 - `packages/belldandy-core/src/goals/manager.ts`: goal 主状态机与治理中心

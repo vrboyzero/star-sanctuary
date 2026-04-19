@@ -55,12 +55,43 @@ export {
   type TaskWorkSurface,
   type TaskWorkSurfaceDelegate,
 } from "./task-work-surface.js";
+export {
+  DreamStore,
+  buildDreamFilePath,
+  buildDreamIndexPath,
+  buildDreamRuntimePath,
+  buildDreamsDirPath,
+  createDefaultDreamRuntimeState,
+  toDreamInputMeta,
+  type BuildDreamFilePathOptions,
+  type DreamStoreOptions,
+} from "./dream-store.js";
+export {
+  buildDreamConversationArtifactPath,
+  buildDreamInputSnapshot,
+  readDreamSessionDigestFile,
+  readDreamSessionMemoryFile,
+} from "./dream-input.js";
+export {
+  buildDreamPromptBundle,
+  parseDreamModelOutput,
+  summarizeDreamModelOutput,
+} from "./dream-prompt.js";
+export { writeDreamArtifacts } from "./dream-writer.js";
+export {
+  DEFAULT_DREAM_OBSIDIAN_ROOT_DIR,
+  resolveDreamObsidianMirrorPaths,
+} from "./obsidian-sync-paths.js";
+export { syncDreamToObsidian } from "./dream-obsidian-sync.js";
+export { writeObsidianCommonsExport } from "./commons-exporter.js";
+export { DreamRuntime } from "./dream-runtime.js";
 export { ExperiencePromoter } from "./experience-promoter.js";
 export { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 export { isNoise, filterNoise, type NoiseFilterOptions } from "./noise-filter.js";
 export * from "./types.js";
 export * from "./task-types.js";
 export * from "./experience-types.js";
+export * from "./dream-types.js";
 export * from "./memory-files.js";
 export * from "./team-memory.js";
 export { TaskProcessor, type TaskProcessorOptions } from "./task-processor.js";

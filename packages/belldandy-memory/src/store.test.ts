@@ -72,6 +72,53 @@ describe("MemoryStore", () => {
     expect(remainingChunks.every((item) => item.content?.includes("old content"))).toBe(true);
   });
 
+  it("tracks task and memory change sequences", () => {
+    expect(store.getTaskChangeSeq()).toBe(0);
+    expect(store.getMemoryChangeSeq()).toBe(0);
+
+    store.upsertChunk({
+      id: "mem-1",
+      sourcePath: "/tmp/memory-source.md",
+      sourceType: "file",
+      memoryType: "daily",
+      content: "first memory chunk",
+    });
+    expect(store.getMemoryChangeSeq()).toBe(1);
+
+    expect(store.promoteChunkVisibility("mem-1")).toBe(true);
+    expect(store.getMemoryChangeSeq()).toBe(2);
+
+    expect(store.deleteBySource("/tmp/memory-source.md")).toBe(1);
+    expect(store.getMemoryChangeSeq()).toBe(3);
+
+    store.replaceSourceChunks("/tmp/memory-source.md", [{
+      id: "mem-2",
+      sourcePath: "/tmp/memory-source.md",
+      sourceType: "file",
+      memoryType: "daily",
+      content: "replacement memory chunk",
+    }]);
+    expect(store.getMemoryChangeSeq()).toBe(4);
+
+    const taskId = "task-change-seq-1";
+    store.createTask({
+      id: taskId,
+      conversationId: "conv-task-change-seq-1",
+      sessionKey: "conv-task-change-seq-1",
+      source: "chat",
+      status: "running",
+      startedAt: "2026-04-19T10:00:00.000Z",
+      createdAt: "2026-04-19T10:00:00.000Z",
+      updatedAt: "2026-04-19T10:00:00.000Z",
+    });
+    expect(store.getTaskChangeSeq()).toBe(1);
+
+    store.updateTask(taskId, {
+      summary: "补充 task change seq 的最小验证。",
+    });
+    expect(store.getTaskChangeSeq()).toBe(2);
+  });
+
   it("rebuilds work recap and resume context when task metadata updates", async () => {
     const startedAt = "2026-04-17T08:00:00.000Z";
     const completedAt = "2026-04-17T08:05:00.000Z";

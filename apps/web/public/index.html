@@ -265,7 +265,21 @@
                 <div class="memory-viewer-kicker" data-i18n="memory.kicker">记忆查看</div>
                 <div id="memoryViewerTitle" class="memory-viewer-title" data-i18n="memory.title">记忆查看</div>
               </div>
-              <button id="memoryViewerRefresh" class="button" data-i18n="common.refresh">刷新</button>
+              <div class="memory-viewer-header-actions">
+                <button id="memoryViewerRefresh" class="button" data-i18n="common.refresh">刷新</button>
+              </div>
+            </div>
+
+            <div id="memoryDreamBar" class="memory-context-bar">
+              <div class="memory-dream-copy">
+                <span id="memoryDreamStatus" class="memory-context-text">Dream 状态：--</span>
+                <span id="memoryDreamMeta" class="memory-context-text">默认会话：--</span>
+                <span id="memoryDreamSummary" class="memory-context-text">最近摘要：--</span>
+              </div>
+              <div class="memory-dream-actions">
+                <button id="memoryDreamRefresh" class="button" type="button">刷新 Dream</button>
+                <button id="memoryDreamRun" class="button" type="button">运行 Dream</button>
+              </div>
             </div>
 
             <div class="memory-viewer-stats" id="memoryViewerStats">

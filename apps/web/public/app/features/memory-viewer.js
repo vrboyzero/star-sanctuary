@@ -28,6 +28,107 @@ function normalizeEmailThreadOpenNoteText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeDreamRuntimeView(payload, fallbackAgentId = "default") {
+  const agentId = typeof payload?.agentId === "string" && payload.agentId.trim()
+    ? payload.agentId.trim()
+    : fallbackAgentId;
+  const state = payload?.state && typeof payload.state === "object" ? payload.state : null;
+  const latestRun = payload?.record && typeof payload.record === "object"
+    ? payload.record
+    : Array.isArray(state?.recentRuns)
+      ? state.recentRuns[0] ?? null
+      : null;
+  const defaultConversationId = typeof payload?.defaultConversationId === "string" && payload.defaultConversationId.trim()
+    ? payload.defaultConversationId.trim()
+    : null;
+  return {
+    requested: {
+      agentId,
+      defaultConversationId,
+    },
+    availability: payload?.availability && typeof payload.availability === "object"
+      ? payload.availability
+      : {
+        enabled: false,
+        available: false,
+        reason: "not_loaded",
+      },
+    autoSummary: payload?.autoSummary && typeof payload.autoSummary === "object"
+      ? payload.autoSummary
+      : null,
+    state,
+    latestRun,
+  };
+}
+
+function formatDreamStatusLabel(value, t = (_key, _params, fallback) => fallback ?? "") {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "queued") return t("memory.dreamStatusQueued", {}, "排队中");
+  if (normalized === "running") return t("memory.dreamStatusRunning", {}, "运行中");
+  if (normalized === "completed") return t("memory.dreamStatusCompleted", {}, "最近成功");
+  if (normalized === "failed") return t("memory.dreamStatusFailed", {}, "最近失败");
+  return t("memory.dreamStatusIdle", {}, "空闲");
+}
+
+function formatDreamAutoTriggerModeLabel(value, t = (_key, _params, fallback) => fallback ?? "") {
+  return value === "cron"
+    ? t("memory.dreamAutoTriggerCron", {}, "cron")
+    : t("memory.dreamAutoTriggerHeartbeat", {}, "heartbeat");
+}
+
+function formatDreamSignalSummary(signal, t = (_key, _params, fallback) => fallback ?? "") {
+  if (!signal || typeof signal !== "object") {
+    return t("memory.dreamSignalSummaryEmpty", {}, "信号：暂无");
+  }
+  return t(
+    "memory.dreamSignalSummary",
+    {
+      digestDelta: formatCount(Number(signal.digestGenerationDelta) || 0),
+      sessionRevisionDelta: formatCount(Number(signal.sessionMemoryRevisionDelta) || 0),
+      taskDelta: formatCount(Number(signal.taskChangeSeqDelta) || 0),
+      memoryDelta: formatCount(Number(signal.memoryChangeSeqDelta) || 0),
+      budget: formatCount(Number(signal.changeBudget) || 0),
+    },
+    `信号：digestΔ ${formatCount(Number(signal.digestGenerationDelta) || 0)} / sessionRevΔ ${formatCount(Number(signal.sessionMemoryRevisionDelta) || 0)} / taskΔ ${formatCount(Number(signal.taskChangeSeqDelta) || 0)} / memoryΔ ${formatCount(Number(signal.memoryChangeSeqDelta) || 0)} / budget ${formatCount(Number(signal.changeBudget) || 0)}`,
+  );
+}
+
+function formatDreamAutoStatsSummary(autoStats, t = (_key, _params, fallback) => fallback ?? "") {
+  if (!autoStats || typeof autoStats !== "object") {
+    return t("memory.dreamAutoStatsEmpty", {}, "统计：暂无");
+  }
+  const skipCodeCounts = autoStats.skipCodeCounts && typeof autoStats.skipCodeCounts === "object"
+    ? Object.entries(autoStats.skipCodeCounts).filter(([, count]) => Number.isFinite(count) && Number(count) > 0)
+    : [];
+  const signalGateCounts = autoStats.signalGateCounts && typeof autoStats.signalGateCounts === "object"
+    ? Object.entries(autoStats.signalGateCounts).filter(([, count]) => Number.isFinite(count) && Number(count) > 0)
+    : [];
+  const skipText = skipCodeCounts.length > 0
+    ? skipCodeCounts.map(([key, count]) => `${key}:${formatCount(Number(count) || 0)}`).join(", ")
+    : "-";
+  const gateText = signalGateCounts.length > 0
+    ? signalGateCounts.map(([key, count]) => `${key}:${formatCount(Number(count) || 0)}`).join(", ")
+    : "-";
+  const triggerModeEntries = autoStats.byTriggerMode && typeof autoStats.byTriggerMode === "object"
+    ? Object.entries(autoStats.byTriggerMode).filter(([, stats]) => stats && typeof stats === "object")
+    : [];
+  const triggerModeText = triggerModeEntries.length > 0
+    ? triggerModeEntries.map(([key, stats]) => `${key}[a:${formatCount(Number(stats.attemptedCount) || 0)}, e:${formatCount(Number(stats.executedCount) || 0)}, s:${formatCount(Number(stats.skippedCount) || 0)}]`).join(", ")
+    : "-";
+  return t(
+    "memory.dreamAutoStatsSummary",
+    {
+      attempted: formatCount(Number(autoStats.attemptedCount) || 0),
+      executed: formatCount(Number(autoStats.executedCount) || 0),
+      skipped: formatCount(Number(autoStats.skippedCount) || 0),
+      skipText,
+      gateText,
+      triggerModeText,
+    },
+    `统计：attempted ${formatCount(Number(autoStats.attemptedCount) || 0)} / executed ${formatCount(Number(autoStats.executedCount) || 0)} / skipped ${formatCount(Number(autoStats.skippedCount) || 0)} · mode ${triggerModeText} · skip ${skipText} · gate ${gateText}`,
+  );
+}
+
 function truncateEmailThreadOpenNoteText(value, { maxLines = 6, maxChars = 480 } = {}) {
   const normalized = normalizeEmailThreadOpenNoteText(value);
   if (!normalized) return "";
@@ -381,6 +482,12 @@ export function createMemoryViewerFeature({
     memoryViewerStatsEl,
     memoryViewerListEl,
     memoryViewerDetailEl,
+    memoryDreamBarEl,
+    memoryDreamStatusEl,
+    memoryDreamMetaEl,
+    memoryDreamSummaryEl,
+    memoryDreamRefreshBtn,
+    memoryDreamRunBtn,
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
@@ -1003,6 +1110,110 @@ export function createMemoryViewerFeature({
       : t("memory.title", {}, "Memory Viewer");
   }
 
+  function renderDreamRuntimeBar() {
+    if (!memoryDreamBarEl) return;
+    const memoryViewerState = getMemoryViewerState();
+    const dreamRuntime = memoryViewerState.dreamRuntime;
+    const autoSummary = dreamRuntime?.autoSummary
+      ?? (dreamRuntime?.state?.lastAutoTrigger
+        ? {
+            ...dreamRuntime.state.lastAutoTrigger,
+            cooldownUntil: dreamRuntime?.state?.cooldownUntil,
+            failureBackoffUntil: dreamRuntime?.state?.failureBackoffUntil,
+          }
+        : null);
+    const latestRun = dreamRuntime?.latestRun
+      ?? (Array.isArray(dreamRuntime?.state?.recentRuns) ? dreamRuntime.state.recentRuns[0] : null);
+    const latestTimestamp = latestRun?.finishedAt || latestRun?.requestedAt || dreamRuntime?.state?.lastDreamAt || dreamRuntime?.state?.updatedAt;
+    const availability = dreamRuntime?.availability;
+    const lastInput = dreamRuntime?.state?.lastInput ?? latestRun?.input ?? null;
+    const sourceCounts = lastInput?.sourceCounts ?? {};
+    const connected = typeof isConnected === "function" ? isConnected() : true;
+    const availabilityText = availability?.available
+      ? (availability.model || t("memory.dreamAvailable", {}, "可用"))
+      : (availability?.reason || t("memory.dreamUnavailable", {}, "未就绪"));
+    const cooldownUntil = autoSummary?.cooldownUntil || dreamRuntime?.state?.cooldownUntil;
+    const failureBackoffUntil = autoSummary?.failureBackoffUntil || dreamRuntime?.state?.failureBackoffUntil;
+    const autoText = autoSummary?.attemptedAt
+      ? t(
+        "memory.dreamAutoSummary",
+        {
+          triggerMode: formatDreamAutoTriggerModeLabel(autoSummary.triggerMode, t),
+          attemptedAt: formatDateTime(autoSummary.attemptedAt),
+          outcome: autoSummary.executed
+            ? formatDreamStatusLabel(autoSummary.status, t)
+            : `skip ${autoSummary.skipCode || "-"}`,
+        },
+        `自动触发：${formatDreamAutoTriggerModeLabel(autoSummary.triggerMode, t)} @ ${formatDateTime(autoSummary.attemptedAt)} · ${autoSummary.executed ? formatDreamStatusLabel(autoSummary.status, t) : `skip ${autoSummary.skipCode || "-"}`}`,
+      )
+      : t("memory.dreamAutoSummaryEmpty", {}, "自动触发：暂无");
+    const gateText = cooldownUntil || failureBackoffUntil
+      ? t(
+        "memory.dreamGateSummary",
+        {
+          cooldownUntil: formatDateTime(cooldownUntil),
+          failureBackoffUntil: formatDateTime(failureBackoffUntil),
+        },
+        `冷却至：${formatDateTime(cooldownUntil)} · 回退至：${formatDateTime(failureBackoffUntil)}`,
+      )
+      : t("memory.dreamGateSummaryEmpty", {}, "冷却 / 回退：无");
+    const signalText = formatDreamSignalSummary(autoSummary?.signal, t);
+    const autoStatsText = formatDreamAutoStatsSummary(dreamRuntime?.state?.autoStats, t);
+    const summaryText = latestRun?.summary
+      || latestRun?.error
+      || (lastInput
+        ? t(
+          "memory.dreamInputSummary",
+          {
+            tasks: formatCount(Number(sourceCounts.recentTaskCount) || 0),
+            memories: formatCount(Number(sourceCounts.recentDurableMemoryCount) || 0),
+            usages: formatCount(Number(sourceCounts.recentExperienceUsageCount) || 0),
+          },
+          `最近输入：任务 ${formatCount(Number(sourceCounts.recentTaskCount) || 0)} / 记忆 ${formatCount(Number(sourceCounts.recentDurableMemoryCount) || 0)} / 经验 ${formatCount(Number(sourceCounts.recentExperienceUsageCount) || 0)}`,
+        )
+        : t("memory.dreamSummaryEmpty", {}, "最近还没有 dream 记录"));
+
+    if (memoryDreamStatusEl) {
+      memoryDreamStatusEl.textContent = connected
+        ? t(
+          "memory.dreamStatusLine",
+          {
+            status: formatDreamStatusLabel(dreamRuntime?.state?.status, t),
+            availability: availabilityText,
+          },
+          `Dream 状态：${formatDreamStatusLabel(dreamRuntime?.state?.status, t)} · ${availabilityText}`,
+        )
+        : t("memory.dreamDisconnected", {}, "Dream 状态：未连接");
+    }
+    if (memoryDreamMetaEl) {
+      memoryDreamMetaEl.textContent = t(
+        "memory.dreamMetaLine",
+        {
+          conversationId: dreamRuntime?.requested?.defaultConversationId || "-",
+          lastRunAt: formatDateTime(latestTimestamp),
+          autoSummary: autoText,
+        },
+        `默认会话：${dreamRuntime?.requested?.defaultConversationId || "-"} · 最近一次：${formatDateTime(latestTimestamp)} · ${autoText}`,
+      );
+    }
+    if (memoryDreamSummaryEl) {
+      memoryDreamSummaryEl.textContent = t(
+        "memory.dreamSummaryLine",
+        { summary: summaryText, gates: gateText, signal: signalText, stats: autoStatsText },
+        `最近摘要：${summaryText} · ${signalText} · ${autoStatsText} · ${gateText}`,
+      );
+    }
+    if (memoryDreamRefreshBtn) {
+      memoryDreamRefreshBtn.disabled = !connected || memoryViewerState.dreamBusy === true;
+    }
+    if (memoryDreamRunBtn) {
+      memoryDreamRunBtn.disabled = !connected || memoryViewerState.dreamBusy === true || availability?.available !== true;
+      memoryDreamRunBtn.title = availability?.available === true
+        ? ""
+        : availability?.reason || t("memory.dreamRunDisabled", {}, "当前 Dream runtime 不可用");
+    }
+  }
+
   function formatTaskStatusLabel(status) {
     const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
     if (!normalized) return "未知";
@@ -1078,6 +1289,7 @@ export function createMemoryViewerFeature({
     }
     syncSharedReviewFilterUi();
     renderSharedReviewBatchBar();
+    renderDreamRuntimeBar();
     syncMemoryTaskGoalFilterUi();
   }
 
@@ -1138,6 +1350,10 @@ export function createMemoryViewerFeature({
     const requestContext = createMemoryViewerRequestContext();
 
     if (!isConnected()) {
+      const memoryViewerState = getMemoryViewerState();
+      memoryViewerState.dreamRuntime = null;
+      memoryViewerState.dreamBusy = false;
+      renderDreamRuntimeBar();
       renderMemoryViewerStats(null);
       renderMemoryViewerListEmpty(t("memory.disconnectedList", {}, "Not connected to the server."));
       renderMemoryViewerDetailEmpty(t("memory.disconnectedDetail", {}, "Tasks and memories will be available after connection is ready."));
@@ -1145,8 +1361,10 @@ export function createMemoryViewerFeature({
     }
 
     const memoryViewerState = getMemoryViewerState();
+    const dreamLoadPromise = loadDreamRuntimeStatus(requestContext);
     if (memoryViewerState.tab === "tasks") {
       await Promise.all([
+        dreamLoadPromise,
         loadMemoryViewerStats(requestContext),
         loadTaskUsageOverview(requestContext),
       ]);
@@ -1155,17 +1373,119 @@ export function createMemoryViewerFeature({
     } else if (memoryViewerState.tab === "sharedReview") {
       memoryViewerState.selectedTask = null;
       memoryViewerState.selectedCandidate = null;
+      await dreamLoadPromise;
       await loadSharedReviewQueue(forceSelectFirst, requestContext);
     } else if (memoryViewerState.tab === "outboundAudit") {
       memoryViewerState.selectedTask = null;
       memoryViewerState.selectedCandidate = null;
+      await dreamLoadPromise;
       await loadExternalOutboundAuditViewer(forceSelectFirst, requestContext);
     } else {
       memoryViewerState.selectedTask = null;
       memoryViewerState.selectedCandidate = null;
-      await loadMemoryViewerStats(requestContext);
+      await Promise.all([
+        dreamLoadPromise,
+        loadMemoryViewerStats(requestContext),
+      ]);
       if (!isMemoryViewerRequestCurrent(requestContext)) return;
       await loadMemoryChunkViewer(forceSelectFirst, requestContext);
+    }
+  }
+
+  async function loadDreamRuntimeStatus(requestContext = null) {
+    const activeRequest = createMemoryViewerRequestContext(requestContext);
+    const memoryViewerState = getMemoryViewerState();
+    const agentId = activeRequest.agentId;
+    if (!isConnected()) {
+      memoryViewerState.dreamRuntime = null;
+      memoryViewerState.dreamBusy = false;
+      renderDreamRuntimeBar();
+      return null;
+    }
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "dream.status.get",
+      params: {
+        agentId,
+      },
+    });
+    if (!isMemoryViewerRequestCurrent(activeRequest)) {
+      return null;
+    }
+    if (res?.ok) {
+      memoryViewerState.dreamRuntime = normalizeDreamRuntimeView(res.payload, agentId);
+    } else {
+      memoryViewerState.dreamRuntime = normalizeDreamRuntimeView({
+        agentId,
+        availability: {
+          enabled: false,
+          available: false,
+          reason: res?.error?.message || t("memory.dreamLoadFailed", {}, "Failed to load dream status."),
+        },
+      }, agentId);
+    }
+    renderDreamRuntimeBar();
+    return memoryViewerState.dreamRuntime;
+  }
+
+  async function runDream() {
+    const memoryViewerState = getMemoryViewerState();
+    if (memoryViewerState.dreamBusy) {
+      return null;
+    }
+    if (!isConnected()) {
+      showNotice?.(
+        t("memory.dreamRunDisconnectedTitle", {}, "Dream 运行失败"),
+        t("memory.dreamRunDisconnectedMessage", {}, "当前未连接到服务器，无法触发 dream.run。"),
+        "error",
+      );
+      return null;
+    }
+
+    const agentId = getActiveAgentId();
+    memoryViewerState.dreamBusy = true;
+    renderDreamRuntimeBar();
+    try {
+      const res = await sendReq({
+        type: "req",
+        id: makeId(),
+        method: "dream.run",
+        params: {
+          agentId,
+        },
+      });
+      if (!res?.ok) {
+        showNotice?.(
+          t("memory.dreamRunFailedTitle", {}, "Dream 运行失败"),
+          res?.error?.message || t("memory.dreamRunFailedMessage", {}, "dream.run 调用失败。"),
+          "error",
+        );
+        return null;
+      }
+      const previousConversationId = memoryViewerState.dreamRuntime?.requested?.defaultConversationId ?? null;
+      memoryViewerState.dreamRuntime = {
+        ...normalizeDreamRuntimeView(res.payload, agentId),
+        requested: {
+          agentId,
+          defaultConversationId: previousConversationId,
+        },
+      };
+      renderDreamRuntimeBar();
+      showNotice?.(
+        t("memory.dreamRunSuccessTitle", {}, "Dream 已运行"),
+        res.payload?.record?.summary || t("memory.dreamRunSuccessMessage", {}, "已生成新的 dream 记录。"),
+        res.payload?.record?.status === "failed" ? "warn" : "success",
+        2600,
+      );
+      void loadDreamRuntimeStatus({
+        requestToken: Number(memoryViewerState.requestToken || 0),
+        agentId,
+      });
+      return res.payload;
+    } finally {
+      memoryViewerState.dreamBusy = false;
+      renderDreamRuntimeBar();
     }
   }
 
@@ -2904,6 +3224,7 @@ export function createMemoryViewerFeature({
   return {
     applyAgentViewState,
     captureAgentViewState,
+    loadDreamRuntimeStatus,
     loadExternalOutboundAuditViewer,
     loadMemoryChunkViewer,
     loadMemoryViewer,
@@ -2915,11 +3236,13 @@ export function createMemoryViewerFeature({
     renderCandidateOnlyDetail,
     renderExternalOutboundAuditDetail,
     renderExternalOutboundAuditList,
+    renderDreamRuntimeBar,
     renderMemoryList,
     renderSharedReviewList,
     renderMemoryDetail,
     renderMemoryViewerStats,
     renderTaskList,
+    runDream,
     syncSharedReviewFilterUi,
     syncMemoryViewerHeaderTitle,
     switchOutboundAuditFocus,

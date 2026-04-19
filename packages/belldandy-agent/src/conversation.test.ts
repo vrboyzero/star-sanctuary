@@ -412,6 +412,7 @@ describe("ConversationStore", () => {
             archivalSummary: "",
         });
         expect(refreshed.digest.lastDigestAt).toBeGreaterThan(0);
+        expect(refreshed.digest.digestGeneration).toBe(1);
 
         const memory = await store.getSessionMemory(id);
         expect(memory).toMatchObject({
@@ -432,8 +433,32 @@ describe("ConversationStore", () => {
         expect(digest.threshold).toBe(2);
         expect(digest.rollingSummary).toBe("rolling-summary-v1");
         expect(digest.digestedMessageCount).toBe(3);
+        expect(digest.digestGeneration).toBe(1);
 
         fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("should only advance digestGeneration when digest content changes", async () => {
+        const store = new ConversationStore({
+            summarizer: async () => "rolling-summary-v1",
+        });
+        const id = "conv-session-digest-generation";
+
+        store.addMessage(id, "user", "第一轮消息 A");
+        store.addMessage(id, "assistant", "第一轮消息 B");
+        await store.refreshSessionDigest(id, { force: true, threshold: 2 });
+
+        const afterFirstRefresh = await store.getSessionDigest(id, { threshold: 2 });
+        expect(afterFirstRefresh.digestGeneration).toBe(1);
+
+        await store.refreshSessionDigest(id, { threshold: 4 });
+        const afterThresholdOnlyRefresh = await store.getSessionDigest(id, { threshold: 4 });
+        expect(afterThresholdOnlyRefresh.digestGeneration).toBe(1);
+
+        store.addMessage(id, "user", "第二轮消息 C");
+        store.addMessage(id, "assistant", "第二轮消息 D");
+        const afterContentRefresh = await store.refreshSessionDigest(id, { force: true, threshold: 2 });
+        expect(afterContentRefresh.digest.digestGeneration).toBe(2);
     });
 
     it("should mark session digest as updated when pending messages cross threshold", async () => {

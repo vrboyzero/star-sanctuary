@@ -95,6 +95,10 @@ describe("buildAgentRuntimePromptSections", () => {
       .toContain("team completion gate");
     expect(sections.find((section) => section.id === "role-execution-policy")?.text)
       .toContain("Role Execution Policy (coder)");
+    expect(sections.find((section) => section.id === "tool-use-policy")?.text)
+      .toContain("do not infer canvas or board storage");
+    expect(sections.find((section) => section.id === "tool-use-policy")?.text)
+      .toContain("dream-runtime.json");
   });
 
   it("skips delegation and role sections when they do not apply", () => {

@@ -11,9 +11,11 @@ import type { EnvDirSource } from "@star-sanctuary/distribution";
 import { resolveEnvFilePaths } from "@star-sanctuary/distribution";
 
 import {
+  buildDreamInputSnapshot,
   createDurableExtractionSurface,
   DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_CODE,
   DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_MESSAGE,
+  DreamRuntime,
   DurableExtractionRuntime,
   getGlobalMemoryManager,
   guardTeamSharedMemoryWrite,
@@ -94,7 +96,9 @@ import {
 import { buildAgentRoster } from "./query-runtime-agent-roster.js";
 import { ensureResidentAgentSession } from "./query-runtime-agent-sessions.js";
 import { buildLearningReviewNudgeRuntimeReport } from "./learning-review-nudge-runtime.js";
+import { buildLearningReviewInput } from "./learning-review-input.js";
 import { buildDeploymentBackendsDoctorReport, ensureDeploymentBackendsConfig } from "./deployment-backends.js";
+import { buildMindProfileSnapshot } from "./mind-profile-snapshot.js";
 import { buildResidentAgentObservabilitySnapshot } from "./resident-agent-observability.js";
 import { resolveResidentStateBindingViewForAgent } from "./resident-state-binding.js";
 import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
@@ -119,6 +123,8 @@ import { handleConfigChannelMethod } from "./server-methods/config-channel.js";
 import { handleGoalMethod } from "./server-methods/goals.js";
 import { handleMemoryExperienceMethod } from "./server-methods/memory-experience.js";
 import { handleMessageSendMethod } from "./server-methods/message-send.js";
+import { handleDreamMethod } from "./server-methods/dreams.js";
+import { ObsidianCommonsRuntime } from "./obsidian-commons-runtime.js";
 import { buildGatewayHttpRoutesContext } from "./server-http-runtime.js";
 import { registerGatewayHttpRoutes } from "./server-http-routes.js";
 import {
@@ -298,6 +304,8 @@ export type GatewayServer = {
   host: string;
   close: () => Promise<void>;
   broadcast: (frame: GatewayEventFrame) => void;
+  resolveDreamRuntime: (agentId?: string) => DreamRuntime | null;
+  resolveDreamDefaultConversationId: (agentId?: string) => string;
   requestDurableExtractionFromDigest: (input: {
     conversationId: string;
     source: string;
@@ -939,6 +947,165 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     return record;
   };
 
+  const dreamRuntimeCache = new Map<string, DreamRuntime>();
+  const dreamObsidianMirrorEnabled = String(process.env.BELLDANDY_DREAM_OBSIDIAN_ENABLED ?? "false").trim().toLowerCase() === "true";
+  const dreamObsidianMirrorVaultPath = readEnvTrimmed("BELLDANDY_DREAM_OBSIDIAN_VAULT_PATH");
+  const dreamObsidianMirrorRootDir = readEnvTrimmed("BELLDANDY_DREAM_OBSIDIAN_ROOT_DIR");
+  const commonsObsidianEnabled = String(
+    process.env.BELLDANDY_COMMONS_OBSIDIAN_ENABLED
+    ?? process.env.BELLDANDY_DREAM_OBSIDIAN_ENABLED
+    ?? "false",
+  ).trim().toLowerCase() === "true";
+  const commonsObsidianVaultPath = readEnvTrimmed("BELLDANDY_COMMONS_OBSIDIAN_VAULT_PATH") ?? dreamObsidianMirrorVaultPath;
+  const commonsObsidianRootDir = readEnvTrimmed("BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR") ?? dreamObsidianMirrorRootDir;
+  let commonsExportRuntime: ObsidianCommonsRuntime | null | undefined;
+
+  const normalizeDreamAgentId = (agentId?: string): string => {
+    const normalized = typeof agentId === "string" ? agentId.trim() : "";
+    return normalized || "default";
+  };
+
+  const resolveDreamDefaultConversationId = (agentId?: string): string => {
+    const runtimeRecord = residentAgentRuntime.ensureMainConversation(normalizeDreamAgentId(agentId));
+    return runtimeRecord.lastConversationId || runtimeRecord.mainConversationId;
+  };
+
+  const resolveDreamRuntime = (agentId?: string): DreamRuntime | null => {
+    const resolvedAgentId = normalizeDreamAgentId(agentId);
+    const cached = dreamRuntimeCache.get(resolvedAgentId);
+    if (cached) {
+      return cached;
+    }
+
+    const managerRecord = opts.residentMemoryManagers?.find((item) => item.agentId === resolvedAgentId);
+    const fallbackConversationId = resolveDreamDefaultConversationId(resolvedAgentId);
+    const manager = managerRecord?.manager
+      ?? getGlobalMemoryManager({
+        agentId: resolvedAgentId,
+        conversationId: fallbackConversationId,
+      })
+      ?? getGlobalMemoryManager();
+    if (!manager) {
+      return null;
+    }
+
+    const dreamStateDir = managerRecord?.stateDir ?? stateDir;
+    const runtime = new DreamRuntime({
+      stateDir: dreamStateDir,
+      agentId: resolvedAgentId,
+      model: opts.primaryModelConfig?.model,
+      baseUrl: opts.primaryModelConfig?.baseUrl,
+      apiKey: opts.primaryModelConfig?.apiKey,
+      obsidianMirror: {
+        enabled: dreamObsidianMirrorEnabled,
+        vaultPath: dreamObsidianMirrorVaultPath,
+        rootDir: dreamObsidianMirrorRootDir,
+      },
+      buildInputSnapshot: async ({ agentId: runtimeAgentId, conversationId, now }) => {
+        const resolvedConversationId = conversationId || resolveDreamDefaultConversationId(runtimeAgentId);
+        const roster = opts.agentRegistry
+          ? await buildAgentRoster({
+            stateDir,
+            agentRegistry: opts.agentRegistry,
+            residentAgentRuntime,
+          })
+          : [];
+        const residentAgents = roster.length > 0 && (opts.residentMemoryManagers?.length ?? 0) > 0
+          ? await buildResidentAgentObservabilitySnapshot({
+            agents: roster,
+            residentMemoryManagers: opts.residentMemoryManagers,
+            conversationStore,
+          })
+          : undefined;
+        const mindProfileSnapshot = await buildMindProfileSnapshot({
+          stateDir,
+          residentAgents,
+          residentMemoryManagers: opts.residentMemoryManagers,
+          agentId: runtimeAgentId,
+        });
+        return buildDreamInputSnapshot({
+          agentId: runtimeAgentId,
+          conversationId: resolvedConversationId,
+          stateDir: dreamStateDir,
+          now,
+          memoryManager: manager,
+          buildMindProfileSnapshot: async () => mindProfileSnapshot,
+          buildLearningReviewInput: async ({ focusTask, mindProfileSnapshot: dreamMindProfileSnapshot }) => buildLearningReviewInput({
+            mindProfileSnapshot: (dreamMindProfileSnapshot ?? mindProfileSnapshot) as any,
+            taskExperienceDetail: focusTask,
+          }),
+          getSessionDigest: async (targetConversationId) => {
+            const digest = await conversationStore.getSessionDigest(targetConversationId);
+            return {
+              conversationId: digest.conversationId,
+              status: digest.status,
+              messageCount: digest.messageCount,
+              digestedMessageCount: digest.digestedMessageCount,
+              pendingMessageCount: digest.pendingMessageCount,
+              threshold: digest.threshold,
+              rollingSummary: digest.rollingSummary,
+              archivalSummary: digest.archivalSummary,
+              lastDigestAt: digest.lastDigestAt,
+              digestGeneration: digest.digestGeneration,
+            };
+          },
+          getSessionMemory: async (targetConversationId) => {
+            const sessionMemory = await conversationStore.getSessionMemory(targetConversationId);
+            return {
+              conversationId: sessionMemory.conversationId,
+              summary: sessionMemory.summary,
+              currentGoal: sessionMemory.currentGoal,
+              decisions: sessionMemory.decisions,
+              keyResults: sessionMemory.keyResults,
+              filesTouched: sessionMemory.filesTouched,
+              errorsAndFixes: sessionMemory.errorsAndFixes,
+              pendingTasks: sessionMemory.pendingTasks,
+              currentWork: sessionMemory.currentWork,
+              nextStep: sessionMemory.nextStep,
+              lastSummarizedMessageCount: sessionMemory.lastSummarizedMessageCount,
+              lastSummarizedToolCursor: sessionMemory.lastSummarizedToolCursor,
+              updatedAt: sessionMemory.updatedAt,
+            };
+          },
+          getTaskChangeSeq: () => manager.getTaskChangeSeq(),
+          getMemoryChangeSeq: () => manager.getMemoryChangeSeq(),
+        });
+      },
+      logger: {
+        debug: (message, data) => log.debug("dream-runtime", message, data),
+        warn: (message, data) => log.warn("dream-runtime", message, data),
+        error: (message, data) => log.error("dream-runtime", message, data),
+      },
+    });
+    dreamRuntimeCache.set(resolvedAgentId, runtime);
+    return runtime;
+  };
+
+  const resolveCommonsExportRuntime = (): ObsidianCommonsRuntime | null => {
+    if (commonsExportRuntime !== undefined) {
+      return commonsExportRuntime;
+    }
+    if ((opts.residentMemoryManagers?.length ?? 0) <= 0) {
+      commonsExportRuntime = null;
+      return commonsExportRuntime;
+    }
+    commonsExportRuntime = new ObsidianCommonsRuntime({
+      stateDir,
+      residentMemoryManagers: opts.residentMemoryManagers,
+      mirror: {
+        enabled: commonsObsidianEnabled,
+        vaultPath: commonsObsidianVaultPath,
+        rootDir: commonsObsidianRootDir,
+      },
+      logger: {
+        debug: (message, data) => log.debug("commons-export", message, data),
+        warn: (message, data) => log.warn("commons-export", message, data),
+        error: (message, data) => log.error("commons-export", message, data),
+      },
+    });
+    return commonsExportRuntime;
+  };
+
   let broadcastEvent: ((frame: GatewayEventFrame) => void) | undefined;
   const handleWebSocketRequest = createGatewayWebSocketRequestHandler({
     stateDir,
@@ -958,6 +1125,9 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     conversationStore,
     conversationRunRegistry,
     durableExtractionRuntime,
+    resolveDreamRuntime,
+    resolveDreamDefaultConversationId,
+    resolveCommonsExportRuntime,
     requestDurableExtraction,
     memoryUsageAccounting,
     memoryBudgetGuard,
@@ -1136,6 +1306,8 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
       await memoryUsageAccounting.flush();
     },
     broadcast: broadcastEvent,
+    resolveDreamRuntime,
+    resolveDreamDefaultConversationId,
     requestDurableExtractionFromDigest,
   };
 }
@@ -1349,12 +1521,17 @@ async function handleReq(
     "memory.task.list",
     "memory.task.get",
     "memory.recent_work",
-    "memory.resume_context",
-    "memory.similar_past_work",
-    "memory.explain_sources",
-    "experience.candidate.get",
-    "experience.candidate.list",
-    "experience.candidate.accept",
+      "memory.resume_context",
+      "memory.similar_past_work",
+      "memory.explain_sources",
+      "dream.run",
+      "dream.status.get",
+      "dream.history.list",
+      "dream.get",
+      "dream.commons.export_now",
+      "experience.candidate.get",
+      "experience.candidate.list",
+      "experience.candidate.accept",
     "experience.candidate.reject",
     "experience.usage.get",
     "experience.usage.list",
@@ -1655,6 +1832,9 @@ async function handleReq(
         residentMemoryManagers: ctx.residentMemoryManagers,
         getCronRuntimeDoctorReport: ctx.getCronRuntimeDoctorReport,
         getBackgroundContinuationRuntimeDoctorReport: ctx.getBackgroundContinuationRuntimeDoctorReport,
+        resolveDreamRuntime: ctx.resolveDreamRuntime,
+        resolveDreamDefaultConversationId: ctx.resolveDreamDefaultConversationId,
+        resolveCommonsExportRuntime: ctx.resolveCommonsExportRuntime,
         inspectAgentPrompt: ctx.inspectAgentPrompt,
         subTaskRuntimeStore: ctx.subTaskRuntimeStore,
         goalManager: ctx.goalManager,
@@ -1742,6 +1922,17 @@ async function handleReq(
         residentMemoryManagers: ctx.residentMemoryManagers,
         agentRegistry: ctx.agentRegistry,
         skillRegistry: ctx.skillRegistry,
+      });
+
+    case "dream.run":
+    case "dream.status.get":
+    case "dream.history.list":
+    case "dream.get":
+    case "dream.commons.export_now":
+      return handleDreamMethod(req, {
+        resolveDreamRuntime: ctx.resolveDreamRuntime ?? (() => null),
+        resolveDefaultConversationId: ctx.resolveDreamDefaultConversationId ?? (() => "agent:default:main"),
+        resolveCommonsExportRuntime: ctx.resolveCommonsExportRuntime ?? (() => null),
       });
 
     case "workspace.list":

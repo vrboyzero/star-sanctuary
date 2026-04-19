@@ -29,6 +29,8 @@ export const memoryViewerState = {
   sharedReviewFilters: createDefaultSharedReviewFilters(),
   selectedSharedReviewIds: [],
   sharedReviewBatchBusy: false,
+  dreamRuntime: null,
+  dreamBusy: false,
   requestToken: 0,
   activeAgentId: "default",
   agentViewStates: {},

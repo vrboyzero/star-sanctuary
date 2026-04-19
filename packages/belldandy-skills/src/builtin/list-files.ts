@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { Tool, ToolContext, ToolCallResult } from "../types.js";
 import { withToolContract } from "../tool-contract.js";
@@ -26,6 +27,17 @@ function isUnderRoot(absolute: string, root: string): { ok: true; relative: stri
     return { ok: true, relative: rel.replace(/\\/g, "/") };
 }
 
+function expandHomeShorthand(pathArg: string): string {
+    const trimmed = (pathArg || "").trim();
+    if (trimmed === "~") {
+        return os.homedir();
+    }
+    if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+        return path.join(os.homedir(), trimmed.slice(2));
+    }
+    return trimmed;
+}
+
 /** 规范化并验证路径在工作区内（主工作区或 extraWorkspaceRoots 中的任一根目录下）；返回匹配的根目录供列目录时计算相对路径用 */
 function resolveAndValidatePath(
     pathArg: string,
@@ -37,11 +49,12 @@ function resolveAndValidatePath(
         return { ok: false, error: "路径不能为空" };
     }
 
-    const normalized = trimmed.replace(/\\/g, "/");
+    const expanded = expandHomeShorthand(trimmed);
+    const normalized = expanded.replace(/\\/g, "/");
     const mainRoot = path.resolve(workspaceRoot);
 
     let absolute: string;
-    if (path.isAbsolute(normalized) || (trimmed.length >= 2 && /^[A-Za-z]:/.test(trimmed))) {
+    if (path.isAbsolute(normalized) || (expanded.length >= 2 && /^[A-Za-z]:/.test(expanded))) {
         absolute = path.resolve(normalized);
     } else {
         absolute = path.resolve(mainRoot, normalized);

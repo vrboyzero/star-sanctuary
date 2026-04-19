@@ -108,6 +108,12 @@ const {
   memoryViewerListEl,
   memoryViewerDetailEl,
   memoryViewerRefreshBtn,
+  memoryDreamBarEl,
+  memoryDreamStatusEl,
+  memoryDreamMetaEl,
+  memoryDreamSummaryEl,
+  memoryDreamRefreshBtn,
+  memoryDreamRunBtn,
   memoryTabTasksBtn,
   memoryTabMemoriesBtn,
   memoryTabSharedReviewBtn,
@@ -727,6 +733,16 @@ connectBtn.addEventListener("click", () => connect());
 sendBtn.addEventListener("click", () => handleComposerPrimaryAction());
 if (memoryViewerRefreshBtn) {
   memoryViewerRefreshBtn.addEventListener("click", () => loadMemoryViewer(true));
+}
+if (memoryDreamRefreshBtn) {
+  memoryDreamRefreshBtn.addEventListener("click", () => {
+    void memoryViewerFeature?.loadDreamRuntimeStatus?.();
+  });
+}
+if (memoryDreamRunBtn) {
+  memoryDreamRunBtn.addEventListener("click", () => {
+    void memoryViewerFeature?.runDream?.();
+  });
 }
 if (memoryTabTasksBtn) {
   memoryTabTasksBtn.addEventListener("click", () => switchMemoryViewerTab("tasks"));
@@ -1427,6 +1443,12 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryViewerStatsEl,
     memoryViewerListEl,
     memoryViewerDetailEl,
+    memoryDreamBarEl,
+    memoryDreamStatusEl,
+    memoryDreamMetaEl,
+    memoryDreamSummaryEl,
+    memoryDreamRefreshBtn,
+    memoryDreamRunBtn,
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
@@ -1640,6 +1662,8 @@ function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
   memoryViewerState.sharedGovernance = null;
   memoryViewerState.selectedSharedReviewIds = [];
   memoryViewerState.sharedReviewBatchBusy = false;
+  memoryViewerState.dreamRuntime = null;
+  memoryViewerState.dreamBusy = false;
 }
 
 async function refreshMemoryViewerForAgentSwitch(agentId = getCurrentAgentSelection()) {

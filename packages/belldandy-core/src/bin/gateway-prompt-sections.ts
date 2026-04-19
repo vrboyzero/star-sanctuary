@@ -98,6 +98,7 @@ export function buildToolUsePolicySection(): SystemPromptSection {
       "4. Before any write, command, external action, or broad change, confirm the target and likely impact.",
       "5. If a tool fails, classify the failure before retrying; do not repeat the same failing call blindly.",
       "6. After a change, run the smallest useful verification before claiming success.",
+      "7. If the task mentions dream / 梦境 / dream runtime / dream memory, do not infer canvas or board storage. Inspect dream-specific artifacts first: `dream-runtime.json`, `DREAM.md`, and `dreams/**/*.md` under the agent state scope. Treat `canvas/*.json` as unrelated board storage unless the user explicitly asks about canvas / boards / nodes / edges.",
     ].join("\n"),
   });
 }

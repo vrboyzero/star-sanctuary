@@ -31,6 +31,8 @@ import { cosineSimilarity, vectorToBuffer, vectorFromBuffer, type EmbeddingVecto
 import { loadSqliteVec } from "./sqlite-vec.js";
 
 const KNOWN_MEMORY_CATEGORIES = ["preference", "experience", "fact", "decision", "entity", "other"] as const;
+const TASK_CHANGE_SEQ_META_KEY = "task_change_seq";
+const MEMORY_CHANGE_SEQ_META_KEY = "memory_change_seq";
 
 export type TaskSummaryRecord = {
   id: string;
@@ -408,10 +410,11 @@ export class MemoryStore {
       now,
       now
     );
+    this.incrementNumericMeta(MEMORY_CHANGE_SEQ_META_KEY);
   }
 
   /** 按来源路径删除 chunks */
-  deleteBySource(sourcePath: string): number {
+  deleteBySource(sourcePath: string, options: { bumpChangeSeq?: boolean } = {}): number {
     this.ensureOpen();
     // 先查出要删除的 rowid，同步删除 vec 数据
     const rows = this.db.prepare(`SELECT rowid FROM chunks WHERE source_path = ?`).all(sourcePath) as { rowid: number }[];
@@ -426,7 +429,11 @@ export class MemoryStore {
 
     const stmt = this.db.prepare(`DELETE FROM chunks WHERE source_path = ?`);
     const result = stmt.run(sourcePath);
-    return Number(result.changes);
+    const changes = Number(result.changes);
+    if (changes > 0 && options.bumpChangeSeq !== false) {
+      this.incrementNumericMeta(MEMORY_CHANGE_SEQ_META_KEY);
+    }
+    return changes;
   }
 
   replaceSourceChunks(sourcePath: string, chunks: MemoryChunk[]): void {
@@ -448,8 +455,9 @@ export class MemoryStore {
         agent_id = excluded.agent_id
     `);
 
+    let deletedCount = 0;
     const tx = this.db.transaction(() => {
-      this.deleteBySource(sourcePath);
+      deletedCount = this.deleteBySource(sourcePath, { bumpChangeSeq: false });
       for (const chunk of chunks) {
         const visibility = chunk.visibility ?? "private";
         upsertChunkStmt.run(
@@ -474,6 +482,9 @@ export class MemoryStore {
     });
 
     tx();
+    if (deletedCount > 0 || chunks.length > 0) {
+      this.incrementNumericMeta(MEMORY_CHANGE_SEQ_META_KEY);
+    }
   }
 
   /** 删除所有 chunks */
@@ -488,7 +499,11 @@ export class MemoryStore {
     }
     const stmt = this.db.prepare(`DELETE FROM chunks`);
     const result = stmt.run();
-    return Number(result.changes);
+    const changes = Number(result.changes);
+    if (changes > 0) {
+      this.incrementNumericMeta(MEMORY_CHANGE_SEQ_META_KEY);
+    }
+    return changes;
   }
 
   private upsertTask(task: TaskRecord): void {
@@ -697,6 +712,7 @@ export class MemoryStore {
     const result = stmt.run(visibility, new Date().toISOString(), chunkId);
     if (Number(result.changes) > 0) {
       this.setChunkVisibility(chunkId, visibility);
+      this.incrementNumericMeta(MEMORY_CHANGE_SEQ_META_KEY);
       return true;
     }
     return false;
@@ -712,12 +728,14 @@ export class MemoryStore {
     const result = stmt.run(visibility, new Date().toISOString(), sourcePath);
     if (Number(result.changes) > 0) {
       this.setSourceVisibility(sourcePath, visibility);
+      this.incrementNumericMeta(MEMORY_CHANGE_SEQ_META_KEY);
     }
     return Number(result.changes);
   }
 
   createTask(task: TaskRecord): void {
     this.upsertTask(task);
+    this.incrementNumericMeta(TASK_CHANGE_SEQ_META_KEY);
   }
 
   createTaskActivity(activity: TaskActivityRecord): void {
@@ -786,6 +804,7 @@ export class MemoryStore {
     }
 
     this.upsertTask(updated);
+    this.incrementNumericMeta(TASK_CHANGE_SEQ_META_KEY);
   }
 
   getTask(taskId: string): TaskRecord | null {
@@ -1989,6 +2008,27 @@ export class MemoryStore {
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `);
     stmt.run(key, value);
+  }
+
+  private getNumericMeta(key: string): number {
+    const value = this.getMeta(key);
+    if (typeof value !== "string") return 0;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }
+
+  private incrementNumericMeta(key: string, by = 1): number {
+    const next = Math.max(0, this.getNumericMeta(key) + Math.max(1, Math.floor(by)));
+    this.setMeta(key, String(next));
+    return next;
+  }
+
+  getTaskChangeSeq(): number {
+    return this.getNumericMeta(TASK_CHANGE_SEQ_META_KEY);
+  }
+
+  getMemoryChangeSeq(): number {
+    return this.getNumericMeta(MEMORY_CHANGE_SEQ_META_KEY);
   }
 
   getSourceAgentId(sourcePath: string): string | null {

@@ -54,6 +54,13 @@ export async function startHeartbeatRuntime(input: {
   backgroundContinuationLedger: BackgroundContinuationLedger;
   backgroundRecoveryRuntime?: Pick<BackgroundRecoveryRuntime, "maybeRecover">;
   isBusy: () => boolean;
+  onFinalizedRun?: (input: {
+    status: "ran" | "skipped" | "failed";
+    conversationId?: string;
+    runId?: string;
+    reason?: string;
+    message?: string;
+  }) => Promise<void> | void;
   logger: GatewayBackgroundLogger;
 }): Promise<HeartbeatRunnerHandle | undefined> {
   if (!input.enabled) {
@@ -135,6 +142,13 @@ export async function startHeartbeatRuntime(input: {
         if (finalized.status === "failed") {
           await input.backgroundRecoveryRuntime?.maybeRecover(finalized);
         }
+        await input.onFinalizedRun?.({
+          status: event.result.status,
+          conversationId: event.conversationId,
+          runId: event.runId,
+          reason: event.result.reason,
+          message: event.result.message,
+        });
       },
     });
 
@@ -158,6 +172,16 @@ export async function startCronRuntime(input: {
   backgroundRecoveryRuntime?: Pick<BackgroundRecoveryRuntime, "maybeRecover">;
   goalManager: GoalManager;
   isBusy: () => boolean;
+  onFinalizedRun?: (input: {
+    status: "ok" | "skipped" | "error";
+    sourceId: string;
+    label: string;
+    conversationId?: string;
+    sessionTarget?: "main" | "isolated";
+    runId?: string;
+    reason?: string;
+    summary?: string;
+  }) => Promise<void> | void;
   logger: GatewayBackgroundLogger;
 }): Promise<CronSchedulerHandle | undefined> {
   if (!input.enabled) {
@@ -318,6 +342,16 @@ export async function startCronRuntime(input: {
       if (finalized.status === "failed") {
         await input.backgroundRecoveryRuntime?.maybeRecover(finalized);
       }
+      await input.onFinalizedRun?.({
+        status: event.status,
+        sourceId: event.jobId,
+        label: event.jobName,
+        conversationId: event.conversationId,
+        sessionTarget: event.sessionTarget,
+        runId: event.runId,
+        reason: event.reason,
+        summary: event.summary,
+      });
     },
   });
 

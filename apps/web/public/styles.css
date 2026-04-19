@@ -2401,6 +2401,12 @@ body::before {
   gap: 16px;
 }
 
+.memory-viewer-header-actions {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
 .memory-viewer-kicker {
   color: var(--memory-kicker-color);
   font-size: 11px;
@@ -2583,6 +2589,19 @@ body::before {
 .memory-context-text {
   color: var(--memory-context-text);
   font-size: 13px;
+}
+
+.memory-dream-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.memory-dream-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .memory-viewer-tabs {

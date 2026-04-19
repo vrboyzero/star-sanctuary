@@ -15,6 +15,7 @@ import {
   DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_CODE,
   DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_MESSAGE,
   getGlobalMemoryManager,
+  type DreamRuntime,
   type DurableExtractionRuntime,
 } from "@belldandy/memory";
 import type {
@@ -101,6 +102,7 @@ import { buildToolContractV2Observability } from "../tool-contract-v2-observabil
 import type { ToolsConfigManager } from "../tools-config.js";
 import { buildAgentLaunchExplainability } from "../agent-launch-explainability.js";
 import type { GoalManager } from "../goals/manager.js";
+import type { ObsidianCommonsRuntime } from "../obsidian-commons-runtime.js";
 
 type SystemDoctorMethodContext = {
   stateDir: string;
@@ -129,6 +131,9 @@ type SystemDoctorMethodContext = {
   residentMemoryManagers?: ScopedMemoryManagerRecord[];
   getCronRuntimeDoctorReport?: () => Promise<CronRuntimeDoctorReport | undefined>;
   getBackgroundContinuationRuntimeDoctorReport?: () => Promise<BackgroundContinuationRuntimeDoctorReport | undefined>;
+  resolveDreamRuntime?: (agentId?: string) => DreamRuntime | null;
+  resolveDreamDefaultConversationId?: (agentId?: string) => string;
+  resolveCommonsExportRuntime?: () => ObsidianCommonsRuntime | null;
   inspectAgentPrompt?: (input: {
     agentId?: string;
     conversationId?: string;
@@ -263,6 +268,13 @@ function extractScopedMemoryAgentId(params: Record<string, unknown>): string | u
   return undefined;
 }
 
+function extractDreamAgentId(params: Record<string, unknown>): string {
+  if (typeof params.dreamAgentId === "string" && params.dreamAgentId.trim()) {
+    return params.dreamAgentId.trim();
+  }
+  return extractScopedMemoryAgentId(params) ?? "default";
+}
+
 function resolveScopedMemoryManager(params: Record<string, unknown> = {}) {
   const conversationId = typeof params.conversationId === "string" && params.conversationId.trim()
     ? params.conversationId.trim()
@@ -282,6 +294,109 @@ async function buildScopedSkillFreshnessSnapshot(
     manager,
     stateDir,
   });
+}
+
+async function buildDreamRuntimeDoctorReport(
+  ctx: Pick<SystemDoctorMethodContext, "resolveDreamRuntime" | "resolveDreamDefaultConversationId">,
+  params: Record<string, unknown>,
+) {
+  if (typeof ctx.resolveDreamRuntime !== "function") {
+    return undefined;
+  }
+  const agentId = extractDreamAgentId(params);
+  const defaultConversationId = typeof ctx.resolveDreamDefaultConversationId === "function"
+    ? ctx.resolveDreamDefaultConversationId(agentId)
+    : undefined;
+  const runtime = ctx.resolveDreamRuntime(agentId);
+  if (!runtime) {
+    return {
+      requested: {
+        agentId,
+        defaultConversationId: defaultConversationId ?? null,
+      },
+      availability: {
+        enabled: false,
+        available: false,
+        reason: "dream runtime unavailable",
+      },
+      state: null,
+      latestRun: null,
+      autoSummary: null,
+      headline: `Dream runtime is unavailable for agent ${agentId}.`,
+    };
+  }
+
+  const state = await runtime.getState();
+  const latestRun = state.recentRuns[0] ?? null;
+  const availability = runtime.getAvailability();
+  const autoSummary = state.lastAutoTrigger
+    ? {
+        triggerMode: state.lastAutoTrigger.triggerMode,
+        attemptedAt: state.lastAutoTrigger.attemptedAt,
+        executed: state.lastAutoTrigger.executed,
+        ...(state.lastAutoTrigger.runId ? { runId: state.lastAutoTrigger.runId } : {}),
+        ...(state.lastAutoTrigger.status ? { status: state.lastAutoTrigger.status } : {}),
+        ...(state.lastAutoTrigger.skipCode ? { skipCode: state.lastAutoTrigger.skipCode } : {}),
+        ...(state.lastAutoTrigger.signalGateCode ? { signalGateCode: state.lastAutoTrigger.signalGateCode } : {}),
+        ...(state.lastAutoTrigger.skipReason ? { skipReason: state.lastAutoTrigger.skipReason } : {}),
+        ...(state.lastAutoTrigger.signal ? { signal: { ...state.lastAutoTrigger.signal } } : {}),
+        ...(state.cooldownUntil ? { cooldownUntil: state.cooldownUntil } : {}),
+        ...(state.failureBackoffUntil ? { failureBackoffUntil: state.failureBackoffUntil } : {}),
+      }
+    : null;
+  const headline = !availability.available
+    ? `Dream runtime is blocked: ${availability.reason ?? "unknown reason"}.`
+    : latestRun?.status === "failed"
+      ? `Latest dream failed at ${latestRun.finishedAt ?? latestRun.requestedAt ?? "-"}.`
+      : latestRun
+        ? `Latest dream ${latestRun.status} at ${latestRun.finishedAt ?? latestRun.requestedAt ?? "-"}.`
+        : "Dream runtime is ready and has no runs yet.";
+
+  return {
+    requested: {
+      agentId,
+      defaultConversationId: defaultConversationId ?? null,
+    },
+    availability,
+    state,
+    latestRun,
+    autoSummary,
+    headline,
+  };
+}
+
+async function buildDreamCommonsDoctorReport(
+  ctx: Pick<SystemDoctorMethodContext, "resolveCommonsExportRuntime">,
+) {
+  if (typeof ctx.resolveCommonsExportRuntime !== "function") {
+    return undefined;
+  }
+  const runtime = ctx.resolveCommonsExportRuntime();
+  if (!runtime) {
+    return {
+      availability: {
+        enabled: false,
+        available: false,
+        reason: "commons export runtime unavailable",
+      },
+      state: null,
+      headline: "Commons export runtime is unavailable.",
+    };
+  }
+  const availability = runtime.getAvailability();
+  const state = await runtime.getState();
+  const headline = !availability.available
+    ? `Commons export is blocked: ${availability.reason ?? "unknown reason"}.`
+    : state.status === "failed"
+      ? `Commons export failed at ${state.lastFailureAt ?? state.updatedAt}.`
+      : state.lastSuccessAt
+        ? `Commons export last completed at ${state.lastSuccessAt}.`
+        : "Commons export is ready and has no runs yet.";
+  return {
+    availability,
+    state,
+    headline,
+  };
 }
 
 export async function handleSystemDoctorMethod(
@@ -486,6 +601,8 @@ export async function handleSystemDoctorMethod(
   let emailInboundRuntime: EmailInboundDoctorReport | undefined;
   let assistantModeRuntime: AssistantModeRuntimeReport | undefined;
   let goalRuntimeSummary: Awaited<ReturnType<typeof buildAssistantModeGoalRuntimeSummary>> | undefined;
+  const dreamRuntime = await buildDreamRuntimeDoctorReport(ctx, params);
+  const dreamCommons = await buildDreamCommonsDoctorReport(ctx);
   try {
     cronRuntime = await ctx.getCronRuntimeDoctorReport?.();
   } catch (error) {
@@ -1257,9 +1374,11 @@ export async function handleSystemDoctorMethod(
       ...(toolContractV2Observability ? { toolContractV2Observability } : {}),
       ...(bridgeRecoveryDiagnostics ? { bridgeRecoveryDiagnostics } : {}),
       ...(residentAgents ? { residentAgents } : {}),
-      ...(mindProfileSnapshot ? { mindProfileSnapshot } : {}),
-      ...(learningReviewInput ? { learningReviewInput } : {}),
-      ...(learningReviewNudgeRuntime ? { learningReviewNudgeRuntime } : {}),
+        ...(mindProfileSnapshot ? { mindProfileSnapshot } : {}),
+        ...(learningReviewInput ? { learningReviewInput } : {}),
+        ...(dreamRuntime ? { dreamRuntime } : {}),
+        ...(dreamCommons ? { dreamCommons } : {}),
+        ...(learningReviewNudgeRuntime ? { learningReviewNudgeRuntime } : {}),
       ...(skillFreshness ? { skillFreshness } : {}),
       ...(delegationObservability ? { delegationObservability } : {}),
       ...(conversationDebug ? { conversationDebug } : {}),

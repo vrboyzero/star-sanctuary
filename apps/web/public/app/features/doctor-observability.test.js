@@ -359,6 +359,94 @@ describe("doctor observability formatting", () => {
           currentTurnPreview: "请帮我整理这轮长期任务的经验候选",
         },
       },
+      dreamRuntime: {
+        requested: {
+          agentId: "default",
+          defaultConversationId: "agent:default:main",
+        },
+        availability: {
+          enabled: true,
+          available: true,
+          model: "gpt-4.1-mini",
+        },
+        headline: "Latest dream completed at 2026-04-19T12:05:00.000Z.",
+        autoSummary: {
+          triggerMode: "heartbeat",
+          attemptedAt: "2026-04-19T12:00:00.000Z",
+          executed: false,
+          skipCode: "cooldown_active",
+          skipReason: "cooldown active until 2026-04-19T18:05:00.000Z",
+          cooldownUntil: "2026-04-19T18:05:00.000Z",
+          signal: {
+            lastDreamCursor: {
+              digestGeneration: 0,
+              sessionMemoryMessageCount: 0,
+              sessionMemoryToolCursor: 0,
+              taskChangeSeq: 0,
+              memoryChangeSeq: 0,
+            },
+            currentCursor: {
+              digestGeneration: 2,
+              sessionMemoryMessageCount: 6,
+              sessionMemoryToolCursor: 2,
+              taskChangeSeq: 3,
+              memoryChangeSeq: 2,
+            },
+            digestGenerationDelta: 2,
+            sessionMemoryMessageDelta: 6,
+            sessionMemoryToolDelta: 2,
+            sessionMemoryRevisionDelta: 2,
+            taskChangeSeqDelta: 3,
+            memoryChangeSeqDelta: 2,
+            changeBudget: 19,
+          },
+        },
+        state: {
+          status: "idle",
+          autoStats: {
+            attemptedCount: 5,
+            executedCount: 2,
+            skippedCount: 3,
+            skipCodeCounts: {
+              cooldown_active: 1,
+              insufficient_signal: 2,
+            },
+            signalGateCounts: {
+              digest_generation: 1,
+              change_budget: 1,
+              insufficient_signal: 2,
+            },
+            byTriggerMode: {
+              heartbeat: {
+                attemptedCount: 3,
+                executedCount: 1,
+                skippedCount: 2,
+              },
+              cron: {
+                attemptedCount: 2,
+                executedCount: 1,
+                skippedCount: 1,
+              },
+            },
+          },
+          lastInput: {
+            sourceCounts: {
+              recentTaskCount: 3,
+              recentDurableMemoryCount: 5,
+              recentExperienceUsageCount: 2,
+            },
+          },
+          recentRuns: [
+            {
+              id: "dream-1",
+              status: "completed",
+              requestedAt: "2026-04-19T12:00:00.000Z",
+              finishedAt: "2026-04-19T12:05:00.000Z",
+              summary: "收口共享审批和 dream writer 的链路差异。",
+            },
+          ],
+        },
+      },
       memoryRuntime: {
         sharedMemory: {
           enabled: true,
@@ -1205,6 +1293,21 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("signals: candidate, review");
     expect(lines.join("\n")).toContain("Latest turn: 请帮我整理这轮长期任务的经验候选");
     expect(lines.join("\n")).toContain("Nudge: 当前输入已具备最小 learning/review 条件，可继续进入 candidate / governance 审阅。");
+    expect(lines.join("\n")).toContain("Dream Runtime");
+    expect(lines.join("\n")).toContain("agent default");
+    expect(lines.join("\n")).toContain("model gpt-4.1-mini");
+    expect(lines.join("\n")).toContain("default conversation: agent:default:main");
+    expect(lines.join("\n")).toContain("latest summary: 收口共享审批和 dream writer 的链路差异。");
+    expect(lines.join("\n")).toContain("latest input: tasks=3, memories=5, usages=2");
+    expect(lines.join("\n")).toContain("auto trigger: heartbeat at 2026-04-19T12:00:00.000Z -> skip cooldown_active");
+    expect(lines.join("\n")).toContain("auto stats: attempted=5, executed=2, skipped=3");
+    expect(lines.join("\n")).toContain("auto skip stats: cooldown_active:1, insufficient_signal:2");
+    expect(lines.join("\n")).toContain("auto gate stats: digest_generation:1, change_budget:1, insufficient_signal:2");
+    expect(lines.join("\n")).toContain("auto mode stats: heartbeat[attempted:3, executed:1, skipped:2], cron[attempted:2, executed:1, skipped:1]");
+    expect(lines.join("\n")).toContain("auto note: cooldown active until 2026-04-19T18:05:00.000Z");
+    expect(lines.join("\n")).toContain("auto signal: digestΔ=2, sessionMsgΔ=6, sessionToolΔ=2, sessionRevΔ=2, taskΔ=3, memoryΔ=2, budget=19");
+    expect(lines.join("\n")).toContain("auto cursor: last[digest=0, msg=0, tool=0, task=0, memory=0] -> current[digest=2, msg=6, tool=2, task=3, memory=2]");
+    expect(lines.join("\n")).toContain("auto gates: cooldown=2026-04-19T18:05:00.000Z; backoff=-");
     expect(lines.join("\n")).toContain("Shared Governance");
     expect(lines.join("\n")).toContain("1 个 shared reader");
     expect(lines.join("\n")).toContain("1 pending approval(s)");

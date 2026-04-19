@@ -21,6 +21,7 @@ import { normalizePreferredProviderIds } from "../provider-model-catalog.js";
 import { ResidentConversationStore } from "../resident-conversation-store.js";
 import { buildLearningReviewNudgePrelude } from "../learning-review-nudge.js";
 import { runPostTaskLearningReview } from "../learning-review-runner.js";
+import { DreamAutomationRuntime } from "../dream-automation-runtime.js";
 import {
   createSubTaskAgentCapabilities,
   createSubTaskResumeController,
@@ -414,9 +415,11 @@ const channelRouterDefaultAgentId = readEnv("BELLDANDY_CHANNEL_ROUTER_DEFAULT_AG
 const heartbeatEnabled = readEnv("BELLDANDY_HEARTBEAT_ENABLED") === "true";
 const heartbeatIntervalRaw = readEnv("BELLDANDY_HEARTBEAT_INTERVAL") ?? "30m";
 const heartbeatActiveHoursRaw = readEnv("BELLDANDY_HEARTBEAT_ACTIVE_HOURS"); // e.g. "08:00-23:00"
+const dreamAutoHeartbeatEnabled = readEnv("BELLDANDY_DREAM_AUTO_HEARTBEAT_ENABLED") === "true";
 
 // Cron 定时任务
 const cronEnabled = readEnv("BELLDANDY_CRON_ENABLED") === "true";
+const dreamAutoCronEnabled = readEnv("BELLDANDY_DREAM_AUTO_CRON_ENABLED") === "true";
 
 // State & Memory
 const stateDir = runtimePaths.stateDir;
@@ -3035,6 +3038,19 @@ const serverOptions = buildGatewayServerOptions({
 });
 const server = await startGatewayServer(serverOptions);
 requestMemoryEvolutionExtraction = server.requestDurableExtractionFromDigest;
+const dreamAutomationRuntime = new DreamAutomationRuntime({
+  heartbeatEnabled: dreamAutoHeartbeatEnabled,
+  cronEnabled: dreamAutoCronEnabled,
+  agentIds: scopedMemoryManagers.records.map((item) => item.agentId),
+  resolveDreamRuntime: server.resolveDreamRuntime,
+  resolveDefaultConversationId: server.resolveDreamDefaultConversationId,
+  isBusy,
+  logger: {
+    debug: (message, data) => logger.debug("dream-automation", message, data),
+    warn: (message, data) => logger.warn("dream-automation", message, data),
+    error: (message, data) => logger.error("dream-automation", message, data),
+  },
+});
 
 goalManager.setEventSink((payload) => {
   server.broadcast({
@@ -3151,6 +3167,9 @@ heartbeatRunner = await startHeartbeatRuntime({
   backgroundContinuationLedger,
   backgroundRecoveryRuntime,
   isBusy,
+  onFinalizedRun: async (event) => {
+    await dreamAutomationRuntime.handleHeartbeatEvent(event);
+  },
   logger,
 });
 
@@ -3166,6 +3185,9 @@ cronSchedulerHandle = await startCronRuntime({
   backgroundRecoveryRuntime,
   goalManager,
   isBusy,
+  onFinalizedRun: async (event) => {
+    await dreamAutomationRuntime.handleCronEvent(event);
+  },
   logger,
 });
 

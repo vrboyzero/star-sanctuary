@@ -990,6 +990,14 @@ export class MemoryManager {
         return this.store.listTasks(limit, filter);
     }
 
+    getTaskChangeSeq(): number {
+        return this.store.getTaskChangeSeq();
+    }
+
+    getMemoryChangeSeq(): number {
+        return this.store.getMemoryChangeSeq();
+    }
+
     searchTasks(query: string, options: TaskSearchOptions = {}): TaskRecord[] {
         const limit = options.limit ?? 10;
         return this.store.searchTasksKeyword(query, limit, options.filter);

@@ -19,12 +19,75 @@ function formatTimestamp(value) {
     : "-";
 }
 
+function formatDateValue(value) {
+  if (typeof value === "string" && value.trim()) {
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : value;
+  }
+  return formatTimestamp(value);
+}
+
+function formatDreamStatusLabel(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "queued") return "queued";
+  if (normalized === "running") return "running";
+  if (normalized === "completed") return "completed";
+  if (normalized === "failed") return "failed";
+  return "idle";
+}
+
+function formatDreamAutoTriggerMode(value) {
+  return value === "cron" ? "cron" : "heartbeat";
+}
+
+function formatDreamCursorValue(cursor) {
+  if (!cursor || typeof cursor !== "object") {
+    return "";
+  }
+  return [
+    `digest=${formatNumber(Number(cursor.digestGeneration) || 0)}`,
+    `msg=${formatNumber(Number(cursor.sessionMemoryMessageCount) || 0)}`,
+    `tool=${formatNumber(Number(cursor.sessionMemoryToolCursor) || 0)}`,
+    `task=${formatNumber(Number(cursor.taskChangeSeq) || 0)}`,
+    `memory=${formatNumber(Number(cursor.memoryChangeSeq) || 0)}`,
+  ].join(", ");
+}
+
+function formatDreamSignalDelta(signal) {
+  if (!signal || typeof signal !== "object") {
+    return "";
+  }
+  const parts = [
+    `digestΔ=${formatNumber(Number(signal.digestGenerationDelta) || 0)}`,
+    `sessionMsgΔ=${formatNumber(Number(signal.sessionMemoryMessageDelta) || 0)}`,
+    `sessionToolΔ=${formatNumber(Number(signal.sessionMemoryToolDelta) || 0)}`,
+    `sessionRevΔ=${formatNumber(Number(signal.sessionMemoryRevisionDelta) || 0)}`,
+    `taskΔ=${formatNumber(Number(signal.taskChangeSeqDelta) || 0)}`,
+    `memoryΔ=${formatNumber(Number(signal.memoryChangeSeqDelta) || 0)}`,
+    `budget=${formatNumber(Number(signal.changeBudget) || 0)}`,
+  ];
+  return parts.join(", ");
+}
+
 function formatKeyCountSummary(value) {
   const entries = Object.entries(value || {}).filter(([, count]) => Number.isFinite(count) && Number(count) > 0);
   if (entries.length === 0) {
     return "-";
   }
   return entries.map(([key, count]) => `${key}:${count}`).join(", ");
+}
+
+function formatDreamTriggerModeStats(value) {
+  const entries = Object.entries(value || {}).filter(([, stats]) => stats && typeof stats === "object");
+  if (entries.length === 0) {
+    return "-";
+  }
+  return entries.map(([key, stats]) => {
+    const attempted = formatNumber(Number(stats.attemptedCount) || 0);
+    const executed = formatNumber(Number(stats.executedCount) || 0);
+    const skipped = formatNumber(Number(stats.skippedCount) || 0);
+    return `${key}[attempted:${attempted}, executed:${executed}, skipped:${skipped}]`;
+  }).join(", ");
 }
 
 function joinDroppedSections(reason) {
@@ -540,6 +603,213 @@ function buildLearningReviewInputCard(payload, t) {
     badges,
     notes,
     status: runtime?.available || summary?.available ? "pass" : "warn",
+  };
+}
+
+function buildDreamRuntimeCard(payload, t) {
+  const dreamRuntime = payload?.dreamRuntime;
+  if (!dreamRuntime) {
+    return undefined;
+  }
+  const requested = dreamRuntime?.requested ?? {};
+  const availability = dreamRuntime?.availability ?? {};
+  const state = dreamRuntime?.state ?? {};
+  const autoSummary = dreamRuntime?.autoSummary
+    ?? (state?.lastAutoTrigger
+      ? {
+          ...state.lastAutoTrigger,
+          cooldownUntil: state?.cooldownUntil,
+          failureBackoffUntil: state?.failureBackoffUntil,
+        }
+      : null);
+  const latestRun = dreamRuntime?.latestRun
+    ?? (Array.isArray(state?.recentRuns) ? state.recentRuns[0] : null);
+  const lastInput = state?.lastInput ?? latestRun?.input ?? null;
+  const sourceCounts = lastInput?.sourceCounts ?? {};
+  const badges = [
+    tr(
+      t,
+      "settings.doctorDreamRuntimeAgent",
+      { agentId: requested.agentId || "default" },
+      `agent ${requested.agentId || "default"}`,
+    ),
+    tr(
+      t,
+      "settings.doctorDreamRuntimeAvailability",
+      {
+        model: availability.model || "-",
+        reason: availability.reason || "-",
+      },
+      availability.available
+        ? `model ${availability.model || "-"}`
+        : `blocked: ${availability.reason || "unknown"}`,
+    ),
+    tr(
+      t,
+      "settings.doctorDreamRuntimeStatus",
+      { status: formatDreamStatusLabel(state?.status) },
+      `status ${formatDreamStatusLabel(state?.status)}`,
+    ),
+  ];
+
+  if (latestRun?.requestedAt) {
+    badges.push(tr(
+      t,
+      "settings.doctorDreamRuntimeLatest",
+      { at: formatDateValue(latestRun.finishedAt || latestRun.requestedAt) },
+      `latest ${formatDateValue(latestRun.finishedAt || latestRun.requestedAt)}`,
+    ));
+  }
+
+  const notes = [
+    dreamRuntime.headline || "Dream runtime summary is not available.",
+    tr(
+      t,
+      "settings.doctorDreamRuntimeConversation",
+      { conversationId: requested.defaultConversationId || "-" },
+      `default conversation: ${requested.defaultConversationId || "-"}`,
+    ),
+  ];
+
+  if (latestRun?.summary) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeSummary",
+      { summary: latestRun.summary },
+      `latest summary: ${latestRun.summary}`,
+    ));
+  }
+  if (latestRun?.error) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeError",
+      { error: latestRun.error },
+      `latest error: ${latestRun.error}`,
+    ));
+  }
+  if (lastInput) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeInput",
+      {
+        tasks: formatNumber(Number(sourceCounts.recentTaskCount) || 0),
+        memories: formatNumber(Number(sourceCounts.recentDurableMemoryCount) || 0),
+        usages: formatNumber(Number(sourceCounts.recentExperienceUsageCount) || 0),
+      },
+      `latest input: tasks=${formatNumber(Number(sourceCounts.recentTaskCount) || 0)}, memories=${formatNumber(Number(sourceCounts.recentDurableMemoryCount) || 0)}, usages=${formatNumber(Number(sourceCounts.recentExperienceUsageCount) || 0)}`,
+    ));
+  }
+  if (state?.lastObsidianSync?.stage) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeObsidian",
+      {
+        stage: state.lastObsidianSync.stage,
+        targetPath: state.lastObsidianSync.targetPath || "-",
+      },
+      `obsidian: ${state.lastObsidianSync.stage} (${state.lastObsidianSync.targetPath || "-"})`,
+    ));
+  }
+  if (autoSummary?.attemptedAt) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoTrigger",
+      {
+        triggerMode: formatDreamAutoTriggerMode(autoSummary.triggerMode),
+        attemptedAt: formatDateValue(autoSummary.attemptedAt),
+        outcome: autoSummary.executed
+          ? formatDreamStatusLabel(autoSummary.status)
+          : `skip ${autoSummary.skipCode || "unknown"}`,
+      },
+      `auto trigger: ${formatDreamAutoTriggerMode(autoSummary.triggerMode)} at ${formatDateValue(autoSummary.attemptedAt)} -> ${autoSummary.executed ? formatDreamStatusLabel(autoSummary.status) : `skip ${autoSummary.skipCode || "unknown"}`}`,
+    ));
+  }
+  if (state?.autoStats) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoStats",
+      {
+        attempted: formatNumber(Number(state.autoStats.attemptedCount) || 0),
+        executed: formatNumber(Number(state.autoStats.executedCount) || 0),
+        skipped: formatNumber(Number(state.autoStats.skippedCount) || 0),
+      },
+      `auto stats: attempted=${formatNumber(Number(state.autoStats.attemptedCount) || 0)}, executed=${formatNumber(Number(state.autoStats.executedCount) || 0)}, skipped=${formatNumber(Number(state.autoStats.skippedCount) || 0)}`,
+    ));
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoSkipStats",
+      {
+        summary: formatKeyCountSummary(state.autoStats.skipCodeCounts),
+      },
+      `auto skip stats: ${formatKeyCountSummary(state.autoStats.skipCodeCounts)}`,
+    ));
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoGateStats",
+      {
+        summary: formatKeyCountSummary(state.autoStats.signalGateCounts),
+      },
+      `auto gate stats: ${formatKeyCountSummary(state.autoStats.signalGateCounts)}`,
+    ));
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoModeStats",
+      {
+        summary: formatDreamTriggerModeStats(state.autoStats.byTriggerMode),
+      },
+      `auto mode stats: ${formatDreamTriggerModeStats(state.autoStats.byTriggerMode)}`,
+    ));
+  }
+  if (autoSummary?.skipReason) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoSkipReason",
+      {
+        reason: autoSummary.skipReason,
+      },
+      `auto note: ${autoSummary.skipReason}`,
+    ));
+  }
+  if (autoSummary?.signal) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoSignal",
+      {
+        summary: formatDreamSignalDelta(autoSummary.signal),
+      },
+      `auto signal: ${formatDreamSignalDelta(autoSummary.signal)}`,
+    ));
+    const lastCursor = formatDreamCursorValue(autoSummary.signal.lastDreamCursor);
+    const currentCursor = formatDreamCursorValue(autoSummary.signal.currentCursor);
+    if (lastCursor || currentCursor) {
+      notes.push(tr(
+        t,
+        "settings.doctorDreamRuntimeAutoCursor",
+        {
+          lastCursor: lastCursor || "-",
+          currentCursor: currentCursor || "-",
+        },
+        `auto cursor: last[${lastCursor || "-"}] -> current[${currentCursor || "-"}]`,
+      ));
+    }
+  }
+  if (autoSummary?.cooldownUntil || autoSummary?.failureBackoffUntil) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeAutoGates",
+      {
+        cooldownUntil: formatDateValue(autoSummary.cooldownUntil),
+        failureBackoffUntil: formatDateValue(autoSummary.failureBackoffUntil),
+      },
+      `auto gates: cooldown=${formatDateValue(autoSummary.cooldownUntil)}; backoff=${formatDateValue(autoSummary.failureBackoffUntil)}`,
+    ));
+  }
+
+  return {
+    title: tr(t, "settings.doctorDreamRuntimeTitle", {}, "Dream Runtime"),
+    badges,
+    notes,
+    status: !availability.available || latestRun?.status === "failed" ? "warn" : "pass",
   };
 }
 
@@ -2747,6 +3017,7 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildResidentAgentsCard(payload, t),
     buildMindProfileSnapshotCard(payload, t),
     buildLearningReviewInputCard(payload, t),
+    buildDreamRuntimeCard(payload, t),
     buildSkillFreshnessCard(payload, t),
     buildSharedGovernanceCard(payload, t),
     buildDelegationCard(payload, t),
@@ -2815,6 +3086,14 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${learningReviewInputCard.title}:`);
     lines.push(...learningReviewInputCard.badges.map((badge) => `- ${badge}`));
     lines.push(...learningReviewInputCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const dreamRuntimeCard = buildDreamRuntimeCard(payload, t);
+  if (dreamRuntimeCard) {
+    lines.push(``);
+    lines.push(`${dreamRuntimeCard.title}:`);
+    lines.push(...dreamRuntimeCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...dreamRuntimeCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const skillFreshnessCard = buildSkillFreshnessCard(payload, t);

@@ -924,6 +924,70 @@ WebChat 的 `🧠 记忆查看` 当前适合做这些事：
 - `Resume Context` 负责给你看“现在应该从哪继续”
 - `来源解释` 负责回答“这条结论是怎么来的”
 
+### 7.2.1 Dream（梦境）怎么用
+
+当前 `dream` 不是另一套独立记忆系统，而是建立在现有摘要、`Work Recap`、`Resume Context`、长期记忆增量之上的“后台整理层”。
+
+先记住 4 个结论：
+
+- dream 会按 `agent` 分开生成私有 dream 文档
+- 第一阶段 dream 不会自动改写 `MEMORY.md`
+- Obsidian 只负责镜像私有 dream 和 Commons 公共区，不会反向覆盖 SS 内部 shared memory
+- 自动 dream 也不是“每次 heartbeat / cron 都执行”，heartbeat / cron 只负责提供一次触发检查机会
+
+当前最常用的入口有 3 个：
+
+1. `🧠 记忆查看` 顶部的 dream runtime 区域
+2. `system.doctor` / `bdd doctor`
+3. 高级用法里的 `dream.run`
+
+普通用户建议这样使用：
+
+1. 先在 `🧠 记忆查看` 里切到目标 Agent
+2. 看 dream 状态条里的最近运行时间、自动触发摘要、cooldown / backoff 摘要
+3. 需要时手动点 `Run dream now`
+4. 如果开启了 Obsidian 镜像，再去 vault 中查看对应私有 dream note
+
+如果你准备开启自动 dream，最小配置建议是：
+
+```env
+BELLDANDY_ASSISTANT_MODE_ENABLED=true
+BELLDANDY_HEARTBEAT_ENABLED=true
+BELLDANDY_CRON_ENABLED=true
+BELLDANDY_DREAM_AUTO_HEARTBEAT_ENABLED=true
+BELLDANDY_DREAM_AUTO_CRON_ENABLED=true
+BELLDANDY_DREAM_OBSIDIAN_ENABLED=true
+BELLDANDY_DREAM_OBSIDIAN_VAULT_PATH=C:/Users/admin/Documents/Obsidian Vault
+BELLDANDY_DREAM_OBSIDIAN_ROOT_DIR=Star Sanctuary
+BELLDANDY_COMMONS_OBSIDIAN_ENABLED=true
+BELLDANDY_COMMONS_OBSIDIAN_VAULT_PATH=C:/Users/admin/Documents/Obsidian Vault
+BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR=Star Sanctuary
+```
+
+这些变量可以这样理解：
+
+- `BELLDANDY_DREAM_AUTO_HEARTBEAT_ENABLED`
+  允许 heartbeat 完成后向 automatic dream 发起一次“检查是否值得做梦”的触发
+- `BELLDANDY_DREAM_AUTO_CRON_ENABLED`
+  允许 cron 完成后发起同样的触发
+- `BELLDANDY_DREAM_OBSIDIAN_*`
+  控制每个 Agent 私有 dream 是否镜像到本地 Obsidian vault，以及镜像根目录
+- `BELLDANDY_COMMONS_OBSIDIAN_*`
+  控制已通过 SS 内部共享审批的 shared memory 是否导出到 Obsidian Commons；如果不单独填写路径，会回退复用 `BELLDANDY_DREAM_OBSIDIAN_*`
+
+自动 dream 的实际判定面在内部 gate，而不是单纯时间器：
+
+- 是否有新的 digest / task / memory 变化信号
+- 是否达到 change budget
+- 当前是否处于 cooldown / failure backoff
+- 当前是否已有运行中的 dream
+
+所以你看到自动 dream 没有立即执行时，优先去 `记忆查看` 或 `system.doctor` 看：
+
+- 最近一次自动触发是 `ran` 还是 `skipped`
+- `skipCode` 是 `signal_gate`、`cooldown`、`backoff` 还是 `already_running`
+- 当前 Obsidian 私有镜像 / Commons 导出是否成功
+
 ### 7.3 长期任务（Goals）
 
 当前 Goals 已经是主线能力之一。你可以把它理解为“长期事项的执行工作台”，而不是普通待办列表。

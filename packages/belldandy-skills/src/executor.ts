@@ -505,6 +505,7 @@ export class ToolExecutor {
       "1. Use `tool_search` to inspect the family summary first.",
       "2. Use `tool_search expandFamilies=[...]` to reveal member tools without loading their schemas yet.",
       "3. Use `tool_search select=[...]` to load only the exact tool schemas needed for the next turn.",
+      "Routing note: do not treat `dream` / 梦境 / memory-runtime work as `canvas` by default. Use the canvas family only for explicit board / node / edge / layout tasks.",
       "",
       "Heavy builtin families:",
     ];
