@@ -9,10 +9,13 @@ import {
   createTaskWorkSurface,
 } from "./task-work-surface.js";
 import type {
+  DreamConfidenceLevel,
   DreamConversationArtifactFileOptions,
   DreamDurableMemoryItem,
   DreamInputBuildOptions,
   DreamInputSnapshot,
+  DreamRuleSkeleton,
+  DreamRuleSkeletonSourceSummary,
   DreamSessionDigest,
   DreamSessionMemory,
   DreamWorkItem,
@@ -43,9 +46,11 @@ function toSafeConversationFileId(id: string): string {
 
 function normalizeText(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const normalized = value.trim();
+  const normalized = value.trim().replace(/\s+/g, " ");
   return normalized ? normalized : undefined;
 }
+
+type DreamInputSnapshotBase = Omit<DreamInputSnapshot, "ruleSkeleton">;
 
 function normalizeCursorValue(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
@@ -186,6 +191,161 @@ function dedupeUsages(items: ExperienceUsageSummary[]): ExperienceUsageSummary[]
     result.push(item);
   }
   return result;
+}
+
+function pushUniqueText(target: string[], seen: Set<string>, value: unknown, limit: number, maxLength = 220): void {
+  if (target.length >= limit) return;
+  const normalized = normalizeText(value);
+  if (!normalized) return;
+  const truncated = normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 3))}...` : normalized;
+  const key = truncated.toLocaleLowerCase();
+  if (seen.has(key)) return;
+  seen.add(key);
+  target.push(truncated);
+}
+
+function formatTaskLoop(task: TaskExperienceDetail): string | undefined {
+  const title = normalizeText(task.title) ?? normalizeText(task.objective) ?? normalizeText(task.summary);
+  if (!title) return undefined;
+  switch (task.status) {
+    case "running":
+      return `任务进行中：${title}`;
+    case "failed":
+      return `任务失败待处理：${title}`;
+    case "partial":
+      return `任务部分完成待收口：${title}`;
+    default:
+      return undefined;
+  }
+}
+
+function buildDreamRuleSkeletonSourceSummary(snapshot: DreamInputSnapshotBase): DreamRuleSkeletonSourceSummary {
+  const primarySources = [
+    snapshot.focusTask ? "focus_task" : undefined,
+    snapshot.sourceCounts.recentWorkCount > 0 ? "recent_work" : undefined,
+    snapshot.sourceCounts.sessionDigestAvailable ? "session_digest" : undefined,
+    snapshot.sourceCounts.sessionMemoryAvailable ? "session_memory" : undefined,
+    snapshot.sourceCounts.recentDurableMemoryCount > 0 ? "durable_memory" : undefined,
+    snapshot.sourceCounts.recentExperienceUsageCount > 0 ? "experience_usage" : undefined,
+    snapshot.sourceCounts.mindProfileAvailable ? "mind_profile" : undefined,
+    snapshot.sourceCounts.learningReviewAvailable ? "learning_review" : undefined,
+  ].filter((item): item is string => Boolean(item));
+  return {
+    primarySources,
+    sourceCount: primarySources.length,
+    taskCount: snapshot.sourceCounts.recentTaskCount,
+    workCount: snapshot.sourceCounts.recentWorkCount,
+    durableMemoryCount: snapshot.sourceCounts.recentDurableMemoryCount,
+    experienceUsageCount: snapshot.sourceCounts.recentExperienceUsageCount,
+    summaryLine: [
+      `sources=${primarySources.join("+") || "none"}`,
+      `tasks=${snapshot.sourceCounts.recentTaskCount}`,
+      `work=${snapshot.sourceCounts.recentWorkCount}`,
+      `durable=${snapshot.sourceCounts.recentDurableMemoryCount}`,
+      `usages=${snapshot.sourceCounts.recentExperienceUsageCount}`,
+    ].join("; "),
+  };
+}
+
+function resolveDreamConfidence(snapshot: DreamInputSnapshotBase): DreamConfidenceLevel {
+  let score = 0;
+  if (snapshot.sourceCounts.sessionDigestAvailable) score += 2;
+  if (snapshot.sourceCounts.sessionMemoryAvailable) score += 2;
+  if (snapshot.sourceCounts.recentWorkRecapCount > 0) score += 2;
+  if (snapshot.sourceCounts.recentDurableMemoryCount > 0) score += 1;
+  if (snapshot.sourceCounts.recentTaskCount > 0) score += 1;
+  if (snapshot.sourceCounts.recentExperienceUsageCount > 0) score += 1;
+  if (snapshot.sourceCounts.mindProfileAvailable) score += 1;
+  if (snapshot.sourceCounts.learningReviewAvailable) score += 1;
+  if (score >= 7) return "high";
+  if (score >= 4) return "medium";
+  return "low";
+}
+
+export function buildDreamRuleSkeleton(snapshot: DreamInputSnapshotBase): DreamRuleSkeleton {
+  const topicCandidates: string[] = [];
+  const confirmedFacts: string[] = [];
+  const openLoops: string[] = [];
+  const carryForwardCandidates: string[] = [];
+  const topicSeen = new Set<string>();
+  const factSeen = new Set<string>();
+  const loopSeen = new Set<string>();
+  const carrySeen = new Set<string>();
+
+  pushUniqueText(topicCandidates, topicSeen, snapshot.focusTask?.title, 3, 120);
+  pushUniqueText(topicCandidates, topicSeen, snapshot.focusTask?.objective, 3, 140);
+  for (const item of snapshot.recentWorkItems) {
+    if (topicCandidates.length >= 3) break;
+    pushUniqueText(topicCandidates, topicSeen, item.title, 3, 120);
+    pushUniqueText(topicCandidates, topicSeen, item.objective, 3, 140);
+  }
+  pushUniqueText(topicCandidates, topicSeen, snapshot.sessionMemory?.currentWork, 3, 140);
+  pushUniqueText(topicCandidates, topicSeen, snapshot.sessionMemory?.nextStep, 3, 140);
+
+  pushUniqueText(confirmedFacts, factSeen, snapshot.sessionDigest?.rollingSummary, 8, 220);
+  pushUniqueText(confirmedFacts, factSeen, snapshot.sessionDigest?.archivalSummary, 8, 220);
+  pushUniqueText(confirmedFacts, factSeen, snapshot.sessionMemory?.summary, 8, 220);
+  pushUniqueText(confirmedFacts, factSeen, snapshot.sessionMemory?.currentGoal, 8, 180);
+  pushUniqueText(confirmedFacts, factSeen, snapshot.sessionMemory?.currentWork, 8, 180);
+  for (const item of snapshot.recentWorkItems) {
+    if (confirmedFacts.length >= 8) break;
+    pushUniqueText(confirmedFacts, factSeen, item.workRecap?.headline, 8, 180);
+    for (const fact of item.workRecap?.confirmedFacts ?? []) {
+      if (confirmedFacts.length >= 8) break;
+      pushUniqueText(confirmedFacts, factSeen, fact, 8, 180);
+    }
+  }
+  for (const item of snapshot.recentDurableMemories) {
+    if (confirmedFacts.length >= 8) break;
+    pushUniqueText(confirmedFacts, factSeen, item.summary, 8, 180);
+    pushUniqueText(confirmedFacts, factSeen, item.snippet, 8, 180);
+  }
+
+  pushUniqueText(openLoops, loopSeen, snapshot.sessionMemory?.nextStep, 6, 180);
+  for (const pendingTask of snapshot.sessionMemory?.pendingTasks ?? []) {
+    if (openLoops.length >= 6) break;
+    pushUniqueText(openLoops, loopSeen, pendingTask, 6, 180);
+  }
+  for (const item of snapshot.recentWorkItems) {
+    if (openLoops.length >= 6) break;
+    pushUniqueText(openLoops, loopSeen, item.resumeContext?.nextStep, 6, 180);
+    pushUniqueText(openLoops, loopSeen, item.resumeContext?.currentStopPoint, 6, 180);
+  }
+  for (const task of snapshot.recentTasks) {
+    if (openLoops.length >= 6) break;
+    pushUniqueText(openLoops, loopSeen, formatTaskLoop(task), 6, 180);
+  }
+
+  pushUniqueText(carryForwardCandidates, carrySeen, snapshot.learningReviewInput?.summary?.headline, 6, 180);
+  for (const line of snapshot.learningReviewInput?.summaryLines ?? []) {
+    if (carryForwardCandidates.length >= 6) break;
+    pushUniqueText(carryForwardCandidates, carrySeen, line, 6, 180);
+  }
+  for (const nudge of snapshot.learningReviewInput?.nudges ?? []) {
+    if (carryForwardCandidates.length >= 6) break;
+    pushUniqueText(carryForwardCandidates, carrySeen, nudge, 6, 180);
+  }
+  for (const usage of snapshot.recentExperienceUsages) {
+    if (carryForwardCandidates.length >= 6) break;
+    pushUniqueText(carryForwardCandidates, carrySeen, usage.sourceCandidateTitle, 6, 160);
+    pushUniqueText(carryForwardCandidates, carrySeen, usage.assetKey, 6, 160);
+  }
+  for (const memory of snapshot.recentDurableMemories) {
+    if (carryForwardCandidates.length >= 6) break;
+    if (memory.visibility === "shared") {
+      pushUniqueText(carryForwardCandidates, carrySeen, memory.summary ?? memory.snippet, 6, 180);
+    }
+  }
+
+  const sourceSummary = buildDreamRuleSkeletonSourceSummary(snapshot);
+  return {
+    topicCandidates,
+    confirmedFacts,
+    openLoops,
+    carryForwardCandidates,
+    sourceSummary,
+    confidence: resolveDreamConfidence(snapshot),
+  };
 }
 
 async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
@@ -370,7 +530,7 @@ export async function buildDreamInputSnapshot(input: DreamInputBuildOptions): Pr
     memoryChangeSeq: normalizeCursorValue(memoryChangeSeq),
   };
 
-  return {
+  const snapshotBase: DreamInputSnapshotBase = {
     agentId,
     collectedAt: now.toISOString(),
     conversationId,
@@ -387,5 +547,9 @@ export async function buildDreamInputSnapshot(input: DreamInputBuildOptions): Pr
     recentDurableMemories,
     recentExperienceUsages,
     ...(learningReviewInput ? { learningReviewInput } : {}),
+  };
+  return {
+    ...snapshotBase,
+    ruleSkeleton: buildDreamRuleSkeleton(snapshotBase),
   };
 }

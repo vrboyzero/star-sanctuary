@@ -111,9 +111,16 @@ const {
   memoryDreamBarEl,
   memoryDreamStatusEl,
   memoryDreamMetaEl,
+  memoryDreamObsidianEl,
   memoryDreamSummaryEl,
   memoryDreamRefreshBtn,
   memoryDreamRunBtn,
+  memoryDreamHistoryToggleBtn,
+  memoryDreamHistoryEl,
+  memoryDreamHistoryStatusEl,
+  memoryDreamHistoryRefreshBtn,
+  memoryDreamHistoryListEl,
+  memoryDreamHistoryDetailEl,
   memoryTabTasksBtn,
   memoryTabMemoriesBtn,
   memoryTabSharedReviewBtn,
@@ -737,11 +744,22 @@ if (memoryViewerRefreshBtn) {
 if (memoryDreamRefreshBtn) {
   memoryDreamRefreshBtn.addEventListener("click", () => {
     void memoryViewerFeature?.loadDreamRuntimeStatus?.();
+    void memoryViewerFeature?.loadDreamCommonsStatus?.();
   });
 }
 if (memoryDreamRunBtn) {
   memoryDreamRunBtn.addEventListener("click", () => {
     void memoryViewerFeature?.runDream?.();
+  });
+}
+if (memoryDreamHistoryToggleBtn) {
+  memoryDreamHistoryToggleBtn.addEventListener("click", () => {
+    memoryViewerFeature?.toggleDreamHistory?.();
+  });
+}
+if (memoryDreamHistoryRefreshBtn) {
+  memoryDreamHistoryRefreshBtn.addEventListener("click", () => {
+    void memoryViewerFeature?.loadDreamHistory?.(false);
   });
 }
 if (memoryTabTasksBtn) {
@@ -1446,9 +1464,16 @@ memoryViewerFeature = createMemoryViewerFeature({
     memoryDreamBarEl,
     memoryDreamStatusEl,
     memoryDreamMetaEl,
+    memoryDreamObsidianEl,
     memoryDreamSummaryEl,
     memoryDreamRefreshBtn,
     memoryDreamRunBtn,
+    memoryDreamHistoryToggleBtn,
+    memoryDreamHistoryEl,
+    memoryDreamHistoryStatusEl,
+    memoryDreamHistoryRefreshBtn,
+    memoryDreamHistoryListEl,
+    memoryDreamHistoryDetailEl,
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
@@ -1663,7 +1688,9 @@ function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
   memoryViewerState.selectedSharedReviewIds = [];
   memoryViewerState.sharedReviewBatchBusy = false;
   memoryViewerState.dreamRuntime = null;
+  memoryViewerState.dreamCommons = null;
   memoryViewerState.dreamBusy = false;
+  memoryViewerFeature?.clearDreamHistoryState?.({ preserveOpen: false });
 }
 
 async function refreshMemoryViewerForAgentSwitch(agentId = getCurrentAgentSelection()) {

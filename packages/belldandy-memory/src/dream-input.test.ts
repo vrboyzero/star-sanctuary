@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   buildDreamConversationArtifactPath,
+  buildDreamRuleSkeleton,
   buildDreamInputSnapshot,
 } from "./dream-input.js";
 import type { DreamInputMemoryManagerDelegate } from "./dream-types.js";
@@ -259,5 +260,152 @@ describe("dream input aggregation", () => {
       taskChangeSeq: 5,
       memoryChangeSeq: 7,
     });
+    expect(snapshot.ruleSkeleton).toMatchObject({
+      topicCandidates: [
+        "实现 dream 输入聚合",
+        "把高信噪比输入统一收敛成 snapshot",
+        "补齐 dream-store 与 dream-input。",
+      ],
+      confidence: "high",
+      sourceSummary: {
+        primarySources: [
+          "focus_task",
+          "recent_work",
+          "session_digest",
+          "session_memory",
+          "durable_memory",
+          "experience_usage",
+          "mind_profile",
+          "learning_review",
+        ],
+        sourceCount: 8,
+        taskCount: 1,
+        workCount: 1,
+        durableMemoryCount: 2,
+        experienceUsageCount: 1,
+      },
+    });
+    expect(snapshot.ruleSkeleton?.confirmedFacts).toContain("最近一轮在收口 dream 输入层。");
+    expect(snapshot.ruleSkeleton?.confirmedFacts).toContain("统一了 recent task/work/memory 聚合。");
+    expect(snapshot.ruleSkeleton?.openLoops).toContain("接 runtime。");
+    expect(snapshot.ruleSkeleton?.carryForwardCandidates).toContain("不要让 dream 自动写 MEMORY.md。");
+  });
+
+  it("builds a stable rule skeleton from existing snapshot surfaces", () => {
+    const skeleton = buildDreamRuleSkeleton({
+      agentId: "coder",
+      collectedAt: "2026-04-20T08:00:00.000Z",
+      windowStartedAt: "2026-04-17T08:00:00.000Z",
+      windowHours: 72,
+      sourceCounts: {
+        recentTaskCount: 2,
+        recentWorkCount: 1,
+        recentWorkRecapCount: 1,
+        recentResumeContextCount: 1,
+        recentDurableMemoryCount: 1,
+        recentPrivateMemoryCount: 1,
+        recentSharedMemoryCount: 0,
+        recentExperienceUsageCount: 0,
+        sessionDigestAvailable: true,
+        sessionMemoryAvailable: true,
+        mindProfileAvailable: false,
+        learningReviewAvailable: false,
+      },
+      focusTask: {
+        id: "task-1",
+        conversationId: "agent:coder:main",
+        sessionKey: "agent:coder:main",
+        agentId: "coder",
+        source: "chat",
+        title: "收口 dream fallback",
+        status: "running",
+        startedAt: "2026-04-20T07:00:00.000Z",
+        createdAt: "2026-04-20T07:00:00.000Z",
+        updatedAt: "2026-04-20T07:30:00.000Z",
+        activities: [],
+        memoryLinks: [],
+        usedMethods: [],
+        usedSkills: [],
+      },
+      sessionDigest: {
+        rollingSummary: "正在收口 dream fallback 方案。",
+      },
+      sessionMemory: {
+        summary: "当前在处理 llm 缺失时的兜底输出。",
+        nextStep: "补 writer 可观察字段。",
+        pendingTasks: ["确认 fallback 不影响 Obsidian mirror。"],
+      },
+      recentTasks: [{
+        id: "task-1",
+        conversationId: "agent:coder:main",
+        sessionKey: "agent:coder:main",
+        agentId: "coder",
+        source: "chat",
+        title: "收口 dream fallback",
+        status: "running",
+        startedAt: "2026-04-20T07:00:00.000Z",
+        createdAt: "2026-04-20T07:00:00.000Z",
+        updatedAt: "2026-04-20T07:30:00.000Z",
+        activities: [],
+        memoryLinks: [],
+        usedMethods: [],
+        usedSkills: [],
+      }],
+      recentWorkItems: [{
+        taskId: "task-1",
+        conversationId: "agent:coder:main",
+        title: "收口 dream fallback",
+        status: "running",
+        source: "chat",
+        startedAt: "2026-04-20T07:00:00.000Z",
+        updatedAt: "2026-04-20T07:30:00.000Z",
+        toolNames: [],
+        artifactPaths: [],
+        recentActivityTitles: [],
+        workRecap: {
+          taskId: "task-1",
+          conversationId: "agent:coder:main",
+          sessionKey: "agent:coder:main",
+          agentId: "coder",
+          headline: "fallback 方案已经进入 writer 对接阶段。",
+          confirmedFacts: ["当前已明确 fallback 不能中断自动链。"],
+          derivedFromActivityIds: [],
+          updatedAt: "2026-04-20T07:25:00.000Z",
+        },
+        resumeContext: {
+          taskId: "task-1",
+          conversationId: "agent:coder:main",
+          sessionKey: "agent:coder:main",
+          agentId: "coder",
+          currentStopPoint: "writer 字段还没补齐。",
+          nextStep: "补 writer 可观察字段。",
+          derivedFromActivityIds: [],
+          updatedAt: "2026-04-20T07:30:00.000Z",
+        },
+      }],
+      recentDurableMemories: [{
+        id: "mem-1",
+        sourcePath: "memory/2026-04-20.md",
+        sourceType: "file",
+        memoryType: "daily",
+        visibility: "private",
+        snippet: "fallback 需要保持 dream/Obsidian/doctor 都不断链。",
+      }],
+      recentExperienceUsages: [],
+    });
+
+    expect(skeleton.topicCandidates).toEqual([
+      "收口 dream fallback",
+      "补 writer 可观察字段。",
+    ]);
+    expect(skeleton.confirmedFacts).toContain("正在收口 dream fallback 方案。");
+    expect(skeleton.confirmedFacts).toContain("当前已明确 fallback 不能中断自动链。");
+    expect(skeleton.openLoops).toContain("补 writer 可观察字段。");
+    expect(skeleton.openLoops).toContain("确认 fallback 不影响 Obsidian mirror。");
+    expect(skeleton.openLoops).toContain("writer 字段还没补齐。");
+    expect(skeleton.openLoops).toContain("任务进行中：收口 dream fallback");
+    expect(skeleton.carryForwardCandidates).toEqual([]);
+    expect(skeleton.confidence).toBe("high");
+    expect(skeleton.sourceSummary.summaryLine).toContain("sources=focus_task+recent_work+session_digest+session_memory+durable_memory");
   });
 });

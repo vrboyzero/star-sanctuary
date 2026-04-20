@@ -1528,6 +1528,7 @@ async function handleReq(
       "dream.status.get",
       "dream.history.list",
       "dream.get",
+      "dream.commons.status.get",
       "dream.commons.export_now",
       "experience.candidate.get",
       "experience.candidate.list",
@@ -1928,6 +1929,7 @@ async function handleReq(
     case "dream.status.get":
     case "dream.history.list":
     case "dream.get":
+    case "dream.commons.status.get":
     case "dream.commons.export_now":
       return handleDreamMethod(req, {
         resolveDreamRuntime: ctx.resolveDreamRuntime ?? (() => null),

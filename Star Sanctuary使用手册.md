@@ -1,6 +1,6 @@
 # Star Sanctuary 使用手册
 
-最后更新时间：2026-04-18  
+最后更新时间：2026-04-20  
 适用版本：当前仓库主干，workspace version `0.2.4`
 
 Star Sanctuary 是一个 **本地优先的个人 AI 助手与 Agent 工作台**。  
@@ -928,12 +928,13 @@ WebChat 的 `🧠 记忆查看` 当前适合做这些事：
 
 当前 `dream` 不是另一套独立记忆系统，而是建立在现有摘要、`Work Recap`、`Resume Context`、长期记忆增量之上的“后台整理层”。
 
-先记住 4 个结论：
+先记住 5 个结论：
 
 - dream 会按 `agent` 分开生成私有 dream 文档
 - 第一阶段 dream 不会自动改写 `MEMORY.md`
 - Obsidian 只负责镜像私有 dream 和 Commons 公共区，不会反向覆盖 SS 内部 shared memory
 - 自动 dream 也不是“每次 heartbeat / cron 都执行”，heartbeat / cron 只负责提供一次触发检查机会
+- 截至 2026-04-20，主实例链路已经完成过真实复验：`dream.run -> SS 内部 dream markdown -> Obsidian 私有镜像` 可以跑通
 
 当前最常用的入口有 3 个：
 
@@ -947,6 +948,17 @@ WebChat 的 `🧠 记忆查看` 当前适合做这些事：
 2. 看 dream 状态条里的最近运行时间、自动触发摘要、cooldown / backoff 摘要
 3. 需要时手动点 `Run dream now`
 4. 如果开启了 Obsidian 镜像，再去 vault 中查看对应私有 dream note
+
+如果你想确认“这次 dream 到底有没有真的写出来”，普通用户最实用的检查顺序是：
+
+1. 先看 `🧠 记忆查看` 顶部状态条
+2. 再看 `system.doctor` / `bdd doctor` 里的最近 dream / Obsidian 状态
+3. 如果你知道状态目录位置，可额外检查：
+   - `dream-runtime.json`
+   - `dreams/`
+   - `DREAM.md`
+4. 如果开启了 Obsidian 镜像，再检查 vault 里的：
+   - `Star Sanctuary/Agents/<agentId>/Dreams/...`
 
 如果你准备开启自动 dream，最小配置建议是：
 
@@ -987,6 +999,12 @@ BELLDANDY_COMMONS_OBSIDIAN_ROOT_DIR=Star Sanctuary
 - 最近一次自动触发是 `ran` 还是 `skipped`
 - `skipCode` 是 `signal_gate`、`cooldown`、`backoff` 还是 `already_running`
 - 当前 Obsidian 私有镜像 / Commons 导出是否成功
+
+再补一条很容易踩坑的运行经验：
+
+- 如果启动日志、`bdd doctor` 或 `system.doctor` 明确提示 `legacy project-root env files`
+- 那么当前 dream / Obsidian / Commons 实际生效的配置来源是**项目根目录** `.env/.env.local`
+- 这时状态目录下同名 dream 配置不会再同时合并，直到你迁移到 `state-dir` 配置
 
 ### 7.3 长期任务（Goals）
 

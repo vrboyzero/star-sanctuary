@@ -274,11 +274,24 @@
               <div class="memory-dream-copy">
                 <span id="memoryDreamStatus" class="memory-context-text">Dream 状态：--</span>
                 <span id="memoryDreamMeta" class="memory-context-text">默认会话：--</span>
+                <span id="memoryDreamObsidian" class="memory-context-text">Obsidian：--</span>
                 <span id="memoryDreamSummary" class="memory-context-text">最近摘要：--</span>
               </div>
               <div class="memory-dream-actions">
                 <button id="memoryDreamRefresh" class="button" type="button">刷新 Dream</button>
                 <button id="memoryDreamRun" class="button" type="button">运行 Dream</button>
+                <button id="memoryDreamHistoryToggle" class="button" type="button" aria-expanded="false">Dream 历史</button>
+              </div>
+            </div>
+
+            <div id="memoryDreamHistory" class="memory-dream-history hidden" hidden>
+              <div class="memory-dream-history-toolbar">
+                <span id="memoryDreamHistoryStatus" class="memory-context-text">Dream 历史：--</span>
+                <button id="memoryDreamHistoryRefresh" class="button" type="button">刷新历史</button>
+              </div>
+              <div class="memory-dream-history-grid">
+                <div id="memoryDreamHistoryList" class="memory-viewer-list"></div>
+                <div id="memoryDreamHistoryDetail" class="memory-viewer-detail"></div>
               </div>
             </div>
 

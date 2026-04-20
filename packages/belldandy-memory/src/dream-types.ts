@@ -25,6 +25,9 @@ export type DreamStatus = "idle" | "queued" | "running" | "completed" | "failed"
 export type DreamTriggerMode = "manual" | "heartbeat" | "cron" | "recovery";
 export type DreamObsidianSyncStage = "idle" | "pending" | "synced" | "failed" | "skipped";
 export type DreamShareCandidateVisibility = "private" | "shared_candidate" | "unclear";
+export type DreamGenerationMode = "llm" | "fallback";
+export type DreamFallbackReason = "missing_model_config" | "llm_call_failed";
+export type DreamConfidenceLevel = "high" | "medium" | "low";
 
 export interface DreamMindProfileSnapshot {
   summary?: {
@@ -162,6 +165,25 @@ export interface DreamInputSourceCounts {
   learningReviewAvailable: boolean;
 }
 
+export interface DreamRuleSkeletonSourceSummary {
+  primarySources: string[];
+  sourceCount: number;
+  taskCount: number;
+  workCount: number;
+  durableMemoryCount: number;
+  experienceUsageCount: number;
+  summaryLine: string;
+}
+
+export interface DreamRuleSkeleton {
+  topicCandidates: string[];
+  confirmedFacts: string[];
+  openLoops: string[];
+  carryForwardCandidates: string[];
+  sourceSummary: DreamRuleSkeletonSourceSummary;
+  confidence: DreamConfidenceLevel;
+}
+
 export interface DreamInputSnapshotMeta {
   collectedAt: string;
   windowHours: number;
@@ -183,6 +205,7 @@ export interface DreamInputSnapshot extends DreamInputSnapshotMeta {
   recentDurableMemories: DreamDurableMemoryItem[];
   recentExperienceUsages: ExperienceUsageSummary[];
   learningReviewInput?: DreamLearningReviewInput;
+  ruleSkeleton?: DreamRuleSkeleton;
 }
 
 export interface DreamObsidianSyncStatus {
@@ -215,6 +238,8 @@ export interface DreamRecord {
   error?: string;
   dreamPath?: string;
   indexPath?: string;
+  generationMode?: DreamGenerationMode;
+  fallbackReason?: DreamFallbackReason;
   input?: DreamInputSnapshotMeta;
   obsidianSync?: DreamObsidianSyncStatus;
 }
@@ -230,6 +255,8 @@ export interface DreamModelOutput {
   headline?: string;
   summary?: string;
   narrative?: string;
+  generationMode?: DreamGenerationMode;
+  fallbackReason?: DreamFallbackReason;
   stableInsights: string[];
   corrections: string[];
   openQuestions: string[];

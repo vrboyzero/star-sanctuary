@@ -68,6 +68,7 @@ export {
 } from "./dream-store.js";
 export {
   buildDreamConversationArtifactPath,
+  buildDreamRuleSkeleton,
   buildDreamInputSnapshot,
   readDreamSessionDigestFile,
   readDreamSessionMemoryFile,

@@ -13,6 +13,18 @@ export interface IndexerOptions {
     ignorePatterns?: string[];
     watch?: boolean;
     watchDebounceMs?: number;
+    verboseWatchEvents?: boolean;
+}
+
+export function resolveVerboseWatchEvents(option?: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+    if (typeof option === "boolean") {
+        return option;
+    }
+    const raw = env.BELLDANDY_MEMORY_INDEXER_VERBOSE_WATCH;
+    if (typeof raw !== "string") {
+        return false;
+    }
+    return ["1", "true", "yes", "on"].includes(raw.trim().toLowerCase());
 }
 
 export class MemoryIndexer {
@@ -31,6 +43,7 @@ export class MemoryIndexer {
             ignorePatterns: options.ignorePatterns ?? ["node_modules", ".git", "dist", "build", ".star_sanctuary", ".belldandy"],
             watch: options.watch ?? false,
             watchDebounceMs: options.watchDebounceMs ?? 1000,
+            verboseWatchEvents: resolveVerboseWatchEvents(options.verboseWatchEvents),
         };
     }
 
@@ -162,7 +175,9 @@ export class MemoryIndexer {
         const handleFile = async (filePath: string) => {
             const ext = path.extname(filePath).toLowerCase();
             if (this.options.extensions.includes(ext)) {
-                console.log(`[FileChanged] ${filePath}`);
+                if (this.options.verboseWatchEvents) {
+                    console.log(`[FileChanged] ${filePath}`);
+                }
                 await this.indexFile(filePath);
             }
         };
@@ -170,7 +185,9 @@ export class MemoryIndexer {
         const handleRemove = async (filePath: string) => {
             const ext = path.extname(filePath).toLowerCase();
             if (this.options.extensions.includes(ext)) {
-                console.log(`[FileRemoved] ${filePath}`);
+                if (this.options.verboseWatchEvents) {
+                    console.log(`[FileRemoved] ${filePath}`);
+                }
                 this.store.deleteBySource(filePath);
             }
         };

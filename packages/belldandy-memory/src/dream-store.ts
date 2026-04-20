@@ -9,6 +9,8 @@ import type {
   DreamAutoTriggerModeStats,
   DreamAutoTriggerState,
   DreamChangeCursor,
+  DreamFallbackReason,
+  DreamGenerationMode,
   DreamInputSourceCounts,
   DreamInputSnapshot,
   DreamRecord,
@@ -37,6 +39,19 @@ export interface BuildDreamFilePathOptions {
 function normalizePositiveInteger(value: unknown, fallback: number, min = 1): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
   return Math.max(min, Math.floor(value));
+}
+
+function normalizePositiveCountRecord(
+  value: Record<string, unknown> | null,
+): Record<string, number> | undefined {
+  if (!value) return undefined;
+  const entries = Object.entries(value)
+    .map(([key, count]) => {
+      const normalizedCount = normalizePositiveInteger(count, 0, 0);
+      return normalizedCount > 0 ? [key, normalizedCount] as const : null;
+    })
+    .filter((entry): entry is readonly [string, number] => Boolean(entry));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function normalizeDreamRuntimeSettings(value?: Partial<DreamRuntimeSettings>): DreamRuntimeSettings {
@@ -71,6 +86,14 @@ function normalizeDreamStatus(value: unknown): DreamStatus {
     default:
       return "idle";
   }
+}
+
+function normalizeGenerationMode(value: unknown): DreamGenerationMode | undefined {
+  return value === "llm" || value === "fallback" ? value : undefined;
+}
+
+function normalizeFallbackReason(value: unknown): DreamFallbackReason | undefined {
+  return value === "missing_model_config" || value === "llm_call_failed" ? value : undefined;
 }
 
 function normalizeCursor(value: unknown): DreamChangeCursor | undefined {
@@ -131,20 +154,8 @@ function normalizeAutoTriggerModeStats(value: unknown): DreamAutoTriggerModeStat
   const signalGateCounts = source.signalGateCounts && typeof source.signalGateCounts === "object" && !Array.isArray(source.signalGateCounts)
     ? source.signalGateCounts as Record<string, unknown>
     : null;
-  const normalizedSkipCodeCounts = skipCodeCounts
-    ? Object.fromEntries(
-        Object.entries(skipCodeCounts)
-          .map(([key, count]) => [key, normalizePositiveInteger(count, 0, 0)])
-          .filter(([, count]) => count > 0),
-      ) as NonNullable<DreamAutoTriggerModeStats["skipCodeCounts"]>
-    : undefined;
-  const normalizedSignalGateCounts = signalGateCounts
-    ? Object.fromEntries(
-        Object.entries(signalGateCounts)
-          .map(([key, count]) => [key, normalizePositiveInteger(count, 0, 0)])
-          .filter(([, count]) => count > 0),
-      ) as NonNullable<DreamAutoTriggerModeStats["signalGateCounts"]>
-    : undefined;
+  const normalizedSkipCodeCounts = normalizePositiveCountRecord(skipCodeCounts) as NonNullable<DreamAutoTriggerModeStats["skipCodeCounts"]> | undefined;
+  const normalizedSignalGateCounts = normalizePositiveCountRecord(signalGateCounts) as NonNullable<DreamAutoTriggerModeStats["signalGateCounts"]> | undefined;
   return {
     attemptedCount: normalizePositiveInteger(source.attemptedCount, 0, 0),
     executedCount: normalizePositiveInteger(source.executedCount, 0, 0),
@@ -163,20 +174,8 @@ function normalizeAutoStats(value: unknown): DreamAutoStats | undefined {
   const signalGateCounts = source.signalGateCounts && typeof source.signalGateCounts === "object" && !Array.isArray(source.signalGateCounts)
     ? source.signalGateCounts as Record<string, unknown>
     : null;
-  const normalizedSkipCodeCounts = skipCodeCounts
-    ? Object.fromEntries(
-        Object.entries(skipCodeCounts)
-          .map(([key, count]) => [key, normalizePositiveInteger(count, 0, 0)])
-          .filter(([, count]) => count > 0),
-      ) as NonNullable<DreamAutoStats["skipCodeCounts"]>
-    : undefined;
-  const normalizedSignalGateCounts = signalGateCounts
-    ? Object.fromEntries(
-        Object.entries(signalGateCounts)
-          .map(([key, count]) => [key, normalizePositiveInteger(count, 0, 0)])
-          .filter(([, count]) => count > 0),
-      ) as NonNullable<DreamAutoStats["signalGateCounts"]>
-    : undefined;
+  const normalizedSkipCodeCounts = normalizePositiveCountRecord(skipCodeCounts) as NonNullable<DreamAutoStats["skipCodeCounts"]> | undefined;
+  const normalizedSignalGateCounts = normalizePositiveCountRecord(signalGateCounts) as NonNullable<DreamAutoStats["signalGateCounts"]> | undefined;
   const byTriggerModeValue = source.byTriggerMode && typeof source.byTriggerMode === "object" && !Array.isArray(source.byTriggerMode)
     ? source.byTriggerMode as Record<string, unknown>
     : null;
@@ -248,6 +247,8 @@ function cloneAutoTrigger(state: DreamRuntimeState["lastAutoTrigger"]): DreamRun
 function cloneRun(run: DreamRecord): DreamRecord {
   return {
     ...run,
+    ...(run.generationMode ? { generationMode: run.generationMode } : {}),
+    ...(run.fallbackReason ? { fallbackReason: run.fallbackReason } : {}),
     ...(run.input ? { input: cloneInputMeta(run.input) } : {}),
     ...(run.obsidianSync ? { obsidianSync: { ...run.obsidianSync } } : {}),
   };
@@ -291,6 +292,8 @@ function normalizeRun(input: unknown): DreamRecord | null {
     ...(normalizeText(record.error) ? { error: normalizeText(record.error) } : {}),
     ...(normalizeText(record.dreamPath, 320) ? { dreamPath: normalizeText(record.dreamPath, 320) } : {}),
     ...(normalizeText(record.indexPath, 320) ? { indexPath: normalizeText(record.indexPath, 320) } : {}),
+    ...(normalizeGenerationMode(record.generationMode) ? { generationMode: normalizeGenerationMode(record.generationMode) } : {}),
+    ...(normalizeFallbackReason(record.fallbackReason) ? { fallbackReason: normalizeFallbackReason(record.fallbackReason) } : {}),
     ...(record.input && typeof record.input === "object" && !Array.isArray(record.input)
       ? {
           input: {

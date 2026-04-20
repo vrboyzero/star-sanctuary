@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DreamRuntime } from "./dream-runtime.js";
+import * as dreamWriterModule from "./dream-writer.js";
 import type { DreamInputSnapshot } from "./dream-types.js";
 
 describe("dream runtime", () => {
@@ -166,6 +167,7 @@ describe("dream runtime", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})));
     tempDirs.length = 0;
   });
@@ -241,10 +243,13 @@ describe("dream runtime", () => {
     });
 
     expect(result.record.status).toBe("completed");
+    expect(result.record.generationMode).toBe("llm");
+    expect(result.record.fallbackReason).toBeUndefined();
     expect(result.record.dreamPath).toBeTruthy();
     expect(result.record.indexPath).toBeTruthy();
     expect(result.record.obsidianSync?.stage).toBe("synced");
     expect(result.markdown).toContain("## Next Focus");
+    expect(result.markdown).toContain("- Generation Mode: llm");
     expect(result.state.status).toBe("idle");
     expect(result.state.lastObsidianSync?.stage).toBe("synced");
 
@@ -261,25 +266,105 @@ describe("dream runtime", () => {
     expect(obsidianIndexContent).toContain("dream-20260419120000");
   });
 
-  it("records a failed run when model config is missing", async () => {
+  it("writes a fallback dream when model config is missing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-"));
     tempDirs.push(stateDir);
 
     const runtime = new DreamRuntime({
       stateDir,
       agentId: "coder",
-      buildInputSnapshot: async () => {
-        throw new Error("should not be called");
-      },
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
     });
 
     const result = await runtime.run({
       conversationId: "agent:coder:main",
     });
 
-    expect(result.record.status).toBe("failed");
-    expect(result.record.error).toContain("missing model/baseUrl/apiKey");
-    expect(result.state.recentRuns[0]?.status).toBe("failed");
+    expect(result.record.status).toBe("completed");
+    expect(result.record.generationMode).toBe("fallback");
+    expect(result.record.fallbackReason).toBe("missing_model_config");
+    expect(result.record.error).toBeUndefined();
+    expect(result.markdown).toContain("Dream Fallback - coder - 2026-04-19");
+    expect(result.markdown).toContain("## 本次主题候选");
+    expect(result.markdown).toContain("- Generation Mode: fallback");
+    expect(result.markdown).toContain("- Fallback Reason: missing_model_config");
+    expect(result.state.recentRuns[0]?.generationMode).toBe("fallback");
+  });
+
+  it("mirrors fallback dream to Obsidian when model config is missing", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-fallback-obsidian-"));
+    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-fallback-vault-"));
+    tempDirs.push(stateDir, vaultDir);
+
+    const runtime = new DreamRuntime({
+      stateDir,
+      agentId: "coder",
+      obsidianMirror: {
+        enabled: true,
+        vaultPath: vaultDir,
+      },
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
+    });
+
+    const result = await runtime.run({
+      conversationId: "agent:coder:main",
+      triggerMode: "manual",
+      reason: "fallback-obsidian-smoke",
+    });
+
+    expect(result.record.status).toBe("completed");
+    expect(result.record.generationMode).toBe("fallback");
+    expect(result.record.fallbackReason).toBe("missing_model_config");
+    expect(result.record.obsidianSync?.stage).toBe("synced");
+
+    const obsidianDreamPath = result.record.obsidianSync?.targetPath;
+    const obsidianIndexPath = path.join(vaultDir, "Star Sanctuary", "Agents", "coder", "DREAM.md");
+    expect(obsidianDreamPath).toBeTruthy();
+
+    const obsidianDreamContent = await fs.readFile(obsidianDreamPath!, "utf-8");
+    const obsidianIndexContent = await fs.readFile(obsidianIndexPath, "utf-8");
+
+    expect(obsidianDreamContent).toContain("Dream Fallback - coder - 2026-04-19");
+    expect(obsidianDreamContent).toContain("## 本次主题候选");
+    expect(obsidianDreamContent).toContain("- Generation Mode: fallback");
+    expect(obsidianDreamContent).toContain("- Fallback Reason: missing_model_config");
+    expect(obsidianIndexContent).toContain("dream-20260419120000");
+  });
+
+  it("falls back when llm call fails instead of recording a failed run", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-fallback-"));
+    tempDirs.push(stateDir);
+
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      async text() {
+        return "upstream unavailable";
+      },
+    })));
+
+    const runtime = new DreamRuntime({
+      stateDir,
+      agentId: "coder",
+      model: "gpt-test",
+      baseUrl: "https://example.com/v1",
+      apiKey: "sk-test",
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
+    });
+
+    const result = await runtime.run({
+      conversationId: "agent:coder:main",
+      triggerMode: "manual",
+    });
+
+    expect(result.record.status).toBe("completed");
+    expect(result.record.generationMode).toBe("fallback");
+    expect(result.record.fallbackReason).toBe("llm_call_failed");
+    expect(result.markdown).toContain("- Fallback Reason: llm_call_failed");
+    expect(result.markdown).toContain("## 已确认事实");
   });
 
   it("runs automatic dream when heartbeat signal gate passes and then enters cooldown", async () => {
@@ -444,17 +529,61 @@ describe("dream runtime", () => {
     });
   });
 
-  it("applies failure backoff for automatic dream retries", async () => {
+  it("runs automatic fallback dream when model config is missing", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-auto-fallback-"));
+    tempDirs.push(stateDir);
+
+    const runtime = new DreamRuntime({
+      stateDir,
+      agentId: "coder",
+      now: () => new Date("2026-04-19T12:00:00.000Z"),
+      buildInputSnapshot: async () => createSnapshot(),
+    });
+
+    const result = await runtime.maybeAutoRun({
+      conversationId: "agent:coder:main",
+      triggerMode: "heartbeat",
+      reason: "auto fallback trigger",
+    });
+
+    expect(result.executed).toBe(true);
+    expect(result.record?.status).toBe("completed");
+    expect(result.record?.generationMode).toBe("fallback");
+    expect(result.record?.fallbackReason).toBe("missing_model_config");
+    expect(result.state.lastAutoTrigger).toMatchObject({
+      triggerMode: "heartbeat",
+      executed: true,
+      runId: result.record?.id,
+      status: "completed",
+    });
+    expect(result.state.cooldownUntil).toBeTruthy();
+    expect(result.state.failureBackoffUntil).toBeUndefined();
+  });
+
+  it("applies failure backoff for automatic dream retries when artifact writing fails", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-runtime-backoff-"));
     tempDirs.push(stateDir);
 
     vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: false,
-      status: 503,
-      async text() {
-        return "upstream unavailable";
+      ok: true,
+      async json() {
+        return {
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                headline: "writer fail path",
+                stableInsights: ["writer failure should still mark run failed"],
+                corrections: [],
+                openQuestions: [],
+                shareCandidates: [],
+                nextFocus: ["keep backoff active"],
+              }),
+            },
+          }],
+        };
       },
     })));
+    vi.spyOn(dreamWriterModule, "writeDreamArtifacts").mockRejectedValue(new Error("disk full"));
 
     const runtime = new DreamRuntime({
       stateDir,
@@ -479,6 +608,7 @@ describe("dream runtime", () => {
 
     expect(first.executed).toBe(true);
     expect(first.record?.status).toBe("failed");
+    expect(first.record?.generationMode).toBeUndefined();
     expect(first.state.failureBackoffUntil).toBeTruthy();
     expect(first.state.lastAutoTrigger).toMatchObject({
       triggerMode: "cron",

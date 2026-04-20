@@ -443,8 +443,30 @@ describe("doctor observability formatting", () => {
               requestedAt: "2026-04-19T12:00:00.000Z",
               finishedAt: "2026-04-19T12:05:00.000Z",
               summary: "收口共享审批和 dream writer 的链路差异。",
+              generationMode: "fallback",
+              fallbackReason: "llm_call_failed",
             },
           ],
+        },
+      },
+      dreamCommons: {
+        availability: {
+          enabled: true,
+          available: true,
+          vaultPath: "E:/vaults/main",
+          sharedStateDir: "E:/project/star-sanctuary/.state/team-memory",
+        },
+        headline: "Commons export last completed at 2026-04-19T13:10:00.000Z.",
+        state: {
+          status: "completed",
+          lastAttemptAt: "2026-04-19T13:09:00.000Z",
+          lastSuccessAt: "2026-04-19T13:10:00.000Z",
+          approvedCount: 3,
+          revokedCount: 1,
+          noteCount: 4,
+          agentPageCount: 2,
+          targetPath: "E:/vaults/main/Star Sanctuary/Commons",
+          indexPath: "E:/vaults/main/Star Sanctuary/Commons/INDEX.md",
         },
       },
       memoryRuntime: {
@@ -1298,6 +1320,8 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("model gpt-4.1-mini");
     expect(lines.join("\n")).toContain("default conversation: agent:default:main");
     expect(lines.join("\n")).toContain("latest summary: 收口共享审批和 dream writer 的链路差异。");
+    expect(lines.join("\n")).toContain("generation fallback");
+    expect(lines.join("\n")).toContain("latest generation: fallback (llm_call_failed)");
     expect(lines.join("\n")).toContain("latest input: tasks=3, memories=5, usages=2");
     expect(lines.join("\n")).toContain("auto trigger: heartbeat at 2026-04-19T12:00:00.000Z -> skip cooldown_active");
     expect(lines.join("\n")).toContain("auto stats: attempted=5, executed=2, skipped=3");
@@ -1308,6 +1332,15 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("auto signal: digestΔ=2, sessionMsgΔ=6, sessionToolΔ=2, sessionRevΔ=2, taskΔ=3, memoryΔ=2, budget=19");
     expect(lines.join("\n")).toContain("auto cursor: last[digest=0, msg=0, tool=0, task=0, memory=0] -> current[digest=2, msg=6, tool=2, task=3, memory=2]");
     expect(lines.join("\n")).toContain("auto gates: cooldown=2026-04-19T18:05:00.000Z; backoff=-");
+    expect(lines.join("\n")).toContain("Dream Commons");
+    expect(lines.join("\n")).toContain("vault E:/vaults/main");
+    expect(lines.join("\n")).toContain("status completed");
+    expect(lines.join("\n")).toContain("Commons export last completed at 2026-04-19T13:10:00.000Z.");
+    expect(lines.join("\n")).toContain("shared state dir: E:/project/star-sanctuary/.state/team-memory");
+    expect(lines.join("\n")).toContain("counts: approved=3, revoked=1, notes=4, agent-pages=2");
+    expect(lines.join("\n")).toContain("commons path: E:/vaults/main/Star Sanctuary/Commons");
+    expect(lines.join("\n")).toContain("index path: E:/vaults/main/Star Sanctuary/Commons/INDEX.md");
+    expect(lines.join("\n")).toContain("timeline: attempt=2026-04-19T13:09:00.000Z, success=2026-04-19T13:10:00.000Z, failure=-");
     expect(lines.join("\n")).toContain("Shared Governance");
     expect(lines.join("\n")).toContain("1 个 shared reader");
     expect(lines.join("\n")).toContain("1 pending approval(s)");

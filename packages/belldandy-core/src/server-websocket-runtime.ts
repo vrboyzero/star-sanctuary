@@ -137,6 +137,7 @@ const DEFAULT_METHODS = [
   "dream.status.get",
   "dream.history.list",
   "dream.get",
+  "dream.commons.status.get",
   "dream.commons.export_now",
   "experience.candidate.get",
   "experience.candidate.list",

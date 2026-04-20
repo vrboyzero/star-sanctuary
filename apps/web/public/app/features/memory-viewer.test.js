@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildDreamRuntimeBarView,
   buildEmailThreadConversationAdvicePrompt,
   buildEmailThreadConversationOpenNote,
   buildSharedReviewBatchActionState,
@@ -9,8 +10,11 @@ import {
   createDefaultMemoryViewerAgentViewState,
   extractCandidateContextTargets,
   extractTaskContextTargets,
+  formatDreamFallbackReasonLabel,
+  formatDreamGenerationModeLabel,
   normalizeMemoryViewerAgentViewState,
 } from "./memory-viewer.js";
+import { buildDreamHistoryPanelView } from "./memory-viewer-dream-history.js";
 
 describe("memory viewer shared review filters", () => {
   it("builds an explicit advice request prompt for opened email thread conversations", () => {
@@ -285,5 +289,130 @@ describe("memory viewer shared review filters", () => {
       },
       goalIdFilter: "goal_demo",
     });
+  });
+
+  it("formats dream generation mode and fallback reason labels", () => {
+    expect(formatDreamGenerationModeLabel("llm")).toBe("LLM");
+    expect(formatDreamGenerationModeLabel("fallback")).toBe("Fallback");
+    expect(formatDreamFallbackReasonLabel("missing_model_config")).toBe("缺少模型配置");
+    expect(formatDreamFallbackReasonLabel("llm_call_failed")).toBe("LLM 调用失败");
+  });
+
+  it("builds memory viewer dream bar text with fallback observability and enabled run button", () => {
+    const view = buildDreamRuntimeBarView({
+      connected: true,
+      dreamBusy: false,
+      dreamRuntime: {
+        requested: {
+          agentId: "coder",
+          defaultConversationId: "agent:coder:main",
+        },
+        availability: {
+          enabled: true,
+          available: false,
+          reason: "missing model/baseUrl/apiKey",
+        },
+        state: {
+          status: "idle",
+          lastObsidianSync: {
+            stage: "synced",
+            targetPath: "E:/vaults/main/Star Sanctuary/Agents/coder/Dreams/2026/04/dream-1.md",
+            updatedAt: "2026-04-20T12:06:00.000Z",
+          },
+          autoStats: {
+            attemptedCount: 2,
+            executedCount: 1,
+            skippedCount: 1,
+          },
+          recentRuns: [
+            {
+              id: "dream-1",
+              status: "completed",
+              finishedAt: "2026-04-20T12:00:00.000Z",
+              summary: "fallback dream generated from rule skeleton",
+              generationMode: "fallback",
+              fallbackReason: "missing_model_config",
+            },
+          ],
+        },
+      },
+      dreamCommons: {
+        availability: {
+          enabled: true,
+          available: true,
+          vaultPath: "E:/vaults/main",
+        },
+        state: {
+          status: "completed",
+          lastSuccessAt: "2026-04-20T12:05:00.000Z",
+          approvedCount: 3,
+          revokedCount: 1,
+          noteCount: 4,
+        },
+      },
+    }, {
+      formatDateTime: (value) => value || "-",
+      formatCount: (value) => String(value ?? 0),
+    });
+
+    expect(view.statusLine).toContain("fallback 就绪");
+    expect(view.metaLine).toContain("agent:coder:main");
+    expect(view.obsidianLine).toContain("Obsidian：synced");
+    expect(view.obsidianLine).toContain("E:/vaults/main/Star Sanctuary/Agents/coder/Dreams/2026/04/dream-1.md");
+    expect(view.summaryLine).toContain("生成：Fallback (缺少模型配置)");
+    expect(view.summaryLine).toContain("Commons：completed · approved 3 / revoked 1 / notes 4");
+    expect(view.runDisabled).toBe(false);
+    expect(view.runTitle).toBe("");
+  });
+
+  it("builds dream history panel view with selected dream detail", () => {
+    const view = buildDreamHistoryPanelView({
+      connected: true,
+      open: true,
+      items: [
+        {
+          id: "dream-2",
+          status: "completed",
+          triggerMode: "manual",
+          requestedAt: "2026-04-20T13:00:00.000Z",
+          finishedAt: "2026-04-20T13:01:00.000Z",
+          summary: "fallback dream generated from rule skeleton",
+          generationMode: "fallback",
+          fallbackReason: "missing_model_config",
+          dreamPath: "state/dreams/dream-2.md",
+          obsidianSync: {
+            stage: "synced",
+            targetPath: "vault/Star Sanctuary/Agents/coder/Dreams/2026/04/dream-2.md",
+          },
+        },
+      ],
+      selectedId: "dream-2",
+      selectedItem: {
+        id: "dream-2",
+        status: "completed",
+        triggerMode: "manual",
+        requestedAt: "2026-04-20T13:00:00.000Z",
+        finishedAt: "2026-04-20T13:01:00.000Z",
+        summary: "fallback dream generated from rule skeleton",
+        generationMode: "fallback",
+        fallbackReason: "missing_model_config",
+        dreamPath: "state/dreams/dream-2.md",
+        obsidianSync: {
+          stage: "synced",
+          targetPath: "vault/Star Sanctuary/Agents/coder/Dreams/2026/04/dream-2.md",
+        },
+      },
+      selectedContent: "# Dream Fallback\n\n## 本次主题候选\n- runtime",
+    }, {
+      formatDateTime: (value) => value || "-",
+    });
+
+    expect(view.open).toBe(true);
+    expect(view.historyStatusLine).toContain("1 条");
+    expect(view.entries[0]?.isActive).toBe(true);
+    expect(view.entries[0]?.meta.join(" · ")).toContain("Fallback");
+    expect(view.detail.title).toContain("fallback dream generated");
+    expect(view.detail.cards.some((card) => card.label === "生成" && String(card.value).includes("Fallback"))).toBe(true);
+    expect(view.detail.content).toContain("# Dream Fallback");
   });
 });

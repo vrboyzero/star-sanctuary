@@ -31,7 +31,7 @@ describe("obsidian commons runtime", () => {
     tempDirs.length = 0;
   });
 
-  it("exports approved and revoked shared memory into Obsidian Commons", async () => {
+  it("exports approved and revoked shared memory into Obsidian Commons without coupling to dream generation mode", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-commons-runtime-"));
     const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-commons-vault-"));
     tempDirs.push(stateDir, vaultDir);
@@ -81,7 +81,12 @@ describe("obsidian commons runtime", () => {
       sourceType: "manual",
       memoryType: "other",
       category: "decision",
-      content: "approved shared memory for commons",
+      content: [
+        "approved shared memory for commons",
+        "",
+        "Generation Mode: fallback",
+        "Fallback Reason: missing_model_config",
+      ].join("\n"),
       visibility: "private",
       metadata: {
         topic: "dream-runtime",
@@ -93,7 +98,11 @@ describe("obsidian commons runtime", () => {
       sourceType: "manual",
       memoryType: "other",
       category: "fact",
-      content: "revoked shared memory for commons",
+      content: [
+        "revoked shared memory for commons",
+        "",
+        "Generation Mode: llm",
+      ].join("\n"),
       visibility: "private",
       metadata: {
         topic: "shared-memory",
@@ -171,6 +180,9 @@ describe("obsidian commons runtime", () => {
 
     expect(indexContent).toContain("Approved Shared Memory Count: 1");
     expect(approvedContent).toContain("approved shared memory for commons");
+    expect(approvedContent).toContain("Generation Mode: fallback");
+    expect(approvedContent).toContain("Fallback Reason: missing_model_config");
     expect(revokedContent).toContain("shared_status: \"revoked\"");
+    expect(revokedContent).toContain("Generation Mode: llm");
   });
 });

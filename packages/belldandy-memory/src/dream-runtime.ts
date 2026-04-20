@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { syncDreamToObsidian } from "./dream-obsidian-sync.js";
+import { buildDreamRuleSkeleton } from "./dream-input.js";
 import { buildOpenAIChatCompletionsUrl } from "./openai-url.js";
 import { buildDreamPromptBundle, parseDreamModelOutput, summarizeDreamModelOutput } from "./dream-prompt.js";
 import { DreamStore, toDreamInputMeta } from "./dream-store.js";
@@ -10,11 +11,14 @@ import type {
   DreamAutoSignalSummary,
   DreamAutoTriggerState,
   DreamChangeCursor,
+  DreamFallbackReason,
+  DreamGenerationMode,
   DreamModelOutput,
   DreamObsidianMirrorOptions,
   DreamRecord,
   DreamRunOptions,
   DreamRunResult,
+  DreamRuntimeLogger,
   DreamRuntimeOptions,
   DreamRuntimeState,
 } from "./dream-types.js";
@@ -30,6 +34,13 @@ function truncateText(value: unknown, maxLength = 240): string | undefined {
   const normalized = normalizeText(value);
   if (!normalized) return undefined;
   return normalized.length > maxLength ? `${normalized.slice(0, Math.max(0, maxLength - 3))}...` : normalized;
+}
+
+function formatDateOnlyUtc(value: Date): string {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function buildDreamRunId(now: Date): string {
@@ -233,6 +244,110 @@ function buildAutoTriggerState(input: DreamAutoTriggerState): DreamAutoTriggerSt
   };
 }
 
+function buildFallbackNarrative(input: {
+  agentId: string;
+  reason: DreamFallbackReason;
+  confidence: string;
+  sourceSummaryLine: string;
+}): string {
+  const reasonText = input.reason === "missing_model_config"
+    ? "当前缺少可用的 dream 模型配置。"
+    : "本次 dream 的 LLM 调用失败，已回退到规则骨架输出。";
+  return [
+    `${reasonText} 本次产物直接基于规则骨架生成。`,
+    `confidence=${input.confidence}; ${input.sourceSummaryLine}.`,
+    `agent=${input.agentId}.`,
+  ].join(" ");
+}
+
+function buildFallbackDreamOutput(input: {
+  agentId: string;
+  snapshot: Awaited<ReturnType<DreamRuntimeOptions["buildInputSnapshot"]>>;
+  fallbackReason: DreamFallbackReason;
+  occurredAt: Date;
+}): DreamModelOutput {
+  const ruleSkeleton = input.snapshot.ruleSkeleton ?? buildDreamRuleSkeleton(input.snapshot);
+  const dateLabel = formatDateOnlyUtc(input.occurredAt);
+  const topicSummary = ruleSkeleton.topicCandidates.slice(0, 3).join(" / ");
+  return {
+    headline: `Dream Fallback - ${input.agentId} - ${dateLabel}`,
+    summary: truncateText(
+      topicSummary
+        ? `fallback dream generated from rule skeleton: ${topicSummary}`
+        : `fallback dream generated from rule skeleton for ${input.agentId}`,
+      260,
+    ),
+    narrative: truncateText(buildFallbackNarrative({
+      agentId: input.agentId,
+      reason: input.fallbackReason,
+      confidence: ruleSkeleton.confidence,
+      sourceSummaryLine: ruleSkeleton.sourceSummary.summaryLine,
+    }), 800),
+    generationMode: "fallback",
+    fallbackReason: input.fallbackReason,
+    stableInsights: ruleSkeleton.confirmedFacts.slice(0, 8),
+    corrections: [],
+    openQuestions: ruleSkeleton.openLoops.slice(0, 6),
+    shareCandidates: [],
+    nextFocus: (ruleSkeleton.carryForwardCandidates.length > 0
+      ? ruleSkeleton.carryForwardCandidates
+      : ruleSkeleton.openLoops).slice(0, 6),
+  };
+}
+
+async function resolveDreamDraft(input: {
+  availability: ReturnType<DreamRuntime["getAvailability"]>;
+  agentId: string;
+  snapshot: Awaited<ReturnType<DreamRuntimeOptions["buildInputSnapshot"]>>;
+  requestedAtDate: Date;
+  logger?: DreamRuntimeLogger;
+  callModel: (system: string, user: string) => Promise<string>;
+}): Promise<{
+  draft: DreamModelOutput;
+  generationMode: DreamGenerationMode;
+  fallbackReason?: DreamFallbackReason;
+}> {
+  if (!input.availability.available) {
+    return {
+      draft: buildFallbackDreamOutput({
+        agentId: input.agentId,
+        snapshot: input.snapshot,
+        fallbackReason: "missing_model_config",
+        occurredAt: input.requestedAtDate,
+      }),
+      generationMode: "fallback",
+      fallbackReason: "missing_model_config",
+    };
+  }
+
+  try {
+    const prompt = buildDreamPromptBundle(input.snapshot);
+    const rawOutput = await input.callModel(prompt.system, prompt.user);
+    return {
+      draft: {
+        ...parseDreamModelOutput(rawOutput),
+        generationMode: "llm",
+      },
+      generationMode: "llm",
+    };
+  } catch (error) {
+    input.logger?.warn?.("dream llm generation failed, using fallback", {
+      agentId: input.agentId,
+      error: serializeError(error),
+    });
+    return {
+      draft: buildFallbackDreamOutput({
+        agentId: input.agentId,
+        snapshot: input.snapshot,
+        fallbackReason: "llm_call_failed",
+        occurredAt: input.requestedAtDate,
+      }),
+      generationMode: "fallback",
+      fallbackReason: "llm_call_failed",
+    };
+  }
+}
+
 export class DreamRuntime {
   private readonly store: DreamStore;
   private readonly agentId: string;
@@ -373,7 +488,7 @@ export class DreamRuntime {
     const now = this.nowProvider();
     const nowMs = now.getTime();
     const attemptedAt = now.toISOString();
-    if (!availability.available) {
+    if (!availability.enabled) {
       const nextState = await this.store.recordAutoTrigger(buildAutoTriggerState({
         triggerMode,
         attemptedAt,
@@ -520,7 +635,7 @@ export class DreamRuntime {
 
     await this.store.setStatus("running");
 
-    if (!availability.available) {
+    if (!availability.enabled) {
       const failedRecord: DreamRecord = {
         id: runId,
         agentId: this.agentId,
@@ -556,9 +671,15 @@ export class DreamRuntime {
       });
       await this.store.updateLastInput(snapshot);
 
-      const prompt = buildDreamPromptBundle(snapshot);
-      const rawOutput = await this.callModel(prompt.system, prompt.user);
-      lastDraft = parseDreamModelOutput(rawOutput);
+      const draftResult = await resolveDreamDraft({
+        availability,
+        agentId: this.agentId,
+        snapshot,
+        requestedAtDate,
+        logger: this.logger,
+        callModel: (system, user) => this.callModel(system, user),
+      });
+      lastDraft = draftResult.draft;
 
       const startedAt = requestedAtDate.toISOString();
       const finishedAt = this.nowProvider().toISOString();
@@ -575,6 +696,8 @@ export class DreamRuntime {
         conversationId: snapshot.conversationId ?? conversationId,
         reason: input.reason,
         summary,
+        generationMode: draftResult.generationMode,
+        ...(draftResult.fallbackReason ? { fallbackReason: draftResult.fallbackReason } : {}),
         input: toDreamInputMeta(snapshot),
         obsidianSync: {
           enabled: false,
@@ -627,6 +750,8 @@ export class DreamRuntime {
         agentId: this.agentId,
         runId,
         conversationId: completedRecord.conversationId,
+        generationMode: completedRecord.generationMode,
+        fallbackReason: completedRecord.fallbackReason,
       });
       return {
         record: completedRecord,

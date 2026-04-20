@@ -344,10 +344,14 @@ async function buildDreamRuntimeDoctorReport(
         ...(state.failureBackoffUntil ? { failureBackoffUntil: state.failureBackoffUntil } : {}),
       }
     : null;
-  const headline = !availability.available
+  const headline = !availability.enabled
     ? `Dream runtime is blocked: ${availability.reason ?? "unknown reason"}.`
     : latestRun?.status === "failed"
       ? `Latest dream failed at ${latestRun.finishedAt ?? latestRun.requestedAt ?? "-"}.`
+      : latestRun?.generationMode === "fallback"
+        ? `Latest dream completed in fallback mode at ${latestRun.finishedAt ?? latestRun.requestedAt ?? "-"}.`
+        : !availability.available
+          ? `Dream runtime has no active LLM route; fallback mode remains available.`
       : latestRun
         ? `Latest dream ${latestRun.status} at ${latestRun.finishedAt ?? latestRun.requestedAt ?? "-"}.`
         : "Dream runtime is ready and has no runs yet.";

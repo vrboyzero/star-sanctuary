@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { MemoryIndexer } from "./indexer.js";
+import { MemoryIndexer, resolveVerboseWatchEvents } from "./indexer.js";
 import { MemoryStore } from "./store.js";
 
 describe("MemoryIndexer", () => {
@@ -67,5 +67,11 @@ describe("MemoryIndexer", () => {
     expect(reindexedChunks.length).toBeGreaterThan(0);
     expect(reindexedChunks.every((item) => !item.content?.includes("old-marker"))).toBe(true);
     expect(reindexedChunks.some((item) => item.content?.includes("new-marker"))).toBe(true);
+  });
+
+  it("keeps watch event logging disabled by default", () => {
+    expect(resolveVerboseWatchEvents(undefined, {} as NodeJS.ProcessEnv)).toBe(false);
+    expect(resolveVerboseWatchEvents(undefined, { BELLDANDY_MEMORY_INDEXER_VERBOSE_WATCH: "true" } as NodeJS.ProcessEnv)).toBe(true);
+    expect(resolveVerboseWatchEvents(false, { BELLDANDY_MEMORY_INDEXER_VERBOSE_WATCH: "true" } as NodeJS.ProcessEnv)).toBe(false);
   });
 });

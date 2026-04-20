@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { buildDreamRuleSkeleton } from "./dream-input.js";
 import { buildDreamIndexPath } from "./dream-store.js";
 import type {
   DreamInputSnapshot,
@@ -46,6 +47,10 @@ function renderShareCandidates(values: DreamModelOutput["shareCandidates"]): str
   });
 }
 
+function buildWriterRuleSkeleton(snapshot: DreamInputSnapshot) {
+  return snapshot.ruleSkeleton ?? buildDreamRuleSkeleton(snapshot);
+}
+
 function renderDreamMarkdown(input: {
   agentId: string;
   record: DreamRecord;
@@ -55,9 +60,8 @@ function renderDreamMarkdown(input: {
   dreamPath: string;
 }): string {
   const relativeDreamPath = toRelativePath(input.stateDir, input.dreamPath);
-  const lines = [
-    "# Agent Dream",
-    "",
+  const ruleSkeleton = buildWriterRuleSkeleton(input.snapshot);
+  const metadataLines = [
     `- Agent: ${input.agentId}`,
     `- Run ID: ${input.record.id}`,
     `- Trigger: ${input.record.triggerMode}`,
@@ -66,6 +70,43 @@ function renderDreamMarkdown(input: {
     `- Conversation: ${input.record.conversationId ?? input.snapshot.conversationId ?? "-"}`,
     `- Path: ${relativeDreamPath}`,
     `- Input Window: ${input.snapshot.windowHours}h`,
+    `- Generation Mode: ${input.record.generationMode ?? input.draft.generationMode ?? "llm"}`,
+    `- Fallback Reason: ${input.record.fallbackReason ?? input.draft.fallbackReason ?? "-"}`,
+    `- Confidence: ${ruleSkeleton.confidence}`,
+    `- Source Summary: ${ruleSkeleton.sourceSummary.summaryLine}`,
+  ];
+  if ((input.record.generationMode ?? input.draft.generationMode) === "fallback") {
+    return [
+      "# Agent Dream",
+      "",
+      ...metadataLines,
+      "",
+      "## 标题",
+      "",
+      input.draft.headline || "暂无",
+      "",
+      "## 本次主题候选",
+      "",
+      ...renderStringList(ruleSkeleton.topicCandidates),
+      "",
+      "## 已确认事实",
+      "",
+      ...renderStringList(ruleSkeleton.confirmedFacts),
+      "",
+      "## 未闭环事项",
+      "",
+      ...renderStringList(ruleSkeleton.openLoops),
+      "",
+      "## 建议继续观察",
+      "",
+      ...renderStringList(ruleSkeleton.carryForwardCandidates.length > 0 ? ruleSkeleton.carryForwardCandidates : input.draft.nextFocus),
+      "",
+    ].join("\n");
+  }
+  const lines = [
+    "# Agent Dream",
+    "",
+    ...metadataLines,
     "",
     "## Headline",
     "",
@@ -102,6 +143,7 @@ function renderDreamMarkdown(input: {
     "## Input Snapshot",
     "",
     `- Source Counts: ${JSON.stringify(input.snapshot.sourceCounts)}`,
+    `- Rule Skeleton Source Summary: ${ruleSkeleton.sourceSummary.summaryLine}`,
     input.snapshot.focusTask?.id ? `- Focus Task: ${input.snapshot.focusTask.id}` : "- Focus Task: -",
     input.snapshot.sessionDigest?.rollingSummary
       ? `- Session Digest: ${truncateText(input.snapshot.sessionDigest.rollingSummary, 240)}`

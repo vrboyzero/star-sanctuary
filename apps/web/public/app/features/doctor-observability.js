@@ -40,6 +40,16 @@ function formatDreamAutoTriggerMode(value) {
   return value === "cron" ? "cron" : "heartbeat";
 }
 
+function formatDreamGenerationMode(value) {
+  return value === "fallback" ? "fallback" : value === "llm" ? "llm" : "-";
+}
+
+function formatDreamFallbackReason(value) {
+  if (value === "missing_model_config") return "missing_model_config";
+  if (value === "llm_call_failed") return "llm_call_failed";
+  return "-";
+}
+
 function formatDreamCursorValue(cursor) {
   if (!cursor || typeof cursor !== "object") {
     return "";
@@ -653,11 +663,19 @@ function buildDreamRuntimeCard(payload, t) {
   ];
 
   if (latestRun?.requestedAt) {
-    badges.push(tr(
+  badges.push(tr(
       t,
       "settings.doctorDreamRuntimeLatest",
       { at: formatDateValue(latestRun.finishedAt || latestRun.requestedAt) },
       `latest ${formatDateValue(latestRun.finishedAt || latestRun.requestedAt)}`,
+    ));
+  }
+  if (latestRun?.generationMode) {
+    badges.push(tr(
+      t,
+      "settings.doctorDreamRuntimeGenerationMode",
+      { mode: formatDreamGenerationMode(latestRun.generationMode) },
+      `generation ${formatDreamGenerationMode(latestRun.generationMode)}`,
     ));
   }
 
@@ -679,12 +697,33 @@ function buildDreamRuntimeCard(payload, t) {
       `latest summary: ${latestRun.summary}`,
     ));
   }
+  if (latestRun?.generationMode) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeGenerationModeNote",
+      {
+        mode: formatDreamGenerationMode(latestRun.generationMode),
+        fallbackReason: formatDreamFallbackReason(latestRun.fallbackReason),
+      },
+      `latest generation: ${formatDreamGenerationMode(latestRun.generationMode)}${latestRun.fallbackReason ? ` (${formatDreamFallbackReason(latestRun.fallbackReason)})` : ""}`,
+    ));
+  }
   if (latestRun?.error) {
     notes.push(tr(
       t,
       "settings.doctorDreamRuntimeError",
       { error: latestRun.error },
       `latest error: ${latestRun.error}`,
+    ));
+  }
+  if (!availability.available && availability.enabled) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamRuntimeFallbackReady",
+      {
+        reason: availability.reason || "-",
+      },
+      `LLM unavailable but fallback remains ready: ${availability.reason || "-"}`,
     ));
   }
   if (lastInput) {
@@ -809,7 +848,114 @@ function buildDreamRuntimeCard(payload, t) {
     title: tr(t, "settings.doctorDreamRuntimeTitle", {}, "Dream Runtime"),
     badges,
     notes,
-    status: !availability.available || latestRun?.status === "failed" ? "warn" : "pass",
+    status: !availability.enabled || !availability.available || latestRun?.status === "failed" || latestRun?.generationMode === "fallback" ? "warn" : "pass",
+  };
+}
+
+function buildDreamCommonsCard(payload, t) {
+  const dreamCommons = payload?.dreamCommons;
+  if (!dreamCommons) {
+    return undefined;
+  }
+
+  const availability = dreamCommons?.availability ?? {};
+  const state = dreamCommons?.state ?? {};
+  const badges = [
+    tr(
+      t,
+      "settings.doctorDreamCommonsAvailability",
+      {
+        vaultPath: availability.vaultPath || "-",
+        reason: availability.reason || "-",
+      },
+      availability.available
+        ? `vault ${availability.vaultPath || "-"}`
+        : `blocked: ${availability.reason || "unknown"}`,
+    ),
+    tr(
+      t,
+      "settings.doctorDreamCommonsStatus",
+      { status: state?.status || "idle" },
+      `status ${state?.status || "idle"}`,
+    ),
+  ];
+
+  if (state?.lastSuccessAt || state?.lastAttemptAt) {
+    badges.push(tr(
+      t,
+      "settings.doctorDreamCommonsLatest",
+      { at: formatDateValue(state?.lastSuccessAt || state?.lastAttemptAt) },
+      `latest ${formatDateValue(state?.lastSuccessAt || state?.lastAttemptAt)}`,
+    ));
+  }
+
+  const notes = [
+    dreamCommons.headline || "Commons export summary is not available.",
+  ];
+
+  if (availability.sharedStateDir) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamCommonsSharedStateDir",
+      { sharedStateDir: availability.sharedStateDir },
+      `shared state dir: ${availability.sharedStateDir}`,
+    ));
+  }
+  if (typeof state?.approvedCount === "number" || typeof state?.revokedCount === "number" || typeof state?.noteCount === "number") {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamCommonsCounts",
+      {
+        approved: formatNumber(Number(state?.approvedCount) || 0),
+        revoked: formatNumber(Number(state?.revokedCount) || 0),
+        notes: formatNumber(Number(state?.noteCount) || 0),
+        agentPages: formatNumber(Number(state?.agentPageCount) || 0),
+      },
+      `counts: approved=${formatNumber(Number(state?.approvedCount) || 0)}, revoked=${formatNumber(Number(state?.revokedCount) || 0)}, notes=${formatNumber(Number(state?.noteCount) || 0)}, agent-pages=${formatNumber(Number(state?.agentPageCount) || 0)}`,
+    ));
+  }
+  if (state?.targetPath) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamCommonsTargetPath",
+      { targetPath: state.targetPath },
+      `commons path: ${state.targetPath}`,
+    ));
+  }
+  if (state?.indexPath) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamCommonsIndexPath",
+      { indexPath: state.indexPath },
+      `index path: ${state.indexPath}`,
+    ));
+  }
+  if (state?.lastSuccessAt || state?.lastAttemptAt || state?.lastFailureAt) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamCommonsTimeline",
+      {
+        lastAttemptAt: formatDateValue(state?.lastAttemptAt),
+        lastSuccessAt: formatDateValue(state?.lastSuccessAt),
+        lastFailureAt: formatDateValue(state?.lastFailureAt),
+      },
+      `timeline: attempt=${formatDateValue(state?.lastAttemptAt)}, success=${formatDateValue(state?.lastSuccessAt)}, failure=${formatDateValue(state?.lastFailureAt)}`,
+    ));
+  }
+  if (state?.error) {
+    notes.push(tr(
+      t,
+      "settings.doctorDreamCommonsError",
+      { error: state.error },
+      `latest error: ${state.error}`,
+    ));
+  }
+
+  return {
+    title: tr(t, "settings.doctorDreamCommonsTitle", {}, "Dream Commons"),
+    badges,
+    notes,
+    status: !availability.enabled || !availability.available || state?.status === "failed" ? "warn" : "pass",
   };
 }
 
@@ -3018,6 +3164,7 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildMindProfileSnapshotCard(payload, t),
     buildLearningReviewInputCard(payload, t),
     buildDreamRuntimeCard(payload, t),
+    buildDreamCommonsCard(payload, t),
     buildSkillFreshnessCard(payload, t),
     buildSharedGovernanceCard(payload, t),
     buildDelegationCard(payload, t),
@@ -3094,6 +3241,14 @@ export function buildDoctorChatSummary(payload, t) {
     lines.push(`${dreamRuntimeCard.title}:`);
     lines.push(...dreamRuntimeCard.badges.map((badge) => `- ${badge}`));
     lines.push(...dreamRuntimeCard.notes.map((note) => `- ${formatNote(note)}`));
+  }
+
+  const dreamCommonsCard = buildDreamCommonsCard(payload, t);
+  if (dreamCommonsCard) {
+    lines.push(``);
+    lines.push(`${dreamCommonsCard.title}:`);
+    lines.push(...dreamCommonsCard.badges.map((badge) => `- ${badge}`));
+    lines.push(...dreamCommonsCard.notes.map((note) => `- ${formatNote(note)}`));
   }
 
   const skillFreshnessCard = buildSkillFreshnessCard(payload, t);

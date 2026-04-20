@@ -42,6 +42,37 @@ function notFound(id: string, message: string): GatewayResFrame {
   return { type: "res", id, ok: false, error: { code: "not_found", message } };
 }
 
+async function buildCommonsStatusPayload(
+  runtime: ObsidianCommonsRuntime | null,
+): Promise<Record<string, unknown>> {
+  if (!runtime) {
+    return {
+      availability: {
+        enabled: false,
+        available: false,
+        reason: "commons export runtime unavailable",
+      },
+      state: null,
+      headline: "Commons export runtime is unavailable.",
+    };
+  }
+
+  const availability = runtime.getAvailability();
+  const state = await runtime.getState();
+  const headline = !availability.available
+    ? `Commons export is blocked: ${availability.reason ?? "unknown reason"}.`
+    : state.status === "failed"
+      ? `Commons export failed at ${state.lastFailureAt ?? state.updatedAt}.`
+      : state.lastSuccessAt
+        ? `Commons export last completed at ${state.lastSuccessAt}.`
+        : "Commons export is ready and has no runs yet.";
+  return {
+    availability,
+    state,
+    headline,
+  };
+}
+
 export async function handleDreamMethod(
   req: GatewayReqFrame,
   ctx: DreamMethodContext,
@@ -111,6 +142,11 @@ export async function handleDreamMethod(
         item: item.record,
         content: item.content,
       });
+    }
+
+    case "dream.commons.status.get": {
+      const commonsRuntime = ctx.resolveCommonsExportRuntime?.() ?? null;
+      return ok(req.id, await buildCommonsStatusPayload(commonsRuntime));
     }
 
     case "dream.commons.export_now": {

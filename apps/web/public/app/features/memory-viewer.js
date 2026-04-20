@@ -14,6 +14,7 @@ import {
   matchesEmailThreadOrganizerQuery,
   normalizeOutboundAuditFocus,
 } from "./email-thread-organizer-view.js";
+import { buildDreamHistoryPanelView } from "./memory-viewer-dream-history.js";
 import { renderSkillFreshnessDetail } from "./skill-freshness-view.js";
 
 function normalizeSharedReviewFocus(value) {
@@ -28,7 +29,7 @@ function normalizeEmailThreadOpenNoteText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function normalizeDreamRuntimeView(payload, fallbackAgentId = "default") {
+export function normalizeDreamRuntimeView(payload, fallbackAgentId = "default") {
   const agentId = typeof payload?.agentId === "string" && payload.agentId.trim()
     ? payload.agentId.trim()
     : fallbackAgentId;
@@ -61,6 +62,88 @@ function normalizeDreamRuntimeView(payload, fallbackAgentId = "default") {
   };
 }
 
+function normalizeDreamCommonsView(payload) {
+  return {
+    availability: payload?.availability && typeof payload.availability === "object"
+      ? payload.availability
+      : {
+        enabled: false,
+        available: false,
+        reason: "not_loaded",
+      },
+    state: payload?.state && typeof payload.state === "object" ? payload.state : null,
+    headline: typeof payload?.headline === "string" ? payload.headline.trim() : "",
+  };
+}
+
+function formatDreamCommonsSummary(dreamCommons, t = (_key, _params, fallback) => fallback ?? "", formatDateTime = (value) => String(value ?? "-"), formatCount = (value) => String(value ?? 0)) {
+  if (!dreamCommons || typeof dreamCommons !== "object") {
+    return t("memory.dreamCommonsSummaryEmpty", {}, "Commons：暂无");
+  }
+  const availability = dreamCommons.availability ?? {};
+  const state = dreamCommons.state ?? {};
+  if (!availability.enabled) {
+    return t(
+      "memory.dreamCommonsDisabled",
+      { reason: availability.reason || "-" },
+      `Commons：未启用 (${availability.reason || "-"})`,
+    );
+  }
+  if (!availability.available) {
+    return t(
+      "memory.dreamCommonsBlocked",
+      { reason: availability.reason || "-" },
+      `Commons：不可用 (${availability.reason || "-"})`,
+    );
+  }
+  return t(
+    "memory.dreamCommonsSummary",
+    {
+      status: state.status || "idle",
+      approved: formatCount(Number(state.approvedCount) || 0),
+      revoked: formatCount(Number(state.revokedCount) || 0),
+      notes: formatCount(Number(state.noteCount) || 0),
+      at: formatDateTime(state.lastSuccessAt || state.lastAttemptAt),
+    },
+    `Commons：${state.status || "idle"} · approved ${formatCount(Number(state.approvedCount) || 0)} / revoked ${formatCount(Number(state.revokedCount) || 0)} / notes ${formatCount(Number(state.noteCount) || 0)} · ${formatDateTime(state.lastSuccessAt || state.lastAttemptAt)}`,
+  );
+}
+
+function formatDreamObsidianSummary(dreamRuntime, t = (_key, _params, fallback) => fallback ?? "", formatDateTime = (value) => String(value ?? "-")) {
+  const sync = dreamRuntime?.state?.lastObsidianSync ?? dreamRuntime?.latestRun?.obsidianSync ?? null;
+  if (!sync || typeof sync !== "object") {
+    return t("memory.dreamObsidianSummaryEmpty", {}, "Obsidian：暂无");
+  }
+  const stage = typeof sync.stage === "string" && sync.stage.trim() ? sync.stage.trim() : "unknown";
+  const targetPath = typeof sync.targetPath === "string" && sync.targetPath.trim() ? sync.targetPath.trim() : "";
+  const updatedAt = typeof sync.updatedAt === "string" && sync.updatedAt.trim() ? sync.updatedAt.trim() : "";
+  return t(
+    "memory.dreamObsidianSummary",
+    {
+      stage,
+      targetPath: targetPath || "-",
+      updatedAt: formatDateTime(updatedAt),
+    },
+    `Obsidian：${stage}${targetPath ? ` · ${targetPath}` : ""}${updatedAt ? ` · ${formatDateTime(updatedAt)}` : ""}`,
+  );
+}
+
+export function formatDreamGenerationModeLabel(value, t = (_key, _params, fallback) => fallback ?? "") {
+  if (value === "fallback") return t("memory.dreamGenerationFallback", {}, "Fallback");
+  if (value === "llm") return t("memory.dreamGenerationLlm", {}, "LLM");
+  return t("memory.dreamGenerationUnknown", {}, "未知");
+}
+
+export function formatDreamFallbackReasonLabel(value, t = (_key, _params, fallback) => fallback ?? "") {
+  if (value === "missing_model_config") {
+    return t("memory.dreamFallbackReasonMissingModelConfig", {}, "缺少模型配置");
+  }
+  if (value === "llm_call_failed") {
+    return t("memory.dreamFallbackReasonLlmCallFailed", {}, "LLM 调用失败");
+  }
+  return t("memory.dreamFallbackReasonUnknown", {}, "未知原因");
+}
+
 function formatDreamStatusLabel(value, t = (_key, _params, fallback) => fallback ?? "") {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (normalized === "queued") return t("memory.dreamStatusQueued", {}, "排队中");
@@ -76,24 +159,24 @@ function formatDreamAutoTriggerModeLabel(value, t = (_key, _params, fallback) =>
     : t("memory.dreamAutoTriggerHeartbeat", {}, "heartbeat");
 }
 
-function formatDreamSignalSummary(signal, t = (_key, _params, fallback) => fallback ?? "") {
+function formatDreamSignalSummary(signal, t = (_key, _params, fallback) => fallback ?? "", countFormatter = (value) => String(value ?? 0)) {
   if (!signal || typeof signal !== "object") {
     return t("memory.dreamSignalSummaryEmpty", {}, "信号：暂无");
   }
   return t(
     "memory.dreamSignalSummary",
     {
-      digestDelta: formatCount(Number(signal.digestGenerationDelta) || 0),
-      sessionRevisionDelta: formatCount(Number(signal.sessionMemoryRevisionDelta) || 0),
-      taskDelta: formatCount(Number(signal.taskChangeSeqDelta) || 0),
-      memoryDelta: formatCount(Number(signal.memoryChangeSeqDelta) || 0),
-      budget: formatCount(Number(signal.changeBudget) || 0),
+      digestDelta: countFormatter(Number(signal.digestGenerationDelta) || 0),
+      sessionRevisionDelta: countFormatter(Number(signal.sessionMemoryRevisionDelta) || 0),
+      taskDelta: countFormatter(Number(signal.taskChangeSeqDelta) || 0),
+      memoryDelta: countFormatter(Number(signal.memoryChangeSeqDelta) || 0),
+      budget: countFormatter(Number(signal.changeBudget) || 0),
     },
-    `信号：digestΔ ${formatCount(Number(signal.digestGenerationDelta) || 0)} / sessionRevΔ ${formatCount(Number(signal.sessionMemoryRevisionDelta) || 0)} / taskΔ ${formatCount(Number(signal.taskChangeSeqDelta) || 0)} / memoryΔ ${formatCount(Number(signal.memoryChangeSeqDelta) || 0)} / budget ${formatCount(Number(signal.changeBudget) || 0)}`,
+    `信号：digestΔ ${countFormatter(Number(signal.digestGenerationDelta) || 0)} / sessionRevΔ ${countFormatter(Number(signal.sessionMemoryRevisionDelta) || 0)} / taskΔ ${countFormatter(Number(signal.taskChangeSeqDelta) || 0)} / memoryΔ ${countFormatter(Number(signal.memoryChangeSeqDelta) || 0)} / budget ${countFormatter(Number(signal.changeBudget) || 0)}`,
   );
 }
 
-function formatDreamAutoStatsSummary(autoStats, t = (_key, _params, fallback) => fallback ?? "") {
+function formatDreamAutoStatsSummary(autoStats, t = (_key, _params, fallback) => fallback ?? "", countFormatter = (value) => String(value ?? 0)) {
   if (!autoStats || typeof autoStats !== "object") {
     return t("memory.dreamAutoStatsEmpty", {}, "统计：暂无");
   }
@@ -104,29 +187,151 @@ function formatDreamAutoStatsSummary(autoStats, t = (_key, _params, fallback) =>
     ? Object.entries(autoStats.signalGateCounts).filter(([, count]) => Number.isFinite(count) && Number(count) > 0)
     : [];
   const skipText = skipCodeCounts.length > 0
-    ? skipCodeCounts.map(([key, count]) => `${key}:${formatCount(Number(count) || 0)}`).join(", ")
+    ? skipCodeCounts.map(([key, count]) => `${key}:${countFormatter(Number(count) || 0)}`).join(", ")
     : "-";
   const gateText = signalGateCounts.length > 0
-    ? signalGateCounts.map(([key, count]) => `${key}:${formatCount(Number(count) || 0)}`).join(", ")
+    ? signalGateCounts.map(([key, count]) => `${key}:${countFormatter(Number(count) || 0)}`).join(", ")
     : "-";
   const triggerModeEntries = autoStats.byTriggerMode && typeof autoStats.byTriggerMode === "object"
     ? Object.entries(autoStats.byTriggerMode).filter(([, stats]) => stats && typeof stats === "object")
     : [];
   const triggerModeText = triggerModeEntries.length > 0
-    ? triggerModeEntries.map(([key, stats]) => `${key}[a:${formatCount(Number(stats.attemptedCount) || 0)}, e:${formatCount(Number(stats.executedCount) || 0)}, s:${formatCount(Number(stats.skippedCount) || 0)}]`).join(", ")
+    ? triggerModeEntries.map(([key, stats]) => `${key}[a:${countFormatter(Number(stats.attemptedCount) || 0)}, e:${countFormatter(Number(stats.executedCount) || 0)}, s:${countFormatter(Number(stats.skippedCount) || 0)}]`).join(", ")
     : "-";
   return t(
     "memory.dreamAutoStatsSummary",
     {
-      attempted: formatCount(Number(autoStats.attemptedCount) || 0),
-      executed: formatCount(Number(autoStats.executedCount) || 0),
-      skipped: formatCount(Number(autoStats.skippedCount) || 0),
+      attempted: countFormatter(Number(autoStats.attemptedCount) || 0),
+      executed: countFormatter(Number(autoStats.executedCount) || 0),
+      skipped: countFormatter(Number(autoStats.skippedCount) || 0),
       skipText,
       gateText,
       triggerModeText,
     },
-    `统计：attempted ${formatCount(Number(autoStats.attemptedCount) || 0)} / executed ${formatCount(Number(autoStats.executedCount) || 0)} / skipped ${formatCount(Number(autoStats.skippedCount) || 0)} · mode ${triggerModeText} · skip ${skipText} · gate ${gateText}`,
+    `统计：attempted ${countFormatter(Number(autoStats.attemptedCount) || 0)} / executed ${countFormatter(Number(autoStats.executedCount) || 0)} / skipped ${countFormatter(Number(autoStats.skippedCount) || 0)} · mode ${triggerModeText} · skip ${skipText} · gate ${gateText}`,
   );
+}
+
+export function buildDreamRuntimeBarView(input, options = {}) {
+  const dreamRuntime = input?.dreamRuntime ?? null;
+  const dreamCommons = input?.dreamCommons ?? null;
+  const connected = input?.connected !== false;
+  const dreamBusy = input?.dreamBusy === true;
+  const t = typeof options.t === "function" ? options.t : (_key, _params, fallback) => fallback ?? "";
+  const formatDateTime = typeof options.formatDateTime === "function" ? options.formatDateTime : (value) => {
+    if (typeof value !== "string" || !value.trim()) return "-";
+    return value;
+  };
+  const formatCount = typeof options.formatCount === "function" ? options.formatCount : (value) => String(value ?? 0);
+  const autoSummary = dreamRuntime?.autoSummary
+    ?? (dreamRuntime?.state?.lastAutoTrigger
+      ? {
+          ...dreamRuntime.state.lastAutoTrigger,
+          cooldownUntil: dreamRuntime?.state?.cooldownUntil,
+          failureBackoffUntil: dreamRuntime?.state?.failureBackoffUntil,
+        }
+      : null);
+  const latestRun = dreamRuntime?.latestRun
+    ?? (Array.isArray(dreamRuntime?.state?.recentRuns) ? dreamRuntime.state.recentRuns[0] : null);
+  const latestTimestamp = latestRun?.finishedAt || latestRun?.requestedAt || dreamRuntime?.state?.lastDreamAt || dreamRuntime?.state?.updatedAt;
+  const availability = dreamRuntime?.availability;
+  const lastInput = dreamRuntime?.state?.lastInput ?? latestRun?.input ?? null;
+  const sourceCounts = lastInput?.sourceCounts ?? {};
+  const fallbackReady = availability?.enabled === true;
+  const availabilityText = availability?.available
+    ? (availability.model || t("memory.dreamAvailable", {}, "可用"))
+    : fallbackReady
+      ? t(
+        "memory.dreamFallbackReady",
+        { reason: availability?.reason || t("memory.dreamUnavailable", {}, "未就绪") },
+        `fallback 就绪 (${availability?.reason || t("memory.dreamUnavailable", {}, "未就绪")})`,
+      )
+      : (availability?.reason || t("memory.dreamUnavailable", {}, "未就绪"));
+  const cooldownUntil = autoSummary?.cooldownUntil || dreamRuntime?.state?.cooldownUntil;
+  const failureBackoffUntil = autoSummary?.failureBackoffUntil || dreamRuntime?.state?.failureBackoffUntil;
+  const autoText = autoSummary?.attemptedAt
+    ? t(
+      "memory.dreamAutoSummary",
+      {
+        triggerMode: formatDreamAutoTriggerModeLabel(autoSummary.triggerMode, t),
+        attemptedAt: formatDateTime(autoSummary.attemptedAt),
+        outcome: autoSummary.executed
+          ? formatDreamStatusLabel(autoSummary.status, t)
+          : `skip ${autoSummary.skipCode || "-"}`,
+      },
+      `自动触发：${formatDreamAutoTriggerModeLabel(autoSummary.triggerMode, t)} @ ${formatDateTime(autoSummary.attemptedAt)} · ${autoSummary.executed ? formatDreamStatusLabel(autoSummary.status, t) : `skip ${autoSummary.skipCode || "-"}`}`,
+    )
+    : t("memory.dreamAutoSummaryEmpty", {}, "自动触发：暂无");
+  const gateText = cooldownUntil || failureBackoffUntil
+    ? t(
+      "memory.dreamGateSummary",
+      {
+        cooldownUntil: formatDateTime(cooldownUntil),
+        failureBackoffUntil: formatDateTime(failureBackoffUntil),
+      },
+      `冷却至：${formatDateTime(cooldownUntil)} · 回退至：${formatDateTime(failureBackoffUntil)}`,
+    )
+    : t("memory.dreamGateSummaryEmpty", {}, "冷却 / 回退：无");
+  const signalText = formatDreamSignalSummary(autoSummary?.signal, t, formatCount);
+  const autoStatsText = formatDreamAutoStatsSummary(dreamRuntime?.state?.autoStats, t, formatCount);
+  const commonsText = formatDreamCommonsSummary(dreamCommons, t, formatDateTime, formatCount);
+  const obsidianText = formatDreamObsidianSummary(dreamRuntime, t, formatDateTime);
+  const generationText = latestRun?.generationMode
+    ? t(
+      "memory.dreamGenerationSummary",
+      {
+        mode: formatDreamGenerationModeLabel(latestRun.generationMode, t),
+        reason: latestRun.fallbackReason ? formatDreamFallbackReasonLabel(latestRun.fallbackReason, t) : "",
+      },
+      `生成：${formatDreamGenerationModeLabel(latestRun.generationMode, t)}${latestRun.fallbackReason ? ` (${formatDreamFallbackReasonLabel(latestRun.fallbackReason, t)})` : ""}`,
+    )
+    : t("memory.dreamGenerationSummaryEmpty", {}, "生成：暂无");
+  const summaryText = latestRun?.summary
+    || latestRun?.error
+    || (lastInput
+      ? t(
+        "memory.dreamInputSummary",
+        {
+          tasks: formatCount(Number(sourceCounts.recentTaskCount) || 0),
+          memories: formatCount(Number(sourceCounts.recentDurableMemoryCount) || 0),
+          usages: formatCount(Number(sourceCounts.recentExperienceUsageCount) || 0),
+        },
+        `最近输入：任务 ${formatCount(Number(sourceCounts.recentTaskCount) || 0)} / 记忆 ${formatCount(Number(sourceCounts.recentDurableMemoryCount) || 0)} / 经验 ${formatCount(Number(sourceCounts.recentExperienceUsageCount) || 0)}`,
+      )
+      : t("memory.dreamSummaryEmpty", {}, "最近还没有 dream 记录"));
+
+  return {
+    statusLine: connected
+      ? t(
+        "memory.dreamStatusLine",
+        {
+          status: formatDreamStatusLabel(dreamRuntime?.state?.status, t),
+          availability: availabilityText,
+        },
+        `Dream 状态：${formatDreamStatusLabel(dreamRuntime?.state?.status, t)} · ${availabilityText}`,
+      )
+      : t("memory.dreamDisconnected", {}, "Dream 状态：未连接"),
+    metaLine: t(
+      "memory.dreamMetaLine",
+      {
+        conversationId: dreamRuntime?.requested?.defaultConversationId || "-",
+        lastRunAt: formatDateTime(latestTimestamp),
+        autoSummary: autoText,
+      },
+      `默认会话：${dreamRuntime?.requested?.defaultConversationId || "-"} · 最近一次：${formatDateTime(latestTimestamp)} · ${autoText}`,
+    ),
+    obsidianLine: obsidianText,
+    summaryLine: t(
+      "memory.dreamSummaryLine",
+      { summary: summaryText, generation: generationText, commons: commonsText, gates: gateText, signal: signalText, stats: autoStatsText },
+      `最近摘要：${summaryText} · ${generationText} · ${commonsText} · ${signalText} · ${autoStatsText} · ${gateText}`,
+    ),
+    refreshDisabled: !connected || dreamBusy,
+    runDisabled: !connected || dreamBusy || !fallbackReady,
+    runTitle: fallbackReady
+      ? ""
+      : availability?.reason || t("memory.dreamRunDisabled", {}, "当前 Dream runtime 不可用"),
+  };
 }
 
 function truncateEmailThreadOpenNoteText(value, { maxLines = 6, maxChars = 480 } = {}) {
@@ -485,9 +690,16 @@ export function createMemoryViewerFeature({
     memoryDreamBarEl,
     memoryDreamStatusEl,
     memoryDreamMetaEl,
+    memoryDreamObsidianEl,
     memoryDreamSummaryEl,
     memoryDreamRefreshBtn,
     memoryDreamRunBtn,
+    memoryDreamHistoryToggleBtn,
+    memoryDreamHistoryEl,
+    memoryDreamHistoryStatusEl,
+    memoryDreamHistoryRefreshBtn,
+    memoryDreamHistoryListEl,
+    memoryDreamHistoryDetailEl,
     memoryTabTasksBtn,
     memoryTabMemoriesBtn,
     memoryTabSharedReviewBtn,
@@ -1113,105 +1325,310 @@ export function createMemoryViewerFeature({
   function renderDreamRuntimeBar() {
     if (!memoryDreamBarEl) return;
     const memoryViewerState = getMemoryViewerState();
-    const dreamRuntime = memoryViewerState.dreamRuntime;
-    const autoSummary = dreamRuntime?.autoSummary
-      ?? (dreamRuntime?.state?.lastAutoTrigger
-        ? {
-            ...dreamRuntime.state.lastAutoTrigger,
-            cooldownUntil: dreamRuntime?.state?.cooldownUntil,
-            failureBackoffUntil: dreamRuntime?.state?.failureBackoffUntil,
-          }
-        : null);
-    const latestRun = dreamRuntime?.latestRun
-      ?? (Array.isArray(dreamRuntime?.state?.recentRuns) ? dreamRuntime.state.recentRuns[0] : null);
-    const latestTimestamp = latestRun?.finishedAt || latestRun?.requestedAt || dreamRuntime?.state?.lastDreamAt || dreamRuntime?.state?.updatedAt;
-    const availability = dreamRuntime?.availability;
-    const lastInput = dreamRuntime?.state?.lastInput ?? latestRun?.input ?? null;
-    const sourceCounts = lastInput?.sourceCounts ?? {};
-    const connected = typeof isConnected === "function" ? isConnected() : true;
-    const availabilityText = availability?.available
-      ? (availability.model || t("memory.dreamAvailable", {}, "可用"))
-      : (availability?.reason || t("memory.dreamUnavailable", {}, "未就绪"));
-    const cooldownUntil = autoSummary?.cooldownUntil || dreamRuntime?.state?.cooldownUntil;
-    const failureBackoffUntil = autoSummary?.failureBackoffUntil || dreamRuntime?.state?.failureBackoffUntil;
-    const autoText = autoSummary?.attemptedAt
-      ? t(
-        "memory.dreamAutoSummary",
-        {
-          triggerMode: formatDreamAutoTriggerModeLabel(autoSummary.triggerMode, t),
-          attemptedAt: formatDateTime(autoSummary.attemptedAt),
-          outcome: autoSummary.executed
-            ? formatDreamStatusLabel(autoSummary.status, t)
-            : `skip ${autoSummary.skipCode || "-"}`,
-        },
-        `自动触发：${formatDreamAutoTriggerModeLabel(autoSummary.triggerMode, t)} @ ${formatDateTime(autoSummary.attemptedAt)} · ${autoSummary.executed ? formatDreamStatusLabel(autoSummary.status, t) : `skip ${autoSummary.skipCode || "-"}`}`,
-      )
-      : t("memory.dreamAutoSummaryEmpty", {}, "自动触发：暂无");
-    const gateText = cooldownUntil || failureBackoffUntil
-      ? t(
-        "memory.dreamGateSummary",
-        {
-          cooldownUntil: formatDateTime(cooldownUntil),
-          failureBackoffUntil: formatDateTime(failureBackoffUntil),
-        },
-        `冷却至：${formatDateTime(cooldownUntil)} · 回退至：${formatDateTime(failureBackoffUntil)}`,
-      )
-      : t("memory.dreamGateSummaryEmpty", {}, "冷却 / 回退：无");
-    const signalText = formatDreamSignalSummary(autoSummary?.signal, t);
-    const autoStatsText = formatDreamAutoStatsSummary(dreamRuntime?.state?.autoStats, t);
-    const summaryText = latestRun?.summary
-      || latestRun?.error
-      || (lastInput
-        ? t(
-          "memory.dreamInputSummary",
-          {
-            tasks: formatCount(Number(sourceCounts.recentTaskCount) || 0),
-            memories: formatCount(Number(sourceCounts.recentDurableMemoryCount) || 0),
-            usages: formatCount(Number(sourceCounts.recentExperienceUsageCount) || 0),
-          },
-          `最近输入：任务 ${formatCount(Number(sourceCounts.recentTaskCount) || 0)} / 记忆 ${formatCount(Number(sourceCounts.recentDurableMemoryCount) || 0)} / 经验 ${formatCount(Number(sourceCounts.recentExperienceUsageCount) || 0)}`,
-        )
-        : t("memory.dreamSummaryEmpty", {}, "最近还没有 dream 记录"));
+    const barView = buildDreamRuntimeBarView({
+      dreamRuntime: memoryViewerState.dreamRuntime,
+      dreamCommons: memoryViewerState.dreamCommons,
+      connected: typeof isConnected === "function" ? isConnected() : true,
+      dreamBusy: memoryViewerState.dreamBusy === true,
+    }, {
+      t,
+      formatDateTime,
+      formatCount,
+    });
 
     if (memoryDreamStatusEl) {
-      memoryDreamStatusEl.textContent = connected
-        ? t(
-          "memory.dreamStatusLine",
-          {
-            status: formatDreamStatusLabel(dreamRuntime?.state?.status, t),
-            availability: availabilityText,
-          },
-          `Dream 状态：${formatDreamStatusLabel(dreamRuntime?.state?.status, t)} · ${availabilityText}`,
-        )
-        : t("memory.dreamDisconnected", {}, "Dream 状态：未连接");
+      memoryDreamStatusEl.textContent = barView.statusLine;
     }
     if (memoryDreamMetaEl) {
-      memoryDreamMetaEl.textContent = t(
-        "memory.dreamMetaLine",
-        {
-          conversationId: dreamRuntime?.requested?.defaultConversationId || "-",
-          lastRunAt: formatDateTime(latestTimestamp),
-          autoSummary: autoText,
-        },
-        `默认会话：${dreamRuntime?.requested?.defaultConversationId || "-"} · 最近一次：${formatDateTime(latestTimestamp)} · ${autoText}`,
-      );
+      memoryDreamMetaEl.textContent = barView.metaLine;
+    }
+    if (memoryDreamObsidianEl) {
+      memoryDreamObsidianEl.textContent = barView.obsidianLine;
     }
     if (memoryDreamSummaryEl) {
-      memoryDreamSummaryEl.textContent = t(
-        "memory.dreamSummaryLine",
-        { summary: summaryText, gates: gateText, signal: signalText, stats: autoStatsText },
-        `最近摘要：${summaryText} · ${signalText} · ${autoStatsText} · ${gateText}`,
-      );
+      memoryDreamSummaryEl.textContent = barView.summaryLine;
     }
     if (memoryDreamRefreshBtn) {
-      memoryDreamRefreshBtn.disabled = !connected || memoryViewerState.dreamBusy === true;
+      memoryDreamRefreshBtn.disabled = barView.refreshDisabled;
     }
     if (memoryDreamRunBtn) {
-      memoryDreamRunBtn.disabled = !connected || memoryViewerState.dreamBusy === true || availability?.available !== true;
-      memoryDreamRunBtn.title = availability?.available === true
-        ? ""
-        : availability?.reason || t("memory.dreamRunDisabled", {}, "当前 Dream runtime 不可用");
+      memoryDreamRunBtn.disabled = barView.runDisabled;
+      memoryDreamRunBtn.title = barView.runTitle;
     }
+    renderDreamHistoryPanel();
+  }
+
+  function createDreamHistoryRequestContext(kind = "list", agentId = getActiveAgentId()) {
+    const memoryViewerState = getMemoryViewerState();
+    const normalizedKind = kind === "detail" ? "detail" : "list";
+    const key = normalizedKind === "detail" ? "dreamHistoryDetailSeq" : "dreamHistorySeq";
+    const nextSeq = Number(memoryViewerState[key] || 0) + 1;
+    memoryViewerState[key] = nextSeq;
+    return {
+      kind: normalizedKind,
+      seq: nextSeq,
+      agentId,
+    };
+  }
+
+  function isDreamHistoryRequestCurrent(requestContext) {
+    const memoryViewerState = getMemoryViewerState();
+    const key = requestContext?.kind === "detail" ? "dreamHistoryDetailSeq" : "dreamHistorySeq";
+    const activeAgentId = String(memoryViewerState.activeAgentId || getActiveAgentId()).trim() || "default";
+    return Number(memoryViewerState[key] || 0) === Number(requestContext?.seq || 0)
+      && activeAgentId === requestContext?.agentId;
+  }
+
+  function clearDreamHistoryState({ preserveOpen = true } = {}) {
+    const memoryViewerState = getMemoryViewerState();
+    memoryViewerState.dreamHistoryOpen = preserveOpen ? memoryViewerState.dreamHistoryOpen === true : false;
+    memoryViewerState.dreamHistoryLoading = false;
+    memoryViewerState.dreamHistoryError = "";
+    memoryViewerState.dreamHistoryItems = [];
+    memoryViewerState.selectedDreamHistoryId = null;
+    memoryViewerState.selectedDreamHistoryItem = null;
+    memoryViewerState.selectedDreamHistoryContent = "";
+    memoryViewerState.dreamHistoryDetailLoading = false;
+    memoryViewerState.dreamHistoryDetailError = "";
+    memoryViewerState.dreamHistorySeq = Number(memoryViewerState.dreamHistorySeq || 0) + 1;
+    memoryViewerState.dreamHistoryDetailSeq = Number(memoryViewerState.dreamHistoryDetailSeq || 0) + 1;
+  }
+
+  function renderDreamHistoryPanel() {
+    const memoryViewerState = getMemoryViewerState();
+    const panelView = buildDreamHistoryPanelView({
+      connected: typeof isConnected === "function" ? isConnected() : true,
+      open: memoryViewerState.dreamHistoryOpen === true,
+      loading: memoryViewerState.dreamHistoryLoading === true,
+      error: memoryViewerState.dreamHistoryError,
+      items: memoryViewerState.dreamHistoryItems,
+      selectedId: memoryViewerState.selectedDreamHistoryId,
+      selectedItem: memoryViewerState.selectedDreamHistoryItem,
+      selectedContent: memoryViewerState.selectedDreamHistoryContent,
+      detailLoading: memoryViewerState.dreamHistoryDetailLoading === true,
+      detailError: memoryViewerState.dreamHistoryDetailError,
+    }, {
+      t,
+      formatDateTime,
+    });
+
+    if (memoryDreamHistoryToggleBtn) {
+      memoryDreamHistoryToggleBtn.textContent = panelView.toggleLabel;
+      memoryDreamHistoryToggleBtn.title = panelView.toggleTitle;
+      memoryDreamHistoryToggleBtn.setAttribute("aria-expanded", panelView.open ? "true" : "false");
+    }
+    if (!memoryDreamHistoryEl) return;
+    memoryDreamHistoryEl.hidden = !panelView.open;
+    memoryDreamHistoryEl.classList.toggle("hidden", !panelView.open);
+    if (!panelView.open) return;
+
+    if (memoryDreamHistoryStatusEl) {
+      memoryDreamHistoryStatusEl.textContent = panelView.historyStatusLine;
+    }
+    if (memoryDreamHistoryRefreshBtn) {
+      memoryDreamHistoryRefreshBtn.disabled = panelView.refreshDisabled;
+    }
+    if (memoryDreamHistoryListEl) {
+      if (panelView.entries.length <= 0) {
+        memoryDreamHistoryListEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(panelView.listEmptyText)}</div>`;
+      } else {
+        memoryDreamHistoryListEl.innerHTML = panelView.entries.map((entry) => `
+          <div class="memory-list-item ${entry.isActive ? "active" : ""}" data-dream-history-id="${escapeHtml(entry.id)}">
+            <div class="memory-list-item-title">${escapeHtml(entry.title)}</div>
+            <div class="memory-list-item-meta">
+              ${entry.meta.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
+            </div>
+            <div class="memory-list-item-snippet">${escapeHtml(entry.snippet)}</div>
+          </div>
+        `).join("");
+      }
+    }
+    if (memoryDreamHistoryDetailEl) {
+      if (panelView.detail.loading || (!panelView.detail.content && panelView.detail.error) || panelView.detail.cards.length <= 0) {
+        memoryDreamHistoryDetailEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(panelView.detail.emptyText)}</div>`;
+      } else {
+        memoryDreamHistoryDetailEl.innerHTML = `
+          <div class="memory-detail-shell">
+            <div class="memory-detail-header">
+              <div>
+                <div class="memory-detail-title">${escapeHtml(panelView.detail.title)}</div>
+                ${panelView.detail.summary ? `<div class="memory-detail-text">${escapeHtml(panelView.detail.summary)}</div>` : ""}
+              </div>
+            </div>
+            <div class="memory-detail-grid">
+              ${panelView.detail.cards.map((card) => `
+                <div class="memory-detail-card">
+                  <span class="memory-detail-label">${escapeHtml(card.label)}</span>
+                  <div class="memory-detail-text">${escapeHtml(card.value)}</div>
+                </div>
+              `).join("")}
+            </div>
+            ${panelView.detail.reason ? `
+              <div class="memory-detail-card">
+                <span class="memory-detail-label">${escapeHtml(t("memory.dreamHistoryReason", {}, "触发原因"))}</span>
+                <div class="memory-detail-text">${escapeHtml(panelView.detail.reason)}</div>
+              </div>
+            ` : ""}
+            <div class="memory-detail-card">
+              <span class="memory-detail-label">${escapeHtml(t("memory.dreamHistoryContent", {}, "Dream 正文"))}</span>
+              ${panelView.detail.content
+                ? `<pre class="memory-detail-pre">${escapeHtml(panelView.detail.content)}</pre>`
+                : `<div class="memory-detail-text">${escapeHtml(panelView.detail.emptyText)}</div>`}
+            </div>
+          </div>
+        `;
+      }
+    }
+  }
+
+  async function loadDreamHistoryDetail(dreamId, agentId = getActiveAgentId()) {
+    const normalizedDreamId = typeof dreamId === "string" ? dreamId.trim() : "";
+    const memoryViewerState = getMemoryViewerState();
+    if (!normalizedDreamId || !isConnected()) {
+      memoryViewerState.selectedDreamHistoryId = normalizedDreamId || null;
+      memoryViewerState.selectedDreamHistoryItem = null;
+      memoryViewerState.selectedDreamHistoryContent = "";
+      memoryViewerState.dreamHistoryDetailLoading = false;
+      memoryViewerState.dreamHistoryDetailError = normalizedDreamId
+        ? t("memory.dreamHistoryDisconnectedDetail", {}, "连接建立后可查看 Dream 正文。")
+        : "";
+      renderDreamHistoryPanel();
+      return null;
+    }
+
+    const requestContext = createDreamHistoryRequestContext("detail", agentId);
+    memoryViewerState.selectedDreamHistoryId = normalizedDreamId;
+    memoryViewerState.selectedDreamHistoryItem = Array.isArray(memoryViewerState.dreamHistoryItems)
+      ? memoryViewerState.dreamHistoryItems.find((item) => item?.id === normalizedDreamId) || null
+      : null;
+    memoryViewerState.selectedDreamHistoryContent = "";
+    memoryViewerState.dreamHistoryDetailLoading = true;
+    memoryViewerState.dreamHistoryDetailError = "";
+    renderDreamHistoryPanel();
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "dream.get",
+      params: {
+        agentId,
+        dreamId: normalizedDreamId,
+      },
+    });
+
+    if (!isDreamHistoryRequestCurrent(requestContext)) {
+      return null;
+    }
+
+    memoryViewerState.dreamHistoryDetailLoading = false;
+    if (!res?.ok) {
+      memoryViewerState.selectedDreamHistoryContent = "";
+      memoryViewerState.dreamHistoryDetailError = res?.error?.message || t("memory.dreamHistoryDetailLoadFailed", {}, "Dream 正文加载失败。");
+      renderDreamHistoryPanel();
+      return null;
+    }
+
+    memoryViewerState.selectedDreamHistoryItem = res.payload?.item && typeof res.payload.item === "object"
+      ? res.payload.item
+      : memoryViewerState.selectedDreamHistoryItem;
+    memoryViewerState.selectedDreamHistoryContent = typeof res.payload?.content === "string" ? res.payload.content : "";
+    memoryViewerState.dreamHistoryDetailError = "";
+    renderDreamHistoryPanel();
+    return res.payload;
+  }
+
+  async function loadDreamHistory(forceSelectFirst = false, agentId = getActiveAgentId()) {
+    const memoryViewerState = getMemoryViewerState();
+    memoryViewerState.dreamHistoryOpen = true;
+    if (!isConnected()) {
+      memoryViewerState.dreamHistoryLoading = false;
+      memoryViewerState.dreamHistoryError = t("memory.dreamHistoryDisconnectedList", {}, "连接建立后可查看 Dream 历史。");
+      memoryViewerState.dreamHistoryItems = [];
+      memoryViewerState.selectedDreamHistoryId = null;
+      memoryViewerState.selectedDreamHistoryItem = null;
+      memoryViewerState.selectedDreamHistoryContent = "";
+      memoryViewerState.dreamHistoryDetailLoading = false;
+      memoryViewerState.dreamHistoryDetailError = "";
+      renderDreamHistoryPanel();
+      return null;
+    }
+
+    const requestContext = createDreamHistoryRequestContext("list", agentId);
+    memoryViewerState.dreamHistoryLoading = true;
+    memoryViewerState.dreamHistoryError = "";
+    renderDreamHistoryPanel();
+
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "dream.history.list",
+      params: {
+        agentId,
+        limit: 12,
+      },
+    });
+
+    if (!isDreamHistoryRequestCurrent(requestContext)) {
+      return null;
+    }
+
+    memoryViewerState.dreamHistoryLoading = false;
+    if (!res?.ok) {
+      memoryViewerState.dreamHistoryItems = [];
+      memoryViewerState.selectedDreamHistoryId = null;
+      memoryViewerState.selectedDreamHistoryItem = null;
+      memoryViewerState.selectedDreamHistoryContent = "";
+      memoryViewerState.dreamHistoryError = res?.error?.message || t("memory.dreamHistoryLoadFailedMessage", {}, "Dream 历史加载失败。");
+      renderDreamHistoryPanel();
+      return null;
+    }
+
+    const items = Array.isArray(res.payload?.items)
+      ? res.payload.items.filter((item) => item && typeof item === "object")
+      : [];
+    memoryViewerState.dreamHistoryItems = items;
+    memoryViewerState.dreamHistoryError = "";
+
+    const preferredDreamId = forceSelectFirst
+      ? (typeof items[0]?.id === "string" ? items[0].id.trim() : "")
+      : (typeof memoryViewerState.selectedDreamHistoryId === "string" ? memoryViewerState.selectedDreamHistoryId.trim() : "");
+    const selectedExists = items.some((item) => item?.id === preferredDreamId);
+    const nextSelectedId = selectedExists
+      ? preferredDreamId
+      : (typeof items[0]?.id === "string" ? items[0].id.trim() : "");
+
+    memoryViewerState.selectedDreamHistoryId = nextSelectedId || null;
+    memoryViewerState.selectedDreamHistoryItem = nextSelectedId
+      ? items.find((item) => item?.id === nextSelectedId) || null
+      : null;
+    memoryViewerState.selectedDreamHistoryContent = "";
+    memoryViewerState.dreamHistoryDetailError = "";
+    renderDreamHistoryPanel();
+
+    if (nextSelectedId) {
+      await loadDreamHistoryDetail(nextSelectedId, agentId);
+    }
+    return items;
+  }
+
+  function toggleDreamHistory() {
+    const memoryViewerState = getMemoryViewerState();
+    memoryViewerState.dreamHistoryOpen = memoryViewerState.dreamHistoryOpen !== true;
+    renderDreamHistoryPanel();
+    if (memoryViewerState.dreamHistoryOpen) {
+      void loadDreamHistory(false);
+    }
+  }
+
+  if (memoryDreamHistoryListEl) {
+    memoryDreamHistoryListEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest("[data-dream-history-id]")
+        : null;
+      const dreamId = target?.getAttribute("data-dream-history-id");
+      if (!dreamId) return;
+      void loadDreamHistoryDetail(dreamId);
+    });
   }
 
   function formatTaskStatusLabel(status) {
@@ -1352,7 +1769,16 @@ export function createMemoryViewerFeature({
     if (!isConnected()) {
       const memoryViewerState = getMemoryViewerState();
       memoryViewerState.dreamRuntime = null;
+      memoryViewerState.dreamCommons = null;
       memoryViewerState.dreamBusy = false;
+      memoryViewerState.dreamHistoryLoading = false;
+      memoryViewerState.dreamHistoryError = "";
+      memoryViewerState.dreamHistoryItems = [];
+      memoryViewerState.selectedDreamHistoryId = null;
+      memoryViewerState.selectedDreamHistoryItem = null;
+      memoryViewerState.selectedDreamHistoryContent = "";
+      memoryViewerState.dreamHistoryDetailLoading = false;
+      memoryViewerState.dreamHistoryDetailError = "";
       renderDreamRuntimeBar();
       renderMemoryViewerStats(null);
       renderMemoryViewerListEmpty(t("memory.disconnectedList", {}, "Not connected to the server."));
@@ -1361,7 +1787,10 @@ export function createMemoryViewerFeature({
     }
 
     const memoryViewerState = getMemoryViewerState();
-    const dreamLoadPromise = loadDreamRuntimeStatus(requestContext);
+    const dreamLoadPromise = Promise.all([
+      loadDreamRuntimeStatus(requestContext),
+      loadDreamCommonsStatus(),
+    ]);
     if (memoryViewerState.tab === "tasks") {
       await Promise.all([
         dreamLoadPromise,
@@ -1426,7 +1855,38 @@ export function createMemoryViewerFeature({
       }, agentId);
     }
     renderDreamRuntimeBar();
+    if (memoryViewerState.dreamHistoryOpen) {
+      void loadDreamHistory(false, agentId);
+    }
     return memoryViewerState.dreamRuntime;
+  }
+
+  async function loadDreamCommonsStatus() {
+    const memoryViewerState = getMemoryViewerState();
+    if (!isConnected()) {
+      memoryViewerState.dreamCommons = null;
+      renderDreamRuntimeBar();
+      return null;
+    }
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "dream.commons.status.get",
+      params: {},
+    });
+    if (res?.ok) {
+      memoryViewerState.dreamCommons = normalizeDreamCommonsView(res.payload);
+    } else {
+      memoryViewerState.dreamCommons = normalizeDreamCommonsView({
+        availability: {
+          enabled: false,
+          available: false,
+          reason: res?.error?.message || t("memory.dreamCommonsLoadFailed", {}, "Failed to load Commons export status."),
+        },
+      });
+    }
+    renderDreamRuntimeBar();
+    return memoryViewerState.dreamCommons;
   }
 
   async function runDream() {
@@ -1478,6 +1938,9 @@ export function createMemoryViewerFeature({
         res.payload?.record?.status === "failed" ? "warn" : "success",
         2600,
       );
+      if (memoryViewerState.dreamHistoryOpen) {
+        void loadDreamHistory(true, agentId);
+      }
       void loadDreamRuntimeStatus({
         requestToken: Number(memoryViewerState.requestToken || 0),
         agentId,
@@ -3224,6 +3687,10 @@ export function createMemoryViewerFeature({
   return {
     applyAgentViewState,
     captureAgentViewState,
+    clearDreamHistoryState,
+    loadDreamCommonsStatus,
+    loadDreamHistory,
+    loadDreamHistoryDetail,
     loadDreamRuntimeStatus,
     loadExternalOutboundAuditViewer,
     loadMemoryChunkViewer,
@@ -3236,6 +3703,7 @@ export function createMemoryViewerFeature({
     renderCandidateOnlyDetail,
     renderExternalOutboundAuditDetail,
     renderExternalOutboundAuditList,
+    renderDreamHistoryPanel,
     renderDreamRuntimeBar,
     renderMemoryList,
     renderSharedReviewList,
@@ -3245,6 +3713,7 @@ export function createMemoryViewerFeature({
     runDream,
     syncSharedReviewFilterUi,
     syncMemoryViewerHeaderTitle,
+    toggleDreamHistory,
     switchOutboundAuditFocus,
     switchMemoryViewerTab,
     syncMemoryViewerUi,

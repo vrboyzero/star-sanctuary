@@ -1,3 +1,4 @@
+import { buildDreamRuleSkeleton } from "./dream-input.js";
 import type {
   DreamInputSnapshot,
   DreamModelOutput,
@@ -139,35 +140,8 @@ function normalizeShareCandidates(value: unknown): DreamShareCandidate[] {
   return result;
 }
 
-function compactTask(task: DreamInputSnapshot["focusTask"] | DreamInputSnapshot["recentTasks"][number] | undefined): Record<string, unknown> | undefined {
-  if (!task) return undefined;
-  return {
-    id: task.id,
-    title: truncateText(task.title, 120),
-    objective: truncateText(task.objective, 180),
-    status: task.status,
-    source: task.source,
-    summary: truncateText(task.summary, 240),
-    outcome: truncateText(task.outcome, 180),
-    reflection: truncateText(task.reflection, 180),
-    toolNames: (task.toolCalls ?? []).map((item) => truncateText(item.toolName, 80)).filter(Boolean).slice(0, 8),
-    artifactPaths: (task.artifactPaths ?? []).map((item) => truncateText(item, 160)).filter(Boolean).slice(0, 8),
-    workRecap: task.workRecap
-      ? {
-          headline: truncateText(task.workRecap.headline, 180),
-          confirmedFacts: (task.workRecap.confirmedFacts ?? []).map((item) => truncateText(item, 160)).filter(Boolean).slice(0, 5),
-        }
-      : undefined,
-    resumeContext: task.resumeContext
-      ? {
-          currentStopPoint: truncateText(task.resumeContext.currentStopPoint, 180),
-          nextStep: truncateText(task.resumeContext.nextStep, 180),
-        }
-      : undefined,
-  };
-}
-
-function compactInputSnapshot(snapshot: DreamInputSnapshot): Record<string, unknown> {
+function compactPromptInput(snapshot: DreamInputSnapshot): Record<string, unknown> {
+  const ruleSkeleton = snapshot.ruleSkeleton ?? buildDreamRuleSkeleton(snapshot);
   return {
     meta: {
       agentId: snapshot.agentId,
@@ -177,93 +151,41 @@ function compactInputSnapshot(snapshot: DreamInputSnapshot): Record<string, unkn
       windowHours: snapshot.windowHours,
       sourceCounts: snapshot.sourceCounts,
     },
-    focusTask: compactTask(snapshot.focusTask),
-    recentTasks: snapshot.recentTasks.slice(0, 4).map((item) => compactTask(item)),
-    recentWorkItems: snapshot.recentWorkItems.slice(0, 4).map((item) => ({
-      taskId: item.taskId,
-      title: truncateText(item.title, 120),
-      objective: truncateText(item.objective, 180),
-      summary: truncateText(item.summary, 200),
-      status: item.status,
-      toolNames: item.toolNames.slice(0, 8),
-      artifactPaths: item.artifactPaths.slice(0, 8),
-      recentActivityTitles: item.recentActivityTitles.slice(0, 5),
-      workRecapHeadline: truncateText(item.workRecap?.headline, 160),
-      resumeNextStep: truncateText(item.resumeContext?.nextStep, 160),
-      sourceRefs: item.sourceExplanation?.sourceRefs?.slice(0, 4).map((ref) => ({
-        kind: ref.kind,
-        label: truncateText(ref.label, 120),
-        previews: ref.previews.slice(0, 3).map((preview) => truncateText(preview, 120)).filter(Boolean),
-      })),
-    })),
-    recentDurableMemories: snapshot.recentDurableMemories.slice(0, 8).map((item) => ({
-      sourcePath: truncateText(item.sourcePath, 180),
-      visibility: item.visibility,
-      memoryType: item.memoryType,
-      category: item.category,
-      summary: truncateText(item.summary, 180),
-      snippet: truncateText(item.snippet, 180),
-    })),
-    recentExperienceUsages: snapshot.recentExperienceUsages.slice(0, 6).map((item) => ({
-      usageId: truncateText(item.usageId, 80),
-      assetType: item.assetType,
-      assetKey: truncateText(item.assetKey, 120),
-      usageCount: item.usageCount,
-      lastUsedAt: item.lastUsedAt,
-      sourceCandidateType: item.sourceCandidateType,
-      sourceCandidateTitle: truncateText(item.sourceCandidateTitle, 120),
-    })),
-    sessionDigest: snapshot.sessionDigest
-      ? {
-          status: snapshot.sessionDigest.status,
-          pendingMessageCount: snapshot.sessionDigest.pendingMessageCount,
-          messageCount: snapshot.sessionDigest.messageCount,
-          rollingSummary: truncateText(snapshot.sessionDigest.rollingSummary, 500),
-          archivalSummary: truncateText(snapshot.sessionDigest.archivalSummary, 500),
-        }
-      : undefined,
-    sessionMemory: snapshot.sessionMemory
-      ? {
-          summary: truncateText(snapshot.sessionMemory.summary, 300),
-          currentGoal: truncateText(snapshot.sessionMemory.currentGoal, 180),
-          currentWork: truncateText(snapshot.sessionMemory.currentWork, 180),
-          nextStep: truncateText(snapshot.sessionMemory.nextStep, 180),
-          decisions: (snapshot.sessionMemory.decisions ?? []).map((item) => truncateText(item, 140)).filter(Boolean).slice(0, 5),
-          keyResults: (snapshot.sessionMemory.keyResults ?? []).map((item) => truncateText(item, 140)).filter(Boolean).slice(0, 5),
-          pendingTasks: (snapshot.sessionMemory.pendingTasks ?? []).map((item) => truncateText(item, 140)).filter(Boolean).slice(0, 5),
-        }
-      : undefined,
-    mindProfileSnapshot: snapshot.mindProfileSnapshot
-      ? {
-          headline: truncateText(snapshot.mindProfileSnapshot.profile?.headline, 180),
-          summaryHeadline: truncateText(snapshot.mindProfileSnapshot.summary?.headline, 180),
-          summaryLines: normalizeStringArray(snapshot.mindProfileSnapshot.profile?.summaryLines, 6, 180),
-          privateMemoryCount: snapshot.mindProfileSnapshot.memory?.privateMemoryCount,
-          sharedMemoryCount: snapshot.mindProfileSnapshot.memory?.sharedMemoryCount,
-          recentMemorySnippets: (snapshot.mindProfileSnapshot.memory?.recentMemorySnippets ?? []).slice(0, 4).map((item) => ({
-            scope: item.scope,
-            sourcePath: truncateText(item.sourcePath, 160),
-            text: truncateText(item.text, 160),
-          })),
-        }
-      : undefined,
-    learningReviewInput: snapshot.learningReviewInput
-      ? {
-          headline: truncateText(snapshot.learningReviewInput.summary?.headline, 180),
-          summaryLines: normalizeStringArray(snapshot.learningReviewInput.summaryLines, 6, 180),
-          nudges: normalizeStringArray(snapshot.learningReviewInput.nudges, 6, 180),
-        }
-      : undefined,
+    ruleSkeleton: {
+      topicCandidates: normalizeStringArray(ruleSkeleton.topicCandidates, 3, 160),
+      confirmedFacts: normalizeStringArray(ruleSkeleton.confirmedFacts, 8, 200),
+      openLoops: normalizeStringArray(ruleSkeleton.openLoops, 6, 180),
+      carryForwardCandidates: normalizeStringArray(ruleSkeleton.carryForwardCandidates, 6, 180),
+      sourceSummary: {
+        primarySources: normalizeStringArray(ruleSkeleton.sourceSummary.primarySources, 8, 60),
+        sourceCount: ruleSkeleton.sourceSummary.sourceCount,
+        taskCount: ruleSkeleton.sourceSummary.taskCount,
+        workCount: ruleSkeleton.sourceSummary.workCount,
+        durableMemoryCount: ruleSkeleton.sourceSummary.durableMemoryCount,
+        experienceUsageCount: ruleSkeleton.sourceSummary.experienceUsageCount,
+        summaryLine: truncateText(ruleSkeleton.sourceSummary.summaryLine, 240),
+      },
+      confidence: ruleSkeleton.confidence,
+    },
+    anchors: {
+      focusTaskTitle: truncateText(snapshot.focusTask?.title, 120),
+      focusTaskStatus: snapshot.focusTask?.status,
+      digestStatus: snapshot.sessionDigest?.status,
+      pendingMessageCount: snapshot.sessionDigest?.pendingMessageCount,
+      currentWork: truncateText(snapshot.sessionMemory?.currentWork, 160),
+      nextStep: truncateText(snapshot.sessionMemory?.nextStep, 160),
+    },
   };
 }
 
 export function buildDreamPromptBundle(snapshot: DreamInputSnapshot): DreamPromptBundle {
-  const inputView = compactInputSnapshot(snapshot);
+  const inputView = compactPromptInput(snapshot);
   return {
     system: [
       "你是 Star Sanctuary 的 dream 整理器。",
-      "你的任务是基于 Agent 最近的会话摘要、session memory、durable memory、任务回顾和经验使用记录，产出一份面向该 Agent 私有记忆空间的梦境整理结果。",
-      "请优先提炼稳定认知、修正偏差、标出后续聚焦点；不要编造事实，不要泄露不存在于输入中的信息。",
+      "你的任务是基于已经抽取好的规则骨架，产出一份面向该 Agent 私有记忆空间的 dream 结构化结果。",
+      "规则骨架已经给出了 topicCandidates、confirmedFacts、openLoops、carryForwardCandidates、sourceSummary 和 confidence。",
+      "请严格以规则骨架为事实边界：你可以重组、压缩、润色，但不要创造新事实，不要自行扩展输入范围，不要重新决定 source priority。",
       "输出必须是 JSON 对象，不要输出 Markdown，不要输出解释。",
       "字段必须包含：headline, summary, narrative, stableInsights, corrections, openQuestions, shareCandidates, nextFocus。",
       "stableInsights / corrections / openQuestions / nextFocus 必须是字符串数组。",
@@ -277,7 +199,7 @@ export function buildDreamPromptBundle(snapshot: DreamInputSnapshot): DreamPromp
       `collectedAt: ${snapshot.collectedAt}`,
       `windowHours: ${snapshot.windowHours}`,
       "",
-      "请根据以下 dream 输入快照，输出一份面向该 Agent 私有 dream 的结构化 JSON：",
+      "请根据以下 dream 规则骨架与锚点信息，输出一份面向该 Agent 私有 dream 的结构化 JSON：",
       "",
       JSON.stringify(inputView, null, 2),
     ].join("\n"),
