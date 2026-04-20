@@ -2158,6 +2158,7 @@ async function sendMessage(options = {}) {
   const params = {
     conversationId: activeConversationId || undefined,
     text: finalText,
+    autoStopPreviousRun: true,
     from: "web",
     clientContext: {
       sentAtMs: Date.now(),

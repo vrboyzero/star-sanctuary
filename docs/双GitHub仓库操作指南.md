@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现了Agent的梦境功能第二阶段，测试通过"
+git commit -m "优化了一些可能出现的服务卡点，全量性能成化前的备份"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

@@ -101,6 +101,8 @@ export type GatewayFrame =
 export type MessageSendParams = {
   conversationId?: string;
   text: string;
+  /** 新消息发送前自动停止同会话上一轮运行 */
+  autoStopPreviousRun?: boolean;
   from?: string;
   clientContext?: {
     sentAtMs?: number;

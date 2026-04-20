@@ -156,6 +156,46 @@ describe("MemoryManager guardrails", () => {
     expect(recent.some((item) => item.sourcePath === ignoredFile)).toBe(false);
   });
 
+  it("limits idle summary generation to one batch per cycle", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      summaryEnabled: true,
+      summaryApiKey: "test-summary-key",
+      summaryModel: "test-summary-model",
+      summaryBatchSize: 2,
+      summaryMinContentLength: 1,
+    });
+
+    const store = (manager as any).store;
+    for (let index = 0; index < 5; index += 1) {
+      store.upsertChunk({
+        id: `summary-chunk-${index}`,
+        sourcePath: path.join(docsDir, `summary-${index}.md`),
+        sourceType: "file",
+        memoryType: "other",
+        content: `summary-source-${index}`,
+      });
+    }
+
+    const summarySpy = vi.spyOn(manager as any, "callLLMForSummary").mockImplementation(async (...args: unknown[]) => {
+      return `summary:${String(args[0] ?? "")}`;
+    });
+
+    vi.useFakeTimers();
+    try {
+      const runPromise = manager.runIdleSummaries();
+      await vi.runAllTimersAsync();
+      const generated = await runPromise;
+
+      expect(generated).toBe(2);
+      expect(summarySpy).toHaveBeenCalledTimes(2);
+      expect(store.getChunksNeedingSummary(1, 10)).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("excludes session memories from context injection by default", async () => {
     const stateMemoryPath = path.join(stateDir, "MEMORY.md");
     const sessionFilePath = path.join(sessionsDir, "session-001.md");

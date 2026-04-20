@@ -338,6 +338,94 @@ test("conversation.run.stop stops the active message.send run and allows the nex
   }
 });
 
+test("message.send can auto stop the previous run in the same conversation", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-auto-stop-"));
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => ({
+      async *run(input) {
+        yield { type: "status" as const, status: "running" };
+        await sleep(150);
+        if (input.abortSignal?.aborted) {
+          yield { type: "status" as const, status: "stopped" };
+          return;
+        }
+        yield { type: "final" as const, text: `done:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    }),
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-auto-stop-run-1",
+      method: "message.send",
+      params: {
+        conversationId: "conv-auto-stop-main",
+        text: "第一轮",
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-auto-stop-run-1" && f.ok === true));
+    const firstSendRes = frames.find((f) => f.type === "res" && f.id === "message-auto-stop-run-1");
+    expect(firstSendRes?.payload?.runId).toBeTruthy();
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "message-auto-stop-run-2",
+      method: "message.send",
+      params: {
+        conversationId: "conv-auto-stop-main",
+        text: "第二轮",
+        autoStopPreviousRun: true,
+      },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "message-auto-stop-run-2" && f.ok === true));
+    const secondSendRes = frames.find((f) => f.type === "res" && f.id === "message-auto-stop-run-2");
+    expect(secondSendRes?.payload?.runId).toBeTruthy();
+    expect(secondSendRes?.payload?.runId).not.toBe(firstSendRes?.payload?.runId);
+
+    await waitFor(() => frames.some((f) =>
+      f.type === "event"
+      && f.event === "conversation.run.stopped"
+      && f.payload?.conversationId === "conv-auto-stop-main"
+      && f.payload?.runId === firstSendRes.payload.runId
+    ));
+
+    await waitFor(() => frames.some((f) =>
+      f.type === "event"
+      && f.event === "chat.final"
+      && f.payload?.conversationId === "conv-auto-stop-main"
+      && f.payload?.runId === secondSendRes.payload.runId
+      && f.payload?.text === "done:第二轮"
+    ));
+
+    expect(frames.some((f) =>
+      f.type === "event"
+      && f.event === "chat.final"
+      && f.payload?.runId === firstSendRes.payload.runId
+    )).toBe(false);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("/health includes version", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const server = await startGatewayServer({

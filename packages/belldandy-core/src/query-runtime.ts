@@ -48,6 +48,7 @@ export type QueryRuntimeStage =
   | "idempotency_checked"
   | "agent_created"
   | "conversation_loaded"
+  | "previous_run_stop_requested"
   | "user_message_persisted"
   | "digest_loaded"
   | "digest_refreshed"

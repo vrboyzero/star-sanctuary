@@ -2034,6 +2034,7 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   if (!text.trim() && !hasAttachments) return { ok: false, message: "text or attachments required" };
   const conversationId =
     typeof obj.conversationId === "string" && obj.conversationId.trim() ? obj.conversationId.trim() : undefined;
+  const autoStopPreviousRun = obj.autoStopPreviousRun === true;
   const from = typeof obj.from === "string" && obj.from.trim() ? obj.from.trim() : undefined;
   const agentId = typeof obj.agentId === "string" && obj.agentId.trim() ? obj.agentId.trim() : undefined;
   const modelId = typeof obj.modelId === "string" && obj.modelId.trim() ? obj.modelId.trim() : undefined;
@@ -2059,7 +2060,22 @@ function parseMessageSendParams(value: unknown): { ok: true; value: MessageSendP
   const senderInfo = obj.senderInfo && typeof obj.senderInfo === "object" ? obj.senderInfo as any : undefined;
   const roomContext = obj.roomContext && typeof obj.roomContext === "object" ? obj.roomContext as any : undefined;
 
-  return { ok: true, value: { text, conversationId, from, agentId, modelId, userUuid, attachments, senderInfo, roomContext, clientContext } };
+  return {
+    ok: true,
+    value: {
+      text,
+      conversationId,
+      autoStopPreviousRun,
+      from,
+      agentId,
+      modelId,
+      userUuid,
+      attachments,
+      senderInfo,
+      roomContext,
+      clientContext,
+    },
+  };
 }
 
 function parseConversationRunStopParams(

@@ -145,6 +145,7 @@ export async function handleMessageSendWithQueryRuntime(
   return runtime.run(async (queryRuntime) => {
     const requestedAgentId = request.params.agentId;
     const requestedModelId = request.params.modelId;
+    const autoStopPreviousRun = request.params.autoStopPreviousRun === true;
     const createOpts = requestedModelId ? { modelOverride: requestedModelId } : undefined;
     const conversationId = request.params.conversationId ?? crypto.randomUUID();
     const runId = crypto.randomUUID();
@@ -217,6 +218,33 @@ export async function handleMessageSendWithQueryRuntime(
           message: `会话已绑定 Agent "${existingConv.agentId}"，不能使用 "${requestedAgentId}"。请新建会话。`,
         },
       };
+    }
+
+    if (autoStopPreviousRun) {
+      const previousRun = runtimeDeps.conversationRunRegistry.get(conversationId);
+      if (previousRun && previousRun.runId !== runId) {
+        const stopReason = "Auto-stopped by newer message.send request.";
+        const stopResult = await runtimeDeps.conversationRunRegistry.requestStop({
+          conversationId,
+          runId: previousRun.runId,
+          reason: stopReason,
+        });
+        queryRuntime.mark("previous_run_stop_requested", {
+          conversationId,
+          detail: {
+            previousRunId: previousRun.runId,
+            accepted: stopResult.accepted,
+            state: stopResult.state,
+            reason: stopReason,
+          },
+        });
+        runtimeDeps.log.info("message", "Auto stop previous conversation run", {
+          conversationId,
+          previousRunId: previousRun.runId,
+          accepted: stopResult.accepted,
+          state: stopResult.state,
+        });
+      }
     }
 
     const userMessageTimestamp = Date.now();

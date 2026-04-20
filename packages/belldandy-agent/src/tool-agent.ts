@@ -552,6 +552,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
       return () => {};
     }
 
+    const hadPrevious = this.conversationRunChains.has(conversationId);
+    const waitStartedAt = hadPrevious ? Date.now() : 0;
     const previous = this.conversationRunChains.get(conversationId) ?? Promise.resolve();
     const waitForPrevious = previous.catch(() => undefined);
     let releaseCurrent!: () => void;
@@ -560,7 +562,18 @@ export class ToolEnabledAgent implements BelldandyAgent {
     });
     const chain = waitForPrevious.then(() => current);
     this.conversationRunChains.set(conversationId, chain);
+    if (hadPrevious) {
+      this.opts.logger?.debug?.("agent", "Waiting for previous conversation run slot", {
+        conversationId,
+      });
+    }
     await waitForPrevious;
+    if (hadPrevious) {
+      this.opts.logger?.debug?.("agent", "Acquired conversation run slot after wait", {
+        conversationId,
+        waitMs: Date.now() - waitStartedAt,
+      });
+    }
 
     let released = false;
     return () => {
@@ -870,6 +883,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
         }
 
         const tools = this.opts.toolExecutor.getDefinitions(resolvedAgentId, input.conversationId, runtimeContext);
+        const nextModelCallIndex = modelCallCount + 1;
+        const modelCallStartedAt = Date.now();
+        logDebug("[model-call] dispatch", {
+          modelCallIndex: nextModelCallIndex,
+          conversationId: input.conversationId,
+          agentId: resolvedAgentId,
+          messageCount: messages.length,
+          toolDefinitionCount: tools.length,
+          textAttachmentChars,
+        });
 
         // 调用模型
         const response = await this.callModel(
@@ -879,11 +902,28 @@ export class ToolEnabledAgent implements BelldandyAgent {
           {
             agentId: resolvedAgentId,
             conversationId: input.conversationId,
+            modelCallIndex: nextModelCallIndex,
           },
           input.abortSignal,
           capturePromptSnapshot,
           providerNativeSystemBlocks,
         );
+        logDebug("[model-call] completed", {
+          modelCallIndex: nextModelCallIndex,
+          conversationId: input.conversationId,
+          agentId: resolvedAgentId,
+          ok: response.ok,
+          durationMs: Date.now() - modelCallStartedAt,
+          ...(response.ok
+            ? {
+                responseContentLength: response.content?.length ?? 0,
+                toolCallCount: response.toolCalls?.length ?? 0,
+                reasoningContentLength: response.reasoning_content?.length ?? 0,
+              }
+            : {
+                error: response.error,
+              }),
+        });
 
         if (isRunStopRequested(input.abortSignal)) {
           yield* emitStopped();
@@ -925,7 +965,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
         }
 
         // 输出文本增量（如果有）；先剥离工具调用协议块，避免在对话中展示
+        const postprocessStartedAt = Date.now();
         const contentForDisplay = stripToolCallsSection(response.content || "");
+        logDebug("[model-call] postprocess_done", {
+          modelCallIndex: nextModelCallIndex,
+          conversationId: input.conversationId,
+          agentId: resolvedAgentId,
+          durationMs: Date.now() - postprocessStartedAt,
+          originalContentLength: response.content?.length ?? 0,
+          displayContentLength: contentForDisplay.length,
+        });
         if (contentForDisplay) {
           for (const delta of splitText(contentForDisplay, 16)) {
             yield* yieldItem({ type: "delta", delta });
@@ -1425,12 +1474,25 @@ export class ToolEnabledAgent implements BelldandyAgent {
     messages: Message[],
     tools?: { type: "function"; function: { name: string; description: string; parameters: object } }[],
     textAttachmentChars?: number,
-    runtimeScope?: { conversationId?: string; agentId?: string },
+    runtimeScope?: { conversationId?: string; agentId?: string; modelCallIndex?: number },
     abortSignal?: AbortSignal,
     onBeforeRequest?: (messages: Message[]) => void,
     providerNativeSystemBlocks?: ProviderNativeSystemBlock[],
   ): Promise<{ ok: true; content: string; toolCalls?: OpenAIToolCall[]; reasoning_content?: string; usage?: AnthropicUsage } | { ok: false; error: string }> {
     let effectiveTimeoutMs = this.opts.timeoutMs;
+    const callStartedAt = Date.now();
+    let currentPhase = "preflight";
+    let failoverSummary: FailoverExecutionSummary | undefined;
+    const logModelPhase = (message: string, data?: unknown) => {
+      this.opts.logger?.debug?.("agent", message, {
+        conversationId: runtimeScope?.conversationId,
+        agentId: runtimeScope?.agentId,
+        modelCallIndex: runtimeScope?.modelCallIndex,
+        phase: currentPhase,
+        elapsedMs: Date.now() - callStartedAt,
+        ...((data && typeof data === "object") ? data as Record<string, unknown> : {}),
+      });
+    };
     try {
       // 输入 token 预检：超限时裁剪历史消息
       const maxInput = this.opts.maxInputTokens;
@@ -1447,7 +1509,16 @@ export class ToolEnabledAgent implements BelldandyAgent {
         ? Math.max(this.opts.timeoutMs, minimumAdaptiveTimeoutMs)
         : this.opts.timeoutMs;
       effectiveTimeoutMs = requestTimeoutMs;
+      currentPhase = "request_start";
+      logModelPhase("[model-call] request_start", {
+        messageCount: messages.length,
+        toolDefinitionCount: tools?.length ?? 0,
+        timeoutMs: requestTimeoutMs,
+        minimumAdaptiveTimeoutMs,
+        textAttachmentChars: textAttachmentChars ?? 0,
+      });
 
+      currentPhase = "awaiting_model_response";
       const { response: res } = await this.failoverClient.fetchWithFailover({
         signal: abortSignal,
         timeoutMs: requestTimeoutMs,
@@ -1455,6 +1526,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
         maxRetries: this.opts.maxRetries,
         retryBackoffMs: this.opts.retryBackoffMs,
         onSummary: (summary) => {
+          failoverSummary = summary;
           this.opts.onRuntimeResilienceEvent?.({
             source: "tool_agent",
             phase: "tool_loop",
@@ -1539,15 +1611,37 @@ export class ToolEnabledAgent implements BelldandyAgent {
           };
         },
       });
+      logModelPhase("[model-call] fetch_resolved", {
+        status: res.status,
+        ok: res.ok,
+        usedProtocol,
+        usedWireApi,
+        responseContentType: res.headers.get("content-type") ?? "",
+        responseContentLength: res.headers.get("content-length") ?? "",
+        failoverFinalStatus: failoverSummary?.finalStatus,
+        failoverFinalProfileId: failoverSummary?.finalProfileId,
+        failoverFinalProvider: failoverSummary?.finalProvider,
+        failoverFinalModel: failoverSummary?.finalModel,
+      });
 
       if (!res.ok) {
+        currentPhase = "read_error_response";
         const text = await safeReadText(res);
+        logModelPhase("[model-call] error_response_read", {
+          status: res.status,
+          errorPreviewLength: text.length,
+        });
         return { ok: false, error: `模型调用失败（HTTP ${res.status}）：${text}` };
       }
 
       // 按实际使用的协议解析响应
       if (usedProtocol === "anthropic") {
+        currentPhase = "parse_anthropic_json";
         const json = (await res.json()) as any;
+        logModelPhase("[model-call] json_parse_done", {
+          parser: "anthropic",
+        });
+        currentPhase = "extract_anthropic_response";
         const parsed = parseAnthropicResponse(json);
         const toolCalls: OpenAIToolCall[] | undefined = parsed.toolCalls && parsed.toolCalls.length > 0
           ? parsed.toolCalls.map(tc => ({
@@ -1556,12 +1650,24 @@ export class ToolEnabledAgent implements BelldandyAgent {
             function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
           }))
           : undefined;
+        logModelPhase("[model-call] response_extracted", {
+          parser: "anthropic",
+          contentLength: parsed.content.length,
+          toolCallCount: toolCalls?.length ?? 0,
+          usageInputTokens: parsed.usage?.input_tokens ?? 0,
+          usageOutputTokens: parsed.usage?.output_tokens ?? 0,
+        });
         return { ok: true, content: parsed.content, toolCalls, usage: parsed.usage };
       }
 
       // OpenAI 响应解析
+      currentPhase = "parse_openai_json";
       const json = (await res.json()) as JsonObject;
+      logModelPhase("[model-call] json_parse_done", {
+        parser: usedWireApi === "responses" ? "responses" : "chat_completions",
+      });
       if (usedWireApi === "responses") {
+        currentPhase = "extract_responses_payload";
         const content = extractResponsesText(json);
         const toolCalls = extractResponsesToolCalls(json);
         const rawUsage = (json as any).usage;
@@ -1569,6 +1675,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
           input_tokens: rawUsage.input_tokens ?? rawUsage.prompt_tokens ?? 0,
           output_tokens: rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0,
         } : undefined;
+        logModelPhase("[model-call] response_extracted", {
+          parser: "responses",
+          contentLength: content.length,
+          toolCallCount: toolCalls.length,
+          usageInputTokens: usage?.input_tokens ?? 0,
+          usageOutputTokens: usage?.output_tokens ?? 0,
+        });
         return {
           ok: true,
           content,
@@ -1579,8 +1692,13 @@ export class ToolEnabledAgent implements BelldandyAgent {
 
       const choice = (json.choices as any)?.[0];
       if (!choice) {
+        currentPhase = "extract_chat_choice";
+        logModelPhase("[model-call] empty_choice", {
+          parser: "chat_completions",
+        });
         return { ok: false, error: "模型返回空响应" };
       }
+      currentPhase = "extract_chat_choice";
       const message = choice.message;
       const content = typeof message?.content === "string" ? message.content : "";
       const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls as OpenAIToolCall[] : undefined;
@@ -1592,9 +1710,22 @@ export class ToolEnabledAgent implements BelldandyAgent {
         input_tokens: rawUsage.prompt_tokens ?? rawUsage.input_tokens ?? 0,
         output_tokens: rawUsage.completion_tokens ?? rawUsage.output_tokens ?? 0,
       } : undefined;
+      logModelPhase("[model-call] response_extracted", {
+        parser: "chat_completions",
+        contentLength: content.length,
+        toolCallCount: toolCalls?.length ?? 0,
+        reasoningContentLength: reasoning_content?.length ?? 0,
+        usageInputTokens: usage?.input_tokens ?? 0,
+        usageOutputTokens: usage?.output_tokens ?? 0,
+      });
 
       return { ok: true, content, toolCalls, reasoning_content, usage };
     } catch (err) {
+      logModelPhase("[model-call] failed", {
+        error: err instanceof Error ? err.message : String(err),
+        errorName: err instanceof Error ? err.name : undefined,
+        timeoutMs: effectiveTimeoutMs,
+      });
       if (err instanceof Error && err.name === "AbortError") {
         if (abortSignal?.aborted) {
           return { ok: false, error: STOP_REQUESTED_ERROR };

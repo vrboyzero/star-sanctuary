@@ -1527,14 +1527,18 @@ export class MemoryManager {
      * L0 摘要生成：扫描未摘要的长 chunk，批量调用 LLM 生成单句摘要。
      * 异步后台执行，不阻塞主流程。支持 pause/resume 协作式让步。
      */
-    async generateSummaries(): Promise<number> {
+    async generateSummaries(options: { maxBatches?: number } = {}): Promise<number> {
         if (!this.summaryEnabled || !this.summaryApiKey || !this.summaryModel) {
             return 0;
         }
 
+        const maxBatches = typeof options.maxBatches === "number" && Number.isFinite(options.maxBatches)
+            ? Math.max(1, Math.floor(options.maxBatches))
+            : Number.POSITIVE_INFINITY;
         let totalGenerated = 0;
+        let processedBatches = 0;
 
-        while (true) {
+        while (processedBatches < maxBatches) {
             // 协作式让步：Agent 活跃时暂停
             await this.waitIfPaused();
 
@@ -1543,6 +1547,7 @@ export class MemoryManager {
                 this.summaryBatchSize
             );
             if (chunks.length === 0) break;
+            processedBatches += 1;
 
             console.log(`[MemoryManager] Generating summaries for ${chunks.length} chunks...`);
 
@@ -1994,7 +1999,7 @@ candidateType 必须是以下之一：user / feedback / project / reference
         if (!this.summaryEnabled || this._paused || this._summaryRunning) return 0;
         this._summaryRunning = true;
         try {
-            return await this.generateSummaries();
+            return await this.generateSummaries({ maxBatches: 1 });
         } finally {
             this._summaryRunning = false;
         }

@@ -137,9 +137,10 @@ export class FailoverExhaustedError extends Error {
 
 /** 可选的日志接口 */
 export type FailoverLogger = {
-    info(module: string, msg: string): void;
-    warn(module: string, msg: string): void;
-    error(module: string, msg: string): void;
+    debug?: (module: string, msg: string, data?: unknown) => void;
+    info(module: string, msg: string, data?: unknown): void;
+    warn(module: string, msg: string, data?: unknown): void;
+    error(module: string, msg: string, data?: unknown): void;
 };
 
 function stripUtf8Bom(raw: string): string {
@@ -497,6 +498,7 @@ export class FailoverClient {
                     const requestSignal = init.signal ?? undefined;
                     const externalSignal = signal ?? requestSignal;
                     throwIfAborted(externalSignal);
+                    const attemptStartedAt = Date.now();
 
                     const controller = new AbortController();
                     let timedOut = false;
@@ -523,7 +525,31 @@ export class FailoverClient {
                             (requestInit as any).dispatcher = dispatcher;
                         }
 
+                        this.logger?.debug?.("failover", "Dispatching model request", {
+                            profileId,
+                            provider,
+                            model: profile.model,
+                            attempt,
+                            maxAttempts,
+                            timeoutMs: resolvedTimeoutMs,
+                            wireApi: profile.wireApi,
+                            url,
+                        });
+
                         const response = await fetch(url, requestInit);
+                        const responseDurationMs = Date.now() - attemptStartedAt;
+                        this.logger?.debug?.("failover", "Model request resolved", {
+                            profileId,
+                            provider,
+                            model: profile.model,
+                            attempt,
+                            maxAttempts,
+                            timeoutMs: resolvedTimeoutMs,
+                            wireApi: profile.wireApi,
+                            status: response.status,
+                            ok: response.ok,
+                            durationMs: responseDurationMs,
+                        });
 
                         if (response.ok) {
                             this.cooldown.markSuccess(profileId);
@@ -638,8 +664,19 @@ export class FailoverClient {
                         this.cooldown.mark(profileId, resolveFailoverCooldownMs(reason, { retryAfterMs }));
                         break;
                     } catch (err) {
+                        const responseDurationMs = Date.now() - attemptStartedAt;
                         const isAbort = err instanceof Error && err.name === "AbortError";
                         if (isAbort && externalSignal?.aborted && !timedOut) {
+                            this.logger?.debug?.("failover", "Model request aborted by caller", {
+                                profileId,
+                                provider,
+                                model: profile.model,
+                                attempt,
+                                maxAttempts,
+                                timeoutMs: resolvedTimeoutMs,
+                                wireApi: profile.wireApi,
+                                durationMs: responseDurationMs,
+                            });
                             throw toAbortError(externalSignal.reason);
                         }
                         const reason: FailoverReason = isAbort ? "timeout" : "unknown";
@@ -648,6 +685,18 @@ export class FailoverClient {
                             : err instanceof Error
                                 ? err.message
                                 : String(err);
+                        this.logger?.debug?.("failover", "Model request failed before response", {
+                            profileId,
+                            provider,
+                            model: profile.model,
+                            attempt,
+                            maxAttempts,
+                            timeoutMs: resolvedTimeoutMs,
+                            wireApi: profile.wireApi,
+                            durationMs: responseDurationMs,
+                            reason,
+                            error: errorMsg,
+                        });
                         const canRetrySameProfile = attempt < maxAttempts && isSameProfileRetryable(reason);
                         incrementReason(reason);
 
