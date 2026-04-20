@@ -51,11 +51,13 @@ describe("methodology tools", () => {
         expect(resolveMethodsDir(undefined, env)).toBe(path.join(stateDir, "methods"));
     });
 
-    it("accepts legacy ASCII slug and arbitrary Chinese method filenames", () => {
+    it("accepts only canonical three-part method filenames", () => {
         expect(isValidMethodFilename("file-read-basic.md")).toBe(true);
         expect(isValidMethodFilename("网页-自动化-基础.md")).toBe(true);
-        expect(isValidMethodFilename("网页自动化基础.md")).toBe(true);
-        expect(isValidMethodFilename("网页自动化基础（进阶）.md")).toBe(true);
+        expect(isValidMethodFilename("memory-query-recall.md")).toBe(true);
+        expect(isValidMethodFilename("网页自动化基础.md")).toBe(false);
+        expect(isValidMethodFilename("file-read.md")).toBe(false);
+        expect(isValidMethodFilename("file-read-basic-extra.md")).toBe(false);
         expect(isValidMethodFilename("bad name.md")).toBe(false);
         expect(isValidMethodFilename("invalid:name.md")).toBe(false);
     });
@@ -127,29 +129,29 @@ status: "verified"
         expect(search.output).toContain("File-read-basic.md");
     });
 
-    it("supports arbitrary Chinese method filenames", async () => {
+    it("supports canonical Chinese three-part filenames", async () => {
         const created = await methodCreateTool.execute({
-            filename: "网页自动化基础.md",
+            filename: "网页-自动化-基础.md",
             content: "# 网页自动化基础方法\n\n## 适用场景\n- 中文文件名",
         }, context);
 
         expect(created.success).toBe(true);
 
-        const read = await methodReadTool.execute({ filename: "网页自动化基础.md" }, context);
+        const read = await methodReadTool.execute({ filename: "网页-自动化-基础.md" }, context);
         expect(read.success).toBe(true);
         expect(read.output).toContain("网页自动化基础方法");
     });
 
-    it("searches methods with arbitrary Chinese filenames", async () => {
+    it("searches methods with canonical Chinese three-part filenames", async () => {
         const created = await methodCreateTool.execute({
-            filename: "网页自动化经验总结.md",
+            filename: "网页-自动化-经验.md",
             content: "# 网页自动化经验总结\n\n## 适用场景\n- 自动化浏览器操作",
         }, context);
         expect(created.success).toBe(true);
 
         const search = await methodSearchTool.execute({ keyword: "经验总结" }, context);
         expect(search.success).toBe(true);
-        expect(search.output).toContain("网页自动化经验总结.md");
+        expect(search.output).toContain("网页-自动化-经验.md");
     });
 
     it("rejects invalid method filenames", async () => {

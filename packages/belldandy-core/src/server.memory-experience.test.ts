@@ -11,6 +11,7 @@ import { SkillRegistry } from "@belldandy/skills";
 
 import { createScopedMemoryManagers } from "./resident-memory-managers.js";
 import { startGatewayServer } from "./server.js";
+import { handleMemoryExperienceMethod } from "./server-methods/memory-experience.js";
 import {
   cleanupGlobalMemoryManagersForTest,
   pairWebSocketClient,
@@ -219,6 +220,164 @@ test("memory.share.queue supports centralized claim and review across resident a
     ws.close();
     await closeP;
     await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.generate creates candidates and respects confirmation env", async () => {
+  const previousMethodConfirm = process.env.BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED;
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-generate-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-generate-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  (memoryManager as any).store.createTask({
+    id: "task-generate-1",
+    conversationId: "conv-generate-1",
+    sessionKey: "session-generate-1",
+    agentId: "default",
+    source: "chat",
+    status: "success",
+    title: "生成经验候选",
+    objective: "验证生成 RPC",
+    summary: "任务包含足够的经验沉淀信号。",
+    reflection: "先验证确认门禁，再验证生成与复用。",
+    toolCalls: [{ toolName: "memory_search", success: true, durationMs: 80 }],
+    artifactPaths: ["docs/demo.md"],
+    startedAt: now,
+    finishedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    process.env.BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED = "true";
+    const blockedRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-generate-blocked",
+      method: "experience.candidate.generate",
+      params: { taskId: "task-generate-1", candidateType: "method", agentId: "default" },
+    }, { stateDir });
+    expect(blockedRes).toBeTruthy();
+    if (!blockedRes || blockedRes.ok) {
+      throw new Error("expected confirmation_required response");
+    }
+    expect(blockedRes.ok).toBe(false);
+    expect(blockedRes.error.code).toBe("confirmation_required");
+
+    process.env.BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED = "false";
+    const createdRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-generate-created",
+      method: "experience.candidate.generate",
+      params: { taskId: "task-generate-1", candidateType: "method", agentId: "default" },
+    }, { stateDir });
+    expect(createdRes).toBeTruthy();
+    if (!createdRes || !createdRes.ok) {
+      throw new Error("expected successful candidate generation response");
+    }
+    const createdCandidate = (createdRes.payload?.candidate ?? {}) as Record<string, any>;
+    expect(createdRes.ok).toBe(true);
+    expect(createdRes.payload?.created).toBe(true);
+    expect(createdCandidate.type).toBe("method");
+    expect(createdCandidate.status).toBe("draft");
+
+    const reusedRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-generate-reused",
+      method: "experience.candidate.generate",
+      params: { taskId: "task-generate-1", candidateType: "method", agentId: "default" },
+    }, { stateDir });
+    expect(reusedRes).toBeTruthy();
+    if (!reusedRes || !reusedRes.ok) {
+      throw new Error("expected reused candidate generation response");
+    }
+    const reusedCandidate = (reusedRes.payload?.candidate ?? {}) as Record<string, any>;
+    expect(reusedRes.ok).toBe(true);
+    expect(reusedRes.payload?.reusedExisting).toBe(true);
+    expect(reusedCandidate.id).toBe(createdCandidate.id);
+  } finally {
+    if (previousMethodConfirm === undefined) {
+      delete process.env.BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED;
+    } else {
+      process.env.BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED = previousMethodConfirm;
+    }
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.check_duplicate previews dedup result before generation", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-dedup-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-dedup-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  (memoryManager as any).store.createTask({
+    id: "task-dedup-1",
+    conversationId: "conv-dedup-1",
+    sessionKey: "session-dedup-1",
+    agentId: "default",
+    source: "chat",
+    status: "success",
+    title: "生成经验候选",
+    objective: "验证生成前去重预检",
+    summary: "任务包含足够的经验沉淀信号。",
+    reflection: "已有同类方法时，先做预检再决定是否继续生成。",
+    toolCalls: [{ toolName: "memory_search", success: true, durationMs: 80 }],
+    artifactPaths: ["docs/demo.md"],
+    startedAt: now,
+    finishedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await fs.promises.mkdir(path.join(stateDir, "methods"), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(stateDir, "methods", "method-生成经验候选.md"),
+    [
+      "---",
+      'summary: "任务包含足够的经验沉淀信号。"',
+      "---",
+      "",
+      "# 生成经验候选",
+    ].join("\n"),
+    "utf-8",
+  );
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    const previewRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-dedup-preview",
+      method: "experience.candidate.check_duplicate",
+      params: { taskId: "task-dedup-1", candidateType: "method", agentId: "default" },
+    }, { stateDir });
+    expect(previewRes).toBeTruthy();
+    if (!previewRes || !previewRes.ok) {
+      throw new Error("expected successful candidate duplicate preview response");
+    }
+
+    expect(previewRes.payload?.type).toBe("method");
+    expect(previewRes.payload?.decision).toBe("similar_existing");
+    const similarMatches = Array.isArray(previewRes.payload?.similarMatches)
+      ? (previewRes.payload.similarMatches as Array<Record<string, unknown>>)
+      : [];
+    expect(Array.isArray(previewRes.payload?.similarMatches)).toBe(true);
+    expect(similarMatches.some((item) => item.source === "method_asset")).toBe(true);
+    expect(memoryManager.listExperienceCandidates(10, { taskId: "task-dedup-1", type: "method" })).toHaveLength(0);
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });
@@ -781,7 +940,8 @@ test("experience candidate rpc lists and updates candidate status", async () => 
     const acceptedCandidate = memoryManager.getExperienceCandidate(methodCandidate!.candidate.id);
     expect(acceptedCandidate?.publishedPath).toContain(path.join(stateDir, "methods"));
     const publishedContent = await fs.promises.readFile(acceptedCandidate!.publishedPath!, "utf-8");
-    expect(publishedContent).toContain("# 收敛第五阶段方案 方法候选");
+    expect(publishedContent).toContain("# 收敛第五阶段方案");
+    expect(publishedContent).toContain("## 0. 元信息");
 
     expect(skillAcceptRes.ok).toBe(true);
     expect(skillAcceptRes.payload.candidate.status).toBe("accepted");
@@ -789,7 +949,9 @@ test("experience candidate rpc lists and updates candidate status", async () => 
     expect(acceptedSkillCandidate?.publishedPath).toContain(path.join(stateDir, "skills"));
     const publishedSkillContent = await fs.promises.readFile(acceptedSkillCandidate!.publishedPath!, "utf-8");
     expect(publishedSkillContent).toContain("name:");
-    expect(skillRegistry.getSkill("收敛第五阶段方案 技能草稿")).toBeTruthy();
+    const publishedSkillName = /(?:^|\n)name:\s*"([^"\n]+)"/.exec(publishedSkillContent)?.[1];
+    expect(publishedSkillName).toBeTruthy();
+    expect(skillRegistry.getSkill(publishedSkillName!)).toBeTruthy();
 
     ws.send(JSON.stringify({
       type: "req",

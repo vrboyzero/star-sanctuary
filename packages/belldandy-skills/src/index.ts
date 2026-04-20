@@ -199,6 +199,7 @@ export {
   methodCreateTool,
   methodSearchTool
 } from "./builtin/methodology/index.js";
+export { parseMethodContent, type MethodMetadata, type ParsedMethod } from "./builtin/methodology/meta.js";
 export {
   goalInitTool,
   goalGetTool,

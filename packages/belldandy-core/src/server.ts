@@ -1530,6 +1530,8 @@ async function handleReq(
       "dream.get",
       "dream.commons.status.get",
       "dream.commons.export_now",
+      "experience.candidate.check_duplicate",
+      "experience.candidate.generate",
       "experience.candidate.get",
       "experience.candidate.list",
       "experience.candidate.accept",
@@ -1909,6 +1911,8 @@ async function handleReq(
     case "memory.resume_context":
     case "memory.similar_past_work":
     case "memory.explain_sources":
+    case "experience.candidate.check_duplicate":
+    case "experience.candidate.generate":
     case "experience.candidate.get":
     case "experience.candidate.list":
     case "experience.candidate.accept":

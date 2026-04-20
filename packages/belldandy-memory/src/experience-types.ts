@@ -103,9 +103,37 @@ export interface ExperienceUsageSummary extends ExperienceUsageStats {
   createdAt: string;
 }
 
+export type ExperienceDedupDecision = "new_candidate" | "duplicate_existing" | "similar_existing";
+
+export interface ExperienceDedupMatch {
+  source: "candidate" | "method_asset" | "skill_asset";
+  assetType: ExperienceCandidateType;
+  key: string;
+  title?: string;
+  summary?: string;
+  candidateId?: string;
+  candidateStatus?: ExperienceCandidateStatus;
+  publishedPath?: string;
+  score?: number;
+}
+
 export interface ExperiencePromoteResult {
   candidate: ExperienceCandidate;
   reusedExisting: boolean;
+  dedupDecision?: ExperienceDedupDecision;
+  exactMatch?: ExperienceDedupMatch;
+  similarMatches?: ExperienceDedupMatch[];
+}
+
+export interface ExperienceDedupCheckResult {
+  taskId: string;
+  type: ExperienceCandidateType;
+  title: string;
+  slug: string;
+  summary?: string;
+  decision: ExperienceDedupDecision;
+  exactMatch?: ExperienceDedupMatch;
+  similarMatches: ExperienceDedupMatch[];
 }
 
 export interface ExperienceUsageRecordResult {

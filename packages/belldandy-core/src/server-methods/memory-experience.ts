@@ -482,6 +482,72 @@ export async function handleMemoryExperienceMethod(
       });
     }
 
+    case "experience.candidate.generate": {
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      if (!manager) return notAvailable(req.id);
+
+      const taskId = readRequiredString(params, "taskId");
+      const candidateType = readRequiredString(params, "candidateType");
+      if (!taskId) return invalid(req.id, "taskId is required");
+      if (candidateType !== "method" && candidateType !== "skill") {
+        return invalid(req.id, "candidateType must be method or skill.");
+      }
+      if (isExperienceGenerationConfirmationRequired(candidateType)) {
+        return confirmationRequired(req.id, `${candidateType} generation requires user confirmation.`);
+      }
+
+      const result = candidateType === "method"
+        ? manager.promoteTaskToMethodCandidate(taskId)
+        : manager.promoteTaskToSkillCandidate(taskId);
+      if (!result?.candidate) return notFound(req.id, "Task not found.");
+
+      const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
+      return ok(req.id, {
+        candidate: attachSkillFreshnessToCandidatePayload(
+          toExperienceCandidatePayloadItem(result.candidate, residentPolicy),
+          result.candidate,
+          skillFreshnessSnapshot,
+        ),
+        created: !result.reusedExisting,
+        reusedExisting: result.reusedExisting,
+        dedupDecision: result.dedupDecision,
+        exactMatch: result.exactMatch,
+        similarMatches: result.similarMatches,
+        queryView: buildResidentMemoryQueryView(residentPolicy),
+      });
+    }
+
+    case "experience.candidate.check_duplicate": {
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      if (!manager) return notAvailable(req.id);
+
+      const taskId = readRequiredString(params, "taskId");
+      const candidateType = readRequiredString(params, "candidateType");
+      if (!taskId) return invalid(req.id, "taskId is required");
+      if (candidateType !== "method" && candidateType !== "skill") {
+        return invalid(req.id, "candidateType must be method or skill.");
+      }
+
+      const result = candidateType === "method"
+        ? manager.checkTaskMethodCandidateDuplicate(taskId)
+        : manager.checkTaskSkillCandidateDuplicate(taskId);
+      if (!result) return notFound(req.id, "Task not found.");
+
+      return ok(req.id, {
+        type: result.type,
+        taskId: result.taskId,
+        title: result.title,
+        slug: result.slug,
+        summary: result.summary,
+        decision: result.decision,
+        exactMatch: result.exactMatch,
+        similarMatches: result.similarMatches,
+        queryView: buildResidentMemoryQueryView(residentPolicy),
+      });
+    }
+
     case "experience.candidate.list": {
       const manager = resolveScopedMemoryManager(params);
       const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
@@ -522,15 +588,22 @@ export async function handleMemoryExperienceMethod(
           },
         };
       }
-
-      let publishedPath: string | undefined;
-      if (existing.type === "skill") {
-        publishedPath = await publishSkillCandidate(existing, ctx.stateDir, ctx.skillRegistry);
+      if (isExperiencePublishConfirmationRequired(existing.type)) {
+        return confirmationRequired(req.id, `${existing.type} publish requires user confirmation.`);
       }
 
-      const candidate = manager.acceptExperienceCandidate(candidateId, publishedPath ? { publishedPath } : {});
-      if (!candidate) return notFound(req.id, "Experience candidate not found.");
-      return ok(req.id, { candidate });
+      try {
+        let publishedPath: string | undefined;
+        if (existing.type === "skill") {
+          publishedPath = await publishSkillCandidate(existing, ctx.stateDir, ctx.skillRegistry);
+        }
+
+        const candidate = manager.acceptExperienceCandidate(candidateId, publishedPath ? { publishedPath } : {});
+        if (!candidate) return notFound(req.id, "Experience candidate not found.");
+        return ok(req.id, { candidate });
+      } catch (error) {
+        return failure(req.id, "experience_candidate_publish_failed", error);
+      }
     }
 
     case "experience.candidate.reject": {
@@ -699,6 +772,35 @@ function readRequiredString(params: Record<string, unknown>, key: string): strin
 function readOptionalString(params: Record<string, unknown>, key: string): string | undefined {
   const value = readRequiredString(params, key);
   return value || undefined;
+}
+
+function confirmationRequired(id: string, message: string): GatewayResFrame {
+  return {
+    type: "res",
+    id,
+    ok: false,
+    error: {
+      code: "confirmation_required",
+      message,
+    },
+  };
+}
+
+function readEnvBoolean(name: string): boolean {
+  const normalized = String(process.env[name] ?? "").trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+}
+
+function isExperienceGenerationConfirmationRequired(type: "method" | "skill"): boolean {
+  return type === "method"
+    ? readEnvBoolean("BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED")
+    : readEnvBoolean("BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED");
+}
+
+function isExperiencePublishConfirmationRequired(type: "method" | "skill"): boolean {
+  return type === "method"
+    ? readEnvBoolean("BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED")
+    : readEnvBoolean("BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED");
 }
 
 function clampListLimit(value: unknown, fallback: number, max = 100): number {

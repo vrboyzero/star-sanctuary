@@ -7,6 +7,8 @@ import {
 } from "@belldandy/skills";
 import type { PluginRegistry } from "@belldandy/plugins";
 import type { GatewayEventFrame, GatewayResFrame } from "@belldandy/protocol";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
 import { buildAgentLaunchExplainability } from "./agent-launch-explainability.js";
@@ -33,6 +35,14 @@ type ToolVisibilityPayload = {
   reasonMessage: string;
   alwaysEnabled?: boolean;
   contractReason?: string;
+};
+
+type MethodInventoryItem = {
+  filename: string;
+  title?: string;
+  summary?: string;
+  status?: string;
+  path?: string;
 };
 
 export type QueryRuntimeToolsContext = {
@@ -124,6 +134,7 @@ export async function handleToolsListWithQueryRuntime(
     });
 
     if (!ctx.toolExecutor || !ctx.toolsConfigManager) {
+      const methods = await listMethodInventory(ctx.stateDir);
       const extensionRuntime = buildExtensionRuntimeReport({
         pluginRegistry: ctx.pluginRegistry,
         skillRegistry: ctx.skillRegistry,
@@ -146,6 +157,7 @@ export async function handleToolsListWithQueryRuntime(
           builtin: [],
           mcp: {},
           plugins: [],
+          methods,
           skills: [],
           contracts: {},
           visibility: {},
@@ -396,6 +408,7 @@ export async function handleToolsListWithQueryRuntime(
       eligible: skill.eligible,
       eligibilityReasons: skill.eligibilityReasons,
     }));
+    const methods = await listMethodInventory(ctx.stateDir);
 
     queryRuntime.mark("tool_visibility_built", {
       conversationId: visibilityConversationId,
@@ -403,6 +416,7 @@ export async function handleToolsListWithQueryRuntime(
         builtinCount: builtin.length,
         mcpServerCount: Object.keys(mcp).length,
         pluginCount: extensionRuntime.summary.pluginCount,
+        methodCount: methods.length,
         skillCount: extensionRuntime.summary.skillCount,
       },
     });
@@ -421,6 +435,7 @@ export async function handleToolsListWithQueryRuntime(
         builtin,
         mcp,
         plugins: pluginIds,
+        methods,
         skills,
         contracts,
         toolContractV2Observability,
@@ -450,6 +465,78 @@ export async function handleToolsListWithQueryRuntime(
       },
     };
   });
+}
+
+async function listMethodInventory(stateDir?: string): Promise<MethodInventoryItem[]> {
+  const resolvedStateDir = typeof stateDir === "string" && stateDir.trim() ? stateDir.trim() : "";
+  if (!resolvedStateDir) {
+    return [];
+  }
+
+  const methodsDir = path.join(resolvedStateDir, "methods");
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(methodsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files = entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b, "zh-CN"));
+
+  const items = await Promise.all(files.map(async (filename) => {
+    const relativePath = `methods/${filename}`;
+    const absolutePath = path.join(methodsDir, filename);
+    try {
+      const content = await fs.readFile(absolutePath, "utf-8");
+      const parsed = parseMethodInventoryContent(content);
+      return {
+        filename,
+        title: parsed.title,
+        summary: parsed.summary,
+        status: parsed.status,
+        path: relativePath,
+      } satisfies MethodInventoryItem;
+    } catch {
+      return {
+        filename,
+        path: relativePath,
+      } satisfies MethodInventoryItem;
+    }
+  }));
+
+  return items;
+}
+
+function parseMethodInventoryContent(content: string): {
+  title?: string;
+  summary?: string;
+  status?: string;
+} {
+  const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  const frontmatter = frontmatterMatch?.[1] || "";
+  const body = frontmatterMatch ? content.slice(frontmatterMatch[0].length) : content;
+  return {
+    title: body.match(/^#\s+(.+)$/m)?.[1]?.trim(),
+    summary: readMethodFrontmatterValue(frontmatter, "summary"),
+    status: readMethodFrontmatterValue(frontmatter, "status"),
+  };
+}
+
+function readMethodFrontmatterValue(frontmatter: string, key: string): string | undefined {
+  if (!frontmatter) return undefined;
+  const pattern = new RegExp(`^${escapeRegExp(key)}\\s*:\\s*(.+)$`, "im");
+  const match = frontmatter.match(pattern);
+  if (!match) {
+    return undefined;
+  }
+  return match[1].trim().replace(/^['"]|['"]$/g, "");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export async function handleToolsUpdateWithQueryRuntime(

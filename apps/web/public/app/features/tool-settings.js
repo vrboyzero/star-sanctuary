@@ -47,6 +47,17 @@ export function createToolSettingsController({
     };
     const entry = map[saveButtonState] || map.default;
     saveToolSettingsBtn.textContent = t(entry.key, {}, entry.fallback);
+    updateSaveButtonAvailability();
+  }
+
+  function updateSaveButtonAvailability() {
+    if (!saveToolSettingsBtn) return;
+    const readOnlyTab = toolSettingsActiveTab === "methods";
+    const saving = saveButtonState === "saving";
+    saveToolSettingsBtn.disabled = saving || readOnlyTab;
+    saveToolSettingsBtn.title = readOnlyTab
+      ? t("toolSettings.saveReadonlyMethods", {}, "Methods is a read-only index. No save action is needed.")
+      : "";
   }
 
   function renderEmpty(messageKey, fallback) {
@@ -571,6 +582,7 @@ export function createToolSettingsController({
       builtin,
       mcp,
       plugins,
+      methods,
       skills,
       disabled,
       contracts,
@@ -593,11 +605,14 @@ export function createToolSettingsController({
       );
     } else if (toolSettingsActiveTab === "mcp") {
       renderMCPTab(mcp, disabled.mcp_servers || [], mcpVisibility || {}, visibilityContext || {}, normalizeToolControlState(toolControl));
+    } else if (toolSettingsActiveTab === "methods") {
+      renderMethodsTab(methods || [], visibilityContext || {}, normalizeToolControlState(toolControl));
     } else if (toolSettingsActiveTab === "skills") {
       renderSkillsTab(skills || [], disabled.skills || [], skillVisibility || {}, visibilityContext || {}, normalizeToolControlState(toolControl));
     } else {
       renderPluginsTab(plugins, disabled.plugins || [], pluginVisibility || {}, visibilityContext || {}, normalizeToolControlState(toolControl));
     }
+    updateSaveButtonAvailability();
   }
 
   function renderBuiltinTab(tools, disabledList, contractsByName, visibilityByName, visibilityContext, toolControl) {
@@ -691,6 +706,39 @@ export function createToolSettingsController({
     bindToggleEvents();
   }
 
+  function renderMethodsTab(methodList, visibilityContext, toolControl) {
+    if (!methodList || methodList.length === 0) {
+      renderEmpty("toolSettings.emptyNoMethods", "未发布方法（将 .md 放入 ~/.star_sanctuary/methods/ 目录）");
+      return;
+    }
+    let html = `<div class="tool-section-header"><span>${escapeHtml(t("toolSettings.sectionMethods", {}, "Methods"))}</span><span class="tool-section-count">${escapeHtml(t("toolSettings.totalCount", { total: methodList.length }, `${methodList.length} total`))}</span></div>`;
+    html += renderToolControlState(toolControl, visibilityContext);
+    html += `<div class="tool-settings-policy-note"><div>${escapeHtml(t("toolSettings.methodsReadonlyHint", {}, "Methods is a system-level read-only index here. Review and open files from this list, but do not manage enable/disable state in this tab."))}</div></div>`;
+    for (const method of [...methodList].sort((a, b) => String(a.filename || "").localeCompare(String(b.filename || ""), "zh-CN"))) {
+      const displayTitle = method.title || method.filename || t("toolSettings.methodTitleMissing", {}, "未命名方法");
+      const metaParts = [
+        method.filename ? `${t("toolSettings.methodFileLabel", {}, "文件")}: ${method.filename}` : "",
+        method.status ? `${t("toolSettings.methodStatusLabel", {}, "状态")}: ${method.status}` : "",
+      ].filter(Boolean);
+      const openPath = typeof method.path === "string" && method.path.trim()
+        ? method.path.trim()
+        : method.filename
+          ? `methods/${method.filename}`
+          : "";
+      html += `<div class="tool-item method-item">
+      <div class="skill-item-info">
+        <span class="tool-item-name">${escapeHtml(displayTitle)}</span>
+        ${metaParts.length > 0 ? `<span class="skill-meta">${escapeHtml(metaParts.join(" · "))}</span>` : ""}
+        <span class="skill-desc">${escapeHtml(method.summary || t("toolSettings.methodSummaryMissing", {}, "暂无摘要"))}</span>
+      </div>
+      ${openPath
+        ? `<div class="tool-item-actions"><button type="button" class="button tool-inline-action" data-method-path="${escapeHtml(openPath)}">${escapeHtml(t("toolSettings.methodOpen", {}, "打开文件"))}</button></div>`
+        : ""}</div>`;
+    }
+    toolSettingsBody.innerHTML = html;
+    bindMethodOpenEvents();
+  }
+
   function renderSkillsTab(skillList, disabledList, visibilityBySkill, visibilityContext, toolControl) {
     if (!skillList || skillList.length === 0) {
       renderEmpty("toolSettings.emptyNoSkills", "No skills loaded (put SKILL.md into ~/.star_sanctuary/skills/)");
@@ -760,8 +808,27 @@ export function createToolSettingsController({
     });
   }
 
+  function bindMethodOpenEvents() {
+    toolSettingsBody.querySelectorAll("[data-method-path]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const methodPath = button.getAttribute("data-method-path");
+        if (!methodPath) return;
+        if (typeof window !== "undefined" && typeof window._belldandyOpenFile === "function") {
+          window._belldandyOpenFile(methodPath);
+          return;
+        }
+        showNotice(
+          t("toolSettings.methodOpenUnavailableTitle", {}, "无法打开文件"),
+          t("toolSettings.methodOpenUnavailableMessage", {}, "当前没有可用的文件打开入口。"),
+          "error",
+        );
+      });
+    });
+  }
+
   async function saveToolSettings() {
     if (!isConnected() || !toolSettingsData) return;
+    if (toolSettingsActiveTab === "methods") return;
     if (saveToolSettingsBtn) {
       saveButtonState = "saving";
       updateSaveButton();
@@ -805,7 +872,7 @@ export function createToolSettingsController({
     }
     if (payload && payload.disabled) {
       if (!toolSettingsData) {
-        toolSettingsData = { builtin: [], mcp: {}, plugins: [], skills: [], disabled: payload.disabled };
+        toolSettingsData = { builtin: [], mcp: {}, plugins: [], methods: [], skills: [], disabled: payload.disabled };
       } else {
         toolSettingsData.disabled = payload.disabled;
       }

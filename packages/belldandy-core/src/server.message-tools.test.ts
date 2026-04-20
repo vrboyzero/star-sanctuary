@@ -890,6 +890,73 @@ test("tools.list exposes visibility reasons for selected agent and conversation"
   }
 });
 
+test("tools.list returns published methods inventory for tool settings", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const toolsConfigManager = new ToolsConfigManager(stateDir);
+  await toolsConfigManager.load();
+  await fs.promises.mkdir(path.join(stateDir, "methods"), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(stateDir, "methods", "网页自动化基础.md"),
+    [
+      "---",
+      'summary: "用于处理网页自动化的基础 SOP"',
+      'status: "published"',
+      "---",
+      "",
+      "# 网页自动化基础",
+      "",
+      "## 适用场景",
+      "处理网页自动化任务。",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const toolExecutor = new ToolExecutor({
+    tools: [
+      createTestTool("alpha_builtin"),
+    ],
+    workspaceRoot: process.cwd(),
+  });
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    toolsConfigManager,
+    toolExecutor,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({ type: "req", id: "tools-list-methods", method: "tools.list", params: {} }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "tools-list-methods"));
+    const listRes = frames.find((f) => f.type === "res" && f.id === "tools-list-methods");
+
+    expect(listRes.ok).toBe(true);
+    expect(listRes.payload?.methods).toEqual([
+      expect.objectContaining({
+        filename: "网页自动化基础.md",
+        title: "网页自动化基础",
+        summary: "用于处理网页自动化的基础 SOP",
+        status: "published",
+        path: "methods/网页自动化基础.md",
+      }),
+    ]);
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("tools.list and conversation.meta expose loaded deferred tools from executor session state", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const conversationStore = new ConversationStore({

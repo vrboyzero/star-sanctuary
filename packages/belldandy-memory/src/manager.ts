@@ -42,6 +42,11 @@ import type {
     ExperienceUsageVia,
     TaskExperienceDetail,
 } from "./experience-types.js";
+import {
+    appendMethodFilenameRevision,
+    buildExperienceMethodFilenameBase,
+    validateMethodCandidateDraftForPublish,
+} from "./experience-publish-rules.js";
 import { appendToTodayMemory } from "./memory-files.js";
 import type { DurableExtractionSkipReasonCode } from "./durable-extraction-policy.js";
 import { resolveStateDir, resolveWorkspaceStateDir } from "@belldandy/protocol";
@@ -585,7 +590,7 @@ export class MemoryManager {
             summaryMinToolCalls: options.taskSummaryMinToolCalls,
             summaryMinTokenTotal: options.taskSummaryMinTokenTotal,
         });
-        this.experiencePromoter = new ExperiencePromoter(this.store);
+        this.experiencePromoter = new ExperiencePromoter(this.store, this.publishStateDir);
         this.experienceAutoPromotionEnabled = options.experienceAutoPromotionEnabled ?? true;
         this.experienceAutoMethodEnabled = options.experienceAutoMethodEnabled ?? true;
         this.experienceAutoSkillEnabled = options.experienceAutoSkillEnabled ?? true;
@@ -1009,6 +1014,14 @@ export class MemoryManager {
 
     promoteTaskToSkillCandidate(taskId: string): ExperiencePromoteResult | null {
         return this.experiencePromoter.promoteTask(taskId, "skill");
+    }
+
+    checkTaskMethodCandidateDuplicate(taskId: string) {
+        return this.experiencePromoter.checkTaskDuplicate(taskId, "method");
+    }
+
+    checkTaskSkillCandidateDuplicate(taskId: string) {
+        return this.experiencePromoter.checkTaskDuplicate(taskId, "skill");
     }
 
     getExperienceCandidate(candidateId: string): ExperienceCandidate | null {
@@ -2047,6 +2060,11 @@ candidateType 必须是以下之一：user / feedback / project / reference
     }
 
     private publishMethodCandidate(candidate: ExperienceCandidate): string {
+        const issues = validateMethodCandidateDraftForPublish(candidate.content);
+        if (issues.length > 0) {
+            throw new Error(`Method candidate publish validation failed: ${issues.join("；")}`);
+        }
+
         const methodsDir = path.join(this.publishStateDir, "methods");
         mkdirSync(methodsDir, { recursive: true });
 
@@ -2060,13 +2078,19 @@ candidateType 必须是以下之一：user / feedback / project / reference
             return candidate.publishedPath;
         }
 
-        const baseName = toSafeMethodFilenameBase(candidate.slug, candidate.taskId);
+        const title = candidate.content.match(/^#\s+(.+)$/m)?.[1]?.trim();
+        const baseName = buildExperienceMethodFilenameBase({
+            title,
+            slug: candidate.slug,
+            fallback: candidate.taskId,
+            summary: candidate.summary,
+        });
         const suffixTaskId = normalizeAsciiToken(candidate.taskId, "task");
         const suffixCandidateId = normalizeAsciiToken(candidate.id, "candidate");
         const candidates = [
             `${baseName}.md`,
-            `${baseName}-${suffixTaskId}.md`,
-            `${baseName}-${suffixCandidateId}.md`,
+            `${appendMethodFilenameRevision(baseName, suffixTaskId)}.md`,
+            `${appendMethodFilenameRevision(baseName, suffixCandidateId)}.md`,
         ];
 
         for (const filename of candidates) {
@@ -2076,24 +2100,8 @@ candidateType 必须是以下之一：user / feedback / project / reference
             }
         }
 
-        return path.join(methodsDir, `${baseName}-${suffixCandidateId}-${Date.now()}.md`);
+        return path.join(methodsDir, `${appendMethodFilenameRevision(baseName, `${suffixCandidateId}_${Date.now()}`)}.md`);
     }
-}
-
-function toSafeMethodFilenameBase(slug: string, taskId: string): string {
-    const raw = (slug || "").trim();
-    const normalized = raw
-        .replace(/\.md$/i, "")
-        .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-")
-        .replace(/\s+/g, "-")
-        .replace(/-+/g, "-")
-        .replace(/^-+|-+$/g, "");
-
-    if (normalized) {
-        return normalized;
-    }
-
-    return `method-${normalizeAsciiToken(taskId, "task")}`;
 }
 
 function normalizeAsciiToken(value: string, fallback: string): string {

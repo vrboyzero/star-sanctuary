@@ -3634,6 +3634,7 @@ export function createMemoryViewerFeature({
 
   function renderCandidateDetailPanel(candidate) {
     if (!candidate) return "";
+    const memoryViewerState = getMemoryViewerState();
     const snapshot = candidate.sourceTaskSnapshot || {};
     const memoryLinks = Array.isArray(snapshot.memoryLinks) ? snapshot.memoryLinks : [];
     const artifactPaths = Array.isArray(snapshot.artifactPaths) ? snapshot.artifactPaths : [];
@@ -3648,6 +3649,13 @@ export function createMemoryViewerFeature({
     const candidateSourceExplanation = candidateSourceView ? formatResidentSourceExplainability(candidateSourceView) : "-";
     const candidateSourceConflict = candidateSourceView ? formatResidentSourceConflictSummary(candidateSourceView) : "-";
     const contextTargets = extractCandidateContextTargets(candidate);
+    const pendingActionKey = typeof memoryViewerState.pendingExperienceActionKey === "string"
+      ? memoryViewerState.pendingExperienceActionKey
+      : "";
+    const acceptBusy = pendingActionKey === `candidate:${candidate.id}:accept`;
+    const rejectBusy = pendingActionKey === `candidate:${candidate.id}:reject`;
+    const skillFreshnessStaleTarget = skillFreshness?.sourceCandidateId || skillFreshness?.skillKey || (candidate.type === "skill" ? candidate.id : "");
+    const skillFreshnessStaleBusy = pendingActionKey === `skill-freshness:${skillFreshnessStaleTarget}:${skillFreshness?.manualStaleMark ? "active" : "stale"}`;
 
     return `
       <div class="memory-detail-card">
@@ -3690,7 +3698,40 @@ export function createMemoryViewerFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">冲突说明</span><div class="memory-detail-text">${escapeHtml(candidateSourceConflict)}</div></div>
         </div>
         ${candidate.summary ? `<div class="memory-detail-text">${escapeHtml(candidate.summary)}</div>` : ""}
-        ${skillFreshness ? renderSkillFreshnessDetail(skillFreshness, { escapeHtml, t, maxSignals: 3 }) : ""}
+        ${candidate.status === "draft" ? `
+          <div class="goal-detail-actions">
+            <button
+              class="memory-usage-action-btn"
+              data-review-candidate-action="accept"
+              data-review-candidate-id="${escapeHtml(candidate.id || "")}"
+              data-review-candidate-task-id="${escapeHtml(candidate.taskId || "")}"
+              ${acceptBusy ? "disabled" : ""}
+            >${escapeHtml(acceptBusy
+              ? t("memory.candidateReviewAccepting", {}, "接受中…")
+              : t("memory.candidateAcceptAndPublish", {}, "接受并发布"))}</button>
+            <button
+              class="memory-usage-action-btn"
+              data-review-candidate-action="reject"
+              data-review-candidate-id="${escapeHtml(candidate.id || "")}"
+              data-review-candidate-task-id="${escapeHtml(candidate.taskId || "")}"
+              ${rejectBusy ? "disabled" : ""}
+            >${escapeHtml(rejectBusy
+              ? t("memory.candidateReviewRejecting", {}, "拒绝中…")
+              : t("memory.candidateReject", {}, "拒绝"))}</button>
+          </div>
+        ` : ""}
+        ${skillFreshness ? renderSkillFreshnessDetail(skillFreshness, {
+          escapeHtml,
+          t,
+          maxSignals: 3,
+          actions: {
+            sourceCandidateId: skillFreshness.sourceCandidateId || (candidate.type === "skill" ? candidate.id : ""),
+            skillKey: skillFreshness.skillKey || "",
+            taskId: candidate.taskId || "",
+            candidateId: candidate.id || "",
+            staleBusy: skillFreshnessStaleBusy,
+          },
+        }) : ""}
         ${learningReviewInput ? `
           <div class="memory-detail-card">
             <span class="memory-detail-label">Learning / Review Input</span>

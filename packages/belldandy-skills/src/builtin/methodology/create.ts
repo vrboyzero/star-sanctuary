@@ -13,7 +13,7 @@ export const methodCreateTool: Tool = {
             properties: {
                 filename: {
                     type: "string",
-                    description: "文件名（兼容原有英文 slug，例如 'cron-create.md'；也支持任意中文 .md 文件名，例如 '网页自动化基础.md'）"
+                    description: "文件名。中英文都必须遵守三段式规则：[目标对象]-[动作类型]-[细分].md，例如 'file-read-basic.md'、'网页-自动化-基础.md'"
                 },
                 content: {
                     type: "string",
@@ -39,14 +39,11 @@ export const methodCreateTool: Tool = {
         }
 
         if (!isValidMethodFilename(filename)) {
-            // 虽然校验失败，但作为 Helper，我们不仅报错，还可以建议。
-            // 为了不中断 Agent 的热情，我们暂时只给 Warning 但仍然允许写入，或者强制报错。
-            // 根据“严格的方法论”设计，我们应该强制报错提示修正。
             return {
                 id: "error",
                 name: "method_create",
                 success: false,
-                output: `文件名 '${filename}' 不符合规范。请使用原有英文 slug（例如: file-read-basic.md），或使用安全的中文 .md 文件名（例如: 网页自动化基础.md）。`,
+                output: `文件名 '${filename}' 不符合规范。method 文件名必须遵守三段式规则：[目标对象]-[动作类型]-[细分].md，例如：file-read-basic.md、网页-自动化-基础.md。`,
                 error: "Invalid filename format",
                 durationMs: 0
             };

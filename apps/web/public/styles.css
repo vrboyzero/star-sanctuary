@@ -3975,6 +3975,18 @@ body::before {
   opacity: 0.5;
 }
 
+.tool-item-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.tool-inline-action {
+  padding: 6px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .tool-contract-desc,
 .tool-contract-meta {
   font-size: 11px;

@@ -7,6 +7,7 @@ import {
 import {
   formatSkillFreshnessStatusLabel,
   getSkillFreshnessBadgeClass,
+  renderSkillFreshnessDetail,
 } from "./skill-freshness-view.js";
 
 export function buildTaskSourceExplanationItems(
@@ -83,6 +84,7 @@ export function createMemoryDetailRenderFeature({
   makeId,
   getMemoryViewerState,
   getMemoryViewerFeature,
+  getMemoryRuntimeFeature,
   getGoalDisplayName,
   getCurrentAgentSelection,
   renderMemoryViewerDetailEmpty,
@@ -113,6 +115,10 @@ export function createMemoryDetailRenderFeature({
 
   function getMemoryViewerFeatureValue() {
     return getMemoryViewerFeature?.() ?? null;
+  }
+
+  function getMemoryRuntimeFeatureValue() {
+    return getMemoryRuntimeFeature?.() ?? null;
   }
 
   function getTaskGoalId(task) {
@@ -357,6 +363,9 @@ export function createMemoryDetailRenderFeature({
         ${safeItems.map((item) => {
           const sourceView = item?.sourceView || null;
           const skillFreshness = assetType === "skill" && item?.skillFreshness ? item.skillFreshness : null;
+          const skillFreshnessTarget = skillFreshness?.sourceCandidateId || skillFreshness?.skillKey || "";
+          const skillFreshnessStaleBusy = typeof memoryViewerState.pendingExperienceActionKey === "string"
+            && memoryViewerState.pendingExperienceActionKey === `skill-freshness:${skillFreshnessTarget}:${skillFreshness?.manualStaleMark ? "active" : "stale"}`;
           return `
           <div class="memory-usage-item">
             <div class="memory-usage-item-head">
@@ -398,6 +407,20 @@ export function createMemoryDetailRenderFeature({
               ${item.sourceCandidateTaskId ? `<span>${escapeHtml(t("memory.usageSourceTask", {}, "Source Task"))} ${escapeHtml(item.sourceCandidateTaskId)}</span>` : ""}
               ${item.lastUsedTaskId ? `<span>${escapeHtml(t("memory.usageRecentTask", {}, "Recent Task"))} ${escapeHtml(item.lastUsedTaskId)}</span>` : ""}
             </div>
+            ${skillFreshness ? renderSkillFreshnessDetail(skillFreshness, {
+              escapeHtml,
+              t,
+              maxSignals: 2,
+              actions: {
+                sourceCandidateId: skillFreshness.sourceCandidateId || item.sourceCandidateId || "",
+                skillKey: skillFreshness.skillKey || item.assetKey || "",
+                taskId: item.taskId || "",
+                candidateId: memoryViewerState.selectedCandidate?.taskId === item.taskId
+                  ? memoryViewerState.selectedCandidate.id || ""
+                  : item.sourceCandidateId || "",
+                staleBusy: Boolean(skillFreshnessStaleBusy),
+              },
+            }) : ""}
           </div>
         `;
         }).join("")}
@@ -538,6 +561,11 @@ export function createMemoryDetailRenderFeature({
     const sourceExplanationError = typeof task.sourceExplanationError === "string" ? task.sourceExplanationError.trim() : "";
     const sourceExplanationUpdatedAt = sourceExplanation?.updatedAt ? formatDateTime(sourceExplanation.updatedAt) : "";
     const hasLoadedSourceExplanation = Boolean(sourceExplanation && sourceExplanation.taskId === task.id);
+    const pendingActionKey = typeof memoryViewerState.pendingExperienceActionKey === "string"
+      ? memoryViewerState.pendingExperienceActionKey
+      : "";
+    const generateMethodBusy = pendingActionKey === `generate:method:${task.id}`;
+    const generateSkillBusy = pendingActionKey === `generate:skill:${task.id}`;
 
     memoryViewerDetailEl.innerHTML = `
       <div class="memory-detail-shell">
@@ -593,6 +621,33 @@ export function createMemoryDetailRenderFeature({
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.methodUsageCount", {}, "Method Usage Count"))}</span><div class="memory-detail-text">${escapeHtml(formatCount(usedMethods.length))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.skillUsageCount", {}, "Skill Usage Count"))}</span><div class="memory-detail-text">${escapeHtml(formatCount(usedSkills.length))}</div></div>
           <div class="memory-detail-card"><span class="memory-detail-label">${escapeHtml(t("memory.statLastUsedAt", {}, "Last Used At"))}</span><div class="memory-detail-text">${escapeHtml(formatDateTime(lastUsageAt))}</div></div>
+        </div>
+
+        <div class="memory-detail-card">
+          <div class="goal-summary-header">
+            <div>
+              <div class="goal-summary-title">${escapeHtml(t("memory.experienceActionsTitle", {}, "经验候选操作"))}</div>
+              <div class="goal-summary-text">${escapeHtml(t("memory.experienceActionsHint", {}, "从当前任务直接生成 method / skill candidate，并在右侧继续审核。"))}</div>
+            </div>
+          </div>
+          <div class="goal-detail-actions">
+            <button
+              class="memory-usage-action-btn"
+              data-generate-experience-type="method"
+              data-generate-experience-task-id="${escapeHtml(task.id || "")}"
+              ${generateMethodBusy ? "disabled" : ""}
+            >${escapeHtml(generateMethodBusy
+              ? t("memory.generateMethodCandidateBusy", {}, "生成 method 中…")
+              : t("memory.generateMethodCandidate", {}, "生成 method candidate"))}</button>
+            <button
+              class="memory-usage-action-btn"
+              data-generate-experience-type="skill"
+              data-generate-experience-task-id="${escapeHtml(task.id || "")}"
+              ${generateSkillBusy ? "disabled" : ""}
+            >${escapeHtml(generateSkillBusy
+              ? t("memory.generateSkillCandidateBusy", {}, "生成 skill 中…")
+              : t("memory.generateSkillCandidate", {}, "生成 skill candidate"))}</button>
+          </div>
         </div>
 
         ${task.objective ? `<div class="memory-detail-card"><span class="memory-detail-label">目标说明</span><div class="memory-detail-text">${escapeHtml(task.objective)}</div></div>` : ""}
@@ -895,6 +950,37 @@ export function createMemoryDetailRenderFeature({
         const taskId = node.getAttribute("data-load-task-source-explanation");
         const conversationId = node.getAttribute("data-load-task-conversation-id");
         await loadTaskSourceExplanation(taskId, conversationId);
+      });
+    });
+    memoryViewerDetailEl.querySelectorAll("[data-generate-experience-type]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const taskId = node.getAttribute("data-generate-experience-task-id");
+        const candidateType = node.getAttribute("data-generate-experience-type");
+        await getMemoryRuntimeFeatureValue()?.generateExperienceCandidate?.(taskId, candidateType);
+      });
+    });
+    memoryViewerDetailEl.querySelectorAll("[data-review-candidate-action]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const candidateId = node.getAttribute("data-review-candidate-id");
+        const taskId = node.getAttribute("data-review-candidate-task-id");
+        const action = node.getAttribute("data-review-candidate-action");
+        await getMemoryRuntimeFeatureValue()?.reviewExperienceCandidate?.(candidateId, action, { taskId });
+      });
+    });
+    memoryViewerDetailEl.querySelectorAll("[data-skill-freshness-stale-action]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const action = node.getAttribute("data-skill-freshness-stale-action");
+        const sourceCandidateId = node.getAttribute("data-skill-freshness-source-candidate-id");
+        const skillKey = node.getAttribute("data-skill-freshness-skill-key");
+        const taskId = node.getAttribute("data-skill-freshness-task-id");
+        const candidateId = node.getAttribute("data-skill-freshness-candidate-id");
+        await getMemoryRuntimeFeatureValue()?.updateSkillFreshnessStaleMark?.({
+          sourceCandidateId,
+          skillKey,
+          taskId,
+          candidateId,
+          stale: action !== "clear",
+        });
       });
     });
   }

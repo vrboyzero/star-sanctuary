@@ -50,9 +50,112 @@ describe("ExperiencePromoter", () => {
     expect(created?.reusedExisting).toBe(false);
     expect(created?.candidate.type).toBe("method");
     expect(created?.candidate.status).toBe("draft");
-    expect(created?.candidate.content).toContain("# 实现候选层 方法候选");
+    expect(created?.candidate.slug).toBe("候选层-实现-闭环");
+    expect(created?.candidate.content).toContain("# 实现候选层");
+    expect(created?.candidate.content).toContain("## 0. 元信息");
+    expect(created?.candidate.content).toContain("## 1. 触发条件");
+    expect(created?.candidate.content).toContain("| 条件 | 说明 | 来源信号 |");
+    expect(created?.candidate.content).toContain("## 3. 执行步骤");
+    expect(created?.candidate.content).toContain("## 5. 失败经验");
+    expect(created?.candidate.content).toContain("## 8. 更新记录");
     expect(reused?.reusedExisting).toBe(true);
     expect(reused?.candidate.id).toBe(created?.candidate.id);
+  });
+
+  it("creates a skill candidate with reusable skill structure instead of task report", () => {
+    const created = manager.promoteTaskToSkillCandidate("task_exp_1");
+
+    expect(created?.reusedExisting).toBe(false);
+    expect(created?.candidate.type).toBe("skill");
+    expect(created?.candidate.status).toBe("draft");
+    expect(created?.candidate.slug).toBe("skill-task-exp-1");
+    expect(created?.candidate.content).toContain('name: "skill-task-exp-1"');
+    expect(created?.candidate.content).toContain('description: "将与 完成 P5-A 的候选层最小闭环 相近的问题收敛为可复用执行路由');
+    expect(created?.candidate.content).toContain("## 快速开始");
+    expect(created?.candidate.content).toContain("## 决策路由");
+    expect(created?.candidate.content).toContain("## 输入");
+    expect(created?.candidate.content).toContain("## 输出");
+    expect(created?.candidate.content).toContain("## NEVER");
+    expect(created?.candidate.content).not.toContain("Conversation:");
+    expect(created?.candidate.content).not.toContain("Status:");
+  });
+
+  it("reuses an exact candidate from another task as system-level dedup", () => {
+    (manager as any).store.createTask({
+      id: "task_exp_2",
+      conversationId: "conv_exp_2",
+      sessionKey: "session_exp_2",
+      source: "chat",
+      status: "success",
+      title: "实现候选层",
+      objective: "完成同类候选层闭环",
+      summary: "已经整理出类型、存储和工具入口。",
+      reflection: "保持候选层先落库，避免正式资产被错误污染。",
+      outcome: "候选层基础闭环可以运行。",
+      toolCalls: [{ toolName: "memory_search", success: true, durationMs: 60 }],
+      artifactPaths: ["MemOS对比分析-v2.md"],
+      startedAt: "2026-03-16T00:00:00.000Z",
+      finishedAt: "2026-03-16T00:00:00.000Z",
+      createdAt: "2026-03-16T00:00:00.000Z",
+      updatedAt: "2026-03-16T00:00:00.000Z",
+    });
+
+    const first = manager.promoteTaskToMethodCandidate("task_exp_1");
+    const deduped = manager.promoteTaskToMethodCandidate("task_exp_2");
+
+    expect(first?.candidate.id).toBeTruthy();
+    expect(deduped?.reusedExisting).toBe(true);
+    expect(deduped?.candidate.id).toBe(first?.candidate.id);
+    expect(deduped?.dedupDecision).toBe("duplicate_existing");
+    expect(deduped?.exactMatch?.candidateId).toBe(first?.candidate.id);
+  });
+
+  it("attaches similar existing method assets to the promotion result", async () => {
+    const methodsDir = path.join(workspaceRoot, "methods");
+    await fs.mkdir(methodsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(methodsDir, "候选层-实现-闭环.md"),
+      [
+        "---",
+        'summary: "已经整理出类型、存储和工具入口。"',
+        "---",
+        "",
+        "# 实现候选层",
+        "",
+        "## 适用场景",
+        "处理候选层实现与治理。",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const result = manager.promoteTaskToMethodCandidate("task_exp_1");
+    expect(result?.reusedExisting).toBe(false);
+    expect(result?.dedupDecision).toBe("similar_existing");
+    expect(result?.similarMatches?.some((item) => item.source === "method_asset")).toBe(true);
+  });
+
+  it("checks duplicates before generation without creating a candidate", async () => {
+    const methodsDir = path.join(workspaceRoot, "methods");
+    await fs.mkdir(methodsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(methodsDir, "候选层-实现-闭环.md"),
+      [
+        "---",
+        'summary: "已经整理出类型、存储和工具入口。"',
+        "---",
+        "",
+        "# 实现候选层",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const preview = manager.checkTaskMethodCandidateDuplicate("task_exp_1");
+
+    expect(preview?.type).toBe("method");
+    expect(preview?.decision).toBe("similar_existing");
+    expect(preview?.title).toBe("实现候选层");
+    expect(preview?.similarMatches.some((item) => item.source === "method_asset")).toBe(true);
+    expect(manager.listExperienceCandidates(10, { taskId: "task_exp_1", type: "method" })).toHaveLength(0);
   });
 
   it("lists and updates candidate status", () => {
@@ -144,8 +247,35 @@ describe("ExperiencePromoter", () => {
     expect(accepted?.status).toBe("accepted");
     expect(accepted?.publishedPath).toBeTruthy();
     expect(accepted?.publishedPath).toContain(path.join(workspaceRoot, "methods"));
+    expect(path.basename(accepted!.publishedPath!)).toBe("候选层-实现-闭环.md");
 
     const content = await fs.readFile(accepted!.publishedPath!, "utf-8");
-    expect(content).toContain("# 实现候选层 方法候选");
+    expect(content).toContain("# 实现候选层");
+    expect(content).toContain("## 3. 执行步骤");
+  });
+
+  it("rejects publishing malformed method candidates before write", () => {
+    manager.upsertExperienceCandidate({
+      id: "exp_invalid_method",
+      taskId: "task_exp_1",
+      type: "method",
+      status: "draft",
+      title: "不完整方法",
+      slug: "不完整方法",
+      content: "# 不完整方法\n\n## 0. 元信息\n| 属性 | 内容 |",
+      summary: "不完整",
+      createdAt: "2026-03-15T00:00:00.000Z",
+      sourceTaskSnapshot: {
+        taskId: "task_exp_1",
+        conversationId: "conv_exp_1",
+        source: "chat",
+        status: "success",
+        startedAt: "2026-03-15T00:00:00.000Z",
+      },
+    });
+
+    expect(() => manager.acceptExperienceCandidate("exp_invalid_method")).toThrow(
+      /Method candidate publish validation failed/,
+    );
   });
 });

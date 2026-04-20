@@ -25,6 +25,11 @@ export type LearningReviewTaskAction = {
   reusedExisting?: boolean;
 };
 
+export type LearningReviewPromotionGate = {
+  allowed: boolean;
+  reason?: string;
+};
+
 export type PostTaskLearningReviewRunResult = {
   taskId: string;
   agentId: string;
@@ -85,6 +90,7 @@ export async function runPostTaskLearningReview(input: {
   task: TaskExperienceDetail | null;
   findCandidate: (taskId: string, type: ExperienceCandidateType) => ExperienceCandidate | null;
   promote: (taskId: string, type: ExperienceCandidateType) => ExperiencePromoteResult | null;
+  canPromote?: (type: ExperienceCandidateType) => LearningReviewPromotionGate | boolean;
 }): Promise<PostTaskLearningReviewRunResult | null> {
   if (!input.task) {
     return null;
@@ -105,6 +111,11 @@ export async function runPostTaskLearningReview(input: {
     const existing = input.findCandidate(input.task.id, type);
     if (existing) {
       actions.push(buildTaskAction(type, { candidate: existing, reusedExisting: true }, "existing", "candidate already exists"));
+      continue;
+    }
+    const gate = resolvePromotionGate(input.canPromote?.(type));
+    if (!gate.allowed) {
+      actions.push(buildTaskAction(type, null, "skipped", gate.reason || "promotion is disabled"));
       continue;
     }
     const allowed = type === "method"
@@ -141,6 +152,16 @@ export async function runPostTaskLearningReview(input: {
     summary: `task=${input.task.id} | generated=${generatedCount} | existing=${existingCount} | task_signal=${learningReviewInput.summary.taskSignalCount}`,
     recommendations,
   };
+}
+
+function resolvePromotionGate(value: LearningReviewPromotionGate | boolean | undefined): LearningReviewPromotionGate {
+  if (typeof value === "boolean") {
+    return { allowed: value };
+  }
+  if (value && typeof value.allowed === "boolean") {
+    return value;
+  }
+  return { allowed: true };
 }
 
 function countGoalReviews(summary: GoalReviewGovernanceSummary): number {

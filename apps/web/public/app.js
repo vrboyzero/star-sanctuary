@@ -1439,6 +1439,7 @@ memoryDetailRenderFeature = createMemoryDetailRenderFeature({
   makeId,
   getMemoryViewerState: () => memoryViewerState,
   getMemoryViewerFeature: () => memoryViewerFeature,
+  getMemoryRuntimeFeature: () => memoryRuntimeFeature,
   getGoalDisplayName,
   getCurrentAgentSelection,
   renderMemoryViewerDetailEmpty: (message) => renderMemoryViewerDetailEmpty(message),
@@ -1679,6 +1680,7 @@ function resetMemoryViewerStateForAgent(agentId = getCurrentAgentSelection()) {
   memoryViewerState.selectedTask = null;
   memoryViewerState.selectedCandidate = null;
   memoryViewerState.pendingUsageRevokeId = null;
+  memoryViewerState.pendingExperienceActionKey = null;
   memoryViewerState.usageOverview = {
     loading: false,
     methods: [],

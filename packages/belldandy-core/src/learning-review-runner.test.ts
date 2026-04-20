@@ -84,6 +84,27 @@ describe("learning review runner", () => {
     expect(manager.listExperienceCandidates(10, { taskId: "task_learning_1" })).toHaveLength(2);
   });
 
+  it("skips generation when promotion requires user confirmation", async () => {
+    const result = await runPostTaskLearningReview({
+      stateDir,
+      agentId: "default",
+      task: manager.getTaskDetail("task_learning_1"),
+      findCandidate: (taskId, type) => manager.findExperienceCandidateByTaskAndType(taskId, type),
+      promote: (taskId, type) => type === "method"
+        ? manager.promoteTaskToMethodCandidate(taskId)
+        : manager.promoteTaskToSkillCandidate(taskId),
+      canPromote: (type) => ({
+        allowed: false,
+        reason: `${type} generation requires user confirmation`,
+      }),
+    });
+
+    expect(result?.generated).toBe(false);
+    expect(result?.actions.map((item) => item.status)).toEqual(["skipped", "skipped"]);
+    expect(result?.actions[0]?.reason).toContain("requires user confirmation");
+    expect(manager.listExperienceCandidates(10, { taskId: "task_learning_1" })).toHaveLength(0);
+  });
+
   it("skips goal review scan generation when actionable reviews still exist", async () => {
     let generateCalled = false;
     const result = await runGoalReviewScanLearningReview({

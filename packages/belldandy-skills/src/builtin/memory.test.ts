@@ -618,14 +618,23 @@ describe("memory tools", () => {
   it("task_promote_method should render created candidate draft", async () => {
     manager.promoteTaskToMethodCandidate.mockReturnValue({
       reusedExisting: false,
+      dedupDecision: "similar_existing",
+      similarMatches: [
+        {
+          source: "method_asset",
+          key: "method-fix-task.md",
+          title: "修复任务实施",
+          score: 0.91,
+        },
+      ],
       candidate: {
         id: "exp-1",
         taskId: "task_1",
         type: "method",
         status: "draft",
-        title: "修复任务 方法候选",
+        title: "修复任务",
         slug: "method-fix-task",
-        content: "# 修复任务 方法候选\n\n## 来源任务\n- Task ID: task_1",
+        content: "# 修复任务\n\n## 0. 元信息\n| 属性 | 内容 |",
         summary: "从修复任务提炼的方法候选",
         qualityScore: 85,
         createdAt: "2026-03-15T00:00:00.000Z",
@@ -639,6 +648,8 @@ describe("memory tools", () => {
     expect(result.output).toContain("Created method candidate draft.");
     expect(result.output).toContain("Candidate ID: exp-1");
     expect(result.output).toContain("Quality Score: 85");
+    expect(result.output).toContain("Dedup Decision: similar_existing");
+    expect(result.output).toContain("Similar Existing:");
   });
 
   it("experience_candidate_list should pass filter and render items", async () => {

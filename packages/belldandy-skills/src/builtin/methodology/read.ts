@@ -13,7 +13,7 @@ export const methodReadTool: Tool = {
             properties: {
                 filename: {
                     type: "string",
-                    description: "方法文件名 (例如: 'Cron-create.md')"
+                    description: "方法文件名（例如: 'file-read-basic.md' 或 '网页-自动化-基础.md'）"
                 }
             },
             required: ["filename"]

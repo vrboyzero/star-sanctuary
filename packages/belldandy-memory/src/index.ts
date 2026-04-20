@@ -87,6 +87,17 @@ export { syncDreamToObsidian } from "./dream-obsidian-sync.js";
 export { writeObsidianCommonsExport } from "./commons-exporter.js";
 export { DreamRuntime } from "./dream-runtime.js";
 export { ExperiencePromoter } from "./experience-promoter.js";
+export {
+  buildExperienceCandidateSlug,
+  buildExperienceMethodFilenameBase,
+  buildExperienceSkillMachineName,
+  normalizeExperienceSkillMachineName,
+  readFirstMarkdownTitle,
+  validateMethodCandidateDraftForPublish,
+  validateSkillCandidateDraftForPublish,
+  EXPERIENCE_METHOD_REQUIRED_HEADINGS,
+  EXPERIENCE_SKILL_REQUIRED_HEADINGS,
+} from "./experience-publish-rules.js";
 export { shouldSkipRetrieval } from "./adaptive-retrieval.js";
 export { isNoise, filterNoise, type NoiseFilterOptions } from "./noise-filter.js";
 export * from "./types.js";

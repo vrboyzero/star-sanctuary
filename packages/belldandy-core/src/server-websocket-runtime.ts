@@ -139,6 +139,8 @@ const DEFAULT_METHODS = [
   "dream.get",
   "dream.commons.status.get",
   "dream.commons.export_now",
+  "experience.candidate.check_duplicate",
+  "experience.candidate.generate",
   "experience.candidate.get",
   "experience.candidate.list",
   "experience.candidate.accept",

@@ -2250,6 +2250,12 @@ const taskSummaryMinTokenTotal = Number(readEnv("BELLDANDY_TASK_SUMMARY_MIN_TOKE
 const experienceAutoPromotionEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_PROMOTION_ENABLED") ?? "true") !== "false";
 const experienceAutoMethodEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_METHOD_ENABLED") ?? "true") !== "false";
 const experienceAutoSkillEnabled = (readEnv("BELLDANDY_EXPERIENCE_AUTO_SKILL_ENABLED") ?? "true") !== "false";
+const methodGenerationConfirmRequired = parseEnvBoolean(readEnv("BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED"));
+const skillGenerationConfirmRequired = parseEnvBoolean(readEnv("BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED"));
+const methodPublishConfirmRequired = parseEnvBoolean(readEnv("BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED"));
+const skillPublishConfirmRequired = parseEnvBoolean(readEnv("BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED"));
+const effectiveExperienceAutoMethodEnabled = experienceAutoMethodEnabled && !methodGenerationConfirmRequired;
+const effectiveExperienceAutoSkillEnabled = experienceAutoSkillEnabled && !skillGenerationConfirmRequired;
 let requestMemoryEvolutionExtraction:
   | ((input: {
     conversationId: string;
@@ -2298,8 +2304,8 @@ const scopedMemoryManagers = createScopedMemoryManagers({
   taskSummaryMinToolCalls,
   taskSummaryMinTokenTotal,
   experienceAutoPromotionEnabled,
-  experienceAutoMethodEnabled,
-  experienceAutoSkillEnabled,
+  experienceAutoMethodEnabled: effectiveExperienceAutoMethodEnabled,
+  experienceAutoSkillEnabled: effectiveExperienceAutoSkillEnabled,
   conversationStore,
   deepRetrievalEnabled,
   rerankerOptions: {
@@ -2320,7 +2326,7 @@ for (const record of [...new Map(scopedMemoryManagers.records.map((item) => [ite
 }
 logger.info(
   "memory",
-  `Scoped MemoryManagers initialized (bindings=${scopedMemoryManagers.records.length}, unique=${new Set(scopedMemoryManagers.records.map((item) => item.stateDir)).size}, teamShared=${teamSharedMemoryEnabled}, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${experienceAutoMethodEnabled}, skillAuto=${experienceAutoSkillEnabled})`,
+  `Scoped MemoryManagers initialized (bindings=${scopedMemoryManagers.records.length}, unique=${new Set(scopedMemoryManagers.records.map((item) => item.stateDir)).size}, teamShared=${teamSharedMemoryEnabled}, summary=${summaryEnabled}, evolution=${evolutionEnabled}, taskMemory=${taskMemoryEnabled}, experienceAuto=${experienceAutoPromotionEnabled}, methodAuto=${effectiveExperienceAutoMethodEnabled}, skillAuto=${effectiveExperienceAutoSkillEnabled}, methodGenerateConfirm=${methodGenerationConfirmRequired}, skillGenerateConfirm=${skillGenerationConfirmRequired}, methodPublishConfirm=${methodPublishConfirmRequired}, skillPublishConfirm=${skillPublishConfirmRequired})`,
 );
 
 // ========== 后台任务调度：pause/resume + 空闲摘要 ==========
@@ -2626,6 +2632,7 @@ if (taskMemoryEnabled) {
         promote: (resolvedTaskId, type) => type === "method"
           ? mm.promoteTaskToMethodCandidate(resolvedTaskId)
           : mm.promoteTaskToSkillCandidate(resolvedTaskId),
+        canPromote: (type) => resolveExperiencePromotionGate(type),
       }).then((result) => {
         if (!result) return;
         logger.info("learning-review", `post-run ${result.summary}`);
@@ -2672,6 +2679,35 @@ if (evolutionEnabled) {
     },
   });
   logger.info("memory-evolution", "Registered agent_end hook for unified durable extraction scheduling");
+}
+
+function resolveExperiencePromotionGate(type: "method" | "skill"): { allowed: boolean; reason?: string } {
+  if (!experienceAutoPromotionEnabled) {
+    return { allowed: false, reason: "experience auto promotion is disabled" };
+  }
+
+  if (type === "method") {
+    if (!experienceAutoMethodEnabled) {
+      return { allowed: false, reason: "method auto promotion is disabled" };
+    }
+    if (methodGenerationConfirmRequired) {
+      return { allowed: false, reason: "method generation requires user confirmation" };
+    }
+    return { allowed: true };
+  }
+
+  if (!experienceAutoSkillEnabled) {
+    return { allowed: false, reason: "skill auto promotion is disabled" };
+  }
+  if (skillGenerationConfirmRequired) {
+    return { allowed: false, reason: "skill generation requires user confirmation" };
+  }
+  return { allowed: true };
+}
+
+function parseEnvBoolean(value: string | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }
 
 // ========== 扩展 C：自动任务边界检测 ==========

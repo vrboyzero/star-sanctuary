@@ -22,6 +22,10 @@ import { withToolContract } from "../tool-contract.js";
 
 // Singleton instance (lazy init, fallback only)
 let memoryManager: MemoryManager | null = null;
+const methodGenerationConfirmRequired = readEnvBoolean("BELLDANDY_METHOD_GENERATION_CONFIRM_REQUIRED");
+const skillGenerationConfirmRequired = readEnvBoolean("BELLDANDY_SKILL_GENERATION_CONFIRM_REQUIRED");
+const methodPublishConfirmRequired = readEnvBoolean("BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED");
+const skillPublishConfirmRequired = readEnvBoolean("BELLDANDY_SKILL_PUBLISH_CONFIRM_REQUIRED");
 
 function getMemoryManager(workspaceRoot: string): MemoryManager {
     // [FIX] 优先使用 Gateway 注册的全局实例，以便访问 sessions 向量索引
@@ -48,6 +52,11 @@ function getMemoryManager(workspaceRoot: string): MemoryManager {
 
 function getTaskWorkSurface(workspaceRoot: string) {
     return createTaskWorkSurface(getMemoryManager(workspaceRoot));
+}
+
+function readEnvBoolean(name: string): boolean {
+    const normalized = String(process.env[name] ?? "").trim().toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }
 
 function withMemoryReadContract(
@@ -1049,7 +1058,7 @@ export const taskPromoteMethodTool: Tool = withMemoryWriteContract({
         }
     },
 }, "Promote a historical task into a method candidate", "Experience promotion result text.", {
-    needsPermission: false,
+    needsPermission: methodGenerationConfirmRequired,
 });
 
 export const taskPromoteSkillDraftTool: Tool = withMemoryWriteContract({
@@ -1096,7 +1105,7 @@ export const taskPromoteSkillDraftTool: Tool = withMemoryWriteContract({
         }
     },
 }, "Promote a historical task into a skill draft candidate", "Experience promotion result text.", {
-    needsPermission: false,
+    needsPermission: skillGenerationConfirmRequired,
 });
 
 export const experienceCandidateGetTool: Tool = withMemoryReadContract({
@@ -1267,6 +1276,7 @@ export const experienceCandidateAcceptTool: Tool = withMemoryWriteContract({
         }
     },
 }, "Accept an experience candidate and optionally publish it", "Experience candidate acceptance result text.", {
+    needsPermission: methodPublishConfirmRequired || skillPublishConfirmRequired,
     riskLevel: "high",
     outputPersistencePolicy: "artifact",
 });
@@ -2054,7 +2064,28 @@ function formatTaskDetail(task: TaskExperienceDetail): string {
 }
 
 function formatExperiencePromotionResult(
-    result: { candidate: ExperienceCandidate; reusedExisting: boolean },
+    result: {
+        candidate: ExperienceCandidate;
+        reusedExisting: boolean;
+        dedupDecision?: "new_candidate" | "duplicate_existing" | "similar_existing";
+        exactMatch?: {
+            source: "candidate" | "method_asset" | "skill_asset";
+            key: string;
+            title?: string;
+            candidateId?: string;
+            candidateStatus?: string;
+            publishedPath?: string;
+        };
+        similarMatches?: Array<{
+            source: "candidate" | "method_asset" | "skill_asset";
+            key: string;
+            title?: string;
+            score?: number;
+            candidateId?: string;
+            candidateStatus?: string;
+            publishedPath?: string;
+        }>;
+    },
     type: "method" | "skill",
 ): string {
     const lines = [
@@ -2071,6 +2102,29 @@ function formatExperiencePromotionResult(
     }
     if (result.candidate.summary) {
         lines.push(`Summary: ${result.candidate.summary}`);
+    }
+    if (result.dedupDecision) {
+        lines.push(`Dedup Decision: ${result.dedupDecision}`);
+    }
+    if (result.exactMatch) {
+        lines.push(`Exact Match: ${result.exactMatch.source} | ${result.exactMatch.title || result.exactMatch.key}`);
+        if (result.exactMatch.candidateId) {
+            lines.push(`Exact Match Candidate: ${result.exactMatch.candidateId}`);
+        }
+        if (result.exactMatch.candidateStatus) {
+            lines.push(`Exact Match Status: ${result.exactMatch.candidateStatus}`);
+        }
+        if (result.exactMatch.publishedPath) {
+            lines.push(`Exact Match Path: ${result.exactMatch.publishedPath}`);
+        }
+    }
+    if (result.similarMatches?.length) {
+        lines.push("Similar Existing:");
+        for (const match of result.similarMatches.slice(0, 3)) {
+            const score = typeof match.score === "number" ? ` | score=${match.score.toFixed(2)}` : "";
+            const candidateMeta = match.candidateId ? ` | candidate=${match.candidateId}` : "";
+            lines.push(`- ${match.source} | ${match.title || match.key}${score}${candidateMeta}`);
+        }
     }
     lines.push("", truncateForSummary(result.candidate.content, 400));
     return lines.join("\n");
