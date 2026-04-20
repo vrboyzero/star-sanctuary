@@ -112,6 +112,7 @@ export function createSettingsController({
   let lastLoadedConfig = null;
   let lastLoadedChannelSecurityContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
   let lastLoadedChannelReplyChunkingContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
+  let doctorRequestVersion = 0;
   const conversationKindCheckboxes = {
     main: cfgConversationKindMain,
     subtask: cfgConversationKindSubtask,
@@ -301,9 +302,11 @@ export function createSettingsController({
       onToggle?.(true);
       if (!options.skipLoad) {
         await loadConfig();
-        await loadModelFallbackConfig();
-        await loadChannelSecuritySurface();
-        await runDoctor();
+        await Promise.all([
+          loadModelFallbackConfig(),
+          loadChannelSecuritySurface(),
+          runDoctor(),
+        ]);
       }
       if (options.section === "channels" && channelsSettingsSection) {
         channelsSettingsSection.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -648,7 +651,7 @@ export function createSettingsController({
       return;
     }
     await loadChannelSecuritySurface();
-    await runDoctor();
+    await runDoctor({ forceRefresh: true });
   }
 
   async function handlePairingPendingAction(code, buttonEl) {
@@ -679,8 +682,109 @@ export function createSettingsController({
     });
   }
 
-  async function runDoctor() {
+  function renderDoctorPayload(payload, options = {}) {
+    if (!doctorStatusEl || !doctorToggleBtn || !payload?.checks) return false;
+    let hasFail = false;
+    let hasWarn = false;
+    doctorStatusEl.innerHTML = "";
+
+    const doctorPerformance = payload.performance;
+    if (doctorPerformance && Number.isFinite(Number(doctorPerformance.totalMs))) {
+      const timingBadge = document.createElement("span");
+      timingBadge.className = "badge";
+      const stages = Array.isArray(doctorPerformance.stages) ? doctorPerformance.stages : [];
+      const slowStages = stages
+        .filter((stage) => Number.isFinite(Number(stage?.durationMs)))
+        .sort((left, right) => Number(right.durationMs || 0) - Number(left.durationMs || 0))
+        .slice(0, 2)
+        .map((stage) => `${stage.name}:${Math.round(Number(stage.durationMs || 0))}ms`);
+      timingBadge.textContent = slowStages.length > 0
+        ? t(
+          "settings.doctorTimingSummary",
+          { totalMs: Math.round(Number(doctorPerformance.totalMs || 0)), slowStages: slowStages.join(", ") },
+          `耗时 ${Math.round(Number(doctorPerformance.totalMs || 0))}ms · ${slowStages.join(", ")}`,
+        )
+        : t(
+          "settings.doctorTiming",
+          { totalMs: Math.round(Number(doctorPerformance.totalMs || 0)) },
+          `耗时 ${Math.round(Number(doctorPerformance.totalMs || 0))}ms`,
+        );
+      doctorStatusEl.appendChild(timingBadge);
+    }
+
+    if (options.detailPending) {
+      const pendingBadge = document.createElement("span");
+      pendingBadge.className = "badge";
+      pendingBadge.textContent = t(
+        "settings.doctorLoadingDetails",
+        {},
+        "正在加载详细观察项...",
+      );
+      doctorStatusEl.appendChild(pendingBadge);
+    }
+
+    payload.checks.forEach((check) => {
+      if (check.status === "fail") {
+        hasFail = true;
+      } else if (check.status === "warn") {
+        hasWarn = true;
+      }
+      const badge = document.createElement("span");
+      badge.className = `badge ${check.status}`;
+      badge.textContent = `${check.name}: ${check.message || check.status}`;
+      doctorStatusEl.appendChild(badge);
+    });
+
+    if (options.includeCards) {
+      renderDoctorObservabilityCards(doctorStatusEl, payload, t, {
+        onOpenContinuationAction,
+      });
+    }
+
+    if (hasFail) {
+      doctorToggleBtn.className = "button badge fail";
+      doctorToggleBtn.textContent = t("settings.doctorHasIssues", {}, "存在未通过的检查");
+    } else if (hasWarn) {
+      doctorToggleBtn.className = "button badge warn";
+      doctorToggleBtn.textContent = t("settings.doctorHasWarnings", {}, "存在需关注项");
+    } else {
+      doctorToggleBtn.className = "button badge pass";
+      doctorToggleBtn.textContent = t("settings.doctorAllPassed", {}, "所有检查通过");
+    }
+
+    return true;
+  }
+
+  async function loadDoctorDetails(version, requestParams = {}) {
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "system.doctor",
+      params: {
+        ...requestParams,
+        surface: "full",
+      },
+    });
+    if (version !== doctorRequestVersion || !doctorStatusEl) {
+      return;
+    }
+    if (res?.ok && res.payload?.checks) {
+      renderDoctorPayload(res.payload, { includeCards: true });
+      return;
+    }
+    const badge = document.createElement("span");
+    badge.className = "badge warn";
+    badge.textContent = t(
+      "settings.doctorDetailLoadFailed",
+      {},
+      "详细观察项加载失败，当前显示的是摘要结果。",
+    );
+    doctorStatusEl.appendChild(badge);
+  }
+
+  async function runDoctor(options = {}) {
     if (!doctorStatusEl || !doctorToggleBtn) return;
+    const version = ++doctorRequestVersion;
     doctorToggleBtn.className = "button button-muted badge";
     doctorToggleBtn.innerHTML = `<span data-i18n="settings.doctorChecking">${t("settings.doctorChecking", {}, "检查中...")}</span>`;
     doctorStatusEl.innerHTML = "";
@@ -691,34 +795,25 @@ export function createSettingsController({
       return;
     }
 
-    const res = await sendReq({ type: "req", id: makeId(), method: "system.doctor" });
+    const requestParams = options.forceRefresh === true ? { forceRefresh: true } : {};
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "system.doctor",
+      params: {
+        ...requestParams,
+        surface: "summary",
+      },
+    });
+    if (version !== doctorRequestVersion) {
+      return;
+    }
     if (res && res.ok && res.payload && res.payload.checks) {
-      let hasFail = false;
-      let hasWarn = false;
-      res.payload.checks.forEach((check) => {
-        if (check.status === "fail") {
-          hasFail = true;
-        } else if (check.status === "warn") {
-          hasWarn = true;
-        }
-        const badge = document.createElement("span");
-        badge.className = `badge ${check.status}`;
-        badge.textContent = `${check.name}: ${check.message || check.status}`;
-        doctorStatusEl.appendChild(badge);
+      renderDoctorPayload(res.payload, {
+        includeCards: false,
+        detailPending: true,
       });
-      renderDoctorObservabilityCards(doctorStatusEl, res.payload, t, {
-        onOpenContinuationAction,
-      });
-      if (hasFail) {
-        doctorToggleBtn.className = "button badge fail";
-        doctorToggleBtn.textContent = t("settings.doctorHasIssues", {}, "存在未通过的检查");
-      } else if (hasWarn) {
-        doctorToggleBtn.className = "button badge warn";
-        doctorToggleBtn.textContent = t("settings.doctorHasWarnings", {}, "存在需关注项");
-      } else {
-        doctorToggleBtn.className = "button badge pass";
-        doctorToggleBtn.textContent = t("settings.doctorAllPassed", {}, "所有检查通过");
-      }
+      void loadDoctorDetails(version, requestParams);
       return;
     }
     if (handlePairingRequiredResponse(res)) {
@@ -887,7 +982,7 @@ export function createSettingsController({
         alert(t("settings.configSavedRestart", {}, "Configuration saved. Please restart server to apply changes."));
       }, 1000);
       await loadChannelSecuritySurface();
-      await runDoctor();
+      await runDoctor({ forceRefresh: true });
       return;
     }
 

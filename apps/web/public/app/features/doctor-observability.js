@@ -3150,9 +3150,40 @@ function createDoctorCard(card, handlers = {}) {
   return panel;
 }
 
+const DOCTOR_CARD_SYNC_BATCH_SIZE = 4;
+const DOCTOR_CARD_ASYNC_BATCH_SIZE = 4;
+const pendingDoctorCardRenderJobs = new WeakMap();
+
+function createDoctorCardRenderScheduler(container) {
+  const view = container?.ownerDocument?.defaultView;
+  if (view && typeof view.requestAnimationFrame === "function" && typeof view.cancelAnimationFrame === "function") {
+    return {
+      schedule(callback) {
+        return view.requestAnimationFrame(callback);
+      },
+      cancel(handle) {
+        view.cancelAnimationFrame(handle);
+      },
+    };
+  }
+  return {
+    schedule(callback) {
+      return setTimeout(callback, 0);
+    },
+    cancel(handle) {
+      clearTimeout(handle);
+    },
+  };
+}
+
 export function renderDoctorObservabilityCards(container, payload, t, handlers = {}) {
   if (!container) {
     return;
+  }
+  const previousJob = pendingDoctorCardRenderJobs.get(container);
+  if (previousJob) {
+    previousJob.cancelled = true;
+    previousJob.cancel();
   }
   const cards = [
     buildAssistantModeRuntimeCard(payload, t),
@@ -3178,10 +3209,43 @@ export function renderDoctorObservabilityCards(container, payload, t, handlers =
     buildAgentStopRuntimeCard(payload, t),
     buildRuntimeResilienceCard(payload, t),
   ].filter(Boolean);
-
-  for (const card of cards) {
-    container.appendChild(createDoctorCard(card, handlers));
+  if (cards.length === 0) {
+    pendingDoctorCardRenderJobs.delete(container);
+    return;
   }
+
+  const scheduler = createDoctorCardRenderScheduler(container);
+  const job = {
+    cancelled: false,
+    handle: null,
+    cancel() {
+      if (this.handle !== null) {
+        scheduler.cancel(this.handle);
+        this.handle = null;
+      }
+    },
+  };
+  pendingDoctorCardRenderJobs.set(container, job);
+
+  const appendBatch = (startIndex, batchSize) => {
+    if (job.cancelled || pendingDoctorCardRenderJobs.get(container) !== job) {
+      return;
+    }
+    const endIndex = Math.min(startIndex + batchSize, cards.length);
+    for (let index = startIndex; index < endIndex; index += 1) {
+      container.appendChild(createDoctorCard(cards[index], handlers));
+    }
+    if (endIndex >= cards.length) {
+      pendingDoctorCardRenderJobs.delete(container);
+      job.handle = null;
+      return;
+    }
+    job.handle = scheduler.schedule(() => {
+      appendBatch(endIndex, DOCTOR_CARD_ASYNC_BATCH_SIZE);
+    });
+  };
+
+  appendBatch(0, DOCTOR_CARD_SYNC_BATCH_SIZE);
 }
 
 export function buildDoctorChatSummary(payload, t) {

@@ -34,6 +34,8 @@ const DEFAULT_PROMPT_SNAPSHOT_EMAIL_THREAD_MAX_RUNS = 10;
 const DEFAULT_PROMPT_SNAPSHOT_MAX_AGE_DAYS = 7;
 const DEFAULT_PROMPT_SNAPSHOT_HEARTBEAT_PREFIX = "heartbeat-";
 const DEFAULT_PROMPT_SNAPSHOT_EMAIL_THREAD_PREFIX = "channel=email:scope=per-account-thread:";
+const RENAME_RETRIES = 3;
+const RENAME_RETRY_DELAY_MS = 50;
 
 export type ConversationPromptSnapshotRetentionPolicy = {
   defaultMaxRunsPerConversation?: number;
@@ -513,15 +515,45 @@ function readPromptSnapshotResidentObject(
 async function atomicWriteJson(targetPath: string, value: unknown): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(value, null, 2), "utf-8");
-  await fs.rename(tempPath, targetPath);
+  const content = JSON.stringify(value, null, 2);
+  await fs.writeFile(tempPath, content, "utf-8");
+  await renameWithWindowsFallback(tempPath, targetPath, content);
 }
 
 async function atomicWriteText(targetPath: string, value: string): Promise<void> {
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tempPath, value, "utf-8");
-  await fs.rename(tempPath, targetPath);
+  await renameWithWindowsFallback(tempPath, targetPath, value);
+}
+
+async function renameWithWindowsFallback(tempPath: string, targetPath: string, content: string): Promise<void> {
+  let lastErr: NodeJS.ErrnoException | null = null;
+  for (let attempt = 0; attempt < RENAME_RETRIES; attempt += 1) {
+    try {
+      await fs.rename(tempPath, targetPath);
+      return;
+    } catch (error) {
+      lastErr = error as NodeJS.ErrnoException;
+      if (attempt < RENAME_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  if (process.platform === "win32" && lastErr && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")) {
+    try {
+      await fs.writeFile(targetPath, content, "utf-8");
+      await fs.unlink(tempPath).catch(() => {});
+      return;
+    } catch (fallbackError) {
+      await fs.unlink(tempPath).catch(() => {});
+      throw fallbackError;
+    }
+  }
+
+  await fs.unlink(tempPath).catch(() => {});
+  throw lastErr;
 }
 
 async function persistConversationPromptSystemPromptBlob(input: {

@@ -71,7 +71,10 @@ async function runStartupSequence(
     ptyManager.write(record.runtimeSessionId, step.data);
     store.appendTranscript(sessionId, "input", step.data);
     store.touch(sessionId);
-    await store.persistSessionState(sessionId);
+    await store.persistSessionState(sessionId, {
+      includeRegistry: false,
+      includeTranscript: true,
+    });
   }
 }
 
@@ -95,7 +98,10 @@ async function captureStartupOutput(
   }
   store.appendTranscript(sessionId, "output", output);
   store.touch(sessionId);
-  await store.persistSessionState(sessionId);
+  await store.persistSessionState(sessionId, {
+    includeRegistry: false,
+    includeTranscript: true,
+  });
   return output;
 }
 
@@ -444,7 +450,10 @@ export async function writeBridgeSession(
         ? { firstTurnWriteObservedAt: Date.now() }
         : {}),
     });
-    await store.persistSessionState(sessionId);
+    await store.persistSessionState(sessionId, {
+      includeRegistry: updated.firstTurnWriteObservedAt !== record.firstTurnWriteObservedAt,
+      includeTranscript: true,
+    });
     const firstTurnGuidance = buildFirstTurnGuidance(updated);
 
     return {
@@ -498,10 +507,15 @@ export async function readBridgeSession(
     await delay(resolvedWaitMs, context.abortSignal);
     const ptyManager = PtyManager.getInstance();
     const output = ptyManager.read(record.runtimeSessionId);
-    store.appendTranscript(sessionId, "output", output);
-    await recordBridgeSessionOutput(context, sessionId, output);
     const updated = store.touch(sessionId);
-    await store.persistSessionState(sessionId);
+    if (output) {
+      store.appendTranscript(sessionId, "output", output);
+      await recordBridgeSessionOutput(context, sessionId, output);
+      await store.persistSessionState(sessionId, {
+        includeRegistry: false,
+        includeTranscript: true,
+      });
+    }
 
     return {
       id: sessionId,

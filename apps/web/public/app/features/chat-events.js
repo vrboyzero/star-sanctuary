@@ -33,6 +33,50 @@ export function createChatEventsFeature({
   let botMessageEl = null;
   let botRawHtmlBuffer = "";
   let botMessageMeta = null;
+  let pendingFrameFlushHandle = null;
+  let pendingTokenUsagePayload = null;
+  let pendingTokenUsageRunning = null;
+  const pendingGoalUpdates = new Map();
+  const pendingSubtaskUpdates = new Map();
+
+  function scheduleFrameFlush() {
+    if (pendingFrameFlushHandle !== null) {
+      return;
+    }
+    const schedule = typeof globalThis.requestAnimationFrame === "function"
+      ? globalThis.requestAnimationFrame.bind(globalThis)
+      : (callback) => globalThis.setTimeout(() => callback(Date.now()), 16);
+    pendingFrameFlushHandle = schedule(() => {
+      pendingFrameFlushHandle = null;
+      flushPendingUiEvents();
+    });
+  }
+
+  function flushPendingUiEvents() {
+    if (pendingTokenUsageRunning !== null) {
+      setTokenUsageRunning?.(pendingTokenUsageRunning);
+      pendingTokenUsageRunning = null;
+    }
+
+    if (pendingTokenUsagePayload) {
+      updateTokenUsage?.(pendingTokenUsagePayload);
+      pendingTokenUsagePayload = null;
+    }
+
+    if (pendingGoalUpdates.size > 0) {
+      for (const payload of pendingGoalUpdates.values()) {
+        queueGoalUpdateEvent?.(payload);
+      }
+      pendingGoalUpdates.clear();
+    }
+
+    if (pendingSubtaskUpdates.size > 0) {
+      for (const payload of pendingSubtaskUpdates.values()) {
+        onSubtaskUpdated?.(payload);
+      }
+      pendingSubtaskUpdates.clear();
+    }
+  }
 
   function resetStreamingState() {
     botMessageEl = null;
@@ -134,13 +178,15 @@ export function createChatEventsFeature({
         showRestartCountdown(payload.countdown, payload.reason || "");
       }
       if (isActiveConversationPayload(payload)) {
-        setTokenUsageRunning(payload?.status === "running");
+        pendingTokenUsageRunning = payload?.status === "running";
+        scheduleFrameFlush();
       }
       return true;
     }
 
     if (event === "token.usage") {
-      updateTokenUsage(payload);
+      pendingTokenUsagePayload = payload || null;
+      scheduleFrameFlush();
       return true;
     }
 
@@ -155,12 +201,24 @@ export function createChatEventsFeature({
     }
 
     if (event === "goal.update") {
-      queueGoalUpdateEvent(payload);
+      const goalId = typeof payload?.goal?.id === "string" ? payload.goal.id : "";
+      if (goalId) {
+        pendingGoalUpdates.set(goalId, payload);
+        scheduleFrameFlush();
+      } else {
+        queueGoalUpdateEvent?.(payload);
+      }
       return true;
     }
 
     if (event === "subtask.update") {
-      onSubtaskUpdated?.(payload);
+      const taskId = typeof payload?.item?.id === "string" ? payload.item.id : "";
+      if (taskId) {
+        pendingSubtaskUpdates.set(taskId, payload);
+        scheduleFrameFlush();
+      } else {
+        onSubtaskUpdated?.(payload);
+      }
       return true;
     }
 

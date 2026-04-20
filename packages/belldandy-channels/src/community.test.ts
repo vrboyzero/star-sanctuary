@@ -300,14 +300,10 @@ describe("community token usage upload", () => {
       conversationStore: new ConversationStore(),
     });
 
-    const diagnoseSpy = vi.spyOn(channel as any, "diagnoseHttpConnectivity").mockResolvedValue({
-      requestUrl: "https://office.goddess.ai/api/rooms/by-name/vrboyzero",
-      host: "office.goddess.ai",
-      port: 443,
-      dns: { ok: true, addresses: ["1.1.1.1"] },
-      tcp: { ok: true, address: "1.1.1.1:443" },
-      failure: { name: "TypeError", message: "fetch failed" },
-    });
+    let resolveDiagnostic!: (value: unknown) => void;
+    const diagnoseSpy = vi.spyOn(channel as any, "diagnoseHttpConnectivity").mockImplementation(() => new Promise((resolve) => {
+      resolveDiagnostic = resolve;
+    }));
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect((channel as any).connectAgent({
@@ -320,15 +316,77 @@ describe("community token usage upload", () => {
       "https://office.goddess.ai/api/rooms/by-name/vrboyzero",
       expect.any(TypeError),
     );
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleErrorSpy).not.toHaveBeenCalledWith(
       '[community] Failed to resolve room name "vrboyzero" (network):',
-      expect.objectContaining({
-        host: "office.goddess.ai",
-        port: 443,
-        dns: expect.objectContaining({ ok: true }),
-        tcp: expect.objectContaining({ ok: true }),
-      }),
+      expect.anything(),
     );
+    resolveDiagnostic({
+      requestUrl: "https://office.goddess.ai/api/rooms/by-name/vrboyzero",
+      host: "office.goddess.ai",
+      port: 443,
+      dns: { ok: true, addresses: ["1.1.1.1"] },
+      tcp: { ok: true, address: "1.1.1.1:443" },
+      failure: { name: "TypeError", message: "fetch failed" },
+    });
+    await vi.waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[community] Failed to resolve room name "vrboyzero" (network):',
+        expect.objectContaining({
+          host: "office.goddess.ai",
+          port: 443,
+          dns: expect.objectContaining({ ok: true }),
+          tcp: expect.objectContaining({ ok: true }),
+        }),
+      );
+    });
+  });
+
+  it("deduplicates in-flight connectivity diagnostics for repeated room lookup failures", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const channel = new CommunityChannel({
+      endpoint: "https://office.goddess.ai",
+      agents: [],
+      agent: { run: vi.fn() } as any,
+      conversationStore: new ConversationStore(),
+    });
+
+    let resolveDiagnostic!: (value: unknown) => void;
+    const diagnoseSpy = vi.spyOn(channel as any, "diagnoseHttpConnectivity").mockImplementation(() => new Promise((resolve) => {
+      resolveDiagnostic = resolve;
+    }));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect((channel as any).connectAgent({
+      name: "贝露丹蒂",
+      apiKey: "gro_test_key",
+      room: { name: "vrboyzero" },
+    })).rejects.toThrow("fetch failed");
+    await expect((channel as any).connectAgent({
+      name: "贝露丹蒂",
+      apiKey: "gro_test_key",
+      room: { name: "vrboyzero" },
+    })).rejects.toThrow("fetch failed");
+
+    expect(diagnoseSpy).toHaveBeenCalledTimes(1);
+
+    resolveDiagnostic({
+      requestUrl: "https://office.goddess.ai/api/rooms/by-name/vrboyzero",
+      host: "office.goddess.ai",
+      port: 443,
+      dns: { ok: true, addresses: ["1.1.1.1"] },
+      tcp: { ok: true, address: "1.1.1.1:443" },
+      failure: { name: "TypeError", message: "fetch failed" },
+    });
+    await vi.waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[community] Failed to resolve room name "vrboyzero" (network):',
+        expect.objectContaining({
+          host: "office.goddess.ai",
+        }),
+      );
+    });
   });
 
   it("logs HTTP status details when room lookup returns non-ok response", async () => {

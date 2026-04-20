@@ -171,12 +171,13 @@ test("message.send accepts multiple attachments within configured limits", async
         stateDir,
         "storage",
         "attachments",
-        encodeURIComponent(conversationId).replace(/\./g, "%2E"),
       );
       const fileA = await fs.promises.readFile(path.join(attachmentDir, "a.txt"), "utf-8");
       const fileB = await fs.promises.readFile(path.join(attachmentDir, "b.txt"), "utf-8");
       expect(fileA).toBe("hello-a");
       expect(fileB).toBe("hello-b");
+      await expect(fs.promises.access(path.join(attachmentDir, encodeURIComponent(conversationId).replace(/\./g, "%2E"))))
+        .rejects.toBeDefined();
     } finally {
       ws.close();
       await closeP;

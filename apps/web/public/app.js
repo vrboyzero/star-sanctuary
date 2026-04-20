@@ -305,6 +305,10 @@ const {
 let ws = null;
 let isReady = false;
 let activeConversationId = null;
+let renderedConversationMessageState = {
+  conversationId: null,
+  keys: [],
+};
 const residentAgentRosterEnabled = window.BELLDANDY_WEB_CONFIG?.residentAgentRosterEnabled !== false;
 const CONFIG_CACHE_TTL_MS = 2000;
 let configCacheData = null;
@@ -2480,33 +2484,86 @@ function prependTaskTokenHistory(conversationId, item) {
   }
 }
 
-function renderConversationMessages(messages) {
+function getConversationMessageRenderKey(item, index) {
+  if (item && typeof item.id === "string" && item.id.trim()) {
+    return `id:${item.id.trim()}`;
+  }
+  const role = typeof item?.role === "string" ? item.role : "";
+  const timestampMs = typeof item?.timestampMs === "number" && Number.isFinite(item.timestampMs)
+    ? item.timestampMs
+    : "";
+  return `fallback:${index}:${role}:${timestampMs}`;
+}
+
+function appendConversationMessageItem(item, index) {
+  if (!item || typeof item !== "object") return;
+  const role = item.role === "assistant" ? "bot" : "me";
+  const content = typeof item.content === "string" ? item.content : String(item.content ?? "");
+  const meta = {
+    timestampMs: typeof item.timestampMs === "number" && Number.isFinite(item.timestampMs) ? item.timestampMs : undefined,
+    displayTimeText: typeof item.displayTimeText === "string" ? item.displayTimeText : undefined,
+    isLatest: item.isLatest === true,
+  };
+  const bubble = appendMessage(role, role === "bot" ? "" : content, meta);
+  if (bubble instanceof HTMLElement) {
+    const renderKey = getConversationMessageRenderKey(item, index);
+    bubble.dataset.conversationMessageKey = renderKey;
+    const wrapper = bubble.closest(".msg-wrapper");
+    if (wrapper instanceof HTMLElement) {
+      wrapper.dataset.conversationMessageKey = renderKey;
+    }
+  }
+  if (role === "bot") {
+    chatUiFeature?.renderAssistantMessage?.(bubble, content);
+  }
+  chatUiFeature?.updateMessageMeta?.(bubble, meta);
+}
+
+function renderConversationMessages(conversationId, messages) {
   if (!messagesEl) return;
+  const normalizedMessages = Array.isArray(messages)
+    ? messages.filter((item) => item && typeof item === "object")
+    : [];
+  const nextKeys = normalizedMessages.map((item, index) => getConversationMessageRenderKey(item, index));
+  const currentState = renderedConversationMessageState;
+  const canIncrementallyAppend = currentState.conversationId === conversationId
+    && currentState.keys.length > 0
+    && nextKeys.length > currentState.keys.length
+    && messagesEl.querySelector(".system-msg") === null
+    && currentState.keys.every((key, index) => key === nextKeys[index]);
+
+  if (canIncrementallyAppend) {
+    for (let index = currentState.keys.length; index < normalizedMessages.length; index += 1) {
+      appendConversationMessageItem(normalizedMessages[index], index);
+    }
+    renderedConversationMessageState = {
+      conversationId,
+      keys: nextKeys,
+    };
+    return;
+  }
+
   messagesEl.innerHTML = "";
 
-  if (!Array.isArray(messages) || messages.length === 0) {
+  if (normalizedMessages.length === 0) {
     const empty = document.createElement("div");
     empty.className = "system-msg";
     empty.textContent = "当前会话暂无消息";
     messagesEl.appendChild(empty);
+    renderedConversationMessageState = {
+      conversationId,
+      keys: [],
+    };
     return;
   }
 
-  for (const item of messages) {
-    if (!item || typeof item !== "object") continue;
-    const role = item.role === "assistant" ? "bot" : "me";
-    const content = typeof item.content === "string" ? item.content : String(item.content ?? "");
-    const meta = {
-      timestampMs: typeof item.timestampMs === "number" && Number.isFinite(item.timestampMs) ? item.timestampMs : undefined,
-      displayTimeText: typeof item.displayTimeText === "string" ? item.displayTimeText : undefined,
-      isLatest: item.isLatest === true,
-    };
-    const bubble = appendMessage(role, role === "bot" ? "" : content, meta);
-    if (role === "bot") {
-      chatUiFeature?.renderAssistantMessage?.(bubble, content);
-    }
-    chatUiFeature?.updateMessageMeta?.(bubble, meta);
+  for (let index = 0; index < normalizedMessages.length; index += 1) {
+    appendConversationMessageItem(normalizedMessages[index], index);
   }
+  renderedConversationMessageState = {
+    conversationId,
+    keys: nextKeys,
+  };
 }
 
 async function loadConversationMeta(conversationId, options = {}) {
@@ -2533,7 +2590,7 @@ async function loadConversationMeta(conversationId, options = {}) {
       agentRuntimeFeature?.setConversationMessages(conversationId, res.payload.messages);
     }
     if (renderMessages && Array.isArray(res.payload.messages) && conversationId === activeConversationId) {
-      renderConversationMessages(res.payload.messages);
+      renderConversationMessages(conversationId, res.payload.messages);
       const emailInboundSessionBanner = await emailInboundSessionBannerFeature?.loadBannerText?.(conversationId);
       emailInboundSessionBannerFeature?.renderBanner?.(
         messagesEl,

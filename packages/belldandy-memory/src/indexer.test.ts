@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +27,8 @@ describe("MemoryIndexer", () => {
   });
 
   afterEach(async () => {
+    await indexer.stopWatching();
+    vi.restoreAllMocks();
     store.close();
     await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
   });
@@ -73,5 +75,49 @@ describe("MemoryIndexer", () => {
     expect(resolveVerboseWatchEvents(undefined, {} as NodeJS.ProcessEnv)).toBe(false);
     expect(resolveVerboseWatchEvents(undefined, { BELLDANDY_MEMORY_INDEXER_VERBOSE_WATCH: "true" } as NodeJS.ProcessEnv)).toBe(true);
     expect(resolveVerboseWatchEvents(false, { BELLDANDY_MEMORY_INDEXER_VERBOSE_WATCH: "true" } as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  it("coalesces repeated watch upsert events for the same file", async () => {
+    vi.useFakeTimers();
+    indexer = new MemoryIndexer(store, {
+      watchDebounceMs: 40,
+    });
+    const indexSpy = vi.spyOn(indexer, "indexFile").mockResolvedValue();
+
+    try {
+      (indexer as any).scheduleWatchEvent(filePath, "upsert");
+      (indexer as any).scheduleWatchEvent(filePath, "upsert");
+
+      await vi.advanceTimersByTimeAsync(15);
+      expect(indexSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(indexSpy).toHaveBeenCalledTimes(1);
+      expect(indexSpy).toHaveBeenCalledWith(path.resolve(filePath));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the latest watch event win when a file is removed after a pending reindex", async () => {
+    vi.useFakeTimers();
+    indexer = new MemoryIndexer(store, {
+      watchDebounceMs: 40,
+    });
+    const indexSpy = vi.spyOn(indexer, "indexFile").mockResolvedValue();
+    const deleteSpy = vi.spyOn(store, "deleteBySource");
+
+    try {
+      (indexer as any).scheduleWatchEvent(filePath, "upsert");
+      (indexer as any).scheduleWatchEvent(filePath, "remove");
+
+      await vi.advanceTimersByTimeAsync(40);
+
+      expect(indexSpy).not.toHaveBeenCalled();
+      expect(deleteSpy).toHaveBeenCalledTimes(1);
+      expect(deleteSpy).toHaveBeenCalledWith(path.resolve(filePath));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

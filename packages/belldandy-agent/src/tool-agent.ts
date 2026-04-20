@@ -55,6 +55,11 @@ const BASE64_FIELD_KEY_RE = /^(base64|data)$/i;
 const DEFAULT_REASONING_TRANSCRIPT_CHAR_LIMIT = 4_000;
 const MIN_REASONING_DEDUPE_CHARS = 96;
 const STOP_REQUESTED_ERROR = "__BELLDANDY_STOP_REQUESTED__";
+const toolDefinitionTokenEstimateCache = new WeakMap<object, {
+  name: string;
+  description: string;
+  tokens: number;
+}>();
 
 export type ToolEnabledAgentOptions = {
   baseUrl: string;
@@ -139,6 +144,27 @@ type OpenAIToolCall = {
   type: "function";
   function: { name: string; arguments: string };
 };
+
+export function estimateToolDefinitionTokens(tool: {
+  type: "function";
+  function: { name: string; description: string; parameters: object };
+}): number {
+  const parameters = tool.function.parameters;
+  const cached = toolDefinitionTokenEstimateCache.get(parameters);
+  if (cached && cached.name === tool.function.name && cached.description === tool.function.description) {
+    return cached.tokens;
+  }
+
+  const tokens = estimateTokens(
+    tool.function.name + tool.function.description + JSON.stringify(parameters),
+  );
+  toolDefinitionTokenEstimateCache.set(parameters, {
+    name: tool.function.name,
+    description: tool.function.description,
+    tokens,
+  });
+  return tokens;
+}
 
 function hasMultimodalContentInMessages(messages: Message[]): boolean {
   return messages.some((m) =>
@@ -883,6 +909,7 @@ export class ToolEnabledAgent implements BelldandyAgent {
         }
 
         const tools = this.opts.toolExecutor.getDefinitions(resolvedAgentId, input.conversationId, runtimeContext);
+        const toolNames = tools.map((tool) => tool.function.name);
         const nextModelCallIndex = modelCallCount + 1;
         const modelCallStartedAt = Date.now();
         logDebug("[model-call] dispatch", {
@@ -891,6 +918,12 @@ export class ToolEnabledAgent implements BelldandyAgent {
           agentId: resolvedAgentId,
           messageCount: messages.length,
           toolDefinitionCount: tools.length,
+          toolNamesPreview: toolNames.slice(0, 12),
+          hasApplyPatch: toolNames.includes("apply_patch"),
+          hasFileRead: toolNames.includes("file_read"),
+          hasFileWrite: toolNames.includes("file_write"),
+          hasListFiles: toolNames.includes("list_files"),
+          hasToolSearch: toolNames.includes("tool_search"),
           textAttachmentChars,
         });
 
@@ -986,6 +1019,8 @@ export class ToolEnabledAgent implements BelldandyAgent {
         logDebug("[tool-check] model response analyzed", {
           toolCallCount: toolCalls?.length ?? 0,
           responseContentLength: response.content?.length ?? 0,
+          toolDefinitionCount: tools.length,
+          toolNamesPreview: toolNames.slice(0, 12),
         });
         if (!toolCalls || toolCalls.length === 0) {
           // 无工具调用，输出最终结果（已剥离协议块）
@@ -2465,7 +2500,7 @@ function trimMessagesToFit(
   let toolsTokens = 0;
   if (tools) {
     for (const t of tools) {
-      toolsTokens += estimateTokens(t.function.name + t.function.description + JSON.stringify(t.function.parameters));
+      toolsTokens += estimateToolDefinitionTokens(t);
     }
   }
 

@@ -300,11 +300,17 @@ export function createGatewayWebSocketRuntime(
           supportsUuid: true,
           configOk: options.isConfigured ? options.isConfigured() : true,
         });
+        if (ws.readyState !== 1) {
+          return;
+        }
         const allowed = await isClientAllowed({
           clientId: state.clientId ?? state.sessionId,
           stateDir: options.stateDir,
         });
         if (!allowed) {
+          if (ws.readyState !== 1) {
+            return;
+          }
           const pairing = await ensurePairingCode({
             clientId: state.clientId ?? state.sessionId,
             stateDir: options.stateDir,

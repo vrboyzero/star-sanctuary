@@ -88,7 +88,6 @@ export async function preparePromptWithAttachments(input: {
     input.stateDir,
     "storage",
     "attachments",
-    toSafeAttachmentConversationDirName(input.conversationId),
   );
   await fs.mkdir(attachmentDir, { recursive: true });
 
@@ -105,6 +104,7 @@ export async function preparePromptWithAttachments(input: {
           index,
           attachment,
           fingerprint: normalized.fingerprint,
+          promptPath: toAttachmentPromptPath(input.stateDir, normalized.savePath),
           acceptedContentCapabilities: input.acceptedContentCapabilities,
         });
         attachmentPrompts.push(imageHandled.prompt);
@@ -119,6 +119,7 @@ export async function preparePromptWithAttachments(input: {
           attachment,
           fingerprint: normalized.fingerprint,
           savePath: normalized.savePath,
+          promptPath: toAttachmentPromptPath(input.stateDir, normalized.savePath),
           acceptedContentCapabilities: input.acceptedContentCapabilities,
         });
         attachmentPrompts.push(videoHandled.prompt);
@@ -168,17 +169,19 @@ export async function preparePromptWithAttachments(input: {
         continue;
       }
 
-      attachmentPrompts.push(`\n[User uploaded a file: ${attachment.name} (type: ${attachment.type}), saved at: ${normalized.savePath}]`);
+      const promptPath = toAttachmentPromptPath(input.stateDir, normalized.savePath);
+      attachmentPrompts.push(`\n[User uploaded a file: ${attachment.name} (type: ${attachment.type}), workspace path: ${promptPath}]`);
       promptDeltas.push(createPromptDelta({
         id: `attachment-file-${index + 1}`,
         deltaType: "attachment",
         role: "attachment",
-        text: `[User uploaded a file: ${attachment.name} (type: ${attachment.type}), saved at: ${normalized.savePath}]`,
+        text: `[User uploaded a file: ${attachment.name} (type: ${attachment.type}), workspace path: ${promptPath}]`,
         metadata: {
           name: attachment.name,
           mime: attachment.type,
           kind: "file",
           fingerprint: normalized.fingerprint,
+          path: promptPath,
         },
       }));
     } catch (error) {
@@ -215,25 +218,50 @@ async function normalizeAttachment(input: {
   attachmentDir: string;
 }): Promise<NormalizedAttachment> {
   const safeName = input.attachment.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const savePath = path.join(input.attachmentDir, safeName);
   const buffer = Buffer.from(input.attachment.base64, "base64");
+  const fingerprint = createAttachmentFingerprint({
+    buffer,
+    mime: input.attachment.type,
+  });
+  const savePath = await resolveAttachmentSavePath({
+    attachmentDir: input.attachmentDir,
+    safeName,
+    buffer,
+    fingerprint,
+  });
   await fs.writeFile(savePath, buffer);
   return {
     attachment: input.attachment,
     kind: inferAttachmentKind(input.attachment),
     buffer,
     savePath,
-    fingerprint: createAttachmentFingerprint({
-      buffer,
-      mime: input.attachment.type,
-    }),
+    fingerprint,
   };
+}
+
+async function resolveAttachmentSavePath(input: {
+  attachmentDir: string;
+  safeName: string;
+  buffer: Buffer;
+  fingerprint: string;
+}): Promise<string> {
+  const preferredPath = path.join(input.attachmentDir, input.safeName);
+  const existing = await fs.readFile(preferredPath).catch(() => undefined);
+  if (!existing || Buffer.compare(existing, input.buffer) === 0) {
+    return preferredPath;
+  }
+
+  const parsed = path.parse(input.safeName);
+  const fingerprintSuffix = input.fingerprint.slice(0, 12) || "attachment";
+  const dedupedName = `${parsed.name}__${fingerprintSuffix}${parsed.ext}`;
+  return path.join(input.attachmentDir, dedupedName);
 }
 
 function handleImageAttachment(input: {
   index: number;
   attachment: NonNullable<MessageSendParams["attachments"]>[number];
   fingerprint: string;
+  promptPath: string;
   acceptedContentCapabilities?: readonly MediaCapability[];
 }): {
   prompt: string;
@@ -263,18 +291,19 @@ function handleImageAttachment(input: {
   }
 
   return {
-    prompt: `\n[用户上传了图片: ${input.attachment.name}（当前模型未声明 image_input，未走多模态注入）]`,
+    prompt: `\n[用户上传了图片: ${input.attachment.name}（当前模型未声明 image_input，未走多模态注入）; workspace path: ${input.promptPath}]`,
     promptDelta: createPromptDelta({
       id: `attachment-image-${input.index + 1}-degraded`,
       deltaType: "attachment",
       role: "attachment",
-      text: `[用户上传了图片: ${input.attachment.name}（当前模型未声明 image_input，未走多模态注入）]`,
+      text: `[用户上传了图片: ${input.attachment.name}（当前模型未声明 image_input，未走多模态注入）; workspace path: ${input.promptPath}]`,
       metadata: {
         name: input.attachment.name,
         mime: input.attachment.type,
         kind: "image",
         fingerprint: input.fingerprint,
         status: "capability-missing",
+        path: input.promptPath,
       },
     }),
   };
@@ -285,6 +314,7 @@ function handleVideoAttachment(input: {
   attachment: NonNullable<MessageSendParams["attachments"]>[number];
   fingerprint: string;
   savePath: string;
+  promptPath: string;
   acceptedContentCapabilities?: readonly MediaCapability[];
 }): {
   prompt: string;
@@ -315,18 +345,19 @@ function handleVideoAttachment(input: {
   }
 
   return {
-    prompt: `\n[用户上传了视频: ${input.attachment.name}（当前模型未声明 video_input，未走多模态注入）]`,
+    prompt: `\n[用户上传了视频: ${input.attachment.name}（当前模型未声明 video_input，未走多模态注入）; workspace path: ${input.promptPath}]`,
     promptDelta: createPromptDelta({
       id: `attachment-video-${input.index + 1}-degraded`,
       deltaType: "attachment",
       role: "attachment",
-      text: `[用户上传了视频: ${input.attachment.name}（当前模型未声明 video_input，未走多模态注入）]`,
+      text: `[用户上传了视频: ${input.attachment.name}（当前模型未声明 video_input，未走多模态注入）; workspace path: ${input.promptPath}]`,
       metadata: {
         name: input.attachment.name,
         mime: input.attachment.type,
         kind: "video",
         fingerprint: input.fingerprint,
         status: "capability-missing",
+        path: input.promptPath,
       },
     }),
   };
@@ -613,8 +644,10 @@ function createPromptDelta(input: {
   };
 }
 
-function toSafeAttachmentConversationDirName(conversationId: string): string {
-  const trimmed = typeof conversationId === "string" ? conversationId.trim() : "";
-  if (!trimmed) return "_";
-  return encodeURIComponent(trimmed).replace(/\./g, "%2E");
+function toAttachmentPromptPath(stateDir: string, savePath: string): string {
+  const relative = path.relative(stateDir, savePath);
+  if (!relative || relative.startsWith("..")) {
+    return savePath;
+  }
+  return relative.replace(/\\/g, "/");
 }

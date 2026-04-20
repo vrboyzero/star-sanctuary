@@ -2,6 +2,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 
 import { MCPManager } from "./manager.js";
 import { MCPClient } from "./client.js";
+import * as toolBridgeModule from "./tool-bridge.js";
 
 describe("MCPManager", () => {
   afterEach(() => {
@@ -184,5 +185,148 @@ describe("MCPManager", () => {
       persistedResultServers: 1,
       truncatedResultServers: 1,
     });
+  });
+
+  it("routes resource reads through the cached resource index", async () => {
+    const manager = new MCPManager();
+    (manager as unknown as { config: unknown }).config = {
+      version: 1,
+      servers: [
+        {
+          id: "server_a",
+          name: "Server A",
+          enabled: true,
+          transport: {
+            type: "sse",
+            url: "http://127.0.0.1:8084/sse",
+          },
+        },
+        {
+          id: "server_b",
+          name: "Server B",
+          enabled: true,
+          transport: {
+            type: "sse",
+            url: "http://127.0.0.1:8085/sse",
+          },
+        },
+      ],
+    };
+
+    const getStateSpy = vi.spyOn(MCPClient.prototype, "getState");
+    const readResourceSpy = vi.spyOn(MCPClient.prototype, "readResource").mockImplementation(async function mockReadResource(this: MCPClient, uri: string) {
+      return {
+        contents: [{
+          uri,
+          mimeType: "text/plain",
+          text: `from:${this.serverId}`,
+        }],
+      };
+    });
+    vi.spyOn(MCPClient.prototype, "connect").mockImplementation(async function mockConnect(this: MCPClient) {
+      (this as unknown as { status: string; tools: unknown[]; resources: unknown[] }).status = "connected";
+      (this as unknown as { tools: unknown[] }).tools = [];
+      (this as unknown as { resources: unknown[] }).resources = [{
+        uri: `resource://${this.serverId}/demo`,
+        name: `resource-${this.serverId}`,
+        serverId: this.serverId,
+      }];
+    });
+
+    await manager.connect("server_a");
+    await manager.connect("server_b");
+    getStateSpy.mockClear();
+    readResourceSpy.mockClear();
+
+    const result = await manager.readResource({ uri: "resource://server_b/demo" });
+
+    expect(result.contents[0]).toEqual(expect.objectContaining({
+      uri: "resource://server_b/demo",
+      text: "from:server_b",
+    }));
+    expect(readResourceSpy).toHaveBeenCalledTimes(1);
+    expect(getStateSpy).not.toHaveBeenCalled();
+  });
+
+  it("caches tool inventory transforms until the tool generation changes", async () => {
+    const manager = new MCPManager();
+    (manager as unknown as { config: unknown }).config = {
+      version: 1,
+      servers: [
+        {
+          id: "server_tools",
+          name: "Server Tools",
+          enabled: true,
+          transport: {
+            type: "sse",
+            url: "http://127.0.0.1:8086/sse",
+          },
+        },
+      ],
+    };
+
+    vi.spyOn(MCPClient.prototype, "connect").mockImplementation(async function mockConnect(this: MCPClient) {
+      (this as unknown as { status: string; tools: unknown[]; resources: unknown[] }).status = "connected";
+      (this as unknown as { tools: unknown[] }).tools = [{
+        name: "demo_tool",
+        bridgedName: "mcp_server_tools_demo_tool",
+        description: "demo tool",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+        serverId: this.serverId,
+      }];
+      (this as unknown as { resources: unknown[] }).resources = [];
+    });
+
+    const openAISpy = vi.spyOn(toolBridgeModule, "toOpenAIFunctions");
+    const anthropicSpy = vi.spyOn(toolBridgeModule, "toAnthropicTools");
+
+    await manager.connect("server_tools");
+
+    expect(manager.getOpenAIFunctions()).toHaveLength(1);
+    expect(manager.getOpenAIFunctions()).toHaveLength(1);
+    expect(manager.getAnthropicTools()).toHaveLength(1);
+    expect(manager.getAnthropicTools()).toHaveLength(1);
+    expect(openAISpy).toHaveBeenCalledTimes(1);
+    expect(anthropicSpy).toHaveBeenCalledTimes(1);
+
+    const client = (manager as unknown as { clients: Map<string, MCPClient> }).clients.get("server_tools");
+    expect(client).toBeDefined();
+    (client as unknown as { tools: unknown[] }).tools = [
+      {
+        name: "demo_tool",
+        bridgedName: "mcp_server_tools_demo_tool",
+        description: "demo tool",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+        serverId: "server_tools",
+      },
+      {
+        name: "demo_tool_2",
+        bridgedName: "mcp_server_tools_demo_tool_2",
+        description: "demo tool 2",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+        serverId: "server_tools",
+      },
+    ];
+
+    (manager as unknown as { handleClientEvent: (event: unknown) => void }).handleClientEvent({
+      type: "tools:updated",
+      serverId: "server_tools",
+      timestamp: new Date(),
+      data: undefined,
+    });
+
+    expect(manager.getOpenAIFunctions()).toHaveLength(2);
+    expect(manager.getAnthropicTools()).toHaveLength(2);
+    expect(openAISpy).toHaveBeenCalledTimes(2);
+    expect(anthropicSpy).toHaveBeenCalledTimes(2);
   });
 });

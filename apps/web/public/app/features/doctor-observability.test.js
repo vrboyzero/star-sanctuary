@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
 
-import { buildDoctorChatSummary } from "./doctor-observability.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { buildDoctorChatSummary, renderDoctorObservabilityCards } from "./doctor-observability.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("doctor observability formatting", () => {
   it("builds a user-facing doctor summary for prompt and tool observability", () => {
@@ -1471,5 +1477,142 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("1 fallbacks");
     expect(lines.join("\n")).toContain("latest success");
     expect(lines.join("\n")).toContain("compaction route openai.com/gpt-4.1-mini");
+  });
+});
+
+describe("doctor observability rendering", () => {
+  function createRenderPayload() {
+    return {
+      promptObservability: {
+        summary: {
+          scope: "run",
+          agentId: "default",
+          counts: {
+            sectionCount: 2,
+            deltaCount: 1,
+            providerNativeSystemBlockCount: 1,
+          },
+          promptSizes: {
+            finalChars: 120,
+          },
+          tokenBreakdown: {
+            systemPromptEstimatedTokens: 32,
+          },
+        },
+      },
+      toolBehaviorObservability: {
+        counts: {
+          includedContractCount: 2,
+          visibleToolContractCount: 2,
+        },
+        included: ["run_command"],
+      },
+      toolContractV2Observability: {
+        summary: {
+          totalCount: 2,
+          missingV2Count: 0,
+          highRiskCount: 1,
+          confirmRequiredCount: 1,
+          missingV2Tools: [],
+        },
+      },
+      residentAgents: {
+        summary: {
+          totalCount: 1,
+          activeCount: 1,
+          runningCount: 1,
+          idleCount: 0,
+          backgroundCount: 0,
+          errorCount: 0,
+          digestReadyCount: 1,
+          digestUpdatedCount: 0,
+          digestIdleCount: 0,
+          digestMissingCount: 0,
+          recentTaskLinkedCount: 0,
+          recentSubtaskLinkedCount: 0,
+          experienceUsageLinkedCount: 0,
+          catalogAnnotatedCount: 0,
+          structuredHandoffCount: 0,
+          skillHintedCount: 0,
+          headline: "1 resident",
+          memoryModeCounts: {
+            isolated: 1,
+            shared: 0,
+            hybrid: 0,
+          },
+        },
+        agents: [],
+      },
+      mindProfileSnapshot: {
+        summary: {
+          available: true,
+          hasUserProfile: true,
+          privateMemoryCount: 1,
+          sharedMemoryCount: 0,
+          activeResidentCount: 1,
+          digestReadyCount: 1,
+          digestUpdatedCount: 0,
+          usageLinkedCount: 0,
+          headline: "mind profile ready",
+        },
+        profile: {
+          summaryLines: ["USER.md ready"],
+        },
+      },
+    };
+  }
+
+  function flushAnimationFrames(queue) {
+    let cursor = 0;
+    while (cursor < queue.length) {
+      const callback = queue[cursor];
+      cursor += 1;
+      if (typeof callback === "function") {
+        callback(16 * cursor);
+      }
+    }
+  }
+
+  it("renders doctor cards in batches after the first synchronous chunk", () => {
+    const callbacks = [];
+    vi.stubGlobal("requestAnimationFrame", (callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (handle) => {
+      callbacks[handle - 1] = null;
+    });
+
+    const container = document.createElement("div");
+    renderDoctorObservabilityCards(container, createRenderPayload());
+
+    const initialCount = container.children.length;
+    expect(initialCount).toBeGreaterThan(0);
+    expect(callbacks.length).toBeGreaterThan(0);
+
+    flushAnimationFrames(callbacks);
+
+    expect(container.children.length).toBeGreaterThan(initialCount);
+  });
+
+  it("cancels stale async doctor card batches when the container is rerendered", () => {
+    const callbacks = [];
+    vi.stubGlobal("requestAnimationFrame", (callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (handle) => {
+      callbacks[handle - 1] = null;
+    });
+
+    const container = document.createElement("div");
+    renderDoctorObservabilityCards(container, createRenderPayload());
+    expect(callbacks.length).toBeGreaterThan(0);
+
+    container.replaceChildren();
+    renderDoctorObservabilityCards(container, {});
+    flushAnimationFrames(callbacks);
+
+    expect(container.children.length).toBe(0);
   });
 });

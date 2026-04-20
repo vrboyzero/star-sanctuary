@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("./doctor-observability.js", () => ({
+  renderDoctorObservabilityCards: vi.fn(),
+}));
+
+import { renderDoctorObservabilityCards } from "./doctor-observability.js";
 import { createSettingsController } from "./settings.js";
 
 class FakeHTMLElement {}
@@ -60,6 +65,40 @@ function createButton(textContent = "") {
     textContent,
     disabled: false,
     addEventListener() {},
+  };
+}
+
+function createDomNode() {
+  const classes = new Set();
+  return {
+    className: "",
+    textContent: "",
+    innerHTML: "",
+    children: [],
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    },
+    addEventListener() {},
+    classList: {
+      add(name) {
+        classes.add(name);
+      },
+      remove(name) {
+        classes.delete(name);
+      },
+      toggle(name) {
+        if (classes.has(name)) {
+          classes.delete(name);
+          return false;
+        }
+        classes.add(name);
+        return true;
+      },
+      contains(name) {
+        return classes.has(name);
+      },
+    },
   };
 }
 
@@ -132,6 +171,7 @@ function createSettingsRefs(overrides = {}) {
     cfgConversationKindSubtask: overrides.cfgConversationKindSubtask || createCheckbox(false),
     cfgConversationKindGoal: overrides.cfgConversationKindGoal || createCheckbox(false),
     cfgConversationKindHeartbeat: overrides.cfgConversationKindHeartbeat || createCheckbox(false),
+    doctorStatusEl: overrides.doctorStatusEl || createDomNode(),
     assistantModeConfigTitleEl: overrides.assistantModeConfigTitleEl || { textContent: "" },
     assistantModeConfigHelpEl: overrides.assistantModeConfigHelpEl || { textContent: "" },
     assistantModeConfigHintEl: overrides.assistantModeConfigHintEl || { textContent: "" },
@@ -171,8 +211,10 @@ describe("settings controller", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     globalThis.HTMLElement = FakeHTMLElement;
+    const doctorToggleBtn = createDomNode();
     globalThis.document = {
-      getElementById: vi.fn(() => null),
+      getElementById: vi.fn((id) => (id === "doctorToggleBtn" ? doctorToggleBtn : null)),
+      createElement: vi.fn(() => createDomNode()),
     };
     globalThis.alert = vi.fn();
     globalThis.confirm = vi.fn(() => true);
@@ -376,6 +418,63 @@ describe("settings controller", () => {
       BELLDANDY_ASSISTANT_MODE_ENABLED: "false",
       BELLDANDY_HEARTBEAT_ENABLED: "false",
       BELLDANDY_CRON_ENABLED: "false",
+    });
+  });
+
+  it("loads doctor summary first and then fetches full detail cards asynchronously", async () => {
+    const sendReq = vi.fn(async (frame) => {
+      switch (frame.method) {
+        case "models.config.get":
+          return { ok: true, payload: { path: "models.json", content: '{\n  "fallbacks": []\n}\n' } };
+        case "channel.security.get":
+          return { ok: true, payload: { path: "channel-security.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.reply_chunking.get":
+          return { ok: true, payload: { path: "channel-reply-chunking.json", content: '{\n  "version": 1,\n  "channels": {}\n}\n' } };
+        case "channel.security.pending.list":
+          return { ok: true, payload: { pending: [] } };
+        case "system.doctor":
+          if (frame.params?.surface === "summary") {
+            return {
+              ok: true,
+              payload: {
+                surface: "summary",
+                performance: { totalMs: 12, stages: [{ name: "baseline", durationMs: 12 }] },
+                checks: [{ name: "Node.js Environment", status: "pass", message: "vtest" }],
+              },
+            };
+          }
+          return {
+            ok: true,
+            payload: {
+              surface: "full",
+              performance: { totalMs: 40, stages: [{ name: "assistant_mode_runtime", durationMs: 20 }] },
+              checks: [{ name: "Node.js Environment", status: "pass", message: "vtest" }],
+              residentAgents: { summary: { headline: "resident ok" } },
+            },
+          };
+        default:
+          return { ok: true, payload: {} };
+      }
+    });
+    const { controller } = createController({
+      sendReq,
+      loadServerConfig: vi.fn().mockResolvedValue({}),
+    });
+
+    await controller.toggle(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const doctorCalls = sendReq.mock.calls
+      .map(([frame]) => frame)
+      .filter((frame) => frame.method === "system.doctor");
+    expect(doctorCalls).toHaveLength(2);
+    expect(doctorCalls[0].params).toMatchObject({ surface: "summary" });
+    expect(doctorCalls[1].params).toMatchObject({ surface: "full" });
+    expect(renderDoctorObservabilityCards).toHaveBeenCalledTimes(1);
+    expect(renderDoctorObservabilityCards.mock.calls[0][1]).toMatchObject({
+      surface: "full",
+      residentAgents: { summary: { headline: "resident ok" } },
     });
   });
 });

@@ -559,6 +559,69 @@ function normalizeMemoryViewerGoalId(value) {
   return normalized || null;
 }
 
+const MEMORY_DETAIL_COLLAPSE_MAX_LINES = 14;
+const MEMORY_DETAIL_COLLAPSE_MAX_CHARS = 1200;
+
+export function buildMemoryDetailCollapsedPreview(value, options = {}) {
+  const text = typeof value === "string" ? value : String(value ?? "");
+  const maxLines = Math.max(1, Number(options.maxLines) || MEMORY_DETAIL_COLLAPSE_MAX_LINES);
+  const maxChars = Math.max(1, Number(options.maxChars) || MEMORY_DETAIL_COLLAPSE_MAX_CHARS);
+  const lines = text.split(/\r?\n/);
+  let preview = lines.slice(0, maxLines).join("\n");
+  let truncated = lines.length > maxLines;
+  if (preview.length > maxChars) {
+    preview = preview.slice(0, Math.max(0, maxChars - 1)).trimEnd();
+    truncated = true;
+  }
+  if (truncated) {
+    preview = `${preview.trimEnd()}\n…`;
+  }
+  return {
+    preview,
+    truncated,
+    lineCount: lines.length,
+    charCount: text.length,
+  };
+}
+
+export function getMemoryViewerListPageSize(tab = "tasks") {
+  const normalizedTab = normalizeMemoryViewerTab(tab);
+  if (normalizedTab === "sharedReview" || normalizedTab === "outboundAudit") {
+    return 25;
+  }
+  return 20;
+}
+
+function normalizeMemoryViewerListPage(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+  return Math.floor(numeric);
+}
+
+export function paginateMemoryViewerItems(items, options = {}) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const pageSize = Math.max(1, normalizeMemoryViewerListPage(options.pageSize) || 20);
+  const totalItems = normalizedItems.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const currentPage = Math.min(normalizeMemoryViewerListPage(options.page), totalPages - 1);
+  const startIndex = totalItems > 0 ? currentPage * pageSize : 0;
+  const endIndex = Math.min(startIndex + pageSize, totalItems);
+  return {
+    pageSize,
+    totalItems,
+    totalPages,
+    currentPage,
+    startIndex,
+    endIndex,
+    visibleStart: totalItems > 0 ? startIndex + 1 : 0,
+    visibleEnd: endIndex,
+    hasPagination: totalItems > pageSize,
+    visibleItems: normalizedItems.slice(startIndex, endIndex),
+  };
+}
+
 export function createDefaultMemoryViewerAgentViewState(tab = "tasks") {
   return {
     tab: normalizeMemoryViewerTab(tab),
@@ -727,6 +790,116 @@ export function createMemoryViewerFeature({
   function getActiveAgentId() {
     const agentId = typeof getSelectedAgentId === "function" ? String(getSelectedAgentId() || "").trim() : "";
     return agentId || "default";
+  }
+
+  function ensureListPageByTab() {
+    const memoryViewerState = getMemoryViewerState();
+    if (!memoryViewerState.listPageByTab || typeof memoryViewerState.listPageByTab !== "object") {
+      memoryViewerState.listPageByTab = {};
+    }
+    return memoryViewerState.listPageByTab;
+  }
+
+  function getStoredListPage(tab = getMemoryViewerState().tab) {
+    return normalizeMemoryViewerListPage(ensureListPageByTab()[normalizeMemoryViewerTab(tab)]);
+  }
+
+  function setStoredListPage(page, tab = getMemoryViewerState().tab) {
+    ensureListPageByTab()[normalizeMemoryViewerTab(tab)] = normalizeMemoryViewerListPage(page);
+  }
+
+  function resetStoredListPage(tab = getMemoryViewerState().tab) {
+    setStoredListPage(0, tab);
+  }
+
+  function resolveMemoryViewerPagination(items, resolveItemId, options = {}) {
+    const memoryViewerState = getMemoryViewerState();
+    const tab = normalizeMemoryViewerTab(memoryViewerState.tab);
+    let page = getStoredListPage(tab);
+    const pageSize = getMemoryViewerListPageSize(tab);
+    if (options.alignToSelected === true) {
+      const selectedId = typeof memoryViewerState.selectedId === "string" ? memoryViewerState.selectedId.trim() : "";
+      if (selectedId) {
+        const selectedIndex = (Array.isArray(items) ? items : []).findIndex((item, index) => resolveItemId(item, index) === selectedId);
+        if (selectedIndex >= 0) {
+          page = Math.floor(selectedIndex / pageSize);
+        }
+      }
+    }
+    const pagination = paginateMemoryViewerItems(items, { page, pageSize });
+    setStoredListPage(pagination.currentPage, tab);
+    return pagination;
+  }
+
+  function renderMemoryViewerPaginationFooter(pagination) {
+    if (!pagination?.hasPagination) {
+      return "";
+    }
+    return `
+      <div class="memory-list-pagination">
+        <div class="memory-list-pagination-summary">${escapeHtml(t(
+          "memory.paginationSummary",
+          {
+            start: formatCount(pagination.visibleStart),
+            end: formatCount(pagination.visibleEnd),
+            total: formatCount(pagination.totalItems),
+            page: formatCount(pagination.currentPage + 1),
+            pages: formatCount(pagination.totalPages),
+          },
+          `Showing ${formatCount(pagination.visibleStart)}-${formatCount(pagination.visibleEnd)} / ${formatCount(pagination.totalItems)} · Page ${formatCount(pagination.currentPage + 1)} of ${formatCount(pagination.totalPages)}`,
+        ))}</div>
+        <div class="memory-list-pagination-actions">
+          <button
+            class="memory-usage-action-btn"
+            data-memory-list-page-action="prev"
+            ${pagination.currentPage <= 0 ? "disabled" : ""}
+          >${escapeHtml(t("memory.paginationPrev", {}, "Prev"))}</button>
+          <button
+            class="memory-usage-action-btn"
+            data-memory-list-page-action="next"
+            ${pagination.currentPage >= pagination.totalPages - 1 ? "disabled" : ""}
+          >${escapeHtml(t("memory.paginationNext", {}, "Next"))}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindMemoryViewerPaginationControls({
+    items,
+    pagination,
+    renderList,
+    resolveItemId,
+    onPageSelected,
+  }) {
+    if (!memoryViewerListEl || !pagination?.hasPagination) return;
+    memoryViewerListEl.querySelectorAll("[data-memory-list-page-action]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const action = node.getAttribute("data-memory-list-page-action");
+        const delta = action === "prev" ? -1 : action === "next" ? 1 : 0;
+        if (!delta) return;
+        const nextPage = pagination.currentPage + delta;
+        if (nextPage < 0 || nextPage >= pagination.totalPages) return;
+        setStoredListPage(nextPage);
+        const nextPagination = resolveMemoryViewerPagination(items, resolveItemId, { alignToSelected: false });
+        const nextSelectedItem = nextPagination.visibleItems[0] ?? null;
+        if (nextSelectedItem) {
+          const nextSelectedId = resolveItemId(nextSelectedItem, nextPagination.startIndex);
+          getMemoryViewerState().selectedId = nextSelectedId || null;
+        }
+        renderList(items);
+        if (nextSelectedItem && typeof onPageSelected === "function") {
+          await onPageSelected(nextSelectedItem, resolveItemId(nextSelectedItem, nextPagination.startIndex), nextPagination);
+        }
+      });
+    });
+  }
+
+  function getCurrentVisibleSharedReviewItems(items) {
+    return resolveMemoryViewerPagination(
+      items,
+      (item) => String(item?.id || "").trim(),
+      { alignToSelected: false },
+    ).visibleItems;
   }
 
   async function requestEmailThreadConversationAdvice(conversationId, item) {
@@ -943,7 +1116,7 @@ export function createMemoryViewerFeature({
 
   function selectAllVisibleSharedReviewItems() {
     const memoryViewerState = getMemoryViewerState();
-    const itemIds = (Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [])
+    const itemIds = getCurrentVisibleSharedReviewItems(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [])
       .map((item) => String(item?.id || "").trim())
       .filter(Boolean);
     setSelectedSharedReviewIds(itemIds);
@@ -951,7 +1124,7 @@ export function createMemoryViewerFeature({
 
   function selectActionableSharedReviewItems() {
     const memoryViewerState = getMemoryViewerState();
-    const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
+    const items = getCurrentVisibleSharedReviewItems(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
     setSelectedSharedReviewIds(collectActionableSharedReviewIds(items, getActiveAgentId()));
   }
 
@@ -988,7 +1161,7 @@ export function createMemoryViewerFeature({
     if (!memorySharedReviewBatchBarEl) return;
     const memoryViewerState = getMemoryViewerState();
     const isSharedReview = memoryViewerState.tab === "sharedReview";
-    const items = Array.isArray(memoryViewerState.items) ? memoryViewerState.items : [];
+    const items = getCurrentVisibleSharedReviewItems(Array.isArray(memoryViewerState.items) ? memoryViewerState.items : []);
     if (!isSharedReview || !items.length) {
       memorySharedReviewBatchBarEl.classList.add("hidden");
       memorySharedReviewBatchBarEl.innerHTML = "";
@@ -1723,6 +1896,7 @@ export function createMemoryViewerFeature({
     ensureAgentViewStates()[normalizedAgentId] = nextView;
     memoryViewerState.tab = tab;
     memoryViewerState.outboundAuditFocus = nextView.outboundAuditFocus || "all";
+    resetStoredListPage(tab);
     memoryViewerState.items = [];
     memoryViewerState.selectedId = null;
     memoryViewerState.selectedTask = null;
@@ -1755,6 +1929,7 @@ export function createMemoryViewerFeature({
     nextView.outboundAuditFocus = normalizedFocus;
     ensureAgentViewStates()[normalizedAgentId] = nextView;
     memoryViewerState.outboundAuditFocus = normalizedFocus;
+    resetStoredListPage("outboundAudit");
     memoryViewerState.items = [];
     memoryViewerState.selectedId = null;
     syncMemoryViewerUi();
@@ -2212,6 +2387,7 @@ export function createMemoryViewerFeature({
       ).filter((item) => matchesEmailThreadOrganizerQuery(item, query))
       : allItems.filter((item) => matchesExternalOutboundAuditQuery(item, query));
     memoryViewerState.items = items;
+    resetStoredListPage("outboundAudit");
     renderMemoryViewerStats({});
 
     if (!items.length) {
@@ -2499,6 +2675,36 @@ export function createMemoryViewerFeature({
 
   function bindMemoryDetailActions(item) {
     if (!memoryViewerDetailEl || !item?.id) return;
+    memoryViewerDetailEl.querySelectorAll("[data-memory-detail-toggle]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const section = node.getAttribute("data-memory-detail-toggle") || "";
+        if (!section) return;
+        const body = memoryViewerDetailEl.querySelector(`[data-memory-detail-body="${section}"]`);
+        const card = body?.closest("[data-memory-detail-collapsible]");
+        if (!(body instanceof HTMLElement) || !(card instanceof HTMLElement)) return;
+
+        const fullText = section === "metadata"
+          ? JSON.stringify(item.metadata ?? {}, null, 2)
+          : String(item.content || item.snippet || t("memory.noContent", {}, "No content"));
+        const preview = buildMemoryDetailCollapsedPreview(fullText);
+        const expanded = node.getAttribute("data-memory-detail-expanded") === "true";
+
+        if (expanded) {
+          body.textContent = preview.preview;
+          body.classList.add("is-collapsed");
+          node.setAttribute("data-memory-detail-expanded", "false");
+          node.textContent = t("memory.detailExpand", {}, "Expand");
+          card.classList.remove("is-expanded");
+          return;
+        }
+
+        body.textContent = fullText;
+        body.classList.remove("is-collapsed");
+        node.setAttribute("data-memory-detail-expanded", "true");
+        node.textContent = t("memory.detailCollapse", {}, "Collapse");
+        card.classList.add("is-expanded");
+      });
+    });
     memoryViewerDetailEl.querySelectorAll("[data-memory-open-shared-review-context]").forEach((node) => {
       node.addEventListener("click", () => {
         void openSharedReviewContextForItem(item);
@@ -2535,6 +2741,7 @@ export function createMemoryViewerFeature({
     filters.targetAgentId = targetAgentId || "";
     filters.claimedByAgentId = filters.focus === "mine" ? getActiveAgentId() : filters.claimedByAgentId;
     memoryViewerState.tab = "sharedReview";
+    resetStoredListPage("sharedReview");
     memoryViewerState.items = [];
     memoryViewerState.selectedId = typeof item?.id === "string" ? item.id.trim() : null;
     memoryViewerState.selectedTask = null;
@@ -2634,6 +2841,7 @@ export function createMemoryViewerFeature({
 
     const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
     memoryViewerState.items = items;
+    resetStoredListPage("tasks");
     renderMemoryViewerStats(memoryViewerState.stats);
 
     if (!items.length) {
@@ -2694,6 +2902,7 @@ export function createMemoryViewerFeature({
     const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
     memoryViewerState.items = items;
     memoryViewerState.memoryQueryView = res.payload?.queryView ?? memoryViewerState.memoryQueryView ?? null;
+    resetStoredListPage("memories");
     renderMemoryViewerStats(memoryViewerState.stats);
 
     if (!items.length) {
@@ -2748,6 +2957,7 @@ export function createMemoryViewerFeature({
     const items = Array.isArray(res.payload?.items) ? res.payload.items : [];
     memoryViewerState.items = items;
     memoryViewerState.sharedReviewSummary = res.payload?.summary ?? null;
+    resetStoredListPage("sharedReview");
     syncSelectedSharedReviewIds(items);
     renderMemoryViewerStats(memoryViewerState.stats);
     renderSharedReviewBatchBar();
@@ -2898,12 +3108,15 @@ export function createMemoryViewerFeature({
   function renderTaskList(items) {
     if (!memoryViewerListEl) return;
     if (!items.length) {
+      resetStoredListPage("tasks");
       renderMemoryViewerListEmpty(t("memory.emptyNoTasks", {}, "No tasks to display."));
       return;
     }
 
     const memoryViewerState = getMemoryViewerState();
-    memoryViewerListEl.innerHTML = items.map((item) => {
+    const resolveTaskId = (item) => String(item?.id || "").trim();
+    const pagination = resolveMemoryViewerPagination(items, resolveTaskId, { alignToSelected: true });
+    memoryViewerListEl.innerHTML = pagination.visibleItems.map((item) => {
       const title = item.title || item.objective || item.summary || item.conversationId || item.id;
       const snippet = item.summary || item.outcome || item.objective || t("memory.emptyNoSummary", {}, "No summary");
       const isActive = item.id === memoryViewerState.selectedId;
@@ -2920,28 +3133,52 @@ export function createMemoryViewerFeature({
           <div class="memory-list-item-snippet">${escapeHtml(snippet)}</div>
         </div>
       `;
-    }).join("");
+    }).join("") + renderMemoryViewerPaginationFooter(pagination);
 
     memoryViewerListEl.querySelectorAll("[data-task-id]").forEach((node) => {
       node.addEventListener("click", async () => {
         const taskId = node.getAttribute("data-task-id");
         if (!taskId) return;
         memoryViewerState.selectedId = taskId;
-        renderTaskList(memoryViewerState.items);
+        setActiveMemoryViewerListItem(node);
         await loadTaskDetail(taskId);
       });
     });
+    bindMemoryViewerPaginationControls({
+      items,
+      pagination,
+      renderList: renderTaskList,
+      resolveItemId: resolveTaskId,
+      onPageSelected: async (_item, taskId) => {
+        if (!taskId) return;
+        await loadTaskDetail(taskId);
+      },
+    });
+  }
+
+  function setActiveMemoryViewerListItem(node) {
+    if (!memoryViewerListEl || !node) return;
+    const activeNode = memoryViewerListEl.querySelector(".memory-list-item.active");
+    if (activeNode && activeNode !== node) {
+      activeNode.classList.remove("active");
+    }
+    if (!node.classList.contains("active")) {
+      node.classList.add("active");
+    }
   }
 
   function renderMemoryList(items) {
     if (!memoryViewerListEl) return;
     if (!items.length) {
+      resetStoredListPage("memories");
       renderMemoryViewerListEmpty(t("memory.emptyNoMemories", {}, "No memories to display."));
       return;
     }
 
     const memoryViewerState = getMemoryViewerState();
-    memoryViewerListEl.innerHTML = items.map((item) => {
+    const resolveMemoryId = (item) => String(item?.id || "").trim();
+    const pagination = resolveMemoryViewerPagination(items, resolveMemoryId, { alignToSelected: true });
+    memoryViewerListEl.innerHTML = pagination.visibleItems.map((item) => {
       const title = summarizeSourcePath(item.sourcePath);
       const summary = item.summary || item.snippet || t("memory.emptyNoSummary", {}, "No summary");
       const isActive = item.id === memoryViewerState.selectedId;
@@ -2962,22 +3199,33 @@ export function createMemoryViewerFeature({
           <div class="memory-list-item-snippet">${escapeHtml(summary)}</div>
         </div>
       `;
-    }).join("");
+    }).join("") + renderMemoryViewerPaginationFooter(pagination);
 
     memoryViewerListEl.querySelectorAll("[data-memory-id]").forEach((node) => {
       node.addEventListener("click", async () => {
         const chunkId = node.getAttribute("data-memory-id");
         if (!chunkId) return;
         memoryViewerState.selectedId = chunkId;
-        renderMemoryList(memoryViewerState.items);
+        setActiveMemoryViewerListItem(node);
         await loadMemoryDetail(chunkId);
       });
+    });
+    bindMemoryViewerPaginationControls({
+      items,
+      pagination,
+      renderList: renderMemoryList,
+      resolveItemId: resolveMemoryId,
+      onPageSelected: async (_item, chunkId) => {
+        if (!chunkId) return;
+        await loadMemoryDetail(chunkId);
+      },
     });
   }
 
   function renderSharedReviewList(items) {
     if (!memoryViewerListEl) return;
     if (!items.length) {
+      resetStoredListPage("sharedReview");
       renderMemoryViewerListEmpty(t("memory.sharedReviewEmpty", {}, "There are no shared review items right now."));
       renderSharedReviewBatchBar();
       return;
@@ -2985,7 +3233,9 @@ export function createMemoryViewerFeature({
 
     const memoryViewerState = getMemoryViewerState();
     const selectedIds = new Set(getSelectedSharedReviewIds());
-    memoryViewerListEl.innerHTML = items.map((item) => {
+    const resolveSharedReviewId = (item) => String(item?.id || "").trim();
+    const pagination = resolveMemoryViewerPagination(items, resolveSharedReviewId, { alignToSelected: true });
+    memoryViewerListEl.innerHTML = pagination.visibleItems.map((item) => {
       const title = summarizeSourcePath(item.sourcePath);
       const summary = item.summary || item.snippet || t("memory.emptyNoSummary", {}, "No summary");
       const isActive = item.id === memoryViewerState.selectedId;
@@ -3038,7 +3288,7 @@ export function createMemoryViewerFeature({
           <div class="memory-list-item-snippet">${escapeHtml(summary)}</div>
         </div>
       `;
-    }).join("");
+    }).join("") + renderMemoryViewerPaginationFooter(pagination);
 
     memoryViewerListEl.querySelectorAll("[data-shared-review-select]").forEach((node) => {
       node.addEventListener("click", (event) => {
@@ -3057,9 +3307,19 @@ export function createMemoryViewerFeature({
         const targetAgentId = node.getAttribute("data-shared-review-target-agent-id");
         if (!chunkId) return;
         memoryViewerState.selectedId = chunkId;
-        renderSharedReviewList(memoryViewerState.items);
+        setActiveMemoryViewerListItem(node);
         await loadMemoryDetail(chunkId, null, { targetAgentId });
       });
+    });
+    bindMemoryViewerPaginationControls({
+      items,
+      pagination,
+      renderList: renderSharedReviewList,
+      resolveItemId: resolveSharedReviewId,
+      onPageSelected: async (item, chunkId) => {
+        if (!chunkId) return;
+        await loadMemoryDetail(chunkId, null, { targetAgentId: item?.targetAgentId });
+      },
     });
     renderSharedReviewBatchBar();
   }
@@ -3067,13 +3327,17 @@ export function createMemoryViewerFeature({
   function renderExternalOutboundAuditList(items) {
     if (!memoryViewerListEl) return;
     if (!items.length) {
+      resetStoredListPage("outboundAudit");
       renderMemoryViewerListEmpty(t("memory.outboundAuditEmpty", {}, "当前还没有匹配的消息审计记录。"));
       return;
     }
 
     const memoryViewerState = getMemoryViewerState();
-    memoryViewerListEl.innerHTML = items.map((item, index) => {
-      const itemId = getExternalOutboundAuditItemId(item, index);
+    const resolveAuditItemId = (item, index) => getExternalOutboundAuditItemId(item, index);
+    const pagination = resolveMemoryViewerPagination(items, resolveAuditItemId, { alignToSelected: true });
+    memoryViewerListEl.innerHTML = pagination.visibleItems.map((item, index) => {
+      const absoluteIndex = pagination.startIndex + index;
+      const itemId = resolveAuditItemId(item, absoluteIndex);
       const isActive = itemId === memoryViewerState.selectedId;
       if (item?.auditKind === "email_thread_organizer") {
         const title = item?.latestSubject || item?.threadId || item?.conversationId || t("memory.emailThreadOrganizerUntitled", {}, "未命名邮件线程");
@@ -3113,7 +3377,7 @@ export function createMemoryViewerFeature({
           <div class="memory-list-item-snippet">${escapeHtml(preview)}</div>
         </div>
       `;
-    }).join("");
+    }).join("") + renderMemoryViewerPaginationFooter(pagination);
 
     memoryViewerListEl.querySelectorAll("[data-outbound-audit-id]").forEach((node) => {
       node.addEventListener("click", () => {
@@ -3125,6 +3389,15 @@ export function createMemoryViewerFeature({
           .find((item, index) => getExternalOutboundAuditItemId(item, index) === itemId);
         renderExternalOutboundAuditDetail(selected || null);
       });
+    });
+    bindMemoryViewerPaginationControls({
+      items,
+      pagination,
+      renderList: renderExternalOutboundAuditList,
+      resolveItemId: resolveAuditItemId,
+      onPageSelected: (item) => {
+        renderExternalOutboundAuditDetail(item || null);
+      },
     });
   }
 
@@ -3602,6 +3875,10 @@ export function createMemoryViewerFeature({
             ? t("memory.detailSharedReviewerActionable", {}, "This review item is actionable for the current reviewer.")
             : t("memory.detailSharedReviewerIdle", {}, "This review item is waiting for a reviewer.");
     const canOpenSharedReviewContext = normalizeMemorySharePromotionStatus(item) && normalizeMemorySharePromotionStatus(item) !== "none";
+    const contentText = String(item.content || item.snippet || t("memory.noContent", {}, "No content"));
+    const contentPreview = buildMemoryDetailCollapsedPreview(contentText);
+    const metadataText = item.metadata ? JSON.stringify(item.metadata, null, 2) : "";
+    const metadataPreview = metadataText ? buildMemoryDetailCollapsedPreview(metadataText) : null;
     memoryViewerDetailEl.innerHTML = `
       <div class="memory-detail-shell">
         <div class="memory-detail-header">
@@ -3667,15 +3944,45 @@ export function createMemoryViewerFeature({
           <div class="memory-detail-text">${escapeHtml(item.snippet || t("memory.noContent", {}, "No content"))}</div>
         </div>
 
-        <div class="memory-detail-card">
-          <span class="memory-detail-label">${escapeHtml(t("memory.detailContent", {}, "Content"))}</span>
-          <pre class="memory-detail-pre">${escapeHtml(item.content || item.snippet || t("memory.noContent", {}, "No content"))}</pre>
+        <div class="memory-detail-card${contentPreview.truncated ? " is-collapsible" : ""}" data-memory-detail-collapsible="content">
+          <div class="memory-detail-card-head">
+            <span class="memory-detail-label">${escapeHtml(t("memory.detailContent", {}, "Content"))}</span>
+            ${contentPreview.truncated ? `
+              <button class="memory-usage-action-btn" data-memory-detail-toggle="content" data-memory-detail-expanded="false">${escapeHtml(t("memory.detailExpand", {}, "Expand"))}</button>
+            ` : ""}
+          </div>
+          ${contentPreview.truncated ? `
+            <div class="memory-detail-caption">${escapeHtml(t(
+              "memory.detailCollapsedHint",
+              {
+                chars: formatCount(contentPreview.charCount),
+                lines: formatCount(contentPreview.lineCount),
+              },
+              `Previewing ${formatCount(contentPreview.charCount)} chars / ${formatCount(contentPreview.lineCount)} lines`,
+            ))}</div>
+          ` : ""}
+          <pre class="memory-detail-pre${contentPreview.truncated ? " is-collapsed" : ""}" data-memory-detail-body="content">${escapeHtml(contentPreview.truncated ? contentPreview.preview : contentText)}</pre>
         </div>
 
-        ${item.metadata ? `
-          <div class="memory-detail-card">
-            <span class="memory-detail-label">元数据</span>
-            <pre class="memory-detail-pre">${escapeHtml(JSON.stringify(item.metadata, null, 2))}</pre>
+        ${metadataPreview ? `
+          <div class="memory-detail-card${metadataPreview.truncated ? " is-collapsible" : ""}" data-memory-detail-collapsible="metadata">
+            <div class="memory-detail-card-head">
+              <span class="memory-detail-label">元数据</span>
+              ${metadataPreview.truncated ? `
+                <button class="memory-usage-action-btn" data-memory-detail-toggle="metadata" data-memory-detail-expanded="false">${escapeHtml(t("memory.detailExpand", {}, "Expand"))}</button>
+              ` : ""}
+            </div>
+            ${metadataPreview.truncated ? `
+              <div class="memory-detail-caption">${escapeHtml(t(
+                "memory.detailCollapsedHint",
+                {
+                  chars: formatCount(metadataPreview.charCount),
+                  lines: formatCount(metadataPreview.lineCount),
+                },
+                `Previewing ${formatCount(metadataPreview.charCount)} chars / ${formatCount(metadataPreview.lineCount)} lines`,
+              ))}</div>
+            ` : ""}
+            <pre class="memory-detail-pre${metadataPreview.truncated ? " is-collapsed" : ""}" data-memory-detail-body="metadata">${escapeHtml(metadataPreview.truncated ? metadataPreview.preview : metadataText)}</pre>
           </div>
         ` : ""}
       </div>

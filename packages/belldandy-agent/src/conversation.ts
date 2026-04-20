@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
     buildCompactedMessages,
     needsCompaction,
@@ -293,6 +294,7 @@ const DEFAULT_COMPACT_BOUNDARY_LIMIT = 20;
 let conversationMessageIdCounter = 0;
 let compactBoundaryIdCounter = 0;
 let partialCompactionViewIdCounter = 0;
+const ASYNC_CONVERSATION_TAIL_READ_CHUNK_BYTES = 16 * 1024;
 
 function createConversationMessageId(timestampMs: number): string {
     conversationMessageIdCounter += 1;
@@ -331,6 +333,43 @@ function createEmptySessionMemory(): StoredSessionMemory {
         lastSummarizedToolCursor: 0,
         updatedAt: 0,
     };
+}
+
+async function readConversationTailLines(filePath: string, maxLines: number): Promise<string[]> {
+    if (!Number.isFinite(maxLines) || maxLines <= 0) {
+        return [];
+    }
+
+    const handle = await fsp.open(filePath, "r");
+    try {
+        const stat = await handle.stat();
+        let position = stat.size;
+        let collected = Buffer.alloc(0);
+
+        while (position > 0) {
+            const chunkSize = Math.min(ASYNC_CONVERSATION_TAIL_READ_CHUNK_BYTES, position);
+            position -= chunkSize;
+
+            const chunk = Buffer.alloc(chunkSize);
+            const { bytesRead } = await handle.read(chunk, 0, chunkSize, position);
+            if (bytesRead <= 0) {
+                break;
+            }
+
+            collected = Buffer.concat([chunk.subarray(0, bytesRead), collected]);
+            const rawLines = collected.toString("utf-8").split("\n");
+            const visibleLines = (position > 0 ? rawLines.slice(1) : rawLines)
+                .filter((line) => line.trim());
+
+            if (visibleLines.length >= maxLines || position === 0) {
+                return visibleLines.slice(-maxLines);
+            }
+        }
+
+        return [];
+    } finally {
+        await handle.close();
+    }
 }
 
 function normalizeString(value: unknown): string {
@@ -754,10 +793,15 @@ export class ConversationStore {
     private async loadFromFileAsync(id: string): Promise<Conversation | undefined> {
         if (!this.dataDir) return undefined;
         const meta = await this.loadMetaFromFileAsync(id);
-        let content: string | undefined;
+        let lines: string[] | undefined;
         for (const filePath of this.getConversationFilePathCandidates(id, ".jsonl")) {
             try {
-                content = await conversationAsyncFs.readFile(filePath, "utf-8");
+                if (meta) {
+                    lines = await readConversationTailLines(filePath, this.maxHistory);
+                } else {
+                    const content = await conversationAsyncFs.readFile(filePath, "utf-8");
+                    lines = content.split("\n").filter((line) => line.trim());
+                }
                 break;
             } catch (err) {
                 const fsErr = err as NodeJS.ErrnoException;
@@ -769,7 +813,7 @@ export class ConversationStore {
             }
         }
 
-        if (typeof content === "undefined") {
+        if (typeof lines === "undefined") {
             if (!meta) return undefined;
             return {
                 id,
@@ -788,7 +832,6 @@ export class ConversationStore {
         }
 
         try {
-            const lines = content.split("\n").filter(line => line.trim());
             const messages: ConversationMessage[] = [];
             let createdAt = Date.now();
             let updatedAt = 0;
@@ -2110,7 +2153,7 @@ export class ConversationStore {
             lastSummarizedToolCursor: toolDigests.length,
             updatedAt: Date.now(),
         });
-        const updated = JSON.stringify(existing) !== JSON.stringify(nextMemory);
+        const updated = !isDeepStrictEqual(existing, nextMemory);
         if (updated) {
             await this.persistSessionMemory(id, nextMemory);
         }

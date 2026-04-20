@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRecentJsonlRecords } from "./jsonl-tail-reader.js";
 
 export type EmailInboundAuditStatus = "processed" | "failed" | "invalid_event" | "skipped_duplicate";
 
@@ -148,24 +149,10 @@ export function createFileEmailInboundAuditStore(filePath: string): EmailInbound
     },
 
     async listRecent(limit = 20) {
-      const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.floor(limit))) : 20;
-      try {
-        const content = await fs.readFile(filePath, "utf-8");
-        const lines = content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-        const items: EmailInboundAuditRecord[] = [];
-        for (let index = lines.length - 1; index >= 0 && items.length < safeLimit; index -= 1) {
-          try {
-            const parsed = JSON.parse(lines[index]) as EmailInboundAuditRecord;
-            if (!parsed || typeof parsed !== "object") continue;
-            items.push(parsed);
-          } catch {
-            continue;
-          }
-        }
-        return items;
-      } catch {
-        return [];
-      }
+      return readRecentJsonlRecords<EmailInboundAuditRecord>({
+        filePath,
+        limit,
+      });
     },
   };
 }

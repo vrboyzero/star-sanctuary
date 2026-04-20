@@ -226,6 +226,7 @@ const MAX_STEERING_RECORDS = 8;
 const MAX_TAKEOVER_RECORDS = 8;
 const MAX_RESUME_RECORDS = 8;
 const OUTPUT_FILENAME = "result.md";
+const THOUGHT_DELTA_PERSIST_DELAY_MS = 32;
 
 function truncateText(value: string, maxLength = 240): string {
   const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
@@ -681,6 +682,7 @@ export class SubTaskRuntimeStore {
   private readonly listeners = new Set<(event: SubTaskChangeEvent) => void>();
   private writeChain = Promise.resolve();
   private loadPromise: Promise<void> | null = null;
+  private deferredPersistTimer: NodeJS.Timeout | null = null;
 
   constructor(stateDir: string, logger?: RuntimeLogger) {
     this.runtimeDir = path.join(stateDir, "subtasks");
@@ -1050,7 +1052,7 @@ export class SubTaskRuntimeStore {
       record.summary = inferSummary(record, snippet);
       this.emitChange("updated", record);
       return cloneRecord(record);
-    });
+    }, { persist: "deferred" });
   }
 
   async completeTask(taskId: string, input: CompleteSubTaskInput): Promise<SubTaskRecord | undefined> {
@@ -1685,15 +1687,45 @@ export class SubTaskRuntimeStore {
     }
   }
 
-  private async mutate<T>(mutator: () => Promise<T>): Promise<T> {
+  private async mutate<T>(
+    mutator: () => Promise<T>,
+    options: { persist?: "immediate" | "deferred" } = {},
+  ): Promise<T> {
     let result!: T;
     const run = this.writeChain.then(async () => {
       result = await mutator();
+      if (options.persist === "deferred") {
+        this.scheduleDeferredPersist();
+        return;
+      }
+      this.cancelDeferredPersist();
       await this.persist();
     });
     this.writeChain = run.catch(() => {});
     await run;
     return result;
+  }
+
+  private scheduleDeferredPersist(): void {
+    if (this.deferredPersistTimer) {
+      return;
+    }
+    this.deferredPersistTimer = setTimeout(() => {
+      this.deferredPersistTimer = null;
+      const run = this.writeChain.then(() => this.persist());
+      this.writeChain = run.catch(() => {});
+      void run.catch((error) => {
+        this.logger?.warn?.("Failed to persist deferred subtask runtime state.", error);
+      });
+    }, THOUGHT_DELTA_PERSIST_DELAY_MS);
+  }
+
+  private cancelDeferredPersist(): void {
+    if (!this.deferredPersistTimer) {
+      return;
+    }
+    clearTimeout(this.deferredPersistTimer);
+    this.deferredPersistTimer = null;
   }
 
   private async persist(): Promise<void> {

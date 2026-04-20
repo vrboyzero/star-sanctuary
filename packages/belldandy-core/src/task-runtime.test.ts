@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import { AgentRegistry, type AgentLaunchSpec } from "@belldandy/agent";
 import {
@@ -121,6 +121,46 @@ test("subtask runtime store loads persisted state with UTF-8 BOM", async () => {
   });
 
   await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+});
+
+test("subtask runtime store batches thought_delta persistence within a short window", async () => {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-subtask-runtime-thought-delta-"));
+  const writeFileSpy = vi.spyOn(fs, "writeFile");
+
+  try {
+    const store = new SubTaskRuntimeStore(stateDir);
+    await store.load();
+
+    const task = await store.createTask({
+      launchSpec: {
+        parentConversationId: "conv-thought-delta",
+        agentId: "coder",
+        instruction: "Batch high-frequency thought delta persistence",
+        channel: "test",
+        timeoutMs: 30_000,
+      },
+    });
+    await store.attachSession(task.id, "sub_thought_delta");
+
+    writeFileSpy.mockClear();
+
+    await store.recordThoughtDeltaBySession("sub_thought_delta", "first delta");
+    await store.recordThoughtDeltaBySession("sub_thought_delta", "second delta");
+
+    expect(writeFileSpy).not.toHaveBeenCalled();
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(writeFileSpy).toHaveBeenCalledTimes(1);
+
+    const reloaded = new SubTaskRuntimeStore(stateDir);
+    await reloaded.load();
+    const persisted = await reloaded.getTask(task.id);
+    expect(persisted?.progress.message).toBe("second delta");
+  } finally {
+    writeFileSpy.mockRestore();
+    await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
 });
 
 test("task runtime agent capabilities wrap spawn results into structured task records", async () => {

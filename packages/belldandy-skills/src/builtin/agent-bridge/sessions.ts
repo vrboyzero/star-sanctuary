@@ -9,6 +9,11 @@ import type { BridgeSessionRecord, BridgeSessionTranscriptEvent } from "./types.
 const MAX_TRANSCRIPT_EVENT_CHARS = 16_000;
 const MAX_TRANSCRIPT_EVENTS = 400;
 
+type PersistSessionStateOptions = {
+  includeRegistry?: boolean;
+  includeTranscript?: boolean;
+};
+
 function stripUtf8Bom(raw: string): string {
   return raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
 }
@@ -126,13 +131,22 @@ export class BridgeSessionStore {
     return [...(this.transcripts.get(sessionId) ?? [])];
   }
 
-  async persistSessionState(sessionId: string): Promise<void> {
+  async persistSessionState(sessionId: string, options: PersistSessionStateOptions = {}): Promise<void> {
     const record = this.records.get(sessionId);
     if (!record) {
       return;
     }
-    await this.writeTranscriptSnapshot(record);
-    await this.writeRegistry();
+    const includeRegistry = options.includeRegistry !== false;
+    const includeTranscript = options.includeTranscript !== false;
+    if (!includeRegistry && !includeTranscript) {
+      return;
+    }
+    if (includeTranscript) {
+      await this.writeTranscriptSnapshot(record);
+    }
+    if (includeRegistry) {
+      await this.writeRegistry();
+    }
   }
 
   touch(

@@ -21,6 +21,23 @@ export class PluginRegistry {
     private pluginSkillDirs: Map<string, string[]> = new Map();
     /** 最近一次插件扫描/加载错误 */
     private loadErrors: PluginLoadErrorRecord[] = [];
+    /** inventory 缓存代次 */
+    private inventoryGeneration = 0;
+    private cachedInventoryGeneration = -1;
+    private cachedPluginDescriptors: PluginRuntimeDescriptor[] = [];
+    private cachedDiagnostics: PluginRegistryDiagnostics = {
+        pluginCount: 0,
+        toolCount: 0,
+        hookCount: 0,
+        skillDirCount: 0,
+        loadErrors: [],
+    };
+    private cachedLegacyHookAvailability = {
+        beforeRun: false,
+        afterRun: false,
+        beforeToolCall: false,
+        afterToolCall: false,
+    };
 
     /**
      * Load a plugin from a file path.
@@ -52,14 +69,17 @@ export class PluginRegistry {
                     }
                     this.tools.set(tool.definition.name, tool);
                     pluginToolNames.push(tool.definition.name);
+                    this.invalidateInventoryCache();
                 },
                 registerHooks: (hooks: AgentHooks) => {
                     this.hooksList.push(hooks);
+                    this.invalidateInventoryCache();
                 },
                 registerSkillDir: (dir: string) => {
                     const existing = this.pluginSkillDirs.get(plugin.id) ?? [];
                     if (!existing.includes(dir)) {
                         existing.push(dir);
+                        this.invalidateInventoryCache();
                     }
                     this.pluginSkillDirs.set(plugin.id, existing);
                 }
@@ -68,6 +88,7 @@ export class PluginRegistry {
             await plugin.activate(context);
             this.plugins.set(plugin.id, plugin);
             this.pluginToolMap.set(plugin.id, pluginToolNames);
+            this.invalidateInventoryCache();
 
         } catch (err) {
             this.recordLoadError("load_plugin", filePath, err);
@@ -115,25 +136,19 @@ export class PluginRegistry {
      * Get plugin descriptors for diagnostics / inventory output
      */
     listPlugins(): PluginRuntimeDescriptor[] {
-        return Array.from(this.plugins.values())
-            .map((plugin) => ({
-                id: plugin.id,
-                name: plugin.name,
-                version: plugin.version,
-                description: plugin.description,
-                toolNames: [...(this.pluginToolMap.get(plugin.id) ?? [])],
-                skillDirs: [...(this.pluginSkillDirs.get(plugin.id) ?? [])],
-            }))
-            .sort((a, b) => a.id.localeCompare(b.id));
+        this.ensureInventoryCache();
+        return this.cachedPluginDescriptors.map((plugin) => ({
+            ...plugin,
+            toolNames: [...plugin.toolNames],
+            skillDirs: [...plugin.skillDirs],
+        }));
     }
 
     getDiagnostics(): PluginRegistryDiagnostics {
+        this.ensureInventoryCache();
         return {
-            pluginCount: this.plugins.size,
-            toolCount: this.tools.size,
-            hookCount: this.hooksList.length,
-            skillDirCount: this.pluginSkillDirs.size,
-            loadErrors: this.loadErrors.map((item) => ({ ...item })),
+            ...this.cachedDiagnostics,
+            loadErrors: this.cachedDiagnostics.loadErrors.map((item) => ({ ...item })),
         };
     }
 
@@ -143,12 +158,8 @@ export class PluginRegistry {
         beforeToolCall: boolean;
         afterToolCall: boolean;
     } {
-        return {
-            beforeRun: this.hooksList.some((hooks) => typeof hooks.beforeRun === "function"),
-            afterRun: this.hooksList.some((hooks) => typeof hooks.afterRun === "function"),
-            beforeToolCall: this.hooksList.some((hooks) => typeof hooks.beforeToolCall === "function"),
-            afterToolCall: this.hooksList.some((hooks) => typeof hooks.afterToolCall === "function"),
-        };
+        this.ensureInventoryCache();
+        return { ...this.cachedLegacyHookAvailability };
     }
 
     /**
@@ -217,5 +228,45 @@ export class PluginRegistry {
             target,
             message,
         });
+        this.invalidateInventoryCache();
+    }
+
+    private ensureInventoryCache(): void {
+        if (this.cachedInventoryGeneration === this.inventoryGeneration) {
+            return;
+        }
+        this.rebuildInventoryCache();
+    }
+
+    private rebuildInventoryCache(): void {
+        this.cachedPluginDescriptors = Array.from(this.plugins.values())
+            .map((plugin) => ({
+                id: plugin.id,
+                name: plugin.name,
+                version: plugin.version,
+                description: plugin.description,
+                toolNames: [...(this.pluginToolMap.get(plugin.id) ?? [])],
+                skillDirs: [...(this.pluginSkillDirs.get(plugin.id) ?? [])],
+            }))
+            .sort((a, b) => a.id.localeCompare(b.id));
+        this.cachedDiagnostics = {
+            pluginCount: this.plugins.size,
+            toolCount: this.tools.size,
+            hookCount: this.hooksList.length,
+            skillDirCount: this.pluginSkillDirs.size,
+            loadErrors: this.loadErrors.map((item) => ({ ...item })),
+        };
+        this.cachedLegacyHookAvailability = {
+            beforeRun: this.hooksList.some((hooks) => typeof hooks.beforeRun === "function"),
+            afterRun: this.hooksList.some((hooks) => typeof hooks.afterRun === "function"),
+            beforeToolCall: this.hooksList.some((hooks) => typeof hooks.beforeToolCall === "function"),
+            afterToolCall: this.hooksList.some((hooks) => typeof hooks.afterToolCall === "function"),
+        };
+        this.cachedInventoryGeneration = this.inventoryGeneration;
+    }
+
+    private invalidateInventoryCache(): void {
+        this.inventoryGeneration += 1;
+        this.cachedInventoryGeneration = -1;
     }
 }

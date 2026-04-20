@@ -4,6 +4,7 @@ import {
   buildDreamRuntimeBarView,
   buildEmailThreadConversationAdvicePrompt,
   buildEmailThreadConversationOpenNote,
+  buildMemoryDetailCollapsedPreview,
   buildSharedReviewBatchActionState,
   buildSharedReviewQueueParams,
   collectActionableSharedReviewIds,
@@ -12,7 +13,9 @@ import {
   extractTaskContextTargets,
   formatDreamFallbackReasonLabel,
   formatDreamGenerationModeLabel,
+  getMemoryViewerListPageSize,
   normalizeMemoryViewerAgentViewState,
+  paginateMemoryViewerItems,
 } from "./memory-viewer.js";
 import { buildDreamHistoryPanelView } from "./memory-viewer-dream-history.js";
 
@@ -289,6 +292,46 @@ describe("memory viewer shared review filters", () => {
       },
       goalIdFilter: "goal_demo",
     });
+  });
+
+  it("uses smaller page sizes for heavy memory viewer lists", () => {
+    expect(getMemoryViewerListPageSize("tasks")).toBe(20);
+    expect(getMemoryViewerListPageSize("memories")).toBe(20);
+    expect(getMemoryViewerListPageSize("sharedReview")).toBe(25);
+    expect(getMemoryViewerListPageSize("outboundAudit")).toBe(25);
+  });
+
+  it("paginates memory viewer items with stable page metadata", () => {
+    const pagination = paginateMemoryViewerItems(
+      Array.from({ length: 26 }, (_, index) => ({ id: `item-${index + 1}` })),
+      { page: 1, pageSize: 20 },
+    );
+
+    expect(pagination.currentPage).toBe(1);
+    expect(pagination.totalPages).toBe(2);
+    expect(pagination.visibleStart).toBe(21);
+    expect(pagination.visibleEnd).toBe(26);
+    expect(pagination.visibleItems.map((item) => item.id)).toEqual([
+      "item-21",
+      "item-22",
+      "item-23",
+      "item-24",
+      "item-25",
+      "item-26",
+    ]);
+  });
+
+  it("builds collapsed previews for oversized memory detail blocks", () => {
+    const preview = buildMemoryDetailCollapsedPreview(
+      Array.from({ length: 20 }, (_, index) => `line-${index + 1}`).join("\n"),
+      { maxLines: 4, maxChars: 200 },
+    );
+
+    expect(preview.truncated).toBe(true);
+    expect(preview.lineCount).toBe(20);
+    expect(preview.preview).toContain("line-1");
+    expect(preview.preview).not.toContain("line-20");
+    expect(preview.preview.endsWith("\n…")).toBe(true);
   });
 
   it("formats dream generation mode and fallback reason labels", () => {

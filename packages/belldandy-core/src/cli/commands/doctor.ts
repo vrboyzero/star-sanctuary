@@ -349,10 +349,36 @@ export default defineCommand({
     const port = Number(process.env.BELLDANDY_PORT ?? DEFAULT_PORT);
 
     const results: CheckResult[] = [];
+    const envLocalCheck = checkEnvLocal(ctx.envDir);
+    const requiredEnvChecks = checkRequiredEnv(ctx.envDir);
+    const deploymentBackends = buildDeploymentBackendsDoctorReport({ stateDir });
 
-    // Sync checks
+    const [
+      pnpmCheck,
+      portCheck,
+      modelConnectivityCheck,
+      configuredProfiles,
+      optionalCapabilities,
+      cameraRuntime,
+      runtimeResilience,
+    ] = await Promise.all([
+      checkPnpm(),
+      checkPort(port),
+      args["check-model"] ? checkModelConnectivity() : Promise.resolve<CheckResult | undefined>(undefined),
+      loadAgentProfiles(path.join(stateDir, "agents.json")),
+      buildOptionalCapabilitiesDoctorReport(),
+      buildCameraRuntimeDoctorReport({
+        context: {
+          conversationId: "bdd.doctor",
+          workspaceRoot: process.cwd(),
+          stateDir,
+        },
+      }),
+      readRuntimeResilienceDoctorReport(stateDir),
+    ]);
+
     results.push(checkNodeVersion());
-    results.push(await checkPnpm());
+    results.push(pnpmCheck);
     results.push(checkStateDir(stateDir));
     results.push({ name: "Environment directory", status: "pass", message: ctx.envDir });
     if (ctx.envSource === "legacy_root") {
@@ -363,14 +389,13 @@ export default defineCommand({
         fix: "Run 'bdd config migrate-to-state-dir' to switch to state-dir config",
       });
     }
-    results.push(checkEnvLocal(ctx.envDir));
-    results.push(...checkRequiredEnv(ctx.envDir));
-    results.push(await checkPort(port));
+    results.push(envLocalCheck);
+    results.push(...requiredEnvChecks);
+    results.push(portCheck);
     results.push(checkMemoryDb(stateDir));
     results.push(checkMcpConfig(stateDir));
-
     if (args["check-model"]) {
-      results.push(await checkModelConnectivity());
+      results.push(modelConnectivityCheck ?? { name: "Model connectivity", status: "warn", message: "skipped" });
     }
 
     const toolBehaviorObservability = buildToolBehaviorObservability({
@@ -379,7 +404,6 @@ export default defineCommand({
     const toolContractV2Observability = {
       summary: buildToolContractV2Summary(listToolContractsV2()),
     };
-    const configuredProfiles = await loadAgentProfiles(path.join(stateDir, "agents.json"));
     const residentProfiles = [
       buildDefaultProfile(),
       ...configuredProfiles.filter((profile) => profile.id !== "default" && isResidentAgentProfile(profile)),
@@ -405,7 +429,6 @@ export default defineCommand({
       status: residentAgents.summary.totalCount > 0 ? "pass" : "warn",
       message: residentAgents.summary.headline,
     });
-    const deploymentBackends = buildDeploymentBackendsDoctorReport({ stateDir });
     results.push({
       name: "Deployment Backends",
       status: deploymentBackends.summary.warningCount > 0 || deploymentBackends.summary.selectedResolved === false
@@ -418,19 +441,11 @@ export default defineCommand({
           ? `Update selectedProfileId in ${deploymentBackends.configPath}`
           : undefined,
     });
-    const optionalCapabilities = await buildOptionalCapabilitiesDoctorReport();
     results.push({
       name: "Optional Capabilities",
       status: optionalCapabilities.summary.warnCount > 0 ? "warn" : "pass",
       message: optionalCapabilities.summary.headline,
       fix: optionalCapabilities.summary.fix,
-    });
-    const cameraRuntime = await buildCameraRuntimeDoctorReport({
-      context: {
-        conversationId: "bdd.doctor",
-        workspaceRoot: process.cwd(),
-        stateDir,
-      },
     });
     if (cameraRuntime) {
       results.push({
@@ -444,7 +459,6 @@ export default defineCommand({
         fix: cameraRuntime.summary.fix,
       });
     }
-    const runtimeResilience = await readRuntimeResilienceDoctorReport(stateDir);
     const runtimeResilienceDiagnostics = runtimeResilience
       ? buildRuntimeResilienceDiagnosticSummary(runtimeResilience)
       : undefined;

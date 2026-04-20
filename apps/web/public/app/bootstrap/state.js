@@ -9,6 +9,7 @@ export function createDefaultSharedReviewFilters() {
 export const memoryViewerState = {
   tab: "tasks",
   outboundAuditFocus: "all",
+  listPageByTab: {},
   stats: null,
   items: [],
   selectedId: null,

@@ -220,6 +220,7 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   // 小型 JSON store 在少数环境中会在 rename 时遇到瞬时竞态，降级为直接写目标文件。
   if (lastErr && (lastErr.code === "ENOENT" || (process.platform === "win32" && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")))) {
     try {
+      await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
       await fs.promises.writeFile(filePath, content, "utf-8");
       await fs.promises.unlink(tmp).catch(() => {});
       return;

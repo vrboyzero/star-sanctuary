@@ -125,6 +125,7 @@ function isCommunityMentioned(text: string, accountName: string, fallbackAgentId
  */
 export class CommunityChannel implements Channel {
   readonly name = "community";
+  private static readonly CONNECTIVITY_DIAGNOSTIC_COOLDOWN_MS = 15_000;
 
   private readonly endpoint: string;
   private readonly agentConfigs: CommunityAgentConfig[];
@@ -150,6 +151,8 @@ export class CommunityChannel implements Channel {
   private readonly MESSAGE_CACHE_SIZE = 1000;
   // Per-room 消息串行队列，避免同一房间的消息并发处理导致冲突
   private messageQueues = new Map<string, Promise<void>>();
+  private readonly pendingConnectivityDiagnostics = new Map<string, Promise<void>>();
+  private readonly lastConnectivityDiagnosticAt = new Map<string, number>();
 
   get isRunning(): boolean {
     return this._running;
@@ -226,6 +229,8 @@ export class CommunityChannel implements Channel {
 
     this.connections.clear();
     this.messageQueues.clear();
+    this.pendingConnectivityDiagnostics.clear();
+    this.lastConnectivityDiagnosticAt.clear();
     this._running = false;
     console.log(`[${this.name}] Community channel stopped`);
   }
@@ -335,8 +340,11 @@ export class CommunityChannel implements Channel {
       console.log(`[${this.name}] Resolved room "${room.name}" to ID: ${roomId}`);
     } catch (error) {
       if (!(error instanceof Error && error.message.startsWith(`Failed to find room "${room.name}":`))) {
-        const diagnostic = await this.diagnoseHttpConnectivity(roomLookupUrl, error);
-        console.error(`[${this.name}] Failed to resolve room name "${room.name}" (network):`, diagnostic);
+        this.scheduleConnectivityDiagnostic(
+          `Failed to resolve room name "${room.name}" (network):`,
+          roomLookupUrl,
+          error,
+        );
       }
       throw error;
     }
@@ -370,8 +378,11 @@ export class CommunityChannel implements Channel {
       console.log(`[${this.name}] Agent ${agentConfig.name} joined room ${room.name} (${roomId})`);
     } catch (error) {
       if (!(error instanceof Error && error.message.startsWith("Failed to join room:"))) {
-        const diagnostic = await this.diagnoseHttpConnectivity(joinRoomUrl, error);
-        console.error(`[${this.name}] Failed to join room ${room.name} (network):`, diagnostic);
+        this.scheduleConnectivityDiagnostic(
+          `Failed to join room ${room.name} (network):`,
+          joinRoomUrl,
+          error,
+        );
       }
       throw error;
     }
@@ -529,6 +540,37 @@ export class CommunityChannel implements Channel {
 
       socket.connect(port, host);
     });
+  }
+
+  private scheduleConnectivityDiagnostic(
+    message: string,
+    requestUrl: string,
+    error: unknown,
+  ): void {
+    if (this.pendingConnectivityDiagnostics.has(requestUrl)) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastRunAt = this.lastConnectivityDiagnosticAt.get(requestUrl) ?? 0;
+    if (now - lastRunAt < CommunityChannel.CONNECTIVITY_DIAGNOSTIC_COOLDOWN_MS) {
+      return;
+    }
+    this.lastConnectivityDiagnosticAt.set(requestUrl, now);
+
+    const task = this.diagnoseHttpConnectivity(requestUrl, error)
+      .then((diagnostic) => {
+        console.error(`[${this.name}] ${message}`, diagnostic);
+      })
+      .catch((diagnosticError) => {
+        console.warn(`[${this.name}] Failed to collect connectivity diagnostic for ${requestUrl}:`, diagnosticError);
+      })
+      .finally(() => {
+        if (this.pendingConnectivityDiagnostics.get(requestUrl) === task) {
+          this.pendingConnectivityDiagnostics.delete(requestUrl);
+        }
+      });
+    this.pendingConnectivityDiagnostics.set(requestUrl, task);
   }
 
   /**

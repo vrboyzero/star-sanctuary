@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+const RENAME_RETRIES = 3;
+const RENAME_RETRY_DELAY_MS = 50;
+
 type PromptSnapshotIndexSessionKind =
   | "agent_main"
   | "goal"
@@ -28,6 +31,32 @@ type PromptSnapshotIndexLedger = {
   generatedAt: number;
   entries: PromptSnapshotIndexEntry[];
 };
+
+export function getPromptSnapshotIndexJsonPath(rootDirectory: string): string {
+  return path.join(rootDirectory, "_index.json");
+}
+
+export async function loadPromptSnapshotIndex(rootDirectory: string): Promise<PromptSnapshotIndexLedger | undefined> {
+  const raw = await fs.readFile(getPromptSnapshotIndexJsonPath(rootDirectory), "utf-8").catch((error) => {
+    const fsError = error as NodeJS.ErrnoException;
+    if (fsError.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as PromptSnapshotIndexLedger;
+    if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.entries)) {
+      return undefined;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
 
 function resolveSessionKind(conversationId: string): PromptSnapshotIndexSessionKind {
   if (/^goal:[^:]+:node:[^:]+:run:[^:]+$/.test(conversationId)) return "goal_node";
@@ -148,9 +177,35 @@ async function readPromptSnapshotIndexEntry(input: {
 }
 
 async function atomicWriteText(targetPath: string, content: string): Promise<void> {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.tmp`;
   await fs.writeFile(tempPath, content, "utf-8");
-  await fs.rename(tempPath, targetPath);
+  let lastErr: NodeJS.ErrnoException | null = null;
+  for (let attempt = 0; attempt < RENAME_RETRIES; attempt += 1) {
+    try {
+      await fs.rename(tempPath, targetPath);
+      return;
+    } catch (error) {
+      lastErr = error as NodeJS.ErrnoException;
+      if (attempt < RENAME_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  if (process.platform === "win32" && lastErr && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")) {
+    try {
+      await fs.writeFile(targetPath, content, "utf-8");
+      await fs.unlink(tempPath).catch(() => {});
+      return;
+    } catch (fallbackError) {
+      await fs.unlink(tempPath).catch(() => {});
+      throw fallbackError;
+    }
+  }
+
+  await fs.unlink(tempPath).catch(() => {});
+  throw lastErr;
 }
 
 export async function writePromptSnapshotIndex(input: {
@@ -186,7 +241,7 @@ export async function writePromptSnapshotIndex(input: {
   };
 
   await atomicWriteText(
-    path.join(input.rootDirectory, "_index.json"),
+    getPromptSnapshotIndexJsonPath(input.rootDirectory),
     JSON.stringify(index, null, 2),
   );
   await atomicWriteText(

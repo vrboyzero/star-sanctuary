@@ -13,6 +13,7 @@ afterEach(() => {
 test("MemoryRuntimeUsageAccounting falls back to direct write on win32 rename EPERM", async () => {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-memory-budget-"));
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  const timestamp = Date.now();
 
   Object.defineProperty(process, "platform", {
     configurable: true,
@@ -28,7 +29,7 @@ test("MemoryRuntimeUsageAccounting falls back to direct write on win32 rename EP
     await accounting.recordEvent({
       consumer: "durable_extraction_request",
       outcome: "blocked",
-      timestamp: 1_775_904_602_960,
+      timestamp,
       metadata: {
         reasonCode: "durable_extraction_request_budget_exceeded",
       },

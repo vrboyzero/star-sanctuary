@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import type { EnvDirSource } from "@star-sanctuary/distribution";
 
@@ -143,8 +144,103 @@ type SystemDoctorMethodContext = {
   goalManager?: GoalManager;
 };
 
+type DoctorPerformanceStage = {
+  name: string;
+  durationMs: number;
+  status: "ok" | "error";
+  error?: string;
+};
+
+type DoctorPerformanceSummary = {
+  startedAt: string;
+  finishedAt: string;
+  totalMs: number;
+  stages: DoctorPerformanceStage[];
+};
+
+type TimedDoctorStageResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: unknown };
+
+type DoctorSurface = "summary" | "full";
+
+const SYSTEM_DOCTOR_SUMMARY_CACHE_TTL_MS = 1500;
+const SYSTEM_DOCTOR_FULL_CACHE_TTL_MS = 5000;
+
+const doctorResponseCache = new Map<string, {
+  expiresAt: number;
+  response: GatewayResFrame;
+}>();
+const doctorResponseInflight = new Map<string, Promise<GatewayResFrame>>();
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeDoctorSurface(value: unknown): DoctorSurface {
+  return typeof value === "string" && value.trim().toLowerCase() === "summary"
+    ? "summary"
+    : "full";
+}
+
+function stabilizeDoctorCacheValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => stabilizeDoctorCacheValue(item));
+  }
+  if (isObjectRecord(value)) {
+    return Object.keys(value)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, key) => {
+        if (key === "forceRefresh") {
+          return acc;
+        }
+        acc[key] = stabilizeDoctorCacheValue(value[key]);
+        return acc;
+      }, {});
+  }
+  return value;
+}
+
+function isCacheableDoctorRequest(params: Record<string, unknown>): boolean {
+  return Object.keys(params).every((key) => key === "surface" || key === "forceRefresh");
+}
+
+function buildDoctorCacheKey(
+  params: Record<string, unknown>,
+  surface: DoctorSurface,
+  ctx: Pick<SystemDoctorMethodContext, "stateDir" | "envDir">,
+): string {
+  return JSON.stringify({
+    surface,
+    stateDir: path.resolve(ctx.stateDir),
+    envDir: path.resolve(ctx.envDir ?? ctx.stateDir),
+    params: stabilizeDoctorCacheValue(params),
+  });
+}
+
+function cloneDoctorResponse(response: GatewayResFrame, id: string): GatewayResFrame {
+  return {
+    ...response,
+    id,
+  };
+}
+
+function resolveDoctorCacheTtlMs(surface: DoctorSurface): number {
+  return surface === "summary"
+    ? SYSTEM_DOCTOR_SUMMARY_CACHE_TTL_MS
+    : SYSTEM_DOCTOR_FULL_CACHE_TTL_MS;
+}
+
+function readCachedDoctorResponse(cacheKey: string, id: string): GatewayResFrame | undefined {
+  const cached = doctorResponseCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.expiresAt <= Date.now()) {
+    doctorResponseCache.delete(cacheKey);
+    return undefined;
+  }
+  return cloneDoctorResponse(cached.response, id);
 }
 
 function formatRateLimitState(rateLimit: RateLimitState): string {
@@ -252,6 +348,69 @@ function buildConfigSourceDoctorReport(ctx: Pick<SystemDoctorMethodContext, "env
       ? "Run 'bdd config migrate-to-state-dir' when you are ready to switch away from project-root env files."
       : undefined,
   };
+}
+
+function roundDoctorDurationMs(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 10) {
+    return Number(value.toFixed(2));
+  }
+  if (value < 100) {
+    return Number(value.toFixed(1));
+  }
+  return Math.round(value);
+}
+
+function formatDoctorStageError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+}
+
+function captureDoctorStage<T>(
+  stages: DoctorPerformanceStage[],
+  name: string,
+  fn: () => Promise<T> | T,
+): Promise<TimedDoctorStageResult<T>> {
+  const stage: DoctorPerformanceStage = {
+    name,
+    durationMs: 0,
+    status: "ok",
+  };
+  stages.push(stage);
+  const startedAt = performance.now();
+  return Promise.resolve()
+    .then(fn)
+    .then((value) => {
+      stage.durationMs = roundDoctorDurationMs(performance.now() - startedAt);
+      return { ok: true, value } satisfies TimedDoctorStageResult<T>;
+    })
+    .catch((error) => {
+      stage.durationMs = roundDoctorDurationMs(performance.now() - startedAt);
+      stage.status = "error";
+      stage.error = formatDoctorStageError(error);
+      return { ok: false, error } satisfies TimedDoctorStageResult<T>;
+    });
+}
+
+function unwrapDoctorStageResult<T>(result: TimedDoctorStageResult<T>): T {
+  if (result.ok) {
+    return result.value;
+  }
+  throw result.error;
+}
+
+function pushDoctorWarnCheck(
+  checks: Array<{ id: string; name: string; status: string; message: string }>,
+  id: string,
+  name: string,
+  error: unknown,
+): void {
+  checks.push({
+    id,
+    name,
+    status: "warn",
+    message: formatDoctorStageError(error),
+  });
 }
 
 function extractScopedMemoryAgentId(params: Record<string, unknown>): string | undefined {
@@ -408,8 +567,30 @@ export async function handleSystemDoctorMethod(
   ctx: SystemDoctorMethodContext,
 ): Promise<GatewayResFrame | null> {
   if (req.method !== "system.doctor") return null;
-
   const params = isObjectRecord(req.params) ? req.params : {};
+  const doctorSurface = normalizeDoctorSurface(params.surface);
+  const summaryOnly = doctorSurface === "summary";
+  const forceRefresh = params.forceRefresh === true;
+  const doctorRequestCacheable = !forceRefresh && isCacheableDoctorRequest(params);
+  const doctorCacheKey = doctorRequestCacheable
+    ? buildDoctorCacheKey(params, doctorSurface, ctx)
+    : undefined;
+  if (doctorRequestCacheable && doctorCacheKey) {
+    const cached = readCachedDoctorResponse(doctorCacheKey, req.id);
+    if (cached) {
+      return cached;
+    }
+    const inFlight = doctorResponseInflight.get(doctorCacheKey);
+    if (inFlight) {
+      return cloneDoctorResponse(await inFlight, req.id);
+    }
+  }
+
+  const responsePromise = (async (): Promise<GatewayResFrame> => {
+    const doctorRequestStartedAt = performance.now();
+    const doctorPerformanceStages: DoctorPerformanceStage[] = [];
+    const doctorStartedAtIso = new Date().toISOString();
+
   const conversationId = typeof params.conversationId === "string" ? params.conversationId.trim() : "";
   const includeTranscript = params.includeTranscript === true;
   const includeTimeline = params.includeTimeline === true;
@@ -442,83 +623,91 @@ export async function handleSystemDoctorMethod(
     { id: "memory_db", name: "Vector Database", status: "pass", message: "OK" },
   ];
 
-  const dbPath = path.join(ctx.stateDir, "memory.sqlite");
-  const stat = await statIfExists(dbPath);
-  if (stat?.isFile()) {
-    checks[1].message = `Size: ${(stat.size / 1024).toFixed(1)} KB`;
-  } else {
-    checks[1].status = "warn";
-    checks[1].message = "Not created yet";
-  }
+  const baselineResult = await captureDoctorStage(doctorPerformanceStages, "baseline", async () => {
+    const dbPath = path.join(ctx.stateDir, "memory.sqlite");
+    const stat = await statIfExists(dbPath);
+    if (stat?.isFile()) {
+      checks[1].message = `Size: ${(stat.size / 1024).toFixed(1)} KB`;
+    } else {
+      checks[1].status = "warn";
+      checks[1].message = "Not created yet";
+    }
 
-  try {
-    ctx.agentFactory();
-    checks.push({ id: "agent_config", name: "Agent Configuration", status: "pass", message: "Valid" });
-  } catch {
-    checks.push({ id: "agent_config", name: "Agent Configuration", status: "fail", message: "Missing API Keys" });
-  }
+    try {
+      ctx.agentFactory();
+      checks.push({ id: "agent_config", name: "Agent Configuration", status: "pass", message: "Valid" });
+    } catch {
+      checks.push({ id: "agent_config", name: "Agent Configuration", status: "fail", message: "Missing API Keys" });
+    }
 
-  const configSource = buildConfigSourceDoctorReport(ctx);
-  checks.push({
-    id: "config_source",
-    name: "Config Source",
-    status: configSource.source === "legacy_root" ? "warn" : "pass",
-    message: configSource.headline,
-  });
+    const configSource = buildConfigSourceDoctorReport(ctx);
+    checks.push({
+      id: "config_source",
+      name: "Config Source",
+      status: configSource.source === "legacy_root" ? "warn" : "pass",
+      message: configSource.headline,
+    });
 
-  const channelSecurity = buildChannelSecurityDoctorReport({
-    stateDir: ctx.stateDir,
-    channels: {
-      discord: {
-        enabled:
-          String(process.env.BELLDANDY_DISCORD_ENABLED ?? "false").trim().toLowerCase() === "true"
-          && Boolean(String(process.env.BELLDANDY_DISCORD_BOT_TOKEN ?? "").trim()),
-      },
-      feishu: {
-        enabled:
-          Boolean(String(process.env.BELLDANDY_FEISHU_APP_ID ?? "").trim())
-          && Boolean(String(process.env.BELLDANDY_FEISHU_APP_SECRET ?? "").trim()),
-      },
-      qq: {
-        enabled:
-          Boolean(String(process.env.BELLDANDY_QQ_APP_ID ?? "").trim())
-          && Boolean(String(process.env.BELLDANDY_QQ_APP_SECRET ?? "").trim()),
-      },
-      community: (() => {
-        const communityConfigPath = path.join(ctx.stateDir, "community.json");
-        try {
-          if (!fs.existsSync(communityConfigPath)) {
+    const channelSecurity = buildChannelSecurityDoctorReport({
+      stateDir: ctx.stateDir,
+      channels: {
+        discord: {
+          enabled:
+            String(process.env.BELLDANDY_DISCORD_ENABLED ?? "false").trim().toLowerCase() === "true"
+            && Boolean(String(process.env.BELLDANDY_DISCORD_BOT_TOKEN ?? "").trim()),
+        },
+        feishu: {
+          enabled:
+            Boolean(String(process.env.BELLDANDY_FEISHU_APP_ID ?? "").trim())
+            && Boolean(String(process.env.BELLDANDY_FEISHU_APP_SECRET ?? "").trim()),
+        },
+        qq: {
+          enabled:
+            Boolean(String(process.env.BELLDANDY_QQ_APP_ID ?? "").trim())
+            && Boolean(String(process.env.BELLDANDY_QQ_APP_SECRET ?? "").trim()),
+        },
+        community: (() => {
+          const communityConfigPath = path.join(ctx.stateDir, "community.json");
+          try {
+            if (!fs.existsSync(communityConfigPath)) {
+              return { enabled: false };
+            }
+            const parsed = JSON.parse(fs.readFileSync(communityConfigPath, "utf-8")) as {
+              endpoint?: unknown;
+              agents?: Array<{ name?: unknown }>;
+            };
+            const accountIds = Array.isArray(parsed.agents)
+              ? parsed.agents
+                .map((item) => (typeof item?.name === "string" ? item.name.trim() : ""))
+                .filter(Boolean)
+              : [];
+            return {
+              enabled: Boolean(accountIds.length) && typeof parsed.endpoint === "string" && Boolean(parsed.endpoint.trim()),
+              ...(accountIds.length ? { accountIds } : {}),
+            };
+          } catch {
             return { enabled: false };
           }
-          const parsed = JSON.parse(fs.readFileSync(communityConfigPath, "utf-8")) as {
-            endpoint?: unknown;
-            agents?: Array<{ name?: unknown }>;
-          };
-          const accountIds = Array.isArray(parsed.agents)
-            ? parsed.agents
-              .map((item) => (typeof item?.name === "string" ? item.name.trim() : ""))
-              .filter(Boolean)
-            : [];
-          return {
-            enabled: Boolean(accountIds.length) && typeof parsed.endpoint === "string" && Boolean(parsed.endpoint.trim()),
-            ...(accountIds.length ? { accountIds } : {}),
-          };
-        } catch {
-          return { enabled: false };
-        }
-      })(),
-    },
-  });
-  for (const item of channelSecurity.items) {
-    checks.push({
-      id: `channel_security_${item.channel}`,
-      name: `Channel Security (${item.channel})`,
-      status: item.status,
-      message: item.message,
+        })(),
+      },
     });
-  }
+    for (const item of channelSecurity.items) {
+      checks.push({
+        id: `channel_security_${item.channel}`,
+        name: `Channel Security (${item.channel})`,
+        status: item.status,
+        message: item.message,
+      });
+    }
 
-  const memoryRuntime = await buildMemoryRuntimeDoctorReport({
+    return {
+      configSource,
+      channelSecurity,
+    };
+  });
+  const { configSource, channelSecurity } = unwrapDoctorStageResult(baselineResult);
+
+  const memoryRuntimeStage = captureDoctorStage(doctorPerformanceStages, "memory_runtime", () => buildMemoryRuntimeDoctorReport({
     conversationStore: ctx.conversationStore,
     compactionRuntimeReport: ctx.getCompactionRuntimeReport?.(),
     durableExtractionRuntime: ctx.durableExtractionRuntime,
@@ -530,36 +719,16 @@ export async function handleSystemDoctorMethod(
       DURABLE_EXTRACTION_REQUEST_RATE_LIMIT_REASON_MESSAGE,
     ),
     durableExtractionRunRateLimit: ctx.memoryBudgetGuard.getDurableExtractionRunRateLimitState(),
-  });
-  const extensionRuntimeBase = ctx.extensionHost?.extensionRuntime ?? buildExtensionRuntimeReport({
-    pluginRegistry: ctx.pluginRegistry,
-    skillRegistry: ctx.skillRegistry,
-    toolsConfigManager: ctx.toolsConfigManager,
-  });
-  const deploymentBackends = buildDeploymentBackendsDoctorReport({
-    stateDir: ctx.stateDir,
-  });
-  const optionalCapabilities = await buildOptionalCapabilitiesDoctorReport();
-  const cameraRuntime = await buildCameraRuntimeDoctorReport({
+  }));
+  const optionalCapabilitiesStage = captureDoctorStage(doctorPerformanceStages, "optional_capabilities", () => buildOptionalCapabilitiesDoctorReport());
+  const cameraRuntimeStage = captureDoctorStage(doctorPerformanceStages, "camera_runtime", () => buildCameraRuntimeDoctorReport({
     context: {
       conversationId: "system.doctor",
       workspaceRoot: process.cwd(),
       stateDir: ctx.stateDir,
     },
-  });
-  const runtimeResilience = ctx.getRuntimeResilienceReport?.();
-  const runtimeResilienceDiagnostics = runtimeResilience
-    ? buildRuntimeResilienceDiagnosticSummary(runtimeResilience)
-    : undefined;
-  const extensionRuntime = ctx.extensionHost
-    ? {
-      ...extensionRuntimeBase,
-      host: {
-        lifecycle: ctx.extensionHost.lifecycle,
-      },
-    }
-    : extensionRuntimeBase;
-  const extensionMarketplace = await (async () => {
+  }));
+  const extensionMarketplaceStage = captureDoctorStage(doctorPerformanceStages, "extension_marketplace", async () => {
     try {
       return {
         ...(await loadExtensionMarketplaceState(ctx.stateDir)),
@@ -590,105 +759,59 @@ export async function handleSystemDoctorMethod(
         loadError: error instanceof Error ? error.message : String(error),
       };
     }
-  })();
-  const extensionGovernance = buildExtensionGovernanceReport({
-    extensionRuntime: extensionRuntimeBase,
-    extensionMarketplace: extensionMarketplace.loadError ? undefined : extensionMarketplace,
-    extensionHostLifecycle: ctx.extensionHost?.lifecycle,
-    loadError: extensionMarketplace.loadError,
   });
-  const queryRuntime = ctx.queryRuntimeTraceStore.getSummary();
-  let cronRuntime: CronRuntimeDoctorReport | undefined;
-  let backgroundContinuationRuntime: BackgroundContinuationRuntimeDoctorReport | undefined;
-  let externalOutboundRuntime: ExternalOutboundDoctorReport | undefined;
-  let emailOutboundRuntime: EmailOutboundDoctorReport | undefined;
-  let emailInboundRuntime: EmailInboundDoctorReport | undefined;
-  let assistantModeRuntime: AssistantModeRuntimeReport | undefined;
-  let goalRuntimeSummary: Awaited<ReturnType<typeof buildAssistantModeGoalRuntimeSummary>> | undefined;
-  const dreamRuntime = await buildDreamRuntimeDoctorReport(ctx, params);
-  const dreamCommons = await buildDreamCommonsDoctorReport(ctx);
-  try {
-    cronRuntime = await ctx.getCronRuntimeDoctorReport?.();
-  } catch (error) {
-    checks.push({
-      id: "cron_runtime",
-      name: "Cron Runtime",
-      status: "warn",
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-  try {
-    backgroundContinuationRuntime = await ctx.getBackgroundContinuationRuntimeDoctorReport?.();
-  } catch (error) {
-    checks.push({
-      id: "background_continuation_runtime",
-      name: "Background Continuation Runtime",
-      status: "warn",
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-  try {
-      if (ctx.externalOutboundAuditStore) {
-        externalOutboundRuntime = await buildExternalOutboundDoctorReport({
-          auditStore: ctx.externalOutboundAuditStore,
-          confirmationStore: ctx.externalOutboundConfirmationStore,
-          requireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
-        });
-      }
-  } catch (error) {
-    checks.push({
-      id: "external_outbound_runtime",
-      name: "External Outbound Runtime",
-      status: "warn",
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-  try {
-    if (ctx.emailOutboundAuditStore) {
-      emailOutboundRuntime = await buildEmailOutboundDoctorReport({
-        auditStore: ctx.emailOutboundAuditStore,
-        requireConfirmation: String(process.env.BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
-      });
+  const dreamRuntimeStage = captureDoctorStage(doctorPerformanceStages, "dream_runtime", () => buildDreamRuntimeDoctorReport(ctx, params));
+  const dreamCommonsStage = captureDoctorStage(doctorPerformanceStages, "dream_commons", () => buildDreamCommonsDoctorReport(ctx));
+  const cronRuntimeStage = captureDoctorStage(doctorPerformanceStages, "cron_runtime", async () => ctx.getCronRuntimeDoctorReport?.());
+  const backgroundContinuationRuntimeStage = captureDoctorStage(
+    doctorPerformanceStages,
+    "background_continuation_runtime",
+    async () => ctx.getBackgroundContinuationRuntimeDoctorReport?.(),
+  );
+  const externalOutboundRuntimeStage = captureDoctorStage(doctorPerformanceStages, "external_outbound_runtime", async () => {
+    if (!ctx.externalOutboundAuditStore) {
+      return undefined;
     }
-  } catch (error) {
-    checks.push({
-      id: "email_outbound_runtime",
-      name: "Email Outbound Runtime",
-      status: "warn",
-      message: error instanceof Error ? error.message : String(error),
+    return buildExternalOutboundDoctorReport({
+      auditStore: ctx.externalOutboundAuditStore,
+      confirmationStore: ctx.externalOutboundConfirmationStore,
+      requireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
     });
-  }
-  try {
-    if (ctx.emailInboundAuditStore) {
-      emailInboundRuntime = await buildEmailInboundDoctorReport({
-        auditStore: ctx.emailInboundAuditStore,
-        enabled: String(process.env.BELLDANDY_EMAIL_IMAP_ENABLED ?? "false").trim().toLowerCase() === "true",
-        host: process.env.BELLDANDY_EMAIL_IMAP_HOST,
-        username: process.env.BELLDANDY_EMAIL_IMAP_USER,
-        password: process.env.BELLDANDY_EMAIL_IMAP_PASS,
-        accountId: process.env.BELLDANDY_EMAIL_IMAP_ACCOUNT_ID,
-        mailbox: process.env.BELLDANDY_EMAIL_IMAP_MAILBOX,
-        requestedAgentId: process.env.BELLDANDY_EMAIL_INBOUND_AGENT_ID,
-        port: Number(process.env.BELLDANDY_EMAIL_IMAP_PORT ?? "993"),
-        secure: String(process.env.BELLDANDY_EMAIL_IMAP_SECURE ?? "true").trim().toLowerCase() !== "false",
-        pollIntervalMs: Number(process.env.BELLDANDY_EMAIL_IMAP_POLL_INTERVAL_MS ?? "60000"),
-        connectTimeoutMs: Number(process.env.BELLDANDY_EMAIL_IMAP_CONNECT_TIMEOUT_MS ?? "10000"),
-        socketTimeoutMs: Number(process.env.BELLDANDY_EMAIL_IMAP_SOCKET_TIMEOUT_MS ?? "20000"),
-        bootstrapMode: String(process.env.BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE ?? "latest").trim().toLowerCase() === "all"
-          ? "all"
-          : "latest",
-        recentWindowLimit: Number(process.env.BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT ?? "0"),
-      });
+  });
+  const emailOutboundRuntimeStage = captureDoctorStage(doctorPerformanceStages, "email_outbound_runtime", async () => {
+    if (!ctx.emailOutboundAuditStore) {
+      return undefined;
     }
-  } catch (error) {
-    checks.push({
-      id: "email_inbound_runtime",
-      name: "Email Inbound Runtime",
-      status: "warn",
-      message: error instanceof Error ? error.message : String(error),
+    return buildEmailOutboundDoctorReport({
+      auditStore: ctx.emailOutboundAuditStore,
+      requireConfirmation: String(process.env.BELLDANDY_EMAIL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
     });
-  }
-  const mcpRuntime = await (async () => {
+  });
+  const emailInboundRuntimeStage = captureDoctorStage(doctorPerformanceStages, "email_inbound_runtime", async () => {
+    if (!ctx.emailInboundAuditStore) {
+      return undefined;
+    }
+    return buildEmailInboundDoctorReport({
+      auditStore: ctx.emailInboundAuditStore,
+      enabled: String(process.env.BELLDANDY_EMAIL_IMAP_ENABLED ?? "false").trim().toLowerCase() === "true",
+      host: process.env.BELLDANDY_EMAIL_IMAP_HOST,
+      username: process.env.BELLDANDY_EMAIL_IMAP_USER,
+      password: process.env.BELLDANDY_EMAIL_IMAP_PASS,
+      accountId: process.env.BELLDANDY_EMAIL_IMAP_ACCOUNT_ID,
+      mailbox: process.env.BELLDANDY_EMAIL_IMAP_MAILBOX,
+      requestedAgentId: process.env.BELLDANDY_EMAIL_INBOUND_AGENT_ID,
+      port: Number(process.env.BELLDANDY_EMAIL_IMAP_PORT ?? "993"),
+      secure: String(process.env.BELLDANDY_EMAIL_IMAP_SECURE ?? "true").trim().toLowerCase() !== "false",
+      pollIntervalMs: Number(process.env.BELLDANDY_EMAIL_IMAP_POLL_INTERVAL_MS ?? "60000"),
+      connectTimeoutMs: Number(process.env.BELLDANDY_EMAIL_IMAP_CONNECT_TIMEOUT_MS ?? "10000"),
+      socketTimeoutMs: Number(process.env.BELLDANDY_EMAIL_IMAP_SOCKET_TIMEOUT_MS ?? "20000"),
+      bootstrapMode: String(process.env.BELLDANDY_EMAIL_IMAP_BOOTSTRAP_MODE ?? "latest").trim().toLowerCase() === "all"
+        ? "all"
+        : "latest",
+      recentWindowLimit: Number(process.env.BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT ?? "0"),
+    });
+  });
+  const mcpRuntimeStage = captureDoctorStage(doctorPerformanceStages, "mcp_runtime", async () => {
     const enabled = (process.env.BELLDANDY_MCP_ENABLED ?? "false") === "true";
     if (!enabled) {
       return { enabled, diagnostics: null as MCPDoctorDiagnostics | null };
@@ -719,7 +842,124 @@ export async function handleSystemDoctorMethod(
         } satisfies MCPDoctorDiagnostics,
       };
     }
-  })();
+  });
+
+  const overviewSyncResult = await captureDoctorStage(doctorPerformanceStages, "overview_sync", async () => {
+    const extensionRuntimeBase = ctx.extensionHost?.extensionRuntime ?? buildExtensionRuntimeReport({
+      pluginRegistry: ctx.pluginRegistry,
+      skillRegistry: ctx.skillRegistry,
+      toolsConfigManager: ctx.toolsConfigManager,
+    });
+    const deploymentBackends = buildDeploymentBackendsDoctorReport({
+      stateDir: ctx.stateDir,
+    });
+    const runtimeResilience = ctx.getRuntimeResilienceReport?.();
+    const runtimeResilienceDiagnostics = runtimeResilience
+      ? buildRuntimeResilienceDiagnosticSummary(runtimeResilience)
+      : undefined;
+    const extensionRuntime = ctx.extensionHost
+      ? {
+        ...extensionRuntimeBase,
+        host: {
+          lifecycle: ctx.extensionHost.lifecycle,
+        },
+      }
+      : extensionRuntimeBase;
+    const queryRuntime = ctx.queryRuntimeTraceStore.getSummary();
+    return {
+      extensionRuntimeBase,
+      deploymentBackends,
+      runtimeResilience,
+      runtimeResilienceDiagnostics,
+      extensionRuntime,
+      queryRuntime,
+    };
+  });
+  const {
+    extensionRuntimeBase,
+    deploymentBackends,
+    runtimeResilience,
+    runtimeResilienceDiagnostics,
+    extensionRuntime,
+    queryRuntime,
+  } = unwrapDoctorStageResult(overviewSyncResult);
+
+  const [
+    memoryRuntimeResult,
+    optionalCapabilitiesResult,
+    cameraRuntimeResult,
+    extensionMarketplaceResult,
+    dreamRuntimeResult,
+    dreamCommonsResult,
+    cronRuntimeResult,
+    backgroundContinuationRuntimeResult,
+    externalOutboundRuntimeResult,
+    emailOutboundRuntimeResult,
+    emailInboundRuntimeResult,
+    mcpRuntimeResult,
+  ] = await Promise.all([
+    memoryRuntimeStage,
+    optionalCapabilitiesStage,
+    cameraRuntimeStage,
+    extensionMarketplaceStage,
+    dreamRuntimeStage,
+    dreamCommonsStage,
+    cronRuntimeStage,
+    backgroundContinuationRuntimeStage,
+    externalOutboundRuntimeStage,
+    emailOutboundRuntimeStage,
+    emailInboundRuntimeStage,
+    mcpRuntimeStage,
+  ]);
+
+  const memoryRuntime = unwrapDoctorStageResult(memoryRuntimeResult);
+  const optionalCapabilities = unwrapDoctorStageResult(optionalCapabilitiesResult);
+  const cameraRuntime = unwrapDoctorStageResult(cameraRuntimeResult);
+  const extensionMarketplace = unwrapDoctorStageResult(extensionMarketplaceResult);
+  const dreamRuntime = unwrapDoctorStageResult(dreamRuntimeResult);
+  const dreamCommons = unwrapDoctorStageResult(dreamCommonsResult);
+
+  let cronRuntime: CronRuntimeDoctorReport | undefined;
+  let backgroundContinuationRuntime: BackgroundContinuationRuntimeDoctorReport | undefined;
+  let externalOutboundRuntime: ExternalOutboundDoctorReport | undefined;
+  let emailOutboundRuntime: EmailOutboundDoctorReport | undefined;
+  let emailInboundRuntime: EmailInboundDoctorReport | undefined;
+  let assistantModeRuntime: AssistantModeRuntimeReport | undefined;
+  let goalRuntimeSummary: Awaited<ReturnType<typeof buildAssistantModeGoalRuntimeSummary>> | undefined;
+
+  if (cronRuntimeResult.ok) {
+    cronRuntime = cronRuntimeResult.value;
+  } else {
+    pushDoctorWarnCheck(checks, "cron_runtime", "Cron Runtime", cronRuntimeResult.error);
+  }
+  if (backgroundContinuationRuntimeResult.ok) {
+    backgroundContinuationRuntime = backgroundContinuationRuntimeResult.value;
+  } else {
+    pushDoctorWarnCheck(checks, "background_continuation_runtime", "Background Continuation Runtime", backgroundContinuationRuntimeResult.error);
+  }
+  if (externalOutboundRuntimeResult.ok) {
+    externalOutboundRuntime = externalOutboundRuntimeResult.value;
+  } else {
+    pushDoctorWarnCheck(checks, "external_outbound_runtime", "External Outbound Runtime", externalOutboundRuntimeResult.error);
+  }
+  if (emailOutboundRuntimeResult.ok) {
+    emailOutboundRuntime = emailOutboundRuntimeResult.value;
+  } else {
+    pushDoctorWarnCheck(checks, "email_outbound_runtime", "Email Outbound Runtime", emailOutboundRuntimeResult.error);
+  }
+  if (emailInboundRuntimeResult.ok) {
+    emailInboundRuntime = emailInboundRuntimeResult.value;
+  } else {
+    pushDoctorWarnCheck(checks, "email_inbound_runtime", "Email Inbound Runtime", emailInboundRuntimeResult.error);
+  }
+
+  const extensionGovernance = buildExtensionGovernanceReport({
+    extensionRuntime: extensionRuntimeBase,
+    extensionMarketplace: extensionMarketplace.loadError ? undefined : extensionMarketplace,
+    extensionHostLifecycle: ctx.extensionHost?.lifecycle,
+    loadError: extensionMarketplace.loadError,
+  });
+  const mcpRuntime = unwrapDoctorStageResult(mcpRuntimeResult);
 
   checks.push({
     id: "session_digest_runtime",
@@ -944,7 +1184,7 @@ export async function handleSystemDoctorMethod(
   let delegationObservability: any;
   let bridgeRecoveryDiagnostics: any;
 
-  if (conversationId) {
+  if (!summaryOnly && conversationId) {
     const conversationSnapshot = ctx.conversationStore.get(conversationId);
     const transcriptExportRaw = includeTranscript
       ? await ctx.conversationStore.buildConversationTranscriptExport(conversationId, { mode: "internal" })
@@ -1011,7 +1251,7 @@ export async function handleSystemDoctorMethod(
       ...(includeTimeline ? { timeline } : {}),
     };
   }
-  if (includeConversationCatalog) {
+  if (!summaryOnly && includeConversationCatalog) {
     const items = await ctx.conversationStore.listPersistedConversations({
       conversationIdPrefix,
       limit: conversationListLimit,
@@ -1030,7 +1270,7 @@ export async function handleSystemDoctorMethod(
       },
     };
   }
-  if (includeRecentExports) {
+  if (!summaryOnly && includeRecentExports) {
     const items = await listRecentConversationExports({
       stateDir: ctx.stateDir,
       conversationIdPrefix,
@@ -1051,7 +1291,7 @@ export async function handleSystemDoctorMethod(
     };
   }
 
-  if (ctx.inspectAgentPrompt) {
+  if (!summaryOnly && ctx.inspectAgentPrompt) {
     const promptAgentId = typeof params.promptAgentId === "string" && params.promptAgentId.trim()
       ? params.promptAgentId.trim()
       : undefined;
@@ -1109,7 +1349,7 @@ export async function handleSystemDoctorMethod(
     }
   }
 
-  if (ctx.agentRegistry && (ctx.residentMemoryManagers?.length ?? 0) > 0) {
+  if (!summaryOnly && ctx.agentRegistry && (ctx.residentMemoryManagers?.length ?? 0) > 0) {
     const roster = await buildAgentRoster({
       stateDir: ctx.stateDir,
       agentRegistry: ctx.agentRegistry,
@@ -1157,75 +1397,94 @@ export async function handleSystemDoctorMethod(
     });
   }
 
-  if (ctx.subTaskRuntimeStore) {
-    const subtaskItems = await ctx.subTaskRuntimeStore.listTasks(undefined, { includeArchived: true });
-    delegationObservability = buildDelegationObservabilitySnapshot(subtaskItems);
-  }
-  goalRuntimeSummary = await buildAssistantModeGoalRuntimeSummary({
-    goalReader: ctx.goalManager,
-  });
+  if (!summaryOnly) {
+    const assistantModeStage = await captureDoctorStage(doctorPerformanceStages, "assistant_mode_runtime", async () => {
+      let resolvedDelegationObservability: typeof delegationObservability;
+      if (ctx.subTaskRuntimeStore) {
+        const subtaskItems = await ctx.subTaskRuntimeStore.listTasks(undefined, { includeArchived: true });
+        resolvedDelegationObservability = buildDelegationObservabilitySnapshot(subtaskItems);
+      }
+      const resolvedGoalRuntimeSummary = await buildAssistantModeGoalRuntimeSummary({
+        goalReader: ctx.goalManager,
+      });
+      const resolvedAssistantModeRuntime = buildAssistantModeRuntimeReport({
+        assistantModeEnabled: (() => {
+          const raw = process.env.BELLDANDY_ASSISTANT_MODE_ENABLED;
+          if (typeof raw !== "string" || !raw.trim()) return undefined;
+          return raw.trim().toLowerCase() === "true";
+        })(),
+        assistantModeConfigured: typeof process.env.BELLDANDY_ASSISTANT_MODE_ENABLED === "string"
+          && Boolean(process.env.BELLDANDY_ASSISTANT_MODE_ENABLED.trim()),
+        heartbeatEnabled: String(process.env.BELLDANDY_HEARTBEAT_ENABLED ?? "false").trim().toLowerCase() === "true",
+        heartbeatInterval: process.env.BELLDANDY_HEARTBEAT_INTERVAL,
+        heartbeatActiveHours: process.env.BELLDANDY_HEARTBEAT_ACTIVE_HOURS,
+        cronEnabled: String(process.env.BELLDANDY_CRON_ENABLED ?? "false").trim().toLowerCase() === "true",
+        cronRuntime,
+        backgroundContinuationRuntime,
+        externalOutboundRuntime,
+        residentAgents,
+        delegationObservability: resolvedDelegationObservability,
+        goals: resolvedGoalRuntimeSummary,
+        externalOutboundRequireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
+        externalDeliveryPreference: parseAssistantExternalDeliveryPreference(
+          process.env.BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE
+            ?? DEFAULT_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE,
+        ),
+      });
+      return {
+        delegationObservability: resolvedDelegationObservability,
+        goalRuntimeSummary: resolvedGoalRuntimeSummary,
+        assistantModeRuntime: resolvedAssistantModeRuntime,
+      };
+    });
+    {
+      const assistantModeState = unwrapDoctorStageResult(assistantModeStage);
+      delegationObservability = assistantModeState.delegationObservability;
+      goalRuntimeSummary = assistantModeState.goalRuntimeSummary;
+      assistantModeRuntime = assistantModeState.assistantModeRuntime;
+    }
+    if (assistantModeRuntime) {
+      checks.push({
+        id: "assistant_mode",
+        name: "Assistant Mode",
+        status: assistantModeRuntime.status === "attention" || assistantModeRuntime.status === "disabled"
+          ? "warn"
+          : "pass",
+        message: assistantModeRuntime.headline,
+      });
+    }
 
-  assistantModeRuntime = buildAssistantModeRuntimeReport({
-    assistantModeEnabled: (() => {
-      const raw = process.env.BELLDANDY_ASSISTANT_MODE_ENABLED;
-      if (typeof raw !== "string" || !raw.trim()) return undefined;
-      return raw.trim().toLowerCase() === "true";
-    })(),
-    assistantModeConfigured: typeof process.env.BELLDANDY_ASSISTANT_MODE_ENABLED === "string"
-      && Boolean(process.env.BELLDANDY_ASSISTANT_MODE_ENABLED.trim()),
-    heartbeatEnabled: String(process.env.BELLDANDY_HEARTBEAT_ENABLED ?? "false").trim().toLowerCase() === "true",
-    heartbeatInterval: process.env.BELLDANDY_HEARTBEAT_INTERVAL,
-    heartbeatActiveHours: process.env.BELLDANDY_HEARTBEAT_ACTIVE_HOURS,
-    cronEnabled: String(process.env.BELLDANDY_CRON_ENABLED ?? "false").trim().toLowerCase() === "true",
-    cronRuntime,
-    backgroundContinuationRuntime,
-    externalOutboundRuntime,
-    residentAgents,
-    delegationObservability,
-    goals: goalRuntimeSummary,
-    externalOutboundRequireConfirmation: String(process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION ?? "true").trim().toLowerCase() !== "false",
-    externalDeliveryPreference: parseAssistantExternalDeliveryPreference(
-      process.env.BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE
-        ?? DEFAULT_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE,
-    ),
-  });
-  if (assistantModeRuntime) {
+    skillFreshness = unwrapDoctorStageResult(await captureDoctorStage(
+      doctorPerformanceStages,
+      "skill_freshness",
+      () => buildScopedSkillFreshnessSnapshot(
+        ctx.stateDir,
+        resolveScopedMemoryManager(params),
+      ),
+    ));
     checks.push({
-      id: "assistant_mode",
-      name: "Assistant Mode",
-      status: assistantModeRuntime.status === "attention" || assistantModeRuntime.status === "disabled"
+      id: "skill_freshness",
+      name: "Skill Freshness",
+      status: (skillFreshness.summary.warnCount + skillFreshness.summary.needsPatchCount + skillFreshness.summary.needsNewSkillCount) > 0
         ? "warn"
-        : "pass",
-      message: assistantModeRuntime.headline,
+        : skillFreshness.summary.available
+          ? "pass"
+          : "warn",
+      message: skillFreshness.summary.headline,
     });
+
+    if (delegationObservability) {
+      const delegationHasProtocolGap = delegationObservability.summary.activeCount > delegationObservability.summary.protocolBackedCount;
+      checks.push({
+        id: "delegation_protocol",
+        name: "Delegation Protocol",
+        status: delegationHasProtocolGap ? "warn" : "pass",
+        message: delegationObservability.summary.headline,
+      });
+    }
   }
 
-  skillFreshness = await buildScopedSkillFreshnessSnapshot(
-    ctx.stateDir,
-    resolveScopedMemoryManager(params),
-  );
-  checks.push({
-    id: "skill_freshness",
-    name: "Skill Freshness",
-    status: (skillFreshness.summary.warnCount + skillFreshness.summary.needsPatchCount + skillFreshness.summary.needsNewSkillCount) > 0
-      ? "warn"
-      : skillFreshness.summary.available
-        ? "pass"
-        : "warn",
-    message: skillFreshness.summary.headline,
-  });
-
-  if (delegationObservability) {
-    const delegationHasProtocolGap = delegationObservability.summary.activeCount > delegationObservability.summary.protocolBackedCount;
-    checks.push({
-      id: "delegation_protocol",
-      name: "Delegation Protocol",
-      status: delegationHasProtocolGap ? "warn" : "pass",
-      message: delegationObservability.summary.headline,
-    });
-  }
-
-  if (ctx.toolExecutor) {
+  if (!summaryOnly && ctx.toolExecutor) {
     const toolAgentId = typeof params.toolAgentId === "string" && params.toolAgentId.trim()
       ? params.toolAgentId.trim()
       : undefined;
@@ -1348,12 +1607,21 @@ export async function handleSystemDoctorMethod(
     };
   }
 
-  return {
+  const doctorPerformance: DoctorPerformanceSummary = {
+    startedAt: doctorStartedAtIso,
+    finishedAt: new Date().toISOString(),
+    totalMs: roundDoctorDurationMs(performance.now() - doctorRequestStartedAt),
+    stages: doctorPerformanceStages,
+  };
+
+    return {
     type: "res",
     id: req.id,
     ok: true,
     payload: {
+      surface: doctorSurface,
       checks,
+      performance: doctorPerformance,
       configSource,
       memoryRuntime,
       deploymentBackends,
@@ -1390,4 +1658,24 @@ export async function handleSystemDoctorMethod(
       ...(recentConversationExports ? { recentConversationExports } : {}),
     },
   };
+  })();
+
+  if (doctorRequestCacheable && doctorCacheKey) {
+    doctorResponseInflight.set(doctorCacheKey, responsePromise);
+  }
+
+  try {
+    const response = await responsePromise;
+    if (doctorRequestCacheable && doctorCacheKey) {
+      doctorResponseCache.set(doctorCacheKey, {
+        expiresAt: Date.now() + resolveDoctorCacheTtlMs(doctorSurface),
+        response,
+      });
+    }
+    return cloneDoctorResponse(response, req.id);
+  } finally {
+    if (doctorRequestCacheable && doctorCacheKey) {
+      doctorResponseInflight.delete(doctorCacheKey);
+    }
+  }
 }

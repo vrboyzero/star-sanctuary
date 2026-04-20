@@ -33,6 +33,7 @@ export class MemoryIndexer {
     private options: Required<IndexerOptions>;
     private watcher: chokidar.FSWatcher | null = null;
     private watchRoots: string[] = [];
+    private pendingWatchEvents = new Map<string, { kind: "upsert" | "remove"; timer: NodeJS.Timeout }>();
 
     constructor(store: MemoryStore, options: IndexerOptions = {}) {
         this.store = store;
@@ -146,6 +147,10 @@ export class MemoryIndexer {
     }
     /** 停止监听 */
     async stopWatching(): Promise<void> {
+        for (const pending of this.pendingWatchEvents.values()) {
+            clearTimeout(pending.timer);
+        }
+        this.pendingWatchEvents.clear();
         if (this.watcher) {
             await this.watcher.close();
             this.watcher = null;
@@ -172,23 +177,17 @@ export class MemoryIndexer {
             }
         });
 
-        const handleFile = async (filePath: string) => {
+        const handleFile = (filePath: string) => {
             const ext = path.extname(filePath).toLowerCase();
             if (this.options.extensions.includes(ext)) {
-                if (this.options.verboseWatchEvents) {
-                    console.log(`[FileChanged] ${filePath}`);
-                }
-                await this.indexFile(filePath);
+                this.scheduleWatchEvent(filePath, "upsert");
             }
         };
 
-        const handleRemove = async (filePath: string) => {
+        const handleRemove = (filePath: string) => {
             const ext = path.extname(filePath).toLowerCase();
             if (this.options.extensions.includes(ext)) {
-                if (this.options.verboseWatchEvents) {
-                    console.log(`[FileRemoved] ${filePath}`);
-                }
-                this.store.deleteBySource(filePath);
+                this.scheduleWatchEvent(filePath, "remove");
             }
         };
 
@@ -250,6 +249,38 @@ export class MemoryIndexer {
 
             return false;
         });
+    }
+
+    private scheduleWatchEvent(filePath: string, kind: "upsert" | "remove"): void {
+        const resolvedPath = path.resolve(filePath);
+        const existing = this.pendingWatchEvents.get(resolvedPath);
+        if (existing) {
+            clearTimeout(existing.timer);
+        }
+        const timer = setTimeout(() => {
+            this.pendingWatchEvents.delete(resolvedPath);
+            void this.flushWatchEvent(resolvedPath, kind);
+        }, this.getWatchEventCoalesceMs());
+        this.pendingWatchEvents.set(resolvedPath, { kind, timer });
+    }
+
+    private getWatchEventCoalesceMs(): number {
+        return Math.min(200, Math.max(25, Math.floor(this.options.watchDebounceMs / 4)));
+    }
+
+    private async flushWatchEvent(filePath: string, kind: "upsert" | "remove"): Promise<void> {
+        if (this.options.verboseWatchEvents) {
+            console.log(kind === "remove" ? `[FileRemoved] ${filePath}` : `[FileChanged] ${filePath}`);
+        }
+        try {
+            if (kind === "remove") {
+                this.store.deleteBySource(filePath);
+                return;
+            }
+            await this.indexFile(filePath);
+        } catch (error) {
+            console.error(`[WatcherFlushError] ${filePath}`, error);
+        }
     }
 }
 

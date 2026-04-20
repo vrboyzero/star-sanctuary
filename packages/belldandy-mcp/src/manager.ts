@@ -51,6 +51,24 @@ export class MCPManager implements IMCPManager {
   
   /** 工具桥接器 */
   private toolBridge: MCPToolBridge;
+
+  /** 工具 inventory 代次，用于派生缓存失效 */
+  private toolInventoryGeneration = 0;
+
+  /** 已缓存的工具 inventory 代次 */
+  private cachedToolInventoryGeneration = -1;
+
+  /** 缓存的工具与派生定义 */
+  private cachedTools: MCPToolInfo[] = [];
+  private cachedBelldandyTools: BelldandyToolDefinition[] = [];
+  private cachedOpenAIFunctions: ReturnType<typeof toOpenAIFunctions> = [];
+  private cachedAnthropicTools: ReturnType<typeof toAnthropicTools> = [];
+
+  /** 资源 inventory 缓存 */
+  private cachedResources: MCPResourceInfo[] = [];
+
+  /** resourceUri -> serverId 索引 */
+  private resourceServerIndex: Map<string, string> = new Map();
   
   /** 事件监听器 */
   private eventListeners: Set<MCPEventListener> = new Set();
@@ -139,6 +157,8 @@ export class MCPManager implements IMCPManager {
     // 清理资源
     this.clients.clear();
     this.toolBridge.unregisterAllTools();
+    this.resetToolInventoryCache();
+    this.resetResourceInventoryCache();
     this.eventListeners.clear();
     this.initialized = false;
 
@@ -196,6 +216,8 @@ export class MCPManager implements IMCPManager {
       // 注册工具
       const state = client.getState();
       this.toolBridge.registerTools(state.tools);
+      this.invalidateToolInventoryCache();
+      this.rebuildResourceInventoryCache();
 
       mcpLog("MCPManager", `已连接到服务器 ${serverId}，注册了 ${state.tools.length} 个工具`);
     } catch (error) {
@@ -237,6 +259,8 @@ export class MCPManager implements IMCPManager {
     if (this.clients.get(serverId) === client) {
       this.clients.delete(serverId);
     }
+    this.invalidateToolInventoryCache();
+    this.rebuildResourceInventoryCache();
 
     mcpLog("MCPManager", `已断开服务器: ${serverId}`);
   }
@@ -283,7 +307,8 @@ export class MCPManager implements IMCPManager {
    * @returns MCP 工具信息数组
    */
   getAllTools(): MCPToolInfo[] {
-    return this.toolBridge.getAllTools();
+    this.ensureToolInventoryCache();
+    return [...this.cachedTools];
   }
 
   /**
@@ -292,14 +317,7 @@ export class MCPManager implements IMCPManager {
    * @returns MCP 资源信息数组
    */
   getAllResources(): MCPResourceInfo[] {
-    const resources: MCPResourceInfo[] = [];
-    
-    for (const client of this.clients.values()) {
-      const state = client.getState();
-      resources.push(...state.resources);
-    }
-    
-    return resources;
+    return [...this.cachedResources];
   }
 
   // ==========================================================================
@@ -324,7 +342,8 @@ export class MCPManager implements IMCPManager {
    * @returns Belldandy 工具定义数组
    */
   getBelldandyTools(): BelldandyToolDefinition[] {
-    return this.toolBridge.toBelldandyTools();
+    this.ensureToolInventoryCache();
+    return [...this.cachedBelldandyTools];
   }
 
   /**
@@ -333,7 +352,8 @@ export class MCPManager implements IMCPManager {
    * 用于 OpenAI API 的 function calling。
    */
   getOpenAIFunctions(): ReturnType<typeof toOpenAIFunctions> {
-    return toOpenAIFunctions(this.getAllTools());
+    this.ensureToolInventoryCache();
+    return [...this.cachedOpenAIFunctions];
   }
 
   /**
@@ -342,7 +362,8 @@ export class MCPManager implements IMCPManager {
    * 用于 Anthropic API 的 tool use。
    */
   getAnthropicTools(): ReturnType<typeof toAnthropicTools> {
-    return toAnthropicTools(this.getAllTools());
+    this.ensureToolInventoryCache();
+    return [...this.cachedAnthropicTools];
   }
 
   // ==========================================================================
@@ -356,14 +377,9 @@ export class MCPManager implements IMCPManager {
    * @returns 资源内容
    */
   async readResource(request: MCPResourceReadRequest): Promise<MCPResourceReadResult> {
-    // 查找拥有该资源的服务器
-    for (const client of this.clients.values()) {
-      const state = client.getState();
-      const resource = state.resources.find((r) => r.uri === request.uri);
-      
-      if (resource) {
-        return client.readResource(request.uri);
-      }
+    const resolvedClient = this.resolveResourceClient(request.uri);
+    if (resolvedClient) {
+      return resolvedClient.readResource(request.uri);
     }
 
     throw new Error(`资源 "${request.uri}" 不存在`);
@@ -449,6 +465,18 @@ export class MCPManager implements IMCPManager {
    * 处理客户端事件
    */
   private handleClientEvent(event: MCPEvent): void {
+    if (event.type === "tools:updated") {
+      const client = this.clients.get(event.serverId);
+      if (client) {
+        // 重新注册工具
+        this.toolBridge.unregisterServerTools(event.serverId);
+        this.toolBridge.registerTools(client.getState().tools);
+        this.invalidateToolInventoryCache();
+      }
+    } else if (event.type === "resources:updated") {
+      this.rebuildResourceInventoryCache();
+    }
+
     // 转发给所有监听器
     for (const listener of this.eventListeners) {
       try {
@@ -457,16 +485,71 @@ export class MCPManager implements IMCPManager {
         mcpError("MCPManager", "事件监听器错误", err);
       }
     }
+  }
 
-    // 处理工具更新事件
-    if (event.type === "tools:updated") {
-      const client = this.clients.get(event.serverId);
-      if (client) {
-        // 重新注册工具
-        this.toolBridge.unregisterServerTools(event.serverId);
-        this.toolBridge.registerTools(client.getState().tools);
+  private ensureToolInventoryCache(): void {
+    if (this.cachedToolInventoryGeneration === this.toolInventoryGeneration) {
+      return;
+    }
+
+    const tools = this.toolBridge.getAllTools();
+    this.cachedTools = tools;
+    this.cachedBelldandyTools = this.toolBridge.toBelldandyTools();
+    this.cachedOpenAIFunctions = toOpenAIFunctions(tools);
+    this.cachedAnthropicTools = toAnthropicTools(tools);
+    this.cachedToolInventoryGeneration = this.toolInventoryGeneration;
+  }
+
+  private invalidateToolInventoryCache(): void {
+    this.toolInventoryGeneration += 1;
+    this.cachedToolInventoryGeneration = -1;
+  }
+
+  private resetToolInventoryCache(): void {
+    this.toolInventoryGeneration = 0;
+    this.cachedToolInventoryGeneration = -1;
+    this.cachedTools = [];
+    this.cachedBelldandyTools = [];
+    this.cachedOpenAIFunctions = [];
+    this.cachedAnthropicTools = [];
+  }
+
+  private rebuildResourceInventoryCache(): void {
+    const resources: MCPResourceInfo[] = [];
+    const resourceServerIndex = new Map<string, string>();
+
+    for (const client of this.clients.values()) {
+      const state = client.getState();
+      for (const resource of state.resources) {
+        resources.push(resource);
+        resourceServerIndex.set(resource.uri, resource.serverId);
       }
     }
+
+    this.cachedResources = resources;
+    this.resourceServerIndex = resourceServerIndex;
+  }
+
+  private resetResourceInventoryCache(): void {
+    this.cachedResources = [];
+    this.resourceServerIndex = new Map();
+  }
+
+  private resolveResourceClient(uri: string): MCPClient | undefined {
+    const serverId = this.resourceServerIndex.get(uri);
+    if (serverId) {
+      const client = this.clients.get(serverId);
+      if (client) {
+        return client;
+      }
+    }
+
+    this.rebuildResourceInventoryCache();
+    const refreshedServerId = this.resourceServerIndex.get(uri);
+    if (!refreshedServerId) {
+      return undefined;
+    }
+    return this.clients.get(refreshedServerId);
   }
 
   private async withServerOperationLock<T>(serverId: string, fn: () => Promise<T>): Promise<T> {

@@ -379,6 +379,32 @@ describe("ConversationStore", () => {
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
+    it("should async cold-load only the recent tail when meta sidecar exists", async () => {
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "belldandy-conversation-"));
+        const dataDir = path.join(tempDir, "sessions");
+        const store = new ConversationStore({ dataDir, maxHistory: 2 });
+        const id = "conv-async-tail-load";
+
+        store.addMessage(id, "user", "first", { agentId: "agent-a", channel: "webchat" });
+        store.addMessage(id, "assistant", "second");
+        store.addMessage(id, "user", "third");
+        await store.waitForPendingPersistence(id);
+
+        const reloaded = new ConversationStore({ dataDir, maxHistory: 2 });
+        const readFileSpy = vi.spyOn(conversationAsyncFs, "readFile");
+
+        const result = await reloaded.getConversationHistoryCompacted(id);
+
+        expect(result.conversation?.agentId).toBe("agent-a");
+        expect(result.history).toEqual([
+            { role: "assistant", content: "second" },
+            { role: "user", content: "third" },
+        ]);
+        expect(readFileSpy.mock.calls.some(([filePath]) => String(filePath).endsWith(".jsonl"))).toBe(false);
+
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
     it("should build and persist session digest from compaction state", async () => {
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "belldandy-conversation-"));
         const dataDir = path.join(tempDir, "sessions");

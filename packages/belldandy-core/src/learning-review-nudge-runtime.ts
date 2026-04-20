@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { getConversationPromptSnapshotRoot } from "./conversation-prompt-snapshot.js";
 import { parseGoalSessionKey } from "./goals/session.js";
+import { loadPromptSnapshotIndex } from "./prompt-snapshot-index.js";
 
 type LearningReviewNudgeSignalKind = "memory" | "candidate" | "method" | "skill" | "review" | "generic";
 type LearningReviewNudgeTriggerSource = "explicit_user_intent" | "goal_review_pressure";
@@ -139,6 +140,10 @@ export async function buildLearningReviewNudgeRuntimeReport(input: {
 
 async function loadLatestForegroundPromptSnapshotArtifact(stateDir: string): Promise<PromptSnapshotArtifactLike | undefined> {
   const root = getConversationPromptSnapshotRoot(stateDir);
+  const indexedArtifact = await loadLatestForegroundPromptSnapshotArtifactFromIndex(root);
+  if (indexedArtifact) {
+    return indexedArtifact;
+  }
   const directories = await fs.readdir(root, { withFileTypes: true }).catch((error) => {
     const fsError = error as NodeJS.ErrnoException;
     if (fsError.code === "ENOENT") {
@@ -178,6 +183,37 @@ async function loadLatestForegroundPromptSnapshotArtifact(stateDir: string): Pro
   }
 
   return latest;
+}
+
+async function loadLatestForegroundPromptSnapshotArtifactFromIndex(
+  root: string,
+): Promise<PromptSnapshotArtifactLike | undefined> {
+  const index = await loadPromptSnapshotIndex(root);
+  if (!index?.entries?.length) {
+    return undefined;
+  }
+
+  for (const entry of index.entries) {
+    if (!entry || typeof entry !== "object" || isBackgroundConversationId(String(entry.conversationId ?? ""))) {
+      continue;
+    }
+    if (typeof entry.directoryName !== "string" || typeof entry.latestFileName !== "string") {
+      continue;
+    }
+    const candidate = await readPromptSnapshotArtifactLike(path.join(root, entry.directoryName, entry.latestFileName));
+    const createdAt = candidate?.manifest?.createdAt;
+    const conversationId = candidate?.manifest?.conversationId;
+    if (
+      typeof createdAt !== "number"
+      || !conversationId
+      || isBackgroundConversationId(conversationId)
+    ) {
+      continue;
+    }
+    return candidate;
+  }
+
+  return undefined;
 }
 
 async function readPromptSnapshotArtifactLike(filePath: string): Promise<PromptSnapshotArtifactLike | undefined> {

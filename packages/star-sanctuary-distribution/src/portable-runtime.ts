@@ -36,6 +36,10 @@ type RuntimeSymlinkEntry = {
   targetPath: string;
 };
 
+function isFileNotFoundError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
 function ensureDir(dirPath: string): void {
   fs.mkdirSync(dirPath, { recursive: true });
 }
@@ -106,11 +110,17 @@ function extractPortablePayloadToStage(params: {
         payloadPaths.runtimeFilesDir,
         ...entry.path.split("/"),
       ) + ".gz";
-      if (!fs.existsSync(compressedAssetPath)) {
+      let compressedAsset: Buffer;
+      try {
+        compressedAsset = fs.readFileSync(compressedAssetPath);
+      } catch (error) {
+        if (!isFileNotFoundError(error)) {
+          throw error;
+        }
         throw new Error(`Portable recovery payload is missing ${entry.path}`);
       }
       ensureDir(path.dirname(destinationPath));
-      fs.writeFileSync(destinationPath, gunzipSync(fs.readFileSync(compressedAssetPath)));
+      fs.writeFileSync(destinationPath, gunzipSync(compressedAsset));
       copiedFiles += 1;
       continue;
     }
@@ -151,9 +161,15 @@ function replacePortableRuntimeAtomically(params: {
   const movedBackups: string[] = [];
 
   const moveIfExists = (sourcePath: string, targetPath: string): void => {
-    if (!fs.existsSync(sourcePath)) return;
     removePath(targetPath);
-    fs.renameSync(sourcePath, targetPath);
+    try {
+      fs.renameSync(sourcePath, targetPath);
+    } catch (error) {
+      if (isFileNotFoundError(error)) {
+        return;
+      }
+      throw error;
+    }
     movedBackups.push(targetPath);
   };
 
@@ -175,9 +191,9 @@ function replacePortableRuntimeAtomically(params: {
       // Best effort cleanup before rollback.
     }
 
-    if (fs.existsSync(backupRuntimeDir)) fs.renameSync(backupRuntimeDir, runtimeDir);
-    if (fs.existsSync(backupVersionFilePath)) fs.renameSync(backupVersionFilePath, versionFilePath);
-    if (fs.existsSync(backupRuntimeManifestPath)) fs.renameSync(backupRuntimeManifestPath, runtimeManifestPath);
+    moveIfExists(backupRuntimeDir, runtimeDir);
+    moveIfExists(backupVersionFilePath, versionFilePath);
+    moveIfExists(backupRuntimeManifestPath, runtimeManifestPath);
     throw error;
   } finally {
     removePath(stageDir);

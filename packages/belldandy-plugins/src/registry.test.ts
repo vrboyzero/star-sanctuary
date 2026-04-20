@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PluginRegistry } from "./registry.js";
 
@@ -68,5 +68,66 @@ describe("PluginRegistry", () => {
         }),
       ],
     }));
+  });
+
+  it("reuses cached inventory views until registry content changes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-plugin-registry-cache-"));
+    tempDirs.push(dir);
+
+    await fs.writeFile(
+      path.join(dir, "good-plugin.mjs"),
+      [
+        "export default {",
+        "  id: 'cache-plugin',",
+        "  name: 'Cache Plugin',",
+        "  async activate(context) {",
+        "    context.registerHooks({ beforeRun: async () => {} });",
+        "    context.registerTool({",
+        "      definition: {",
+        "        name: 'cache_tool',",
+        "        description: 'cache',",
+        "        parameters: { type: 'object', properties: {} },",
+        "      },",
+        "      async execute() {",
+        "        return { id: '', name: 'cache_tool', success: true, output: 'ok' };",
+        "      },",
+        "    });",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const registry = new PluginRegistry();
+    const rebuildSpy = vi.spyOn(registry as any, "rebuildInventoryCache");
+
+    await registry.loadPluginDirectory(dir);
+    rebuildSpy.mockClear();
+
+    expect(registry.listPlugins()).toEqual([
+      expect.objectContaining({
+        id: "cache-plugin",
+        toolNames: ["cache_tool"],
+      }),
+    ]);
+    expect(registry.getDiagnostics()).toEqual(expect.objectContaining({
+      pluginCount: 1,
+      toolCount: 1,
+      hookCount: 1,
+    }));
+    expect(registry.getLegacyHookAvailability()).toEqual({
+      beforeRun: true,
+      afterRun: false,
+      beforeToolCall: false,
+      afterToolCall: false,
+    });
+    expect(registry.listPlugins()).toHaveLength(1);
+    expect(registry.getDiagnostics().pluginCount).toBe(1);
+    expect(rebuildSpy).toHaveBeenCalledTimes(1);
+
+    await registry.loadPluginDirectory(path.join(dir, "missing-dir"));
+    expect(registry.getDiagnostics().loadErrors).toHaveLength(1);
+    expect(rebuildSpy).toHaveBeenCalledTimes(2);
   });
 });

@@ -224,6 +224,12 @@ export interface ToolAvailabilityState {
   contractReason?: ToolContractDenialReason;
 }
 
+type ToolContextSnapshot = {
+  loaded: Set<string>;
+  available: Tool[];
+  exposed: Tool[];
+};
+
 export class ToolExecutor {
   private readonly tools: Map<string, Tool>;
   private readonly workspaceRoot: string;
@@ -352,8 +358,8 @@ export class ToolExecutor {
     conversationId?: string,
     runtimeContext?: ToolExecutionRuntimeContext,
   ): { type: "function"; function: { name: string; description: string; parameters: object } }[] {
-    const active = this.getExposedTools(agentId, conversationId, runtimeContext);
-    return active.map(t => ({
+    const snapshot = this.buildToolContextSnapshot(agentId, conversationId, runtimeContext);
+    return snapshot.exposed.map(t => ({
       type: "function" as const,
       function: {
         name: t.definition.name,
@@ -373,21 +379,8 @@ export class ToolExecutor {
     conversationId?: string,
     runtimeContext?: ToolExecutionRuntimeContext,
   ): ToolCatalogEntry[] {
-    const loaded = conversationId ? this.getLoadedDeferredToolNames(conversationId) : new Set<string>();
-    return this.getAvailableTools(agentId, conversationId, runtimeContext).map((tool) => {
-      const deferred = this.isDeferredTool(tool.definition.name);
-      return {
-        kind: "tool",
-        name: tool.definition.name,
-        description: tool.definition.description,
-        shortDescription: tool.definition.shortDescription?.trim() || tool.definition.description,
-        keywords: tool.definition.keywords ?? [],
-        tags: tool.definition.tags ?? [],
-        loadingMode: deferred ? "deferred" : "core",
-        loaded: deferred ? loaded.has(tool.definition.name) : true,
-        discoveryFamilyId: tool.definition.discoveryFamily?.id,
-      };
-    });
+    const snapshot = this.buildToolContextSnapshot(agentId, conversationId, runtimeContext);
+    return this.buildCatalogEntriesFromAvailableTools(snapshot.available, snapshot.loaded);
   }
 
   getDiscoveryFamilyEntries(
@@ -395,47 +388,8 @@ export class ToolExecutor {
     conversationId?: string,
     runtimeContext?: ToolExecutionRuntimeContext,
   ): ToolCatalogFamilyEntry[] {
-    const loaded = conversationId ? this.getLoadedDeferredToolNames(conversationId) : new Set<string>();
-    const available = this.getAvailableTools(agentId, conversationId, runtimeContext);
-    const families = new Map<string, {
-      definition: ToolDiscoveryFamilyDefinition;
-      toolCount: number;
-      loadedToolCount: number;
-    }>();
-
-    for (const tool of available) {
-      const family = tool.definition.discoveryFamily;
-      if (!family) continue;
-      const entry = families.get(family.id) ?? {
-        definition: family,
-        toolCount: 0,
-        loadedToolCount: 0,
-      };
-      entry.toolCount += 1;
-      if (loaded.has(tool.definition.name)) {
-        entry.loadedToolCount += 1;
-      }
-      families.set(family.id, entry);
-    }
-
-    return Array.from(families.values())
-      .sort((left, right) => {
-        const leftOrder = left.definition.order ?? Number.MAX_SAFE_INTEGER;
-        const rightOrder = right.definition.order ?? Number.MAX_SAFE_INTEGER;
-        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
-        return left.definition.title.localeCompare(right.definition.title);
-      })
-      .map((entry) => ({
-        kind: "family",
-        id: entry.definition.id,
-        title: entry.definition.title,
-        summary: entry.definition.summary,
-        keywords: entry.definition.keywords ?? [],
-        toolCount: entry.toolCount,
-        loadedToolCount: entry.loadedToolCount,
-        loadingMode: "deferred",
-        gateMode: entry.definition.gateMode ?? "none",
-      }));
+    const snapshot = this.buildToolContextSnapshot(agentId, conversationId, runtimeContext);
+    return this.buildDiscoveryFamilyEntriesFromAvailableTools(snapshot.available, snapshot.loaded);
   }
 
   getDiscoveryEntries(
@@ -444,14 +398,15 @@ export class ToolExecutor {
     runtimeContext?: ToolExecutionRuntimeContext,
     options?: ToolDiscoveryEntriesOptions,
   ): ToolDiscoveryEntry[] {
-    const familyEntries = this.getDiscoveryFamilyEntries(agentId, conversationId, runtimeContext);
+    const snapshot = this.buildToolContextSnapshot(agentId, conversationId, runtimeContext);
+    const familyEntries = this.buildDiscoveryFamilyEntriesFromAvailableTools(snapshot.available, snapshot.loaded);
     const familyById = new Map(familyEntries.map((entry) => [entry.id, entry]));
     const expandedFamilyIds = new Set(
       (options?.expandedFamilyIds ?? [])
         .map((item) => item.trim())
         .filter(Boolean),
     );
-    const toolEntries = this.getCatalogEntries(agentId, conversationId, runtimeContext)
+    const toolEntries = this.buildCatalogEntriesFromAvailableTools(snapshot.available, snapshot.loaded)
       .filter((entry) => {
         if (!entry.discoveryFamilyId) {
           return true;
@@ -643,7 +598,8 @@ export class ToolExecutor {
 
   /** 获取当前运行时可见的工具契约元数据 */
   getContracts(agentId?: string, conversationId?: string, runtimeContext?: ToolExecutionRuntimeContext): ToolContract[] {
-    return this.getAvailableTools(agentId, conversationId, runtimeContext).flatMap((tool) => {
+    const snapshot = this.buildToolContextSnapshot(agentId, conversationId, runtimeContext);
+    return snapshot.available.flatMap((tool) => {
       const contract = getToolContract(tool);
       return contract ? [contract] : [];
     });
@@ -943,18 +899,95 @@ export class ToolExecutor {
     conversationId?: string,
     runtimeContext?: ToolExecutionRuntimeContext,
   ): Tool[] {
+    return this.buildToolContextSnapshot(agentId, conversationId, runtimeContext).exposed;
+  }
+
+  private buildToolContextSnapshot(
+    agentId?: string,
+    conversationId?: string,
+    runtimeContext?: ToolExecutionRuntimeContext,
+  ): ToolContextSnapshot {
     const available = this.getAvailableTools(agentId, conversationId, runtimeContext);
     if (!conversationId) {
-      return available;
+      return {
+        loaded: new Set<string>(),
+        available,
+        exposed: available,
+      };
     }
-
     const loaded = this.getLoadedDeferredToolNames(conversationId);
-    return available.filter((tool) => {
+    const exposed = available.filter((tool) => {
       if (!this.isDeferredTool(tool.definition.name)) {
         return true;
       }
       return loaded.has(tool.definition.name);
     });
+    return { loaded, available, exposed };
+  }
+
+  private buildCatalogEntriesFromAvailableTools(
+    available: Tool[],
+    loaded: Set<string>,
+  ): ToolCatalogEntry[] {
+    return available.map((tool) => {
+      const deferred = this.isDeferredTool(tool.definition.name);
+      return {
+        kind: "tool",
+        name: tool.definition.name,
+        description: tool.definition.description,
+        shortDescription: tool.definition.shortDescription?.trim() || tool.definition.description,
+        keywords: tool.definition.keywords ?? [],
+        tags: tool.definition.tags ?? [],
+        loadingMode: deferred ? "deferred" : "core",
+        loaded: deferred ? loaded.has(tool.definition.name) : true,
+        discoveryFamilyId: tool.definition.discoveryFamily?.id,
+      };
+    });
+  }
+
+  private buildDiscoveryFamilyEntriesFromAvailableTools(
+    available: Tool[],
+    loaded: Set<string>,
+  ): ToolCatalogFamilyEntry[] {
+    const families = new Map<string, {
+      definition: ToolDiscoveryFamilyDefinition;
+      toolCount: number;
+      loadedToolCount: number;
+    }>();
+
+    for (const tool of available) {
+      const family = tool.definition.discoveryFamily;
+      if (!family) continue;
+      const entry = families.get(family.id) ?? {
+        definition: family,
+        toolCount: 0,
+        loadedToolCount: 0,
+      };
+      entry.toolCount += 1;
+      if (loaded.has(tool.definition.name)) {
+        entry.loadedToolCount += 1;
+      }
+      families.set(family.id, entry);
+    }
+
+    return Array.from(families.values())
+      .sort((left, right) => {
+        const leftOrder = left.definition.order ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder = right.definition.order ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        return left.definition.title.localeCompare(right.definition.title);
+      })
+      .map((entry) => ({
+        kind: "family",
+        id: entry.definition.id,
+        title: entry.definition.title,
+        summary: entry.definition.summary,
+        keywords: entry.definition.keywords ?? [],
+        toolCount: entry.toolCount,
+        loadedToolCount: entry.loadedToolCount,
+        loadingMode: "deferred",
+        gateMode: entry.definition.gateMode ?? "none",
+      }));
   }
 
   private isDeferredTool(toolName: string): boolean {

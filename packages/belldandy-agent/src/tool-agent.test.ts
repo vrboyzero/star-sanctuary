@@ -5,6 +5,7 @@ import {
   applyPrependContextToInput,
   buildToolTranscriptMessageForHistory,
   compactReasoningContentForHistory,
+  estimateToolDefinitionTokens,
   sanitizeAssistantToolCallHistoryContent,
   sanitizeResponsesToolDefinitions,
 } from "./tool-agent.js";
@@ -117,6 +118,31 @@ describe("sanitizeResponsesToolDefinitions", () => {
     expect(sanitized).not.toBe(tools);
     expect((sanitized[0].function.parameters as any).oneOf).toBeUndefined();
     expect((tools[0].function.parameters as any).oneOf).toBeDefined();
+  });
+});
+
+describe("estimateToolDefinitionTokens", () => {
+  it("reuses cached token estimates when the same parameters object is reused", () => {
+    const tool = {
+      type: "function" as const,
+      function: {
+        name: "file_read",
+        description: "read file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
+        },
+      },
+    };
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+
+    const first = estimateToolDefinitionTokens(tool);
+    const second = estimateToolDefinitionTokens(tool);
+
+    expect(first).toBe(second);
+    expect(stringifySpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2157,6 +2183,7 @@ describe("ToolEnabledAgent hook timeouts", () => {
 function createToolExecutor(overrides: Record<string, unknown> = {}): any {
   return {
     getDefinitions: () => [],
+    consumeLoadedDeferredToolsForNextTurn: vi.fn(async () => []),
     setTokenCounter: vi.fn(),
     clearTokenCounter: vi.fn(),
     execute: vi.fn(),

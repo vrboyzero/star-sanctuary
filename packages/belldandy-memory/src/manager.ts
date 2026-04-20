@@ -1532,6 +1532,8 @@ export class MemoryManager {
             return 0;
         }
 
+        const summaryConcurrency = Math.max(1, Math.min(2, this.summaryBatchSize));
+        const summaryThrottleMs = summaryConcurrency > 1 ? 200 : 0;
         const maxBatches = typeof options.maxBatches === "number" && Number.isFinite(options.maxBatches)
             ? Math.max(1, Math.floor(options.maxBatches))
             : Number.POSITIVE_INFINITY;
@@ -1551,26 +1553,37 @@ export class MemoryManager {
 
             console.log(`[MemoryManager] Generating summaries for ${chunks.length} chunks...`);
 
-            for (const chunk of chunks) {
-                // 每个 chunk 前再检查一次暂停状态
-                await this.waitIfPaused();
+            const pendingChunks = chunks.slice();
+            const workers = Array.from(
+                { length: Math.min(summaryConcurrency, pendingChunks.length) },
+                async () => {
+                    while (pendingChunks.length > 0) {
+                        // 每个 chunk 前再检查一次暂停状态
+                        await this.waitIfPaused();
 
-                try {
-                    const summary = await this.callLLMForSummary(chunk.content);
-                    if (summary) {
-                        // 粗略估算 token 数（中文约 1.5 字/token，英文约 0.75 词/token）
-                        const estimatedTokens = Math.ceil(summary.length / 2);
-                        this.store.updateChunkSummary(chunk.id, summary, estimatedTokens);
-                        totalGenerated++;
+                        const chunk = pendingChunks.shift();
+                        if (!chunk) break;
+
+                        try {
+                            const summary = await this.callLLMForSummary(chunk.content);
+                            if (summary) {
+                                // 粗略估算 token 数（中文约 1.5 字/token，英文约 0.75 词/token）
+                                const estimatedTokens = Math.ceil(summary.length / 2);
+                                this.store.updateChunkSummary(chunk.id, summary, estimatedTokens);
+                                totalGenerated++;
+                            }
+                        } catch (err) {
+                            console.error(`[MemoryManager] Failed to generate summary for chunk ${chunk.id}:`, err);
+                            // 单个失败不中断整批
+                        }
+
+                        if (summaryThrottleMs > 0 && pendingChunks.length > 0) {
+                            await new Promise((resolve) => setTimeout(resolve, summaryThrottleMs));
+                        }
                     }
-                } catch (err) {
-                    console.error(`[MemoryManager] Failed to generate summary for chunk ${chunk.id}:`, err);
-                    // 单个失败不中断整批
-                }
-
-                // 每次 LLM 调用后延迟 2s，避免打满 API 速率限制
-                await new Promise(r => setTimeout(r, 2000));
-            }
+                },
+            );
+            await Promise.all(workers);
         }
 
         if (totalGenerated > 0) {

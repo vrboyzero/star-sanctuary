@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "@belldandy/protocol";
 import { getGlobalMemoryManager, type ExperienceCandidate } from "@belldandy/memory";
 import { publishSkillCandidate, getGlobalSkillRegistry, getUserSkillsDir } from "@belldandy/skills";
@@ -1804,7 +1805,7 @@ export class GoalManager {
       checkpointScan.scanItems,
       scannedAt,
     );
-    if (JSON.stringify(notifications.state) !== JSON.stringify(existingNotifications)) {
+    if (!isDeepStrictEqual(notifications.state, existingNotifications)) {
       await writeGoalReviewNotifications(goal, notifications.state);
     }
     const dispatches = this.materializeNotificationDispatches(
@@ -1814,7 +1815,7 @@ export class GoalManager {
       notifications.state.items,
       scannedAt,
     );
-    if (JSON.stringify(dispatches.state) !== JSON.stringify(existingDispatches)) {
+    if (!isDeepStrictEqual(dispatches.state, existingDispatches)) {
       await writeGoalReviewNotificationDispatches(goal, dispatches.state);
     }
     const updatedGoal = checkpointScan.mutated ? await this.touchGoal(reviewResult.goal) : reviewResult.goal;
@@ -1918,7 +1919,7 @@ export class GoalManager {
       syncedAt: now,
       items: nextItems,
     };
-    const changed = JSON.stringify(existing) !== JSON.stringify(nextState);
+    const changed = !isDeepStrictEqual(existing, nextState);
     if (changed) {
       await writeGoalSuggestionReviews(goal, nextState);
     }

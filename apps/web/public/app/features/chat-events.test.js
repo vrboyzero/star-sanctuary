@@ -31,6 +31,135 @@ describe("chat events pairing", () => {
     });
   });
 
+  it("batches token and live update events into a single frame flush", () => {
+    const frameCallbacks = [];
+    vi.stubGlobal("requestAnimationFrame", (callback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    const updateTokenUsage = vi.fn();
+    const setTokenUsageRunning = vi.fn();
+    const queueGoalUpdateEvent = vi.fn();
+    const onSubtaskUpdated = vi.fn();
+    const onAgentStatusEvent = vi.fn();
+    const feature = createChatEventsFeature({
+      appendMessage: vi.fn(() => document.createElement("div")),
+      onPairingRequired: vi.fn(),
+      showRestartCountdown: vi.fn(),
+      setTokenUsageRunning,
+      updateTokenUsage,
+      showTaskTokenResult: vi.fn(),
+      onChannelSecurityPending: vi.fn(),
+      queueGoalUpdateEvent,
+      onSubtaskUpdated,
+      onToolSettingsConfirmRequired: vi.fn(),
+      onToolSettingsConfirmResolved: vi.fn(),
+      onExternalOutboundConfirmRequired: vi.fn(),
+      onExternalOutboundConfirmResolved: vi.fn(),
+      onEmailOutboundConfirmRequired: vi.fn(),
+      onEmailOutboundConfirmResolved: vi.fn(),
+      onToolsConfigUpdated: vi.fn(),
+      onConversationDigestUpdated: vi.fn(),
+      stripThinkBlocks: (value) => value,
+      configureMarkedOnce: vi.fn(),
+      renderAssistantMessage: vi.fn(),
+      updateMessageMeta: vi.fn(),
+      forceScrollToBottom: vi.fn(),
+      getCanvasApp: () => null,
+      getActiveConversationId: () => "conv-1",
+      onAgentStatusEvent,
+      onConversationDelta: vi.fn(),
+      onConversationFinal: vi.fn(),
+      onConversationStopped: vi.fn(),
+      getStoppedMessageText: () => "Interrupted",
+      escapeHtml: (value) => String(value),
+    });
+
+    feature.handleEvent("agent.status", { conversationId: "conv-1", status: "running" });
+    feature.handleEvent("token.usage", { inputTokens: 1 });
+    feature.handleEvent("token.usage", { inputTokens: 3 });
+    feature.handleEvent("goal.update", { goal: { id: "goal-1", title: "v1" } });
+    feature.handleEvent("goal.update", { goal: { id: "goal-1", title: "v2" } });
+    feature.handleEvent("subtask.update", { item: { id: "task-1", title: "v1" } });
+    feature.handleEvent("subtask.update", { item: { id: "task-1", title: "v2" } });
+
+    expect(onAgentStatusEvent).toHaveBeenCalledTimes(1);
+    expect(frameCallbacks).toHaveLength(1);
+    expect(setTokenUsageRunning).not.toHaveBeenCalled();
+    expect(updateTokenUsage).not.toHaveBeenCalled();
+    expect(queueGoalUpdateEvent).not.toHaveBeenCalled();
+    expect(onSubtaskUpdated).not.toHaveBeenCalled();
+
+    frameCallbacks[0](0);
+
+    expect(setTokenUsageRunning).toHaveBeenCalledWith(true);
+    expect(updateTokenUsage).toHaveBeenCalledTimes(1);
+    expect(updateTokenUsage).toHaveBeenCalledWith({ inputTokens: 3 });
+    expect(queueGoalUpdateEvent).toHaveBeenCalledTimes(1);
+    expect(queueGoalUpdateEvent).toHaveBeenCalledWith({ goal: { id: "goal-1", title: "v2" } });
+    expect(onSubtaskUpdated).toHaveBeenCalledTimes(1);
+    expect(onSubtaskUpdated).toHaveBeenCalledWith({ item: { id: "task-1", title: "v2" } });
+  });
+
+  it("flushes distinct goal and subtask ids separately within the same frame", () => {
+    const frameCallbacks = [];
+    vi.stubGlobal("requestAnimationFrame", (callback) => {
+      frameCallbacks.push(callback);
+      return frameCallbacks.length;
+    });
+
+    const queueGoalUpdateEvent = vi.fn();
+    const onSubtaskUpdated = vi.fn();
+    const feature = createChatEventsFeature({
+      appendMessage: vi.fn(() => document.createElement("div")),
+      onPairingRequired: vi.fn(),
+      showRestartCountdown: vi.fn(),
+      setTokenUsageRunning: vi.fn(),
+      updateTokenUsage: vi.fn(),
+      showTaskTokenResult: vi.fn(),
+      onChannelSecurityPending: vi.fn(),
+      queueGoalUpdateEvent,
+      onSubtaskUpdated,
+      onToolSettingsConfirmRequired: vi.fn(),
+      onToolSettingsConfirmResolved: vi.fn(),
+      onExternalOutboundConfirmRequired: vi.fn(),
+      onExternalOutboundConfirmResolved: vi.fn(),
+      onEmailOutboundConfirmRequired: vi.fn(),
+      onEmailOutboundConfirmResolved: vi.fn(),
+      onToolsConfigUpdated: vi.fn(),
+      onConversationDigestUpdated: vi.fn(),
+      stripThinkBlocks: (value) => value,
+      configureMarkedOnce: vi.fn(),
+      renderAssistantMessage: vi.fn(),
+      updateMessageMeta: vi.fn(),
+      forceScrollToBottom: vi.fn(),
+      getCanvasApp: () => null,
+      getActiveConversationId: () => "",
+      onAgentStatusEvent: vi.fn(),
+      onConversationDelta: vi.fn(),
+      onConversationFinal: vi.fn(),
+      onConversationStopped: vi.fn(),
+      getStoppedMessageText: () => "Interrupted",
+      escapeHtml: (value) => String(value),
+    });
+
+    feature.handleEvent("goal.update", { goal: { id: "goal-1", title: "A" } });
+    feature.handleEvent("goal.update", { goal: { id: "goal-2", title: "B" } });
+    feature.handleEvent("subtask.update", { item: { id: "task-1", title: "A" } });
+    feature.handleEvent("subtask.update", { item: { id: "task-2", title: "B" } });
+
+    expect(frameCallbacks).toHaveLength(1);
+    frameCallbacks[0](0);
+
+    expect(queueGoalUpdateEvent).toHaveBeenCalledTimes(2);
+    expect(queueGoalUpdateEvent).toHaveBeenNthCalledWith(1, { goal: { id: "goal-1", title: "A" } });
+    expect(queueGoalUpdateEvent).toHaveBeenNthCalledWith(2, { goal: { id: "goal-2", title: "B" } });
+    expect(onSubtaskUpdated).toHaveBeenCalledTimes(2);
+    expect(onSubtaskUpdated).toHaveBeenNthCalledWith(1, { item: { id: "task-1", title: "A" } });
+    expect(onSubtaskUpdated).toHaveBeenNthCalledWith(2, { item: { id: "task-2", title: "B" } });
+  });
+
   it("replaces an empty streaming bubble with an interrupted system message when conversation.run.stopped arrives", () => {
     document.body.innerHTML = "<div id=\"messages\"></div>";
     const messagesEl = document.getElementById("messages");

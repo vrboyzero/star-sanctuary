@@ -5,6 +5,18 @@ import { mkdirSync } from "node:fs";
 import { getGoalsRegistryPath } from "./paths.js";
 import type { GoalRegistry, GoalRegistryEntry } from "./types.js";
 
+const RENAME_RETRIES = 3;
+const RENAME_RETRY_DELAY_MS = 50;
+
+function isRetryableRenameError(error: NodeJS.ErrnoException | null): boolean {
+  if (!error) {
+    return false;
+  }
+  return error.code === "ENOENT"
+    || error.code === "EPERM"
+    || error.code === "EBUSY";
+}
+
 function createEmptyRegistry(): GoalRegistry {
   return {
     version: 1,
@@ -16,8 +28,38 @@ function createEmptyRegistry(): GoalRegistry {
 async function atomicWriteJson(targetPath: string, value: unknown): Promise<void> {
   mkdirSync(path.dirname(targetPath), { recursive: true });
   const tempPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(value, null, 2), "utf-8");
-  await fs.rename(tempPath, targetPath);
+  const content = JSON.stringify(value, null, 2);
+  await fs.writeFile(tempPath, content, "utf-8");
+  let lastErr: NodeJS.ErrnoException | null = null;
+  for (let attempt = 0; attempt < RENAME_RETRIES; attempt += 1) {
+    try {
+      await fs.rename(tempPath, targetPath);
+      return;
+    } catch (error) {
+      lastErr = error as NodeJS.ErrnoException;
+      if (!isRetryableRenameError(lastErr)) {
+        break;
+      }
+      if (attempt < RENAME_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  if (lastErr && (lastErr.code === "ENOENT" || (process.platform === "win32" && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")))) {
+    try {
+      mkdirSync(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, content, "utf-8");
+      await fs.unlink(tempPath).catch(() => {});
+      return;
+    } catch (fallbackError) {
+      await fs.unlink(tempPath).catch(() => {});
+      throw fallbackError;
+    }
+  }
+
+  await fs.unlink(tempPath).catch(() => {});
+  throw lastErr;
 }
 
 export async function loadGoalRegistry(stateDir: string): Promise<GoalRegistry> {

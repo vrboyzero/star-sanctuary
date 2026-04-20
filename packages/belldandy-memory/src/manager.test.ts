@@ -196,6 +196,69 @@ describe("MemoryManager guardrails", () => {
     }
   });
 
+  it("runs idle summary batches with bounded concurrency", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      summaryEnabled: true,
+      summaryApiKey: "test-summary-key",
+      summaryModel: "test-summary-model",
+      summaryBatchSize: 4,
+      summaryMinContentLength: 1,
+    });
+
+    const store = (manager as any).store;
+    for (let index = 0; index < 4; index += 1) {
+      store.upsertChunk({
+        id: `summary-concurrency-${index}`,
+        sourcePath: path.join(docsDir, `summary-concurrency-${index}.md`),
+        sourceType: "file",
+        memoryType: "other",
+        content: `summary-concurrency-source-${index}`,
+      });
+    }
+
+    const blockers: Array<{ promise: Promise<void>; resolve: () => void }> = [];
+    for (let index = 0; index < 2; index += 1) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((innerResolve) => {
+        resolve = innerResolve;
+      });
+      blockers.push({ promise, resolve });
+    }
+
+    let activeCalls = 0;
+    let maxActiveCalls = 0;
+    let blockerIndex = 0;
+    const summarySpy = vi.spyOn(manager as any, "callLLMForSummary").mockImplementation(async (...args: unknown[]) => {
+      activeCalls += 1;
+      maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+      try {
+        const blocker = blockers[blockerIndex++];
+        if (blocker) {
+          await blocker.promise;
+        }
+        return `summary:${String(args[0] ?? "")}`;
+      } finally {
+        activeCalls -= 1;
+      }
+    });
+
+    const runPromise = manager.runIdleSummaries();
+    await vi.waitFor(() => {
+      expect(summarySpy).toHaveBeenCalledTimes(2);
+    });
+    expect(maxActiveCalls).toBe(2);
+
+    for (const blocker of blockers) {
+      blocker.resolve();
+    }
+
+    const generated = await runPromise;
+    expect(generated).toBe(4);
+    expect(store.getChunksNeedingSummary(1, 10)).toHaveLength(0);
+  });
+
   it("excludes session memories from context injection by default", async () => {
     const stateMemoryPath = path.join(stateDir, "MEMORY.md");
     const sessionFilePath = path.join(sessionsDir, "session-001.md");

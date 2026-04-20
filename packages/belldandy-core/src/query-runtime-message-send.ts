@@ -948,6 +948,13 @@ function emitMessageSendFinalFrame(input: {
   text: string;
   timestampMs: number;
 }): void {
+  input.ctx.runtime.log.debug("message", "Emitting chat.final", {
+    conversationId: input.conversationId,
+    runId: input.runId,
+    agentId: input.agentId,
+    textLength: input.text.length,
+    timestampMs: input.timestampMs,
+  });
   input.ctx.io.sendEvent(input.ctx.request.ws, {
     type: "event",
     event: "chat.final",
@@ -1068,6 +1075,21 @@ async function finalizeMessageSendSuccess(input: {
   state: MessageSendBackgroundRunState;
 }): Promise<void> {
   const { ctx, queryRuntime, runResult } = input;
+  ctx.runtime.log.debug("message", "message.send run completed", {
+    conversationId: input.conversationId,
+    runId: input.runId,
+    agentId: input.requestedAgentId ?? "default",
+    durationMs: runResult.durationMs,
+    receivedFinal: runResult.receivedFinal,
+    latestStatus: runResult.latestStatus ?? null,
+    fullTextLength: runResult.fullText.length,
+    finalTextLength: runResult.finalText.length,
+    toolCallCount: runResult.toolCallCount,
+    toolResultCount: runResult.toolResultCount,
+    toolEventCount: runResult.toolEventCount,
+    statusCount: runResult.statusCount,
+    deltaCount: runResult.deltaCount,
+  });
   if (wasMessageSendStopped({
     abortSignal: input.abortController.signal,
     runResult,
@@ -1103,6 +1125,15 @@ async function finalizeMessageSendSuccess(input: {
 
   if (!runResult.receivedFinal) {
     input.state.run.setReceivedFinal(false);
+    ctx.runtime.log.debug("message", "message.send completed without final item", {
+      conversationId: input.conversationId,
+      runId: input.runId,
+      agentId: input.requestedAgentId ?? "default",
+      latestStatus: runResult.latestStatus ?? null,
+      fullTextLength: runResult.fullText.length,
+      toolCallCount: runResult.toolCallCount,
+      toolResultCount: runResult.toolResultCount,
+    });
     queryRuntime.mark("completed", {
       conversationId: input.conversationId,
       detail: {
@@ -1127,6 +1158,22 @@ async function finalizeMessageSendSuccess(input: {
     );
     assistantTimestamp = assistantMessage.timestamp;
     await ctx.runtime.conversationStore.waitForPendingPersistence(input.conversationId);
+    ctx.runtime.log.debug("message", "Assistant message persisted for message.send", {
+      conversationId: input.conversationId,
+      runId: input.runId,
+      agentId: input.requestedAgentId ?? "default",
+      assistantTimestampMs: assistantTimestamp,
+      sanitizedLength: sanitized.length,
+      rawLength: runResult.fullText.length,
+    });
+  } else {
+    ctx.runtime.log.debug("message", "message.send finalized without assistant persistence", {
+      conversationId: input.conversationId,
+      runId: input.runId,
+      agentId: input.requestedAgentId ?? "default",
+      rawLength: runResult.fullText.length,
+      sanitizedLength: sanitized.length,
+    });
   }
 
   applyMessageSendCompletionPolicy({

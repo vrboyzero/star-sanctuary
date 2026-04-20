@@ -22,6 +22,29 @@ const STARTUP_SEQUENCE_STEP_WAIT_MS = IS_WINDOWS ? 2_500 : 50;
 const STARTUP_CAPTURE_WAIT_MS = IS_WINDOWS ? 2_500 : 120;
 const STARTUP_OUTPUT_READ_WAIT_MS = IS_WINDOWS ? 1_400 : 200;
 const WINDOWS_SLOW_PTY_TEST_TIMEOUT_MS = IS_WINDOWS ? 12_000 : undefined;
+const WINDOWS_RM_RETRIES = IS_WINDOWS ? 5 : 1;
+const WINDOWS_RM_RETRY_DELAY_MS = 200;
+
+async function removeDirectoryWithRetries(targetPath: string): Promise<void> {
+  let lastError: NodeJS.ErrnoException | null = null;
+  for (let attempt = 0; attempt < WINDOWS_RM_RETRIES; attempt += 1) {
+    try {
+      await fs.rm(targetPath, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error as NodeJS.ErrnoException;
+      if (!IS_WINDOWS || (lastError.code !== "EBUSY" && lastError.code !== "EPERM")) {
+        throw error;
+      }
+      if (attempt < WINDOWS_RM_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, WINDOWS_RM_RETRY_DELAY_MS));
+      }
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+}
 
 describe("agent bridge P1 session tools", () => {
   let tempDir: string;
@@ -78,7 +101,7 @@ describe("agent bridge P1 session tools", () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 120));
     BridgeSessionStore.getInstance().clear();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeDirectoryWithRetries(tempDir);
   });
 
   it("starts, writes to, inspects, lists, and closes a bridge PTY session", async () => {

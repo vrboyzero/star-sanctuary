@@ -166,7 +166,7 @@ export class RelayServer {
     private handleExtensionMessage(msg: ExtensionMessage) {
         if ("method" in msg) {
             if (msg.method === "ping") {
-                this.extensionWs?.send(JSON.stringify({ method: "pong" }));
+                this.sendJson(this.extensionWs, { method: "pong" });
                 return;
             }
             if (msg.method === "forwardCDPEvent") {
@@ -222,8 +222,7 @@ export class RelayServer {
                 },
                 sessionId: cmd.sessionId
             };
-            this.logger?.debug(`Sending contexts: ${JSON.stringify(response)}`);
-            client.send(JSON.stringify(response));
+            this.sendJson(client, response, "Sending contexts");
             return;
         }
 
@@ -244,15 +243,14 @@ export class RelayServer {
                     }
                 }
             };
-            this.logger?.debug(`Sending targetCreated: ${JSON.stringify(targetEvent)}`);
-            client.send(JSON.stringify(targetEvent));
+            this.sendJson(client, targetEvent, "Sending targetCreated");
 
             const response: CdpResponse = {
                 id: cmd.id,
                 result: {},
                 sessionId: cmd.sessionId
             };
-            client.send(JSON.stringify(response));
+            this.sendJson(client, response);
 
             return;
         }
@@ -264,7 +262,7 @@ export class RelayServer {
                 result: {},
                 sessionId: cmd.sessionId
             };
-            client.send(JSON.stringify(response));
+            this.sendJson(client, response);
 
             // CRITICAL FIX: Only trigger "Connect to page-1" if this command comes from the BROWSWER (root)
             // If it comes from an existing Session (cmd.sessionId is present), it's Puppeteer looking for iframes/workers.
@@ -288,7 +286,7 @@ export class RelayServer {
                     },
                     id: internalId
                 };
-                this.extensionWs?.send(JSON.stringify(payload));
+                this.sendJson(this.extensionWs, payload);
             }
 
             return;
@@ -314,7 +312,7 @@ export class RelayServer {
                 },
                 sessionId: cmd.sessionId
             };
-            client.send(JSON.stringify(response));
+            this.sendJson(client, response);
             return;
         }
 
@@ -337,7 +335,7 @@ export class RelayServer {
             }
 
             // 发送给 Extension 并等待响应
-            this.extensionWs.send(JSON.stringify(payload));
+            this.sendJson(this.extensionWs, payload);
 
             const result = await new Promise((resolve, reject) => {
                 const timer = setTimeout(() => {
@@ -353,7 +351,7 @@ export class RelayServer {
                 result,
                 sessionId: cmd.sessionId
             };
-            client.send(JSON.stringify(response));
+            this.sendJson(client, response);
 
         } catch (err) {
             const response: CdpResponse = {
@@ -361,8 +359,21 @@ export class RelayServer {
                 error: { message: err instanceof Error ? err.message : String(err) },
                 sessionId: cmd.sessionId
             };
-            client.send(JSON.stringify(response));
+            this.sendJson(client, response);
         }
+    }
+
+    private sendJson(
+        socket: Pick<WebSocket, "send"> | null | undefined,
+        payload: unknown,
+        debugLabel?: string,
+    ): void {
+        if (!socket) return;
+        const serialized = JSON.stringify(payload);
+        if (debugLabel) {
+            this.logger?.debug(`${debugLabel}: ${serialized}`);
+        }
+        socket.send(serialized);
     }
 
     public async start() {

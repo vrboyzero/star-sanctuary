@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { buildConversationPromptSnapshotArtifact, getConversationPromptSnapshotArtifactPath } from "./conversation-prompt-snapshot.js";
+import {
+  buildConversationPromptSnapshotArtifact,
+  getConversationPromptSnapshotArtifactPath,
+  persistConversationPromptSnapshot,
+} from "./conversation-prompt-snapshot.js";
 import { buildLearningReviewNudgeRuntimeReport } from "./learning-review-nudge-runtime.js";
 
 describe("buildLearningReviewNudgeRuntimeReport", () => {
@@ -101,6 +105,72 @@ describe("buildLearningReviewNudgeRuntimeReport", () => {
       });
       expect(report.summary.headline).toContain("did not trigger");
       expect(report.latest?.currentTurnPreview).toContain("最近有什么事吗");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("prefers the indexed latest foreground snapshot and skips newer background snapshots", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "ss-learning-review-index-"));
+    try {
+      await persistConversationPromptSnapshot({
+        stateDir,
+        snapshot: {
+          agentId: "default",
+          conversationId: "agent:default:main",
+          runId: "run_foreground",
+          createdAt: Date.parse("2026-04-09T14:25:00.000Z"),
+          systemPrompt: "system",
+          messages: [
+            { role: "system", content: "system" },
+            { role: "user", content: "帮我总结这轮经验沉淀" },
+          ],
+          deltas: [
+            {
+              id: "learning-review-nudge",
+              deltaType: "user-prelude",
+              role: "user-prelude",
+              source: "learning-review-nudge",
+              text: "<learning-review-nudge>\n- task_promote_method\n</learning-review-nudge>",
+              metadata: {
+                lineCount: 1,
+                signalKinds: ["method"],
+                triggerSources: ["explicit_user_intent"],
+              },
+            },
+          ],
+          hookSystemPromptUsed: false,
+        },
+      });
+      await persistConversationPromptSnapshot({
+        stateDir,
+        snapshot: {
+          agentId: "default",
+          conversationId: "heartbeat-latest",
+          runId: "run_background",
+          createdAt: Date.parse("2026-04-09T14:30:00.000Z"),
+          systemPrompt: "system",
+          messages: [
+            { role: "system", content: "system" },
+          ],
+          deltas: [],
+          hookSystemPromptUsed: false,
+        },
+      });
+
+      const report = await buildLearningReviewNudgeRuntimeReport({ stateDir });
+      expect(report.summary).toMatchObject({
+        available: true,
+        triggered: true,
+        sessionKind: "main",
+        triggerSources: ["explicit_user_intent"],
+        signalKinds: ["method"],
+        lineCount: 1,
+      });
+      expect(report.latest).toMatchObject({
+        conversationId: "agent:default:main",
+        runId: "run_foreground",
+      });
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
     }

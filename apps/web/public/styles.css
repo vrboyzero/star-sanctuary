@@ -2805,11 +2805,50 @@ body::before {
   overflow-wrap: anywhere;
 }
 
+.memory-list-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--memory-card-border);
+  background: color-mix(in srgb, var(--memory-card-bg) 82%, transparent);
+  position: sticky;
+  bottom: 0;
+}
+
+.memory-list-pagination-summary {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.memory-list-pagination-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .memory-detail-shell {
   padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.memory-detail-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-detail-caption {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .memory-detail-header {
@@ -2914,6 +2953,11 @@ body::before {
   font-size: 12px;
   max-height: 320px;
   overflow: auto;
+}
+
+.memory-detail-pre.is-collapsed {
+  max-height: 15.5em;
+  overflow: hidden;
 }
 
 .goals-viewer-shell {
