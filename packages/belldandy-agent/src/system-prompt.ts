@@ -635,7 +635,7 @@ export function buildSystemPromptResult(params: SystemPromptParams): SystemPromp
             "",
             "2. **Knowledge Distillation**: After completing a task, REFLECT: 'Did I learn a reusable pattern?'",
             "   - If yes -> Use `method_create` to save/update the Method.",
-            "   - Filename: `[target]-[action]-[suffix].md` (e.g., `nginx-deploy-static.md` or `网页-自动化-基础.md`).",
+            "   - Filename: `[target]-[action]-[detail].md` (e.g., `nginx-deploy-static.md` or `网页-自动化-基础.md`).",
             "   - Content: Include Context, Steps, Tools Used, and Pitfalls.",
             "",
             "**Goal**: Do not rely on ephemeral context alone. Crystallize your experience into persistent Methods.",
