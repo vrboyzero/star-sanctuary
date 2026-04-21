@@ -416,38 +416,51 @@
               </div>
             </div>
 
-            <div class="memory-viewer-toolbar">
-              <div class="memory-viewer-filters">
-                <input id="experienceWorkbenchQuery" class="input input-sm memory-search-input" data-i18n-placeholder="experience.queryPlaceholder" placeholder="搜索标题、摘要、taskId 或 slug" />
-                <div class="memory-filter-group">
-                  <select id="experienceWorkbenchTypeFilter" class="select select-sm">
-                    <option value="" data-i18n="experience.filterTypeAll">全部类型</option>
-                    <option value="method" data-i18n="experience.listTypeMethod">Method</option>
-                    <option value="skill" data-i18n="experience.listTypeSkill">Skill</option>
-                  </select>
-                  <select id="experienceWorkbenchStatusFilter" class="select select-sm">
-                    <option value="" data-i18n="experience.filterStatusAll">全部状态</option>
-                    <option value="draft" data-i18n="experience.listStatusDraft">草稿</option>
-                    <option value="accepted" data-i18n="experience.listStatusAccepted">已接受</option>
-                    <option value="rejected" data-i18n="experience.listStatusRejected">已拒绝</option>
-                  </select>
-                  <button id="experienceWorkbenchResetFilters" class="button" data-i18n="experience.resetFilters">重置</button>
+            <div class="memory-viewer-tabs experience-workbench-tabs">
+              <button id="experienceWorkbenchTabCandidates" class="memory-tab-btn active" data-i18n="experience.tabCandidates">经验候选</button>
+              <button id="experienceWorkbenchTabUsageOverview" class="memory-tab-btn" data-i18n="experience.tabUsageOverview">经验消费总览</button>
+            </div>
+
+            <div id="experienceWorkbenchCandidatesPane">
+              <div class="memory-viewer-toolbar">
+                <div class="memory-viewer-filters">
+                  <input id="experienceWorkbenchQuery" class="input input-sm memory-search-input" data-i18n-placeholder="experience.queryPlaceholder" placeholder="搜索标题、摘要、taskId 或 slug" />
+                  <div class="memory-filter-group">
+                    <select id="experienceWorkbenchTypeFilter" class="select select-sm">
+                      <option value="" data-i18n="experience.filterTypeAll">全部类型</option>
+                      <option value="method" data-i18n="experience.listTypeMethod">Method</option>
+                      <option value="skill" data-i18n="experience.listTypeSkill">Skill</option>
+                    </select>
+                    <select id="experienceWorkbenchStatusFilter" class="select select-sm">
+                      <option value="" data-i18n="experience.filterStatusAll">全部状态</option>
+                      <option value="draft" data-i18n="experience.listStatusDraft">草稿</option>
+                      <option value="accepted" data-i18n="experience.listStatusAccepted">已接受</option>
+                      <option value="rejected" data-i18n="experience.listStatusRejected">已拒绝</option>
+                    </select>
+                    <button id="experienceWorkbenchResetFilters" class="button" data-i18n="experience.resetFilters">重置</button>
+                  </div>
+                </div>
+                <div class="goal-detail-actions experience-workbench-generate">
+                  <input id="experienceGenerateTaskId" class="input input-sm experience-workbench-task-input" data-i18n-placeholder="experience.generateTaskPlaceholder" placeholder="输入 taskId 后生成 candidate" />
+                  <button id="experienceGenerateMethodBtn" class="memory-usage-action-btn" data-i18n="experience.generateMethod">生成 method</button>
+                  <button id="experienceGenerateSkillBtn" class="memory-usage-action-btn" data-i18n="experience.generateSkill">生成 skill</button>
                 </div>
               </div>
-              <div class="goal-detail-actions experience-workbench-generate">
-                <input id="experienceGenerateTaskId" class="input input-sm experience-workbench-task-input" data-i18n-placeholder="experience.generateTaskPlaceholder" placeholder="输入 taskId 后生成 candidate" />
-                <button id="experienceGenerateMethodBtn" class="memory-usage-action-btn" data-i18n="experience.generateMethod">生成 method</button>
-                <button id="experienceGenerateSkillBtn" class="memory-usage-action-btn" data-i18n="experience.generateSkill">生成 skill</button>
+
+              <div class="memory-viewer-body">
+                <aside class="memory-viewer-list" id="experienceWorkbenchList">
+                  <div class="memory-viewer-empty" data-i18n="experience.waiting">等待加载…</div>
+                </aside>
+                <section class="memory-viewer-detail" id="experienceWorkbenchDetail">
+                  <div class="memory-viewer-empty" data-i18n="experience.detailSelect">选择左侧经验候选查看详情。</div>
+                </section>
               </div>
             </div>
 
-            <div class="memory-viewer-body">
-              <aside class="memory-viewer-list" id="experienceWorkbenchList">
-                <div class="memory-viewer-empty" data-i18n="experience.waiting">等待加载…</div>
-              </aside>
-              <section class="memory-viewer-detail" id="experienceWorkbenchDetail">
-                <div class="memory-viewer-empty" data-i18n="experience.detailSelect">选择左侧经验候选查看详情。</div>
-              </section>
+            <div id="experienceWorkbenchUsagePane" class="experience-workbench-overview-body hidden">
+              <div id="experienceWorkbenchUsageOverview" class="experience-workbench-overview-root">
+                <div class="memory-viewer-empty" data-i18n="experience.usageOverviewWaiting">等待经验消费总览…</div>
+              </div>
             </div>
           </div>
         </section>

@@ -438,7 +438,7 @@ export function createMemoryDetailRenderFeature({
 
     if (!loading && !methods.length && !skills.length) {
       return `
-        <div class="memory-stat-card memory-stat-card-wide">
+        <div class="memory-stat-card memory-stat-card-wide memory-usage-overview-card">
           <div class="memory-stat-card-head">
             <span class="memory-stat-label">${escapeHtml(t("memory.usageOverviewTitle", {}, "Experience Usage Overview"))}</span>
             <span class="memory-stat-caption">${escapeHtml(t("memory.usageOverviewEmpty", {}, "No usage data yet"))}</span>
@@ -448,7 +448,7 @@ export function createMemoryDetailRenderFeature({
     }
 
     return `
-      <div class="memory-stat-card memory-stat-card-wide">
+      <div class="memory-stat-card memory-stat-card-wide memory-usage-overview-card">
         <div class="memory-stat-card-head">
           <span class="memory-stat-label">${escapeHtml(t("memory.usageOverviewTitle", {}, "Experience Usage Overview"))}</span>
           <span class="memory-stat-caption">${escapeHtml(loading

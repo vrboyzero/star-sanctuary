@@ -2580,43 +2580,47 @@ body::before {
 
 .memory-viewer-stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
   min-height: 0;
-  max-height: 200px;
+  max-height: 160px;
   overflow-y: auto;
   align-content: start;
-  padding-right: 4px;
+  padding-right: 0;
 }
 
 .memory-viewer.tasks-mode .memory-viewer-stats {
-  max-height: 200px;
+  max-height: 170px;
+  overflow-y: auto;
 }
 
 .memory-stat-card {
   background: var(--memory-card-bg);
   border: 1px solid var(--memory-card-border);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: 11px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
+  min-height: 66px;
 }
 
 .memory-stat-label {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.25;
 }
 
 .memory-stat-value {
   color: var(--primary);
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 15px;
+  line-height: 1.15;
 }
 
 .memory-stat-value-compact {
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.25;
 }
 
 .memory-stat-card-wide {
@@ -2627,12 +2631,13 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .memory-stat-caption {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .memory-category-chart {
@@ -2873,6 +2878,62 @@ body::before {
   min-width: 240px;
 }
 
+#experienceWorkbenchStats {
+  gap: 8px;
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+#experienceWorkbenchStats .memory-stat-card {
+  min-height: 36px;
+  padding: 6px 10px;
+  gap: 1px;
+  justify-content: center;
+}
+
+#experienceWorkbenchStats .memory-stat-label {
+  line-height: 1.1;
+}
+
+#experienceWorkbenchStats .memory-stat-value {
+  font-size: 14px;
+  line-height: 1.05;
+}
+
+.experience-workbench-tabs {
+  align-self: flex-start;
+}
+
+.experience-workbench-tabs + #experienceWorkbenchCandidatesPane,
+#experienceWorkbenchCandidatesPane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.experience-workbench-overview-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.experience-workbench-overview-root {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.experience-workbench-overview-root .memory-usage-overview-card {
+  min-height: 0;
+}
+
 .memory-shared-review-batch-summary {
   color: var(--memory-context-text);
   font-size: 13px;
@@ -3048,6 +3109,30 @@ body::before {
 }
 
 @media (max-width: 960px) {
+  .memory-viewer-stats {
+    grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+    gap: 6px;
+    max-height: 150px;
+  }
+
+  .memory-stat-card {
+    padding: 8px 9px;
+    min-height: 62px;
+  }
+
+  .memory-stat-value {
+    font-size: 14px;
+  }
+
+  .memory-stat-value-compact {
+    font-size: 11px;
+  }
+
+  .memory-viewer.tasks-mode .memory-viewer-stats {
+    max-height: 160px;
+    overflow-y: auto;
+  }
+
   .memory-dream-history-grid {
     grid-template-columns: 1fr;
   }
@@ -3154,6 +3239,29 @@ body::before {
 .goals-viewer-shell {
   background: var(--goal-shell-bg);
   border-color: var(--goal-shell-border);
+}
+
+#goalsSummary {
+  gap: 8px;
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
+#goalsSummary .memory-stat-card {
+  min-height: 36px;
+  padding: 6px 10px;
+  gap: 1px;
+  justify-content: center;
+}
+
+#goalsSummary .memory-stat-label {
+  line-height: 1.1;
+}
+
+#goalsSummary .memory-stat-value {
+  font-size: 14px;
+  line-height: 1.05;
 }
 
 .subtasks-viewer-shell {
@@ -3656,14 +3764,14 @@ body::before {
 
 .memory-usage-overview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
 }
 
 .memory-usage-overview-lane {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -3671,28 +3779,28 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .memory-usage-overview-title {
   color: var(--memory-number-strong);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .memory-usage-overview-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .memory-usage-overview-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(90px, 28%) 52px;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
   background: var(--memory-card-bg);
   border: 1px solid var(--memory-card-border);
 }
@@ -3703,26 +3811,26 @@ body::before {
 
 .memory-usage-overview-key {
   color: var(--memory-number-strong);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  line-height: 1.45;
+  line-height: 1.3;
   word-break: break-word;
 }
 
 .memory-usage-overview-meta,
 .memory-usage-item-meta {
-  margin-top: 4px;
+  margin-top: 2px;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 10px;
+  line-height: 1.3;
 }
 
 .memory-usage-overview-bar-track {
   position: relative;
-  height: 8px;
+  height: 7px;
   overflow: hidden;
   border-radius: 999px;
   background: var(--memory-track-bg);
@@ -3744,17 +3852,17 @@ body::before {
 .memory-usage-overview-metrics {
   color: var(--memory-number-strong);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11px;
   text-align: right;
 }
 
 .memory-usage-overview-empty {
-  padding: 12px;
-  border-radius: 12px;
+  padding: 10px;
+  border-radius: 10px;
   background: var(--memory-card-bg);
   border: 1px dashed var(--memory-badge-border);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .memory-usage-list {
@@ -3943,6 +4051,24 @@ body::before {
   .experience-workbench-task-input {
     min-width: 0;
     width: 100%;
+  }
+
+  #experienceWorkbenchStats {
+    gap: 6px;
+  }
+
+  #experienceWorkbenchStats .memory-stat-card {
+    min-height: 34px;
+    padding: 6px 9px;
+  }
+
+  #experienceWorkbenchStats .memory-stat-value {
+    font-size: 13px;
+  }
+
+  .experience-workbench-tabs {
+    width: 100%;
+    overflow-x: auto;
   }
 
   .memory-category-row {

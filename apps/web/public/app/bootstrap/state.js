@@ -74,6 +74,7 @@ export const experienceWorkbenchState = {
   selectedId: null,
   selectedCandidate: null,
   stats: null,
+  activeTab: "candidates",
   filters: {
     query: "",
     type: "",

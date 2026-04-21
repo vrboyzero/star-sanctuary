@@ -56,6 +56,8 @@ export function createExperienceWorkbenchFeature({
   getSelectedAgentId,
   getSelectedAgentLabel,
   renderCandidateDetailPanel,
+  renderTaskUsageOverviewCard,
+  loadTaskUsageOverview,
   generateExperienceCandidate,
   openToolSettingsTab,
   escapeHtml,
@@ -70,6 +72,11 @@ export function createExperienceWorkbenchFeature({
     experienceWorkbenchSection,
     experienceWorkbenchTitleEl,
     experienceWorkbenchStatsEl,
+    experienceWorkbenchTabCandidatesBtn,
+    experienceWorkbenchTabUsageOverviewBtn,
+    experienceWorkbenchCandidatesPaneEl,
+    experienceWorkbenchUsagePaneEl,
+    experienceWorkbenchUsageOverviewEl,
     experienceWorkbenchQueryEl,
     experienceWorkbenchTypeFilterEl,
     experienceWorkbenchStatusFilterEl,
@@ -113,6 +120,16 @@ export function createExperienceWorkbenchFeature({
     return typeof memoryViewerState?.pendingExperienceActionKey === "string"
       ? memoryViewerState.pendingExperienceActionKey
       : "";
+  }
+
+  function getActiveTab() {
+    const state = getExperienceWorkbenchState();
+    return state.activeTab === "usage-overview" ? "usage-overview" : "candidates";
+  }
+
+  function setActiveTab(nextTab) {
+    const state = getExperienceWorkbenchState();
+    state.activeTab = nextTab === "usage-overview" ? "usage-overview" : "candidates";
   }
 
   function getFilters() {
@@ -174,6 +191,12 @@ export function createExperienceWorkbenchFeature({
       if (!candidateId || String(state.selectedCandidate?.id || "") !== candidateId) {
         state.selectedCandidate = null;
       }
+      if (candidateId && !hasOwn(options, "tab")) {
+        setActiveTab("candidates");
+      }
+    }
+    if (hasOwn(options, "tab")) {
+      setActiveTab(options.tab);
     }
     syncFilterUi();
   }
@@ -196,6 +219,22 @@ export function createExperienceWorkbenchFeature({
       experienceGenerateSkillBtn.textContent = skillBusy
         ? t("memory.generateSkillCandidateBusy", {}, "生成 skill 中…")
         : t("experience.generateSkill", {}, "Generate skill");
+    }
+  }
+
+  function syncExperienceWorkbenchTabUi() {
+    const activeTab = getActiveTab();
+    if (experienceWorkbenchTabCandidatesBtn) {
+      experienceWorkbenchTabCandidatesBtn.classList.toggle("active", activeTab === "candidates");
+    }
+    if (experienceWorkbenchTabUsageOverviewBtn) {
+      experienceWorkbenchTabUsageOverviewBtn.classList.toggle("active", activeTab === "usage-overview");
+    }
+    if (experienceWorkbenchCandidatesPaneEl) {
+      experienceWorkbenchCandidatesPaneEl.classList.toggle("hidden", activeTab !== "candidates");
+    }
+    if (experienceWorkbenchUsagePaneEl) {
+      experienceWorkbenchUsagePaneEl.classList.toggle("hidden", activeTab !== "usage-overview");
     }
   }
 
@@ -250,6 +289,11 @@ export function createExperienceWorkbenchFeature({
   function renderExperienceWorkbenchDetailEmpty(message) {
     if (!experienceWorkbenchDetailEl) return;
     experienceWorkbenchDetailEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  }
+
+  function renderExperienceWorkbenchUsageOverviewEmpty(message) {
+    if (!experienceWorkbenchUsageOverviewEl) return;
+    experienceWorkbenchUsageOverviewEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
   }
 
   function summarizePathLabel(value) {
@@ -425,6 +469,59 @@ export function createExperienceWorkbenchFeature({
     });
   }
 
+  function bindExperienceWorkbenchUsageOverviewActions() {
+    if (!experienceWorkbenchUsageOverviewEl) return;
+    experienceWorkbenchUsageOverviewEl.querySelectorAll("[data-open-task-id]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const taskId = node.getAttribute("data-open-task-id");
+        await openTaskFromWorkbench?.(taskId);
+      });
+    });
+    experienceWorkbenchUsageOverviewEl.querySelectorAll("[data-open-source]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const sourcePath = node.getAttribute("data-open-source");
+        await openSourcePath?.(sourcePath);
+      });
+    });
+    experienceWorkbenchUsageOverviewEl.querySelectorAll("[data-open-candidate-id]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const candidateId = node.getAttribute("data-open-candidate-id");
+        setActiveTab("candidates");
+        syncExperienceWorkbenchTabUi();
+        await loadExperienceCandidateDetail(candidateId);
+      });
+    });
+  }
+
+  function renderExperienceWorkbenchUsageOverviewPanel() {
+    if (!experienceWorkbenchUsageOverviewEl) return;
+    const markup = typeof renderTaskUsageOverviewCard === "function"
+      ? renderTaskUsageOverviewCard()
+      : "";
+    if (!markup) {
+      renderExperienceWorkbenchUsageOverviewEmpty(t("experience.usageOverviewWaiting", {}, "Waiting for experience usage overview..."));
+      return;
+    }
+    experienceWorkbenchUsageOverviewEl.innerHTML = markup;
+    bindExperienceWorkbenchUsageOverviewActions();
+  }
+
+  async function loadExperienceWorkbenchUsageOverview() {
+    if (!experienceWorkbenchUsageOverviewEl) return;
+    if (!isConnected?.()) {
+      renderExperienceWorkbenchUsageOverviewEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
+      return;
+    }
+    if (typeof loadTaskUsageOverview !== "function" || typeof renderTaskUsageOverviewCard !== "function") {
+      renderExperienceWorkbenchUsageOverviewEmpty(t("memory.usageOverviewEmpty", {}, "No usage data yet"));
+      return;
+    }
+    const pending = loadTaskUsageOverview();
+    renderExperienceWorkbenchUsageOverviewPanel();
+    await pending;
+    renderExperienceWorkbenchUsageOverviewPanel();
+  }
+
   function renderExperienceAggregatePanel(candidate) {
     if (!candidate || typeof candidate !== "object") return "";
     const snapshot = candidate.sourceTaskSnapshot && typeof candidate.sourceTaskSnapshot === "object"
@@ -548,6 +645,7 @@ export function createExperienceWorkbenchFeature({
     const filteredItems = getFilteredExperienceItems();
     state.stats = countExperienceStats(filteredItems);
     renderExperienceWorkbenchStats(state.stats);
+    syncExperienceWorkbenchTabUi();
 
     const selectedVisible = filteredItems.some((item) => String(item?.id || "") === String(state.selectedId || ""));
     if (!selectedVisible) {
@@ -579,6 +677,7 @@ export function createExperienceWorkbenchFeature({
   async function loadExperienceWorkbench(forceSelectFirst = false) {
     syncExperienceWorkbenchHeaderTitle();
     syncFilterUi();
+    syncExperienceWorkbenchTabUi();
     const state = getExperienceWorkbenchState();
     state.activeAgentId = getActiveAgentId();
     if (!isConnected?.()) {
@@ -588,6 +687,7 @@ export function createExperienceWorkbenchFeature({
       renderExperienceWorkbenchStats(null);
       renderExperienceWorkbenchListEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       renderExperienceWorkbenchDetailEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
+      renderExperienceWorkbenchUsageOverviewEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       return;
     }
 
@@ -595,6 +695,9 @@ export function createExperienceWorkbenchFeature({
     renderExperienceWorkbenchStats(null);
     renderExperienceWorkbenchListEmpty(t("experience.loading", {}, "Loading experience candidates..."));
     renderExperienceWorkbenchDetailEmpty(t("experience.detailLoading", {}, "Loading candidate details..."));
+    if (getActiveTab() === "usage-overview") {
+      renderExperienceWorkbenchUsageOverviewPanel();
+    }
 
     const res = await sendReq({
       type: "req",
@@ -615,6 +718,7 @@ export function createExperienceWorkbenchFeature({
       renderExperienceWorkbenchStats(null);
       renderExperienceWorkbenchListEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
       renderExperienceWorkbenchDetailEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
+      renderExperienceWorkbenchUsageOverviewEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
       return;
     }
 
@@ -628,6 +732,9 @@ export function createExperienceWorkbenchFeature({
       state.selectedCandidate = null;
     }
     await syncExperienceWorkbenchUi({ preferFirst: forceSelectFirst !== false, loadDetailIfNeeded: true });
+    if (getActiveTab() === "usage-overview") {
+      await loadExperienceWorkbenchUsageOverview();
+    }
   }
 
   async function openExperienceWorkbench(options = {}) {
@@ -842,6 +949,19 @@ export function createExperienceWorkbenchFeature({
         void handleGenerateExperience("skill");
       });
     }
+    if (experienceWorkbenchTabCandidatesBtn) {
+      experienceWorkbenchTabCandidatesBtn.addEventListener("click", () => {
+        setActiveTab("candidates");
+        syncExperienceWorkbenchTabUi();
+      });
+    }
+    if (experienceWorkbenchTabUsageOverviewBtn) {
+      experienceWorkbenchTabUsageOverviewBtn.addEventListener("click", () => {
+        setActiveTab("usage-overview");
+        syncExperienceWorkbenchTabUi();
+        void loadExperienceWorkbenchUsageOverview();
+      });
+    }
   }
 
   function resetExperienceWorkbenchStateForAgent(agentId = getActiveAgentId()) {
@@ -852,6 +972,7 @@ export function createExperienceWorkbenchFeature({
     state.selectedId = null;
     state.selectedCandidate = null;
     state.stats = null;
+    state.activeTab = "candidates";
   }
 
   async function refreshExperienceWorkbenchForAgentSwitch(agentId = getActiveAgentId()) {

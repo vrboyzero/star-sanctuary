@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "增加了经验能力UI模块，再次对齐了UI中英文双语内容"
+git commit -m "调整了记忆查看和经验能力界面布局"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
