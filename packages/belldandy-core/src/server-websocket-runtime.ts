@@ -145,6 +145,7 @@ const DEFAULT_METHODS = [
   "experience.candidate.list",
   "experience.candidate.accept",
   "experience.candidate.reject",
+  "experience.candidate.reject_bulk",
   "experience.usage.get",
   "experience.usage.list",
   "experience.usage.stats",

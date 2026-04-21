@@ -1535,13 +1535,14 @@ async function handleReq(
       "experience.candidate.get",
       "experience.candidate.list",
       "experience.candidate.accept",
-    "experience.candidate.reject",
-    "experience.usage.get",
-    "experience.usage.list",
-    "experience.usage.stats",
-    "experience.usage.revoke",
-    "experience.skill.freshness.update",
-    "goal.create",
+      "experience.candidate.reject",
+      "experience.candidate.reject_bulk",
+      "experience.usage.get",
+      "experience.usage.list",
+      "experience.usage.stats",
+      "experience.usage.revoke",
+      "experience.skill.freshness.update",
+      "goal.create",
     "goal.list",
     "goal.get",
     "goal.resume",
@@ -1915,8 +1916,10 @@ async function handleReq(
     case "experience.candidate.generate":
     case "experience.candidate.get":
     case "experience.candidate.list":
+    case "experience.candidate.stats":
     case "experience.candidate.accept":
     case "experience.candidate.reject":
+    case "experience.candidate.reject_bulk":
     case "experience.usage.get":
     case "experience.usage.list":
     case "experience.usage.stats":

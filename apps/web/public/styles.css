@@ -3989,6 +3989,49 @@ body.control-panel-hidden .main-content {
   font-size: 11px;
 }
 
+.experience-capability-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: flex-start;
+}
+
+.experience-capability-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.experience-capability-summary {
+  color: var(--memory-context-text);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.experience-capability-lane-head-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experience-capability-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 280px;
+}
+
+.experience-capability-actions .memory-usage-action-btn {
+  white-space: nowrap;
+}
+
+.experience-capability-bulk-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .memory-usage-list {
   display: flex;
   flex-direction: column;
@@ -4212,6 +4255,20 @@ body.control-panel-hidden .main-content {
 
   .memory-usage-overview-row {
     grid-template-columns: 1fr;
+  }
+
+  .experience-capability-row {
+    grid-template-columns: 1fr;
+  }
+
+  .experience-capability-card .memory-usage-overview-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .experience-capability-actions {
+    max-width: none;
+    justify-content: flex-start;
   }
 
   .memory-usage-item-head {

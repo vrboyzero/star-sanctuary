@@ -432,11 +432,12 @@
             </div>
 
             <div class="memory-viewer-tabs experience-workbench-tabs">
-              <button id="experienceWorkbenchTabCandidates" class="memory-tab-btn active" data-i18n="experience.tabCandidates">经验候选</button>
+              <button id="experienceWorkbenchTabCapabilityAcquisition" class="memory-tab-btn active" data-i18n="experience.tabCapabilityAcquisition">能力获取</button>
+              <button id="experienceWorkbenchTabCandidates" class="memory-tab-btn" data-i18n="experience.tabCandidates">经验候选</button>
               <button id="experienceWorkbenchTabUsageOverview" class="memory-tab-btn" data-i18n="experience.tabUsageOverview">经验消费总览</button>
             </div>
 
-            <div id="experienceWorkbenchCandidatesPane">
+            <div id="experienceWorkbenchCandidatesPane" class="hidden">
               <div class="memory-viewer-toolbar">
                 <div class="memory-toolbar-search-row">
                   <input id="experienceWorkbenchQuery" class="input input-sm memory-search-input" data-i18n-placeholder="experience.queryPlaceholder" placeholder="搜索标题、摘要、taskId 或 slug" />
@@ -473,6 +474,12 @@
                 <section class="memory-viewer-detail" id="experienceWorkbenchDetail">
                   <div class="memory-viewer-empty" data-i18n="experience.detailSelect">选择左侧经验候选查看详情。</div>
                 </section>
+              </div>
+            </div>
+
+            <div id="experienceWorkbenchCapabilityPane" class="experience-workbench-overview-body hidden">
+              <div id="experienceWorkbenchCapabilityOverview" class="experience-workbench-overview-root">
+                <div class="memory-viewer-empty" data-i18n="experience.capabilityWaiting">等待能力获取候选…</div>
               </div>
             </div>
 

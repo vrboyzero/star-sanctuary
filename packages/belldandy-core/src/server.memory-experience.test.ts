@@ -313,6 +313,172 @@ test("experience.candidate.generate creates candidates and respects confirmation
   }
 });
 
+test("experience.candidate.accept allows explicit confirmed flag when publish confirmation is enabled", async () => {
+  const previousMethodPublishConfirm = process.env.BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED;
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-accept-confirm-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-accept-confirm-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  (memoryManager as any).store.createTask({
+    id: "task-accept-confirm-1",
+    conversationId: "conv-accept-confirm-1",
+    sessionKey: "session-accept-confirm-1",
+    agentId: "default",
+    source: "chat",
+    status: "success",
+    title: "确认发布 method 候选",
+    objective: "验证 accept confirmed 参数",
+    summary: "需要在确认门禁开启时仍能完成手动确认发布。",
+    reflection: "WebChat 按钮本身就是一次明确的人类确认动作。",
+    toolCalls: [{ toolName: "memory_search", success: true, durationMs: 40 }],
+    artifactPaths: [],
+    startedAt: now,
+    finishedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const promoted = memoryManager.promoteTaskToMethodCandidate("task-accept-confirm-1");
+  expect(promoted?.candidate.id).toBeTruthy();
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    process.env.BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED = "true";
+
+    const blockedRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-accept-blocked",
+      method: "experience.candidate.accept",
+      params: {
+        candidateId: promoted!.candidate.id,
+        agentId: "default",
+      },
+    }, { stateDir });
+    expect(blockedRes).toBeTruthy();
+    if (!blockedRes || blockedRes.ok) {
+      throw new Error("expected confirmation_required response");
+    }
+    expect(blockedRes.error.code).toBe("confirmation_required");
+
+    const confirmedRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-accept-confirmed",
+      method: "experience.candidate.accept",
+      params: {
+        candidateId: promoted!.candidate.id,
+        agentId: "default",
+        confirmed: true,
+      },
+    }, { stateDir });
+    expect(confirmedRes).toBeTruthy();
+    if (!confirmedRes || !confirmedRes.ok) {
+      throw new Error("expected successful confirmed accept response");
+    }
+    const confirmedCandidate = (confirmedRes.payload?.candidate ?? {}) as Record<string, unknown>;
+    expect(confirmedCandidate.status).toBe("accepted");
+  } finally {
+    if (previousMethodPublishConfirm === undefined) {
+      delete process.env.BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED;
+    } else {
+      process.env.BELLDANDY_METHOD_PUBLISH_CONFIRM_REQUIRED = previousMethodPublishConfirm;
+    }
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("experience.candidate.reject_bulk rejects all draft candidates for a type and refreshes stats", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-reject-bulk-"));
+  const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-reject-bulk-workspace-"));
+  const memoryManager = new MemoryManager({
+    workspaceRoot,
+    stateDir,
+    taskMemoryEnabled: true,
+  });
+
+  const now = "2026-04-20T00:00:00.000Z";
+  const createTask = (taskId: string, title: string) => {
+    (memoryManager as any).store.createTask({
+      id: taskId,
+      conversationId: `conv-${taskId}`,
+      sessionKey: `session-${taskId}`,
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title,
+      objective: `${title} objective`,
+      summary: `${title} summary`,
+      reflection: `${title} reflection`,
+      toolCalls: [{ toolName: "memory_search", success: true, durationMs: 30 }],
+      artifactPaths: [],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  };
+
+  createTask("task-reject-bulk-method-1", "Method Draft One");
+  createTask("task-reject-bulk-method-2", "Method Draft Two");
+  createTask("task-reject-bulk-skill-1", "Skill Draft One");
+  const methodOne = memoryManager.promoteTaskToMethodCandidate("task-reject-bulk-method-1");
+  const methodTwo = memoryManager.promoteTaskToMethodCandidate("task-reject-bulk-method-2");
+  const skillOne = memoryManager.promoteTaskToSkillCandidate("task-reject-bulk-skill-1");
+  expect(methodOne?.candidate.id).toBeTruthy();
+  expect(methodTwo?.candidate.id).toBeTruthy();
+  expect(skillOne?.candidate.id).toBeTruthy();
+  registerGlobalMemoryManager(memoryManager);
+
+  try {
+    const rejectBulkRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-reject-bulk",
+      method: "experience.candidate.reject_bulk",
+      params: {
+        agentId: "default",
+        filter: {
+          type: "method",
+        },
+      },
+    }, { stateDir });
+    expect(rejectBulkRes).toBeTruthy();
+    if (!rejectBulkRes || !rejectBulkRes.ok) {
+      throw new Error("expected successful reject_bulk response");
+    }
+    expect(rejectBulkRes.payload?.count).toBe(2);
+
+    const statsRes = await handleMemoryExperienceMethod({
+      type: "req",
+      id: "candidate-stats",
+      method: "experience.candidate.stats",
+      params: {
+        agentId: "default",
+      },
+    }, { stateDir });
+    expect(statsRes).toBeTruthy();
+    if (!statsRes || !statsRes.ok) {
+      throw new Error("expected successful stats response");
+    }
+    expect(statsRes.payload?.stats).toMatchObject({
+      total: 3,
+      methods: 2,
+      skills: 1,
+      draft: 1,
+      accepted: 0,
+      rejected: 2,
+    });
+  } finally {
+    memoryManager.close();
+    await fs.promises.rm(workspaceRoot, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("experience.candidate.check_duplicate previews dedup result before generation", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-dedup-"));
   const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-experience-dedup-workspace-"));
@@ -919,6 +1085,36 @@ test("experience candidate rpc lists and updates candidate status", async () => 
 
     ws.send(JSON.stringify({
       type: "req",
+      id: "candidate-list-offset",
+      method: "experience.candidate.list",
+      params: { limit: 1, offset: 1, filter: { status: "draft" } },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-list-offset"));
+    const offsetListRes = frames.find((f) => f.type === "res" && f.id === "candidate-list-offset");
+    expect(offsetListRes.ok).toBe(true);
+    expect(offsetListRes.payload.items.length).toBe(1);
+    expect(offsetListRes.payload.offset).toBe(1);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-stats",
+      method: "experience.candidate.stats",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-stats"));
+    const statsRes = frames.find((f) => f.type === "res" && f.id === "candidate-stats");
+    expect(statsRes.ok).toBe(true);
+    expect(statsRes.payload.stats).toMatchObject({
+      total: 2,
+      methods: 1,
+      skills: 1,
+      draft: 2,
+      accepted: 0,
+      rejected: 0,
+    });
+
+    ws.send(JSON.stringify({
+      type: "req",
       id: "candidate-accept",
       method: "experience.candidate.accept",
       params: { candidateId: methodCandidate!.candidate.id },
@@ -965,6 +1161,24 @@ test("experience candidate rpc lists and updates candidate status", async () => 
     expect(invalidAcceptRes.ok).toBe(false);
     expect(invalidAcceptRes.error.code).toBe("invalid_state");
     expect(invalidAcceptRes.error.message).toContain("Current status: accepted");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "candidate-stats-after-accept",
+      method: "experience.candidate.stats",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "candidate-stats-after-accept"));
+    const statsAfterAcceptRes = frames.find((f) => f.type === "res" && f.id === "candidate-stats-after-accept");
+    expect(statsAfterAcceptRes.ok).toBe(true);
+    expect(statsAfterAcceptRes.payload.stats).toMatchObject({
+      total: 2,
+      methods: 1,
+      skills: 1,
+      draft: 0,
+      accepted: 2,
+      rejected: 0,
+    });
   } finally {
     ws.close();
     await closeP;

@@ -554,8 +554,9 @@ export async function handleMemoryExperienceMethod(
       if (!manager) return notAvailable(req.id);
 
       const limit = clampListLimit(params.limit, 50);
+      const offset = readOptionalNonNegativeInteger(params, "offset") ?? 0;
       const filter = isObjectRecord(params.filter) ? params.filter : undefined;
-      const items = manager.listExperienceCandidates(limit, filter as any);
+      const items = manager.listExperienceCandidates(limit, filter as any, offset);
       const skillFreshnessSnapshot = await buildScopedSkillFreshnessSnapshot(ctx.stateDir, manager);
       return ok(req.id, {
         items: items.map((item) => attachSkillFreshnessToCandidatePayload(
@@ -564,6 +565,19 @@ export async function handleMemoryExperienceMethod(
           skillFreshnessSnapshot,
         )),
         limit,
+        offset,
+        queryView: buildResidentMemoryQueryView(residentPolicy),
+      });
+    }
+
+    case "experience.candidate.stats": {
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      if (!manager) return notAvailable(req.id);
+
+      const filter = isObjectRecord(params.filter) ? params.filter : undefined;
+      return ok(req.id, {
+        stats: manager.getExperienceCandidateStats(filter as any),
         queryView: buildResidentMemoryQueryView(residentPolicy),
       });
     }
@@ -573,6 +587,7 @@ export async function handleMemoryExperienceMethod(
       if (!manager) return notAvailable(req.id);
 
       const candidateId = readRequiredString(params, "candidateId");
+      const confirmed = readOptionalBoolean(params, "confirmed") === true;
       if (!candidateId) return invalid(req.id, "candidateId is required");
 
       const existing = manager.getExperienceCandidate(candidateId);
@@ -588,7 +603,7 @@ export async function handleMemoryExperienceMethod(
           },
         };
       }
-      if (isExperiencePublishConfirmationRequired(existing.type)) {
+      if (isExperiencePublishConfirmationRequired(existing.type) && !confirmed) {
         return confirmationRequired(req.id, `${existing.type} publish requires user confirmation.`);
       }
 
@@ -630,6 +645,32 @@ export async function handleMemoryExperienceMethod(
       const candidate = manager.rejectExperienceCandidate(candidateId);
       if (!candidate) return notFound(req.id, "Experience candidate not found.");
       return ok(req.id, { candidate });
+    }
+
+    case "experience.candidate.reject_bulk": {
+      const manager = resolveScopedMemoryManager(params);
+      const residentPolicy = resolveScopedResidentMemoryPolicy(params, ctx.residentMemoryManagers);
+      if (!manager) return notAvailable(req.id);
+
+      const filter = isObjectRecord(params.filter) ? { ...params.filter } : {};
+      const rawType = typeof filter.type === "string" ? filter.type.trim().toLowerCase() : "";
+      if (rawType !== "method" && rawType !== "skill") {
+        return invalid(req.id, "filter.type must be 'method' or 'skill'");
+      }
+
+      const count = manager.rejectExperienceCandidates({
+        ...(filter as any),
+        type: rawType,
+        status: "draft",
+      });
+      return ok(req.id, {
+        count,
+        filter: {
+          type: rawType,
+          status: "draft",
+        },
+        queryView: buildResidentMemoryQueryView(residentPolicy),
+      });
     }
 
     case "experience.usage.get": {
@@ -772,6 +813,24 @@ function readRequiredString(params: Record<string, unknown>, key: string): strin
 function readOptionalString(params: Record<string, unknown>, key: string): string | undefined {
   const value = readRequiredString(params, key);
   return value || undefined;
+}
+
+function readOptionalBoolean(params: Record<string, unknown>, key: string): boolean | undefined {
+  const raw = params[key];
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") return true;
+    if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") return false;
+  }
+  return undefined;
+}
+
+function readOptionalNonNegativeInteger(params: Record<string, unknown>, key: string): number | undefined {
+  const raw = params[key];
+  const parsed = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) return undefined;
+  return parsed;
 }
 
 function confirmationRequired(id: string, message: string): GatewayResFrame {

@@ -18,6 +18,7 @@ import type {
   ExperienceAssetType,
   ExperienceCandidate,
   ExperienceCandidateListFilter,
+  ExperienceCandidateStats,
   ExperienceCandidateStatus,
   ExperienceCandidateType,
   ExperienceSourceTaskSnapshot,
@@ -996,9 +997,10 @@ export class MemoryStore {
     return row ? rowToExperienceCandidate(row) : null;
   }
 
-  listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter): ExperienceCandidate[] {
+  listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter, offset = 0): ExperienceCandidate[] {
     this.ensureOpen();
     const { clause, params } = this.buildExperienceCandidateFilterClause(filter);
+    const safeOffset = Number.isInteger(offset) && offset > 0 ? offset : 0;
     const stmt = this.db.prepare(`
       SELECT c.*
       FROM experience_candidates c
@@ -1006,9 +1008,62 @@ export class MemoryStore {
       WHERE 1 = 1${clause}
       ORDER BY c.created_at DESC
       LIMIT ?
+      OFFSET ?
     `);
-    const rows = stmt.all(...params, limit) as Record<string, unknown>[];
+    const rows = stmt.all(...params, limit, safeOffset) as Record<string, unknown>[];
     return rows.map(rowToExperienceCandidate);
+  }
+
+  getExperienceCandidateStats(filter?: ExperienceCandidateListFilter): ExperienceCandidateStats {
+    this.ensureOpen();
+    const { clause, params } = this.buildExperienceCandidateFilterClause(filter);
+    const stmt = this.db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN c.type = 'method' THEN 1 ELSE 0 END) AS methods,
+        SUM(CASE WHEN c.type = 'skill' THEN 1 ELSE 0 END) AS skills,
+        SUM(CASE WHEN c.status = 'draft' THEN 1 ELSE 0 END) AS draft,
+        SUM(CASE WHEN c.status = 'accepted' THEN 1 ELSE 0 END) AS accepted,
+        SUM(CASE WHEN c.status = 'rejected' THEN 1 ELSE 0 END) AS rejected
+      FROM experience_candidates c
+      LEFT JOIN tasks t ON t.id = c.task_id
+      WHERE 1 = 1${clause}
+    `);
+    const row = stmt.get(...params) as Record<string, unknown> | undefined;
+    return {
+      total: optionalNumber(row?.total) ?? 0,
+      methods: optionalNumber(row?.methods) ?? 0,
+      skills: optionalNumber(row?.skills) ?? 0,
+      draft: optionalNumber(row?.draft) ?? 0,
+      accepted: optionalNumber(row?.accepted) ?? 0,
+      rejected: optionalNumber(row?.rejected) ?? 0,
+    };
+  }
+
+  rejectExperienceCandidates(filter?: ExperienceCandidateListFilter): number {
+    this.ensureOpen();
+    const effectiveFilter: ExperienceCandidateListFilter = {
+      ...(filter && typeof filter === "object" ? filter : {}),
+      status: "draft",
+    };
+    const { clause, params } = this.buildExperienceCandidateFilterClause(effectiveFilter);
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      UPDATE experience_candidates
+      SET
+        status = 'rejected',
+        reviewed_at = COALESCE(reviewed_at, ?),
+        accepted_at = NULL,
+        rejected_at = ?
+      WHERE id IN (
+        SELECT c.id
+        FROM experience_candidates c
+        LEFT JOIN tasks t ON t.id = c.task_id
+        WHERE 1 = 1${clause}
+      )
+    `);
+    const result = stmt.run(now, now, ...params);
+    return Number(result.changes ?? 0);
   }
 
   updateExperienceCandidate(candidateId: string, patch: Partial<ExperienceCandidate>): ExperienceCandidate | null {

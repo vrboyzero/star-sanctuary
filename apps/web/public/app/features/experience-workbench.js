@@ -1,5 +1,8 @@
 import { extractCandidateContextTargets } from "./memory-viewer.js";
 
+const EXPERIENCE_CANDIDATE_PAGE_SIZE = 100;
+const EXPERIENCE_CANDIDATE_MAX_PAGES = 50;
+
 function normalizeCandidateType(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   return normalized === "skill" ? "skill" : "method";
@@ -17,8 +20,30 @@ function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeWorkbenchTab(value) {
+  const normalized = normalizeText(value);
+  if (normalized === "candidates" || normalized === "capability-acquisition" || normalized === "usage-overview") {
+    return normalized;
+  }
+  return "capability-acquisition";
+}
+
 function hasOwn(source, key) {
   return Boolean(source) && Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function parseTimestamp(value) {
+  const time = Date.parse(typeof value === "string" ? value : "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function compareCandidateByUpdatedAtDesc(left, right) {
+  const leftTime = parseTimestamp(left?.updatedAt || left?.createdAt);
+  const rightTime = parseTimestamp(right?.updatedAt || right?.createdAt);
+  if (leftTime !== rightTime) {
+    return rightTime - leftTime;
+  }
+  return String(left?.id || "").localeCompare(String(right?.id || ""));
 }
 
 function countExperienceStats(items) {
@@ -44,6 +69,64 @@ function countExperienceStats(items) {
     if (status === "rejected") stats.rejected += 1;
   }
   return stats;
+}
+
+function normalizeExperienceStatValue(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function mergeExperienceStats(stats, fallback) {
+  const safeFallback = fallback && typeof fallback === "object"
+    ? fallback
+    : countExperienceStats([]);
+  if (!stats || typeof stats !== "object") {
+    return safeFallback;
+  }
+  return {
+    total: normalizeExperienceStatValue(stats.total, safeFallback.total),
+    methods: normalizeExperienceStatValue(stats.methods, safeFallback.methods),
+    skills: normalizeExperienceStatValue(stats.skills, safeFallback.skills),
+    draft: normalizeExperienceStatValue(stats.draft, safeFallback.draft),
+    accepted: normalizeExperienceStatValue(stats.accepted, safeFallback.accepted),
+    rejected: normalizeExperienceStatValue(stats.rejected, safeFallback.rejected),
+  };
+}
+
+function getExperienceStatsStatusKey(status) {
+  return status === "draft" || status === "accepted" || status === "rejected"
+    ? status
+    : "";
+}
+
+function updateExperienceStatsForStatusTransition(stats, fromStatus, toStatus) {
+  if (!stats || typeof stats !== "object") {
+    return stats;
+  }
+  const nextStats = mergeExperienceStats(stats, stats);
+  const fromKey = getExperienceStatsStatusKey(fromStatus);
+  const toKey = getExperienceStatsStatusKey(toStatus);
+  if (fromKey && Number.isFinite(nextStats[fromKey])) {
+    nextStats[fromKey] = Math.max(0, nextStats[fromKey] - 1);
+  }
+  if (toKey && Number.isFinite(nextStats[toKey])) {
+    nextStats[toKey] += 1;
+  }
+  return nextStats;
+}
+
+function updateExperienceStatsForBulkReject(stats, count) {
+  if (!stats || typeof stats !== "object") {
+    return stats;
+  }
+  const rejectedCount = Number(count);
+  if (!Number.isFinite(rejectedCount) || rejectedCount <= 0) {
+    return mergeExperienceStats(stats, stats);
+  }
+  const nextStats = mergeExperienceStats(stats, stats);
+  nextStats.draft = Math.max(0, nextStats.draft - rejectedCount);
+  nextStats.rejected += rejectedCount;
+  return nextStats;
 }
 
 export function createExperienceWorkbenchFeature({
@@ -73,8 +156,11 @@ export function createExperienceWorkbenchFeature({
     experienceWorkbenchTitleEl,
     experienceWorkbenchStatsEl,
     experienceWorkbenchTabCandidatesBtn,
+    experienceWorkbenchTabCapabilityAcquisitionBtn,
     experienceWorkbenchTabUsageOverviewBtn,
     experienceWorkbenchCandidatesPaneEl,
+    experienceWorkbenchCapabilityPaneEl,
+    experienceWorkbenchCapabilityOverviewEl,
     experienceWorkbenchUsagePaneEl,
     experienceWorkbenchUsageOverviewEl,
     experienceWorkbenchQueryEl,
@@ -124,12 +210,12 @@ export function createExperienceWorkbenchFeature({
 
   function getActiveTab() {
     const state = getExperienceWorkbenchState();
-    return state.activeTab === "usage-overview" ? "usage-overview" : "candidates";
+    return normalizeWorkbenchTab(state.activeTab);
   }
 
   function setActiveTab(nextTab) {
     const state = getExperienceWorkbenchState();
-    state.activeTab = nextTab === "usage-overview" ? "usage-overview" : "candidates";
+    state.activeTab = normalizeWorkbenchTab(nextTab);
   }
 
   function getFilters() {
@@ -227,11 +313,17 @@ export function createExperienceWorkbenchFeature({
     if (experienceWorkbenchTabCandidatesBtn) {
       experienceWorkbenchTabCandidatesBtn.classList.toggle("active", activeTab === "candidates");
     }
+    if (experienceWorkbenchTabCapabilityAcquisitionBtn) {
+      experienceWorkbenchTabCapabilityAcquisitionBtn.classList.toggle("active", activeTab === "capability-acquisition");
+    }
     if (experienceWorkbenchTabUsageOverviewBtn) {
       experienceWorkbenchTabUsageOverviewBtn.classList.toggle("active", activeTab === "usage-overview");
     }
     if (experienceWorkbenchCandidatesPaneEl) {
       experienceWorkbenchCandidatesPaneEl.classList.toggle("hidden", activeTab !== "candidates");
+    }
+    if (experienceWorkbenchCapabilityPaneEl) {
+      experienceWorkbenchCapabilityPaneEl.classList.toggle("hidden", activeTab !== "capability-acquisition");
     }
     if (experienceWorkbenchUsagePaneEl) {
       experienceWorkbenchUsagePaneEl.classList.toggle("hidden", activeTab !== "usage-overview");
@@ -271,6 +363,16 @@ export function createExperienceWorkbenchFeature({
     });
   }
 
+  function getCapabilityDraftItemsByType() {
+    const state = getExperienceWorkbenchState();
+    const safeItems = Array.isArray(state.draftItems) ? [...state.draftItems] : [];
+    safeItems.sort(compareCandidateByUpdatedAtDesc);
+    return {
+      methods: safeItems.filter((item) => normalizeCandidateType(item?.type) === "method"),
+      skills: safeItems.filter((item) => normalizeCandidateType(item?.type) === "skill"),
+    };
+  }
+
   function syncExperienceWorkbenchHeaderTitle() {
     if (!experienceWorkbenchTitleEl) return;
     const agentName = typeof getSelectedAgentLabel === "function"
@@ -294,6 +396,11 @@ export function createExperienceWorkbenchFeature({
   function renderExperienceWorkbenchUsageOverviewEmpty(message) {
     if (!experienceWorkbenchUsageOverviewEl) return;
     experienceWorkbenchUsageOverviewEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
+  }
+
+  function renderExperienceWorkbenchCapabilityOverviewEmpty(message) {
+    if (!experienceWorkbenchCapabilityOverviewEl) return;
+    experienceWorkbenchCapabilityOverviewEl.innerHTML = `<div class="memory-viewer-empty">${escapeHtml(message)}</div>`;
   }
 
   function summarizePathLabel(value) {
@@ -493,6 +600,163 @@ export function createExperienceWorkbenchFeature({
     });
   }
 
+  function renderExperienceWorkbenchCapabilityLane(title, items, laneType) {
+    const safeItems = Array.isArray(items) ? items : [];
+    const rawLaneType = typeof laneType === "string" ? laneType.trim().toLowerCase() : "";
+    const normalizedLaneType = rawLaneType === "skill" ? "skill" : "method";
+    const pendingActionKey = getPendingActionKey();
+    const bulkRejectBusy = pendingActionKey === `bulk-reject:${normalizedLaneType}`;
+    const bulkRejectDisabled = !safeItems.length || (Boolean(pendingActionKey) && !bulkRejectBusy);
+    const laneHead = `
+      <div class="memory-usage-overview-head">
+        <div class="experience-capability-lane-head-main">
+          <span class="memory-usage-overview-title">${escapeHtml(title)}</span>
+          <span class="memory-stat-caption">${escapeHtml(t("experience.capabilityDraftCount", { count: String(safeItems.length) }, `Draft ${safeItems.length}`))}</span>
+        </div>
+        <button
+          class="memory-usage-action-btn experience-capability-bulk-btn"
+          data-capability-bulk-reject-type="${escapeHtml(normalizedLaneType)}"
+          ${bulkRejectDisabled ? "disabled" : ""}
+        >${escapeHtml(bulkRejectBusy
+          ? t("experience.capabilityBulkRejectBusy", {}, "全部拒绝中…")
+          : t("experience.capabilityBulkReject", {}, "全部拒绝"))}</button>
+      </div>
+    `;
+    if (!safeItems.length) {
+      return `
+        <div class="memory-usage-overview-lane">
+          ${laneHead}
+          <div class="memory-usage-overview-empty">${escapeHtml(t("experience.capabilityLaneEmpty", {}, "暂无 draft 候选"))}</div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="memory-usage-overview-lane">
+        ${laneHead}
+        <div class="memory-usage-overview-list">
+          ${safeItems.map((item) => {
+            const acceptBusy = pendingActionKey === `candidate:${item?.id}:accept`;
+            const rejectBusy = pendingActionKey === `candidate:${item?.id}:reject`;
+            const reviewDisabled = Boolean(pendingActionKey) && !acceptBusy && !rejectBusy;
+            const skillFreshnessStatus = normalizeText(item?.skillFreshness?.status);
+            const skillFreshnessSummary = normalizeText(item?.skillFreshness?.summary);
+            const summary = normalizeText(item?.summary) || t("experience.listNoSummary", {}, "No summary yet.");
+            return `
+              <div class="memory-usage-overview-row experience-capability-row">
+                <div class="memory-usage-overview-row-main experience-capability-row-main">
+                  <div class="memory-usage-overview-key">${escapeHtml(item?.title || item?.slug || item?.id || t("memory.candidateUntitled", {}, "Untitled Candidate"))}</div>
+                  <div class="memory-usage-overview-meta">
+                    <span>${escapeHtml(formatCandidateStatusLabel(item?.status))}</span>
+                    ${item?.taskId ? `<span>${escapeHtml(t("experience.listTaskLabel", {}, "Task"))} ${escapeHtml(String(item.taskId))}</span>` : ""}
+                    ${skillFreshnessStatus ? `<span>${escapeHtml(skillFreshnessStatus)}</span>` : ""}
+                    <span>${escapeHtml(formatDateTime(item?.updatedAt || item?.createdAt))}</span>
+                  </div>
+                  <div class="memory-detail-badges">
+                    <span class="memory-badge">${escapeHtml(formatCandidateTypeLabel(item?.type))}</span>
+                    <span class="memory-badge">${escapeHtml(formatCandidateStatusLabel(item?.status))}</span>
+                    ${skillFreshnessSummary ? `<span class="memory-badge">${escapeHtml(skillFreshnessSummary)}</span>` : ""}
+                  </div>
+                  <div class="experience-capability-summary">${escapeHtml(summary)}</div>
+                </div>
+                <div class="experience-capability-actions">
+                  <button class="memory-usage-action-btn" data-capability-open-candidate-id="${escapeHtml(String(item?.id || ""))}">${escapeHtml(t("experience.capabilityViewDetail", {}, "查看详情"))}</button>
+                  ${item?.taskId ? `<button class="memory-usage-action-btn" data-capability-open-task-id="${escapeHtml(String(item.taskId))}">${escapeHtml(t("experience.capabilityOpenTask", {}, "打开任务"))}</button>` : ""}
+                  <button
+                    class="memory-usage-action-btn"
+                    data-capability-review-candidate-action="accept"
+                    data-capability-review-candidate-id="${escapeHtml(String(item?.id || ""))}"
+                    ${acceptBusy || reviewDisabled ? "disabled" : ""}
+                  >${escapeHtml(acceptBusy
+                    ? t("memory.candidateReviewAccepting", {}, "接受中…")
+                    : t("memory.candidateAcceptAndPublish", {}, "接受并发布"))}</button>
+                  <button
+                    class="memory-usage-action-btn"
+                    data-capability-review-candidate-action="reject"
+                    data-capability-review-candidate-id="${escapeHtml(String(item?.id || ""))}"
+                    ${rejectBusy || reviewDisabled ? "disabled" : ""}
+                  >${escapeHtml(rejectBusy
+                    ? t("memory.candidateReviewRejecting", {}, "拒绝中…")
+                    : t("memory.candidateReject", {}, "拒绝"))}</button>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function bindExperienceWorkbenchCapabilityActions() {
+    if (!experienceWorkbenchCapabilityOverviewEl) return;
+    experienceWorkbenchCapabilityOverviewEl.querySelectorAll("[data-capability-open-candidate-id]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const candidateId = node.getAttribute("data-capability-open-candidate-id");
+        if (!candidateId) return;
+        setActiveTab("candidates");
+        syncExperienceWorkbenchTabUi();
+        await loadExperienceCandidateDetail(candidateId);
+      });
+    });
+    experienceWorkbenchCapabilityOverviewEl.querySelectorAll("[data-capability-open-task-id]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const taskId = node.getAttribute("data-capability-open-task-id");
+        await openTaskFromWorkbench?.(taskId);
+      });
+    });
+    experienceWorkbenchCapabilityOverviewEl.querySelectorAll("[data-capability-review-candidate-action]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const candidateId = node.getAttribute("data-capability-review-candidate-id");
+        const action = node.getAttribute("data-capability-review-candidate-action");
+        await reviewExperienceCandidate(candidateId, action);
+      });
+    });
+    experienceWorkbenchCapabilityOverviewEl.querySelectorAll("[data-capability-bulk-reject-type]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const candidateType = node.getAttribute("data-capability-bulk-reject-type");
+        await bulkRejectExperienceCandidates(candidateType);
+      });
+    });
+  }
+
+  function renderExperienceWorkbenchCapabilityOverviewPanel() {
+    if (!experienceWorkbenchCapabilityOverviewEl) return;
+    const state = getExperienceWorkbenchState();
+    const { methods, skills } = getCapabilityDraftItemsByType();
+    if (state.draftItemsLoading && !methods.length && !skills.length) {
+      renderExperienceWorkbenchCapabilityOverviewEmpty(t("experience.capabilityWaiting", {}, "等待能力获取候选…"));
+      return;
+    }
+    if (state.draftItemsError && !methods.length && !skills.length) {
+      renderExperienceWorkbenchCapabilityOverviewEmpty(state.draftItemsError);
+      return;
+    }
+    if (!methods.length && !skills.length) {
+      renderExperienceWorkbenchCapabilityOverviewEmpty(t("experience.capabilityEmpty", {}, "当前没有可处理的 draft method / skill 候选。"));
+      return;
+    }
+
+    const caption = state.draftItemsError
+      ? state.draftItemsError
+      : state.draftItemsLoading
+        ? t("experience.capabilityLoading", {}, "正在刷新 draft 能力候选…")
+        : t("experience.capabilityCaption", {}, "仅显示 draft 候选；已接受 / 已拒绝请到“经验候选”页签查看。");
+
+    experienceWorkbenchCapabilityOverviewEl.innerHTML = `
+      <div class="memory-stat-card memory-stat-card-wide memory-usage-overview-card experience-capability-card">
+        <div class="memory-stat-card-head">
+          <span class="memory-stat-label">${escapeHtml(t("experience.capabilityTitle", {}, "能力获取"))}</span>
+          <span class="memory-stat-caption">${escapeHtml(caption)}</span>
+        </div>
+        <div class="memory-usage-overview-grid">
+          ${renderExperienceWorkbenchCapabilityLane(t("experience.capabilityMethodLane", {}, "Method Draft"), methods, "method")}
+          ${renderExperienceWorkbenchCapabilityLane(t("experience.capabilitySkillLane", {}, "Skill Draft"), skills, "skill")}
+        </div>
+      </div>
+    `;
+    bindExperienceWorkbenchCapabilityActions();
+  }
+
   function renderExperienceWorkbenchUsageOverviewPanel() {
     if (!experienceWorkbenchUsageOverviewEl) return;
     const markup = typeof renderTaskUsageOverviewCard === "function"
@@ -504,6 +768,42 @@ export function createExperienceWorkbenchFeature({
     }
     experienceWorkbenchUsageOverviewEl.innerHTML = markup;
     bindExperienceWorkbenchUsageOverviewActions();
+  }
+
+  function findExperienceCandidateInState(candidateId) {
+    const normalizedCandidateId = normalizeText(candidateId);
+    if (!normalizedCandidateId) return null;
+    const state = getExperienceWorkbenchState();
+    if (String(state.selectedCandidate?.id || "") === normalizedCandidateId) {
+      return state.selectedCandidate;
+    }
+    const draftCandidate = Array.isArray(state.draftItems)
+      ? state.draftItems.find((item) => String(item?.id || "") === normalizedCandidateId)
+      : null;
+    if (draftCandidate) return draftCandidate;
+    return Array.isArray(state.items)
+      ? state.items.find((item) => String(item?.id || "") === normalizedCandidateId) || null
+      : null;
+  }
+
+  function applyReviewedExperienceCandidate(candidate, previousStatus = "") {
+    if (!candidate || typeof candidate !== "object") return;
+    const state = getExperienceWorkbenchState();
+    const normalizedCandidateId = normalizeText(candidate.id);
+    if (!normalizedCandidateId) return;
+    const previousCandidate = findExperienceCandidateInState(normalizedCandidateId);
+    const resolvedPreviousStatus = normalizeCandidateStatus(previousStatus || previousCandidate?.status);
+    const nextStatus = normalizeCandidateStatus(candidate.status);
+    state.items = Array.isArray(state.items)
+      ? state.items.map((item) => String(item?.id || "") === normalizedCandidateId ? { ...item, ...candidate } : item)
+      : [];
+    state.draftItems = Array.isArray(state.draftItems)
+      ? state.draftItems.filter((item) => String(item?.id || "") !== normalizedCandidateId)
+      : [];
+    if (String(state.selectedId || "") === normalizedCandidateId) {
+      state.selectedCandidate = { ...(previousCandidate || {}), ...candidate };
+    }
+    state.stats = updateExperienceStatsForStatusTransition(state.stats, resolvedPreviousStatus, nextStatus);
   }
 
   async function loadExperienceWorkbenchUsageOverview() {
@@ -520,6 +820,146 @@ export function createExperienceWorkbenchFeature({
     renderExperienceWorkbenchUsageOverviewPanel();
     await pending;
     renderExperienceWorkbenchUsageOverviewPanel();
+  }
+
+  async function requestExperienceCandidateList(requestContext, input = {}) {
+    const limit = Number.isInteger(input.limit) && input.limit > 0
+      ? input.limit
+      : EXPERIENCE_CANDIDATE_PAGE_SIZE;
+    const offset = Number.isInteger(input.offset) && input.offset > 0 ? input.offset : 0;
+    const params = {
+      limit,
+      offset,
+      agentId: requestContext.agentId,
+    };
+    if (input.filter && typeof input.filter === "object") {
+      params.filter = input.filter;
+    }
+    return sendReq({
+      type: "req",
+      id: makeId(),
+      method: "experience.candidate.list",
+      params,
+    });
+  }
+
+  async function requestExperienceCandidateReview(candidateId, decision, options = {}) {
+    const normalizedCandidateId = normalizeText(candidateId);
+    const normalizedDecision = decision === "accept" || decision === "reject" ? decision : "";
+    if (!normalizedCandidateId || !normalizedDecision) return null;
+    return sendReq({
+      type: "req",
+      id: makeId(),
+      method: normalizedDecision === "accept" ? "experience.candidate.accept" : "experience.candidate.reject",
+      params: {
+        candidateId: normalizedCandidateId,
+        agentId: getActiveAgentId(),
+        ...(options.confirmed === true ? { confirmed: true } : {}),
+      },
+    });
+  }
+
+  async function requestExperienceCandidateBulkReject(candidateType) {
+    const normalizedCandidateType = typeof candidateType === "string" ? candidateType.trim().toLowerCase() : "";
+    if (normalizedCandidateType !== "method" && normalizedCandidateType !== "skill") return null;
+    return sendReq({
+      type: "req",
+      id: makeId(),
+      method: "experience.candidate.reject_bulk",
+      params: {
+        agentId: getActiveAgentId(),
+        filter: {
+          type: normalizedCandidateType,
+        },
+      },
+    });
+  }
+
+  function buildExperiencePublishConfirmMessage(candidate) {
+    const safeCandidate = candidate && typeof candidate === "object" ? candidate : {};
+    const title = normalizeText(safeCandidate.title)
+      || normalizeText(safeCandidate.slug)
+      || normalizeText(safeCandidate.id)
+      || t("memory.candidateUntitled", {}, "Untitled Candidate");
+    const typeLabel = formatCandidateTypeLabel(safeCandidate.type);
+    return t(
+      "experience.reviewAcceptConfirmMessage",
+      { type: typeLabel, title },
+      `Confirm accepting and publishing this ${typeLabel} candidate?\n\n${title}`,
+    );
+  }
+
+  async function loadAllExperienceCandidateItems(requestContext, input = {}) {
+    const limit = Number.isInteger(input.limit) && input.limit > 0
+      ? input.limit
+      : EXPERIENCE_CANDIDATE_PAGE_SIZE;
+    const maxPages = Number.isInteger(input.maxPages) && input.maxPages > 0
+      ? input.maxPages
+      : EXPERIENCE_CANDIDATE_MAX_PAGES;
+    const items = [];
+    let offset = 0;
+    for (let page = 0; page < maxPages; page += 1) {
+      const res = await requestExperienceCandidateList(requestContext, {
+        limit,
+        offset,
+        filter: input.filter,
+      });
+      if (!isRequestCurrent(requestContext)) {
+        return { ok: false, aborted: true };
+      }
+      if (!res || !res.ok) {
+        return { ok: false, error: res?.error };
+      }
+      const pageItems = Array.isArray(res.payload?.items) ? res.payload.items : [];
+      items.push(...pageItems);
+      if (pageItems.length < limit) {
+        return { ok: true, items };
+      }
+      offset += pageItems.length;
+    }
+    return { ok: true, items, truncated: true };
+  }
+
+  function applyBulkRejectedExperienceCandidates(candidateType, count) {
+    const normalizedCandidateType = typeof candidateType === "string" ? candidateType.trim().toLowerCase() : "";
+    if (normalizedCandidateType !== "method" && normalizedCandidateType !== "skill") return 0;
+    const state = getExperienceWorkbenchState();
+    const rejectedIds = new Set(
+      (Array.isArray(state.draftItems) ? state.draftItems : [])
+        .filter((item) => normalizeCandidateType(item?.type) === normalizedCandidateType)
+        .map((item) => normalizeText(item?.id))
+        .filter(Boolean),
+    );
+    const reviewedAt = new Date().toISOString();
+    state.draftItems = Array.isArray(state.draftItems)
+      ? state.draftItems.filter((item) => normalizeCandidateType(item?.type) !== normalizedCandidateType)
+      : [];
+    state.items = Array.isArray(state.items)
+      ? state.items.map((item) => {
+        const candidateId = normalizeText(item?.id);
+        if (!candidateId || !rejectedIds.has(candidateId) || normalizeCandidateStatus(item?.status) !== "draft") {
+          return item;
+        }
+        return {
+          ...item,
+          status: "rejected",
+          reviewedAt: item?.reviewedAt || reviewedAt,
+          rejectedAt: reviewedAt,
+          acceptedAt: null,
+        };
+      })
+      : [];
+    if (rejectedIds.has(normalizeText(state.selectedCandidate?.id))) {
+      state.selectedCandidate = {
+        ...(state.selectedCandidate || {}),
+        status: "rejected",
+        reviewedAt: state.selectedCandidate?.reviewedAt || reviewedAt,
+        rejectedAt: reviewedAt,
+        acceptedAt: null,
+      };
+    }
+    state.stats = updateExperienceStatsForBulkReject(state.stats, count);
+    return rejectedIds.size;
   }
 
   function renderExperienceAggregatePanel(candidate) {
@@ -643,9 +1083,10 @@ export function createExperienceWorkbenchFeature({
     const preferFirst = options.preferFirst !== false;
     const loadDetailIfNeeded = options.loadDetailIfNeeded === true;
     const filteredItems = getFilteredExperienceItems();
-    state.stats = countExperienceStats(filteredItems);
+    state.stats = mergeExperienceStats(state.stats, countExperienceStats(state.items));
     renderExperienceWorkbenchStats(state.stats);
     syncExperienceWorkbenchTabUi();
+    renderExperienceWorkbenchCapabilityOverviewPanel();
 
     const selectedVisible = filteredItems.some((item) => String(item?.id || "") === String(state.selectedId || ""));
     if (!selectedVisible) {
@@ -682,47 +1123,75 @@ export function createExperienceWorkbenchFeature({
     state.activeAgentId = getActiveAgentId();
     if (!isConnected?.()) {
       state.items = [];
+      state.draftItems = [];
+      state.draftItemsLoading = false;
+      state.draftItemsError = "";
+      state.stats = null;
       state.selectedId = null;
       state.selectedCandidate = null;
       renderExperienceWorkbenchStats(null);
       renderExperienceWorkbenchListEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       renderExperienceWorkbenchDetailEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
+      renderExperienceWorkbenchCapabilityOverviewEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       renderExperienceWorkbenchUsageOverviewEmpty(t("experience.disconnected", {}, "Connect to the server to view experience candidates."));
       return;
     }
 
     const requestContext = createRequestContext();
-    renderExperienceWorkbenchStats(null);
+    state.draftItemsLoading = true;
+    state.draftItemsError = "";
+    if (!state.stats || typeof state.stats !== "object") {
+      renderExperienceWorkbenchStats(null);
+    }
     renderExperienceWorkbenchListEmpty(t("experience.loading", {}, "Loading experience candidates..."));
     renderExperienceWorkbenchDetailEmpty(t("experience.detailLoading", {}, "Loading candidate details..."));
+    renderExperienceWorkbenchCapabilityOverviewPanel();
     if (getActiveTab() === "usage-overview") {
       renderExperienceWorkbenchUsageOverviewPanel();
     }
 
-    const res = await sendReq({
-      type: "req",
-      id: makeId(),
-      method: "experience.candidate.list",
-      params: {
-        limit: 120,
-        agentId: requestContext.agentId,
-      },
-    });
+    const [res, draftRes, statsRes] = await Promise.all([
+      requestExperienceCandidateList(requestContext, { limit: 120 }),
+      loadAllExperienceCandidateItems(requestContext, {
+        limit: EXPERIENCE_CANDIDATE_PAGE_SIZE,
+        maxPages: EXPERIENCE_CANDIDATE_MAX_PAGES,
+        filter: { status: "draft" },
+      }),
+      sendReq({
+        type: "req",
+        id: makeId(),
+        method: "experience.candidate.stats",
+        params: {
+          agentId: requestContext.agentId,
+        },
+      }),
+    ]);
     if (!isRequestCurrent(requestContext)) {
       return;
     }
     if (!res || !res.ok) {
       state.items = [];
+      state.draftItems = [];
+      state.draftItemsLoading = false;
+      state.draftItemsError = res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates.");
+      state.stats = null;
       state.selectedId = null;
       state.selectedCandidate = null;
       renderExperienceWorkbenchStats(null);
       renderExperienceWorkbenchListEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
       renderExperienceWorkbenchDetailEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
+      renderExperienceWorkbenchCapabilityOverviewEmpty(state.draftItemsError);
       renderExperienceWorkbenchUsageOverviewEmpty(res?.error?.message || t("experience.loadFailed", {}, "Failed to load experience candidates."));
       return;
     }
 
     state.items = Array.isArray(res.payload?.items) ? res.payload.items : [];
+    state.draftItems = draftRes?.ok && Array.isArray(draftRes.items) ? draftRes.items : [];
+    state.draftItemsLoading = false;
+    state.draftItemsError = draftRes?.ok
+      ? ""
+      : draftRes?.error?.message || t("experience.capabilityLoadFailed", {}, "Failed to load draft capability candidates.");
+    state.stats = mergeExperienceStats(statsRes?.payload?.stats, countExperienceStats(state.items));
     const filteredItems = getFilteredExperienceItems();
     const hasExistingSelection = state.selectedId && filteredItems.some((item) => String(item?.id || "") === String(state.selectedId));
     if (!hasExistingSelection) {
@@ -759,24 +1228,33 @@ export function createExperienceWorkbenchFeature({
       return null;
     }
     if (getPendingActionKey()) return null;
+    const currentCandidate = findExperienceCandidateInState(normalizedCandidateId);
+    const previousCandidateStatus = normalizeCandidateStatus(currentCandidate?.status);
 
     const memoryViewerState = typeof getMemoryViewerState === "function" ? getMemoryViewerState() : null;
     if (memoryViewerState) {
       memoryViewerState.pendingExperienceActionKey = `candidate:${normalizedCandidateId}:${normalizedDecision}`;
     }
     renderSelectedExperienceCandidate();
+    renderExperienceWorkbenchCapabilityOverviewPanel();
     syncGenerateControls();
 
+    let reviewedCandidate = null;
     try {
-      const res = await sendReq({
-        type: "req",
-        id: makeId(),
-        method: normalizedDecision === "accept" ? "experience.candidate.accept" : "experience.candidate.reject",
-        params: {
-          candidateId: normalizedCandidateId,
-          agentId: getActiveAgentId(),
-        },
-      });
+      let res = await requestExperienceCandidateReview(normalizedCandidateId, normalizedDecision);
+      if (
+        normalizedDecision === "accept"
+        && res
+        && !res.ok
+        && res.error?.code === "confirmation_required"
+      ) {
+        const confirmed = typeof window === "object" && typeof window.confirm === "function"
+          ? window.confirm(buildExperiencePublishConfirmMessage(currentCandidate))
+          : true;
+        if (confirmed) {
+          res = await requestExperienceCandidateReview(normalizedCandidateId, normalizedDecision, { confirmed: true });
+        }
+      }
       if (!res || !res.ok) {
         showNotice(
           t("experience.reviewFailedTitle", {}, "Candidate action failed"),
@@ -795,7 +1273,96 @@ export function createExperienceWorkbenchFeature({
         "success",
         2200,
       );
-      return res.payload?.candidate ?? null;
+      reviewedCandidate = res.payload?.candidate ?? null;
+      return reviewedCandidate;
+    } finally {
+      if (memoryViewerState) {
+        memoryViewerState.pendingExperienceActionKey = null;
+      }
+      if (reviewedCandidate) {
+        applyReviewedExperienceCandidate(reviewedCandidate, previousCandidateStatus);
+        await syncExperienceWorkbenchUi({ preferFirst: false, loadDetailIfNeeded: false });
+      } else {
+        renderExperienceWorkbenchCapabilityOverviewPanel();
+      }
+      syncGenerateControls();
+      await loadExperienceWorkbench(false);
+    }
+  }
+
+  async function bulkRejectExperienceCandidates(candidateType) {
+    const normalizedCandidateType = typeof candidateType === "string" ? candidateType.trim().toLowerCase() : "";
+    if (normalizedCandidateType !== "method" && normalizedCandidateType !== "skill") return null;
+    if (!isConnected?.()) {
+      showNotice(
+        t("experience.reviewFailedTitle", {}, "Candidate action failed"),
+        t("experience.disconnected", {}, "Connect to the server to view experience candidates."),
+        "error",
+      );
+      return null;
+    }
+    if (getPendingActionKey()) return null;
+    const { methods, skills } = getCapabilityDraftItemsByType();
+    const laneItems = normalizedCandidateType === "skill" ? skills : methods;
+    const draftCount = laneItems.length;
+    const typeLabel = formatCandidateTypeLabel(normalizedCandidateType);
+    if (!draftCount) {
+      showNotice(
+        t("experience.capabilityBulkRejectEmptyTitle", {}, "没有可拒绝的候选"),
+        t("experience.capabilityBulkRejectEmptyMessage", { type: typeLabel }, `当前没有可拒绝的 ${typeLabel} draft 候选。`),
+        "info",
+        2400,
+      );
+      return null;
+    }
+    const confirmed = typeof window === "object" && typeof window.confirm === "function"
+      ? window.confirm(t(
+        "experience.capabilityBulkRejectConfirm",
+        { type: typeLabel, count: String(draftCount) },
+        `确认拒绝全部 ${draftCount} 个 ${typeLabel} draft 候选？\n\n系统会通过单次批量操作处理，避免逐条点击。`,
+      ))
+      : true;
+    if (!confirmed) {
+      return null;
+    }
+
+    const memoryViewerState = typeof getMemoryViewerState === "function" ? getMemoryViewerState() : null;
+    if (memoryViewerState) {
+      memoryViewerState.pendingExperienceActionKey = `bulk-reject:${normalizedCandidateType}`;
+    }
+    renderExperienceWorkbenchCapabilityOverviewPanel();
+    syncGenerateControls();
+
+    let rejectedCount = 0;
+    try {
+      const res = await requestExperienceCandidateBulkReject(normalizedCandidateType);
+      if (!res || !res.ok) {
+        showNotice(
+          t("experience.reviewFailedTitle", {}, "Candidate action failed"),
+          res?.error?.message || t("experience.reviewFailedTitle", {}, "Candidate action failed"),
+          "error",
+        );
+        return null;
+      }
+      rejectedCount = Math.max(0, Number(res.payload?.count) || 0);
+      if (!rejectedCount) {
+        showNotice(
+          t("experience.capabilityBulkRejectEmptyTitle", {}, "没有可拒绝的候选"),
+          t("experience.capabilityBulkRejectEmptyMessage", { type: typeLabel }, `当前没有可拒绝的 ${typeLabel} draft 候选。`),
+          "info",
+          2400,
+        );
+        return res.payload ?? null;
+      }
+      applyBulkRejectedExperienceCandidates(normalizedCandidateType, rejectedCount);
+      await syncExperienceWorkbenchUi({ preferFirst: false, loadDetailIfNeeded: false });
+      showNotice(
+        t("experience.capabilityBulkRejectSuccessTitle", {}, "批量拒绝完成"),
+        t("experience.capabilityBulkRejectSuccessMessage", { count: String(rejectedCount), type: typeLabel }, `已批量拒绝 ${rejectedCount} 个 ${typeLabel} draft 候选。`),
+        "success",
+        2600,
+      );
+      return res.payload ?? null;
     } finally {
       if (memoryViewerState) {
         memoryViewerState.pendingExperienceActionKey = null;
@@ -955,6 +1522,13 @@ export function createExperienceWorkbenchFeature({
         syncExperienceWorkbenchTabUi();
       });
     }
+    if (experienceWorkbenchTabCapabilityAcquisitionBtn) {
+      experienceWorkbenchTabCapabilityAcquisitionBtn.addEventListener("click", () => {
+        setActiveTab("capability-acquisition");
+        syncExperienceWorkbenchTabUi();
+        renderExperienceWorkbenchCapabilityOverviewPanel();
+      });
+    }
     if (experienceWorkbenchTabUsageOverviewBtn) {
       experienceWorkbenchTabUsageOverviewBtn.addEventListener("click", () => {
         setActiveTab("usage-overview");
@@ -969,10 +1543,13 @@ export function createExperienceWorkbenchFeature({
     state.requestToken = Number(state.requestToken || 0) + 1;
     state.activeAgentId = String(agentId || "default").trim() || "default";
     state.items = [];
+    state.draftItems = [];
+    state.draftItemsLoading = false;
+    state.draftItemsError = "";
     state.selectedId = null;
     state.selectedCandidate = null;
     state.stats = null;
-    state.activeTab = "candidates";
+    state.activeTab = "capability-acquisition";
   }
 
   async function refreshExperienceWorkbenchForAgentSwitch(agentId = getActiveAgentId()) {

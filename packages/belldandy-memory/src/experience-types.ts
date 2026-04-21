@@ -65,6 +65,15 @@ export interface ExperienceCandidateListFilter {
   agentId?: string;
 }
 
+export interface ExperienceCandidateStats {
+  total: number;
+  methods: number;
+  skills: number;
+  draft: number;
+  accepted: number;
+  rejected: number;
+}
+
 export interface ExperienceUsage {
   id: string;
   taskId: string;

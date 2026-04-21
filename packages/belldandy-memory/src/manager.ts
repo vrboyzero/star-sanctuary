@@ -31,6 +31,7 @@ import type {
 import type {
     ExperienceAssetType,
     ExperienceCandidate,
+    ExperienceCandidateStats,
     ExperienceCandidateType,
     ExperienceCandidateListFilter,
     ExperiencePromoteResult,
@@ -1054,8 +1055,12 @@ export class MemoryManager {
         return this.store.getExperienceCandidate(candidate.id) ?? candidate;
     }
 
-    listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter): ExperienceCandidate[] {
-        return this.store.listExperienceCandidates(limit, filter);
+    listExperienceCandidates(limit = 20, filter?: ExperienceCandidateListFilter, offset = 0): ExperienceCandidate[] {
+        return this.store.listExperienceCandidates(limit, filter, offset);
+    }
+
+    getExperienceCandidateStats(filter?: ExperienceCandidateListFilter): ExperienceCandidateStats {
+        return this.store.getExperienceCandidateStats(filter);
     }
 
     recordExperienceUsage(input: {
@@ -1241,6 +1246,10 @@ export class MemoryManager {
             acceptedAt: undefined,
             rejectedAt: now,
         });
+    }
+
+    rejectExperienceCandidates(filter?: ExperienceCandidateListFilter): number {
+        return this.store.rejectExperienceCandidates(filter);
     }
 
     async linkTaskMemoriesFromSource(

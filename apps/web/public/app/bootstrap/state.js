@@ -71,10 +71,13 @@ export const goalsState = {
 
 export const experienceWorkbenchState = {
   items: [],
+  draftItems: [],
+  draftItemsLoading: false,
+  draftItemsError: "",
   selectedId: null,
   selectedCandidate: null,
   stats: null,
-  activeTab: "candidates",
+  activeTab: "capability-acquisition",
   filters: {
     query: "",
     type: "",
