@@ -88,7 +88,7 @@ export function createWorkspaceFeature({
   } = refs;
   const { workspaceRootsKey } = keys;
 
-  let sidebarExpanded = false;
+  let sidebarExpanded = !sidebarEl?.classList.contains("hidden");
   let currentEditPath = null;
   let originalContent = null;
   let currentEditReadOnly = false;
@@ -99,13 +99,6 @@ export function createWorkspaceFeature({
     fallback: "Loading...",
   };
 
-  if (sidebarEl) {
-    sidebarEl.classList.add("collapsed");
-  }
-
-  if (sidebarTitleEl) {
-    sidebarTitleEl.addEventListener("click", () => toggleSidebar());
-  }
   if (refreshTreeBtn) {
     refreshTreeBtn.addEventListener("click", () => {
       void loadFileTree();
@@ -144,8 +137,12 @@ export function createWorkspaceFeature({
     return sidebarExpanded;
   }
 
+  function isSidebarVisible() {
+    return !sidebarEl?.classList.contains("hidden");
+  }
+
   function refreshAfterConnectionReady() {
-    if (sidebarExpanded) {
+    if (isSidebarVisible()) {
       void loadFileTree();
     }
   }
@@ -175,26 +172,26 @@ export function createWorkspaceFeature({
     }
   }
 
-  function toggleSidebar() {
-    sidebarExpanded = !sidebarExpanded;
-    if (!sidebarEl) return;
-
-    if (sidebarExpanded) {
-      sidebarEl.classList.remove("collapsed");
-      if (isConnected()) {
-        void loadFileTree();
-      }
-      return;
+  function handleSidebarVisibilityChange(visible) {
+    sidebarExpanded = Boolean(visible);
+    if (visible && isConnected()) {
+      void loadFileTree();
     }
+  }
 
-    sidebarEl.classList.add("collapsed");
+  function toggleSidebar(forceVisible) {
+    const nextVisible = typeof forceVisible === "boolean"
+      ? forceVisible
+      : !isSidebarVisible();
+    if (!sidebarEl) return nextVisible;
+    sidebarEl.classList.toggle("hidden", !nextVisible);
+    handleSidebarVisibilityChange(nextVisible);
+    return nextVisible;
   }
 
   function switchTreeMode(mode) {
     if (currentTreeMode === mode) {
-      if (!sidebarExpanded) {
-        toggleSidebar();
-      } else {
+      if (isSidebarVisible()) {
         void loadFileTree();
       }
       switchMode("chat");
@@ -206,11 +203,9 @@ export function createWorkspaceFeature({
     updateSidebarTitle();
     switchMode("chat");
 
-    if (!sidebarExpanded) {
-      toggleSidebar();
-      return;
+    if (isSidebarVisible()) {
+      void loadFileTree();
     }
-    void loadFileTree();
   }
 
   function applyEditorSession({ path, content, readOnly = false, label, startLine }) {
@@ -604,6 +599,7 @@ export function createWorkspaceFeature({
   return {
     cancelEdit,
     getTreeMode,
+    handleSidebarVisibilityChange,
     isSidebarExpanded,
     loadFileTree,
     loadWorkspaceRootsFromServer,

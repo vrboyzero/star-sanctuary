@@ -47,7 +47,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css?v=10.1" />
+  <link rel="stylesheet" href="/styles.css?v=10.2" />
   <link rel="stylesheet" href="/canvas.css?v=1.0" />
   <link rel="stylesheet" href="/theme.css?v=1.1" />
   <script src="/config.js?v=1.0"></script>
@@ -57,24 +57,33 @@
 <body>
   <main class="layout">
     <header class="header">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <img src="/logo06-256.png" alt="Star Sanctuary Logo" style="width: 52px; height: 52px; object-fit: contain;">
-        <div class="title">Star Sanctuary WebChat</div>
-        <a id="officialHomeLink" href="#" target="_blank" class="theme-link theme-link-accent" data-i18n="header.officialHome">官方主页</a>
+      <div class="header-brand">
+        <img src="/logo06-256.png" alt="Star Sanctuary Logo" class="header-logo">
+        <div class="header-brand-copy">
+          <div class="header-title-row">
+            <div class="title">Star Sanctuary WebChat</div>
+            <div class="header-title-links">
+              <a id="officialHomeLink" href="#" target="_blank" class="theme-link theme-link-accent" data-i18n="header.officialHome">官方主页</a>
+              <button id="toggleContentPanelBtn" type="button" class="header-toggle-link theme-link theme-link-accent" data-i18n="header.contentPanel" aria-controls="sidebar">内容管理</button>
+              <button id="toggleControlPanelBtn" type="button" class="header-toggle-link theme-link theme-link-accent" data-i18n="header.controlPanel" aria-controls="controlPanel">操作面板</button>
+              <button id="toggleAgentPanelBtn" type="button" class="header-toggle-link theme-link theme-link-accent" data-i18n="header.agentPanel" aria-controls="agentRightPanel">代理信息</button>
+            </div>
+          </div>
+        </div>
       </div>
-      <div style="display: flex; gap: 8px; align-items: center;">
+      <div class="header-actions">
         <div class="token-usage" id="tokenUsage" title="Token Usage (INΣ = run cumulative input across model calls)">
-          <span class="token-label">SYS</span><span class="token-val" id="tuSys">--</span>
+          <span class="token-metric token-metric-sys"><span class="token-label">SYS</span><span class="token-val" id="tuSys">--</span></span>
           <span class="token-sep">|</span>
-          <span class="token-label">CTX</span><span class="token-val" id="tuCtx">--</span>
+          <span class="token-metric token-metric-ctx"><span class="token-label">CTX</span><span class="token-val" id="tuCtx">--</span></span>
           <span class="token-sep">|</span>
-          <span class="token-label">INΣ</span><span class="token-val" id="tuIn">--</span>
+          <span class="token-metric token-metric-in"><span class="token-label">INΣ</span><span class="token-val" id="tuIn">--</span></span>
           <span class="token-sep">|</span>
-          <span class="token-label">OUT</span><span class="token-val" id="tuOut">--</span>
+          <span class="token-metric token-metric-out"><span class="token-label">OUT</span><span class="token-val" id="tuOut">--</span></span>
           <span class="token-sep">|</span>
-          <span class="token-label">CALLS</span><span class="token-val" id="tuCalls">--</span>
+          <span class="token-metric token-metric-calls"><span class="token-label">CALLS</span><span class="token-val" id="tuCalls">--</span></span>
           <span class="token-sep">|</span>
-          <span class="token-label">ALL</span><span class="token-val token-val-all" id="tuAll">--</span>
+          <span class="token-metric token-metric-all"><span class="token-label">ALL</span><span class="token-val token-val-all" id="tuAll">--</span></span>
         </div>
         <div class="task-token-usage" id="taskTokenUsage" title="任务 Token 用量" style="display: none;">
           <span class="token-label">TASK</span><span class="token-val" id="taskName">--</span>
@@ -92,7 +101,7 @@
       </div>
     </header>
 
-    <section class="panel">
+    <section class="panel hidden" id="controlPanel">
       <!-- 输入行 -->
       <div class="row panel-input-row">
         <!-- 可操作区输入 + 保存按钮 -->
@@ -157,7 +166,7 @@
 
     <div class="main-content">
       <!-- 左侧边栏：智能体设置 -->
-      <aside class="sidebar" id="sidebar">
+      <aside class="sidebar hidden" id="sidebar">
         <!-- 导航区域 -->
         <div class="sidebar-nav">
           <button id="switchRoot" class="sidebar-action-btn is-active"

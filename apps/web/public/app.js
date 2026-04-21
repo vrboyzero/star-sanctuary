@@ -9,11 +9,15 @@ import {
 } from "./app/features/persistence.js";
 import { APP_DOM_REFS } from "./app/bootstrap/dom.js";
 import {
+  AGENT_PANEL_VISIBLE_KEY,
   DEFAULT_VOICE_SHORTCUT,
   AGENT_ID_KEY,
   CLIENT_KEY,
+  CONTENT_PANEL_VISIBLE_KEY,
+  CONTROL_PANEL_VISIBLE_KEY,
   MODEL_ID_KEY,
   STORE_KEY,
+  TOKEN_USAGE_COLLAPSED_KEY,
   UUID_KEY,
   VOICE_SHORTCUT_DISABLED_VALUE,
   VOICE_SHORTCUT_KEY,
@@ -58,6 +62,7 @@ import { createSubtasksOverviewFeature, parseGoalSessionReference } from "./app/
 import { createSubtasksRuntimeFeature } from "./app/features/subtasks-runtime.js";
 import { createLocaleController } from "./app/features/locale.js";
 import { initPromptController } from "./app/features/prompt.js";
+import { createPanelVisibilityFeature } from "./app/features/panel-visibility.js";
 import { createThemeController } from "./app/features/theme.js";
 import { createVoiceFeature } from "./app/features/voice.js";
 import { createWorkspaceFeature } from "./app/features/workspace.js";
@@ -70,6 +75,7 @@ const {
   userUuidEl,
   saveUuidBtn,
   workspaceRootsEl,
+  controlPanelEl,
   connectBtn,
   sendBtn,
   promptEl,
@@ -221,6 +227,9 @@ const {
   sessionDigestModalContentEl,
   sessionDigestModalCloseBtn,
   tokenUsageEl,
+  toggleContentPanelBtn,
+  toggleControlPanelBtn,
+  toggleAgentPanelBtn,
   restartOverlayEl,
   restartCountdownEl,
   restartReasonEl,
@@ -522,6 +531,31 @@ const themeController = createThemeController({
   toggleButtonEl: themeToggleBtn,
   translate: localeController.t,
 });
+const panelVisibilityFeature = createPanelVisibilityFeature({
+  refs: {
+    tokenUsageEl,
+    sidebarEl,
+    toggleContentPanelBtn,
+    controlPanelEl,
+    toggleControlPanelBtn,
+    agentRightPanelEl,
+    toggleAgentPanelBtn,
+  },
+  storageKeys: {
+    tokenUsageCollapsedKey: TOKEN_USAGE_COLLAPSED_KEY,
+    contentPanelVisibleKey: CONTENT_PANEL_VISIBLE_KEY,
+    controlPanelVisibleKey: CONTROL_PANEL_VISIBLE_KEY,
+    agentPanelVisibleKey: AGENT_PANEL_VISIBLE_KEY,
+  },
+  defaults: {
+    tokenUsageCollapsed: true,
+    contentPanelVisible: false,
+    controlPanelVisible: false,
+    agentPanelVisible: false,
+  },
+  onContentPanelVisibleChange: (visible) => workspaceFeature?.handleSidebarVisibilityChange?.(visible),
+  t: localeController.t,
+});
 
 let attachmentsFeature = null;
 let agentRuntimeFeature = null;
@@ -641,6 +675,7 @@ const voiceFeature = createVoiceFeature({
 
 localeController.subscribe(() => {
   themeController.refreshLabels?.();
+  panelVisibilityFeature.refreshLocale?.();
   voiceFeature.refreshLocale?.();
   chatNetworkFeature?.refreshLocale?.();
   workspaceFeature?.refreshLocale?.();
@@ -724,6 +759,7 @@ workspaceFeature = createWorkspaceFeature({
   persistWorkspaceRootsField,
   t: localeController.t,
 });
+workspaceFeature.handleSidebarVisibilityChange?.(panelVisibilityFeature.getState().contentPanelVisible);
 
 restoreAuthFields({ storeKey: STORE_KEY, authModeEl, authValueEl });
 restoreWorkspaceRootsField({ workspaceRootsKey: WORKSPACE_ROOTS_KEY, workspaceRootsEl });
@@ -1748,6 +1784,7 @@ agentRuntimeFeature = createAgentRuntimeFeature({
   },
   showNotice,
   localeController,
+  setAgentPanelHasContent: (hasContent) => panelVisibilityFeature.setAgentPanelHasContent(hasContent),
   t: localeController.t,
 });
 

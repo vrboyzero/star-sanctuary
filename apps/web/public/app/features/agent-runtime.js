@@ -44,6 +44,7 @@ export function createAgentRuntimeFeature({
   onAgentCatalogChanged,
   showNotice,
   localeController,
+  setAgentPanelHasContent,
   t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
@@ -686,7 +687,11 @@ export function createAgentRuntimeFeature({
 
     const agents = [...agentCatalog.values()];
     agentRightPanelEl.textContent = "";
-    agentRightPanelEl.classList.toggle("hidden", agents.length === 0);
+    if (typeof setAgentPanelHasContent === "function") {
+      setAgentPanelHasContent(agents.length > 0);
+    } else {
+      agentRightPanelEl.classList.toggle("hidden", agents.length === 0);
+    }
     if (agents.length === 0) return;
 
     const fragment = document.createDocumentFragment();

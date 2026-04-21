@@ -6,6 +6,10 @@ export const AGENT_ID_KEY = "belldandy.webchat.agentId";
 export const UUID_KEY = "belldandy.webchat.userUuid";
 export const WEBCHAT_DEBUG_KEY = "belldandy.webchat.debug";
 export const VOICE_SHORTCUT_KEY = "belldandy.webchat.voiceShortcut";
+export const TOKEN_USAGE_COLLAPSED_KEY = "belldandy.webchat.tokenUsageCollapsed";
+export const CONTENT_PANEL_VISIBLE_KEY = "belldandy.webchat.contentPanelVisible";
+export const CONTROL_PANEL_VISIBLE_KEY = "belldandy.webchat.controlPanelVisible";
+export const AGENT_PANEL_VISIBLE_KEY = "belldandy.webchat.agentPanelVisible";
 export const VOICE_SHORTCUT_DISABLED_VALUE = "disabled";
 export const DEFAULT_VOICE_SHORTCUT = Object.freeze({
   code: "KeyR",
