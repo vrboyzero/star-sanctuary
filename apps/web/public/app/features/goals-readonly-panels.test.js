@@ -3,6 +3,59 @@ import { describe, expect, it } from "vitest";
 import { createGoalsReadonlyPanelsFeature } from "./goals-readonly-panels.js";
 
 describe("goals readonly panels", () => {
+  it("renders long continuation targets with an in-card wrapping button class", () => {
+    const panel = { innerHTML: "" };
+    const feature = createGoalsReadonlyPanelsFeature({
+      refs: {
+        goalsDetailEl: {
+          querySelector(selector) {
+            return selector === "#goalHandoffPanel" ? panel : null;
+          },
+        },
+      },
+      escapeHtml: (value) => String(value ?? ""),
+      formatDateTime: (value) => String(value ?? "-"),
+      normalizeGoalBoardId: (value) => String(value ?? ""),
+      goalRuntimeFilePath: (_goal, fileName) => `runtime/${fileName}`,
+    });
+
+    feature.renderGoalHandoffPanel({
+      id: "goal_resume",
+      handoffPath: "runtime/handoff.md",
+    }, {
+      generatedAt: "2026-04-21T09:00:00.000Z",
+      summary: "继续当前长期任务。",
+      nextAction: "从建议节点继续。",
+      tracking: {
+        totalNodes: 4,
+        completedNodes: 1,
+        inProgressNodes: 1,
+        blockedNodes: 0,
+      },
+      recentProgress: [],
+    }, {
+      version: 1,
+      scope: "goal",
+      targetId: "goal_resume",
+      recommendedTargetId: "node_d1c48b7e_with_a_very_long_suffix_to_stress_the_layout",
+      targetType: "node",
+      resumeMode: "current_node",
+      summary: "继续当前长期任务。",
+      nextAction: "从建议节点继续。",
+      checkpoints: {
+        openCount: 0,
+        blockerCount: 0,
+      },
+      progress: {
+        current: "aligning",
+        recent: [],
+      },
+    });
+
+    expect(panel.innerHTML).toContain("goal-continuation-target-btn");
+    expect(panel.innerHTML).toContain("title=\"node:node_d1c48b7e_with_a_very_long_suffix_to_stress_the_layout\"");
+  });
+
   it("renders bridge governance reference summary inside the handoff panel", () => {
     const panel = { innerHTML: "" };
     const feature = createGoalsReadonlyPanelsFeature({

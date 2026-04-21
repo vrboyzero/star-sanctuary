@@ -146,6 +146,76 @@ export function createSessionDigestFeature({
     return Boolean(state.digest && getActiveConversationId() && isConnected());
   }
 
+  function buildContinuationModalMarkup() {
+    const continuation = state.continuationState;
+    if (!continuation || typeof continuation !== "object") {
+      return "";
+    }
+
+    const checkpoints = continuation.checkpoints && typeof continuation.checkpoints === "object"
+      ? continuation.checkpoints
+      : {};
+    const progress = continuation.progress && typeof continuation.progress === "object"
+      ? continuation.progress
+      : {};
+    const recent = Array.isArray(progress.recent)
+      ? progress.recent.filter((item) => typeof item === "string" && item.trim()).slice(0, 3)
+      : [];
+    const labels = Array.isArray(checkpoints.labels)
+      ? checkpoints.labels.filter((item) => typeof item === "string" && item.trim()).slice(0, 4)
+      : [];
+    const targetText = formatContinuationTargetLabel(continuation);
+    const targetAction = buildContinuationAction(continuation);
+    const encodedTargetAction = encodeContinuationAction(targetAction);
+    const targetMarkup = continuation.recommendedTargetId && encodedTargetAction
+      ? `
+        <button
+          type="button"
+          class="button button-muted session-digest-inline-action"
+          data-continuation-action="${escapeHtml(encodedTargetAction)}"
+        >${escapeHtml(targetText)}</button>
+      `
+      : escapeHtml(targetText);
+
+    return `
+      <section class="session-digest-modal-section">
+        <div class="session-digest-modal-section-head">
+          <div class="session-digest-modal-section-title">${escapeHtml(t("panel.sessionContinuationLabel", {}, "Continuation"))}</div>
+          <div class="session-digest-modal-chip-row">
+            <span class="memory-badge">${escapeHtml(continuation.resumeMode || "-")}</span>
+            <span class="memory-badge">${escapeHtml(t("panel.sessionContinuationMessages", { count: String(progress.current || "-") }, String(progress.current || "-")))}</span>
+            <span class="memory-badge">${escapeHtml(t("panel.sessionContinuationBoundaries", { count: String(Number(checkpoints.openCount || 0)) }, `Boundaries ${Number(checkpoints.openCount || 0)}`))}</span>
+            <span class="memory-badge">${escapeHtml(t("panel.sessionContinuationBlockers", { count: String(Number(checkpoints.blockerCount || 0)) }, `Blockers ${Number(checkpoints.blockerCount || 0)}`))}</span>
+          </div>
+        </div>
+        <div class="session-digest-modal-grid">
+          <div class="session-digest-modal-card">
+            <span class="session-digest-modal-card-label">${escapeHtml(t("panel.sessionContinuationTargetLabel", {}, "Target"))}</span>
+            <div class="session-digest-modal-card-value">${targetMarkup}</div>
+          </div>
+          <div class="session-digest-modal-card">
+            <span class="session-digest-modal-card-label">${escapeHtml(t("panel.sessionContinuationNextAction", {}, "Next Action"))}</span>
+            <div class="session-digest-modal-card-value">${escapeHtml(continuation.nextAction || "-")}</div>
+          </div>
+        </div>
+        <div class="session-digest-modal-card">
+          <span class="session-digest-modal-card-label">${escapeHtml(t("panel.sessionContinuationSummaryLabel", {}, "Continuation Summary"))}</span>
+          <div class="session-digest-modal-card-value">${escapeHtml(continuation.summary || t("panel.sessionContinuationEmpty", {}, "No continuation summary yet."))}</div>
+        </div>
+        ${labels.length ? `
+          <div class="session-digest-modal-chip-row">
+            ${labels.map((item) => `<span class="memory-badge">${escapeHtml(item)}</span>`).join("")}
+          </div>
+        ` : ""}
+        ${recent.length ? `
+          <div class="session-digest-modal-note-list">
+            ${recent.map((item) => `<div class="session-digest-modal-note">${escapeHtml(item)}</div>`).join("")}
+          </div>
+        ` : ""}
+      </section>
+    `;
+  }
+
   function renderModal() {
     if (!sessionDigestModalEl) return;
 
@@ -224,7 +294,10 @@ export function createSessionDigestFeature({
       sessionDigestModalActionsEl.classList.toggle("hidden", actions.length === 0);
     }
     if (sessionDigestModalContentEl) {
-      sessionDigestModalContentEl.textContent = summaryText;
+      sessionDigestModalContentEl.innerHTML = `
+        <div class="session-digest-modal-copy">${escapeHtml(summaryText)}</div>
+        ${buildContinuationModalMarkup()}
+      `;
     }
   }
 
@@ -251,67 +324,7 @@ export function createSessionDigestFeature({
 
   function renderContinuationSummary() {
     if (!sessionContinuationSummaryEl) return;
-    const continuation = state.continuationState;
-    if (!continuation || !isConnected() || !getActiveConversationId()) {
-      sessionContinuationSummaryEl.innerHTML = "";
-      return;
-    }
-
-    const checkpoints = continuation.checkpoints && typeof continuation.checkpoints === "object"
-      ? continuation.checkpoints
-      : {};
-    const progress = continuation.progress && typeof continuation.progress === "object"
-      ? continuation.progress
-      : {};
-    const recent = Array.isArray(progress.recent)
-      ? progress.recent.filter((item) => typeof item === "string" && item.trim()).slice(0, 2)
-      : [];
-    const labels = Array.isArray(checkpoints.labels)
-      ? checkpoints.labels.filter((item) => typeof item === "string" && item.trim()).slice(0, 3)
-      : [];
-    const targetText = formatContinuationTargetLabel(continuation);
-    const targetAction = buildContinuationAction(continuation);
-    const encodedTargetAction = encodeContinuationAction(targetAction);
-    const targetMarkup = continuation.recommendedTargetId && encodedTargetAction
-      ? `
-        <button
-          type="button"
-          class="button button-muted"
-          data-continuation-action="${escapeHtml(encodedTargetAction)}"
-        >${escapeHtml(targetText)}</button>
-      `
-      : `<span>${escapeHtml(targetText)}</span>`;
-
-    sessionContinuationSummaryEl.innerHTML = `
-      <div class="session-digest-card">
-        <div class="session-digest-head">
-          <div class="session-digest-badges">
-            <span class="memory-badge">${escapeHtml(t("panel.sessionContinuationLabel", {}, "Continuation"))}</span>
-            <span class="memory-badge">${escapeHtml(continuation.resumeMode || "-")}</span>
-            <span class="memory-badge">${escapeHtml(t("panel.sessionContinuationMessages", { count: String(progress.current || "-") }, String(progress.current || "-")))}</span>
-          </div>
-        <div class="session-digest-meta">
-            <span>${escapeHtml(t("panel.sessionContinuationTarget", { target: targetText }, `Target: ${targetText}`))}</span>
-            ${targetMarkup}
-        </div>
-      </div>
-        <div class="session-digest-summary-text">${escapeHtml(continuation.summary || t("panel.sessionContinuationEmpty", {}, "No continuation summary yet."))}</div>
-        <div class="memory-list-item-meta">
-          <span>${escapeHtml(t("panel.sessionContinuationNextAction", {}, "Next Action"))}</span>
-          <span>${escapeHtml(continuation.nextAction || "-")}</span>
-        </div>
-        <div class="memory-list-item-meta">
-          <span>${escapeHtml(t("panel.sessionContinuationBoundaries", { count: String(Number(checkpoints.openCount || 0)) }, `Boundaries ${Number(checkpoints.openCount || 0)}`))}</span>
-          <span>${escapeHtml(t("panel.sessionContinuationBlockers", { count: String(Number(checkpoints.blockerCount || 0)) }, `Blockers ${Number(checkpoints.blockerCount || 0)}`))}</span>
-        </div>
-        ${labels.length ? `<div class="memory-list-item-meta"><span>${escapeHtml(labels.join(" | "))}</span></div>` : ""}
-        ${recent.length ? `
-          <div class="memory-list-item-meta">
-            ${recent.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}
-          </div>
-        ` : ""}
-      </div>
-    `;
+    sessionContinuationSummaryEl.innerHTML = "";
   }
 
   function renderDigest() {
@@ -470,6 +483,15 @@ export function createSessionDigestFeature({
     if (conversationId && conversationId !== getActiveConversationId()) return;
     state.continuationState = payload && typeof payload === "object" ? payload : null;
     renderContinuationSummary();
+    renderModal();
+  }
+
+  function handleContinuationActionEvent(event) {
+    const trigger = event.target instanceof Element ? event.target.closest("[data-continuation-action]") : null;
+    if (!trigger || typeof onOpenContinuationAction !== "function") return;
+    const action = decodeContinuationAction(trigger.getAttribute("data-continuation-action") || "");
+    if (!action) return;
+    void onOpenContinuationAction(action);
   }
 
   if (sessionDigestRefreshBtn) {
@@ -496,13 +518,11 @@ export function createSessionDigestFeature({
   }
 
   if (sessionContinuationSummaryEl) {
-    sessionContinuationSummaryEl.addEventListener("click", (event) => {
-      const trigger = event.target instanceof Element ? event.target.closest("[data-continuation-action]") : null;
-      if (!trigger || typeof onOpenContinuationAction !== "function") return;
-      const action = decodeContinuationAction(trigger.getAttribute("data-continuation-action") || "");
-      if (!action) return;
-      void onOpenContinuationAction(action);
-    });
+    sessionContinuationSummaryEl.addEventListener("click", handleContinuationActionEvent);
+  }
+
+  if (sessionDigestModalContentEl) {
+    sessionDigestModalContentEl.addEventListener("click", handleContinuationActionEvent);
   }
 
   if (sessionDigestModalCloseBtn) {

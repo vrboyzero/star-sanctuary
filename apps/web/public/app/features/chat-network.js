@@ -94,9 +94,6 @@ export function formatModelOptionLabel(model, t = (_key, _params, fallback) => f
   if (!model || typeof model !== "object") return "";
   const baseLabel = model.displayName || model.model || model.id || t("composer.defaultModel", {}, "Default Model");
   const suffixes = [];
-  if (typeof model.providerLabel === "string" && model.providerLabel.trim()) {
-    suffixes.push(model.providerLabel.trim());
-  }
   if (model.authStatus === "missing") {
     suffixes.push(t("composer.modelAuthMissing", {}, "auth missing"));
   }
@@ -252,6 +249,7 @@ export function createChatNetworkFeature({
     workspaceRootsEl,
     userUuidEl,
     agentSelectEl,
+    modelPickerEl,
     modelFilterEl,
     modelSelectEl,
   } = refs;
@@ -276,12 +274,16 @@ export function createChatNetworkFeature({
 
   function refreshModelFilterVisibility(models) {
     if (!modelFilterEl) return;
-    const providerCount = new Set((Array.isArray(models) ? models : []).map((item) => item?.providerId).filter(Boolean)).size;
-    const shouldShow = (Array.isArray(models) ? models.length : 0) >= 5 || providerCount >= 2;
-    modelFilterEl.classList.toggle("hidden", !shouldShow);
-    if (!shouldShow) {
-      modelFilterEl.value = "";
-    }
+    modelFilterEl.classList.add("hidden");
+    modelFilterEl.value = "";
+  }
+
+  function syncModelPickerVisibility() {
+    if (!modelPickerEl) return;
+    const hasVisibleControl =
+      Boolean(modelFilterEl && !modelFilterEl.classList.contains("hidden"))
+      || Boolean(modelSelectEl && !modelSelectEl.classList.contains("hidden"));
+    modelPickerEl.classList.toggle("hidden", !hasVisibleControl);
   }
 
   function upsertManualModelOption(manualValue) {
@@ -566,6 +568,7 @@ export function createChatNetworkFeature({
     }
 
     modelSelectEl.classList.toggle("hidden", modelSelectEl.options.length <= 1 && !manualEntrySupported);
+    syncModelPickerVisibility();
   }
 
   function connect() {
@@ -689,6 +692,8 @@ export function createChatNetworkFeature({
       );
     });
   }
+
+  syncModelPickerVisibility();
 
   return {
     connect,

@@ -244,6 +244,11 @@ describe("chat ui rich text rendering", () => {
     const textBubble = feature.appendMessage("bot", "");
     feature.renderAssistantMessage(textBubble, "<p>第一段 <strong>重点</strong></p>");
     const messageButton = textBubble?.closest(".msg-content-wrapper")?.querySelector(".copy-msg-btn");
+    const metaRow = textBubble?.closest(".msg-content-wrapper")?.querySelector(".msg-meta");
+    expect(messageButton).not.toBeNull();
+    expect(metaRow?.firstElementChild?.classList.contains("msg-meta-actions")).toBe(true);
+    expect(metaRow?.querySelector(".msg-meta-actions .copy-msg-btn")).toBe(messageButton);
+    expect(metaRow?.querySelector(".msg-time")).not.toBeNull();
     await clickHandler({ target: messageButton });
     expect(clipboard.writeText).toHaveBeenNthCalledWith(2, "第一段 重点");
     expect(messageButton?.innerHTML).toBe("已复制");

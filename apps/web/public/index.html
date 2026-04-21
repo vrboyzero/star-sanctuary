@@ -149,7 +149,6 @@
             <div class="session-digest-summary" id="sessionDigestSummary">
               <div class="task-token-history-empty" data-i18n="panel.sessionDigestNoConversation">暂无活跃会话</div>
             </div>
-            <div class="session-digest-summary" id="sessionContinuationSummary"></div>
             <button id="sessionDigestRefresh" class="button session-digest-refresh-btn" data-i18n="panel.sessionDigestRefresh">刷新摘要</button>
           </div>
         </div>
@@ -261,37 +260,17 @@
         <section class="memory-viewer hidden" id="memoryViewerSection">
           <div class="memory-viewer-shell">
             <div class="memory-viewer-header">
-              <div>
-                <div class="memory-viewer-kicker" data-i18n="memory.kicker">记忆查看</div>
-                <div id="memoryViewerTitle" class="memory-viewer-title" data-i18n="memory.title">记忆查看</div>
+              <div class="memory-viewer-heading">
+                <div class="memory-viewer-kicker-row">
+                  <div class="memory-viewer-kicker" data-i18n="memory.kicker">记忆查看</div>
+                  <button id="memoryDreamModalTrigger" class="button memory-dream-open-btn" type="button">梦境</button>
+                </div>
+                <div class="memory-viewer-title-row">
+                  <div id="memoryViewerTitle" class="memory-viewer-title" data-i18n="memory.title">记忆查看</div>
+                </div>
               </div>
               <div class="memory-viewer-header-actions">
                 <button id="memoryViewerRefresh" class="button" data-i18n="common.refresh">刷新</button>
-              </div>
-            </div>
-
-            <div id="memoryDreamBar" class="memory-context-bar">
-              <div class="memory-dream-copy">
-                <span id="memoryDreamStatus" class="memory-context-text">Dream 状态：--</span>
-                <span id="memoryDreamMeta" class="memory-context-text">默认会话：--</span>
-                <span id="memoryDreamObsidian" class="memory-context-text">Obsidian：--</span>
-                <span id="memoryDreamSummary" class="memory-context-text">最近摘要：--</span>
-              </div>
-              <div class="memory-dream-actions">
-                <button id="memoryDreamRefresh" class="button" type="button">刷新 Dream</button>
-                <button id="memoryDreamRun" class="button" type="button">运行 Dream</button>
-                <button id="memoryDreamHistoryToggle" class="button" type="button" aria-expanded="false">Dream 历史</button>
-              </div>
-            </div>
-
-            <div id="memoryDreamHistory" class="memory-dream-history hidden" hidden>
-              <div class="memory-dream-history-toolbar">
-                <span id="memoryDreamHistoryStatus" class="memory-context-text">Dream 历史：--</span>
-                <button id="memoryDreamHistoryRefresh" class="button" type="button">刷新历史</button>
-              </div>
-              <div class="memory-dream-history-grid">
-                <div id="memoryDreamHistoryList" class="memory-viewer-list"></div>
-                <div id="memoryDreamHistoryDetail" class="memory-viewer-detail"></div>
               </div>
             </div>
 
@@ -484,10 +463,12 @@
         <input type="file" id="fileInput" class="hidden" multiple
           accept=".jpg,.jpeg,.png,.gif,.webp,.txt,.md,.json,.log,.mp4,.mov,.avi,.webm,.mkv" />
         <textarea id="prompt" class="input" data-i18n-placeholder="composer.promptPlaceholder" placeholder="输入消息… (可拖拽文件到此)" rows="1"></textarea>
-        <input id="modelFilter" class="input composer-model-filter hidden" data-i18n-placeholder="composer.modelFilterPlaceholder" placeholder="筛选模型或 Provider" />
-        <select id="modelSelect" class="agent-select hidden" data-i18n-title="composer.modelSelectTitle" title="选择模型">
-          <option value="" data-i18n="composer.defaultModel">默认模型</option>
-        </select>
+        <div id="modelPicker" class="composer-model-picker hidden">
+          <input id="modelFilter" class="input composer-model-filter hidden" data-i18n-placeholder="composer.modelFilterPlaceholder" placeholder="筛选模型或 Provider" />
+          <select id="modelSelect" class="agent-select hidden" data-i18n-title="composer.modelSelectTitle" title="选择模型">
+            <option value="" data-i18n="composer.defaultModel">默认模型</option>
+          </select>
+        </div>
         <select id="agentSelect" class="agent-select hidden" data-i18n-title="composer.agentSelectTitle" title="选择 Agent"></select>
         <button id="send" class="button" data-i18n="common.send" disabled>Send</button>
       </div>
@@ -985,6 +966,41 @@
         <div id="sessionDigestModalMeta" class="session-digest-modal-meta"></div>
         <div id="sessionDigestModalActions" class="session-digest-modal-actions hidden"></div>
         <div id="sessionDigestModalContent" class="session-digest-modal-content"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="memoryDreamModal" class="modal-overlay hidden">
+    <div class="modal memory-dream-modal">
+      <div class="modal-header" style="display: flex; align-items: center;">
+        <span id="memoryDreamModalTitle">梦境</span>
+        <button id="memoryDreamModalClose" class="settings-btn" type="button" title="关闭">✕</button>
+      </div>
+      <div class="modal-body memory-dream-modal-body">
+        <div id="memoryDreamBar" class="memory-context-bar">
+          <div class="memory-dream-copy">
+            <span id="memoryDreamStatus" class="memory-context-text">Dream 状态：--</span>
+            <span id="memoryDreamMeta" class="memory-context-text">默认会话：--</span>
+            <span id="memoryDreamObsidian" class="memory-context-text">Obsidian：--</span>
+            <span id="memoryDreamSummary" class="memory-context-text">最近摘要：--</span>
+          </div>
+          <div class="memory-dream-actions">
+            <button id="memoryDreamRefresh" class="button" type="button">刷新 Dream</button>
+            <button id="memoryDreamRun" class="button" type="button">运行 Dream</button>
+            <button id="memoryDreamHistoryToggle" class="button" type="button" aria-expanded="false">Dream 历史</button>
+          </div>
+        </div>
+
+        <div id="memoryDreamHistory" class="memory-dream-history hidden" hidden>
+          <div class="memory-dream-history-toolbar">
+            <span id="memoryDreamHistoryStatus" class="memory-context-text">Dream 历史：--</span>
+            <button id="memoryDreamHistoryRefresh" class="button" type="button">刷新历史</button>
+          </div>
+          <div class="memory-dream-history-grid">
+            <div id="memoryDreamHistoryList" class="memory-viewer-list"></div>
+            <div id="memoryDreamHistoryDetail" class="memory-viewer-detail"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

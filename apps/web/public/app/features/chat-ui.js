@@ -85,6 +85,10 @@ export function createChatUiFeature({
       metaRow = document.createElement("div");
       metaRow.className = "msg-meta";
 
+      const actionsEl = document.createElement("div");
+      actionsEl.className = "msg-meta-actions";
+      metaRow.appendChild(actionsEl);
+
       const timeEl = document.createElement("span");
       timeEl.className = "msg-time";
       metaRow.appendChild(timeEl);
@@ -110,6 +114,7 @@ export function createChatUiFeature({
 
     const timeEl = metaRow.querySelector(".msg-time");
     const latestEl = metaRow.querySelector(".msg-latest-badge");
+    const actionsEl = metaRow.querySelector(".msg-meta-actions");
     const timestampMs = typeof meta.timestampMs === "number" && Number.isFinite(meta.timestampMs)
       ? meta.timestampMs
       : undefined;
@@ -129,6 +134,10 @@ export function createChatUiFeature({
       timeEl.textContent = shortText;
       timeEl.title = displayTimeText || shortText;
       timeEl.classList.toggle("hidden", !shortText);
+    }
+
+    if (actionsEl instanceof HTMLElement) {
+      actionsEl.classList.toggle("hidden", !actionsEl.childElementCount);
     }
 
     if (isLatest) {
@@ -361,9 +370,13 @@ export function createChatUiFeature({
     contentWrapper.appendChild(nameEl);
     contentWrapper.appendChild(bubble);
 
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(contentWrapper);
+    messagesEl.appendChild(wrapper);
+
     if (kind === "bot") {
-      const actionsEl = document.createElement("div");
-      actionsEl.className = "msg-actions";
+      const metaRow = ensureMetaRow(bubble);
+      const metaActionsEl = metaRow?.querySelector(".msg-meta-actions");
 
       const copyBtn = document.createElement("button");
       copyBtn.className = "copy-msg-btn";
@@ -373,13 +386,9 @@ export function createChatUiFeature({
         </svg> 复制
       `;
       copyBtn.title = "复制全文";
-      actionsEl.appendChild(copyBtn);
-      contentWrapper.appendChild(actionsEl);
+      metaActionsEl?.appendChild(copyBtn);
     }
 
-    wrapper.appendChild(avatar);
-    wrapper.appendChild(contentWrapper);
-    messagesEl.appendChild(wrapper);
     updateMessageMeta(bubble, meta);
     forceScrollToBottom();
     return bubble;

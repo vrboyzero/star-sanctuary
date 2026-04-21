@@ -47,7 +47,7 @@
 | community 缺失主人 UUID 时的上传 | 已实现但取决于接收端策略 | 当前 community 在 `ownerUserUuid` 缺失时仍会继续上传，只是不带 `userUuid`。如果接收端开启 strict uuid 校验，这类请求可能失败。 | `packages/belldandy-channels/src/community.ts`、`packages/belldandy-core/src/bin/gateway.ts` |
 | 任务级计数器“跨 run 持续” | 已实现 | `ToolEnabledAgent` 会把活跃计数器快照写回 `ConversationStore`，当前已补 `.meta.json` 持久化；对已落会话消息的场景，Gateway 重启后也可恢复。 | `packages/belldandy-agent/src/tool-agent.ts`、`packages/belldandy-agent/src/conversation.ts` |
 | 任务级结果前端展示字段 | 已实现但较轻量 | 前端只展示 `name / input / output / total`，`durationMs` 和 `auto` 标记虽然已在事件中存在，但当前 UI 没有展示。 | `packages/belldandy-skills/src/builtin/token-counter.ts`、`packages/belldandy-core/src/bin/gateway.ts`、`apps/web/public/index.html`、`apps/web/public/app.js` |
-| 严格 UUID 配置文档 | 代码已支持，示例配置未补全 | 代码里已经读取 `BELLDANDY_TOKEN_USAGE_STRICT_UUID`，但当前 `.env.example` 未看到该配置说明。 | `packages/belldandy-core/src/bin/gateway.ts`、`.env.example` |
+| 严格 UUID 配置文档 | 已实现 | `.env.example` 已补充 `BELLDANDY_TOKEN_USAGE_STRICT_UUID` 的配置说明与示例。 | `packages/belldandy-core/src/bin/gateway-channels-runtime.ts`、`.env.example` |
 
 ## 4. 当前自动验证结果
 

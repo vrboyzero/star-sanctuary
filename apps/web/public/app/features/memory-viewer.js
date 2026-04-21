@@ -750,6 +750,10 @@ export function createMemoryViewerFeature({
     memoryViewerStatsEl,
     memoryViewerListEl,
     memoryViewerDetailEl,
+    memoryDreamModalTriggerBtn,
+    memoryDreamModalEl,
+    memoryDreamModalTitleEl,
+    memoryDreamModalCloseBtn,
     memoryDreamBarEl,
     memoryDreamStatusEl,
     memoryDreamMetaEl,
@@ -786,6 +790,7 @@ export function createMemoryViewerFeature({
     memorySharedReviewClaimedByFilterEl,
   } = refs;
   const autoRequestedEmailThreadAdvice = new Set();
+  let dreamModalOpen = false;
 
   function getActiveAgentId() {
     const agentId = typeof getSelectedAgentId === "function" ? String(getSelectedAgentId() || "").trim() : "";
@@ -1495,6 +1500,38 @@ export function createMemoryViewerFeature({
       : t("memory.title", {}, "Memory Viewer");
   }
 
+  function renderDreamModal() {
+    const triggerLabel = t("memory.dreamModalTrigger", {}, "梦境");
+    const closeLabel = t("memory.dreamModalClose", {}, "关闭");
+    if (memoryDreamModalTriggerBtn) {
+      memoryDreamModalTriggerBtn.textContent = triggerLabel;
+      memoryDreamModalTriggerBtn.title = t("memory.dreamModalOpenTitle", {}, "查看 Dream 运行状态与历史");
+      memoryDreamModalTriggerBtn.setAttribute("aria-expanded", dreamModalOpen ? "true" : "false");
+      memoryDreamModalTriggerBtn.setAttribute("aria-haspopup", "dialog");
+    }
+    if (memoryDreamModalTitleEl) {
+      memoryDreamModalTitleEl.textContent = t("memory.dreamModalTitle", {}, "梦境");
+    }
+    if (memoryDreamModalCloseBtn) {
+      memoryDreamModalCloseBtn.title = closeLabel;
+      memoryDreamModalCloseBtn.setAttribute("aria-label", closeLabel);
+    }
+    if (memoryDreamModalEl) {
+      memoryDreamModalEl.classList.toggle("hidden", !dreamModalOpen);
+    }
+  }
+
+  function closeDreamModal() {
+    if (!dreamModalOpen) return;
+    dreamModalOpen = false;
+    renderDreamModal();
+  }
+
+  function openDreamModal() {
+    dreamModalOpen = true;
+    renderDreamModal();
+  }
+
   function renderDreamRuntimeBar() {
     if (!memoryDreamBarEl) return;
     const memoryViewerState = getMemoryViewerState();
@@ -1804,6 +1841,31 @@ export function createMemoryViewerFeature({
     });
   }
 
+  if (memoryDreamModalTriggerBtn) {
+    memoryDreamModalTriggerBtn.addEventListener("click", () => {
+      openDreamModal();
+    });
+  }
+
+  if (memoryDreamModalCloseBtn) {
+    memoryDreamModalCloseBtn.addEventListener("click", () => {
+      closeDreamModal();
+    });
+  }
+
+  if (memoryDreamModalEl) {
+    memoryDreamModalEl.addEventListener("click", (event) => {
+      if (event.target === memoryDreamModalEl) {
+        closeDreamModal();
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !dreamModalOpen) return;
+    closeDreamModal();
+  });
+
   function formatTaskStatusLabel(status) {
     const normalized = typeof status === "string" ? status.trim().toLowerCase() : "";
     if (!normalized) return "未知";
@@ -1880,6 +1942,7 @@ export function createMemoryViewerFeature({
     syncSharedReviewFilterUi();
     renderSharedReviewBatchBar();
     renderDreamRuntimeBar();
+    renderDreamModal();
     syncMemoryTaskGoalFilterUi();
   }
 
@@ -4036,6 +4099,7 @@ export function createMemoryViewerFeature({
     applyAgentViewState,
     captureAgentViewState,
     clearDreamHistoryState,
+    closeDreamModal,
     loadDreamCommonsStatus,
     loadDreamHistory,
     loadDreamHistoryDetail,
@@ -4052,6 +4116,7 @@ export function createMemoryViewerFeature({
     renderExternalOutboundAuditDetail,
     renderExternalOutboundAuditList,
     renderDreamHistoryPanel,
+    renderDreamModal,
     renderDreamRuntimeBar,
     renderMemoryList,
     renderSharedReviewList,
@@ -4062,6 +4127,7 @@ export function createMemoryViewerFeature({
     syncSharedReviewFilterUi,
     syncMemoryViewerHeaderTitle,
     toggleDreamHistory,
+    openDreamModal,
     switchOutboundAuditFocus,
     switchMemoryViewerTab,
     syncMemoryViewerUi,

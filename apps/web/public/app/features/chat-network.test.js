@@ -113,8 +113,8 @@ describe("chat network model selection", () => {
   ];
 
   it("formats provider and auth state into option labels", () => {
-    expect(formatModelOptionLabel(models[0])).toBe("gpt-5（默认） · OpenAI");
-    expect(formatModelOptionLabel(models[1])).toBe("Claude Opus 4.5 · Anthropic · auth missing");
+    expect(formatModelOptionLabel(models[0])).toBe("gpt-5（默认）");
+    expect(formatModelOptionLabel(models[1])).toBe("Claude Opus 4.5 · auth missing");
   });
 
   it("preserves valid manual model selections when manual entry is supported", () => {

@@ -40,8 +40,9 @@ export function createGoalsReadonlyPanelsFeature({
       ? `
         <button
           type="button"
-          class="button goal-inline-action-secondary"
+          class="button goal-inline-action-secondary goal-continuation-target-btn"
           data-continuation-action="${escapeHtml(encodedTargetAction)}"
+          title="${escapeHtml(targetLabel)}"
         >${escapeHtml(targetLabel)}</button>
       `
       : `<strong class="goal-summary-value">${escapeHtml(targetLabel || targetText)}</strong>`;
