@@ -28,6 +28,7 @@ export function createChatUiFeature({
   showNotice,
   getAvatarUploadHeaders,
   onAvatarUploaded,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { messagesEl, chatSection } = refs;
   let markedConfigured = false;
@@ -95,7 +96,7 @@ export function createChatUiFeature({
 
       const latestEl = document.createElement("span");
       latestEl.className = "msg-latest-badge hidden";
-      latestEl.textContent = "最新";
+      latestEl.textContent = t("chat.latestBadge", {}, "Latest");
       metaRow.appendChild(latestEl);
 
       bubble.insertAdjacentElement("afterend", metaRow);
@@ -228,7 +229,9 @@ export function createChatUiFeature({
     const selector = kind === "bot" ? ".msg-wrapper.bot .msg-avatar" : ".msg-wrapper.me .msg-avatar";
     messagesEl.querySelectorAll(selector).forEach((avatarEl) => {
       applyAvatarVisual(avatarEl, avatarSrc);
-      avatarEl.title = kind === "bot" ? "点击更换 Agent 头像" : "点击更换用户头像";
+      avatarEl.title = kind === "bot"
+        ? t("chat.avatarAgentTitle", {}, "Change agent avatar")
+        : t("chat.avatarUserTitle", {}, "Change user avatar");
       avatarEl.classList.add("avatar-clickable");
     });
   }
@@ -272,14 +275,19 @@ export function createChatUiFeature({
 
       const payload = await res.json().catch(() => null);
       if (!res.ok || !payload?.ok) {
-        const message = payload?.error?.message || "头像上传失败。";
-        showNotice?.("头像上传失败", message, "error", 3800);
+        const message = payload?.error?.message || t("chat.avatarUploadFailedMessage", {}, "Failed to upload avatar.");
+        showNotice?.(t("chat.avatarUploadFailedTitle", {}, "Avatar upload failed"), message, "error", 3800);
         return;
       }
 
       const avatarPath = typeof payload.avatarPath === "string" ? payload.avatarPath : "";
       if (!avatarPath) {
-        showNotice?.("头像上传失败", "服务端未返回头像路径。", "error", 3800);
+        showNotice?.(
+          t("chat.avatarUploadFailedTitle", {}, "Avatar upload failed"),
+          t("chat.avatarMissingPathMessage", {}, "The server did not return an avatar path."),
+          "error",
+          3800,
+        );
         return;
       }
 
@@ -291,14 +299,16 @@ export function createChatUiFeature({
       });
 
       showNotice?.(
-        "头像已更新",
-        role === "agent" ? "Agent 头像已写入对应的 IDENTITY.md。" : "用户头像已写入 USER.md。",
+        t("chat.avatarUpdatedTitle", {}, "Avatar updated"),
+        role === "agent"
+          ? t("chat.avatarAgentUpdatedMessage", {}, "The agent avatar has been written to the corresponding IDENTITY.md.")
+          : t("chat.avatarUserUpdatedMessage", {}, "The user avatar has been written to USER.md."),
         "success",
         2200,
       );
     } catch (error) {
       showNotice?.(
-        "头像上传失败",
+        t("chat.avatarUploadFailedTitle", {}, "Avatar upload failed"),
         error instanceof Error ? error.message : String(error),
         "error",
         3800,
@@ -347,7 +357,9 @@ export function createChatUiFeature({
     const profile = kind === "bot" ? getAgentProfile?.() : getUserProfile?.();
     const avatarSrc = profile?.avatar || "";
     applyAvatarVisual(avatar, avatarSrc);
-    avatar.title = kind === "bot" ? "点击更换 Agent 头像" : "点击更换用户头像";
+    avatar.title = kind === "bot"
+      ? t("chat.avatarAgentTitle", {}, "Change agent avatar")
+      : t("chat.avatarUserTitle", {}, "Change user avatar");
     avatar.addEventListener("click", (event) => {
       event.stopPropagation();
       openAvatarPicker(kind);
@@ -383,9 +395,9 @@ export function createChatUiFeature({
       copyBtn.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-        </svg> 复制
+        </svg> ${escapeHtml(t("chat.copy", {}, "Copy"))}
       `;
-      copyBtn.title = "复制全文";
+      copyBtn.title = t("chat.copyFullTitle", {}, "Copy full message");
       metaActionsEl?.appendChild(copyBtn);
     }
 
@@ -437,7 +449,7 @@ export function createChatUiFeature({
       const wrapper = document.createElement("div");
       wrapper.className = "media-thumbnail";
       wrapper.style.backgroundImage = `url(${originalSrc})`;
-      wrapper.title = "点击查看原图";
+      wrapper.title = t("chat.mediaOpenImage", {}, "Open full image");
       wrapper.addEventListener("click", () => openMediaModal(originalSrc, "image"));
       img.replaceWith(wrapper);
     });
@@ -448,7 +460,7 @@ export function createChatUiFeature({
 
       const wrapper = document.createElement("div");
       wrapper.className = "media-thumbnail video-thumbnail";
-      wrapper.title = "点击播放视频";
+      wrapper.title = t("chat.mediaOpenVideo", {}, "Play video");
 
       const playIcon = document.createElement("div");
       playIcon.className = "play-icon";
@@ -481,8 +493,8 @@ export function createChatUiFeature({
       return `<div class="code-block-wrapper">
   <div class="code-block-header">
     <span class="code-block-lang">${language || ""}</span>
-    <button class="copy-code-btn" title="复制代码">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> 复制
+    <button class="copy-code-btn" title="${escapeHtml(t("chat.copyCodeTitle", {}, "Copy code"))}">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> ${escapeHtml(t("chat.copy", {}, "Copy"))}
     </button>
   </div>
   <pre><code class="language-${language}">${escapeHtml(code)}</code></pre>
@@ -593,7 +605,7 @@ export function createChatUiFeature({
     try {
       await navigator.clipboard.writeText(text);
       const originalHtml = button.innerHTML;
-      button.innerHTML = "已复制";
+      button.innerHTML = escapeHtml(t("chat.copied", {}, "Copied"));
       setTimeout(() => {
         button.innerHTML = originalHtml;
       }, 2000);

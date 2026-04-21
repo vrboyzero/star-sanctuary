@@ -25,12 +25,14 @@ export function createAppShellFeature({
     switchFacetBtn,
     switchCronBtn,
     switchMemoryBtn,
+    switchExperienceBtn,
     switchGoalsBtn,
     switchSubtasksBtn,
     switchCanvasBtn,
     chatSection,
     editorSection,
     memoryViewerSection,
+    experienceWorkbenchSection,
     goalsSection,
     subtasksSection,
     composerSection,
@@ -43,6 +45,7 @@ export function createAppShellFeature({
     setSidebarActionButtonState(switchFacetBtn, treeMode === "facets");
     setSidebarActionButtonState(switchCronBtn, treeMode === "cron");
     setSidebarActionButtonState(switchMemoryBtn, memoryViewerSection && !memoryViewerSection.classList.contains("hidden"));
+    setSidebarActionButtonState(switchExperienceBtn, experienceWorkbenchSection && !experienceWorkbenchSection.classList.contains("hidden"));
     setSidebarActionButtonState(switchGoalsBtn, goalsSection && !goalsSection.classList.contains("hidden"));
     setSidebarActionButtonState(switchSubtasksBtn, subtasksSection && !subtasksSection.classList.contains("hidden"));
     const canvasSection = document.getElementById("canvasSection");
@@ -92,6 +95,7 @@ export function createAppShellFeature({
       if (editorSection) editorSection.classList.remove("hidden");
       if (canvasSection) canvasSection.classList.add("hidden");
       if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+      if (experienceWorkbenchSection) experienceWorkbenchSection.classList.add("hidden");
       if (goalsSection) goalsSection.classList.add("hidden");
       if (subtasksSection) subtasksSection.classList.add("hidden");
       if (composerSection) composerSection.classList.add("hidden");
@@ -101,6 +105,7 @@ export function createAppShellFeature({
       if (editorSection) editorSection.classList.add("hidden");
       if (canvasSection) canvasSection.classList.remove("hidden");
       if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+      if (experienceWorkbenchSection) experienceWorkbenchSection.classList.add("hidden");
       if (goalsSection) goalsSection.classList.add("hidden");
       if (subtasksSection) subtasksSection.classList.add("hidden");
       if (composerSection) composerSection.classList.add("hidden");
@@ -110,6 +115,17 @@ export function createAppShellFeature({
       if (editorSection) editorSection.classList.add("hidden");
       if (canvasSection) canvasSection.classList.add("hidden");
       if (memoryViewerSection) memoryViewerSection.classList.remove("hidden");
+      if (experienceWorkbenchSection) experienceWorkbenchSection.classList.add("hidden");
+      if (goalsSection) goalsSection.classList.add("hidden");
+      if (subtasksSection) subtasksSection.classList.add("hidden");
+      if (composerSection) composerSection.classList.add("hidden");
+      if (editorActions) editorActions.classList.add("hidden");
+    } else if (mode === "experience") {
+      if (chatSection) chatSection.classList.add("hidden");
+      if (editorSection) editorSection.classList.add("hidden");
+      if (canvasSection) canvasSection.classList.add("hidden");
+      if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+      if (experienceWorkbenchSection) experienceWorkbenchSection.classList.remove("hidden");
       if (goalsSection) goalsSection.classList.add("hidden");
       if (subtasksSection) subtasksSection.classList.add("hidden");
       if (composerSection) composerSection.classList.add("hidden");
@@ -119,6 +135,7 @@ export function createAppShellFeature({
       if (editorSection) editorSection.classList.add("hidden");
       if (canvasSection) canvasSection.classList.add("hidden");
       if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+      if (experienceWorkbenchSection) experienceWorkbenchSection.classList.add("hidden");
       if (goalsSection) goalsSection.classList.remove("hidden");
       if (subtasksSection) subtasksSection.classList.add("hidden");
       if (composerSection) composerSection.classList.add("hidden");
@@ -128,6 +145,7 @@ export function createAppShellFeature({
       if (editorSection) editorSection.classList.add("hidden");
       if (canvasSection) canvasSection.classList.add("hidden");
       if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+      if (experienceWorkbenchSection) experienceWorkbenchSection.classList.add("hidden");
       if (goalsSection) goalsSection.classList.add("hidden");
       if (subtasksSection) subtasksSection.classList.remove("hidden");
       if (composerSection) composerSection.classList.add("hidden");
@@ -140,6 +158,7 @@ export function createAppShellFeature({
       if (editorSection) editorSection.classList.add("hidden");
       if (canvasSection) canvasSection.classList.add("hidden");
       if (memoryViewerSection) memoryViewerSection.classList.add("hidden");
+      if (experienceWorkbenchSection) experienceWorkbenchSection.classList.add("hidden");
       if (goalsSection) goalsSection.classList.add("hidden");
       if (subtasksSection) subtasksSection.classList.add("hidden");
       if (composerSection) composerSection.classList.remove("hidden");

@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "webchatUI优化第一步完成，准备做新能力界面"
+git commit -m "增加了经验能力UI模块，再次对齐了UI中英文双语内容"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

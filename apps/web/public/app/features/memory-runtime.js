@@ -412,7 +412,7 @@ export function createMemoryRuntimeFeature({
             "info",
             2200,
           );
-          return null;
+          return memoryViewerState.selectedCandidate ?? null;
         }
       } else if (duplicateCheck.decision === "similar_existing") {
         const confirmed = typeof window !== "undefined" && typeof window.confirm === "function"

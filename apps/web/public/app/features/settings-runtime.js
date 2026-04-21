@@ -421,6 +421,9 @@ export function createSettingsRuntimeFeature({
     refreshLocale() {
       toolSettingsController.refreshLocale?.();
     },
+    openToolSettingsTab(tab) {
+      return toolSettingsController.openTab?.(tab);
+    },
     toggleSettings,
     openPairingPending(options = {}) {
       return settingsController.openPairingPending?.(options);

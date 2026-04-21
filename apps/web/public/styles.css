@@ -2865,6 +2865,14 @@ body::before {
   gap: 8px;
 }
 
+.experience-workbench-generate {
+  justify-content: flex-end;
+}
+
+.experience-workbench-task-input {
+  min-width: 240px;
+}
+
 .memory-shared-review-batch-summary {
   color: var(--memory-context-text);
   font-size: 13px;
@@ -3925,6 +3933,16 @@ body::before {
 
   .memory-viewer-filters {
     justify-content: flex-start;
+  }
+
+  .experience-workbench-generate {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .experience-workbench-task-input {
+    min-width: 0;
+    width: 100%;
   }
 
   .memory-category-row {

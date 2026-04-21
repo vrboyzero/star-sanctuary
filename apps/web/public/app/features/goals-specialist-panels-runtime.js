@@ -74,14 +74,39 @@ function parseGoalReviewGovernanceSummary(rawSummary, parseGoalCheckpoints) {
   if (!rawSummary || typeof rawSummary !== "object") return null;
   const summary = rawSummary;
   const governanceConfig = summary.governanceConfig && typeof summary.governanceConfig === "object" ? summary.governanceConfig : {};
+  const publishRecordsState = summary.publishRecords && typeof summary.publishRecords === "object" ? summary.publishRecords : {};
   const notificationsState = summary.notifications && typeof summary.notifications === "object" ? summary.notifications : {};
   const dispatchesState = summary.notificationDispatches && typeof summary.notificationDispatches === "object" ? summary.notificationDispatches : {};
   const actionableReviews = Array.isArray(summary.actionableReviews) ? summary.actionableReviews : [];
   const overdueReviews = Array.isArray(summary.overdueReviews) ? summary.overdueReviews : [];
+  const publishRecordItems = Array.isArray(publishRecordsState.items) ? publishRecordsState.items : [];
   const templates = Array.isArray(governanceConfig.templates) ? governanceConfig.templates : [];
   const reviewers = Array.isArray(governanceConfig.reviewers) ? governanceConfig.reviewers : [];
   const notifications = Array.isArray(notificationsState.items) ? notificationsState.items : [];
   const dispatches = Array.isArray(dispatchesState.items) ? dispatchesState.items : [];
+  const publishRecords = publishRecordItems.map((item, index) => {
+    const data = item && typeof item === "object" ? item : {};
+    return {
+      id: data.id ? String(data.id) : `publish-record-${index + 1}`,
+      reviewId: data.reviewId ? String(data.reviewId) : "",
+      suggestionType: data.suggestionType ? String(data.suggestionType) : "",
+      suggestionId: data.suggestionId ? String(data.suggestionId) : "",
+      experienceCandidateId: data.experienceCandidateId ? String(data.experienceCandidateId) : "",
+      publishedPath: data.publishedPath ? String(data.publishedPath) : "",
+      title: data.title ? String(data.title) : "",
+    };
+  });
+  const experienceCandidateMap = new Map(
+    publishRecords
+      .filter((item) => item.suggestionType && item.suggestionId && item.experienceCandidateId)
+      .map((item) => [`${item.suggestionType}:${item.suggestionId}`, item.experienceCandidateId]),
+  );
+  const normalizeExperienceType = (value) => {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (normalized === "skill_candidate") return "skill";
+    if (normalized === "method_candidate") return "method";
+    return "";
+  };
   return {
     generatedAt: summary.generatedAt ? String(summary.generatedAt) : "",
     summary: summary.summary ? String(summary.summary) : "",
@@ -97,6 +122,7 @@ function parseGoalReviewGovernanceSummary(rawSummary, parseGoalCheckpoints) {
     workflowOverdueCount: Number(summary.workflowOverdueCount || 0),
     checkpointWorkflowPendingCount: Number(summary.checkpointWorkflowPendingCount || 0),
     checkpointWorkflowOverdueCount: Number(summary.checkpointWorkflowOverdueCount || 0),
+    publishRecords,
     templates: templates.map((item, index) => {
       const data = item && typeof item === "object" ? item : {};
       return {
@@ -146,15 +172,19 @@ function parseGoalReviewGovernanceSummary(rawSummary, parseGoalCheckpoints) {
     recommendations: parseStringList(summary.recommendations),
     actionableReviews: actionableReviews.map((item, index) => {
       const data = item && typeof item === "object" ? item : {};
+      const suggestionType = data.suggestionType ? String(data.suggestionType) : "method_candidate";
+      const suggestionId = data.suggestionId ? String(data.suggestionId) : "";
       return {
         id: data.id ? String(data.id) : `review-${index + 1}`,
         title: data.title ? String(data.title) : data.id ? String(data.id) : `review-${index + 1}`,
-        suggestionType: data.suggestionType ? String(data.suggestionType) : "method_candidate",
+        suggestionType,
         status: data.status ? String(data.status) : "pending_review",
         reviewer: data.reviewer ? String(data.reviewer) : "",
         nodeId: data.nodeId ? String(data.nodeId) : "",
-        suggestionId: data.suggestionId ? String(data.suggestionId) : "",
+        suggestionId,
         updatedAt: data.updatedAt ? String(data.updatedAt) : "",
+        experienceType: normalizeExperienceType(suggestionType),
+        experienceCandidateId: experienceCandidateMap.get(`${suggestionType}:${suggestionId}`) || "",
       };
     }),
     overdueReviews: overdueReviews.map((item, index) => {
@@ -620,6 +650,7 @@ export function createGoalsSpecialistPanelsRuntimeFeature({
   runGoalSuggestionReviewDecision,
   runGoalSuggestionReviewEscalation,
   runGoalCheckpointEscalation,
+  openExperienceWorkbench,
   applyGoalContinuationFocus,
 }) {
   const { goalsDetailEl } = refs;
@@ -982,6 +1013,21 @@ export function createGoalsSpecialistPanelsRuntimeFeature({
           reviewId,
           suggestionType,
           suggestionId,
+        });
+      });
+    });
+    panel.querySelectorAll("[data-goal-open-experience]").forEach((node) => {
+      node.addEventListener("click", () => {
+        const candidateId = node.getAttribute("data-goal-open-experience-candidate-id");
+        const type = node.getAttribute("data-goal-open-experience-type");
+        const query = node.getAttribute("data-goal-open-experience-query");
+        void openExperienceWorkbench?.({
+          candidateId,
+          filters: {
+            type,
+            query,
+          },
+          preferFirst: true,
         });
       });
     });

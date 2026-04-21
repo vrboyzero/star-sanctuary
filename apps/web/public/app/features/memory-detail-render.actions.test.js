@@ -30,6 +30,7 @@ function createHarness() {
   };
 
   const loadCandidateDetail = vi.fn(async () => {});
+  const openExperienceCandidate = vi.fn(async () => {});
   const runtime = {
     generateExperienceCandidate: vi.fn(async () => {}),
     reviewExperienceCandidate: vi.fn(async () => {}),
@@ -129,6 +130,7 @@ function createHarness() {
     loadTaskUsageOverview: vi.fn(async () => {}),
     loadTaskDetail: vi.fn(async () => {}),
     loadCandidateDetail,
+    openExperienceCandidate,
     openTaskFromAudit: vi.fn(async () => {}),
     openMemoryFromAudit: vi.fn(async () => {}),
     openSourcePath: vi.fn(async () => {}),
@@ -141,7 +143,7 @@ function createHarness() {
     t: (_key, _params, fallback) => fallback ?? "",
   });
 
-  return { refs, state, runtime, detailRenderFeature, loadCandidateDetail };
+  return { refs, state, runtime, detailRenderFeature, loadCandidateDetail, openExperienceCandidate };
 }
 
 describe("memory detail render actions", () => {
@@ -274,5 +276,41 @@ describe("memory detail render actions", () => {
     await Promise.resolve();
 
     expect(loadCandidateDetail).toHaveBeenCalledWith("exp-patch-1");
+  });
+
+  it("opens experience workbench candidate entry from memory detail actions", async () => {
+    const { refs, state, detailRenderFeature, openExperienceCandidate } = createHarness();
+    state.selectedCandidate = {
+      id: "exp-skill-pending",
+      taskId: "task-1",
+      type: "skill",
+      status: "draft",
+      title: "技能候选",
+      slug: "skill-demo",
+      content: "# skill",
+      summary: "summary",
+      sourceTaskSnapshot: {},
+    };
+    state.selectedTask = {
+      id: "task-1",
+      conversationId: "conv-1",
+      status: "success",
+      source: "chat",
+      title: "任务一",
+      usedMethods: [{ sourceCandidateId: "exp-method-1" }],
+      usedSkills: [],
+      activities: [],
+      toolCalls: [],
+      memoryLinks: [],
+      artifactPaths: [],
+    };
+
+    detailRenderFeature.renderTaskDetail(state.selectedTask);
+    refs.memoryViewerDetailEl.querySelector("[data-open-experience-candidate-id='exp-method-1']")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    refs.memoryViewerDetailEl.querySelector("[data-open-experience-candidate-id='exp-skill-pending']")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+
+    expect(openExperienceCandidate).toHaveBeenCalledWith("exp-method-1");
+    expect(openExperienceCandidate).toHaveBeenCalledWith("exp-skill-pending");
   });
 });

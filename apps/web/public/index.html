@@ -166,16 +166,18 @@
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧩</span><span data-i18n="sidebar.facetEditor">模组编辑</span></button>
           <button id="switchCron" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">⏰</span><span data-i18n="sidebar.cronConfig">定时任务配置</span></button>
-          <button id="openChannelSettings" class="sidebar-action-btn"
-            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🌐</span><span data-i18n="sidebar.channelSettings">渠道配置</span></button>
           <button id="switchMemory" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧠</span><span data-i18n="sidebar.memoryViewer">记忆查看</span></button>
+          <button id="switchExperience" class="sidebar-action-btn"
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🧩</span><span data-i18n="sidebar.experienceWorkbench">经验能力</span></button>
           <button id="switchGoals" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🎯</span><span data-i18n="sidebar.longTasks">长期任务</span></button>
           <button id="switchSubtasks" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🪄</span><span data-i18n="sidebar.subtasks">子任务面板</span></button>
           <button id="switchCanvas" class="sidebar-action-btn"
             style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🎨</span><span data-i18n="sidebar.canvasWorkspace">画布工作区</span></button>
+          <button id="openChannelSettings" class="sidebar-action-btn"
+            style="text-align: left; justify-content: flex-start;"><span style="margin-right: 8px;" aria-hidden="true">🌐</span><span data-i18n="sidebar.channelSettings">渠道配置</span></button>
         </div>
 
         <!-- 树头部 -->
@@ -203,8 +205,8 @@
         <!-- 编辑模式：文件编辑器 -->
         <section class="editor-section hidden" id="editorSection">
           <div class="editor-header">
-            <span class="editor-path" id="editorPath">文件路径</span>
-            <span class="editor-mode-badge hidden" id="editorModeBadge">只读来源</span>
+            <span class="editor-path" id="editorPath" data-i18n="editor.pathLabel">文件路径</span>
+            <span class="editor-mode-badge hidden" id="editorModeBadge" data-i18n="editor.readonlySource">只读来源</span>
           </div>
           <textarea class="editor-textarea" id="editorTextarea" spellcheck="false"></textarea>
         </section>
@@ -263,7 +265,7 @@
               <div class="memory-viewer-heading">
                 <div class="memory-viewer-kicker-row">
                   <div class="memory-viewer-kicker" data-i18n="memory.kicker">记忆查看</div>
-                  <button id="memoryDreamModalTrigger" class="button memory-dream-open-btn" type="button">梦境</button>
+                  <button id="memoryDreamModalTrigger" class="button memory-dream-open-btn" type="button" data-i18n="memory.dreamModalTrigger" data-i18n-title="memory.dreamModalOpenTitle" title="打开梦境">梦境</button>
                 </div>
                 <div class="memory-viewer-title-row">
                   <div id="memoryViewerTitle" class="memory-viewer-title" data-i18n="memory.title">记忆查看</div>
@@ -293,27 +295,27 @@
                 <div id="memoryTaskFilters" class="memory-filter-group">
                   <select id="memoryTaskStatusFilter" class="select select-sm">
                     <option value="" data-i18n="memory.filters.statusAll">全部状态</option>
-                    <option value="running">运行中</option>
-                    <option value="success">成功</option>
-                    <option value="failed">失败</option>
-                    <option value="partial">部分完成</option>
+                    <option value="running" data-i18n="memory.taskStatusRunning">运行中</option>
+                    <option value="success" data-i18n="memory.taskStatusSuccess">成功</option>
+                    <option value="failed" data-i18n="memory.taskStatusFailed">失败</option>
+                    <option value="partial" data-i18n="memory.taskStatusPartial">部分完成</option>
                   </select>
                   <select id="memoryTaskSourceFilter" class="select select-sm">
                     <option value="" data-i18n="memory.filters.sourceAll">全部来源</option>
-                    <option value="chat">聊天</option>
-                    <option value="sub_agent">子 Agent</option>
-                    <option value="cron">定时任务</option>
-                    <option value="heartbeat">心跳</option>
-                    <option value="manual">手动</option>
+                    <option value="chat" data-i18n="memory.taskSourceChat">聊天</option>
+                    <option value="sub_agent" data-i18n="memory.taskSourceSubAgent">子 Agent</option>
+                    <option value="cron" data-i18n="memory.taskSourceCron">定时任务</option>
+                    <option value="heartbeat" data-i18n="memory.taskSourceHeartbeat">心跳</option>
+                    <option value="manual" data-i18n="memory.taskSourceManual">手动</option>
                   </select>
                 </div>
                 <div id="memoryChunkFilters" class="memory-filter-group hidden">
                   <select id="memoryChunkTypeFilter" class="select select-sm">
                     <option value="" data-i18n="memory.filters.chunkTypeAll">全部记忆类型</option>
-                    <option value="core">核心</option>
-                    <option value="daily">每日</option>
-                    <option value="session">会话</option>
-                    <option value="other">其他</option>
+                    <option value="core" data-i18n="memory.memoryTypeCore">核心</option>
+                    <option value="daily" data-i18n="memory.memoryTypeDaily">每日</option>
+                    <option value="session" data-i18n="memory.memoryTypeSession">会话</option>
+                    <option value="other" data-i18n="memory.memoryTypeOther">其他</option>
                   </select>
                   <select id="memoryChunkVisibilityFilter" class="select select-sm">
                       <option value="" data-i18n="memory.filters.visibilityDefault">默认范围</option>
@@ -374,6 +376,77 @@
               </aside>
               <section class="memory-viewer-detail" id="memoryViewerDetail">
                 <div class="memory-viewer-empty" data-i18n="memory.detailSelect">选择左侧条目查看详情。</div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="memory-viewer hidden" id="experienceWorkbenchSection">
+          <div class="memory-viewer-shell">
+            <div class="memory-viewer-header">
+              <div class="memory-viewer-heading">
+                <div class="memory-viewer-kicker-row">
+                  <div class="memory-viewer-kicker" data-i18n="experience.kicker">经验能力</div>
+                </div>
+                <div class="memory-viewer-title-row">
+                  <div id="experienceWorkbenchTitle" class="memory-viewer-title" data-i18n="experience.title">经验能力工作台</div>
+                </div>
+              </div>
+              <div class="memory-viewer-header-actions">
+                <button id="experienceWorkbenchRefresh" class="button" data-i18n="common.refresh">刷新</button>
+              </div>
+            </div>
+
+            <div class="memory-viewer-stats" id="experienceWorkbenchStats">
+              <div class="memory-stat-card">
+                <span class="memory-stat-label" data-i18n="experience.statTotal">候选总数</span>
+                <strong class="memory-stat-value">--</strong>
+              </div>
+              <div class="memory-stat-card">
+                <span class="memory-stat-label" data-i18n="experience.statMethods">Method</span>
+                <strong class="memory-stat-value">--</strong>
+              </div>
+              <div class="memory-stat-card">
+                <span class="memory-stat-label" data-i18n="experience.statSkills">Skill</span>
+                <strong class="memory-stat-value">--</strong>
+              </div>
+              <div class="memory-stat-card">
+                <span class="memory-stat-label" data-i18n="experience.statDraft">草稿</span>
+                <strong class="memory-stat-value">--</strong>
+              </div>
+            </div>
+
+            <div class="memory-viewer-toolbar">
+              <div class="memory-viewer-filters">
+                <input id="experienceWorkbenchQuery" class="input input-sm memory-search-input" data-i18n-placeholder="experience.queryPlaceholder" placeholder="搜索标题、摘要、taskId 或 slug" />
+                <div class="memory-filter-group">
+                  <select id="experienceWorkbenchTypeFilter" class="select select-sm">
+                    <option value="" data-i18n="experience.filterTypeAll">全部类型</option>
+                    <option value="method" data-i18n="experience.listTypeMethod">Method</option>
+                    <option value="skill" data-i18n="experience.listTypeSkill">Skill</option>
+                  </select>
+                  <select id="experienceWorkbenchStatusFilter" class="select select-sm">
+                    <option value="" data-i18n="experience.filterStatusAll">全部状态</option>
+                    <option value="draft" data-i18n="experience.listStatusDraft">草稿</option>
+                    <option value="accepted" data-i18n="experience.listStatusAccepted">已接受</option>
+                    <option value="rejected" data-i18n="experience.listStatusRejected">已拒绝</option>
+                  </select>
+                  <button id="experienceWorkbenchResetFilters" class="button" data-i18n="experience.resetFilters">重置</button>
+                </div>
+              </div>
+              <div class="goal-detail-actions experience-workbench-generate">
+                <input id="experienceGenerateTaskId" class="input input-sm experience-workbench-task-input" data-i18n-placeholder="experience.generateTaskPlaceholder" placeholder="输入 taskId 后生成 candidate" />
+                <button id="experienceGenerateMethodBtn" class="memory-usage-action-btn" data-i18n="experience.generateMethod">生成 method</button>
+                <button id="experienceGenerateSkillBtn" class="memory-usage-action-btn" data-i18n="experience.generateSkill">生成 skill</button>
+              </div>
+            </div>
+
+            <div class="memory-viewer-body">
+              <aside class="memory-viewer-list" id="experienceWorkbenchList">
+                <div class="memory-viewer-empty" data-i18n="experience.waiting">等待加载…</div>
+              </aside>
+              <section class="memory-viewer-detail" id="experienceWorkbenchDetail">
+                <div class="memory-viewer-empty" data-i18n="experience.detailSelect">选择左侧经验候选查看详情。</div>
               </section>
             </div>
           </div>
@@ -455,10 +528,10 @@
     <section class="composer" id="composerSection">
       <!-- 附件预览区 -->
       <div class="attachments-preview" id="attachmentsPreview"></div>
-      <!-- 输入区 -->
+        <!-- 输入区 -->
       <div class="composer-input-row">
         <button id="attachBtn" class="attach-btn" data-i18n-title="composer.attachTitle" title="添加附件">+</button>
-        <button id="voiceBtn" class="voice-btn" title="语音输入（点击切换录音）">🎤</button>
+        <button id="voiceBtn" class="voice-btn" data-i18n-title="voice.titleWithoutShortcut" title="语音输入（点击切换录音）">🎤</button>
         <span id="voiceDuration" class="voice-duration hidden">00:00</span>
         <input type="file" id="fileInput" class="hidden" multiple
           accept=".jpg,.jpeg,.png,.gif,.webp,.txt,.md,.json,.log,.mp4,.mov,.avi,.webm,.mkv" />
@@ -476,8 +549,8 @@
 
     <!-- 编辑模式：操作按钮 -->
     <section class="editor-actions hidden" id="editorActions">
-      <button id="cancelEdit" class="button editor-cancel">取消</button>
-      <button id="saveEdit" class="button editor-save">保存</button>
+      <button id="cancelEdit" class="button editor-cancel" data-i18n="common.cancel">取消</button>
+      <button id="saveEdit" class="button editor-save" data-i18n="common.save">保存</button>
     </section>
   </main>
 
@@ -912,36 +985,36 @@
   <div id="goalCreateModal" class="modal-overlay hidden">
     <div class="modal goal-create-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
-        <span>新建长期任务</span>
-        <button id="goalCreateClose" class="settings-btn">✕</button>
+        <span data-i18n="goals.create">新建长期任务</span>
+        <button id="goalCreateClose" class="settings-btn" data-i18n-title="common.close" title="关闭">✕</button>
       </div>
       <div class="modal-body">
         <div class="form-group">
-          <label class="form-label" for="goalCreateTitle">标题</label>
-          <input id="goalCreateTitle" class="input" placeholder="例如：WebChat 超长期任务系统落地" />
-          <div class="form-help">必填。建议直接写项目或阶段目标，而不是临时动作。</div>
+          <label class="form-label" for="goalCreateTitle" data-i18n="goals.createTitleLabel">标题</label>
+          <input id="goalCreateTitle" class="input" data-i18n-placeholder="goals.createTitlePlaceholder" placeholder="例如：WebChat 超长期任务系统落地" />
+          <div class="form-help" data-i18n="goals.createTitleHelp">必填。建议直接写项目或阶段目标，而不是临时动作。</div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="goalCreateObjective">目标说明</label>
-          <textarea id="goalCreateObjective" class="input" rows="4" placeholder="描述这个长期任务要达成的最终结果、边界与预期交付物"></textarea>
-          <div class="form-help">可选。这里的内容会直接写入初始 `00-goal.md` / `NORTHSTAR.md`。</div>
+          <label class="form-label" for="goalCreateObjective" data-i18n="goals.createObjectiveLabel">目标说明</label>
+          <textarea id="goalCreateObjective" class="input" rows="4" data-i18n-placeholder="goals.createObjectivePlaceholder" placeholder="描述这个长期任务要达成的最终结果、边界与预期交付物"></textarea>
+          <div class="form-help" data-i18n="goals.createObjectiveHelp">可选。这里的内容会直接写入初始 `00-goal.md` / `NORTHSTAR.md`。</div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="goalCreateRoot">自定义任务根目录</label>
-          <input id="goalCreateRoot" class="input" placeholder="留空则使用 ~/.star_sanctuary/goals/" />
-          <div class="form-help">可选。用于把某个长期任务的运行态和文档落到项目目录、D 盘或 E 盘路径。</div>
+          <label class="form-label" for="goalCreateRoot" data-i18n="goals.createRootLabel">自定义任务根目录</label>
+          <input id="goalCreateRoot" class="input" data-i18n-placeholder="goals.createRootPlaceholder" placeholder="留空则使用 ~/.star_sanctuary/goals/" />
+          <div class="form-help" data-i18n="goals.createRootHelp">可选。用于把某个长期任务的运行态和文档落到项目目录、D 盘或 E 盘路径。</div>
         </div>
         <div class="form-group">
           <label class="form-label" for="goalCreateAutoResume">
             <input id="goalCreateAutoResume" type="checkbox" style="margin-right: 8px;" checked />
-            创建后立即进入独立长期任务通道
+            <span data-i18n="goals.createAutoResumeLabel">创建后立即进入独立长期任务通道</span>
           </label>
-          <div class="form-help">建议保持开启。这样创建完成后会立刻切到该长期任务的专用执行通道。</div>
+          <div class="form-help" data-i18n="goals.createAutoResumeHelp">建议保持开启。这样创建完成后会立刻切到该长期任务的专用执行通道。</div>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="goalCreateCancel" class="button">取消</button>
-        <button id="goalCreateSubmit" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">创建</button>
+        <button id="goalCreateCancel" class="button" data-i18n="common.cancel">取消</button>
+        <button id="goalCreateSubmit" class="button" data-i18n="goals.createButton" style="background: var(--button-primary-bg); color: var(--button-primary-text);">创建</button>
       </div>
     </div>
   </div>
@@ -949,8 +1022,8 @@
   <div id="agentObservabilityModal" class="modal-overlay hidden">
     <div class="modal agent-observability-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
-        <span id="agentObservabilityModalTitle">Agent 详情</span>
-        <button id="agentObservabilityModalClose" class="settings-btn">✕</button>
+        <span id="agentObservabilityModalTitle" data-i18n="agentPanel.detailsTitle">Agent 详情</span>
+        <button id="agentObservabilityModalClose" class="settings-btn" data-i18n-title="common.close" title="关闭">✕</button>
       </div>
       <div class="modal-body" id="agentObservabilityModalBody"></div>
     </div>
@@ -959,8 +1032,8 @@
   <div id="sessionDigestModal" class="modal-overlay hidden">
     <div class="modal session-digest-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
-        <span id="sessionDigestModalTitle">会话摘要</span>
-        <button id="sessionDigestModalClose" class="settings-btn" title="关闭">✕</button>
+        <span id="sessionDigestModalTitle" data-i18n="panel.sessionDigestFullTitle">会话摘要</span>
+        <button id="sessionDigestModalClose" class="settings-btn" data-i18n-title="panel.sessionDigestClose" title="关闭">✕</button>
       </div>
       <div class="modal-body session-digest-modal-body">
         <div id="sessionDigestModalMeta" class="session-digest-modal-meta"></div>
@@ -973,28 +1046,28 @@
   <div id="memoryDreamModal" class="modal-overlay hidden">
     <div class="modal memory-dream-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
-        <span id="memoryDreamModalTitle">梦境</span>
-        <button id="memoryDreamModalClose" class="settings-btn" type="button" title="关闭">✕</button>
+        <span id="memoryDreamModalTitle" data-i18n="memory.dreamModalTitle">梦境</span>
+        <button id="memoryDreamModalClose" class="settings-btn" type="button" data-i18n-title="memory.dreamModalClose" title="关闭">✕</button>
       </div>
       <div class="modal-body memory-dream-modal-body">
         <div id="memoryDreamBar" class="memory-context-bar">
           <div class="memory-dream-copy">
-            <span id="memoryDreamStatus" class="memory-context-text">Dream 状态：--</span>
-            <span id="memoryDreamMeta" class="memory-context-text">默认会话：--</span>
-            <span id="memoryDreamObsidian" class="memory-context-text">Obsidian：--</span>
-            <span id="memoryDreamSummary" class="memory-context-text">最近摘要：--</span>
+            <span id="memoryDreamStatus" class="memory-context-text" data-i18n="memory.dreamDisconnected">Dream 状态：未连接</span>
+            <span id="memoryDreamMeta" class="memory-context-text" data-i18n="memory.dreamMetaDefault">默认会话：-</span>
+            <span id="memoryDreamObsidian" class="memory-context-text" data-i18n="memory.dreamObsidianSummaryEmpty">Obsidian：暂无</span>
+            <span id="memoryDreamSummary" class="memory-context-text" data-i18n="memory.dreamSummaryEmpty">最近还没有 dream 记录</span>
           </div>
           <div class="memory-dream-actions">
-            <button id="memoryDreamRefresh" class="button" type="button">刷新 Dream</button>
-            <button id="memoryDreamRun" class="button" type="button">运行 Dream</button>
-            <button id="memoryDreamHistoryToggle" class="button" type="button" aria-expanded="false">Dream 历史</button>
+            <button id="memoryDreamRefresh" class="button" type="button" data-i18n="common.refresh">刷新</button>
+            <button id="memoryDreamRun" class="button" type="button" data-i18n="memory.dreamRunButton">运行梦境</button>
+            <button id="memoryDreamHistoryToggle" class="button" type="button" aria-expanded="false" data-i18n="memory.dreamHistoryShow">Dream 历史</button>
           </div>
         </div>
 
         <div id="memoryDreamHistory" class="memory-dream-history hidden" hidden>
           <div class="memory-dream-history-toolbar">
-            <span id="memoryDreamHistoryStatus" class="memory-context-text">Dream 历史：--</span>
-            <button id="memoryDreamHistoryRefresh" class="button" type="button">刷新历史</button>
+            <span id="memoryDreamHistoryStatus" class="memory-context-text" data-i18n="memory.dreamHistoryDisconnected">Dream 历史：未连接</span>
+            <button id="memoryDreamHistoryRefresh" class="button" type="button" data-i18n="memory.dreamHistoryRefresh">刷新历史</button>
           </div>
           <div class="memory-dream-history-grid">
             <div id="memoryDreamHistoryList" class="memory-viewer-list"></div>
@@ -1008,51 +1081,51 @@
   <div id="goalCheckpointActionModal" class="modal-overlay hidden">
     <div class="modal goal-checkpoint-action-modal">
       <div class="modal-header" style="display: flex; align-items: center;">
-        <span id="goalCheckpointActionTitle">处理 Checkpoint</span>
-        <button id="goalCheckpointActionClose" class="settings-btn">✕</button>
+        <span id="goalCheckpointActionTitle" data-i18n="goals.checkpointActionModalTitle">处理 Checkpoint</span>
+        <button id="goalCheckpointActionClose" class="settings-btn" data-i18n-title="common.close" title="关闭">✕</button>
       </div>
       <div class="modal-body">
         <div class="goal-checkpoint-action-copy">
-          <div id="goalCheckpointActionHint" class="form-help">在这里完成 checkpoint 审批或状态流转，避免使用临时 prompt 输入。</div>
+          <div id="goalCheckpointActionHint" class="form-help" data-i18n="goals.checkpointActionHint">在这里完成 checkpoint 审批或状态流转，避免使用临时 prompt 输入。</div>
         </div>
         <div id="goalCheckpointActionContext" class="goal-checkpoint-action-context"></div>
         <div class="goal-checkpoint-action-form-grid">
           <div class="form-group">
-            <label class="form-label" for="goalCheckpointActionReviewer">评审人</label>
-            <input id="goalCheckpointActionReviewer" class="input" placeholder="例如：producer / qa / @reviewer" />
+            <label class="form-label" for="goalCheckpointActionReviewer" data-i18n="goals.checkpointActionReviewerLabel">评审人</label>
+            <input id="goalCheckpointActionReviewer" class="input" data-i18n-placeholder="goals.checkpointActionReviewerPlaceholder" placeholder="例如：producer / qa / @reviewer" />
           </div>
           <div class="form-group">
-            <label class="form-label" for="goalCheckpointActionReviewerRole">评审角色</label>
-            <input id="goalCheckpointActionReviewerRole" class="input" placeholder="例如：产品验收 / 技术审阅" />
+            <label class="form-label" for="goalCheckpointActionReviewerRole" data-i18n="goals.checkpointActionReviewerRoleLabel">评审角色</label>
+            <input id="goalCheckpointActionReviewerRole" class="input" data-i18n-placeholder="goals.checkpointActionReviewerRolePlaceholder" placeholder="例如：产品验收 / 技术审阅" />
           </div>
           <div class="form-group">
-            <label class="form-label" for="goalCheckpointActionRequestedBy">发起人</label>
-            <input id="goalCheckpointActionRequestedBy" class="input" placeholder="例如：main-agent / user / worker-1" />
+            <label class="form-label" for="goalCheckpointActionRequestedBy" data-i18n="goals.checkpointActionRequestedByLabel">发起人</label>
+            <input id="goalCheckpointActionRequestedBy" class="input" data-i18n-placeholder="goals.checkpointActionRequestedByPlaceholder" placeholder="例如：main-agent / user / worker-1" />
           </div>
           <div class="form-group">
-            <label id="goalCheckpointActionActorLabel" class="form-label" for="goalCheckpointActionActor">审批人</label>
-            <input id="goalCheckpointActionActor" class="input" placeholder="例如：designer / reviewer / producer" />
+            <label id="goalCheckpointActionActorLabel" class="form-label" for="goalCheckpointActionActor" data-i18n="goals.checkpointActionActorLabel">审批人</label>
+            <input id="goalCheckpointActionActor" class="input" data-i18n-placeholder="goals.checkpointActionActorPlaceholder" placeholder="例如：designer / reviewer / producer" />
           </div>
           <div class="form-group">
-            <label class="form-label" for="goalCheckpointActionSlaAt">SLA</label>
+            <label class="form-label" for="goalCheckpointActionSlaAt" data-i18n="goals.checkpointActionSlaLabel">SLA</label>
             <input id="goalCheckpointActionSlaAt" class="input" type="datetime-local" />
-            <div class="form-help">可选。用于表示本次 checkpoint 的目标处理截止时间。</div>
+            <div class="form-help" data-i18n="goals.checkpointActionSlaHelp">可选。用于表示本次 checkpoint 的目标处理截止时间。</div>
           </div>
         </div>
         <div class="form-group">
-          <label class="form-label" for="goalCheckpointActionSummary">摘要</label>
-          <input id="goalCheckpointActionSummary" class="input" placeholder="例如：已批准 / 已拒绝 / 已过期 / 已重新打开" />
-          <div class="form-help">会写入 `checkpoints.json` 与 `progress.md`，建议保持简短明确。</div>
+          <label class="form-label" for="goalCheckpointActionSummary" data-i18n="goals.checkpointActionSummaryLabel">摘要</label>
+          <input id="goalCheckpointActionSummary" class="input" data-i18n-placeholder="goals.checkpointActionSummaryPlaceholder" placeholder="例如：已批准 / 已拒绝 / 已过期 / 已重新打开" />
+          <div class="form-help" data-i18n="goals.checkpointActionSummaryHelp">会写入 `checkpoints.json` 与 `progress.md`，建议保持简短明确。</div>
         </div>
         <div class="form-group">
-          <label id="goalCheckpointActionNoteLabel" class="form-label" for="goalCheckpointActionNote">说明</label>
-          <textarea id="goalCheckpointActionNote" class="input" rows="5" placeholder="补充审批意见、过期原因或重新打开说明"></textarea>
-          <div id="goalCheckpointActionNoteHelp" class="form-help">部分操作要求填写原因，避免只留下状态没有上下文。</div>
+          <label id="goalCheckpointActionNoteLabel" class="form-label" for="goalCheckpointActionNote" data-i18n="goals.checkpointActionNoteLabel">说明</label>
+          <textarea id="goalCheckpointActionNote" class="input" rows="5" data-i18n-placeholder="goals.checkpointActionNotePlaceholder" placeholder="补充审批意见、过期原因或重新打开说明"></textarea>
+          <div id="goalCheckpointActionNoteHelp" class="form-help" data-i18n="goals.checkpointActionNoteHelp">部分操作要求填写原因，避免只留下状态没有上下文。</div>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="goalCheckpointActionCancel" class="button">取消</button>
-        <button id="goalCheckpointActionSubmit" class="button" style="background: var(--button-primary-bg); color: var(--button-primary-text);">提交</button>
+        <button id="goalCheckpointActionCancel" class="button" data-i18n="common.cancel">取消</button>
+        <button id="goalCheckpointActionSubmit" class="button" data-i18n="common.submit" style="background: var(--button-primary-bg); color: var(--button-primary-text);">提交</button>
       </div>
     </div>
   </div>

@@ -92,6 +92,7 @@ export function createMemoryDetailRenderFeature({
   loadTaskUsageOverview,
   loadTaskDetail,
   loadCandidateDetail,
+  openExperienceCandidate,
   openTaskFromAudit,
   openMemoryFromAudit,
   openSourcePath,
@@ -605,6 +606,7 @@ export function createMemoryDetailRenderFeature({
             ${goalId ? `<button class="button goal-inline-action-secondary" data-open-goal-tasks="${escapeHtml(goalId)}">${escapeHtml(t("memory.filterTasksByGoal", {}, "Filter Tasks by Goal"))}</button>` : ""}
             ${contextTargets.firstMemoryId ? `<button class="button goal-inline-action-secondary" data-open-memory-id="${escapeHtml(contextTargets.firstMemoryId)}">${escapeHtml(t("memory.contextOpenFirstMemory", {}, "打开关联记忆"))}</button>` : ""}
             ${contextTargets.firstCandidateId ? `<button class="button goal-inline-action-secondary" data-open-candidate-id="${escapeHtml(contextTargets.firstCandidateId)}">${escapeHtml(t("memory.contextOpenFirstCandidate", {}, "打开经验候选"))}</button>` : ""}
+            ${contextTargets.firstCandidateId ? `<button class="button goal-inline-action-secondary" data-open-experience-candidate-id="${escapeHtml(contextTargets.firstCandidateId)}">${escapeHtml(t("memory.contextOpenFirstCandidateWorkbench", {}, "在经验能力中打开"))}</button>` : ""}
             ${contextTargets.firstArtifactPath ? `<button class="button goal-inline-action-secondary" data-open-source="${escapeHtml(contextTargets.firstArtifactPath)}">${escapeHtml(t("memory.contextOpenFirstArtifact", {}, "打开相关产物"))}</button>` : ""}
           </div>
         </div>
@@ -911,6 +913,12 @@ export function createMemoryDetailRenderFeature({
       node.addEventListener("click", async () => {
         const candidateId = node.getAttribute("data-open-candidate-id");
         await loadCandidateDetail(candidateId);
+      });
+    });
+    memoryViewerDetailEl.querySelectorAll("[data-open-experience-candidate-id]").forEach((node) => {
+      node.addEventListener("click", async () => {
+        const candidateId = node.getAttribute("data-open-experience-candidate-id");
+        await openExperienceCandidate?.(candidateId);
       });
     });
     memoryViewerDetailEl.querySelectorAll("[data-open-goal-id]").forEach((node) => {

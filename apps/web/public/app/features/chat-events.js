@@ -29,6 +29,7 @@ export function createChatEventsFeature({
   onConversationStopped,
   getStoppedMessageText,
   escapeHtml,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   let botMessageEl = null;
   let botRawHtmlBuffer = "";
@@ -158,15 +159,14 @@ export function createChatEventsFeature({
       const safeCode = escapeHtml?.(code) || code;
       target.innerHTML = `
         <div style="line-height: 1.6;">
-          需要配对（Pairing）。配对码：<b>${safeCode}</b><br><br>
-          <b>新手操作指南：</b><br>
-          1. 不要关闭当前网页。<br>
-          2. <b>保持那个运行着服务的黑色窗口不要关</b>，然后在项目目录下重新打开一个<b>新的黑色终端窗口</b>。<br>
-          3. 在这个新窗口里，复制并粘贴下面的完整命令，然后按回车键：<br>
+          <div>${escapeHtml?.(t("settings.pairingPendingDefaultMessage", {}, "The current WebChat session still needs pairing approval.")) || ""}</div>
+          <div style="margin-top: 8px;">${escapeHtml?.(t("runtime.pairingCodeLabel", {}, "Pairing code")) || ""}：<b>${safeCode || "-"}</b></div>
           <div style="background: var(--bg-secondary); padding: 8px; border-radius: 4px; margin: 8px 0; font-family: monospace;">
             corepack pnpm bdd pairing approve ${safeCode}
           </div>
-          4. 终端提示成功后，在这个网页再发一次消息即可。
+          <div style="color: var(--text-secondary); font-size: 12px;">
+            ${escapeHtml?.(t("runtime.pairingCliHint", {}, "If the inline approval button is unavailable, run this command in a new terminal and then resend your message here.")) || ""}
+          </div>
         </div>
       `;
       return true;
@@ -307,7 +307,7 @@ export function createChatEventsFeature({
       }
       const removedEmptyBubble = discardStreamingBubbleIfEmpty();
       if (removedEmptyBubble) {
-        appendMessage("system", getStoppedMessageText?.(payload) || "已中断");
+        appendMessage("system", getStoppedMessageText?.(payload) || t("common.interrupted", {}, "Interrupted"));
       }
       resetStreamingState();
       forceScrollToBottom();

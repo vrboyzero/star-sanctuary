@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildGoalBridgeGovernanceSummary,
   collectGoalTrackingRuntimeTaskIds,
+  createGoalsSpecialistPanelsRuntimeFeature,
   mergeGoalTrackingRuntimeIndex,
 } from "./goals-specialist-panels-runtime.js";
 
@@ -131,6 +134,81 @@ describe("goal tracking runtime helpers", () => {
       taskId: "run_patch",
       runtimeState: "orphaned",
       closeReason: "orphan",
+    });
+  });
+
+  it("routes governance suggestion actions to experience workbench with fallback filters", async () => {
+    document.body.innerHTML = `
+      <div id="goalsDetail">
+        <div id="goalGovernancePanel">
+          <button
+            data-goal-open-experience="true"
+            data-goal-open-experience-candidate-id=""
+            data-goal-open-experience-type="skill"
+            data-goal-open-experience-query="Skill candidate from goal"
+          ></button>
+          <button
+            data-goal-open-experience="true"
+            data-goal-open-experience-candidate-id="goal_exp_method_1"
+            data-goal-open-experience-type="method"
+            data-goal-open-experience-query="Method candidate from goal"
+          ></button>
+        </div>
+      </div>
+    `;
+
+    const openExperienceWorkbench = vi.fn(async () => {});
+    const feature = createGoalsSpecialistPanelsRuntimeFeature({
+      refs: {
+        goalsDetailEl: document.getElementById("goalsDetail"),
+      },
+      getGoalsState: () => ({
+        capabilityCache: {},
+        capabilityPending: {},
+      }),
+      getGoalsCapabilityPanelFeature: () => null,
+      getGoalsReadonlyPanelsFeature: () => null,
+      getGoalsTrackingPanelFeature: () => null,
+      getGoalsGovernancePanelFeature: () => null,
+      readSourceFile: vi.fn(async () => null),
+      goalRuntimeFilePath: vi.fn(() => ""),
+      safeJsonParse: vi.fn(() => null),
+      sendReq: vi.fn(async () => ({ ok: true })),
+      makeId: () => "req-1",
+      getCanvasContextFeature: () => null,
+      openSourcePath: vi.fn(async () => {}),
+      openContinuationAction: vi.fn(async () => {}),
+      generateGoalHandoff: vi.fn(async () => {}),
+      runGoalApprovalScan: vi.fn(async () => {}),
+      runGoalSuggestionReviewDecision: vi.fn(async () => {}),
+      runGoalSuggestionReviewEscalation: vi.fn(async () => {}),
+      runGoalCheckpointEscalation: vi.fn(async () => {}),
+      openExperienceWorkbench,
+      applyGoalContinuationFocus: vi.fn(),
+    });
+
+    feature.bindGoalReviewGovernanceActions({ id: "goal_alpha" });
+
+    const [skillNode, methodNode] = Array.from(document.querySelectorAll("[data-goal-open-experience]"));
+    skillNode.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    methodNode.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+
+    expect(openExperienceWorkbench).toHaveBeenNthCalledWith(1, {
+      candidateId: "",
+      filters: {
+        type: "skill",
+        query: "Skill candidate from goal",
+      },
+      preferFirst: true,
+    });
+    expect(openExperienceWorkbench).toHaveBeenNthCalledWith(2, {
+      candidateId: "goal_exp_method_1",
+      filters: {
+        type: "method",
+        query: "Method candidate from goal",
+      },
+      preferFirst: true,
     });
   });
 });

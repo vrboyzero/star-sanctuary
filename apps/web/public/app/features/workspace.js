@@ -219,7 +219,7 @@ export function createWorkspaceFeature({
     currentEditReadOnly = readOnly;
 
     if (editorPathEl) {
-      editorPathEl.textContent = label || path || "文件路径";
+      editorPathEl.textContent = label || path || t("editor.pathLabel", {}, "File path");
     }
     if (editorTextareaEl) {
       editorTextareaEl.value = content || "";
@@ -227,12 +227,14 @@ export function createWorkspaceFeature({
     }
     if (editorModeBadgeEl) {
       editorModeBadgeEl.classList.toggle("hidden", !readOnly);
-      editorModeBadgeEl.textContent = readOnly ? "只读来源" : "可编辑";
+      editorModeBadgeEl.textContent = readOnly
+        ? t("editor.readonlySource", {}, "Read-only source")
+        : t("editor.editable", {}, "Editable");
     }
     if (saveEditBtn) {
       saveEditBtn.disabled = readOnly;
-      saveEditBtn.textContent = readOnly ? "只读" : "保存";
-      saveEditBtn.title = readOnly ? "当前为只读源文件视图" : "";
+      saveEditBtn.textContent = readOnly ? t("editor.readonly", {}, "Read-only") : t("common.save", {}, "Save");
+      saveEditBtn.title = readOnly ? t("editor.readonlySaveTitle", {}, "This source view is read-only.") : "";
     }
 
     switchMode("editor");
@@ -263,25 +265,25 @@ export function createWorkspaceFeature({
     }
     if (editorModeBadgeEl) {
       editorModeBadgeEl.classList.add("hidden");
-      editorModeBadgeEl.textContent = "只读来源";
+      editorModeBadgeEl.textContent = t("editor.readonlySource", {}, "Read-only source");
     }
     if (saveEditBtn) {
       saveEditBtn.disabled = false;
-      saveEditBtn.textContent = "保存";
+      saveEditBtn.textContent = t("common.save", {}, "Save");
       saveEditBtn.title = "";
     }
   }
 
   async function openEnvFile() {
     if (!isConnected()) {
-      showNotice("无法打开配置", "未连接到服务器。", "error");
+      showNotice(t("editor.openConfigFailedTitle", {}, "Unable to open config"), t("editor.notConnected", {}, "Not connected to the server."), "error");
       return;
     }
 
     const res = await createReq(sendReq, makeId, "config.readRaw");
     if (!res || !res.ok) {
-      const msg = res?.error?.message || "读取失败";
-      showNotice("无法读取配置文件", msg, "error");
+      const msg = res?.error?.message || t("editor.readFailed", {}, "Read failed");
+      showNotice(t("editor.openConfigReadFailedTitle", {}, "Unable to read config file"), msg, "error");
       return;
     }
 
@@ -289,7 +291,7 @@ export function createWorkspaceFeature({
       path: ".env",
       content: typeof res.payload?.content === "string" ? res.payload.content : "",
       readOnly: false,
-      label: ".env (环境配置)",
+      label: t("editor.envLabel", {}, ".env (environment config)"),
     });
   }
 
@@ -440,14 +442,14 @@ export function createWorkspaceFeature({
 
   async function openFile(filePath) {
     if (!isConnected()) {
-      showNotice("无法打开文件", "未连接到服务器。", "error");
+      showNotice(t("editor.openFileFailedTitle", {}, "Unable to open file"), t("editor.notConnected", {}, "Not connected to the server."), "error");
       return;
     }
 
     const res = await createReq(sendReq, makeId, "workspace.read", { path: filePath });
     if (!res || !res.ok) {
-      const msg = res?.error?.message || "读取失败";
-      showNotice("无法读取文件", msg, "error");
+      const msg = res?.error?.message || t("editor.readFailed", {}, "Read failed");
+      showNotice(t("editor.openFileReadFailedTitle", {}, "Unable to read file"), msg, "error");
       return;
     }
 
@@ -464,8 +466,18 @@ export function createWorkspaceFeature({
       const summary = summarizeCronWorkspaceContent(typeof res.payload?.content === "string" ? res.payload.content : "");
       if (summary) {
         showNotice(
-          "Cron 配置摘要",
-          `共 ${summary.totalJobs} 个任务，已启用 ${summary.enabledJobs} 个，main ${summary.mainSessionJobs} / isolated ${summary.isolatedSessionJobs}，错峰 ${summary.staggeredJobs} 个。`,
+          t("editor.cronSummaryTitle", {}, "Cron Summary"),
+          t(
+            "editor.cronSummaryMessage",
+            {
+              totalJobs: String(summary.totalJobs),
+              enabledJobs: String(summary.enabledJobs),
+              mainSessionJobs: String(summary.mainSessionJobs),
+              isolatedSessionJobs: String(summary.isolatedSessionJobs),
+              staggeredJobs: String(summary.staggeredJobs),
+            },
+            `${summary.totalJobs} jobs total, ${summary.enabledJobs} enabled, main ${summary.mainSessionJobs} / isolated ${summary.isolatedSessionJobs}, staggered ${summary.staggeredJobs}.`,
+          ),
           "info",
           2600,
         );
@@ -476,29 +488,30 @@ export function createWorkspaceFeature({
 
   async function openSourcePath(sourcePath, options = {}) {
     if (!isConnected()) {
-      showNotice("无法打开来源文件", "未连接到服务器。", "error");
+      showNotice(t("editor.openSourceFailedTitle", {}, "Unable to open source file"), t("editor.notConnected", {}, "Not connected to the server."), "error");
       return;
     }
     if (!sourcePath || typeof sourcePath !== "string") {
-      showNotice("无法打开来源文件", "无效的来源路径。", "error");
+      showNotice(t("editor.openSourceFailedTitle", {}, "Unable to open source file"), t("editor.invalidSourcePath", {}, "Invalid source path."), "error");
       return;
     }
 
     const res = await createReq(sendReq, makeId, "workspace.readSource", { path: sourcePath });
     if (!res || !res.ok) {
-      const msg = res?.error?.message || "读取失败";
-      showNotice("无法打开来源文件", msg, "error", 4200);
+      const msg = res?.error?.message || t("editor.readFailed", {}, "Read failed");
+      showNotice(t("editor.openSourceFailedTitle", {}, "Unable to open source file"), msg, "error", 4200);
       return;
     }
 
+    const resolvedPath = res.payload?.path || sourcePath;
     applyEditorSession({
-      path: res.payload?.path || sourcePath,
+      path: resolvedPath,
       content: typeof res.payload?.content === "string" ? res.payload.content : "",
       readOnly: true,
-      label: `${res.payload?.path || sourcePath} (只读来源)`,
+      label: t("editor.sourceReadonlyLabel", { path: resolvedPath }, `${resolvedPath} (read-only source)`),
       startLine: options.startLine,
     });
-    showNotice("来源文件已打开", "当前为只读视图，不会写回原文件。", "info", 2600);
+    showNotice(t("editor.sourceOpenedTitle", {}, "Source file opened"), t("editor.sourceOpenedMessage", {}, "This is a read-only view and will not write back to the original file."), "info", 2600);
   }
 
   async function readSourceFile(sourcePath) {
@@ -515,21 +528,21 @@ export function createWorkspaceFeature({
 
   async function saveFile() {
     if (!isConnected()) {
-      showNotice("无法保存", "未连接到服务器。", "error");
+      showNotice(t("editor.cannotSaveTitle", {}, "Unable to save"), t("editor.notConnected", {}, "Not connected to the server."), "error");
       return;
     }
     if (currentEditReadOnly) {
-      showNotice("当前不可保存", "这是只读来源视图，不能直接写回。", "error");
+      showNotice(t("editor.readonlySaveTitle", {}, "Save unavailable"), t("editor.readonlySaveMessage", {}, "This is a read-only source view and cannot be written back directly."), "error");
       return;
     }
     if (!currentEditPath) {
-      showNotice("无法保存", "没有正在编辑的文件。", "error");
+      showNotice(t("editor.cannotSaveTitle", {}, "Unable to save"), t("editor.noActiveFileMessage", {}, "There is no active file being edited."), "error");
       return;
     }
 
     const content = editorTextareaEl ? editorTextareaEl.value : "";
     if (saveEditBtn) {
-      saveEditBtn.textContent = "保存中...";
+      saveEditBtn.textContent = t("editor.saving", {}, "Saving...");
       saveEditBtn.disabled = true;
     }
 
@@ -545,21 +558,26 @@ export function createWorkspaceFeature({
 
     if (!res || !res.ok) {
       if (saveEditBtn) {
-        saveEditBtn.textContent = "保存";
+        saveEditBtn.textContent = t("common.save", {}, "Save");
       }
-      const msg = res?.error?.message || "保存失败";
-      showNotice("保存失败", msg, "error");
+      const msg = res?.error?.message || t("editor.saveFailed", {}, "Save failed");
+      showNotice(t("editor.saveFailedTitle", {}, "Save failed"), msg, "error");
       return;
     }
 
     if (saveEditBtn) {
-      saveEditBtn.textContent = "已保存";
+      saveEditBtn.textContent = t("common.saved", {}, "Saved");
     }
-    showNotice("保存成功", `${currentEditPath} 已写入。`, "success", 1800);
+    showNotice(
+      t("editor.saveSuccessTitle", {}, "Saved"),
+      t("editor.saveSuccessMessage", { path: currentEditPath }, `${currentEditPath} was written.`),
+      "success",
+      1800,
+    );
 
     setTimeout(() => {
       if (saveEditBtn) {
-        saveEditBtn.textContent = "保存";
+        saveEditBtn.textContent = t("common.save", {}, "Save");
       }
       switchMode("chat");
       currentEditPath = null;
@@ -571,7 +589,7 @@ export function createWorkspaceFeature({
 
   function cancelEdit() {
     if (originalContent !== null && editorTextareaEl) {
-      if (editorTextareaEl.value !== originalContent && !confirm("放弃修改？")) {
+      if (editorTextareaEl.value !== originalContent && !confirm(t("editor.discardConfirm", {}, "Discard changes?"))) {
         return;
       }
     }

@@ -153,6 +153,63 @@ test("config.update accepts channel settings and config.read redacts channel sec
   }
 });
 
+test("config.update persists assistant external delivery preference", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-env-"));
+  await fs.promises.writeFile(path.join(envDir, ".env"), 'BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE="feishu,qq"\n', "utf-8");
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    envDir,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-update-assistant-delivery-preference",
+      method: "config.update",
+      params: {
+        updates: {
+          BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE: "community,discord",
+        },
+      },
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-update-assistant-delivery-preference"));
+    const updateRes = frames.find((f) => f.type === "res" && f.id === "config-update-assistant-delivery-preference");
+    expect(updateRes.ok).toBe(true);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "config-read-assistant-delivery-preference",
+      method: "config.read",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "config-read-assistant-delivery-preference"));
+    const readRes = frames.find((f) => f.type === "res" && f.id === "config-read-assistant-delivery-preference");
+    expect(readRes.ok).toBe(true);
+    expect(readRes.payload?.config?.BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE).toBe("community,discord");
+
+    const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
+    expect(envLocalContent).toContain('BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE="community,discord"');
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
 test("channel.reply_chunking.get and update persist runtime chunk strategy config", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
   const server = await startGatewayServer({

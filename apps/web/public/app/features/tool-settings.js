@@ -37,6 +37,25 @@ export function createToolSettingsController({
   let toolSettingsConfirmTimer = null;
   let saveButtonState = "default";
 
+  function normalizeToolSettingsTab(tab) {
+    const normalized = typeof tab === "string" ? tab.trim() : "";
+    if (normalized === "builtin" || normalized === "mcp" || normalized === "plugins" || normalized === "methods" || normalized === "skills") {
+      return normalized;
+    }
+    return "builtin";
+  }
+
+  function setActiveToolSettingsTab(tab, options = {}) {
+    const nextTab = normalizeToolSettingsTab(tab);
+    toolSettingsActiveTab = nextTab;
+    for (const item of toolTabButtons || []) {
+      item.classList.toggle("active", item.dataset.tab === nextTab);
+    }
+    if (options.render !== false && toolSettingsData) {
+      renderToolSettingsTab();
+    }
+  }
+
   function updateSaveButton() {
     if (!saveToolSettingsBtn) return;
     const map = {
@@ -357,24 +376,24 @@ export function createToolSettingsController({
 
   for (const tab of toolTabButtons || []) {
     tab.addEventListener("click", () => {
-      for (const item of toolTabButtons) {
-        item.classList.remove("active");
-      }
-      tab.classList.add("active");
-      toolSettingsActiveTab = tab.dataset.tab;
-      renderToolSettingsTab();
+      setActiveToolSettingsTab(tab.dataset.tab, { render: true });
     });
   }
 
-  async function toggle(show) {
+  async function toggle(show, options = {}) {
     if (!toolSettingsModal) return;
     if (show) {
+      setActiveToolSettingsTab(options.tab ?? toolSettingsActiveTab, { render: false });
       toolSettingsModal.classList.remove("hidden");
       toolSettingsData = null;
       await loadToolSettings();
       return;
     }
     toolSettingsModal.classList.add("hidden");
+  }
+
+  async function openTab(tab) {
+    await toggle(true, { tab });
   }
 
   function shouldHandleToolSettingsConfirmPayload(payload) {
@@ -887,6 +906,7 @@ export function createToolSettingsController({
         renderToolSettingsTab();
       }
     },
+    openTab,
     toggle,
     handleConfirmRequired,
     handleConfirmResolved,

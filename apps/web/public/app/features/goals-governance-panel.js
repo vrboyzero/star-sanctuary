@@ -3,6 +3,7 @@ export function createGoalsGovernancePanelFeature({
   escapeHtml,
   formatDateTime,
   goalRuntimeFilePath,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const { goalsDetailEl } = refs;
 
@@ -27,6 +28,10 @@ export function createGoalsGovernancePanelFeature({
     if (normalized === "suggestion_review") return "建议评审";
     if (normalized === "template") return "模板";
     return targetType;
+  }
+
+  function isExperienceSuggestionType(suggestionType) {
+    return suggestionType === "method_candidate" || suggestionType === "skill_candidate";
   }
 
   function formatBridgeRuntimeState(runtimeState) {
@@ -171,6 +176,7 @@ export function createGoalsGovernancePanelFeature({
                     ${item.reviewer ? `<span>${escapeHtml(item.reviewer)}</span>` : ""}
                   </div>
                   <div class="goal-detail-actions">
+                    ${isExperienceSuggestionType(item.suggestionType) ? `<button class="button goal-inline-action-secondary" data-goal-open-experience="true" data-goal-open-experience-candidate-id="${escapeHtml(item.experienceCandidateId || "")}" data-goal-open-experience-type="${escapeHtml(item.experienceType || "")}" data-goal-open-experience-query="${escapeHtml(item.title || item.suggestionId || item.id || "")}">${escapeHtml(t("goals.openExperienceWorkbench", {}, "在经验能力中打开"))}</button>` : ""}
                     <button class="button goal-inline-action" data-goal-suggestion-decision="accepted" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">通过</button>
                     <button class="button goal-inline-action-secondary" data-goal-suggestion-decision="rejected" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">拒绝</button>
                     <button class="button goal-inline-action-secondary" data-goal-suggestion-escalate="true" data-goal-suggestion-goal-id="${escapeHtml(goal.id)}" data-goal-suggestion-review-id="${escapeHtml(item.id)}" data-goal-suggestion-type="${escapeHtml(item.suggestionType)}" data-goal-suggestion-id="${escapeHtml(item.suggestionId)}">升级</button>

@@ -64,6 +64,7 @@ export function createAttachmentsFeature({
   imageCompression,
   estimateDataUrlBytes,
   formatBytes,
+  t = (_key, _params, fallback) => fallback ?? "",
 }) {
   const {
     attachmentsPreviewEl,
@@ -163,8 +164,24 @@ export function createAttachmentsFeature({
 
     const totalBytes = estimatePendingAttachmentTotalBytes();
     const summary = pendingAttachments.length > 0
-      ? `已选 ${pendingAttachments.length} 个附件，约 ${formatBytes(totalBytes)} / ${formatBytes(attachmentLimits.maxTotalBytes)}。单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}。`
-      : `附件上限：单文件 ${formatBytes(attachmentLimits.maxFileBytes)}，总计 ${formatBytes(attachmentLimits.maxTotalBytes)}。`;
+      ? t(
+        "attachments.summarySelected",
+        {
+          count: String(pendingAttachments.length),
+          totalBytes: formatBytes(totalBytes),
+          totalLimit: formatBytes(attachmentLimits.maxTotalBytes),
+          fileLimit: formatBytes(attachmentLimits.maxFileBytes),
+        },
+        `Selected ${pendingAttachments.length} attachment(s), about ${formatBytes(totalBytes)} / ${formatBytes(attachmentLimits.maxTotalBytes)}. Per-file limit ${formatBytes(attachmentLimits.maxFileBytes)}.`,
+      )
+      : t(
+        "attachments.summaryEmpty",
+        {
+          fileLimit: formatBytes(attachmentLimits.maxFileBytes),
+          totalLimit: formatBytes(attachmentLimits.maxTotalBytes),
+        },
+        `Attachment limits: ${formatBytes(attachmentLimits.maxFileBytes)} per file, ${formatBytes(attachmentLimits.maxTotalBytes)} total.`,
+      );
 
     attachmentHintEl.textContent = extraMessage ? `${extraMessage}\n${summary}` : summary;
     attachmentHintEl.classList.toggle("has-warning", Boolean(extraMessage));
@@ -259,7 +276,7 @@ export function createAttachmentsFeature({
 
       if (!isImage && !isVideo && !isText) {
         console.warn(`不支持的文件类型: ${file.name}`);
-        rejected.push(`${file.name}：不支持的文件类型`);
+        rejected.push(t("attachments.unsupportedType", { name: file.name }, `${file.name}: unsupported file type`));
         continue;
       }
 
@@ -269,11 +286,30 @@ export function createAttachmentsFeature({
         let attachmentBytes = 0;
 
         if (!isImage && file.size > attachmentLimits.maxFileBytes) {
-          rejected.push(`${file.name}：文件大小 ${formatBytes(file.size)} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}`);
+          rejected.push(
+            t(
+              "attachments.singleLimitExceeded",
+              {
+                name: file.name,
+                size: formatBytes(file.size),
+                limit: formatBytes(attachmentLimits.maxFileBytes),
+              },
+              `${file.name}: file size ${formatBytes(file.size)} exceeds the per-file limit ${formatBytes(attachmentLimits.maxFileBytes)}`,
+            ),
+          );
           continue;
         }
         if (!isImage && projectedTotalBytes + file.size > attachmentLimits.maxTotalBytes) {
-          rejected.push(`${file.name}：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}`);
+          rejected.push(
+            t(
+              "attachments.totalLimitExceeded",
+              {
+                name: file.name,
+                limit: formatBytes(attachmentLimits.maxTotalBytes),
+              },
+              `${file.name}: total size would exceed ${formatBytes(attachmentLimits.maxTotalBytes)}`,
+            ),
+          );
           continue;
         }
 
@@ -290,11 +326,30 @@ export function createAttachmentsFeature({
         }
 
         if (attachmentBytes > attachmentLimits.maxFileBytes) {
-          rejected.push(`${file.name}：处理后大小 ${formatBytes(attachmentBytes)} 超过单文件上限 ${formatBytes(attachmentLimits.maxFileBytes)}`);
+          rejected.push(
+            t(
+              "attachments.processedLimitExceeded",
+              {
+                name: file.name,
+                size: formatBytes(attachmentBytes),
+                limit: formatBytes(attachmentLimits.maxFileBytes),
+              },
+              `${file.name}: processed size ${formatBytes(attachmentBytes)} exceeds the per-file limit ${formatBytes(attachmentLimits.maxFileBytes)}`,
+            ),
+          );
           continue;
         }
         if (projectedTotalBytes + attachmentBytes > attachmentLimits.maxTotalBytes) {
-          rejected.push(`${file.name}：加入后总大小会超过 ${formatBytes(attachmentLimits.maxTotalBytes)}`);
+          rejected.push(
+            t(
+              "attachments.totalLimitExceeded",
+              {
+                name: file.name,
+                limit: formatBytes(attachmentLimits.maxTotalBytes),
+              },
+              `${file.name}: total size would exceed ${formatBytes(attachmentLimits.maxTotalBytes)}`,
+            ),
+          );
           continue;
         }
 
@@ -307,16 +362,18 @@ export function createAttachmentsFeature({
         projectedTotalBytes += attachmentBytes;
       } catch (err) {
         console.error(`读取文件失败: ${file.name}`, err);
-        rejected.push(`${file.name}：读取失败`);
+        rejected.push(t("attachments.readFailed", { name: file.name }, `${file.name}: failed to read`));
       }
     }
 
     if (rejected.length > 0) {
       const lines = rejected.slice(0, 3).map((item) => `- ${item}`);
       if (rejected.length > 3) {
-        lines.push(`- 另有 ${rejected.length - 3} 个文件被跳过`);
+        lines.push(
+          `- ${t("attachments.skippedMore", { count: String(rejected.length - 3) }, `${rejected.length - 3} more file(s) were skipped`)}`,
+        );
       }
-      renderAttachmentsPreview(`⚠️ 以下文件未加入：\n${lines.join("\n")}`);
+      renderAttachmentsPreview(`${t("attachments.rejectedPrefix", {}, "The following files were not added:")}\n${lines.join("\n")}`);
       return;
     }
 

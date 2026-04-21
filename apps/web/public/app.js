@@ -22,6 +22,7 @@ import {
 } from "./app/bootstrap/storage-keys.js";
 import {
   createDefaultSharedReviewFilters,
+  experienceWorkbenchState,
   goalsState,
   memoryViewerState,
   subtasksState,
@@ -49,6 +50,7 @@ import { createGoalsTrackingPanelFeature } from "./app/features/goals-tracking-p
 import { createMemoryDetailRenderFeature } from "./app/features/memory-detail-render.js";
 import { createMemoryRuntimeFeature } from "./app/features/memory-runtime.js";
 import { createMemoryViewerFeature } from "./app/features/memory-viewer.js";
+import { createExperienceWorkbenchFeature } from "./app/features/experience-workbench.js";
 import { createSessionNavigationFeature } from "./app/features/session-navigation.js";
 import { createSessionDigestFeature } from "./app/features/session-digest.js";
 import { createSettingsRuntimeFeature } from "./app/features/settings-runtime.js";
@@ -98,6 +100,7 @@ const {
   switchFacetBtn,
   switchCronBtn,
   switchMemoryBtn,
+  switchExperienceBtn,
   switchGoalsBtn,
   switchSubtasksBtn,
   switchCanvasBtn,
@@ -152,6 +155,19 @@ const {
   memorySharedReviewTargetFilterEl,
   memorySharedReviewClaimedByFilterEl,
   memorySharedReviewClearFiltersBtn,
+  experienceWorkbenchSection,
+  experienceWorkbenchTitleEl,
+  experienceWorkbenchStatsEl,
+  experienceWorkbenchQueryEl,
+  experienceWorkbenchTypeFilterEl,
+  experienceWorkbenchStatusFilterEl,
+  experienceWorkbenchResetFiltersBtn,
+  experienceGenerateTaskIdEl,
+  experienceGenerateMethodBtn,
+  experienceGenerateSkillBtn,
+  experienceWorkbenchListEl,
+  experienceWorkbenchDetailEl,
+  experienceWorkbenchRefreshBtn,
   goalsSection,
   goalsSummaryEl,
   goalsListEl,
@@ -523,6 +539,7 @@ let goalsTrackingPanelFeature = null;
 let memoryDetailRenderFeature = null;
 let memoryRuntimeFeature = null;
 let memoryViewerFeature = null;
+let experienceWorkbenchFeature = null;
 let emailInboundSessionBannerFeature = null;
 let sessionDigestFeature = null;
 let settingsRuntimeFeature = null;
@@ -541,12 +558,14 @@ const appShellFeature = createAppShellFeature({
     switchFacetBtn,
     switchCronBtn,
     switchMemoryBtn,
+    switchExperienceBtn,
     switchGoalsBtn,
     switchSubtasksBtn,
     switchCanvasBtn,
     chatSection,
     editorSection,
     memoryViewerSection,
+    experienceWorkbenchSection,
     goalsSection,
     subtasksSection,
     composerSection,
@@ -666,6 +685,7 @@ attachmentsFeature = createAttachmentsFeature({
   },
   estimateDataUrlBytes,
   formatBytes,
+  t: localeController.t,
 });
 
 workspaceFeature = createWorkspaceFeature({
@@ -749,6 +769,9 @@ connectBtn.addEventListener("click", () => connect());
 sendBtn.addEventListener("click", () => handleComposerPrimaryAction());
 if (memoryViewerRefreshBtn) {
   memoryViewerRefreshBtn.addEventListener("click", () => loadMemoryViewer(true));
+}
+if (experienceWorkbenchRefreshBtn) {
+  experienceWorkbenchRefreshBtn.addEventListener("click", () => loadExperienceWorkbench(true));
 }
 if (memoryDreamRefreshBtn) {
   memoryDreamRefreshBtn.addEventListener("click", () => {
@@ -1158,6 +1181,7 @@ chatUiFeature = createChatUiFeature({
   showNotice,
   getAvatarUploadHeaders: () => getHttpAuthHeaders(),
   onAvatarUploaded: ({ role, agentId, avatarPath }) => applyUploadedAvatarChange({ role, agentId, avatarPath }),
+  t: localeController.t,
 });
 
 chatUiFeature.initCopyButtonDelegation();
@@ -1312,6 +1336,7 @@ goalsGovernancePanelFeature = createGoalsGovernancePanelFeature({
   escapeHtml,
   formatDateTime,
   goalRuntimeFilePath,
+  t: localeController.t,
 });
 
 goalsCapabilityPanelFeature = createGoalsCapabilityPanelFeature({
@@ -1385,6 +1410,10 @@ goalsSpecialistPanelsFeature = createGoalsSpecialistPanelsRuntimeFeature({
   runGoalSuggestionReviewDecision: (goalId, options = {}) => runGoalSuggestionReviewDecision(goalId, options),
   runGoalSuggestionReviewEscalation: (goalId, options = {}) => runGoalSuggestionReviewEscalation(goalId, options),
   runGoalCheckpointEscalation: (goalId, nodeId, checkpointId) => runGoalCheckpointEscalation(goalId, nodeId, checkpointId),
+  openExperienceWorkbench: async (options = {}) => {
+    switchMode("experience");
+    await experienceWorkbenchFeature?.openExperienceWorkbench?.(options);
+  },
   applyGoalContinuationFocus: (goalId) => applyGoalContinuationFocus(goalId),
 });
 
@@ -1453,6 +1482,11 @@ memoryDetailRenderFeature = createMemoryDetailRenderFeature({
   loadTaskUsageOverview: () => loadTaskUsageOverview(),
   loadTaskDetail: (taskId) => loadTaskDetail(taskId),
   loadCandidateDetail: (candidateId) => loadCandidateDetail(candidateId),
+  openExperienceCandidate: async (candidateId) => {
+    if (!candidateId) return;
+    switchMode("experience");
+    await experienceWorkbenchFeature?.openExperienceWorkbench?.({ candidateId, preferFirst: false });
+  },
   openTaskFromAudit: (taskId) => openTaskFromAudit(taskId),
   openMemoryFromAudit: (chunkId) => openMemoryFromAudit(chunkId),
   openSourcePath: (sourcePath, options) => openSourcePath(sourcePath, options),
@@ -1546,6 +1580,47 @@ memoryViewerFeature = createMemoryViewerFeature({
   showNotice,
   t: localeController.t,
 });
+
+experienceWorkbenchFeature = createExperienceWorkbenchFeature({
+  refs: {
+    experienceWorkbenchSection,
+    experienceWorkbenchTitleEl,
+    experienceWorkbenchStatsEl,
+    experienceWorkbenchQueryEl,
+    experienceWorkbenchTypeFilterEl,
+    experienceWorkbenchStatusFilterEl,
+    experienceWorkbenchResetFiltersBtn,
+    experienceGenerateTaskIdEl,
+    experienceGenerateMethodBtn,
+    experienceGenerateSkillBtn,
+    experienceWorkbenchListEl,
+    experienceWorkbenchDetailEl,
+  },
+  isConnected: () => Boolean(ws && isReady),
+  sendReq,
+  makeId,
+  getExperienceWorkbenchState: () => experienceWorkbenchState,
+  getMemoryViewerState: () => memoryViewerState,
+  getSelectedAgentId: () => getCurrentAgentSelection(),
+  getSelectedAgentLabel: () => getCurrentAgentLabel(),
+  renderCandidateDetailPanel: (candidate) => memoryViewerFeature?.renderCandidateDetailPanel(candidate) || "",
+  generateExperienceCandidate: (taskId, candidateType) => memoryRuntimeFeature?.generateExperienceCandidate?.(taskId, candidateType),
+  openToolSettingsTab: (tab) => settingsRuntimeFeature?.openToolSettingsTab?.(tab),
+  escapeHtml,
+  formatDateTime,
+  openTaskFromWorkbench: async (taskId) => {
+    switchMode("memory");
+    await openTaskFromAudit(taskId);
+  },
+  openMemoryFromWorkbench: async (chunkId) => {
+    switchMode("memory");
+    await openMemoryFromAudit(chunkId);
+  },
+  openSourcePath: (sourcePath, options) => openSourcePath(sourcePath, options),
+  showNotice,
+  t: localeController.t,
+});
+experienceWorkbenchFeature.bindUi();
 
 memoryRuntimeFeature = createMemoryRuntimeFeature({
   refs: {
@@ -1651,10 +1726,13 @@ agentRuntimeFeature = createAgentRuntimeFeature({
   onAgentIdentityChanged: () => {
     memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
     memoryViewerFeature?.syncSharedReviewFilterUi?.();
+    experienceWorkbenchFeature?.syncExperienceWorkbenchHeaderTitle?.();
+    void refreshExperienceWorkbenchForAgentSwitch();
   },
   onAgentCatalogChanged: () => {
     memoryViewerFeature?.syncMemoryViewerHeaderTitle?.();
     memoryViewerFeature?.syncSharedReviewFilterUi?.();
+    experienceWorkbenchFeature?.syncExperienceWorkbenchHeaderTitle?.();
   },
   showNotice,
   localeController,
@@ -1732,6 +1810,10 @@ async function refreshMemoryViewerForAgentSwitch(agentId = getCurrentAgentSelect
   }
 
   await loadMemoryViewer(true);
+}
+
+async function refreshExperienceWorkbenchForAgentSwitch(agentId = getCurrentAgentSelection()) {
+  return experienceWorkbenchFeature?.refreshExperienceWorkbenchForAgentSwitch(agentId);
 }
 
 function syncAgentRuntimeEntry(agentId, patch = {}) {
@@ -1909,7 +1991,7 @@ function restorePromptText(text) {
 
 async function approvePairingFromWebchat(code) {
   if (!code || !ws || !isReady) {
-    return { ok: false, message: "当前连接不可用，请先重新连接后再试。" };
+    return { ok: false, message: localeController.t("runtime.pairingConnectionUnavailable", {}, "The current connection is unavailable. Reconnect and try again.") };
   }
   const response = await sendReq({
     type: "req",
@@ -1918,10 +2000,10 @@ async function approvePairingFromWebchat(code) {
     params: { code },
   });
   if (!response) {
-    return { ok: false, message: "配对批准请求未返回结果。" };
+    return { ok: false, message: localeController.t("runtime.pairingNoResult", {}, "The pairing approval request did not return a result.") };
   }
   if (!response.ok) {
-    return { ok: false, message: response.error?.message || "配对批准失败。" };
+    return { ok: false, message: response.error?.message || localeController.t("settings.pairingApproveFailedFallback", {}, "Pairing approval failed.") };
   }
   return {
     ok: true,
@@ -1935,21 +2017,21 @@ function renderPairingRequiredPrompt(target, payload = {}) {
   const safeCode = escapeHtml(code);
   const message = typeof payload.message === "string" && payload.message.trim()
     ? payload.message.trim()
-    : `需要配对（Pairing）。配对码：${code || "未知"}`;
+    : localeController.t("settings.pairingPendingDefaultMessage", {}, "The current WebChat session still needs pairing approval.");
   const safeMessage = escapeHtml(message);
   const clientId = typeof payload.clientId === "string" ? payload.clientId.trim() : "";
   const safeClientId = escapeHtml(clientId);
   target.innerHTML = `
     <div class="pairing-required-card" style="line-height: 1.6;">
       <div>${safeMessage}</div>
-      <div style="margin-top: 8px;">配对码：<b>${safeCode || "未知"}</b></div>
+      <div style="margin-top: 8px;">${escapeHtml(localeController.t("runtime.pairingCodeLabel", {}, "Pairing code"))}：<b>${safeCode || "-"}</b></div>
       <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-        <button type="button" class="btn pairing-approve-btn">在 WebChat 内批准</button>
-        <button type="button" class="btn pairing-open-settings-btn">打开设置页</button>
+        <button type="button" class="btn pairing-approve-btn">${escapeHtml(localeController.t("settings.pairingApprove", {}, "Approve"))}</button>
+        <button type="button" class="btn pairing-open-settings-btn">${escapeHtml(localeController.t("settings.title", {}, "Settings"))}</button>
         <span class="pairing-status-text" style="color: var(--text-secondary); font-size: 12px;"></span>
       </div>
       <div style="margin-top: 10px; color: var(--text-secondary); font-size: 12px;">
-        默认流程不需要命令行。若页面按钮不可用，再使用 CLI 诊断路径：
+        ${escapeHtml(localeController.t("runtime.pairingCliHint", {}, "If the inline approval button is unavailable, use the CLI fallback below and then resend your message here."))}
         <code>bdd pairing approve ${safeCode || "&lt;CODE&gt;"}</code>
       </div>
       ${safeClientId ? `<div style="margin-top: 6px; color: var(--text-secondary); font-size: 12px;">clientId: <code>${safeClientId}</code></div>` : ""}
@@ -1966,24 +2048,29 @@ function renderPairingRequiredPrompt(target, payload = {}) {
 
   approveBtn.addEventListener("click", async () => {
     if (!code) {
-      statusEl.textContent = "缺少配对码，无法批准。";
+      statusEl.textContent = localeController.t("settings.pairingCodeMissing", {}, "Pairing code is required.");
       return;
     }
     approveBtn.disabled = true;
     if (openSettingsBtn) openSettingsBtn.disabled = true;
-    statusEl.textContent = "正在批准配对…";
+    statusEl.textContent = localeController.t("settings.pairingProcessing", {}, "Processing...");
     const approved = settingsRuntimeFeature?.approvePairingPending
       ? await settingsRuntimeFeature.approvePairingPending(code, { showSuccessNotice: false })
       : await approvePairingFromWebchat(code);
     if (!approved.ok) {
-      statusEl.textContent = approved.message || "配对批准失败。";
+      statusEl.textContent = approved.message || localeController.t("settings.pairingApproveFailedFallback", {}, "Pairing approval failed.");
       approveBtn.disabled = false;
       if (openSettingsBtn) openSettingsBtn.disabled = false;
       return;
     }
-    statusEl.textContent = "配对已批准。现在可以直接重发刚才的消息。";
-    approveBtn.textContent = "已批准";
-    showNotice?.("配对已批准", "可直接在当前 WebChat 继续发送消息。", "success", 3200);
+    statusEl.textContent = localeController.t("runtime.pairingApprovedResend", {}, "Pairing approved. You can resend your message now.");
+    approveBtn.textContent = localeController.t("runtime.pairingApprovedButton", {}, "Approved");
+    showNotice?.(
+      localeController.t("settings.pairingApprovedTitle", {}, "Pairing approved"),
+      localeController.t("settings.pairingApprovedMessage", { code }, "Pairing code {code} was approved. You can continue in the current WebChat session."),
+      "success",
+      3200,
+    );
   }, { once: true });
 }
 
@@ -2087,11 +2174,11 @@ async function sendMessage(options = {}) {
   // ── 斜杠命令：/compact ──
   if (text === "/compact") {
     if (!activeConversationId) {
-      appendMessage("bot", "当前没有活跃的对话，无法压缩上下文。");
+      appendMessage("bot", localeController.t("runtime.compactNoConversation", {}, "There is no active conversation to compact."));
       return;
     }
     appendMessage("me", "/compact");
-    const statusEl = appendMessage("bot", "正在压缩上下文…");
+    const statusEl = appendMessage("bot", localeController.t("runtime.compactPending", {}, "Compacting context..."));
     const res = await sendReq({
       type: "req",
       id: makeId(),
@@ -2101,12 +2188,24 @@ async function sendMessage(options = {}) {
     if (res && res.ok && res.payload) {
       const p = res.payload;
       if (p.compacted) {
-        statusEl.textContent = `上下文压缩完成（${p.tier ?? "unknown"}）：${p.originalTokens ?? "?"} → ${p.compactedTokens ?? "?"} tokens`;
+        statusEl.textContent = localeController.t(
+          "runtime.compactComplete",
+          {
+            tier: p.tier ?? localeController.t("common.unknown", {}, "unknown"),
+            originalTokens: String(p.originalTokens ?? "?"),
+            compactedTokens: String(p.compactedTokens ?? "?"),
+          },
+          `Context compaction complete (${p.tier ?? localeController.t("common.unknown", {}, "unknown")}): ${p.originalTokens ?? "?"} -> ${p.compactedTokens ?? "?"} tokens`,
+        );
       } else {
-        statusEl.textContent = "当前上下文较短，无需压缩。";
+        statusEl.textContent = localeController.t("runtime.compactSkipped", {}, "The current context is already short enough. No compaction is needed.");
       }
     } else {
-      statusEl.textContent = "压缩失败：" + (res?.error?.message || "未知错误");
+      statusEl.textContent = localeController.t(
+        "runtime.compactFailed",
+        { message: res?.error?.message || localeController.t("common.unknown", {}, "Unknown") },
+        `Context compaction failed: ${res?.error?.message || localeController.t("common.unknown", {}, "Unknown")}`,
+      );
     }
     return;
   }
@@ -2133,7 +2232,7 @@ async function sendMessage(options = {}) {
   // ── 斜杠命令：/doctor ──
   if (text === "/doctor") {
     appendMessage("me", "/doctor");
-    const statusEl = appendMessage("bot", "正在执行健康检查…");
+    const statusEl = appendMessage("bot", localeController.t("runtime.doctorPending", {}, "Running system doctor..."));
     const res = await sendReq({
       type: "req",
       id: makeId(),
@@ -2151,7 +2250,11 @@ async function sendMessage(options = {}) {
       lines.push(...buildDoctorChatSummary(res.payload, localeController.t));
       statusEl.textContent = lines.join("\n");
     } else {
-      statusEl.textContent = "健康检查失败：" + (res?.error?.message || "未知错误");
+      statusEl.textContent = localeController.t(
+        "runtime.doctorFailed",
+        { message: res?.error?.message || localeController.t("common.unknown", {}, "Unknown") },
+        `System doctor failed: ${res?.error?.message || localeController.t("common.unknown", {}, "Unknown")}`,
+      );
     }
     return;
   }
@@ -2194,12 +2297,14 @@ async function sendMessage(options = {}) {
 
   const oversizedAttachment = attachments.find((att) => estimateBase64DecodedBytes(att.base64) > attachmentLimits.maxFileBytes);
   if (oversizedAttachment) {
-    appendMessage("bot",
-      `⚠️ 本次消息已在发送前拦截。\n` +
-      `附件 "${oversizedAttachment.name}" 超过单文件大小限制。\n` +
-      `当前限制：${formatBytes(attachmentLimits.maxFileBytes)}（可通过 BELLDANDY_ATTACHMENT_MAX_FILE_BYTES 调整）。\n` +
-      `建议：压缩文件或拆分后重试。`
-    );
+    appendMessage("bot", localeController.t(
+      "runtime.sendBlockedSingleAttachment",
+      {
+        name: oversizedAttachment.name,
+        limit: formatBytes(attachmentLimits.maxFileBytes),
+      },
+      `This message was blocked before sending.\nAttachment "${oversizedAttachment.name}" exceeds the per-file size limit.\nCurrent limit: ${formatBytes(attachmentLimits.maxFileBytes)} (adjustable via BELLDANDY_ATTACHMENT_MAX_FILE_BYTES).\nSuggestion: compress the file or split it and try again.`,
+    ));
     console.warn("message.send blocked by single attachment limit", {
       fileName: oversizedAttachment.name,
       fileLimitBytes: attachmentLimits.maxFileBytes,
@@ -2212,11 +2317,14 @@ async function sendMessage(options = {}) {
   }
 
   if (attachmentDecodedBytes > attachmentLimits.maxTotalBytes) {
-    appendMessage("bot",
-      `⚠️ 本次消息已在发送前拦截。\n` +
-      `附件总大小约 ${formatBytes(attachmentDecodedBytes)}，超过总限制 ${formatBytes(attachmentLimits.maxTotalBytes)}。\n` +
-      `可通过 BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES 调整上限，或减少附件后重试。`
-    );
+    appendMessage("bot", localeController.t(
+      "runtime.sendBlockedTotalAttachments",
+      {
+        size: formatBytes(attachmentDecodedBytes),
+        limit: formatBytes(attachmentLimits.maxTotalBytes),
+      },
+      `This message was blocked before sending.\nAttachments total about ${formatBytes(attachmentDecodedBytes)}, which exceeds the total limit ${formatBytes(attachmentLimits.maxTotalBytes)}.\nAdjust BELLDANDY_ATTACHMENT_MAX_TOTAL_BYTES or remove some attachments and try again.`,
+    ));
     console.warn("message.send blocked by attachment total limit", {
       attachmentDecodedBytes,
       totalLimitBytes: attachmentLimits.maxTotalBytes,
@@ -2228,15 +2336,18 @@ async function sendMessage(options = {}) {
     return;
   }
 
-  const displayText = text || (pendingAttachments.length ? "[语音消息]" : "");
+  const displayText = text || (pendingAttachments.length ? localeController.t("runtime.voiceMessagePlaceholder", {}, "[Voice message]") : "");
+  const attachmentBadge = pendingAttachments.length
+    ? localeController.t("runtime.attachmentsCountBadge", { count: String(pendingAttachments.length) }, `[${pendingAttachments.length} attachment(s)]`)
+    : "";
   const optimisticUserMeta = {
     timestampMs: params.clientContext.sentAtMs,
     isLatest: true,
   };
-  appendMessage("me", displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""), optimisticUserMeta);
+  appendMessage("me", displayText + (attachmentBadge ? ` ${attachmentBadge}` : ""), optimisticUserMeta);
   agentRuntimeFeature?.cacheOutgoingUserMessage({
     conversationId: activeConversationId,
-    displayText: displayText + (pendingAttachments.length ? ` [${pendingAttachments.length} 附件]` : ""),
+    displayText: displayText + (attachmentBadge ? ` ${attachmentBadge}` : ""),
     timestampMs: optimisticUserMeta.timestampMs,
     agentId: getCurrentAgentSelection(),
   });
@@ -2284,7 +2395,7 @@ async function sendMessage(options = {}) {
     }
     if (payload.error && payload.error.code === "config_required") {
       if (botMsgEl) {
-        botMsgEl.textContent = `❌ 配置缺失：${payload.error.message}\n请点击右上角设置图标（⚙️）完善配置。`;
+        botMsgEl.textContent = `${localeController.t("runtime.configRequired", { message: payload.error.message }, `Configuration missing: ${payload.error.message}`)}\n${localeController.t("runtime.configRequiredHint", {}, "Click the settings icon (⚙️) in the top-right corner to complete the configuration.")}`;
       }
       toggleSettings(true); // Auto open settings
       return;
@@ -2410,6 +2521,7 @@ chatEventsFeature = createChatEventsFeature({
   },
   getStoppedMessageText: () => localeController.t("common.interrupted", {}, "Interrupted"),
   escapeHtml,
+  t: localeController.t,
 });
 
 connect();
@@ -2560,7 +2672,7 @@ function renderConversationMessages(conversationId, messages) {
   if (normalizedMessages.length === 0) {
     const empty = document.createElement("div");
     empty.className = "system-msg";
-    empty.textContent = "当前会话暂无消息";
+    empty.textContent = localeController.t("runtime.emptyConversation", {}, "There are no messages in this conversation yet.");
     messagesEl.appendChild(empty);
     renderedConversationMessageState = {
       conversationId,
@@ -2780,6 +2892,12 @@ if (switchMemoryBtn) {
   switchMemoryBtn.addEventListener("click", async () => {
     switchMode("memory");
     await loadMemoryViewer(false);
+  });
+}
+if (switchExperienceBtn) {
+  switchExperienceBtn.addEventListener("click", async () => {
+    switchMode("experience");
+    await loadExperienceWorkbench(true);
   });
 }
 if (switchGoalsBtn) {
@@ -3179,6 +3297,10 @@ function syncMemoryViewerUi() {
 
 async function loadMemoryViewer(forceSelectFirst = false) {
   return memoryRuntimeFeature?.loadMemoryViewer(forceSelectFirst);
+}
+
+async function loadExperienceWorkbench(forceSelectFirst = false) {
+  return experienceWorkbenchFeature?.loadExperienceWorkbench(forceSelectFirst);
 }
 
 async function loadMemoryViewerStats() {

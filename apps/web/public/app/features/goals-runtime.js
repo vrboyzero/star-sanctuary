@@ -2,55 +2,91 @@ function getGoalCheckpointActionConfig(action) {
   const actionMap = {
     approve: {
       method: "goal.checkpoint.approve",
-      modalTitle: "批准 Checkpoint",
-      successTitle: "已批准 checkpoint",
-      submitLabel: "批准",
-      defaultSummary: "已批准",
-      actorLabel: "审批人",
-      noteLabel: "审批说明",
-      notePlaceholder: "可选，例如：验证通过，可进入下一节点",
-      noteHelp: "可选。用于记录批准依据、验证结果或补充说明。",
+      modalTitleKey: "goals.checkpointApproveTitle",
+      modalTitleFallback: "Approve Checkpoint",
+      successTitleKey: "goals.checkpointApproveSuccessTitle",
+      successTitleFallback: "Checkpoint approved",
+      submitLabelKey: "goals.checkpointApproveSubmit",
+      submitLabelFallback: "Approve",
+      defaultSummaryKey: "goals.checkpointApproveSummary",
+      defaultSummaryFallback: "Approved",
+      actorLabelKey: "goals.checkpointApproveActorLabel",
+      actorLabelFallback: "Reviewer",
+      noteLabelKey: "goals.checkpointApproveNoteLabel",
+      noteLabelFallback: "Approval Note",
+      notePlaceholderKey: "goals.checkpointApproveNotePlaceholder",
+      notePlaceholderFallback: "Optional, for example: verification passed and the next node can start",
+      noteHelpKey: "goals.checkpointApproveNoteHelp",
+      noteHelpFallback: "Optional. Record the approval basis, verification result, or extra notes.",
       noteRequired: false,
-      hint: "批准后会把 checkpoint 推进到下一状态，并把摘要写入进度时间线。",
+      hintKey: "goals.checkpointApproveHint",
+      hintFallback: "Approving advances the checkpoint to the next state and writes the summary into the progress timeline.",
     },
     reject: {
       method: "goal.checkpoint.reject",
-      modalTitle: "拒绝 Checkpoint",
-      successTitle: "已拒绝 checkpoint",
-      submitLabel: "拒绝",
-      defaultSummary: "已拒绝",
-      actorLabel: "审批人",
-      noteLabel: "拒绝原因",
-      notePlaceholder: "必填，例如：需要补充修改后再提交",
-      noteHelp: "必填。拒绝不能只留下状态，必须给出明确原因。",
+      modalTitleKey: "goals.checkpointRejectTitle",
+      modalTitleFallback: "Reject Checkpoint",
+      successTitleKey: "goals.checkpointRejectSuccessTitle",
+      successTitleFallback: "Checkpoint rejected",
+      submitLabelKey: "goals.checkpointRejectSubmit",
+      submitLabelFallback: "Reject",
+      defaultSummaryKey: "goals.checkpointRejectSummary",
+      defaultSummaryFallback: "Rejected",
+      actorLabelKey: "goals.checkpointRejectActorLabel",
+      actorLabelFallback: "Reviewer",
+      noteLabelKey: "goals.checkpointRejectNoteLabel",
+      noteLabelFallback: "Rejection Reason",
+      notePlaceholderKey: "goals.checkpointRejectNotePlaceholder",
+      notePlaceholderFallback: "Required, for example: more changes are needed before resubmission",
+      noteHelpKey: "goals.checkpointRejectNoteHelp",
+      noteHelpFallback: "Required. Rejection must include a clear reason instead of only a status change.",
       noteRequired: true,
-      hint: "拒绝会保留 checkpoint 记录，并让后续恢复动作有明确依据。",
+      hintKey: "goals.checkpointRejectHint",
+      hintFallback: "Rejecting keeps the checkpoint record and gives future recovery actions a clear rationale.",
     },
     expire: {
       method: "goal.checkpoint.expire",
-      modalTitle: "标记 Checkpoint 过期",
-      successTitle: "已标记 checkpoint 过期",
-      submitLabel: "标记过期",
-      defaultSummary: "已过期",
-      actorLabel: "操作人",
-      noteLabel: "过期原因",
-      notePlaceholder: "必填，例如：审批超时，需要重新发起",
-      noteHelp: "必填。建议写明为什么当前 checkpoint 需要作废。",
+      modalTitleKey: "goals.checkpointExpireTitle",
+      modalTitleFallback: "Mark Checkpoint Expired",
+      successTitleKey: "goals.checkpointExpireSuccessTitle",
+      successTitleFallback: "Checkpoint marked expired",
+      submitLabelKey: "goals.checkpointExpireSubmit",
+      submitLabelFallback: "Mark Expired",
+      defaultSummaryKey: "goals.checkpointExpireSummary",
+      defaultSummaryFallback: "Expired",
+      actorLabelKey: "goals.checkpointExpireActorLabel",
+      actorLabelFallback: "Operator",
+      noteLabelKey: "goals.checkpointExpireNoteLabel",
+      noteLabelFallback: "Expiration Reason",
+      notePlaceholderKey: "goals.checkpointExpireNotePlaceholder",
+      notePlaceholderFallback: "Required, for example: review timed out and needs to be requested again",
+      noteHelpKey: "goals.checkpointExpireNoteHelp",
+      noteHelpFallback: "Required. Explain why the current checkpoint should be invalidated.",
       noteRequired: true,
-      hint: "过期适用于审批超时、上下文失效或产物已被新版本替换的场景。",
+      hintKey: "goals.checkpointExpireHint",
+      hintFallback: "Expiration fits review timeouts, stale context, or artifacts replaced by a newer version.",
     },
     reopen: {
       method: "goal.checkpoint.reopen",
-      modalTitle: "重新打开 Checkpoint",
-      successTitle: "已重新打开 checkpoint",
-      submitLabel: "重新打开",
-      defaultSummary: "已重新打开",
-      actorLabel: "重新发起人",
-      noteLabel: "重新打开说明",
-      notePlaceholder: "必填，例如：已完成补充修改，重新发起审批",
-      noteHelp: "必填。说明为什么重新打开，以及期望下一步如何处理。",
+      modalTitleKey: "goals.checkpointReopenTitle",
+      modalTitleFallback: "Reopen Checkpoint",
+      successTitleKey: "goals.checkpointReopenSuccessTitle",
+      successTitleFallback: "Checkpoint reopened",
+      submitLabelKey: "goals.checkpointReopenSubmit",
+      submitLabelFallback: "Reopen",
+      defaultSummaryKey: "goals.checkpointReopenSummary",
+      defaultSummaryFallback: "Reopened",
+      actorLabelKey: "goals.checkpointReopenActorLabel",
+      actorLabelFallback: "Requester",
+      noteLabelKey: "goals.checkpointReopenNoteLabel",
+      noteLabelFallback: "Reopen Note",
+      notePlaceholderKey: "goals.checkpointReopenNotePlaceholder",
+      notePlaceholderFallback: "Required, for example: supplemental changes are complete and review can restart",
+      noteHelpKey: "goals.checkpointReopenNoteHelp",
+      noteHelpFallback: "Required. Explain why the checkpoint is reopened and what should happen next.",
       noteRequired: true,
-      hint: "重新打开会让 checkpoint 回到可继续处理状态，并保留历史记录。",
+      hintKey: "goals.checkpointReopenHint",
+      hintFallback: "Reopening returns the checkpoint to an actionable state while preserving history.",
     },
   };
   return actionMap[action] || null;
@@ -159,28 +195,28 @@ export function createGoalsRuntimeFeature({
   }
 
   function resetGoalCheckpointActionForm() {
-    if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = "处理 Checkpoint";
+    if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = t("goals.checkpointActionModalTitle", {}, "Checkpoint Action");
     if (goalCheckpointActionHintEl) {
-      goalCheckpointActionHintEl.textContent = "在这里完成 checkpoint 审批或状态流转，避免使用临时 prompt 输入。";
+      goalCheckpointActionHintEl.textContent = t("goals.checkpointActionHint", {}, "Complete checkpoint review or state transitions here instead of using temporary prompts.");
     }
     if (goalCheckpointActionContextEl) goalCheckpointActionContextEl.innerHTML = "";
     if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.value = "";
     if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.value = "";
     if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.value = "";
-    if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = "审批人";
+    if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = t("goals.checkpointActionActorLabel", {}, "Reviewer");
     if (goalCheckpointActionActorEl) goalCheckpointActionActorEl.value = "";
     if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.value = "";
     if (goalCheckpointActionSummaryEl) {
       goalCheckpointActionSummaryEl.value = "";
-      goalCheckpointActionSummaryEl.placeholder = "例如：已批准 / 已拒绝 / 已过期 / 已重新打开";
+      goalCheckpointActionSummaryEl.placeholder = t("goals.checkpointActionSummaryPlaceholder", {}, "For example: approved / rejected / expired / reopened");
     }
-    if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = "说明";
+    if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = t("goals.checkpointActionNoteLabel", {}, "Note");
     if (goalCheckpointActionNoteHelpEl) {
-      goalCheckpointActionNoteHelpEl.textContent = "部分操作要求填写原因，避免只留下状态没有上下文。";
+      goalCheckpointActionNoteHelpEl.textContent = t("goals.checkpointActionNoteHelp", {}, "Some actions require a reason so the status is not left without context.");
     }
     if (goalCheckpointActionNoteEl) {
       goalCheckpointActionNoteEl.value = "";
-      goalCheckpointActionNoteEl.placeholder = "补充审批意见、过期原因或重新打开说明";
+      goalCheckpointActionNoteEl.placeholder = t("goals.checkpointActionNotePlaceholder", {}, "Add review notes, expiration reasons, or reopen details");
     }
   }
 
@@ -188,13 +224,16 @@ export function createGoalsRuntimeFeature({
     const config = pendingGoalCheckpointAction
       ? getGoalCheckpointActionConfig(pendingGoalCheckpointAction.action)
       : null;
+    const submitLabel = config
+      ? t(config.submitLabelKey, {}, config.submitLabelFallback)
+      : t("common.submit", {}, "Submit");
     if (goalCheckpointActionCloseBtn) goalCheckpointActionCloseBtn.disabled = busy;
     if (goalCheckpointActionCancelBtn) goalCheckpointActionCancelBtn.disabled = busy;
     if (goalCheckpointActionSubmitBtn) {
       goalCheckpointActionSubmitBtn.disabled = busy;
       goalCheckpointActionSubmitBtn.textContent = busy
-        ? `${config?.submitLabel || "提交"}中...`
-        : config?.submitLabel || "提交";
+        ? t("goals.checkpointActionSubmitting", { label: submitLabel }, `${submitLabel}...`)
+        : submitLabel;
     }
     if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.disabled = busy;
     if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.disabled = busy;
@@ -215,27 +254,27 @@ export function createGoalsRuntimeFeature({
     if (!goalCheckpointActionContextEl || !context) return;
     goalCheckpointActionContextEl.innerHTML = `
       <div class="goal-checkpoint-action-context-item">
-        <span class="goal-summary-label">Goal</span>
+        <span class="goal-summary-label">${escapeHtml(t("goals.checkpointActionContextGoal", {}, "Goal"))}</span>
         <strong>${escapeHtml(context.goalId)}</strong>
       </div>
       <div class="goal-checkpoint-action-context-item">
-        <span class="goal-summary-label">Node</span>
+        <span class="goal-summary-label">${escapeHtml(t("goals.checkpointActionContextNode", {}, "Node"))}</span>
         <strong>${escapeHtml(context.nodeId)}</strong>
       </div>
       <div class="goal-checkpoint-action-context-item">
-        <span class="goal-summary-label">Checkpoint</span>
+        <span class="goal-summary-label">${escapeHtml(t("goals.checkpointActionContextCheckpoint", {}, "Checkpoint"))}</span>
         <strong>${escapeHtml(context.checkpointId)}</strong>
       </div>
       <div class="goal-checkpoint-action-context-item">
-        <span class="goal-summary-label">Status</span>
+        <span class="goal-summary-label">${escapeHtml(t("goals.checkpointActionContextStatus", {}, "Status"))}</span>
         <strong>${escapeHtml(context.status || "-")}</strong>
       </div>
       <div class="goal-checkpoint-action-context-item">
-        <span class="goal-summary-label">Reviewer</span>
+        <span class="goal-summary-label">${escapeHtml(t("goals.checkpointActionContextReviewer", {}, "Reviewer"))}</span>
         <strong>${escapeHtml(context.reviewer || "-")}</strong>
       </div>
       <div class="goal-checkpoint-action-context-item">
-        <span class="goal-summary-label">SLA</span>
+        <span class="goal-summary-label">${escapeHtml(t("goals.checkpointActionContextSla", {}, "SLA"))}</span>
         <strong>${escapeHtml(context.slaAt ? formatDateTime(context.slaAt) : "-")}</strong>
       </div>
     `;
@@ -249,23 +288,23 @@ export function createGoalsRuntimeFeature({
       if (!nextContext || !config) return;
       pendingGoalCheckpointAction = nextContext;
       resetGoalCheckpointActionForm();
-      if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = config.modalTitle;
-      if (goalCheckpointActionHintEl) goalCheckpointActionHintEl.textContent = config.hint;
+      if (goalCheckpointActionTitleEl) goalCheckpointActionTitleEl.textContent = t(config.modalTitleKey, {}, config.modalTitleFallback);
+      if (goalCheckpointActionHintEl) goalCheckpointActionHintEl.textContent = t(config.hintKey, {}, config.hintFallback);
       if (goalCheckpointActionReviewerEl) goalCheckpointActionReviewerEl.value = nextContext.reviewer || "";
       if (goalCheckpointActionReviewerRoleEl) goalCheckpointActionReviewerRoleEl.value = nextContext.reviewerRole || "";
       if (goalCheckpointActionRequestedByEl) goalCheckpointActionRequestedByEl.value = nextContext.requestedBy || "";
-      if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = config.actorLabel;
+      if (goalCheckpointActionActorLabelEl) goalCheckpointActionActorLabelEl.textContent = t(config.actorLabelKey, {}, config.actorLabelFallback);
       if (goalCheckpointActionActorEl) {
         goalCheckpointActionActorEl.value = config.method === "goal.checkpoint.reopen"
           ? nextContext.requestedBy || ""
           : nextContext.decidedBy || "";
       }
       if (goalCheckpointActionSlaAtEl) goalCheckpointActionSlaAtEl.value = formatDateTimeLocalValue(nextContext.slaAt);
-      if (goalCheckpointActionSummaryEl) goalCheckpointActionSummaryEl.value = nextContext.summary || config.defaultSummary;
-      if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = config.noteLabel;
-      if (goalCheckpointActionNoteHelpEl) goalCheckpointActionNoteHelpEl.textContent = config.noteHelp;
+      if (goalCheckpointActionSummaryEl) goalCheckpointActionSummaryEl.value = nextContext.summary || t(config.defaultSummaryKey, {}, config.defaultSummaryFallback);
+      if (goalCheckpointActionNoteLabelEl) goalCheckpointActionNoteLabelEl.textContent = t(config.noteLabelKey, {}, config.noteLabelFallback);
+      if (goalCheckpointActionNoteHelpEl) goalCheckpointActionNoteHelpEl.textContent = t(config.noteHelpKey, {}, config.noteHelpFallback);
       if (goalCheckpointActionNoteEl) {
-        goalCheckpointActionNoteEl.placeholder = config.notePlaceholder;
+        goalCheckpointActionNoteEl.placeholder = t(config.notePlaceholderKey, {}, config.notePlaceholderFallback);
         goalCheckpointActionNoteEl.value = nextContext.note || "";
       }
       renderGoalCheckpointActionContext(nextContext);
@@ -290,14 +329,14 @@ export function createGoalsRuntimeFeature({
 
   async function runGoalCheckpointAction(goalId, nodeId, checkpointId, action) {
     if (!isConnected()) {
-      showNotice("无法执行 checkpoint 操作", "未连接到服务器。", "error");
+      showNotice(t("goals.checkpointActionFailedTitle", {}, "Checkpoint action failed"), t("goals.notConnected", {}, "Not connected to the server."), "error");
       return;
     }
 
     const config = getGoalCheckpointActionConfig(action);
     if (!config) return;
     if (!goalCheckpointActionModal) {
-      showNotice("checkpoint 操作失败", "前端操作面板未初始化。", "error");
+      showNotice(t("goals.checkpointActionFailedTitle", {}, "Checkpoint action failed"), t("goals.checkpointActionModalMissing", {}, "The checkpoint action panel is not initialized."), "error");
       return;
     }
 
@@ -321,7 +360,7 @@ export function createGoalsRuntimeFeature({
   async function submitGoalCheckpointActionForm() {
     if (!pendingGoalCheckpointAction) return;
     if (!isConnected()) {
-      showNotice("无法执行 checkpoint 操作", "未连接到服务器。", "error");
+      showNotice(t("goals.checkpointActionFailedTitle", {}, "Checkpoint action failed"), t("goals.notConnected", {}, "Not connected to the server."), "error");
       return;
     }
 
@@ -334,10 +373,16 @@ export function createGoalsRuntimeFeature({
     const requestedBy = goalCheckpointActionRequestedByEl?.value.trim() || "";
     const actor = goalCheckpointActionActorEl?.value.trim() || "";
     const slaAt = parseDateTimeLocalValue(goalCheckpointActionSlaAtEl?.value || "") || "";
-    const summary = goalCheckpointActionSummaryEl?.value.trim() || config.defaultSummary;
+    const defaultSummary = t(config.defaultSummaryKey, {}, config.defaultSummaryFallback);
+    const summary = goalCheckpointActionSummaryEl?.value.trim() || defaultSummary;
     const note = goalCheckpointActionNoteEl?.value.trim() || "";
+    const noteLabel = t(config.noteLabelKey, {}, config.noteLabelFallback);
     if (config.noteRequired && !note) {
-      showNotice("无法执行 checkpoint 操作", `${config.noteLabel}不能为空。`, "error");
+      showNotice(
+        t("goals.checkpointActionFailedTitle", {}, "Checkpoint action failed"),
+        t("goals.checkpointActionNoteRequired", { label: noteLabel }, `${noteLabel} is required.`),
+        "error",
+      );
       goalCheckpointActionNoteEl?.focus();
       return;
     }
@@ -359,20 +404,25 @@ export function createGoalsRuntimeFeature({
             ? (actor || undefined)
             : undefined,
           slaAt: slaAt || undefined,
-          summary: summary || config.defaultSummary,
+          summary: summary || defaultSummary,
           note: note || undefined,
         },
       });
       if (!res || !res.ok) {
-        showNotice("checkpoint 操作失败", res?.error?.message || "未知错误。", "error");
+        showNotice(t("goals.checkpointActionFailedTitle", {}, "Checkpoint action failed"), res?.error?.message || t("goals.unknownError", {}, "Unknown error."), "error");
         return;
       }
 
       toggleGoalCheckpointActionModal(false);
       await loadGoals(true, context.goalId);
-      showNotice(config.successTitle, `${context.goalId} / ${context.nodeId} 已更新。`, "success", 2200);
+      showNotice(
+        t(config.successTitleKey, {}, config.successTitleFallback),
+        t("goals.checkpointActionUpdatedMessage", { goalId: context.goalId, nodeId: context.nodeId }, `${context.goalId} / ${context.nodeId} updated.`),
+        "success",
+        2200,
+      );
     } catch (error) {
-      showNotice("checkpoint 操作失败", error instanceof Error ? error.message : String(error), "error");
+      showNotice(t("goals.checkpointActionFailedTitle", {}, "Checkpoint action failed"), error instanceof Error ? error.message : String(error), "error");
     } finally {
       if (pendingGoalCheckpointAction) {
         setGoalCheckpointActionBusy(false);

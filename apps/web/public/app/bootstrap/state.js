@@ -69,6 +69,21 @@ export const goalsState = {
   liveUpdatePending: {},
 };
 
+export const experienceWorkbenchState = {
+  items: [],
+  selectedId: null,
+  selectedCandidate: null,
+  stats: null,
+  filters: {
+    query: "",
+    type: "",
+    status: "",
+  },
+  generateTaskId: "",
+  requestToken: 0,
+  activeAgentId: "default",
+};
+
 export const subtasksState = {
   items: [],
   selectedId: null,
