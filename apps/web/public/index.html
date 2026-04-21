@@ -283,84 +283,90 @@
               </div>
             </div>
 
+            <div class="memory-viewer-tabs memory-toolbar-tabs">
+              <button id="memoryTabTasks" class="memory-tab-btn active" data-i18n="memory.tabs.tasks">任务记录</button>
+              <button id="memoryTabMemories" class="memory-tab-btn" data-i18n="memory.tabs.memories">记忆</button>
+              <button id="memoryTabSharedReview" class="memory-tab-btn" data-i18n="memory.tabs.sharedReview">共享审批</button>
+              <button id="memoryTabOutboundAudit" class="memory-tab-btn" data-i18n="memory.tabs.outboundAudit">消息审计</button>
+            </div>
             <div class="memory-viewer-toolbar">
-              <div class="memory-viewer-tabs">
-                <button id="memoryTabTasks" class="memory-tab-btn active" data-i18n="memory.tabs.tasks">任务记录</button>
-                <button id="memoryTabMemories" class="memory-tab-btn" data-i18n="memory.tabs.memories">记忆</button>
-                <button id="memoryTabSharedReview" class="memory-tab-btn" data-i18n="memory.tabs.sharedReview">共享审批</button>
-                <button id="memoryTabOutboundAudit" class="memory-tab-btn" data-i18n="memory.tabs.outboundAudit">消息审计</button>
-              </div>
-              <div class="memory-viewer-filters">
+              <div class="memory-toolbar-search-row">
                 <input id="memorySearchInput" class="input input-sm memory-search-input" data-i18n-placeholder="memory.searchPlaceholder" placeholder="搜索 task 标题、总结或 memory 内容" />
-                <div id="memoryTaskFilters" class="memory-filter-group">
-                  <select id="memoryTaskStatusFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.filters.statusAll">全部状态</option>
-                    <option value="running" data-i18n="memory.taskStatusRunning">运行中</option>
-                    <option value="success" data-i18n="memory.taskStatusSuccess">成功</option>
-                    <option value="failed" data-i18n="memory.taskStatusFailed">失败</option>
-                    <option value="partial" data-i18n="memory.taskStatusPartial">部分完成</option>
-                  </select>
-                  <select id="memoryTaskSourceFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.filters.sourceAll">全部来源</option>
-                    <option value="chat" data-i18n="memory.taskSourceChat">聊天</option>
-                    <option value="sub_agent" data-i18n="memory.taskSourceSubAgent">子 Agent</option>
-                    <option value="cron" data-i18n="memory.taskSourceCron">定时任务</option>
-                    <option value="heartbeat" data-i18n="memory.taskSourceHeartbeat">心跳</option>
-                    <option value="manual" data-i18n="memory.taskSourceManual">手动</option>
-                  </select>
-                </div>
-                <div id="memoryChunkFilters" class="memory-filter-group hidden">
-                  <select id="memoryChunkTypeFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.filters.chunkTypeAll">全部记忆类型</option>
-                    <option value="core" data-i18n="memory.memoryTypeCore">核心</option>
-                    <option value="daily" data-i18n="memory.memoryTypeDaily">每日</option>
-                    <option value="session" data-i18n="memory.memoryTypeSession">会话</option>
-                    <option value="other" data-i18n="memory.memoryTypeOther">其他</option>
-                  </select>
-                  <select id="memoryChunkVisibilityFilter" class="select select-sm">
-                      <option value="" data-i18n="memory.filters.visibilityDefault">默认范围</option>
-                      <option value="private" data-i18n="memory.filters.visibilityPrivate">私有层+系统层</option>
-                      <option value="shared" data-i18n="memory.filters.visibilityShared">共享层+系统层</option>
-                      <option value="all" data-i18n="memory.filters.visibilityAll">全部层</option>
+              </div>
+              <div class="memory-toolbar-actions-row">
+                <div class="memory-toolbar-filters-row">
+                  <div id="memoryTaskFilters" class="memory-filter-group">
+                    <select id="memoryTaskStatusFilter" class="select select-sm">
+                      <option value="" data-i18n="memory.filters.statusAll">全部状态</option>
+                      <option value="running" data-i18n="memory.taskStatusRunning">运行中</option>
+                      <option value="success" data-i18n="memory.taskStatusSuccess">成功</option>
+                      <option value="failed" data-i18n="memory.taskStatusFailed">失败</option>
+                      <option value="partial" data-i18n="memory.taskStatusPartial">部分完成</option>
                     </select>
-                  <select id="memoryChunkGovernanceFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.filters.governanceAll">全部治理状态</option>
-                    <option value="pending" data-i18n="memory.filters.governancePending">待审批</option>
-                    <option value="approved" data-i18n="memory.filters.governanceApproved">已批准</option>
-                    <option value="rejected" data-i18n="memory.filters.governanceRejected">已驳回</option>
-                    <option value="revoked" data-i18n="memory.filters.governanceRevoked">已撤销</option>
-                    <option value="none" data-i18n="memory.filters.governanceNone">未进入审批</option>
-                  </select>
-                  <select id="memoryChunkCategoryFilter" class="select select-sm">
-                      <option value="" data-i18n="memory.filters.categoryAll">全部分类</option>
-                      <option value="uncategorized" data-i18n="memory.filters.categoryUncategorized">未分类</option>
-                    <option value="preference" data-i18n="memory.filters.categoryPreference">偏好</option>
-                    <option value="experience" data-i18n="memory.filters.categoryExperience">经验</option>
-                    <option value="fact" data-i18n="memory.filters.categoryFact">事实</option>
-                    <option value="decision" data-i18n="memory.filters.categoryDecision">决策</option>
-                    <option value="entity" data-i18n="memory.filters.categoryEntity">实体</option>
-                    <option value="other" data-i18n="memory.filters.categoryOther">其他</option>
-                  </select>
+                    <select id="memoryTaskSourceFilter" class="select select-sm">
+                      <option value="" data-i18n="memory.filters.sourceAll">全部来源</option>
+                      <option value="chat" data-i18n="memory.taskSourceChat">聊天</option>
+                      <option value="sub_agent" data-i18n="memory.taskSourceSubAgent">子 Agent</option>
+                      <option value="cron" data-i18n="memory.taskSourceCron">定时任务</option>
+                      <option value="heartbeat" data-i18n="memory.taskSourceHeartbeat">心跳</option>
+                      <option value="manual" data-i18n="memory.taskSourceManual">手动</option>
+                    </select>
+                  </div>
+                  <div id="memoryChunkFilters" class="memory-filter-group hidden">
+                    <select id="memoryChunkTypeFilter" class="select select-sm">
+                      <option value="" data-i18n="memory.filters.chunkTypeAll">全部记忆类型</option>
+                      <option value="core" data-i18n="memory.memoryTypeCore">核心</option>
+                      <option value="daily" data-i18n="memory.memoryTypeDaily">每日</option>
+                      <option value="session" data-i18n="memory.memoryTypeSession">会话</option>
+                      <option value="other" data-i18n="memory.memoryTypeOther">其他</option>
+                    </select>
+                    <select id="memoryChunkVisibilityFilter" class="select select-sm">
+                        <option value="" data-i18n="memory.filters.visibilityDefault">默认范围</option>
+                        <option value="private" data-i18n="memory.filters.visibilityPrivate">私有层+系统层</option>
+                        <option value="shared" data-i18n="memory.filters.visibilityShared">共享层+系统层</option>
+                        <option value="all" data-i18n="memory.filters.visibilityAll">全部层</option>
+                      </select>
+                    <select id="memoryChunkGovernanceFilter" class="select select-sm">
+                      <option value="" data-i18n="memory.filters.governanceAll">全部治理状态</option>
+                      <option value="pending" data-i18n="memory.filters.governancePending">待审批</option>
+                      <option value="approved" data-i18n="memory.filters.governanceApproved">已批准</option>
+                      <option value="rejected" data-i18n="memory.filters.governanceRejected">已驳回</option>
+                      <option value="revoked" data-i18n="memory.filters.governanceRevoked">已撤销</option>
+                      <option value="none" data-i18n="memory.filters.governanceNone">未进入审批</option>
+                    </select>
+                    <select id="memoryChunkCategoryFilter" class="select select-sm">
+                        <option value="" data-i18n="memory.filters.categoryAll">全部分类</option>
+                        <option value="uncategorized" data-i18n="memory.filters.categoryUncategorized">未分类</option>
+                      <option value="preference" data-i18n="memory.filters.categoryPreference">偏好</option>
+                      <option value="experience" data-i18n="memory.filters.categoryExperience">经验</option>
+                      <option value="fact" data-i18n="memory.filters.categoryFact">事实</option>
+                      <option value="decision" data-i18n="memory.filters.categoryDecision">决策</option>
+                      <option value="entity" data-i18n="memory.filters.categoryEntity">实体</option>
+                      <option value="other" data-i18n="memory.filters.categoryOther">其他</option>
+                    </select>
+                  </div>
+                  <div id="memorySharedReviewFilters" class="memory-filter-group hidden">
+                    <select id="memorySharedReviewFocusFilter" class="select select-sm">
+                      <option value="" data-i18n="memory.sharedReviewFocusAllPending">全部待审批</option>
+                      <option value="actionable" data-i18n="memory.sharedReviewFocusActionable">仅可处理</option>
+                      <option value="mine" data-i18n="memory.sharedReviewFocusMine">仅我认领</option>
+                    </select>
+                    <select id="memorySharedReviewTargetFilter" class="select select-sm">
+                      <option value="" data-i18n="memory.sharedReviewTargetAll">全部目标 Agent</option>
+                    </select>
+                    <select id="memorySharedReviewClaimedByFilter" class="select select-sm">
+                      <option value="" data-i18n="memory.sharedReviewClaimedByAll">全部认领人</option>
+                    </select>
+                    <button id="memorySharedReviewClearFilters" class="button" data-i18n="memory.sharedReviewClearFilters">清空筛选</button>
+                  </div>
+                  <div id="memoryOutboundAuditFilters" class="memory-viewer-tabs hidden">
+                    <button id="memoryOutboundAuditFocusAll" class="memory-tab-btn active" data-i18n="memory.outboundAuditFocusAll">全部消息</button>
+                    <button id="memoryOutboundAuditFocusThreads" class="memory-tab-btn" data-i18n="memory.outboundAuditFocusThreads">邮件线程整理</button>
+                  </div>
                 </div>
-                <div id="memorySharedReviewFilters" class="memory-filter-group hidden">
-                  <select id="memorySharedReviewFocusFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.sharedReviewFocusAllPending">全部待审批</option>
-                    <option value="actionable" data-i18n="memory.sharedReviewFocusActionable">仅可处理</option>
-                    <option value="mine" data-i18n="memory.sharedReviewFocusMine">仅我认领</option>
-                  </select>
-                  <select id="memorySharedReviewTargetFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.sharedReviewTargetAll">全部目标 Agent</option>
-                  </select>
-                  <select id="memorySharedReviewClaimedByFilter" class="select select-sm">
-                    <option value="" data-i18n="memory.sharedReviewClaimedByAll">全部认领人</option>
-                  </select>
-                  <button id="memorySharedReviewClearFilters" class="button" data-i18n="memory.sharedReviewClearFilters">清空筛选</button>
+                <div class="memory-toolbar-actions">
+                  <button id="memorySearchBtn" class="button" data-i18n="memory.search">查询</button>
                 </div>
-                <div id="memoryOutboundAuditFilters" class="memory-viewer-tabs hidden">
-                  <button id="memoryOutboundAuditFocusAll" class="memory-tab-btn active" data-i18n="memory.outboundAuditFocusAll">全部消息</button>
-                  <button id="memoryOutboundAuditFocusThreads" class="memory-tab-btn" data-i18n="memory.outboundAuditFocusThreads">邮件线程整理</button>
-                </div>
-                <button id="memorySearchBtn" class="button" data-i18n="memory.search">查询</button>
               </div>
             </div>
 
@@ -423,27 +429,31 @@
 
             <div id="experienceWorkbenchCandidatesPane">
               <div class="memory-viewer-toolbar">
-                <div class="memory-viewer-filters">
+                <div class="memory-toolbar-search-row">
                   <input id="experienceWorkbenchQuery" class="input input-sm memory-search-input" data-i18n-placeholder="experience.queryPlaceholder" placeholder="搜索标题、摘要、taskId 或 slug" />
-                  <div class="memory-filter-group">
-                    <select id="experienceWorkbenchTypeFilter" class="select select-sm">
-                      <option value="" data-i18n="experience.filterTypeAll">全部类型</option>
-                      <option value="method" data-i18n="experience.listTypeMethod">Method</option>
-                      <option value="skill" data-i18n="experience.listTypeSkill">Skill</option>
-                    </select>
-                    <select id="experienceWorkbenchStatusFilter" class="select select-sm">
-                      <option value="" data-i18n="experience.filterStatusAll">全部状态</option>
-                      <option value="draft" data-i18n="experience.listStatusDraft">草稿</option>
-                      <option value="accepted" data-i18n="experience.listStatusAccepted">已接受</option>
-                      <option value="rejected" data-i18n="experience.listStatusRejected">已拒绝</option>
-                    </select>
-                    <button id="experienceWorkbenchResetFilters" class="button" data-i18n="experience.resetFilters">重置</button>
-                  </div>
                 </div>
-                <div class="goal-detail-actions experience-workbench-generate">
-                  <input id="experienceGenerateTaskId" class="input input-sm experience-workbench-task-input" data-i18n-placeholder="experience.generateTaskPlaceholder" placeholder="输入 taskId 后生成 candidate" />
-                  <button id="experienceGenerateMethodBtn" class="memory-usage-action-btn" data-i18n="experience.generateMethod">生成 method</button>
-                  <button id="experienceGenerateSkillBtn" class="memory-usage-action-btn" data-i18n="experience.generateSkill">生成 skill</button>
+                <div class="memory-toolbar-actions-row">
+                  <div class="memory-toolbar-filters-row">
+                    <div class="memory-filter-group">
+                      <select id="experienceWorkbenchTypeFilter" class="select select-sm">
+                        <option value="" data-i18n="experience.filterTypeAll">全部类型</option>
+                        <option value="method" data-i18n="experience.listTypeMethod">Method</option>
+                        <option value="skill" data-i18n="experience.listTypeSkill">Skill</option>
+                      </select>
+                      <select id="experienceWorkbenchStatusFilter" class="select select-sm">
+                        <option value="" data-i18n="experience.filterStatusAll">全部状态</option>
+                        <option value="draft" data-i18n="experience.listStatusDraft">草稿</option>
+                        <option value="accepted" data-i18n="experience.listStatusAccepted">已接受</option>
+                        <option value="rejected" data-i18n="experience.listStatusRejected">已拒绝</option>
+                      </select>
+                      <button id="experienceWorkbenchResetFilters" class="button" data-i18n="experience.resetFilters">重置</button>
+                    </div>
+                  </div>
+                  <div class="memory-toolbar-actions experience-workbench-generate">
+                    <input id="experienceGenerateTaskId" class="input input-sm experience-workbench-task-input" data-i18n-placeholder="experience.generateTaskPlaceholder" placeholder="输入 taskId 后生成 candidate" />
+                    <button id="experienceGenerateMethodBtn" class="memory-usage-action-btn" data-i18n="experience.generateMethod">生成 method</button>
+                    <button id="experienceGenerateSkillBtn" class="memory-usage-action-btn" data-i18n="experience.generateSkill">生成 skill</button>
+                  </div>
                 </div>
               </div>
 
