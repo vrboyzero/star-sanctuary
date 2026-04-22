@@ -70,7 +70,7 @@ function buildDraftContent(goal: LongTermGoal, plan: GoalCapabilityPlan, summary
   const title = `${plan.nodeId} skill 候选`;
   const escapedName = `${plan.nodeId} skill draft`.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const escapedDescription = summary.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const objective = plan.objective.trim() || goal.objective.trim() || title;
+  const objective = plan.objective?.trim() || goal.objective?.trim() || title;
   const constraintSummary = plan.analysis.summary.trim() || plan.summary.trim() || "待补充";
   const expectedOutput = plan.summary.trim() || "至少形成一个可检查的执行结果。";
   const lines = [
