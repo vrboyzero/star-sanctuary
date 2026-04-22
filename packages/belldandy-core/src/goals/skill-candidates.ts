@@ -67,10 +67,16 @@ function buildDraftContent(goal: LongTermGoal, plan: GoalCapabilityPlan, summary
   const toolNames = plan.actualUsage.toolNames.length > 0
     ? plan.actualUsage.toolNames
     : [];
+  const title = `${plan.nodeId} skill 候选`;
+  const escapedName = `${plan.nodeId} skill draft`.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const escapedDescription = summary.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const objective = plan.objective.trim() || goal.objective.trim() || title;
+  const constraintSummary = plan.analysis.summary.trim() || plan.summary.trim() || "待补充";
+  const expectedOutput = plan.summary.trim() || "至少形成一个可检查的执行结果。";
   const lines = [
     "---",
-    `name: "${`${plan.nodeId} skill draft`.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
-    `description: "${summary.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`,
+    `name: "${escapedName}"`,
+    `description: "${escapedDescription}"`,
     'version: "0.1.0-draft"',
     `tags: ["goal-derived", "${goal.id}", "${plan.nodeId}"]`,
     `priority: ${plan.riskLevel === "high" ? "high" : "normal"}`,
@@ -81,33 +87,64 @@ function buildDraftContent(goal: LongTermGoal, plan: GoalCapabilityPlan, summary
     ] : []),
     "---",
     "",
-    "# 适用场景",
-    plan.objective,
+    `# ${title}`,
     "",
-    "# 使用指引",
+    `> ${summary}`,
+    "",
+    "## 快速开始",
     "1. 先确认当前节点目标、约束和验收标准。",
     plan.actualUsage.toolNames.length > 0
       ? `2. 优先按这些工具顺序执行：${plan.actualUsage.toolNames.join(", ")}。`
       : "2. 优先按当前 goal 已验证的最小闭环执行。",
-    plan.actualUsage.mcpServers.length > 0
-      ? `3. 需要联动这些 MCP server：${plan.actualUsage.mcpServers.join(", ")}。`
-      : "3. 需要时补充当前项目可用的外部能力。",
-    "4. 对照 capability 偏差与缺口，持续修正执行路径。",
+    "3. 如果当前输入或目标产物偏离来源节点，先停在 candidate 层人工审阅。",
     "",
-    "# 风险与约束",
-    `- Execution Mode: ${plan.executionMode}`,
-    `- Risk Level: ${plan.riskLevel}`,
-    `- Checkpoint Mode: ${plan.checkpoint.approvalMode}`,
-    `- Gaps: ${plan.gaps.join(" | ") || "(none)"}`,
+    "## 决策路由",
+    `- 任务仍属于“${objective}”这一类问题时，优先复用本 skill candidate，而不是重新从零组织流程。`,
+    toolNames.length > 0
+      ? `- 当主路径仍依赖 ${plan.actualUsage.toolNames.join(" / ")} 这组工具时，优先沿用已验证顺序。`
+      : "- 当任务仍能沿用当前 goal 的最小闭环时，优先复用本 candidate。",
+    "- 如果输入约束、目标产物或边界条件明显变化，先人工审阅 candidate，不要直接发布。",
+    "- 如果现有 method / skill 已经覆盖问题，优先复用现有资产，避免重复沉淀。",
     "",
-    "# 来源",
+    "## 输入",
+    `- 任务目标：${objective}`,
+    `- 关键约束：${constraintSummary}`,
+    toolNames.length > 0
+      ? `- 可用工具：${plan.actualUsage.toolNames.join(" / ")}`
+      : "- 可用工具：沿用当前 goal 已验证的最小执行路径",
+    "",
+    "## 输出",
+    `- 预期产物：${expectedOutput}`,
+    "- 执行结果应包含：关键步骤、验证点、异常分支处理。",
+    "- 如果结果不足以复用，应停留在 candidate 层，不要冒进发布。",
+    "",
+    "## 参考指引",
     `- Goal ID: ${goal.id}`,
     `- Node ID: ${plan.nodeId}`,
     `- Plan ID: ${plan.id}`,
     `- Plan Status: ${plan.status}`,
     plan.runId ? `- Run ID: ${plan.runId}` : "",
+    `- 偏差摘要：${constraintSummary}`,
+    plan.actualUsage.mcpServers.length > 0
+      ? `- MCP 依赖：${plan.actualUsage.mcpServers.join(" / ")}`
+      : "- MCP 依赖：无",
     "",
-    "# 偏差与建议",
+    "## NEVER",
+    "- 不要把一次性的临时 workaround 直接写成通用规则。",
+    "- 不要绕过人工审阅直接覆盖正式 skill 资产。",
+    "- 不要忽略现有 method / skill，重复制造同类资产。",
+    "- 如果出现新约束或新工具组合，不要假装本 candidate 仍然适用。",
+    "",
+    "## 适用场景",
+    objective,
+    "",
+    "## 风险与约束",
+    `- Execution Mode: ${plan.executionMode}`,
+    `- Risk Level: ${plan.riskLevel}`,
+    `- Checkpoint Mode: ${plan.checkpoint.approvalMode}`,
+    `- Gaps: ${plan.gaps.join(" | ") || "(none)"}`,
+    "",
+    "## 偏差与建议",
     plan.analysis.summary,
     "",
   ].filter(Boolean);

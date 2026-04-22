@@ -474,7 +474,7 @@ test("bdd doctor json output includes runtime resilience summary when available"
       durationMs: 500,
     },
   });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await tracker.waitForPendingWrite();
 
   try {
     await doctorCommand.run?.({

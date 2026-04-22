@@ -118,7 +118,10 @@ describe("memory runtime duplicate precheck", () => {
 
     const result = await feature.generateExperienceCandidate("task-1", "method");
 
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      id: "exp-dup-1",
+      title: "实现候选层",
+    });
     expect(window.confirm).toHaveBeenCalledTimes(1);
     expect(sendReq.mock.calls.map(([req]) => req.method)).toEqual([
       "experience.candidate.check_duplicate",

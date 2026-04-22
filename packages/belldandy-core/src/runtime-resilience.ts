@@ -400,6 +400,10 @@ export class RuntimeResilienceTracker {
     return cloneReport(this.report);
   }
 
+  async waitForPendingWrite(): Promise<void> {
+    await this.writeQueue;
+  }
+
   private readPersisted(): RuntimeResilienceDoctorReport | undefined {
     try {
       if (!fs.existsSync(this.filePath)) {

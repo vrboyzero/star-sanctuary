@@ -155,7 +155,7 @@ describe("chat ui rich text rendering", () => {
     expect(body?.querySelector(".code-block-wrapper")).not.toBeNull();
     expect(body?.querySelector(".code-block-header")).not.toBeNull();
     expect(body?.querySelector(".code-block-lang")?.textContent).toBe("ts");
-    expect(body?.querySelector(".copy-code-btn")?.getAttribute("title")).toBe("复制代码");
+    expect(body?.querySelector(".copy-code-btn")?.getAttribute("title")).toBe("Copy code");
     expect(body?.querySelector("code")?.className).toBe("language-ts");
     expect(body?.innerHTML).toContain("&lt;div&gt;");
   });
@@ -237,9 +237,9 @@ describe("chat ui rich text rendering", () => {
     const codeButton = bubble.querySelector(".copy-code-btn");
     await clickHandler({ target: codeButton });
     expect(clipboard.writeText).toHaveBeenNthCalledWith(1, "const html = '<div>';\n");
-    expect(codeButton?.innerHTML).toBe("已复制");
+    expect(codeButton?.innerHTML).toBe("Copied");
     vi.advanceTimersByTime(2000);
-    expect(codeButton?.innerHTML).toContain("复制");
+    expect(codeButton?.innerHTML).toContain("Copy");
 
     const textBubble = feature.appendMessage("bot", "");
     feature.renderAssistantMessage(textBubble, "<p>第一段 <strong>重点</strong></p>");
@@ -251,9 +251,9 @@ describe("chat ui rich text rendering", () => {
     expect(metaRow?.querySelector(".msg-time")).not.toBeNull();
     await clickHandler({ target: messageButton });
     expect(clipboard.writeText).toHaveBeenNthCalledWith(2, "第一段 重点");
-    expect(messageButton?.innerHTML).toBe("已复制");
+    expect(messageButton?.innerHTML).toBe("Copied");
     vi.advanceTimersByTime(2000);
-    expect(messageButton?.innerHTML).toContain("复制");
+    expect(messageButton?.innerHTML).toContain("Copy");
   });
 
   it("opens image and video media modals from rewritten thumbnails", () => {

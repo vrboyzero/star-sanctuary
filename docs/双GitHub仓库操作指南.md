@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "实现了任务开始与结束的自动统计时间与token消耗"
+git commit -m "进行了全仓测试与一些BUG的处理，全仓测试通过"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

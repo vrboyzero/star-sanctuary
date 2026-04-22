@@ -1184,7 +1184,7 @@ export class MemoryManager {
     }
 
     private inferExperienceSourceCandidateId(assetType: ExperienceAssetType, assetKey: string): string | undefined {
-        const normalizedAssetKey = this.normalizeExperienceAssetKey(assetKey);
+        const normalizedAssetKey = this.normalizeExperienceAssetLookupKey(assetType, assetKey);
         if (!normalizedAssetKey) return undefined;
 
         const candidates = this.store.listExperienceCandidates(500, {
@@ -1201,7 +1201,7 @@ export class MemoryManager {
                     publishedName,
                     slugName,
                     titleName,
-                ].some((value) => this.normalizeExperienceAssetKey(value) === normalizedAssetKey);
+                ].some((value) => this.normalizeExperienceAssetLookupKey(assetType, value) === normalizedAssetKey);
                 if (matched) {
                     return candidate.id;
                 }
@@ -1215,7 +1215,7 @@ export class MemoryManager {
                 candidate.slug,
                 candidate.title,
                 publishedDir,
-            ].some((value) => this.normalizeExperienceAssetKey(value) === normalizedAssetKey);
+            ].some((value) => this.normalizeExperienceAssetLookupKey(assetType, value) === normalizedAssetKey);
             if (matched) {
                 return candidate.id;
             }
@@ -1231,6 +1231,22 @@ export class MemoryManager {
 
     private normalizeExperienceAssetKey(value: string | undefined): string {
         return String(value ?? "").trim().toLowerCase();
+    }
+
+    private normalizeExperienceAssetLookupKey(assetType: ExperienceAssetType, value: string | undefined): string {
+        const normalized = this.normalizeExperienceAssetKey(value)
+            .replace(/\\/g, "/")
+            .replace(/\/skill\.md$/i, "")
+            .replace(/\.md$/i, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        if (assetType !== "skill") {
+            return normalized;
+        }
+        return normalized
+            .replace(/技能草稿|skill draft/gi, "")
+            .replace(/\s+/g, " ")
+            .trim();
     }
 
     acceptExperienceCandidate(candidateId: string, options: { publishedPath?: string } = {}): ExperienceCandidate | null {

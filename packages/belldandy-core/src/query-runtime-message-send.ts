@@ -1160,7 +1160,10 @@ async function finalizeMessageSendSuccess(input: {
 
   const sanitized = sanitizeMessageSendAssistantText(runResult.fullText);
   const assistantText = appendAutoTaskReport(sanitized || runResult.fullText, autoTaskReport);
-  const completionFinalText = appendAutoTaskReport(finalEventText || runResult.fullText, autoTaskReport);
+  const completionFinalText = appendAutoTaskReport(
+    sanitizeVisibleAssistantText(finalEventText || runResult.fullText),
+    autoTaskReport,
+  );
   let assistantTimestamp = Date.now();
   if (assistantText) {
     const assistantMessage = ctx.runtime.conversationStore.addMessage(

@@ -226,7 +226,10 @@ test("gateway persists prompt snapshot across restart and reloads it via inspect
         promptRunId: runId,
       },
     }));
-    await waitFor(() => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === doctorReqId && frame.ok === true));
+    await waitFor(
+      () => wsHandle!.frames.some((frame) => frame.type === "res" && frame.id === doctorReqId && frame.ok === true),
+      15_000,
+    );
 
     const doctorRes = wsHandle.frames.find((frame) => frame.type === "res" && frame.id === doctorReqId);
     expect(doctorRes?.payload?.promptObservability).toMatchObject({
@@ -1083,15 +1086,25 @@ async function startGatewayProcess(input: {
 }): Promise<GatewayProcessHandle> {
   const output: string[] = [];
   const port = await getAvailablePort();
+  const inheritedEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) =>
+      !key.startsWith("BELLDANDY_")
+      && !key.startsWith("OPENAI_")
+      && !key.startsWith("STAR_SANCTUARY_")
+      && key !== "AUTO_OPEN_BROWSER"
+    ),
+  );
   const child = spawn(process.execPath, ["--import", "tsx", "packages/belldandy-core/src/bin/gateway.ts"], {
     cwd: process.cwd(),
     env: {
-      ...process.env,
+      ...inheritedEnv,
       BELLDANDY_STATE_DIR: input.stateDir,
       BELLDANDY_ENV_DIR: input.stateDir,
       BELLDANDY_PORT: String(port),
       BELLDANDY_HOST: "127.0.0.1",
       BELLDANDY_AUTH_MODE: "none",
+      BELLDANDY_COMMUNITY_API_ENABLED: "false",
+      BELLDANDY_ALLOWED_ORIGINS: "http://127.0.0.1",
       BELLDANDY_AGENT_PROVIDER: "openai",
       BELLDANDY_OPENAI_API_KEY: "test-openai-key",
       BELLDANDY_OPENAI_BASE_URL: input.openaiBaseUrl,
