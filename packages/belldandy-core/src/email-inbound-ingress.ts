@@ -10,6 +10,7 @@ import {
   type EmailThreadBindingStore,
 } from "./email-thread-binding-store.js";
 import { runAgentToCompletionWithLifecycle, type QueryRuntimeAgentUsage } from "./query-runtime-agent-run.js";
+import { sanitizeVisibleAssistantText } from "./task-auto-report.js";
 
 type QueryRuntimeLogger = {
   info: (module: string, message: string, data?: unknown) => void;
@@ -269,7 +270,7 @@ export async function ingestEmailInboundEvent(
       },
     });
 
-    const finalText = runResult.finalText || "";
+    const finalText = sanitizeVisibleAssistantText(runResult.finalText || "");
     const assistantMessage = ctx.conversationStore.addMessage(conversationId, "assistant", finalText, {
       agentId: resolvedAgentId,
       channel: "email",

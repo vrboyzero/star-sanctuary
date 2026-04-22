@@ -814,6 +814,34 @@ describe("ToolExecutor", () => {
     expect(executor.hasTool("echo")).toBe(true);
   });
 
+  it("should notify when a conversation token counter is attached", () => {
+    const onTokenCounterSet = vi.fn();
+    const counter = {
+      start() {},
+      stop() {
+        return { name: "test", inputTokens: 0, outputTokens: 0, totalTokens: 0, durationMs: 0 };
+      },
+      list() {
+        return [];
+      },
+      notifyUsage() {},
+      cleanup() {
+        return [];
+      },
+    };
+    const executor = new ToolExecutor({
+      tools: [echoTool],
+      workspaceRoot: "/tmp/test",
+      onTokenCounterSet,
+    });
+
+    executor.setTokenCounter("conv-1", counter);
+
+    expect(onTokenCounterSet).toHaveBeenCalledTimes(1);
+    expect(onTokenCounterSet).toHaveBeenCalledWith("conv-1", counter);
+    expect(executor.getTokenCounter("conv-1")).toBe(counter);
+  });
+
   it("should hide deferred tools from schema injection until they are loaded", async () => {
     const deferredTool: Tool = {
       definition: {

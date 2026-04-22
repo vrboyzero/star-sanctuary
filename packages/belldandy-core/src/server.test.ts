@@ -18,6 +18,7 @@ import { startGatewayServer } from "./server.js";
 import { approvePairingCode } from "./security/store.js";
 import { RuntimeResilienceTracker } from "./runtime-resilience.js";
 import { BELLDANDY_VERSION } from "./version.generated.js";
+import { clearAutoTaskReportsForTest } from "./task-auto-report.js";
 import {
   cleanupGlobalMemoryManagersForTest,
   formatLocalDateForTest,
@@ -39,6 +40,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanupGlobalMemoryManagersForTest();
+  clearAutoTaskReportsForTest();
 });
 
 test("gateway handshake and message.send streams chat", async () => {
@@ -1293,6 +1295,231 @@ test("message.send emits auto run token result and conversation.meta returns per
       isLatest: true,
     });
     expect(typeof metaRes.payload.messages[0].timestampMs).toBe("number");
+  } finally {
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("message.send appends auto task report summary when enabled", async () => {
+  await withEnv({
+    BELLDANDY_AUTO_TASK_TIME_ENABLED: "true",
+    BELLDANDY_AUTO_TASK_TOKEN_ENABLED: "true",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        yield { type: "status", status: "running" as const };
+        yield {
+          type: "usage" as const,
+          systemPromptTokens: 1,
+          contextTokens: 2,
+          inputTokens: 12,
+          outputTokens: 8,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          modelCalls: 1,
+        };
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    };
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      frames.length = 0;
+
+      const conversationId = "conv-auto-task-report";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "auto-task-report",
+        method: "message.send",
+        params: { text: "自动统计", conversationId },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "auto-task-report" && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+      const finalFrame = frames.find((f) => f.type === "event" && f.event === "chat.final");
+      expect(String(finalFrame?.payload?.text ?? "")).toContain("执行统计");
+      expect(String(finalFrame?.payload?.text ?? "")).toContain("- 耗时：");
+      expect(String(finalFrame?.payload?.text ?? "")).toContain("- Token：IN 12 / OUT 8 / TOTAL 20");
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "auto-task-report-meta",
+        method: "conversation.meta",
+        params: { conversationId },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "auto-task-report-meta" && f.ok === true));
+      const metaRes = frames.find((f) => f.type === "res" && f.id === "auto-task-report-meta");
+      expect(String(metaRes?.payload?.messages?.[1]?.content ?? "")).toContain("执行统计");
+      expect(String(metaRes?.payload?.messages?.[1]?.content ?? "")).toContain("- Token：IN 12 / OUT 8 / TOTAL 20");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send keeps only one auto task report block when final text already contains one", async () => {
+  await withEnv({
+    BELLDANDY_AUTO_TASK_TIME_ENABLED: "true",
+    BELLDANDY_AUTO_TASK_TOKEN_ENABLED: "true",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        yield { type: "status", status: "running" as const };
+        yield {
+          type: "usage" as const,
+          systemPromptTokens: 1,
+          contextTokens: 2,
+          inputTokens: 12,
+          outputTokens: 8,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          modelCalls: 1,
+        };
+        yield {
+          type: "final" as const,
+          text: `echo:${input.text}\n\n执行统计\n- 耗时：1.23s\n- Token：IN 1 / OUT 1 / TOTAL 2`,
+        };
+        yield { type: "status" as const, status: "done" };
+      },
+    };
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+    });
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+    const frames: any[] = [];
+    const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+    try {
+      await pairWebSocketClient(ws, frames, stateDir);
+      frames.length = 0;
+
+      const conversationId = "conv-auto-task-report-dedup";
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "auto-task-report-dedup",
+        method: "message.send",
+        params: { text: "自动统计去重", conversationId },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "auto-task-report-dedup" && f.ok === true));
+      await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+      const finalFrame = frames.find((f) => f.type === "event" && f.event === "chat.final");
+      const finalText = String(finalFrame?.payload?.text ?? "");
+      expect(finalText.match(/执行统计/g)?.length ?? 0).toBe(1);
+      expect(finalText).not.toContain("- 耗时：1.23s");
+      expect(finalText).toContain("- Token：IN 12 / OUT 8 / TOTAL 20");
+
+      ws.send(JSON.stringify({
+        type: "req",
+        id: "auto-task-report-dedup-meta",
+        method: "conversation.meta",
+        params: { conversationId },
+      }));
+
+      await waitFor(() => frames.some((f) => f.type === "res" && f.id === "auto-task-report-dedup-meta" && f.ok === true));
+      const metaRes = frames.find((f) => f.type === "res" && f.id === "auto-task-report-dedup-meta");
+      const persistedText = String(metaRes?.payload?.messages?.[1]?.content ?? "");
+      expect(persistedText.match(/执行统计/g)?.length ?? 0).toBe(1);
+      expect(persistedText).not.toContain("- 耗时：1.23s");
+      expect(persistedText).toContain("- Token：IN 12 / OUT 8 / TOTAL 20");
+    } finally {
+      ws.close();
+      await closeP;
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("message.send strips think blocks from final output and persisted assistant message", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const agent: BelldandyAgent = {
+    async *run(input) {
+      yield { type: "status", status: "running" as const };
+      yield { type: "final" as const, text: `<think>secret:${input.text}</think>\n\necho:${input.text}` };
+      yield { type: "status" as const, status: "done" };
+    },
+  };
+
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    agentFactory: () => agent,
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+    frames.length = 0;
+
+    const conversationId = "conv-strip-think";
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "strip-think",
+      method: "message.send",
+      params: { text: "隐藏推理", conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "strip-think" && f.ok === true));
+    await waitFor(() => frames.some((f) => f.type === "event" && f.event === "chat.final"));
+
+    const finalFrame = frames.find((f) => f.type === "event" && f.event === "chat.final");
+    const finalText = String(finalFrame?.payload?.text ?? "");
+    expect(finalText).not.toContain("<think>");
+    expect(finalText).not.toContain("secret:隐藏推理");
+    expect(finalText).toContain("echo:隐藏推理");
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "strip-think-meta",
+      method: "conversation.meta",
+      params: { conversationId },
+    }));
+
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "strip-think-meta" && f.ok === true));
+    const metaRes = frames.find((f) => f.type === "res" && f.id === "strip-think-meta");
+    const persistedText = String(metaRes?.payload?.messages?.[1]?.content ?? "");
+    expect(persistedText).not.toContain("<think>");
+    expect(persistedText).not.toContain("secret:隐藏推理");
+    expect(persistedText).toContain("echo:隐藏推理");
   } finally {
     ws.close();
     await closeP;

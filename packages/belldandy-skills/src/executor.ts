@@ -103,6 +103,8 @@ export type ToolExecutorOptions = {
     agentId?: string;
     toolName: string;
   }) => void;
+  /** 可选：当某个会话的 token counter 被绑定后触发 */
+  onTokenCounterSet?: (conversationId: string, counter: ITokenCounterService) => void;
   /** 可选：统一 contract 安全矩阵策略 */
   contractAccessPolicy?: ToolContractAccessPolicy;
   /** 可选：按会话延迟加载的工具名 */
@@ -258,6 +260,7 @@ export class ToolExecutor {
     agentId?: string;
     toolName: string;
   }) => void;
+  private readonly onTokenCounterSet?: (conversationId: string, counter: ITokenCounterService) => void;
 
   constructor(options: ToolExecutorOptions) {
     this.tools = new Map(options.tools.map(t => [t.definition.name, t]));
@@ -281,6 +284,7 @@ export class ToolExecutor {
     this.mcp = options.mcp;
     this.bridgeSessionGovernance = options.bridgeSessionGovernance;
     this.broadcastObserver = options.broadcastObserver;
+    this.onTokenCounterSet = options.onTokenCounterSet;
   }
 
   /**
@@ -336,6 +340,16 @@ export class ToolExecutor {
    */
   setTokenCounter(conversationId: string, counter: ITokenCounterService): void {
     this.tokenCounters.set(conversationId, counter);
+    if (!this.onTokenCounterSet) {
+      return;
+    }
+    try {
+      this.onTokenCounterSet(conversationId, counter);
+    } catch (error) {
+      this.logger?.warn(
+        `Token counter set callback failed for conversation ${conversationId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**

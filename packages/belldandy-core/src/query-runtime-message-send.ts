@@ -17,6 +17,12 @@ import { preparePromptWithAttachments, type AttachmentPromptLimits } from "./att
 import { ConversationRunRegistry } from "./conversation-run-registry.js";
 import { runAgentWithLifecycle } from "./query-runtime-agent-run.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
+import {
+  appendAutoTaskReport,
+  consumeAutoTaskReport,
+  resolveAutoTaskReportForOutput,
+  sanitizeVisibleAssistantText,
+} from "./task-auto-report.js";
 import type { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import type { TranscribeOptions, TranscribeResult } from "@belldandy/skills";
 import type { MediaCapability } from "./media-capability-registry.js";
@@ -933,7 +939,7 @@ function scheduleMessageSendDigestRefresh(input: {
 }
 
 function sanitizeMessageSendAssistantText(text: string): string {
-  return text
+  return sanitizeVisibleAssistantText(text)
     .replace(/<audio[^>]*>.*?<\/audio>/gi, "")
     .replace(/\[Download\]\([^)]*\/generated\/[^)]*\)/gi, "")
     .replace(/\n{3,}/g, "\n\n")
@@ -1094,6 +1100,7 @@ async function finalizeMessageSendSuccess(input: {
     abortSignal: input.abortController.signal,
     runResult,
   })) {
+    consumeAutoTaskReport(input.conversationId);
     finalizeMessageSendStopped({
       ctx,
       queryRuntime,
@@ -1124,6 +1131,7 @@ async function finalizeMessageSendSuccess(input: {
   }
 
   if (!runResult.receivedFinal) {
+    consumeAutoTaskReport(input.conversationId);
     input.state.run.setReceivedFinal(false);
     ctx.runtime.log.debug("message", "message.send completed without final item", {
       conversationId: input.conversationId,
@@ -1143,14 +1151,22 @@ async function finalizeMessageSendSuccess(input: {
     return;
   }
   input.state.run.setReceivedFinal(true);
+  const autoTaskReport = resolveAutoTaskReportForOutput({
+    conversationId: input.conversationId,
+    durationMs: runResult.durationMs,
+    inputTokens: runResult.latestUsage?.inputTokens,
+    outputTokens: runResult.latestUsage?.outputTokens,
+  });
 
   const sanitized = sanitizeMessageSendAssistantText(runResult.fullText);
+  const assistantText = appendAutoTaskReport(sanitized || runResult.fullText, autoTaskReport);
+  const completionFinalText = appendAutoTaskReport(finalEventText || runResult.fullText, autoTaskReport);
   let assistantTimestamp = Date.now();
-  if (sanitized || runResult.fullText) {
+  if (assistantText) {
     const assistantMessage = ctx.runtime.conversationStore.addMessage(
       input.conversationId,
       "assistant",
-      sanitized || runResult.fullText,
+      assistantText,
       {
         agentId: input.requestedAgentId,
         timestampMs: assistantTimestamp,
@@ -1182,7 +1198,7 @@ async function finalizeMessageSendSuccess(input: {
     policy: {
       conversationId: input.conversationId,
       runId: input.runId,
-      finalText: finalEventText || runResult.fullText,
+      finalText: completionFinalText,
       finalTimestampMs: assistantTimestamp,
       terminalStage: "completed",
       terminalDetail: {
@@ -1210,6 +1226,7 @@ function finalizeMessageSendStopped(input: {
   partialText?: string;
   reason?: string;
 }): void {
+  consumeAutoTaskReport(input.conversationId);
   const stopReason = readMessageSendStopReason(undefined, input.reason);
   input.ctx.runtime.conversationRunRegistry.markStopped(input.conversationId, input.runId, stopReason);
   input.queryRuntime.mark("task_stopped", {
@@ -1265,6 +1282,9 @@ function finalizeMessageSendFailure(input: {
   input.ctx.runtime.log.error("agent", "Agent run failed", input.error);
 
   const errorTimestamp = Date.now();
+  const autoTaskReport = resolveAutoTaskReportForOutput({
+    conversationId: input.conversationId,
+  });
   applyMessageSendCompletionPolicy({
     ctx: input.ctx,
     queryRuntime: input.queryRuntime,
@@ -1272,7 +1292,7 @@ function finalizeMessageSendFailure(input: {
       conversationId: input.conversationId,
       runId: input.runId,
       agentId: input.requestedAgentId ?? "default",
-      finalText: `Error: ${String(input.error)}`,
+      finalText: appendAutoTaskReport(`Error: ${String(input.error)}`, autoTaskReport),
       finalTimestampMs: errorTimestamp,
       statusBeforeFinal: "error",
       terminalStage: "failed",

@@ -25,6 +25,7 @@ import {
 } from "./server-testkit.js";
 import { ToolControlConfirmationStore } from "./tool-control-confirmation-store.js";
 import { ToolsConfigManager } from "./tools-config.js";
+import { clearAutoTaskReportsForTest } from "./task-auto-report.js";
 import { IdempotencyManager } from "./webhook/index.js";
 
 // MemoryManager 内部会初始化 OpenAIEmbeddingProvider，需要 OPENAI_API_KEY
@@ -37,6 +38,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanupGlobalMemoryManagersForTest();
+  clearAutoTaskReportsForTest();
 });
 
 test("/api/message is disabled by default", async () => {
@@ -170,6 +172,138 @@ test("/api/message accepts valid bearer token", async () => {
       expect(payload.ok).toBe(true);
       expect(payload.payload?.conversationId).toBe("conv-4");
       expect(String(payload.payload?.response ?? "")).toContain("hello from community");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("api.message and webhook append auto task report summary when enabled", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-test-token",
+    BELLDANDY_AUTO_TASK_TIME_ENABLED: "true",
+    BELLDANDY_AUTO_TASK_TOKEN_ENABLED: "true",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        yield { type: "status", status: "running" as const };
+        yield {
+          type: "usage" as const,
+          systemPromptTokens: 2,
+          contextTokens: 4,
+          inputTokens: 10,
+          outputTokens: 6,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          modelCalls: 1,
+        };
+        yield { type: "final" as const, text: `echo:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    };
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+      webhookConfig: {
+        version: 1,
+        webhooks: [
+          {
+            id: "audit",
+            enabled: true,
+            token: "webhook-trace-token",
+          },
+        ],
+      },
+      webhookIdempotency: new IdempotencyManager(60_000),
+    });
+
+    try {
+      const communityRes = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-test-token",
+        },
+        body: JSON.stringify({
+          text: "hello from community",
+          conversationId: "conv-http-auto-report",
+          from: "office.goddess.ai",
+        }),
+      });
+      const communityPayload = await communityRes.json();
+      expect(communityRes.status).toBe(200);
+      expect(String(communityPayload.payload?.response ?? "")).toContain("执行统计");
+      expect(String(communityPayload.payload?.response ?? "")).toContain("- Token：IN 10 / OUT 6 / TOTAL 16");
+
+      const webhookRes = await fetch(`http://127.0.0.1:${server.port}/api/webhook/audit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer webhook-trace-token",
+        },
+        body: JSON.stringify({
+          text: "hello runtime webhook",
+          conversationId: "conv-webhook-auto-report",
+        }),
+      });
+      const webhookPayload = await webhookRes.json();
+      expect(webhookRes.status).toBe(200);
+      expect(String(webhookPayload.payload?.response ?? "")).toContain("执行统计");
+      expect(String(webhookPayload.payload?.response ?? "")).toContain("- Token：IN 10 / OUT 6 / TOTAL 16");
+    } finally {
+      await server.close();
+      await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+test("api.message strips think blocks from HTTP response", async () => {
+  await withEnv({
+    BELLDANDY_COMMUNITY_API_ENABLED: "true",
+    BELLDANDY_COMMUNITY_API_TOKEN: "community-test-token",
+  }, async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+    const agent: BelldandyAgent = {
+      async *run(input) {
+        yield { type: "status", status: "running" as const };
+        yield { type: "final" as const, text: `<think>secret:${input.text}</think>\n\necho:${input.text}` };
+        yield { type: "status" as const, status: "done" };
+      },
+    };
+
+    const server = await startGatewayServer({
+      port: 0,
+      auth: { mode: "none" },
+      webRoot: resolveWebRoot(),
+      stateDir,
+      agentFactory: () => agent,
+    });
+
+    try {
+      const communityRes = await fetch(`http://127.0.0.1:${server.port}/api/message`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer community-test-token",
+        },
+        body: JSON.stringify({
+          text: "隐藏推理",
+          conversationId: "conv-http-strip-think",
+          from: "office.goddess.ai",
+        }),
+      });
+      const communityPayload = await communityRes.json();
+      expect(communityRes.status).toBe(200);
+      expect(String(communityPayload.payload?.response ?? "")).not.toContain("<think>");
+      expect(String(communityPayload.payload?.response ?? "")).not.toContain("secret:隐藏推理");
+      expect(String(communityPayload.payload?.response ?? "")).toContain("echo:隐藏推理");
     } finally {
       await server.close();
       await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});

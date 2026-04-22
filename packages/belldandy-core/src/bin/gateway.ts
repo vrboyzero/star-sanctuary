@@ -248,6 +248,13 @@ import {
   type IdentityAuthorityProfile,
   type JsonObject,
 } from "@belldandy/protocol";
+import {
+  AUTO_TASK_REPORT_COUNTER_NAME,
+  beginAutoTaskReport,
+  getAutoTaskReportFlags,
+  recordAutoTaskReportDuration,
+  recordAutoTaskReportToken,
+} from "../task-auto-report.js";
 import { GoalManager } from "../goals/manager.js";
 import { parseGoalSessionKey } from "../goals/session.js";
 import { buildContextInjectionPrelude } from "../context-injection.js";
@@ -999,6 +1006,7 @@ const deferredToolNames = runtimeToolsToRegister
   .filter((name) => !CORE_TOOL_NAMES.has(name));
 
 let agentRegistry: AgentRegistry | undefined;
+const autoTaskReportFlags = getAutoTaskReportFlags();
 
 const toolExecutor = new ToolExecutor({
   tools: runtimeToolsToRegister,
@@ -1032,6 +1040,19 @@ const toolExecutor = new ToolExecutor({
   },
   broadcast: (event, payload) => {
     serverBroadcast?.({ type: "event", event, payload });
+  },
+  onTokenCounterSet: (conversationId, counter) => {
+    if (!autoTaskReportFlags.tokenEnabled || !conversationId) {
+      return;
+    }
+    try {
+      counter.start(AUTO_TASK_REPORT_COUNTER_NAME);
+    } catch (err) {
+      logger.warn(
+        "auto-task-report",
+        `Failed to start auto task report counter for session ${conversationId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   },
   auditLogger: (log) => {
     const msg = log.success
@@ -2715,6 +2736,63 @@ function parseEnvBoolean(value: string | undefined): boolean {
 // - agent_end: 自动 stop 所有自动启动的计数器并广播结果
 const AUTO_BOUNDARY_TOOLS = new Set(["sessions_spawn", "delegate_task", "delegate_parallel"]);
 const AUTO_COUNTER_PREFIX = "auto:";
+
+if (autoTaskReportFlags.timeEnabled || autoTaskReportFlags.tokenEnabled) {
+  hookRegistry.register({
+    source: "auto-task-report",
+    hookName: "before_agent_start",
+    priority: 120,
+    handler: async (_event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      beginAutoTaskReport(sessionKey, autoTaskReportFlags);
+    },
+  });
+
+  hookRegistry.register({
+    source: "auto-task-report",
+    hookName: "agent_end",
+    priority: 95,
+    handler: async (event, ctx) => {
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) return;
+
+      if (autoTaskReportFlags.timeEnabled) {
+        recordAutoTaskReportDuration(sessionKey, event.durationMs);
+      }
+
+      if (!autoTaskReportFlags.tokenEnabled) {
+        return;
+      }
+
+      const counter = toolExecutor.getTokenCounter(sessionKey);
+      if (!counter || !counter.list().includes(AUTO_TASK_REPORT_COUNTER_NAME)) {
+        return;
+      }
+
+      try {
+        const result = counter.stop(AUTO_TASK_REPORT_COUNTER_NAME);
+        recordAutoTaskReportToken({
+          conversationId: sessionKey,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          totalTokens: result.totalTokens,
+        });
+      } catch (err) {
+        logger.warn(
+          "auto-task-report",
+          `Failed to stop auto task report counter for session ${sessionKey}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+  });
+
+  logger.info(
+    "auto-task-report",
+    `Registered auto task report hooks (time=${autoTaskReportFlags.timeEnabled}, token=${autoTaskReportFlags.tokenEnabled})`,
+  );
+}
 
 if (toolsEnabled) {
   // after_tool_call: 检测任务派发工具，自动启动 token 计数器

@@ -10,6 +10,12 @@ import {
 import type { MessageSendParams } from "@belldandy/protocol";
 import { runAgentToCompletionWithLifecycle } from "./query-runtime-agent-run.js";
 import { QueryRuntime, type QueryRuntimeObserver } from "./query-runtime.js";
+import {
+  appendAutoTaskReport,
+  consumeAutoTaskReport,
+  resolveAutoTaskReportForOutput,
+  sanitizeVisibleAssistantText,
+} from "./task-auto-report.js";
 import type { WebhookConfig, WebhookRequestParams, IdempotencyManager, WebhookResponse } from "./webhook/index.js";
 import { findWebhookRule, generateConversationId, generatePromptFromPayload, verifyWebhookToken } from "./webhook/index.js";
 
@@ -83,6 +89,7 @@ export async function handleCommunityMessageWithQueryRuntime(
     traceId: ctx.requestId,
     observer: ctx.runtimeObserver,
   });
+  let conversationIdForCleanup: string | undefined;
 
   try {
     return await runtime.run(async (queryRuntime) => {
@@ -135,6 +142,7 @@ export async function handleCommunityMessageWithQueryRuntime(
       const body = isObjectRecord(ctx.body) ? ctx.body : {};
       const text = typeof body.text === "string" ? body.text : "";
       const conversationId = typeof body.conversationId === "string" ? body.conversationId : "";
+      conversationIdForCleanup = conversationId || undefined;
       const from = typeof body.from === "string" ? body.from : undefined;
       const agentId = typeof body.agentId === "string" ? body.agentId : undefined;
       const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
@@ -338,17 +346,26 @@ export async function handleCommunityMessageWithQueryRuntime(
           },
         });
       }
+      const responseText = appendAutoTaskReport(
+        sanitizeVisibleAssistantText(runResult.finalText),
+        resolveAutoTaskReportForOutput({
+          conversationId,
+          durationMs: runResult.durationMs,
+          inputTokens: runResult.latestUsage?.inputTokens,
+          outputTokens: runResult.latestUsage?.outputTokens,
+        }),
+      );
 
       queryRuntime.mark("response_built", {
         conversationId,
         detail: {
           hasUsage: Boolean(runResult.latestUsage),
-          responseLength: runResult.finalText.length,
+          responseLength: responseText.length,
         },
       });
       queryRuntime.mark("completed", { conversationId });
 
-      ctx.log.info("api", `Community message processed successfully: ${runResult.finalText.substring(0, 50)}...`);
+      ctx.log.info("api", `Community message processed successfully: ${responseText.substring(0, 50)}...`);
       return {
         status: 200,
         body: {
@@ -356,12 +373,15 @@ export async function handleCommunityMessageWithQueryRuntime(
           payload: {
             conversationId,
             runId,
-            response: runResult.finalText,
+            response: responseText,
           },
         },
       };
     });
   } catch (error) {
+    if (conversationIdForCleanup) {
+      consumeAutoTaskReport(conversationIdForCleanup);
+    }
     ctx.log.error("api", "Failed to process community message", error);
     return {
       status: 500,
@@ -386,6 +406,7 @@ export async function handleWebhookReceiveWithQueryRuntime(
   });
 
   let ownedIdempotency = false;
+  let conversationIdForCleanup: string | undefined;
 
   try {
     return await runtime.run(async (queryRuntime) => {
@@ -556,6 +577,7 @@ export async function handleWebhookReceiveWithQueryRuntime(
       const conversationId = typeof params.conversationId === "string" && params.conversationId
         ? params.conversationId
         : generateConversationId(rule);
+      conversationIdForCleanup = conversationId;
 
       let promptText = typeof params.text === "string" ? params.text : "";
       if (!promptText && params.payload) {
@@ -696,6 +718,15 @@ export async function handleWebhookReceiveWithQueryRuntime(
           },
         });
       }
+      const responseText = appendAutoTaskReport(
+        sanitizeVisibleAssistantText(runResult.finalText),
+        resolveAutoTaskReportForOutput({
+          conversationId,
+          durationMs: runResult.durationMs,
+          inputTokens: runResult.latestUsage?.inputTokens,
+          outputTokens: runResult.latestUsage?.outputTokens,
+        }),
+      );
 
       const response: WebhookResponse = {
         ok: true,
@@ -703,7 +734,7 @@ export async function handleWebhookReceiveWithQueryRuntime(
           webhookId,
           conversationId,
           runId,
-          response: runResult.finalText,
+          response: responseText,
         },
       };
 
@@ -717,12 +748,12 @@ export async function handleWebhookReceiveWithQueryRuntime(
         detail: {
           webhookId,
           hasUsage: Boolean(runResult.latestUsage),
-          responseLength: runResult.finalText.length,
+          responseLength: responseText.length,
         },
       });
       queryRuntime.mark("completed", { conversationId });
 
-      ctx.log.info("webhook", `Webhook processed successfully: ${runResult.finalText.substring(0, 50)}...`);
+      ctx.log.info("webhook", `Webhook processed successfully: ${responseText.substring(0, 50)}...`);
       return {
         status: 200,
         body: response as unknown as Record<string, unknown>,
@@ -733,6 +764,9 @@ export async function handleWebhookReceiveWithQueryRuntime(
     const idempotencyKey = typeof ctx.idempotencyKey === "string" ? ctx.idempotencyKey : undefined;
     if (ownedIdempotency && webhookId && idempotencyKey && ctx.webhookIdempotency) {
       ctx.webhookIdempotency.failRequest(webhookId, idempotencyKey, error);
+    }
+    if (conversationIdForCleanup) {
+      consumeAutoTaskReport(conversationIdForCleanup);
     }
     ctx.log.error("webhook", "Failed to process webhook", error);
     return {
