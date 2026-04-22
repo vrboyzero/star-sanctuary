@@ -243,7 +243,7 @@ async function main() {
   const stagedSourceRoot = path.join(smokeRoot, "windows-source-stage");
   const installRoot = path.join(smokeRoot, "windows-install-root");
   const stateDir = path.join(smokeRoot, "windows-install-state");
-  const envLocalPath = path.join(installRoot, ".env.local");
+  const envLocalPath = path.join(stateDir, ".env.local");
   const installInfoPath = path.join(installRoot, "install-info.json");
   const backupRoot = path.join(installRoot, "backups");
   const port = 29681;
@@ -365,7 +365,7 @@ async function main() {
     && setupJson?.path === envLocalPath
     && installInfo.tag === "v3.0.0-build-smoke"
     && installInfo.version === "v3.0.0-build-smoke"
-    && environmentCheck?.message === installRoot
+    && environmentCheck?.message === stateDir
     && envLocalCheck?.status === "pass"
     && envLocalCheck?.message === envLocalPath
     && envLocalText.includes("BELLDANDY_AGENT_PROVIDER")

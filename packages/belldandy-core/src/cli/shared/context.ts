@@ -3,7 +3,7 @@
  * Provides stateDir resolution, output mode, and logging helpers.
  */
 import pc from "picocolors";
-import { resolveEnvFilePaths, resolvePreferredEnvDirInfo, type EnvDirSource } from "@star-sanctuary/distribution";
+import { resolveEnvFilePaths, type EnvDirSource } from "@star-sanctuary/distribution";
 import { resolveStateDir, loadProjectEnvFiles } from "./env-loader.js";
 
 export interface CLIContext {
@@ -25,28 +25,20 @@ export function createCLIContext(args: {
   stateDir?: string;
   verbose?: boolean;
 }): CLIContext {
-  const envSelection = resolvePreferredEnvDirInfo({
-    env: process.env,
-    cwd: process.cwd(),
-    stateDir: args.stateDir,
-  });
-  const envDir = envSelection.envDir;
-
-  // 先按统一 envDir 规则加载 .env / .env.local，再解析 stateDir。
-  // 这样 CLI 与 gateway.ts 在 legacy root env 和 stateDir env 两种模式下保持一致。
+  const stateDir = args.stateDir ?? resolveStateDir();
+  const envDir = stateDir;
   const envFiles = resolveEnvFilePaths({ envDir });
   loadProjectEnvFiles({
     envPath: envFiles.envPath,
     envLocalPath: envFiles.envLocalPath,
   });
 
-  const stateDir = args.stateDir ?? resolveStateDir();
   const json = args.json ?? false;
 
   return {
     stateDir,
     envDir,
-    envSource: envSelection.source,
+    envSource: "state_dir" as EnvDirSource,
     json,
     verbose: args.verbose ?? false,
     log: (msg) => {

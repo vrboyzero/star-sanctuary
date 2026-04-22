@@ -20,6 +20,7 @@ export const APP_DOM_REFS = {
   agentSelectEl: byId("agentSelect"),
   themeToggleBtn: byId("themeToggleBtn"),
   toggleContentPanelBtn: byId("toggleContentPanelBtn"),
+  goChatPageBtn: byId("goChatPageBtn"),
   sidebarEl: byId("sidebar"),
   sidebarTitleEl: document.querySelector(".sidebar-title"),
   fileTreeEl: byId("fileTree"),

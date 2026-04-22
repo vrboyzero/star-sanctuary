@@ -115,6 +115,7 @@ export function createSettingsController({
     "BELLDANDY_MEMORY_EVOLUTION_API_KEY",
     "BELLDANDY_MEMORY_SUMMARY_API_KEY",
     "BELLDANDY_EMBEDDING_OPENAI_API_KEY",
+    "BELLDANDY_TASK_SUMMARY_API_KEY",
   ];
   let lastLoadedConfig = null;
   let lastLoadedChannelSecurityContent = '{\n  "version": 1,\n  "channels": {}\n}\n';

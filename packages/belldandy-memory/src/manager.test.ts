@@ -714,7 +714,7 @@ describe("MemoryManager guardrails", () => {
       evolutionMinMessages: 2,
     });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as keyof typeof globalThis).mockResolvedValue({
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({
         choices: [
@@ -759,7 +759,7 @@ describe("MemoryManager guardrails", () => {
       evolutionMinMessages: 2,
     });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as keyof typeof globalThis).mockResolvedValue({
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({
         choices: [
@@ -774,7 +774,8 @@ describe("MemoryManager guardrails", () => {
 
     await (manager as any).callLLMForExtraction("请沉淀这轮对话中的长期信息。");
 
-    const request = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const firstCall = fetchSpy.mock.calls[0] as [unknown, RequestInit | undefined] | undefined;
+    const request = firstCall?.[1];
     const body = JSON.parse(String(request?.body ?? "{}")) as Record<string, unknown>;
     expect(body.reasoning_split).toBe(true);
 
@@ -792,7 +793,7 @@ describe("MemoryManager guardrails", () => {
       evolutionMinMessages: 2,
     });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as keyof typeof globalThis).mockResolvedValue({
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       json: async () => ({
         choices: [
@@ -807,7 +808,8 @@ describe("MemoryManager guardrails", () => {
 
     await (manager as any).callLLMForExtraction("请沉淀这轮对话中的长期信息。");
 
-    const request = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const firstCall = fetchSpy.mock.calls[0] as [unknown, RequestInit | undefined] | undefined;
+    const request = firstCall?.[1];
     const body = JSON.parse(String(request?.body ?? "{}")) as Record<string, unknown>;
     expect(body).not.toHaveProperty("reasoning_split");
 

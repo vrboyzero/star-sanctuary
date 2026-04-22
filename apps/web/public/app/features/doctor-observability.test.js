@@ -770,19 +770,15 @@ describe("doctor observability formatting", () => {
         headline: "enabled; status=running; heartbeat=on; interval=45m; activeHours=08:00-23:00; cron=on; jobs=2/3; recent=2; notify=resident+feishu>qq>community>discord; confirm=required",
       },
       configSource: {
-        source: "legacy_root",
-        sourceLabel: "legacy project-root env",
-        envDir: "E:/project/star-sanctuary",
+        source: "state_dir",
+        sourceLabel: "state-dir config",
+        envDir: "C:/Users/admin/.star_sanctuary",
         stateDir: "C:/Users/admin/.star_sanctuary",
-        stateDirActive: false,
+        stateDirActive: true,
         resolutionOrder: [
-          "explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR)",
-          "installed runtime env dir from install-info.json",
-          "legacy project-root .env / .env.local",
-          "state-dir config",
+          "state-dir config (BELLDANDY_STATE_DIR)",
         ],
-        headline: "Using legacy project-root env files from E:/project/star-sanctuary; state-dir config at C:/Users/admin/.star_sanctuary is currently inactive.",
-        migrationHint: "Run 'bdd config migrate-to-state-dir' when you are ready to switch away from project-root env files.",
+        headline: "Using state-dir config from C:/Users/admin/.star_sanctuary; Gateway reads .env / .env.local from BELLDANDY_STATE_DIR on every start.",
       },
       externalOutboundRuntime: {
         requireConfirmation: true,
@@ -1388,13 +1384,11 @@ describe("doctor observability formatting", () => {
     expect(lines.join("\n")).toContain("Heartbeat: running, heartbeat, target=conversation:heartbeat-1, summary=Heartbeat follow-up");
     expect(lines.join("\n")).toContain("Digest: ran, cron, session=main, target=conversation:cron-main:cron-job-1, summary=Digest delivered");
     expect(lines.join("\n")).toContain("Config Source");
-    expect(lines.join("\n")).toContain("current legacy project-root env");
-    expect(lines.join("\n")).toContain("state-dir inactive");
-    expect(lines.join("\n")).toContain("envDir: E:/project/star-sanctuary");
+    expect(lines.join("\n")).toContain("current state-dir config");
+    expect(lines.join("\n")).toContain("state-dir active");
     expect(lines.join("\n")).toContain("stateDir: C:/Users/admin/.star_sanctuary");
-    expect(lines.join("\n")).toContain("resolution order: explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR) -> installed runtime env dir from install-info.json -> legacy project-root .env / .env.local -> state-dir config");
-    expect(lines.join("\n")).toContain("不会再同时合并 state-dir 配置");
-    expect(lines.join("\n")).toContain("bdd config migrate-to-state-dir");
+    expect(lines.join("\n")).toContain("resolution order: state-dir config (BELLDANDY_STATE_DIR)");
+    expect(lines.join("\n")).toContain("Gateway reads .env / .env.local from BELLDANDY_STATE_DIR on every start.");
     expect(lines.join("\n")).toContain("Cron Runtime");
     expect(lines.join("\n")).toContain("2/3 jobs enabled");
     expect(lines.join("\n")).toContain("delivery user 2 / none 1");

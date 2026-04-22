@@ -1158,6 +1158,7 @@ export async function startGatewayServer(opts: GatewayServerOptions): Promise<Ga
     updateSubTask: opts.updateSubTask,
     stopSubTask: opts.stopSubTask,
     tokenUsageUploadConfig,
+    broadcast: (frame) => broadcastEvent?.(frame),
     broadcastEvent: (frame) => broadcastEvent?.(frame),
     getCompactionRuntimeReport: opts.getCompactionRuntimeReport,
     getRuntimeResilienceReport: opts.getRuntimeResilienceReport,

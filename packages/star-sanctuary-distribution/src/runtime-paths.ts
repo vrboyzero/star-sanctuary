@@ -53,11 +53,6 @@ export type ResolveWorkspaceTemplateDirOptions = {
   mode?: RuntimeMode;
 };
 
-type InstalledSourceLayout = {
-  currentDir: string;
-  envDir: string;
-};
-
 function readTrimmedEnv(
   env: NodeJS.ProcessEnv,
   ...keys: string[]
@@ -85,57 +80,8 @@ function pickFirstExistingPath(candidates: string[], fallback: string): string {
   return fallback;
 }
 
-function fileExists(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath);
-  } catch {
-    return false;
-  }
-}
-
 function resolveFromModuleUrl(moduleUrl: string, relativePath: string): string {
   return path.resolve(path.dirname(fileURLToPath(moduleUrl)), relativePath);
-}
-
-function resolveInstallRelativePath(rootDir: string, relativePath: string | undefined, fallback: string): string {
-  const trimmed = relativePath?.trim();
-  if (!trimmed) {
-    return path.resolve(rootDir, fallback);
-  }
-  if (path.isAbsolute(trimmed)) {
-    return path.resolve(rootDir, fallback);
-  }
-
-  const resolved = path.resolve(rootDir, trimmed);
-  const relativeToRoot = path.relative(rootDir, resolved);
-  if (relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
-    return path.resolve(rootDir, fallback);
-  }
-  return resolved;
-}
-
-function readInstalledSourceLayout(installInfoPath: string, installRoot: string): InstalledSourceLayout {
-  try {
-    const raw = fs.readFileSync(installInfoPath, "utf-8");
-    const parsed = JSON.parse(raw) as { currentDir?: unknown; envDir?: unknown };
-    return {
-      currentDir: resolveInstallRelativePath(
-        installRoot,
-        typeof parsed.currentDir === "string" ? parsed.currentDir : undefined,
-        "current",
-      ),
-      envDir: resolveInstallRelativePath(
-        installRoot,
-        typeof parsed.envDir === "string" ? parsed.envDir : undefined,
-        ".",
-      ),
-    };
-  } catch {
-    return {
-      currentDir: path.resolve(installRoot, "current"),
-      envDir: path.resolve(installRoot, "."),
-    };
-  }
 }
 
 export function resolveRuntimeDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -175,51 +121,7 @@ export function resolvePreferredEnvDir(
 export function resolvePreferredEnvDirInfo(
   options: ResolvePreferredEnvDirOptions = {},
 ): ResolvePreferredEnvDirResult {
-  const env = options.env ?? process.env;
-  const exists = options.exists ?? fileExists;
-  const explicitEnvDir = options.envDir
-    ?? readTrimmedEnv(env, "STAR_SANCTUARY_ENV_DIR", "BELLDANDY_ENV_DIR");
-  if (explicitEnvDir) {
-    return {
-      envDir: path.resolve(explicitEnvDir),
-      source: "explicit",
-    };
-  }
-
-  const explicitRuntimeDir = options.runtimeDir ?? resolveRuntimeDir(env);
-  if (explicitRuntimeDir) {
-    const normalizedRuntimeDir = path.resolve(explicitRuntimeDir);
-    const installRootCandidates = [
-      normalizedRuntimeDir,
-      path.dirname(normalizedRuntimeDir),
-    ];
-
-    for (const candidateRoot of installRootCandidates) {
-      const installInfoPath = path.join(candidateRoot, "install-info.json");
-      if (!exists(installInfoPath)) {
-        continue;
-      }
-
-      const installedLayout = readInstalledSourceLayout(installInfoPath, candidateRoot);
-      if (normalizedRuntimeDir === candidateRoot || normalizedRuntimeDir === installedLayout.currentDir) {
-        return {
-          envDir: installedLayout.envDir,
-          source: "installed_source",
-        };
-      }
-    }
-  }
-
-  const cwd = path.resolve(options.cwd ?? process.cwd());
-  const cwdEnvFiles = resolveEnvFilePaths({ envDir: cwd });
-  if (exists(cwdEnvFiles.envPath) || exists(cwdEnvFiles.envLocalPath)) {
-    return {
-      envDir: cwd,
-      source: "legacy_root",
-    };
-  }
-
-  const stateDir = path.resolve(options.stateDir ?? resolveStateDir(env));
+  const stateDir = path.resolve(options.stateDir ?? resolveStateDir(options.env ?? process.env));
   return {
     envDir: stateDir,
     source: "state_dir",
@@ -236,7 +138,7 @@ export function resolveGatewayRuntimePaths(
       ?? readTrimmedEnv(env, "STAR_SANCTUARY_RUNTIME_DIR", "BELLDANDY_RUNTIME_DIR"),
   );
   const mode = resolveRuntimeMode(env, runtimeDir, options.mode);
-  const stateDir = options.stateDir ?? resolveStateDir(env);
+  const stateDir = path.resolve(options.stateDir ?? resolveStateDir(env));
   const envSelection = resolvePreferredEnvDirInfo({
     env,
     cwd,

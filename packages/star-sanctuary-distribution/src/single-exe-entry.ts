@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import { loadRuntimeEnvFiles, readTrimmedEnv, resolveRuntimeEnvDir } from "./env.js";
+import { ensureDefaultEnvFiles, loadRuntimeEnvFiles, readTrimmedEnv, resolveRuntimeEnvDir } from "./env.js";
 import { startGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   cleanupSingleExeRuntimeDirs,
@@ -22,13 +22,12 @@ function ensureSingleExeEnv(params: {
   runtimeDir: string;
   envDir: string;
 }): NodeJS.ProcessEnv {
+  ensureDefaultEnvFiles(params.envDir);
   const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(params.baseEnv, params.envDir);
   env.STAR_SANCTUARY_RUNTIME_MODE = "single-exe";
   env.BELLDANDY_RUNTIME_MODE = "single-exe";
   env.STAR_SANCTUARY_RUNTIME_DIR = params.runtimeDir;
   env.BELLDANDY_RUNTIME_DIR = params.runtimeDir;
-  env.STAR_SANCTUARY_ENV_DIR = params.envDir;
-  env.BELLDANDY_ENV_DIR = params.envDir;
   env.AUTO_OPEN_BROWSER = readTrimmedEnv(env, "AUTO_OPEN_BROWSER") ?? "true";
 
   if (readTrimmedEnv(env, "BELLDANDY_AUTH_MODE") === "token" && !readTrimmedEnv(env, "BELLDANDY_AUTH_TOKEN")) {
@@ -47,7 +46,7 @@ function main(): void {
     baseEnv,
     fallbackEnvDir: stateDir,
   }));
-  console.log(`[Star Sanctuary Single-Exe] Environment dir: ${envDir}`);
+  console.log(`[Star Sanctuary Single-Exe] State dir: ${envDir}`);
   const runningFromSea = isSeaRuntime();
   const ensuredRuntime = runningFromSea
     ? ensureSingleExeRuntimeFromSea({ env: baseEnv })

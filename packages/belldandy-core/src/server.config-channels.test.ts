@@ -110,6 +110,7 @@ test("config.update accepts unified Aliyun API key targets and redacts them in c
           BELLDANDY_MEMORY_EVOLUTION_API_KEY: "aliyun-shared-key",
           BELLDANDY_MEMORY_SUMMARY_API_KEY: "aliyun-shared-key",
           BELLDANDY_EMBEDDING_OPENAI_API_KEY: "aliyun-shared-key",
+          BELLDANDY_TASK_SUMMARY_API_KEY: "aliyun-shared-key",
         },
       },
     }));
@@ -126,6 +127,7 @@ test("config.update accepts unified Aliyun API key targets and redacts them in c
     expect(readRes.payload?.config?.BELLDANDY_MEMORY_EVOLUTION_API_KEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_MEMORY_SUMMARY_API_KEY).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_EMBEDDING_OPENAI_API_KEY).toBe("[REDACTED]");
+    expect(readRes.payload?.config?.BELLDANDY_TASK_SUMMARY_API_KEY).toBe("[REDACTED]");
 
     const envLocalContent = await fs.promises.readFile(path.join(envDir, ".env.local"), "utf-8");
     expect(envLocalContent).toContain('DASHSCOPE_API_KEY="aliyun-shared-key"');
@@ -133,6 +135,7 @@ test("config.update accepts unified Aliyun API key targets and redacts them in c
     expect(envLocalContent).toContain('BELLDANDY_MEMORY_EVOLUTION_API_KEY="aliyun-shared-key"');
     expect(envLocalContent).toContain('BELLDANDY_MEMORY_SUMMARY_API_KEY="aliyun-shared-key"');
     expect(envLocalContent).toContain('BELLDANDY_EMBEDDING_OPENAI_API_KEY="aliyun-shared-key"');
+    expect(envLocalContent).toContain('BELLDANDY_TASK_SUMMARY_API_KEY="aliyun-shared-key"');
   } finally {
     ws.close();
     await closeP;

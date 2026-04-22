@@ -19,7 +19,6 @@ const portableRoot = resolvePortableArtifactRoot({
 const executablePath = path.join(portableRoot, "star-sanctuary.exe");
 const entryScript = path.join(portableRoot, "launcher", "portable-entry.js");
 const lifecycleStateDir = path.join(workspaceRoot, "artifacts", `portable-state-lifecycle${suffix}`);
-const lifecycleEnvDir = path.join(workspaceRoot, "artifacts", `portable-env-lifecycle${suffix}`);
 const reportPath = path.join(portableRoot, "portable-lifecycle-report.json");
 
 function wait(ms) {
@@ -83,7 +82,6 @@ async function runPortable(params) {
     env: {
       ...process.env,
       BELLDANDY_STATE_DIR: lifecycleStateDir,
-      STAR_SANCTUARY_ENV_DIR: lifecycleEnvDir,
       AUTO_OPEN_BROWSER: "false",
     },
     stdio: ["ignore", stdout, stderr],
@@ -133,10 +131,9 @@ async function main() {
   ensureArtifactExists();
 
   fs.rmSync(lifecycleStateDir, { recursive: true, force: true });
-  fs.rmSync(lifecycleEnvDir, { recursive: true, force: true });
   fs.rmSync(reportPath, { force: true });
 
-  const envMarkerPath = path.join(lifecycleEnvDir, ".env.local");
+  const envMarkerPath = path.join(lifecycleStateDir, ".env.local");
   const stateMarkerPath = path.join(lifecycleStateDir, "workspace", "marker.txt");
   fs.mkdirSync(path.dirname(envMarkerPath), { recursive: true });
   fs.mkdirSync(path.dirname(stateMarkerPath), { recursive: true });

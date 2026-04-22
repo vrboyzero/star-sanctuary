@@ -15,8 +15,6 @@ const START_BAT_CONTENT = [
   "set \"BELLDANDY_RUNTIME_MODE=source\"",
   "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
   "set \"BELLDANDY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-  "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
-  "set \"BELLDANDY_ENV_DIR=%INSTALL_ROOT%\"",
   "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" start %*",
   "exit /b %ERRORLEVEL%",
   "",
@@ -30,8 +28,6 @@ const BDD_CMD_CONTENT = [
   "set \"BELLDANDY_RUNTIME_MODE=source\"",
   "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
   "set \"BELLDANDY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-  "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
-  "set \"BELLDANDY_ENV_DIR=%INSTALL_ROOT%\"",
   "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" %*",
   "",
 ].join("\r\n");
@@ -44,8 +40,6 @@ const START_SH_CONTENT = [
   "export BELLDANDY_RUNTIME_MODE=\"source\"",
   "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
   "export BELLDANDY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-  "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
-  "export BELLDANDY_ENV_DIR=\"${SCRIPT_DIR}\"",
   "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" start \"$@\"",
   "",
 ].join("\n");
@@ -58,8 +52,6 @@ const BDD_SH_CONTENT = [
   "export BELLDANDY_RUNTIME_MODE=\"source\"",
   "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
   "export BELLDANDY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-  "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
-  "export BELLDANDY_ENV_DIR=\"${SCRIPT_DIR}\"",
   "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" \"$@\"",
   "",
 ].join("\n");
@@ -71,12 +63,10 @@ const SCENARIOS = [
     startWrapper: "start.bat",
     cliExpectedSnippets: [
       "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-      "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
       "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" %*",
     ],
     startExpectedSnippets: [
       "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-      "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
       "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" start %*",
     ],
   },
@@ -86,12 +76,10 @@ const SCENARIOS = [
     startWrapper: "start.sh",
     cliExpectedSnippets: [
       "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-      "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
       "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" \"$@\"",
     ],
     startExpectedSnippets: [
       "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-      "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
       "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" start \"$@\"",
     ],
   },
@@ -108,8 +96,6 @@ const SCRUBBED_ENV_KEYS = [
   "BELLDANDY_AUTH_MODE",
   "BELLDANDY_AUTH_TOKEN",
   "BELLDANDY_AUTH_PASSWORD",
-  "STAR_SANCTUARY_ENV_DIR",
-  "BELLDANDY_ENV_DIR",
   "STAR_SANCTUARY_RUNTIME_DIR",
   "BELLDANDY_RUNTIME_DIR",
   "STAR_SANCTUARY_RUNTIME_MODE",
@@ -193,8 +179,6 @@ function buildWrapperEnv(installRoot, extraEnv = {}) {
     BELLDANDY_RUNTIME_MODE: "source",
     STAR_SANCTUARY_RUNTIME_DIR: path.join(installRoot, "current"),
     BELLDANDY_RUNTIME_DIR: path.join(installRoot, "current"),
-    STAR_SANCTUARY_ENV_DIR: installRoot,
-    BELLDANDY_ENV_DIR: installRoot,
   };
 }
 
@@ -231,7 +215,6 @@ function writeInstallFixture(installRoot, options = {}) {
       tag,
       version,
       currentDir: "current",
-      envDir: ".",
       entrypoints: {
         startBat: "start.bat",
         startSh: "start.sh",
@@ -514,8 +497,8 @@ async function runScenario(scenario, index) {
   const stateDir = path.join(smokeRoot, `${scenario.id}-state`);
   const port = 29189 + (index * 4);
   const relayPort = port + 1;
-  const envLocalPath = path.join(installRoot, ".env.local");
-  const envPath = path.join(installRoot, ".env");
+  const envLocalPath = path.join(stateDir, ".env.local");
+  const envPath = path.join(stateDir, ".env");
   const stateMarkerPath = path.join(stateDir, "workspace", "install-lifecycle-marker.txt");
   const stateMarkerText = `${scenario.id}-state-preserved`;
   const envMarkerLine = `INSTALL_LIFECYCLE_MARKER=${scenario.id}`;
@@ -615,19 +598,19 @@ async function runScenario(scenario, index) {
 
   const initialOk = setupJson?.path === envLocalPath
     && initialStep.healthy
-    && initialStep.doctorEnvironmentDir === installRoot
+    && initialStep.doctorEnvironmentDir === stateDir
     && initialStep.doctorEnvLocalPath === envLocalPath
     && initialStep.doctorEnvLocalStatus === "pass"
     && envExistsBeforeRefresh;
   const reinstallOk = reinstallStep.healthy
-    && reinstallStep.doctorEnvironmentDir === installRoot
+    && reinstallStep.doctorEnvironmentDir === stateDir
     && reinstallStep.doctorEnvLocalPath === envLocalPath
     && reinstallStep.doctorEnvLocalStatus === "pass"
     && preservedEnvAfterReinstall === preservedEnvBeforeRefresh
     && stateMarkerAfterReinstall.trim() === stateMarkerText
     && fs.existsSync(envPath);
   const upgradeOk = upgradeStep.healthy
-    && upgradeStep.doctorEnvironmentDir === installRoot
+    && upgradeStep.doctorEnvironmentDir === stateDir
     && upgradeStep.doctorEnvLocalPath === envLocalPath
     && upgradeStep.doctorEnvLocalStatus === "pass"
     && installInfo?.tag === "smoke-upgrade"

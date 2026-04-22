@@ -258,8 +258,6 @@ set "STAR_SANCTUARY_RUNTIME_MODE=source"
 set "BELLDANDY_RUNTIME_MODE=source"
 set "STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current"
 set "BELLDANDY_RUNTIME_DIR=%INSTALL_ROOT%current"
-set "STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%"
-set "BELLDANDY_ENV_DIR=%INSTALL_ROOT%"
 if exist "%FIRST_START_NOTICE%" (
 echo [Star Sanctuary Launcher] Post-install note:
 type "%FIRST_START_NOTICE%"
@@ -279,8 +277,6 @@ $env:STAR_SANCTUARY_RUNTIME_MODE = 'source'
 $env:BELLDANDY_RUNTIME_MODE = 'source'
 $env:STAR_SANCTUARY_RUNTIME_DIR = Join-Path $scriptDir 'current'
 $env:BELLDANDY_RUNTIME_DIR = $env:STAR_SANCTUARY_RUNTIME_DIR
-$env:STAR_SANCTUARY_ENV_DIR = $scriptDir
-$env:BELLDANDY_ENV_DIR = $scriptDir
 if (Test-Path $noticePath) {
   Write-Host '[Star Sanctuary Launcher] Post-install note:'
   Get-Content -LiteralPath $noticePath
@@ -299,8 +295,6 @@ set "STAR_SANCTUARY_RUNTIME_MODE=source"
 set "BELLDANDY_RUNTIME_MODE=source"
 set "STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current"
 set "BELLDANDY_RUNTIME_DIR=%INSTALL_ROOT%current"
-set "STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%"
-set "BELLDANDY_ENV_DIR=%INSTALL_ROOT%"
 call node "%INSTALL_ROOT%current\packages\belldandy-core\dist\bin\bdd.js" %*
 "@
   Write-File -Path (Join-Path $Root "bdd.cmd") -Content ($bddCmd.TrimStart("`r", "`n") + "`r`n")
@@ -326,7 +320,6 @@ function Write-InstallMetadata {
     }
     installedAt = [DateTimeOffset]::UtcNow.ToString("o")
     currentDir = "current"
-    envDir = "."
     entrypoints = @{
       startBat = "start.bat"
       startPs1 = "start.ps1"
@@ -356,14 +349,64 @@ function Write-FirstStartNotice {
   Write-File -Path $noticePath -Content (($normalizedLines -join "`r`n") + "`r`n")
 }
 
+function Resolve-InstallerStateDir {
+  $homeDir = $HOME
+  if ([string]::IsNullOrWhiteSpace($homeDir)) {
+    $homeDir = $env:USERPROFILE
+  }
+  if ([string]::IsNullOrWhiteSpace($homeDir)) {
+    throw "Unable to resolve home directory for state dir."
+  }
+
+  function Resolve-ExplicitStateDir {
+    param(
+      [string]$RawPath,
+      [string]$ResolvedHomeDir
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RawPath)) {
+      return $null
+    }
+
+    $trimmed = $RawPath.Trim()
+    if ($trimmed -eq "~") {
+      return [System.IO.Path]::GetFullPath($ResolvedHomeDir)
+    }
+    if ($trimmed.StartsWith("~/") -or $trimmed.StartsWith('~\')) {
+      return [System.IO.Path]::GetFullPath((Join-Path $ResolvedHomeDir $trimmed.Substring(2)))
+    }
+    return [System.IO.Path]::GetFullPath($trimmed)
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($env:BELLDANDY_STATE_DIR_WINDOWS)) {
+    return Resolve-ExplicitStateDir -RawPath $env:BELLDANDY_STATE_DIR_WINDOWS -ResolvedHomeDir $homeDir
+  }
+  if (-not [string]::IsNullOrWhiteSpace($env:BELLDANDY_STATE_DIR)) {
+    return Resolve-ExplicitStateDir -RawPath $env:BELLDANDY_STATE_DIR -ResolvedHomeDir $homeDir
+  }
+
+  $preferred = Join-Path $homeDir ".star_sanctuary"
+  if (Test-Path $preferred) {
+    return [System.IO.Path]::GetFullPath($preferred)
+  }
+
+  $legacy = Join-Path $homeDir ".belldandy"
+  if (Test-Path $legacy) {
+    return [System.IO.Path]::GetFullPath($legacy)
+  }
+
+  return [System.IO.Path]::GetFullPath($preferred)
+}
+
 function Get-SetupPlan {
   param(
     [string]$InstallRoot,
+    [string]$StateDir,
     [switch]$NoSetup,
     [switch]$ForceSetup
   )
 
-  $envLocalPath = Join-Path $InstallRoot ".env.local"
+  $envLocalPath = Join-Path $StateDir ".env.local"
   if ($NoSetup) {
     return @{
       ShouldRun = $false
@@ -452,6 +495,7 @@ $installRootFilesBackupDir = Join-Path $tempRoot "install-root-files-backup"
 $backupPath = $null
 $installSucceeded = $false
 $setupPlan = $null
+$resolvedStateDir = Resolve-InstallerStateDir
 
 try {
   Ensure-NodeRuntime
@@ -569,7 +613,7 @@ try {
     New-DesktopShortcut -InstallRoot $installRoot
   }
 
-  $setupPlan = Get-SetupPlan -InstallRoot $installRoot -NoSetup:$NoSetup -ForceSetup:$ForceSetup
+  $setupPlan = Get-SetupPlan -InstallRoot $installRoot -StateDir $resolvedStateDir -NoSetup:$NoSetup -ForceSetup:$ForceSetup
   if ($setupPlan.ShouldRun) {
     Write-Step $setupPlan.StepMessage
     Invoke-TestFailPoint -Point "before_setup"

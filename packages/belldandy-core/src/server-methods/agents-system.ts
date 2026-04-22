@@ -1,5 +1,5 @@
 import type { AgentRegistry, ConversationStore } from "@belldandy/agent";
-import type { GatewayReqFrame, GatewayResFrame } from "@belldandy/protocol";
+import type { GatewayEventFrame, GatewayReqFrame, GatewayResFrame } from "@belldandy/protocol";
 import type { SubTaskRuntimeStore } from "../task-runtime.js";
 
 import { buildResidentAgentObservabilitySnapshot } from "../resident-agent-observability.js";
@@ -18,7 +18,7 @@ type AgentsSystemMethodContext = {
   stateDir: string;
   clientId: string;
   log: { warn: (scope: string, message: string, meta?: Record<string, unknown>) => void };
-  broadcast?: (message: unknown) => void;
+  broadcast?: (message: GatewayEventFrame) => void;
   agentRegistry?: AgentRegistry;
   residentAgentRuntime: ResidentAgentRuntimeRegistry;
   residentMemoryManagers?: ScopedMemoryManagerRecord[];

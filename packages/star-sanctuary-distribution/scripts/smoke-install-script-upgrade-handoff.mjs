@@ -190,8 +190,8 @@ async function main() {
 
   const installRoot = path.join(smokeRoot, "windows-install-root");
   const stateDir = path.join(smokeRoot, "windows-install-state");
-  const envPath = path.join(installRoot, ".env");
-  const envLocalPath = path.join(installRoot, ".env.local");
+  const envPath = path.join(stateDir, ".env");
+  const envLocalPath = path.join(stateDir, ".env.local");
   const installInfoPath = path.join(installRoot, "install-info.json");
   const firstStartNoticePath = path.join(installRoot, "first-start-notice.txt");
   const backupRoot = path.join(installRoot, "backups");
@@ -215,7 +215,10 @@ async function main() {
     command: "powershell.exe",
     args: [...installArgsBase, "-NoSetup", "-Version", "v1.0.0-handoff-smoke"],
     cwd: workspaceRoot,
-    env: sanitizeEnv({ CI: "true" }),
+    env: sanitizeEnv({
+      BELLDANDY_STATE_DIR: stateDir,
+      CI: "true",
+    }),
     stdoutPath: path.join(smokeRoot, "install-1.stdout.log"),
     stderrPath: path.join(smokeRoot, "install-1.stderr.log"),
     timeoutMs: 10 * 60 * 1000,
@@ -224,7 +227,8 @@ async function main() {
     throw new Error(`Initial install.ps1 run failed.\n--- stdout ---\n${firstInstall.stdoutText}\n--- stderr ---\n${firstInstall.stderrText}`);
   }
 
-  fs.writeFileSync(envLocalPath, `${envMarkerLine}\n`, "utf-8");
+  fs.mkdirSync(path.dirname(envLocalPath), { recursive: true });
+  fs.writeFileSync(envLocalPath, `${envMarkerLine}\nBELLDANDY_AUTH_MODE=none\n`, "utf-8");
   fs.mkdirSync(path.dirname(stateMarkerPath), { recursive: true });
   fs.writeFileSync(stateMarkerPath, "upgrade-handoff-state\n", "utf-8");
 
@@ -232,7 +236,10 @@ async function main() {
     command: "powershell.exe",
     args: [...installArgsBase, "-Version", "v2.0.0-handoff-smoke"],
     cwd: workspaceRoot,
-    env: sanitizeEnv({ CI: "true" }),
+    env: sanitizeEnv({
+      BELLDANDY_STATE_DIR: stateDir,
+      CI: "true",
+    }),
     stdoutPath: path.join(smokeRoot, "install-2.stdout.log"),
     stderrPath: path.join(smokeRoot, "install-2.stderr.log"),
     timeoutMs: 10 * 60 * 1000,
@@ -267,6 +274,7 @@ async function main() {
     args: [...installArgsBase, "-ForceSetup", "-Version", "v3.0.0-handoff-smoke"],
     cwd: workspaceRoot,
     env: sanitizeEnv({
+      BELLDANDY_STATE_DIR: stateDir,
       CI: "true",
       STAR_SANCTUARY_INSTALL_TEST_FAIL_AT: "before_setup",
     }),
@@ -339,7 +347,7 @@ async function main() {
     && forceFailureCombined.includes("Installer test failpoint triggered at before_setup.")
     && installInfo.tag === "v2.0.0-handoff-smoke"
     && installInfo.version === "v2.0.0-handoff-smoke"
-    && environmentCheck?.message === installRoot
+    && environmentCheck?.message === stateDir
     && envLocalCheck?.status === "pass"
     && envLocalCheck?.message === envLocalPath
     && envLocalText.includes(envMarkerLine)

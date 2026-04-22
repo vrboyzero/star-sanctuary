@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { ensureDefaultEnvFile, resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
+import { ensureDefaultEnvFiles, resolveEnvFilePaths, resolveGatewayRuntimePaths } from "@star-sanctuary/distribution";
 import { loadProjectEnvFiles } from "../cli/shared/env-loader.js";
 import { buildAutoOpenTargetUrl, resolveLauncherSetupAuth } from "./launcher-auth.js";
 import { startBrowserRelayRuntime, startCronRuntime, startHeartbeatRuntime } from "./gateway-background-runtime.js";
@@ -355,7 +355,7 @@ let runtimePaths = resolveGatewayRuntimePaths({
   gatewayModuleUrl: import.meta.url,
 });
 let envFiles = resolveEnvFilePaths({ envDir: runtimePaths.envDir });
-const ensuredDefaultEnv = ensureDefaultEnvFile(runtimePaths.envDir);
+const ensuredDefaultEnvFiles = ensureDefaultEnvFiles(runtimePaths.envDir);
 
 loadProjectEnvFiles({
   envPath: envFiles.envPath,
@@ -439,12 +439,11 @@ const extraWorkspaceRoots = extraWorkspaceRootsRaw
 // Logger（尽早初始化，后续所有输出走统一日志）
 const logger = createLoggerFromEnv(stateDir);
 logger.info("gateway", `Environment Dir: ${runtimePaths.envDir}`);
-if (ensuredDefaultEnv.created) {
-  logger.info("gateway", `Generated default .env at ${ensuredDefaultEnv.envPath}`);
+if (ensuredDefaultEnvFiles.createdEnv) {
+  logger.info("gateway", `Generated default .env at ${ensuredDefaultEnvFiles.envPath}`);
 }
-if (runtimePaths.envSource === "legacy_root") {
-  logger.warn("gateway", `Using legacy project-root env files from ${runtimePaths.envDir}; state-dir config at ${stateDir} is currently inactive and will not be merged`);
-  logger.warn("gateway", "Run 'bdd config migrate-to-state-dir' when you are ready to switch to state-dir config");
+if (ensuredDefaultEnvFiles.createdEnvLocal) {
+  logger.info("gateway", `Generated default .env.local at ${ensuredDefaultEnvFiles.envLocalPath}`);
 }
 
 const toolsPolicyFile = readEnv("BELLDANDY_TOOLS_POLICY_FILE");

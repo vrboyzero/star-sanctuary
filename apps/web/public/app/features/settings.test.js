@@ -355,6 +355,7 @@ describe("settings controller", () => {
       BELLDANDY_MEMORY_EVOLUTION_API_KEY: "aliyun-unified-key",
       BELLDANDY_MEMORY_SUMMARY_API_KEY: "aliyun-unified-key",
       BELLDANDY_EMBEDDING_OPENAI_API_KEY: "aliyun-unified-key",
+      BELLDANDY_TASK_SUMMARY_API_KEY: "aliyun-unified-key",
       BELLDANDY_ASSISTANT_MODE_ENABLED: "true",
       BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
       BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE: "community,discord",

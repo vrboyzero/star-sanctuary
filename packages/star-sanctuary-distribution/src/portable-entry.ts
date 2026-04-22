@@ -4,8 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startGatewaySupervisor } from "./gateway-supervisor.js";
-import { loadRuntimeEnvFiles, readTrimmedEnv, resolveRuntimeEnvDir } from "./env.js";
+import { ensureDefaultEnvFiles, loadRuntimeEnvFiles, readTrimmedEnv, resolveRuntimeEnvDir } from "./env.js";
 import { ensurePortableRuntime } from "./portable-runtime.js";
+import { resolveStateDir } from "./state-dir.js";
 
 function resolvePaths() {
   const entryFile = fileURLToPath(import.meta.url);
@@ -28,17 +29,16 @@ function resolvePaths() {
 }
 
 function ensurePortableEnv(baseEnv: NodeJS.ProcessEnv, portableRoot: string, runtimeDir: string): NodeJS.ProcessEnv {
-  const envDir = path.resolve(resolveRuntimeEnvDir({
+  const stateDir = path.resolve(resolveRuntimeEnvDir({
     baseEnv,
-    fallbackEnvDir: portableRoot,
+    fallbackEnvDir: resolveStateDir(baseEnv),
   }));
-  const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(baseEnv, envDir);
+  ensureDefaultEnvFiles(stateDir);
+  const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(baseEnv, stateDir);
   env.STAR_SANCTUARY_RUNTIME_MODE = "portable";
   env.BELLDANDY_RUNTIME_MODE = "portable";
   env.STAR_SANCTUARY_RUNTIME_DIR = runtimeDir;
   env.BELLDANDY_RUNTIME_DIR = runtimeDir;
-  env.STAR_SANCTUARY_ENV_DIR = envDir;
-  env.BELLDANDY_ENV_DIR = envDir;
   env.AUTO_OPEN_BROWSER = readTrimmedEnv(env, "AUTO_OPEN_BROWSER") ?? "true";
 
   if (readTrimmedEnv(env, "BELLDANDY_AUTH_MODE") === "token" && !readTrimmedEnv(env, "BELLDANDY_AUTH_TOKEN")) {

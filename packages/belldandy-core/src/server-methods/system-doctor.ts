@@ -282,71 +282,31 @@ function hasTimelineArtifacts(timeline: SessionTimelineProjection | undefined): 
 }
 
 function resolveDoctorEnvSource(
-  envDir: string,
-  stateDir: string,
-  envSource?: EnvDirSource,
+  _envDir: string,
+  _stateDir: string,
+  _envSource?: EnvDirSource,
 ): EnvDirSource {
-  if (
-    envSource === "explicit"
-    || envSource === "installed_source"
-    || envSource === "legacy_root"
-    || envSource === "state_dir"
-  ) {
-    return envSource;
-  }
-  return path.resolve(envDir) === path.resolve(stateDir) ? "state_dir" : "legacy_root";
+  return "state_dir";
 }
 
 function buildConfigSourceDoctorReport(ctx: Pick<SystemDoctorMethodContext, "envDir" | "envSource" | "stateDir">) {
-  const envDir = path.resolve(ctx.envDir ?? ctx.stateDir);
   const stateDir = path.resolve(ctx.stateDir);
+  const envDir = stateDir;
   const source = resolveDoctorEnvSource(envDir, stateDir, ctx.envSource);
-  const stateDirActive = source === "state_dir";
-  const projectRootWins = source === "legacy_root";
-  const sourceLabel = (() => {
-    switch (source) {
-      case "explicit":
-        return "explicit env dir";
-      case "installed_source":
-        return "installed runtime env";
-      case "legacy_root":
-        return "legacy project-root env";
-      case "state_dir":
-      default:
-        return "state-dir config";
-    }
-  })();
-  const headline = (() => {
-    switch (source) {
-      case "explicit":
-        return `Using explicit env dir ${envDir}; it overrides both project-root and state-dir config.`;
-      case "installed_source":
-        return `Using installed runtime env dir ${envDir}; this packaged runtime config takes precedence over project-root and state-dir defaults.`;
-      case "legacy_root":
-        return `Using legacy project-root env files from ${envDir}; state-dir config at ${stateDir} is currently inactive.`;
-      case "state_dir":
-      default:
-        return `Using state-dir config from ${stateDir}; no higher-priority env dir is currently active.`;
-    }
-  })();
+  const sourceLabel = "state-dir config";
+  const headline = `Using state-dir config from ${stateDir}; Gateway reads .env / .env.local from BELLDANDY_STATE_DIR on every start.`;
 
   return {
     envDir,
     stateDir,
     source,
     sourceLabel,
-    stateDirActive,
-    projectRootWins,
+    stateDirActive: true,
+    projectRootWins: false,
     resolutionOrder: [
-      "explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR)",
-      "installed runtime env dir from install-info.json",
-      "legacy project-root .env / .env.local",
-      "state-dir config",
+      "state-dir config (BELLDANDY_STATE_DIR)",
     ],
     headline,
-    migrationHint: source === "legacy_root"
-      ? "Run 'bdd config migrate-to-state-dir' when you are ready to switch away from project-root env files."
-      : undefined,
   };
 }
 
@@ -644,7 +604,7 @@ export async function handleSystemDoctorMethod(
     checks.push({
       id: "config_source",
       name: "Config Source",
-      status: configSource.source === "legacy_root" ? "warn" : "pass",
+      status: "pass",
       message: configSource.headline,
     });
 

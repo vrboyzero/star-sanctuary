@@ -3,6 +3,7 @@ import {
   type ExperienceCandidateType,
   type ExperiencePromoteResult,
   type TaskExperienceDetail,
+  resolveAutomaticExperiencePromotionTaskGate,
 } from "@belldandy/memory";
 
 import type {
@@ -15,7 +16,6 @@ import type {
 import { buildLearningReviewInput, type LearningReviewInput } from "./learning-review-input.js";
 import { buildMindProfileSnapshot } from "./mind-profile-snapshot.js";
 import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
-import { resolveAutomaticExperiencePromotionTaskGate } from "../../belldandy-memory/src/task-auto-promotion-policy.js";
 
 export type LearningReviewTaskAction = {
   type: ExperienceCandidateType;

@@ -1,8 +1,13 @@
 export {
   ensureDefaultEnvFile,
+  ensureDefaultEnvFiles,
   loadRuntimeEnvFiles,
+  readDefaultEnvTemplates,
   readTrimmedEnv,
+  resolveDefaultEnvTemplatePaths,
   resolveRuntimeEnvDir,
+  type DefaultEnvTemplates,
+  type EnsureDefaultEnvFilesResult,
 } from "./env.js";
 export {
   resolveEnvFilePaths,

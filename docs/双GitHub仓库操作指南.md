@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "修改了一些webchat的小bug，调整了环境变量配置项，增加了阿里APIKEY设置快道"
+git commit -m "实现了在状态目录中缺少配置文件时，按默认的模板文件补齐配置文件的功能"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

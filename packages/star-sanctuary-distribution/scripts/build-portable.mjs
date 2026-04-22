@@ -749,6 +749,10 @@ function main() {
       path.join(runtimeRoot, "templates"),
     );
     copyDir(
+      path.join(workspaceRoot, "packages", "star-sanctuary-distribution", "src", "templates", "default-env"),
+      path.join(runtimeRoot, "templates", "default-env"),
+    );
+    copyDir(
       path.join(workspaceRoot, "packages", "belldandy-skills", "src", "bundled-skills"),
       path.join(runtimeRoot, "bundled-skills"),
     );

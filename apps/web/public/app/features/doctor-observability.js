@@ -1811,7 +1811,7 @@ function buildAssistantModeRuntimeCard(payload, t) {
 
 function buildConfigSourceCard(payload, t) {
   const summary = payload?.configSource;
-  if (!summary?.source || !summary?.envDir || !summary?.stateDir) {
+  if (!summary?.source || !summary?.stateDir) {
     return undefined;
   }
 
@@ -1843,14 +1843,6 @@ function buildConfigSourceCard(payload, t) {
     {
       text: tr(
         t,
-        "settings.doctorConfigSourceEnvDirPath",
-        { path: summary.envDir },
-        `envDir: ${summary.envDir}`,
-      ),
-    },
-    {
-      text: tr(
-        t,
         "settings.doctorConfigSourceStateDirPath",
         { path: summary.stateDir },
         `stateDir: ${summary.stateDir}`,
@@ -1871,16 +1863,6 @@ function buildConfigSourceCard(payload, t) {
       ),
     });
   }
-  if (summary.source === "legacy_root") {
-    notes.push({
-      text: tr(
-        t,
-        "settings.doctorConfigSourceLegacyExplain",
-        {},
-        "当仓库根目录已存在 .env 或 .env.local 时，Gateway 会优先使用它们，不会再同时合并 state-dir 配置。",
-      ),
-    });
-  }
   if (summary.migrationHint) {
     notes.push({
       text: tr(
@@ -1896,7 +1878,7 @@ function buildConfigSourceCard(payload, t) {
     title: tr(t, "settings.doctorConfigSourceTitle", {}, "Config Source"),
     badges,
     notes,
-    status: summary.source === "legacy_root" ? "warn" : "pass",
+    status: "pass",
   };
 }
 

@@ -210,8 +210,6 @@ export STAR_SANCTUARY_RUNTIME_MODE="source"
 export BELLDANDY_RUNTIME_MODE="source"
 export STAR_SANCTUARY_RUNTIME_DIR="${SCRIPT_DIR}/current"
 export BELLDANDY_RUNTIME_DIR="${SCRIPT_DIR}/current"
-export STAR_SANCTUARY_ENV_DIR="${SCRIPT_DIR}"
-export BELLDANDY_ENV_DIR="${SCRIPT_DIR}"
 if [[ -f "${NOTICE_FILE}" ]]; then
   echo "[Star Sanctuary Launcher] Post-install note:"
   cat "${NOTICE_FILE}"
@@ -229,8 +227,6 @@ export STAR_SANCTUARY_RUNTIME_MODE="source"
 export BELLDANDY_RUNTIME_MODE="source"
 export STAR_SANCTUARY_RUNTIME_DIR="${SCRIPT_DIR}/current"
 export BELLDANDY_RUNTIME_DIR="${SCRIPT_DIR}/current"
-export STAR_SANCTUARY_ENV_DIR="${SCRIPT_DIR}"
-export BELLDANDY_ENV_DIR="${SCRIPT_DIR}"
 exec node "${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js" "$@"
 EOF
 
@@ -267,9 +263,38 @@ restore_install_root_files() {
   done
 }
 
+resolve_state_dir() {
+  local home_dir="${HOME}"
+  local uname_value
+  uname_value="$(uname -s 2>/dev/null || printf '')"
+
+  if [[ "${uname_value}" == "Linux" && -n "${BELLDANDY_STATE_DIR_WSL:-}" && ( -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" ) ]]; then
+    printf '%s' "${BELLDANDY_STATE_DIR_WSL/#\~/${home_dir}}"
+    return 0
+  fi
+
+  if [[ -n "${BELLDANDY_STATE_DIR:-}" ]]; then
+    printf '%s' "${BELLDANDY_STATE_DIR/#\~/${home_dir}}"
+    return 0
+  fi
+
+  if [[ -d "${home_dir}/.star_sanctuary" ]]; then
+    printf '%s' "${home_dir}/.star_sanctuary"
+    return 0
+  fi
+
+  if [[ -d "${home_dir}/.belldandy" ]]; then
+    printf '%s' "${home_dir}/.belldandy"
+    return 0
+  fi
+
+  printf '%s' "${home_dir}/.star_sanctuary"
+}
+
 get_setup_step_message() {
   local install_root="$1"
-  local env_local_path="${install_root}/.env.local"
+  local state_dir="$2"
+  local env_local_path="${state_dir}/.env.local"
 
   if [[ "${NO_SETUP}" -eq 1 ]]; then
     printf 'Skipping bdd setup (--no-setup)'
@@ -291,7 +316,8 @@ get_setup_step_message() {
 
 get_setup_summary() {
   local install_root="$1"
-  local env_local_path="${install_root}/.env.local"
+  local state_dir="$2"
+  local env_local_path="${state_dir}/.env.local"
 
   if [[ "${NO_SETUP}" -eq 1 ]]; then
     printf 'skipped by --no-setup; run %s/bdd setup when you are ready to refresh config' "${install_root}"
@@ -313,7 +339,8 @@ get_setup_summary() {
 
 get_first_start_summary() {
   local install_root="$1"
-  local env_local_path="${install_root}/.env.local"
+  local state_dir="$2"
+  local env_local_path="${state_dir}/.env.local"
 
   if [[ "${NO_SETUP}" -eq 1 || "${FORCE_SETUP}" -eq 1 ]]; then
     return 0
@@ -325,8 +352,9 @@ get_first_start_summary() {
 }
 
 should_run_setup() {
-  local install_root="$1"
-  local env_local_path="${install_root}/.env.local"
+  local _install_root="$1"
+  local state_dir="$2"
+  local env_local_path="${state_dir}/.env.local"
 
   if [[ "${NO_SETUP}" -eq 1 ]]; then
     return 1
@@ -362,7 +390,6 @@ const path = process.argv[1];
     },
     installedAt: new Date().toISOString(),
     currentDir: 'current',
-    envDir: '.',
     entrypoints: {
       startSh: 'start.sh',
       bdd: 'bdd',
@@ -412,6 +439,7 @@ INSTALL_SUCCEEDED=0
 SETUP_STEP_MESSAGE=""
 SETUP_SUMMARY=""
 FIRST_START_SUMMARY=""
+INSTALL_STATE_DIR=""
 
 if [[ "${NO_SETUP}" -eq 1 && "${FORCE_SETUP}" -eq 1 ]]; then
   fail "--no-setup and --force-setup cannot be used together."
@@ -513,12 +541,13 @@ fi
 
 write_unix_wrappers "${INSTALL_ROOT}"
 write_install_metadata "${INSTALL_ROOT}" "${TAG_NAME}" "${RELEASE_NAME}"
+INSTALL_STATE_DIR="$(resolve_state_dir)"
 
-SETUP_STEP_MESSAGE="$(get_setup_step_message "${INSTALL_ROOT}")"
-SETUP_SUMMARY="$(get_setup_summary "${INSTALL_ROOT}")"
-FIRST_START_SUMMARY="$(get_first_start_summary "${INSTALL_ROOT}")"
+SETUP_STEP_MESSAGE="$(get_setup_step_message "${INSTALL_ROOT}" "${INSTALL_STATE_DIR}")"
+SETUP_SUMMARY="$(get_setup_summary "${INSTALL_ROOT}" "${INSTALL_STATE_DIR}")"
+FIRST_START_SUMMARY="$(get_first_start_summary "${INSTALL_ROOT}" "${INSTALL_STATE_DIR}")"
 
-if should_run_setup "${INSTALL_ROOT}"; then
+if should_run_setup "${INSTALL_ROOT}" "${INSTALL_STATE_DIR}"; then
   log "${SETUP_STEP_MESSAGE}"
   run_test_fail_point "before_setup"
   "${INSTALL_ROOT}/bdd" setup || fail "'bdd setup' failed."

@@ -1039,17 +1039,14 @@ test("system.doctor reads memory db status without blocking sync fs path", async
   }
 });
 
-test("system.doctor exposes config source summary for legacy project-root env mode", async () => {
+test("system.doctor exposes config source summary for state-dir config mode", async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-state-"));
-  const envDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-env-"));
 
   const server = await startGatewayServer({
     port: 0,
     auth: { mode: "none" },
     webRoot: resolveWebRoot(),
     stateDir,
-    envDir,
-    envSource: "legacy_root",
   });
 
   const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
@@ -1065,32 +1062,28 @@ test("system.doctor exposes config source summary for legacy project-root env mo
     const response = frames.find((f) => f.type === "res" && f.id === "system-doctor-config-source");
     expect(response.ok).toBe(true);
     expect(response.payload?.configSource).toMatchObject({
-      source: "legacy_root",
-      sourceLabel: "legacy project-root env",
-      envDir: path.resolve(envDir),
+      source: "state_dir",
+      sourceLabel: "state-dir config",
+      envDir: path.resolve(stateDir),
       stateDir: path.resolve(stateDir),
-      stateDirActive: false,
-      projectRootWins: true,
+      stateDirActive: true,
+      projectRootWins: false,
       resolutionOrder: expect.arrayContaining([
-        "explicit env dir (STAR_SANCTUARY_ENV_DIR / BELLDANDY_ENV_DIR)",
-        "installed runtime env dir from install-info.json",
-        "legacy project-root .env / .env.local",
-        "state-dir config",
+        "state-dir config (BELLDANDY_STATE_DIR)",
       ]),
     });
     expect(response.payload?.checks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: "config_source",
         name: "Config Source",
-        status: "warn",
-        message: expect.stringContaining("state-dir config"),
+        status: "pass",
+        message: expect.stringContaining("BELLDANDY_STATE_DIR"),
       }),
     ]));
   } finally {
     ws.close();
     await closeP;
     await server.close();
-    await fs.promises.rm(envDir, { recursive: true, force: true }).catch(() => {});
     await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   }
 });

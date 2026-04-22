@@ -380,15 +380,7 @@ export default defineCommand({
     results.push(checkNodeVersion());
     results.push(pnpmCheck);
     results.push(checkStateDir(stateDir));
-    results.push({ name: "Environment directory", status: "pass", message: ctx.envDir });
-    if (ctx.envSource === "legacy_root") {
-      results.push({
-        name: "Legacy root env mode",
-        status: "warn",
-        message: `Using project-root env files; state-dir config at ${ctx.stateDir} is currently inactive and not merged`,
-        fix: "Run 'bdd config migrate-to-state-dir' to switch to state-dir config",
-      });
-    }
+    results.push({ name: "Environment directory", status: "pass", message: ctx.stateDir });
     results.push(envLocalCheck);
     results.push(...requiredEnvChecks);
     results.push(portCheck);

@@ -105,6 +105,7 @@ export type GatewayWebSocketRequestContext = {
   updateSubTask?: (taskId: string, message: string) => Promise<SubTaskRecord | undefined>;
   stopSubTask?: (taskId: string, reason?: string) => Promise<SubTaskRecord | undefined>;
   tokenUsageUploadConfig: TokenUsageUploadConfig;
+  broadcast?: (frame: GatewayEventFrame) => void;
   broadcastEvent?: (frame: GatewayEventFrame) => void;
   getCompactionRuntimeReport?: () => CompactionRuntimeReport | undefined;
   getRuntimeResilienceReport?: () => RuntimeResilienceDoctorReport | undefined;
@@ -195,6 +196,7 @@ export function buildGatewayWebSocketRequestContext(
     updateSubTask: options.updateSubTask,
     stopSubTask: options.stopSubTask,
     tokenUsageUploadConfig: options.tokenUsageUploadConfig,
+    broadcast: options.broadcast,
     broadcastEvent: options.broadcastEvent,
     getCompactionRuntimeReport: options.getCompactionRuntimeReport,
     getRuntimeResilienceReport: options.getRuntimeResilienceReport,

@@ -15,8 +15,6 @@ const START_BAT_CONTENT = [
   "set \"BELLDANDY_RUNTIME_MODE=source\"",
   "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
   "set \"BELLDANDY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-  "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
-  "set \"BELLDANDY_ENV_DIR=%INSTALL_ROOT%\"",
   "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" start %*",
   "exit /b %ERRORLEVEL%",
   "",
@@ -30,8 +28,6 @@ const BDD_CMD_CONTENT = [
   "set \"BELLDANDY_RUNTIME_MODE=source\"",
   "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
   "set \"BELLDANDY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-  "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
-  "set \"BELLDANDY_ENV_DIR=%INSTALL_ROOT%\"",
   "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" %*",
   "",
 ].join("\r\n");
@@ -44,8 +40,6 @@ const START_SH_CONTENT = [
   "export BELLDANDY_RUNTIME_MODE=\"source\"",
   "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
   "export BELLDANDY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-  "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
-  "export BELLDANDY_ENV_DIR=\"${SCRIPT_DIR}\"",
   "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" start \"$@\"",
   "",
 ].join("\n");
@@ -58,8 +52,6 @@ const BDD_SH_CONTENT = [
   "export BELLDANDY_RUNTIME_MODE=\"source\"",
   "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
   "export BELLDANDY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-  "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
-  "export BELLDANDY_ENV_DIR=\"${SCRIPT_DIR}\"",
   "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" \"$@\"",
   "",
 ].join("\n");
@@ -71,7 +63,6 @@ const SCENARIOS = [
     args: [],
     expectedSnippets: [
       "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-      "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
       "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" start %*",
     ],
   },
@@ -81,7 +72,6 @@ const SCENARIOS = [
     args: ["start"],
     expectedSnippets: [
       "set \"STAR_SANCTUARY_RUNTIME_DIR=%INSTALL_ROOT%current\"",
-      "set \"STAR_SANCTUARY_ENV_DIR=%INSTALL_ROOT%\"",
       "call node \"%INSTALL_ROOT%current\\packages\\belldandy-core\\dist\\bin\\bdd.js\" %*",
     ],
   },
@@ -91,7 +81,6 @@ const SCENARIOS = [
     args: [],
     expectedSnippets: [
       "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-      "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
       "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" start \"$@\"",
     ],
   },
@@ -101,7 +90,6 @@ const SCENARIOS = [
     args: ["start"],
     expectedSnippets: [
       "export STAR_SANCTUARY_RUNTIME_DIR=\"${SCRIPT_DIR}/current\"",
-      "export STAR_SANCTUARY_ENV_DIR=\"${SCRIPT_DIR}\"",
       "exec node \"${SCRIPT_DIR}/current/packages/belldandy-core/dist/bin/bdd.js\" \"$@\"",
     ],
   },
@@ -187,7 +175,6 @@ function writeInstallFixture(installRoot) {
       tag: "smoke",
       version: "smoke",
       currentDir: "current",
-      envDir: ".",
       entrypoints: {
         startBat: "start.bat",
         startSh: "start.sh",
@@ -214,8 +201,6 @@ function buildSemanticEnv(installRoot, env) {
     BELLDANDY_RUNTIME_MODE: "source",
     STAR_SANCTUARY_RUNTIME_DIR: path.join(installRoot, "current"),
     BELLDANDY_RUNTIME_DIR: path.join(installRoot, "current"),
-    STAR_SANCTUARY_ENV_DIR: installRoot,
-    BELLDANDY_ENV_DIR: installRoot,
   };
 }
 
@@ -328,7 +313,7 @@ async function runScenario(scenario, index, useNativeBash) {
 
   const stdoutText = fs.existsSync(stdoutPath) ? fs.readFileSync(stdoutPath, "utf-8") : "";
   const stderrText = fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, "utf-8") : "";
-  const generatedEnvPath = path.join(installRoot, ".env");
+  const generatedEnvPath = path.join(stateDir, ".env");
   const installInfoPath = path.join(installRoot, "install-info.json");
   const passed = healthy && fs.existsSync(generatedEnvPath) && fs.existsSync(installInfoPath);
 

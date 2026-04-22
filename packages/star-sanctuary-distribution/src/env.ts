@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveEnvFilePaths } from "./runtime-paths.js";
+import path from "node:path";
+import { resolveEnvFilePaths, resolveWorkspaceTemplateDir } from "./runtime-paths.js";
 
 const DEFAULT_ENV_TEMPLATE = `# Star Sanctuary default bootstrap config
 # Auto-generated on first launch when no .env or .env.local exists yet.
@@ -55,6 +57,100 @@ BELLDANDY_ROOM_INJECT_THRESHOLD=6
 BELLDANDY_ROOM_MEMBERS_CACHE_TTL=600000
 BELLDANDY_TOKEN_USAGE_UPLOAD_ENABLED=false
 `;
+
+const DEFAULT_ENV_LOCAL_TEMPLATE = `# Star Sanctuary local overrides
+# Auto-generated when .env.local is missing.
+# Put secrets and personal machine overrides here.
+`;
+
+export type DefaultEnvTemplates = {
+  env: string;
+  envLocal: string;
+};
+
+export type EnsureDefaultEnvFilesResult = {
+  envDir: string;
+  envPath: string;
+  envLocalPath: string;
+  createdEnv: boolean;
+  createdEnvLocal: boolean;
+};
+
+export function resolveDefaultEnvTemplatePaths(): {
+  templatesDir: string;
+  envTemplatePath: string;
+  envLocalTemplatePath: string;
+} {
+  const { templatesDir } = resolveWorkspaceTemplateDir({
+    agentModuleUrl: import.meta.url,
+  });
+  return {
+    templatesDir,
+    envTemplatePath: path.join(templatesDir, "default-env", "runtime.env"),
+    envLocalTemplatePath: path.join(templatesDir, "default-env", "runtime.env.local"),
+  };
+}
+
+function readOptionalTextFile(filePath: string): string | undefined {
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    return content.replace(/^\uFEFF/, "");
+  } catch {
+    return undefined;
+  }
+}
+
+function readEnvValueFromText(text: string, key: string): string | undefined {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    const normalized = trimmed.startsWith("export ")
+      ? trimmed.slice("export ".length).trim()
+      : trimmed;
+    const eq = normalized.indexOf("=");
+    if (eq <= 0) continue;
+
+    const candidateKey = normalized.slice(0, eq).trim();
+    if (candidateKey !== key) continue;
+
+    let value = normalized.slice(eq + 1).trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    return value && value.trim() ? value.trim() : undefined;
+  }
+
+  return undefined;
+}
+
+function ensureBootstrapAuthTokenInEnvLocal(templates: DefaultEnvTemplates): string {
+  const authMode = readEnvValueFromText(templates.envLocal, "BELLDANDY_AUTH_MODE")
+    ?? readEnvValueFromText(templates.env, "BELLDANDY_AUTH_MODE");
+  const authToken = readEnvValueFromText(templates.envLocal, "BELLDANDY_AUTH_TOKEN")
+    ?? readEnvValueFromText(templates.env, "BELLDANDY_AUTH_TOKEN");
+  if (authMode !== "token" || authToken) {
+    return templates.envLocal;
+  }
+
+  const generatedToken = `setup-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const suffix = templates.envLocal.endsWith("\n") || !templates.envLocal ? "" : "\n";
+  return `${templates.envLocal}${suffix}# Auto-generated bootstrap token for first launch\nBELLDANDY_AUTH_TOKEN=${generatedToken}\n`;
+}
+
+export function readDefaultEnvTemplates(): DefaultEnvTemplates {
+  const templatePaths = resolveDefaultEnvTemplatePaths();
+  const env = readOptionalTextFile(templatePaths.envTemplatePath) ?? DEFAULT_ENV_TEMPLATE;
+  const envLocal = readOptionalTextFile(templatePaths.envLocalTemplatePath) ?? DEFAULT_ENV_LOCAL_TEMPLATE;
+  return {
+    env,
+    envLocal: ensureBootstrapAuthTokenInEnvLocal({ env, envLocal }),
+  };
+}
 
 function loadEnvFileInto(
   targetEnv: NodeJS.ProcessEnv,
@@ -112,9 +208,34 @@ export function resolveRuntimeEnvDir(params: {
   baseEnv: NodeJS.ProcessEnv;
   fallbackEnvDir: string;
 }): string {
-  return readTrimmedEnv(params.baseEnv, "STAR_SANCTUARY_ENV_DIR")
-    ?? readTrimmedEnv(params.baseEnv, "BELLDANDY_ENV_DIR")
-    ?? params.fallbackEnvDir;
+  return params.fallbackEnvDir;
+}
+
+export function ensureDefaultEnvFiles(envDir: string): EnsureDefaultEnvFilesResult {
+  const paths = resolveEnvFilePaths({ envDir });
+  const templates = readDefaultEnvTemplates();
+  let createdEnv = false;
+  let createdEnvLocal = false;
+
+  if (!fs.existsSync(paths.envPath)) {
+    fs.mkdirSync(paths.envDir, { recursive: true });
+    fs.writeFileSync(paths.envPath, templates.env, "utf-8");
+    createdEnv = true;
+  }
+
+  if (!fs.existsSync(paths.envLocalPath)) {
+    fs.mkdirSync(paths.envDir, { recursive: true });
+    fs.writeFileSync(paths.envLocalPath, templates.envLocal, "utf-8");
+    createdEnvLocal = true;
+  }
+
+  return {
+    envDir: paths.envDir,
+    envPath: paths.envPath,
+    envLocalPath: paths.envLocalPath,
+    createdEnv,
+    createdEnvLocal,
+  };
 }
 
 export function ensureDefaultEnvFile(envDir: string): {
@@ -122,12 +243,10 @@ export function ensureDefaultEnvFile(envDir: string): {
   envPath: string;
   envLocalPath: string;
 } {
-  const paths = resolveEnvFilePaths({ envDir });
-  if (fs.existsSync(paths.envPath)) {
-    return { created: false, envPath: paths.envPath, envLocalPath: paths.envLocalPath };
-  }
-
-  fs.mkdirSync(paths.envDir, { recursive: true });
-  fs.writeFileSync(paths.envPath, DEFAULT_ENV_TEMPLATE, "utf-8");
-  return { created: true, envPath: paths.envPath, envLocalPath: paths.envLocalPath };
+  const result = ensureDefaultEnvFiles(envDir);
+  return {
+    created: result.createdEnv,
+    envPath: result.envPath,
+    envLocalPath: result.envLocalPath,
+  };
 }

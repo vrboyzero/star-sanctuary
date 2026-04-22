@@ -165,8 +165,8 @@ async function main() {
 
   const installRoot = path.join(smokeRoot, "windows-install-root");
   const stateDir = path.join(smokeRoot, "windows-install-state");
-  const envPath = path.join(installRoot, ".env");
-  const envLocalPath = path.join(installRoot, ".env.local");
+  const envPath = path.join(stateDir, ".env");
+  const envLocalPath = path.join(stateDir, ".env.local");
   const backupRoot = path.join(installRoot, "backups");
   const currentRoot = path.join(installRoot, "current");
   const installInfoPath = path.join(installRoot, "install-info.json");
@@ -198,7 +198,8 @@ async function main() {
     throw new Error(`First install.ps1 run failed.\n--- stdout ---\n${firstInstall.stdoutText}\n--- stderr ---\n${firstInstall.stderrText}`);
   }
 
-  fs.writeFileSync(envLocalPath, `${envMarkerLine}\n`, "utf-8");
+  fs.mkdirSync(path.dirname(envLocalPath), { recursive: true });
+  fs.writeFileSync(envLocalPath, `${envMarkerLine}\nBELLDANDY_AUTH_MODE=none\n`, "utf-8");
   fs.mkdirSync(path.dirname(stateMarkerPath), { recursive: true });
   fs.writeFileSync(stateMarkerPath, "installer-script-state\n", "utf-8");
 
@@ -281,7 +282,7 @@ async function main() {
     && backupEntries.length >= 1
     && installInfo.tag === "v2.0.0-smoke"
     && installInfo.version === "v2.0.0-smoke"
-    && environmentCheck?.message === installRoot
+    && environmentCheck?.message === stateDir
     && envLocalCheck?.status === "pass"
     && envLocalCheck?.message === envLocalPath
     && envLocalText.includes(envMarkerLine)

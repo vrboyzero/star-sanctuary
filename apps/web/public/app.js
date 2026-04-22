@@ -91,6 +91,7 @@ const {
   sidebarTitleEl,
   fileTreeEl,
   refreshTreeBtn,
+  goChatPageBtn,
   chatSection,
   editorSection,
   canvasContextBarEl,
@@ -624,6 +625,11 @@ const appShellFeature = createAppShellFeature({
 const showNotice = (...args) => appShellFeature.showNotice(...args);
 const switchMode = (...args) => appShellFeature.switchMode(...args);
 const updateSidebarModeButtons = (...args) => appShellFeature.updateSidebarModeButtons(...args);
+
+goChatPageBtn?.addEventListener("click", () => {
+  switchMode("chat");
+  promptEl?.focus();
+});
 
 sessionNavigationFeature = createSessionNavigationFeature({
   refs: {
