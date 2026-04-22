@@ -276,6 +276,7 @@ describe("settings controller", () => {
       BELLDANDY_OPENAI_MODEL: "gpt-test",
       BELLDANDY_TTS_OPENAI_BASE_URL: "https://tts.example.com/v1",
       BELLDANDY_MODEL_PREFERRED_PROVIDERS: "moonshot,openrouter",
+      BELLDANDY_MEMORY_SUMMARY_API_KEY: "aliyun-memory-summary-key",
       BELLDANDY_ASSISTANT_MODE_ENABLED: "true",
       BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "false",
       BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE: "qq,feishu",
@@ -296,6 +297,7 @@ describe("settings controller", () => {
     expect(refs.cfgModel.value).toBe("gpt-test");
     expect(refs.cfgTtsOpenAIBaseUrl.value).toBe("https://tts.example.com/v1");
     expect(refs.cfgModelPreferredProviders.value).toBe("moonshot,openrouter");
+    expect(refs.cfgDashScopeApiKey.value).toBe("aliyun-memory-summary-key");
     expect(refs.cfgAssistantModeEnabled.checked).toBe(true);
     expect(refs.cfgAssistantModePreset.value).toBe("custom");
     expect(refs.cfgExternalOutboundRequireConfirmation.checked).toBe(false);
@@ -312,6 +314,7 @@ describe("settings controller", () => {
       cfgModel: createInput("gpt-test"),
       cfgTtsOpenAIBaseUrl: createInput("https://tts.example.com/v1"),
       cfgTtsOpenAIApiKey: createInput("tts-openai-key"),
+      cfgDashScopeApiKey: createInput("aliyun-unified-key"),
       cfgAssistantModeEnabled: createCheckbox(true),
       cfgAssistantModePreset: createInput("custom"),
       cfgExternalOutboundRequireConfirmation: createCheckbox(true),
@@ -341,11 +344,17 @@ describe("settings controller", () => {
     vi.runAllTimers();
 
     const updateCall = sendReq.mock.calls.find(([frame]) => frame.method === "config.update");
+    const restartCall = sendReq.mock.calls.find(([frame]) => frame.method === "system.restart");
     expect(updateCall?.[0]?.params?.updates).toMatchObject({
       BELLDANDY_OPENAI_BASE_URL: "https://api.example.com/v1",
       BELLDANDY_OPENAI_MODEL: "gpt-test",
       BELLDANDY_TTS_OPENAI_BASE_URL: "https://tts.example.com/v1",
       BELLDANDY_TTS_OPENAI_API_KEY: "tts-openai-key",
+      DASHSCOPE_API_KEY: "aliyun-unified-key",
+      BELLDANDY_COMPACTION_API_KEY: "aliyun-unified-key",
+      BELLDANDY_MEMORY_EVOLUTION_API_KEY: "aliyun-unified-key",
+      BELLDANDY_MEMORY_SUMMARY_API_KEY: "aliyun-unified-key",
+      BELLDANDY_EMBEDDING_OPENAI_API_KEY: "aliyun-unified-key",
       BELLDANDY_ASSISTANT_MODE_ENABLED: "true",
       BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION: "true",
       BELLDANDY_ASSISTANT_EXTERNAL_DELIVERY_PREFERENCE: "community,discord",
@@ -353,6 +362,9 @@ describe("settings controller", () => {
       BELLDANDY_HEARTBEAT_ENABLED: "true",
       BELLDANDY_HEARTBEAT_ACTIVE_HOURS: "09:00-18:00",
       BELLDANDY_CRON_ENABLED: "true",
+    });
+    expect(restartCall?.[0]?.params).toMatchObject({
+      reason: "settings updated",
     });
   });
 

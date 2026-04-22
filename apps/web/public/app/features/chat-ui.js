@@ -35,6 +35,7 @@ export function createChatUiFeature({
   let copyDelegationBound = false;
   let avatarUploadInput = null;
   let avatarUploadBusy = false;
+  let restoreScrollBehaviorHandle = null;
 
   function pad2(value) {
     return String(value).padStart(2, "0");
@@ -333,7 +334,24 @@ export function createChatUiFeature({
 
   function forceScrollToBottom() {
     if (!chatSection) return;
+    if (restoreScrollBehaviorHandle !== null) {
+      const cancel = typeof globalThis.cancelAnimationFrame === "function"
+        ? globalThis.cancelAnimationFrame.bind(globalThis)
+        : globalThis.clearTimeout?.bind(globalThis);
+      cancel?.(restoreScrollBehaviorHandle);
+      restoreScrollBehaviorHandle = null;
+    }
+    const previousScrollBehavior = chatSection.style.scrollBehavior;
+    chatSection.style.scrollBehavior = "auto";
     chatSection.scrollTop = chatSection.scrollHeight;
+    const restore = () => {
+      chatSection.style.scrollBehavior = previousScrollBehavior;
+      restoreScrollBehaviorHandle = null;
+    };
+    const schedule = typeof globalThis.requestAnimationFrame === "function"
+      ? globalThis.requestAnimationFrame.bind(globalThis)
+      : (callback) => globalThis.setTimeout(callback, 16);
+    restoreScrollBehaviorHandle = schedule(restore);
   }
 
   function appendMessage(kind, text, meta = {}) {

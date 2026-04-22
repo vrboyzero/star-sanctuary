@@ -377,6 +377,39 @@ describe("chat ui rich text rendering", () => {
     expect(chatSection.scrollTop).toBe(240);
   });
 
+  it("forces instant auto-scroll during message appends to avoid smooth-scroll bounce", () => {
+    const originalRaf = globalThis.requestAnimationFrame;
+    const originalCancelRaf = globalThis.cancelAnimationFrame;
+    const scheduled = [];
+    let nextHandle = 1;
+    globalThis.requestAnimationFrame = (callback) => {
+      const handle = nextHandle++;
+      scheduled.push({ handle, callback });
+      return handle;
+    };
+    globalThis.cancelAnimationFrame = (handle) => {
+      const index = scheduled.findIndex((item) => item.handle === handle);
+      if (index >= 0) {
+        scheduled.splice(index, 1);
+      }
+    };
+
+    const { feature, chatSection } = createFeature();
+    chatSection.style.scrollBehavior = "smooth";
+
+    feature.forceScrollToBottom();
+
+    expect(chatSection.scrollTop).toBe(240);
+    expect(chatSection.style.scrollBehavior).toBe("auto");
+
+    const pending = scheduled.shift();
+    pending?.callback(0);
+
+    expect(chatSection.style.scrollBehavior).toBe("smooth");
+    globalThis.requestAnimationFrame = originalRaf;
+    globalThis.cancelAnimationFrame = originalCancelRaf;
+  });
+
   it("ignores rich text deltas from inactive conversations", () => {
     installMarkedStub((text) => `<p>${escapeHtml(text)}</p>`);
     const { feature, messagesEl } = createFeature();

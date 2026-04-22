@@ -1670,6 +1670,7 @@ async function handleReq(
     stateDir: ctx.stateDir,
     clientId: ctx.clientId,
     log: ctx.log,
+    broadcast: ctx.broadcast,
     agentRegistry: ctx.agentRegistry,
     residentAgentRuntime: ctx.residentAgentRuntime,
     residentMemoryManagers: ctx.residentMemoryManagers,

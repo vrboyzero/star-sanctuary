@@ -109,6 +109,13 @@ export function createSettingsController({
     cfgHeartbeatActiveHours,
     cfgCronEnabled,
   };
+  const aliyunApiKeyTargets = [
+    "DASHSCOPE_API_KEY",
+    "BELLDANDY_COMPACTION_API_KEY",
+    "BELLDANDY_MEMORY_EVOLUTION_API_KEY",
+    "BELLDANDY_MEMORY_SUMMARY_API_KEY",
+    "BELLDANDY_EMBEDDING_OPENAI_API_KEY",
+  ];
   let lastLoadedConfig = null;
   let lastLoadedChannelSecurityContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
   let lastLoadedChannelReplyChunkingContent = '{\n  "version": 1,\n  "channels": {}\n}\n';
@@ -359,7 +366,9 @@ export function createSettingsController({
     cfgTtsVoice.value = c["BELLDANDY_TTS_VOICE"] || "";
     cfgTtsOpenAIBaseUrl.value = c["BELLDANDY_TTS_OPENAI_BASE_URL"] || "";
     cfgTtsOpenAIApiKey.value = c["BELLDANDY_TTS_OPENAI_API_KEY"] || "";
-    cfgDashScopeApiKey.value = c["DASHSCOPE_API_KEY"] || "";
+    cfgDashScopeApiKey.value = aliyunApiKeyTargets
+      .map((key) => c[key] || "")
+      .find((value) => value) || "";
     cfgFacetAnchor.value = c["BELLDANDY_FACET_ANCHOR"] || "";
     cfgInjectAgents.checked = c["BELLDANDY_INJECT_AGENTS"] === "true";
     cfgInjectSoul.checked = c["BELLDANDY_INJECT_SOUL"] === "true";
@@ -675,6 +684,11 @@ export function createSettingsController({
     updates[key] = value;
   }
 
+  function assignSecretUpdates(updates, keys, inputEl) {
+    if (!Array.isArray(keys)) return;
+    keys.forEach((key) => assignSecretUpdate(updates, key, inputEl));
+  }
+
   const doctorToggleBtn = document.getElementById("doctorToggleBtn");
   if (doctorToggleBtn) {
     doctorToggleBtn.addEventListener("click", () => {
@@ -877,7 +891,7 @@ export function createSettingsController({
     updates["BELLDANDY_TTS_VOICE"] = cfgTtsVoice.value.trim();
     updates["BELLDANDY_TTS_OPENAI_BASE_URL"] = cfgTtsOpenAIBaseUrl.value.trim();
     assignSecretUpdate(updates, "BELLDANDY_TTS_OPENAI_API_KEY", cfgTtsOpenAIApiKey);
-    assignSecretUpdate(updates, "DASHSCOPE_API_KEY", cfgDashScopeApiKey);
+    assignSecretUpdates(updates, aliyunApiKeyTargets, cfgDashScopeApiKey);
     updates["BELLDANDY_FACET_ANCHOR"] = cfgFacetAnchor.value.trim();
     updates["BELLDANDY_INJECT_AGENTS"] = cfgInjectAgents.checked ? "true" : "false";
     updates["BELLDANDY_INJECT_SOUL"] = cfgInjectSoul.checked ? "true" : "false";
@@ -974,15 +988,28 @@ export function createSettingsController({
       if (saveSettingsBtn) {
         saveSettingsBtn.textContent = t("settings.saved", {}, "Saved");
       }
-      setTimeout(() => {
+
+      const restartResult = await restartServer({
+        confirmRestart: false,
+        reason: "settings updated",
+        showAlertOnFailure: false,
+      });
+      if (restartResult.ok) {
         if (saveSettingsBtn) {
-          saveSettingsBtn.textContent = t("settings.save", {}, "Save");
-          saveSettingsBtn.disabled = false;
+          saveSettingsBtn.textContent = t("settings.restartingStatus", {}, "Restarting...");
         }
-        alert(t("settings.configSavedRestart", {}, "Configuration saved. Please restart server to apply changes."));
-      }, 1000);
-      await loadChannelSecuritySurface();
-      await runDoctor({ forceRefresh: true });
+        return;
+      }
+
+      if (saveSettingsBtn) {
+        saveSettingsBtn.textContent = t("settings.save", {}, "Save");
+        saveSettingsBtn.disabled = false;
+      }
+      alert(t(
+        "settings.configSavedAutoRestartFailed",
+        { message: restartResult.message || "Unknown error" },
+        "Configuration saved, but automatic restart failed: {message}. Please restart the server manually.",
+      ));
       return;
     }
 
@@ -993,11 +1020,36 @@ export function createSettingsController({
     alert(t("settings.saveFailed", { message: res?.error ? res.error.message : "Unknown error" }, "Save failed: {message}"));
   }
 
-  async function restartServer() {
-    if (!confirm(t("settings.restartConfirm", {}, "Are you sure you want to restart the server?"))) return;
-    if (!isConnected()) return;
-    await sendReq({ type: "req", id: makeId(), method: "system.restart" });
-    setStatus(t("settings.restartingStatus", {}, "Restarting..."));
+  async function restartServer(options = {}) {
+    const {
+      confirmRestart = true,
+      reason = "",
+      showAlertOnFailure = true,
+    } = options;
+    if (confirmRestart && !confirm(t("settings.restartConfirm", {}, "Are you sure you want to restart the server?"))) {
+      return { ok: false, cancelled: true };
+    }
+    if (!isConnected()) {
+      return {
+        ok: false,
+        message: t("settings.notConnectedError", {}, "Error: Not connected to server.\nPlease refresh the page or check if the Gateway is running."),
+      };
+    }
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "system.restart",
+      params: typeof reason === "string" && reason.trim() ? { reason: reason.trim() } : {},
+    });
+    if (res?.ok) {
+      setStatus(t("settings.restartingStatus", {}, "Restarting..."));
+      return { ok: true };
+    }
+    const message = res?.error?.message || "Unknown error";
+    if (showAlertOnFailure) {
+      alert(t("settings.restartFailed", { message }, `Restart failed: ${message}`));
+    }
+    return { ok: false, message };
   }
 
   async function openCommunityConfig() {

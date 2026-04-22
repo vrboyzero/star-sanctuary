@@ -646,6 +646,11 @@
           <input id="cfgModelPreferredProviders" class="input" data-i18n-placeholder="settings.modelPreferredProvidersPlaceholder" placeholder="openrouter,moonshot,anthropic" />
           <div class="form-help" data-i18n="settings.modelPreferredProvidersHelp">显式指定 model picker 的 provider 排序偏好，使用 providerId 逗号分隔；未命中时仍回退到当前默认模型与可用性排序。</div>
         </div>
+        <div class="form-group">
+          <label class="form-label" data-i18n="settings.dashScopeApiKeyLabel">DashScope API Key</label>
+          <input id="cfgDashScopeApiKey" class="input" type="password" data-i18n-placeholder="settings.dashScopeApiKeyPlaceholder" placeholder="仅 dashscope provider 需要" />
+          <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
+        </div>
         <div class="settings-subsection-header" style="margin-top: 16px;">
           <div>
             <div class="settings-subsection-title" data-i18n="settings.modelFallbackConfigTitle">Model Fallback Profiles</div>
@@ -818,11 +823,6 @@
           <label class="form-label" data-i18n="settings.ttsOpenAiApiKeyLabel">TTS OpenAI API Key</label>
           <input id="cfgTtsOpenAIApiKey" class="input" type="password" data-i18n-placeholder="settings.ttsOpenAiApiKeyPlaceholder" placeholder="留空则复用主模型 API Key" />
           <div class="form-help" data-i18n="settings.ttsOpenAiApiKeyHelp">仅在 TTS Provider 选择 `openai` 时使用。留空时回退到全局 `BELLDANDY_OPENAI_API_KEY`，再回退旧的 `OPENAI_API_KEY`。</div>
-        </div>
-        <div class="form-group">
-          <label class="form-label" data-i18n="settings.dashScopeApiKeyLabel">DashScope API Key</label>
-          <input id="cfgDashScopeApiKey" class="input" type="password" data-i18n-placeholder="settings.dashScopeApiKeyPlaceholder" placeholder="仅 dashscope provider 需要" />
-          <div class="form-help" data-i18n="settings.dashScopeApiKeyHelp">仅在 TTS Provider 选择 `dashscope` 时需要配置。</div>
         </div>
         <div class="form-group">
           <label class="form-label" data-i18n="settings.voiceShortcutLabel">Voice Shortcut</label>

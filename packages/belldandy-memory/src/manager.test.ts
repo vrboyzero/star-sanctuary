@@ -703,6 +703,117 @@ describe("MemoryManager guardrails", () => {
     extractionSpy.mockRestore();
   });
 
+  it("parses durable extraction JSON wrapped by a leading think block", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "test-evolution-model",
+      evolutionBaseUrl: "https://example.invalid/v1",
+      evolutionApiKey: "test-evolution-key",
+      evolutionMinMessages: 2,
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch" as keyof typeof globalThis).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: `<think>
+先判断哪些内容适合 durable memory。
+</think>
+[{"type":"偏好","category":"preference","candidateType":"user","content":"用户默认希望使用简体中文交流。","reason":"长期沟通偏好"}]`,
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    const result = await (manager as any).callLLMForExtraction([
+      { role: "user", content: "请沉淀这轮对话中的长期偏好。" },
+      { role: "assistant", content: "用户默认希望使用简体中文交流。" },
+    ]);
+
+    expect(result).toEqual([
+      {
+        type: "偏好",
+        category: "preference",
+        candidateType: "user",
+        content: "用户默认希望使用简体中文交流。",
+        reason: "长期沟通偏好",
+      },
+    ]);
+
+    fetchSpy.mockRestore();
+  });
+
+  it("adds reasoning_split for MiniMax evolution requests", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "MiniMax-M2.5",
+      evolutionBaseUrl: "https://api.minimaxi.com/v1",
+      evolutionApiKey: "test-evolution-key",
+      evolutionMinMessages: 2,
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch" as keyof typeof globalThis).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: "[]",
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    await (manager as any).callLLMForExtraction("请沉淀这轮对话中的长期信息。");
+
+    const request = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(String(request?.body ?? "{}")) as Record<string, unknown>;
+    expect(body.reasoning_split).toBe(true);
+
+    fetchSpy.mockRestore();
+  });
+
+  it("keeps generic OpenAI-compatible evolution requests unchanged for non-MiniMax providers", async () => {
+    manager = createManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      evolutionEnabled: true,
+      evolutionModel: "gpt-4o-mini",
+      evolutionBaseUrl: "https://api.openai.com/v1",
+      evolutionApiKey: "test-evolution-key",
+      evolutionMinMessages: 2,
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch" as keyof typeof globalThis).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: "[]",
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    await (manager as any).callLLMForExtraction("请沉淀这轮对话中的长期信息。");
+
+    const request = fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(String(request?.body ?? "{}")) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("reasoning_split");
+
+    fetchSpy.mockRestore();
+  });
+
   it("aggregates embedding cache and API logs into a single summary per sync run", async () => {
     manager = createManager({
       workspaceRoot: docsDir,

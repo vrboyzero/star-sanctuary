@@ -320,6 +320,20 @@ function detectDurableMemoryRejection(content: string): { code: DurableMemoryRej
     return undefined;
 }
 
+function sanitizeExtractionJsonText(raw: string): string {
+    return raw
+        .replace(/^(?:<think\b[^>]*>[\s\S]*?<\/think>\s*)+/i, "")
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+}
+
+function shouldEnableMiniMaxReasoningSplit(baseUrl: string, model: string): boolean {
+    const normalizedBaseUrl = String(baseUrl ?? "").trim().toLowerCase();
+    const normalizedModel = String(model ?? "").trim().toLowerCase();
+    return normalizedBaseUrl.includes("minimaxi.com") || normalizedModel.startsWith("minimax-");
+}
+
 function buildDurableExtractionSummary(input: {
     acceptedCount: number;
     acceptedCandidateTypes: DurableMemoryCandidateType[];
@@ -1910,18 +1924,12 @@ export class MemoryManager {
     private async callLLMForExtraction(
         conversationText: string,
     ): Promise<ExtractedConversationMemory[] | null> {
-        const response = await fetch(buildOpenAIChatCompletionsUrl(this.evolutionBaseUrl), {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${this.evolutionApiKey}`,
-            },
-            body: JSON.stringify({
-                model: this.evolutionModel,
-                messages: [
-                    {
-                        role: "system",
-                        content: `分析以下对话，提取值得长期记住的信息。优先归入以下 durable candidate type：
+        const requestBody: Record<string, unknown> = {
+            model: this.evolutionModel,
+            messages: [
+                {
+                    role: "system",
+                    content: `分析以下对话，提取值得长期记住的信息。优先归入以下 durable candidate type：
 - user：用户偏好、习惯、长期工作方式、稳定背景信息
 - feedback：用户对结果质量、交互方式、输出风格的持续反馈
 - project：项目背景、阶段性决定、长期约束、外部依赖入口
@@ -1947,15 +1955,25 @@ category 必须是以下之一：preference / experience / fact / decision / ent
 candidateType 必须是以下之一：user / feedback / project / reference
 如果没有值得记住的内容，返回空数组 []。
 只输出 JSON，不要其他内容。`
-                    },
-                    {
-                        role: "user",
-                        content: conversationText
-                    }
-                ],
-                max_tokens: 500,
-                temperature: 0.3,
-            }),
+                },
+                {
+                    role: "user",
+                    content: conversationText
+                }
+            ],
+            max_tokens: 500,
+            temperature: 0.3,
+        };
+        if (shouldEnableMiniMaxReasoningSplit(this.evolutionBaseUrl, this.evolutionModel)) {
+            requestBody.reasoning_split = true;
+        }
+        const response = await fetch(buildOpenAIChatCompletionsUrl(this.evolutionBaseUrl), {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${this.evolutionApiKey}`,
+            },
+            body: JSON.stringify(requestBody),
         });
 
         if (!response.ok) {
@@ -1970,8 +1988,8 @@ candidateType 必须是以下之一：user / feedback / project / reference
         if (!raw) return null;
 
         try {
-            // 提取 JSON（兼容 markdown code block 包裹）
-            const jsonStr = raw.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+            // 提取 JSON（兼容前置 think 块与 markdown code block 包裹）
+            const jsonStr = sanitizeExtractionJsonText(raw);
             const parsed = JSON.parse(jsonStr);
             if (!Array.isArray(parsed)) return null;
             return parsed.filter(
