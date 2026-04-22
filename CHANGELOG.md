@@ -2,7 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.3.0] - 2026-04-23
+## [0.3.1] - 2026-04-23
+
+聚焦安装器首启体验收口与默认配置模板稳态修复，降低新手安装后因环境模板差异导致的启动与配置摩擦。
+
+### Install / Onboarding
+
+- `bdd setup` 启动时会先补齐 `stateDir/.env` 与 `stateDir/.env.local` 默认模板，再写入交互配置，避免首次运行出现“精简配置文件”导致的体验分叉
+- 安装链路默认模板改为新手安全策略：`BELLDANDY_EMBEDDING_ENABLED` 默认关闭，避免未配置独立 embedding 线路时触发向量检索报错刷屏
+
+### Default Env Template
+
+- 模板中的开发机固定路径已改为通用占位或注释示例（例如 `BELLDANDY_STATE_DIR`、`BELLDANDY_EXTRA_WORKSPACE_ROOTS`、`BELLDANDY_TOOLS_POLICY_FILE`、`BELLDANDY_CAMERA_NATIVE_HELPER_CWD`、`BELLDANDY_CHANNEL_ROUTER_CONFIG_PATH`）
+- Obsidian 相关默认 Vault 路径改为空值，避免把开发机目录写入用户首启配置
+- 修复 `runtime.env.local` 模板发布可见性（加入版本控制），确保安装器与运行时均可读取完整双文件模板
+
+### Stability
+
+- 保持主要能力默认可用（工具、心跳、调度等），在不阻塞安装/启动前提下减少新用户初次配置门槛`r`n`r`n## [0.3.0] - 2026-04-23
 
 聚焦 Agent 运行时能力跃迁、WebChat 能力工作台升级、跨渠道桥接拓展与系统级稳定性收口，作为 `v0.2.4` 后的次版本发布。
 
@@ -278,3 +295,4 @@ All notable changes to this project will be documented in this file.
 - Docker 构建链路支持版本注入
 - GitHub Release 自动提取 CHANGELOG 对应版本段落
 - `scripts/release.sh` 一键发版脚本
+

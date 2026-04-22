@@ -7,6 +7,7 @@
 import { defineCommand } from "citty";
 import fs from "node:fs";
 import pc from "picocolors";
+import { ensureDefaultEnvFiles } from "@star-sanctuary/distribution";
 import { createCLIContext } from "../shared/context.js";
 import {
   parseEnvFile,
@@ -103,6 +104,7 @@ export default defineCommand({
   },
   async run({ args }) {
     const ctx = createCLIContext({ json: args.json, stateDir: args["state-dir"] });
+    ensureDefaultEnvFiles(ctx.envDir);
     const projectEnvPath = resolveEnvPath(ctx.envDir);
     const envPath = resolveEnvLocalPath(ctx.envDir);
 

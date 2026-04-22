@@ -37,6 +37,7 @@ pnpm-debug.log*
 !.env.example
 !.env.local.example
 *.local
+!packages/star-sanctuary-distribution/src/templates/default-env/runtime.env.local
 # User data directory (Belldandy workspace)
 .belldandy/
 
