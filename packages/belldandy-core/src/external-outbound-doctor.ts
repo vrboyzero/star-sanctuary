@@ -6,6 +6,14 @@ import { detectExternalOutboundFailureStage, type ExternalOutboundFailureStage }
 export type ExternalOutboundDoctorReport = {
   available: boolean;
   requireConfirmation: boolean;
+  health: {
+    status: "pass" | "warn";
+    activeFailure: boolean;
+    recoveredAfterFailure: boolean;
+    latestRecordAt?: number;
+    latestSentAt?: number;
+    latestFailedAt?: number;
+  };
   totals: {
     totalRecords: number;
     pendingConfirmationCount: number;
@@ -74,9 +82,21 @@ export async function buildExternalOutboundDoctorReport(input: {
   let failedCount = 0;
   let resolveFailedCount = 0;
   let deliveryFailedCount = 0;
+  let latestRecordAt: number | undefined;
+  let latestSentAt: number | undefined;
+  let latestFailedAt: number | undefined;
 
   const recentFailures: ExternalOutboundDoctorReport["recentFailures"] = [];
   for (const item of items) {
+    if (Number.isFinite(item.timestamp)) {
+      const timestamp = Math.floor(item.timestamp);
+      latestRecordAt = latestRecordAt === undefined ? timestamp : Math.max(latestRecordAt, timestamp);
+      if (item.delivery === "sent") {
+        latestSentAt = latestSentAt === undefined ? timestamp : Math.max(latestSentAt, timestamp);
+      } else if (item.delivery === "failed") {
+        latestFailedAt = latestFailedAt === undefined ? timestamp : Math.max(latestFailedAt, timestamp);
+      }
+    }
     channelCounts[item.targetChannel] = (channelCounts[item.targetChannel] ?? 0) + 1;
     if (item.decision === "confirmed") confirmedCount += 1;
     if (item.decision === "auto_approved") autoApprovedCount += 1;
@@ -149,10 +169,23 @@ export async function buildExternalOutboundDoctorReport(input: {
     `delivery_failed=${deliveryFailedCount}`,
     input.requireConfirmation ? "confirm=required" : "confirm=disabled",
   ];
+  const activeFailure = latestFailedAt !== undefined
+    && (latestSentAt === undefined || latestFailedAt >= latestSentAt);
+  const recoveredAfterFailure = latestFailedAt !== undefined
+    && latestSentAt !== undefined
+    && latestSentAt > latestFailedAt;
 
   return {
     available: true,
     requireConfirmation: input.requireConfirmation,
+    health: {
+      status: !input.requireConfirmation || activeFailure ? "warn" : "pass",
+      activeFailure,
+      recoveredAfterFailure,
+      ...(latestRecordAt !== undefined ? { latestRecordAt } : {}),
+      ...(latestSentAt !== undefined ? { latestSentAt } : {}),
+      ...(latestFailedAt !== undefined ? { latestFailedAt } : {}),
+    },
     totals: {
       totalRecords: items.length,
       pendingConfirmationCount: pendingItems.length,

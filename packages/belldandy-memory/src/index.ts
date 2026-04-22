@@ -88,6 +88,13 @@ export { writeObsidianCommonsExport } from "./commons-exporter.js";
 export { DreamRuntime } from "./dream-runtime.js";
 export { ExperiencePromoter } from "./experience-promoter.js";
 export {
+  hasEmailToolCalls,
+  isEmailConversationTask,
+  resolveAutomaticExperiencePromotionTaskGate,
+  shouldAutoPromoteTaskByPolicy,
+  type AutomaticExperiencePromotionTaskGate,
+} from "./task-auto-promotion-policy.js";
+export {
   buildExperienceCandidateSlug,
   buildExperienceMethodFilenameBase,
   buildExperienceSkillMachineName,

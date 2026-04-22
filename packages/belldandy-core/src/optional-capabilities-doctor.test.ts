@@ -101,3 +101,36 @@ test("optional capability doctor stays green for inactive optional paths with wo
     }),
   ]));
 });
+
+test("optional capability doctor probes package-scoped optional deps from feature package contexts", async () => {
+  const observed = new Map<string, string[]>();
+
+  await buildOptionalCapabilitiesDoctorReport({
+    env: {
+      BELLDANDY_TOOLS_ENABLED: "true",
+      BELLDANDY_EMBEDDING_ENABLED: "true",
+      BELLDANDY_EMBEDDING_PROVIDER: "local",
+    },
+    workspaceRoot: "/workspace/star-sanctuary",
+    workspacePolicyRaw: `ignoredBuiltDependencies:\n  - node-pty\n  - onnxruntime-node\n  - protobufjs\n`,
+    probeOptionalModule: async (moduleName, options) => {
+      observed.set(moduleName, options.resolveFromPaths ?? []);
+      return {
+        installed: true,
+        available: true,
+        checkedBy: options.load ? "load" : "resolve",
+        resolvedFrom: `/workspace/node_modules/${moduleName}/index.js`,
+      };
+    },
+  });
+
+  const nodePtyPaths = (observed.get("node-pty") ?? []).map((item) => item.replace(/\\/g, "/"));
+  const fastembedPaths = (observed.get("fastembed") ?? []).map((item) => item.replace(/\\/g, "/"));
+
+  expect(nodePtyPaths).toEqual(expect.arrayContaining([
+    expect.stringContaining("/packages/belldandy-skills/package.json"),
+  ]));
+  expect(fastembedPaths).toEqual(expect.arrayContaining([
+    expect.stringContaining("/packages/belldandy-memory/package.json"),
+  ]));
+});

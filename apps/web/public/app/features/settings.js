@@ -691,7 +691,7 @@ export function createSettingsController({
     const doctorPerformance = payload.performance;
     if (doctorPerformance && Number.isFinite(Number(doctorPerformance.totalMs))) {
       const timingBadge = document.createElement("span");
-      timingBadge.className = "badge";
+      timingBadge.className = "badge doctor-summary-badge";
       const stages = Array.isArray(doctorPerformance.stages) ? doctorPerformance.stages : [];
       const slowStages = stages
         .filter((stage) => Number.isFinite(Number(stage?.durationMs)))
@@ -714,7 +714,7 @@ export function createSettingsController({
 
     if (options.detailPending) {
       const pendingBadge = document.createElement("span");
-      pendingBadge.className = "badge";
+      pendingBadge.className = "badge doctor-summary-badge";
       pendingBadge.textContent = t(
         "settings.doctorLoadingDetails",
         {},
@@ -730,7 +730,7 @@ export function createSettingsController({
         hasWarn = true;
       }
       const badge = document.createElement("span");
-      badge.className = `badge ${check.status}`;
+      badge.className = `badge doctor-summary-badge ${check.status}`;
       badge.textContent = `${check.name}: ${check.message || check.status}`;
       doctorStatusEl.appendChild(badge);
     });
@@ -773,7 +773,7 @@ export function createSettingsController({
       return;
     }
     const badge = document.createElement("span");
-    badge.className = "badge warn";
+    badge.className = "badge doctor-summary-badge warn";
     badge.textContent = t(
       "settings.doctorDetailLoadFailed",
       {},
@@ -820,7 +820,7 @@ export function createSettingsController({
       doctorToggleBtn.className = "button badge warn";
       doctorToggleBtn.textContent = t("settings.doctorPairingRequired", {}, "等待配对批准");
       const badge = document.createElement("span");
-      badge.className = "badge warn";
+      badge.className = "badge doctor-summary-badge warn";
       badge.textContent = t(
         "settings.doctorPairingRequiredHelp",
         {},

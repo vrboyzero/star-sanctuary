@@ -1615,4 +1615,78 @@ describe("doctor observability rendering", () => {
 
     expect(container.children.length).toBe(0);
   });
+
+  it("renders external outbound runtime as pass after later recovery even if historical failures remain", () => {
+    const callbacks = [];
+    vi.stubGlobal("requestAnimationFrame", (callback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (handle) => {
+      callbacks[handle - 1] = null;
+    });
+
+    const payload = createRenderPayload();
+    payload.externalOutboundRuntime = {
+      requireConfirmation: true,
+      health: {
+        status: "pass",
+        activeFailure: false,
+        recoveredAfterFailure: true,
+        latestRecordAt: 1710000130000,
+        latestSentAt: 1710000130000,
+        latestFailedAt: 1710000120000,
+      },
+      totals: {
+        totalRecords: 3,
+        pendingConfirmationCount: 0,
+        confirmedCount: 2,
+        autoApprovedCount: 0,
+        rejectedCount: 0,
+        sentCount: 2,
+        failedCount: 1,
+        resolveFailedCount: 1,
+        deliveryFailedCount: 0,
+      },
+      channelCounts: {
+        feishu: 2,
+        qq: 1,
+      },
+      errorCodeCounts: {
+        binding_not_found: 1,
+      },
+      failureStageCounts: {
+        resolve: 1,
+        delivery: 0,
+        confirmation: 0,
+      },
+      recentFailures: [
+        {
+          timestamp: 1710000120000,
+          targetChannel: "qq",
+          delivery: "failed",
+          resolution: "latest_binding",
+          failureStage: "resolve",
+          errorCode: "binding_not_found",
+          error: "当前没有可用于 qq 的最新会话绑定。",
+          requestedSessionKey: "channel=qq:chat=chat-2",
+          contentPreview: "请去 QQ 提醒我",
+        },
+      ],
+      recentPending: [],
+      headline: "records=3; sent=2; failed=1; resolve_failed=1; delivery_failed=0; confirm=required",
+    };
+
+    const container = document.createElement("div");
+    renderDoctorObservabilityCards(container, payload);
+    flushAnimationFrames(callbacks);
+
+    const externalOutboundCard = Array.from(container.children).find((node) =>
+      node.textContent?.includes("External Outbound Runtime")
+    );
+    expect(externalOutboundCard).toBeTruthy();
+    const firstBadge = externalOutboundCard.querySelector(".badge");
+    expect(firstBadge?.className).toContain("pass");
+    expect(firstBadge?.className).not.toContain("warn");
+  });
 });

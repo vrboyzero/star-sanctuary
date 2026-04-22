@@ -2407,6 +2407,41 @@ body.control-panel-hidden .main-content {
   background: var(--badge-fail-bg);
 }
 
+/* Settings Doctor Layout */
+#doctorStatus {
+  min-width: 0;
+  max-width: 100%;
+  align-items: flex-start;
+  align-content: flex-start;
+}
+
+#doctorStatus > * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+#doctorStatus .doctor-summary-badge,
+#doctorStatus .doctor-observability-card-badge,
+#doctorStatus .doctor-observability-card-title,
+#doctorStatus .doctor-observability-card-note,
+#doctorStatus .doctor-observability-card-action {
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+#doctorStatus .doctor-observability-card {
+  flex: 1 1 100%;
+}
+
+#doctorStatus .doctor-observability-card-badges,
+#doctorStatus .doctor-observability-card-notes {
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* Animations */
 @keyframes fade-up {
   from {

@@ -513,6 +513,13 @@ test("assistant mode runtime includes pending outbound confirmations in attentio
     externalOutboundRuntime: {
       available: true,
       requireConfirmation: true,
+      health: {
+        status: "warn",
+        activeFailure: false,
+        recoveredAfterFailure: false,
+        latestRecordAt: 1710001000000,
+        latestSentAt: 1710001000000,
+      },
       totals: {
         totalRecords: 2,
         pendingConfirmationCount: 1,

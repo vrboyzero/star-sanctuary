@@ -1,8 +1,8 @@
-import type {
-  ExperienceCandidate,
-  ExperienceCandidateType,
-  ExperiencePromoteResult,
-  TaskExperienceDetail,
+import {
+  type ExperienceCandidate,
+  type ExperienceCandidateType,
+  type ExperiencePromoteResult,
+  type TaskExperienceDetail,
 } from "@belldandy/memory";
 
 import type {
@@ -15,6 +15,7 @@ import type {
 import { buildLearningReviewInput, type LearningReviewInput } from "./learning-review-input.js";
 import { buildMindProfileSnapshot } from "./mind-profile-snapshot.js";
 import type { ScopedMemoryManagerRecord } from "./resident-memory-managers.js";
+import { resolveAutomaticExperiencePromotionTaskGate } from "../../belldandy-memory/src/task-auto-promotion-policy.js";
 
 export type LearningReviewTaskAction = {
   type: ExperienceCandidateType;
@@ -106,6 +107,19 @@ export async function runPostTaskLearningReview(input: {
   });
 
   const actions: LearningReviewTaskAction[] = [];
+  const taskGate = resolveAutomaticExperiencePromotionTaskGate(input.task);
+  if (!taskGate.allowed) {
+    for (const type of ["method", "skill"] satisfies ExperienceCandidateType[]) {
+      actions.push(buildTaskAction(type, null, "skipped", taskGate.reason || "task is excluded from automatic promotion"));
+    }
+    return buildPostTaskLearningReviewRunResult({
+      input,
+      agentId,
+      learningReviewInput,
+      actions,
+    });
+  }
+
   const candidates: ExperienceCandidateType[] = ["method", "skill"];
   for (const type of candidates) {
     const existing = input.findCandidate(input.task.id, type);
@@ -143,13 +157,45 @@ export async function runPostTaskLearningReview(input: {
     ...learningReviewInput.nudges.slice(0, 2),
   ].filter(Boolean);
 
+  return buildPostTaskLearningReviewRunResult({
+    input,
+    agentId,
+    learningReviewInput,
+    actions,
+  });
+}
+
+function buildPostTaskLearningReviewRunResult(input: {
+  input: { task: TaskExperienceDetail | null };
+  agentId: string;
+  learningReviewInput: LearningReviewInput;
+  actions: LearningReviewTaskAction[];
+}): PostTaskLearningReviewRunResult {
+  const { agentId, learningReviewInput, actions } = input;
+  const task = input.input.task!;
+  const generatedCount = actions.filter((item) => item.status === "generated").length;
+  const existingCount = actions.filter((item) => item.status === "existing").length;
+  const skippedCount = actions.filter((item) => item.status === "skipped").length;
+  const recommendations = [
+    generatedCount > 0
+      ? `本次 post-run learning review 生成 ${generatedCount} 个 candidate。`
+      : "",
+    existingCount > 0
+      ? `已有 ${existingCount} 个同 task candidate，当前不重复生成。`
+      : "",
+    skippedCount > 0 && generatedCount === 0 && existingCount === 0
+      ? `本次 post-run learning review 跳过 ${skippedCount} 个 candidate。`
+      : "",
+    ...learningReviewInput.nudges.slice(0, 2),
+  ].filter(Boolean);
+
   return {
-    taskId: input.task.id,
+    taskId: task.id,
     agentId,
     learningReviewInput,
     generated: generatedCount > 0,
     actions,
-    summary: `task=${input.task.id} | generated=${generatedCount} | existing=${existingCount} | task_signal=${learningReviewInput.summary.taskSignalCount}`,
+    summary: `task=${task.id} | generated=${generatedCount} | existing=${existingCount} | skipped=${skippedCount} | task_signal=${learningReviewInput.summary.taskSignalCount}`,
     recommendations,
   };
 }

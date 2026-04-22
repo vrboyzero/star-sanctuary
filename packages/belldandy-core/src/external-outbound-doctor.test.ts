@@ -68,6 +68,14 @@ describe("external outbound doctor", () => {
 
     expect(report.headline).toContain("records=3");
     expect(report.headline).toContain("pending=1");
+    expect(report.health).toMatchObject({
+      status: "pass",
+      activeFailure: false,
+      recoveredAfterFailure: true,
+      latestRecordAt: 3,
+      latestSentAt: 3,
+      latestFailedAt: 2,
+    });
     expect(report.totals.pendingConfirmationCount).toBe(1);
     expect(report.totals.sentCount).toBe(1);
     expect(report.totals.failedCount).toBe(2);
@@ -94,6 +102,52 @@ describe("external outbound doctor", () => {
       targetChannel: "qq",
       requestedSessionKey: "channel=qq:chat=chat-2",
       targetSessionKey: "channel=qq:chat=chat-2",
+    });
+  });
+
+  it("keeps warning active when the latest outbound attempt is still failing", async () => {
+    const report = await buildExternalOutboundDoctorReport({
+      auditStore: {
+        async append() {},
+        async listRecent() {
+          return [
+            {
+              timestamp: 4,
+              sourceConversationId: "conv-3",
+              sourceChannel: "webchat" as const,
+              targetChannel: "discord" as const,
+              targetSessionKey: "channel=discord:chat=room-1",
+              resolution: "latest_binding" as const,
+              decision: "confirmed" as const,
+              delivery: "failed" as const,
+              contentPreview: "send fail",
+              errorCode: "send_failed",
+              error: "send failed",
+            },
+            {
+              timestamp: 3,
+              sourceConversationId: "conv-2",
+              sourceChannel: "webchat" as const,
+              targetChannel: "feishu" as const,
+              targetSessionKey: "channel=feishu:chat=chat-1",
+              resolution: "latest_binding" as const,
+              decision: "confirmed" as const,
+              delivery: "sent" as const,
+              contentPreview: "ok",
+            },
+          ];
+        },
+      },
+      requireConfirmation: true,
+    });
+
+    expect(report.health).toMatchObject({
+      status: "warn",
+      activeFailure: true,
+      recoveredAfterFailure: false,
+      latestRecordAt: 4,
+      latestSentAt: 3,
+      latestFailedAt: 4,
     });
   });
 });

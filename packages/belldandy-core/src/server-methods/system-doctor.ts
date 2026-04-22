@@ -1080,9 +1080,11 @@ export async function handleSystemDoctorMethod(
     checks.push({
       id: "external_outbound_runtime",
       name: "External Outbound Runtime",
-      status: externalOutboundRuntime.totals.failedCount > 0 || !externalOutboundRuntime.requireConfirmation
-        ? "warn"
-        : "pass",
+      status: externalOutboundRuntime.health?.status ?? (
+        externalOutboundRuntime.totals.failedCount > 0 || !externalOutboundRuntime.requireConfirmation
+          ? "warn"
+          : "pass"
+      ),
       message: externalOutboundRuntime.headline,
     });
   }

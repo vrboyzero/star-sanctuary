@@ -17,6 +17,7 @@ import type {
 import { ExperiencePromoter } from "./experience-promoter.js";
 import { TaskProcessor } from "./task-processor.js";
 import { TaskSummarizer } from "./task-summarizer.js";
+import { shouldAutoPromoteTaskByPolicy } from "./task-auto-promotion-policy.js";
 import { buildOpenAIChatCompletionsUrl } from "./openai-url.js";
 import type {
     TaskActivityRecord,
@@ -2056,16 +2057,7 @@ candidateType 必须是以下之一：user / feedback / project / reference
     }
 
     private shouldAutoPromoteTask(task: TaskRecord): boolean {
-        if (task.status !== "success" && task.status !== "partial") {
-            return false;
-        }
-
-        const hasSummary = Boolean(task.summary?.trim());
-        const hasReflection = Boolean(task.reflection?.trim());
-        const hasTools = (task.toolCalls?.length ?? 0) > 0;
-        const hasArtifacts = (task.artifactPaths?.length ?? 0) > 0;
-        const hasObjective = Boolean(task.objective?.trim());
-        return hasSummary || hasReflection || hasTools || hasArtifacts || hasObjective;
+        return shouldAutoPromoteTaskByPolicy(task);
     }
 
     private publishMethodCandidate(candidate: ExperienceCandidate): string {

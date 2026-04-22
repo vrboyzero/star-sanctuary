@@ -23,6 +23,7 @@ const DREAM_RUNTIME_FILENAME = "dream-runtime.json";
 const DREAM_INDEX_FILENAME = "DREAM.md";
 const DREAMS_DIRNAME = "dreams";
 const STATE_VERSION = 1 as const;
+const ATOMIC_RENAME_RETRY_DELAYS_MS = [25, 50, 100, 200] as const;
 
 export interface DreamStoreOptions {
   stateDir: string;
@@ -494,8 +495,36 @@ function normalizeState(
 async function atomicWriteJson(filePath: string, value: DreamRuntimeState): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${crypto.randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, JSON.stringify(value, null, 2), "utf-8");
-  await fs.rename(tmpPath, filePath);
+  try {
+    await fs.writeFile(tmpPath, JSON.stringify(value, null, 2), "utf-8");
+    await renameWithRetry(tmpPath, filePath);
+  } catch (error) {
+    await fs.unlink(tmpPath).catch(() => {});
+    throw error;
+  }
+}
+
+function isRetriableAtomicRenameError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function renameWithRetry(sourcePath: string, destinationPath: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.rename(sourcePath, destinationPath);
+      return;
+    } catch (error) {
+      if (!isRetriableAtomicRenameError(error) || attempt >= ATOMIC_RENAME_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      await sleep(ATOMIC_RENAME_RETRY_DELAYS_MS[attempt]);
+    }
+  }
 }
 
 function normalizeDate(value?: Date | number | string): Date {

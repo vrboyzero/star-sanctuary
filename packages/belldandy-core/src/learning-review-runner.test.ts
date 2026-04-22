@@ -105,6 +105,44 @@ describe("learning review runner", () => {
     expect(manager.listExperienceCandidates(10, { taskId: "task_learning_1" })).toHaveLength(0);
   });
 
+  it("skips post-run generation for email thread tasks", async () => {
+    const now = "2026-04-09T12:30:00.000Z";
+    (manager as any).store.createTask({
+      id: "task_learning_email",
+      conversationId: "channel=email:scope=per-account-thread:provider=imap:account=default:thread=%3Cthread-1%40example.com%3E",
+      sessionKey: "channel=email:scope=per-account-thread:provider=imap:account=default:thread=%3Cthread-1%40example.com%3E",
+      agentId: "default",
+      source: "chat",
+      status: "success",
+      title: "回复邮件线程",
+      objective: "回复一下这封邮件",
+      summary: "已经根据邮件线程内容生成并发送回复。",
+      outcome: "回复邮件已发送。",
+      toolCalls: [{ toolName: "send_email", success: true, durationMs: 10 }],
+      artifactPaths: [],
+      startedAt: now,
+      finishedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const result = await runPostTaskLearningReview({
+      stateDir,
+      agentId: "default",
+      task: manager.getTaskDetail("task_learning_email"),
+      findCandidate: (taskId, type) => manager.findExperienceCandidateByTaskAndType(taskId, type),
+      promote: (taskId, type) => type === "method"
+        ? manager.promoteTaskToMethodCandidate(taskId)
+        : manager.promoteTaskToSkillCandidate(taskId),
+    });
+
+    expect(result?.generated).toBe(false);
+    expect(result?.actions.map((item) => item.status)).toEqual(["skipped", "skipped"]);
+    expect(result?.actions[0]?.reason).toContain("email");
+    expect(result?.summary).toContain("skipped=2");
+    expect(manager.listExperienceCandidates(10, { taskId: "task_learning_email" })).toHaveLength(0);
+  });
+
   it("skips goal review scan generation when actionable reviews still exist", async () => {
     let generateCalled = false;
     const result = await runGoalReviewScanLearningReview({

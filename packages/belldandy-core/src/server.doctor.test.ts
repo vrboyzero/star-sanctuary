@@ -2986,6 +2986,10 @@ test("system.doctor exposes external outbound runtime summary when audit data is
     expect(res.ok).toBe(true);
     expect(res.payload?.externalOutboundRuntime).toMatchObject({
       requireConfirmation: false,
+      health: {
+        status: "warn",
+        activeFailure: true,
+      },
       totals: {
         totalRecords: 3,
         sentCount: 1,
@@ -3008,6 +3012,99 @@ test("system.doctor exposes external outbound runtime summary when audit data is
         id: "external_outbound_runtime",
         name: "External Outbound Runtime",
         status: "warn",
+      }),
+    ]));
+  } finally {
+    if (typeof previousConfirm === "string") {
+      process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = previousConfirm;
+    } else {
+      delete process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+    }
+    ws.close();
+    await closeP;
+    await server.close();
+    await fs.promises.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+test("system.doctor keeps external outbound runtime green after a later success recovers earlier failures", async () => {
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "belldandy-test-"));
+  const previousConfirm = process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION;
+  process.env.BELLDANDY_EXTERNAL_OUTBOUND_REQUIRE_CONFIRMATION = "true";
+  const server = await startGatewayServer({
+    port: 0,
+    auth: { mode: "none" },
+    webRoot: resolveWebRoot(),
+    stateDir,
+    externalOutboundAuditStore: {
+      async append() {},
+      async listRecent() {
+        return [
+          {
+            timestamp: 1710000004000,
+            sourceConversationId: "conv-3",
+            sourceChannel: "webchat" as const,
+            targetChannel: "feishu" as const,
+            targetSessionKey: "channel=feishu:chat=chat-1",
+            resolution: "latest_binding" as const,
+            decision: "confirmed" as const,
+            delivery: "sent" as const,
+            contentPreview: "recovered",
+          },
+          {
+            timestamp: 1710000002000,
+            sourceConversationId: "conv-2",
+            sourceChannel: "webchat" as const,
+            targetChannel: "qq" as const,
+            requestedSessionKey: "channel=qq:chat=chat-2",
+            resolution: "explicit_session_key" as const,
+            decision: "auto_approved" as const,
+            delivery: "failed" as const,
+            contentPreview: "resolve fail",
+            errorCode: "binding_not_found",
+            error: "not found",
+          },
+        ];
+      },
+    },
+  });
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}`, { origin: "http://127.0.0.1" });
+  const frames: any[] = [];
+  const closeP = new Promise<void>((resolve) => ws.once("close", () => resolve()));
+  ws.on("message", (data) => frames.push(JSON.parse(data.toString("utf-8"))));
+
+  try {
+    await pairWebSocketClient(ws, frames, stateDir);
+
+    ws.send(JSON.stringify({
+      type: "req",
+      id: "system-doctor-external-outbound-runtime-recovered",
+      method: "system.doctor",
+      params: {},
+    }));
+    await waitFor(() => frames.some((f) => f.type === "res" && f.id === "system-doctor-external-outbound-runtime-recovered"));
+
+    const res = frames.find((f) => f.type === "res" && f.id === "system-doctor-external-outbound-runtime-recovered");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.externalOutboundRuntime).toMatchObject({
+      requireConfirmation: true,
+      health: {
+        status: "pass",
+        activeFailure: false,
+        recoveredAfterFailure: true,
+      },
+      totals: {
+        totalRecords: 2,
+        sentCount: 1,
+        failedCount: 1,
+      },
+    });
+    expect(res.payload?.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "external_outbound_runtime",
+        name: "External Outbound Runtime",
+        status: "pass",
       }),
     ]));
   } finally {

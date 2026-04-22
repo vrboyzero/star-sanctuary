@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 type DoctorStatus = "pass" | "warn";
 type OptionalCapabilityMode = "ready" | "fallback" | "inactive" | "policy" | "policy_gap";
@@ -12,6 +13,11 @@ type OptionalModuleProbe = {
   checkedBy: "resolve" | "load";
   resolvedFrom?: string;
   error?: string;
+};
+
+type OptionalModuleProbeOptions = {
+  load: boolean;
+  resolveFromPaths?: string[];
 };
 
 export interface OptionalCapabilityDoctorItem {
@@ -41,7 +47,7 @@ export type OptionalCapabilitiesDoctorReportParams = {
   env?: Record<string, string | undefined>;
   workspaceRoot?: string;
   workspacePolicyRaw?: string;
-  probeOptionalModule?: (moduleName: string, options: { load: boolean }) => Promise<OptionalModuleProbe>;
+  probeOptionalModule?: (moduleName: string, options: OptionalModuleProbeOptions) => Promise<OptionalModuleProbe>;
 };
 
 const EXPECTED_IGNORED_BUILD_DEPENDENCIES = [
@@ -49,6 +55,15 @@ const EXPECTED_IGNORED_BUILD_DEPENDENCIES = [
   "onnxruntime-node",
   "protobufjs",
 ] as const;
+
+const OPTIONAL_MODULE_RESOLVE_CONTEXTS: Record<string, string[]> = {
+  "node-pty": [
+    fileURLToPath(new URL("../../belldandy-skills/package.json", import.meta.url)),
+  ],
+  fastembed: [
+    fileURLToPath(new URL("../../belldandy-memory/package.json", import.meta.url)),
+  ],
+};
 
 function isEnabled(value: string | undefined): boolean {
   return value?.trim().toLowerCase() === "true";
@@ -92,18 +107,29 @@ function parseYamlList(raw: string, key: string): string[] {
 
 async function defaultProbeOptionalModule(
   moduleName: string,
-  options: { load: boolean },
+  options: OptionalModuleProbeOptions,
 ): Promise<OptionalModuleProbe> {
-  const require = createRequire(import.meta.url);
+  const resolveFromPaths = Array.from(new Set([
+    fileURLToPath(import.meta.url),
+    ...(options.resolveFromPaths ?? []),
+  ]));
   let resolvedFrom: string | undefined;
-  try {
-    resolvedFrom = require.resolve(moduleName);
-  } catch (error) {
+  let resolveError: unknown;
+  for (const resolveFromPath of resolveFromPaths) {
+    const require = createRequire(resolveFromPath);
+    try {
+      resolvedFrom = require.resolve(moduleName);
+      break;
+    } catch (error) {
+      resolveError = error;
+    }
+  }
+  if (!resolvedFrom) {
     return {
       installed: false,
       available: false,
       checkedBy: options.load ? "load" : "resolve",
-      error: truncateError(normalizeError(error)),
+      error: truncateError(normalizeError(resolveError)),
     };
   }
 
@@ -117,7 +143,7 @@ async function defaultProbeOptionalModule(
   }
 
   try {
-    await import(moduleName);
+    await import(pathToFileURL(resolvedFrom).href);
     return {
       installed: true,
       available: true,
@@ -264,8 +290,14 @@ export async function buildOptionalCapabilitiesDoctorReport(
   const embeddingProvider = resolveEmbeddingProvider(env.BELLDANDY_EMBEDDING_PROVIDER);
 
   const [ptyProbe, fastembedProbe] = await Promise.all([
-    probeOptionalModule("node-pty", { load: toolsEnabled }),
-    probeOptionalModule("fastembed", { load: embeddingEnabled && embeddingProvider === "local" }),
+    probeOptionalModule("node-pty", {
+      load: toolsEnabled,
+      resolveFromPaths: OPTIONAL_MODULE_RESOLVE_CONTEXTS["node-pty"],
+    }),
+    probeOptionalModule("fastembed", {
+      load: embeddingEnabled && embeddingProvider === "local",
+      resolveFromPaths: OPTIONAL_MODULE_RESOLVE_CONTEXTS.fastembed,
+    }),
   ]);
 
   const items = [

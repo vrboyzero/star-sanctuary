@@ -208,6 +208,82 @@ describe("ExperiencePromoter", () => {
     expect(candidates.map((item) => item.type).sort()).toEqual(["method", "skill"]);
   });
 
+  it("does not auto-promote ordinary chat tasks without execution evidence", () => {
+    const taskId = manager.startTaskCapture({
+      conversationId: "conv_chat_plain",
+      sessionKey: "session_chat_plain",
+      source: "chat",
+      objective: "小贝早上好",
+    });
+
+    expect(taskId).toBeTruthy();
+    const completedTaskId = manager.completeTaskCapture({
+      conversationId: "conv_chat_plain",
+      success: true,
+      durationMs: 180,
+    });
+
+    expect(completedTaskId).toBe(taskId);
+    const task = manager.getTask(taskId!);
+    expect(task).toMatchObject({
+      source: "chat",
+      objective: "小贝早上好",
+    });
+    const candidates = manager.listExperienceCandidates(10, { taskId: taskId! });
+    expect(candidates).toHaveLength(0);
+  });
+
+  it("does not auto-promote chat tasks that only send email", () => {
+    const taskId = manager.startTaskCapture({
+      conversationId: "conv_send_email",
+      sessionKey: "session_send_email",
+      source: "chat",
+      objective: "给客户发一封跟进邮件",
+    });
+
+    expect(taskId).toBeTruthy();
+    manager.recordTaskToolCall("conv_send_email", {
+      toolName: "send_email",
+      success: true,
+      durationMs: 120,
+    });
+
+    const completedTaskId = manager.completeTaskCapture({
+      conversationId: "conv_send_email",
+      success: true,
+      durationMs: 420,
+    });
+
+    expect(completedTaskId).toBe(taskId);
+    expect(manager.listExperienceCandidates(10, { taskId: taskId! })).toHaveLength(0);
+  });
+
+  it("does not auto-promote email thread tasks even with execution evidence", () => {
+    const conversationId = "channel=email:scope=per-account-thread:provider=imap:account=default:thread=%3Cthread-1%40example.com%3E";
+    const taskId = manager.startTaskCapture({
+      conversationId,
+      sessionKey: conversationId,
+      source: "chat",
+      objective: "处理并回复一封入站邮件",
+    });
+
+    expect(taskId).toBeTruthy();
+    manager.recordTaskToolCall(conversationId, {
+      toolName: "memory_search",
+      success: true,
+      durationMs: 80,
+    });
+
+    const completedTaskId = manager.completeTaskCapture({
+      conversationId,
+      success: true,
+      durationMs: 560,
+    });
+
+    expect(completedTaskId).toBe(taskId);
+    expect(manager.listExperienceCandidates(10, { taskId: taskId! })).toHaveLength(0);
+  });
+
   it("does not auto-promote when the switch is disabled", async () => {
     manager.close();
     await fs.rm(workspaceRoot, { recursive: true, force: true }).catch(() => { });

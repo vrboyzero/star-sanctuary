@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DreamStore,
@@ -169,5 +169,50 @@ describe("DreamStore", () => {
         },
       },
     });
+  });
+
+  it("retries transient rename failures before replacing runtime state", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "belldandy-dream-store-"));
+    tempDirs.push(stateDir);
+    const store = new DreamStore({
+      stateDir,
+      agentId: "agent-retry",
+    });
+
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename");
+    let attempts = 0;
+
+    renameSpy.mockImplementation(async (sourcePath, destinationPath) => {
+      attempts += 1;
+      if (attempts <= 2) {
+        const error = new Error("file is temporarily locked") as NodeJS.ErrnoException;
+        error.code = "EPERM";
+        throw error;
+      }
+      return originalRename(sourcePath, destinationPath);
+    });
+
+    try {
+      const nextState = await store.recordAutoTrigger({
+        triggerMode: "heartbeat",
+        attemptedAt: "2026-04-22T00:00:00.000Z",
+        executed: false,
+        skipCode: "insufficient_signal",
+      });
+
+      expect(attempts).toBe(3);
+      expect(nextState.lastAutoTrigger?.triggerMode).toBe("heartbeat");
+
+      const persistedRaw = await fs.readFile(store.getRuntimePath(), "utf-8");
+      const persisted = JSON.parse(persistedRaw) as { lastAutoTrigger?: { triggerMode?: string }, autoStats?: { attemptedCount?: number } };
+      expect(persisted.lastAutoTrigger?.triggerMode).toBe("heartbeat");
+      expect(persisted.autoStats?.attemptedCount).toBe(1);
+
+      const leftoverTemps = (await fs.readdir(stateDir)).filter((name) => name.endsWith(".tmp"));
+      expect(leftoverTemps).toEqual([]);
+    } finally {
+      renameSpy.mockRestore();
+    }
   });
 });
