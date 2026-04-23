@@ -17,7 +17,7 @@ import {
   parseArgs,
   resolveCwd,
   runCodexExec,
-} from "./codex-bridge-server.mjs";
+} from "./codex-bridge-server-core.ts";
 
 type MockChild = EventEmitter & {
   stdout: PassThrough;

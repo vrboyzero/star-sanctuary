@@ -17,7 +17,7 @@ import {
   parseArgs,
   resolveCwd,
   runClaudeExec,
-} from "./claude-bridge-server.mjs";
+} from "./claude-bridge-server-core.ts";
 
 type MockChild = EventEmitter & {
   stdout: PassThrough;
