@@ -18,7 +18,6 @@ import {
 } from "../shared/env-loader.js";
 import type { OnboardAnswers, SetupFlow, SetupScenario } from "../wizard/onboard-shared.js";
 import { answersToEnvPairs, buildAnswersFromFlags, isLocalHost } from "../wizard/onboard-shared.js";
-import type { AdvancedModule } from "../wizard/advanced-modules-shared.js";
 
 const NON_INTERACTIVE_INPUT_KEYS = [
   "provider",
@@ -43,11 +42,47 @@ const MANAGED_ENV_KEYS = [
   "BELLDANDY_AUTH_PASSWORD",
 ] as const;
 
+const INTERACTIVE_MANAGED_ENV_KEYS = [
+  "BELLDANDY_HOST",
+  "BELLDANDY_PORT",
+  "BELLDANDY_AUTH_MODE",
+  "BELLDANDY_AUTH_TOKEN",
+  "BELLDANDY_AUTH_PASSWORD",
+] as const;
+
 function hasNonInteractiveFlags(args: Record<string, unknown>): boolean {
   return NON_INTERACTIVE_INPUT_KEYS.some((key) => {
     const value = args[key];
     return value !== undefined && value !== false && value !== "";
   });
+}
+
+export function buildSetupNextStepNotes(params: {
+  flow: SetupFlow;
+  interactive: boolean;
+  existedBefore: boolean;
+}): string[] {
+  const doctorLine = params.existedBefore
+    ? "Run 'bdd doctor' to verify the updated setup."
+    : "Run 'bdd doctor' to verify your setup.";
+
+  if (!params.interactive) {
+    return [
+      doctorLine,
+      params.existedBefore
+        ? "Run 'bdd start' to relaunch Belldandy with the new config."
+        : "Run 'bdd start' to launch Belldandy.",
+    ];
+  }
+
+  return [
+    params.flow === "quickstart"
+      ? "QuickStart no longer collects provider/API/model in CLI; finish that in WebChat Settings."
+      : "Advanced saved deployment settings only; finish provider/API/model in WebChat Settings.",
+    "Next: run your installed start.bat or start.sh (or use 'bdd start' in a dev workspace).",
+    "Then open WebChat Settings to complete provider / API Key / model setup.",
+    doctorLine,
+  ];
 }
 
 function readMergedEnvValues(envPath: string, envLocalPath: string): Map<string, string> {
@@ -107,12 +142,11 @@ export default defineCommand({
     ensureDefaultEnvFiles(ctx.envDir);
     const projectEnvPath = resolveEnvPath(ctx.envDir);
     const envPath = resolveEnvLocalPath(ctx.envDir);
+    const interactiveSetup = !hasNonInteractiveFlags(args);
 
     let answers: OnboardAnswers;
-    let configuredModules: AdvancedModule[] = [];
-    let moduleNotes: string[] = [];
 
-    if (hasNonInteractiveFlags(args)) {
+    if (!interactiveSetup) {
       // Non-interactive mode
       answers = buildAnswersFromFlags(args);
 
@@ -158,9 +192,12 @@ export default defineCommand({
       envLocalPath: envPath,
       authMode: answers.authMode,
     });
-    const pairs = answersToEnvPairs(answers);
+    const pairs = answersToEnvPairs(answers, {
+      includeModelConfig: !interactiveSetup,
+    });
     const nextKeys = new Set(pairs.map(([key]) => key));
-    for (const key of MANAGED_ENV_KEYS) {
+    const managedEnvKeys = interactiveSetup ? INTERACTIVE_MANAGED_ENV_KEYS : MANAGED_ENV_KEYS;
+    for (const key of managedEnvKeys) {
       if (!nextKeys.has(key)) {
         removeEnvValue(envPath, key);
       }
@@ -169,16 +206,11 @@ export default defineCommand({
       updateEnvValue(envPath, key, value);
     }
 
-    if (!hasNonInteractiveFlags(args) && answers.flow === "advanced") {
-      const { runAdvancedModulesWizard } = await import("../wizard/advanced-modules.js");
-      const advancedResult = await runAdvancedModulesWizard({
-        envPath,
-        stateDir: ctx.stateDir,
-        authMode: answers.authMode,
-      });
-      configuredModules = advancedResult.configuredModules;
-      moduleNotes = advancedResult.notes;
-    }
+    const nextStepNotes = buildSetupNextStepNotes({
+      flow: answers.flow,
+      interactive: interactiveSetup,
+      existedBefore,
+    });
 
     if (ctx.json) {
       const written: Record<string, string> = {};
@@ -192,8 +224,8 @@ export default defineCommand({
         path: envPath,
         flow: answers.flow,
         scenario: answers.scenario,
-        configuredModules,
-        notes: [...setupNotes, ...moduleNotes],
+        configuredModules: [],
+        notes: [...setupNotes, ...nextStepNotes],
         config: written,
       });
     } else {
@@ -203,24 +235,14 @@ export default defineCommand({
       console.log(pc.dim(`  Scenario: ${answers.scenario}`));
       console.log(pc.dim(`  Bind: ${answers.host}:${answers.port}`));
       console.log(pc.dim(`  Auth: ${answers.authMode}\n`));
-      if (configuredModules.length > 0) {
-        console.log(pc.dim(`  Advanced modules: ${configuredModules.join(", ")}\n`));
-      }
       for (const note of setupNotes) {
         console.log(pc.dim(`  ${note}`));
       }
-      for (const note of moduleNotes) {
+      for (const note of nextStepNotes) {
         console.log(pc.dim(`  ${note}`));
       }
-      if (setupNotes.length > 0 || moduleNotes.length > 0) {
+      if (setupNotes.length > 0 || nextStepNotes.length > 0) {
         console.log("");
-      }
-      if (!existedBefore) {
-        console.log(pc.dim("  Run 'bdd doctor' to verify your setup."));
-        console.log(pc.dim("  Run 'bdd start' to launch Belldandy.\n"));
-      } else {
-        console.log(pc.dim("  Run 'bdd doctor' to verify the updated setup."));
-        console.log(pc.dim("  Run 'bdd start' to relaunch Belldandy with the new config.\n"));
       }
     }
   },

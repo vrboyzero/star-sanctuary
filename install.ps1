@@ -476,12 +476,18 @@ function New-DesktopShortcut {
   $shortcutPath = Join-Path $desktopDir "Star Sanctuary.lnk"
   $targetPath = Join-Path $InstallRoot "start.bat"
   $workingDir = $InstallRoot
+  $iconPath = Join-Path $InstallRoot "current\apps\web\public\logo06-256.ico"
 
   $shell = New-Object -ComObject WScript.Shell
   $shortcut = $shell.CreateShortcut($shortcutPath)
   $shortcut.TargetPath = $targetPath
   $shortcut.WorkingDirectory = $workingDir
   $shortcut.Description = "Start Star Sanctuary"
+  if (Test-Path $iconPath -PathType Leaf) {
+    $shortcut.IconLocation = $iconPath
+  } else {
+    Write-Step "Shortcut icon was not found at $iconPath. Creating desktop shortcut without a custom icon."
+  }
   $shortcut.Save()
 
   Write-Step "Desktop shortcut created at $shortcutPath"

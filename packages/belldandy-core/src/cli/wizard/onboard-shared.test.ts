@@ -76,6 +76,28 @@ describe("onboard-shared", () => {
     expect(pairs).toContainEqual(["BELLDANDY_AUTH_TOKEN", "abc123"]);
   });
 
+  test("answersToEnvPairs can omit model config for interactive setup handoff", () => {
+    const pairs = answersToEnvPairs({
+      flow: "quickstart",
+      scenario: "local",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-test",
+      model: "gpt-4o",
+      host: "127.0.0.1",
+      port: 28889,
+      authMode: "none",
+    }, {
+      includeModelConfig: false,
+    });
+
+    expect(pairs).not.toContainEqual(["BELLDANDY_AGENT_PROVIDER", "openai"]);
+    expect(pairs).not.toContainEqual(["BELLDANDY_OPENAI_BASE_URL", "https://api.openai.com/v1"]);
+    expect(pairs).not.toContainEqual(["BELLDANDY_OPENAI_API_KEY", "sk-test"]);
+    expect(pairs).not.toContainEqual(["BELLDANDY_OPENAI_MODEL", "gpt-4o"]);
+    expect(pairs).toContainEqual(["BELLDANDY_AUTH_MODE", "none"]);
+  });
+
   test("getScenarioDefaults keeps local installs private by default", () => {
     expect(getScenarioDefaults("local")).toEqual({
       host: "127.0.0.1",

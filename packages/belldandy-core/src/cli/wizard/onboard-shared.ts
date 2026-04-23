@@ -18,6 +18,10 @@ export interface OnboardAnswers {
   authSecret?: string;
 }
 
+export interface AnswersToEnvPairsOptions {
+  includeModelConfig?: boolean;
+}
+
 function normalizeFlow(value: unknown): SetupFlow {
   return value === "advanced" ? "advanced" : "quickstart";
 }
@@ -89,15 +93,21 @@ export function parseExistingAnswers(entries: EnvEntry[]): OnboardAnswers | null
   };
 }
 
-export function answersToEnvPairs(a: OnboardAnswers): Array<[string, string]> {
+export function answersToEnvPairs(
+  a: OnboardAnswers,
+  options: AnswersToEnvPairsOptions = {},
+): Array<[string, string]> {
   const pairs: Array<[string, string]> = [];
+  const includeModelConfig = options.includeModelConfig ?? true;
 
-  pairs.push(["BELLDANDY_AGENT_PROVIDER", a.provider]);
+  if (includeModelConfig) {
+    pairs.push(["BELLDANDY_AGENT_PROVIDER", a.provider]);
 
-  if (a.provider === "openai") {
-    if (a.baseUrl) pairs.push(["BELLDANDY_OPENAI_BASE_URL", a.baseUrl]);
-    if (a.apiKey) pairs.push(["BELLDANDY_OPENAI_API_KEY", a.apiKey]);
-    if (a.model) pairs.push(["BELLDANDY_OPENAI_MODEL", a.model]);
+    if (a.provider === "openai") {
+      if (a.baseUrl) pairs.push(["BELLDANDY_OPENAI_BASE_URL", a.baseUrl]);
+      if (a.apiKey) pairs.push(["BELLDANDY_OPENAI_API_KEY", a.apiKey]);
+      if (a.model) pairs.push(["BELLDANDY_OPENAI_MODEL", a.model]);
+    }
   }
 
   if (a.host !== "127.0.0.1") pairs.push(["BELLDANDY_HOST", a.host]);

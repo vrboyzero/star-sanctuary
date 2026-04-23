@@ -31,3 +31,11 @@ test("install.ps1 Windows start.ps1 wrapper defaults AUTO_OPEN_BROWSER safely", 
   expect(script).toContain("Write-Host '[Star Sanctuary Launcher] WebChat: http://localhost:28889'");
   expect(script).toContain("& node (Join-Path $scriptDir 'current\\packages\\belldandy-core\\dist\\bin\\bdd.js') 'start' @args");
 });
+
+test("install.ps1 desktop shortcut uses the packaged ico when available", () => {
+  const script = readInstallScript();
+
+  expect(script).toContain('$iconPath = Join-Path $InstallRoot "current\\apps\\web\\public\\logo06-256.ico"');
+  expect(script).toContain("if (Test-Path $iconPath -PathType Leaf) {");
+  expect(script).toContain("$shortcut.IconLocation = $iconPath");
+});

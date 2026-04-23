@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, expect, test } from "vitest";
 
-import { reconcileSetupCommunityApiConflict } from "./setup.js";
+import { buildSetupNextStepNotes, reconcileSetupCommunityApiConflict } from "./setup.js";
 
 const tempDirs = new Set<string>();
 
@@ -74,4 +74,26 @@ test("bdd setup keeps existing community config unchanged when auth mode stays a
   const after = await fs.readFile(envLocalPath, "utf-8");
   expect(notes).toEqual([]);
   expect(after).toBe(before);
+});
+
+test("bdd setup quickstart guidance points users to WebChat settings instead of CLI model prompts", () => {
+  const notes = buildSetupNextStepNotes({
+    flow: "quickstart",
+    interactive: true,
+    existedBefore: false,
+  });
+
+  expect(notes[0]).toContain("QuickStart no longer collects provider/API/model in CLI");
+  expect(notes).toContain("Then open WebChat Settings to complete provider / API Key / model setup.");
+});
+
+test("bdd setup advanced guidance keeps deployment setup but still hands model config to WebChat", () => {
+  const notes = buildSetupNextStepNotes({
+    flow: "advanced",
+    interactive: true,
+    existedBefore: true,
+  });
+
+  expect(notes[0]).toContain("Advanced saved deployment settings only");
+  expect(notes).toContain("Run 'bdd doctor' to verify the updated setup.");
 });

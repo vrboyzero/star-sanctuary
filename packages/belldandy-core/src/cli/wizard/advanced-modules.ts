@@ -1,3 +1,7 @@
+/**
+ * Advanced module wizards for `bdd configure <module>`.
+ * Install-time `bdd setup` no longer enters this module chain directly.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 

@@ -1,7 +1,7 @@
 /**
  * Onboarding Wizard — interactive setup flow for Belldandy.
- * Collects provider, API config, host/port, and auth mode.
- * Writes results to .env.local via updateEnvValue.
+ * QuickStart only collects the minimum deployment handoff.
+ * Advanced collects deployment settings such as host/port/auth.
  */
 import * as p from "@clack/prompts";
 import pc from "picocolors";
@@ -50,13 +50,18 @@ async function promptSecret(message: string, existingValue?: string): Promise<st
 }
 
 function renderSummary(answers: OnboardAnswers): string {
-  return [
+  const lines = [
     `Flow: ${answers.flow}`,
     `Scenario: ${answers.scenario}`,
-    `Provider: ${answers.provider}`,
     `Host: ${answers.host}:${answers.port}`,
     `Auth: ${answers.authMode}`,
-  ].join("\n");
+  ];
+  lines.push(
+    answers.flow === "quickstart"
+      ? "Model/API setup: continue in WebChat Settings"
+      : "Model/API setup: continue in WebChat Settings after deployment setup",
+  );
+  return lines.join("\n");
 }
 
 function getAuthInitialValue(
@@ -115,45 +120,19 @@ export async function runOnboardWizard(options: RunOnboardWizardOptions = {}): P
     initialValue: defaults?.flow ?? "quickstart",
   }));
 
-  const scenario = options.scenario ?? resolvePromptValue(await p.select<SetupScenario>({
-    message: "Run scenario",
-    options: [
-      { value: "local", label: "Local only", hint: "127.0.0.1, single-machine use" },
-      { value: "lan", label: "LAN access", hint: "0.0.0.0 with required auth" },
-      { value: "remote", label: "Remote / reverse proxy", hint: "0.0.0.0 with required auth" },
-    ],
-    initialValue: defaults?.scenario ?? "local",
-  }));
+  const scenario = flow === "advanced"
+    ? (options.scenario ?? resolvePromptValue(await p.select<SetupScenario>({
+      message: "Run scenario",
+      options: [
+        { value: "local", label: "Local only", hint: "127.0.0.1, single-machine use" },
+        { value: "lan", label: "LAN access", hint: "0.0.0.0 with required auth" },
+        { value: "remote", label: "Remote / reverse proxy", hint: "0.0.0.0 with required auth" },
+      ],
+      initialValue: defaults?.scenario ?? "local",
+    })))
+    : "local";
 
   const scenarioDefaults = getScenarioDefaults(scenario);
-
-  const provider = resolvePromptValue(await p.select<OnboardAnswers["provider"]>({
-    message: "Agent provider",
-    options: [
-      { value: "openai", label: "OpenAI-compatible API" },
-      { value: "mock", label: "Mock (testing)" },
-    ],
-    initialValue: defaults?.provider ?? "openai",
-  }));
-
-  let baseUrl: string | undefined;
-  let apiKey: string | undefined;
-  let model: string | undefined;
-  if (provider === "openai") {
-    baseUrl = resolvePromptValue(await p.text({
-      message: "API Base URL",
-      placeholder: "https://api.openai.com/v1",
-      defaultValue: defaults?.baseUrl ?? "https://api.openai.com/v1",
-      validate: (value) => (!value.trim() ? "URL is required" : undefined),
-    }));
-    apiKey = await promptSecret("API Key", defaults?.apiKey);
-    model = resolvePromptValue(await p.text({
-      message: "Model name",
-      placeholder: "gpt-4o",
-      defaultValue: defaults?.model ?? "gpt-4o",
-      validate: (value) => (!value.trim() ? "Model name is required" : undefined),
-    }));
-  }
 
   const host = flow === "advanced"
     ? resolvePromptValue(await p.text({
@@ -163,18 +142,20 @@ export async function runOnboardWizard(options: RunOnboardWizardOptions = {}): P
     }))
     : scenarioDefaults.host;
 
-  const port = Number(resolvePromptValue(await p.text({
-    message: "Port",
-    placeholder: "28889",
-    defaultValue: String(defaults?.port ?? 28889),
-    validate: (value) => {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
-        return "Must be a valid port (1-65535)";
-      }
-      return undefined;
-    },
-  })));
+  const port = flow === "advanced"
+    ? Number(resolvePromptValue(await p.text({
+      message: "Port",
+      placeholder: "28889",
+      defaultValue: String(defaults?.port ?? 28889),
+      validate: (value) => {
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 65535) {
+          return "Must be a valid port (1-65535)";
+        }
+        return undefined;
+      },
+    })))
+    : 28889;
 
   let authMode: SetupAuthMode;
   if (flow === "advanced") {
@@ -217,10 +198,10 @@ export async function runOnboardWizard(options: RunOnboardWizardOptions = {}): P
   const answers: OnboardAnswers = {
     flow,
     scenario: normalizeScenario(scenario, host),
-    provider,
-    baseUrl,
-    apiKey,
-    model,
+    provider: defaults?.provider ?? "openai",
+    baseUrl: defaults?.baseUrl,
+    apiKey: defaults?.apiKey,
+    model: defaults?.model,
     host,
     port,
     authMode,
@@ -228,5 +209,13 @@ export async function runOnboardWizard(options: RunOnboardWizardOptions = {}): P
   };
 
   p.note(renderSummary(answers), "Setup summary");
+  p.note(
+    [
+      "Next step:",
+      "1. Run your installed start.bat or start.sh (or use `bdd start` in a dev workspace).",
+      "2. Open WebChat Settings to finish provider / API Key / model configuration.",
+    ].join("\n"),
+    flow === "quickstart" ? "QuickStart handoff" : "Advanced handoff",
+  );
   return answers;
 }
