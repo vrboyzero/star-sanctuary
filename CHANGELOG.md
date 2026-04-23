@@ -16,6 +16,22 @@ All notable changes to this project will be documented in this file.
 
 - 新增 `MemoryManager` 回归测试，覆盖“有 OpenAI key 但 embedding 被显式禁用”场景，断言使用 null provider 且检索路径正常
 
+## [0.3.4] - 2026-04-23
+
+聚焦安装器 Windows 启动包装脚本的新手安全体验修复，避免脚本级自动探活触发安全软件误报，同时保留自动开页能力与启动可见性。
+
+### Install / Launcher
+
+- 安装器生成的 `start.bat` / `start.ps1` 移除脚本级探活与后台 PowerShell 拉起逻辑，降低被杀软隔离风险
+- 改为仅设置 `AUTO_OPEN_BROWSER` 安全默认：默认开启、`CI=true` 强制关闭，由 Gateway 内部统一处理自动开浏览器
+- 安装器生成的 `start.bat` / `start.ps1` 新增低风险启动提示：
+  - `Starting Gateway...`
+  - `WebChat: http://localhost:28889`
+
+### Tests
+
+- 新增安装脚本模板回归测试，覆盖 Windows `start.bat` / `start.ps1` 的安全默认与提示文案断言
+
 ## [0.3.2] - 2026-04-23
 
 聚焦默认渠道模板防误触发修复，避免新手安装后因占位值被当成真实凭证导致 WS 连接异常刷屏。

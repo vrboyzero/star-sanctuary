@@ -264,6 +264,11 @@ type "%FIRST_START_NOTICE%"
 del /f /q "%FIRST_START_NOTICE%" >nul 2>nul
 echo.
 )
+if not defined AUTO_OPEN_BROWSER set "AUTO_OPEN_BROWSER=true"
+if /I "%CI%"=="true" set "AUTO_OPEN_BROWSER=false"
+echo [Star Sanctuary Launcher] Starting Gateway...
+echo [Star Sanctuary Launcher] WebChat: http://localhost:28889
+echo.
 call node "%INSTALL_ROOT%current\packages\belldandy-core\dist\bin\bdd.js" start %*
 exit /b %ERRORLEVEL%
 "@
@@ -283,6 +288,14 @@ if (Test-Path $noticePath) {
   Remove-Item -LiteralPath $noticePath -Force -ErrorAction SilentlyContinue
   Write-Host ''
 }
+if ([string]::IsNullOrWhiteSpace($env:AUTO_OPEN_BROWSER)) {
+  $env:AUTO_OPEN_BROWSER = if ($env:CI -eq 'true') { 'false' } else { 'true' }
+} elseif ($env:CI -eq 'true') {
+  $env:AUTO_OPEN_BROWSER = 'false'
+}
+Write-Host '[Star Sanctuary Launcher] Starting Gateway...'
+Write-Host '[Star Sanctuary Launcher] WebChat: http://localhost:28889'
+Write-Host ''
 & node (Join-Path $scriptDir 'current\packages\belldandy-core\dist\bin\bdd.js') 'start' @args
 '@
   Write-File -Path (Join-Path $Root "start.ps1") -Content ($startPs1.TrimStart("`r", "`n") + "`r`n")
