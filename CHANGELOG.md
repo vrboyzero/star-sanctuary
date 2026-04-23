@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.5] - 2026-04-23
+
+聚焦安装链路首配瘦身与 Windows 启动入口收口，减少首次安装时的重复输入，并补齐桌面快捷方式图标验证。
+
+### Install / Setup
+
+- 交互式 `bdd setup` 的 `QuickStart` 不再询问 `provider / API Base URL / API Key / Model`，改为直接交接到 `start.bat / start.sh -> WebChat Settings`
+- 交互式 `bdd setup` 的 `Advanced` 收缩为部署口径配置，仅保留 `scenario / host / port / auth`
+- 安装期 `bdd setup` 不再进入 `community / models / webhook / cron` 模块链路；后续配置继续走 `bdd configure <module>`
+- 交互式 `bdd setup` 现在只管理部署口径相关 env 键，不再误清理已有主模型/API 配置
+
+### Install / Windows Shortcut
+
+- Windows 安装器创建桌面快捷方式时，现会优先使用安装产物内的 `logo06-256.ico`
+- 当图标文件缺失时，安装器会自动降级为创建无自定义图标的快捷方式，而不会中断安装
+
+### Tests
+
+- 新增安装脚本模板断言，覆盖桌面快捷方式 `IconLocation` 接线
+- 新增真实 Windows smoke：验证桌面 `Star Sanctuary.lnk` 的 `TargetPath` 与 `IconLocation`
+
 ## [0.3.3] - 2026-04-23
 
 聚焦 embedding 开关生效链路修复，避免“配置已关闭向量检索却仍初始化 embedding provider”的启动噪音与误报。
