@@ -366,6 +366,7 @@ export interface MemoryManagerOptions {
     openaiApiKey?: string;
     openaiBaseUrl?: string;
     openaiModel?: string;
+    embeddingEnabled?: boolean;
     provider?: "openai" | "local";
     localModel?: string;
     modelsDir?: string;
@@ -544,7 +545,14 @@ export class MemoryManager {
         this.store = new MemoryStore(storePath);
 
         // Initialize Embedding Provider
-        if (options.provider === "local") {
+        if (options.embeddingEnabled === false) {
+            this.embeddingProvider = {
+                modelName: "none",
+                embed: async () => [],
+                embedBatch: async (texts) => texts.map(() => []),
+            };
+            console.log("[MemoryManager] Embedding disabled by config — using keyword search only.");
+        } else if (options.provider === "local") {
             const modelName = options.localModel || "BAAI/bge-m3";
             const modelsDir = options.modelsDir || path.join(workspaceStateDir, "models");
             this.embeddingProvider = new LocalEmbeddingProvider(modelName, modelsDir);

@@ -90,6 +90,23 @@ describe("MemoryManager guardrails", () => {
     expect(implicit).toHaveLength(0);
   });
 
+  it("uses null embedding provider when embedding is explicitly disabled", async () => {
+    manager = new MemoryManager({
+      workspaceRoot: docsDir,
+      stateDir,
+      embeddingEnabled: false,
+      openaiApiKey: "test-openai-key",
+      openaiModel: "text-embedding-3-small",
+      provider: "openai",
+    });
+
+    expect((manager as any).embeddingProvider.modelName).toBe("none");
+
+    await expect(
+      manager.search("disabled embedding fallback", { limit: 1, retrievalMode: "explicit" }),
+    ).resolves.toEqual([]);
+  });
+
   it("preserves chunk and source visibility after reindex", async () => {
     const chunkFilePath = path.join(docsDir, "chunk-visibility.md");
     const sourceFilePath = path.join(docsDir, "source-visibility.md");

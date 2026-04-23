@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.3] - 2026-04-23
+
+聚焦 embedding 开关生效链路修复，避免“配置已关闭向量检索却仍初始化 embedding provider”的启动噪音与误报。
+
+### Memory / Embedding
+
+- 修复 `BELLDANDY_EMBEDDING_ENABLED=false` 时的透传链路，`gateway` 会把解析后的开关传递到 scoped memory manager
+- `MemoryManager` 新增 `embeddingEnabled` 选项；当显式关闭时强制使用 null embedding provider，不再初始化 OpenAI/local embedding provider
+- 在 embedding 显式关闭场景下，保持关键词检索路径可用，避免首启阶段因 embedding 认证失败造成干扰日志
+
+### Tests
+
+- 新增 `MemoryManager` 回归测试，覆盖“有 OpenAI key 但 embedding 被显式禁用”场景，断言使用 null provider 且检索路径正常
+
 ## [0.3.2] - 2026-04-23
 
 聚焦默认渠道模板防误触发修复，避免新手安装后因占位值被当成真实凭证导致 WS 连接异常刷屏。

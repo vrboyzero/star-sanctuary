@@ -2298,6 +2298,7 @@ const scopedMemoryManagers = createScopedMemoryManagers({
   agentRegistry,
   modelsDir: path.join(stateDir, "models"),
   includeTeamSharedMemory: teamSharedMemoryEnabled,
+  embeddingEnabled: resolvedEmbeddingEnabled,
   openaiApiKey: embeddingApiKey,
   openaiBaseUrl: embeddingBaseUrl,
   openaiModel: embeddingModel,
