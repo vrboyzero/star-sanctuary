@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-04-23
+
+聚焦默认渠道模板防误触发修复，避免新手安装后因占位值被当成真实凭证导致 WS 连接异常刷屏。
+
+### Channels / Default Env
+
+- 将完整默认模板中的飞书与 QQ 渠道凭证占位值改为空字符串：
+  - `BELLDANDY_FEISHU_APP_ID=""`
+  - `BELLDANDY_FEISHU_APP_SECRET=""`
+  - `BELLDANDY_QQ_APP_ID=""`
+  - `BELLDANDY_QQ_APP_SECRET=""`
+- 保持“未配置即不启动渠道”语义，避免占位文本触发飞书/QQ通道启动并引发重连异常日志
+
 ## [0.3.1] - 2026-04-23
 
 聚焦安装器首启体验收口与默认配置模板稳态修复，降低新手安装后因环境模板差异导致的启动与配置摩擦。
@@ -19,7 +32,9 @@ All notable changes to this project will be documented in this file.
 
 ### Stability
 
-- 保持主要能力默认可用（工具、心跳、调度等），在不阻塞安装/启动前提下减少新用户初次配置门槛`r`n`r`n## [0.3.0] - 2026-04-23
+- 保持主要能力默认可用（工具、心跳、调度等），在不阻塞安装/启动前提下减少新用户初次配置门槛
+
+## [0.3.0] - 2026-04-23
 
 聚焦 Agent 运行时能力跃迁、WebChat 能力工作台升级、跨渠道桥接拓展与系统级稳定性收口，作为 `v0.2.4` 后的次版本发布。
 
