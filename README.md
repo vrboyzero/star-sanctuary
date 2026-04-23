@@ -327,6 +327,13 @@ curl -fsSL https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/insta
 
 - [docs/用户版本升级手册.md](./docs/%E7%94%A8%E6%88%B7%E7%89%88%E6%9C%AC%E5%8D%87%E7%BA%A7%E6%89%8B%E5%86%8C.md)
 
+当前安装期口径：
+
+- `QuickStart` 不再在 CLI 里询问 `provider / API Base URL / API Key / model`
+- 安装完成后，直接通过 `start.bat` / `start.sh` 进入 WebChat，并在 `⚙️ 设置` 中完成模型与 API 配置
+- `Advanced` 现在只保留部署口径相关项，例如 `host / port / auth`
+- `community / webhook / cron` 等高级模块不再放在安装期入口里，需要时再用 `bdd configure ...` 单独配置
+
 **方式一：从 Release 下载（推荐）**
 1. 访问项目的 [Releases 页面](https://github.com/vrboyzero/star-sanctuary/releases)。
 2. 下载最新版本的 `Source code (zip)`压缩包。
@@ -344,34 +351,27 @@ cd star-sanctuary
 
 当前默认行为：
 
-- 首次启动时，Gateway 会在**当前实际生效的配置目录**下自动生成一份默认 `.env`
+- 首次启动时，Gateway 会在 `stateDir` 下自动生成一份默认 `.env`
 - 敏感配置与个性化覆盖继续写入 `.env.local`
 - `.env` / `.env.local` 只用于本机，不应提交到 Git
 
 为了避免后面这些术语看起来太“程序员”，这里先统一一下：
 
-- **配置目录**：当前真正读取 `.env / .env.local` 的目录；下文有时会写成 `envDir`
 - **状态目录**：程序平时保存配置、日志、会话、技能和 JSON 配置的主目录；下文有时会写成 `stateDir`
+- **配置文件位置**：当前版本中，`.env / .env.local` 也固定放在 `stateDir` 下，不再单独区分 `envDir`
 - **用户目录下的 `.star_sanctuary` 文件夹**：Windows 常见路径是 `C:\Users\你的用户名\.star_sanctuary`
 
-`envDir` 的判定规则如下：
+当前规则已经收口为：
 
-1. 如果显式设置了 `STAR_SANCTUARY_ENV_DIR` 或 `BELLDANDY_ENV_DIR`，则使用该目录
-2. 否则，如果仓库根目录已存在 `.env` 或 `.env.local`，则继续兼容使用仓库根目录
-3. 否则，默认使用状态目录，也就是通常位于用户目录下的 `.star_sanctuary` 文件夹
+1. 通过 `BELLDANDY_STATE_DIR`（以及平台细分变量）确定 `stateDir`
+2. `.env / .env.local` 固定从 `stateDir` 读取
+3. 默认 `stateDir` 通常位于用户目录下的 `.star_sanctuary` 文件夹
 
 补充说明：
 
-- 这里是“择一生效”，不是“多处合并”
-- 只要第 2 条命中，Gateway 就会继续从仓库根目录读取 `.env` / `.env.local`
-- 此时状态目录里的同名配置文件不会同时参与加载，直到你迁移配置或显式指定配置目录（有些提示里会写成 `ENV_DIR`）
-
-如果你是老用户，并且仓库根目录仍保留旧配置，系统会继续兼容旧路径；准备切换到状态目录时，可使用：
-
-```bash
-corepack pnpm bdd config migrate-to-state-dir --dry-run
-corepack pnpm bdd config migrate-to-state-dir
-```
+- 当前不再使用独立 `envDir`
+- 仓库根目录下的 `.env / .env.local` 不应再作为日常运行配置入口
+- 新配置请直接写入 `stateDir/.env` 与 `stateDir/.env.local`
 
 ### 一键启动
 
@@ -393,7 +393,7 @@ corepack pnpm bdd config migrate-to-state-dir
 - 检查 Node.js 与 pnpm
 - 缺依赖时自动执行 `corepack pnpm install`
 - 缺少 `dist/` 时自动执行 `corepack pnpm build`
-- 在当前实际生效的配置目录下自动补生成默认 `.env`（若缺失）
+- 在 `stateDir` 下自动补生成默认 `.env`（若缺失）
 - 在需要时生成一次性 WebChat Token
 - 启动 Gateway 并自动打开浏览器
 
@@ -434,14 +434,21 @@ corepack pnpm bdd stop
 corepack pnpm bdd setup
 ```
 
-`bdd setup` 会把结果写入当前实际生效的配置目录中的 `.env.local`。可通过以下命令确认当前路径：
+`bdd setup` 会把结果写入 `stateDir/.env.local`。可通过以下命令确认当前路径：
 
 ```bash
 corepack pnpm bdd config path
 corepack pnpm bdd doctor
 ```
 
-非交互模式示例：
+交互式 `bdd setup` 的当前行为：
+
+- `QuickStart` 只处理部署口径，不再要求在 CLI 中填写 provider / API Base URL / API Key / model
+- `Advanced` 只额外保留 `host / port / auth` 这一类部署设置
+- 完成后请直接启动 `start.bat` / `start.sh`，并在 WebChat `⚙️ 设置` 中完成模型与 API Key 配置
+- `community / webhook / cron / models fallback` 这类高级项，后续按需用 `bdd configure ...` 单独维护
+
+如果你是在做自动化预置或脚本化初始化，仍可使用非交互模式：
 
 ```bash
 corepack pnpm bdd setup \
@@ -478,13 +485,10 @@ corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
 
 ## 配置指南
 
-当前配置目录默认不是固定写死在项目根目录，而是使用“当前实际生效的配置目录”。
+当前版本里，配置文件读取路径已经与 `stateDir` 合并：
 
-默认规则：
-
-1. 显式 `BELLDANDY_ENV_DIR` / `STAR_SANCTUARY_ENV_DIR`
-2. 否则兼容已有的仓库根目录 `.env` / `.env.local`
-3. 否则回落到状态目录
+1. 先确定 `stateDir`
+2. 然后固定读取 `stateDir/.env` 与 `stateDir/.env.local`
 
 推荐理解方式：
 
@@ -498,11 +502,9 @@ corepack pnpm bdd config path
 corepack pnpm bdd doctor
 ```
 
-如果 `bdd doctor` 提示 `Legacy root env mode`，说明你当前仍在使用仓库根目录旧配置。
-
 ### 最小可用配置
 
-以下内容建议写入当前实际生效的配置目录中的 `.env.local`：
+以下内容建议写入 `stateDir/.env.local`：
 
 ```env
 BELLDANDY_AGENT_PROVIDER=openai
@@ -513,7 +515,7 @@ BELLDANDY_OPENAI_MODEL=gpt-4o
 
 ### 常用基础配置
 
-以下内容可放在 `.env.local`，也可作为覆盖项写入当前实际生效的配置目录中的 `.env`：
+以下内容可放在 `stateDir/.env.local`，也可作为覆盖项写入 `stateDir/.env`：
 
 ```env
 # 监听地址与端口
@@ -641,7 +643,7 @@ BELLDANDY_RELAY_PORT=28892
 - 发信：`SMTP`
 - 收信：`IMAP polling fallback`
 
-IMAP 收信的最小可用配置如下，建议写入当前实际生效的配置目录中的 `.env.local`：
+IMAP 收信的最小可用配置如下，建议写入 `stateDir/.env.local`：
 
 ```env
 BELLDANDY_EMAIL_INBOUND_AGENT_ID=default
@@ -662,7 +664,7 @@ BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT=50
 
 - `BELLDANDY_EMAIL_IMAP_ENABLED=true` 只表示“尝试开启”，不代表 runtime 一定会启动
 - `HOST / USER / PASS` 缺任意一个，IMAP runtime 都会跳过启动
-- 这些配置只会从当前实际生效的配置目录读取；如果当前仍是 `legacy project-root env`，那就继续以仓库根目录 `.env/.env.local` 为准
+- 这些配置都应从 `stateDir/.env` 与 `stateDir/.env.local` 读取
 
 如果你接的是一个历史邮件很多的老邮箱，再额外记住：
 
@@ -682,7 +684,7 @@ BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT=50
 
 如果你刚改了 `.env.local`，但 `Email Inbound Runtime` 没变化，通常先检查两件事：
 
-1. `Config Source` 显示的生效目录是不是你刚改的那个目录
+1. `Config Source` 显示的 `stateDir` 是不是你刚改的那个目录
 2. 启动日志里有没有出现 `.env.local` 变更并触发 Gateway 重启
 
 ### 配置建议文档
@@ -699,13 +701,13 @@ BELLDANDY_EMAIL_IMAP_RECENT_WINDOW_LIMIT=50
 
 ### 老用户迁移到状态目录
 
-如果你之前一直在仓库根目录维护 `.env` / `.env.local`，当前版本会继续兼容旧路径。
+如果你之前一直在仓库根目录维护 `.env` / `.env.local`，建议尽快迁移到 `stateDir`。
 
 需要特别注意：
 
-- 只要仓库根目录里的 `.env` 或 `.env.local` 仍然存在，它们就会优先生效
-- 同名配置不会再从状态目录里补一层
-- 启动日志或 `bdd doctor` / `system.doctor` 里如果看到 `legacy project-root env files`，就表示当前真正生效的是仓库根目录配置
+- 当前运行口径应以 `stateDir/.env` 与 `stateDir/.env.local` 为准
+- 仓库根目录配置不应再作为正式运行配置保留
+- 排障时优先用 `bdd config path`、`bdd doctor` 或 `system.doctor` 确认 `stateDir`
 
 当你准备切换到状态目录时，推荐按以下顺序操作：
 
@@ -716,11 +718,10 @@ corepack pnpm bdd config migrate-to-state-dir
 corepack pnpm bdd doctor
 ```
 
-迁移命令会：
+迁移后建议：
 
-- 把仓库根目录中的 `.env` / `.env.local` 迁移到状态目录
-- 在目标目录已有冲突文件时中止，不自动覆盖
-- 将原文件备份为 `*.migrated-to-state-dir.<timestamp>.bak`
+- 只维护 `stateDir` 下的 `.env / .env.local`
+- 不再继续编辑仓库根目录中的旧配置文件
 
 ### 多渠道配置
 
@@ -1189,7 +1190,7 @@ BELLDANDY_AUTH_TOKEN=your-secure-token
 
 - 对应功能是否已启用
 - Bearer Token 是否正确
-- 当前实际生效的配置目录是否符合预期
+- 当前 `stateDir` 是否符合预期
 - 若处于 legacy root mode，是否仍在读取仓库根目录旧配置
 - Gateway 是否已重启
 

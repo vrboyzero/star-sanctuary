@@ -99,6 +99,7 @@ If you just need to know which entrypoint to use first, start with this table:
 
 | What you want to do | Primary entrypoint | Secondary entrypoint | Quick note |
 |---|---|---|---|
+| Install / upgrade from terminal | `install.ps1` / `install.sh` | Release package | Best path for command-line users; the same route is also the most direct for upgrades. |
 | Chat with the Agent | WebChat | `/api/message` | For normal use, start in WebChat. |
 | Change model / API key / capability toggles | WebChat `⚙️ Settings` | `bdd config set` | Regular users should prefer Settings; use CLI for scripted changes. |
 | Pair a new device | Get pairing code in WebChat | `bdd pairing approve` | WebChat triggers the flow, CLI approves it. |
@@ -291,7 +292,32 @@ If you use Belldandy inside the community ecosystem long-term, this is part of t
 
 ### Getting the Code
 
-You can get the project in one of two ways:
+You can get the project in one of three ways:
+
+**Method 0: Installer edition (one command in terminal)**
+
+Best for users who want a direct install now and later upgrades through the same command path:
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/install.ps1 | iex
+```
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/install.sh | bash
+```
+
+The installer prepares dependencies, build artifacts, launcher scripts, and the `bdd` command wrapper automatically. For advanced usage such as pinning a version, skipping setup, or forcing setup again, see:
+
+- [docs/用户版本升级手册.md](./docs/%E7%94%A8%E6%88%B7%E7%89%88%E6%9C%AC%E5%8D%87%E7%BA%A7%E6%89%8B%E5%86%8C.md)
+
+Current installer behavior:
+
+- `QuickStart` no longer asks for `provider / API Base URL / API Key / model` in CLI
+- after install, go through `start.bat` / `start.sh` into WebChat and finish model/API setup in `⚙️ Settings`
+- `Advanced` now keeps deployment-oriented items only, such as `host / port / auth`
+- advanced modules such as `community / webhook / cron` are no longer entered during install; configure them later with `bdd configure ...`
 
 **Method 1: Download from Release (Recommended)**
 1. Visit the project's [Releases page](https://github.com/vrboyzero/star-sanctuary/releases).
@@ -310,28 +336,27 @@ For source-mode installs, **new users usually do not need to copy `.env.example`
 
 Current default behavior:
 
-- on first launch, the Gateway auto-generates a default `.env` in the current effective configuration directory
+- on first launch, the Gateway auto-generates a default `.env` under `stateDir`
 - sensitive values and personal overrides continue to live in `.env.local`
 - `.env` and `.env.local` are local-only and must not be committed
 
 To make the rest of this README easier to follow:
 
-- **configuration directory**: the directory that actually provides the active `.env` / `.env.local`; some places call this `envDir`
 - **state directory**: the main directory where the app keeps configs, logs, sessions, skills, and JSON state files; some places call this `stateDir`
+- **config file location**: in the current runtime, `.env / .env.local` also live directly under `stateDir`; there is no separate runtime `envDir` anymore
 - **`.star_sanctuary` under your home directory**: on Windows, this is usually `C:\Users\YourName\.star_sanctuary`
 
-`envDir` is resolved in this order:
+The current rule is now:
 
-1. explicit `STAR_SANCTUARY_ENV_DIR` or `BELLDANDY_ENV_DIR`
-2. otherwise, if the project root already contains `.env` or `.env.local`, keep using the project root for legacy compatibility
-3. otherwise, fall back to the state directory, which is usually the `.star_sanctuary` folder under your home directory
+1. resolve `stateDir` from `BELLDANDY_STATE_DIR` and related platform-specific variables
+2. always read `.env / .env.local` from `stateDir`
+3. by default, `stateDir` is usually the `.star_sanctuary` folder under your home directory
 
-If you are an existing user with legacy project-root config and want to switch later, use:
+Notes:
 
-```bash
-corepack pnpm bdd config migrate-to-state-dir --dry-run
-corepack pnpm bdd config migrate-to-state-dir
-```
+- there is no separate runtime `envDir` anymore
+- project-root `.env / .env.local` should no longer be treated as the normal runtime config entrypoint
+- place new config directly in `stateDir/.env` and `stateDir/.env.local`
 
 ### One-click Launch
 
@@ -354,7 +379,7 @@ The launcher script will automatically:
 - check Node.js and pnpm
 - run `corepack pnpm install` if dependencies are missing
 - run `corepack pnpm build` if `dist/` is missing
-- auto-generate a default `.env` in the effective configuration directory when it is missing
+- auto-generate a default `.env` under `stateDir` when it is missing
 - generate a one-time WebChat token when needed
 - start the Gateway and open the browser
 
@@ -395,14 +420,21 @@ If sensitive config is not set yet, start with:
 corepack pnpm bdd setup
 ```
 
-`bdd setup` writes into `.env.local` inside the current effective configuration directory. You can confirm the active path with:
+`bdd setup` writes into `stateDir/.env.local`. You can confirm the active path with:
 
 ```bash
 corepack pnpm bdd config path
 corepack pnpm bdd doctor
 ```
 
-Non-interactive example:
+Current interactive `bdd setup` behavior:
+
+- `QuickStart` handles deployment-oriented setup only and no longer asks for provider / API Base URL / API Key / model in CLI
+- `Advanced` keeps extra deployment fields such as `host / port / auth`
+- after setup, launch `start.bat` / `start.sh` and finish model/API configuration in WebChat `⚙️ Settings`
+- advanced modules such as `community / webhook / cron / models fallback` should be maintained later with `bdd configure ...` when needed
+
+If you are doing scripted bootstrap or automated pre-seeding, you can still use non-interactive mode:
 
 ```bash
 corepack pnpm bdd setup \
@@ -439,13 +471,12 @@ corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
 
 ## Configuration
 
-The configuration directory is no longer assumed to be the project root. The runtime now uses the current effective configuration directory.
+The runtime configuration path is now unified with `stateDir`.
 
-Resolution order:
+Resolution rule:
 
-1. explicit `BELLDANDY_ENV_DIR` / `STAR_SANCTUARY_ENV_DIR`
-2. otherwise, existing project-root `.env` / `.env.local` for legacy compatibility
-3. otherwise, the state directory
+1. resolve `stateDir`
+2. then read `stateDir/.env` and `stateDir/.env.local`
 
 Recommended mental model:
 
@@ -459,11 +490,11 @@ corepack pnpm bdd config path
 corepack pnpm bdd doctor
 ```
 
-If `bdd doctor` reports `Legacy root env mode`, you are still using legacy project-root config.
+`bdd doctor` and `system.doctor` should both be read as state-dir based config diagnostics.
 
 ### Minimal Configuration
 
-These values are typically written into `.env.local` inside the current effective configuration directory:
+These values are typically written into `stateDir/.env.local`:
 
 ```env
 BELLDANDY_AGENT_PROVIDER=openai
@@ -474,7 +505,7 @@ BELLDANDY_OPENAI_MODEL=gpt-4o
 
 ### Common Base Configuration
 
-These values can live in `.env.local`, or in `.env` inside the current effective configuration directory as overrides:
+These values can live in `stateDir/.env.local`, or in `stateDir/.env` as overrides:
 
 ```env
 # Host and port
@@ -573,7 +604,7 @@ Recommended reading order:
 
 ### Migrating Legacy Project-root Config to the State Directory
 
-If you have been maintaining `.env` / `.env.local` in the project root, the current version will keep using them for backward compatibility.
+If you have been maintaining `.env` / `.env.local` in the project root, move them into `stateDir` as soon as possible.
 
 When you are ready to switch to the state directory, use:
 
@@ -584,11 +615,10 @@ corepack pnpm bdd config migrate-to-state-dir
 corepack pnpm bdd doctor
 ```
 
-The migration command:
+After migration:
 
-- moves project-root `.env` / `.env.local` into the state directory
-- aborts on conflicting target files instead of overwriting them
-- keeps backups as `*.migrated-to-state-dir.<timestamp>.bak`
+- keep maintaining only `stateDir/.env` and `stateDir/.env.local`
+- stop treating project-root config files as the runtime source of truth
 
 ### Multi-channel Configuration
 
@@ -1022,7 +1052,7 @@ Check:
 
 - whether the feature is enabled
 - whether the Bearer Token is correct
-- whether the current effective configuration directory is the one you expect
+- whether the current `stateDir` is the one you expect
 - whether legacy project-root config is still active
 - whether the Gateway has been restarted
 

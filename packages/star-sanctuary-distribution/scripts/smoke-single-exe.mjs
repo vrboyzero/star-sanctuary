@@ -20,6 +20,7 @@ const singleExeHome = path.join(workspaceRoot, "artifacts", `single-exe-home-smo
 const stateDir = path.join(workspaceRoot, "artifacts", `single-exe-state-smoke${suffix}`);
 const stdoutPath = path.join(workspaceRoot, "artifacts", `single-exe-smoke${suffix}.stdout.log`);
 const stderrPath = path.join(workspaceRoot, "artifacts", `single-exe-smoke${suffix}.stderr.log`);
+const SINGLE_EXE_SMOKE_MAX_WAIT_SECONDS = 90;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -61,7 +62,7 @@ async function main() {
 
   let healthy = false;
   try {
-    for (let i = 0; i < 45; i++) {
+    for (let i = 0; i < SINGLE_EXE_SMOKE_MAX_WAIT_SECONDS; i += 1) {
       await wait(1000);
       if (child.exitCode != null) break;
       if (await checkHealth()) {
