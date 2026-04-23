@@ -22,6 +22,7 @@ const STARTUP_SEQUENCE_STEP_WAIT_MS = IS_WINDOWS ? 2_500 : 50;
 const STARTUP_CAPTURE_WAIT_MS = IS_WINDOWS ? 2_500 : 120;
 const STARTUP_OUTPUT_READ_WAIT_MS = IS_WINDOWS ? 1_400 : 200;
 const WINDOWS_SLOW_PTY_TEST_TIMEOUT_MS = IS_WINDOWS ? 12_000 : undefined;
+const WINDOWS_PTY_FLOW_TEST_TIMEOUT_MS = IS_WINDOWS ? 15_000 : undefined;
 const WINDOWS_RM_RETRIES = IS_WINDOWS ? 5 : 1;
 const WINDOWS_RM_RETRY_DELAY_MS = 200;
 
@@ -190,7 +191,7 @@ describe("agent bridge P1 session tools", () => {
     }, baseContext);
     expect(readAfterClose.success).toBe(false);
     expect(readAfterClose.error).toContain("已关闭");
-  });
+  }, WINDOWS_PTY_FLOW_TEST_TIMEOUT_MS);
 
   it("aborts bridge_session_read while waiting for output", async () => {
     const startResult = await bridgeSessionStartTool.execute({
@@ -285,7 +286,7 @@ describe("agent bridge P1 session tools", () => {
     expect(statusPayload.status).toBe("closed");
     expect(statusPayload.closeReason).toBe("idle-timeout");
     expect(statusPayload.artifactPath).toBeTruthy();
-  });
+  }, WINDOWS_PTY_FLOW_TEST_TIMEOUT_MS);
 
   it("runs startupSequence after bridge session start", async () => {
     const bootstrapConfig = {
@@ -523,7 +524,7 @@ describe("agent bridge P1 session tools", () => {
     expect(payload.firstTurnPromptProvided).toBe(false);
     expect(payload.firstTurnWarning).toContain("bridge_session_start.prompt");
     expect(payload.recommendedNextStep).toContain("重新 start");
-  });
+  }, WINDOWS_PTY_FLOW_TEST_TIMEOUT_MS);
 
   it("restores a closed bridge session from persisted registry after in-memory reset", async () => {
     const startResult = await bridgeSessionStartTool.execute({
@@ -604,7 +605,7 @@ describe("agent bridge P1 session tools", () => {
     await BridgeSessionStore.getInstance().ensureLoaded(tempDir);
     const restoredTranscript = BridgeSessionStore.getInstance().getTranscript(started.sessionId);
     expect(restoredTranscript.some((event) => event.direction === "output" && event.content.includes("bom-session-ok"))).toBe(true);
-  });
+  }, WINDOWS_PTY_FLOW_TEST_TIMEOUT_MS);
 
   it("recovers an active ungoverned session as orphan after in-memory reset", async () => {
     const startResult = await bridgeSessionStartTool.execute({

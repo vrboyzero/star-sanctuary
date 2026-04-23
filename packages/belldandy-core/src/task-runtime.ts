@@ -227,6 +227,8 @@ const MAX_TAKEOVER_RECORDS = 8;
 const MAX_RESUME_RECORDS = 8;
 const OUTPUT_FILENAME = "result.md";
 const THOUGHT_DELTA_PERSIST_DELAY_MS = 32;
+const RENAME_RETRIES = 3;
+const RENAME_RETRY_DELAY_MS = 50;
 
 function truncateText(value: string, maxLength = 240): string {
   const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
@@ -615,7 +617,32 @@ async function atomicWriteText(targetPath: string, content: string): Promise<voi
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   const tmpPath = `${targetPath}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, content, "utf-8");
-  await fs.rename(tmpPath, targetPath);
+  let lastErr: NodeJS.ErrnoException | null = null;
+  for (let attempt = 0; attempt < RENAME_RETRIES; attempt += 1) {
+    try {
+      await fs.rename(tmpPath, targetPath);
+      return;
+    } catch (error) {
+      lastErr = error as NodeJS.ErrnoException;
+      if (attempt < RENAME_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  if (process.platform === "win32" && lastErr && (lastErr.code === "EPERM" || lastErr.code === "EBUSY")) {
+    try {
+      await fs.writeFile(targetPath, content, "utf-8");
+      await fs.unlink(tmpPath).catch(() => {});
+      return;
+    } catch (fallbackError) {
+      await fs.unlink(tmpPath).catch(() => {});
+      throw fallbackError;
+    }
+  }
+
+  await fs.unlink(tmpPath).catch(() => {});
+  throw lastErr;
 }
 
 function cloneRecord(record: SubTaskRecord): SubTaskRecord {
