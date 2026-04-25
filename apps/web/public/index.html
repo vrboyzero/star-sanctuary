@@ -909,7 +909,7 @@
           <div class="settings-subsection-header">
             <div>
               <div class="settings-subsection-title" data-i18n="settings.channelsSectionTitle">渠道配置</div>
-              <div class="form-help" data-i18n="settings.channelsSectionHelp">用于维护社区 API、飞书、QQ 和 Discord 的环境变量配置。社区/官网相关的结构化配置仍需配合 community.json。</div>
+              <div class="form-help" data-i18n="settings.channelsSectionHelp">用于维护社区 API、邮件、飞书、QQ 和 Discord 的环境变量配置。社区/官网相关的结构化配置仍需配合 community.json。</div>
             </div>
             <button id="openCommunityConfig" type="button" class="button button-muted" data-i18n="settings.openCommunityConfig">打开 community.json</button>
           </div>
@@ -925,6 +925,23 @@
             <label class="form-label" data-i18n="settings.communityApiTokenLabel">Community API Token</label>
             <input id="cfgCommunityApiToken" class="input" type="password" data-i18n-placeholder="settings.communityApiTokenPlaceholder" placeholder="用于 Bearer 鉴权" />
             <div class="form-help" data-i18n="settings.communityApiTokenHelp">社区 API 的 Bearer Token。保存时会继续使用脱敏逻辑。</div>
+          </div>
+
+          <hr class="theme-divider">
+
+          <div class="form-group">
+            <label class="form-label" for="cfgEmailSmtpEnabled">
+              <input id="cfgEmailSmtpEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.emailSmtpEnabledLabel">Enable Email SMTP</span>
+            </label>
+            <div class="form-help" data-i18n="settings.emailSmtpEnabledHelp">启用邮件发送通道。保存后需重启 Gateway 生效。</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="cfgEmailImapEnabled">
+              <input id="cfgEmailImapEnabled" type="checkbox" style="margin-right: 8px;" />
+              <span data-i18n="settings.emailImapEnabledLabel">Enable Email IMAP</span>
+            </label>
+            <div class="form-help" data-i18n="settings.emailImapEnabledHelp">启用 IMAP 轮询收信与邮件线程处理。保存后需重启 Gateway 生效。</div>
           </div>
 
           <hr class="theme-divider">

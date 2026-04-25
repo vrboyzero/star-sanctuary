@@ -299,6 +299,8 @@ const {
   openCommunityConfigBtn,
   cfgCommunityApiEnabled,
   cfgCommunityApiToken,
+  cfgEmailSmtpEnabled,
+  cfgEmailImapEnabled,
   cfgFeishuAppId,
   cfgFeishuAppSecret,
   cfgFeishuAgentId,
@@ -2846,14 +2848,25 @@ function updateTokenUsage(payload) {
 }
 
 let taskTokenHideTimer = null;
+const TASK_TOKEN_TRANSIENT_PANEL_ENABLED = false;
 
 function showTaskTokenResult(payload) {
   if (!payload) return;
-  if (!taskTokenUsagePanelEl) return;
 
   if (payload.conversationId) {
     prependTaskTokenHistory(String(payload.conversationId), payload);
   }
+
+  if (!TASK_TOKEN_TRANSIENT_PANEL_ENABLED) {
+    if (taskTokenHideTimer) {
+      clearTimeout(taskTokenHideTimer);
+      taskTokenHideTimer = null;
+    }
+    if (taskTokenUsagePanelEl) taskTokenUsagePanelEl.style.display = "none";
+    return;
+  }
+
+  if (!taskTokenUsagePanelEl) return;
 
   const set = (id, val) => {
     const el = taskTokenValueEls[id];

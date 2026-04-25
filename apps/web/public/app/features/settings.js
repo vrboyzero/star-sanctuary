@@ -81,6 +81,8 @@ export function createSettingsController({
     openCommunityConfigBtn,
     cfgCommunityApiEnabled,
     cfgCommunityApiToken,
+    cfgEmailSmtpEnabled,
+    cfgEmailImapEnabled,
     cfgFeishuAppId,
     cfgFeishuAppSecret,
     cfgFeishuAgentId,
@@ -379,6 +381,8 @@ export function createSettingsController({
     loadConversationAllowedKinds(c["BELLDANDY_CONVERSATION_ALLOWED_KINDS"]);
     if (cfgCommunityApiEnabled) cfgCommunityApiEnabled.checked = c["BELLDANDY_COMMUNITY_API_ENABLED"] === "true";
     if (cfgCommunityApiToken) cfgCommunityApiToken.value = c["BELLDANDY_COMMUNITY_API_TOKEN"] || "";
+    if (cfgEmailSmtpEnabled) cfgEmailSmtpEnabled.checked = c["BELLDANDY_EMAIL_SMTP_ENABLED"] === "true";
+    if (cfgEmailImapEnabled) cfgEmailImapEnabled.checked = c["BELLDANDY_EMAIL_IMAP_ENABLED"] === "true";
     if (cfgFeishuAppId) cfgFeishuAppId.value = c["BELLDANDY_FEISHU_APP_ID"] || "";
     if (cfgFeishuAppSecret) cfgFeishuAppSecret.value = c["BELLDANDY_FEISHU_APP_SECRET"] || "";
     if (cfgFeishuAgentId) cfgFeishuAgentId.value = c["BELLDANDY_FEISHU_AGENT_ID"] || "";
@@ -902,6 +906,8 @@ export function createSettingsController({
     updates["BELLDANDY_CONVERSATION_ALLOWED_KINDS"] = serializeConversationAllowedKinds();
     if (cfgCommunityApiEnabled) updates["BELLDANDY_COMMUNITY_API_ENABLED"] = cfgCommunityApiEnabled.checked ? "true" : "false";
     assignSecretUpdate(updates, "BELLDANDY_COMMUNITY_API_TOKEN", cfgCommunityApiToken);
+    if (cfgEmailSmtpEnabled) updates["BELLDANDY_EMAIL_SMTP_ENABLED"] = cfgEmailSmtpEnabled.checked ? "true" : "false";
+    if (cfgEmailImapEnabled) updates["BELLDANDY_EMAIL_IMAP_ENABLED"] = cfgEmailImapEnabled.checked ? "true" : "false";
     if (cfgFeishuAppId) updates["BELLDANDY_FEISHU_APP_ID"] = cfgFeishuAppId.value.trim();
     assignSecretUpdate(updates, "BELLDANDY_FEISHU_APP_SECRET", cfgFeishuAppSecret);
     if (cfgFeishuAgentId) updates["BELLDANDY_FEISHU_AGENT_ID"] = cfgFeishuAgentId.value.trim();

@@ -171,6 +171,8 @@ function createSettingsRefs(overrides = {}) {
     cfgConversationKindSubtask: overrides.cfgConversationKindSubtask || createCheckbox(false),
     cfgConversationKindGoal: overrides.cfgConversationKindGoal || createCheckbox(false),
     cfgConversationKindHeartbeat: overrides.cfgConversationKindHeartbeat || createCheckbox(false),
+    cfgEmailSmtpEnabled: overrides.cfgEmailSmtpEnabled || createCheckbox(false),
+    cfgEmailImapEnabled: overrides.cfgEmailImapEnabled || createCheckbox(false),
     doctorStatusEl: overrides.doctorStatusEl || createDomNode(),
     assistantModeConfigTitleEl: overrides.assistantModeConfigTitleEl || { textContent: "" },
     assistantModeConfigHelpEl: overrides.assistantModeConfigHelpEl || { textContent: "" },
@@ -284,6 +286,8 @@ describe("settings controller", () => {
       BELLDANDY_HEARTBEAT_ENABLED: "true",
       BELLDANDY_HEARTBEAT_ACTIVE_HOURS: "08:00-23:00",
       BELLDANDY_CRON_ENABLED: "true",
+      BELLDANDY_EMAIL_SMTP_ENABLED: "true",
+      BELLDANDY_EMAIL_IMAP_ENABLED: "false",
     });
     const { controller, refs } = createController({ loadServerConfig });
 
@@ -306,6 +310,8 @@ describe("settings controller", () => {
     expect(refs.cfgHeartbeatEnabled.checked).toBe(true);
     expect(refs.cfgHeartbeatActiveHours.value).toBe("08:00-23:00");
     expect(refs.cfgCronEnabled.checked).toBe(true);
+    expect(refs.cfgEmailSmtpEnabled.checked).toBe(true);
+    expect(refs.cfgEmailImapEnabled.checked).toBe(false);
   });
 
   it("saves assistant mode config fields through settings mapping", async () => {
@@ -323,6 +329,8 @@ describe("settings controller", () => {
       cfgHeartbeatEnabled: createCheckbox(true),
       cfgHeartbeatActiveHours: createInput(" 09:00-18:00 "),
       cfgCronEnabled: createCheckbox(true),
+      cfgEmailSmtpEnabled: createCheckbox(true),
+      cfgEmailImapEnabled: createCheckbox(false),
     });
     const sendReq = vi.fn(async (frame) => {
       switch (frame.method) {
@@ -363,6 +371,8 @@ describe("settings controller", () => {
       BELLDANDY_HEARTBEAT_ENABLED: "true",
       BELLDANDY_HEARTBEAT_ACTIVE_HOURS: "09:00-18:00",
       BELLDANDY_CRON_ENABLED: "true",
+      BELLDANDY_EMAIL_SMTP_ENABLED: "true",
+      BELLDANDY_EMAIL_IMAP_ENABLED: "false",
     });
     expect(restartCall?.[0]?.params).toMatchObject({
       reason: "settings updated",

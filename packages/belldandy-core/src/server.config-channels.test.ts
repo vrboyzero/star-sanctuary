@@ -181,6 +181,8 @@ test("config.update accepts channel settings and config.read redacts channel sec
           BELLDANDY_QQ_APP_SECRET: "qq-secret",
           BELLDANDY_QQ_AGENT_ID: "researcher",
           BELLDANDY_QQ_SANDBOX: "false",
+          BELLDANDY_EMAIL_SMTP_ENABLED: "true",
+          BELLDANDY_EMAIL_IMAP_ENABLED: "false",
           BELLDANDY_DISCORD_ENABLED: "true",
           BELLDANDY_DISCORD_BOT_TOKEN: "discord-secret",
         },
@@ -200,6 +202,8 @@ test("config.update accepts channel settings and config.read redacts channel sec
     expect(readRes.payload?.config?.BELLDANDY_FEISHU_AGENT_ID).toBe("coder");
     expect(readRes.payload?.config?.BELLDANDY_QQ_APP_ID).toBe("qq-app-id");
     expect(readRes.payload?.config?.BELLDANDY_QQ_SANDBOX).toBe("false");
+    expect(readRes.payload?.config?.BELLDANDY_EMAIL_SMTP_ENABLED).toBe("true");
+    expect(readRes.payload?.config?.BELLDANDY_EMAIL_IMAP_ENABLED).toBe("false");
     expect(readRes.payload?.config?.BELLDANDY_DISCORD_ENABLED).toBe("true");
     expect(readRes.payload?.config?.BELLDANDY_COMMUNITY_API_TOKEN).toBe("[REDACTED]");
     expect(readRes.payload?.config?.BELLDANDY_FEISHU_APP_SECRET).toBe("[REDACTED]");

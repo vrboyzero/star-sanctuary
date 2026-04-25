@@ -247,6 +247,8 @@ export const APP_DOM_REFS = {
   openCommunityConfigBtn: byId("openCommunityConfig"),
   cfgCommunityApiEnabled: byId("cfgCommunityApiEnabled"),
   cfgCommunityApiToken: byId("cfgCommunityApiToken"),
+  cfgEmailSmtpEnabled: byId("cfgEmailSmtpEnabled"),
+  cfgEmailImapEnabled: byId("cfgEmailImapEnabled"),
   cfgFeishuAppId: byId("cfgFeishuAppId"),
   cfgFeishuAppSecret: byId("cfgFeishuAppSecret"),
   cfgFeishuAgentId: byId("cfgFeishuAgentId"),
