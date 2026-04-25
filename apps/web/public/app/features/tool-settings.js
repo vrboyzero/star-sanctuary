@@ -479,6 +479,52 @@ export function createToolSettingsController({
     if (toolSettingsConfirmModal) toolSettingsConfirmModal.classList.add("hidden");
   }
 
+  function buildToolSettingsConfirmAgentNotice(request, decision) {
+    const approved = decision === "approve";
+    const summary = Array.isArray(request?.summary)
+      ? request.summary.map((line) => String(line || "").trim()).filter(Boolean)
+      : [];
+    return [
+      "【工具开关确认结果】",
+      `requestId: ${request?.requestId || "-"}`,
+      `decision: ${approved ? "approved / 用户已批准" : "rejected / 用户已拒绝"}`,
+      approved
+        ? "result: 全局工具开关变更已应用。"
+        : "result: 用户拒绝了这次全局工具开关变更，配置未改变。",
+      summary.length > 0 ? "变更摘要：" : "",
+      ...summary.map((line) => `- ${line}`),
+      "请基于这个确认结果继续当前任务；不要再次要求用户输入工具确认口令。",
+    ].filter(Boolean).join("\n");
+  }
+
+  async function notifyAgentOfToolSettingsConfirm(request, decision) {
+    const conversationId = typeof request?.conversationId === "string" ? request.conversationId.trim() : "";
+    if (!conversationId) return;
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "message.send",
+      params: {
+        conversationId,
+        text: buildToolSettingsConfirmAgentNotice(request, decision),
+        from: "web",
+        roomContext: { environment: "local" },
+        clientContext: {
+          sentAtMs: Date.now(),
+          timezoneOffsetMinutes: new Date().getTimezoneOffset(),
+          locale: typeof navigator !== "undefined" ? navigator.language : undefined,
+        },
+      },
+    });
+    if (!res || res.ok === false) {
+      showNotice(
+        t("toolSettings.noticeAgentNotifyFailedTitle", {}, "Unable to notify Agent"),
+        res?.error?.message || t("toolSettings.noticeAgentNotifyFailedMessage", {}, "The confirmation was processed, but the Agent follow-up message was not sent."),
+        "error",
+      );
+    }
+  }
+
   function handleConfirmRequired(payload) {
     if (!shouldHandleToolSettingsConfirmPayload(payload)) return;
     const normalized = normalizeToolSettingsConfirmPayload(payload);
@@ -562,6 +608,7 @@ export function createToolSettingsController({
       decision === "approve" ? "success" : "info",
       2600,
     );
+    void notifyAgentOfToolSettingsConfirm(currentRequest, decision);
   }
 
   async function loadToolSettings() {

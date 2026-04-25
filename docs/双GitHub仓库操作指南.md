@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "在webchat设置窗口中增加了邮件收发开关，隐藏了顶部临时token消耗条"
+git commit -m "增加了Agent开启或关闭工具时，用户确认或拒绝后给Agent返回的通知"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>

@@ -360,6 +360,8 @@ export const enUS = {
     noticeRejectedTitle: "Tool settings rejected",
     noticeConfirmedMessage: "Global tool switch changes have been applied.",
     noticeRejectedMessage: "This tool switch change was rejected.",
+    noticeAgentNotifyFailedTitle: "Unable to notify Agent",
+    noticeAgentNotifyFailedMessage: "The confirmation was processed, but the Agent follow-up message was not sent.",
     noticeHandleErrorTitle: "Unable to process confirmation",
     noticeNotConnected: "Not connected to the server.",
     approveFailedTitle: "Approval failed",

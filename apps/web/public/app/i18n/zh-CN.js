@@ -360,6 +360,8 @@ export const zhCN = {
     noticeRejectedTitle: "工具设置已拒绝",
     noticeConfirmedMessage: "全局工具开关变更已应用。",
     noticeRejectedMessage: "本次工具开关变更已拒绝。",
+    noticeAgentNotifyFailedTitle: "无法通知 Agent",
+    noticeAgentNotifyFailedMessage: "确认已经处理，但 Agent 后续消息未发送成功。",
     noticeHandleErrorTitle: "无法处理确认",
     noticeNotConnected: "当前未连接到服务器。",
     approveFailedTitle: "确认失败",

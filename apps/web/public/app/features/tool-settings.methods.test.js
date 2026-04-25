@@ -123,4 +123,65 @@ describe("tool settings methods tab", () => {
 
     expect(refs.toolSettingsBody.textContent).toContain("未发布方法");
   });
+
+  it("notifies the agent conversation after approving a tool settings request", async () => {
+    const { controller, refs, sendReq } = createHarness();
+    controller.handleConfirmRequired({
+      targetClientId: "client-1",
+      conversationId: "conv-tool-settings",
+      requestId: "REQ01",
+      summary: ["关闭 builtin: alpha_builtin"],
+      impact: "global change",
+      expiresAt: Date.now() + 60_000,
+    });
+
+    refs.toolSettingsConfirmApproveBtn.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const confirmCall = sendReq.mock.calls.find(([frame]) => frame.method === "tool_settings.confirm");
+    expect(confirmCall?.[0]?.params).toMatchObject({
+      requestId: "REQ01",
+      conversationId: "conv-tool-settings",
+      decision: "approve",
+    });
+    const notifyCall = sendReq.mock.calls.find(([frame]) => frame.method === "message.send");
+    expect(notifyCall?.[0]?.params).toMatchObject({
+      conversationId: "conv-tool-settings",
+      from: "web",
+      roomContext: { environment: "local" },
+    });
+    expect(notifyCall?.[0]?.params?.text).toContain("decision: approved / 用户已批准");
+    expect(notifyCall?.[0]?.params?.text).toContain("关闭 builtin: alpha_builtin");
+    expect(notifyCall?.[0]?.params?.text).not.toContain("批准工具设置变更");
+  });
+
+  it("notifies the agent conversation after rejecting a tool settings request", async () => {
+    const { controller, refs, sendReq } = createHarness();
+    controller.handleConfirmRequired({
+      targetClientId: "client-1",
+      conversationId: "conv-tool-settings",
+      requestId: "REQ02",
+      summary: ["开启 builtin: beta_builtin"],
+      impact: "global change",
+      expiresAt: Date.now() + 60_000,
+    });
+
+    refs.toolSettingsConfirmRejectBtn.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const confirmCall = sendReq.mock.calls.find(([frame]) => frame.method === "tool_settings.confirm");
+    expect(confirmCall?.[0]?.params).toMatchObject({
+      requestId: "REQ02",
+      conversationId: "conv-tool-settings",
+      decision: "reject",
+    });
+    const notifyCall = sendReq.mock.calls.find(([frame]) => frame.method === "message.send");
+    expect(notifyCall?.[0]?.params?.text).toContain("decision: rejected / 用户已拒绝");
+    expect(notifyCall?.[0]?.params?.text).toContain("配置未改变");
+    expect(notifyCall?.[0]?.params?.text).toContain("开启 builtin: beta_builtin");
+  });
 });
