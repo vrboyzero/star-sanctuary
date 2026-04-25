@@ -358,4 +358,9 @@ export {
   officeHomesteadMountTool,
   officeHomesteadUnmountTool,
   officeHomesteadOpenBlindBoxTool,
+  officeForumListBoardsTool,
+  officeForumSearchThreadsTool,
+  officeForumGetThreadTool,
+  officeForumCollectBugsTool,
+  officeForumCollectFeedbackTool,
 } from "./builtin/office/index.js";

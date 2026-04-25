@@ -19,6 +19,13 @@ import {
   officeHomesteadUnmountTool as baseOfficeHomesteadUnmountTool,
   officeHomesteadOpenBlindBoxTool as baseOfficeHomesteadOpenBlindBoxTool,
 } from "./homestead.js";
+import {
+  officeForumListBoardsTool as baseOfficeForumListBoardsTool,
+  officeForumSearchThreadsTool as baseOfficeForumSearchThreadsTool,
+  officeForumGetThreadTool as baseOfficeForumGetThreadTool,
+  officeForumCollectBugsTool as baseOfficeForumCollectBugsTool,
+  officeForumCollectFeedbackTool as baseOfficeForumCollectFeedbackTool,
+} from "./forum.js";
 
 function withOfficeReadContract(tool: Tool, activityDescription: string): Tool {
   return withToolContract(tool, {
@@ -127,4 +134,25 @@ export const officeHomesteadUnmountTool = withOfficeWriteContract(
 export const officeHomesteadOpenBlindBoxTool = withOfficeWriteContract(
   baseOfficeHomesteadOpenBlindBoxTool,
   "Open a homestead blind box reward",
+);
+
+export const officeForumListBoardsTool = withOfficeReadContract(
+  baseOfficeForumListBoardsTool,
+  "List office forum boards",
+);
+export const officeForumSearchThreadsTool = withOfficeReadContract(
+  baseOfficeForumSearchThreadsTool,
+  "Search office forum threads",
+);
+export const officeForumGetThreadTool = withOfficeReadContract(
+  baseOfficeForumGetThreadTool,
+  "Read office forum thread details and replies",
+);
+export const officeForumCollectBugsTool = withOfficeReadContract(
+  baseOfficeForumCollectBugsTool,
+  "Collect office forum bug threads",
+);
+export const officeForumCollectFeedbackTool = withOfficeReadContract(
+  baseOfficeForumCollectFeedbackTool,
+  "Collect office forum feedback threads",
 );

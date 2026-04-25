@@ -17,6 +17,11 @@ import {
   officeHomesteadMountTool,
   officeHomesteadUnmountTool,
   officeHomesteadOpenBlindBoxTool,
+  officeForumListBoardsTool,
+  officeForumSearchThreadsTool,
+  officeForumGetThreadTool,
+  officeForumCollectBugsTool,
+  officeForumCollectFeedbackTool,
 } from "./index.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -466,5 +471,161 @@ describe("office tools", () => {
     expect(url).toBe("http://office.test/api/town-square/open-blind-box");
     expect(init.method).toBe("POST");
     expect(init.body).toBe(JSON.stringify({ inventoryId: 11 }));
+  });
+
+  it("should list forum boards with realm filter", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      items: [
+        { id: "b1", slug: "bug", name: "BUG区", realm: "renshijian" },
+        { id: "b2", slug: "wulingjie", name: "物灵界", realm: "wulingjie" },
+      ],
+    }));
+
+    const result = await officeForumListBoardsTool.execute(
+      { agent_name: "贝露丹蒂", realm: "renshijian" },
+      context,
+    );
+
+    expect(result.success).toBe(true);
+    const output = JSON.parse(result.output);
+    expect(output.total).toBe(1);
+    expect(output.items[0].slug).toBe("bug");
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://office.test/api/forum/boards");
+  });
+
+  it("should search forum threads with board slug and keyword", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      items: [{ id: "t1", title: "登录异常", content: "无法登录", authorType: "user" }],
+      total: 1,
+      page: 1,
+      pageSize: 20,
+    }));
+
+    const result = await officeForumSearchThreadsTool.execute(
+      { agent_name: "贝露丹蒂", board_slug: "bug", keyword: "登录" },
+      context,
+    );
+
+    expect(result.success).toBe(true);
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://office.test/api/forum/threads?boardSlug=bug&q=%E7%99%BB%E5%BD%95&pinned=all&page=1&pageSize=20");
+    const output = JSON.parse(result.output);
+    expect(output.filteredCount).toBe(1);
+    expect(output.items[0].title).toBe("登录异常");
+  });
+
+  it("should get forum thread and replies", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        thread: { id: "thread-1", title: "主题", content: "正文", authorType: "user" },
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{ id: "reply-1", threadId: "thread-1", content: "回复", authorType: "agent" }],
+        total: 1,
+        page: 1,
+        pageSize: 50,
+      }));
+
+    const result = await officeForumGetThreadTool.execute(
+      { agent_name: "贝露丹蒂", thread_id: "thread-1", include_replies: true },
+      context,
+    );
+
+    expect(result.success).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [threadUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [replyUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(threadUrl).toBe("http://office.test/api/forum/threads/thread-1");
+    expect(replyUrl).toBe("http://office.test/api/forum/threads/thread-1/replies?page=1&pageSize=50");
+    const output = JSON.parse(result.output);
+    expect(output.repliesTotal).toBe(1);
+    expect(output.replies[0].id).toBe("reply-1");
+  });
+
+  it("should collect bug threads with time filter and limit", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{ id: "b1", slug: "bug", name: "BUG区", realm: "renshijian", realmLabel: "人世间", threadCount: 3 }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        items: [
+          {
+            id: "thread-old",
+            title: "旧 BUG",
+            content: "旧内容",
+            authorType: "user",
+            createdAt: "2026-04-20T10:00:00.000Z",
+            updatedAt: "2026-04-20T10:00:00.000Z",
+            lastReplyAt: "2026-04-20T10:00:00.000Z",
+            replyCount: 1,
+            board: { id: "b1", slug: "bug", name: "BUG区", realm: "renshijian" },
+          },
+          {
+            id: "thread-new",
+            title: "新 BUG",
+            content: "新内容",
+            authorType: "user",
+            createdAt: "2026-04-25T10:00:00.000Z",
+            updatedAt: "2026-04-25T10:00:00.000Z",
+            lastReplyAt: "2026-04-25T10:00:00.000Z",
+            replyCount: 2,
+            board: { id: "b1", slug: "bug", name: "BUG区", realm: "renshijian" },
+          },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 2,
+      }));
+
+    const result = await officeForumCollectBugsTool.execute(
+      { agent_name: "贝露丹蒂", from: "2026-04-24T00:00:00.000Z", limit: 1 },
+      context,
+    );
+
+    expect(result.success).toBe(true);
+    const output = JSON.parse(result.output);
+    expect(output.board.slug).toBe("bug");
+    expect(output.totalMatched).toBe(1);
+    expect(output.items[0].title).toBe("新 BUG");
+  });
+
+  it("should collect feedback threads from suggestions board", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{ id: "s1", slug: "suggestions", name: "建议区", realm: "renshijian", realmLabel: "人世间", threadCount: 1 }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        items: [
+          {
+            id: "thread-suggestion",
+            title: "建议增加导出",
+            content: "希望增加 CSV 导出",
+            authorType: "user",
+            createdAt: "2026-04-25T09:00:00.000Z",
+            updatedAt: "2026-04-25T09:00:00.000Z",
+            lastReplyAt: "2026-04-25T09:00:00.000Z",
+            replyCount: 0,
+            board: { id: "s1", slug: "suggestions", name: "建议区", realm: "renshijian" },
+          },
+        ],
+        total: 1,
+        page: 1,
+        pageSize: 10,
+      }));
+
+    const result = await officeForumCollectFeedbackTool.execute(
+      { agent_name: "贝露丹蒂", keyword: "导出" },
+      context,
+    );
+
+    expect(result.success).toBe(true);
+    const [boardsUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [threadsUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(boardsUrl).toBe("http://office.test/api/forum/boards");
+    expect(threadsUrl).toContain("/api/forum/threads?boardSlug=suggestions&q=%E5%AF%BC%E5%87%BA");
+    const output = JSON.parse(result.output);
+    expect(output.board.slug).toBe("suggestions");
+    expect(output.items[0].title).toBe("建议增加导出");
   });
 });

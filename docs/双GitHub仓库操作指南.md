@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "发布最新v0.3.5版本，简化了命令安装后的首次运行引导"
+git commit -m "完成论坛与模型广场开发,Agent实现与论坛对接"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
