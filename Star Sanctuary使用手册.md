@@ -140,8 +140,8 @@ curl -fsSL https://raw.githubusercontent.com/vrboyzero/star-sanctuary/main/insta
 - 检查 `Node.js 22.12+`
 - 自动准备依赖与构建产物
 - 在安装根生成启动包装脚本
-- 默认复用安装根中的 `.env` / `.env.local`
-- 如果安装根已存在 `.env.local`，默认跳过 `bdd setup`
+- 默认复用状态目录中的 `.env` / `.env.local`
+- 如果状态目录已存在 `.env.local`，默认跳过 `bdd setup`
 
 安装完成后，你通常可以直接用安装根里的命令继续操作：
 
@@ -198,17 +198,17 @@ corepack pnpm bdd config path
 corepack pnpm bdd doctor
 ```
 
-当前实际生效的配置目录规则：
+当前实际生效的配置目录规则已经收口为：
 
-1. 如果显式设置了 `STAR_SANCTUARY_ENV_DIR` 或 `BELLDANDY_ENV_DIR`，优先使用该目录
-2. 否则，如果项目根目录已经存在 `.env` 或 `.env.local`，继续兼容使用项目根目录
-3. 否则，默认使用状态目录，也就是通常位于用户目录下的 `.star_sanctuary` 文件夹  
+1. 通过 `BELLDANDY_STATE_DIR`（以及平台细分变量）确定 `stateDir`
+2. `.env / .env.local` 固定从 `stateDir` 读取
+3. 默认 `stateDir` 通常位于用户目录下的 `.star_sanctuary` 文件夹  
    Windows 常见路径是：`C:\Users\你的用户名\.star_sanctuary`
 
 推荐原则：
 
-- 本地源码运行：优先使用 `.env.local`
-- Docker：优先使用 `.env`
+- 本地源码运行：优先使用 `stateDir/.env.local`
+- Docker：优先使用容器挂载或部署配置中的 `.env`
 - 不要把真实密钥提交到 Git
 
 ### 3.2 本地最小可用配置
@@ -520,9 +520,11 @@ corepack pnpm bdd console
 `bdd setup` 是当前推荐的首次启动入口。它会帮你：
 
 - 生成初始配置
-- 选择 provider、Base URL、API Key、模型
 - 配置监听地址与鉴权方式
-- 在高级流程里顺带配置部分扩展模块
+- 在交互式 `QuickStart` 中只处理部署口径
+- 在交互式 `Advanced` 中额外处理 `host / port / auth`
+
+交互式 `bdd setup` 当前不再要求填写 provider / Base URL / API Key / model。模型和 API Key 建议启动后在 WebChat `⚙️ 设置` 中完成；自动化预置仍可使用下面的非交互参数。
 
 也支持非交互式：
 
@@ -579,7 +581,79 @@ corepack pnpm bdd pairing revoke <clientId>
 corepack pnpm bdd pairing cleanup --dry-run
 ```
 
-### 4.5 版本检查与升级
+### 4.5 云服务器 / 无本机浏览器部署
+
+云服务器上通常没有可用的桌面浏览器。推荐路径是：Gateway 只监听远端本机地址，你在自己的电脑上通过 SSH 隧道打开 WebChat。
+
+安装器版 Linux/macOS 默认安装根通常是 `${XDG_DATA_HOME:-$HOME/.local/share}/star-sanctuary`。下面用 `<InstallRoot>` 代表该目录；源码运行时可把 `<InstallRoot>/bdd` 替换为 `corepack pnpm bdd`。
+
+#### 推荐：127.0.0.1 + token + SSH 隧道
+
+在服务器上配置：
+
+```bash
+<InstallRoot>/bdd config path
+<InstallRoot>/bdd config set BELLDANDY_HOST 127.0.0.1
+<InstallRoot>/bdd config set BELLDANDY_PORT 28889
+<InstallRoot>/bdd config set BELLDANDY_AUTH_MODE token
+<InstallRoot>/bdd config set BELLDANDY_AUTH_TOKEN '<strong-random-token>'
+<InstallRoot>/start.sh
+```
+
+在你的电脑上建立隧道：
+
+```bash
+ssh -L 28889:127.0.0.1:28889 user@server
+```
+
+然后用本机浏览器打开：
+
+```text
+http://127.0.0.1:28889/
+```
+
+WebChat 顶部 Auth 选择 `token`，填写服务器上配置的 `BELLDANDY_AUTH_TOKEN`。
+
+首次访问敏感能力时，如果页面提示 Pairing code，在服务器上批准：
+
+```bash
+<InstallRoot>/bdd pairing pending
+<InstallRoot>/bdd pairing approve <配对码>
+```
+
+#### 纯命令行配置
+
+没有浏览器时，也可以只用 CLI 写配置：
+
+```bash
+<InstallRoot>/bdd setup
+<InstallRoot>/bdd config path
+<InstallRoot>/bdd config set BELLDANDY_AUTH_MODE token
+<InstallRoot>/bdd config set BELLDANDY_AUTH_TOKEN '<strong-random-token>'
+<InstallRoot>/bdd doctor
+```
+
+如果是源码运行，把命令替换为：
+
+```bash
+corepack pnpm bdd setup
+corepack pnpm bdd config path
+corepack pnpm bdd doctor
+```
+
+#### 公网直连
+
+只有确实需要让其他机器直接访问服务端端口时，才使用公网监听：
+
+```env
+BELLDANDY_HOST=0.0.0.0
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
+```
+
+公网方案还应配合防火墙、反向代理 TLS、`BELLDANDY_ALLOWED_ORIGINS` 和更保守的工具策略。不要使用 `AUTH_MODE=none`，项目会拒绝 `0.0.0.0 + AUTH_MODE=none`。
+
+### 4.6 版本检查与升级
 
 当前默认会做轻量版本检查，只提示，不自动升级。
 
@@ -3457,13 +3531,29 @@ corepack pnpm bdd pairing approve <code>
 
 ### 15.5 想局域网或公网访问
 
-至少要改成：
+如果只是你自己远程访问云服务器，优先使用 SSH 隧道：
+
+```bash
+ssh -L 28889:127.0.0.1:28889 user@server
+```
+
+服务端保持：
+
+```env
+BELLDANDY_HOST=127.0.0.1
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
+```
+
+只有确实需要让其他机器直接访问服务端端口时，才改成：
 
 ```env
 BELLDANDY_HOST=0.0.0.0
 BELLDANDY_AUTH_MODE=token
 BELLDANDY_AUTH_TOKEN=your-secure-token
 ```
+
+公网方案还应配合防火墙、反向代理 TLS、`BELLDANDY_ALLOWED_ORIGINS` 和更保守的工具策略。
 
 ### 15.6 `/api/message` 或 `/api/webhook/:id` 调不通
 

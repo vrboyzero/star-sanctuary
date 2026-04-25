@@ -467,6 +467,46 @@ corepack pnpm bdd pairing export --out pairing-backup.json --include-pending
 corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
 ```
 
+### Cloud Server / Headless Server Deployment
+
+Cloud servers usually do not have a usable desktop browser. The recommended setup is to keep the Gateway bound to the remote loopback address and access WebChat from your own machine through an SSH tunnel instead of exposing WebChat directly to the public internet.
+
+On Linux/macOS installer installs, the default install root is usually `${XDG_DATA_HOME:-$HOME/.local/share}/star-sanctuary`. The examples below use `<InstallRoot>` for that directory. In source mode, replace `<InstallRoot>/bdd` with `corepack pnpm bdd`.
+
+Configure the server:
+
+```bash
+<InstallRoot>/bdd config path
+<InstallRoot>/bdd config set BELLDANDY_HOST 127.0.0.1
+<InstallRoot>/bdd config set BELLDANDY_PORT 28889
+<InstallRoot>/bdd config set BELLDANDY_AUTH_MODE token
+<InstallRoot>/bdd config set BELLDANDY_AUTH_TOKEN '<strong-random-token>'
+<InstallRoot>/start.sh
+```
+
+Create the tunnel from your local machine:
+
+```bash
+ssh -L 28889:127.0.0.1:28889 user@server
+```
+
+Then open `http://127.0.0.1:28889/` in your local browser. In the WebChat Auth controls, select `token` and enter the same token configured on the server. If a sensitive action asks for a pairing code, approve it on the server:
+
+```bash
+<InstallRoot>/bdd pairing pending
+<InstallRoot>/bdd pairing approve <CODE>
+```
+
+If you must expose the service directly to a network or the public internet, use at least:
+
+```env
+BELLDANDY_HOST=0.0.0.0
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
+```
+
+Public exposure should also use firewall rules, a TLS reverse proxy, `BELLDANDY_ALLOWED_ORIGINS`, and a conservative tools policy. The project intentionally rejects `0.0.0.0 + AUTH_MODE=none`.
+
 ---
 
 ## Configuration
@@ -1031,20 +1071,29 @@ corepack pnpm bdd pairing approve <CODE>
 
 ### I want LAN or public access
 
-Set:
+If this is only for your own remote access to a cloud server, prefer an SSH tunnel:
 
-```env
-BELLDANDY_HOST=0.0.0.0
+```bash
+ssh -L 28889:127.0.0.1:28889 user@server
 ```
 
-and make sure auth is enabled:
+Keep the server bound to loopback with auth enabled:
 
 ```env
+BELLDANDY_HOST=127.0.0.1
 BELLDANDY_AUTH_MODE=token
 BELLDANDY_AUTH_TOKEN=your-secure-token
 ```
 
-The project intentionally rejects the unsafe combination `0.0.0.0 + AUTH_MODE=none`.
+Only bind to all interfaces when other machines must directly reach the server port:
+
+```env
+BELLDANDY_HOST=0.0.0.0
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
+```
+
+Public exposure should also use firewall rules, a TLS reverse proxy, `BELLDANDY_ALLOWED_ORIGINS`, and a conservative tools policy. The project intentionally rejects the unsafe combination `0.0.0.0 + AUTH_MODE=none`.
 
 ### Webhook / Community API is not working
 

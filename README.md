@@ -481,6 +481,46 @@ corepack pnpm bdd pairing export --out pairing-backup.json --include-pending
 corepack pnpm bdd pairing import --in pairing-backup.json --mode merge
 ```
 
+### 云服务器 / 无本机浏览器部署
+
+云服务器上通常没有可用的桌面浏览器。推荐不要直接公网暴露 WebChat，而是让 Gateway 只监听远端本机地址，再从你的电脑通过 SSH 隧道访问。
+
+安装器版 Linux/macOS 默认安装根通常是 `${XDG_DATA_HOME:-$HOME/.local/share}/star-sanctuary`。下面用 `<InstallRoot>` 代表该目录；源码运行时可把 `<InstallRoot>/bdd` 替换为 `corepack pnpm bdd`。
+
+服务端配置：
+
+```bash
+<InstallRoot>/bdd config path
+<InstallRoot>/bdd config set BELLDANDY_HOST 127.0.0.1
+<InstallRoot>/bdd config set BELLDANDY_PORT 28889
+<InstallRoot>/bdd config set BELLDANDY_AUTH_MODE token
+<InstallRoot>/bdd config set BELLDANDY_AUTH_TOKEN '<strong-random-token>'
+<InstallRoot>/start.sh
+```
+
+本机电脑建立隧道：
+
+```bash
+ssh -L 28889:127.0.0.1:28889 user@server
+```
+
+然后在本机浏览器打开 `http://127.0.0.1:28889/`，WebChat 顶部 Auth 选择 `token` 并填写同一个 token。首次访问敏感能力时如果出现 Pairing code，在服务器上批准：
+
+```bash
+<InstallRoot>/bdd pairing pending
+<InstallRoot>/bdd pairing approve <CODE>
+```
+
+如果必须公网访问，至少使用：
+
+```env
+BELLDANDY_HOST=0.0.0.0
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
+```
+
+公网方案还应配合防火墙、反向代理 TLS、`BELLDANDY_ALLOWED_ORIGINS` 和更保守的工具策略。项目会拒绝 `0.0.0.0 + AUTH_MODE=none`。
+
 ---
 
 ## 配置指南
@@ -1169,15 +1209,24 @@ corepack pnpm bdd pairing approve <CODE>
 
 ### 想局域网或公网访问
 
-把：
+如果只是你自己远程访问云服务器，优先使用 SSH 隧道：
+
+```bash
+ssh -L 28889:127.0.0.1:28889 user@server
+```
+
+服务端保持：
+
+```env
+BELLDANDY_HOST=127.0.0.1
+BELLDANDY_AUTH_MODE=token
+BELLDANDY_AUTH_TOKEN=your-secure-token
+```
+
+只有确实需要让其他机器直接访问服务端端口时，才改成：
 
 ```env
 BELLDANDY_HOST=0.0.0.0
-```
-
-同时务必启用：
-
-```env
 BELLDANDY_AUTH_MODE=token
 BELLDANDY_AUTH_TOKEN=your-secure-token
 ```

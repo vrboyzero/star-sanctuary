@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "增加了Agent开启或关闭工具时，用户确认或拒绝后给Agent返回的通知"
+git commit -m "README和使用说明增加了云服务器部署的说明"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
