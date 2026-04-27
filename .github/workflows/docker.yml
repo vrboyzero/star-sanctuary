@@ -214,6 +214,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Map short workspace path
+        shell: pwsh
+        run: |
+          subst R: $env:GITHUB_WORKSPACE
+          "SHORT_WORKSPACE=R:/" >> $env:GITHUB_ENV
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -338,40 +344,48 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         run: pnpm install --frozen-lockfile
 
       - name: Extract version
         id: version
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         shell: pwsh
         run: |
           "VERSION=$($env:GITHUB_REF -replace '^refs/tags/v', '')" >> $env:GITHUB_OUTPUT
 
       - name: Build workspace
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         run: pnpm build
 
       - name: Build Windows portable asset
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         run: pnpm build:portable
 
       - name: Smoke Windows portable asset
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         run: pnpm smoke:portable
 
       - name: Build winget assets
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         run: pnpm build:winget -- --version=${{ steps.version.outputs.VERSION }}
 
       - name: Verify winget assets
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         run: pnpm verify:winget -- --version=${{ steps.version.outputs.VERSION }}
 
       - name: Upload winget manifest artifact
         uses: actions/upload-artifact@v4
         with:
           name: winget-manifests-v${{ steps.version.outputs.VERSION }}
-          path: artifacts/winget/v${{ steps.version.outputs.VERSION }}/manifests/**
+          path: ${{ env.SHORT_WORKSPACE }}/artifacts/winget/v${{ steps.version.outputs.VERSION }}/manifests/**
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload Windows release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ env.SHORT_WORKSPACE }}
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"

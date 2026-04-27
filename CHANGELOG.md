@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.9] - 2026-04-27
+
+聚焦修复 Windows tag 发布资产 job 在 GitHub runner 上的路径长度风险，确保 `portable` 构建、`winget` 资产生成与 Release 追加上传能在短路径下执行。
+
+### Release / CI
+
+- Windows `Build Windows Release Assets` job 新增短盘符映射：
+  - 将 `GITHUB_WORKSPACE` 映射到 `R:\`
+  - 后续 `pnpm install / build / build:portable / smoke:portable / build:winget / verify:winget` 统一在短路径下执行
+- `upload-artifact` 与 `gh release upload` 现已对齐到短路径工作区，避免 Windows runner 的深层 `pnpm` / runtime 路径触发构建失败
+- 保持 `v0.3.8` 引入的 `winget` 生成链与 Release 资产命名不变，仅修复 Windows runner 执行环境
+
 ## [0.3.8] - 2026-04-27
 
 聚焦 `winget` 正式接入准备与 Windows tag 发布资产链路补强，让 GitHub Release 在保留轻量正式附件的同时，开始自动产出 Windows portable 正式 zip 与对应 `winget` 输入。
