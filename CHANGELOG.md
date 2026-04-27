@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.7] - 2026-04-27
+
+聚焦 GitHub Release 轻量附件发布链路修复，补齐 `pnpm` 初始化顺序，确保 tag 发版时能正常构建并上传正式轻量资产。
+
+### Release / CI
+
+- 修复 `Create GitHub Release` job 的 `pnpm` 初始化顺序：先安装 `pnpm`，再启用 `setup-node` 的 `pnpm` 缓存
+- release job 统一改为直接执行 `pnpm` 命令，移除该 job 中不再需要的 `corepack enable`
+- 保持轻量附件构建、校验、上传链路不变，继续产出 `zip / tar.gz / manifest / sha256`
+
 ## [0.3.6] - 2026-04-27
 
 聚焦独立图片生成链路落地与正式轻量 Release 附件上线准备，补齐 WebChat 预览/reveal 体验，并为后续包管理器分发建立稳定发布输入。
