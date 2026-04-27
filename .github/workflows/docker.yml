@@ -360,7 +360,16 @@ jobs:
 
       - name: Build Windows portable asset
         working-directory: ${{ env.SHORT_WORKSPACE }}
-        run: pnpm build:portable
+        shell: pwsh
+        run: |
+          $logPath = Join-Path $env:RUNNER_TEMP "build-portable.log"
+          if (Test-Path $logPath) { Remove-Item $logPath -Force }
+          pnpm build:portable *>&1 | Tee-Object -FilePath $logPath
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (Get-Content $logPath -Tail 80) -join "`n"
+            Write-Host "::error::Portable build failed. Tail:`n$tail"
+            exit $LASTEXITCODE
+          }
 
       - name: Smoke Windows portable asset
         working-directory: ${{ env.SHORT_WORKSPACE }}

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.11] - 2026-04-27
+
+聚焦补充 Windows 资产 job 的失败诊断输出，确保后续 GitHub Actions 若再次失败，能够直接从公开 check annotations 中读到 `portable` 构建尾日志。
+
+### Release / CI
+
+- Windows `Build Windows portable asset` 步骤现在会将构建输出写入临时日志
+- 当 `pnpm build:portable` 失败时，会把尾部日志通过 `::error::` 注解直接回传到 Actions 检查结果
+- 这样即使未登录 GitHub 日志页，也能通过公开 API 读取具体失败片段
+
 ## [0.3.10] - 2026-04-27
 
 聚焦修正 `v0.3.9` 发布时的 workflow 接线错误，确保短路径映射只作用于 Windows 资产 job，而不会误伤 Ubuntu 的 GitHub Release job。
