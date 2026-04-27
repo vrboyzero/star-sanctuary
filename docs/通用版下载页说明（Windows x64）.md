@@ -2,6 +2,38 @@
 
 本文用于对外发布页 / 下载页说明，口径以当前已完成的 Windows x64 发布形态为准。
 
+## 0. 官网当前下载分工
+
+当前官网与 GitHub Release 已拆成两条下载线：
+
+### 0.1 命令安装 / 开发者部署 / 轻量正式附件
+
+适合：
+
+- 会使用终端的人
+- 准备自己部署的人
+- 需要更小附件、后续可能接包管理器的人
+
+当前正式轻量附件位于 GitHub Release：
+
+- `star-sanctuary-dist-v<version>.zip`
+- `star-sanctuary-dist-v<version>.tar.gz`
+- `star-sanctuary-dist-v<version>.manifest.json`
+- `star-sanctuary-dist-v<version>.sha256`
+
+说明：
+
+- 这组附件不包含 Node runtime
+- 适合命令安装、开发者部署、后续包管理器准备
+- 不适合期待“下载后直接双击就能用”的用户
+
+### 0.2 Windows 小白运行包
+
+本文下面介绍的，是面向 Windows 普通用户的可运行包：
+
+- `Portable`
+- `Single-Exe`
+
 ## 1. 这是什么
 
 `Star Sanctuary` 是一个面向普通用户的本地 AI 助手应用包。
@@ -15,6 +47,8 @@
 
 - `Portable` 提供 `Slim` / `Full`
 - `Single-Exe` 当前仅提供 `Full`
+
+这条页面口径只覆盖 **Windows 可运行包**，不覆盖上面的轻量正式附件。
 
 ## 2. 我该下载哪个版本
 

@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.8] - 2026-04-27
+
+聚焦 `winget` 正式接入准备与 Windows tag 发布资产链路补强，让 GitHub Release 在保留轻量正式附件的同时，开始自动产出 Windows portable 正式 zip 与对应 `winget` 输入。
+
+### Release / Distribution
+
+- 新增 `build:winget` 与 `verify:winget`，可基于 Windows portable 产物生成：
+  - `star-sanctuary-portable-win32-x64-v<version>.zip`
+  - `star-sanctuary-portable-win32-x64-v<version>.sha256`
+  - `star-sanctuary-portable-win32-x64-v<version>.metadata.json`
+  - `winget` 版本 / installer / locale 三类 YAML manifests
+- 新增 Windows tag release asset job：
+  - 在 `windows-latest` 上构建 `portable`
+  - 执行 `smoke:portable`
+  - 生成并校验 `winget` 资产
+  - 追加上传 Windows portable 正式 zip 与配套元数据到 GitHub Release
+- `verify:winget` 现在除了项目内结构校验外，还会在 Windows 环境下自动执行 `winget validate`
+
+### Docs
+
+- README、下载页说明、升级手册、安装命令方案文档已统一到新的发布口径：
+  - GitHub Release 轻量正式附件
+  - Windows `Portable / Single-Exe`
+  - `winget` 先行、`brew` 暂缓
+- 项目导航补充 `winget` 生成与校验脚本入口
+
 ## [0.3.7] - 2026-04-27
 
 聚焦 GitHub Release 轻量附件发布链路修复，补齐 `pnpm` 初始化顺序，确保 tag 发版时能正常构建并上传正式轻量资产。

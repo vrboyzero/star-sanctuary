@@ -65,7 +65,9 @@ star-sanctuary/
 - `tsconfig.json`: 各 package 的 TS 编译依赖顺序
 - `vitest.config.ts`: 测试排除项和 Node/forks 配置
 - `scripts/build-release-light-assets.mjs`: 生成 GitHub Release 轻量正式附件（`zip` / `tar.gz` / `manifest` / `sha256`）
+- `scripts/build-winget-assets.mjs`: 基于 Windows portable 产物生成 `winget` 发布 zip、hash 与 YAML manifests
 - `scripts/verify-release-light-assets.mjs`: 校验轻量正式附件结构、版本与 hash
+- `scripts/verify-winget-assets.mjs`: 校验本地生成的 `winget` 资产与 manifests 一致性
 - `docs/Star Sanctuary使用手册.md`: 当前版用户手册，聚焦 Agent / 工具 / Agent Teams 的使用与配置说明
 
 ### Gateway / CLI
