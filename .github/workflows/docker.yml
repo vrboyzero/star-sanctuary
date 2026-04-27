@@ -214,12 +214,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Map short workspace path
-        shell: pwsh
-        run: |
-          subst R: $env:GITHUB_WORKSPACE
-          "SHORT_WORKSPACE=R:/" >> $env:GITHUB_ENV
-
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -331,6 +325,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Map short workspace path
+        shell: pwsh
+        run: |
+          subst R: $env:GITHUB_WORKSPACE
+          "SHORT_WORKSPACE=R:/" >> $env:GITHUB_ENV
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.10] - 2026-04-27
+
+聚焦修正 `v0.3.9` 发布时的 workflow 接线错误，确保短路径映射只作用于 Windows 资产 job，而不会误伤 Ubuntu 的 GitHub Release job。
+
+### Release / CI
+
+- 将 `Map short workspace path` 从 Ubuntu `Create GitHub Release` job 中移除
+- 将该步骤正确放回 Windows `Build Windows Release Assets` job
+- 保持 `R:\` 短路径方案不变，继续用于规避 Windows runner 上 `portable` 构建的深路径风险
+
 ## [0.3.9] - 2026-04-27
 
 聚焦修复 Windows tag 发布资产 job 在 GitHub runner 上的路径长度风险，确保 `portable` 构建、`winget` 资产生成与 Release 追加上传能在短路径下执行。
