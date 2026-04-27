@@ -32,7 +32,7 @@ git remote -v
 ```bash
 # 1. 正常添加并提交代码
 git add .
-git commit -m "README和使用说明增加了云服务器部署的说明"
+git commit -m "完成了图形模型的接入，生图成功；完成了轻量包与安装命令对接"
 
 # 2. 推送当前分支到私有仓库
 # 格式: git push <远程名称> <分支名>
