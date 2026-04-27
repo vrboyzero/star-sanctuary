@@ -104,19 +104,75 @@ function Get-ReleaseMetadata {
   )
 
   $normalizedVersion = Normalize-Version -RawVersion $RequestedVersion
-  if ($normalizedVersion -ne "latest") {
-    return @{
-      tag_name = $normalizedVersion
-      name = $normalizedVersion
-      zipball_url = "https://github.com/$Owner/$Name/archive/refs/tags/$normalizedVersion.zip"
-      html_url = "https://github.com/$Owner/$Name/releases/tag/$normalizedVersion"
-      source = "tag-archive-direct"
+  $endpoint = if ($normalizedVersion -eq "latest") {
+    "https://api.github.com/repos/$Owner/$Name/releases/latest"
+  } else {
+    "https://api.github.com/repos/$Owner/$Name/releases/tags/$normalizedVersion"
+  }
+  Write-Step "Fetching release metadata from $endpoint"
+  return Invoke-RestMethod -Headers (Get-GitHubHeaders) -Uri $endpoint
+}
+
+function Get-ReleaseVersionNumberFromTag {
+  param([string]$TagName)
+
+  if ([string]::IsNullOrWhiteSpace($TagName)) {
+    return ""
+  }
+  if ($TagName.StartsWith("v")) {
+    return $TagName.Substring(1)
+  }
+  return $TagName
+}
+
+function Get-InstallPayloadKindFromRoot {
+  param([string]$SourceRoot)
+
+  if (Test-Path (Join-Path $SourceRoot "README-release-light.md") -PathType Leaf) {
+    return "release-light"
+  }
+  return "source"
+}
+
+function Resolve-RemoteInstallPayloadPlan {
+  param(
+    [object]$Release,
+    [string]$Owner,
+    [string]$Name
+  )
+
+  $tagName = [string]$Release.tag_name
+  $versionNumber = Get-ReleaseVersionNumberFromTag -TagName $tagName
+  $assetName = if ([string]::IsNullOrWhiteSpace($versionNumber)) {
+    $null
+  } else {
+    "star-sanctuary-dist-v$versionNumber.zip"
+  }
+
+  if ($assetName -and $Release.assets) {
+    $asset = @($Release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1)
+    if ($asset.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$asset[0].browser_download_url)) {
+      return @{
+        kind = "release-light"
+        sourceType = "github-release-light"
+        archiveUrl = [string]$asset[0].browser_download_url
+        downloadLabel = "GitHub release-light archive"
+        extractLabel = "release-light archive"
+      }
     }
   }
 
-  $endpoint = "https://api.github.com/repos/$Owner/$Name/releases/latest"
-  Write-Step "Fetching release metadata from $endpoint"
-  return Invoke-RestMethod -Headers (Get-GitHubHeaders) -Uri $endpoint
+  if (-not [string]::IsNullOrWhiteSpace([string]$Release.zipball_url)) {
+    return @{
+      kind = "source"
+      sourceType = "github-release-source"
+      archiveUrl = [string]$Release.zipball_url
+      downloadLabel = "GitHub release source archive"
+      extractLabel = "source archive"
+    }
+  }
+
+  throw "The selected release does not expose a usable release-light asset or source zipball."
 }
 
 function Ensure-Command {
@@ -319,7 +375,8 @@ function Write-InstallMetadata {
     [string]$TagName,
     [string]$VersionName,
     [string]$Owner,
-    [string]$Name
+    [string]$Name,
+    [string]$SourceType
   )
 
   $payload = @{
@@ -327,7 +384,7 @@ function Write-InstallMetadata {
     tag = $TagName
     version = $VersionName
     source = @{
-      type = "github-release-source"
+      type = $SourceType
       owner = $Owner
       repo = $Name
     }
@@ -522,6 +579,9 @@ try {
   $release = $null
   $resolvedTag = $null
   $versionName = $null
+  $installPayloadKind = $null
+  $installSourceType = $null
+  $remotePayloadPlan = $null
   $normalizedVersion = Normalize-Version -RawVersion $Version
 
   if (-not [string]::IsNullOrWhiteSpace($SourceDir)) {
@@ -530,15 +590,13 @@ try {
       throw "SourceDir was not found: $localSourceRoot"
     }
 
-    $resolvedTag = if ($normalizedVersion -eq "latest") { "local-source" } else { $normalizedVersion }
+    $installPayloadKind = Get-InstallPayloadKindFromRoot -SourceRoot $localSourceRoot
+    $installSourceType = if ($installPayloadKind -eq "release-light") { "local-release-light" } else { "local-source" }
+    $resolvedTag = if ($normalizedVersion -eq "latest") { $installSourceType } else { $normalizedVersion }
     $versionName = $resolvedTag
-    Write-Step "Using local source override from $localSourceRoot"
+    Write-Step "Using local $installPayloadKind override from $localSourceRoot"
   } else {
     $release = Get-ReleaseMetadata -Owner $RepoOwner -Name $RepoName -RequestedVersion $Version
-    if (-not $release.zipball_url) {
-      throw "The selected release does not expose a GitHub source zipball."
-    }
-
     $resolvedTag = [string]$release.tag_name
     if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
       throw "Failed to resolve release tag from GitHub metadata."
@@ -548,6 +606,9 @@ try {
     if ([string]::IsNullOrWhiteSpace($versionName)) {
       $versionName = $resolvedTag
     }
+    $remotePayloadPlan = Resolve-RemoteInstallPayloadPlan -Release $release -Owner $RepoOwner -Name $RepoName
+    $installPayloadKind = [string]$remotePayloadPlan.kind
+    $installSourceType = [string]$remotePayloadPlan.sourceType
   }
 
   Write-Step "Installing Star Sanctuary $resolvedTag into $installRoot"
@@ -560,10 +621,10 @@ try {
     $extractRoot = Join-Path $tempRoot "extract"
     New-Item -ItemType Directory -Path $extractRoot | Out-Null
 
-    Write-Step "Downloading GitHub release source archive"
-    Invoke-WebRequest -Headers (Get-GitHubHeaders) -Uri $release.zipball_url -OutFile $archivePath
+    Write-Step "Downloading $($remotePayloadPlan.downloadLabel)"
+    Invoke-WebRequest -Headers (Get-GitHubHeaders) -Uri $remotePayloadPlan.archiveUrl -OutFile $archivePath
 
-    Write-Step "Extracting source archive"
+    Write-Step "Extracting $($remotePayloadPlan.extractLabel)"
     Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force
 
     $sourceRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
@@ -609,16 +670,24 @@ try {
     }
 
     Invoke-InSourceRoot -SourceRoot $currentRoot -Action {
-      Write-Step "Installing workspace dependencies"
-      & corepack pnpm install
-      if ($LASTEXITCODE -ne 0) {
-        throw "corepack pnpm install failed."
-      }
+      if ($installPayloadKind -eq "release-light") {
+        Write-Step "Installing production workspace dependencies from release-light package"
+        & corepack pnpm install --prod --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) {
+          throw "corepack pnpm install failed."
+        }
+      } else {
+        Write-Step "Installing workspace dependencies"
+        & corepack pnpm install
+        if ($LASTEXITCODE -ne 0) {
+          throw "corepack pnpm install failed."
+        }
 
-      Write-Step "Building workspace"
-      & corepack pnpm build
-      if ($LASTEXITCODE -ne 0) {
-        throw "corepack pnpm build failed."
+        Write-Step "Building workspace"
+        & corepack pnpm build
+        if ($LASTEXITCODE -ne 0) {
+          throw "corepack pnpm build failed."
+        }
       }
     }
   } else {
@@ -626,7 +695,7 @@ try {
   }
 
   Write-WindowsWrappers -Root $installRoot
-  Write-InstallMetadata -Root $installRoot -TagName $resolvedTag -VersionName $versionName -Owner $RepoOwner -Name $RepoName
+  Write-InstallMetadata -Root $installRoot -TagName $resolvedTag -VersionName $versionName -Owner $RepoOwner -Name $RepoName -SourceType $installSourceType
 
   if (-not $NoDesktopShortcut) {
     New-DesktopShortcut -InstallRoot $installRoot

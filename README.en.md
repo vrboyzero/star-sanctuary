@@ -99,7 +99,7 @@ If you just need to know which entrypoint to use first, start with this table:
 
 | What you want to do | Primary entrypoint | Secondary entrypoint | Quick note |
 |---|---|---|---|
-| Install / upgrade from terminal | `install.ps1` / `install.sh` | Release package | Best path for command-line users; the same route is also the most direct for upgrades. |
+| Install / upgrade from terminal | `install.ps1` / `install.sh` | `release-light` release asset | The installer now prefers the `release-light` asset set first; manual deploys should also prefer `star-sanctuary-dist-v<version>.*`. |
 | Chat with the Agent | WebChat | `/api/message` | For normal use, start in WebChat. |
 | Change model / API key / capability toggles | WebChat `⚙️ Settings` | `bdd config set` | Regular users should prefer Settings; use CLI for scripted changes. |
 | Pair a new device | Get pairing code in WebChat | `bdd pairing approve` | WebChat triggers the flow, CLI approves it. |
@@ -314,15 +314,29 @@ The installer prepares dependencies, build artifacts, launcher scripts, and the 
 
 Current installer behavior:
 
+- the installer now prefers `release-light` GitHub Release assets first
+- if a target older release does not provide `release-light`, it automatically falls back to the source archive path
 - `QuickStart` no longer asks for `provider / API Base URL / API Key / model` in CLI
 - after install, go through `start.bat` / `start.sh` into WebChat and finish model/API setup in `⚙️ Settings`
 - `Advanced` now keeps deployment-oriented items only, such as `host / port / auth`
 - advanced modules such as `community / webhook / cron` are no longer entered during install; configure them later with `bdd configure ...`
 
-**Method 1: Download from Release (Recommended)**
+**Method 1: Download the lightweight release asset (Recommended for manual deployment)**
 1. Visit the project's [Releases page](https://github.com/vrboyzero/star-sanctuary/releases).
-2. Download the `Source code (zip)` archive for the latest version.
+2. Download the current lightweight release asset for your platform:
+   - Windows: `star-sanctuary-dist-v<version>.zip`
+   - Linux / macOS: `star-sanctuary-dist-v<version>.tar.gz`
 3. Extract it to a path without special characters or spaces.
+4. Make sure Node.js 22 is already installed, then run:
+   - Windows: `start.bat`
+   - Linux / macOS: `./start.sh`
+
+Notes:
+
+- this lightweight asset already includes built `dist`, web static assets, templates, startup scripts, and `.env.example`
+- it does **not** include Node runtime or `node_modules`
+- startup scripts auto-run `corepack pnpm install` if dependencies are missing
+- GitHub-generated `Source code (zip/tar.gz)` archives are still available, but they are no longer the README-recommended manual deployment entrypoint
 
 **Method 2: Git Clone**
 ```bash

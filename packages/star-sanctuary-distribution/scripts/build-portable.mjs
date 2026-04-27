@@ -677,7 +677,10 @@ function installRuntimeDependencies() {
     "pnpm",
     "install",
     "--prod",
-    "--offline",
+    // GitHub Windows runners may miss package metadata in the local pnpm mirror
+    // even after fetch, which breaks strict offline install for sqlite-vec platform
+    // packages. Prefer offline cache first, but allow registry metadata fallback.
+    "--prefer-offline",
     "--no-frozen-lockfile",
     ...sharedArgs,
   ];

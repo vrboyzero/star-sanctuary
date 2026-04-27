@@ -76,6 +76,18 @@ function copyFileRelative(sourceRelativePath, destinationRelativePath = sourceRe
   fs.copyFileSync(sourcePath, destinationPath);
 }
 
+function copyPathRelative(sourceRelativePath, destinationRelativePath = sourceRelativePath) {
+  const sourcePath = assertExists(sourceRelativePath);
+  const destinationPath = path.join(packageRoot, destinationRelativePath);
+  const stat = fs.statSync(sourcePath);
+  if (stat.isDirectory()) {
+    fs.cpSync(sourcePath, destinationPath, { recursive: true, force: true });
+    return;
+  }
+  ensureDir(path.dirname(destinationPath));
+  fs.copyFileSync(sourcePath, destinationPath);
+}
+
 function shouldExcludeDistFile(relativePath) {
   return PACKAGE_DIST_EXCLUDE_PATTERNS.some((pattern) => pattern.test(relativePath));
 }
@@ -117,6 +129,19 @@ function copyPackageDistTrees() {
     const packageJsonRelativePath = path.join(packageRootPath, "package.json");
 
     copyFileRelative(packageJsonRelativePath);
+    const packageJson = JSON.parse(fs.readFileSync(path.join(workspaceRoot, packageJsonRelativePath), "utf-8"));
+    if (packageJson.bin && typeof packageJson.bin === "object") {
+      for (const relativeTarget of Object.values(packageJson.bin)) {
+        if (typeof relativeTarget !== "string" || relativeTarget.startsWith("./dist/")) {
+          continue;
+        }
+        const normalizedTarget = relativeTarget.replace(/^\.\//, "");
+        copyPathRelative(
+          path.join(packageRootPath, normalizedTarget),
+          path.join(packageRootPath, normalizedTarget),
+        );
+      }
+    }
     const distAbsolutePath = assertExists(distRelativePath);
     const stat = fs.statSync(distAbsolutePath);
     if (!stat.isDirectory()) {
@@ -147,7 +172,7 @@ function writeReleaseReadme() {
     "- portable runtime payload",
     "- single-exe payload",
     "",
-    "This asset is not the current default installer input yet.",
+    "This asset is the default command-installer input.",
   ].join("\n");
   fs.writeFileSync(targetPath, content, "utf-8");
 }
@@ -237,10 +262,11 @@ function writeManifest(stageSummary) {
     releaseKind: "light",
     generatedAt: new Date().toISOString(),
     packageRoot: packageRootName,
-    currentInstallerInput: "source-archive",
+    currentInstallerInput: "release-light-archive",
     intendedConsumers: [
       "github-release-download",
       "official-website-download",
+      "official-command-installer",
       "future-package-manager-prep",
     ],
     includesRuntime: false,
@@ -251,6 +277,7 @@ function writeManifest(stageSummary) {
       includedRoots: [
         "packages/*/dist",
         "packages/*/package.json",
+        "packages/*/bin (when referenced by package.json#bin)",
         "apps/web/public",
         "apps/web/package.json",
         "packages/belldandy-agent/src/templates",

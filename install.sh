@@ -180,10 +180,44 @@ release_endpoint() {
   fi
 }
 
-direct_archive_url() {
-  local normalized
-  normalized="$(normalize_version "$VERSION")"
-  printf 'https://github.com/%s/%s/archive/refs/tags/%s.tar.gz' "$REPO_OWNER" "$REPO_NAME" "$normalized"
+release_version_number_from_tag() {
+  local tag="$1"
+  if [[ "$tag" == v* ]]; then
+    printf '%s' "${tag#v}"
+    return 0
+  fi
+  printf '%s' "$tag"
+}
+
+detect_install_payload_kind() {
+  local source_root="$1"
+  if [[ -f "${source_root}/README-release-light.md" ]]; then
+    printf 'release-light'
+    return 0
+  fi
+  printf 'source'
+}
+
+resolve_remote_install_payload_plan() {
+  local release_json="$1"
+  local tag_name="$2"
+  local version_number asset_name asset_url source_url
+
+  version_number="$(release_version_number_from_tag "$tag_name")"
+  asset_name="star-sanctuary-dist-v${version_number}.tar.gz"
+  asset_url="$(printf '%s' "$release_json" | json_read "(() => { const assets = Array.isArray(data.assets) ? data.assets : []; const hit = assets.find((item) => item && item.name === ${asset_name@Q}); return hit ? hit.browser_download_url : ''; })()")" || asset_url=""
+  if [[ -n "${asset_url}" ]]; then
+    printf 'release-light|github-release-light|%s|GitHub release-light archive|release-light archive' "${asset_url}"
+    return 0
+  fi
+
+  source_url="$(printf '%s' "$release_json" | json_read 'data.tarball_url || ""')" || source_url=""
+  if [[ -n "${source_url}" ]]; then
+    printf 'source|github-release-source|%s|GitHub release source archive|source archive' "${source_url}"
+    return 0
+  fi
+
+  fail "The selected release does not expose a usable release-light asset or source tarball."
 }
 
 json_read() {
@@ -375,6 +409,7 @@ write_install_metadata() {
   local root="$1"
   local tag="$2"
   local release_name="$3"
+  local source_type="$4"
 
   node -e "
 const fs = require('fs');
@@ -384,7 +419,7 @@ const path = process.argv[1];
     tag: process.argv[2],
     version: process.argv[3],
   source: {
-    type: 'github-release-source',
+    type: process.argv[6],
     owner: process.argv[4],
     repo: process.argv[5],
     },
@@ -399,7 +434,7 @@ const path = process.argv[1];
   },
 };
 fs.writeFileSync(path, JSON.stringify(payload, null, 2) + '\n');
-" "${root}/install-info.json" "${tag}" "${release_name}" "${REPO_OWNER}" "${REPO_NAME}"
+" "${root}/install-info.json" "${tag}" "${release_name}" "${REPO_OWNER}" "${REPO_NAME}" "${source_type}"
 }
 
 write_first_start_notice() {
@@ -448,29 +483,33 @@ fi
 ensure_node_runtime
 
 NORMALIZED_VERSION="$(normalize_version "$VERSION")"
+INSTALL_PAYLOAD_KIND=""
+INSTALL_SOURCE_TYPE=""
+REMOTE_PLAN=""
 if [[ -n "${SOURCE_DIR}" ]]; then
   SOURCE_DIR="$(cd "${SOURCE_DIR}" && pwd)" || fail "Source dir not found: ${SOURCE_DIR}"
+  INSTALL_PAYLOAD_KIND="$(detect_install_payload_kind "${SOURCE_DIR}")"
+  if [[ "${INSTALL_PAYLOAD_KIND}" == "release-light" ]]; then
+    INSTALL_SOURCE_TYPE="local-release-light"
+  else
+    INSTALL_SOURCE_TYPE="local-source"
+  fi
   TAG_NAME="${NORMALIZED_VERSION}"
   if [[ "${TAG_NAME}" == "latest" ]]; then
-    TAG_NAME="local-source"
+    TAG_NAME="${INSTALL_SOURCE_TYPE}"
   fi
   RELEASE_NAME="${TAG_NAME}"
-  log "Using local source override from ${SOURCE_DIR}"
+  log "Using local ${INSTALL_PAYLOAD_KIND} override from ${SOURCE_DIR}"
 else
   ENDPOINT="$(release_endpoint)"
-  if [[ "${NORMALIZED_VERSION}" == "latest" ]]; then
-    log "Fetching release metadata from ${ENDPOINT}"
-    RELEASE_JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Star-Sanctuary-Installer' "${github_headers[@]}" "${ENDPOINT}")" \
-      || fail "Failed to fetch GitHub release metadata."
+  log "Fetching release metadata from ${ENDPOINT}"
+  RELEASE_JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Star-Sanctuary-Installer' "${github_headers[@]}" "${ENDPOINT}")" \
+    || fail "Failed to fetch GitHub release metadata."
 
-    TAG_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.tag_name')" || fail "Failed to resolve release tag."
-    ARCHIVE_URL="$(printf '%s' "$RELEASE_JSON" | json_read 'data.tarball_url')" || fail "The selected release does not expose a GitHub source tarball."
-    RELEASE_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.name || data.tag_name')" || fail "Failed to resolve release name."
-  else
-    TAG_NAME="${NORMALIZED_VERSION}"
-    ARCHIVE_URL="$(direct_archive_url)"
-    RELEASE_NAME="${TAG_NAME}"
-  fi
+  TAG_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.tag_name')" || fail "Failed to resolve release tag."
+  RELEASE_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.name || data.tag_name')" || fail "Failed to resolve release name."
+  REMOTE_PLAN="$(resolve_remote_install_payload_plan "$RELEASE_JSON" "$TAG_NAME")"
+  IFS='|' read -r INSTALL_PAYLOAD_KIND INSTALL_SOURCE_TYPE ARCHIVE_URL DOWNLOAD_LABEL EXTRACT_LABEL <<< "${REMOTE_PLAN}"
 fi
 
 log "Installing Star Sanctuary ${TAG_NAME} into ${INSTALL_ROOT}"
@@ -482,12 +521,12 @@ else
   EXTRACT_ROOT="${TEMP_ROOT}/extract"
   mkdir -p "${EXTRACT_ROOT}"
 
-  log "Downloading GitHub release source archive"
+  log "Downloading ${DOWNLOAD_LABEL}"
   curl -fsSL -H 'User-Agent: Star-Sanctuary-Installer' "${github_headers[@]}" "${ARCHIVE_URL}" -o "${ARCHIVE_PATH}" \
-    || fail "Failed to download GitHub source archive."
+    || fail "Failed to download ${EXTRACT_LABEL}."
 
-  log "Extracting source archive"
-  tar -xzf "${ARCHIVE_PATH}" -C "${EXTRACT_ROOT}" || fail "Failed to extract source archive."
+  log "Extracting ${EXTRACT_LABEL}"
+  tar -xzf "${ARCHIVE_PATH}" -C "${EXTRACT_ROOT}" || fail "Failed to extract ${EXTRACT_LABEL}."
 
   SOURCE_ROOT="$(find "${EXTRACT_ROOT}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [[ -n "${SOURCE_ROOT}" ]] || fail "Failed to locate extracted source root."
@@ -526,11 +565,16 @@ if [[ "${SKIP_INSTALL_BUILD}" -eq 0 ]]; then
 
   (
     cd "${CURRENT_ROOT}"
-    log "Installing workspace dependencies"
-    corepack pnpm install || fail "corepack pnpm install failed."
+    if [[ "${INSTALL_PAYLOAD_KIND}" == "release-light" ]]; then
+      log "Installing production workspace dependencies from release-light package"
+      corepack pnpm install --prod --frozen-lockfile || fail "corepack pnpm install failed."
+    else
+      log "Installing workspace dependencies"
+      corepack pnpm install || fail "corepack pnpm install failed."
 
-    log "Building workspace"
-    corepack pnpm build || fail "corepack pnpm build failed."
+      log "Building workspace"
+      corepack pnpm build || fail "corepack pnpm build failed."
+    fi
   )
 else
   log "Skipping dependency install/build (--skip-install-build)"
@@ -540,7 +584,7 @@ if [[ -f "${CURRENT_ROOT}/start.sh" ]]; then
 fi
 
 write_unix_wrappers "${INSTALL_ROOT}"
-write_install_metadata "${INSTALL_ROOT}" "${TAG_NAME}" "${RELEASE_NAME}"
+write_install_metadata "${INSTALL_ROOT}" "${TAG_NAME}" "${RELEASE_NAME}" "${INSTALL_SOURCE_TYPE}"
 INSTALL_STATE_DIR="$(resolve_state_dir)"
 
 SETUP_STEP_MESSAGE="$(get_setup_step_message "${INSTALL_ROOT}" "${INSTALL_STATE_DIR}")"

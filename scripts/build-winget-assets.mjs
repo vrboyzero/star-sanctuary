@@ -127,6 +127,10 @@ function writeText(targetPath, content) {
   fs.writeFileSync(targetPath, `${content.trimEnd()}\n`, "utf-8");
 }
 
+function removePath(targetPath) {
+  fs.rmSync(targetPath, { recursive: true, force: true });
+}
+
 function buildDefaultLocaleManifest(params) {
   const {
     packageIdentifier,
@@ -289,6 +293,7 @@ function main() {
   resetDir(versionRoot);
   copyPortableTree(portableRoot, stageRoot);
   createZipArchive(versionRoot, assetBaseName, path.basename(zipPath));
+  removePath(stageRoot);
 
   const installerSha256 = sha256File(zipPath);
   writeText(sha256Path, `${installerSha256}  ${path.basename(zipPath)}`);
@@ -341,6 +346,7 @@ function main() {
     arch,
     portableRoot,
     generatedAt: new Date().toISOString(),
+    stagingDirectoryRetained: false,
     asset: {
       fileName: path.basename(zipPath),
       path: path.relative(workspaceRoot, zipPath).replaceAll("\\", "/"),

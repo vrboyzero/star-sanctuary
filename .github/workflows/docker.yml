@@ -236,10 +236,10 @@ jobs:
         run: pnpm build
 
       - name: Build release-light assets
-        run: pnpm build:release-light -- --version=${{ steps.version.outputs.VERSION }}
+        run: pnpm build:release-light
 
       - name: Verify release-light assets
-        run: pnpm verify:release-light -- --version=${{ steps.version.outputs.VERSION }}
+        run: pnpm verify:release-light
 
       - name: Extract changelog section
         id: changelog
@@ -311,15 +311,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ========================================
-  # Job 4: 生成 Windows portable / winget 发布资产（仅 tags）
+  # Job 4: 准备 Windows portable / winget 预备产物（仅 tags）
   # ========================================
   release-windows-assets:
-    name: Build Windows Release Assets
+    name: Prepare Windows Packaging Assets
     runs-on: windows-latest
     needs: release
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
-      contents: write
+      contents: read
     timeout-minutes: 90
 
     steps:
@@ -383,23 +383,13 @@ jobs:
         working-directory: ${{ env.SHORT_WORKSPACE }}
         run: pnpm verify:winget -- --version=${{ steps.version.outputs.VERSION }}
 
-      - name: Upload winget manifest artifact
+      - name: Upload winget preparation artifact
         uses: actions/upload-artifact@v4
         with:
-          name: winget-manifests-v${{ steps.version.outputs.VERSION }}
-          path: ${{ env.SHORT_WORKSPACE }}/artifacts/winget/v${{ steps.version.outputs.VERSION }}/manifests/**
+          name: winget-prep-v${{ steps.version.outputs.VERSION }}
+          path: |
+            ${{ env.SHORT_WORKSPACE }}/artifacts/winget/v${{ steps.version.outputs.VERSION }}/manifests/**
+            ${{ env.SHORT_WORKSPACE }}/artifacts/winget/v${{ steps.version.outputs.VERSION }}/*.metadata.json
+            ${{ env.SHORT_WORKSPACE }}/artifacts/winget/v${{ steps.version.outputs.VERSION }}/*.sha256
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload Windows release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        working-directory: ${{ env.SHORT_WORKSPACE }}
-        shell: pwsh
-        run: |
-          $version = "${{ steps.version.outputs.VERSION }}"
-          $assetRoot = Join-Path "artifacts\winget" "v$version"
-          $zipPath = Join-Path $assetRoot "star-sanctuary-portable-win32-x64-v$version.zip"
-          $shaPath = Join-Path $assetRoot "star-sanctuary-portable-win32-x64-v$version.sha256"
-          $metadataPath = Join-Path $assetRoot "star-sanctuary-portable-win32-x64-v$version.metadata.json"
-          gh release upload "v$version" $zipPath $shaPath $metadataPath --clobber

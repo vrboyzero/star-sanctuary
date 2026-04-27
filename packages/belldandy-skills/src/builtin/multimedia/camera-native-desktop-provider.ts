@@ -262,7 +262,9 @@ export class NativeDesktopCameraProvider implements CameraProvider {
     context: CameraProviderContext,
   ): Promise<void> {
     try {
-      await writeCameraRuntimeHealthSnapshot(context.stateDir, this.id, this.runtimeHealth);
+      await writeCameraRuntimeHealthSnapshot(context.stateDir, this.id, this.runtimeHealth, {
+        now: this.runtimeHealth.observedAt,
+      });
     } catch (error) {
       context.logger?.warn(
         `Failed to persist ${this.id} runtime health snapshot: ${error instanceof Error ? error.message : String(error)}`,

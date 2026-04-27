@@ -455,7 +455,9 @@ describe("native desktop camera provider", () => {
         },
       });
 
-      const snapshot = await readCameraRuntimeHealthSnapshot(stateDir, "native_desktop");
+      const snapshot = await readCameraRuntimeHealthSnapshot(stateDir, "native_desktop", {
+        now: "2026-04-17T12:00:02.000Z",
+      });
       expect(snapshot).toMatchObject({
         provider: "native_desktop",
         runtimeHealth: {

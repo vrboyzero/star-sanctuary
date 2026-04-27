@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.12] - 2026-04-27
+
+聚焦把命令安装正式切到 `release-light` 轻量附件输入，并收紧 Windows `winget` 预备链职责，避免再把超大 `portable` zip 误当作 GitHub Release 正式附件。
+
+### Install / Distribution
+
+- `install.ps1` 与 `install.sh` 现在会先读取 GitHub Release 元数据，并优先下载 `star-sanctuary-dist-v<version>.*` 轻量正式附件
+- 若目标旧版本尚未提供 `release-light` 附件，安装器会自动回退到 GitHub Release 源码归档
+- 安装元数据现在会记录实际安装来源类型，区分 `github-release-light / github-release-source / local-release-light / local-source`
+- `build-release-light-assets` 现在会补齐 `package.json#bin` 引用但不在 `dist/` 下的必要文件，确保轻量附件可以直接作为安装器输入
+- `README-release-light.md` 与 `manifest.json` 已同步改口径，明确 `release-light` 是当前命令安装默认输入
+
+### Release / CI
+
+- Windows tag job 现在只负责准备 `winget` 预备产物，不再把数百 MB 的 Windows portable zip 追加上传为 GitHub Release 主附件
+- GitHub Actions 产物上传改为 `winget-prep-v<version>`，只保留 manifest、metadata、sha256 等包管理器准备材料
+- `build-winget-assets` 在生成 zip 后会清理 staging 目录，避免 `artifacts/winget` 残留不必要的大体积内容
+- `build-portable` 的运行时依赖安装从严格 `--offline` 调整为 `--prefer-offline`，规避 GitHub Windows runner 缺失 `sqlite-vec` 本地 mirror 元数据时的失败
+
+### Tests / Tooling / Docs
+
+- 修正 `camera-native-desktop-provider` 的运行时健康快照时间写入，避免测试里出现时间漂移
+- 根 `vitest.config.ts` 补齐 `GW` 测试所需的 JSX 与 `@ -> GW/src` alias 支持
+- README 中的命令安装说明已同步到最新口径：安装命令仍走 GitHub Raw，但内部优先消费 `release-light`；手工部署优先下载 `star-sanctuary-dist-v<version>.*`
+
 ## [0.3.11] - 2026-04-27
 
 聚焦补充 Windows 资产 job 的失败诊断输出，确保后续 GitHub Actions 若再次失败，能够直接从公开 check annotations 中读到 `portable` 构建尾日志。
