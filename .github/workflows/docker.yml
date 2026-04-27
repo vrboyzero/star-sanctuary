@@ -214,9 +214,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
       - name: Extract version
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build workspace
+        run: corepack pnpm build
+
+      - name: Build release-light assets
+        run: corepack pnpm build:release-light -- --version=${{ steps.version.outputs.VERSION }}
+
+      - name: Verify release-light assets
+        run: corepack pnpm verify:release-light -- --version=${{ steps.version.outputs.VERSION }}
 
       - name: Extract changelog section
         id: changelog
@@ -273,7 +294,16 @@ jobs:
 
             - [Docker Deployment Guide](https://github.com/${{ github.repository }}/blob/main/DOCKER_DEPLOYMENT.md)
             - [Tailscale Remote Access](https://github.com/${{ github.repository }}/blob/main/docs/TAILSCALE_DEPLOYMENT.md)
+            
+            ## Release Assets
+
+            This release includes lightweight official assets for GitHub download and future package-manager integration.
           draft: false
           prerelease: false
+          files: |
+            artifacts/release-light/v${{ steps.version.outputs.VERSION }}/star-sanctuary-dist-v${{ steps.version.outputs.VERSION }}.zip
+            artifacts/release-light/v${{ steps.version.outputs.VERSION }}/star-sanctuary-dist-v${{ steps.version.outputs.VERSION }}.tar.gz
+            artifacts/release-light/v${{ steps.version.outputs.VERSION }}/star-sanctuary-dist-v${{ steps.version.outputs.VERSION }}.manifest.json
+            artifacts/release-light/v${{ steps.version.outputs.VERSION }}/star-sanctuary-dist-v${{ steps.version.outputs.VERSION }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

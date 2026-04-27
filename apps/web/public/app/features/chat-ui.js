@@ -2,6 +2,7 @@ const SAFE_ASSISTANT_TAGS = new Set([
   "A", "AUDIO", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "H5", "H6", "HR",
   "I", "IMG", "LI", "OL", "P", "PRE", "SOURCE", "SPAN", "STRONG", "UL", "VIDEO", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD", "BUTTON", "SVG", "PATH", "RECT",
 ]);
+const GENERATED_IMAGE_REVEAL_PREFIX = "#generated-image-reveal:";
 
 const SAFE_ASSISTANT_ATTRS = {
   A: new Set(["href", "title", "target", "rel"]),
@@ -24,6 +25,7 @@ export function createChatUiFeature({
   getAgentProfile,
   getUserProfile,
   getCurrentAgentId,
+  revealGeneratedArtifactPath,
   escapeHtml,
   showNotice,
   getAvatarUploadHeaders,
@@ -501,6 +503,34 @@ export function createChatUiFeature({
 
       wrapper.addEventListener("click", () => openMediaModal(originalSrc, "video"));
       video.replaceWith(wrapper);
+    });
+
+    msgEl.querySelectorAll(`a[href^="${GENERATED_IMAGE_REVEAL_PREFIX}"]`).forEach((link) => {
+      link.addEventListener("click", async (event) => {
+        event.preventDefault();
+        const href = link.getAttribute("href") || "";
+        const artifactPath = href.slice(GENERATED_IMAGE_REVEAL_PREFIX.length).trim();
+        if (!artifactPath) return;
+
+        if (typeof revealGeneratedArtifactPath !== "function") {
+          showNotice?.(
+            t("chat.generatedImageOpenUnavailableTitle", {}, "无法打开保存目录"),
+            t("chat.generatedImageOpenUnavailableMessage", {}, "当前没有可用的目录打开入口。"),
+            "error",
+          );
+          return;
+        }
+
+        try {
+          await revealGeneratedArtifactPath(artifactPath);
+        } catch (error) {
+          showNotice?.(
+            t("chat.generatedImageOpenFailedTitle", {}, "打开保存目录失败"),
+            error instanceof Error ? error.message : String(error),
+            "error",
+          );
+        }
+      });
     });
   }
 

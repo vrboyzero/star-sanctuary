@@ -67,6 +67,7 @@ type ConnectionState = {
 const DEFAULT_METHODS = [
   "message.send",
   "conversation.run.stop",
+  "artifact.reveal",
   "pairing.approve",
   "tool_settings.confirm",
   "external_outbound.confirm",

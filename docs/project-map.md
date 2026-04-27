@@ -64,6 +64,8 @@ star-sanctuary/
 - `pnpm-workspace.yaml`: workspace 范围
 - `tsconfig.json`: 各 package 的 TS 编译依赖顺序
 - `vitest.config.ts`: 测试排除项和 Node/forks 配置
+- `scripts/build-release-light-assets.mjs`: 生成 GitHub Release 轻量正式附件（`zip` / `tar.gz` / `manifest` / `sha256`）
+- `scripts/verify-release-light-assets.mjs`: 校验轻量正式附件结构、版本与 hash
 - `docs/Star Sanctuary使用手册.md`: 当前版用户手册，聚焦 Agent / 工具 / Agent Teams 的使用与配置说明
 
 ### Gateway / CLI
@@ -103,6 +105,7 @@ star-sanctuary/
 - `packages/belldandy-core/src/server.ts`: RPC 请求分发总入口
 - `packages/belldandy-core/src/server-methods/`: `models` / `goal` / `memory` / `dream` / `tools` / `workspace` / `subtask`
 - `packages/belldandy-core/src/server-http-routes.ts`: `/health`、`/api/message`、webhook、静态资源
+- `packages/belldandy-core/src/query-runtime-artifact.ts`: `/generated` 产物 reveal，本地打开保存目录/定位文件
 - `packages/belldandy-core/src/query-runtime-message-send.ts`: `message.send` 主执行链、tool result metadata / `failureKind` / follow-up runtime marks 透传
 
 ### UI / WebChat

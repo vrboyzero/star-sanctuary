@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.6] - 2026-04-27
+
+聚焦独立图片生成链路落地与正式轻量 Release 附件上线准备，补齐 WebChat 预览/reveal 体验，并为后续包管理器分发建立稳定发布输入。
+
+### Image Generation / WebChat
+
+- `image_generate` 现已切到独立 `BELLDANDY_IMAGE_*` 配置面，默认使用 `gpt-image-2`，不再回退复用主 Agent 的 OpenAI 配置
+- 图片生成结果会落盘到 `generated/images/`，并在 WebChat 消息区直接显示缩略图预览
+- 生成结果下方新增“保存位置”路径交互；点击路径可通过受限 `artifact.reveal` 在本机打开保存目录/定位文件
+- `BELLDANDY_IMAGE_TIMEOUT_MS` 现在统一覆盖“生成 + URL 下载”链路；设置为 `0` 时按不额外限时处理
+
+### Release / Distribution
+
+- 新增正式轻量 Release 附件构建脚本，生成：
+  - `star-sanctuary-dist-v<version>.zip`
+  - `star-sanctuary-dist-v<version>.tar.gz`
+  - `star-sanctuary-dist-v<version>.manifest.json`
+  - `star-sanctuary-dist-v<version>.sha256`
+- GitHub Release workflow 现已接入轻量附件构建、校验与上传链路
+- 当前轻量附件线只作为正式 Release 附件发布，不改变现有安装器继续消费源码归档的语义
+
+### Tests
+
+- 新增图片生成工具定向测试，覆盖独立图片 key、结果落盘、超时语义与 URL 下载信号复用
+- 新增 `artifact.reveal` 定向测试，覆盖受限路径 reveal 行为
+- 新增 WebChat 生成图片交互定向测试，覆盖缩略图保留与保存路径点击行为
+- 新增轻量 Release 附件校验脚本，覆盖版本、结构与 `sha256` 一致性
+
 ## [0.3.5] - 2026-04-23
 
 聚焦安装链路首配瘦身与 Windows 启动入口收口，减少首次安装时的重复输入，并补齐桌面快捷方式图标验证。

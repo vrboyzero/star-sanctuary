@@ -30,7 +30,7 @@ function installMarkedStub(parseImpl) {
   };
 }
 
-function createFeature() {
+function createFeature(overrides = {}) {
   document.body.innerHTML = `
     <section class="chat-section">
       <div class="messages"></div>
@@ -52,8 +52,9 @@ function createFeature() {
     getAgentProfile: () => ({ name: "Belldandy", avatar: "B" }),
     getUserProfile: () => ({ name: "User", avatar: "U" }),
     getCurrentAgentId: () => "default",
+    revealGeneratedArtifactPath: overrides.revealGeneratedArtifactPath,
     escapeHtml,
-    showNotice: vi.fn(),
+    showNotice: overrides.showNotice || vi.fn(),
     getAvatarUploadHeaders: () => ({}),
     onAvatarUploaded: vi.fn(),
   });
@@ -279,6 +280,29 @@ describe("chat ui rich text rendering", () => {
     videoThumbnail?.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
     const videoModal = document.body.querySelector(".media-modal");
     expect(videoModal?.querySelector("video")?.getAttribute("src")).toBe("https://example.com/demo.mp4");
+  });
+
+  it("binds generated image path links to artifact reveal without changing image preview behavior", async () => {
+    installMarkedStub((text) => text);
+    const revealGeneratedArtifactPath = vi.fn().mockResolvedValue(undefined);
+    const { bubble, feature } = createFeature({ revealGeneratedArtifactPath });
+
+    feature.renderAssistantMessage(
+      bubble,
+      [
+        "<div class=\"generated-image-result\">",
+        "<img src=\"/generated/images/demo.png\" alt=\"Generated Image\">",
+        "<div class=\"generated-image-path\">保存位置：<a href=\"#generated-image-reveal:/generated/images/demo.png\">generated/images/demo.png</a></div>",
+        "</div>",
+      ].join(""),
+    );
+
+    expect(bubble.querySelector(".media-thumbnail")).not.toBeNull();
+    const revealLink = bubble.querySelector(".generated-image-path a");
+    revealLink?.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    await Promise.resolve();
+    expect(revealGeneratedArtifactPath).toHaveBeenCalledWith("/generated/images/demo.png");
   });
 
   it("keeps media modal open on content click and closes it on backdrop click", () => {

@@ -1,6 +1,6 @@
 {
   "name": "star-sanctuary",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,7 @@
     "verify:build": "node scripts/verify-workspace-build.mjs",
     "verify:webchat": "node scripts/verify-webchat-modules.mjs",
     "build": "pnpm run build:force && pnpm run verify:build",
+    "build:release-light": "node scripts/build-release-light-assets.mjs",
     "build:portable": "node packages/star-sanctuary-distribution/scripts/build-portable.mjs",
     "build:portable:full": "node packages/star-sanctuary-distribution/scripts/build-portable.mjs --mode full",
     "prefetch:portable": "node packages/star-sanctuary-distribution/scripts/prefetch-portable-deps.mjs",
@@ -48,6 +49,7 @@
     "verify:single-exe-lifecycle:full": "node packages/star-sanctuary-distribution/scripts/verify-single-exe-lifecycle.mjs --mode full",
     "verify:portable-deps": "node packages/star-sanctuary-distribution/scripts/verify-portable-deps.mjs",
     "verify:portable-deps:full": "node packages/star-sanctuary-distribution/scripts/verify-portable-deps.mjs --mode full",
+    "verify:release-light": "node scripts/verify-release-light-assets.mjs",
     "verify:single-exe-deps": "node packages/star-sanctuary-distribution/scripts/verify-single-exe-deps.mjs --mode full",
     "verify:single-exe-deps:full": "node packages/star-sanctuary-distribution/scripts/verify-single-exe-deps.mjs --mode full",
     "rebuild": "pnpm run clean:build && pnpm run build",

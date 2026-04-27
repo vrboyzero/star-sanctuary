@@ -1229,6 +1229,19 @@ chatUiFeature = createChatUiFeature({
     avatar: userAvatar,
   }),
   getCurrentAgentId: () => getCurrentAgentSelection(),
+  revealGeneratedArtifactPath: async (artifactPath) => {
+    const res = await sendReq({
+      type: "req",
+      id: makeId(),
+      method: "artifact.reveal",
+      params: {
+        path: artifactPath,
+      },
+    });
+    if (!res || res.ok === false) {
+      throw new Error(res?.error?.message || localeController.t("settings.failed", {}, "Failed"));
+    }
+  },
   escapeHtml,
   showNotice,
   getAvatarUploadHeaders: () => getHttpAuthHeaders(),

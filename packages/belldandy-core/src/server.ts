@@ -1463,6 +1463,7 @@ async function handleReq(
   const secureMethods = [
     "message.send",
     "conversation.run.stop",
+    "artifact.reveal",
     "tool_settings.confirm",
     "external_outbound.confirm",
     "external_outbound.audit.list",
@@ -1950,6 +1951,7 @@ async function handleReq(
     case "workspace.read":
     case "workspace.readSource":
     case "workspace.write":
+    case "artifact.reveal":
     case "context.compact":
     case "context.compact.partial":
     case "conversation.meta":
@@ -1963,6 +1965,7 @@ async function handleReq(
     case "conversation.restore": {
       return handleWorkspaceConversationMethod(req, {
         stateDir: ctx.stateDir,
+        generatedDir: path.join(ctx.stateDir, "generated"),
         additionalWorkspaceRoots: ctx.additionalWorkspaceRoots,
         conversationStore: ctx.conversationStore,
         getConversationPromptSnapshot: ctx.getConversationPromptSnapshot,

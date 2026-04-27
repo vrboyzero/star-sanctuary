@@ -49,10 +49,12 @@ import {
   handleWorkspaceReadWithQueryRuntime,
   handleWorkspaceWriteWithQueryRuntime,
 } from "../query-runtime-workspace.js";
+import { handleArtifactRevealWithQueryRuntime } from "../query-runtime-artifact.js";
 import type { GoalManager } from "../goals/manager.js";
 
 type WorkspaceConversationMethodContext = {
   stateDir: string;
+  generatedDir: string;
   additionalWorkspaceRoots: string[];
   conversationStore: ConversationStore;
   getConversationPromptSnapshot?: (input: {
@@ -121,6 +123,7 @@ type WorkspaceConversationMethodContext = {
 };
 
 type WorkspaceMethod =
+  | "artifact.reveal"
   | "workspace.list"
   | "workspace.read"
   | "workspace.readSource"
@@ -219,6 +222,23 @@ export async function handleWorkspaceConversationMethod(
   ctx: WorkspaceConversationMethodContext,
 ): Promise<GatewayResFrame | null> {
   switch (req.method) {
+    case "artifact.reveal": {
+      const params = req.params as { path?: string } | undefined;
+      const artifactPath = params?.path;
+
+      if (!artifactPath || typeof artifactPath !== "string") {
+        return { type: "res", id: req.id, ok: false, error: { code: "invalid_params", message: "path is required" } };
+      }
+      return handleArtifactRevealWithQueryRuntime({
+        requestId: req.id,
+        generatedDir: ctx.generatedDir,
+        isUnderRoot: ctx.isUnderRoot,
+        runtimeObserver: ctx.queryRuntimeTraceStore.createObserver<"artifact.reveal">(),
+      }, {
+        path: artifactPath,
+      });
+    }
+
     case "workspace.list": {
       const params = req.params as { path?: string } | undefined;
       return handleWorkspaceListWithQueryRuntime(createWorkspaceRuntimeContext(req.id, ctx), {
