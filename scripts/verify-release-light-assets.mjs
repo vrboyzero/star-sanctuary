@@ -18,6 +18,24 @@ const zipPath = path.join(versionRoot, `${packageRootName}.zip`);
 const tarGzPath = path.join(versionRoot, `${packageRootName}.tar.gz`);
 const manifestPath = path.join(versionRoot, `${packageRootName}.manifest.json`);
 const sha256Path = path.join(versionRoot, `${packageRootName}.sha256`);
+const defaultEnvTemplatePath = path.join(
+  packageRoot,
+  "packages",
+  "star-sanctuary-distribution",
+  "src",
+  "templates",
+  "default-env",
+  "runtime.env",
+);
+const defaultEnvLocalTemplatePath = path.join(
+  packageRoot,
+  "packages",
+  "star-sanctuary-distribution",
+  "src",
+  "templates",
+  "default-env",
+  "runtime.env.local",
+);
 
 function assertExists(targetPath) {
   if (!fs.existsSync(targetPath)) {
@@ -33,6 +51,9 @@ function sha256File(filePath) {
 
 function main() {
   for (const requiredPath of [packageRoot, zipPath, tarGzPath, manifestPath, sha256Path]) {
+    assertExists(requiredPath);
+  }
+  for (const requiredPath of [defaultEnvTemplatePath, defaultEnvLocalTemplatePath]) {
     assertExists(requiredPath);
   }
 

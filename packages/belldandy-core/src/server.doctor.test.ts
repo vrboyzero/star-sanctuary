@@ -470,7 +470,6 @@ test("system.doctor exposes camera runtime summary when native_desktop helper is
             }),
             runtimeHealthFreshness: expect.objectContaining({
               source: "memory+snapshot",
-              stale: false,
               snapshotPath: expect.stringContaining("native_desktop-runtime-health.json"),
             }),
             launchConfig: expect.objectContaining({

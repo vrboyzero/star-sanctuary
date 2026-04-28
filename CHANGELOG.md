@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-04-28
+
+聚焦修复 `release-light` 安装输入里的默认环境模板完整性，确保命令安装落地后的 `.env` / `.env.local` 与仓库默认模板一致，并收紧当前 GitHub tag 发布只走轻量正式附件链路。
+
+### Install / Distribution
+
+- `build-release-light-assets` 现在会把 `packages/star-sanctuary-distribution/src/templates` 一并打入轻量正式附件
+- `verify-release-light-assets` 现在会强制校验以下文件已进入 `release-light` 产物：
+  - `packages/star-sanctuary-distribution/src/templates/default-env/runtime.env`
+  - `packages/star-sanctuary-distribution/src/templates/default-env/runtime.env.local`
+- 通过 `install.ps1` / `install.sh` 从 GitHub Release 安装时，后续在状态目录生成或补齐的 `.env` / `.env.local` 现在会回到完整默认模板内容
+
+### Tests / Tooling
+
+- 新增 `release-light-assets.test.ts`，实际执行轻量附件构建与校验，并断言产物中的 `runtime.env` / `runtime.env.local` 与源码模板逐字节一致
+- 放宽 `doctor` 相关测试里对 `runtimeHealthFreshness.stale` 的硬编码断言，避免固定快照时间戳随着真实时间推移导致发布前误报
+
+### Release / CI
+
+- `Prepare Windows Packaging Assets` 现改为仓库变量开关控制：
+  - `vars.ENABLE_WINDOWS_PACKAGING == 'true'` 时才执行
+- 默认 tag 发布路径现在停在 `Create GitHub Release`，只上传 `release-light` 4 个正式附件；`portable / single-exe` 继续作为独立分发物，不进入 GitHub Release 正式附件列表
+
 ## [0.3.12] - 2026-04-27
 
 聚焦把命令安装正式切到 `release-light` 轻量附件输入，并收紧 Windows `winget` 预备链职责，避免再把超大 `portable` zip 误当作 GitHub Release 正式附件。

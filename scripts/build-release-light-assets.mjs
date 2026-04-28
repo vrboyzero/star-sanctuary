@@ -45,6 +45,7 @@ const ROOT_FILE_PATHS = [
 const DIRECTORY_COPY_PLAN = [
   { source: "apps/web/public", destination: "apps/web/public" },
   { source: "packages/belldandy-agent/src/templates", destination: "packages/belldandy-agent/src/templates" },
+  { source: "packages/star-sanctuary-distribution/src/templates", destination: "packages/star-sanctuary-distribution/src/templates" },
   { source: "packages/belldandy-skills/src/bundled-skills", destination: "packages/belldandy-skills/src/bundled-skills" },
 ];
 
@@ -281,6 +282,7 @@ function writeManifest(stageSummary) {
         "apps/web/public",
         "apps/web/package.json",
         "packages/belldandy-agent/src/templates",
+        "packages/star-sanctuary-distribution/src/templates",
         "packages/belldandy-skills/src/bundled-skills",
         "package.json",
         "pnpm-lock.yaml",

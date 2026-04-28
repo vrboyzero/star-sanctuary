@@ -317,7 +317,7 @@ jobs:
     name: Prepare Windows Packaging Assets
     runs-on: windows-latest
     needs: release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_WINDOWS_PACKAGING == 'true'
     permissions:
       contents: read
     timeout-minutes: 90

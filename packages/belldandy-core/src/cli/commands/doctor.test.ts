@@ -393,7 +393,6 @@ test("bdd doctor json output includes camera runtime summary when native_desktop
           }),
           runtimeHealthFreshness: expect.objectContaining({
             source: "memory+snapshot",
-            stale: false,
             snapshotPath: expect.stringContaining("native_desktop-runtime-health.json"),
           }),
           sampleDevices: expect.arrayContaining([
