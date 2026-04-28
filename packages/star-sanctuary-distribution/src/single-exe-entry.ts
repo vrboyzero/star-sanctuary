@@ -22,7 +22,7 @@ function ensureSingleExeEnv(params: {
   runtimeDir: string;
   envDir: string;
 }): NodeJS.ProcessEnv {
-  ensureDefaultEnvFiles(params.envDir);
+  ensureDefaultEnvFiles(params.envDir, { runtimeDir: params.runtimeDir });
   const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(params.baseEnv, params.envDir);
   env.STAR_SANCTUARY_RUNTIME_MODE = "single-exe";
   env.BELLDANDY_RUNTIME_MODE = "single-exe";

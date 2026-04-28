@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, expect, test } from "vitest";
 
@@ -77,6 +78,46 @@ test("ensureDefaultEnvFiles only backfills the missing file", async () => {
   await expect(fs.readFile(result.envPath, "utf-8")).resolves.toBe("BELLDANDY_PORT=9999\n");
   const envLocalContent = await fs.readFile(result.envLocalPath, "utf-8");
   expect(envLocalContent).toContain("BELLDANDY_AGENT_PROVIDER=openai");
+  expect(envLocalContent).toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
+});
+
+test("ensureDefaultEnvFiles prefers explicit runtime templates over bundle-relative fallback lookup", async () => {
+  const rootDir = await createTempDir();
+  const envDir = path.join(rootDir, "state");
+  const runtimeDir = path.join(rootDir, "runtime");
+  const templatesDir = path.join(runtimeDir, "templates", "default-env");
+  await fs.mkdir(templatesDir, { recursive: true });
+  await fs.writeFile(
+    path.join(templatesDir, "runtime.env"),
+    [
+      "# custom full runtime env",
+      "BELLDANDY_AGENT_PROVIDER=custom-runtime",
+      "BELLDANDY_AUTH_MODE=token",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  await fs.writeFile(
+    path.join(templatesDir, "runtime.env.local"),
+    [
+      "# custom full runtime env.local",
+      "BELLDANDY_OPENAI_MODEL=runtime-local-model",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+
+  const result = ensureDefaultEnvFiles(envDir, {
+    runtimeDir,
+    agentModuleUrl: pathToFileURL(path.join(rootDir, "bundle", "single-exe-main.cjs")).href,
+  });
+
+  const envContent = await fs.readFile(result.envPath, "utf-8");
+  const envLocalContent = await fs.readFile(result.envLocalPath, "utf-8");
+  expect(envContent).toContain("BELLDANDY_AGENT_PROVIDER=custom-runtime");
+  expect(envContent).not.toContain("Star Sanctuary default bootstrap config");
+  expect(envLocalContent).toContain("BELLDANDY_OPENAI_MODEL=runtime-local-model");
+  expect(envLocalContent).not.toContain("Star Sanctuary local overrides");
   expect(envLocalContent).toMatch(/BELLDANDY_AUTH_TOKEN=setup-[^\r\n]+/);
 });
 

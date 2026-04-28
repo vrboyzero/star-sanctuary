@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveEnvFilePaths, resolveWorkspaceTemplateDir } from "./runtime-paths.js";
+import {
+  resolveEnvFilePaths,
+  resolveWorkspaceTemplateDir,
+  type ResolveWorkspaceTemplateDirOptions,
+} from "./runtime-paths.js";
 
 const DEFAULT_ENV_TEMPLATE = `# Star Sanctuary default bootstrap config
 # Auto-generated on first launch when no .env or .env.local exists yet.
@@ -76,13 +80,21 @@ export type EnsureDefaultEnvFilesResult = {
   createdEnvLocal: boolean;
 };
 
-export function resolveDefaultEnvTemplatePaths(): {
+export type ResolveDefaultEnvTemplatePathsOptions = Pick<
+  ResolveWorkspaceTemplateDirOptions,
+  "env" | "runtimeDir" | "templatesDir" | "agentModuleUrl" | "mode"
+>;
+
+export function resolveDefaultEnvTemplatePaths(
+  options: ResolveDefaultEnvTemplatePathsOptions = {},
+): {
   templatesDir: string;
   envTemplatePath: string;
   envLocalTemplatePath: string;
 } {
   const { templatesDir } = resolveWorkspaceTemplateDir({
     agentModuleUrl: import.meta.url,
+    ...options,
   });
   return {
     templatesDir,
@@ -142,8 +154,10 @@ function ensureBootstrapAuthTokenInEnvLocal(templates: DefaultEnvTemplates): str
   return `${templates.envLocal}${suffix}# Auto-generated bootstrap token for first launch\nBELLDANDY_AUTH_TOKEN=${generatedToken}\n`;
 }
 
-export function readDefaultEnvTemplates(): DefaultEnvTemplates {
-  const templatePaths = resolveDefaultEnvTemplatePaths();
+export function readDefaultEnvTemplates(
+  options: ResolveDefaultEnvTemplatePathsOptions = {},
+): DefaultEnvTemplates {
+  const templatePaths = resolveDefaultEnvTemplatePaths(options);
   const env = readOptionalTextFile(templatePaths.envTemplatePath) ?? DEFAULT_ENV_TEMPLATE;
   const envLocal = readOptionalTextFile(templatePaths.envLocalTemplatePath) ?? DEFAULT_ENV_LOCAL_TEMPLATE;
   return {
@@ -211,9 +225,12 @@ export function resolveRuntimeEnvDir(params: {
   return params.fallbackEnvDir;
 }
 
-export function ensureDefaultEnvFiles(envDir: string): EnsureDefaultEnvFilesResult {
+export function ensureDefaultEnvFiles(
+  envDir: string,
+  options: ResolveDefaultEnvTemplatePathsOptions = {},
+): EnsureDefaultEnvFilesResult {
   const paths = resolveEnvFilePaths({ envDir });
-  const templates = readDefaultEnvTemplates();
+  const templates = readDefaultEnvTemplates(options);
   let createdEnv = false;
   let createdEnvLocal = false;
 
@@ -238,12 +255,15 @@ export function ensureDefaultEnvFiles(envDir: string): EnsureDefaultEnvFilesResu
   };
 }
 
-export function ensureDefaultEnvFile(envDir: string): {
+export function ensureDefaultEnvFile(
+  envDir: string,
+  options: ResolveDefaultEnvTemplatePathsOptions = {},
+): {
   created: boolean;
   envPath: string;
   envLocalPath: string;
 } {
-  const result = ensureDefaultEnvFiles(envDir);
+  const result = ensureDefaultEnvFiles(envDir, options);
   return {
     created: result.createdEnv,
     envPath: result.envPath,

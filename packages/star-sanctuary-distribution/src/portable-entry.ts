@@ -33,7 +33,7 @@ function ensurePortableEnv(baseEnv: NodeJS.ProcessEnv, portableRoot: string, run
     baseEnv,
     fallbackEnvDir: resolveStateDir(baseEnv),
   }));
-  ensureDefaultEnvFiles(stateDir);
+  ensureDefaultEnvFiles(stateDir, { runtimeDir });
   const env: NodeJS.ProcessEnv = loadRuntimeEnvFiles(baseEnv, stateDir);
   env.STAR_SANCTUARY_RUNTIME_MODE = "portable";
   env.BELLDANDY_RUNTIME_MODE = "portable";
