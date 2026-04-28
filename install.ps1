@@ -113,6 +113,67 @@ function Get-ReleaseMetadata {
   return Invoke-RestMethod -Headers (Get-GitHubHeaders) -Uri $endpoint
 }
 
+function Get-ReleasePageUri {
+  param(
+    [string]$Owner,
+    [string]$Name,
+    [string]$RequestedVersion
+  )
+
+  $normalizedVersion = Normalize-Version -RawVersion $RequestedVersion
+  if ($normalizedVersion -eq "latest") {
+    return "https://github.com/$Owner/$Name/releases/latest"
+  }
+
+  return "https://github.com/$Owner/$Name/releases/tag/$normalizedVersion"
+}
+
+function Resolve-ReleaseTagFromPage {
+  param(
+    [string]$Owner,
+    [string]$Name,
+    [string]$RequestedVersion
+  )
+
+  $pageUri = Get-ReleasePageUri -Owner $Owner -Name $Name -RequestedVersion $RequestedVersion
+  Write-Step "Falling back to release page resolution via $pageUri"
+  $response = Invoke-WebRequest -Headers (Get-GitHubHeaders) -Uri $pageUri
+  $resolvedUri = $response.BaseResponse.ResponseUri.AbsoluteUri
+  if ($resolvedUri -match "/releases/tag/(?<tag>v[^/?#]+)") {
+    return $Matches["tag"]
+  }
+
+  throw "Failed to resolve release tag from GitHub release page."
+}
+
+function Test-RemoteUriExists {
+  param(
+    [string]$Uri,
+    [string]$Label
+  )
+
+  try {
+    Invoke-WebRequest -Headers (Get-GitHubHeaders) -Method Head -MaximumRedirection 0 -Uri $Uri | Out-Null
+    return $true
+  } catch {
+    $statusCode = $null
+    if ($_.Exception.Response) {
+      $statusCode = [int]$_.Exception.Response.StatusCode
+    }
+
+    if ($statusCode -in 200, 301, 302, 303, 307, 308) {
+      return $true
+    }
+
+    if ($statusCode -eq 404) {
+      return $false
+    }
+
+    Write-Step "Remote probe for $Label failed; treating it as unavailable."
+    return $false
+  }
+}
+
 function Get-ReleaseVersionNumberFromTag {
   param([string]$TagName)
 
@@ -167,6 +228,51 @@ function Resolve-RemoteInstallPayloadPlan {
       kind = "source"
       sourceType = "github-release-source"
       archiveUrl = [string]$Release.zipball_url
+      downloadLabel = "GitHub release source archive"
+      extractLabel = "source archive"
+    }
+  }
+
+  throw "The selected release does not expose a usable release-light asset or source zipball."
+}
+
+function Resolve-RemoteInstallPayloadPlanFromTag {
+  param(
+    [string]$Owner,
+    [string]$Name,
+    [string]$TagName,
+    [string]$RequestedVersion
+  )
+
+  $versionNumber = Get-ReleaseVersionNumberFromTag -TagName $TagName
+  if ([string]::IsNullOrWhiteSpace($versionNumber)) {
+    throw "Failed to resolve release version number from tag."
+  }
+
+  $assetName = "star-sanctuary-dist-v$versionNumber.zip"
+  $normalizedVersion = Normalize-Version -RawVersion $RequestedVersion
+  $assetUrl = if ($normalizedVersion -eq "latest") {
+    "https://github.com/$Owner/$Name/releases/latest/download/$assetName"
+  } else {
+    "https://github.com/$Owner/$Name/releases/download/$TagName/$assetName"
+  }
+
+  if (Test-RemoteUriExists -Uri $assetUrl -Label "release-light asset $assetName") {
+    return @{
+      kind = "release-light"
+      sourceType = "github-release-light"
+      archiveUrl = $assetUrl
+      downloadLabel = "GitHub release-light archive"
+      extractLabel = "release-light archive"
+    }
+  }
+
+  $sourceUrl = "https://github.com/$Owner/$Name/archive/refs/tags/$TagName.zip"
+  if (Test-RemoteUriExists -Uri $sourceUrl -Label "source archive $TagName") {
+    return @{
+      kind = "source"
+      sourceType = "github-release-source"
+      archiveUrl = $sourceUrl
       downloadLabel = "GitHub release source archive"
       extractLabel = "source archive"
     }
@@ -596,17 +702,29 @@ try {
     $versionName = $resolvedTag
     Write-Step "Using local $installPayloadKind override from $localSourceRoot"
   } else {
-    $release = Get-ReleaseMetadata -Owner $RepoOwner -Name $RepoName -RequestedVersion $Version
-    $resolvedTag = [string]$release.tag_name
-    if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
-      throw "Failed to resolve release tag from GitHub metadata."
+    try {
+      $release = Get-ReleaseMetadata -Owner $RepoOwner -Name $RepoName -RequestedVersion $Version
+    } catch {
+      Write-Step "GitHub API release metadata fetch failed; falling back to GitHub release page resolution. Set GITHUB_TOKEN to raise API rate limits when available."
     }
 
-    $versionName = (([string]$release.name).Trim())
-    if ([string]::IsNullOrWhiteSpace($versionName)) {
+    if ($release) {
+      $resolvedTag = [string]$release.tag_name
+      if ([string]::IsNullOrWhiteSpace($resolvedTag)) {
+        throw "Failed to resolve release tag from GitHub metadata."
+      }
+
+      $versionName = (([string]$release.name).Trim())
+      if ([string]::IsNullOrWhiteSpace($versionName)) {
+        $versionName = $resolvedTag
+      }
+      $remotePayloadPlan = Resolve-RemoteInstallPayloadPlan -Release $release -Owner $RepoOwner -Name $RepoName
+    } else {
+      $resolvedTag = Resolve-ReleaseTagFromPage -Owner $RepoOwner -Name $RepoName -RequestedVersion $Version
       $versionName = $resolvedTag
+      $remotePayloadPlan = Resolve-RemoteInstallPayloadPlanFromTag -Owner $RepoOwner -Name $RepoName -TagName $resolvedTag -RequestedVersion $Version
     }
-    $remotePayloadPlan = Resolve-RemoteInstallPayloadPlan -Release $release -Owner $RepoOwner -Name $RepoName
+
     $installPayloadKind = [string]$remotePayloadPlan.kind
     $installSourceType = [string]$remotePayloadPlan.sourceType
   }

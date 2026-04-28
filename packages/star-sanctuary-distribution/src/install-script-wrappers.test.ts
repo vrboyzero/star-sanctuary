@@ -10,6 +10,12 @@ function readInstallScript(): string {
   return fs.readFileSync(path.join(workspaceRoot, "install.ps1"), "utf-8");
 }
 
+function readInstallShScript(): string {
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const workspaceRoot = path.resolve(currentDir, "..", "..", "..");
+  return fs.readFileSync(path.join(workspaceRoot, "install.sh"), "utf-8");
+}
+
 test("install.ps1 Windows start.bat wrapper defaults AUTO_OPEN_BROWSER safely", () => {
   const script = readInstallScript();
 
@@ -38,4 +44,17 @@ test("install.ps1 desktop shortcut uses the packaged ico when available", () => 
   expect(script).toContain('$iconPath = Join-Path $InstallRoot "current\\apps\\web\\public\\logo06-256.ico"');
   expect(script).toContain("if (Test-Path $iconPath -PathType Leaf) {");
   expect(script).toContain("$shortcut.IconLocation = $iconPath");
+});
+
+test("install scripts fall back to GitHub release pages when API metadata is unavailable", () => {
+  const psScript = readInstallScript();
+  const shScript = readInstallShScript();
+
+  expect(psScript).toContain("falling back to GitHub release page resolution");
+  expect(psScript).toContain("https://github.com/$Owner/$Name/releases/latest/download/");
+  expect(psScript).toContain("https://github.com/$Owner/$Name/archive/refs/tags/$TagName.zip");
+
+  expect(shScript).toContain("falling back to GitHub release page resolution");
+  expect(shScript).toContain("https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download/${asset_name}");
+  expect(shScript).toContain("https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${tag_name}.tar.gz");
 });

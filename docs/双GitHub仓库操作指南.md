@@ -98,3 +98,42 @@ git remote set-url private <新的仓库URL>
 ```bash
 git remote remove private
 ```
+
+## 6. 发布链路维护提醒
+
+### GitHub Actions 运行时升级跟踪
+
+GitHub Actions 已开始提示部分 JavaScript actions 仍运行在 Node.js 20 上。根据 GitHub 官方公告：
+
+- 从 `2026-06-02` 开始，JavaScript actions 将默认切换到 Node.js 24
+- 到 `2026-09-16`，Node.js 20 将从 runner 中移除
+
+这类告警当前不会阻塞发布，但应作为独立维护事项跟踪，不要与业务发版混在同一个提交里。
+
+当前仓库已确认需要单独检查或升级的 actions：
+
+- `actions/checkout`
+- `actions/setup-node`
+- `docker/setup-buildx-action`
+- `docker/metadata-action`
+- `docker/build-push-action`
+- `docker/login-action`
+- `docker/setup-qemu-action`
+- `pnpm/action-setup`
+- `peter-evans/dockerhub-description`
+- `softprops/action-gh-release`
+
+建议执行顺序：
+
+1. 先单开一个 CI 维护 PR，只处理 workflow 依赖升级。
+2. 升级前可临时开启 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` 做兼容性演练。
+3. 升级后至少重新验证：
+   - `Build & Test`
+   - `Publish to Docker Hub`
+   - `Create GitHub Release`
+4. 验证通过后，再考虑为 GitHub Actions 增加 Dependabot 跟踪。
+
+说明：
+
+- 该事项属于发布基础设施维护，不影响 `private/main` 的日常开发备份职责。
+- 若未来再次出现 Node 运行时弃用告警，应优先在 `origin` 公开发布链路中修复，再决定是否同步到 `private`。

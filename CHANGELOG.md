@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-04-28
+
+聚焦修复命令安装链路对 GitHub API 匿名限流的脆弱依赖，确保安装器在 `releases/latest` 元数据请求失败时，仍能通过 GitHub 公开 release 页面与正式附件直链继续安装。
+
+### Install / Distribution
+
+- `install.ps1` 现在在 GitHub API release metadata 获取失败时，会自动降级到 GitHub release 页面解析 tag
+- Windows 安装器在降级后会继续优先探测 `release-light` 正式附件；若目标版本没有该附件，再回退到 tag 源码 zip
+- `install.sh` 现在也具备相同降级逻辑：
+  - 先尝试 GitHub API
+  - 失败后改走 GitHub release 页面
+  - 继续优先下载 `release-light` 正式附件，必要时回退到 tag 源码 tarball
+- 安装器失败提示里补充了 `GITHUB_TOKEN` 可提高 GitHub API 额度的说明，便于受限环境排查
+
+### Tests / Tooling
+
+- `install-script-wrappers.test.ts` 新增回归断言，锁定 Windows / shell 安装脚本都必须保留“API 不可用时回退到 GitHub release 页面”的逻辑
+- 本地已完成：
+  - `install.ps1` PowerShell 语法解析
+  - `bash -n install.sh`
+  - 安装脚本定向 Vitest 校验
+
 ## [0.5.0] - 2026-04-28
 
 聚焦修复 `release-light` 安装输入里的默认环境模板完整性，确保命令安装落地后的 `.env` / `.env.local` 与仓库默认模板一致，并收紧当前 GitHub tag 发布只走轻量正式附件链路。

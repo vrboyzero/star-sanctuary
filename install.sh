@@ -180,6 +180,16 @@ release_endpoint() {
   fi
 }
 
+release_page_endpoint() {
+  local normalized
+  normalized="$(normalize_version "$VERSION")"
+  if [[ "$normalized" == "latest" ]]; then
+    printf 'https://github.com/%s/%s/releases/latest' "$REPO_OWNER" "$REPO_NAME"
+  else
+    printf 'https://github.com/%s/%s/releases/tag/%s' "$REPO_OWNER" "$REPO_NAME" "$normalized"
+  fi
+}
+
 release_version_number_from_tag() {
   local tag="$1"
   if [[ "$tag" == v* ]]; then
@@ -213,6 +223,55 @@ resolve_remote_install_payload_plan() {
 
   source_url="$(printf '%s' "$release_json" | json_read 'data.tarball_url || ""')" || source_url=""
   if [[ -n "${source_url}" ]]; then
+    printf 'source|github-release-source|%s|GitHub release source archive|source archive' "${source_url}"
+    return 0
+  fi
+
+  fail "The selected release does not expose a usable release-light asset or source tarball."
+}
+
+resolve_release_tag_from_page() {
+  local page_url effective_url
+  page_url="$(release_page_endpoint)"
+  log "Falling back to release page resolution via ${page_url}"
+  effective_url="$(curl -fsSL -H 'User-Agent: Star-Sanctuary-Installer' "${github_headers[@]}" -o /dev/null -w '%{url_effective}' "${page_url}")" \
+    || fail "Failed to resolve release page."
+
+  if [[ "${effective_url}" =~ /releases/tag/(v[^/?#]+) ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  fail "Failed to resolve release tag from GitHub release page."
+}
+
+remote_url_exists() {
+  local url="$1"
+  curl -fsSI -H 'User-Agent: Star-Sanctuary-Installer' "${github_headers[@]}" "${url}" >/dev/null 2>&1
+}
+
+resolve_remote_install_payload_plan_from_tag() {
+  local tag_name="$1"
+  local requested_version="$2"
+  local normalized version_number asset_name asset_url source_url
+
+  normalized="$(normalize_version "${requested_version}")"
+  version_number="$(release_version_number_from_tag "$tag_name")"
+  asset_name="star-sanctuary-dist-v${version_number}.tar.gz"
+
+  if [[ "${normalized}" == "latest" ]]; then
+    asset_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download/${asset_name}"
+  else
+    asset_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${tag_name}/${asset_name}"
+  fi
+
+  if remote_url_exists "${asset_url}"; then
+    printf 'release-light|github-release-light|%s|GitHub release-light archive|release-light archive' "${asset_url}"
+    return 0
+  fi
+
+  source_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${tag_name}.tar.gz"
+  if remote_url_exists "${source_url}"; then
     printf 'source|github-release-source|%s|GitHub release source archive|source archive' "${source_url}"
     return 0
   fi
@@ -503,12 +562,16 @@ if [[ -n "${SOURCE_DIR}" ]]; then
 else
   ENDPOINT="$(release_endpoint)"
   log "Fetching release metadata from ${ENDPOINT}"
-  RELEASE_JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Star-Sanctuary-Installer' "${github_headers[@]}" "${ENDPOINT}")" \
-    || fail "Failed to fetch GitHub release metadata."
-
-  TAG_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.tag_name')" || fail "Failed to resolve release tag."
-  RELEASE_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.name || data.tag_name')" || fail "Failed to resolve release name."
-  REMOTE_PLAN="$(resolve_remote_install_payload_plan "$RELEASE_JSON" "$TAG_NAME")"
+  if RELEASE_JSON="$(curl -fsSL -H 'Accept: application/vnd.github+json' -H 'User-Agent: Star-Sanctuary-Installer' "${github_headers[@]}" "${ENDPOINT}")"; then
+    TAG_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.tag_name')" || fail "Failed to resolve release tag."
+    RELEASE_NAME="$(printf '%s' "$RELEASE_JSON" | json_read 'data.name || data.tag_name')" || fail "Failed to resolve release name."
+    REMOTE_PLAN="$(resolve_remote_install_payload_plan "$RELEASE_JSON" "$TAG_NAME")"
+  else
+    log "GitHub API release metadata fetch failed; falling back to GitHub release page resolution. Set GITHUB_TOKEN to raise API rate limits when available."
+    TAG_NAME="$(resolve_release_tag_from_page)"
+    RELEASE_NAME="${TAG_NAME}"
+    REMOTE_PLAN="$(resolve_remote_install_payload_plan_from_tag "$TAG_NAME" "$VERSION")"
+  fi
   IFS='|' read -r INSTALL_PAYLOAD_KIND INSTALL_SOURCE_TYPE ARCHIVE_URL DOWNLOAD_LABEL EXTRACT_LABEL <<< "${REMOTE_PLAN}"
 fi
 
